@@ -1,4 +1,4 @@
-package se.haleby.occurrent.inmemory.domain;
+package se.haleby.occurrent.domain;
 
 import java.time.LocalDateTime;
 

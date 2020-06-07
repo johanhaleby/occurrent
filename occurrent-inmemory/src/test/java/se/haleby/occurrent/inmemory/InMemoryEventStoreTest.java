@@ -5,10 +5,11 @@ import org.assertj.core.api.SoftAssertions;
 import org.assertj.core.api.junit.jupiter.SoftAssertionsExtension;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
+import se.haleby.occurrent.EventStore;
 import se.haleby.occurrent.EventStream;
-import se.haleby.occurrent.inmemory.domain.DomainEvent;
-import se.haleby.occurrent.inmemory.domain.Name;
-import se.haleby.occurrent.inmemory.domain.NameDefined;
+import se.haleby.occurrent.domain.DomainEvent;
+import se.haleby.occurrent.domain.Name;
+import se.haleby.occurrent.domain.NameDefined;
 
 import java.net.URI;
 import java.time.LocalDateTime;
@@ -22,7 +23,7 @@ import static java.time.ZoneOffset.UTC;
 public class InMemoryEventStoreTest {
 
     @Test
-    void ds(SoftAssertions softly) {
+    void read_and_write(SoftAssertions softly) {
         // Given
         InMemoryEventStore inMemoryEventStore = new InMemoryEventStore();
         LocalDateTime now = LocalDateTime.now();
@@ -38,7 +39,7 @@ public class InMemoryEventStoreTest {
         softly.assertThat(eventStream.events().collect(Collectors.toList()).get(0).getData()).hasValue(new NameDefined(now, "John Doe"));
     }
 
-    private void persist(InMemoryEventStore inMemoryEventStore, String eventStreamId, List<DomainEvent> events) {
+    private void persist(EventStore inMemoryEventStore, String eventStreamId, List<DomainEvent> events) {
         inMemoryEventStore.write(eventStreamId, 0, events.stream()
                 .map(e -> CloudEventBuilder.<DomainEvent>builder()
                         .withId(UUID.randomUUID().toString())
