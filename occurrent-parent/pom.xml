@@ -13,6 +13,7 @@
         <module>../occurrent-inmemory</module>
         <module>../occurrent-mongodb</module>
         <module>../occurrent-test-support</module>
+        <module>../occurrent-examples</module>
     </modules>
 
     <name>occurrent-parent</name>
@@ -25,6 +26,7 @@
         <maven.compiler.target>8</maven.compiler.target>
         <junit.version>5.6.2</junit.version>
         <test-containers.version>1.14.3</test-containers.version>
+        <kotlin.version>1.3.72</kotlin.version>
     </properties>
 
 
@@ -44,6 +46,11 @@
                 <groupId>org.slf4j</groupId>
                 <artifactId>slf4j-api</artifactId>
                 <version>1.7.30</version>
+            </dependency>
+            <dependency>
+                <groupId>org.jetbrains.kotlin</groupId>
+                <artifactId>kotlin-stdlib-jdk8</artifactId>
+                <version>${kotlin.version}</version>
             </dependency>
 
             <!-- Test -->
@@ -87,10 +94,26 @@
                 <artifactId>vavr</artifactId>
                 <version>0.10.3</version>
             </dependency>
+            <dependency>
+                <groupId>org.jetbrains.kotlinx</groupId>
+                <artifactId>kotlinx-collections-immutable-jvm</artifactId>
+                <version>0.3.2</version>
+            </dependency>
         </dependencies>
     </dependencyManagement>
-    <build>
 
+    <repositories>
+        <repository>
+            <snapshots>
+                <enabled>false</enabled>
+            </snapshots>
+            <id>jcenter</id>
+            <name>jcenter</name>
+            <url>https://jcenter.bintray.com/</url>
+        </repository>
+    </repositories>
+
+    <build>
         <pluginManagement><!-- lock down plugins versions to avoid using Maven defaults (may be moved to parent pom) -->
             <plugins>
                 <!-- clean lifecycle, see https://maven.apache.org/ref/current/maven-core/lifecycles.html#clean_Lifecycle -->
@@ -131,6 +154,11 @@
                 <plugin>
                     <artifactId>maven-project-info-reports-plugin</artifactId>
                     <version>3.0.0</version>
+                </plugin>
+                <plugin>
+                    <groupId>org.jetbrains.kotlin</groupId>
+                    <artifactId>kotlin-maven-plugin</artifactId>
+                    <version>${kotlin.version}</version>
                 </plugin>
             </plugins>
         </pluginManagement>
