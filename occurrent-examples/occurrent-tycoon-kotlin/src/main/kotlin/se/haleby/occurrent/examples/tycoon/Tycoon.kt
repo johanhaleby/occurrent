@@ -6,10 +6,10 @@ import se.haleby.occurrent.examples.tycoon.Destination.WarehouseB
 import se.haleby.occurrent.examples.tycoon.DomainEvent.*
 import se.haleby.occurrent.examples.tycoon.StartingPoint.Factory
 import se.haleby.occurrent.examples.tycoon.TransitPoint.Port
-import se.haleby.occurrent.examples.tycoon.VehicleActivity.MovableVehicleActivity.DeliveringCargo
-import se.haleby.occurrent.examples.tycoon.VehicleActivity.MovableVehicleActivity.Returning
+import se.haleby.occurrent.examples.tycoon.VehicleActivity.EnRouteVehicleActivity
+import se.haleby.occurrent.examples.tycoon.VehicleActivity.EnRouteVehicleActivity.DeliveringCargo
+import se.haleby.occurrent.examples.tycoon.VehicleActivity.EnRouteVehicleActivity.Returning
 import se.haleby.occurrent.examples.tycoon.VehicleActivity.WaitingForCargo
-import se.haleby.occurrent.examples.tycoon.VehicleType.Ship
 import se.haleby.occurrent.examples.tycoon.VehicleType.Truck
 
 // Domain Model
@@ -76,155 +76,155 @@ sealed class DomainEvent {
     data class VehicleStartedWaitingForCargo(val vehicle: Vehicle, val at: Location) : DomainEvent()
     data class VehicleStoppedWaitingForCargo(val vehicle: Vehicle, val at: Location) : DomainEvent()
     data class CargoWasDeliveredToDestination(val vehicle: Vehicle, val destination: Destination, val elapsedTime: Hours) : DomainEvent()
-    data class AllCargoWasDelivered(val elapsedTime: Hours) : DomainEvent()
+    data class AllCargoHasBeenDelivered(val elapsedTime: Hours) : DomainEvent()
     data class TimePassed(val time: Hours) : DomainEvent()
 }
-
-// Legs
-
-val factoryToPort = Leg(requiredVehicleType = Truck, from = Factory, to = Port, duration = 1)
-val portToWarehouseA = Leg(requiredVehicleType = Ship, from = Port, to = WarehouseA, duration = 4)
-val factoryToWarehouseB = Leg(requiredVehicleType = Truck, from = Factory, to = WarehouseB, duration = 5)
-
-// Routes
-val routeFromFactoryToWarehouseA = Route(factoryToPort, portToWarehouseA)
-val routeFromFactoryToWarehouseB = Route(factoryToWarehouseB)
-
-// Delivery network
-val deliveryNetwork = DeliveryNetwork(routeFromFactoryToWarehouseA, routeFromFactoryToWarehouseB)
-
-// Fleet
-val fleet = Fleet(Vehicle(name = "A", type = Truck), Vehicle(name = "B", type = Truck), Vehicle(name = "Ship", type = Ship))
-
 
 // Use cases
 fun deliverCargo(cargosToDeliver: List<Cargo>, fleet: Fleet, deliveryNetwork: DeliveryNetwork): List<DomainEvent> {
 
-    val cargoDestinations: Map<Cargo, Destination> = cargosToDeliver.map { cargo ->
+    val cargoDestinations: ImmutableMap<Cargo, Destination> = cargosToDeliver.map { cargo ->
         cargo to when (cargo) {
             Cargo.A -> WarehouseA
             Cargo.B -> WarehouseB
         }
-    }.toMap()
+    }.toMap().toImmutableMap()
 
-    val locationBuffers = LocationBuffers(persistentMapOf(Factory to cargosToDeliver.toPersistentList()))
+    val cargoAtLocation = CargoAtLocation(persistentMapOf(Factory to cargosToDeliver.toPersistentList()))
+
+    // TODO This should probably be passed in a parameter
+    val vehicleActivities = fleet.map { vehicle ->
+        vehicle to WaitingForCargo(location = if (vehicle.type == Truck) Factory else Port)
+    }.toMap().toPersistentMap()
 
     val scenario = Scenario(
-            vehicleActivities = fleet.map { vehicle ->
-                WaitingForCargo(vehicle, location = if (vehicle.type == Truck) Factory else Port)
-            }.toPersistentList(),
-            locationBuffers = locationBuffers,
-            cargoDestinations = cargoDestinations.toImmutableMap())
+            vehicleActivities = vehicleActivities,
+            cargoAtLocation = cargoAtLocation,
+            cargosToDeliver = cargosToDeliver,
+            deliveryNetwork = deliveryNetwork,
+            cargoDestinations = cargoDestinations
+    )
 
-    return scenario.execute(cargosToDeliver, deliveryNetwork)
+    return execute(scenario).history
 }
 
 // Internal
-private sealed class VehicleActivity {
-    abstract val vehicle: Vehicle
+private tailrec fun execute(scenario: Scenario): Scenario {
+    val updatedScenario = scenario.proceed { vehicle, activity ->
+        when (activity) {
+            is WaitingForCargo -> loadOrWaitForCargo(vehicle, activity.location, activity)
+            is EnRouteVehicleActivity -> continueRoute(vehicle, activity)
+        }
+    }
 
-    sealed class MovableVehicleActivity<T : MovableVehicleActivity<T>> : VehicleActivity() {
+    return if (updatedScenario.isScenarioCompleted()) {
+        updatedScenario
+    } else {
+        execute(updatedScenario.passTime(1))
+    }
+}
+
+private sealed class VehicleActivity {
+
+    sealed class EnRouteVehicleActivity : VehicleActivity() {
         abstract val from: Location
         abstract val to: Location
         abstract val elapsedTime: Hours
         abstract val legTime: Hours
 
-        abstract fun move(): T
-
         val remainingTime: Hours get() = legTime - elapsedTime
         fun hasArrived(): Boolean = remainingTime == 0
 
-        data class DeliveringCargo(val cargo: Cargo, override val vehicle: Vehicle, override val from: Location, override val to: Location, override val legTime: Hours, override val elapsedTime: Hours = 0) : MovableVehicleActivity<DeliveringCargo>() {
-            override fun move(): DeliveringCargo = copy(elapsedTime = elapsedTime.inc())
+        data class DeliveringCargo(val cargo: Cargo, override val from: Location, override val to: Location, override val legTime: Hours, override val elapsedTime: Hours = 0) : EnRouteVehicleActivity() {
+            fun continueRoute(): DeliveringCargo = copy(elapsedTime = elapsedTime.inc())
         }
 
-        data class Returning(override val vehicle: Vehicle, override val from: Location, override val to: Location, override val legTime: Hours, override val elapsedTime: Hours = 0) : MovableVehicleActivity<Returning>() {
-            override fun move(): Returning = copy(elapsedTime = elapsedTime.inc())
+        data class Returning(override val from: Location, override val to: Location, override val legTime: Hours, override val elapsedTime: Hours = 0) : EnRouteVehicleActivity() {
+            fun continueRoute(): Returning = copy(elapsedTime = elapsedTime.inc())
         }
-
     }
 
-    data class WaitingForCargo(override val vehicle: Vehicle, val location: Location) : VehicleActivity()
+    data class WaitingForCargo(val location: Location) : VehicleActivity()
 }
 
-private data class Scenario(val vehicleActivities: PersistentList<VehicleActivity>,
+private data class Scenario(val vehicleActivities: PersistentMap<Vehicle, VehicleActivity>,
                             val elapsedTime: Hours = 0,
                             val cargoDestinations: ImmutableMap<Cargo, Destination>,
-                            val locationBuffers: LocationBuffers = LocationBuffers(),
+                            val cargoAtLocation: CargoAtLocation = CargoAtLocation(),
                             val history: PersistentList<DomainEvent> = persistentListOf(),
-                            val completed: Boolean = false) {
-    fun passTime(time: Hours) = copy(elapsedTime = elapsedTime + time, history = history.add(TimePassed(time)))
-    fun appendHistory(e: DomainEvent): Scenario = copy(history = history.add(e))
-    fun appendHistory(events: List<DomainEvent>): Scenario = copy(history = history.addAll(events))
-
-    fun updateVehicleActivity(vehicleActivity: VehicleActivity): Scenario {
-        val updatedVehicleActivities = replaceVehicleActivityForVehicle(vehicleActivity)
-        return copy(vehicleActivities = updatedVehicleActivities)
-    }
-
-    fun dropOffCargo(cargo: Cargo, location: Location): Scenario = copy(locationBuffers = locationBuffers.dropOffCargo(cargo, location))
-
-    fun pickUpOrWaitForCargo(vehicle: Vehicle, location: Location, deliveryNetwork: DeliveryNetwork): Scenario {
-        val cargo = locationBuffers.findStockedCargoAt(location)
-        return if (cargo == null) {
-            copy(vehicleActivities = replaceVehicleActivityForVehicle(WaitingForCargo(vehicle, location)),
+                            val cargosToDeliver: List<Cargo>,
+                            val deliveryNetwork: DeliveryNetwork) {
+    fun loadOrWaitForCargo(vehicle: Vehicle, location: Location, currentVehicleActivity: VehicleActivity): Scenario {
+        val cargo = cargoAtLocation.findStockedCargoAt(location)
+        return if (cargo == null && currentVehicleActivity !is WaitingForCargo) {
+            copy(vehicleActivities = vehicleActivities.put(vehicle, WaitingForCargo(location)),
                     history = history.add(VehicleStartedWaitingForCargo(vehicle, location)))
+        } else if (cargo == null) {
+            this
         } else {
             val (requiredVehicleType, from, to, duration) = deliveryNetwork.findRouteForCargo(cargo, cargoDestinations).findLeg { leg -> leg.from == location }!!
             if (requiredVehicleType != vehicle.type) {
                 return this
             }
-            val isCurrentlyWaitingForCargo = vehicleActivities.first { vehicleActivity -> vehicleActivity.vehicle == vehicle } is WaitingForCargo
+            val isCurrentlyWaitingForCargo = vehicleActivities[vehicle] is WaitingForCargo
             val legStarted = LegStarted(vehicle, from, to, duration)
             val events = if (isCurrentlyWaitingForCargo) listOf(VehicleStoppedWaitingForCargo(vehicle, from), legStarted) else listOf(legStarted)
-            copy(vehicleActivities = replaceVehicleActivityForVehicle(DeliveringCargo(cargo, vehicle, from, to, duration)),
+            copy(vehicleActivities = vehicleActivities.put(vehicle, DeliveringCargo(cargo, from, to, duration)),
                     history = history.addAll(events),
-                    locationBuffers = locationBuffers.pickupCargo(from))
+                    cargoAtLocation = cargoAtLocation.loadCargo(from))
         }
     }
 
-    private fun replaceVehicleActivityForVehicle(vehicleActivity: VehicleActivity): PersistentList<VehicleActivity> {
-        val index = vehicleActivities.indexOfFirst { va -> va.vehicle == vehicleActivity.vehicle }
-        return vehicleActivities.set(index, vehicleActivity)
+    fun continueRoute(vehicle: Vehicle, vehicleActivity: EnRouteVehicleActivity): Scenario = when (vehicleActivity) {
+        is DeliveringCargo -> {
+            val vehicleActivityAfterRouteWasContinued = vehicleActivity.continueRoute()
+            if (vehicleActivityAfterRouteWasContinued.hasArrived()) {
+                val currentLocation = vehicleActivity.to
+                val deliveringCargoEvents = mutableListOf<DomainEvent>()
+                if (vehicleActivityAfterRouteWasContinued.to is Destination) {
+                    deliveringCargoEvents.add(CargoWasDeliveredToDestination(vehicle, vehicleActivityAfterRouteWasContinued.to, elapsedTime))
+                }
+                deliveringCargoEvents.add(LegCompleted(vehicle, vehicleActivity.from, vehicleActivity.to, vehicleActivityAfterRouteWasContinued.elapsedTime))
+                val newVehicleActivity = Returning(from = vehicleActivity.to, to = vehicleActivity.from, legTime = vehicleActivity.legTime)
+                appendHistory(deliveringCargoEvents).unloadCargo(vehicleActivityAfterRouteWasContinued.cargo, currentLocation).updateVehicleActivity(vehicle, newVehicleActivity)
+            } else {
+                updateVehicleActivity(vehicle, vehicleActivityAfterRouteWasContinued)
+            }
+        }
+        is Returning -> {
+            val vehicleActivityAfterMove = vehicleActivity.continueRoute()
+            if (vehicleActivityAfterMove.hasArrived()) {
+                val currentLocation = vehicleActivity.to
+                loadOrWaitForCargo(vehicle, currentLocation, vehicleActivityAfterMove)
+            } else {
+                updateVehicleActivity(vehicle, vehicleActivityAfterMove)
+            }
+        }
     }
 
-    fun execute(cargosToDeliver: List<Cargo>, deliveryNetwork : DeliveryNetwork): List<DomainEvent> {
-        return generateSequence(this) { scenario ->
-            val updatedOverview = scenario.vehicleActivities.fold(scenario) { overview, va ->
-                // Move all vehicles
-                when (va) {
-                    is WaitingForCargo -> overview.pickUpOrWaitForCargo(va.vehicle, va.location, deliveryNetwork)
-                    is DeliveringCargo -> {
-                        val vehicleActivityAfterMove = va.move()
-                        if (vehicleActivityAfterMove.hasArrived()) {
-                            val deliveringCargoEvents = mutableListOf<DomainEvent>()
-                            if (vehicleActivityAfterMove.to is Destination) {
-                                deliveringCargoEvents.add(CargoWasDeliveredToDestination(vehicleActivityAfterMove.vehicle, vehicleActivityAfterMove.to, overview.elapsedTime))
-                            }
-                            deliveringCargoEvents.add(LegCompleted(va.vehicle, va.from, va.to, vehicleActivityAfterMove.elapsedTime))
-                            val vehicleActivity = Returning(va.vehicle, from = va.to, to = va.from, legTime = va.legTime)
-                            overview.appendHistory(deliveringCargoEvents).dropOffCargo(vehicleActivityAfterMove.cargo, va.to).updateVehicleActivity(vehicleActivity)
-                        } else {
-                            overview.updateVehicleActivity(vehicleActivityAfterMove)
-                        }
-                    }
-                    is Returning -> {
-                        val vehicleActivityAfterMove = va.move()
-                        if (vehicleActivityAfterMove.hasArrived()) {
-                            overview.pickUpOrWaitForCargo(va.vehicle, vehicleActivityAfterMove.to, deliveryNetwork)
-                        } else {
-                            overview.updateVehicleActivity(vehicleActivityAfterMove)
-                        }
-                    }
-                }
-            }
+    fun proceed(fn: Scenario.(vehicle: Vehicle, activity: VehicleActivity) -> Scenario): Scenario = vehicleActivities.entries.fold(this) { s, (vehicle, activity) ->
+        fn(s, vehicle, activity)
+    }
 
-            when {
-                updatedOverview.completed -> null
-                updatedOverview.history.count { it is CargoWasDeliveredToDestination } == cargosToDeliver.size -> updatedOverview.copy(completed = true).appendHistory(AllCargoWasDelivered(updatedOverview.elapsedTime))
-                else -> updatedOverview.passTime(1)
-            }
-        }.last().history
+    fun isScenarioCompleted(): Boolean = history.any { it is AllCargoHasBeenDelivered }
+
+    // private helpers
+
+    fun passTime(time: Hours) = copy(elapsedTime = elapsedTime + time, history = history.add(TimePassed(time)))
+    private fun appendHistory(event: DomainEvent): Scenario = copy(history = history.add(event))
+    private fun appendHistory(events: List<DomainEvent>): Scenario = copy(history = history.addAll(events))
+
+    private fun updateVehicleActivity(vehicle: Vehicle, vehicleActivity: VehicleActivity): Scenario {
+        return copy(vehicleActivities = vehicleActivities.put(vehicle, vehicleActivity))
+    }
+
+    private fun unloadCargo(cargo: Cargo, location: Location): Scenario {
+        val s = if (history.count { it is CargoWasDeliveredToDestination } == cargosToDeliver.size) {
+            appendHistory(AllCargoHasBeenDelivered(elapsedTime))
+        } else {
+            this
+        }
+        return s.copy(cargoAtLocation = cargoAtLocation.unloadCargo(cargo, location))
     }
 }
 
@@ -233,8 +233,8 @@ private fun DeliveryNetwork.findRouteForCargo(cargo: Cargo, cargoDestinations: M
     return network.first { route -> route.legs.any { leg -> leg.to == destination } }
 }
 
-private data class LocationBuffers(private val buffer: PersistentMap<Location, PersistentList<Cargo>> = persistentMapOf()) {
-    fun dropOffCargo(cargo: Cargo, location: Location): LocationBuffers = copy(buffer = buffer.put(location, buffer.getOrDefault(location, persistentListOf()).add(cargo)))
+private data class CargoAtLocation(private val buffer: PersistentMap<Location, PersistentList<Cargo>> = persistentMapOf()) {
+    fun unloadCargo(cargo: Cargo, location: Location): CargoAtLocation = copy(buffer = buffer.put(location, buffer.getOrDefault(location, persistentListOf()).add(cargo)))
     fun findStockedCargoAt(location: Location): Cargo? = buffer[location]?.firstOrNull()
-    fun pickupCargo(location: Location): LocationBuffers = copy(buffer = buffer.put(location, buffer[location]!!.removeAt(0)))
+    fun loadCargo(location: Location): CargoAtLocation = copy(buffer = buffer.put(location, buffer[location]!!.removeAt(0)))
 }

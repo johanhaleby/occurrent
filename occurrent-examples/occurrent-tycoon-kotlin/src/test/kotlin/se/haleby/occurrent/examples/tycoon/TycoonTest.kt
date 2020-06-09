@@ -11,8 +11,26 @@ class TycoonTest {
 
     @Test
     fun `prints history and elapsed time`() {
+        // Given
+
+        // Legs
+        val factoryToPort = Leg(requiredVehicleType = VehicleType.Truck, from = StartingPoint.Factory, to = TransitPoint.Port, duration = 1)
+        val portToWarehouseA = Leg(requiredVehicleType = VehicleType.Ship, from = TransitPoint.Port, to = Destination.WarehouseA, duration = 4)
+        val factoryToWarehouseB = Leg(requiredVehicleType = VehicleType.Truck, from = StartingPoint.Factory, to = Destination.WarehouseB, duration = 5)
+
+        // Routes
+        val routeFromFactoryToWarehouseA = Route(factoryToPort, portToWarehouseA)
+        val routeFromFactoryToWarehouseB = Route(factoryToWarehouseB)
+
+        // Delivery network
+        val deliveryNetwork = DeliveryNetwork(routeFromFactoryToWarehouseA, routeFromFactoryToWarehouseB)
+
+        // Fleet
+        val fleet = Fleet(Vehicle(name = "A", type = VehicleType.Truck), Vehicle(name = "B", type = VehicleType.Truck), Vehicle(name = "Ship", type = VehicleType.Ship))
+
+
         // When
-        val events = deliverCargo(listOf(A, B, B, B, A, B, A, A, A, B, B, B), fleet, deliveryNetwork)
+        val events = deliverCargo(listOf(A, A, B, A, B, B, A, B), fleet, deliveryNetwork)
 
         // Then
         println("==== History ===")
