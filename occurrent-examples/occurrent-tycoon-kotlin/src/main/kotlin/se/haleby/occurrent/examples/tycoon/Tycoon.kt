@@ -77,7 +77,7 @@ sealed class DomainEvent {
     data class VehicleStoppedWaitingForCargo(val vehicle: Vehicle, val at: Location) : DomainEvent()
     data class CargoWasDeliveredToDestination(val vehicle: Vehicle, val destination: Destination, val elapsedTime: Hours) : DomainEvent()
     data class AllCargoHasBeenDelivered(val elapsedTime: Hours) : DomainEvent()
-    data class TimePassed(val time: Hours) : DomainEvent()
+    data class TimeElapsed(val time: Hours) : DomainEvent()
 }
 
 // Use cases
@@ -97,7 +97,7 @@ fun deliverCargo(cargosToDeliver: List<Cargo>, fleet: Fleet, deliveryNetwork: De
         vehicle to WaitingForCargo(location = if (vehicle.type == Truck) Factory else Port)
     }.toMap().toPersistentMap()
 
-    val scenario = Scenario(
+    val initialScenario = Scenario(
             vehicleActivities = vehicleActivities,
             cargoAtLocation = cargoAtLocation,
             cargosToDeliver = cargosToDeliver,
@@ -105,25 +105,21 @@ fun deliverCargo(cargosToDeliver: List<Cargo>, fleet: Fleet, deliveryNetwork: De
             cargoDestinations = cargoDestinations
     )
 
-    return execute(scenario).history
+    val scenarioProgression = generateSequence(initialScenario) { scenario ->
+        scenario.moveForward { vehicle, currentActivity ->
+            when (currentActivity) {
+                is WaitingForCargo -> loadOrWaitForCargo(vehicle, currentActivity.location, currentActivity)
+                is EnRouteVehicleActivity -> continueRoute(vehicle, currentActivity)
+            }
+        }
+    }
+    return scenarioProgression
+            .dropWhile { scenario -> !scenario.isScenarioCompleted() }
+            .first()
+            .history
 }
 
 // Internal
-private tailrec fun execute(scenario: Scenario): Scenario {
-    val updatedScenario = scenario.proceed { vehicle, activity ->
-        when (activity) {
-            is WaitingForCargo -> loadOrWaitForCargo(vehicle, activity.location, activity)
-            is EnRouteVehicleActivity -> continueRoute(vehicle, activity)
-        }
-    }
-
-    return if (updatedScenario.isScenarioCompleted()) {
-        updatedScenario
-    } else {
-        execute(updatedScenario.passTime(1))
-    }
-}
-
 private sealed class VehicleActivity {
 
     sealed class EnRouteVehicleActivity : VehicleActivity() {
@@ -155,23 +151,26 @@ private data class Scenario(val vehicleActivities: PersistentMap<Vehicle, Vehicl
                             val cargosToDeliver: List<Cargo>,
                             val deliveryNetwork: DeliveryNetwork) {
     fun loadOrWaitForCargo(vehicle: Vehicle, location: Location, currentVehicleActivity: VehicleActivity): Scenario {
-        val cargo = cargoAtLocation.findStockedCargoAt(location)
-        return if (cargo == null && currentVehicleActivity !is WaitingForCargo) {
-            copy(vehicleActivities = vehicleActivities.put(vehicle, WaitingForCargo(location)),
-                    history = history.add(VehicleStartedWaitingForCargo(vehicle, location)))
-        } else if (cargo == null) {
-            this
-        } else {
-            val (requiredVehicleType, from, to, duration) = deliveryNetwork.findRouteForCargo(cargo, cargoDestinations).findLeg { leg -> leg.from == location }!!
-            if (requiredVehicleType != vehicle.type) {
-                return this
+        val cargo = cargoAtLocation.findCargoAtLocation(location)
+        return when {
+            cargo == null && currentVehicleActivity is WaitingForCargo -> this // Vehicle is already waiting for cargo, do nothing
+            cargo == null ->
+                // Vehicle is currently not waiting for cargo (it has just arrived to the location) and since
+                // there's no cargo at this location the vehicle needs to wait for it to arrive before it can proceed.
+                copy(vehicleActivities = vehicleActivities.put(vehicle, WaitingForCargo(location)),
+                        history = history.add(VehicleStartedWaitingForCargo(vehicle, location)))
+            else -> {
+                val (requiredVehicleType, from, to, duration) = deliveryNetwork.findRouteForCargo(cargo, cargoDestinations).findLeg { leg -> leg.from == location }!!
+                if (requiredVehicleType != vehicle.type) {
+                    return this
+                }
+                val isCurrentlyWaitingForCargo = vehicleActivities[vehicle] is WaitingForCargo
+                val legStarted = LegStarted(vehicle, from, to, duration)
+                val events = if (isCurrentlyWaitingForCargo) listOf(VehicleStoppedWaitingForCargo(vehicle, from), legStarted) else listOf(legStarted)
+                copy(vehicleActivities = vehicleActivities.put(vehicle, DeliveringCargo(cargo, from, to, duration)),
+                        history = history.addAll(events),
+                        cargoAtLocation = cargoAtLocation.addCargoToLocation(from))
             }
-            val isCurrentlyWaitingForCargo = vehicleActivities[vehicle] is WaitingForCargo
-            val legStarted = LegStarted(vehicle, from, to, duration)
-            val events = if (isCurrentlyWaitingForCargo) listOf(VehicleStoppedWaitingForCargo(vehicle, from), legStarted) else listOf(legStarted)
-            copy(vehicleActivities = vehicleActivities.put(vehicle, DeliveringCargo(cargo, from, to, duration)),
-                    history = history.addAll(events),
-                    cargoAtLocation = cargoAtLocation.loadCargo(from))
         }
     }
 
@@ -202,15 +201,22 @@ private data class Scenario(val vehicleActivities: PersistentMap<Vehicle, Vehicl
         }
     }
 
-    fun proceed(fn: Scenario.(vehicle: Vehicle, activity: VehicleActivity) -> Scenario): Scenario = vehicleActivities.entries.fold(this) { s, (vehicle, activity) ->
-        fn(s, vehicle, activity)
+    fun moveForward(fn: Scenario.(vehicle: Vehicle, activity: VehicleActivity) -> Scenario): Scenario {
+        val scenarioAfterAllVehiclesHaveMoved = vehicleActivities.entries.fold(this) { s, (vehicle, activity) ->
+            fn(s, vehicle, activity)
+        }
+        return if (scenarioAfterAllVehiclesHaveMoved.isScenarioCompleted()) {
+            scenarioAfterAllVehiclesHaveMoved
+        } else {
+            scenarioAfterAllVehiclesHaveMoved.elapseTimeBy(1)
+        }
     }
 
     fun isScenarioCompleted(): Boolean = history.any { it is AllCargoHasBeenDelivered }
 
     // private helpers
 
-    fun passTime(time: Hours) = copy(elapsedTime = elapsedTime + time, history = history.add(TimePassed(time)))
+    fun elapseTimeBy(time: Hours) = copy(elapsedTime = elapsedTime + time, history = history.add(TimeElapsed(time)))
     private fun appendHistory(event: DomainEvent): Scenario = copy(history = history.add(event))
     private fun appendHistory(events: List<DomainEvent>): Scenario = copy(history = history.addAll(events))
 
@@ -224,7 +230,7 @@ private data class Scenario(val vehicleActivities: PersistentMap<Vehicle, Vehicl
         } else {
             this
         }
-        return s.copy(cargoAtLocation = cargoAtLocation.unloadCargo(cargo, location))
+        return s.copy(cargoAtLocation = cargoAtLocation.removeCargoFromLocation(cargo, location))
     }
 }
 
@@ -234,7 +240,7 @@ private fun DeliveryNetwork.findRouteForCargo(cargo: Cargo, cargoDestinations: M
 }
 
 private data class CargoAtLocation(private val buffer: PersistentMap<Location, PersistentList<Cargo>> = persistentMapOf()) {
-    fun unloadCargo(cargo: Cargo, location: Location): CargoAtLocation = copy(buffer = buffer.put(location, buffer.getOrDefault(location, persistentListOf()).add(cargo)))
-    fun findStockedCargoAt(location: Location): Cargo? = buffer[location]?.firstOrNull()
-    fun loadCargo(location: Location): CargoAtLocation = copy(buffer = buffer.put(location, buffer[location]!!.removeAt(0)))
+    fun removeCargoFromLocation(cargo: Cargo, location: Location): CargoAtLocation = copy(buffer = buffer.put(location, buffer.getOrDefault(location, persistentListOf()).add(cargo)))
+    fun findCargoAtLocation(location: Location): Cargo? = buffer[location]?.firstOrNull()
+    fun addCargoToLocation(location: Location): CargoAtLocation = copy(buffer = buffer.put(location, buffer[location]!!.removeAt(0)))
 }

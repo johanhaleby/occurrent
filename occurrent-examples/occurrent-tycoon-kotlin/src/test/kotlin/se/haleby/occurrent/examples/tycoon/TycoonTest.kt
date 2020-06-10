@@ -4,7 +4,7 @@ import org.junit.jupiter.api.Test
 import se.haleby.occurrent.examples.tycoon.Cargo.A
 import se.haleby.occurrent.examples.tycoon.Cargo.B
 import se.haleby.occurrent.examples.tycoon.DomainEvent.CargoWasDeliveredToDestination
-import se.haleby.occurrent.examples.tycoon.DomainEvent.TimePassed
+import se.haleby.occurrent.examples.tycoon.DomainEvent.TimeElapsed
 
 
 class TycoonTest {
@@ -37,7 +37,7 @@ class TycoonTest {
         println(events.joinToString(separator = "\n"))
         println("================")
         println("Elapsed Time (1): " + events.filterIsInstance<CargoWasDeliveredToDestination>().last().elapsedTime + " hours")
-        println("Elapsed Time (2): " + events.filterIsInstance<TimePassed>().map(TimePassed::time).reduce(Int::plus) + " hours")
+        println("Elapsed Time (2): " + events.filterIsInstance<TimeElapsed>().map(TimeElapsed::time).reduce(Int::plus) + " hours")
 
     }
 }
