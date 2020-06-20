@@ -1,6 +1,7 @@
 package se.haleby.occurrent.examples.tycoon
 
 import org.assertj.core.api.Assertions.assertThat
+import org.junit.jupiter.api.Test
 import org.junit.jupiter.api.assertAll
 import org.junit.jupiter.params.ParameterizedTest
 import org.junit.jupiter.params.provider.CsvSource
@@ -55,6 +56,35 @@ class TycoonTest {
                 { assertThat(elapsedTimeInCargoWasDeliveredToDestinationEvent).isEqualTo(expectedTimeString.toInt()) },
                 { assertThat(calculatedTimeElapsed).isEqualTo(expectedTimeString.toInt()) }
         )
+    }
+
+    @Test
+    fun `fdsrs`() {
+        // Given
+        val deliveryNetwork = deliveryNetwork {
+            route {
+                leg(requiredVehicleType = Truck, from = Factory, to = Port, duration = 1)
+                leg(requiredVehicleType = Ship, from = Port, to = WarehouseA, duration = 4)
+            }
+            route {
+                leg(requiredVehicleType = Truck, from = Factory, to = WarehouseB, duration = 5)
+            }
+        }
+
+        val fleet = fleet {
+            add(vehicleName = "A", vehicleType = Truck, at = Factory)
+            add(vehicleName = "B", vehicleType = Truck, at = Factory)
+            add(vehicleName = "Ship", vehicleType = Ship, at = Port)
+        }
+
+        val deliveryPlan = "ABBBABAAABBB".parseToDeliveryPlan()
+        val events = deliverCargo(deliveryPlan, fleet, deliveryNetwork)
+
+        // When
+        val logEvents = generateLogFromEvents(events)
+
+        // Then
+        println(logEvents.joinToString("\n"))
     }
 }
 

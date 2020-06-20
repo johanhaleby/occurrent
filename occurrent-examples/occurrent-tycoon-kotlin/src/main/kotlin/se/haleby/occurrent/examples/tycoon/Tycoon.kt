@@ -2,9 +2,10 @@ package se.haleby.occurrent.examples.tycoon
 
 import kotlinx.collections.immutable.*
 import se.haleby.occurrent.examples.tycoon.DomainEvent.*
-import se.haleby.occurrent.examples.tycoon.VehicleActivity.*
+import se.haleby.occurrent.examples.tycoon.VehicleActivity.EnRouteVehicleActivity
 import se.haleby.occurrent.examples.tycoon.VehicleActivity.EnRouteVehicleActivity.DeliveringCargo
 import se.haleby.occurrent.examples.tycoon.VehicleActivity.EnRouteVehicleActivity.Returning
+import se.haleby.occurrent.examples.tycoon.VehicleActivity.StationaryVehicleActivity
 import se.haleby.occurrent.examples.tycoon.VehicleActivity.StationaryVehicleActivity.WaitingForCargo
 import se.haleby.occurrent.examples.tycoon.VehicleActivity.StationaryVehicleActivity.WaitingToStartJourney
 
@@ -95,11 +96,12 @@ class DeliveryPlan private constructor(internal val cargoDeliveries: MutableList
 }
 
 sealed class DomainEvent {
-    data class LegStarted(val cargo: Cargo, val vehicle: Vehicle, val from: Location, val to: Location, val estimatedTimeForThisLeg: Hours) : DomainEvent()
-    data class LegCompleted(val cargo: Cargo, val vehicle: Vehicle, val from: Location, val to: Location, val elapsedTimeForThisLeg: Hours) : DomainEvent()
+    data class VehicleDeparted(val cargo: Cargo, val vehicle: Vehicle, val from: Location, val to: Location, val elapsedTime: Hours, val estimatedTimeForThisLeg: Hours) : DomainEvent()
+    data class VehicleArrived(val cargo: Cargo, val vehicle: Vehicle, val from: Location, val to: Location, val elapsedTime: Hours, val elapsedTimeForThisLeg: Hours) : DomainEvent()
     data class VehicleStartedWaitingForCargo(val vehicle: Vehicle, val at: Location) : DomainEvent()
     data class VehicleStoppedWaitingForCargo(val vehicle: Vehicle, val at: Location) : DomainEvent()
-    data class CargoWasDeliveredToDestination(val cargo: Cargo, val vehicle: Vehicle, val destination: Location, val elapsedTime: Hours) : DomainEvent()
+    data class CargoDeliveryStarted(val cargo: Cargo, val origin: Location, val destination: Location, val elapsedTime: Hours) : DomainEvent()
+    data class CargoWasDeliveredToDestination(val cargo: Cargo, val vehicle: Vehicle, val origin: Location, val destination: Location, val elapsedTime: Hours) : DomainEvent()
     data class AllCargoHasBeenDelivered(val elapsedTime: Hours) : DomainEvent()
     data class TimeElapsed(val time: Hours) : DomainEvent()
 }
@@ -155,6 +157,7 @@ private sealed class VehicleActivity {
 
     sealed class StationaryVehicleActivity : VehicleActivity() {
         abstract val location: Location
+
         data class WaitingForCargo(override val location: Location) : StationaryVehicleActivity()
         data class WaitingToStartJourney(override val location: Location) : StationaryVehicleActivity()
 
@@ -199,9 +202,14 @@ private data class Journey(val fleetActivity: PersistentMap<Vehicle, VehicleActi
                 if (requiredVehicleType != vehicle.type) {
                     return this
                 }
-                val isCurrentlyWaitingForCargo = fleetActivity[vehicle] is WaitingForCargo
-                val legStarted = LegStarted(cargo, vehicle, from, to, duration)
-                val events = if (isCurrentlyWaitingForCargo) listOf(VehicleStoppedWaitingForCargo(vehicle, from), legStarted) else listOf(legStarted)
+                val events = mutableListOf<DomainEvent>()
+                if (fleetActivity[vehicle] is WaitingForCargo) {
+                    events.add(VehicleStoppedWaitingForCargo(vehicle, from))
+                }
+                if (deliveryPlan[cargo].from == from) {
+                    events.add(CargoDeliveryStarted(cargo, from, deliveryPlan[cargo].to, elapsedTime))
+                }
+                events.add(VehicleDeparted(cargo, vehicle, from, to, elapsedTime, duration))
                 copy(fleetActivity = fleetActivity.put(vehicle, DeliveringCargo(cargo, from, to, duration)),
                         history = history.addAll(events),
                         facilities = facilities.loadCargo(from, cargo))
@@ -215,10 +223,10 @@ private data class Journey(val fleetActivity: PersistentMap<Vehicle, VehicleActi
             if (vehicleActivityAfterRouteWasContinued.hasArrived()) {
                 val currentLocation = vehicleActivity.to
                 val cargo = vehicleActivity.cargo
-                val deliveringCargoEvents = mutableListOf<DomainEvent>(LegCompleted(cargo, vehicle, vehicleActivity.from, vehicleActivity.to, vehicleActivityAfterRouteWasContinued.elapsedTime))
+                val deliveringCargoEvents = mutableListOf<DomainEvent>(VehicleArrived(cargo, vehicle, vehicleActivity.from, vehicleActivity.to, elapsedTime, vehicleActivityAfterRouteWasContinued.elapsedTime))
                 val finalCargoDestination = deliveryPlan[cargo].to
                 if (vehicleActivityAfterRouteWasContinued.hasArrivedTo(finalCargoDestination)) {
-                    deliveringCargoEvents.add(CargoWasDeliveredToDestination(cargo, vehicle, vehicleActivityAfterRouteWasContinued.to, elapsedTime))
+                    deliveringCargoEvents.add(CargoWasDeliveredToDestination(cargo, vehicle, deliveryPlan[cargo].from, finalCargoDestination, elapsedTime))
                     if (history.count { it is CargoWasDeliveredToDestination }.inc() == deliveryPlan.size) {
                         deliveringCargoEvents.add(AllCargoHasBeenDelivered(elapsedTime))
                     }
