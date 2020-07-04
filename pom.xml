@@ -5,18 +5,17 @@
     <modelVersion>4.0.0</modelVersion>
 
     <groupId>se.haleby.occurrent</groupId>
-    <artifactId>occurrent-parent</artifactId>
+    <artifactId>parent</artifactId>
     <packaging>pom</packaging>
     <version>0.0.1-SNAPSHOT</version>
     <modules>
-        <module>../occurrent-core</module>
-        <module>../occurrent-inmemory</module>
-        <module>../occurrent-mongodb</module>
-        <module>../occurrent-test-support</module>
-        <module>../occurrent-examples</module>
+        <module>core</module>
+        <module>test-support</module>
+        <module>examples</module>
+        <module>eventstore</module>
     </modules>
 
-    <name>occurrent-parent</name>
+    <name>parent</name>
     <!-- FIXME change it to the project's website -->
     <url>http://www.example.com</url>
 
@@ -132,7 +131,7 @@
                 </plugin>
                 <plugin>
                     <artifactId>maven-surefire-plugin</artifactId>
-                    <version>2.22.1</version>
+                    <version>2.22.2</version>
                 </plugin>
                 <plugin>
                     <artifactId>maven-jar-plugin</artifactId>
