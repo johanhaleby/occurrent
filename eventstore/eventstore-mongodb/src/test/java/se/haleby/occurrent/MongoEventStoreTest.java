@@ -5,6 +5,7 @@ import io.cloudevents.v1.CloudEventBuilder;
 import io.cloudevents.v1.CloudEventImpl;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.extension.RegisterExtension;
 import org.testcontainers.containers.MongoDBContainer;
 import org.testcontainers.junit.jupiter.Container;
 import org.testcontainers.junit.jupiter.Testcontainers;
@@ -36,6 +37,9 @@ class MongoEventStoreTest {
     @Container
     private static final MongoDBContainer mongoDBContainer = new MongoDBContainer("mongo:4.2.7");
     private MongoEventStore mongoEventStore;
+
+    @RegisterExtension
+    FlushEventsInMongoDBExtension flushEventsInMongoDBExtension = new FlushEventsInMongoDBExtension(new ConnectionString(mongoDBContainer.getReplicaSetUrl() + ".events"));
 
     @BeforeEach
     void create_mongo_event_store() {
