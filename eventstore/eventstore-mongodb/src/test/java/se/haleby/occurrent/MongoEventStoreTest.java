@@ -53,35 +53,58 @@ class MongoEventStoreTest {
 
         // When
         List<DomainEvent> events = Name.defineName(now, "John Doe");
-        persist(mongoEventStore, "name", events);
+        persist(mongoEventStore, "name", 0, events);
 
         // Then
         EventStream<Map> eventStream = mongoEventStore.read("name", Map.class);
         List<DomainEvent> readEvents = deserialize(eventStream.events());
 
         assertAll(() -> {
-            assertThat(eventStream.version()).isEqualTo(0);
+            assertThat(eventStream.version()).isEqualTo(1);
             assertThat(eventStream.events()).hasSize(1);
             assertThat(readEvents).containsExactlyElementsOf(events);
         });
     }
 
     @Test
-    void can_read_and_write_multiple_events_to_mongo_event_store() {
+    void can_read_and_write_multiple_events_at_once_to_mongo_event_store() {
         LocalDateTime now = LocalDateTime.now();
         List<DomainEvent> events = chain(Name.defineName(now, "Hello World"), es -> Name.changeName(es, now, "John Doe"));
 
         // When
-        persist(mongoEventStore, "name", events);
+        persist(mongoEventStore, "name", 0, events);
 
         // Then
         EventStream<Map> eventStream = mongoEventStore.read("name", Map.class);
         List<DomainEvent> readEvents = deserialize(eventStream.events());
 
         assertAll(() -> {
-            assertThat(eventStream.version()).isEqualTo(0);
+            assertThat(eventStream.version()).isEqualTo(1);
             assertThat(eventStream.events()).hasSize(2);
             assertThat(readEvents).containsExactlyElementsOf(events);
+        });
+    }
+
+    @Test
+    void can_read_and_write_multiple_events_at_different_occasions_to_mongo_event_store() {
+        LocalDateTime now = LocalDateTime.now();
+        NameDefined nameDefined = new NameDefined(now, "name");
+        NameWasChanged nameWasChanged1 = new NameWasChanged(now.plusHours(1), "name2");
+        NameWasChanged nameWasChanged2 = new NameWasChanged(now.plusHours(2), "name3");
+
+        // When
+        persist(mongoEventStore, "name", 0, nameDefined);
+        persist(mongoEventStore, "name", 1, nameWasChanged1);
+        persist(mongoEventStore, "name", 2, nameWasChanged2);
+
+        // Then
+        EventStream<Map> eventStream = mongoEventStore.read("name", Map.class);
+        List<DomainEvent> readEvents = deserialize(eventStream.events());
+
+        assertAll(() -> {
+            assertThat(eventStream.version()).isEqualTo(3);
+            assertThat(eventStream.events()).hasSize(3);
+            assertThat(readEvents).containsExactly(nameDefined, nameWasChanged1, nameWasChanged2);
         });
     }
 
@@ -102,8 +125,14 @@ class MongoEventStoreTest {
 
     }
 
-    private void persist(EventStore eventStore, String eventStreamId, List<DomainEvent> events) {
-        eventStore.write(eventStreamId, 0, events.stream()
+    private void persist(EventStore eventStore, String eventStreamId, long expectedStreamVersion, DomainEvent event) {
+        List<DomainEvent> events = new ArrayList<>();
+        events.add(event);
+        persist(eventStore, eventStreamId, expectedStreamVersion, events);
+    }
+
+    private void persist(EventStore eventStore, String eventStreamId, long expectedStreamVersion, List<DomainEvent> events) {
+        eventStore.write(eventStreamId, expectedStreamVersion, events.stream()
                 .map(e -> CloudEventBuilder.<Map<String, Object>>builder()
                         .withId(UUID.randomUUID().toString())
                         .withSource(URI.create("http://name"))

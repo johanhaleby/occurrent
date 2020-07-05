@@ -20,7 +20,7 @@ import java.util.stream.Stream;
 
 import static com.mongodb.client.model.Filters.and;
 import static com.mongodb.client.model.Filters.eq;
-import static com.mongodb.client.model.Updates.pushEach;
+import static com.mongodb.client.model.Updates.*;
 
 public class MongoEventStore implements EventStore {
     private static final Logger log = LoggerFactory.getLogger(MongoEventStore.class);
@@ -54,7 +54,7 @@ public class MongoEventStore implements EventStore {
         List<String> serializedEvents = events.map(Json::encode).collect(Collectors.toList());
         // Note that upsert will fail if version is different since _id is unique in MongoDB
         eventCollection.updateOne(and(eq("_id", streamId), eq("version", expectedStreamVersion)),
-                pushEach("events", serializedEvents),
+                combine(pushEach("events", serializedEvents), set("version", expectedStreamVersion + 1)),
                 new UpdateOptions().upsert(true));
     }
 
