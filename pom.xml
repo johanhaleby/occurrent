@@ -13,6 +13,7 @@
         <module>test-support</module>
         <module>examples</module>
         <module>eventstore</module>
+        <module>change-streamer</module>
     </modules>
 
     <name>parent</name>
@@ -97,6 +98,11 @@
                 <groupId>org.jetbrains.kotlinx</groupId>
                 <artifactId>kotlinx-collections-immutable-jvm</artifactId>
                 <version>0.3.2</version>
+            </dependency>
+            <dependency>
+                <groupId>org.awaitility</groupId>
+                <artifactId>awaitility</artifactId>
+                <version>4.0.3</version>
             </dependency>
         </dependencies>
     </dependencyManagement>
