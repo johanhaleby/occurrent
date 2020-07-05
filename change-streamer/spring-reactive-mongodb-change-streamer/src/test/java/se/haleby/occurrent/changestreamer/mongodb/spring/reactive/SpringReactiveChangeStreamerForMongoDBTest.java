@@ -54,7 +54,7 @@ public class SpringReactiveChangeStreamerForMongoDBTest {
     void calls_listener_for_each_new_event() {
         // Given
         CopyOnWriteArrayList<CloudEventImpl<DomainEvent>> state = new CopyOnWriteArrayList<>();
-        changeStreamer.withChanges(cloudEvent -> Mono.fromRunnable(() -> state.add(cloudEvent))).subscribeOn(Schedulers.newSingle("test")).subscribe();
+        changeStreamer.forEachEvent(cloudEvent -> Mono.fromRunnable(() -> state.add(cloudEvent))).subscribeOn(Schedulers.newSingle("test")).subscribe();
         NameDefined nameDefined1 = new NameDefined(LocalDateTime.now(), "name1");
         NameWasChanged nameWasChanged1 = new NameWasChanged(LocalDateTime.now(), "name3");
         NameDefined nameDefined2 = new NameDefined(LocalDateTime.now(), "name2");
@@ -62,10 +62,10 @@ public class SpringReactiveChangeStreamerForMongoDBTest {
         // When
         mongoEventStore.write("1", 0, serialize(nameDefined1));
         mongoEventStore.write("2", 0, serialize(nameDefined2));
-        // mongoEventStore.write("1", 1L, serialize(nameWasChanged1));
+        mongoEventStore.write("1", 1, serialize(nameWasChanged1));
 
         // Then
-        await().with().pollInterval(Duration.of(20, MILLIS)).untilAsserted(() -> assertThat(state).hasSize(2));
+        await().with().pollInterval(Duration.of(20, MILLIS)).untilAsserted(() -> assertThat(state).hasSize(3));
     }
 
     private Stream<CloudEventImpl<DomainEvent>> serialize(DomainEvent e) {

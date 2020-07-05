@@ -37,13 +37,14 @@ public class SpringReactiveChangeStreamerForMongoDB<T> {
         this.resumeTokenCollection = resumeTokenCollection;
     }
 
-    public Flux<CloudEventImpl<T>> withChanges(Function<CloudEventImpl<T>, Mono<Void>> action) {
+    public Flux<CloudEventImpl<T>> forEachEvent(Function<CloudEventImpl<T>, Mono<Void>> action) {
         return mongo.changeStream(String.class)
                 .watchCollection(eventCollection)
                 .listen()
                 .flatMap(changeEvent -> {
                     Flux<String> strings = extractCloudEventString(changeEvent.getBody());
                     return strings
+                            .log()
                             // @formatter:off
                             .map(body -> Json.decodeValue(body, new TypeReference<CloudEventImpl<T>>() {}))
                             // @formatter:on
