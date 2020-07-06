@@ -53,11 +53,12 @@ public class SpringReactiveChangeStreamerForMongoDBTest {
     @Test
     void calls_listener_for_each_new_event() {
         // Given
+        LocalDateTime now = LocalDateTime.now();
         CopyOnWriteArrayList<CloudEventImpl<DomainEvent>> state = new CopyOnWriteArrayList<>();
-        changeStreamer.forEachEvent(cloudEvent -> Mono.fromRunnable(() -> state.add(cloudEvent))).subscribeOn(Schedulers.newSingle("test")).subscribe();
-        NameDefined nameDefined1 = new NameDefined(LocalDateTime.now(), "name1");
-        NameWasChanged nameWasChanged1 = new NameWasChanged(LocalDateTime.now(), "name3");
-        NameDefined nameDefined2 = new NameDefined(LocalDateTime.now(), "name2");
+        changeStreamer.forEachEvent(cloudEvent -> Mono.fromRunnable(() -> state.addAll(cloudEvent))).subscribeOn(Schedulers.newSingle("test")).subscribe();
+        NameDefined nameDefined1 = new NameDefined(now, "name1");
+        NameDefined nameDefined2 = new NameDefined(now.plusSeconds(2), "name2");
+        NameWasChanged nameWasChanged1 = new NameWasChanged(now.plusSeconds(10), "name3");
 
         // When
         mongoEventStore.write("1", 0, serialize(nameDefined1));

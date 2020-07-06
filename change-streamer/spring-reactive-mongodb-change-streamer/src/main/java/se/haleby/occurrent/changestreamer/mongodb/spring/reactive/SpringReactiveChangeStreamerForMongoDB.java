@@ -1,11 +1,11 @@
 package se.haleby.occurrent.changestreamer.mongodb.spring.reactive;
 
-import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.core.type.TypeReference;
-import com.fasterxml.jackson.databind.JsonNode;
-import com.fasterxml.jackson.databind.ObjectMapper;
+import com.mongodb.client.model.changestream.OperationType;
+import com.mongodb.client.result.UpdateResult;
 import io.cloudevents.json.Json;
 import io.cloudevents.v1.CloudEventImpl;
+import org.bson.BsonString;
 import org.bson.BsonValue;
 import org.bson.Document;
 import org.springframework.data.mongodb.core.ChangeStreamEvent;
@@ -14,12 +14,16 @@ import org.springframework.data.mongodb.core.query.Update;
 import reactor.core.publisher.Flux;
 import reactor.core.publisher.Mono;
 
+import java.util.Collections;
 import java.util.HashMap;
-import java.util.Iterator;
 import java.util.List;
 import java.util.Map;
+import java.util.Map.Entry;
 import java.util.function.Function;
+import java.util.stream.Collectors;
 
+import static com.mongodb.client.model.changestream.OperationType.INSERT;
+import static com.mongodb.client.model.changestream.OperationType.UPDATE;
 import static org.springframework.data.mongodb.core.query.Criteria.where;
 import static org.springframework.data.mongodb.core.query.Query.query;
 
@@ -37,37 +41,27 @@ public class SpringReactiveChangeStreamerForMongoDB<T> {
         this.resumeTokenCollection = resumeTokenCollection;
     }
 
-    public Flux<CloudEventImpl<T>> forEachEvent(Function<CloudEventImpl<T>, Mono<Void>> action) {
+    @SuppressWarnings("ConstantConditions")
+    public Flux<CloudEventImpl<T>> forEachEvent(Function<List<CloudEventImpl<T>>, Mono<Void>> action) {
         return mongo.changeStream(String.class)
                 .watchCollection(eventCollection)
+                // TODO Filter only insert and update operations
                 .listen()
                 .flatMap(changeEvent -> {
-                    Flux<String> strings = extractCloudEventString(changeEvent.getBody());
-                    return strings
-                            .log()
+                    List<CloudEventImpl<T>> cloudEvents = extractEventsAsJson(changeEvent).stream()
                             // @formatter:off
-                            .map(body -> Json.decodeValue(body, new TypeReference<CloudEventImpl<T>>() {}))
+                            .map(eventAsJson -> Json.decodeValue(eventAsJson, new TypeReference<CloudEventImpl<T>>() {}))
                             // @formatter:on
-                            .flatMap(e -> action.apply(e).thenReturn(new Object() {
-                                private final ChangeStreamEvent<String> changeStreamEvent = changeEvent;
-                                private final CloudEventImpl<T> cloudEvent = e;
-                            }));
-
+                            .collect(Collectors.toList());
+                    return action.apply(cloudEvents).thenReturn(new ChangeStreamEventAndCloudEvent<>(changeEvent, cloudEvents));
                 })
-                .flatMap(tuple ->
-                        mongo.upsert(query(where(ID).is(RESUME_TOKEN_DOCUMENT_ID)),
-                                Update.fromDocument(latestResumeTokenDocument(RESUME_TOKEN_DOCUMENT_ID, tuple.changeStreamEvent.getResumeToken())),
-                                resumeTokenCollection).map(__ -> tuple.cloudEvent)
-                );
+                .flatMap(events -> persistResumeToken(events.changeStreamEvent.getResumeToken()).thenMany(Flux.fromIterable(events.cloudEvents)));
     }
 
-    private Flux<String> extractCloudEventString(String jsonString) {
-        try {
-            return Flux.fromIterable(new ObjectMapper().readTree(jsonString).path("events"))
-                    .map(JsonNode::asText);
-        } catch (JsonProcessingException e) {
-            throw new RuntimeException(e);
-        }
+    private Mono<UpdateResult> persistResumeToken(BsonValue resumeToken) {
+        return mongo.upsert(query(where(ID).is(RESUME_TOKEN_DOCUMENT_ID)),
+                Update.fromDocument(latestResumeTokenDocument(RESUME_TOKEN_DOCUMENT_ID, resumeToken)),
+                resumeTokenCollection);
     }
 
     @SuppressWarnings("SameParameterValue")
@@ -76,5 +70,38 @@ public class SpringReactiveChangeStreamerForMongoDB<T> {
         data.put(ID, resumeTokenDocumentId);
         data.put("resumeToken", resumeToken);
         return new Document(data);
+    }
+
+    private static List<String> extractEventsAsJson(ChangeStreamEvent<String> changeStreamEvent) {
+        final List<String> eventsAsJson;
+        OperationType operationType = changeStreamEvent.getOperationType();
+        if (operationType == INSERT) {
+            // This is when the first event(s) are written to the event store for a particular stream id
+            eventsAsJson = changeStreamEvent.getRaw().getFullDocument().getList("events", String.class);
+        } else if (operationType == UPDATE) {
+            // When events already exists for a stream id we get an update operation. To only get the events
+            // that are updated we get the "updated fields" and extract only the events ("version" is also updated but
+            // we don't care about it here).
+            eventsAsJson = changeStreamEvent.getRaw().getUpdateDescription().getUpdatedFields().entrySet().stream()
+                    .filter(entry -> entry.getKey().startsWith("events"))
+                    .map(Entry::getValue)
+                    .map(BsonValue::asString)
+                    .map(BsonString::getValue)
+                    .collect(Collectors.toList());
+        } else {
+            eventsAsJson = Collections.emptyList();
+        }
+
+        return eventsAsJson;
+    }
+
+    private static class ChangeStreamEventAndCloudEvent<T> {
+        private final ChangeStreamEvent<String> changeStreamEvent;
+        private final List<CloudEventImpl<T>> cloudEvents;
+
+        ChangeStreamEventAndCloudEvent(ChangeStreamEvent<String> changeStreamEvent, List<CloudEventImpl<T>> cloudEvents) {
+            this.changeStreamEvent = changeStreamEvent;
+            this.cloudEvents = cloudEvents;
+        }
     }
 }
