@@ -5,7 +5,7 @@
     <modelVersion>4.0.0</modelVersion>
 
     <groupId>se.haleby.occurrent</groupId>
-    <artifactId>parent</artifactId>
+    <artifactId>occurrent</artifactId>
     <packaging>pom</packaging>
     <version>0.0.1-SNAPSHOT</version>
     <modules>
@@ -16,7 +16,7 @@
         <module>change-streamer</module>
     </modules>
 
-    <name>parent</name>
+    <name>occurrent</name>
     <!-- FIXME change it to the project's website -->
     <url>http://www.example.com</url>
 
