@@ -55,7 +55,7 @@ public class SpringReactiveChangeStreamerForMongoDBTest {
         // Given
         LocalDateTime now = LocalDateTime.now();
         CopyOnWriteArrayList<CloudEventImpl<DomainEvent>> state = new CopyOnWriteArrayList<>();
-        changeStreamer.forEachEvent(cloudEvent -> Mono.fromRunnable(() -> state.addAll(cloudEvent))).subscribeOn(Schedulers.newSingle("test")).subscribe();
+        changeStreamer.subscribe("test", cloudEvent -> Mono.fromRunnable(() -> state.addAll(cloudEvent))).subscribeOn(Schedulers.newSingle("test")).subscribe();
         NameDefined nameDefined1 = new NameDefined(now, "name1");
         NameDefined nameDefined2 = new NameDefined(now.plusSeconds(2), "name2");
         NameWasChanged nameWasChanged1 = new NameWasChanged(now.plusSeconds(10), "name3");

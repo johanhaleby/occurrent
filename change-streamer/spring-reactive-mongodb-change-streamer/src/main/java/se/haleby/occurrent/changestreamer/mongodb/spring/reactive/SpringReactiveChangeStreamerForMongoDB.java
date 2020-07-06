@@ -41,11 +41,10 @@ public class SpringReactiveChangeStreamerForMongoDB<T> {
         this.resumeTokenCollection = resumeTokenCollection;
     }
 
-    @SuppressWarnings("ConstantConditions")
-    public Flux<CloudEventImpl<T>> forEachEvent(Function<List<CloudEventImpl<T>>, Mono<Void>> action) {
+    public Flux<CloudEventImpl<T>> subscribe(String subscriberId, Function<List<CloudEventImpl<T>>, Mono<Void>> action) {
         return mongo.changeStream(String.class)
                 .watchCollection(eventCollection)
-                // TODO Filter only insert and update operations
+                // TODO Filter only insert and update operations??
                 .listen()
                 .flatMap(changeEvent -> {
                     List<CloudEventImpl<T>> cloudEvents = extractEventsAsJson(changeEvent).stream()
@@ -55,19 +54,20 @@ public class SpringReactiveChangeStreamerForMongoDB<T> {
                             .collect(Collectors.toList());
                     return action.apply(cloudEvents).thenReturn(new ChangeStreamEventAndCloudEvent<>(changeEvent, cloudEvents));
                 })
-                .flatMap(events -> persistResumeToken(events.changeStreamEvent.getResumeToken()).thenMany(Flux.fromIterable(events.cloudEvents)));
+                .flatMap(events -> persistResumeToken(subscriberId, events.changeStreamEvent.getResumeToken()).thenMany(Flux.fromIterable(events.cloudEvents)));
     }
 
-    private Mono<UpdateResult> persistResumeToken(BsonValue resumeToken) {
+    private Mono<UpdateResult> persistResumeToken(String subscriberId, BsonValue resumeToken) {
         return mongo.upsert(query(where(ID).is(RESUME_TOKEN_DOCUMENT_ID)),
-                Update.fromDocument(latestResumeTokenDocument(RESUME_TOKEN_DOCUMENT_ID, resumeToken)),
+                Update.fromDocument(latestResumeTokenDocument(subscriberId, RESUME_TOKEN_DOCUMENT_ID, resumeToken)),
                 resumeTokenCollection);
     }
 
     @SuppressWarnings("SameParameterValue")
-    private static Document latestResumeTokenDocument(String resumeTokenDocumentId, BsonValue resumeToken) {
+    private static Document latestResumeTokenDocument(String subscriberId, String resumeTokenDocumentId, BsonValue resumeToken) {
         Map<String, Object> data = new HashMap<>();
         data.put(ID, resumeTokenDocumentId);
+        data.put("subscriberId", subscriberId);
         data.put("resumeToken", resumeToken);
         return new Document(data);
     }
