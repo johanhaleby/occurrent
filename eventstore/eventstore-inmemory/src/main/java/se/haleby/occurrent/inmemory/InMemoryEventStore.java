@@ -5,11 +5,11 @@ import se.haleby.occurrent.EventStore;
 import se.haleby.occurrent.EventStream;
 
 import java.util.ArrayList;
-import java.util.Collections;
 import java.util.List;
 import java.util.Objects;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ConcurrentMap;
+import java.util.function.Function;
 import java.util.stream.Collectors;
 import java.util.stream.Stream;
 
@@ -18,9 +18,14 @@ public class InMemoryEventStore implements EventStore {
     private final ConcurrentMap<String, VersionAndEvents> state = new ConcurrentHashMap<>();
 
     @Override
-    public <T> EventStream<T> read(String streamId, Class<T> t) {
-        VersionAndEvents versionAndEvents = state.getOrDefault(streamId, new VersionAndEvents(0, Collections.emptyList()));
-        return new EventStreamImpl<>(streamId, versionAndEvents);
+    public <T> EventStream<T> read(String streamId, int skip, int limit, Class<T> t) {
+        VersionAndEvents versionAndEvents = state.get(streamId);
+        if (versionAndEvents == null) {
+            return null;
+        } else if (skip == 0 && limit == Integer.MAX_VALUE) {
+            return new EventStreamImpl<>(streamId, versionAndEvents);
+        }
+        return new EventStreamImpl<>(streamId, versionAndEvents.flatMap(v -> new VersionAndEvents(v.version, v.events.subList(skip, limit))));
     }
 
     @Override
@@ -60,6 +65,10 @@ public class InMemoryEventStore implements EventStore {
         @Override
         public int hashCode() {
             return Objects.hash(version, events);
+        }
+
+        VersionAndEvents flatMap(Function<VersionAndEvents, VersionAndEvents> fn) {
+            return fn.apply(this);
         }
     }
 

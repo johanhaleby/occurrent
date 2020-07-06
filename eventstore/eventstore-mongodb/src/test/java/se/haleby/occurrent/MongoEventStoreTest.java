@@ -108,6 +108,29 @@ class MongoEventStoreTest {
         });
     }
 
+    @Test
+    void can_read_events_with_skip_and_limit() {
+        LocalDateTime now = LocalDateTime.now();
+        NameDefined nameDefined = new NameDefined(now, "name");
+        NameWasChanged nameWasChanged1 = new NameWasChanged(now.plusHours(1), "name2");
+        NameWasChanged nameWasChanged2 = new NameWasChanged(now.plusHours(2), "name3");
+
+        // When
+        persist(mongoEventStore, "name", 0, nameDefined);
+        persist(mongoEventStore, "name", 1, nameWasChanged1);
+        persist(mongoEventStore, "name", 2, nameWasChanged2);
+
+        // Then
+        EventStream<Map> eventStream = mongoEventStore.read("name", 1, 1, Map.class);
+        List<DomainEvent> readEvents = deserialize(eventStream.events());
+
+        assertAll(() -> {
+            assertThat(eventStream.version()).isEqualTo(3);
+            assertThat(eventStream.events()).hasSize(1);
+            assertThat(readEvents).containsExactly(nameWasChanged1);
+        });
+    }
+
     private List<DomainEvent> deserialize(Stream<CloudEventImpl<Map>> events) {
         return events
                 .map(CloudEventImpl::getData)

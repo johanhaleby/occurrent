@@ -20,6 +20,7 @@ import java.util.stream.Stream;
 
 import static com.mongodb.client.model.Filters.and;
 import static com.mongodb.client.model.Filters.eq;
+import static com.mongodb.client.model.Projections.slice;
 import static com.mongodb.client.model.Updates.*;
 
 public class MongoEventStore implements EventStore {
@@ -36,8 +37,8 @@ public class MongoEventStore implements EventStore {
     }
 
     @Override
-    public <T> EventStream<T> read(String streamId, Class<T> t) {
-        Document document = eventCollection.find(eq("_id", streamId)).first();
+    public <T> EventStream<T> read(String streamId, int skip, int limit, Class<T> t) {
+        Document document = eventCollection.find(eq("_id", streamId)).projection(slice("events", skip, limit)).first();
         if (document == null) {
             return null;
         }
