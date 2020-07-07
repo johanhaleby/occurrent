@@ -1,8 +1,11 @@
 package se.haleby.occurrent;
 
+import com.fasterxml.jackson.core.JsonProcessingException;
+import com.fasterxml.jackson.core.type.TypeReference;
+import com.fasterxml.jackson.databind.ObjectMapper;
 import com.mongodb.ConnectionString;
-import io.cloudevents.v1.CloudEventBuilder;
-import io.cloudevents.v1.CloudEventImpl;
+import io.cloudevents.CloudEvent;
+import io.cloudevents.core.builder.CloudEventBuilder;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.RegisterExtension;
@@ -41,11 +44,13 @@ class MongoEventStoreTest {
 
     @RegisterExtension
     FlushEventsInMongoDBExtension flushEventsInMongoDBExtension = new FlushEventsInMongoDBExtension(new ConnectionString(mongoDBContainer.getReplicaSetUrl() + ".events"));
+    private ObjectMapper objectMapper;
 
     @BeforeEach
     void create_mongo_event_store() {
         ConnectionString connectionString = new ConnectionString(mongoDBContainer.getReplicaSetUrl() + ".events");
         mongoEventStore = new MongoEventStore(connectionString);
+        objectMapper = new ObjectMapper();
     }
 
     @Test
@@ -57,7 +62,7 @@ class MongoEventStoreTest {
         persist(mongoEventStore, "name", 0, events);
 
         // Then
-        EventStream<Map> eventStream = mongoEventStore.read("name", Map.class);
+        EventStream<CloudEvent> eventStream = mongoEventStore.read("name");
         List<DomainEvent> readEvents = deserialize(eventStream.events());
 
         assertAll(() -> {
@@ -76,7 +81,7 @@ class MongoEventStoreTest {
         persist(mongoEventStore, "name", 0, events);
 
         // Then
-        EventStream<Map> eventStream = mongoEventStore.read("name", Map.class);
+        EventStream<CloudEvent> eventStream = mongoEventStore.read("name");
         List<DomainEvent> readEvents = deserialize(eventStream.events());
 
         assertAll(() -> {
@@ -99,7 +104,7 @@ class MongoEventStoreTest {
         persist(mongoEventStore, "name", 2, nameWasChanged2);
 
         // Then
-        EventStream<Map> eventStream = mongoEventStore.read("name", Map.class);
+        EventStream<CloudEvent> eventStream = mongoEventStore.read("name");
         List<DomainEvent> readEvents = deserialize(eventStream.events());
 
         assertAll(() -> {
@@ -122,7 +127,7 @@ class MongoEventStoreTest {
         persist(mongoEventStore, "name", 2, nameWasChanged2);
 
         // Then
-        EventStream<Map> eventStream = mongoEventStore.read("name", 1, 1, Map.class);
+        EventStream<CloudEvent> eventStream = mongoEventStore.read("name", 1, 1);
         List<DomainEvent> readEvents = deserialize(eventStream.events());
 
         assertAll(() -> {
@@ -132,10 +137,12 @@ class MongoEventStoreTest {
         });
     }
 
-    private List<DomainEvent> deserialize(Stream<CloudEventImpl<Map>> events) {
+    private List<DomainEvent> deserialize(Stream<CloudEvent> events) {
         return events
-                .map(CloudEventImpl::getData)
-                .map(Optional::get)
+                .map(CloudEvent::getData)
+                // @formatter:off
+                .map(unchecked(data -> objectMapper.readValue(data, new TypeReference<Map<String, Object>>() {})))
+                // @formatter:on
                 .map(event -> {
                     Instant instant = Instant.ofEpochMilli((long) event.get("time"));
                     LocalDateTime time = LocalDateTime.ofInstant(instant, UTC);
@@ -157,7 +164,7 @@ class MongoEventStoreTest {
 
     private void persist(EventStore eventStore, String eventStreamId, long expectedStreamVersion, List<DomainEvent> events) {
         eventStore.write(eventStreamId, expectedStreamVersion, events.stream()
-                .map(e -> CloudEventBuilder.<Map<String, Object>>builder()
+                .map(e -> CloudEventBuilder.v1()
                         .withId(UUID.randomUUID().toString())
                         .withSource(URI.create("http://name"))
                         .withType(e.getClass().getSimpleName())
@@ -169,11 +176,15 @@ class MongoEventStoreTest {
                 ));
     }
 
-    private static Map<String, Object> serializeEvent(DomainEvent e) {
-        return new HashMap<String, Object>() {{
-            put("type", e.getClass().getSimpleName());
-            put("name", e.getName());
-            put("time", e.getTimestamp().getTime());
-        }};
+    private byte[] serializeEvent(DomainEvent e) {
+        try {
+            return objectMapper.writeValueAsBytes(new HashMap<String, Object>() {{
+                put("type", e.getClass().getSimpleName());
+                put("name", e.getName());
+                put("time", e.getTimestamp().getTime());
+            }});
+        } catch (JsonProcessingException jsonProcessingException) {
+            throw new RuntimeException(jsonProcessingException);
+        }
     }
 }

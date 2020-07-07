@@ -25,8 +25,8 @@ public class ChangeStreamerFromMongoDBToSpringEventApplication {
     }
 
     @Bean
-    public SpringReactiveChangeStreamerForMongoDB<String> changeStreamerForMongoDB(ReactiveMongoOperations mongoOperations) {
-        return new SpringReactiveChangeStreamerForMongoDB<>(mongoOperations, "events", "resumeTokens");
+    public SpringReactiveChangeStreamerForMongoDB changeStreamerForMongoDB(ReactiveMongoOperations mongoOperations) {
+        return new SpringReactiveChangeStreamerForMongoDB(mongoOperations, "events", "resumeTokens");
     }
 
     @Bean

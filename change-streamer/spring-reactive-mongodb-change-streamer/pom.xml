@@ -18,7 +18,7 @@
     <dependencies>
         <dependency>
             <groupId>io.cloudevents</groupId>
-            <artifactId>cloudevents-api</artifactId>
+            <artifactId>cloudevents-json-jackson</artifactId>
         </dependency>
         <dependency>
             <groupId>com.fasterxml.jackson.core</groupId>
@@ -27,10 +27,6 @@
         <dependency>
             <groupId>com.fasterxml.jackson.core</groupId>
             <artifactId>jackson-databind</artifactId>
-        </dependency>
-        <dependency>
-            <groupId>com.fasterxml.jackson.datatype</groupId>
-            <artifactId>jackson-datatype-jdk8</artifactId>
         </dependency>
         <dependency>
             <groupId>io.projectreactor</groupId>

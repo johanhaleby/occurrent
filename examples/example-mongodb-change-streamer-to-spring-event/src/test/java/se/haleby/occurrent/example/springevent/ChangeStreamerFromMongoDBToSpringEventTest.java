@@ -1,8 +1,8 @@
 package se.haleby.occurrent.example.springevent;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
-import io.cloudevents.v1.CloudEventBuilder;
-import io.cloudevents.v1.CloudEventImpl;
+import io.cloudevents.CloudEvent;
+import io.cloudevents.core.builder.CloudEventBuilder;
 import org.junit.jupiter.api.AfterAll;
 import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.Test;
@@ -66,7 +66,7 @@ public class ChangeStreamerFromMongoDBToSpringEventTest {
     private EventListenerExample eventListenerExample;
 
     @Test
-    void calls_listener_for_each_new_event() {
+    void publishes_events_to_spring_event_publisher() {
         // Given
         LocalDateTime now = LocalDateTime.now();
         NameDefined nameDefined = new NameDefined(now, "name");
@@ -82,16 +82,16 @@ public class ChangeStreamerFromMongoDBToSpringEventTest {
         });
     }
 
-    private Stream<CloudEventImpl<String>> serialize(DomainEvent... events) {
+    private Stream<CloudEvent> serialize(DomainEvent... events) {
         return Stream.of(events)
-                .map(e -> CloudEventBuilder.<String>builder()
+                .map(e -> CloudEventBuilder.v1()
                         .withId(UUID.randomUUID().toString())
                         .withSource(URI.create("http://name"))
                         .withType(e.getClass().getSimpleName())
                         .withTime(toLocalDateTime(e.getTimestamp()).atZone(UTC))
                         .withSubject(e.getName())
                         .withDataContentType("application/json")
-                        .withData(unchecked(objectMapper::writeValueAsString).apply(e))
+                        .withData(unchecked(objectMapper::writeValueAsBytes).apply(e))
                         .build());
     }
 }

@@ -1,10 +1,11 @@
 package se.haleby.occurrent.changestreamer.mongodb.spring.reactive;
 
-import com.fasterxml.jackson.core.type.TypeReference;
 import com.mongodb.client.model.changestream.OperationType;
 import com.mongodb.client.result.UpdateResult;
-import io.cloudevents.json.Json;
-import io.cloudevents.v1.CloudEventImpl;
+import io.cloudevents.CloudEvent;
+import io.cloudevents.core.format.EventFormat;
+import io.cloudevents.core.provider.EventFormatProvider;
+import io.cloudevents.jackson.JsonFormat;
 import org.bson.BsonString;
 import org.bson.BsonValue;
 import org.bson.Document;
@@ -27,10 +28,11 @@ import java.util.stream.Collectors;
 
 import static com.mongodb.client.model.changestream.OperationType.INSERT;
 import static com.mongodb.client.model.changestream.OperationType.UPDATE;
+import static java.nio.charset.StandardCharsets.UTF_8;
 import static org.springframework.data.mongodb.core.query.Criteria.where;
 import static org.springframework.data.mongodb.core.query.Query.query;
 
-public class SpringReactiveChangeStreamerForMongoDB<T> {
+public class SpringReactiveChangeStreamerForMongoDB {
     private static final Logger log = LoggerFactory.getLogger(SpringReactiveChangeStreamerForMongoDB.class);
 
     private static final String ID = "_id";
@@ -38,27 +40,31 @@ public class SpringReactiveChangeStreamerForMongoDB<T> {
     private final ReactiveMongoOperations mongo;
     private final String eventCollection;
     private final String resumeTokenCollection;
+    private final EventFormat cloudEventSerializer;
 
     public SpringReactiveChangeStreamerForMongoDB(ReactiveMongoOperations mongo, String eventCollection, String resumeTokenCollection) {
         this.mongo = mongo;
         this.eventCollection = eventCollection;
         this.resumeTokenCollection = resumeTokenCollection;
+        cloudEventSerializer = EventFormatProvider.getInstance().resolveFormat(JsonFormat.CONTENT_TYPE);
     }
 
-    public Flux<CloudEventImpl<T>> subscribe(String subscriberId, Function<List<CloudEventImpl<T>>, Mono<Void>> action) {
+    public Flux<CloudEvent> subscribe(String subscriberId, Function<List<CloudEvent>, Mono<Void>> action) {
         ChangeStreamWithFilterAndProjection<String> changeStream = mongo.changeStream(String.class).watchCollection(eventCollection);
 
         // First try to find and use a resume token for the subscriber, if not found just listen normally.
         return mongo.find(query(where(ID).is(subscriberId)), Document.class, resumeTokenCollection)
                 .map(document -> document.get("resumeToken", BsonValue.class))
-                .doOnNext(resumeToken -> log.info("Found resume token {} for subscriber {}, will resume stream", resumeToken, subscriberId))
+                .doOnNext(resumeToken -> log.info("Found resume token {} for subscriber {}, will resume stream.", resumeToken, subscriberId))
                 .flatMap(resumeToken -> changeStream.startAfter(resumeToken).listen())
-                .switchIfEmpty(changeStream.listen())
+                .switchIfEmpty(Flux.defer(() -> {
+                    log.info("Couldn't find resume token for subscriber {}, will start subscribing to events for this moment in time.", subscriberId);
+                    return changeStream.listen();
+                }))
                 .flatMap(changeEvent -> {
-                    List<CloudEventImpl<T>> cloudEvents = extractEventsAsJson(changeEvent).stream()
-                            // @formatter:off
-                            .map(eventAsJson -> Json.decodeValue(eventAsJson, new TypeReference<CloudEventImpl<T>>() {}))
-                            // @formatter:on
+                    List<CloudEvent> cloudEvents = extractEventsAsJson(changeEvent).stream()
+                            .map(cloudEventString -> cloudEventString.getBytes(UTF_8))
+                            .map(cloudEventSerializer::deserialize)
                             .collect(Collectors.toList());
                     return action.apply(cloudEvents).thenReturn(new ChangeStreamEventAndCloudEvent<>(changeEvent, cloudEvents));
                 })
@@ -109,9 +115,9 @@ public class SpringReactiveChangeStreamerForMongoDB<T> {
 
     private static class ChangeStreamEventAndCloudEvent<T> {
         private final ChangeStreamEvent<String> changeStreamEvent;
-        private final List<CloudEventImpl<T>> cloudEvents;
+        private final List<CloudEvent> cloudEvents;
 
-        ChangeStreamEventAndCloudEvent(ChangeStreamEvent<String> changeStreamEvent, List<CloudEventImpl<T>> cloudEvents) {
+        ChangeStreamEventAndCloudEvent(ChangeStreamEvent<String> changeStreamEvent, List<CloudEvent> cloudEvents) {
             this.changeStreamEvent = changeStreamEvent;
             this.cloudEvents = cloudEvents;
         }

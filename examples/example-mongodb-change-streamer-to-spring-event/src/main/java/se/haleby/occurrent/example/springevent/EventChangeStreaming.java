@@ -12,6 +12,7 @@ import se.haleby.occurrent.domain.DomainEvent;
 
 import javax.annotation.PostConstruct;
 import javax.annotation.PreDestroy;
+import java.util.Objects;
 import java.util.concurrent.atomic.AtomicReference;
 
 import static se.haleby.occurrent.functional.CheckedFunction.unchecked;
@@ -21,12 +22,12 @@ public class EventChangeStreaming {
     private static final Logger log = LoggerFactory.getLogger(EventChangeStreaming.class);
 
     private static final String SUBSCRIBER_ID = "test-app";
-    private final SpringReactiveChangeStreamerForMongoDB<String> changeStreamerForMongoDB;
+    private final SpringReactiveChangeStreamerForMongoDB changeStreamerForMongoDB;
     private final ObjectMapper objectMapper;
     private final ApplicationEventPublisher eventPublisher;
     private final AtomicReference<Disposable> subscription;
 
-    public EventChangeStreaming(SpringReactiveChangeStreamerForMongoDB<String> changeStreamerForMongoDB,
+    public EventChangeStreaming(SpringReactiveChangeStreamerForMongoDB changeStreamerForMongoDB,
                                 ObjectMapper objectMapper,
                                 ApplicationEventPublisher eventPublisher) {
         this.changeStreamerForMongoDB = changeStreamerForMongoDB;
@@ -40,7 +41,7 @@ public class EventChangeStreaming {
         log.info("Subscribing with id {}", SUBSCRIBER_ID);
         Disposable disposable = changeStreamerForMongoDB.subscribe(SUBSCRIBER_ID,
                 events -> Flux.fromIterable(events)
-                        .map(cloudEvent -> cloudEvent.getData().orElseThrow(() -> new IllegalStateException("Couldn't find any data in the cloud event")))
+                        .map(cloudEvent -> Objects.requireNonNull(cloudEvent.getData()))
                         .map(unchecked(eventJson -> objectMapper.readValue(eventJson, DomainEvent.class)))
                         .doOnNext(eventPublisher::publishEvent)
                         .then())

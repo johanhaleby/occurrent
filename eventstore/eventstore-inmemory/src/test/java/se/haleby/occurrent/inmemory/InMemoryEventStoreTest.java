@@ -1,8 +1,10 @@
 package se.haleby.occurrent.inmemory;
 
-import io.cloudevents.v1.CloudEventBuilder;
+import com.fasterxml.jackson.databind.ObjectMapper;
+import io.cloudevents.core.builder.CloudEventBuilder;
 import org.assertj.core.api.SoftAssertions;
 import org.assertj.core.api.junit.jupiter.SoftAssertionsExtension;
+import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
 import se.haleby.occurrent.EventStore;
@@ -18,9 +20,18 @@ import java.util.UUID;
 import java.util.stream.Collectors;
 
 import static java.time.ZoneOffset.UTC;
+import static se.haleby.occurrent.functional.CheckedFunction.unchecked;
+import static se.haleby.occurrent.time.TimeConversion.toLocalDateTime;
 
 @ExtendWith(SoftAssertionsExtension.class)
 public class InMemoryEventStoreTest {
+
+    private ObjectMapper objectMapper;
+
+    @BeforeEach
+    void create_object_mapper() {
+        objectMapper = new ObjectMapper();
+    }
 
     @Test
     void read_and_write(SoftAssertions softly) {
@@ -33,21 +44,21 @@ public class InMemoryEventStoreTest {
         persist(inMemoryEventStore, "name", events);
 
         // Then
-        EventStream<DomainEvent> eventStream = inMemoryEventStore.read("name", DomainEvent.class);
+        EventStream<NameDefined> eventStream = inMemoryEventStore.read("name").map(unchecked(cloudEvent -> objectMapper.readValue(cloudEvent.getData(), NameDefined.class)));
         softly.assertThat(eventStream.version()).isEqualTo(0);
         softly.assertThat(eventStream.events()).hasSize(1);
-        softly.assertThat(eventStream.events().collect(Collectors.toList()).get(0).getData()).hasValue(new NameDefined(now, "John Doe"));
+        softly.assertThat(eventStream.events().collect(Collectors.toList())).containsExactly(new NameDefined(now, "John Doe"));
     }
 
     private void persist(EventStore inMemoryEventStore, String eventStreamId, List<DomainEvent> events) {
         inMemoryEventStore.write(eventStreamId, 0, events.stream()
-                .map(e -> CloudEventBuilder.<DomainEvent>builder()
+                .map(e -> CloudEventBuilder.v1()
                         .withId(UUID.randomUUID().toString())
                         .withSource(URI.create("http://name"))
                         .withType(e.getClass().getSimpleName())
-                        .withTime(e.getTimestamp().atZone(UTC))
+                        .withTime(toLocalDateTime(e.getTimestamp()).atZone(UTC))
                         .withSubject(e.getName())
-                        .withData(e)
+                        .withData(unchecked(objectMapper::writeValueAsBytes).apply(e))
                         .build()));
     }
 }
