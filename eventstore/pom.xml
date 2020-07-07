@@ -14,7 +14,7 @@
 
     <modules>
         <module>eventstore-inmemory</module>
-        <module>eventstore-mongodb</module>
+        <module>eventstore-mongodb-native</module>
     </modules>
 
 </project>
