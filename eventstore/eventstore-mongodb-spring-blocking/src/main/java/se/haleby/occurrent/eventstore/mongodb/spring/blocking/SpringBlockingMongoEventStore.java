@@ -11,16 +11,13 @@ import se.haleby.occurrent.EventStore;
 import se.haleby.occurrent.EventStream;
 
 import java.util.List;
-import java.util.stream.Collectors;
 import java.util.stream.Stream;
 
 import static java.nio.charset.StandardCharsets.UTF_8;
 import static org.springframework.data.mongodb.core.aggregation.Aggregation.*;
-import static org.springframework.data.mongodb.core.aggregation.ArrayOperators.Slice.sliceArrayOf;
 import static org.springframework.data.mongodb.core.query.Criteria.where;
 import static org.springframework.data.mongodb.core.query.Query.query;
 import static org.springframework.data.mongodb.core.query.Update.update;
-
 
 public class SpringBlockingMongoEventStore implements EventStore {
 
@@ -39,20 +36,21 @@ public class SpringBlockingMongoEventStore implements EventStore {
     public EventStream<CloudEvent> read(String streamId, int skip, int limit) {
         Aggregation aggregation = newAggregation(
                 match(where("_id").is(streamId)),
-                project("_id", "version").and(sliceArrayOf("events").offset(skip).itemCount(limit))
+                project("_id", "version").and("events").slice(limit, skip)
         );
 
         return mongoOperations.aggregate(aggregation, eventStoreCollectionName, EventStreamImpl.class).getMappedResults().stream()
                 .findFirst()
-                .map(eventStream -> eventStream.map(eventJsonString -> eventJsonString.getBytes(UTF_8)).map(cloudEventSerializer::deserialize))
+                .map(document -> document.map(eventJsonString -> eventJsonString.getBytes(UTF_8)).map(cloudEventSerializer::deserialize))
                 .orElse(null);
     }
 
     @Override
     public void write(String streamId, long expectedStreamVersion, Stream<CloudEvent> events) {
-        List<String> serializedEvents = events.map(cloudEventSerializer::serialize).map(bytes -> new String(bytes, UTF_8)).collect(Collectors.toList());
+        String[] serializedEvents = events.map(cloudEventSerializer::serialize).map(bytes -> new String(bytes, UTF_8)).toArray(String[]::new);
+        //noinspection ConfusingArgumentToVarargsMethod
         mongoOperations.upsert(query(where("_id").is(streamId).and("version").is(expectedStreamVersion)),
-                update("version", expectedStreamVersion + 1).push("events").value(serializedEvents),
+                update("version", expectedStreamVersion + 1).push("events").each(serializedEvents),
                 eventStoreCollectionName);
     }
 
