@@ -14,7 +14,7 @@
     <dependencies>
         <dependency>
             <groupId>se.haleby.occurrent</groupId>
-            <artifactId>core</artifactId>
+            <artifactId>eventstore-api-blocking</artifactId>
             <version>0.0.1-SNAPSHOT</version>
         </dependency>
         <dependency>

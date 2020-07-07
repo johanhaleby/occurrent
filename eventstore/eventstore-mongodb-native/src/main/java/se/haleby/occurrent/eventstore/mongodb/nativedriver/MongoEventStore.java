@@ -13,8 +13,8 @@ import io.cloudevents.jackson.JsonFormat;
 import org.bson.Document;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
-import se.haleby.occurrent.EventStore;
-import se.haleby.occurrent.EventStream;
+import se.haleby.occurrent.eventstore.api.blocking.EventStore;
+import se.haleby.occurrent.eventstore.api.blocking.EventStream;
 
 import java.util.Collections;
 import java.util.List;

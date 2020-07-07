@@ -1,4 +1,4 @@
-package se.haleby.occurrent;
+package se.haleby.occurrent.eventstore.api.blocking;
 
 public interface EventStore extends ReadEventStream, WriteEventStream {
 }

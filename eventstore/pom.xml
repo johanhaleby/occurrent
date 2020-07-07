@@ -13,6 +13,7 @@
     <artifactId>eventstore</artifactId>
 
     <modules>
+        <module>eventstore-api-blocking</module>
         <module>eventstore-inmemory</module>
         <module>eventstore-mongodb-native</module>
         <module>eventstore-mongodb-spring-blocking</module>

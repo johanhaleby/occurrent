@@ -1,8 +1,8 @@
 package se.haleby.occurrent.eventstore.inmemory;
 
 import io.cloudevents.CloudEvent;
-import se.haleby.occurrent.EventStore;
-import se.haleby.occurrent.EventStream;
+import se.haleby.occurrent.eventstore.api.blocking.EventStore;
+import se.haleby.occurrent.eventstore.api.blocking.EventStream;
 
 import java.util.ArrayList;
 import java.util.List;

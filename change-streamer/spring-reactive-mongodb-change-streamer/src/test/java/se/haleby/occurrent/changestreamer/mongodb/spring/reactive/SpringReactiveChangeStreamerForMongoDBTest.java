@@ -13,10 +13,10 @@ import org.testcontainers.containers.MongoDBContainer;
 import org.testcontainers.junit.jupiter.Container;
 import org.testcontainers.junit.jupiter.Testcontainers;
 import reactor.core.publisher.Mono;
-import se.haleby.occurrent.MongoEventStore;
 import se.haleby.occurrent.domain.DomainEvent;
 import se.haleby.occurrent.domain.NameDefined;
 import se.haleby.occurrent.domain.NameWasChanged;
+import se.haleby.occurrent.eventstore.mongodb.nativedriver.MongoEventStore;
 
 import java.net.URI;
 import java.time.Duration;

@@ -9,7 +9,6 @@
     <packaging>pom</packaging>
     <version>0.0.1-SNAPSHOT</version>
     <modules>
-        <module>core</module>
         <module>test-support</module>
         <module>examples</module>
         <module>eventstore</module>

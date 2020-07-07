@@ -1,4 +1,4 @@
-package se.haleby.occurrent;
+package se.haleby.occurrent.eventstore.api.blocking;
 
 import java.util.function.Function;
 import java.util.stream.Stream;

@@ -7,8 +7,8 @@ import io.cloudevents.core.provider.EventFormatProvider;
 import io.cloudevents.jackson.JsonFormat;
 import org.springframework.data.mongodb.core.MongoOperations;
 import org.springframework.data.mongodb.core.aggregation.Aggregation;
-import se.haleby.occurrent.EventStore;
-import se.haleby.occurrent.EventStream;
+import se.haleby.occurrent.eventstore.api.blocking.EventStore;
+import se.haleby.occurrent.eventstore.api.blocking.EventStream;
 
 import java.util.List;
 import java.util.stream.Stream;
