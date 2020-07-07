@@ -1,16 +1,27 @@
 package se.haleby.occurrent.domain;
 
 import java.time.LocalDateTime;
+import java.util.Date;
 import java.util.Objects;
+
+import static se.haleby.occurrent.time.TimeConversion.toDate;
 
 public class NameWasChanged implements DomainEvent {
 
-    private final LocalDateTime time;
-    private final String name;
+    private Date timestamp;
+    private String name;
 
-    public NameWasChanged(LocalDateTime time, String nameChangedTo) {
-        this.time = time;
+    @SuppressWarnings("unused")
+    NameWasChanged() {
+    }
+
+    public NameWasChanged(Date timestamp, String nameChangedTo) {
+        this.timestamp = timestamp;
         this.name = nameChangedTo;
+    }
+
+    public NameWasChanged(LocalDateTime timestamp, String name) {
+        this(toDate(timestamp), name);
     }
 
     @Override
@@ -19,8 +30,8 @@ public class NameWasChanged implements DomainEvent {
     }
 
     @Override
-    public LocalDateTime getTime() {
-        return time;
+    public Date getTimestamp() {
+        return timestamp;
     }
 
     @Override
@@ -28,19 +39,19 @@ public class NameWasChanged implements DomainEvent {
         if (this == o) return true;
         if (!(o instanceof NameWasChanged)) return false;
         NameWasChanged that = (NameWasChanged) o;
-        return Objects.equals(time, that.time) &&
+        return Objects.equals(timestamp, that.timestamp) &&
                 Objects.equals(name, that.name);
     }
 
     @Override
     public int hashCode() {
-        return Objects.hash(time, name);
+        return Objects.hash(timestamp, name);
     }
 
     @Override
     public String toString() {
         return "NameWasChanged{" +
-                "time=" + time +
+                "timestamp=" + timestamp +
                 ", name='" + name + '\'' +
                 '}';
     }

@@ -45,7 +45,7 @@ public class InMemoryEventStoreTest {
                         .withId(UUID.randomUUID().toString())
                         .withSource(URI.create("http://name"))
                         .withType(e.getClass().getSimpleName())
-                        .withTime(e.getTime().atZone(UTC))
+                        .withTime(e.getTimestamp().atZone(UTC))
                         .withSubject(e.getName())
                         .withData(e)
                         .build()));

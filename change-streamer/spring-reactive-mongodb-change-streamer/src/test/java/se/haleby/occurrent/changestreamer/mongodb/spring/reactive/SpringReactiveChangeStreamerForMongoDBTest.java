@@ -1,6 +1,5 @@
 package se.haleby.occurrent.changestreamer.mongodb.spring.reactive;
 
-import com.fasterxml.jackson.databind.ObjectMapper;
 import com.mongodb.ConnectionString;
 import com.mongodb.reactivestreams.client.MongoClients;
 import io.cloudevents.v1.CloudEventBuilder;
@@ -31,6 +30,7 @@ import static java.time.ZoneOffset.UTC;
 import static java.time.temporal.ChronoUnit.MILLIS;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.awaitility.Awaitility.await;
+import static se.haleby.occurrent.time.TimeConversion.toLocalDateTime;
 
 @Testcontainers
 public class SpringReactiveChangeStreamerForMongoDBTest {
@@ -39,11 +39,9 @@ public class SpringReactiveChangeStreamerForMongoDBTest {
     private static final MongoDBContainer mongoDBContainer = new MongoDBContainer("mongo:4.2.7");
     private MongoEventStore mongoEventStore;
     private SpringReactiveChangeStreamerForMongoDB<DomainEvent> changeStreamer;
-    private ObjectMapper objectMapper;
 
     @BeforeEach
     void create_mongo_event_store() {
-        objectMapper = new ObjectMapper();
         ConnectionString connectionString = new ConnectionString(mongoDBContainer.getReplicaSetUrl() + ".events");
         mongoEventStore = new MongoEventStore(connectionString);
         ReactiveMongoOperations mongoOperations = new ReactiveMongoTemplate(MongoClients.create(connectionString), Objects.requireNonNull(connectionString.getDatabase()));
@@ -74,7 +72,7 @@ public class SpringReactiveChangeStreamerForMongoDBTest {
                 .withId(UUID.randomUUID().toString())
                 .withSource(URI.create("http://name"))
                 .withType(e.getClass().getSimpleName())
-                .withTime(e.getTime().atZone(UTC))
+                .withTime(toLocalDateTime(e.getTimestamp()).atZone(UTC))
                 .withSubject(e.getName())
                 .withDataContentType("application/json")
                 .withData(e)

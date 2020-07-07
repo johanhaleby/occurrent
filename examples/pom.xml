@@ -10,6 +10,7 @@
     <packaging>pom</packaging>
     <modules>
         <module>example-tycoon-kotlin</module>
+        <module>example-mongodb-change-streamer-to-spring-event</module>
     </modules>
     <modelVersion>4.0.0</modelVersion>
 

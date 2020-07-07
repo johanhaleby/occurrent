@@ -6,10 +6,12 @@ import java.util.List;
 import java.util.Objects;
 import java.util.function.Predicate;
 
+import static se.haleby.occurrent.time.TimeConversion.toDate;
+
 public class Name {
 
     public static List<DomainEvent> defineName(LocalDateTime time, String name) {
-        return Collections.singletonList(new NameDefined(time, name));
+        return Collections.singletonList(new NameDefined(toDate(time), name));
     }
 
     public static List<DomainEvent> changeName(List<DomainEvent> events, LocalDateTime time, String newName) {
@@ -25,7 +27,6 @@ public class Name {
         } else if (currentName.isEmpty()) {
             throw new IllegalArgumentException("Cannot change name this it is currently undefined");
         }
-        return Collections.singletonList(new NameWasChanged(time, newName));
+        return Collections.singletonList(new NameWasChanged(toDate(time), newName));
     }
-
 }

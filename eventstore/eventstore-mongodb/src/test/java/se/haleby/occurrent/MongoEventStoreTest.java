@@ -29,6 +29,7 @@ import static java.time.ZoneOffset.UTC;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.junit.jupiter.api.Assertions.assertAll;
 import static se.haleby.occurrent.domain.Composition.chain;
+import static se.haleby.occurrent.time.TimeConversion.toLocalDateTime;
 
 @SuppressWarnings("rawtypes")
 @Testcontainers
@@ -160,7 +161,7 @@ class MongoEventStoreTest {
                         .withId(UUID.randomUUID().toString())
                         .withSource(URI.create("http://name"))
                         .withType(e.getClass().getSimpleName())
-                        .withTime(e.getTime().atZone(UTC))
+                        .withTime(toLocalDateTime(e.getTimestamp()).atZone(UTC))
                         .withSubject(e.getName())
                         .withDataContentType("application/json")
                         .withData(serializeEvent(e))
@@ -172,7 +173,7 @@ class MongoEventStoreTest {
         return new HashMap<String, Object>() {{
             put("type", e.getClass().getSimpleName());
             put("name", e.getName());
-            put("time", e.getTime().toInstant(UTC).toEpochMilli());
+            put("time", e.getTimestamp().getTime());
         }};
     }
 }

@@ -83,6 +83,7 @@ public class SpringReactiveChangeStreamerForMongoDB<T> {
         return new Document(data);
     }
 
+    @SuppressWarnings("ConstantConditions")
     private static List<String> extractEventsAsJson(ChangeStreamEvent<String> changeStreamEvent) {
         final List<String> eventsAsJson;
         OperationType operationType = changeStreamEvent.getOperationType();
