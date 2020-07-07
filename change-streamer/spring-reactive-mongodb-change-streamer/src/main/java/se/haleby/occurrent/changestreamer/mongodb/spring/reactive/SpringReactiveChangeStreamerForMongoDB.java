@@ -46,14 +46,14 @@ public class SpringReactiveChangeStreamerForMongoDB<T> {
     }
 
     public Flux<CloudEventImpl<T>> subscribe(String subscriberId, Function<List<CloudEventImpl<T>>, Mono<Void>> action) {
-        ChangeStreamWithFilterAndProjection<String> stream = mongo.changeStream(String.class)
-                .watchCollection(eventCollection);
+        ChangeStreamWithFilterAndProjection<String> changeStream = mongo.changeStream(String.class).watchCollection(eventCollection);
 
+        // First try to find and use a resume token for the subscriber, if not found just listen normally.
         return mongo.find(query(where(ID).is(subscriberId)), Document.class, resumeTokenCollection)
                 .map(document -> document.get("resumeToken", BsonValue.class))
                 .doOnNext(resumeToken -> log.info("Found resume token {} for subscriber {}, will resume stream", resumeToken, subscriberId))
-                .flatMap(resumeToken -> stream.startAfter(resumeToken).listen())
-                .switchIfEmpty(stream.listen())
+                .flatMap(resumeToken -> changeStream.startAfter(resumeToken).listen())
+                .switchIfEmpty(changeStream.listen())
                 .flatMap(changeEvent -> {
                     List<CloudEventImpl<T>> cloudEvents = extractEventsAsJson(changeEvent).stream()
                             // @formatter:off
@@ -63,6 +63,10 @@ public class SpringReactiveChangeStreamerForMongoDB<T> {
                     return action.apply(cloudEvents).thenReturn(new ChangeStreamEventAndCloudEvent<>(changeEvent, cloudEvents));
                 })
                 .flatMap(events -> persistResumeToken(subscriberId, events.changeStreamEvent.getResumeToken()).thenMany(Flux.fromIterable(events.cloudEvents)));
+    }
+
+    public void unsubscribe(String subscriberId) {
+        mongo.remove(query(where(ID).is(subscriberId)), resumeTokenCollection).subscribe();
     }
 
     private Mono<UpdateResult> persistResumeToken(String subscriberId, BsonValue resumeToken) {
