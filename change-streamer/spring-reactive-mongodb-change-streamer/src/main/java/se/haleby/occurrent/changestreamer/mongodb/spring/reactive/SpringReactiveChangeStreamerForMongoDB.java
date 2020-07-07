@@ -58,7 +58,7 @@ public class SpringReactiveChangeStreamerForMongoDB {
                 .doOnNext(resumeToken -> log.info("Found resume token {} for subscriber {}, will resume stream.", resumeToken, subscriberId))
                 .flatMap(resumeToken -> changeStream.startAfter(resumeToken).listen())
                 .switchIfEmpty(Flux.defer(() -> {
-                    log.info("Couldn't find resume token for subscriber {}, will start subscribing to events for this moment in time.", subscriberId);
+                    log.info("Couldn't find resume token for subscriber {}, will start subscribing to events at this moment in time.", subscriberId);
                     return changeStream.listen();
                 }))
                 .flatMap(changeEvent -> {
