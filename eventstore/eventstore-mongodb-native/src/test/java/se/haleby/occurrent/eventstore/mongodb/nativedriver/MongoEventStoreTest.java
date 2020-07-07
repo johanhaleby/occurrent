@@ -1,4 +1,4 @@
-package se.haleby.occurrent.eventstore.mongodb.vanilla;
+package se.haleby.occurrent.eventstore.mongodb.nativedriver;
 
 import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.core.type.TypeReference;

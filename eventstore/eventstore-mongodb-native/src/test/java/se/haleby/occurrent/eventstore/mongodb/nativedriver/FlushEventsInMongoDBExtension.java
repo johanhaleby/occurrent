@@ -1,4 +1,4 @@
-package se.haleby.occurrent.eventstore.mongodb.vanilla;
+package se.haleby.occurrent.eventstore.mongodb.nativedriver;
 
 import com.mongodb.ConnectionString;
 import com.mongodb.client.MongoClients;
