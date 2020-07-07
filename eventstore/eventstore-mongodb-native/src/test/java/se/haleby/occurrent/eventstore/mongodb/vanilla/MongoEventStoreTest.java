@@ -1,4 +1,4 @@
-package se.haleby.occurrent;
+package se.haleby.occurrent.eventstore.mongodb.vanilla;
 
 import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.core.type.TypeReference;
@@ -12,6 +12,8 @@ import org.junit.jupiter.api.extension.RegisterExtension;
 import org.testcontainers.containers.MongoDBContainer;
 import org.testcontainers.junit.jupiter.Container;
 import org.testcontainers.junit.jupiter.Testcontainers;
+import se.haleby.occurrent.EventStore;
+import se.haleby.occurrent.EventStream;
 import se.haleby.occurrent.domain.DomainEvent;
 import se.haleby.occurrent.domain.Name;
 import se.haleby.occurrent.domain.NameDefined;

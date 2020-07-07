@@ -1,4 +1,4 @@
-package se.haleby.occurrent.inmemory;
+package se.haleby.occurrent.eventstore.inmemory;
 
 import io.cloudevents.CloudEvent;
 import se.haleby.occurrent.EventStore;

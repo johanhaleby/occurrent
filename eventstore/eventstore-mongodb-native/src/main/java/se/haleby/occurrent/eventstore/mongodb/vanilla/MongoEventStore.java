@@ -1,4 +1,4 @@
-package se.haleby.occurrent;
+package se.haleby.occurrent.eventstore.mongodb.vanilla;
 
 import com.mongodb.ConnectionString;
 import com.mongodb.client.MongoClient;
@@ -13,6 +13,8 @@ import io.cloudevents.jackson.JsonFormat;
 import org.bson.Document;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import se.haleby.occurrent.EventStore;
+import se.haleby.occurrent.EventStream;
 
 import java.util.Collections;
 import java.util.List;

@@ -10,11 +10,6 @@
     <modelVersion>4.0.0</modelVersion>
 
     <artifactId>spring-reactive-mongodb-change-streamer</artifactId>
-
-    <properties>
-        <reactor.version>3.3.7.RELEASE</reactor.version>
-    </properties>
-
     <dependencies>
         <dependency>
             <groupId>io.cloudevents</groupId>
@@ -31,17 +26,14 @@
         <dependency>
             <groupId>io.projectreactor</groupId>
             <artifactId>reactor-core</artifactId>
-            <version>${reactor.version}</version>
         </dependency>
         <dependency>
             <groupId>org.mongodb</groupId>
             <artifactId>mongodb-driver-reactivestreams</artifactId>
-            <version>4.0.4</version>
         </dependency>
         <dependency>
             <groupId>org.springframework.data</groupId>
             <artifactId>spring-data-mongodb</artifactId>
-            <version>3.0.1.RELEASE</version>
         </dependency>
 
         <!-- Test -->
@@ -54,7 +46,6 @@
         <dependency>
             <groupId>io.projectreactor</groupId>
             <artifactId>reactor-test</artifactId>
-            <version>${reactor.version}</version>
             <scope>test</scope>
         </dependency>
         <dependency>

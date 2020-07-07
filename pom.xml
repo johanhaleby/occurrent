@@ -29,6 +29,8 @@
         <kotlin.version>1.3.72</kotlin.version>
         <jackson.version>2.11.1</jackson.version>
         <cloudevents.version>2.0.0-milestone1</cloudevents.version>
+        <reactor.version>3.3.7.RELEASE</reactor.version>
+        <spring-data-mongodb.version>3.0.1.RELEASE</spring-data-mongodb.version>
     </properties>
 
 
@@ -74,6 +76,23 @@
                 <artifactId>kotlin-stdlib-jdk8</artifactId>
                 <version>${kotlin.version}</version>
             </dependency>
+            <!-- Mongo -->
+            <dependency>
+                <groupId>org.springframework.data</groupId>
+                <artifactId>spring-data-mongodb</artifactId>
+                <version>${spring-data-mongodb.version}</version>
+            </dependency>
+            <dependency>
+                <groupId>org.mongodb</groupId>
+                <artifactId>mongodb-driver-reactivestreams</artifactId>
+                <version>4.0.4</version>
+            </dependency>
+            <dependency>
+                <groupId>io.projectreactor</groupId>
+                <artifactId>reactor-core</artifactId>
+                <version>${reactor.version}</version>
+            </dependency>
+
 
             <!-- Test -->
             <dependency>
@@ -85,6 +104,11 @@
                 <groupId>org.junit.jupiter</groupId>
                 <artifactId>junit-jupiter-params</artifactId>
                 <version>${junit.version}</version>
+            </dependency>
+            <dependency>
+                <groupId>io.projectreactor</groupId>
+                <artifactId>reactor-test</artifactId>
+                <version>${reactor.version}</version>
             </dependency>
             <dependency>
                 <groupId>org.testcontainers</groupId>

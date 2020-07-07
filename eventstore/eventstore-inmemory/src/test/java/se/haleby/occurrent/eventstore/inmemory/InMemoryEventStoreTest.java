@@ -1,4 +1,4 @@
-package se.haleby.occurrent.inmemory;
+package se.haleby.occurrent.eventstore.inmemory;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
 import io.cloudevents.core.builder.CloudEventBuilder;
