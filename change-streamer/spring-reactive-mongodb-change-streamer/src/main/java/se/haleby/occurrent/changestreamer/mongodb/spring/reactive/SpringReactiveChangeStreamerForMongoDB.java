@@ -8,7 +8,10 @@ import io.cloudevents.v1.CloudEventImpl;
 import org.bson.BsonString;
 import org.bson.BsonValue;
 import org.bson.Document;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.data.mongodb.core.ChangeStreamEvent;
+import org.springframework.data.mongodb.core.ReactiveChangeStreamOperation.ChangeStreamWithFilterAndProjection;
 import org.springframework.data.mongodb.core.ReactiveMongoOperations;
 import org.springframework.data.mongodb.core.query.Update;
 import reactor.core.publisher.Flux;
@@ -28,7 +31,8 @@ import static org.springframework.data.mongodb.core.query.Criteria.where;
 import static org.springframework.data.mongodb.core.query.Query.query;
 
 public class SpringReactiveChangeStreamerForMongoDB<T> {
-    private static final String RESUME_TOKEN_DOCUMENT_ID = "80c3cf26-0c96-4f9d-8c83-a3a2314f0776";
+    private static final Logger log = LoggerFactory.getLogger(SpringReactiveChangeStreamerForMongoDB.class);
+
     private static final String ID = "_id";
 
     private final ReactiveMongoOperations mongo;
@@ -42,10 +46,14 @@ public class SpringReactiveChangeStreamerForMongoDB<T> {
     }
 
     public Flux<CloudEventImpl<T>> subscribe(String subscriberId, Function<List<CloudEventImpl<T>>, Mono<Void>> action) {
-        return mongo.changeStream(String.class)
-                .watchCollection(eventCollection)
-                // TODO Filter only insert and update operations??
-                .listen()
+        ChangeStreamWithFilterAndProjection<String> stream = mongo.changeStream(String.class)
+                .watchCollection(eventCollection);
+
+        return mongo.find(query(where(ID).is(subscriberId)), Document.class, resumeTokenCollection)
+                .map(document -> document.get("resumeToken", BsonValue.class))
+                .doOnNext(resumeToken -> log.info("Found resume token {} for subscriber {}, will resume stream", resumeToken, subscriberId))
+                .flatMap(resumeToken -> stream.startAfter(resumeToken).listen())
+                .switchIfEmpty(stream.listen())
                 .flatMap(changeEvent -> {
                     List<CloudEventImpl<T>> cloudEvents = extractEventsAsJson(changeEvent).stream()
                             // @formatter:off
@@ -58,16 +66,15 @@ public class SpringReactiveChangeStreamerForMongoDB<T> {
     }
 
     private Mono<UpdateResult> persistResumeToken(String subscriberId, BsonValue resumeToken) {
-        return mongo.upsert(query(where(ID).is(RESUME_TOKEN_DOCUMENT_ID)),
-                Update.fromDocument(latestResumeTokenDocument(subscriberId, RESUME_TOKEN_DOCUMENT_ID, resumeToken)),
+        return mongo.upsert(query(where(ID).is(subscriberId)),
+                Update.fromDocument(generateResumeTokenDocument(subscriberId, resumeToken)),
                 resumeTokenCollection);
     }
 
     @SuppressWarnings("SameParameterValue")
-    private static Document latestResumeTokenDocument(String subscriberId, String resumeTokenDocumentId, BsonValue resumeToken) {
+    private static Document generateResumeTokenDocument(String subscriberId, BsonValue resumeToken) {
         Map<String, Object> data = new HashMap<>();
-        data.put(ID, resumeTokenDocumentId);
-        data.put("subscriberId", subscriberId);
+        data.put(ID, subscriberId);
         data.put("resumeToken", resumeToken);
         return new Document(data);
     }
