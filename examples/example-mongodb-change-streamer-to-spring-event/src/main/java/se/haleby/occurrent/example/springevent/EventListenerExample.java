@@ -18,13 +18,13 @@ public class EventListenerExample {
     public final CopyOnWriteArrayList<NameWasChanged> changedNames = new CopyOnWriteArrayList<>();
 
     @EventListener
-    public void handleContextStart(NameDefined nameDefined) {
+    public void handleNameDefined(NameDefined nameDefined) {
         log.info("Received {}", nameDefined);
         definedNames.add(nameDefined);
     }
 
     @EventListener
-    public void handleContextStart(NameWasChanged nameWasChanged) {
+    public void handleNameWasChanged(NameWasChanged nameWasChanged) {
         log.info("Received {}", nameWasChanged);
         changedNames.add(nameWasChanged);
     }
