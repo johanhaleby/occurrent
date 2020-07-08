@@ -65,7 +65,7 @@ public class TransactionalProjectionsWithSpringAndMongoDBApplicationTest {
     }
 
     @Test
-    void events_are_not_written_stored_when_projection_fails() {
+    void events_are_not_written_when_projection_fails() {
         replaceCurrentNameProjectionWithMock(() -> {
             // Given
             LocalDateTime now = LocalDateTime.now();
