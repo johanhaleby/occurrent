@@ -33,11 +33,7 @@ public class DomainEventStore {
     }
 
     public EventStream<DomainEvent> loadEventStream(UUID id) {
-        EventStream<CloudEvent> cloudEvents = eventStore.read(id.toString());
-        if (cloudEvents == null) {
-            return null;
-        }
-        return cloudEvents.map(this::deserialize);
+        return eventStore.read(id.toString()).map(this::deserialize);
     }
 
     private Stream<CloudEvent> serialize(UUID id, List<DomainEvent> events) {

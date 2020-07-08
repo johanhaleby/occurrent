@@ -5,6 +5,7 @@ import se.haleby.occurrent.eventstore.api.blocking.EventStore;
 import se.haleby.occurrent.eventstore.api.blocking.EventStream;
 
 import java.util.ArrayList;
+import java.util.Collections;
 import java.util.List;
 import java.util.Objects;
 import java.util.concurrent.ConcurrentHashMap;
@@ -21,7 +22,7 @@ public class InMemoryEventStore implements EventStore {
     public EventStream<CloudEvent> read(String streamId, int skip, int limit) {
         VersionAndEvents versionAndEvents = state.get(streamId);
         if (versionAndEvents == null) {
-            return null;
+            return new EventStreamImpl(streamId, new VersionAndEvents(0, Collections.emptyList()));
         } else if (skip == 0 && limit == Integer.MAX_VALUE) {
             return new EventStreamImpl(streamId, versionAndEvents);
         }

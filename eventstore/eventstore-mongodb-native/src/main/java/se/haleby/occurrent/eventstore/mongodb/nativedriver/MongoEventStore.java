@@ -47,7 +47,7 @@ public class MongoEventStore implements EventStore {
     public EventStream<CloudEvent> read(String streamId, int skip, int limit) {
         Document document = eventCollection.find(eq("_id", streamId)).projection(slice("events", skip, limit)).first();
         if (document == null) {
-            return null;
+            return new EventStreamImpl(streamId, 0, Collections.emptyList());
         }
         long version = document.getLong("version");
         List<String> serializedCloudEvents = document.getList("events", String.class, Collections.emptyList());

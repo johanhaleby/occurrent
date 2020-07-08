@@ -20,6 +20,10 @@ public interface EventStream<T> extends Iterable<T> {
         return events().iterator();
     }
 
+    default boolean isEmpty() {
+        return version() == 0;
+    }
+
     default List<T> eventList() {
         return events().collect(Collectors.toList());
     }

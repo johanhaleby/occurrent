@@ -42,7 +42,7 @@ public class SpringBlockingMongoEventStore implements EventStore {
         return mongoOperations.aggregate(aggregation, eventStoreCollectionName, EventStreamImpl.class).getMappedResults().stream()
                 .findFirst()
                 .map(document -> document.map(eventJsonString -> eventJsonString.getBytes(UTF_8)).map(cloudEventSerializer::deserialize))
-                .orElse(null);
+                .orElse(new EmptyEventStreamImpl(streamId));
     }
 
     @Override
@@ -54,10 +54,43 @@ public class SpringBlockingMongoEventStore implements EventStore {
                 eventStoreCollectionName);
     }
 
+    private static class EmptyEventStreamImpl implements EventStream<CloudEvent> {
+        private final String id;
+
+        public EmptyEventStreamImpl(String id) {
+            this.id = id;
+        }
+
+        @Override
+        public String id() {
+            return id;
+        }
+
+        @Override
+        public long version() {
+            return 0;
+        }
+
+        @Override
+        public Stream<CloudEvent> events() {
+            return Stream.empty();
+        }
+    }
+
     private static class EventStreamImpl implements EventStream<String> {
         private String _id;
         private long version;
         private List<String> events;
+
+        @SuppressWarnings("unused")
+        EventStreamImpl() {
+        }
+
+        EventStreamImpl(String _id, long version, List<String> events) {
+            this._id = _id;
+            this.version = version;
+            this.events = events;
+        }
 
         @Override
         public String id() {

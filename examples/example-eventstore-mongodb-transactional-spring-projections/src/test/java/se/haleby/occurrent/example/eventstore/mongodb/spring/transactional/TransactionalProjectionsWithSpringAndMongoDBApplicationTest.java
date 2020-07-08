@@ -7,7 +7,9 @@ import org.springframework.boot.test.context.SpringBootTest;
 import org.testcontainers.containers.MongoDBContainer;
 import org.testcontainers.junit.jupiter.Container;
 import org.testcontainers.junit.jupiter.Testcontainers;
+import se.haleby.occurrent.domain.DomainEvent;
 import se.haleby.occurrent.domain.NameDefined;
+import se.haleby.occurrent.eventstore.api.blocking.EventStream;
 
 import java.time.LocalDateTime;
 import java.util.ArrayList;
@@ -77,7 +79,9 @@ public class TransactionalProjectionsWithSpringAndMongoDBApplicationTest {
             assertAll(() -> {
                 assertThat(throwable).isExactlyInstanceOf(IllegalArgumentException.class);
                 assertThat(currentNameProjection.findById(id.toString())).isEmpty();
-                assertThat(eventStore.loadEventStream(id)).isNull();
+                EventStream<DomainEvent> eventStream = eventStore.loadEventStream(id);
+                assertThat(eventStream.isEmpty()).isTrue();
+                assertThat(eventStream).isEmpty();
             });
         });
     }
