@@ -14,7 +14,7 @@
     <dependencies>
         <dependency>
             <groupId>se.haleby.occurrent</groupId>
-            <artifactId>spring-reactive-mongodb-change-streamer</artifactId>
+            <artifactId>changestreamer-mongodb-spring-reactive</artifactId>
             <version>0.0.1-SNAPSHOT</version>
         </dependency>
         <dependency>
