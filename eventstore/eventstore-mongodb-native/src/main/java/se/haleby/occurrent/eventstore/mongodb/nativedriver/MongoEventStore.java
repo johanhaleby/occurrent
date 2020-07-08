@@ -68,6 +68,11 @@ public class MongoEventStore implements EventStore {
                 new UpdateOptions().upsert(true));
     }
 
+    @Override
+    public boolean exists(String streamId) {
+        return eventCollection.countDocuments(eq("_id", streamId)) > 0;
+    }
+
     private static class EventStreamImpl implements EventStream<CloudEvent> {
         private final String id;
         private final long version;

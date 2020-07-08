@@ -54,6 +54,11 @@ public class SpringBlockingMongoEventStore implements EventStore {
                 eventStoreCollectionName);
     }
 
+    @Override
+    public boolean exists(String streamId) {
+        return mongoOperations.exists(query(where("_id").is(streamId)), eventStoreCollectionName);
+    }
+
     private static class EmptyEventStreamImpl implements EventStream<CloudEvent> {
         private final String id;
 

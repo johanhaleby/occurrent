@@ -44,6 +44,11 @@ public class InMemoryEventStore implements EventStore {
         });
     }
 
+    @Override
+    public boolean exists(String streamId) {
+        return state.containsKey(streamId);
+    }
+
     private static class VersionAndEvents {
         long version;
         List<CloudEvent> events;
