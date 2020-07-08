@@ -9,7 +9,7 @@
     </parent>
     <modelVersion>4.0.0</modelVersion>
 
-    <artifactId>example-mongodb-change-streamer-to-spring-event</artifactId>
+    <artifactId>example-eventstore-mongodb-changestreamer-to-spring-event</artifactId>
 
     <dependencies>
         <dependency>

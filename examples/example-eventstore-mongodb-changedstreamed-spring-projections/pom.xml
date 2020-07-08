@@ -7,15 +7,9 @@
         <groupId>se.haleby.occurrent</groupId>
         <version>0.0.1-SNAPSHOT</version>
     </parent>
-    <packaging>pom</packaging>
-    <modules>
-        <module>example-eventstore-mongodb-changestreamer-to-spring-event</module>
-        <module>example-eventstore-mongodb-transactional-spring-projections</module>
-        <module>example-eventstore-mongodb-changedstreamed-spring-projections</module>
-    </modules>
     <modelVersion>4.0.0</modelVersion>
 
-    <artifactId>examples</artifactId>
+    <artifactId>example-eventstore-mongodb-changedstreamed-spring-projections</artifactId>
 
 
 </project>
