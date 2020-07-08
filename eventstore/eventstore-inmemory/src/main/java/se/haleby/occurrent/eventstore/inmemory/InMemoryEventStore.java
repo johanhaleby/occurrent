@@ -95,5 +95,27 @@ public class InMemoryEventStore implements EventStore {
         public Stream<CloudEvent> events() {
             return versionAndEvents.events.stream();
         }
+
+        @Override
+        public String toString() {
+            return "EventStreamImpl{" +
+                    "streamId='" + streamId + '\'' +
+                    ", versionAndEvents=" + versionAndEvents +
+                    '}';
+        }
+
+        @Override
+        public boolean equals(Object o) {
+            if (this == o) return true;
+            if (!(o instanceof EventStreamImpl)) return false;
+            EventStreamImpl that = (EventStreamImpl) o;
+            return Objects.equals(streamId, that.streamId) &&
+                    Objects.equals(versionAndEvents, that.versionAndEvents);
+        }
+
+        @Override
+        public int hashCode() {
+            return Objects.hash(streamId, versionAndEvents);
+        }
     }
 }

@@ -10,6 +10,7 @@
     <packaging>pom</packaging>
     <modules>
         <module>example-mongodb-change-streamer-to-spring-event</module>
+        <module>example-eventstore-mongodb-transactional-spring-projections</module>
     </modules>
     <modelVersion>4.0.0</modelVersion>
 

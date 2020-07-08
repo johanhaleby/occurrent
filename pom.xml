@@ -30,6 +30,7 @@
         <cloudevents.version>2.0.0-milestone1</cloudevents.version>
         <reactor.version>3.3.7.RELEASE</reactor.version>
         <spring-data-mongodb.version>3.0.1.RELEASE</spring-data-mongodb.version>
+        <spring-boot.version>2.3.1.RELEASE</spring-boot.version>
     </properties>
 
 
@@ -75,6 +76,17 @@
                 <artifactId>kotlin-stdlib-jdk8</artifactId>
                 <version>${kotlin.version}</version>
             </dependency>
+            <!-- Spring -->
+            <dependency>
+                <groupId>org.springframework.boot</groupId>
+                <artifactId>spring-boot-starter</artifactId>
+                <version>${spring-boot.version}</version>
+            </dependency>
+            <dependency>
+                <groupId>org.springframework.boot</groupId>
+                <artifactId>spring-boot-starter-data-mongodb</artifactId>
+                <version>${spring-boot.version}</version>
+            </dependency>
             <!-- Mongo -->
             <dependency>
                 <groupId>org.springframework.data</groupId>
@@ -94,6 +106,18 @@
 
 
             <!-- Test -->
+            <dependency>
+                <groupId>org.springframework.boot</groupId>
+                <artifactId>spring-boot-starter-test</artifactId>
+                <version>${spring-boot.version}</version>
+                <scope>test</scope>
+                <exclusions>
+                    <exclusion>
+                        <groupId>org.junit.vintage</groupId>
+                        <artifactId>junit-vintage-engine</artifactId>
+                    </exclusion>
+                </exclusions>
+            </dependency>
             <dependency>
                 <groupId>org.junit.jupiter</groupId>
                 <artifactId>junit-jupiter-engine</artifactId>

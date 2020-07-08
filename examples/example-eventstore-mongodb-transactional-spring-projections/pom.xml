@@ -9,33 +9,30 @@
     </parent>
     <modelVersion>4.0.0</modelVersion>
 
-    <artifactId>example-mongodb-change-streamer-to-spring-event</artifactId>
+    <artifactId>example-eventstore-mongodb-transactional-spring-projections</artifactId>
 
     <dependencies>
         <dependency>
             <groupId>se.haleby.occurrent</groupId>
-            <artifactId>spring-reactive-mongodb-change-streamer</artifactId>
-            <version>0.0.1-SNAPSHOT</version>
-        </dependency>
-        <dependency>
-            <groupId>se.haleby.occurrent</groupId>
-            <artifactId>eventstore-mongodb-native</artifactId>
+            <artifactId>eventstore-mongodb-spring-blocking</artifactId>
             <version>0.0.1-SNAPSHOT</version>
         </dependency>
         <dependency>
             <groupId>org.springframework.boot</groupId>
             <artifactId>spring-boot-starter</artifactId>
-            <version>${spring-boot.version}</version>
         </dependency>
         <dependency>
             <groupId>org.springframework.boot</groupId>
             <artifactId>spring-boot-starter-data-mongodb</artifactId>
-            <version>${spring-boot.version}</version>
         </dependency>
         <dependency>
             <groupId>se.haleby.occurrent</groupId>
             <artifactId>test-support</artifactId>
             <version>0.0.1-SNAPSHOT</version>
+        </dependency>
+        <dependency>
+            <groupId>io.vavr</groupId>
+            <artifactId>vavr</artifactId>
         </dependency>
 
         <!-- Test -->
