@@ -13,6 +13,8 @@
         <module>examples</module>
         <module>eventstore</module>
         <module>changestreamer</module>
+        <module>changestreamer/changestreamer-mongodb-spring-blocking</module>
+        <module>changestreamer-mongodb-common</module>
     </modules>
 
     <name>occurrent</name>
@@ -31,6 +33,7 @@
         <reactor.version>3.3.7.RELEASE</reactor.version>
         <spring-data-mongodb.version>3.0.1.RELEASE</spring-data-mongodb.version>
         <spring-boot.version>2.3.1.RELEASE</spring-boot.version>
+        <mongo.version>4.0.4</mongo.version>
     </properties>
 
 
@@ -62,11 +65,6 @@
                 <version>${jackson.version}</version>
             </dependency>
             <dependency>
-                <groupId>org.mongodb</groupId>
-                <artifactId>mongodb-driver-sync</artifactId>
-                <version>4.0.4</version>
-            </dependency>
-            <dependency>
                 <groupId>org.slf4j</groupId>
                 <artifactId>slf4j-api</artifactId>
                 <version>1.7.30</version>
@@ -95,8 +93,18 @@
             </dependency>
             <dependency>
                 <groupId>org.mongodb</groupId>
+                <artifactId>mongodb-driver-sync</artifactId>
+                <version>${mongo.version}</version>
+            </dependency>
+            <dependency>
+                <groupId>org.mongodb</groupId>
+                <artifactId>mongodb-driver-core</artifactId>
+                <version>${mongo.version}</version>
+            </dependency>
+            <dependency>
+                <groupId>org.mongodb</groupId>
                 <artifactId>mongodb-driver-reactivestreams</artifactId>
-                <version>4.0.4</version>
+                <version>${mongo.version}</version>
             </dependency>
             <dependency>
                 <groupId>io.projectreactor</groupId>
