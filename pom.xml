@@ -13,8 +13,6 @@
         <module>examples</module>
         <module>eventstore</module>
         <module>changestreamer</module>
-        <module>changestreamer/changestreamer-mongodb-spring-blocking</module>
-        <module>changestreamer-mongodb-common</module>
     </modules>
 
     <name>occurrent</name>

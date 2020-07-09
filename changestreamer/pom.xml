@@ -10,6 +10,8 @@
     <packaging>pom</packaging>
     <modules>
         <module>changestreamer-mongodb-spring-reactive</module>
+        <module>changestreamer-mongodb-spring-blocking</module>
+        <module>changestreamer-mongodb-common</module>
     </modules>
     <modelVersion>4.0.0</modelVersion>
 
