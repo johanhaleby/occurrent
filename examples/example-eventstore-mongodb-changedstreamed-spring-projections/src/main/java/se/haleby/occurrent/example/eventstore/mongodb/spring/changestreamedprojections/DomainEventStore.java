@@ -22,10 +22,12 @@ public class DomainEventStore {
 
     private final EventStore eventStore;
     private final ObjectMapper objectMapper;
+    private final DeserializeCloudEventToDomainEvent deserializeCloudEventToDomainEvent;
 
-    public DomainEventStore(EventStore eventStore, ObjectMapper objectMapper) {
+    public DomainEventStore(EventStore eventStore, ObjectMapper objectMapper, DeserializeCloudEventToDomainEvent deserializeCloudEventToDomainEvent) {
         this.eventStore = eventStore;
         this.objectMapper = objectMapper;
+        this.deserializeCloudEventToDomainEvent = deserializeCloudEventToDomainEvent;
     }
 
     public void append(UUID id, long expectedVersion, List<DomainEvent> events) {
@@ -33,7 +35,7 @@ public class DomainEventStore {
     }
 
     public EventStream<DomainEvent> loadEventStream(UUID id) {
-        return eventStore.read(id.toString()).map(this::deserialize);
+        return eventStore.read(id.toString()).map(deserializeCloudEventToDomainEvent::deserialize);
     }
 
     private Stream<CloudEvent> serialize(UUID id, List<DomainEvent> events) {
@@ -47,9 +49,5 @@ public class DomainEventStore {
                         .withDataContentType("application/json")
                         .withData(unchecked(objectMapper::writeValueAsBytes).apply(e))
                         .build());
-    }
-
-    private DomainEvent deserialize(CloudEvent cloudEvent) {
-        return unchecked((CloudEvent e) -> (DomainEvent) objectMapper.readValue(e.getData(), Class.forName(e.getType()))).apply(cloudEvent);
     }
 }
