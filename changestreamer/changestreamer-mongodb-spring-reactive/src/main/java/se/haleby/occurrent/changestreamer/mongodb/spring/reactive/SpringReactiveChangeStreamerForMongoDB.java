@@ -58,8 +58,8 @@ public class SpringReactiveChangeStreamerForMongoDB {
                 .flatMap(events -> persistResumeToken(subscriberId, events.changeStreamEvent.getResumeToken()).thenMany(Flux.fromIterable(events.cloudEvents)));
     }
 
-    public void unsubscribe(String subscriberId) {
-        mongo.remove(query(where(ID).is(subscriberId)), resumeTokenCollection).subscribe();
+    public Mono<Void> cancelSubscription(String subscriberId) {
+        return mongo.remove(query(where(ID).is(subscriberId)), resumeTokenCollection).then();
     }
 
     private Mono<UpdateResult> persistResumeToken(String subscriberId, BsonValue resumeToken) {

@@ -53,6 +53,6 @@ public class EventChangeStreaming {
     void stopEventStreaming() {
         log.info("Unsubscribing");
         subscription.get().dispose();
-        changeStreamerForMongoDB.unsubscribe(SUBSCRIBER_ID);
+        changeStreamerForMongoDB.cancelSubscription(SUBSCRIBER_ID);
     }
 }
