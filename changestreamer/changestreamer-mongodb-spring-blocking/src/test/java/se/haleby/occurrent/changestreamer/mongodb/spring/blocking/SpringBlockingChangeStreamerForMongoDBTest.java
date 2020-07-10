@@ -6,6 +6,7 @@ import com.mongodb.client.MongoClients;
 import com.mongodb.client.model.Filters;
 import io.cloudevents.CloudEvent;
 import io.cloudevents.core.builder.CloudEventBuilder;
+import org.junit.Ignore;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -137,6 +138,7 @@ public class SpringBlockingChangeStreamerForMongoDBTest {
     }
 
     @Test
+    @Ignore
     void fdssd() throws InterruptedException {
         // Given
         LocalDateTime now = LocalDateTime.now();

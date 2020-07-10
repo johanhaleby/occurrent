@@ -11,6 +11,7 @@ import org.springframework.data.mongodb.core.aggregation.Aggregation;
 import se.haleby.occurrent.eventstore.api.blocking.EventStore;
 import se.haleby.occurrent.eventstore.api.blocking.EventStream;
 
+import javax.print.Doc;
 import java.util.List;
 import java.util.stream.Stream;
 
@@ -42,7 +43,7 @@ public class SpringBlockingMongoEventStore implements EventStore {
 
         return mongoOperations.aggregate(aggregation, eventStoreCollectionName, EventStreamImpl.class).getMappedResults().stream()
                 .findFirst()
-                .map(document -> document.map(eventJsonString -> eventJsonString.getBytes(UTF_8)).map(cloudEventSerializer::deserialize))
+                .map(document -> document.map(Document::toJson).map(eventJsonString -> eventJsonString.getBytes(UTF_8)).map(cloudEventSerializer::deserialize))
                 .orElse(new EmptyEventStreamImpl(streamId));
     }
 
@@ -87,16 +88,16 @@ public class SpringBlockingMongoEventStore implements EventStore {
         }
     }
 
-    private static class EventStreamImpl implements EventStream<String> {
+    private static class EventStreamImpl implements EventStream<Document> {
         private String _id;
         private long version;
-        private List<String> events;
+        private List<Document> events;
 
         @SuppressWarnings("unused")
         EventStreamImpl() {
         }
 
-        EventStreamImpl(String _id, long version, List<String> events) {
+        EventStreamImpl(String _id, long version, List<Document> events) {
             this._id = _id;
             this.version = version;
             this.events = events;
@@ -113,7 +114,7 @@ public class SpringBlockingMongoEventStore implements EventStore {
         }
 
         @Override
-        public Stream<String> events() {
+        public Stream<Document> events() {
             return events.stream();
         }
 
@@ -125,7 +126,7 @@ public class SpringBlockingMongoEventStore implements EventStore {
             this.version = version;
         }
 
-        public void setEvents(List<String> events) {
+        public void setEvents(List<Document> events) {
             this.events = events;
         }
     }

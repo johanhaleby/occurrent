@@ -16,6 +16,7 @@ import org.slf4j.LoggerFactory;
 import se.haleby.occurrent.eventstore.api.blocking.EventStore;
 import se.haleby.occurrent.eventstore.api.blocking.EventStream;
 
+import javax.print.Doc;
 import java.util.Collections;
 import java.util.List;
 import java.util.Objects;
@@ -50,8 +51,9 @@ public class MongoEventStore implements EventStore {
             return new EventStreamImpl(streamId, 0, Collections.emptyList());
         }
         long version = document.getLong("version");
-        List<String> serializedCloudEvents = document.getList("events", String.class, Collections.emptyList());
+        List<Document> serializedCloudEvents = document.getList("events", Document.class, Collections.emptyList());
         List<CloudEvent> events = serializedCloudEvents.stream()
+                .map(Document::toJson)
                 .map(cloudEventAsString -> cloudEventAsString.getBytes(UTF_8))
                 .map(cloudEventSerializer::deserialize)
                 .collect(Collectors.toList());
