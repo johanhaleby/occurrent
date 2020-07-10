@@ -10,6 +10,7 @@ import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.RegisterExtension;
 import org.springframework.data.mongodb.core.MongoTemplate;
+import org.springframework.data.mongodb.core.messaging.DefaultMessageListenerContainer;
 import org.testcontainers.containers.MongoDBContainer;
 import org.testcontainers.junit.jupiter.Container;
 import org.testcontainers.junit.jupiter.Testcontainers;
@@ -23,6 +24,7 @@ import se.haleby.occurrent.testsupport.mongodb.FlushMongoDBExtension;
 import java.net.URI;
 import java.time.Duration;
 import java.time.LocalDateTime;
+import java.time.temporal.ChronoUnit;
 import java.util.UUID;
 import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.stream.Stream;
@@ -58,7 +60,7 @@ public class SpringBlockingChangeStreamerForMongoDBTest {
         ConnectionString connectionString = new ConnectionString(mongoDBContainer.getReplicaSetUrl() + ".events");
         mongoTemplate = new MongoTemplate(MongoClients.create(connectionString), requireNonNull(connectionString.getDatabase()));
         mongoEventStore = new SpringBlockingMongoEventStore(mongoTemplate, connectionString.getCollection());
-        changeStreamer = new SpringBlockingChangeStreamerForMongoDB(mongoTemplate, connectionString.getCollection(), RESUME_TOKEN_COLLECTION);
+        changeStreamer = new SpringBlockingChangeStreamerForMongoDB(mongoTemplate, connectionString.getCollection(), RESUME_TOKEN_COLLECTION, new DefaultMessageListenerContainer(mongoTemplate));
         objectMapper = new ObjectMapper();
     }
 
@@ -68,11 +70,11 @@ public class SpringBlockingChangeStreamerForMongoDBTest {
     }
 
     @Test
-    void blocking_spring_change_streamer_calls_listener_for_each_new_event() {
+    void blocking_spring_change_streamer_calls_listener_for_each_new_event() throws InterruptedException {
         // Given
         LocalDateTime now = LocalDateTime.now();
         CopyOnWriteArrayList<CloudEvent> state = new CopyOnWriteArrayList<>();
-        changeStreamer.subscribe(UUID.randomUUID().toString(), state::addAll);
+        changeStreamer.subscribe(UUID.randomUUID().toString(), state::addAll).await(Duration.of(10, ChronoUnit.SECONDS));
         NameDefined nameDefined1 = new NameDefined(now, "name1");
         NameDefined nameDefined2 = new NameDefined(now.plusSeconds(2), "name2");
         NameWasChanged nameWasChanged1 = new NameWasChanged(now.plusSeconds(10), "name3");
@@ -87,12 +89,12 @@ public class SpringBlockingChangeStreamerForMongoDBTest {
     }
 
     @Test
-    void blocking_spring_change_streamer_allows_resuming_events_from_where_it_left_off() {
+    void blocking_spring_change_streamer_allows_resuming_events_from_where_it_left_off() throws InterruptedException {
         // Given
         LocalDateTime now = LocalDateTime.now();
         CopyOnWriteArrayList<CloudEvent> state = new CopyOnWriteArrayList<>();
         String subscriberId = UUID.randomUUID().toString();
-        changeStreamer.subscribe(subscriberId, state::addAll);
+        changeStreamer.subscribe(subscriberId, state::addAll).await(Duration.of(10, ChronoUnit.SECONDS));
         NameDefined nameDefined1 = new NameDefined(now, "name1");
         NameDefined nameDefined2 = new NameDefined(now.plusSeconds(2), "name2");
         NameWasChanged nameWasChanged1 = new NameWasChanged(now.plusSeconds(10), "name3");
@@ -111,12 +113,12 @@ public class SpringBlockingChangeStreamerForMongoDBTest {
     }
 
     @Test
-    void blocking_spring_change_streamer_allows_cancelling_subscription() {
+    void blocking_spring_change_streamer_allows_cancelling_subscription() throws InterruptedException {
         // Given
         LocalDateTime now = LocalDateTime.now();
         CopyOnWriteArrayList<CloudEvent> state = new CopyOnWriteArrayList<>();
         String subscriberId = UUID.randomUUID().toString();
-        changeStreamer.subscribe(subscriberId, state::addAll);
+        changeStreamer.subscribe(subscriberId, state::addAll).await(Duration.of(10, ChronoUnit.SECONDS));
         NameDefined nameDefined1 = new NameDefined(now, "name1");
 
         // When

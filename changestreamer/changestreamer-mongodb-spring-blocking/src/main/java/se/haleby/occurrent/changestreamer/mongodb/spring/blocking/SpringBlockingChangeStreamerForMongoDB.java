@@ -11,22 +11,20 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.data.mongodb.core.ChangeStreamOptions;
 import org.springframework.data.mongodb.core.MongoTemplate;
-import org.springframework.data.mongodb.core.messaging.*;
+import org.springframework.data.mongodb.core.messaging.ChangeStreamRequest;
 import org.springframework.data.mongodb.core.messaging.ChangeStreamRequest.ChangeStreamRequestOptions;
+import org.springframework.data.mongodb.core.messaging.MessageListener;
+import org.springframework.data.mongodb.core.messaging.MessageListenerContainer;
+import org.springframework.data.mongodb.core.messaging.Subscription;
 import org.springframework.data.mongodb.core.query.Update;
 
 import javax.annotation.PreDestroy;
-import java.time.Duration;
 import java.util.List;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ConcurrentMap;
-import java.util.concurrent.SynchronousQueue;
-import java.util.concurrent.ThreadPoolExecutor;
 import java.util.function.Consumer;
 
-import static java.time.temporal.ChronoUnit.SECONDS;
 import static java.util.Objects.requireNonNull;
-import static java.util.concurrent.TimeUnit.MILLISECONDS;
 import static org.springframework.data.mongodb.core.query.Criteria.where;
 import static org.springframework.data.mongodb.core.query.Query.query;
 import static se.haleby.occurrent.changestreamer.mongodb.common.MongoDBCloudEventsToJsonDeserializer.*;
@@ -41,27 +39,22 @@ public class SpringBlockingChangeStreamerForMongoDB {
     private final ConcurrentMap<String, Subscription> subscriptions;
     private final EventFormat cloudEventSerializer;
 
-    public SpringBlockingChangeStreamerForMongoDB(MongoTemplate mongoTemplate, String eventCollection, String resumeTokenCollection) {
-        this(mongoTemplate, eventCollection, resumeTokenCollection, null);
-    }
-
     public SpringBlockingChangeStreamerForMongoDB(MongoTemplate mongoTemplate, String eventCollection, String resumeTokenCollection, MessageListenerContainer messageListenerContainer) {
+        requireNonNull(mongoTemplate, "Mongo template cannot be null");
+        requireNonNull(mongoTemplate, "eventCollection cannot be null");
+        requireNonNull(mongoTemplate, "resumeTokenCollection cannot be null");
+        requireNonNull(mongoTemplate, "messageListenerContainer cannot be null");
+
         this.mongoTemplate = mongoTemplate;
         this.eventCollection = eventCollection;
         this.resumeTokenCollection = resumeTokenCollection;
         this.subscriptions = new ConcurrentHashMap<>();
         this.cloudEventSerializer = EventFormatProvider.getInstance().resolveFormat(JsonFormat.CONTENT_TYPE);
-
-        if (messageListenerContainer == null) {
-            ThreadPoolExecutor taskExecutor = new ThreadPoolExecutor(Runtime.getRuntime().availableProcessors() + 1, 100, 5000, MILLISECONDS, new SynchronousQueue<>(true));
-            this.messageListenerContainer = new DefaultMessageListenerContainer(mongoTemplate, taskExecutor);
-        } else {
-            this.messageListenerContainer = messageListenerContainer;
-        }
+        this.messageListenerContainer = messageListenerContainer;
         this.messageListenerContainer.start();
     }
 
-    public void subscribe(String subscriptionId, Consumer<List<CloudEvent>> action) {
+    public Subscription subscribe(String subscriptionId, Consumer<List<CloudEvent>> action) {
         Document document = mongoTemplate.findOne(query(where(ID).is(subscriptionId)), Document.class, resumeTokenCollection);
 
         final ChangeStreamOptions changeStreamOptions;
@@ -85,12 +78,7 @@ public class SpringBlockingChangeStreamerForMongoDB {
         ChangeStreamRequestOptions options = new ChangeStreamRequestOptions(null, eventCollection, changeStreamOptions);
         final Subscription subscription = messageListenerContainer.register(new ChangeStreamRequest<>(listener, options), Document.class);
         subscriptions.put(subscriptionId, subscription);
-        try {
-            // Wait a reasonable time for the subscription to become active
-            subscription.await(Duration.of(10, SECONDS));
-        } catch (InterruptedException e) {
-            throw new RuntimeException(e);
-        }
+        return subscription;
     }
 
     void pauseSubscription(String subscriptionId) {
