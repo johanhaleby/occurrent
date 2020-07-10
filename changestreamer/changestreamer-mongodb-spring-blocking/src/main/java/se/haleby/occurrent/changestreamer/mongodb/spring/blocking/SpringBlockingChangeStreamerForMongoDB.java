@@ -54,6 +54,7 @@ public class SpringBlockingChangeStreamerForMongoDB {
         this.messageListenerContainer.start();
     }
 
+    // TODO Add filter DSL?
     public Subscription subscribe(String subscriptionId, Consumer<List<CloudEvent>> action) {
         Document document = mongoTemplate.findOne(query(where(ID).is(subscriptionId)), Document.class, resumeTokenCollection);
 
