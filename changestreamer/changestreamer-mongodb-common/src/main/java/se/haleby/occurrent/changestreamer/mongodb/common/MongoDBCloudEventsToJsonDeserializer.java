@@ -9,12 +9,12 @@ import org.bson.BsonString;
 import org.bson.BsonValue;
 import org.bson.Document;
 
-import java.util.Collections;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Map.Entry;
 import java.util.stream.Collectors;
+import java.util.stream.Stream;
 
 import static com.mongodb.client.model.changestream.OperationType.INSERT;
 import static com.mongodb.client.model.changestream.OperationType.UPDATE;
@@ -27,19 +27,19 @@ public class MongoDBCloudEventsToJsonDeserializer {
     private static final String RESUME_TOKEN_DATA = "_data";
 
     public static List<CloudEvent> deserializeToCloudEvents(EventFormat cloudEventSerializer, ChangeStreamDocument<Document> changeStreamDocument) {
-        return changeStreamDocumentToCloudEventsAsJson(changeStreamDocument).stream()
+        return changeStreamDocumentToCloudEventsAsJson(changeStreamDocument)
                 .map(cloudEventString -> cloudEventString.getBytes(UTF_8))
                 .map(cloudEventSerializer::deserialize)
                 .collect(Collectors.toList());
     }
 
     @SuppressWarnings("ConstantConditions")
-    private static List<String> changeStreamDocumentToCloudEventsAsJson(ChangeStreamDocument<Document> changeStreamDocument) {
-        final List<String> eventsAsJson;
+    private static Stream<String> changeStreamDocumentToCloudEventsAsJson(ChangeStreamDocument<Document> changeStreamDocument) {
+        final Stream<String> eventsAsJson;
         OperationType operationType = changeStreamDocument.getOperationType();
         if (operationType == INSERT) {
             // This is when the first event(s) are written to the event store for a particular stream id
-            eventsAsJson = changeStreamDocument.getFullDocument().getList("events", String.class);
+            eventsAsJson = changeStreamDocument.getFullDocument().getList("events", Document.class).stream().map(Document::toJson);
         } else if (operationType == UPDATE) {
             // When events already exists for a stream id we get an update operation. To only get the events
             // that are updated we get the "updated fields" and extract only the events ("version" is also updated but
@@ -47,11 +47,10 @@ public class MongoDBCloudEventsToJsonDeserializer {
             eventsAsJson = changeStreamDocument.getUpdateDescription().getUpdatedFields().entrySet().stream()
                     .filter(entry -> entry.getKey().startsWith("events"))
                     .map(Entry::getValue)
-                    .map(BsonValue::asString)
-                    .map(BsonString::getValue)
-                    .collect(Collectors.toList());
+                    .map(BsonValue::asDocument)
+                    .map(BsonDocument::toJson);
         } else {
-            eventsAsJson = Collections.emptyList();
+            eventsAsJson = Stream.empty();
         }
 
         return eventsAsJson;

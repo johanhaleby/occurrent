@@ -5,6 +5,7 @@ import io.cloudevents.CloudEvent;
 import io.cloudevents.core.format.EventFormat;
 import io.cloudevents.core.provider.EventFormatProvider;
 import io.cloudevents.jackson.JsonFormat;
+import org.bson.Document;
 import org.springframework.data.mongodb.core.MongoOperations;
 import org.springframework.data.mongodb.core.aggregation.Aggregation;
 import se.haleby.occurrent.eventstore.api.blocking.EventStore;
@@ -47,7 +48,11 @@ public class SpringBlockingMongoEventStore implements EventStore {
 
     @Override
     public void write(String streamId, long expectedStreamVersion, Stream<CloudEvent> events) {
-        String[] serializedEvents = events.map(cloudEventSerializer::serialize).map(bytes -> new String(bytes, UTF_8)).toArray(String[]::new);
+        Document[] serializedEvents = events.map(cloudEventSerializer::serialize)
+                .map(bytes -> new String(bytes, UTF_8))
+                .map(Document::parse)
+                .toArray(Document[]::new);
+
         //noinspection ConfusingArgumentToVarargsMethod
         mongoOperations.upsert(query(where("_id").is(streamId).and("version").is(expectedStreamVersion)),
                 update("version", expectedStreamVersion + 1).push("events").each(serializedEvents),

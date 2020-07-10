@@ -60,7 +60,10 @@ public class MongoEventStore implements EventStore {
 
     @Override
     public void write(String streamId, long expectedStreamVersion, Stream<CloudEvent> events) {
-        List<String> serializedEvents = events.map(cloudEventSerializer::serialize).map(bytes -> new String(bytes, UTF_8)).collect(Collectors.toList());
+        List<Document> serializedEvents = events.map(cloudEventSerializer::serialize)
+                .map(bytes -> new String(bytes, UTF_8))
+                .map(Document::parse)
+                .collect(Collectors.toList());
 
         // Note that upsert will fail if version is different since _id is unique in MongoDB
         eventCollection.updateOne(and(eq("_id", streamId), eq("version", expectedStreamVersion)),
