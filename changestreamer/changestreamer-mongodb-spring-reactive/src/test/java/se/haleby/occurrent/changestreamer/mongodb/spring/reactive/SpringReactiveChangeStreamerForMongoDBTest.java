@@ -74,11 +74,12 @@ public class SpringReactiveChangeStreamerForMongoDBTest {
     }
 
     @Test
-    void reactive_spring_changestreamer_calls_listener_for_each_new_event() {
+    void reactive_spring_changestreamer_calls_listener_for_each_new_event() throws InterruptedException {
         // Given
         LocalDateTime now = LocalDateTime.now();
         CopyOnWriteArrayList<CloudEvent> state = new CopyOnWriteArrayList<>();
         disposeAfterTest(changeStreamer.subscribe("test", cloudEvent -> Mono.fromRunnable(() -> state.addAll(cloudEvent))).subscribe());
+        Thread.sleep(200);
         NameDefined nameDefined1 = new NameDefined(now, "name1");
         NameDefined nameDefined2 = new NameDefined(now.plusSeconds(2), "name2");
         NameWasChanged nameWasChanged1 = new NameWasChanged(now.plusSeconds(10), "name3");
