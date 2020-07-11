@@ -6,14 +6,12 @@ import com.mongodb.client.MongoClients;
 import com.mongodb.client.model.Filters;
 import io.cloudevents.CloudEvent;
 import io.cloudevents.core.builder.CloudEventBuilder;
-import org.junit.Ignore;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.RegisterExtension;
 import org.springframework.data.mongodb.core.MongoTemplate;
 import org.springframework.data.mongodb.core.messaging.DefaultMessageListenerContainer;
-import org.springframework.data.mongodb.core.query.Criteria;
 import org.testcontainers.containers.MongoDBContainer;
 import org.testcontainers.junit.jupiter.Container;
 import org.testcontainers.junit.jupiter.Testcontainers;
@@ -40,7 +38,6 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.awaitility.Awaitility.await;
 import static org.awaitility.Durations.ONE_SECOND;
 import static org.hamcrest.Matchers.is;
-import static org.springframework.data.mongodb.core.query.Criteria.where;
 import static se.haleby.occurrent.changestreamer.mongodb.common.MongoDBFilterSpecification.BsonMongoDBFilterSpecification.filter;
 import static se.haleby.occurrent.functional.CheckedFunction.unchecked;
 import static se.haleby.occurrent.functional.Not.not;
@@ -138,7 +135,6 @@ public class SpringBlockingChangeStreamerForMongoDBTest {
     }
 
     @Test
-    @Ignore
     void fdssd() throws InterruptedException {
         // Given
         LocalDateTime now = LocalDateTime.now();

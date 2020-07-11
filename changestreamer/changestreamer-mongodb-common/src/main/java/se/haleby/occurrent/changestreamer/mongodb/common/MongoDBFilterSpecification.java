@@ -1,12 +1,13 @@
 package se.haleby.occurrent.changestreamer.mongodb.common;
 
 import com.mongodb.client.model.Filters;
+import com.mongodb.client.model.Projections;
 import org.bson.Document;
 import org.bson.conversions.Bson;
 
 import java.util.function.BiFunction;
 
-import static com.mongodb.client.model.Filters.elemMatch;
+import static com.mongodb.client.model.Aggregates.project;
 
 /**
  * Add filters when subscribing to a MongoDB change streamer if you're only interested in specify changes.
@@ -64,18 +65,20 @@ public class MongoDBFilterSpecification {
      */
     public static class BsonMongoDBFilterSpecification extends MongoDBFilterSpecification {
 
-        private final Bson bson;
+        private final Bson[] aggregationStages;
 
         private BsonMongoDBFilterSpecification() {
-            this.bson = null;
+            this.aggregationStages = null;
         }
 
-        public BsonMongoDBFilterSpecification(Bson bson) {
-            this.bson = bson;
+        public BsonMongoDBFilterSpecification(Bson firstAggregationStage, Bson... additionalStages) {
+            this.aggregationStages = new Bson[1 + additionalStages.length];
+            this.aggregationStages[0] = firstAggregationStage;
+            System.arraycopy(additionalStages, 0, this.aggregationStages, 1, additionalStages.length);
         }
 
-        public static BsonMongoDBFilterSpecification filter(Bson bson) {
-            return new BsonMongoDBFilterSpecification(bson);
+        public static BsonMongoDBFilterSpecification filter(Bson firstAggregationStage, Bson... additionalStages) {
+            return new BsonMongoDBFilterSpecification(firstAggregationStage, additionalStages);
         }
 
         public static BsonMongoDBFilterSpecification filter() {
@@ -83,11 +86,12 @@ public class MongoDBFilterSpecification {
         }
 
         public BsonMongoDBFilterSpecification type(BiFunction<String, String, Bson> filter, String item) {
-            return new BsonMongoDBFilterSpecification(elemMatch("events", filter.apply("type", item)));
+            // new BsonMongoDBFilterSpecification(unwind("$events"), replaceRoot("$events"), match(filter.apply("type", item)));
+            return new BsonMongoDBFilterSpecification(project(Projections.elemMatch("events", filter.apply("type", item))));
         }
 
-        public Bson getBson() {
-            return bson;
+        public Bson[] getAggregationStages() {
+            return aggregationStages;
         }
     }
 }
