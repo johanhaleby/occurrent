@@ -2,7 +2,6 @@ package se.haleby.occurrent.changestreamer.mongodb.spring.blocking;
 
 import com.mongodb.MongoClientSettings;
 import com.mongodb.client.model.changestream.ChangeStreamDocument;
-import com.mongodb.client.model.changestream.FullDocument;
 import io.cloudevents.CloudEvent;
 import io.cloudevents.core.format.EventFormat;
 import io.cloudevents.core.provider.EventFormatProvider;
@@ -34,7 +33,6 @@ import java.util.concurrent.ConcurrentMap;
 import java.util.function.Consumer;
 import java.util.stream.Stream;
 
-import static com.mongodb.client.model.changestream.FullDocument.UPDATE_LOOKUP;
 import static java.util.Objects.requireNonNull;
 import static org.springframework.data.mongodb.core.query.Criteria.where;
 import static org.springframework.data.mongodb.core.query.Query.query;
@@ -81,7 +79,6 @@ public class SpringBlockingChangeStreamerForMongoDB {
             log.info("Found resume token {} for subscription {}, will resume stream.", resumeToken.asString(), subscriptionId);
             changeStreamOptionsBuilder.startAfter(resumeToken.asBsonDocument());
         }
-        changeStreamOptionsBuilder.fullDocumentLookup(UPDATE_LOOKUP);
         final ChangeStreamOptions changeStreamOptions = applyFilter(filter, changeStreamOptionsBuilder);
 
         MessageListener<ChangeStreamDocument<Document>, Document> listener = change -> {

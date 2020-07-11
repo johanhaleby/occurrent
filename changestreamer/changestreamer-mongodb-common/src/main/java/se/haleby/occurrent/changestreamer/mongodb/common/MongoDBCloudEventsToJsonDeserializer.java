@@ -25,6 +25,7 @@ public class MongoDBCloudEventsToJsonDeserializer {
     public static final String ID = "_id";
     public static final String RESUME_TOKEN = "resumeToken";
     private static final String RESUME_TOKEN_DATA = "_data";
+    private static final String EVENTS_COLLECTION_NAME = "events";
 
     public static List<CloudEvent> deserializeToCloudEvents(EventFormat cloudEventSerializer, ChangeStreamDocument<Document> changeStreamDocument) {
         return changeStreamDocumentToCloudEventsAsJson(changeStreamDocument)
@@ -39,13 +40,13 @@ public class MongoDBCloudEventsToJsonDeserializer {
         OperationType operationType = changeStreamDocument.getOperationType();
         if (operationType == INSERT) {
             // This is when the first event(s) are written to the event store for a particular stream id
-            eventsAsJson = changeStreamDocument.getFullDocument().getList("events", Document.class).stream().map(Document::toJson);
+            eventsAsJson = changeStreamDocument.getFullDocument().getList(EVENTS_COLLECTION_NAME, Document.class).stream().map(Document::toJson);
         } else if (operationType == UPDATE) {
             // When events already exists for a stream id we get an update operation. To only get the events
             // that are updated we get the "updated fields" and extract only the events ("version" is also updated but
             // we don't care about it here).
             eventsAsJson = changeStreamDocument.getUpdateDescription().getUpdatedFields().entrySet().stream()
-                    .filter(entry -> entry.getKey().startsWith("events"))
+                    .filter(entry -> entry.getKey().startsWith(EVENTS_COLLECTION_NAME))
                     .map(Entry::getValue)
                     .map(BsonValue::asDocument)
                     .map(BsonDocument::toJson);
