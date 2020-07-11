@@ -78,9 +78,9 @@ public class SpringBlockingChangeStreamerForMongoDBTest {
         LocalDateTime now = LocalDateTime.now();
         CopyOnWriteArrayList<CloudEvent> state = new CopyOnWriteArrayList<>();
         changeStreamer.subscribe(UUID.randomUUID().toString(), state::addAll).await(Duration.of(10, ChronoUnit.SECONDS));
-        NameDefined nameDefined1 = new NameDefined(now, "name1");
-        NameDefined nameDefined2 = new NameDefined(now.plusSeconds(2), "name2");
-        NameWasChanged nameWasChanged1 = new NameWasChanged(now.plusSeconds(10), "name3");
+        NameDefined nameDefined1 = new NameDefined(UUID.randomUUID().toString(), now, "name1");
+        NameDefined nameDefined2 = new NameDefined(UUID.randomUUID().toString(), now.plusSeconds(2), "name2");
+        NameWasChanged nameWasChanged1 = new NameWasChanged(UUID.randomUUID().toString(), now.plusSeconds(10), "name3");
 
         // When
         mongoEventStore.write("1", 0, serialize(nameDefined1));
@@ -98,9 +98,9 @@ public class SpringBlockingChangeStreamerForMongoDBTest {
         CopyOnWriteArrayList<CloudEvent> state = new CopyOnWriteArrayList<>();
         String subscriberId = UUID.randomUUID().toString();
         changeStreamer.subscribe(subscriberId, state::addAll).await(Duration.of(10, ChronoUnit.SECONDS));
-        NameDefined nameDefined1 = new NameDefined(now, "name1");
-        NameDefined nameDefined2 = new NameDefined(now.plusSeconds(2), "name2");
-        NameWasChanged nameWasChanged1 = new NameWasChanged(now.plusSeconds(10), "name3");
+        NameDefined nameDefined1 = new NameDefined(UUID.randomUUID().toString(), now, "name1");
+        NameDefined nameDefined2 = new NameDefined(UUID.randomUUID().toString(), now.plusSeconds(2), "name2");
+        NameWasChanged nameWasChanged1 = new NameWasChanged(UUID.randomUUID().toString(), now.plusSeconds(10), "name3");
 
         // When
         mongoEventStore.write("1", 0, serialize(nameDefined1));
@@ -122,7 +122,7 @@ public class SpringBlockingChangeStreamerForMongoDBTest {
         CopyOnWriteArrayList<CloudEvent> state = new CopyOnWriteArrayList<>();
         String subscriberId = UUID.randomUUID().toString();
         changeStreamer.subscribe(subscriberId, state::addAll).await(Duration.of(10, ChronoUnit.SECONDS));
-        NameDefined nameDefined1 = new NameDefined(now, "name1");
+        NameDefined nameDefined1 = new NameDefined(UUID.randomUUID().toString(), now, "name1");
 
         // When
         mongoEventStore.write("1", 0, serialize(nameDefined1));
@@ -143,10 +143,10 @@ public class SpringBlockingChangeStreamerForMongoDBTest {
         changeStreamer.subscribe(subscriberId, state::addAll, filter().type(Filters::eq, NameDefined.class.getName()))
         // changeStreamer.subscribe(subscriberId, state::addAll, filter(where("events").elemMatch(where("type").is(NameDefined.class.getName())).getCriteriaObject()))
                 .await(Duration.of(10, ChronoUnit.SECONDS));
-        NameDefined nameDefined1 = new NameDefined(now, "name1");
-        NameDefined nameDefined2 = new NameDefined(now.plusSeconds(2), "name2");
-        NameWasChanged nameWasChanged1 = new NameWasChanged(now.plusSeconds(3), "name3");
-        NameWasChanged nameWasChanged2 = new NameWasChanged(now.plusSeconds(4), "name4");
+        NameDefined nameDefined1 = new NameDefined(UUID.randomUUID().toString(), now, "name1");
+        NameDefined nameDefined2 = new NameDefined(UUID.randomUUID().toString(), now.plusSeconds(2), "name2");
+        NameWasChanged nameWasChanged1 = new NameWasChanged(UUID.randomUUID().toString(), now.plusSeconds(3), "name3");
+        NameWasChanged nameWasChanged2 = new NameWasChanged(UUID.randomUUID().toString(), now.plusSeconds(4), "name4");
 
         // When
         mongoEventStore.write("1", 0, serialize(nameDefined1));

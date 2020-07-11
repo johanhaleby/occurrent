@@ -96,9 +96,9 @@ class MongoEventStoreTest {
     @Test
     void can_read_and_write_multiple_events_at_different_occasions_to_mongo_event_store() {
         LocalDateTime now = LocalDateTime.now();
-        NameDefined nameDefined = new NameDefined(now, "name");
-        NameWasChanged nameWasChanged1 = new NameWasChanged(now.plusHours(1), "name2");
-        NameWasChanged nameWasChanged2 = new NameWasChanged(now.plusHours(2), "name3");
+        NameDefined nameDefined = new NameDefined(UUID.randomUUID().toString(), now, "name");
+        NameWasChanged nameWasChanged1 = new NameWasChanged(UUID.randomUUID().toString(), now.plusHours(1), "name2");
+        NameWasChanged nameWasChanged2 = new NameWasChanged(UUID.randomUUID().toString(), now.plusHours(2), "name3");
 
         // When
         persist(mongoEventStore, "name", 0, nameDefined);
@@ -119,9 +119,9 @@ class MongoEventStoreTest {
     @Test
     void can_read_events_with_skip_and_limit() {
         LocalDateTime now = LocalDateTime.now();
-        NameDefined nameDefined = new NameDefined(now, "name");
-        NameWasChanged nameWasChanged1 = new NameWasChanged(now.plusHours(1), "name2");
-        NameWasChanged nameWasChanged2 = new NameWasChanged(now.plusHours(2), "name3");
+        NameDefined nameDefined = new NameDefined(UUID.randomUUID().toString(), now, "name");
+        NameWasChanged nameWasChanged1 = new NameWasChanged(UUID.randomUUID().toString(), now.plusHours(1), "name2");
+        NameWasChanged nameWasChanged2 = new NameWasChanged(UUID.randomUUID().toString(), now.plusHours(2), "name3");
 
         // When
         persist(mongoEventStore, "name", 0, nameDefined);
@@ -150,8 +150,8 @@ class MongoEventStoreTest {
                     LocalDateTime time = LocalDateTime.ofInstant(instant, UTC);
                     String name = (String) event.get("name");
                     return Match(event.get("type")).of(
-                            Case($(is(NameDefined.class.getSimpleName())), e -> new NameDefined(time, name)),
-                            Case($(is(NameWasChanged.class.getSimpleName())), e -> new NameWasChanged(time, name))
+                            Case($(is(NameDefined.class.getSimpleName())), e -> new NameDefined(UUID.randomUUID().toString(), time, name)),
+                            Case($(is(NameWasChanged.class.getSimpleName())), e -> new NameWasChanged(UUID.randomUUID().toString(), time, name))
                     );
                 })
                 .collect(Collectors.toList());

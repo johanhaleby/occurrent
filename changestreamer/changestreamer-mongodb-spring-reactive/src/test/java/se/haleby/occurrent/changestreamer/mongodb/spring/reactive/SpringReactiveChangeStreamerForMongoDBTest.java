@@ -80,9 +80,9 @@ public class SpringReactiveChangeStreamerForMongoDBTest {
         CopyOnWriteArrayList<CloudEvent> state = new CopyOnWriteArrayList<>();
         disposeAfterTest(changeStreamer.subscribe("test", cloudEvent -> Mono.fromRunnable(() -> state.addAll(cloudEvent))).subscribe());
         Thread.sleep(200);
-        NameDefined nameDefined1 = new NameDefined(now, "name1");
-        NameDefined nameDefined2 = new NameDefined(now.plusSeconds(2), "name2");
-        NameWasChanged nameWasChanged1 = new NameWasChanged(now.plusSeconds(10), "name3");
+        NameDefined nameDefined1 = new NameDefined(UUID.randomUUID().toString(), now, "name1");
+        NameDefined nameDefined2 = new NameDefined(UUID.randomUUID().toString(), now.plusSeconds(2), "name2");
+        NameWasChanged nameWasChanged1 = new NameWasChanged(UUID.randomUUID().toString(), now.plusSeconds(10), "name3");
 
         // When
         mongoEventStore.write("1", 0, serialize(nameDefined1));
@@ -102,9 +102,9 @@ public class SpringReactiveChangeStreamerForMongoDBTest {
         Function<List<CloudEvent>, Mono<Void>> function = cloudEvents -> Mono.fromRunnable(() -> state.addAll(cloudEvents));
         Disposable subscription1 = disposeAfterTest(changeStreamer.subscribe(subscriberId, function).subscribe());
         Thread.sleep(200);
-        NameDefined nameDefined1 = new NameDefined(now, "name1");
-        NameDefined nameDefined2 = new NameDefined(now.plusSeconds(2), "name2");
-        NameWasChanged nameWasChanged1 = new NameWasChanged(now.plusSeconds(10), "name3");
+        NameDefined nameDefined1 = new NameDefined(UUID.randomUUID().toString(), now, "name1");
+        NameDefined nameDefined2 = new NameDefined(UUID.randomUUID().toString(), now.plusSeconds(2), "name2");
+        NameWasChanged nameWasChanged1 = new NameWasChanged(UUID.randomUUID().toString(), now.plusSeconds(10), "name3");
 
         // When
         mongoEventStore.write("1", 0, serialize(nameDefined1));
@@ -127,7 +127,7 @@ public class SpringReactiveChangeStreamerForMongoDBTest {
         String subscriberId = UUID.randomUUID().toString();
         disposeAfterTest(changeStreamer.subscribe(subscriberId, cloudEvents -> Mono.fromRunnable(() -> state.addAll(cloudEvents))).subscribe());
         Thread.sleep(200);
-        NameDefined nameDefined1 = new NameDefined(now, "name1");
+        NameDefined nameDefined1 = new NameDefined(UUID.randomUUID().toString(), now, "name1");
 
         // When
         mongoEventStore.write("1", 0, serialize(nameDefined1));

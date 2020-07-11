@@ -47,7 +47,7 @@ public class InMemoryEventStoreTest {
         EventStream<NameDefined> eventStream = inMemoryEventStore.read("name").map(unchecked(cloudEvent -> objectMapper.readValue(cloudEvent.getData(), NameDefined.class)));
         softly.assertThat(eventStream.version()).isEqualTo(0);
         softly.assertThat(eventStream.events()).hasSize(1);
-        softly.assertThat(eventStream.events().collect(Collectors.toList())).containsExactly(new NameDefined(now, "John Doe"));
+        softly.assertThat(eventStream.events().collect(Collectors.toList())).containsExactly(new NameDefined(UUID.randomUUID().toString(), now, "John Doe"));
     }
 
     private void persist(EventStore inMemoryEventStore, String eventStreamId, List<DomainEvent> events) {

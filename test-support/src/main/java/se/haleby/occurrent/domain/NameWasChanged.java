@@ -8,6 +8,7 @@ import static se.haleby.occurrent.time.TimeConversion.toDate;
 
 public class NameWasChanged implements DomainEvent {
 
+    private String eventId;
     private Date timestamp;
     private String name;
 
@@ -15,18 +16,24 @@ public class NameWasChanged implements DomainEvent {
     NameWasChanged() {
     }
 
-    public NameWasChanged(Date timestamp, String nameChangedTo) {
+    public NameWasChanged(String eventId, Date timestamp, String nameChangedTo) {
+        this.eventId = eventId;
         this.timestamp = timestamp;
         this.name = nameChangedTo;
     }
 
-    public NameWasChanged(LocalDateTime timestamp, String name) {
-        this(toDate(timestamp), name);
+    public NameWasChanged(String eventId, LocalDateTime timestamp, String name) {
+        this(eventId, toDate(timestamp), name);
     }
 
     @Override
     public String getName() {
         return name;
+    }
+
+    @Override
+    public String getEventId() {
+        return eventId;
     }
 
     @Override
@@ -39,19 +46,21 @@ public class NameWasChanged implements DomainEvent {
         if (this == o) return true;
         if (!(o instanceof NameWasChanged)) return false;
         NameWasChanged that = (NameWasChanged) o;
-        return Objects.equals(timestamp, that.timestamp) &&
+        return Objects.equals(eventId, that.eventId) &&
+                Objects.equals(timestamp, that.timestamp) &&
                 Objects.equals(name, that.name);
     }
 
     @Override
     public int hashCode() {
-        return Objects.hash(timestamp, name);
+        return Objects.hash(eventId, timestamp, name);
     }
 
     @Override
     public String toString() {
         return "NameWasChanged{" +
-                "timestamp=" + timestamp +
+                "id='" + eventId + '\'' +
+                ", timestamp=" + timestamp +
                 ", name='" + name + '\'' +
                 '}';
     }

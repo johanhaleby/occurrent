@@ -60,7 +60,7 @@ public class TransactionalProjectionsWithSpringAndMongoDBApplicationTest {
         // Then
         assertAll(() -> {
             assertThat(currentNameProjection.findById(id.toString())).hasValue(new CurrentName(id.toString(), "John Doe"));
-            assertThat(eventStore.loadEventStream(id)).containsExactly(new NameDefined(now, "John Doe"));
+            assertThat(eventStore.loadEventStream(id)).containsExactly(new NameDefined(UUID.randomUUID().toString(), now, "John Doe"));
         });
     }
 
