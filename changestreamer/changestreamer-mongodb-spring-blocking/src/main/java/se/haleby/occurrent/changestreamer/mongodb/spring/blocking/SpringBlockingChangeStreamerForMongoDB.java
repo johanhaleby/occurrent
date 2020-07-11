@@ -2,6 +2,7 @@ package se.haleby.occurrent.changestreamer.mongodb.spring.blocking;
 
 import com.mongodb.MongoClientSettings;
 import com.mongodb.client.model.changestream.ChangeStreamDocument;
+import com.mongodb.client.model.changestream.FullDocument;
 import io.cloudevents.CloudEvent;
 import io.cloudevents.core.format.EventFormat;
 import io.cloudevents.core.provider.EventFormatProvider;
@@ -33,6 +34,7 @@ import java.util.concurrent.ConcurrentMap;
 import java.util.function.Consumer;
 import java.util.stream.Stream;
 
+import static com.mongodb.client.model.changestream.FullDocument.UPDATE_LOOKUP;
 import static java.util.Objects.requireNonNull;
 import static org.springframework.data.mongodb.core.query.Criteria.where;
 import static org.springframework.data.mongodb.core.query.Query.query;
@@ -79,6 +81,23 @@ public class SpringBlockingChangeStreamerForMongoDB {
             log.info("Found resume token {} for subscription {}, will resume stream.", resumeToken.asString(), subscriptionId);
             changeStreamOptionsBuilder.startAfter(resumeToken.asBsonDocument());
         }
+        changeStreamOptionsBuilder.fullDocumentLookup(UPDATE_LOOKUP);
+        final ChangeStreamOptions changeStreamOptions = applyFilter(filter, changeStreamOptionsBuilder);
+
+        MessageListener<ChangeStreamDocument<Document>, Document> listener = change -> {
+            ChangeStreamDocument<Document> raw = change.getRaw();
+            List<CloudEvent> cloudEvents = deserializeToCloudEvents(requireNonNull(cloudEventSerializer), raw);
+            action.accept(cloudEvents);
+            persistResumeToken(subscriptionId, requireNonNull(raw).getResumeToken());
+        };
+
+        ChangeStreamRequestOptions options = new ChangeStreamRequestOptions(null, eventCollection, changeStreamOptions);
+        final Subscription subscription = messageListenerContainer.register(new ChangeStreamRequest<>(listener, options), Document.class);
+        subscriptions.put(subscriptionId, subscription);
+        return subscription;
+    }
+
+    private static ChangeStreamOptions applyFilter(MongoDBFilterSpecification filter, ChangeStreamOptionsBuilder changeStreamOptionsBuilder) {
         final ChangeStreamOptions changeStreamOptions;
         if (filter == null) {
             changeStreamOptions = changeStreamOptionsBuilder.build();
@@ -108,18 +127,7 @@ public class SpringBlockingChangeStreamerForMongoDB {
         } else {
             throw new IllegalArgumentException("Invalid " + MongoDBFilterSpecification.class.getSimpleName());
         }
-
-        MessageListener<ChangeStreamDocument<Document>, Document> listener = change -> {
-            ChangeStreamDocument<Document> raw = change.getRaw();
-            List<CloudEvent> cloudEvents = deserializeToCloudEvents(requireNonNull(cloudEventSerializer), raw);
-            action.accept(cloudEvents);
-            persistResumeToken(subscriptionId, requireNonNull(raw).getResumeToken());
-        };
-
-        ChangeStreamRequestOptions options = new ChangeStreamRequestOptions(null, eventCollection, changeStreamOptions);
-        final Subscription subscription = messageListenerContainer.register(new ChangeStreamRequest<>(listener, options), Document.class);
-        subscriptions.put(subscriptionId, subscription);
-        return subscription;
+        return changeStreamOptions;
     }
 
     void pauseSubscription(String subscriptionId) {

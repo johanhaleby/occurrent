@@ -1,13 +1,10 @@
 package se.haleby.occurrent.changestreamer.mongodb.common;
 
 import com.mongodb.client.model.Filters;
-import com.mongodb.client.model.Projections;
 import org.bson.Document;
 import org.bson.conversions.Bson;
 
 import java.util.function.BiFunction;
-
-import static com.mongodb.client.model.Aggregates.project;
 
 /**
  * Add filters when subscribing to a MongoDB change streamer if you're only interested in specify changes.
@@ -68,7 +65,7 @@ public class MongoDBFilterSpecification {
         private final Bson[] aggregationStages;
 
         private BsonMongoDBFilterSpecification() {
-            this.aggregationStages = null;
+            this.aggregationStages = new Bson[0];
         }
 
         public BsonMongoDBFilterSpecification(Bson firstAggregationStage, Bson... additionalStages) {
@@ -87,7 +84,8 @@ public class MongoDBFilterSpecification {
 
         public BsonMongoDBFilterSpecification type(BiFunction<String, String, Bson> filter, String item) {
             // new BsonMongoDBFilterSpecification(unwind("$events"), replaceRoot("$events"), match(filter.apply("type", item)));
-            return new BsonMongoDBFilterSpecification(project(Projections.elemMatch("events", filter.apply("type", item))));
+            // project(Projections.elemMatch("events", filter.apply("type", item)))
+            return new BsonMongoDBFilterSpecification();
         }
 
         public Bson[] getAggregationStages() {
