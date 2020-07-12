@@ -78,19 +78,13 @@ public class SpringBlockingMongoEventStoreTest {
         objectMapper = new ObjectMapper();
     }
 
-    @DisplayName("common tests regardless of StreamWriteConsistencyGuarantee")
+    @DisplayName("when using StreamConsistencyGuarantee with type None")
     @Nested
-    class RegardlessOfStreamWriteConsistencyGuarantee {
-
-    }
-
-    @DisplayName("when using StreamWriteConsistencyGuarantee with type None")
-    @Nested
-    class StreamWriteConsistencyGuaranteeNone {
+    class StreamConsistencyGuaranteeNone {
 
         @BeforeEach
         void create_mongo_spring_blocking_event_store_with_stream_write_consistency_guarantee_none() {
-            eventStore = new SpringBlockingMongoEventStore(mongoTemplate, connectionString.getCollection(), StreamWriteConsistencyGuarantee.none());
+            eventStore = new SpringBlockingMongoEventStore(mongoTemplate, connectionString.getCollection(), StreamConsistencyGuarantee.none());
         }
 
         @Test
@@ -178,14 +172,14 @@ public class SpringBlockingMongoEventStoreTest {
         }
     }
 
-    @DisplayName("when using StreamWriteConsistencyGuarantee with type transactional")
+    @DisplayName("when using StreamConsistencyGuarantee with type transactional")
     @Nested
-    class StreamWriteConsistencyGuaranteeTransactional {
+    class StreamConsistencyGuaranteeTransactional {
 
         @BeforeEach
-        void create_mongo_spring_blocking_event_store_with_stream_write_consistency_guarantee_none() {
+        void create_mongo_spring_blocking_event_store_with_stream_write_consistency_guarantee_transactional() {
             MongoTransactionManager mongoTransactionManager = new MongoTransactionManager(new SimpleMongoClientDatabaseFactory(mongoClient, requireNonNull(connectionString.getDatabase())));
-            eventStore = new SpringBlockingMongoEventStore(mongoTemplate, connectionString.getCollection(), StreamWriteConsistencyGuarantee.transactional("event-stream-version", mongoTransactionManager));
+            eventStore = new SpringBlockingMongoEventStore(mongoTemplate, connectionString.getCollection(), StreamConsistencyGuarantee.transactional("event-stream-version", mongoTransactionManager));
         }
 
         @Test
@@ -289,6 +283,122 @@ public class SpringBlockingMongoEventStoreTest {
             assertAll(
                     () -> assertThat(throwable).isExactlyInstanceOf(MongoBulkWriteException.class),
                     () -> assertThat(eventStream.version()).isEqualTo(1),
+                    () -> assertThat(readEvents).hasSize(2),
+                    () -> assertThat(readEvents).containsExactlyElementsOf(events)
+            );
+        }
+    }
+
+    @DisplayName("when using StreamConsistencyGuarantee with type transactional annotation")
+    @Nested
+    class StreamConsistencyGuaranteeTransactionalAnnotation {
+
+        @BeforeEach
+        void create_mongo_spring_blocking_event_store_with_stream_write_consistency_guarantee_transactional_annotation() {
+            eventStore = new SpringBlockingMongoEventStore(mongoTemplate, connectionString.getCollection(), StreamConsistencyGuarantee.transactionalAnnotation("event-stream-version"));
+        }
+
+        @Test
+        void can_read_and_write_single_event_to_mongo_spring_blocking_event_store() {
+            LocalDateTime now = LocalDateTime.now();
+
+            // When
+            List<DomainEvent> events = Name.defineName(now, "John Doe");
+            persist(eventStore, "name", 0, events);
+
+            // Then
+            EventStream<CloudEvent> eventStream = eventStore.read("name");
+            List<DomainEvent> readEvents = deserialize(eventStream.events());
+
+            assertAll(
+                    () -> assertThat(eventStream.version()).isEqualTo(1),
+                    () -> assertThat(readEvents).hasSize(1),
+                    () -> assertThat(readEvents).containsExactlyElementsOf(events)
+            );
+        }
+
+        @Test
+        void can_read_and_write_multiple_events_at_once_to_mongo_spring_blocking_event_store() {
+            LocalDateTime now = LocalDateTime.now();
+            List<DomainEvent> events = chain(Name.defineName(now, "Hello World"), es -> Name.changeName(es, now, "John Doe"));
+
+            // When
+            persist(eventStore, "name", 0, events);
+
+            // Then
+            EventStream<CloudEvent> eventStream = eventStore.read("name");
+            List<DomainEvent> readEvents = deserialize(eventStream.events());
+
+            assertAll(
+                    () -> assertThat(eventStream.version()).isEqualTo(1),
+                    () -> assertThat(readEvents).hasSize(2),
+                    () -> assertThat(readEvents).containsExactlyElementsOf(events)
+            );
+        }
+
+        @Test
+        void can_read_and_write_multiple_events_at_different_occasions_to_mongo_spring_blocking_event_store() {
+            LocalDateTime now = LocalDateTime.now();
+            NameDefined nameDefined = new NameDefined(UUID.randomUUID().toString(), now, "name");
+            NameWasChanged nameWasChanged1 = new NameWasChanged(UUID.randomUUID().toString(), now.plusHours(1), "name2");
+            NameWasChanged nameWasChanged2 = new NameWasChanged(UUID.randomUUID().toString(), now.plusHours(2), "name3");
+
+            // When
+            persist(eventStore, "name", 0, nameDefined);
+            persist(eventStore, "name", 1, nameWasChanged1);
+            persist(eventStore, "name", 2, nameWasChanged2);
+
+            // Then
+            EventStream<CloudEvent> eventStream = eventStore.read("name");
+            List<DomainEvent> readEvents = deserialize(eventStream.events());
+
+            assertAll(
+                    () -> assertThat(eventStream.version()).isEqualTo(3),
+                    () -> assertThat(readEvents).hasSize(3),
+                    () -> assertThat(readEvents).containsExactly(nameDefined, nameWasChanged1, nameWasChanged2)
+            );
+        }
+
+        @Test
+        void can_read_events_with_skip_and_limit_using_mongo_event_store() {
+            LocalDateTime now = LocalDateTime.now();
+            NameDefined nameDefined = new NameDefined(UUID.randomUUID().toString(), now, "name");
+            NameWasChanged nameWasChanged1 = new NameWasChanged(UUID.randomUUID().toString(), now.plusHours(1), "name2");
+            NameWasChanged nameWasChanged2 = new NameWasChanged(UUID.randomUUID().toString(), now.plusHours(2), "name3");
+
+            // When
+            persist(eventStore, "name", 0, nameDefined);
+            persist(eventStore, "name", 1, nameWasChanged1);
+            persist(eventStore, "name", 2, nameWasChanged2);
+
+            // Then
+            EventStream<CloudEvent> eventStream = eventStore.read("name", 1, 1);
+            List<DomainEvent> readEvents = deserialize(eventStream.events());
+
+            assertAll(
+                    () -> assertThat(eventStream.version()).isEqualTo(3),
+                    () -> assertThat(readEvents).hasSize(1),
+                    () -> assertThat(readEvents).containsExactly(nameWasChanged1)
+            );
+        }
+
+        @Test
+        void stream_version_is_updated_when_event_insertion_fails_when_no_transaction_is_started() {
+            LocalDateTime now = LocalDateTime.now();
+            List<DomainEvent> events = chain(Name.defineName(now, "Hello World"), es -> Name.changeName(es, now, "John Doe"));
+
+            persist(eventStore, "name", 0, events);
+
+            // When
+            Throwable throwable = catchThrowable(() -> persist(eventStore, "name", 1, events));
+
+            // Then
+            EventStream<CloudEvent> eventStream = eventStore.read("name");
+            List<DomainEvent> readEvents = deserialize(eventStream.events());
+
+            assertAll(
+                    () -> assertThat(throwable).isExactlyInstanceOf(MongoBulkWriteException.class),
+                    () -> assertThat(eventStream.version()).isEqualTo(2),
                     () -> assertThat(readEvents).hasSize(2),
                     () -> assertThat(readEvents).containsExactlyElementsOf(events)
             );
