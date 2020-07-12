@@ -4,18 +4,17 @@ import java.time.LocalDateTime;
 import java.util.Collections;
 import java.util.List;
 import java.util.Objects;
-import java.util.UUID;
 import java.util.function.Predicate;
 
 import static se.haleby.occurrent.time.TimeConversion.toDate;
 
 public class Name {
 
-    public static List<DomainEvent> defineName(LocalDateTime time, String name) {
-        return Collections.singletonList(new NameDefined(UUID.randomUUID().toString(), toDate(time), name));
+    public static List<DomainEvent> defineName(String eventId, LocalDateTime time, String name) {
+        return Collections.singletonList(new NameDefined(eventId, toDate(time), name));
     }
 
-    public static List<DomainEvent> changeName(List<DomainEvent> events, LocalDateTime time, String newName) {
+    public static List<DomainEvent> changeName(List<DomainEvent> events, String eventId, LocalDateTime time, String newName) {
         Predicate<DomainEvent> isInstanceOfNameDefined = NameDefined.class::isInstance;
         Predicate<DomainEvent> isInstanceOfNameWasChanged = NameWasChanged.class::isInstance;
 
@@ -28,6 +27,6 @@ public class Name {
         } else if (currentName.isEmpty()) {
             throw new IllegalArgumentException("Cannot change name this it is currently undefined");
         }
-        return Collections.singletonList(new NameWasChanged(UUID.randomUUID().toString(), toDate(time), newName));
+        return Collections.singletonList(new NameWasChanged(eventId, toDate(time), newName));
     }
 }

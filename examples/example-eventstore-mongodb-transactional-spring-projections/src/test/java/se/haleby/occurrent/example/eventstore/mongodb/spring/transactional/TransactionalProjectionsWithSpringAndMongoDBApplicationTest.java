@@ -58,10 +58,10 @@ public class TransactionalProjectionsWithSpringAndMongoDBApplicationTest {
         nameApplicationService.defineName(id, now, "John Doe");
 
         // Then
-        assertAll(() -> {
-            assertThat(currentNameProjection.findById(id.toString())).hasValue(new CurrentName(id.toString(), "John Doe"));
-            assertThat(eventStore.loadEventStream(id)).containsExactly(new NameDefined(UUID.randomUUID().toString(), now, "John Doe"));
-        });
+        assertAll(
+                () -> assertThat(currentNameProjection.findById(id.toString())).hasValue(new CurrentName(id.toString(), "John Doe")),
+                () -> assertThat(eventStore.loadEventStream(id).events()).containsExactly(new NameDefined(id.toString(), now, "John Doe"))
+        );
     }
 
     @Test
@@ -76,13 +76,13 @@ public class TransactionalProjectionsWithSpringAndMongoDBApplicationTest {
             Throwable throwable = catchThrowable(() -> nameApplicationService.defineName(id, now, "John Doe"));
 
             // Then
-            assertAll(() -> {
-                assertThat(throwable).isExactlyInstanceOf(IllegalArgumentException.class);
-                assertThat(currentNameProjection.findById(id.toString())).isEmpty();
-                EventStream<DomainEvent> eventStream = eventStore.loadEventStream(id);
-                assertThat(eventStream.isEmpty()).isTrue();
-                assertThat(eventStream).isEmpty();
-            });
+            EventStream<DomainEvent> eventStream = eventStore.loadEventStream(id);
+            assertAll(
+                    () -> assertThat(throwable).isExactlyInstanceOf(IllegalArgumentException.class),
+                    () -> assertThat(currentNameProjection.findById(id.toString())).isEmpty(),
+                    () -> assertThat(eventStream.isEmpty()).isTrue(),
+                    () -> assertThat(eventStream).isEmpty()
+            );
         });
     }
 

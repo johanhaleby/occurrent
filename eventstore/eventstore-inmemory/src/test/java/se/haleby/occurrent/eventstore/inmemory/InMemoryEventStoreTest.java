@@ -7,11 +7,11 @@ import org.assertj.core.api.junit.jupiter.SoftAssertionsExtension;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
-import se.haleby.occurrent.eventstore.api.blocking.EventStore;
-import se.haleby.occurrent.eventstore.api.blocking.EventStream;
 import se.haleby.occurrent.domain.DomainEvent;
 import se.haleby.occurrent.domain.Name;
 import se.haleby.occurrent.domain.NameDefined;
+import se.haleby.occurrent.eventstore.api.blocking.EventStore;
+import se.haleby.occurrent.eventstore.api.blocking.EventStream;
 
 import java.net.URI;
 import java.time.LocalDateTime;
@@ -37,17 +37,18 @@ public class InMemoryEventStoreTest {
     void read_and_write(SoftAssertions softly) {
         // Given
         InMemoryEventStore inMemoryEventStore = new InMemoryEventStore();
+        String eventId = UUID.randomUUID().toString();
         LocalDateTime now = LocalDateTime.now();
 
         // When
-        List<DomainEvent> events = Name.defineName(now, "John Doe");
+        List<DomainEvent> events = Name.defineName(eventId, now, "John Doe");
         persist(inMemoryEventStore, "name", events);
 
         // Then
         EventStream<NameDefined> eventStream = inMemoryEventStore.read("name").map(unchecked(cloudEvent -> objectMapper.readValue(cloudEvent.getData(), NameDefined.class)));
         softly.assertThat(eventStream.version()).isEqualTo(0);
         softly.assertThat(eventStream.events()).hasSize(1);
-        softly.assertThat(eventStream.events().collect(Collectors.toList())).containsExactly(new NameDefined(UUID.randomUUID().toString(), now, "John Doe"));
+        softly.assertThat(eventStream.events().collect(Collectors.toList())).containsExactly(new NameDefined(eventId, now, "John Doe"));
     }
 
     private void persist(EventStore inMemoryEventStore, String eventStreamId, List<DomainEvent> events) {

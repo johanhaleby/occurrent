@@ -193,6 +193,9 @@ public class SpringBlockingMongoEventStore implements EventStore {
             mongoTemplate.setSessionSynchronization(ALWAYS);
             String streamVersionCollectionName = ((Transactional) streamConsistencyGuarantee).streamVersionCollectionName;
             createStreamVersionCollectionAndIndex(streamVersionCollectionName, mongoTemplate);
+        } else if (streamConsistencyGuarantee instanceof TransactionalAnnotation) {
+            String streamVersionCollectionName = ((TransactionalAnnotation) streamConsistencyGuarantee).streamVersionCollectionName;
+            createStreamVersionCollectionAndIndex(streamVersionCollectionName, mongoTemplate);
         }
     }
 

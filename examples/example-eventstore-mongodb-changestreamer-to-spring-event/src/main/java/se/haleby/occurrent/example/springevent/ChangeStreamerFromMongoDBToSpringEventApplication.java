@@ -7,9 +7,10 @@ import org.springframework.beans.factory.annotation.Value;
 import org.springframework.boot.autoconfigure.SpringBootApplication;
 import org.springframework.context.annotation.Bean;
 import org.springframework.data.mongodb.core.ReactiveMongoOperations;
-import se.haleby.occurrent.eventstore.api.blocking.EventStore;
 import se.haleby.occurrent.changestreamer.mongodb.spring.reactive.SpringReactiveChangeStreamerForMongoDB;
+import se.haleby.occurrent.eventstore.api.blocking.EventStore;
 import se.haleby.occurrent.eventstore.mongodb.nativedriver.MongoEventStore;
+import se.haleby.occurrent.eventstore.mongodb.nativedriver.StreamConsistencyGuarantee;
 
 import static com.fasterxml.jackson.databind.ObjectMapper.DefaultTyping.EVERYTHING;
 
@@ -21,7 +22,7 @@ public class ChangeStreamerFromMongoDBToSpringEventApplication {
 
     @Bean
     public EventStore eventStore() {
-        return new MongoEventStore(connectionString());
+        return new MongoEventStore(connectionString(), StreamConsistencyGuarantee.transactional("event-consistency"));
     }
 
     @Bean

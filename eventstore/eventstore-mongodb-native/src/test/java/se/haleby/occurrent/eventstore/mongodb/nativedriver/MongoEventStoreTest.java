@@ -51,7 +51,7 @@ class MongoEventStoreTest {
     @BeforeEach
     void create_mongo_event_store() {
         ConnectionString connectionString = new ConnectionString(mongoDBContainer.getReplicaSetUrl() + ".events");
-        mongoEventStore = new MongoEventStore(connectionString);
+        mongoEventStore = new MongoEventStore(connectionString, StreamConsistencyGuarantee.transactional("consistency"));
         objectMapper = new ObjectMapper();
     }
 
@@ -60,24 +60,24 @@ class MongoEventStoreTest {
         LocalDateTime now = LocalDateTime.now();
 
         // When
-        List<DomainEvent> events = Name.defineName(now, "John Doe");
+        List<DomainEvent> events = Name.defineName(UUID.randomUUID().toString(), now, "John Doe");
         persist(mongoEventStore, "name", 0, events);
 
         // Then
         EventStream<CloudEvent> eventStream = mongoEventStore.read("name");
         List<DomainEvent> readEvents = deserialize(eventStream.events());
 
-        assertAll(() -> {
-            assertThat(eventStream.version()).isEqualTo(1);
-            assertThat(eventStream.events()).hasSize(1);
-            assertThat(readEvents).containsExactlyElementsOf(events);
-        });
+        assertAll(
+                () -> assertThat(eventStream.version()).isEqualTo(1),
+                () -> assertThat(readEvents).hasSize(1),
+                () -> assertThat(readEvents).containsExactlyElementsOf(events)
+        );
     }
 
     @Test
     void can_read_and_write_multiple_events_at_once_to_mongo_event_store() {
         LocalDateTime now = LocalDateTime.now();
-        List<DomainEvent> events = chain(Name.defineName(now, "Hello World"), es -> Name.changeName(es, now, "John Doe"));
+        List<DomainEvent> events = chain(Name.defineName(UUID.randomUUID().toString(), now, "Hello World"), es -> Name.changeName(es, UUID.randomUUID().toString(), now, "John Doe"));
 
         // When
         persist(mongoEventStore, "name", 0, events);
@@ -86,11 +86,11 @@ class MongoEventStoreTest {
         EventStream<CloudEvent> eventStream = mongoEventStore.read("name");
         List<DomainEvent> readEvents = deserialize(eventStream.events());
 
-        assertAll(() -> {
-            assertThat(eventStream.version()).isEqualTo(1);
-            assertThat(eventStream.events()).hasSize(2);
-            assertThat(readEvents).containsExactlyElementsOf(events);
-        });
+        assertAll(
+                () -> assertThat(eventStream.version()).isEqualTo(1),
+                () -> assertThat(readEvents).hasSize(2),
+                () -> assertThat(readEvents).containsExactlyElementsOf(events)
+        );
     }
 
     @Test
@@ -109,11 +109,11 @@ class MongoEventStoreTest {
         EventStream<CloudEvent> eventStream = mongoEventStore.read("name");
         List<DomainEvent> readEvents = deserialize(eventStream.events());
 
-        assertAll(() -> {
-            assertThat(eventStream.version()).isEqualTo(3);
-            assertThat(eventStream.events()).hasSize(3);
-            assertThat(readEvents).containsExactly(nameDefined, nameWasChanged1, nameWasChanged2);
-        });
+        assertAll(
+                () -> assertThat(eventStream.version()).isEqualTo(3),
+                () -> assertThat(readEvents).hasSize(3),
+                () -> assertThat(readEvents).containsExactly(nameDefined, nameWasChanged1, nameWasChanged2)
+        );
     }
 
     @Test
@@ -132,11 +132,11 @@ class MongoEventStoreTest {
         EventStream<CloudEvent> eventStream = mongoEventStore.read("name", 1, 1);
         List<DomainEvent> readEvents = deserialize(eventStream.events());
 
-        assertAll(() -> {
-            assertThat(eventStream.version()).isEqualTo(3);
-            assertThat(eventStream.events()).hasSize(1);
-            assertThat(readEvents).containsExactly(nameWasChanged1);
-        });
+        assertAll(
+                () -> assertThat(eventStream.version()).isEqualTo(3),
+                () -> assertThat(readEvents).hasSize(1),
+                () -> assertThat(readEvents).containsExactly(nameWasChanged1)
+        );
     }
 
     private List<DomainEvent> deserialize(Stream<CloudEvent> events) {
@@ -148,10 +148,11 @@ class MongoEventStoreTest {
                 .map(event -> {
                     Instant instant = Instant.ofEpochMilli((long) event.get("time"));
                     LocalDateTime time = LocalDateTime.ofInstant(instant, UTC);
+                    String eventId = (String) event.get("eventId");
                     String name = (String) event.get("name");
                     return Match(event.get("type")).of(
-                            Case($(is(NameDefined.class.getSimpleName())), e -> new NameDefined(UUID.randomUUID().toString(), time, name)),
-                            Case($(is(NameWasChanged.class.getSimpleName())), e -> new NameWasChanged(UUID.randomUUID().toString(), time, name))
+                            Case($(is(NameDefined.class.getSimpleName())), e -> new NameDefined(eventId, time, name)),
+                            Case($(is(NameWasChanged.class.getSimpleName())), e -> new NameWasChanged(eventId, time, name))
                     );
                 })
                 .collect(Collectors.toList());
@@ -182,6 +183,7 @@ class MongoEventStoreTest {
         try {
             return objectMapper.writeValueAsBytes(new HashMap<String, Object>() {{
                 put("type", e.getClass().getSimpleName());
+                put("eventId", e.getEventId());
                 put("name", e.getName());
                 put("time", e.getTimestamp().getTime());
             }});

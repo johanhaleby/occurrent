@@ -92,7 +92,7 @@ public class SpringBlockingMongoEventStoreTest {
             LocalDateTime now = LocalDateTime.now();
 
             // When
-            List<DomainEvent> events = Name.defineName(now, "John Doe");
+            List<DomainEvent> events = Name.defineName(UUID.randomUUID().toString(), now, "John Doe");
             persist(eventStore, "name", 0, events);
 
             // Then
@@ -109,7 +109,7 @@ public class SpringBlockingMongoEventStoreTest {
         @Test
         void can_read_and_write_multiple_events_at_once_to_mongo_spring_blocking_event_store() {
             LocalDateTime now = LocalDateTime.now();
-            List<DomainEvent> events = chain(Name.defineName(now, "Hello World"), es -> Name.changeName(es, now, "John Doe"));
+            List<DomainEvent> events = chain(Name.defineName(UUID.randomUUID().toString(), now, "Hello World"), es -> Name.changeName(es, UUID.randomUUID().toString(), now, "John Doe"));
 
             // When
             persist(eventStore, "name", 0, events);
@@ -187,7 +187,7 @@ public class SpringBlockingMongoEventStoreTest {
             LocalDateTime now = LocalDateTime.now();
 
             // When
-            List<DomainEvent> events = Name.defineName(now, "John Doe");
+            List<DomainEvent> events = Name.defineName(UUID.randomUUID().toString(), now, "John Doe");
             persist(eventStore, "name", 0, events);
 
             // Then
@@ -204,7 +204,7 @@ public class SpringBlockingMongoEventStoreTest {
         @Test
         void can_read_and_write_multiple_events_at_once_to_mongo_spring_blocking_event_store() {
             LocalDateTime now = LocalDateTime.now();
-            List<DomainEvent> events = chain(Name.defineName(now, "Hello World"), es -> Name.changeName(es, now, "John Doe"));
+            List<DomainEvent> events = chain(Name.defineName(UUID.randomUUID().toString(), now, "Hello World"), es -> Name.changeName(es, UUID.randomUUID().toString(), now, "John Doe"));
 
             // When
             persist(eventStore, "name", 0, events);
@@ -269,7 +269,7 @@ public class SpringBlockingMongoEventStoreTest {
         @Test
         void stream_version_is_not_updated_when_event_insertion_fails() {
             LocalDateTime now = LocalDateTime.now();
-            List<DomainEvent> events = chain(Name.defineName(now, "Hello World"), es -> Name.changeName(es, now, "John Doe"));
+            List<DomainEvent> events = chain(Name.defineName(UUID.randomUUID().toString(), now, "Hello World"), es -> Name.changeName(es, UUID.randomUUID().toString(), now, "John Doe"));
 
             persist(eventStore, "name", 0, events);
 
@@ -303,7 +303,7 @@ public class SpringBlockingMongoEventStoreTest {
             LocalDateTime now = LocalDateTime.now();
 
             // When
-            List<DomainEvent> events = Name.defineName(now, "John Doe");
+            List<DomainEvent> events = Name.defineName(UUID.randomUUID().toString(), now, "John Doe");
             persist(eventStore, "name", 0, events);
 
             // Then
@@ -320,7 +320,7 @@ public class SpringBlockingMongoEventStoreTest {
         @Test
         void can_read_and_write_multiple_events_at_once_to_mongo_spring_blocking_event_store() {
             LocalDateTime now = LocalDateTime.now();
-            List<DomainEvent> events = chain(Name.defineName(now, "Hello World"), es -> Name.changeName(es, now, "John Doe"));
+            List<DomainEvent> events = chain(Name.defineName(UUID.randomUUID().toString(), now, "Hello World"), es -> Name.changeName(es, UUID.randomUUID().toString(), now, "John Doe"));
 
             // When
             persist(eventStore, "name", 0, events);
@@ -385,7 +385,7 @@ public class SpringBlockingMongoEventStoreTest {
         @Test
         void stream_version_is_updated_when_event_insertion_fails_when_no_transaction_is_started() {
             LocalDateTime now = LocalDateTime.now();
-            List<DomainEvent> events = chain(Name.defineName(now, "Hello World"), es -> Name.changeName(es, now, "John Doe"));
+            List<DomainEvent> events = chain(Name.defineName(UUID.randomUUID().toString(), now, "Hello World"), es -> Name.changeName(es, UUID.randomUUID().toString(), now, "John Doe"));
 
             persist(eventStore, "name", 0, events);
 
