@@ -17,7 +17,6 @@ import reactor.core.publisher.Flux;
 import reactor.core.publisher.Mono;
 import se.haleby.occurrent.changestreamer.mongodb.common.MongoDBCloudEventsToJsonDeserializer;
 
-import java.util.List;
 import java.util.function.Function;
 
 import static org.springframework.data.mongodb.core.query.Criteria.where;
@@ -39,7 +38,7 @@ public class SpringReactiveChangeStreamerForMongoDB {
         cloudEventSerializer = EventFormatProvider.getInstance().resolveFormat(JsonFormat.CONTENT_TYPE);
     }
 
-    public Flux<CloudEvent> subscribe(String subscriberId, Function<List<CloudEvent>, Mono<Void>> action) {
+    public Flux<CloudEvent> subscribe(String subscriberId, Function<CloudEvent, Mono<Void>> action) {
         ChangeStreamWithFilterAndProjection<String> changeStream = mongo.changeStream(String.class).watchCollection(eventCollection);
 
         // First try to find and use a resume token for the subscriber, if not found just listen normally.
@@ -51,11 +50,14 @@ public class SpringReactiveChangeStreamerForMongoDB {
                     log.info("Couldn't find resume token for subscriber {}, will start subscribing to events at this moment in time.", subscriberId);
                     return changeStream.listen();
                 }))
-                .flatMap(changeEvent -> {
-                    List<CloudEvent> cloudEvents = deserializeToCloudEvents(cloudEventSerializer, changeEvent.getRaw());
-                    return action.apply(cloudEvents).thenReturn(new ChangeStreamEventAndCloudEvent(changeEvent, cloudEvents));
-                })
-                .flatMap(events -> persistResumeToken(subscriberId, events.changeStreamEvent.getResumeToken()).thenMany(Flux.fromIterable(events.cloudEvents)));
+                .flatMap(changeEvent ->
+                        deserializeToCloudEvent(cloudEventSerializer, changeEvent.getRaw())
+                                .map(cloudEvent -> action.apply(cloudEvent).thenReturn(new ChangeStreamEventAndCloudEvent(changeEvent, cloudEvent)))
+                                .orElse(Mono.just(new ChangeStreamEventAndCloudEvent(changeEvent, null)))
+                )
+                .flatMap(event -> persistResumeToken(subscriberId, event.changeStreamEvent.getResumeToken()).thenReturn(event))
+                .filter(event -> event.cloudEvent != null)
+                .map(ChangeStreamEventAndCloudEvent::getCloudEvent);
     }
 
     public Mono<Void> cancelSubscription(String subscriberId) {
@@ -70,11 +72,15 @@ public class SpringReactiveChangeStreamerForMongoDB {
 
     private static class ChangeStreamEventAndCloudEvent {
         private final ChangeStreamEvent<String> changeStreamEvent;
-        private final List<CloudEvent> cloudEvents;
+        private final CloudEvent cloudEvent;
 
-        ChangeStreamEventAndCloudEvent(ChangeStreamEvent<String> changeStreamEvent, List<CloudEvent> cloudEvents) {
+        ChangeStreamEventAndCloudEvent(ChangeStreamEvent<String> changeStreamEvent, CloudEvent cloudEvent) {
             this.changeStreamEvent = changeStreamEvent;
-            this.cloudEvents = cloudEvents;
+            this.cloudEvent = cloudEvent;
+        }
+
+        public CloudEvent getCloudEvent() {
+            return cloudEvent;
         }
     }
 }

@@ -25,7 +25,6 @@ import se.haleby.occurrent.testsupport.mongodb.FlushMongoDBExtension;
 import java.net.URI;
 import java.time.Duration;
 import java.time.LocalDateTime;
-import java.util.List;
 import java.util.Objects;
 import java.util.UUID;
 import java.util.concurrent.CopyOnWriteArrayList;
@@ -78,7 +77,7 @@ public class SpringReactiveChangeStreamerForMongoDBTest {
         // Given
         LocalDateTime now = LocalDateTime.now();
         CopyOnWriteArrayList<CloudEvent> state = new CopyOnWriteArrayList<>();
-        disposeAfterTest(changeStreamer.subscribe("test", cloudEvent -> Mono.fromRunnable(() -> state.addAll(cloudEvent))).subscribe());
+        disposeAfterTest(changeStreamer.subscribe("test", cloudEvent -> Mono.fromRunnable(() -> state.add(cloudEvent))).subscribe());
         Thread.sleep(200);
         NameDefined nameDefined1 = new NameDefined(UUID.randomUUID().toString(), now, "name1");
         NameDefined nameDefined2 = new NameDefined(UUID.randomUUID().toString(), now.plusSeconds(2), "name2");
@@ -94,12 +93,12 @@ public class SpringReactiveChangeStreamerForMongoDBTest {
     }
 
     @Test
-    void reactive_spring_change_streamer_allows_resuming_events_from_where_it_left_off() throws Exception{
+    void reactive_spring_change_streamer_allows_resuming_events_from_where_it_left_off() throws Exception {
         // Given
         LocalDateTime now = LocalDateTime.now();
         CopyOnWriteArrayList<CloudEvent> state = new CopyOnWriteArrayList<>();
         String subscriberId = UUID.randomUUID().toString();
-        Function<List<CloudEvent>, Mono<Void>> function = cloudEvents -> Mono.fromRunnable(() -> state.addAll(cloudEvents));
+        Function<CloudEvent, Mono<Void>> function = cloudEvents -> Mono.fromRunnable(() -> state.add(cloudEvents));
         Disposable subscription1 = disposeAfterTest(changeStreamer.subscribe(subscriberId, function).subscribe());
         Thread.sleep(200);
         NameDefined nameDefined1 = new NameDefined(UUID.randomUUID().toString(), now, "name1");
@@ -125,7 +124,7 @@ public class SpringReactiveChangeStreamerForMongoDBTest {
         LocalDateTime now = LocalDateTime.now();
         CopyOnWriteArrayList<CloudEvent> state = new CopyOnWriteArrayList<>();
         String subscriberId = UUID.randomUUID().toString();
-        disposeAfterTest(changeStreamer.subscribe(subscriberId, cloudEvents -> Mono.fromRunnable(() -> state.addAll(cloudEvents))).subscribe());
+        disposeAfterTest(changeStreamer.subscribe(subscriberId, cloudEvents -> Mono.fromRunnable(() -> state.add(cloudEvents))).subscribe());
         Thread.sleep(200);
         NameDefined nameDefined1 = new NameDefined(UUID.randomUUID().toString(), now, "name1");
 

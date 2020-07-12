@@ -6,10 +6,14 @@ import org.bson.conversions.Bson;
 
 import java.util.function.BiFunction;
 
+import static com.mongodb.client.model.Aggregates.match;
+
 /**
  * Add filters when subscribing to a MongoDB change streamer if you're only interested in specify changes.
  */
 public class MongoDBFilterSpecification {
+
+    public static final String CLOUD_EVENT_PATH = "fullDocument.cloudEvent";
 
     public static class JsonMongoDBFilterSpecification extends MongoDBFilterSpecification {
         private final String json;
@@ -83,9 +87,8 @@ public class MongoDBFilterSpecification {
         }
 
         public BsonMongoDBFilterSpecification type(BiFunction<String, String, Bson> filter, String item) {
-            // new BsonMongoDBFilterSpecification(unwind("$events"), replaceRoot("$events"), match(filter.apply("type", item)));
-            // project(Projections.elemMatch("events", filter.apply("type", item)))
-            return new BsonMongoDBFilterSpecification();
+            return new BsonMongoDBFilterSpecification(match(filter.apply(CLOUD_EVENT_PATH + ".type", item)));
+            // return new BsonMongoDBFilterSpecification();
         }
 
         public Bson[] getAggregationStages() {

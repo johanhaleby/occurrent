@@ -10,14 +10,10 @@ import org.bson.BsonValue;
 import org.bson.Document;
 
 import java.util.HashMap;
-import java.util.List;
 import java.util.Map;
-import java.util.Map.Entry;
-import java.util.stream.Collectors;
-import java.util.stream.Stream;
+import java.util.Optional;
 
 import static com.mongodb.client.model.changestream.OperationType.INSERT;
-import static com.mongodb.client.model.changestream.OperationType.UPDATE;
 import static java.nio.charset.StandardCharsets.UTF_8;
 
 public class MongoDBCloudEventsToJsonDeserializer {
@@ -25,36 +21,26 @@ public class MongoDBCloudEventsToJsonDeserializer {
     public static final String ID = "_id";
     public static final String RESUME_TOKEN = "resumeToken";
     private static final String RESUME_TOKEN_DATA = "_data";
-    private static final String EVENTS_COLLECTION_NAME = "events";
+    private static final String CLOUD_EVENT = "cloudEvent";
 
-    public static List<CloudEvent> deserializeToCloudEvents(EventFormat cloudEventSerializer, ChangeStreamDocument<Document> changeStreamDocument) {
-        return changeStreamDocumentToCloudEventsAsJson(changeStreamDocument)
+    public static Optional<CloudEvent> deserializeToCloudEvent(EventFormat cloudEventSerializer, ChangeStreamDocument<Document> changeStreamDocument) {
+        return changeStreamDocumentToCloudEventAsJson(changeStreamDocument)
                 .map(cloudEventString -> cloudEventString.getBytes(UTF_8))
-                .map(cloudEventSerializer::deserialize)
-                .collect(Collectors.toList());
+                .map(cloudEventSerializer::deserialize);
     }
 
     @SuppressWarnings("ConstantConditions")
-    private static Stream<String> changeStreamDocumentToCloudEventsAsJson(ChangeStreamDocument<Document> changeStreamDocument) {
-        final Stream<String> eventsAsJson;
+    private static Optional<String> changeStreamDocumentToCloudEventAsJson(ChangeStreamDocument<Document> changeStreamDocument) {
+        final String eventsAsJson;
         OperationType operationType = changeStreamDocument.getOperationType();
         if (operationType == INSERT) {
             // This is when the first event(s) are written to the event store for a particular stream id
-            eventsAsJson = changeStreamDocument.getFullDocument().getList(EVENTS_COLLECTION_NAME, Document.class).stream().map(Document::toJson);
-        } else if (operationType == UPDATE) {
-            // When events already exists for a stream id we get an update operation. To only get the events
-            // that are updated we get the "updated fields" and extract only the events ("version" is also updated but
-            // we don't care about it here).
-            eventsAsJson = changeStreamDocument.getUpdateDescription().getUpdatedFields().entrySet().stream()
-                    .filter(entry -> entry.getKey().startsWith(EVENTS_COLLECTION_NAME))
-                    .map(Entry::getValue)
-                    .map(BsonValue::asDocument)
-                    .map(BsonDocument::toJson);
+            eventsAsJson = changeStreamDocument.getFullDocument().get(CLOUD_EVENT, Document.class).toJson();
         } else {
-            eventsAsJson = Stream.empty();
+            eventsAsJson = null;
         }
 
-        return eventsAsJson;
+        return Optional.ofNullable(eventsAsJson);
     }
 
     public static Document generateResumeTokenDocument(String subscriptionId, BsonValue resumeToken) {

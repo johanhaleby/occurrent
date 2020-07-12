@@ -6,7 +6,7 @@ import org.slf4j.LoggerFactory;
 import org.springframework.context.ApplicationEventPublisher;
 import org.springframework.stereotype.Component;
 import reactor.core.Disposable;
-import reactor.core.publisher.Flux;
+import reactor.core.publisher.Mono;
 import se.haleby.occurrent.changestreamer.mongodb.spring.reactive.SpringReactiveChangeStreamerForMongoDB;
 import se.haleby.occurrent.domain.DomainEvent;
 
@@ -40,7 +40,7 @@ public class EventChangeStreaming {
     void startEventStreaming() {
         log.info("Subscribing with id {}", SUBSCRIBER_ID);
         Disposable disposable = changeStreamerForMongoDB.subscribe(SUBSCRIBER_ID,
-                events -> Flux.fromIterable(events)
+                event -> Mono.just(event)
                         .map(cloudEvent -> Objects.requireNonNull(cloudEvent.getData()))
                         .map(unchecked(eventJson -> objectMapper.readValue(eventJson, DomainEvent.class)))
                         .doOnNext(eventPublisher::publishEvent)

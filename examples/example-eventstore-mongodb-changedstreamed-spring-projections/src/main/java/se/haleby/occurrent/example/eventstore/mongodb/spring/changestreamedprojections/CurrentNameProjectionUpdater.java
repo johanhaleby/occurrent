@@ -31,23 +31,14 @@ public class CurrentNameProjectionUpdater {
     @PostConstruct
     void startProjectionUpdater() throws InterruptedException {
         changeStreamer
-                .subscribe("current-name", cloudEvents -> cloudEvents.stream()
-                        .map(cloudEvent -> new DomainEventWithId(cloudEvent.getId(), deserializeCloudEventToDomainEvent.deserialize(cloudEvent)))
-                        .map(withId -> Match(withId.domainEvent).of(
-                                Case($(instanceOf(NameDefined.class)), e -> new CurrentName(withId.id, e.getName())),
-                                Case($(instanceOf(NameWasChanged.class)), e -> new CurrentName(withId.id, e.getName()))
-                        ))
-                        .forEach(currentNameProjection::save))
+                .subscribe("current-name", cloudEvent -> {
+                    DomainEvent domainEvent = deserializeCloudEventToDomainEvent.deserialize(cloudEvent);
+                    String eventId = cloudEvent.getId();
+                    CurrentName currentName = Match(domainEvent).of(
+                            Case($(instanceOf(NameDefined.class)), e -> new CurrentName(eventId, e.getName())),
+                            Case($(instanceOf(NameWasChanged.class)), e -> new CurrentName(eventId, e.getName())));
+                    currentNameProjection.save(currentName);
+                })
                 .await(Duration.of(2, SECONDS));
-    }
-
-    private static class DomainEventWithId {
-        private final String id;
-        private final DomainEvent domainEvent;
-
-        public DomainEventWithId(String id, DomainEvent domainEvent) {
-            this.id = id;
-            this.domainEvent = domainEvent;
-        }
     }
 }

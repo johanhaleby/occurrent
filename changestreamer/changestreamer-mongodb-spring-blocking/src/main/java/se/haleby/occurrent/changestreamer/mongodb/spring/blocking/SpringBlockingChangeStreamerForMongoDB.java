@@ -27,7 +27,6 @@ import se.haleby.occurrent.changestreamer.mongodb.common.MongoDBFilterSpecificat
 import se.haleby.occurrent.changestreamer.mongodb.common.MongoDBFilterSpecification.JsonMongoDBFilterSpecification;
 
 import javax.annotation.PreDestroy;
-import java.util.List;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ConcurrentMap;
 import java.util.function.Consumer;
@@ -63,12 +62,11 @@ public class SpringBlockingChangeStreamerForMongoDB {
         this.messageListenerContainer.start();
     }
 
-    // TODO Add filter DSL?
-    public Subscription subscribe(String subscriptionId, Consumer<List<CloudEvent>> action) {
+    public Subscription subscribe(String subscriptionId, Consumer<CloudEvent> action) {
         return subscribe(subscriptionId, action, null);
     }
 
-    public Subscription subscribe(String subscriptionId, Consumer<List<CloudEvent>> action, MongoDBFilterSpecification filter) {
+    public Subscription subscribe(String subscriptionId, Consumer<CloudEvent> action, MongoDBFilterSpecification filter) {
         Document document = mongoTemplate.findOne(query(where(ID).is(subscriptionId)), Document.class, resumeTokenCollection);
 
         final ChangeStreamOptionsBuilder changeStreamOptionsBuilder = ChangeStreamOptions.builder();
@@ -83,8 +81,7 @@ public class SpringBlockingChangeStreamerForMongoDB {
 
         MessageListener<ChangeStreamDocument<Document>, Document> listener = change -> {
             ChangeStreamDocument<Document> raw = change.getRaw();
-            List<CloudEvent> cloudEvents = deserializeToCloudEvents(requireNonNull(cloudEventSerializer), raw);
-            action.accept(cloudEvents);
+            deserializeToCloudEvent(requireNonNull(cloudEventSerializer), raw).ifPresent(action);
             persistResumeToken(subscriptionId, requireNonNull(raw).getResumeToken());
         };
 
