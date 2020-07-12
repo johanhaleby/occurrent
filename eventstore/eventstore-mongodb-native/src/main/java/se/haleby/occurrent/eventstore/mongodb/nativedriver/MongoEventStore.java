@@ -149,7 +149,7 @@ public class MongoEventStore implements EventStore {
 
     @Override
     public boolean exists(String streamId) {
-        return eventCollection.countDocuments(eq("_id", streamId)) > 0;
+        return eventCollection.countDocuments(eq(STREAM_ID, streamId)) > 0;
     }
 
     private static class EventStreamImpl<T> implements EventStream<T> {

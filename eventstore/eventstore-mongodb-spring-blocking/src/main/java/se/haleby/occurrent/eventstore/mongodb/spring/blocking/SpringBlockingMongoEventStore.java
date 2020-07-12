@@ -94,7 +94,7 @@ public class SpringBlockingMongoEventStore implements EventStore {
 
     @Override
     public boolean exists(String streamId) {
-        return mongoTemplate.exists(query(where(ID).is(streamId)), eventStoreCollectionName);
+        return mongoTemplate.exists(query(where(STREAM_ID).is(streamId)), eventStoreCollectionName);
     }
 
     private static class EventStreamImpl<T> implements EventStream<T> {
