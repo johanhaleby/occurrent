@@ -18,9 +18,7 @@ import se.haleby.occurrent.eventstore.api.blocking.EventStream;
 import se.haleby.occurrent.eventstore.mongodb.nativedriver.StreamConsistencyGuarantee.None;
 import se.haleby.occurrent.eventstore.mongodb.nativedriver.StreamConsistencyGuarantee.Transactional;
 
-import java.util.HashMap;
 import java.util.List;
-import java.util.Map;
 import java.util.Objects;
 import java.util.stream.Collectors;
 import java.util.stream.Stream;
@@ -29,14 +27,11 @@ import java.util.stream.StreamSupport;
 import static com.mongodb.client.model.Filters.and;
 import static com.mongodb.client.model.Filters.eq;
 import static com.mongodb.client.model.Updates.set;
-import static java.nio.charset.StandardCharsets.UTF_8;
-import static java.util.Objects.requireNonNull;
+import static se.haleby.occurrent.eventstore.mongodb.converter.OccurrentCloudEventMongoDBDocumentMapper.*;
 
 public class MongoEventStore implements EventStore {
     private static final Logger log = LoggerFactory.getLogger(MongoEventStore.class);
 
-    private static final String STREAM_ID = "streamId";
-    private static final String CLOUD_EVENT = "cloudEvent";
     private static final String ID = "_id";
     private static final String VERSION = "version";
 
@@ -70,7 +65,7 @@ public class MongoEventStore implements EventStore {
         } else {
             throw new IllegalStateException("Internal error, invalid stream write consistency guarantee");
         }
-        return requireNonNull(eventStream).map(Document::toJson).map(eventJsonString -> eventJsonString.getBytes(UTF_8)).map(cloudEventSerializer::deserialize);
+        return convertToCloudEvent(cloudEventSerializer, eventStream);
     }
 
     private EventStreamImpl<Document> readEventStream(String streamId, int skip, int limit, Transactional transactional) {
@@ -104,21 +99,12 @@ public class MongoEventStore implements EventStore {
 
     @Override
     public void write(String streamId, long expectedStreamVersion, Stream<CloudEvent> events) {
-        List<Document> serializedEvents = events.map(cloudEventSerializer::serialize)
-                .map(bytes -> new String(bytes, UTF_8))
-                .map(Document::parse)
-                .map(cloudEvent -> {
-                    Map<String, Object> data = new HashMap<>();
-                    data.put(STREAM_ID, streamId);
-                    data.put(CLOUD_EVENT, cloudEvent);
-                    return new Document(data);
-                })
-                .collect(Collectors.toList());
+        List<Document> cloudEventDocuments = convertToDocuments(cloudEventSerializer, streamId, events).collect(Collectors.toList());
 
         if (streamConsistencyGuarantee instanceof None) {
-            eventCollection.insertMany(serializedEvents);
+            eventCollection.insertMany(cloudEventDocuments);
         } else if (streamConsistencyGuarantee instanceof Transactional) {
-            consistentlyWrite(streamId, expectedStreamVersion, serializedEvents);
+            consistentlyWrite(streamId, expectedStreamVersion, cloudEventDocuments);
 
         } else {
             throw new IllegalStateException("Internal error, invalid stream write consistency guarantee");

@@ -18,6 +18,11 @@
             <version>0.0.1-SNAPSHOT</version>
         </dependency>
         <dependency>
+            <groupId>se.haleby.occurrent</groupId>
+            <artifactId>eventstore-mongodb-common</artifactId>
+            <version>0.0.1-SNAPSHOT</version>
+        </dependency>
+        <dependency>
             <groupId>io.cloudevents</groupId>
             <artifactId>cloudevents-json-jackson</artifactId>
         </dependency>

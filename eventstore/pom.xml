@@ -17,6 +17,7 @@
         <module>eventstore-inmemory</module>
         <module>eventstore-mongodb-native</module>
         <module>eventstore-mongodb-spring-blocking</module>
+        <module>eventstore-mongodb-common</module>
     </modules>
 
 </project>
