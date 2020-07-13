@@ -4,6 +4,7 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import com.mongodb.ConnectionString;
 import com.mongodb.client.MongoClient;
 import com.mongodb.client.MongoClients;
+import com.mongodb.client.model.Aggregates;
 import com.mongodb.client.model.Filters;
 import io.cloudevents.CloudEvent;
 import io.cloudevents.core.builder.CloudEventBuilder;
@@ -34,11 +35,15 @@ import java.util.UUID;
 import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.stream.Stream;
 
+import static com.mongodb.client.model.Aggregates.match;
+import static com.mongodb.client.model.Filters.and;
+import static com.mongodb.client.model.Filters.eq;
 import static java.time.ZoneOffset.UTC;
 import static java.time.temporal.ChronoUnit.MILLIS;
 import static java.util.Objects.requireNonNull;
 import static java.util.concurrent.TimeUnit.SECONDS;
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.groups.Tuple.tuple;
 import static org.awaitility.Awaitility.await;
 import static org.awaitility.Durations.ONE_SECOND;
 import static org.hamcrest.Matchers.is;
@@ -167,6 +172,58 @@ public class SpringBlockingChangeStreamerForMongoDBTest {
     }
 
     @Test
+    void using_bson_query_dsl_composition() throws InterruptedException {
+        // Given
+        LocalDateTime now = LocalDateTime.now();
+        CopyOnWriteArrayList<CloudEvent> state = new CopyOnWriteArrayList<>();
+        String subscriberId = UUID.randomUUID().toString();
+        NameDefined nameDefined1 = new NameDefined(UUID.randomUUID().toString(), now, "name1");
+        NameDefined nameDefined2 = new NameDefined(UUID.randomUUID().toString(), now.plusSeconds(2), "name2");
+        NameWasChanged nameWasChanged1 = new NameWasChanged(UUID.randomUUID().toString(), now.plusSeconds(3), "name3");
+        NameWasChanged nameWasChanged2 = new NameWasChanged(UUID.randomUUID().toString(), now.plusSeconds(4), "name4");
+
+        changeStreamer.subscribe(subscriberId, state::add,
+                filter().id(Filters::eq, nameDefined2.getEventId()).type(Filters::eq, NameDefined.class.getName()))
+                .await(Duration.of(10, ChronoUnit.SECONDS));
+
+        // When
+        mongoEventStore.write("1", 0, serialize(nameDefined1));
+        mongoEventStore.write("1", 1, serialize(nameWasChanged1));
+        mongoEventStore.write("2", 0, serialize(nameDefined2));
+        mongoEventStore.write("2", 1, serialize(nameWasChanged2));
+
+        // Then
+        await().atMost(ONE_SECOND).until(state::size, is(1));
+        assertThat(state).extracting(CloudEvent::getId, CloudEvent::getType).containsOnly(tuple(nameDefined2.getEventId(), NameDefined.class.getName()));
+    }
+    
+    @Test
+    void using_bson_query_native_mongo_filters_composition() throws InterruptedException {
+        // Given
+        LocalDateTime now = LocalDateTime.now();
+        CopyOnWriteArrayList<CloudEvent> state = new CopyOnWriteArrayList<>();
+        String subscriberId = UUID.randomUUID().toString();
+        NameDefined nameDefined1 = new NameDefined(UUID.randomUUID().toString(), now, "name1");
+        NameDefined nameDefined2 = new NameDefined(UUID.randomUUID().toString(), now.plusSeconds(2), "name2");
+        NameWasChanged nameWasChanged1 = new NameWasChanged(UUID.randomUUID().toString(), now.plusSeconds(3), "name3");
+        NameWasChanged nameWasChanged2 = new NameWasChanged(UUID.randomUUID().toString(), now.plusSeconds(4), "name4");
+
+        changeStreamer.subscribe(subscriberId, state::add,
+                filter(match(and(eq("fullDocument.id", nameDefined2.getEventId()), eq("fullDocument.type", NameDefined.class.getName())))))
+                .await(Duration.of(10, ChronoUnit.SECONDS));
+
+        // When
+        mongoEventStore.write("1", 0, serialize(nameDefined1));
+        mongoEventStore.write("1", 1, serialize(nameWasChanged1));
+        mongoEventStore.write("2", 0, serialize(nameDefined2));
+        mongoEventStore.write("2", 1, serialize(nameWasChanged2));
+
+        // Then
+        await().atMost(ONE_SECOND).until(state::size, is(1));
+        assertThat(state).extracting(CloudEvent::getId, CloudEvent::getType).containsOnly(tuple(nameDefined2.getEventId(), NameDefined.class.getName()));
+    }
+
+    @Test
     void using_json_query_for_type() throws InterruptedException {
         // Given
         LocalDateTime now = LocalDateTime.now();
@@ -192,7 +249,7 @@ public class SpringBlockingChangeStreamerForMongoDBTest {
 
     private Stream<CloudEvent> serialize(DomainEvent e) {
         return Stream.of(CloudEventBuilder.v1()
-                .withId(UUID.randomUUID().toString())
+                .withId(e.getEventId())
                 .withSource(URI.create("http://name"))
                 .withType(e.getClass().getName())
                 .withTime(toLocalDateTime(e.getTimestamp()).atZone(UTC))
