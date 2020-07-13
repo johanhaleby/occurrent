@@ -173,7 +173,7 @@ public class SpringBlockingMongoEventStore implements EventStore {
         // Cloud spec defines id + source must be unique!
         mongoTemplate.getCollection(eventStoreCollectionName).createIndex(Indexes.compoundIndex(Indexes.ascending("id"), Indexes.ascending("source")), new IndexOptions().unique(true));
         if (streamConsistencyGuarantee instanceof Transactional) {
-            // Need to be always in order for TransactionTemplate to work with mongo template!
+            // SessionSynchronization need to be "ALWAYS" in order for TransactionTemplate to work with mongo template!
             // See https://docs.spring.io/spring-data/mongodb/docs/current/reference/html/#mongo.transactions.transaction-template
             mongoTemplate.setSessionSynchronization(ALWAYS);
             String streamVersionCollectionName = ((Transactional) streamConsistencyGuarantee).streamVersionCollectionName;
