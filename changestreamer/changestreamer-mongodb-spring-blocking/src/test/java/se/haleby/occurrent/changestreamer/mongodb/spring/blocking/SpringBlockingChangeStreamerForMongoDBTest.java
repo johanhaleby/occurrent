@@ -43,7 +43,7 @@ import static org.awaitility.Awaitility.await;
 import static org.awaitility.Durations.ONE_SECOND;
 import static org.hamcrest.Matchers.is;
 import static se.haleby.occurrent.changestreamer.mongodb.common.MongoDBFilterSpecification.BsonMongoDBFilterSpecification.filter;
-import static se.haleby.occurrent.changestreamer.mongodb.common.MongoDBFilterSpecification.CLOUD_EVENT_PATH;
+import static se.haleby.occurrent.changestreamer.mongodb.common.MongoDBFilterSpecification.FULL_DOCUMENT;
 import static se.haleby.occurrent.eventstore.mongodb.spring.blocking.StreamConsistencyGuarantee.transactional;
 import static se.haleby.occurrent.functional.CheckedFunction.unchecked;
 import static se.haleby.occurrent.functional.Not.not;
@@ -172,7 +172,7 @@ public class SpringBlockingChangeStreamerForMongoDBTest {
         LocalDateTime now = LocalDateTime.now();
         CopyOnWriteArrayList<CloudEvent> state = new CopyOnWriteArrayList<>();
         String subscriberId = UUID.randomUUID().toString();
-        changeStreamer.subscribe(subscriberId, state::add, JsonMongoDBFilterSpecification.filter("{ $match : { \"" + CLOUD_EVENT_PATH + ".type\" : \"" + NameDefined.class.getName() + "\" } }"))
+        changeStreamer.subscribe(subscriberId, state::add, JsonMongoDBFilterSpecification.filter("{ $match : { \"" + FULL_DOCUMENT + ".type\" : \"" + NameDefined.class.getName() + "\" } }"))
                 .await(Duration.of(10, ChronoUnit.SECONDS));
         NameDefined nameDefined1 = new NameDefined(UUID.randomUUID().toString(), now, "name1");
         NameDefined nameDefined2 = new NameDefined(UUID.randomUUID().toString(), now.plusSeconds(2), "name2");

@@ -28,7 +28,6 @@ import static se.haleby.occurrent.eventstore.mongodb.converter.OccurrentCloudEve
 
 public class SpringBlockingMongoEventStore implements EventStore {
 
-
     private static final String ID = "_id";
 
     private final MongoTemplate mongoTemplate;
@@ -162,8 +161,7 @@ public class SpringBlockingMongoEventStore implements EventStore {
         if (skip != 0 || limit != Integer.MAX_VALUE) {
             query.skip(skip).limit(limit);
         }
-        return StreamUtils.createStreamFromIterator(mongoTemplate.stream(query, Document.class, eventStoreCollectionName))
-                .map(document -> document.get(CLOUD_EVENT, Document.class));
+        return StreamUtils.createStreamFromIterator(mongoTemplate.stream(query, Document.class, eventStoreCollectionName));
     }
 
     // Initialization
@@ -173,7 +171,7 @@ public class SpringBlockingMongoEventStore implements EventStore {
         }
         mongoTemplate.getCollection(eventStoreCollectionName).createIndex(Indexes.ascending(STREAM_ID));
         // Cloud spec defines id + source must be unique!
-        mongoTemplate.getCollection(eventStoreCollectionName).createIndex(Indexes.compoundIndex(Indexes.ascending(CLOUD_EVENT + ".id"), Indexes.ascending(CLOUD_EVENT + ".source")), new IndexOptions().unique(true));
+        mongoTemplate.getCollection(eventStoreCollectionName).createIndex(Indexes.compoundIndex(Indexes.ascending("id"), Indexes.ascending("source")), new IndexOptions().unique(true));
         if (streamConsistencyGuarantee instanceof Transactional) {
             // Need to be always in order for TransactionTemplate to work with mongo template!
             // See https://docs.spring.io/spring-data/mongodb/docs/current/reference/html/#mongo.transactions.transaction-template

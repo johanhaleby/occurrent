@@ -16,22 +16,26 @@ The [CloudEvents](https://cloudevents.io/) are persisted like this in the "event
 
 ```json
 {
-  "streamId": "streamId",
-  "cloudEvent": {
-    "specversion": "1.0",
-    "id": "86282094-5344-4309-932a-129a7774735e",
-    "source": "http://name",
-    "type": "se.haleby.occurrent.domain.NameDefined",
-    "datacontenttype": "application/json",
-    "subject": "name1",
-    "time": "2020-07-10T14:48:23.272Z",
-    "data": {
-      "timestamp": 1594392503272,
-      "name": "name1"
-    }
-  }
+  "specversion": "1.0",
+  "id": "86282094-5344-4309-932a-129a7774735e",
+  "source": "http://name",
+  "type": "se.haleby.occurrent.domain.NameDefined",
+  "datacontenttype": "application/json",
+  "subject": "name1",
+  "time": "2020-07-10T14:48:23.272Z",
+  "data": {
+    "timestamp": 1594392503272,
+    "name": "name1"
+  },
+  "occurrentStreamId" : "streamId"
 }
 ```
+
+Note that "occurrentStreamId" is added as an extension by the MongoDB event stores in order to read all events for a particular stream.
+It'll be removed again on read so it's not something that is visible to the user of the API.
+It's quite possible that the user _wants_ to include the stream id in the cloud event but my reasoning is that the user needs to add
+an extension property him-/herself (not named "occurrentStreamId") with the stream id. This is to reduce magic and maintain 
+"referential transparency".  
 
 If stream consistency is enabled then another collection, the "stream consistency" collection is also written to the database (2):
 
@@ -42,11 +46,11 @@ If stream consistency is enabled then another collection, the "stream consistenc
 }
 ```
 
-When appending cloud events to the stream the consistency of the stream is maintained by comparing the version value supplied by the user 
+When appending cloud events to the stream the consistency of the stream is maintained by comparing the version supplied by the user 
 with the version present in (2). If they don't match then the cloud events are not written. Also if there are two threads writing to the same 
 stream at once then one of them will run into an error which means it has to retry (optimistic locking). For this to work, transactions are required! 
 
-Another previous approach was instead to store teh events like this:
+Another previous approach was instead to store the events like this:
 
 ```json
 {

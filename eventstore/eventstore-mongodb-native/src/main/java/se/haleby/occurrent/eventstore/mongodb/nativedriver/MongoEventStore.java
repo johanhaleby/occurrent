@@ -93,8 +93,7 @@ public class MongoEventStore implements EventStore {
         if (skip != 0 || limit != Integer.MAX_VALUE) {
             documents = documents.skip(skip).limit(limit);
         }
-        MongoIterable<Document> iterable = documents.map(document -> document.get(CLOUD_EVENT, Document.class));
-        return StreamSupport.stream(iterable.spliterator(), false);
+        return StreamSupport.stream(documents.spliterator(), false);
     }
 
     @Override
@@ -171,7 +170,7 @@ public class MongoEventStore implements EventStore {
         }
         mongoDatabase.getCollection(eventStoreCollectionName).createIndex(Indexes.ascending(STREAM_ID));
         // Cloud spec defines id + source must be unique!
-        mongoDatabase.getCollection(eventStoreCollectionName).createIndex(Indexes.compoundIndex(Indexes.ascending(CLOUD_EVENT + ".id"), Indexes.ascending(CLOUD_EVENT + ".source")), new IndexOptions().unique(true));
+        mongoDatabase.getCollection(eventStoreCollectionName).createIndex(Indexes.compoundIndex(Indexes.ascending("id"), Indexes.ascending("source")), new IndexOptions().unique(true));
         if (streamConsistencyGuarantee instanceof Transactional) {
             String streamVersionCollectionName = ((Transactional) streamConsistencyGuarantee).streamVersionCollectionName;
             createStreamVersionCollectionAndIndex(streamVersionCollectionName, mongoDatabase);
