@@ -12,6 +12,7 @@
         <module>example-eventstore-mongodb-changestreamer-to-spring-event</module>
         <module>example-eventstore-mongodb-transactional-spring-projections</module>
         <module>example-eventstore-mongodb-changedstreamed-spring-projections</module>
+        <module>example-eventstore-mongodb-adhoc-spring-projections</module>
     </modules>
     <modelVersion>4.0.0</modelVersion>
 
