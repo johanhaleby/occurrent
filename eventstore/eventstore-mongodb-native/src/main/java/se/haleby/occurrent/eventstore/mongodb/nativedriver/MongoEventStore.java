@@ -11,6 +11,7 @@ import io.cloudevents.core.format.EventFormat;
 import io.cloudevents.core.provider.EventFormatProvider;
 import io.cloudevents.jackson.JsonFormat;
 import org.bson.Document;
+import org.bson.conversions.Bson;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import se.haleby.occurrent.eventstore.api.blocking.EventStore;
@@ -57,7 +58,7 @@ public class MongoEventStore implements EventStore {
     public EventStream<CloudEvent> read(String streamId, int skip, int limit) {
         final EventStream<Document> eventStream;
         if (streamConsistencyGuarantee instanceof None) {
-            Stream<Document> stream = readCloudEvents(streamId, skip, limit);
+            Stream<Document> stream = readCloudEvents(streamId, skip, limit, null);
             eventStream = new EventStreamImpl<>(streamId, 0, stream);
         } else if (streamConsistencyGuarantee instanceof Transactional) {
             Transactional transactional = (Transactional) this.streamConsistencyGuarantee;
@@ -74,26 +75,36 @@ public class MongoEventStore implements EventStore {
                 Document document = mongoClient
                         .getDatabase(databaseName)
                         .getCollection(transactional.streamVersionCollectionName)
-                        .find(eq(ID, streamId), Document.class)
+                        .find(clientSession, eq(ID, streamId), Document.class)
                         .first();
 
                 if (document == null) {
                     return new EventStreamImpl<>(streamId, 0, Stream.empty());
                 }
 
-                Stream<Document> stream = readCloudEvents(streamId, skip, limit);
+                Stream<Document> stream = readCloudEvents(streamId, skip, limit, clientSession);
                 return new EventStreamImpl<>(ID, document.getLong(VERSION), stream);
             }, transactional.transactionOptions);
         }
     }
 
 
-    private Stream<Document> readCloudEvents(String streamId, int skip, int limit) {
-        FindIterable<Document> documents = eventCollection.find(eq(STREAM_ID, streamId));
-        if (skip != 0 || limit != Integer.MAX_VALUE) {
-            documents = documents.skip(skip).limit(limit);
+    private Stream<Document> readCloudEvents(String streamId, int skip, int limit, ClientSession clientSession) {
+        final Bson filter = eq(STREAM_ID, streamId);
+        final FindIterable<Document> documentsWithoutSkipAndLimit;
+        if (clientSession == null) {
+            documentsWithoutSkipAndLimit = eventCollection.find(filter);
+        } else {
+            documentsWithoutSkipAndLimit = eventCollection.find(clientSession, filter);
         }
-        return StreamSupport.stream(documents.spliterator(), false);
+
+        final FindIterable<Document> documentsWithSkipAndLimit;
+        if (skip != 0 || limit != Integer.MAX_VALUE) {
+            documentsWithSkipAndLimit = documentsWithoutSkipAndLimit.skip(skip).limit(limit);
+        } else {
+            documentsWithSkipAndLimit = documentsWithoutSkipAndLimit;
+        }
+        return StreamSupport.stream(documentsWithSkipAndLimit.spliterator(), false);
     }
 
     @Override
@@ -119,14 +130,14 @@ public class MongoEventStore implements EventStore {
                 mongoClient
                         .getDatabase(databaseName)
                         .getCollection(streamVersionCollectionName)
-                        .updateOne(and(eq(ID, streamId), eq(VERSION, expectedStreamVersion)),
+                        .updateOne(clientSession, and(eq(ID, streamId), eq(VERSION, expectedStreamVersion)),
                                 set("version", expectedStreamVersion + 1),
                                 new UpdateOptions().upsert(true));
 
                 mongoClient
                         .getDatabase(databaseName)
                         .getCollection(eventCollection.getNamespace().getCollectionName())
-                        .insertMany(serializedEvents);
+                        .insertMany(clientSession, serializedEvents);
                 return expectedStreamVersion + 1;
             }, transactionOptions);
         }
