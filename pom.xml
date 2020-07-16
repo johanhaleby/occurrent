@@ -13,6 +13,7 @@
         <module>examples</module>
         <module>eventstore</module>
         <module>changestreamer</module>
+        <module>cloudevents-extension</module>
     </modules>
 
     <name>occurrent</name>

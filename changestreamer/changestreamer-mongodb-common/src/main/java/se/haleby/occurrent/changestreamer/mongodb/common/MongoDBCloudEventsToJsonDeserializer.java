@@ -21,7 +21,6 @@ public class MongoDBCloudEventsToJsonDeserializer {
     public static final String ID = "_id";
     public static final String RESUME_TOKEN = "resumeToken";
     private static final String RESUME_TOKEN_DATA = "_data";
-    private static final String OCCURRENT_STREAM_ID = "occurrentStreamId";
 
     public static Optional<CloudEvent> deserializeToCloudEvent(EventFormat cloudEventSerializer, ChangeStreamDocument<Document> changeStreamDocument) {
         return changeStreamDocumentToCloudEventAsJson(changeStreamDocument)
@@ -34,11 +33,7 @@ public class MongoDBCloudEventsToJsonDeserializer {
         final String eventsAsJson;
         OperationType operationType = changeStreamDocument.getOperationType();
         if (operationType == INSERT) {
-            // This is when the first event(s) are written to the event store for a particular stream id
-            Document fullDocument = changeStreamDocument.getFullDocument();
-            // Remove stream id
-            fullDocument.remove(OCCURRENT_STREAM_ID);
-            eventsAsJson = fullDocument.toJson();
+            eventsAsJson = changeStreamDocument.getFullDocument().toJson();
         } else {
             eventsAsJson = null;
         }

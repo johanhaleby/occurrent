@@ -27,15 +27,11 @@ The [CloudEvents](https://cloudevents.io/) are persisted like this in the "event
     "timestamp": 1594392503272,
     "name": "name1"
   },
-  "occurrentStreamId" : "streamId"
+  "streamId" : "streamId"
 }
 ```
 
-Note that "occurrentStreamId" is added as an extension by the MongoDB event stores in order to read all events for a particular stream.
-It'll be removed again on read so it's not something that is visible to the user of the API.
-It's quite possible that the user _wants_ to include the stream id in the cloud event but my reasoning is that the user needs to add
-an extension property him-/herself (not named "occurrentStreamId") with the stream id. This is to reduce magic and maintain 
-"referential transparency".  
+Note that "streamId" is added as an extension by the MongoDB event stores in order to read all events for a particular stream.
 
 If stream consistency is enabled then another collection, the "stream consistency" collection is also written to the database (2):
 

@@ -1,6 +1,9 @@
 package se.haleby.occurrent.eventstore.inmemory;
 
 import io.cloudevents.CloudEvent;
+import io.cloudevents.SpecVersion;
+import io.cloudevents.core.v1.CloudEventBuilder;
+import se.haleby.occurrent.cloudevents.OccurrentCloudEventExtension;
 import se.haleby.occurrent.eventstore.api.blocking.EventStore;
 import se.haleby.occurrent.eventstore.api.blocking.EventStream;
 
@@ -31,12 +34,15 @@ public class InMemoryEventStore implements EventStore {
 
     @Override
     public void write(String streamId, long expectedStreamVersion, Stream<CloudEvent> events) {
+        Stream<CloudEvent> cloudEventStream = events.peek(e -> requireTrue(e.getSpecVersion() == SpecVersion.V1, "Spec version needs to be " + SpecVersion.V1))
+                .map(modify(e -> e.withExtension(new OccurrentCloudEventExtension(streamId))));
+
         state.compute(streamId, (__, currentVersionAndEvents) -> {
             if (currentVersionAndEvents == null) {
-                return new VersionAndEvents(0, events.collect(Collectors.toList()));
+                return new VersionAndEvents(0, cloudEventStream.collect(Collectors.toList()));
             } else if (currentVersionAndEvents.version == expectedStreamVersion) {
                 List<CloudEvent> newEvents = new ArrayList<>(currentVersionAndEvents.events);
-                newEvents.addAll(events.collect(Collectors.toList()));
+                newEvents.addAll(cloudEventStream.collect(Collectors.toList()));
                 return new VersionAndEvents(expectedStreamVersion + 1, newEvents);
             } else {
                 throw new IllegalStateException(String.format("Optimistic locking exception! Expected version %s but was %s.", expectedStreamVersion, currentVersionAndEvents.version));
@@ -123,5 +129,38 @@ public class InMemoryEventStore implements EventStore {
         public int hashCode() {
             return Objects.hash(streamId, versionAndEvents);
         }
+    }
+
+    private static void requireTrue(boolean bool, String message) {
+        if (!bool) {
+            throw new IllegalArgumentException(message);
+        }
+    }
+
+    private static CloudEvent modify(CloudEvent cloudEvent, Function<CloudEventBuilder, CloudEventBuilder> fn) {
+        CloudEventBuilder b = new CloudEventBuilder()
+                .withId(cloudEvent.getId())
+                .withSource(cloudEvent.getSource())
+                .withDataSchema(cloudEvent.getDataSchema())
+                .withSubject(cloudEvent.getSubject())
+                .withTime(cloudEvent.getTime())
+                .withType(cloudEvent.getType())
+                .withDataContentType(cloudEvent.getDataContentType())
+                .withData(cloudEvent.getData());
+        cloudEvent.getExtensionNames().forEach(name -> {
+            Object value = cloudEvent.getExtension(name);
+            if (value instanceof String) {
+                b.withExtension(name, (String) value);
+            } else if (value instanceof Boolean) {
+                b.withExtension(name, (boolean) value);
+            } else if (value instanceof Number) {
+                b.withExtension(name, (Number) value);
+            }
+        });
+        return fn.apply(b).build();
+    }
+
+    private static Function<CloudEvent, CloudEvent> modify(Function<CloudEventBuilder, CloudEventBuilder> fn) {
+        return (cloudEvent) -> modify(cloudEvent, fn);
     }
 }

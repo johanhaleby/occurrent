@@ -15,6 +15,7 @@ import se.haleby.occurrent.eventstore.api.blocking.EventStream;
 import se.haleby.occurrent.eventstore.mongodb.spring.blocking.StreamConsistencyGuarantee.None;
 import se.haleby.occurrent.eventstore.mongodb.spring.blocking.StreamConsistencyGuarantee.Transactional;
 import se.haleby.occurrent.eventstore.mongodb.spring.blocking.StreamConsistencyGuarantee.TransactionalAnnotation;
+import se.haleby.occurrent.cloudevents.OccurrentCloudEventExtension;
 
 import java.util.List;
 import java.util.stream.Collectors;
@@ -80,7 +81,7 @@ public class SpringBlockingMongoEventStore implements EventStore {
 
     @Override
     public boolean exists(String streamId) {
-        return mongoTemplate.exists(query(where(STREAM_ID).is(streamId)), eventStoreCollectionName);
+        return mongoTemplate.exists(query(where(OccurrentCloudEventExtension.STREAM_ID).is(streamId)), eventStoreCollectionName);
     }
 
     private static class EventStreamImpl<T> implements EventStream<T> {
@@ -157,7 +158,7 @@ public class SpringBlockingMongoEventStore implements EventStore {
     }
 
     private Stream<Document> readCloudEvents(String streamId, int skip, int limit) {
-        Query query = query(where(STREAM_ID).is(streamId));
+        Query query = query(where(OccurrentCloudEventExtension.STREAM_ID).is(streamId));
         if (skip != 0 || limit != Integer.MAX_VALUE) {
             query.skip(skip).limit(limit);
         }
@@ -169,7 +170,7 @@ public class SpringBlockingMongoEventStore implements EventStore {
         if (!mongoTemplate.collectionExists(eventStoreCollectionName)) {
             mongoTemplate.createCollection(eventStoreCollectionName);
         }
-        mongoTemplate.getCollection(eventStoreCollectionName).createIndex(Indexes.ascending(STREAM_ID));
+        mongoTemplate.getCollection(eventStoreCollectionName).createIndex(Indexes.ascending(OccurrentCloudEventExtension.STREAM_ID));
         // Cloud spec defines id + source must be unique!
         mongoTemplate.getCollection(eventStoreCollectionName).createIndex(Indexes.compoundIndex(Indexes.ascending("id"), Indexes.ascending("source")), new IndexOptions().unique(true));
         if (streamConsistencyGuarantee instanceof Transactional) {

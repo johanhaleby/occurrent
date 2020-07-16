@@ -18,6 +18,7 @@ import se.haleby.occurrent.eventstore.api.blocking.EventStore;
 import se.haleby.occurrent.eventstore.api.blocking.EventStream;
 import se.haleby.occurrent.eventstore.mongodb.nativedriver.StreamConsistencyGuarantee.None;
 import se.haleby.occurrent.eventstore.mongodb.nativedriver.StreamConsistencyGuarantee.Transactional;
+import se.haleby.occurrent.cloudevents.OccurrentCloudEventExtension;
 
 import java.util.List;
 import java.util.Objects;
@@ -90,7 +91,7 @@ public class MongoEventStore implements EventStore {
 
 
     private Stream<Document> readCloudEvents(String streamId, int skip, int limit, ClientSession clientSession) {
-        final Bson filter = eq(STREAM_ID, streamId);
+        final Bson filter = eq(OccurrentCloudEventExtension.STREAM_ID, streamId);
         final FindIterable<Document> documentsWithoutSkipAndLimit;
         if (clientSession == null) {
             documentsWithoutSkipAndLimit = eventCollection.find(filter);
@@ -145,7 +146,7 @@ public class MongoEventStore implements EventStore {
 
     @Override
     public boolean exists(String streamId) {
-        return eventCollection.countDocuments(eq(STREAM_ID, streamId)) > 0;
+        return eventCollection.countDocuments(eq(OccurrentCloudEventExtension.STREAM_ID, streamId)) > 0;
     }
 
     private static class EventStreamImpl<T> implements EventStream<T> {
@@ -179,7 +180,7 @@ public class MongoEventStore implements EventStore {
         if (!collectionExists(mongoDatabase, eventStoreCollectionName)) {
             mongoDatabase.createCollection(eventStoreCollectionName);
         }
-        mongoDatabase.getCollection(eventStoreCollectionName).createIndex(Indexes.ascending(STREAM_ID));
+        mongoDatabase.getCollection(eventStoreCollectionName).createIndex(Indexes.ascending(OccurrentCloudEventExtension.STREAM_ID));
         // Cloud spec defines id + source must be unique!
         mongoDatabase.getCollection(eventStoreCollectionName).createIndex(Indexes.compoundIndex(Indexes.ascending("id"), Indexes.ascending("source")), new IndexOptions().unique(true));
         if (streamConsistencyGuarantee instanceof Transactional) {

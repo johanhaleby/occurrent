@@ -9,10 +9,9 @@ import java.util.stream.Stream;
 
 import static java.nio.charset.StandardCharsets.UTF_8;
 import static java.util.Objects.requireNonNull;
+import static se.haleby.occurrent.cloudevents.OccurrentCloudEventExtension.STREAM_ID;
 
 public class OccurrentCloudEventMongoDBDocumentMapper {
-
-    public static final String STREAM_ID = "occurrentStreamId";
 
     public static Stream<Document> convertToDocuments(EventFormat eventFormat, String streamId, Stream<CloudEvent> cloudEvents) {
         return cloudEvents.map(eventFormat::serialize)
@@ -24,11 +23,6 @@ public class OccurrentCloudEventMongoDBDocumentMapper {
 
     public static EventStream<CloudEvent> convertToCloudEvent(EventFormat eventFormat, EventStream<Document> eventStream) {
         return requireNonNull(eventStream)
-                // Remove streamId as extension property!
-                .map(document -> {
-                    document.remove(STREAM_ID);
-                    return document;
-                })
                 .map(Document::toJson)
                 .map(eventJsonString -> eventJsonString.getBytes(UTF_8))
                 .map(eventFormat::deserialize);
