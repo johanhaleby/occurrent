@@ -2,7 +2,7 @@ package se.haleby.occurrent.eventstore.inmemory;
 
 import io.cloudevents.CloudEvent;
 import io.cloudevents.SpecVersion;
-import io.cloudevents.core.v1.CloudEventBuilder;
+import io.cloudevents.core.builder.CloudEventBuilder;
 import se.haleby.occurrent.cloudevents.OccurrentCloudEventExtension;
 import se.haleby.occurrent.eventstore.api.blocking.EventStore;
 import se.haleby.occurrent.eventstore.api.blocking.EventStream;
@@ -34,8 +34,9 @@ public class InMemoryEventStore implements EventStore {
 
     @Override
     public void write(String streamId, long expectedStreamVersion, Stream<CloudEvent> events) {
-        Stream<CloudEvent> cloudEventStream = events.peek(e -> requireTrue(e.getSpecVersion() == SpecVersion.V1, "Spec version needs to be " + SpecVersion.V1))
-                .map(modify(e -> e.withExtension(new OccurrentCloudEventExtension(streamId))));
+        Stream<CloudEvent> cloudEventStream = events
+                .peek(e -> requireTrue(e.getSpecVersion() == SpecVersion.V1, "Spec version needs to be " + SpecVersion.V1))
+                .map(modifyCloudEvent(e -> e.withExtension(new OccurrentCloudEventExtension(streamId))));
 
         state.compute(streamId, (__, currentVersionAndEvents) -> {
             if (currentVersionAndEvents == null) {
@@ -137,30 +138,7 @@ public class InMemoryEventStore implements EventStore {
         }
     }
 
-    private static CloudEvent modify(CloudEvent cloudEvent, Function<CloudEventBuilder, CloudEventBuilder> fn) {
-        CloudEventBuilder b = new CloudEventBuilder()
-                .withId(cloudEvent.getId())
-                .withSource(cloudEvent.getSource())
-                .withDataSchema(cloudEvent.getDataSchema())
-                .withSubject(cloudEvent.getSubject())
-                .withTime(cloudEvent.getTime())
-                .withType(cloudEvent.getType())
-                .withDataContentType(cloudEvent.getDataContentType())
-                .withData(cloudEvent.getData());
-        cloudEvent.getExtensionNames().forEach(name -> {
-            Object value = cloudEvent.getExtension(name);
-            if (value instanceof String) {
-                b.withExtension(name, (String) value);
-            } else if (value instanceof Boolean) {
-                b.withExtension(name, (boolean) value);
-            } else if (value instanceof Number) {
-                b.withExtension(name, (Number) value);
-            }
-        });
-        return fn.apply(b).build();
-    }
-
-    private static Function<CloudEvent, CloudEvent> modify(Function<CloudEventBuilder, CloudEventBuilder> fn) {
-        return (cloudEvent) -> modify(cloudEvent, fn);
+    private static Function<CloudEvent, CloudEvent> modifyCloudEvent(Function<CloudEventBuilder, CloudEventBuilder> fn) {
+        return (cloudEvent) -> fn.apply(CloudEventBuilder.v1(cloudEvent)).build();
     }
 }
