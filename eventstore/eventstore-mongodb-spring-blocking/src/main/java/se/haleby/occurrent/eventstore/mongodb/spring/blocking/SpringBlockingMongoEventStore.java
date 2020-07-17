@@ -2,34 +2,47 @@ package se.haleby.occurrent.eventstore.mongodb.spring.blocking;
 
 import com.mongodb.client.model.IndexOptions;
 import com.mongodb.client.model.Indexes;
+import com.mongodb.client.result.UpdateResult;
 import io.cloudevents.CloudEvent;
 import io.cloudevents.core.format.EventFormat;
 import io.cloudevents.core.provider.EventFormatProvider;
 import io.cloudevents.jackson.JsonFormat;
 import org.bson.Document;
 import org.springframework.data.mongodb.core.MongoTemplate;
+import org.springframework.data.mongodb.core.query.Criteria;
 import org.springframework.data.mongodb.core.query.Query;
+import org.springframework.data.mongodb.core.query.Update;
 import org.springframework.data.util.StreamUtils;
+import se.haleby.occurrent.cloudevents.OccurrentCloudEventExtension;
 import se.haleby.occurrent.eventstore.api.blocking.EventStore;
 import se.haleby.occurrent.eventstore.api.blocking.EventStream;
+import se.haleby.occurrent.eventstore.api.blocking.WriteCondition;
+import se.haleby.occurrent.eventstore.api.blocking.WriteCondition.Condition;
+import se.haleby.occurrent.eventstore.api.blocking.WriteCondition.Condition.MultiOperation;
+import se.haleby.occurrent.eventstore.api.blocking.WriteCondition.Condition.Operation;
+import se.haleby.occurrent.eventstore.api.blocking.WriteCondition.StreamVersionWriteCondition;
+import se.haleby.occurrent.eventstore.api.blocking.WriteConditionNotFulfilledException;
 import se.haleby.occurrent.eventstore.mongodb.spring.blocking.StreamConsistencyGuarantee.None;
 import se.haleby.occurrent.eventstore.mongodb.spring.blocking.StreamConsistencyGuarantee.Transactional;
 import se.haleby.occurrent.eventstore.mongodb.spring.blocking.StreamConsistencyGuarantee.TransactionalAnnotation;
-import se.haleby.occurrent.cloudevents.OccurrentCloudEventExtension;
 
+import java.util.HashMap;
 import java.util.List;
+import java.util.Map;
 import java.util.stream.Collectors;
 import java.util.stream.Stream;
 
+import static com.mongodb.client.model.Filters.eq;
 import static org.springframework.data.mongodb.SessionSynchronization.ALWAYS;
 import static org.springframework.data.mongodb.core.query.Criteria.where;
 import static org.springframework.data.mongodb.core.query.Query.query;
-import static org.springframework.data.mongodb.core.query.Update.update;
-import static se.haleby.occurrent.eventstore.mongodb.converter.OccurrentCloudEventMongoDBDocumentMapper.*;
+import static se.haleby.occurrent.eventstore.mongodb.converter.OccurrentCloudEventMongoDBDocumentMapper.convertToCloudEvent;
+import static se.haleby.occurrent.eventstore.mongodb.converter.OccurrentCloudEventMongoDBDocumentMapper.convertToDocuments;
 
 public class SpringBlockingMongoEventStore implements EventStore {
 
     private static final String ID = "_id";
+    private static final String VERSION = "version";
 
     private final MongoTemplate mongoTemplate;
     private final String eventStoreCollectionName;
@@ -62,7 +75,23 @@ public class SpringBlockingMongoEventStore implements EventStore {
     }
 
     @Override
-    public void write(String streamId, long expectedStreamVersion, Stream<CloudEvent> events) {
+    public void write(String streamId, WriteCondition writeCondition, Stream<CloudEvent> events) {
+        if (writeCondition == null) {
+            throw new IllegalArgumentException(WriteCondition.class.getSimpleName() + " cannot be null");
+        }
+        writeInternal(streamId, writeCondition, events);
+    }
+
+    @Override
+    public void write(String streamId, Stream<CloudEvent> events) {
+        writeInternal(streamId, null, events);
+    }
+
+    private void writeInternal(String streamId, WriteCondition writeCondition, Stream<CloudEvent> events) {
+        if (streamConsistencyGuarantee instanceof None && writeCondition != null) {
+            throw new IllegalArgumentException("Cannot use a " + WriteCondition.class.getSimpleName() + " when streamConsistencyGuarantee is " + None.class.getSimpleName());
+        }
+
         List<Document> serializedEvents = convertToDocuments(cloudEventSerializer, streamId, events).collect(Collectors.toList());
 
         if (streamConsistencyGuarantee instanceof None) {
@@ -70,13 +99,14 @@ public class SpringBlockingMongoEventStore implements EventStore {
         } else if (streamConsistencyGuarantee instanceof Transactional) {
             Transactional transactional = (Transactional) this.streamConsistencyGuarantee;
             String streamVersionCollectionName = transactional.streamVersionCollectionName;
-            transactional.transactionTemplate.executeWithoutResult(transactionStatus -> conditionallyWriteEvents(streamId, streamVersionCollectionName, expectedStreamVersion, serializedEvents));
+            transactional.transactionTemplate.executeWithoutResult(transactionStatus -> conditionallyWriteEvents(streamId, streamVersionCollectionName, writeCondition, serializedEvents));
         } else if (streamConsistencyGuarantee instanceof TransactionalAnnotation) {
             String streamVersionCollectionName = ((TransactionalAnnotation) streamConsistencyGuarantee).streamVersionCollectionName;
-            conditionallyWriteEvents(streamId, streamVersionCollectionName, expectedStreamVersion, serializedEvents);
+            conditionallyWriteEvents(streamId, streamVersionCollectionName, writeCondition, serializedEvents);
         } else {
             throw new IllegalStateException("Internal error, invalid stream write consistency guarantee");
         }
+
     }
 
     @Override
@@ -84,6 +114,8 @@ public class SpringBlockingMongoEventStore implements EventStore {
         return mongoTemplate.exists(query(where(OccurrentCloudEventExtension.STREAM_ID).is(streamId)), eventStoreCollectionName);
     }
 
+
+    @SuppressWarnings("unused")
     private static class EventStreamImpl<T> implements EventStream<T> {
         private String _id;
         private long version;
@@ -128,8 +160,8 @@ public class SpringBlockingMongoEventStore implements EventStore {
     }
 
     // Write
-    private void conditionallyWriteEvents(String streamId, String streamVersionCollectionName, long expectedStreamVersion, List<Document> serializedEvents) {
-        increaseStreamVersion(streamId, expectedStreamVersion, streamVersionCollectionName);
+    private void conditionallyWriteEvents(String streamId, String streamVersionCollectionName, WriteCondition writeCondition, List<Document> serializedEvents) {
+        increaseStreamVersion(streamId, writeCondition, streamVersionCollectionName);
         insertAll(serializedEvents);
     }
 
@@ -139,10 +171,81 @@ public class SpringBlockingMongoEventStore implements EventStore {
         mongoTemplate.getCollection(eventStoreCollectionName).insertMany(documents);
     }
 
-    private void increaseStreamVersion(String streamId, long expectedStreamVersion, String streamVersionCollectionName) {
-        mongoTemplate.upsert(query(where(ID).is(streamId).and("version").is(expectedStreamVersion)),
-                update("version", expectedStreamVersion + 1), streamVersionCollectionName);
+    private void increaseStreamVersion(String streamId, WriteCondition writeCondition, String streamVersionCollectionName) {
+        UpdateResult updateResult = mongoTemplate.updateFirst(query(generateUpdateCondition(streamId, writeCondition)),
+                new Update().inc(VERSION, 1L), streamVersionCollectionName);
+
+        if (updateResult.getMatchedCount() == 0) {
+            Document document = mongoTemplate.findOne(query(where(ID).is(streamId)), Document.class, streamVersionCollectionName);
+            if (document == null) {
+                Map<String, Object> data = new HashMap<String, Object>() {{
+                    put(ID, streamId);
+                    put(VERSION, 1L);
+                }};
+                mongoTemplate.insert(new Document(data), streamVersionCollectionName);
+            } else {
+                long eventStreamVersion = document.getLong(VERSION);
+                throw new WriteConditionNotFulfilledException(streamId, eventStreamVersion, writeCondition, String.format("%s was not fulfilled. Expected version %s but was %s.", WriteCondition.class.getSimpleName(), writeCondition.toString(), eventStreamVersion));
+            }
+        }
     }
+
+    private static Criteria generateUpdateCondition(String streamId, WriteCondition writeCondition) {
+        Criteria streamEq = where(ID).is(streamId);
+        if (writeCondition == null) {
+            return streamEq;
+        }
+
+        if (!(writeCondition instanceof StreamVersionWriteCondition)) {
+            throw new IllegalArgumentException("Invalid " + WriteCondition.class.getSimpleName() + ": " + writeCondition);
+        }
+
+        StreamVersionWriteCondition c = (StreamVersionWriteCondition) writeCondition;
+        return streamEq.andOperator(generateUpdateCondition(c.condition));
+    }
+
+
+    private static Criteria generateUpdateCondition(Condition<Long> condition) {
+        if (condition instanceof MultiOperation) {
+            MultiOperation<Long> operation = (MultiOperation<Long>) condition;
+            WriteCondition.MultiOperationName operationName = operation.operationName;
+            List<Condition<Long>> operations = operation.operations;
+            Criteria[] criteria = operations.stream().map(SpringBlockingMongoEventStore::generateUpdateCondition).toArray(Criteria[]::new);
+            switch (operationName) {
+                case AND:
+                    return new Criteria().andOperator(criteria);
+                case OR:
+                    return new Criteria().orOperator(criteria);
+                case NOT:
+                    return new Criteria().norOperator(criteria);
+                default:
+                    throw new IllegalStateException("Unexpected value: " + operationName);
+            }
+        } else if (condition instanceof Operation) {
+            Operation<Long> operation = (Operation<Long>) condition;
+            long expectedVersion = operation.operand;
+            WriteCondition.OperationName operationName = operation.operationName;
+            switch (operationName) {
+                case EQ:
+                    return where(VERSION).is(expectedVersion);
+                case LT:
+                    return where(VERSION).lt(expectedVersion);
+                case GT:
+                    return where(VERSION).gt(expectedVersion);
+                case LTE:
+                    return where(VERSION).lte(expectedVersion);
+                case GTE:
+                    return where(VERSION).gte(expectedVersion);
+                case NE:
+                    return where(VERSION).ne(expectedVersion);
+                default:
+                    throw new IllegalStateException("Unexpected value: " + operationName);
+            }
+        } else {
+            throw new IllegalArgumentException("Unsupported condition: " + condition.getClass());
+        }
+    }
+
 
     // Read
     private EventStreamImpl<Document> readEventStream(String streamId, int skip, int limit, String streamVersionCollectionName) {
@@ -189,6 +292,6 @@ public class SpringBlockingMongoEventStore implements EventStore {
         if (!mongoTemplate.collectionExists(streamVersionCollectionName)) {
             mongoTemplate.createCollection(streamVersionCollectionName);
         }
-        mongoTemplate.getCollection(streamVersionCollectionName).createIndex(Indexes.compoundIndex(Indexes.ascending(ID), Indexes.ascending("version")), new IndexOptions().unique(true));
+        mongoTemplate.getCollection(streamVersionCollectionName).createIndex(Indexes.compoundIndex(Indexes.ascending(ID), Indexes.ascending(VERSION)), new IndexOptions().unique(true));
     }
 }

@@ -6,6 +6,14 @@ import io.cloudevents.core.builder.CloudEventBuilder;
 import se.haleby.occurrent.cloudevents.OccurrentCloudEventExtension;
 import se.haleby.occurrent.eventstore.api.blocking.EventStore;
 import se.haleby.occurrent.eventstore.api.blocking.EventStream;
+import se.haleby.occurrent.eventstore.api.blocking.WriteCondition;
+import se.haleby.occurrent.eventstore.api.blocking.WriteCondition.Condition;
+import se.haleby.occurrent.eventstore.api.blocking.WriteCondition.Condition.MultiOperation;
+import se.haleby.occurrent.eventstore.api.blocking.WriteCondition.Condition.Operation;
+import se.haleby.occurrent.eventstore.api.blocking.WriteCondition.MultiOperationName;
+import se.haleby.occurrent.eventstore.api.blocking.WriteCondition.OperationName;
+import se.haleby.occurrent.eventstore.api.blocking.WriteCondition.StreamVersionWriteCondition;
+import se.haleby.occurrent.eventstore.api.blocking.WriteConditionNotFulfilledException;
 
 import java.util.ArrayList;
 import java.util.Collections;
@@ -16,6 +24,8 @@ import java.util.concurrent.ConcurrentMap;
 import java.util.function.Function;
 import java.util.stream.Collectors;
 import java.util.stream.Stream;
+
+import static java.util.function.Predicate.isEqual;
 
 public class InMemoryEventStore implements EventStore {
 
@@ -33,27 +43,94 @@ public class InMemoryEventStore implements EventStore {
     }
 
     @Override
-    public void write(String streamId, long expectedStreamVersion, Stream<CloudEvent> events) {
-        Stream<CloudEvent> cloudEventStream = events
-                .peek(e -> requireTrue(e.getSpecVersion() == SpecVersion.V1, "Spec version needs to be " + SpecVersion.V1))
-                .map(modifyCloudEvent(e -> e.withExtension(new OccurrentCloudEventExtension(streamId))));
+    public void write(String streamId, WriteCondition writeCondition, Stream<CloudEvent> events) {
+        requireTrue(writeCondition != null, WriteCondition.class.getSimpleName() + " cannot be null");
+        writeInternal(streamId, writeCondition, events);
+    }
 
-        state.compute(streamId, (__, currentVersionAndEvents) -> {
-            if (currentVersionAndEvents == null) {
-                return new VersionAndEvents(0, cloudEventStream.collect(Collectors.toList()));
-            } else if (currentVersionAndEvents.version == expectedStreamVersion) {
-                List<CloudEvent> newEvents = new ArrayList<>(currentVersionAndEvents.events);
-                newEvents.addAll(cloudEventStream.collect(Collectors.toList()));
-                return new VersionAndEvents(expectedStreamVersion + 1, newEvents);
-            } else {
-                throw new IllegalStateException(String.format("Optimistic locking exception! Expected version %s but was %s.", expectedStreamVersion, currentVersionAndEvents.version));
-            }
-        });
+
+    @Override
+    public void write(String streamId, Stream<CloudEvent> events) {
+        writeInternal(streamId, null, events);
     }
 
     @Override
     public boolean exists(String streamId) {
         return state.containsKey(streamId);
+    }
+
+    private void writeInternal(String streamId, WriteCondition writeCondition, Stream<CloudEvent> events) {
+        Stream<CloudEvent> cloudEventStream = events
+                .peek(e -> requireTrue(e.getSpecVersion() == SpecVersion.V1, "Spec version needs to be " + SpecVersion.V1))
+                .map(modifyCloudEvent(e -> e.withExtension(new OccurrentCloudEventExtension(streamId))));
+
+        state.compute(streamId, (__, currentVersionAndEvents) -> {
+            if (currentVersionAndEvents == null && isConditionFulfilledBy(writeCondition, 0)) {
+                return new VersionAndEvents(1, cloudEventStream.collect(Collectors.toList()));
+            } else if (currentVersionAndEvents != null && isConditionFulfilledBy(writeCondition, currentVersionAndEvents.version)) {
+                List<CloudEvent> newEvents = new ArrayList<>(currentVersionAndEvents.events);
+                newEvents.addAll(cloudEventStream.collect(Collectors.toList()));
+                return new VersionAndEvents(currentVersionAndEvents.version + 1, newEvents);
+            } else {
+                long eventStreamVersion = currentVersionAndEvents == null ? 0 : currentVersionAndEvents.version;
+                throw new WriteConditionNotFulfilledException(streamId, eventStreamVersion, writeCondition, String.format("%s was not fulfilled. Expected version %s but was %s.", WriteCondition.class.getSimpleName(), writeCondition.toString(), eventStreamVersion));
+            }
+        });
+    }
+
+    private static boolean isConditionFulfilledBy(WriteCondition writeCondition, long version) {
+        if (writeCondition == null) {
+            return true;
+        }
+
+        if (!(writeCondition instanceof StreamVersionWriteCondition)) {
+            return false;
+        }
+
+        StreamVersionWriteCondition c = (StreamVersionWriteCondition) writeCondition;
+        return isConditionFulfilledBy(c.condition, version);
+    }
+
+
+    private static boolean isConditionFulfilledBy(Condition<Long> condition, long actualVersion) {
+        if (condition instanceof MultiOperation) {
+            MultiOperation<Long> operation = (MultiOperation<Long>) condition;
+            MultiOperationName operationName = operation.operationName;
+            List<Condition<Long>> operations = operation.operations;
+            Stream<Boolean> stream = operations.stream().map(c -> isConditionFulfilledBy(c, actualVersion));
+            switch (operationName) {
+                case AND:
+                    return stream.allMatch(isEqual(true));
+                case OR:
+                    return stream.anyMatch(isEqual(true));
+                case NOT:
+                    return stream.allMatch(isEqual(false));
+                default:
+                    throw new IllegalStateException("Unexpected value: " + operationName);
+            }
+        } else if (condition instanceof Operation) {
+            Operation<Long> operation = (Operation<Long>) condition;
+            long expectedVersion = operation.operand;
+            OperationName operationName = operation.operationName;
+            switch (operationName) {
+                case EQ:
+                    return actualVersion == expectedVersion;
+                case LT:
+                    return actualVersion < expectedVersion;
+                case GT:
+                    return actualVersion > expectedVersion;
+                case LTE:
+                    return actualVersion <= expectedVersion;
+                case GTE:
+                    return actualVersion >= expectedVersion;
+                case NE:
+                    return actualVersion != expectedVersion;
+                default:
+                    throw new IllegalStateException("Unexpected value: " + operationName);
+            }
+        } else {
+            throw new IllegalArgumentException("Unsupported condition: " + condition.getClass());
+        }
     }
 
     private static class VersionAndEvents {

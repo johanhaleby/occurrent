@@ -3,9 +3,10 @@ package se.haleby.occurrent.eventstore.mongodb.nativedriver;
 import com.mongodb.ConnectionString;
 import com.mongodb.TransactionOptions;
 import com.mongodb.client.*;
+import com.mongodb.client.model.Filters;
 import com.mongodb.client.model.IndexOptions;
 import com.mongodb.client.model.Indexes;
-import com.mongodb.client.model.UpdateOptions;
+import com.mongodb.client.result.UpdateResult;
 import io.cloudevents.CloudEvent;
 import io.cloudevents.core.format.EventFormat;
 import io.cloudevents.core.provider.EventFormatProvider;
@@ -14,22 +15,30 @@ import org.bson.Document;
 import org.bson.conversions.Bson;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import se.haleby.occurrent.cloudevents.OccurrentCloudEventExtension;
 import se.haleby.occurrent.eventstore.api.blocking.EventStore;
 import se.haleby.occurrent.eventstore.api.blocking.EventStream;
+import se.haleby.occurrent.eventstore.api.blocking.WriteCondition;
+import se.haleby.occurrent.eventstore.api.blocking.WriteCondition.Condition;
+import se.haleby.occurrent.eventstore.api.blocking.WriteCondition.Condition.MultiOperation;
+import se.haleby.occurrent.eventstore.api.blocking.WriteCondition.Condition.Operation;
+import se.haleby.occurrent.eventstore.api.blocking.WriteCondition.MultiOperationName;
+import se.haleby.occurrent.eventstore.api.blocking.WriteConditionNotFulfilledException;
 import se.haleby.occurrent.eventstore.mongodb.nativedriver.StreamConsistencyGuarantee.None;
 import se.haleby.occurrent.eventstore.mongodb.nativedriver.StreamConsistencyGuarantee.Transactional;
-import se.haleby.occurrent.cloudevents.OccurrentCloudEventExtension;
 
+import java.util.HashMap;
 import java.util.List;
+import java.util.Map;
 import java.util.Objects;
 import java.util.stream.Collectors;
 import java.util.stream.Stream;
 import java.util.stream.StreamSupport;
 
-import static com.mongodb.client.model.Filters.and;
-import static com.mongodb.client.model.Filters.eq;
-import static com.mongodb.client.model.Updates.set;
-import static se.haleby.occurrent.eventstore.mongodb.converter.OccurrentCloudEventMongoDBDocumentMapper.*;
+import static com.mongodb.client.model.Filters.*;
+import static com.mongodb.client.model.Updates.inc;
+import static se.haleby.occurrent.eventstore.mongodb.converter.OccurrentCloudEventMongoDBDocumentMapper.convertToCloudEvent;
+import static se.haleby.occurrent.eventstore.mongodb.converter.OccurrentCloudEventMongoDBDocumentMapper.convertToDocuments;
 
 public class MongoEventStore implements EventStore {
     private static final Logger log = LoggerFactory.getLogger(MongoEventStore.class);
@@ -60,7 +69,7 @@ public class MongoEventStore implements EventStore {
         final EventStream<Document> eventStream;
         if (streamConsistencyGuarantee instanceof None) {
             Stream<Document> stream = readCloudEvents(streamId, skip, limit, null);
-            eventStream = new EventStreamImpl<>(streamId, 0, stream);
+            eventStream = new EventStreamImpl<>(streamId, -1, stream);
         } else if (streamConsistencyGuarantee instanceof Transactional) {
             Transactional transactional = (Transactional) this.streamConsistencyGuarantee;
             eventStream = readEventStream(streamId, skip, limit, transactional);
@@ -84,11 +93,10 @@ public class MongoEventStore implements EventStore {
                 }
 
                 Stream<Document> stream = readCloudEvents(streamId, skip, limit, clientSession);
-                return new EventStreamImpl<>(ID, document.getLong(VERSION), stream);
+                return new EventStreamImpl<>(streamId, document.getLong(VERSION), stream);
             }, transactional.transactionOptions);
         }
     }
-
 
     private Stream<Document> readCloudEvents(String streamId, int skip, int limit, ClientSession clientSession) {
         final Bson filter = eq(OccurrentCloudEventExtension.STREAM_ID, streamId);
@@ -109,38 +117,125 @@ public class MongoEventStore implements EventStore {
     }
 
     @Override
-    public void write(String streamId, long expectedStreamVersion, Stream<CloudEvent> events) {
+    public void write(String streamId, Stream<CloudEvent> events) {
+        writeInternal(streamId, null, events);
+    }
+
+    @Override
+    public void write(String streamId, WriteCondition writeCondition, Stream<CloudEvent> events) {
+        if (writeCondition == null) {
+            throw new IllegalArgumentException(WriteCondition.class.getSimpleName() + " cannot be null");
+        }
+        writeInternal(streamId, writeCondition, events);
+    }
+
+    private void writeInternal(String streamId, WriteCondition writeCondition, Stream<CloudEvent> events) {
+        if (streamConsistencyGuarantee instanceof None && writeCondition != null) {
+            throw new IllegalArgumentException("Cannot use a " + WriteCondition.class.getSimpleName() + " when streamConsistencyGuarantee is " + None.class.getSimpleName());
+        }
+
         List<Document> cloudEventDocuments = convertToDocuments(cloudEventSerializer, streamId, events).collect(Collectors.toList());
 
         if (streamConsistencyGuarantee instanceof None) {
             eventCollection.insertMany(cloudEventDocuments);
         } else if (streamConsistencyGuarantee instanceof Transactional) {
-            consistentlyWrite(streamId, expectedStreamVersion, cloudEventDocuments);
-
+            consistentlyWrite(streamId, writeCondition, cloudEventDocuments);
         } else {
             throw new IllegalStateException("Internal error, invalid stream write consistency guarantee");
         }
     }
 
-    private void consistentlyWrite(String streamId, long expectedStreamVersion, List<Document> serializedEvents) {
+    private void consistentlyWrite(String streamId, WriteCondition writeCondition, List<Document> serializedEvents) {
         Transactional transactional = (Transactional) this.streamConsistencyGuarantee;
         TransactionOptions transactionOptions = transactional.transactionOptions;
         String streamVersionCollectionName = transactional.streamVersionCollectionName;
         try (ClientSession clientSession = mongoClient.startSession()) {
             clientSession.withTransaction(() -> {
-                mongoClient
+                MongoCollection<Document> streamVersionCollection = mongoClient
                         .getDatabase(databaseName)
-                        .getCollection(streamVersionCollectionName)
-                        .updateOne(clientSession, and(eq(ID, streamId), eq(VERSION, expectedStreamVersion)),
-                                set("version", expectedStreamVersion + 1),
-                                new UpdateOptions().upsert(true));
+                        .getCollection(streamVersionCollectionName);
+
+                UpdateResult updateResult = streamVersionCollection
+                        .updateOne(clientSession, generateUpdateCondition(streamId, writeCondition),
+                                inc(VERSION, 1L));
+
+                if (updateResult.getMatchedCount() == 0) {
+                    Document document = streamVersionCollection.find(clientSession, eq(ID, streamId)).first();
+                    if (document == null) {
+                        Map<String, Object> data = new HashMap<String, Object>() {{
+                            put(ID, streamId);
+                            put(VERSION, 1L);
+                        }};
+                        streamVersionCollection.insertOne(clientSession, new Document(data));
+                    } else {
+                        long eventStreamVersion = document.getLong(VERSION);
+                        throw new WriteConditionNotFulfilledException(streamId, eventStreamVersion, writeCondition, String.format("%s was not fulfilled. Expected version %s but was %s.", WriteCondition.class.getSimpleName(), writeCondition.toString(), eventStreamVersion));
+                    }
+                }
+
 
                 mongoClient
                         .getDatabase(databaseName)
                         .getCollection(eventCollection.getNamespace().getCollectionName())
                         .insertMany(clientSession, serializedEvents);
-                return expectedStreamVersion + 1;
+                return "";
             }, transactionOptions);
+        }
+    }
+
+    private static Bson generateUpdateCondition(String streamId, WriteCondition writeCondition) {
+        Bson streamEq = eq(ID, streamId);
+        if (writeCondition == null) {
+            return streamEq;
+        }
+
+        if (!(writeCondition instanceof WriteCondition.StreamVersionWriteCondition)) {
+            throw new IllegalArgumentException("Invalid " + WriteCondition.class.getSimpleName() + ": " + writeCondition);
+        }
+
+        WriteCondition.StreamVersionWriteCondition c = (WriteCondition.StreamVersionWriteCondition) writeCondition;
+        return and(streamEq, generateUpdateCondition(c.condition));
+    }
+
+
+    private static Bson generateUpdateCondition(Condition<Long> condition) {
+        if (condition instanceof MultiOperation) {
+            MultiOperation<Long> operation = (MultiOperation<Long>) condition;
+            MultiOperationName operationName = operation.operationName;
+            List<Condition<Long>> operations = operation.operations;
+            Bson[] filters = operations.stream().map(MongoEventStore::generateUpdateCondition).toArray(Bson[]::new);
+            switch (operationName) {
+                case AND:
+                    return Filters.and(filters);
+                case OR:
+                    return Filters.or(filters);
+                case NOT:
+                    return Filters.not(filters[0]);
+                default:
+                    throw new IllegalStateException("Unexpected value: " + operationName);
+            }
+        } else if (condition instanceof Operation) {
+            Operation<Long> operation = (Operation<Long>) condition;
+            long expectedVersion = operation.operand;
+            WriteCondition.OperationName operationName = operation.operationName;
+            switch (operationName) {
+                case EQ:
+                    return eq(VERSION, expectedVersion);
+                case LT:
+                    return lt(VERSION, expectedVersion);
+                case GT:
+                    return gt(VERSION, expectedVersion);
+                case LTE:
+                    return lte(VERSION, expectedVersion);
+                case GTE:
+                    return gte(VERSION, expectedVersion);
+                case NE:
+                    return ne(VERSION, expectedVersion);
+                default:
+                    throw new IllegalStateException("Unexpected value: " + operationName);
+            }
+        } else {
+            throw new IllegalArgumentException("Unsupported condition: " + condition.getClass());
         }
     }
 
