@@ -30,8 +30,8 @@ public class DomainEventStore {
         this.deserializeCloudEventToDomainEvent = deserializeCloudEventToDomainEvent;
     }
 
-    public void append(UUID id, long expectedVersion, List<DomainEvent> events) {
-        eventStore.write(id.toString(), expectedVersion, serialize(id, events));
+    public void append(UUID id, List<DomainEvent> events) {
+        eventStore.write(id.toString(), serialize(id, events));
     }
 
     public EventStream<DomainEvent> loadEventStream(UUID id) {

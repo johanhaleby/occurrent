@@ -20,7 +20,7 @@ public class NameApplicationService {
 
     public void defineName(UUID id, LocalDateTime time, String name) {
         List<DomainEvent> events = Name.defineName(UUID.randomUUID().toString(), time, name);
-        eventStore.append(id, 0, events);
+        eventStore.append(id, events);
     }
 
     public void changeName(UUID id, LocalDateTime time, String name) {
@@ -29,6 +29,6 @@ public class NameApplicationService {
 
         List<DomainEvent> newEvents = Name.changeName(events, UUID.randomUUID().toString(), time, name);
 
-        eventStore.append(id, eventStream.version(), newEvents);
+        eventStore.append(id, newEvents);
     }
 }
