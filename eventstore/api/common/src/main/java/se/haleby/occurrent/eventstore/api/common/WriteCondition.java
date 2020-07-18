@@ -1,13 +1,13 @@
-package se.haleby.occurrent.eventstore.api.blocking;
+package se.haleby.occurrent.eventstore.api.common;
 
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.List;
 import java.util.stream.Collectors;
 
-import static se.haleby.occurrent.eventstore.api.blocking.WriteCondition.Condition.eq;
-import static se.haleby.occurrent.eventstore.api.blocking.WriteCondition.MultiOperationName.*;
-import static se.haleby.occurrent.eventstore.api.blocking.WriteCondition.OperationName.*;
+import static se.haleby.occurrent.eventstore.api.common.WriteCondition.Condition.eq;
+import static se.haleby.occurrent.eventstore.api.common.WriteCondition.MultiOperationName.*;
+import static se.haleby.occurrent.eventstore.api.common.WriteCondition.OperationName.*;
 
 public abstract class WriteCondition {
 

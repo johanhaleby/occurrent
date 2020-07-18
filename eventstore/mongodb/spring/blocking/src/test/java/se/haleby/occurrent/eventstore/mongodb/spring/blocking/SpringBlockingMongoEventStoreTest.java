@@ -27,8 +27,8 @@ import se.haleby.occurrent.domain.NameDefined;
 import se.haleby.occurrent.domain.NameWasChanged;
 import se.haleby.occurrent.eventstore.api.blocking.EventStore;
 import se.haleby.occurrent.eventstore.api.blocking.EventStream;
-import se.haleby.occurrent.eventstore.api.blocking.WriteCondition;
-import se.haleby.occurrent.eventstore.api.blocking.WriteConditionNotFulfilledException;
+import se.haleby.occurrent.eventstore.api.common.WriteCondition;
+import se.haleby.occurrent.eventstore.api.common.WriteConditionNotFulfilledException;
 import se.haleby.occurrent.testsupport.mongodb.FlushMongoDBExtension;
 
 import java.net.URI;
@@ -48,9 +48,9 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.catchThrowable;
 import static org.junit.jupiter.api.Assertions.assertAll;
 import static se.haleby.occurrent.domain.Composition.chain;
-import static se.haleby.occurrent.eventstore.api.blocking.WriteCondition.Condition.*;
-import static se.haleby.occurrent.eventstore.api.blocking.WriteCondition.streamVersion;
-import static se.haleby.occurrent.eventstore.api.blocking.WriteCondition.streamVersionEq;
+import static se.haleby.occurrent.eventstore.api.common.WriteCondition.Condition.*;
+import static se.haleby.occurrent.eventstore.api.common.WriteCondition.streamVersion;
+import static se.haleby.occurrent.eventstore.api.common.WriteCondition.streamVersionEq;
 import static se.haleby.occurrent.functional.CheckedFunction.unchecked;
 import static se.haleby.occurrent.time.TimeConversion.toLocalDateTime;
 

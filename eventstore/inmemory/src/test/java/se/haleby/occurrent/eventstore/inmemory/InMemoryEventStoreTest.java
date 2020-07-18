@@ -16,8 +16,8 @@ import se.haleby.occurrent.domain.NameDefined;
 import se.haleby.occurrent.domain.NameWasChanged;
 import se.haleby.occurrent.eventstore.api.blocking.EventStore;
 import se.haleby.occurrent.eventstore.api.blocking.EventStream;
-import se.haleby.occurrent.eventstore.api.blocking.WriteCondition;
-import se.haleby.occurrent.eventstore.api.blocking.WriteConditionNotFulfilledException;
+import se.haleby.occurrent.eventstore.api.common.WriteCondition;
+import se.haleby.occurrent.eventstore.api.common.WriteConditionNotFulfilledException;
 
 import java.net.URI;
 import java.time.LocalDateTime;
@@ -31,9 +31,9 @@ import static java.time.ZoneOffset.UTC;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.catchThrowable;
 import static se.haleby.occurrent.cloudevents.OccurrentCloudEventExtension.STREAM_ID;
-import static se.haleby.occurrent.eventstore.api.blocking.WriteCondition.Condition.*;
-import static se.haleby.occurrent.eventstore.api.blocking.WriteCondition.streamVersion;
-import static se.haleby.occurrent.eventstore.api.blocking.WriteCondition.streamVersionEq;
+import static se.haleby.occurrent.eventstore.api.common.WriteCondition.Condition.*;
+import static se.haleby.occurrent.eventstore.api.common.WriteCondition.streamVersion;
+import static se.haleby.occurrent.eventstore.api.common.WriteCondition.streamVersionEq;
 import static se.haleby.occurrent.functional.CheckedFunction.unchecked;
 import static se.haleby.occurrent.time.TimeConversion.toLocalDateTime;
 

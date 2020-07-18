@@ -1,4 +1,4 @@
-package se.haleby.occurrent.eventstore.api.blocking;
+package se.haleby.occurrent.eventstore.api.common;
 
 public class WriteConditionNotFulfilledException extends RuntimeException {
     public final String eventStreamId;

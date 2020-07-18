@@ -9,13 +9,19 @@
     </parent>
     <modelVersion>4.0.0</modelVersion>
 
-    <artifactId>eventstore-api-blocking</artifactId>
+    <artifactId>eventstore-api-common</artifactId>
 
     <dependencies>
         <dependency>
             <groupId>se.haleby.occurrent</groupId>
-            <artifactId>eventstore-api-common</artifactId>
+            <artifactId>cloudevents-extension</artifactId>
             <version>0.0.1-SNAPSHOT</version>
         </dependency>
+        <dependency>
+            <groupId>io.cloudevents</groupId>
+            <artifactId>cloudevents-api</artifactId>
+        </dependency>
     </dependencies>
+
+
 </project>

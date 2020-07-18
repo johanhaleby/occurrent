@@ -9,7 +9,7 @@
     </parent>
     <modelVersion>4.0.0</modelVersion>
 
-    <artifactId>eventstore-api-blocking</artifactId>
+    <artifactId>eventstore-api-reactor</artifactId>
 
     <dependencies>
         <dependency>
@@ -17,5 +17,10 @@
             <artifactId>eventstore-api-common</artifactId>
             <version>0.0.1-SNAPSHOT</version>
         </dependency>
+        <dependency>
+            <groupId>io.projectreactor</groupId>
+            <artifactId>reactor-core</artifactId>
+        </dependency>
     </dependencies>
+
 </project>
