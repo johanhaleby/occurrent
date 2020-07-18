@@ -9,14 +9,12 @@
     </parent>
     <packaging>pom</packaging>
     <modules>
-        <module>example-eventstore-mongodb-changestreamer-to-spring-event</module>
-        <module>example-eventstore-mongodb-transactional-spring-projections</module>
-        <module>example-eventstore-mongodb-changedstreamed-spring-projections</module>
-        <module>example-eventstore-mongodb-adhoc-spring-projections</module>
+        <module>projection</module>
+        <module>forwarder</module>
     </modules>
     <modelVersion>4.0.0</modelVersion>
 
-    <artifactId>examples</artifactId>
+    <artifactId>example</artifactId>
 
 
 </project>

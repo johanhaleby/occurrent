@@ -10,7 +10,7 @@
     <version>0.0.1-SNAPSHOT</version>
     <modules>
         <module>test-support</module>
-        <module>examples</module>
+        <module>example</module>
         <module>eventstore</module>
         <module>changestreamer</module>
         <module>cloudevents-extension</module>
