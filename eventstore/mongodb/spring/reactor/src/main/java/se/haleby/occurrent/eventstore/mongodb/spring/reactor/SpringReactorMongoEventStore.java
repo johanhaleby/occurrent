@@ -11,6 +11,7 @@ import org.bson.Document;
 import org.bson.conversions.Bson;
 import org.springframework.data.mongodb.core.ReactiveMongoTemplate;
 import org.springframework.data.mongodb.core.query.Criteria;
+import org.springframework.data.mongodb.core.query.Query;
 import org.springframework.data.mongodb.core.query.Update;
 import reactor.core.publisher.Flux;
 import reactor.core.publisher.Mono;
@@ -27,7 +28,6 @@ import se.haleby.occurrent.eventstore.mongodb.spring.reactor.StreamConsistencyGu
 import java.util.HashMap;
 
 import static java.nio.charset.StandardCharsets.UTF_8;
-import static java.util.Objects.requireNonNull;
 import static org.springframework.data.mongodb.SessionSynchronization.ALWAYS;
 import static org.springframework.data.mongodb.core.query.Criteria.where;
 import static org.springframework.data.mongodb.core.query.Query.query;
@@ -67,7 +67,41 @@ public class SpringReactorMongoEventStore implements EventStore {
 
     @Override
     public Mono<EventStream<CloudEvent>> read(String streamId, int skip, int limit) {
-        return null;
+        final Mono<EventStreamImpl> eventStream;
+        if (streamConsistencyGuarantee instanceof None) {
+            Flux<Document> flux = readCloudEvents(streamId, skip, limit);
+            eventStream = Mono.just(new EventStreamImpl(streamId, 0, flux));
+        } else if (streamConsistencyGuarantee instanceof Transactional) {
+            Transactional transactional = (Transactional) this.streamConsistencyGuarantee;
+            eventStream = transactional.transactionalOperator
+                    .execute(transactionStatus -> readEventStream(streamId, skip, limit, transactional.streamVersionCollectionName))
+                    .single();
+        } else if (streamConsistencyGuarantee instanceof TransactionalAnnotation) {
+            String streamVersionCollectionName = ((TransactionalAnnotation) streamConsistencyGuarantee).streamVersionCollectionName;
+            eventStream = readEventStream(streamId, skip, limit, streamVersionCollectionName);
+        } else {
+            throw new IllegalStateException("Internal error, invalid stream write consistency guarantee");
+        }
+        return convertToCloudEvent(cloudEventSerializer, eventStream);
+    }
+
+
+    // Read
+    private Mono<EventStreamImpl> readEventStream(String streamId, int skip, int limit, String streamVersionCollectionName) {
+        return mongoTemplate.findOne(query(where(ID).is(streamId)), EventStreamImpl.class, streamVersionCollectionName)
+                .map(es -> {
+                    es.setEvents(readCloudEvents(streamId, skip, limit));
+                    return es;
+                })
+                .switchIfEmpty(Mono.just(new EventStreamImpl(streamId, 0, Flux.empty())));
+    }
+
+    private Flux<Document> readCloudEvents(String streamId, int skip, int limit) {
+        Query query = query(where(STREAM_ID).is(streamId));
+        if (skip != 0 || limit != Integer.MAX_VALUE) {
+            query.skip(skip).limit(limit);
+        }
+        return mongoTemplate.find(query, Document.class, eventStoreCollectionName);
     }
 
     @Override
@@ -117,19 +151,20 @@ public class SpringReactorMongoEventStore implements EventStore {
                 .flatMap(updateResult -> {
                     final Mono<Void> mono;
                     if (updateResult.getMatchedCount() == 0) {
-                        mono = Mono
-                                .fromSupplier(() -> new Document(new HashMap<String, Object>() {{
-                                    put(ID, streamId);
-                                    put(VERSION, 1L);
-                                }}))
-                                .flatMap(data -> mongoTemplate.insert(data, streamVersionCollectionName))
-                                .then();
-                    } else {
                         mono = mongoTemplate.findOne(query(where(ID).is(streamId)), Document.class, streamVersionCollectionName)
                                 .flatMap(document -> {
                                     long eventStreamVersion = document.getLong(VERSION);
                                     return Mono.error(new WriteConditionNotFulfilledException(streamId, eventStreamVersion, writeCondition, String.format("%s was not fulfilled. Expected version %s but was %s.", WriteCondition.class.getSimpleName(), writeCondition.toString(), eventStreamVersion)));
-                                });
+                                })
+                                .switchIfEmpty(
+                                        Mono.fromSupplier(() -> new Document(new HashMap<String, Object>() {{
+                                            put(ID, streamId);
+                                            put(VERSION, 1L);
+                                        }})).flatMap(data -> mongoTemplate.insert(data, streamVersionCollectionName)))
+                                .then();
+
+                    } else {
+                        mono = Mono.empty();
                     }
                     return mono;
                 });
@@ -194,10 +229,53 @@ public class SpringReactorMongoEventStore implements EventStore {
                 });
     }
 
-    public static EventStream<CloudEvent> convertToCloudEvent(EventFormat eventFormat, EventStream<Document> eventStream) {
-        return requireNonNull(eventStream)
-                .map(Document::toJson)
+    public static Mono<EventStream<CloudEvent>> convertToCloudEvent(EventFormat eventFormat, Mono<EventStreamImpl> eventStream) {
+        return eventStream.map(es -> es.map(Document::toJson)
                 .map(eventJsonString -> eventJsonString.getBytes(UTF_8))
-                .map(eventFormat::deserialize);
+                .map(eventFormat::deserialize));
+    }
+
+    @SuppressWarnings("unused")
+    private static class EventStreamImpl implements EventStream<Document> {
+        private String _id;
+        private long version;
+        private Flux<Document> events;
+
+        @SuppressWarnings("unused")
+        EventStreamImpl() {
+        }
+
+        EventStreamImpl(String _id, long version, Flux<Document> events) {
+            this._id = _id;
+            this.version = version;
+            this.events = events;
+        }
+
+        @Override
+        public String id() {
+            return _id;
+        }
+
+        @Override
+        public long version() {
+            return version;
+        }
+
+        @Override
+        public Flux<Document> events() {
+            return events;
+        }
+
+        public void set_id(String _id) {
+            this._id = _id;
+        }
+
+        public void setVersion(long version) {
+            this.version = version;
+        }
+
+        public void setEvents(Flux<Document> events) {
+            this.events = events;
+        }
     }
 }
