@@ -13,6 +13,8 @@
 
     <modules>
         <module>blocking</module>
+        <module>reactor</module>
+        <module>common</module>
     </modules>
 
 

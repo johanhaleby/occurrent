@@ -9,6 +9,7 @@ import static se.haleby.occurrent.eventstore.api.common.WriteCondition.Condition
 import static se.haleby.occurrent.eventstore.api.common.WriteCondition.MultiOperationName.*;
 import static se.haleby.occurrent.eventstore.api.common.WriteCondition.OperationName.*;
 
+// TODO Add Any stream version!!
 public abstract class WriteCondition {
 
     private WriteCondition() {
