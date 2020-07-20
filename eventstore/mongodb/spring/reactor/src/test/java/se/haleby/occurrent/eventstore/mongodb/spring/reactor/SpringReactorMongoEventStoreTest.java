@@ -1,7 +1,5 @@
 package se.haleby.occurrent.eventstore.mongodb.spring.reactor;
 
-import com.fasterxml.jackson.core.JsonProcessingException;
-import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.mongodb.ConnectionString;
 import com.mongodb.reactivestreams.client.MongoClient;
@@ -34,15 +32,13 @@ import se.haleby.occurrent.eventstore.api.reactor.EventStream;
 import se.haleby.occurrent.testsupport.mongodb.FlushMongoDBExtension;
 
 import java.net.URI;
-import java.time.Instant;
 import java.time.LocalDateTime;
+import java.util.ArrayList;
 import java.util.List;
-import java.util.Map;
-import java.util.*;
+import java.util.UUID;
+import java.util.function.Function;
 import java.util.stream.Collectors;
 
-import static io.vavr.API.*;
-import static io.vavr.Predicates.is;
 import static java.time.ZoneOffset.UTC;
 import static java.util.Objects.requireNonNull;
 import static org.assertj.core.api.Assertions.assertThat;
@@ -177,6 +173,32 @@ public class SpringReactorMongoEventStoreTest {
                     () -> assertThat(versionAndEvents.events).containsExactly(nameWasChanged1)
             );
         }
+
+        @Test
+        void read_skew_is_allowed_when_stream_consistency_guarantee_is_none() {
+            // Given
+            LocalDateTime now = LocalDateTime.now();
+            NameDefined nameDefined = new NameDefined(UUID.randomUUID().toString(), now, "name");
+            NameWasChanged nameWasChanged1 = new NameWasChanged(UUID.randomUUID().toString(), now.plusHours(1), "name2");
+            NameWasChanged nameWasChanged2 = new NameWasChanged(UUID.randomUUID().toString(), now.plusHours(2), "name3");
+
+            persist("name", Flux.just(nameDefined, nameWasChanged1)).block();
+
+            // When
+            VersionAndEvents versionAndEvents =
+                    eventStore.read("name")
+                            .flatMap(es -> persist("name", nameWasChanged2)
+                                    .then(es.events().collectList())
+                                    .map(eventList -> new VersionAndEvents(es.version(), eventList.stream().map(deserialize()).collect(Collectors.toList()))))
+                            .block();
+            // Then
+
+            assert versionAndEvents != null;
+            assertAll(
+                    () -> assertThat(versionAndEvents.version).describedAs("version").isEqualTo(0L),
+                    () -> assertThat(versionAndEvents.events).containsExactly(nameDefined, nameWasChanged1, nameWasChanged2)
+            );
+        }
     }
 
     @DisplayName("when using StreamConsistencyGuarantee with type transactional")
@@ -294,6 +316,58 @@ public class SpringReactorMongoEventStoreTest {
                     () -> assertThat(versionAndEvents.events).containsExactlyElementsOf(events)
             );
         }
+
+        @Test
+        void read_skew_is_avoided_when_stream_consistency_guarantee_is_transactional() {
+            // Given
+            LocalDateTime now = LocalDateTime.now();
+            NameDefined nameDefined = new NameDefined(UUID.randomUUID().toString(), now, "name");
+            NameWasChanged nameWasChanged1 = new NameWasChanged(UUID.randomUUID().toString(), now.plusHours(1), "name2");
+            NameWasChanged nameWasChanged2 = new NameWasChanged(UUID.randomUUID().toString(), now.plusHours(2), "name3");
+
+            persist("name", streamVersionEq(0), Flux.just(nameDefined, nameWasChanged1)).block();
+
+            // When
+            VersionAndEvents versionAndEvents =
+                    eventStore.read("name")
+                            .flatMap(es -> persist("name", streamVersionEq(1), nameWasChanged2)
+                                    .then(es.events().collectList())
+                                    .map(eventList -> new VersionAndEvents(es.version(), eventList.stream().map(deserialize()).collect(Collectors.toList()))))
+                            .block();
+            // Then
+
+            assert versionAndEvents != null;
+            assertAll(
+                    () -> assertThat(versionAndEvents.version).describedAs("version").isEqualTo(1L),
+                    () -> assertThat(versionAndEvents.events).containsExactly(nameDefined, nameWasChanged1)
+            );
+        }
+
+        @Test
+        void read_skew_is_avoided_when_stream_consistency_guarantee_is_transactional_and_skip_and_limit_is_defined() {
+            // Given
+            LocalDateTime now = LocalDateTime.now();
+            NameDefined nameDefined = new NameDefined(UUID.randomUUID().toString(), now, "name");
+            NameWasChanged nameWasChanged1 = new NameWasChanged(UUID.randomUUID().toString(), now.plusHours(1), "name2");
+            NameWasChanged nameWasChanged2 = new NameWasChanged(UUID.randomUUID().toString(), now.plusHours(2), "name3");
+
+            persist("name", streamVersionEq(0), Flux.just(nameDefined, nameWasChanged1)).block();
+
+            // When
+            VersionAndEvents versionAndEvents =
+                    eventStore.read("name", 0, 2)
+                            .flatMap(es -> persist("name", streamVersionEq(1), nameWasChanged2)
+                                    .then(es.events().collectList())
+                                    .map(eventList -> new VersionAndEvents(es.version(), eventList.stream().map(deserialize()).collect(Collectors.toList()))))
+                            .block();
+            // Then
+            assert versionAndEvents != null;
+            assertAll(
+                    () -> assertThat(versionAndEvents.version).describedAs("version").isEqualTo(1L),
+                    () -> assertThat(versionAndEvents.events).containsExactly(nameDefined, nameWasChanged1)
+            );
+        }
+
     }
 
     @DisplayName("when using StreamConsistencyGuarantee with type transactional annotation")
@@ -410,8 +484,58 @@ public class SpringReactorMongoEventStoreTest {
                     () -> assertThat(versionAndEvents.events).containsExactlyElementsOf(events)
             );
         }
-    }
 
+        @Test
+        void read_skew_is_avoided_when_stream_consistency_guarantee_is_transactional_annotation_and_skip_and_limit_is_undefined() {
+            // Given
+            LocalDateTime now = LocalDateTime.now();
+            NameDefined nameDefined = new NameDefined(UUID.randomUUID().toString(), now, "name");
+            NameWasChanged nameWasChanged1 = new NameWasChanged(UUID.randomUUID().toString(), now.plusHours(1), "name2");
+            NameWasChanged nameWasChanged2 = new NameWasChanged(UUID.randomUUID().toString(), now.plusHours(2), "name3");
+
+            persist("name", streamVersionEq(0), Flux.just(nameDefined, nameWasChanged1)).block();
+
+            // When
+            VersionAndEvents versionAndEvents =
+                    eventStore.read("name")
+                            .flatMap(es -> persist("name", streamVersionEq(1), nameWasChanged2)
+                                    .then(es.events().collectList())
+                                    .map(eventList -> new VersionAndEvents(es.version(), eventList.stream().map(deserialize()).collect(Collectors.toList()))))
+                            .block();
+            // Then
+
+            assert versionAndEvents != null;
+            assertAll(
+                    () -> assertThat(versionAndEvents.version).describedAs("version").isEqualTo(1L),
+                    () -> assertThat(versionAndEvents.events).containsExactly(nameDefined, nameWasChanged1)
+            );
+        }
+
+        @Test
+        void read_skew_is_avoided_when_stream_consistency_guarantee_is_transactional_annotation_and_skip_and_limit_is_defined() {
+            // Given
+            LocalDateTime now = LocalDateTime.now();
+            NameDefined nameDefined = new NameDefined(UUID.randomUUID().toString(), now, "name");
+            NameWasChanged nameWasChanged1 = new NameWasChanged(UUID.randomUUID().toString(), now.plusHours(1), "name2");
+            NameWasChanged nameWasChanged2 = new NameWasChanged(UUID.randomUUID().toString(), now.plusHours(2), "name3");
+
+            persist("name", streamVersionEq(0), Flux.just(nameDefined, nameWasChanged1)).block();
+
+            // When
+            VersionAndEvents versionAndEvents =
+                    eventStore.read("name", 0, 2)
+                            .flatMap(es -> persist("name", streamVersionEq(1), nameWasChanged2)
+                                    .then(es.events().collectList())
+                                    .map(eventList -> new VersionAndEvents(es.version(), eventList.stream().map(deserialize()).collect(Collectors.toList()))))
+                            .block();
+            // Then
+            assert versionAndEvents != null;
+            assertAll(
+                    () -> assertThat(versionAndEvents.version).describedAs("version").isEqualTo(1L),
+                    () -> assertThat(versionAndEvents.events).containsExactly(nameDefined, nameWasChanged1)
+            );
+        }
+    }
 
     @Nested
     @DisplayName("Conditionally Write to Mongo Event Store")
@@ -806,25 +930,18 @@ public class SpringReactorMongoEventStoreTest {
         return eventStreamMono
                 .map(es -> {
                     List<DomainEvent> events = es.events()
-                            // @formatter:off
-                            .map(unchecked(cloudEvent -> objectMapper.readValue(cloudEvent.getData(), new TypeReference<Map<String, Object>>() {})))
-                            // @formatter:on
-                            .map(event -> {
-                                Instant instant = Instant.ofEpochMilli((long) event.get("time"));
-                                LocalDateTime time = LocalDateTime.ofInstant(instant, UTC);
-                                String eventId = (String) event.get("eventId");
-                                String name = (String) event.get("name");
-                                return Match(event.get("type")).of(
-                                        Case($(is(NameDefined.class.getSimpleName())), e -> new NameDefined(eventId, time, name)),
-                                        Case($(is(NameWasChanged.class.getSimpleName())), e -> new NameWasChanged(eventId, time, name))
-                                );
-                            })
+                            .map(deserialize())
                             .toStream()
                             .collect(Collectors.toList());
                     return new VersionAndEvents(es.version(), events);
                 })
                 .block();
 
+    }
+
+    @NotNull
+    private Function<CloudEvent, DomainEvent> deserialize() {
+        return unchecked(cloudEvent -> (DomainEvent) objectMapper.readValue(cloudEvent.getData(), Class.forName(cloudEvent.getType())));
     }
 
     private static class VersionAndEvents {
@@ -846,8 +963,12 @@ public class SpringReactorMongoEventStoreTest {
         return eventStore.write(eventStreamId, Flux.just(convertDomainEventCloudEvent(event)));
     }
 
+    private Mono<Void> persist(String eventStreamId, Flux<DomainEvent> events) {
+        return eventStore.write(eventStreamId, events.map(this::convertDomainEventCloudEvent));
+    }
+
     private Mono<Void> persist(String eventStreamId, List<DomainEvent> events) {
-        return eventStore.write(eventStreamId, Flux.fromIterable(events).map(this::convertDomainEventCloudEvent));
+        return persist(eventStreamId, Flux.fromIterable(events));
     }
 
     private Mono<Void> persist(String eventStreamId, WriteCondition writeCondition, DomainEvent event) {
@@ -869,25 +990,12 @@ public class SpringReactorMongoEventStoreTest {
         return CloudEventBuilder.v1()
                 .withId(domainEvent.getEventId())
                 .withSource(URI.create("http://name"))
-                .withType(domainEvent.getClass().getSimpleName())
+                .withType(domainEvent.getClass().getName())
                 .withTime(toLocalDateTime(domainEvent.getTimestamp()).atZone(UTC))
                 .withSubject(domainEvent.getName())
                 .withDataContentType("application/json")
-                .withData(serializeEvent(domainEvent))
+                .withData(unchecked(objectMapper::writeValueAsBytes).apply(domainEvent))
                 .build();
-    }
-
-    private byte[] serializeEvent(DomainEvent e) {
-        try {
-            return objectMapper.writeValueAsBytes(new HashMap<String, Object>() {{
-                put("type", e.getClass().getSimpleName());
-                put("eventId", e.getEventId());
-                put("name", e.getName());
-                put("time", e.getTimestamp().getTime());
-            }});
-        } catch (JsonProcessingException jsonProcessingException) {
-            throw new RuntimeException(jsonProcessingException);
-        }
     }
 }
 

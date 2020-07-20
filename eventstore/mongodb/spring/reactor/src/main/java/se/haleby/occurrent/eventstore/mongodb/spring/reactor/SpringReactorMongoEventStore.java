@@ -89,16 +89,27 @@ public class SpringReactorMongoEventStore implements EventStore {
     // Read
     private Mono<EventStreamImpl> readEventStream(String streamId, int skip, int limit, String streamVersionCollectionName) {
         return mongoTemplate.findOne(query(where(ID).is(streamId)), EventStreamImpl.class, streamVersionCollectionName)
-                .map(es -> {
-                    es.setEvents(readCloudEvents(streamId, skip, limit));
-                    return es;
+                .flatMap(es -> {
+                    if (isSkipOrLimitDefined(skip, limit)) {
+                        Flux<Document> cloudEventDocuments = readCloudEvents(streamId, skip, limit);
+                        es.setEvents(cloudEventDocuments);
+                        return Mono.just(es);
+                    }
+                    // We perform a count of stream ids to avoid read skew if additional writes happen before
+                    // the user subscribes to the flux!
+                    return mongoTemplate.count(query(where(STREAM_ID).is(streamId)), eventStoreCollectionName)
+                            .flatMap(c -> {
+                                Flux<Document> cloudEventDocuments = readCloudEvents(streamId, 0, Math.toIntExact(c));
+                                es.setEvents(cloudEventDocuments);
+                                return Mono.just(es);
+                            });
                 })
                 .switchIfEmpty(Mono.just(new EventStreamImpl(streamId, 0, Flux.empty())));
     }
 
     private Flux<Document> readCloudEvents(String streamId, int skip, int limit) {
         Query query = query(where(STREAM_ID).is(streamId));
-        if (skip != 0 || limit != Integer.MAX_VALUE) {
+        if (isSkipOrLimitDefined(skip, limit)) {
             query.skip(skip).limit(limit);
         }
         return mongoTemplate.find(query, Document.class, eventStoreCollectionName);
@@ -233,6 +244,10 @@ public class SpringReactorMongoEventStore implements EventStore {
         return eventStream.map(es -> es.map(Document::toJson)
                 .map(eventJsonString -> eventJsonString.getBytes(UTF_8))
                 .map(eventFormat::deserialize));
+    }
+
+    private static boolean isSkipOrLimitDefined(int skip, int limit) {
+        return skip != 0 || limit != Integer.MAX_VALUE;
     }
 
     @SuppressWarnings("unused")
