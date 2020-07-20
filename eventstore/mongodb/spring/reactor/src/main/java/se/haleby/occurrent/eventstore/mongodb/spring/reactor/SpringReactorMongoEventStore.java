@@ -97,6 +97,7 @@ public class SpringReactorMongoEventStore implements EventStore {
                     }
                     // We perform a count of stream ids to avoid read skew if additional writes happen before
                     // the user subscribes to the flux!
+                    // TODO Is the a better way to solve this to avoid an extra query?
                     return mongoTemplate.count(query(where(STREAM_ID).is(streamId)), eventStoreCollectionName)
                             .flatMap(c -> {
                                 Flux<Document> cloudEventDocuments = readCloudEvents(streamId, 0, Math.toIntExact(c));
