@@ -148,6 +148,29 @@ class MongoEventStoreTest {
         );
     }
 
+    @Test
+    void read_skew_is_not_allowed_for_native_implementation_when_stream_consistency_guarantee_is_transactional() {
+        LocalDateTime now = LocalDateTime.now();
+        NameDefined nameDefined = new NameDefined(UUID.randomUUID().toString(), now, "name");
+        NameWasChanged nameWasChanged1 = new NameWasChanged(UUID.randomUUID().toString(), now.plusHours(1), "name2");
+        NameWasChanged nameWasChanged2 = new NameWasChanged(UUID.randomUUID().toString(), now.plusHours(2), "name3");
+
+        persist("name", streamVersionEq(0), nameDefined);
+        persist("name", streamVersionEq(1), nameWasChanged1);
+        // When
+        EventStream<CloudEvent> eventStream = mongoEventStore.read("name");
+        persist("name", streamVersionEq(2), nameWasChanged2);
+
+        // Then
+        List<DomainEvent> readEvents = deserialize(eventStream.events());
+
+        assertAll(
+                () -> assertThat(eventStream.version()).isEqualTo(2),
+                () -> assertThat(readEvents).hasSize(2),
+                () -> assertThat(readEvents).containsExactly(nameDefined, nameWasChanged1)
+        );
+    }
+
     @Nested
     @DisplayName("Conditionally Write to Mongo Event Store")
     class ConditionallyWriteToMongoEventStore {

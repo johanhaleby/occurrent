@@ -176,6 +176,29 @@ public class SpringBlockingMongoEventStoreTest {
                     () -> assertThat(readEvents).containsExactly(nameWasChanged1)
             );
         }
+
+        @Test
+        void read_skew_does_not_happen_for_blocking_implementation_when_stream_consistency_guarantee_is_none() {
+            LocalDateTime now = LocalDateTime.now();
+            NameDefined nameDefined = new NameDefined(UUID.randomUUID().toString(), now, "name");
+            NameWasChanged nameWasChanged1 = new NameWasChanged(UUID.randomUUID().toString(), now.plusHours(1), "name2");
+            NameWasChanged nameWasChanged2 = new NameWasChanged(UUID.randomUUID().toString(), now.plusHours(2), "name3");
+            persist("name", nameDefined);
+            persist("name", nameWasChanged1);
+
+            // When
+            EventStream<CloudEvent> eventStream = eventStore.read("name");
+            persist("name", nameWasChanged2);
+
+            // Then
+            List<DomainEvent> readEvents = deserialize(eventStream.events());
+
+            assertAll(
+                    () -> assertThat(eventStream.version()).isEqualTo(0),
+                    () -> assertThat(readEvents).hasSize(2),
+                    () -> assertThat(readEvents).containsExactly(nameDefined, nameWasChanged1)
+            );
+        }
     }
 
     @DisplayName("when using StreamConsistencyGuarantee with type transactional")
@@ -291,6 +314,29 @@ public class SpringBlockingMongoEventStoreTest {
                     () -> assertThat(eventStream.version()).isEqualTo(1),
                     () -> assertThat(readEvents).hasSize(2),
                     () -> assertThat(readEvents).containsExactlyElementsOf(events)
+            );
+        }
+
+        @Test
+        void read_skew_is_not_allowed_for_blocking_implementation_when_stream_consistency_guarantee_is_transactional() {
+            LocalDateTime now = LocalDateTime.now();
+            NameDefined nameDefined = new NameDefined(UUID.randomUUID().toString(), now, "name");
+            NameWasChanged nameWasChanged1 = new NameWasChanged(UUID.randomUUID().toString(), now.plusHours(1), "name2");
+            NameWasChanged nameWasChanged2 = new NameWasChanged(UUID.randomUUID().toString(), now.plusHours(2), "name3");
+            persist("name", nameDefined);
+            persist("name", nameWasChanged1);
+
+            // When
+            EventStream<CloudEvent> eventStream = eventStore.read("name");
+            persist("name", nameWasChanged2);
+
+            // Then
+            List<DomainEvent> readEvents = deserialize(eventStream.events());
+
+            assertAll(
+                    () -> assertThat(eventStream.version()).isEqualTo(2),
+                    () -> assertThat(readEvents).hasSize(2),
+                    () -> assertThat(readEvents).containsExactly(nameDefined, nameWasChanged1)
             );
         }
     }
@@ -409,8 +455,30 @@ public class SpringBlockingMongoEventStoreTest {
                     () -> assertThat(readEvents).containsExactlyElementsOf(events)
             );
         }
-    }
 
+        @Test
+        void read_skew_is_not_allowed_for_blocking_implementation_when_stream_consistency_guarantee_is_transactional_annotation() {
+            LocalDateTime now = LocalDateTime.now();
+            NameDefined nameDefined = new NameDefined(UUID.randomUUID().toString(), now, "name");
+            NameWasChanged nameWasChanged1 = new NameWasChanged(UUID.randomUUID().toString(), now.plusHours(1), "name2");
+            NameWasChanged nameWasChanged2 = new NameWasChanged(UUID.randomUUID().toString(), now.plusHours(2), "name3");
+            persist("name", nameDefined);
+            persist("name", nameWasChanged1);
+
+            // When
+            EventStream<CloudEvent> eventStream = eventStore.read("name");
+            persist("name", nameWasChanged2);
+
+            // Then
+            List<DomainEvent> readEvents = deserialize(eventStream.events());
+
+            assertAll(
+                    () -> assertThat(eventStream.version()).isEqualTo(2),
+                    () -> assertThat(readEvents).hasSize(2),
+                    () -> assertThat(readEvents).containsExactly(nameDefined, nameWasChanged1)
+            );
+        }
+    }
 
     @Nested
     @DisplayName("Conditionally Write to Mongo Event Store")
