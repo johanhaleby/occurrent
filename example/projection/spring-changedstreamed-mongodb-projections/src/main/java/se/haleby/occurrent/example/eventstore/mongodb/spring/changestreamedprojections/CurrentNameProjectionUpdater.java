@@ -1,7 +1,6 @@
 package se.haleby.occurrent.example.eventstore.mongodb.spring.changestreamedprojections;
 
 import org.springframework.stereotype.Component;
-import se.haleby.occurrent.changestreamer.mongodb.spring.blocking.SpringBlockingChangeStreamerForMongoDB;
 import se.haleby.occurrent.changestreamer.mongodb.spring.blocking.SpringBlockingChangeStreamerWithPositionPersistenceForMongoDB;
 import se.haleby.occurrent.domain.DomainEvent;
 import se.haleby.occurrent.domain.NameDefined;

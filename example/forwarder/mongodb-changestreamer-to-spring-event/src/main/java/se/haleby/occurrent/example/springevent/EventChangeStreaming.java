@@ -7,7 +7,7 @@ import org.springframework.context.ApplicationEventPublisher;
 import org.springframework.stereotype.Component;
 import reactor.core.Disposable;
 import reactor.core.publisher.Mono;
-import se.haleby.occurrent.changestreamer.mongodb.spring.reactive.SpringReactiveChangeStreamerForMongoDB;
+import se.haleby.occurrent.changestreamer.mongodb.spring.reactive.SpringReactiveChangeStreamerWithPositionPersistenceForMongoDB;
 import se.haleby.occurrent.domain.DomainEvent;
 
 import javax.annotation.PostConstruct;
@@ -22,12 +22,12 @@ public class EventChangeStreaming {
     private static final Logger log = LoggerFactory.getLogger(EventChangeStreaming.class);
 
     private static final String SUBSCRIBER_ID = "test-app";
-    private final SpringReactiveChangeStreamerForMongoDB changeStreamerForMongoDB;
+    private final SpringReactiveChangeStreamerWithPositionPersistenceForMongoDB changeStreamerForMongoDB;
     private final ObjectMapper objectMapper;
     private final ApplicationEventPublisher eventPublisher;
     private final AtomicReference<Disposable> subscription;
 
-    public EventChangeStreaming(SpringReactiveChangeStreamerForMongoDB changeStreamerForMongoDB,
+    public EventChangeStreaming(SpringReactiveChangeStreamerWithPositionPersistenceForMongoDB changeStreamerForMongoDB,
                                 ObjectMapper objectMapper,
                                 ApplicationEventPublisher eventPublisher) {
         this.changeStreamerForMongoDB = changeStreamerForMongoDB;
@@ -39,7 +39,7 @@ public class EventChangeStreaming {
     @PostConstruct
     void startEventStreaming() {
         log.info("Subscribing with id {}", SUBSCRIBER_ID);
-        Disposable disposable = changeStreamerForMongoDB.subscribe(SUBSCRIBER_ID,
+        Disposable disposable = changeStreamerForMongoDB.stream(SUBSCRIBER_ID,
                 event -> Mono.just(event)
                         .map(cloudEvent -> Objects.requireNonNull(cloudEvent.getData()))
                         .map(unchecked(eventJson -> objectMapper.readValue(eventJson, DomainEvent.class)))

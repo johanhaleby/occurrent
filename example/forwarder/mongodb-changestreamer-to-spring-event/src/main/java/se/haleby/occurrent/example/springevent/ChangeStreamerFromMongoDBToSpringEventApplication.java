@@ -8,6 +8,7 @@ import org.springframework.boot.autoconfigure.SpringBootApplication;
 import org.springframework.context.annotation.Bean;
 import org.springframework.data.mongodb.core.ReactiveMongoOperations;
 import se.haleby.occurrent.changestreamer.mongodb.spring.reactive.SpringReactiveChangeStreamerForMongoDB;
+import se.haleby.occurrent.changestreamer.mongodb.spring.reactive.SpringReactiveChangeStreamerWithPositionPersistenceForMongoDB;
 import se.haleby.occurrent.eventstore.api.blocking.EventStore;
 import se.haleby.occurrent.eventstore.mongodb.nativedriver.MongoEventStore;
 import se.haleby.occurrent.eventstore.mongodb.nativedriver.StreamConsistencyGuarantee;
@@ -26,8 +27,9 @@ public class ChangeStreamerFromMongoDBToSpringEventApplication {
     }
 
     @Bean
-    public SpringReactiveChangeStreamerForMongoDB changeStreamerForMongoDB(ReactiveMongoOperations mongoOperations) {
-        return new SpringReactiveChangeStreamerForMongoDB(mongoOperations, "events", "resumeTokens");
+    public SpringReactiveChangeStreamerWithPositionPersistenceForMongoDB changeStreamerForMongoDB(ReactiveMongoOperations mongoOperations) {
+        SpringReactiveChangeStreamerForMongoDB streamer = new SpringReactiveChangeStreamerForMongoDB(mongoOperations, "events");
+        return new SpringReactiveChangeStreamerWithPositionPersistenceForMongoDB(streamer, mongoOperations, "resumeTokens");
     }
 
     @Bean
