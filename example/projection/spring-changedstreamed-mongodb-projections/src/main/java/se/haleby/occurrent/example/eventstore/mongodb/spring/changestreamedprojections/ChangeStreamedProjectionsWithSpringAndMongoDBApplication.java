@@ -7,6 +7,7 @@ import org.springframework.data.mongodb.core.MongoTemplate;
 import org.springframework.data.mongodb.core.messaging.DefaultMessageListenerContainer;
 import org.springframework.data.mongodb.repository.config.EnableMongoRepositories;
 import se.haleby.occurrent.changestreamer.mongodb.spring.blocking.SpringBlockingChangeStreamerForMongoDB;
+import se.haleby.occurrent.changestreamer.mongodb.spring.blocking.SpringBlockingChangeStreamerWithPositionPersistenceForMongoDB;
 import se.haleby.occurrent.eventstore.api.blocking.EventStore;
 import se.haleby.occurrent.eventstore.mongodb.spring.blocking.SpringBlockingMongoEventStore;
 import se.haleby.occurrent.eventstore.mongodb.spring.blocking.StreamConsistencyGuarantee;
@@ -23,8 +24,9 @@ public class ChangeStreamedProjectionsWithSpringAndMongoDBApplication {
     }
 
     @Bean
-    public SpringBlockingChangeStreamerForMongoDB springBlockingChangeStreamerForMongoDB(MongoTemplate mongoTemplate) {
-        return new SpringBlockingChangeStreamerForMongoDB(mongoTemplate, EVENTS_COLLECTION, "event-subscribers", new DefaultMessageListenerContainer(mongoTemplate));
+    public SpringBlockingChangeStreamerWithPositionPersistenceForMongoDB springBlockingChangeStreamerForMongoDB(MongoTemplate mongoTemplate) {
+        SpringBlockingChangeStreamerForMongoDB springBlockingChangeStreamerForMongoDB = new SpringBlockingChangeStreamerForMongoDB(EVENTS_COLLECTION, new DefaultMessageListenerContainer(mongoTemplate));
+        return new SpringBlockingChangeStreamerWithPositionPersistenceForMongoDB(springBlockingChangeStreamerForMongoDB, mongoTemplate, "event-subscribers");
     }
 
     @Bean

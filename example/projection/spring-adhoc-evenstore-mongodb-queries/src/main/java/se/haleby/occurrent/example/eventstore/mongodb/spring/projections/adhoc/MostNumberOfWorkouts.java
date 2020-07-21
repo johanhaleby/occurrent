@@ -1,6 +1,5 @@
 package se.haleby.occurrent.example.eventstore.mongodb.spring.projections.adhoc;
 
-import org.bson.Document;
 import org.springframework.data.annotation.Id;
 import org.springframework.data.mongodb.core.MongoOperations;
 import org.springframework.data.mongodb.core.aggregation.Aggregation;
@@ -27,8 +26,6 @@ public class MostNumberOfWorkouts {
                 // and using "aliases" such as project("count").and("data.completedBy").as("name")
                 // has no effect, see https://stackoverflow.com/questions/62479752/spring-data-mongodb-aggregation-rename-id-in-projection
                 project("count", "data.completedBy"));
-        Document document = mongo.aggregate(aggregation, "events", Document.class).getUniqueMappedResult();
-        System.out.println(document);
         return mongo.aggregate(aggregation, "events", PersonWithMostNumberOfWorkouts.class).getUniqueMappedResult();
     }
 
