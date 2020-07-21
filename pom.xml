@@ -14,7 +14,6 @@
         <module>eventstore</module>
         <module>changestreamer</module>
         <module>cloudevents-extension</module>
-        <module>changestreamer/mongodb/spring/blocking-persistent</module>
     </modules>
 
     <name>occurrent</name>
