@@ -7,7 +7,7 @@ import org.springframework.context.ApplicationEventPublisher;
 import org.springframework.stereotype.Component;
 import reactor.core.Disposable;
 import reactor.core.publisher.Mono;
-import se.haleby.occurrent.changestreamer.mongodb.spring.reactive.SpringReactiveChangeStreamerWithPositionPersistenceForMongoDB;
+import se.haleby.occurrent.changestreamer.mongodb.spring.reactor.SpringReactiveChangeStreamerWithPositionPersistenceForMongoDB;
 import se.haleby.occurrent.domain.DomainEvent;
 
 import javax.annotation.PostConstruct;

@@ -14,8 +14,8 @@
     <artifactId>changestreamer-mongodb-spring</artifactId>
 
     <modules>
-        <module>reactive</module>
-        <module>reactive-persistent</module>
+        <module>reactor</module>
+        <module>reactor-persistent</module>
         <module>blocking</module>
         <module>blocking-persistent</module>
     </modules>
