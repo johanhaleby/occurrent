@@ -2,6 +2,7 @@ package se.haleby.occurrent.example.eventstore.mongodb.spring.changestreamedproj
 
 import org.springframework.stereotype.Component;
 import se.haleby.occurrent.changestreamer.mongodb.spring.blocking.SpringBlockingChangeStreamerForMongoDB;
+import se.haleby.occurrent.changestreamer.mongodb.spring.blocking.SpringBlockingChangeStreamerWithPositionPersistenceForMongoDB;
 import se.haleby.occurrent.domain.DomainEvent;
 import se.haleby.occurrent.domain.NameDefined;
 import se.haleby.occurrent.domain.NameWasChanged;
@@ -16,11 +17,11 @@ import static java.time.temporal.ChronoUnit.SECONDS;
 @Component
 public class CurrentNameProjectionUpdater {
 
-    private final SpringBlockingChangeStreamerForMongoDB changeStreamer;
+    private final SpringBlockingChangeStreamerWithPositionPersistenceForMongoDB changeStreamer;
     private final CurrentNameProjection currentNameProjection;
     private final DeserializeCloudEventToDomainEvent deserializeCloudEventToDomainEvent;
 
-    public CurrentNameProjectionUpdater(SpringBlockingChangeStreamerForMongoDB changeStreamer,
+    public CurrentNameProjectionUpdater(SpringBlockingChangeStreamerWithPositionPersistenceForMongoDB changeStreamer,
                                         CurrentNameProjection currentNameProjection,
                                         DeserializeCloudEventToDomainEvent deserializeCloudEventToDomainEvent) {
         this.changeStreamer = changeStreamer;
