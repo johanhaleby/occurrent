@@ -9,7 +9,8 @@
     </parent>
     <modelVersion>4.0.0</modelVersion>
 
-    <artifactId>changestreamer-mongodb-spring-persistent</artifactId>
+    <artifactId>changestreamer-mongodb-spring-blocking-persistent</artifactId>
+
     <dependencies>
         <dependency>
             <groupId>org.springframework.boot</groupId>
