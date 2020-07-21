@@ -9,9 +9,14 @@
     </parent>
     <modelVersion>4.0.0</modelVersion>
 
-    <artifactId>changestreamer-mongodb-spring-reactive</artifactId>
+    <artifactId>changestreamer-mongodb-spring-reactive-persistent</artifactId>
 
     <dependencies>
+        <dependency>
+            <groupId>se.haleby.occurrent</groupId>
+            <artifactId>changestreamer-mongodb-spring-reactive</artifactId>
+            <version>0.0.1-SNAPSHOT</version>
+        </dependency>
         <dependency>
             <groupId>io.cloudevents</groupId>
             <artifactId>cloudevents-json-jackson</artifactId>
@@ -35,11 +40,6 @@
         <dependency>
             <groupId>org.springframework.data</groupId>
             <artifactId>spring-data-mongodb</artifactId>
-        </dependency>
-        <dependency>
-            <groupId>se.haleby.occurrent</groupId>
-            <artifactId>changestreamer-mongodb-common</artifactId>
-            <version>0.0.1-SNAPSHOT</version>
         </dependency>
 
         <!-- Test -->

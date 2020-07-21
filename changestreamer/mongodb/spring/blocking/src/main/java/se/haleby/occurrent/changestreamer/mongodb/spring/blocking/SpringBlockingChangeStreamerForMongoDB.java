@@ -49,15 +49,15 @@ public class SpringBlockingChangeStreamerForMongoDB {
         this.messageListenerContainer.start();
     }
 
-    public Subscription subscribe(String subscriptionId, Consumer<CloudEventWithStreamPosition<BsonDocument>> action) {
-        return subscribe(subscriptionId, action, null);
+    public Subscription stream(String subscriptionId, Consumer<CloudEventWithStreamPosition<BsonDocument>> action) {
+        return stream(subscriptionId, action, null);
     }
 
-    public Subscription subscribe(String subscriptionId, Consumer<CloudEventWithStreamPosition<BsonDocument>> action, MongoDBFilterSpecification filter) {
-        return subscribe(subscriptionId, action, filter, ChangeStreamOptions.builder());
+    public Subscription stream(String subscriptionId, Consumer<CloudEventWithStreamPosition<BsonDocument>> action, MongoDBFilterSpecification filter) {
+        return stream(subscriptionId, action, filter, ChangeStreamOptions.builder());
     }
 
-    public Subscription subscribe(String subscriptionId, Consumer<CloudEventWithStreamPosition<BsonDocument>> action, MongoDBFilterSpecification filter, ChangeStreamOptionsBuilder changeStreamOptionsBuilder) {
+    public Subscription stream(String subscriptionId, Consumer<CloudEventWithStreamPosition<BsonDocument>> action, MongoDBFilterSpecification filter, ChangeStreamOptionsBuilder changeStreamOptionsBuilder) {
         requireNonNull(subscriptionId, "subscriptionId cannot be null");
         requireNonNull(action, "Action cannot be null");
         requireNonNull(changeStreamOptionsBuilder, "ChangeStreamOptionsBuilder cannot be null");

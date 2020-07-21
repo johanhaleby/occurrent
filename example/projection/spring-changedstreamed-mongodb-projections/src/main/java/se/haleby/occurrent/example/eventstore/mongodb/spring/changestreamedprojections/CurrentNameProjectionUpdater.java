@@ -31,7 +31,7 @@ public class CurrentNameProjectionUpdater {
     @PostConstruct
     void startProjectionUpdater() throws InterruptedException {
         changeStreamer
-                .subscribe("current-name", cloudEvent -> {
+                .stream("current-name", cloudEvent -> {
                     DomainEvent domainEvent = deserializeCloudEventToDomainEvent.deserialize(cloudEvent);
                     String eventId = cloudEvent.getId();
                     CurrentName currentName = Match(domainEvent).of(

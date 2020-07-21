@@ -10,6 +10,7 @@ import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.RegisterExtension;
 import org.springframework.data.mongodb.core.ReactiveMongoTemplate;
+import org.springframework.data.mongodb.core.query.Query;
 import org.testcontainers.containers.MongoDBContainer;
 import org.testcontainers.junit.jupiter.Container;
 import org.testcontainers.junit.jupiter.Testcontainers;
@@ -28,24 +29,30 @@ import java.time.LocalDateTime;
 import java.util.Objects;
 import java.util.UUID;
 import java.util.concurrent.CopyOnWriteArrayList;
+import java.util.function.Function;
 import java.util.stream.Stream;
 
 import static java.time.ZoneOffset.UTC;
 import static java.time.temporal.ChronoUnit.MILLIS;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.awaitility.Awaitility.await;
+import static org.awaitility.Durations.ONE_SECOND;
+import static org.awaitility.Durations.TWO_SECONDS;
 import static se.haleby.occurrent.functional.CheckedFunction.unchecked;
+import static se.haleby.occurrent.functional.Not.not;
 import static se.haleby.occurrent.time.TimeConversion.toLocalDateTime;
 
 @Testcontainers
-public class SpringReactiveChangeStreamerForMongoDBTest {
+public class SpringReactiveChangeStreamerWithPositionPersistenceForMongoDBTest {
 
     @Container
     private static final MongoDBContainer mongoDBContainer = new MongoDBContainer("mongo:4.2.7");
+    private static final String RESUME_TOKEN_COLLECTION = "ack";
 
     private MongoEventStore mongoEventStore;
-    private SpringReactiveChangeStreamerForMongoDB changeStreamer;
+    private SpringReactiveChangeStreamerWithPositionPersistenceForMongoDB changeStreamer;
     private ObjectMapper objectMapper;
+    private ReactiveMongoTemplate reactiveMongoTemplate;
     private CopyOnWriteArrayList<Disposable> disposables;
 
     @RegisterExtension
@@ -55,8 +62,9 @@ public class SpringReactiveChangeStreamerForMongoDBTest {
     void create_mongo_event_store() {
         ConnectionString connectionString = new ConnectionString(mongoDBContainer.getReplicaSetUrl() + ".events");
         mongoEventStore = new MongoEventStore(connectionString, StreamConsistencyGuarantee.transactional("event-consistency"));
-        ReactiveMongoTemplate reactiveMongoTemplate = new ReactiveMongoTemplate(MongoClients.create(connectionString), Objects.requireNonNull(connectionString.getDatabase()));
-        changeStreamer = new SpringReactiveChangeStreamerForMongoDB(reactiveMongoTemplate, "events");
+        reactiveMongoTemplate = new ReactiveMongoTemplate(MongoClients.create(connectionString), Objects.requireNonNull(connectionString.getDatabase()));
+        SpringReactiveChangeStreamerForMongoDB springReactiveChangeStreamerForMongoDB = new SpringReactiveChangeStreamerForMongoDB(reactiveMongoTemplate, "events");
+        changeStreamer = new SpringReactiveChangeStreamerWithPositionPersistenceForMongoDB(springReactiveChangeStreamerForMongoDB, reactiveMongoTemplate, RESUME_TOKEN_COLLECTION);
         objectMapper = new ObjectMapper();
         disposables = new CopyOnWriteArrayList<>();
     }
@@ -67,11 +75,11 @@ public class SpringReactiveChangeStreamerForMongoDBTest {
     }
 
     @Test
-    void reactive_spring_change_streamer_calls_listener_for_each_new_event() throws InterruptedException {
+    void reactive_persistent_spring_change_streamer_calls_action_for_each_new_event() throws InterruptedException {
         // Given
         LocalDateTime now = LocalDateTime.now();
         CopyOnWriteArrayList<CloudEvent> state = new CopyOnWriteArrayList<>();
-        disposeAfterTest(changeStreamer.stream().doOnNext(cloudEvent -> Mono.fromRunnable(() -> state.add(cloudEvent))).subscribe());
+        disposeAfterTest(changeStreamer.stream("test", cloudEvent -> Mono.fromRunnable(() -> state.add(cloudEvent))).subscribe());
         Thread.sleep(200);
         NameDefined nameDefined1 = new NameDefined(UUID.randomUUID().toString(), now, "name1");
         NameDefined nameDefined2 = new NameDefined(UUID.randomUUID().toString(), now.plusSeconds(2), "name2");
@@ -86,6 +94,53 @@ public class SpringReactiveChangeStreamerForMongoDBTest {
         await().with().pollInterval(Duration.of(20, MILLIS)).untilAsserted(() -> assertThat(state).hasSize(3));
     }
 
+    @Test
+    void reactive_persistent_spring_change_streamer_allows_resuming_events_from_where_it_left_off() throws Exception {
+        // Given
+        LocalDateTime now = LocalDateTime.now();
+        CopyOnWriteArrayList<CloudEvent> state = new CopyOnWriteArrayList<>();
+        String subscriberId = UUID.randomUUID().toString();
+        Function<CloudEvent, Mono<Void>> function = cloudEvents -> Mono.fromRunnable(() -> state.add(cloudEvents));
+        Disposable subscription1 = disposeAfterTest(changeStreamer.stream(subscriberId, function).subscribe());
+        Thread.sleep(200);
+        NameDefined nameDefined1 = new NameDefined(UUID.randomUUID().toString(), now, "name1");
+        NameDefined nameDefined2 = new NameDefined(UUID.randomUUID().toString(), now.plusSeconds(2), "name2");
+        NameWasChanged nameWasChanged1 = new NameWasChanged(UUID.randomUUID().toString(), now.plusSeconds(10), "name3");
+
+        // When
+        mongoEventStore.write("1", 0, serialize(nameDefined1));
+        // The change streamer is async so we need to wait for it
+        await().atMost(ONE_SECOND).until(not(state::isEmpty));
+        subscription1.dispose();
+        mongoEventStore.write("2", 0, serialize(nameDefined2));
+        mongoEventStore.write("1", 1, serialize(nameWasChanged1));
+        disposeAfterTest(changeStreamer.stream(subscriberId, function).subscribe());
+
+        // Then
+        await().atMost(TWO_SECONDS).with().pollInterval(Duration.of(20, MILLIS)).untilAsserted(() -> assertThat(state).hasSize(3));
+    }
+
+    @Test
+    void reactive_persistent_spring_change_streamer_allows_cancelling_subscription() throws InterruptedException {
+        // Given
+        LocalDateTime now = LocalDateTime.now();
+        CopyOnWriteArrayList<CloudEvent> state = new CopyOnWriteArrayList<>();
+        String subscriberId = UUID.randomUUID().toString();
+        disposeAfterTest(changeStreamer.stream(subscriberId, cloudEvents -> Mono.fromRunnable(() -> state.add(cloudEvents))).subscribe());
+        Thread.sleep(200);
+        NameDefined nameDefined1 = new NameDefined(UUID.randomUUID().toString(), now, "name1");
+
+        // When
+        mongoEventStore.write("1", 0, serialize(nameDefined1));
+        // The change streamer is async so we need to wait for it
+        await().atMost(ONE_SECOND).until(not(state::isEmpty));
+
+        changeStreamer.cancelSubscription(subscriberId).block();
+
+        // Then
+        assertThat(reactiveMongoTemplate.count(new Query(), RESUME_TOKEN_COLLECTION).block()).isZero();
+    }
+
     private Stream<CloudEvent> serialize(DomainEvent e) {
         return Stream.of(CloudEventBuilder.v1()
                 .withId(UUID.randomUUID().toString())
@@ -98,7 +153,8 @@ public class SpringReactiveChangeStreamerForMongoDBTest {
                 .build());
     }
 
-    private void disposeAfterTest(Disposable disposable) {
+    private Disposable disposeAfterTest(Disposable disposable) {
         disposables.add(disposable);
+        return disposable;
     }
 }

@@ -15,6 +15,7 @@
 
     <modules>
         <module>reactive</module>
+        <module>reactive-persistent</module>
         <module>blocking</module>
         <module>blocking-persistent</module>
     </modules>

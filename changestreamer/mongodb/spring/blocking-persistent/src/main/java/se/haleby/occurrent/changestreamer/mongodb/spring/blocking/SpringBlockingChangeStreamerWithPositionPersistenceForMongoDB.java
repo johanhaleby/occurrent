@@ -37,11 +37,11 @@ public class SpringBlockingChangeStreamerWithPositionPersistenceForMongoDB {
         this.resumeTokenCollection = streamPositionCollection;
     }
 
-    public Subscription subscribe(String subscriptionId, Consumer<CloudEvent> action) {
-        return subscribe(subscriptionId, action, null);
+    public Subscription stream(String subscriptionId, Consumer<CloudEvent> action) {
+        return stream(subscriptionId, action, null);
     }
 
-    public Subscription subscribe(String subscriptionId, Consumer<CloudEvent> action, MongoDBFilterSpecification filter) {
+    public Subscription stream(String subscriptionId, Consumer<CloudEvent> action, MongoDBFilterSpecification filter) {
         Document document = mongoTemplate.findOne(query(where(ID).is(subscriptionId)), Document.class, resumeTokenCollection);
 
         final ChangeStreamOptionsBuilder changeStreamOptionsBuilder = ChangeStreamOptions.builder();
@@ -53,7 +53,7 @@ public class SpringBlockingChangeStreamerWithPositionPersistenceForMongoDB {
             changeStreamOptionsBuilder.startAfter(resumeToken.asBsonDocument());
         }
 
-        return changeStreamer.subscribe(subscriptionId,
+        return changeStreamer.stream(subscriptionId,
                 cloudEventWithStreamPosition -> {
                     action.accept(cloudEventWithStreamPosition);
                     persistResumeToken(subscriptionId, cloudEventWithStreamPosition.getStreamPosition());
