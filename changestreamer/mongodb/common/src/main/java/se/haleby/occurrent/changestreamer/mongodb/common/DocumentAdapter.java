@@ -1,4 +1,4 @@
-package se.haleby.occurrent.changestreamer.mongodb.spring.blocking;
+package se.haleby.occurrent.changestreamer.mongodb.common;
 
 import org.bson.BsonDocument;
 import org.bson.Document;

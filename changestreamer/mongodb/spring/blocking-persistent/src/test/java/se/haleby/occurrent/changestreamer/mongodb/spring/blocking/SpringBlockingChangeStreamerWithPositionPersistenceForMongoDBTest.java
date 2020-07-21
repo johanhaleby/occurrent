@@ -54,7 +54,7 @@ import static se.haleby.occurrent.functional.Not.not;
 import static se.haleby.occurrent.time.TimeConversion.toLocalDateTime;
 
 @Testcontainers
-public class SpringBlockingChangeStreamerForMongoDBTest {
+public class SpringBlockingChangeStreamerWithPositionPersistenceForMongoDBTest {
 
     @Container
     private static final MongoDBContainer mongoDBContainer = new MongoDBContainer("mongo:4.2.7");
@@ -64,7 +64,7 @@ public class SpringBlockingChangeStreamerForMongoDBTest {
     FlushMongoDBExtension flushMongoDBExtension = new FlushMongoDBExtension(new ConnectionString(mongoDBContainer.getReplicaSetUrl()));
 
     private EventStore mongoEventStore;
-    private SpringBlockingChangeStreamerForMongoDB changeStreamer;
+    private SpringBlockingChangeStreamerWithPositionPersistenceForMongoDB changeStreamer;
     private ObjectMapper objectMapper;
     private MongoTemplate mongoTemplate;
 
@@ -75,7 +75,8 @@ public class SpringBlockingChangeStreamerForMongoDBTest {
         mongoTemplate = new MongoTemplate(mongoClient, requireNonNull(connectionString.getDatabase()));
         MongoTransactionManager mongoTransactionManager = new MongoTransactionManager(new SimpleMongoClientDatabaseFactory(mongoClient, requireNonNull(connectionString.getDatabase())));
         mongoEventStore = new SpringBlockingMongoEventStore(mongoTemplate, connectionString.getCollection(), transactional("stream-consistency", mongoTransactionManager));
-        changeStreamer = new SpringBlockingChangeStreamerForMongoDB(connectionString.getCollection(), new DefaultMessageListenerContainer(mongoTemplate));
+        SpringBlockingChangeStreamerForMongoDB springBlockingChangeStreamerForMongoDB = new SpringBlockingChangeStreamerForMongoDB(connectionString.getCollection(), new DefaultMessageListenerContainer(mongoTemplate));
+        changeStreamer = new SpringBlockingChangeStreamerWithPositionPersistenceForMongoDB(springBlockingChangeStreamerForMongoDB, mongoTemplate, RESUME_TOKEN_COLLECTION);
         objectMapper = new ObjectMapper();
     }
 
@@ -98,6 +99,30 @@ public class SpringBlockingChangeStreamerForMongoDBTest {
         mongoEventStore.write("1", 0, serialize(nameDefined1));
         mongoEventStore.write("2", 0, serialize(nameDefined2));
         mongoEventStore.write("1", 1, serialize(nameWasChanged1));
+
+        // Then
+        await().atMost(2, SECONDS).with().pollInterval(Duration.of(20, MILLIS)).untilAsserted(() -> assertThat(state).hasSize(3));
+    }
+
+    @Test
+    void blocking_spring_change_streamer_allows_resuming_events_from_where_it_left_off() throws InterruptedException {
+        // Given
+        LocalDateTime now = LocalDateTime.now();
+        CopyOnWriteArrayList<CloudEvent> state = new CopyOnWriteArrayList<>();
+        String subscriberId = UUID.randomUUID().toString();
+        changeStreamer.subscribe(subscriberId, state::add).await(Duration.of(10, ChronoUnit.SECONDS));
+        NameDefined nameDefined1 = new NameDefined(UUID.randomUUID().toString(), now, "name1");
+        NameDefined nameDefined2 = new NameDefined(UUID.randomUUID().toString(), now.plusSeconds(2), "name2");
+        NameWasChanged nameWasChanged1 = new NameWasChanged(UUID.randomUUID().toString(), now.plusSeconds(10), "name3");
+
+        // When
+        mongoEventStore.write("1", 0, serialize(nameDefined1));
+        changeStreamer.pauseSubscription(subscriberId);
+        // The change streamer is async so we need to wait for it
+        await().atMost(ONE_SECOND).until(not(state::isEmpty));
+        mongoEventStore.write("2", 0, serialize(nameDefined2));
+        mongoEventStore.write("1", 1, serialize(nameWasChanged1));
+        changeStreamer.subscribe(subscriberId, state::add);
 
         // Then
         await().atMost(2, SECONDS).with().pollInterval(Duration.of(20, MILLIS)).untilAsserted(() -> assertThat(state).hasSize(3));
@@ -171,7 +196,7 @@ public class SpringBlockingChangeStreamerForMongoDBTest {
         await().atMost(ONE_SECOND).until(state::size, is(1));
         assertThat(state).extracting(CloudEvent::getId, CloudEvent::getType).containsOnly(tuple(nameDefined2.getEventId(), NameDefined.class.getName()));
     }
-    
+
     @Test
     void using_bson_query_native_mongo_filters_composition() throws InterruptedException {
         // Given

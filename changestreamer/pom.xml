@@ -12,6 +12,7 @@
 
     <packaging>pom</packaging>
     <modules>
+        <module>core</module>
         <module>mongodb</module>
     </modules>
 

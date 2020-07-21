@@ -3,27 +3,18 @@
          xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
          xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 http://maven.apache.org/xsd/maven-4.0.0.xsd">
     <parent>
+        <artifactId>changestreamer</artifactId>
         <groupId>se.haleby.occurrent</groupId>
-        <artifactId>changestreamer-mongodb</artifactId>
         <version>0.0.1-SNAPSHOT</version>
     </parent>
     <modelVersion>4.0.0</modelVersion>
 
-    <artifactId>changestreamer-mongodb-common</artifactId>
+    <artifactId>changestreamer-core</artifactId>
 
     <dependencies>
         <dependency>
-            <groupId>org.mongodb</groupId>
-            <artifactId>mongodb-driver-core</artifactId>
-        </dependency>
-        <dependency>
             <groupId>io.cloudevents</groupId>
-            <artifactId>cloudevents-json-jackson</artifactId>
-        </dependency>
-        <dependency>
-            <groupId>se.haleby.occurrent</groupId>
-            <artifactId>changestreamer-core</artifactId>
-            <version>0.0.1-SNAPSHOT</version>
+            <artifactId>cloudevents-api</artifactId>
         </dependency>
     </dependencies>
 
