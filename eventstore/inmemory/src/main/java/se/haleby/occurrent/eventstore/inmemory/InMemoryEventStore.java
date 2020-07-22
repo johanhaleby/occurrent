@@ -4,8 +4,6 @@ import io.cloudevents.CloudEvent;
 import io.cloudevents.SpecVersion;
 import io.cloudevents.core.builder.CloudEventBuilder;
 import se.haleby.occurrent.cloudevents.OccurrentCloudEventExtension;
-import se.haleby.occurrent.eventstore.api.blocking.EventStore;
-import se.haleby.occurrent.eventstore.api.blocking.EventStream;
 import se.haleby.occurrent.eventstore.api.WriteCondition;
 import se.haleby.occurrent.eventstore.api.WriteCondition.Condition;
 import se.haleby.occurrent.eventstore.api.WriteCondition.Condition.MultiOperation;
@@ -14,6 +12,8 @@ import se.haleby.occurrent.eventstore.api.WriteCondition.MultiOperationName;
 import se.haleby.occurrent.eventstore.api.WriteCondition.OperationName;
 import se.haleby.occurrent.eventstore.api.WriteCondition.StreamVersionWriteCondition;
 import se.haleby.occurrent.eventstore.api.WriteConditionNotFulfilledException;
+import se.haleby.occurrent.eventstore.api.blocking.EventStore;
+import se.haleby.occurrent.eventstore.api.blocking.EventStream;
 
 import java.util.ArrayList;
 import java.util.Collections;
@@ -45,21 +45,6 @@ public class InMemoryEventStore implements EventStore {
     @Override
     public void write(String streamId, WriteCondition writeCondition, Stream<CloudEvent> events) {
         requireTrue(writeCondition != null, WriteCondition.class.getSimpleName() + " cannot be null");
-        writeInternal(streamId, writeCondition, events);
-    }
-
-
-    @Override
-    public void write(String streamId, Stream<CloudEvent> events) {
-        writeInternal(streamId, null, events);
-    }
-
-    @Override
-    public boolean exists(String streamId) {
-        return state.containsKey(streamId);
-    }
-
-    private void writeInternal(String streamId, WriteCondition writeCondition, Stream<CloudEvent> events) {
         Stream<CloudEvent> cloudEventStream = events
                 .peek(e -> requireTrue(e.getSpecVersion() == SpecVersion.V1, "Spec version needs to be " + SpecVersion.V1))
                 .map(modifyCloudEvent(e -> e.withExtension(new OccurrentCloudEventExtension(streamId))));
@@ -78,8 +63,19 @@ public class InMemoryEventStore implements EventStore {
         });
     }
 
+
+    @Override
+    public void write(String streamId, Stream<CloudEvent> events) {
+        write(streamId, WriteCondition.anyStreamVersion(), events);
+    }
+
+    @Override
+    public boolean exists(String streamId) {
+        return state.containsKey(streamId);
+    }
+
     private static boolean isConditionFulfilledBy(WriteCondition writeCondition, long version) {
-        if (writeCondition == null) {
+        if (writeCondition.isAnyStreamVersion()) {
             return true;
         }
 

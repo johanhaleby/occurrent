@@ -46,8 +46,7 @@ import static org.assertj.core.api.Assertions.catchThrowable;
 import static org.junit.jupiter.api.Assertions.assertAll;
 import static se.haleby.occurrent.domain.Composition.chain;
 import static se.haleby.occurrent.eventstore.api.WriteCondition.Condition.*;
-import static se.haleby.occurrent.eventstore.api.WriteCondition.streamVersion;
-import static se.haleby.occurrent.eventstore.api.WriteCondition.streamVersionEq;
+import static se.haleby.occurrent.eventstore.api.WriteCondition.*;
 import static se.haleby.occurrent.functional.CheckedFunction.unchecked;
 import static se.haleby.occurrent.time.TimeConversion.toLocalDateTime;
 
@@ -197,6 +196,25 @@ public class SpringReactorMongoEventStoreTest {
             assertAll(
                     () -> assertThat(versionAndEvents.version).describedAs("version").isEqualTo(0L),
                     () -> assertThat(versionAndEvents.events).containsExactly(nameDefined, nameWasChanged1, nameWasChanged2)
+            );
+        }
+
+
+        @Test
+        void any_write_condition_may_be_explicitly_specified_when_stream_consistency_guarantee_is_none() {
+            LocalDateTime now = LocalDateTime.now();
+            NameDefined nameDefined = new NameDefined(UUID.randomUUID().toString(), now, "name");
+
+            // When
+            persist("name", anyStreamVersion(), nameDefined).block();
+
+            // Then
+            Mono<EventStream<CloudEvent>> eventStream = eventStore.read("name");
+            VersionAndEvents versionAndEvents = deserialize(eventStream);
+
+            assertAll(
+                    () -> assertThat(versionAndEvents.version).isEqualTo(0),
+                    () -> assertThat(versionAndEvents.events).containsExactly(nameDefined)
             );
         }
     }

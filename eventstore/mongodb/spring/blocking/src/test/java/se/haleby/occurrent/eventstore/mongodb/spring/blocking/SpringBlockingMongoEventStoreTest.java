@@ -26,11 +26,11 @@ import se.haleby.occurrent.domain.DomainEvent;
 import se.haleby.occurrent.domain.Name;
 import se.haleby.occurrent.domain.NameDefined;
 import se.haleby.occurrent.domain.NameWasChanged;
-import se.haleby.occurrent.eventstore.api.blocking.EventStore;
-import se.haleby.occurrent.eventstore.api.blocking.EventStream;
 import se.haleby.occurrent.eventstore.api.DuplicateCloudEventException;
 import se.haleby.occurrent.eventstore.api.WriteCondition;
 import se.haleby.occurrent.eventstore.api.WriteConditionNotFulfilledException;
+import se.haleby.occurrent.eventstore.api.blocking.EventStore;
+import se.haleby.occurrent.eventstore.api.blocking.EventStream;
 import se.haleby.occurrent.testsupport.mongodb.FlushMongoDBExtension;
 
 import java.net.URI;
@@ -195,6 +195,26 @@ public class SpringBlockingMongoEventStoreTest {
             persist("name", nameWasChanged2);
 
             // Then
+            List<DomainEvent> readEvents = deserialize(eventStream.events());
+
+            assertAll(
+                    () -> assertThat(eventStream.version()).isEqualTo(0),
+                    () -> assertThat(readEvents).hasSize(2),
+                    () -> assertThat(readEvents).containsExactly(nameDefined, nameWasChanged1)
+            );
+        }
+
+        @Test
+        void any_write_condition_may_be_explicitly_specified_when_stream_consistency_guarantee_is_none() {
+            LocalDateTime now = LocalDateTime.now();
+            NameDefined nameDefined = new NameDefined(UUID.randomUUID().toString(), now, "name");
+            NameWasChanged nameWasChanged1 = new NameWasChanged(UUID.randomUUID().toString(), now.plusHours(1), "name2");
+
+            // When
+            persist("name", WriteCondition.anyStreamVersion(), Stream.of(nameDefined, nameWasChanged1));
+
+            // Then
+            EventStream<CloudEvent> eventStream = eventStore.read("name");
             List<DomainEvent> readEvents = deserialize(eventStream.events());
 
             assertAll(

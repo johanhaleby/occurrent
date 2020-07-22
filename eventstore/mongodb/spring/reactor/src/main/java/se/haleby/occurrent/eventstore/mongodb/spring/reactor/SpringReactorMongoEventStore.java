@@ -53,11 +53,34 @@ public class SpringReactorMongoEventStore implements EventStore {
     }
 
     @Override
+    public Mono<Void> write(String streamId, Flux<CloudEvent> events) {
+        return write(streamId, WriteCondition.anyStreamVersion(), events);
+    }
+
+    @Override
     public Mono<Void> write(String streamId, WriteCondition writeCondition, Flux<CloudEvent> events) {
         if (writeCondition == null) {
             throw new IllegalArgumentException(WriteCondition.class.getSimpleName() + " cannot be null");
+        } else if (streamConsistencyGuarantee instanceof None && !writeCondition.isAnyStreamVersion()) {
+            throw new IllegalArgumentException("Cannot use a " + WriteCondition.class.getSimpleName() + " other than 'any' when streamConsistencyGuarantee is " + None.class.getSimpleName());
         }
-        return writeInternal(streamId, writeCondition, events);
+
+        Flux<Document> serializedEvents = convertToDocuments(cloudEventSerializer, streamId, events);
+
+        Mono<Void> result;
+        if (streamConsistencyGuarantee instanceof None) {
+            result = insertAll(serializedEvents).then();
+        } else if (streamConsistencyGuarantee instanceof Transactional) {
+            Transactional transactional = (Transactional) this.streamConsistencyGuarantee;
+            String streamVersionCollectionName = transactional.streamVersionCollectionName;
+            result = transactional.transactionalOperator.execute(transactionStatus -> conditionallyWriteEvents(streamId, streamVersionCollectionName, writeCondition, serializedEvents)).then();
+        } else if (streamConsistencyGuarantee instanceof TransactionalAnnotation) {
+            String streamVersionCollectionName = ((TransactionalAnnotation) streamConsistencyGuarantee).streamVersionCollectionName;
+            result = conditionallyWriteEvents(streamId, streamVersionCollectionName, writeCondition, serializedEvents);
+        } else {
+            throw new IllegalStateException("Internal error, invalid stream write consistency guarantee");
+        }
+        return result;
     }
 
     @Override
@@ -116,34 +139,6 @@ public class SpringReactorMongoEventStore implements EventStore {
         return mongoTemplate.find(query, Document.class, eventStoreCollectionName);
     }
 
-    @Override
-    public Mono<Void> write(String streamId, Flux<CloudEvent> events) {
-        return writeInternal(streamId, null, events);
-    }
-
-    public Mono<Void> writeInternal(String streamId, WriteCondition writeCondition, Flux<CloudEvent> events) {
-        if (streamConsistencyGuarantee instanceof None && writeCondition != null) {
-            throw new IllegalArgumentException("Cannot use a " + WriteCondition.class.getSimpleName() + " when streamConsistencyGuarantee is " + None.class.getSimpleName());
-        }
-
-        Flux<Document> serializedEvents = convertToDocuments(cloudEventSerializer, streamId, events);
-
-        Mono<Void> result;
-        if (streamConsistencyGuarantee instanceof None) {
-            result = insertAll(serializedEvents).then();
-        } else if (streamConsistencyGuarantee instanceof Transactional) {
-            Transactional transactional = (Transactional) this.streamConsistencyGuarantee;
-            String streamVersionCollectionName = transactional.streamVersionCollectionName;
-            result = transactional.transactionalOperator.execute(transactionStatus -> conditionallyWriteEvents(streamId, streamVersionCollectionName, writeCondition, serializedEvents)).then();
-        } else if (streamConsistencyGuarantee instanceof TransactionalAnnotation) {
-            String streamVersionCollectionName = ((TransactionalAnnotation) streamConsistencyGuarantee).streamVersionCollectionName;
-            result = conditionallyWriteEvents(streamId, streamVersionCollectionName, writeCondition, serializedEvents);
-        } else {
-            throw new IllegalStateException("Internal error, invalid stream write consistency guarantee");
-        }
-        return result;
-    }
-
     // Write
     private Mono<Void> conditionallyWriteEvents(String streamId, String streamVersionCollectionName, WriteCondition writeCondition, Flux<Document> serializedEvents) {
         return increaseStreamVersion(streamId, writeCondition, streamVersionCollectionName)
@@ -184,7 +179,7 @@ public class SpringReactorMongoEventStore implements EventStore {
 
     private static Criteria generateUpdateCondition(String streamId, WriteCondition writeCondition) {
         Criteria streamEq = where(ID).is(streamId);
-        if (writeCondition == null) {
+        if (writeCondition.isAnyStreamVersion()) {
             return streamEq;
         }
 

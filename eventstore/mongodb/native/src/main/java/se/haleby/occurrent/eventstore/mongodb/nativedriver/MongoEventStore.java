@@ -16,14 +16,14 @@ import org.bson.conversions.Bson;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import se.haleby.occurrent.cloudevents.OccurrentCloudEventExtension;
-import se.haleby.occurrent.eventstore.api.blocking.EventStore;
-import se.haleby.occurrent.eventstore.api.blocking.EventStream;
 import se.haleby.occurrent.eventstore.api.WriteCondition;
 import se.haleby.occurrent.eventstore.api.WriteCondition.Condition;
 import se.haleby.occurrent.eventstore.api.WriteCondition.Condition.MultiOperation;
 import se.haleby.occurrent.eventstore.api.WriteCondition.Condition.Operation;
 import se.haleby.occurrent.eventstore.api.WriteCondition.MultiOperationName;
 import se.haleby.occurrent.eventstore.api.WriteConditionNotFulfilledException;
+import se.haleby.occurrent.eventstore.api.blocking.EventStore;
+import se.haleby.occurrent.eventstore.api.blocking.EventStream;
 import se.haleby.occurrent.eventstore.mongodb.nativedriver.StreamConsistencyGuarantee.None;
 import se.haleby.occurrent.eventstore.mongodb.nativedriver.StreamConsistencyGuarantee.Transactional;
 
@@ -118,20 +118,15 @@ public class MongoEventStore implements EventStore {
 
     @Override
     public void write(String streamId, Stream<CloudEvent> events) {
-        writeInternal(streamId, null, events);
+        write(streamId, WriteCondition.anyStreamVersion(), events);
     }
 
     @Override
     public void write(String streamId, WriteCondition writeCondition, Stream<CloudEvent> events) {
         if (writeCondition == null) {
             throw new IllegalArgumentException(WriteCondition.class.getSimpleName() + " cannot be null");
-        }
-        writeInternal(streamId, writeCondition, events);
-    }
-
-    private void writeInternal(String streamId, WriteCondition writeCondition, Stream<CloudEvent> events) {
-        if (streamConsistencyGuarantee instanceof None && writeCondition != null) {
-            throw new IllegalArgumentException("Cannot use a " + WriteCondition.class.getSimpleName() + " when streamConsistencyGuarantee is " + None.class.getSimpleName());
+        } else if (streamConsistencyGuarantee instanceof None && !writeCondition.isAnyStreamVersion()) {
+            throw new IllegalArgumentException("Cannot use a " + WriteCondition.class.getSimpleName() + " other than 'any' when streamConsistencyGuarantee is " + None.class.getSimpleName());
         }
 
         List<Document> cloudEventDocuments = convertToDocuments(cloudEventSerializer, streamId, events).collect(Collectors.toList());
@@ -185,7 +180,7 @@ public class MongoEventStore implements EventStore {
 
     private static Bson generateUpdateCondition(String streamId, WriteCondition writeCondition) {
         Bson streamEq = eq(ID, streamId);
-        if (writeCondition == null) {
+        if (writeCondition.isAnyStreamVersion()) {
             return streamEq;
         }
 

@@ -19,9 +19,9 @@ import se.haleby.occurrent.domain.DomainEvent;
 import se.haleby.occurrent.domain.Name;
 import se.haleby.occurrent.domain.NameDefined;
 import se.haleby.occurrent.domain.NameWasChanged;
-import se.haleby.occurrent.eventstore.api.blocking.EventStream;
 import se.haleby.occurrent.eventstore.api.WriteCondition;
 import se.haleby.occurrent.eventstore.api.WriteConditionNotFulfilledException;
+import se.haleby.occurrent.eventstore.api.blocking.EventStream;
 import se.haleby.occurrent.testsupport.mongodb.FlushMongoDBExtension;
 
 import java.net.URI;
@@ -42,8 +42,7 @@ import static org.assertj.core.api.Assertions.catchThrowable;
 import static org.junit.jupiter.api.Assertions.assertAll;
 import static se.haleby.occurrent.domain.Composition.chain;
 import static se.haleby.occurrent.eventstore.api.WriteCondition.Condition.*;
-import static se.haleby.occurrent.eventstore.api.WriteCondition.streamVersion;
-import static se.haleby.occurrent.eventstore.api.WriteCondition.streamVersionEq;
+import static se.haleby.occurrent.eventstore.api.WriteCondition.*;
 import static se.haleby.occurrent.time.TimeConversion.toLocalDateTime;
 
 @Testcontainers
@@ -59,8 +58,8 @@ class MongoEventStoreTest {
 
     @BeforeEach
     void create_mongo_event_store() {
-        ConnectionString connectionString = new ConnectionString(mongoDBContainer.getReplicaSetUrl() + ".events");
-        mongoEventStore = new MongoEventStore(connectionString, StreamConsistencyGuarantee.transactional("consistency"));
+        StreamConsistencyGuarantee consistency = StreamConsistencyGuarantee.transactional("consistency");
+        mongoEventStore = newMongoEventStore(consistency);
         objectMapper = new ObjectMapper();
     }
 
@@ -145,6 +144,26 @@ class MongoEventStoreTest {
                 () -> assertThat(eventStream.version()).isEqualTo(3),
                 () -> assertThat(readEvents).hasSize(1),
                 () -> assertThat(readEvents).containsExactly(nameWasChanged1)
+        );
+    }
+
+    @Test
+    void any_write_condition_may_be_explicitly_specified_when_stream_consistency_guarantee_is_none() {
+        mongoEventStore = newMongoEventStore(StreamConsistencyGuarantee.none());
+        LocalDateTime now = LocalDateTime.now();
+        NameDefined nameDefined = new NameDefined(UUID.randomUUID().toString(), now, "name");
+
+        // When
+        persist("name", anyStreamVersion(), nameDefined);
+
+        // Then
+        EventStream<CloudEvent> eventStream = mongoEventStore.read("name");
+        List<DomainEvent> readEvents = deserialize(eventStream.events());
+
+        assertAll(
+                () -> assertThat(eventStream.version()).isEqualTo(-1),
+                () -> assertThat(readEvents).hasSize(1),
+                () -> assertThat(readEvents).containsExactly(nameDefined)
         );
     }
 
@@ -626,5 +645,10 @@ class MongoEventStoreTest {
         } catch (JsonProcessingException jsonProcessingException) {
             throw new RuntimeException(jsonProcessingException);
         }
+    }
+
+    private MongoEventStore newMongoEventStore(StreamConsistencyGuarantee consistency) {
+        ConnectionString connectionString = new ConnectionString(mongoDBContainer.getReplicaSetUrl() + ".events");
+        return new MongoEventStore(connectionString, consistency);
     }
 }
