@@ -1,13 +1,13 @@
-package se.haleby.occurrent.eventstore.api.common;
+package se.haleby.occurrent.eventstore.api;
 
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.List;
 import java.util.stream.Collectors;
 
-import static se.haleby.occurrent.eventstore.api.common.WriteCondition.Condition.eq;
-import static se.haleby.occurrent.eventstore.api.common.WriteCondition.MultiOperationName.*;
-import static se.haleby.occurrent.eventstore.api.common.WriteCondition.OperationName.*;
+import static se.haleby.occurrent.eventstore.api.WriteCondition.Condition.eq;
+import static se.haleby.occurrent.eventstore.api.WriteCondition.MultiOperationName.*;
+import static se.haleby.occurrent.eventstore.api.WriteCondition.OperationName.*;
 
 // TODO Add Any stream version!!
 public abstract class WriteCondition {

@@ -28,9 +28,9 @@ import se.haleby.occurrent.domain.NameDefined;
 import se.haleby.occurrent.domain.NameWasChanged;
 import se.haleby.occurrent.eventstore.api.blocking.EventStore;
 import se.haleby.occurrent.eventstore.api.blocking.EventStream;
-import se.haleby.occurrent.eventstore.api.common.DuplicateCloudEventException;
-import se.haleby.occurrent.eventstore.api.common.WriteCondition;
-import se.haleby.occurrent.eventstore.api.common.WriteConditionNotFulfilledException;
+import se.haleby.occurrent.eventstore.api.DuplicateCloudEventException;
+import se.haleby.occurrent.eventstore.api.WriteCondition;
+import se.haleby.occurrent.eventstore.api.WriteConditionNotFulfilledException;
 import se.haleby.occurrent.testsupport.mongodb.FlushMongoDBExtension;
 
 import java.net.URI;
@@ -51,9 +51,9 @@ import static org.assertj.core.api.Assertions.catchThrowable;
 import static org.junit.jupiter.api.Assertions.assertAll;
 import static org.springframework.data.mongodb.SessionSynchronization.ALWAYS;
 import static se.haleby.occurrent.domain.Composition.chain;
-import static se.haleby.occurrent.eventstore.api.common.WriteCondition.Condition.*;
-import static se.haleby.occurrent.eventstore.api.common.WriteCondition.streamVersion;
-import static se.haleby.occurrent.eventstore.api.common.WriteCondition.streamVersionEq;
+import static se.haleby.occurrent.eventstore.api.WriteCondition.Condition.*;
+import static se.haleby.occurrent.eventstore.api.WriteCondition.streamVersion;
+import static se.haleby.occurrent.eventstore.api.WriteCondition.streamVersionEq;
 import static se.haleby.occurrent.functional.CheckedFunction.unchecked;
 import static se.haleby.occurrent.time.TimeConversion.toLocalDateTime;
 

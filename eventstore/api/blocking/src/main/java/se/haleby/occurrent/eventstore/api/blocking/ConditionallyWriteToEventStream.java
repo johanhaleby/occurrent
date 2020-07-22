@@ -1,11 +1,11 @@
 package se.haleby.occurrent.eventstore.api.blocking;
 
 import io.cloudevents.CloudEvent;
-import se.haleby.occurrent.eventstore.api.common.WriteCondition;
+import se.haleby.occurrent.eventstore.api.WriteCondition;
 
 import java.util.stream.Stream;
 
-import static se.haleby.occurrent.eventstore.api.common.WriteCondition.streamVersionEq;
+import static se.haleby.occurrent.eventstore.api.WriteCondition.streamVersionEq;
 
 public interface ConditionallyWriteToEventStream {
     default void write(String streamId, long expectedStreamVersion, Stream<CloudEvent> events) {

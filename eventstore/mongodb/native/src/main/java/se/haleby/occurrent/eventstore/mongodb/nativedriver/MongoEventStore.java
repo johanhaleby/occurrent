@@ -18,12 +18,12 @@ import org.slf4j.LoggerFactory;
 import se.haleby.occurrent.cloudevents.OccurrentCloudEventExtension;
 import se.haleby.occurrent.eventstore.api.blocking.EventStore;
 import se.haleby.occurrent.eventstore.api.blocking.EventStream;
-import se.haleby.occurrent.eventstore.api.common.WriteCondition;
-import se.haleby.occurrent.eventstore.api.common.WriteCondition.Condition;
-import se.haleby.occurrent.eventstore.api.common.WriteCondition.Condition.MultiOperation;
-import se.haleby.occurrent.eventstore.api.common.WriteCondition.Condition.Operation;
-import se.haleby.occurrent.eventstore.api.common.WriteCondition.MultiOperationName;
-import se.haleby.occurrent.eventstore.api.common.WriteConditionNotFulfilledException;
+import se.haleby.occurrent.eventstore.api.WriteCondition;
+import se.haleby.occurrent.eventstore.api.WriteCondition.Condition;
+import se.haleby.occurrent.eventstore.api.WriteCondition.Condition.MultiOperation;
+import se.haleby.occurrent.eventstore.api.WriteCondition.Condition.Operation;
+import se.haleby.occurrent.eventstore.api.WriteCondition.MultiOperationName;
+import se.haleby.occurrent.eventstore.api.WriteConditionNotFulfilledException;
 import se.haleby.occurrent.eventstore.mongodb.nativedriver.StreamConsistencyGuarantee.None;
 import se.haleby.occurrent.eventstore.mongodb.nativedriver.StreamConsistencyGuarantee.Transactional;
 

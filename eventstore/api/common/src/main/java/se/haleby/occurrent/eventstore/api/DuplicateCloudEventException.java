@@ -1,4 +1,4 @@
-package se.haleby.occurrent.eventstore.api.common;
+package se.haleby.occurrent.eventstore.api;
 
 import java.net.URI;
 import java.util.Objects;
