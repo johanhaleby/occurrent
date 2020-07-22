@@ -6,6 +6,7 @@ import com.mongodb.reactivestreams.client.MongoClient;
 import com.mongodb.reactivestreams.client.MongoClients;
 import io.cloudevents.CloudEvent;
 import io.cloudevents.core.builder.CloudEventBuilder;
+import org.awaitility.Awaitility;
 import org.jetbrains.annotations.NotNull;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
@@ -16,6 +17,7 @@ import org.springframework.dao.DuplicateKeyException;
 import org.springframework.data.mongodb.ReactiveMongoTransactionManager;
 import org.springframework.data.mongodb.core.ReactiveMongoTemplate;
 import org.springframework.data.mongodb.core.SimpleReactiveMongoDatabaseFactory;
+import org.springframework.transaction.reactive.TransactionalOperator;
 import org.testcontainers.containers.MongoDBContainer;
 import org.testcontainers.junit.jupiter.Container;
 import org.testcontainers.junit.jupiter.Testcontainers;
@@ -36,6 +38,8 @@ import java.time.LocalDateTime;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.UUID;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.atomic.AtomicReference;
 import java.util.function.Function;
 import java.util.stream.Collectors;
 
@@ -43,10 +47,12 @@ import static java.time.ZoneOffset.UTC;
 import static java.util.Objects.requireNonNull;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.catchThrowable;
+import static org.hamcrest.Matchers.not;
+import static org.hamcrest.Matchers.nullValue;
 import static org.junit.jupiter.api.Assertions.assertAll;
 import static se.haleby.occurrent.domain.Composition.chain;
-import static se.haleby.occurrent.eventstore.api.WriteCondition.Condition.*;
 import static se.haleby.occurrent.eventstore.api.WriteCondition.*;
+import static se.haleby.occurrent.eventstore.api.WriteCondition.Condition.*;
 import static se.haleby.occurrent.functional.CheckedFunction.unchecked;
 import static se.haleby.occurrent.time.TimeConversion.toLocalDateTime;
 
@@ -222,11 +228,12 @@ public class SpringReactorMongoEventStoreTest {
     @DisplayName("when using StreamConsistencyGuarantee with type transactional")
     @Nested
     class StreamConsistencyGuaranteeTransactional {
+        private ReactiveMongoTransactionManager reactiveMongoTransactionManager;
 
         @BeforeEach
         void create_mongo_spring_reactive_event_store_with_stream_write_consistency_guarantee_transactional() {
-            ReactiveMongoTransactionManager mongoTransactionManager = new ReactiveMongoTransactionManager(new SimpleReactiveMongoDatabaseFactory(mongoClient, requireNonNull(connectionString.getDatabase())));
-            eventStore = new SpringReactorMongoEventStore(mongoTemplate, connectionString.getCollection(), StreamConsistencyGuarantee.transactional("event-stream-version", mongoTransactionManager));
+            reactiveMongoTransactionManager = new ReactiveMongoTransactionManager(new SimpleReactiveMongoDatabaseFactory(mongoClient, requireNonNull(connectionString.getDatabase())));
+            eventStore = new SpringReactorMongoEventStore(mongoTemplate, connectionString.getCollection(), StreamConsistencyGuarantee.transactional("event-stream-version", reactiveMongoTransactionManager));
         }
 
         @Test
@@ -336,7 +343,7 @@ public class SpringReactorMongoEventStoreTest {
         }
 
         @Test
-        void read_skew_is_avoided_when_stream_consistency_guarantee_is_transactional() {
+        void read_skew_is_avoided_when_stream_consistency_guarantee_is_transactional_and_transaction_is_started() {
             // Given
             LocalDateTime now = LocalDateTime.now();
             NameDefined nameDefined = new NameDefined(UUID.randomUUID().toString(), now, "name");
@@ -345,16 +352,27 @@ public class SpringReactorMongoEventStoreTest {
 
             persist("name", streamVersionEq(0), Flux.just(nameDefined, nameWasChanged1)).block();
 
-            // When
-            VersionAndEvents versionAndEvents =
-                    eventStore.read("name")
-                            .flatMap(es -> persist("name", streamVersionEq(1), nameWasChanged2)
-                                    .then(es.events().collectList())
-                                    .map(eventList -> new VersionAndEvents(es.version(), eventList.stream().map(deserialize()).collect(Collectors.toList()))))
-                            .block();
-            // Then
+            TransactionalOperator transactionalOperator = TransactionalOperator.create(reactiveMongoTransactionManager);
+            CountDownLatch countDownLatch = new CountDownLatch(1);
 
-            assert versionAndEvents != null;
+            AtomicReference<VersionAndEvents> versionAndEventsRef = new AtomicReference<>();
+
+            // When
+            transactionalOperator.execute(__ -> eventStore.read("name")
+                    .flatMap(es -> es.events().collectList().map(eventList -> {
+                        await(countDownLatch);
+                        return new VersionAndEvents(es.version(), eventList.stream().map(deserialize()).collect(Collectors.toList()));
+                    }))
+                    .doOnNext(versionAndEventsRef::set))
+                    .subscribe();
+
+            transactionalOperator.execute(__ -> persist("name", streamVersionEq(1), nameWasChanged2)
+                    .then(Mono.fromRunnable(countDownLatch::countDown)).then())
+                    .blockFirst();
+
+            // Then
+            VersionAndEvents versionAndEvents = Awaitility.await().untilAtomic(versionAndEventsRef, not(nullValue()));
+
             assertAll(
                     () -> assertThat(versionAndEvents.version).describedAs("version").isEqualTo(1L),
                     () -> assertThat(versionAndEvents.events).containsExactly(nameDefined, nameWasChanged1)
@@ -362,7 +380,7 @@ public class SpringReactorMongoEventStoreTest {
         }
 
         @Test
-        void read_skew_is_avoided_when_stream_consistency_guarantee_is_transactional_and_skip_and_limit_is_defined() {
+        void read_skew_is_avoided_when_stream_consistency_guarantee_is_transactional_and_skip_and_limit_is_defined_even_when_no_transaction_is_started() {
             // Given
             LocalDateTime now = LocalDateTime.now();
             NameDefined nameDefined = new NameDefined(UUID.randomUUID().toString(), now, "name");
@@ -504,7 +522,45 @@ public class SpringReactorMongoEventStoreTest {
         }
 
         @Test
-        void read_skew_is_avoided_when_stream_consistency_guarantee_is_transactional_annotation_and_skip_and_limit_is_undefined() {
+        void read_skew_is_avoided_when_stream_consistency_guarantee_is_transactional_annotation_and_transaction_is_started() {
+            // Given
+            LocalDateTime now = LocalDateTime.now();
+            NameDefined nameDefined = new NameDefined(UUID.randomUUID().toString(), now, "name");
+            NameWasChanged nameWasChanged1 = new NameWasChanged(UUID.randomUUID().toString(), now.plusHours(1), "name2");
+            NameWasChanged nameWasChanged2 = new NameWasChanged(UUID.randomUUID().toString(), now.plusHours(2), "name3");
+
+            persist("name", streamVersionEq(0), Flux.just(nameDefined, nameWasChanged1)).block();
+
+            ReactiveMongoTransactionManager mongoTransactionManager = new ReactiveMongoTransactionManager(new SimpleReactiveMongoDatabaseFactory(mongoClient, requireNonNull(connectionString.getDatabase())));
+            TransactionalOperator transactionalOperator = TransactionalOperator.create(mongoTransactionManager);
+            CountDownLatch countDownLatch = new CountDownLatch(1);
+
+            AtomicReference<VersionAndEvents> versionAndEventsRef = new AtomicReference<>();
+
+            // When
+            transactionalOperator.execute(__ -> eventStore.read("name")
+                    .flatMap(es -> es.events().collectList().map(eventList -> {
+                        await(countDownLatch);
+                        return new VersionAndEvents(es.version(), eventList.stream().map(deserialize()).collect(Collectors.toList()));
+                    }))
+                    .doOnNext(versionAndEventsRef::set))
+                    .subscribe();
+
+            transactionalOperator.execute(__ -> persist("name", streamVersionEq(1), nameWasChanged2)
+                    .then(Mono.fromRunnable(countDownLatch::countDown)).then())
+                    .blockFirst();
+
+            // Then
+            VersionAndEvents versionAndEvents = Awaitility.await().untilAtomic(versionAndEventsRef, not(nullValue()));
+
+            assertAll(
+                    () -> assertThat(versionAndEvents.version).describedAs("version").isEqualTo(1L),
+                    () -> assertThat(versionAndEvents.events).containsExactly(nameDefined, nameWasChanged1)
+            );
+        }
+
+        @Test
+        void read_skew_is_not_avoided_when_stream_consistency_guarantee_is_transactional_annotation_and_skip_and_limit_is_undefined_when_no_transaction_is_started() {
             // Given
             LocalDateTime now = LocalDateTime.now();
             NameDefined nameDefined = new NameDefined(UUID.randomUUID().toString(), now, "name");
@@ -525,12 +581,12 @@ public class SpringReactorMongoEventStoreTest {
             assert versionAndEvents != null;
             assertAll(
                     () -> assertThat(versionAndEvents.version).describedAs("version").isEqualTo(1L),
-                    () -> assertThat(versionAndEvents.events).containsExactly(nameDefined, nameWasChanged1)
+                    () -> assertThat(versionAndEvents.events).containsExactly(nameDefined, nameWasChanged1, nameWasChanged2)
             );
         }
 
         @Test
-        void read_skew_is_avoided_when_stream_consistency_guarantee_is_transactional_annotation_and_skip_and_limit_is_defined() {
+        void read_skew_is_avoided_when_stream_consistency_guarantee_is_transactional_annotation_and_skip_and_limit_is_defined_even_when_no_transaction_is_started() {
             // Given
             LocalDateTime now = LocalDateTime.now();
             NameDefined nameDefined = new NameDefined(UUID.randomUUID().toString(), now, "name");
@@ -920,7 +976,7 @@ public class SpringReactorMongoEventStoreTest {
 
                 DomainEvent event2 = new NameWasChanged(UUID.randomUUID().toString(), now, "Jan Doe");
                 Mono<EventStream<CloudEvent>> eventStream1 = eventStore.read("name");
-                persist(streamIdOf(eventStream1), streamVersion(not(eq(100L))), event2).block();
+                persist(streamIdOf(eventStream1), streamVersion(Condition.not(eq(100L))), event2).block();
 
                 // Then
                 Mono<EventStream<CloudEvent>> eventStream2 = eventStore.read("name");
@@ -935,7 +991,7 @@ public class SpringReactorMongoEventStoreTest {
 
                 // When
                 DomainEvent event2 = new NameWasChanged(UUID.randomUUID().toString(), now, "Jan Doe");
-                Throwable throwable = catchThrowable(() -> persist("name", streamVersion(not(eq(1L))), event2).block());
+                Throwable throwable = catchThrowable(() -> persist("name", streamVersion(Condition.not(eq(1L))), event2).block());
 
                 // Then
                 assertThat(throwable).isExactlyInstanceOf(WriteConditionNotFulfilledException.class)
@@ -1014,6 +1070,14 @@ public class SpringReactorMongoEventStoreTest {
                 .withDataContentType("application/json")
                 .withData(unchecked(objectMapper::writeValueAsBytes).apply(domainEvent))
                 .build();
+    }
+
+    private static void await(CountDownLatch countDownLatch) {
+        try {
+            countDownLatch.await();
+        } catch (InterruptedException e) {
+            throw new RuntimeException(e);
+        }
     }
 }
 

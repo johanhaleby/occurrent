@@ -108,25 +108,13 @@ public class SpringReactorMongoEventStore implements EventStore {
         return convertToCloudEvent(cloudEventSerializer, eventStream);
     }
 
-
     // Read
     private Mono<EventStreamImpl> readEventStream(String streamId, int skip, int limit, String streamVersionCollectionName) {
         return mongoTemplate.findOne(query(where(ID).is(streamId)), EventStreamImpl.class, streamVersionCollectionName)
-                .flatMap(es -> {
-                    if (isSkipOrLimitDefined(skip, limit)) {
-                        Flux<Document> cloudEventDocuments = readCloudEvents(streamId, skip, limit);
-                        es.setEvents(cloudEventDocuments);
-                        return Mono.just(es);
-                    }
-                    // We perform a count of stream ids to avoid read skew if additional writes happen before
-                    // the user subscribes to the flux!
-                    // TODO Is the a better way to solve this to avoid an extra query?
-                    return mongoTemplate.count(query(where(STREAM_ID).is(streamId)), eventStoreCollectionName)
-                            .flatMap(c -> {
-                                Flux<Document> cloudEventDocuments = readCloudEvents(streamId, 0, Math.toIntExact(c));
-                                es.setEvents(cloudEventDocuments);
-                                return Mono.just(es);
-                            });
+                .map(es -> {
+                    Flux<Document> cloudEventDocuments = readCloudEvents(streamId, skip, limit);
+                    es.setEvents(cloudEventDocuments);
+                    return es;
                 })
                 .switchIfEmpty(Mono.just(new EventStreamImpl(streamId, 0, Flux.empty())));
     }
