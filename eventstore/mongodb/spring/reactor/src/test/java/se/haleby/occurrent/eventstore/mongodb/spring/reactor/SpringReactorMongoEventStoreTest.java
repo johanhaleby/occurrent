@@ -406,13 +406,13 @@ public class SpringReactorMongoEventStoreTest {
 
     }
 
-    @DisplayName("when using StreamConsistencyGuarantee with type transactional annotation")
+    @DisplayName("when using StreamConsistencyGuarantee with type transaction already started")
     @Nested
-    class StreamConsistencyGuaranteeTransactionalAnnotation {
+    class StreamConsistencyGuaranteeTransactionAlreadyStarted {
 
         @BeforeEach
-        void create_mongo_spring_reactive_event_store_with_stream_write_consistency_guarantee_transactional_annotation() {
-            eventStore = new SpringReactorMongoEventStore(mongoTemplate, connectionString.getCollection(), StreamConsistencyGuarantee.transactionalAnnotation("event-stream-version"));
+        void create_mongo_spring_reactive_event_store_with_stream_write_consistency_guarantee_transaction_already_started() {
+            eventStore = new SpringReactorMongoEventStore(mongoTemplate, connectionString.getCollection(), StreamConsistencyGuarantee.transactionAlreadyStarted("event-stream-version"));
         }
 
         @Test
@@ -522,7 +522,7 @@ public class SpringReactorMongoEventStoreTest {
         }
 
         @Test
-        void read_skew_is_avoided_when_stream_consistency_guarantee_is_transactional_annotation_and_transaction_is_started() {
+        void read_skew_is_avoided_when_stream_consistency_guarantee_is_transaction_already_started_and_transaction_is_started() {
             // Given
             LocalDateTime now = LocalDateTime.now();
             NameDefined nameDefined = new NameDefined(UUID.randomUUID().toString(), now, "name");
@@ -560,7 +560,7 @@ public class SpringReactorMongoEventStoreTest {
         }
 
         @Test
-        void read_skew_is_not_avoided_when_stream_consistency_guarantee_is_transactional_annotation_and_skip_and_limit_is_undefined_when_no_transaction_is_started() {
+        void read_skew_is_not_avoided_when_stream_consistency_guarantee_is_transaction_already_started_and_skip_and_limit_is_undefined_when_no_transaction_is_started() {
             // Given
             LocalDateTime now = LocalDateTime.now();
             NameDefined nameDefined = new NameDefined(UUID.randomUUID().toString(), now, "name");
@@ -586,7 +586,7 @@ public class SpringReactorMongoEventStoreTest {
         }
 
         @Test
-        void read_skew_is_avoided_when_stream_consistency_guarantee_is_transactional_annotation_and_skip_and_limit_is_defined_even_when_no_transaction_is_started() {
+        void read_skew_is_avoided_when_stream_consistency_guarantee_is_transaction_already_started_and_skip_and_limit_is_defined_even_when_no_transaction_is_started() {
             // Given
             LocalDateTime now = LocalDateTime.now();
             NameDefined nameDefined = new NameDefined(UUID.randomUUID().toString(), now, "name");

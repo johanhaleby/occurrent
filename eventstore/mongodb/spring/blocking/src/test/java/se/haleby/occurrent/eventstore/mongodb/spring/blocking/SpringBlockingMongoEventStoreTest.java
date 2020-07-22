@@ -418,7 +418,7 @@ public class SpringBlockingMongoEventStoreTest {
 
             @Test
             void no_events_are_inserted_when_batch_contains_duplicate_events_when_stream_consistency_guarantee_is_transactional() {
-                eventStore = newSpringBlockingMongoEventStore(StreamConsistencyGuarantee.transactionalAnnotation("event-stream-version"));
+                eventStore = newSpringBlockingMongoEventStore(StreamConsistencyGuarantee.transactionAlreadyStarted("event-stream-version"));
                 LocalDateTime now = LocalDateTime.now();
 
                 NameDefined nameDefined = new NameDefined(UUID.randomUUID().toString(), now, "name");
@@ -441,7 +441,7 @@ public class SpringBlockingMongoEventStoreTest {
 
             @Test
             void no_events_are_inserted_when_batch_contains_event_that_has_already_been_persisted_when_stream_consistency_guarantee_is_transactional() {
-                eventStore = newSpringBlockingMongoEventStore(StreamConsistencyGuarantee.transactionalAnnotation("event-stream-version"));
+                eventStore = newSpringBlockingMongoEventStore(StreamConsistencyGuarantee.transactionAlreadyStarted("event-stream-version"));
                 LocalDateTime now = LocalDateTime.now();
 
                 NameDefined nameDefined = new NameDefined(UUID.randomUUID().toString(), now, "name");
@@ -467,14 +467,14 @@ public class SpringBlockingMongoEventStoreTest {
         }
     }
 
-    @DisplayName("when using StreamConsistencyGuarantee with type transactional annotation")
+    @DisplayName("when using StreamConsistencyGuarantee with type transaction already started")
     @Nested
-    class StreamConsistencyGuaranteeTransactionalAnnotation {
+    class StreamConsistencyGuaranteeTransactionAlreadyStarted {
 
 
         @BeforeEach
-        void create_mongo_spring_blocking_event_store_with_stream_write_consistency_guarantee_transactional_annotation() {
-            eventStore = newSpringBlockingMongoEventStore(StreamConsistencyGuarantee.transactionalAnnotation("event-stream-version"));
+        void create_mongo_spring_blocking_event_store_with_stream_write_consistency_guarantee_transaction_already_started() {
+            eventStore = newSpringBlockingMongoEventStore(StreamConsistencyGuarantee.transactionAlreadyStarted("event-stream-version"));
         }
 
         @Test
@@ -563,7 +563,7 @@ public class SpringBlockingMongoEventStoreTest {
 
         @Test
         void stream_version_is_updated_when_event_insertion_fails_when_no_transaction_is_started() {
-            eventStore = newSpringBlockingMongoEventStore(StreamConsistencyGuarantee.transactionalAnnotation("event-stream-version"));
+            eventStore = newSpringBlockingMongoEventStore(StreamConsistencyGuarantee.transactionAlreadyStarted("event-stream-version"));
             LocalDateTime now = LocalDateTime.now();
             List<DomainEvent> events = chain(Name.defineName(UUID.randomUUID().toString(), now, "Hello World"), es -> Name.changeName(es, UUID.randomUUID().toString(), now, "John Doe"));
 
@@ -585,7 +585,7 @@ public class SpringBlockingMongoEventStoreTest {
         }
 
         @Test
-        void read_skew_is_not_allowed_for_blocking_implementation_when_stream_consistency_guarantee_is_transactional_annotation() {
+        void read_skew_is_not_allowed_for_blocking_implementation_when_stream_consistency_guarantee_is_transaction_already_started() {
             LocalDateTime now = LocalDateTime.now();
             NameDefined nameDefined = new NameDefined(UUID.randomUUID().toString(), now, "name");
             NameWasChanged nameWasChanged1 = new NameWasChanged(UUID.randomUUID().toString(), now.plusHours(1), "name2");
@@ -622,7 +622,7 @@ public class SpringBlockingMongoEventStoreTest {
             }
 
             @Test
-            void no_events_are_inserted_when_batch_contains_duplicate_events_when_stream_consistency_guarantee_is_transactional_annotation_and_tx_is_started() {
+            void no_events_are_inserted_when_batch_contains_duplicate_events_when_stream_consistency_guarantee_is_transaction_already_started_and_tx_is_started() {
 
                 LocalDateTime now = LocalDateTime.now();
                 NameDefined nameDefined = new NameDefined(UUID.randomUUID().toString(), now, "name");
@@ -644,7 +644,7 @@ public class SpringBlockingMongoEventStoreTest {
             }
 
             @Test
-            void no_events_are_inserted_when_batch_contains_event_that_has_already_been_persisted_when_stream_consistency_guarantee_is_transactional_annotation_and_tx_is_started() {
+            void no_events_are_inserted_when_batch_contains_event_that_has_already_been_persisted_when_stream_consistency_guarantee_is_transaction_already_started_and_tx_is_started() {
                 LocalDateTime now = LocalDateTime.now();
 
                 NameDefined nameDefined = new NameDefined(UUID.randomUUID().toString(), now, "name");

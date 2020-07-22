@@ -14,7 +14,7 @@ import se.haleby.occurrent.eventstore.mongodb.spring.reactor.SpringReactorMongoE
 
 import javax.annotation.PostConstruct;
 
-import static se.haleby.occurrent.eventstore.mongodb.spring.reactor.StreamConsistencyGuarantee.transactionalAnnotation;
+import static se.haleby.occurrent.eventstore.mongodb.spring.reactor.StreamConsistencyGuarantee.transactionAlreadyStarted;
 
 @SpringBootApplication
 @EnableReactiveMongoRepositories
@@ -30,7 +30,7 @@ public class TransactionalProjectionsWithSpringAndMongoDBApplication {
 
     @Bean
     public EventStore eventStore(ReactiveMongoTemplate mongoTemplate) {
-        return new SpringReactorMongoEventStore(mongoTemplate, "events", transactionalAnnotation("stream-consistency"));
+        return new SpringReactorMongoEventStore(mongoTemplate, "events", transactionAlreadyStarted("stream-consistency"));
     }
 
     @Bean

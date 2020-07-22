@@ -23,7 +23,7 @@ import se.haleby.occurrent.eventstore.api.blocking.EventStore;
 import se.haleby.occurrent.eventstore.api.blocking.EventStream;
 import se.haleby.occurrent.eventstore.mongodb.spring.blocking.StreamConsistencyGuarantee.None;
 import se.haleby.occurrent.eventstore.mongodb.spring.blocking.StreamConsistencyGuarantee.Transactional;
-import se.haleby.occurrent.eventstore.mongodb.spring.blocking.StreamConsistencyGuarantee.TransactionalAnnotation;
+import se.haleby.occurrent.eventstore.mongodb.spring.blocking.StreamConsistencyGuarantee.TransactionAlreadyStarted;
 
 import java.net.URI;
 import java.util.HashMap;
@@ -67,8 +67,8 @@ public class SpringBlockingMongoEventStore implements EventStore {
         } else if (streamConsistencyGuarantee instanceof Transactional) {
             Transactional transactional = (Transactional) this.streamConsistencyGuarantee;
             eventStream = transactional.transactionTemplate.execute(transactionStatus -> readEventStream(streamId, skip, limit, transactional.streamVersionCollectionName));
-        } else if (streamConsistencyGuarantee instanceof TransactionalAnnotation) {
-            eventStream = readEventStream(streamId, skip, limit, ((TransactionalAnnotation) streamConsistencyGuarantee).streamVersionCollectionName);
+        } else if (streamConsistencyGuarantee instanceof TransactionAlreadyStarted) {
+            eventStream = readEventStream(streamId, skip, limit, ((TransactionAlreadyStarted) streamConsistencyGuarantee).streamVersionCollectionName);
         } else {
             throw new IllegalStateException("Internal error, invalid stream write consistency guarantee");
         }
@@ -91,8 +91,8 @@ public class SpringBlockingMongoEventStore implements EventStore {
             Transactional transactional = (Transactional) this.streamConsistencyGuarantee;
             String streamVersionCollectionName = transactional.streamVersionCollectionName;
             transactional.transactionTemplate.executeWithoutResult(transactionStatus -> conditionallyWriteEvents(streamId, streamVersionCollectionName, writeCondition, serializedEvents));
-        } else if (streamConsistencyGuarantee instanceof TransactionalAnnotation) {
-            String streamVersionCollectionName = ((TransactionalAnnotation) streamConsistencyGuarantee).streamVersionCollectionName;
+        } else if (streamConsistencyGuarantee instanceof TransactionAlreadyStarted) {
+            String streamVersionCollectionName = ((TransactionAlreadyStarted) streamConsistencyGuarantee).streamVersionCollectionName;
             conditionallyWriteEvents(streamId, streamVersionCollectionName, writeCondition, serializedEvents);
         } else {
             throw new IllegalStateException("Internal error, invalid stream write consistency guarantee");
@@ -256,8 +256,8 @@ public class SpringBlockingMongoEventStore implements EventStore {
             mongoTemplate.setSessionSynchronization(ALWAYS);
             String streamVersionCollectionName = ((Transactional) streamConsistencyGuarantee).streamVersionCollectionName;
             createStreamVersionCollectionAndIndex(streamVersionCollectionName, mongoTemplate);
-        } else if (streamConsistencyGuarantee instanceof TransactionalAnnotation) {
-            String streamVersionCollectionName = ((TransactionalAnnotation) streamConsistencyGuarantee).streamVersionCollectionName;
+        } else if (streamConsistencyGuarantee instanceof TransactionAlreadyStarted) {
+            String streamVersionCollectionName = ((TransactionAlreadyStarted) streamConsistencyGuarantee).streamVersionCollectionName;
             createStreamVersionCollectionAndIndex(streamVersionCollectionName, mongoTemplate);
         }
     }

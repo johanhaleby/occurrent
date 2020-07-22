@@ -15,10 +15,10 @@ public abstract class StreamConsistencyGuarantee {
         }
     }
 
-    public static final class TransactionalAnnotation extends StreamConsistencyGuarantee {
+    public static final class TransactionAlreadyStarted extends StreamConsistencyGuarantee {
         public final String streamVersionCollectionName;
 
-        private TransactionalAnnotation(String streamVersionCollectionName) {
+        private TransactionAlreadyStarted(String streamVersionCollectionName) {
             this.streamVersionCollectionName = streamVersionCollectionName;
         }
     }
@@ -76,7 +76,7 @@ public abstract class StreamConsistencyGuarantee {
      * stream version will _not_ be reverted. This is probably not what you want, consider {@link #none()}
      * if stream/aggregate consistency is not a concern in your application.
      */
-    public static TransactionalAnnotation transactionalAnnotation(String streamVersionCollectionName) {
-        return new TransactionalAnnotation(streamVersionCollectionName);
+    public static TransactionAlreadyStarted transactionAlreadyStarted(String streamVersionCollectionName) {
+        return new TransactionAlreadyStarted(streamVersionCollectionName);
     }
 }

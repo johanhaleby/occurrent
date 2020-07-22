@@ -16,7 +16,7 @@ import se.haleby.occurrent.eventstore.mongodb.spring.blocking.SpringBlockingMong
 import javax.annotation.PostConstruct;
 
 import static com.fasterxml.jackson.databind.ObjectMapper.DefaultTyping.EVERYTHING;
-import static se.haleby.occurrent.eventstore.mongodb.spring.blocking.StreamConsistencyGuarantee.transactionalAnnotation;
+import static se.haleby.occurrent.eventstore.mongodb.spring.blocking.StreamConsistencyGuarantee.transactionAlreadyStarted;
 
 @SpringBootApplication
 @EnableMongoRepositories
@@ -32,7 +32,7 @@ public class TransactionalProjectionsWithSpringAndMongoDBApplication {
 
     @Bean
     public EventStore eventStore(MongoTemplate mongoTemplate) {
-        return new SpringBlockingMongoEventStore(mongoTemplate, "events", transactionalAnnotation("stream-consistency"));
+        return new SpringBlockingMongoEventStore(mongoTemplate, "events", transactionAlreadyStarted("stream-consistency"));
     }
 
     @Bean
