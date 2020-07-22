@@ -1,5 +1,7 @@
 package se.haleby.occurrent.eventstore.mongodb.spring.blocking;
 
+import com.mongodb.MongoBulkWriteException;
+import com.mongodb.WriteError;
 import com.mongodb.client.model.IndexOptions;
 import com.mongodb.client.model.Indexes;
 import com.mongodb.client.result.UpdateResult;
@@ -15,6 +17,7 @@ import org.springframework.data.mongodb.core.query.Update;
 import org.springframework.data.util.StreamUtils;
 import se.haleby.occurrent.eventstore.api.blocking.EventStore;
 import se.haleby.occurrent.eventstore.api.blocking.EventStream;
+import se.haleby.occurrent.eventstore.api.common.DuplicateCloudEventException;
 import se.haleby.occurrent.eventstore.api.common.WriteCondition;
 import se.haleby.occurrent.eventstore.api.common.WriteCondition.StreamVersionWriteCondition;
 import se.haleby.occurrent.eventstore.api.common.WriteConditionNotFulfilledException;
@@ -22,6 +25,7 @@ import se.haleby.occurrent.eventstore.mongodb.spring.blocking.StreamConsistencyG
 import se.haleby.occurrent.eventstore.mongodb.spring.blocking.StreamConsistencyGuarantee.Transactional;
 import se.haleby.occurrent.eventstore.mongodb.spring.blocking.StreamConsistencyGuarantee.TransactionalAnnotation;
 
+import java.net.URI;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
@@ -161,10 +165,33 @@ public class SpringBlockingMongoEventStore implements EventStore {
         insertAll(serializedEvents);
     }
 
-    // TODO If inserts fail due to duplicate cloud event, remove this event from the documents list
-    //  (and all events before this document since they have been successfully inserted) and retry!
+    @SuppressWarnings("UnnecessaryLocalVariable")
     private void insertAll(List<Document> documents) {
-        mongoTemplate.getCollection(eventStoreCollectionName).insertMany(documents);
+        try {
+            mongoTemplate.getCollection(eventStoreCollectionName).insertMany(documents);
+        } catch (MongoBulkWriteException e) {
+            DuplicateCloudEventException duplicateCloudEventException = e.getWriteErrors().stream()
+                    .filter(error -> error.getCode() == 11000)
+                    .map(WriteError::getMessage)
+                    .filter(errorMessage -> errorMessage.contains("{ id: \"") && errorMessage.contains(", source: \""))
+                    .map(errorMessage -> {
+                        int idKeyStartIndex = errorMessage.indexOf("{ id: \"");
+                        int idValueStartIndex = idKeyStartIndex + "{ id: \"".length();
+                        int idValueEndIndex = errorMessage.indexOf("\"", idValueStartIndex);
+                        String id = errorMessage.substring(idValueStartIndex, idValueEndIndex);
+
+                        int sourceKeyStartIndex = errorMessage.indexOf(", source: \"", idValueEndIndex);
+                        int sourceValueStartIndex = sourceKeyStartIndex + ", source: \"".length();
+                        int sourceValueEndIndex = errorMessage.indexOf("\" }", sourceValueStartIndex);
+                        String source = errorMessage.substring(sourceValueStartIndex, sourceValueEndIndex);
+
+                        return new DuplicateCloudEventException(id, URI.create(source), e);
+                    })
+                    .findFirst()
+                    .orElse(new DuplicateCloudEventException(null, null, e));
+
+            throw duplicateCloudEventException;
+        }
     }
 
     private void increaseStreamVersion(String streamId, WriteCondition writeCondition, String streamVersionCollectionName) {
