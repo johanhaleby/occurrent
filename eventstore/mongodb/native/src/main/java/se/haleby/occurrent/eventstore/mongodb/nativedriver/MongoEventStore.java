@@ -1,6 +1,7 @@
 package se.haleby.occurrent.eventstore.mongodb.nativedriver;
 
 import com.mongodb.ConnectionString;
+import com.mongodb.MongoBulkWriteException;
 import com.mongodb.TransactionOptions;
 import com.mongodb.client.*;
 import com.mongodb.client.model.Filters;
@@ -37,6 +38,7 @@ import java.util.stream.StreamSupport;
 
 import static com.mongodb.client.model.Filters.*;
 import static com.mongodb.client.model.Updates.inc;
+import static se.haleby.occurrent.eventstore.mongodb.converter.MongoBulkWriteExceptionToDuplicateCloudEventExceptionTranslator.translateToDuplicateCloudEventException;
 import static se.haleby.occurrent.eventstore.mongodb.converter.OccurrentCloudEventMongoDBDocumentMapper.convertToCloudEvent;
 import static se.haleby.occurrent.eventstore.mongodb.converter.OccurrentCloudEventMongoDBDocumentMapper.convertToDocuments;
 
@@ -50,13 +52,13 @@ public class MongoEventStore implements EventStore {
     private final EventFormat cloudEventSerializer;
     private final StreamConsistencyGuarantee streamConsistencyGuarantee;
     private final MongoClient mongoClient;
-    private final String databaseName;
+    private final MongoDatabase mongoDatabase;
 
     public MongoEventStore(ConnectionString connectionString, StreamConsistencyGuarantee streamConsistencyGuarantee) {
         log.info("Connecting to MongoDB using connection string: {}", connectionString);
         mongoClient = MongoClients.create(connectionString);
-        databaseName = Objects.requireNonNull(connectionString.getDatabase());
-        MongoDatabase mongoDatabase = mongoClient.getDatabase(databaseName);
+        String databaseName = Objects.requireNonNull(connectionString.getDatabase());
+        mongoDatabase = mongoClient.getDatabase(databaseName);
         String eventCollectionName = Objects.requireNonNull(connectionString.getCollection());
         eventCollection = mongoDatabase.getCollection(eventCollectionName);
         cloudEventSerializer = EventFormatProvider.getInstance().resolveFormat(JsonFormat.CONTENT_TYPE);
@@ -82,8 +84,7 @@ public class MongoEventStore implements EventStore {
     private EventStreamImpl<Document> readEventStream(String streamId, int skip, int limit, Transactional transactional) {
         try (ClientSession clientSession = mongoClient.startSession()) {
             return clientSession.withTransaction(() -> {
-                Document document = mongoClient
-                        .getDatabase(databaseName)
+                Document document = mongoDatabase
                         .getCollection(transactional.streamVersionCollectionName)
                         .find(clientSession, eq(ID, streamId), Document.class)
                         .first();
@@ -132,7 +133,11 @@ public class MongoEventStore implements EventStore {
         List<Document> cloudEventDocuments = convertToDocuments(cloudEventSerializer, streamId, events).collect(Collectors.toList());
 
         if (streamConsistencyGuarantee instanceof None) {
-            eventCollection.insertMany(cloudEventDocuments);
+            try {
+                eventCollection.insertMany(cloudEventDocuments);
+            } catch (MongoBulkWriteException e) {
+                throw translateToDuplicateCloudEventException(e);
+            }
         } else if (streamConsistencyGuarantee instanceof Transactional) {
             consistentlyWrite(streamId, writeCondition, cloudEventDocuments);
         } else {
@@ -146,9 +151,7 @@ public class MongoEventStore implements EventStore {
         String streamVersionCollectionName = transactional.streamVersionCollectionName;
         try (ClientSession clientSession = mongoClient.startSession()) {
             clientSession.withTransaction(() -> {
-                MongoCollection<Document> streamVersionCollection = mongoClient
-                        .getDatabase(databaseName)
-                        .getCollection(streamVersionCollectionName);
+                MongoCollection<Document> streamVersionCollection = mongoDatabase.getCollection(streamVersionCollectionName);
 
                 UpdateResult updateResult = streamVersionCollection
                         .updateOne(clientSession, generateUpdateCondition(streamId, writeCondition),
@@ -168,11 +171,11 @@ public class MongoEventStore implements EventStore {
                     }
                 }
 
-
-                mongoClient
-                        .getDatabase(databaseName)
-                        .getCollection(eventCollection.getNamespace().getCollectionName())
-                        .insertMany(clientSession, serializedEvents);
+                try {
+                    eventCollection.insertMany(clientSession, serializedEvents);
+                } catch (MongoBulkWriteException e) {
+                    throw translateToDuplicateCloudEventException(e);
+                }
                 return "";
             }, transactionOptions);
         }

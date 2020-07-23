@@ -19,8 +19,7 @@
         </dependency>
         <dependency>
             <groupId>org.mongodb</groupId>
-            <artifactId>bson</artifactId>
-            <version>${mongo.version}</version>
+            <artifactId>mongodb-driver-core</artifactId>
         </dependency>
         <dependency>
             <groupId>io.cloudevents</groupId>

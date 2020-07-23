@@ -1,7 +1,6 @@
 package se.haleby.occurrent.eventstore.mongodb.spring.blocking;
 
 import com.mongodb.MongoBulkWriteException;
-import com.mongodb.WriteError;
 import com.mongodb.client.model.IndexOptions;
 import com.mongodb.client.model.Indexes;
 import com.mongodb.client.result.UpdateResult;
@@ -15,17 +14,15 @@ import org.springframework.data.mongodb.core.query.Criteria;
 import org.springframework.data.mongodb.core.query.Query;
 import org.springframework.data.mongodb.core.query.Update;
 import org.springframework.data.util.StreamUtils;
-import se.haleby.occurrent.eventstore.api.DuplicateCloudEventException;
 import se.haleby.occurrent.eventstore.api.WriteCondition;
 import se.haleby.occurrent.eventstore.api.WriteCondition.StreamVersionWriteCondition;
 import se.haleby.occurrent.eventstore.api.WriteConditionNotFulfilledException;
 import se.haleby.occurrent.eventstore.api.blocking.EventStore;
 import se.haleby.occurrent.eventstore.api.blocking.EventStream;
 import se.haleby.occurrent.eventstore.mongodb.spring.blocking.StreamConsistencyGuarantee.None;
-import se.haleby.occurrent.eventstore.mongodb.spring.blocking.StreamConsistencyGuarantee.Transactional;
 import se.haleby.occurrent.eventstore.mongodb.spring.blocking.StreamConsistencyGuarantee.TransactionAlreadyStarted;
+import se.haleby.occurrent.eventstore.mongodb.spring.blocking.StreamConsistencyGuarantee.Transactional;
 
-import java.net.URI;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
@@ -36,6 +33,7 @@ import static org.springframework.data.mongodb.SessionSynchronization.ALWAYS;
 import static org.springframework.data.mongodb.core.query.Criteria.where;
 import static org.springframework.data.mongodb.core.query.Query.query;
 import static se.haleby.occurrent.cloudevents.OccurrentCloudEventExtension.STREAM_ID;
+import static se.haleby.occurrent.eventstore.mongodb.converter.MongoBulkWriteExceptionToDuplicateCloudEventExceptionTranslator.translateToDuplicateCloudEventException;
 import static se.haleby.occurrent.eventstore.mongodb.converter.OccurrentCloudEventMongoDBDocumentMapper.convertToCloudEvent;
 import static se.haleby.occurrent.eventstore.mongodb.converter.OccurrentCloudEventMongoDBDocumentMapper.convertToDocuments;
 import static se.haleby.occurrent.eventstore.mongodb.spring.common.internal.ConditionToCriteriaConverter.convertConditionToCriteria;
@@ -159,32 +157,11 @@ public class SpringBlockingMongoEventStore implements EventStore {
         insertAll(serializedEvents);
     }
 
-    @SuppressWarnings("UnnecessaryLocalVariable")
     private void insertAll(List<Document> documents) {
         try {
             mongoTemplate.getCollection(eventStoreCollectionName).insertMany(documents);
         } catch (MongoBulkWriteException e) {
-            DuplicateCloudEventException duplicateCloudEventException = e.getWriteErrors().stream()
-                    .filter(error -> error.getCode() == 11000)
-                    .map(WriteError::getMessage)
-                    .filter(errorMessage -> errorMessage.contains("{ id: \"") && errorMessage.contains(", source: \""))
-                    .map(errorMessage -> {
-                        int idKeyStartIndex = errorMessage.indexOf("{ id: \"");
-                        int idValueStartIndex = idKeyStartIndex + "{ id: \"".length();
-                        int idValueEndIndex = errorMessage.indexOf("\"", idValueStartIndex);
-                        String id = errorMessage.substring(idValueStartIndex, idValueEndIndex);
-
-                        int sourceKeyStartIndex = errorMessage.indexOf(", source: \"", idValueEndIndex);
-                        int sourceValueStartIndex = sourceKeyStartIndex + ", source: \"".length();
-                        int sourceValueEndIndex = errorMessage.indexOf("\" }", sourceValueStartIndex);
-                        String source = errorMessage.substring(sourceValueStartIndex, sourceValueEndIndex);
-
-                        return new DuplicateCloudEventException(id, URI.create(source), e);
-                    })
-                    .findFirst()
-                    .orElse(new DuplicateCloudEventException(null, null, e));
-
-            throw duplicateCloudEventException;
+            throw translateToDuplicateCloudEventException(e);
         }
     }
 

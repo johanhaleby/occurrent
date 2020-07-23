@@ -4,6 +4,7 @@ import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.mongodb.ConnectionString;
+import com.mongodb.MongoBulkWriteException;
 import io.cloudevents.CloudEvent;
 import io.cloudevents.core.builder.CloudEventBuilder;
 import org.jetbrains.annotations.NotNull;
@@ -19,6 +20,7 @@ import se.haleby.occurrent.domain.DomainEvent;
 import se.haleby.occurrent.domain.Name;
 import se.haleby.occurrent.domain.NameDefined;
 import se.haleby.occurrent.domain.NameWasChanged;
+import se.haleby.occurrent.eventstore.api.DuplicateCloudEventException;
 import se.haleby.occurrent.eventstore.api.WriteCondition;
 import se.haleby.occurrent.eventstore.api.WriteConditionNotFulfilledException;
 import se.haleby.occurrent.eventstore.api.blocking.EventStream;
@@ -186,6 +188,102 @@ class MongoEventStoreTest {
         assertAll(
                 () -> assertThat(eventStream.version()).isEqualTo(2),
                 () -> assertThat(readEvents).hasSize(2),
+                () -> assertThat(readEvents).containsExactly(nameDefined, nameWasChanged1)
+        );
+    }
+
+    @Test
+    void events_that_are_inserted_before_duplicate_event_in_batch_is_written_when_stream_consistency_guarantee_is_none() {
+        mongoEventStore = newMongoEventStore(StreamConsistencyGuarantee.none());
+        LocalDateTime now = LocalDateTime.now();
+
+        NameDefined nameDefined = new NameDefined(UUID.randomUUID().toString(), now, "name");
+        NameWasChanged nameWasChanged1 = new NameWasChanged(UUID.randomUUID().toString(), now.plusHours(1), "name2");
+        NameWasChanged nameWasChanged2 = new NameWasChanged(UUID.randomUUID().toString(), now.plusHours(2), "name4");
+
+        // When
+        Throwable throwable = catchThrowable(() -> persist("name", Stream.of(nameDefined, nameWasChanged1, nameWasChanged1, nameWasChanged2)));
+
+        // Then
+        EventStream<CloudEvent> eventStream = mongoEventStore.read("name");
+        List<DomainEvent> readEvents = deserialize(eventStream.events());
+
+        assertAll(
+                () -> assertThat(throwable).isExactlyInstanceOf(DuplicateCloudEventException.class).hasCauseExactlyInstanceOf(MongoBulkWriteException.class),
+                () -> assertThat(eventStream.version()).isEqualTo(-1),
+                // MongoDB inserts all events up until the error but ignores events after the failed events..
+                () -> assertThat(readEvents).containsExactly(nameDefined, nameWasChanged1)
+        );
+    }
+
+    @Test
+    void events_that_are_inserted_before_the_duplicate_event_in_batch_are_retained_when_stream_consistency_guarantee_is_none() {
+        mongoEventStore = newMongoEventStore(StreamConsistencyGuarantee.none());
+        LocalDateTime now = LocalDateTime.now();
+
+        NameDefined nameDefined = new NameDefined(UUID.randomUUID().toString(), now, "name");
+        NameWasChanged nameWasChanged1 = new NameWasChanged(UUID.randomUUID().toString(), now.plusHours(1), "name2");
+        NameWasChanged nameWasChanged2 = new NameWasChanged(UUID.randomUUID().toString(), now.plusHours(2), "name4");
+
+        persist("name", Stream.of(nameDefined, nameWasChanged1));
+
+        // When
+        Throwable throwable = catchThrowable(() -> persist("name", Stream.of(nameWasChanged2, nameWasChanged1)));
+
+
+        // Then
+        EventStream<CloudEvent> eventStream = mongoEventStore.read("name");
+        List<DomainEvent> readEvents = deserialize(eventStream.events());
+
+        assertAll(
+                () -> assertThat(throwable).isExactlyInstanceOf(DuplicateCloudEventException.class).hasCauseExactlyInstanceOf(MongoBulkWriteException.class),
+                () -> assertThat(eventStream.version()).isEqualTo(-1),
+                () -> assertThat(readEvents).containsExactly(nameDefined, nameWasChanged1, nameWasChanged2)
+        );
+    }
+
+    @Test
+    void no_events_are_inserted_when_batch_contains_duplicate_events_when_stream_consistency_guarantee_is_transactional() {
+        LocalDateTime now = LocalDateTime.now();
+
+        NameDefined nameDefined = new NameDefined(UUID.randomUUID().toString(), now, "name");
+        NameWasChanged nameWasChanged1 = new NameWasChanged(UUID.randomUUID().toString(), now.plusHours(1), "name2");
+        NameWasChanged nameWasChanged2 = new NameWasChanged(UUID.randomUUID().toString(), now.plusHours(2), "name4");
+
+        // When
+        Throwable throwable = catchThrowable(() -> persist("name", streamVersionEq(0), Stream.of(nameDefined, nameWasChanged1, nameWasChanged1, nameWasChanged2)));
+
+        // Then
+        EventStream<CloudEvent> eventStream = mongoEventStore.read("name");
+        List<DomainEvent> readEvents = deserialize(eventStream.events());
+
+        assertAll(
+                () -> assertThat(throwable).isExactlyInstanceOf(DuplicateCloudEventException.class).hasCauseExactlyInstanceOf(MongoBulkWriteException.class),
+                () -> assertThat(eventStream.version()).isEqualTo(0),
+                () -> assertThat(readEvents).isEmpty()
+        );
+    }
+
+    @Test
+    void no_events_are_inserted_when_batch_contains_event_that_has_already_been_persisted_when_stream_consistency_guarantee_is_transactional() {
+        LocalDateTime now = LocalDateTime.now();
+
+        NameDefined nameDefined = new NameDefined(UUID.randomUUID().toString(), now, "name");
+        NameWasChanged nameWasChanged1 = new NameWasChanged(UUID.randomUUID().toString(), now.plusHours(1), "name2");
+        NameWasChanged nameWasChanged2 = new NameWasChanged(UUID.randomUUID().toString(), now.plusHours(2), "name4");
+
+        persist("name", streamVersionEq(0), Stream.of(nameDefined, nameWasChanged1));
+
+        // When
+        Throwable throwable = catchThrowable(() -> persist("name", streamVersionEq(1), Stream.of(nameWasChanged2, nameWasChanged1)));
+
+        // Then
+        EventStream<CloudEvent> eventStream = mongoEventStore.read("name");
+        List<DomainEvent> readEvents = deserialize(eventStream.events());
+
+        assertAll(
+                () -> assertThat(throwable).isExactlyInstanceOf(DuplicateCloudEventException.class).hasCauseExactlyInstanceOf(MongoBulkWriteException.class),
+                () -> assertThat(eventStream.version()).isEqualTo(1),
                 () -> assertThat(readEvents).containsExactly(nameDefined, nameWasChanged1)
         );
     }
