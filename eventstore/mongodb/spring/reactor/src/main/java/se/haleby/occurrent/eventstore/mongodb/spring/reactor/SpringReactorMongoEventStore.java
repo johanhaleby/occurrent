@@ -197,22 +197,21 @@ public class SpringReactorMongoEventStore implements EventStore {
 
         final Mono<String> additionalIndexes;
         if (streamConsistencyGuarantee instanceof Transactional) {
-            // SessionSynchronization need to be "ALWAYS" in order for TransactionTemplate to work with mongo template!
-            // See https://docs.spring.io/spring-data/mongodb/docs/current/reference/html/#mongo.transactions.transaction-template
-            mongoTemplate.setSessionSynchronization(ALWAYS);
             String streamVersionCollectionName = ((Transactional) streamConsistencyGuarantee).streamVersionCollectionName;
-
             additionalIndexes = createIndex(streamVersionCollectionName, mongoTemplate, Indexes.compoundIndex(Indexes.ascending(ID), Indexes.ascending(VERSION)), new IndexOptions().unique(true));
         } else if (streamConsistencyGuarantee instanceof TransactionInsertsOnly) {
-            // SessionSynchronization need to be "ALWAYS" in order for TransactionTemplate to work with mongo template!
-            // See https://docs.spring.io/spring-data/mongodb/docs/current/reference/html/#mongo.transactions.transaction-template
-            mongoTemplate.setSessionSynchronization(ALWAYS);
             additionalIndexes = Mono.empty();
         } else if (streamConsistencyGuarantee instanceof TransactionAlreadyStarted) {
             String streamVersionCollectionName = ((TransactionAlreadyStarted) streamConsistencyGuarantee).streamVersionCollectionName;
             additionalIndexes = createIndex(streamVersionCollectionName, mongoTemplate, Indexes.compoundIndex(Indexes.ascending(ID), Indexes.ascending(VERSION)), new IndexOptions().unique(true));
         } else {
             additionalIndexes = Mono.empty();
+        }
+
+        if (!(streamConsistencyGuarantee instanceof None)) {
+            // SessionSynchronization need to be "ALWAYS" in order for TransactionTemplate to work with mongo template!
+            // See https://docs.spring.io/spring-data/mongodb/docs/current/reference/html/#mongo.transactions.transaction-template
+            mongoTemplate.setSessionSynchronization(ALWAYS);
         }
 
         return createEventStoreCollection.then(indexStreamId).then(indexIdAndSource).then(additionalIndexes).then();
