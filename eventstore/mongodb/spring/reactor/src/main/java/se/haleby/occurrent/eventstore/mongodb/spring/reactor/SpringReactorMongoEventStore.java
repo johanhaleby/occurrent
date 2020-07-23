@@ -1,5 +1,6 @@
 package se.haleby.occurrent.eventstore.mongodb.spring.reactor;
 
+import com.mongodb.MongoBulkWriteException;
 import com.mongodb.client.model.IndexOptions;
 import com.mongodb.client.model.Indexes;
 import com.mongodb.reactivestreams.client.MongoCollection;
@@ -9,10 +10,12 @@ import io.cloudevents.core.provider.EventFormatProvider;
 import io.cloudevents.jackson.JsonFormat;
 import org.bson.Document;
 import org.bson.conversions.Bson;
+import org.springframework.dao.DuplicateKeyException;
 import org.springframework.data.mongodb.core.ReactiveMongoTemplate;
 import org.springframework.data.mongodb.core.query.Criteria;
 import org.springframework.data.mongodb.core.query.Query;
 import org.springframework.data.mongodb.core.query.Update;
+import org.springframework.transaction.reactive.TransactionalOperator;
 import reactor.core.publisher.Flux;
 import reactor.core.publisher.Mono;
 import se.haleby.occurrent.cloudevents.OccurrentCloudEventExtension;
@@ -21,13 +24,15 @@ import se.haleby.occurrent.eventstore.api.WriteCondition.StreamVersionWriteCondi
 import se.haleby.occurrent.eventstore.api.WriteConditionNotFulfilledException;
 import se.haleby.occurrent.eventstore.api.reactor.EventStore;
 import se.haleby.occurrent.eventstore.api.reactor.EventStream;
+import se.haleby.occurrent.eventstore.mongodb.converter.MongoBulkWriteExceptionToDuplicateCloudEventExceptionTranslator;
+import se.haleby.occurrent.eventstore.mongodb.converter.OccurrentCloudEventMongoDBDocumentMapper;
 import se.haleby.occurrent.eventstore.mongodb.spring.reactor.StreamConsistencyGuarantee.None;
-import se.haleby.occurrent.eventstore.mongodb.spring.reactor.StreamConsistencyGuarantee.Transactional;
 import se.haleby.occurrent.eventstore.mongodb.spring.reactor.StreamConsistencyGuarantee.TransactionAlreadyStarted;
+import se.haleby.occurrent.eventstore.mongodb.spring.reactor.StreamConsistencyGuarantee.TransactionInsertsOnly;
+import se.haleby.occurrent.eventstore.mongodb.spring.reactor.StreamConsistencyGuarantee.Transactional;
 
 import java.util.HashMap;
 
-import static java.nio.charset.StandardCharsets.UTF_8;
 import static org.springframework.data.mongodb.SessionSynchronization.ALWAYS;
 import static org.springframework.data.mongodb.core.query.Criteria.where;
 import static org.springframework.data.mongodb.core.query.Query.query;
@@ -65,11 +70,14 @@ public class SpringReactorMongoEventStore implements EventStore {
             throw new IllegalArgumentException("Cannot use a " + WriteCondition.class.getSimpleName() + " other than 'any' when streamConsistencyGuarantee is " + None.class.getSimpleName());
         }
 
-        Flux<Document> serializedEvents = convertToDocuments(cloudEventSerializer, streamId, events);
+        Flux<Document> serializedEvents = events.map(cloudEvent -> OccurrentCloudEventMongoDBDocumentMapper.convertToDocument(cloudEventSerializer, streamId, cloudEvent));
 
         Mono<Void> result;
         if (streamConsistencyGuarantee instanceof None) {
             result = insertAll(serializedEvents).then();
+        } else if (streamConsistencyGuarantee instanceof TransactionInsertsOnly) {
+            TransactionalOperator transactional = ((TransactionInsertsOnly) streamConsistencyGuarantee).transactionalOperator;
+            result = transactional.execute(__ -> insertAll(serializedEvents)).then();
         } else if (streamConsistencyGuarantee instanceof Transactional) {
             Transactional transactional = (Transactional) this.streamConsistencyGuarantee;
             String streamVersionCollectionName = transactional.streamVersionCollectionName;
@@ -91,7 +99,7 @@ public class SpringReactorMongoEventStore implements EventStore {
     @Override
     public Mono<EventStream<CloudEvent>> read(String streamId, int skip, int limit) {
         final Mono<EventStreamImpl> eventStream;
-        if (streamConsistencyGuarantee instanceof None) {
+        if (streamConsistencyGuarantee instanceof None || streamConsistencyGuarantee instanceof TransactionInsertsOnly) {
             Flux<Document> flux = readCloudEvents(streamId, skip, limit);
             eventStream = Mono.just(new EventStreamImpl(streamId, 0, flux));
         } else if (streamConsistencyGuarantee instanceof Transactional) {
@@ -134,10 +142,10 @@ public class SpringReactorMongoEventStore implements EventStore {
                 .then();
     }
 
-    // TODO If inserts fail due to duplicate cloud event, remove this event from the documents list
-    //  (and all events before this document since they have been successfully inserted) and retry!
     private Flux<Document> insertAll(Flux<Document> documents) {
-        return mongoTemplate.insertAll(documents.collectList(), eventStoreCollectionName);
+        return mongoTemplate.insertAll(documents.collectList(), eventStoreCollectionName)
+                .onErrorMap(DuplicateKeyException.class, Throwable::getCause)
+                .onErrorMap(MongoBulkWriteException.class, MongoBulkWriteExceptionToDuplicateCloudEventExceptionTranslator::translateToDuplicateCloudEventException);
     }
 
     private Mono<Void> increaseStreamVersion(String streamId, WriteCondition writeCondition, String streamVersionCollectionName) {
@@ -195,6 +203,11 @@ public class SpringReactorMongoEventStore implements EventStore {
             String streamVersionCollectionName = ((Transactional) streamConsistencyGuarantee).streamVersionCollectionName;
 
             additionalIndexes = createIndex(streamVersionCollectionName, mongoTemplate, Indexes.compoundIndex(Indexes.ascending(ID), Indexes.ascending(VERSION)), new IndexOptions().unique(true));
+        } else if (streamConsistencyGuarantee instanceof TransactionInsertsOnly) {
+            // SessionSynchronization need to be "ALWAYS" in order for TransactionTemplate to work with mongo template!
+            // See https://docs.spring.io/spring-data/mongodb/docs/current/reference/html/#mongo.transactions.transaction-template
+            mongoTemplate.setSessionSynchronization(ALWAYS);
+            additionalIndexes = Mono.empty();
         } else if (streamConsistencyGuarantee instanceof TransactionAlreadyStarted) {
             String streamVersionCollectionName = ((TransactionAlreadyStarted) streamConsistencyGuarantee).streamVersionCollectionName;
             additionalIndexes = createIndex(streamVersionCollectionName, mongoTemplate, Indexes.compoundIndex(Indexes.ascending(ID), Indexes.ascending(VERSION)), new IndexOptions().unique(true));
@@ -213,21 +226,8 @@ public class SpringReactorMongoEventStore implements EventStore {
         return mongoTemplate.collectionExists(eventStoreCollectionName).flatMap(exists -> mongoTemplate.createCollection(eventStoreCollectionName));
     }
 
-    // Serialization
-    public static Flux<Document> convertToDocuments(EventFormat eventFormat, String streamId, Flux<CloudEvent> cloudEvents) {
-        return cloudEvents
-                .map(eventFormat::serialize)
-                .map(bytes -> {
-                    Document cloudEventDocument = Document.parse(new String(bytes, UTF_8));
-                    cloudEventDocument.put(STREAM_ID, streamId);
-                    return cloudEventDocument;
-                });
-    }
-
     public static Mono<EventStream<CloudEvent>> convertToCloudEvent(EventFormat eventFormat, Mono<EventStreamImpl> eventStream) {
-        return eventStream.map(es -> es.map(Document::toJson)
-                .map(eventJsonString -> eventJsonString.getBytes(UTF_8))
-                .map(eventFormat::deserialize));
+        return eventStream.map(es -> es.map(document -> OccurrentCloudEventMongoDBDocumentMapper.convertToCloudEvent(eventFormat, document)));
     }
 
     private static boolean isSkipOrLimitDefined(int skip, int limit) {

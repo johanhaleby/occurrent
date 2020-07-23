@@ -29,13 +29,14 @@ import java.util.Map;
 import java.util.stream.Collectors;
 import java.util.stream.Stream;
 
+import static java.util.Objects.requireNonNull;
 import static org.springframework.data.mongodb.SessionSynchronization.ALWAYS;
 import static org.springframework.data.mongodb.core.query.Criteria.where;
 import static org.springframework.data.mongodb.core.query.Query.query;
 import static se.haleby.occurrent.cloudevents.OccurrentCloudEventExtension.STREAM_ID;
 import static se.haleby.occurrent.eventstore.mongodb.converter.MongoBulkWriteExceptionToDuplicateCloudEventExceptionTranslator.translateToDuplicateCloudEventException;
 import static se.haleby.occurrent.eventstore.mongodb.converter.OccurrentCloudEventMongoDBDocumentMapper.convertToCloudEvent;
-import static se.haleby.occurrent.eventstore.mongodb.converter.OccurrentCloudEventMongoDBDocumentMapper.convertToDocuments;
+import static se.haleby.occurrent.eventstore.mongodb.converter.OccurrentCloudEventMongoDBDocumentMapper.convertToDocument;
 import static se.haleby.occurrent.eventstore.mongodb.spring.common.internal.ConditionToCriteriaConverter.convertConditionToCriteria;
 
 public class SpringBlockingMongoEventStore implements EventStore {
@@ -70,7 +71,7 @@ public class SpringBlockingMongoEventStore implements EventStore {
         } else {
             throw new IllegalStateException("Internal error, invalid stream write consistency guarantee");
         }
-        return convertToCloudEvent(cloudEventSerializer, eventStream);
+        return requireNonNull(eventStream).map(document -> convertToCloudEvent(cloudEventSerializer, document));
     }
 
     @Override
@@ -81,7 +82,9 @@ public class SpringBlockingMongoEventStore implements EventStore {
             throw new IllegalArgumentException("Cannot use a " + WriteCondition.class.getSimpleName() + " other than 'any' when streamConsistencyGuarantee is " + None.class.getSimpleName());
         }
 
-        List<Document> serializedEvents = convertToDocuments(cloudEventSerializer, streamId, events).collect(Collectors.toList());
+        List<Document> serializedEvents = events
+                .map(cloudEvent -> convertToDocument(cloudEventSerializer, streamId, cloudEvent))
+                .collect(Collectors.toList());
 
         if (streamConsistencyGuarantee instanceof None) {
             insertAll(serializedEvents);

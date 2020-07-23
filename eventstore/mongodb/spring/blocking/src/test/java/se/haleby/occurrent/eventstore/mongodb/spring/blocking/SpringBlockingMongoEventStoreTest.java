@@ -415,10 +415,8 @@ public class SpringBlockingMongoEventStoreTest {
         @DisplayName("and there are duplicate events")
         class DuplicatesTest {
 
-
             @Test
             void no_events_are_inserted_when_batch_contains_duplicate_events_when_stream_consistency_guarantee_is_transactional() {
-                eventStore = newSpringBlockingMongoEventStore(StreamConsistencyGuarantee.transactionAlreadyStarted("event-stream-version"));
                 LocalDateTime now = LocalDateTime.now();
 
                 NameDefined nameDefined = new NameDefined(UUID.randomUUID().toString(), now, "name");
@@ -434,14 +432,13 @@ public class SpringBlockingMongoEventStoreTest {
 
                 assertAll(
                         () -> assertThat(throwable).isExactlyInstanceOf(DuplicateCloudEventException.class).hasCauseExactlyInstanceOf(MongoBulkWriteException.class),
-                        () -> assertThat(eventStream.version()).isEqualTo(1),
-                        () -> assertThat(readEvents).containsExactly(nameDefined, nameWasChanged1)
+                        () -> assertThat(eventStream.version()).isEqualTo(0),
+                        () -> assertThat(readEvents).isEmpty()
                 );
             }
 
             @Test
             void no_events_are_inserted_when_batch_contains_event_that_has_already_been_persisted_when_stream_consistency_guarantee_is_transactional() {
-                eventStore = newSpringBlockingMongoEventStore(StreamConsistencyGuarantee.transactionAlreadyStarted("event-stream-version"));
                 LocalDateTime now = LocalDateTime.now();
 
                 NameDefined nameDefined = new NameDefined(UUID.randomUUID().toString(), now, "name");
@@ -459,9 +456,9 @@ public class SpringBlockingMongoEventStoreTest {
 
                 assertAll(
                         () -> assertThat(throwable).isExactlyInstanceOf(DuplicateCloudEventException.class).hasCauseExactlyInstanceOf(MongoBulkWriteException.class),
-                        () -> assertThat(eventStream.version()).isEqualTo(2),
-                        () -> assertThat(readEvents).hasSize(3),
-                        () -> assertThat(readEvents).containsExactly(nameDefined, nameWasChanged1, nameWasChanged2)
+                        () -> assertThat(eventStream.version()).isEqualTo(1),
+                        () -> assertThat(readEvents).hasSize(2),
+                        () -> assertThat(readEvents).containsExactly(nameDefined, nameWasChanged1)
                 );
             }
         }
@@ -470,7 +467,6 @@ public class SpringBlockingMongoEventStoreTest {
     @DisplayName("when using StreamConsistencyGuarantee with type transaction already started")
     @Nested
     class StreamConsistencyGuaranteeTransactionAlreadyStarted {
-
 
         @BeforeEach
         void create_mongo_spring_blocking_event_store_with_stream_write_consistency_guarantee_transaction_already_started() {

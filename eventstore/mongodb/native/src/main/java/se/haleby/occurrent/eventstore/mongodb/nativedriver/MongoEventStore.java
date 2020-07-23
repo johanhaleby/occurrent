@@ -40,7 +40,7 @@ import static com.mongodb.client.model.Filters.*;
 import static com.mongodb.client.model.Updates.inc;
 import static se.haleby.occurrent.eventstore.mongodb.converter.MongoBulkWriteExceptionToDuplicateCloudEventExceptionTranslator.translateToDuplicateCloudEventException;
 import static se.haleby.occurrent.eventstore.mongodb.converter.OccurrentCloudEventMongoDBDocumentMapper.convertToCloudEvent;
-import static se.haleby.occurrent.eventstore.mongodb.converter.OccurrentCloudEventMongoDBDocumentMapper.convertToDocuments;
+import static se.haleby.occurrent.eventstore.mongodb.converter.OccurrentCloudEventMongoDBDocumentMapper.convertToDocument;
 
 public class MongoEventStore implements EventStore {
     private static final Logger log = LoggerFactory.getLogger(MongoEventStore.class);
@@ -78,7 +78,7 @@ public class MongoEventStore implements EventStore {
         } else {
             throw new IllegalStateException("Internal error, invalid stream write consistency guarantee");
         }
-        return convertToCloudEvent(cloudEventSerializer, eventStream);
+        return eventStream.map(document -> convertToCloudEvent(cloudEventSerializer, document));
     }
 
     private EventStreamImpl<Document> readEventStream(String streamId, int skip, int limit, Transactional transactional) {
@@ -130,7 +130,9 @@ public class MongoEventStore implements EventStore {
             throw new IllegalArgumentException("Cannot use a " + WriteCondition.class.getSimpleName() + " other than 'any' when streamConsistencyGuarantee is " + None.class.getSimpleName());
         }
 
-        List<Document> cloudEventDocuments = convertToDocuments(cloudEventSerializer, streamId, events).collect(Collectors.toList());
+        List<Document> cloudEventDocuments = events
+                .map(cloudEvent -> convertToDocument(cloudEventSerializer, streamId, cloudEvent))
+                .collect(Collectors.toList());
 
         if (streamConsistencyGuarantee instanceof None) {
             try {

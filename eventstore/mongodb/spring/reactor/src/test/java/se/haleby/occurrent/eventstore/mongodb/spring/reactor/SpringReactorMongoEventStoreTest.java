@@ -2,6 +2,7 @@ package se.haleby.occurrent.eventstore.mongodb.spring.reactor;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.mongodb.ConnectionString;
+import com.mongodb.MongoBulkWriteException;
 import com.mongodb.reactivestreams.client.MongoClient;
 import com.mongodb.reactivestreams.client.MongoClients;
 import io.cloudevents.CloudEvent;
@@ -24,6 +25,7 @@ import se.haleby.occurrent.domain.DomainEvent;
 import se.haleby.occurrent.domain.Name;
 import se.haleby.occurrent.domain.NameDefined;
 import se.haleby.occurrent.domain.NameWasChanged;
+import se.haleby.occurrent.eventstore.api.DuplicateCloudEventException;
 import se.haleby.occurrent.eventstore.api.WriteCondition;
 import se.haleby.occurrent.eventstore.api.WriteConditionNotFulfilledException;
 import se.haleby.occurrent.eventstore.api.reactor.EventStore;
@@ -220,6 +222,88 @@ public class SpringReactorMongoEventStoreTest {
                     () -> assertThat(versionAndEvents.events).containsExactly(nameDefined)
             );
         }
+
+        @Test
+        void events_that_are_inserted_before_duplicate_event_in_batch_is_written_when_stream_consistency_guarantee_is_none() {
+            LocalDateTime now = LocalDateTime.now();
+
+            NameDefined nameDefined = new NameDefined(UUID.randomUUID().toString(), now, "name");
+            NameWasChanged nameWasChanged1 = new NameWasChanged(UUID.randomUUID().toString(), now.plusHours(1), "name2");
+            NameWasChanged nameWasChanged2 = new NameWasChanged(UUID.randomUUID().toString(), now.plusHours(2), "name4");
+
+            // When
+            Throwable throwable = catchThrowable(() -> persist("name", Flux.just(nameDefined, nameWasChanged1, nameWasChanged1, nameWasChanged2)).block());
+
+            // Then
+            Mono<EventStream<CloudEvent>> eventStream = eventStore.read("name");
+            VersionAndEvents versionAndEvents = deserialize(eventStream);
+
+            assertAll(
+                    () -> assertThat(throwable).isExactlyInstanceOf(DuplicateCloudEventException.class).hasCauseExactlyInstanceOf(MongoBulkWriteException.class),
+                    () -> assertThat(versionAndEvents.version).isEqualTo(0),
+                    // MongoDB inserts all events up until the error but ignores events after the failed events..
+                    () -> assertThat(versionAndEvents.events).containsExactly(nameDefined, nameWasChanged1)
+            );
+        }
+
+        @Test
+        void events_that_are_inserted_before_the_duplicate_event_in_batch_are_retained_when_stream_consistency_guarantee_is_none() {
+            LocalDateTime now = LocalDateTime.now();
+
+            NameDefined nameDefined = new NameDefined(UUID.randomUUID().toString(), now, "name");
+            NameWasChanged nameWasChanged1 = new NameWasChanged(UUID.randomUUID().toString(), now.plusHours(1), "name2");
+            NameWasChanged nameWasChanged2 = new NameWasChanged(UUID.randomUUID().toString(), now.plusHours(2), "name4");
+
+            persist("name", Flux.just(nameDefined, nameWasChanged1)).block();
+
+            // When
+            Throwable throwable = catchThrowable(() -> persist("name", Flux.just(nameWasChanged2, nameWasChanged1)).block());
+
+            // Then
+            Mono<EventStream<CloudEvent>> eventStream = eventStore.read("name");
+            VersionAndEvents versionAndEvents = deserialize(eventStream);
+
+            assertAll(
+                    () -> assertThat(throwable).isExactlyInstanceOf(DuplicateCloudEventException.class).hasCauseExactlyInstanceOf(MongoBulkWriteException.class),
+                    () -> assertThat(versionAndEvents.version).isEqualTo(0),
+                    () -> assertThat(versionAndEvents.events).containsExactly(nameDefined, nameWasChanged1, nameWasChanged2)
+            );
+        }
+    }
+
+    @DisplayName("when using StreamConsistencyGuarantee with type transactional inserts only")
+    @Nested
+    class StreamConsistencyGuaranteeTransactionalInsertsOnly {
+
+        @BeforeEach
+        void create_mongo_spring_reactive_event_store_with_stream_write_consistency_guarantee_transactional_inserts_only() {
+            ReactiveMongoTransactionManager reactiveMongoTransactionManager = new ReactiveMongoTransactionManager(new SimpleReactiveMongoDatabaseFactory(mongoClient, requireNonNull(connectionString.getDatabase())));
+            eventStore = new SpringReactorMongoEventStore(mongoTemplate, connectionString.getCollection(), StreamConsistencyGuarantee.transactionalInsertsOnly(reactiveMongoTransactionManager));
+        }
+
+        @Test
+        void no_events_are_inserted_before_the_duplicate_event_in_batch_when_stream_consistency_guarantee_is_transactional_inserts_only() {
+            LocalDateTime now = LocalDateTime.now();
+
+            NameDefined nameDefined = new NameDefined(UUID.randomUUID().toString(), now, "name");
+            NameWasChanged nameWasChanged1 = new NameWasChanged(UUID.randomUUID().toString(), now.plusHours(1), "name2");
+            NameWasChanged nameWasChanged2 = new NameWasChanged(UUID.randomUUID().toString(), now.plusHours(2), "name4");
+
+            persist("name", Flux.just(nameDefined, nameWasChanged1)).block();
+
+            // When
+            Throwable throwable = catchThrowable(() -> persist("name", Flux.just(nameWasChanged2, nameWasChanged1)).block());
+
+            // Then
+            Mono<EventStream<CloudEvent>> eventStream = eventStore.read("name");
+            VersionAndEvents versionAndEvents = deserialize(eventStream);
+
+            assertAll(
+                    () -> assertThat(throwable).isExactlyInstanceOf(DuplicateCloudEventException.class).hasCauseExactlyInstanceOf(MongoBulkWriteException.class),
+                    () -> assertThat(versionAndEvents.version).isEqualTo(0),
+                    () -> assertThat(versionAndEvents.events).containsExactly(nameDefined, nameWasChanged1)
+            );
+        }
     }
 
     @DisplayName("when using StreamConsistencyGuarantee with type transactional")
@@ -332,7 +416,7 @@ public class SpringReactorMongoEventStoreTest {
             VersionAndEvents versionAndEvents = deserialize(eventStream);
 
             assertAll(
-                    () -> assertThat(throwable).isExactlyInstanceOf(DuplicateKeyException.class),
+                    () -> assertThat(throwable).isExactlyInstanceOf(DuplicateCloudEventException.class),
                     () -> assertThat(versionAndEvents.version).isEqualTo(1),
                     () -> assertThat(versionAndEvents.events).hasSize(2),
                     () -> assertThat(versionAndEvents.events).containsExactlyElementsOf(events)
@@ -401,6 +485,52 @@ public class SpringReactorMongoEventStoreTest {
             );
         }
 
+        @Test
+        void no_events_are_inserted_when_batch_contains_duplicate_events_when_stream_consistency_guarantee_is_transactional() {
+            LocalDateTime now = LocalDateTime.now();
+
+            NameDefined nameDefined = new NameDefined(UUID.randomUUID().toString(), now, "name");
+            NameWasChanged nameWasChanged1 = new NameWasChanged(UUID.randomUUID().toString(), now.plusHours(1), "name2");
+            NameWasChanged nameWasChanged2 = new NameWasChanged(UUID.randomUUID().toString(), now.plusHours(2), "name4");
+
+            // When
+            Throwable throwable = catchThrowable(() -> persist("name", streamVersionEq(0), Flux.just(nameDefined, nameWasChanged1, nameWasChanged1, nameWasChanged2)).block());
+
+            // Then
+            Mono<EventStream<CloudEvent>> eventStream = eventStore.read("name");
+            VersionAndEvents versionAndEvents = deserialize(eventStream);
+
+            assertAll(
+                    () -> assertThat(throwable).isExactlyInstanceOf(DuplicateCloudEventException.class).hasCauseExactlyInstanceOf(MongoBulkWriteException.class),
+                    () -> assertThat(versionAndEvents.version).isEqualTo(0),
+                    () -> assertThat(versionAndEvents.events).isEmpty()
+            );
+        }
+
+        @Test
+        void no_events_are_inserted_when_batch_contains_event_that_has_already_been_persisted_when_stream_consistency_guarantee_is_transactional() {
+            LocalDateTime now = LocalDateTime.now();
+
+            NameDefined nameDefined = new NameDefined(UUID.randomUUID().toString(), now, "name");
+            NameWasChanged nameWasChanged1 = new NameWasChanged(UUID.randomUUID().toString(), now.plusHours(1), "name2");
+            NameWasChanged nameWasChanged2 = new NameWasChanged(UUID.randomUUID().toString(), now.plusHours(2), "name4");
+
+            persist("name", streamVersionEq(0), Flux.just(nameDefined, nameWasChanged1)).block();
+
+            // When
+            Throwable throwable = catchThrowable(() -> persist("name", streamVersionEq(1), Flux.just(nameWasChanged2, nameWasChanged1)).block());
+
+            // Then
+            Mono<EventStream<CloudEvent>> eventStream = eventStore.read("name");
+            VersionAndEvents versionAndEvents = deserialize(eventStream);
+
+            assertAll(
+                    () -> assertThat(throwable).isExactlyInstanceOf(DuplicateCloudEventException.class).hasCauseExactlyInstanceOf(MongoBulkWriteException.class),
+                    () -> assertThat(versionAndEvents.version).isEqualTo(1),
+                    () -> assertThat(versionAndEvents.events).hasSize(2),
+                    () -> assertThat(versionAndEvents.events).containsExactly(nameDefined, nameWasChanged1)
+            );
+        }
     }
 
     @DisplayName("when using StreamConsistencyGuarantee with type transaction already started")
@@ -511,7 +641,7 @@ public class SpringReactorMongoEventStoreTest {
             VersionAndEvents versionAndEvents = deserialize(eventStream);
 
             assertAll(
-                    () -> assertThat(throwable).isExactlyInstanceOf(DuplicateKeyException.class),
+                    () -> assertThat(throwable).isExactlyInstanceOf(DuplicateCloudEventException.class),
                     () -> assertThat(versionAndEvents.version).isEqualTo(2),
                     () -> assertThat(versionAndEvents.events).hasSize(2),
                     () -> assertThat(versionAndEvents.events).containsExactlyElementsOf(events)
