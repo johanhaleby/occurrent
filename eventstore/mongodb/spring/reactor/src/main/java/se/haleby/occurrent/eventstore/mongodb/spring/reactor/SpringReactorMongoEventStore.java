@@ -23,6 +23,7 @@ import se.haleby.occurrent.eventstore.api.WriteCondition;
 import se.haleby.occurrent.eventstore.api.WriteCondition.StreamVersionWriteCondition;
 import se.haleby.occurrent.eventstore.api.WriteConditionNotFulfilledException;
 import se.haleby.occurrent.eventstore.api.reactor.EventStore;
+import se.haleby.occurrent.eventstore.api.reactor.EventStoreOperations;
 import se.haleby.occurrent.eventstore.api.reactor.EventStream;
 import se.haleby.occurrent.eventstore.mongodb.converter.MongoBulkWriteExceptionToDuplicateCloudEventExceptionTranslator;
 import se.haleby.occurrent.eventstore.mongodb.converter.OccurrentCloudEventMongoDBDocumentMapper;
@@ -31,15 +32,17 @@ import se.haleby.occurrent.eventstore.mongodb.spring.reactor.StreamConsistencyGu
 import se.haleby.occurrent.eventstore.mongodb.spring.reactor.StreamConsistencyGuarantee.TransactionInsertsOnly;
 import se.haleby.occurrent.eventstore.mongodb.spring.reactor.StreamConsistencyGuarantee.Transactional;
 
+import java.net.URI;
 import java.util.HashMap;
 
+import static java.util.Objects.requireNonNull;
 import static org.springframework.data.mongodb.SessionSynchronization.ALWAYS;
 import static org.springframework.data.mongodb.core.query.Criteria.where;
 import static org.springframework.data.mongodb.core.query.Query.query;
 import static se.haleby.occurrent.cloudevents.OccurrentCloudEventExtension.STREAM_ID;
 import static se.haleby.occurrent.eventstore.mongodb.spring.common.internal.ConditionToCriteriaConverter.convertConditionToCriteria;
 
-public class SpringReactorMongoEventStore implements EventStore {
+public class SpringReactorMongoEventStore implements EventStore, EventStoreOperations {
 
     private static final String ID = "_id";
     private static final String VERSION = "version";
@@ -231,6 +234,46 @@ public class SpringReactorMongoEventStore implements EventStore {
 
     private static boolean isSkipOrLimitDefined(int skip, int limit) {
         return skip != 0 || limit != Integer.MAX_VALUE;
+    }
+
+    @Override
+    public Mono<Void> deleteEventStream(String streamId) {
+        requireNonNull(streamId, "Stream id cannot be null");
+
+        final Mono<Void> mono;
+        if (streamConsistencyGuarantee instanceof Transactional) {
+            Transactional transactional = (Transactional) this.streamConsistencyGuarantee;
+            Mono<Void> removeMetadataAndEvents = mongoTemplate
+                    .remove(query(where(ID).is(streamId)), transactional.streamVersionCollectionName)
+                    .then(deleteAllEventsInEventStream(streamId));
+            mono = transactional.transactionalOperator.transactional(removeMetadataAndEvents);
+        } else {
+            mono = deleteAllEventsInEventStream(streamId);
+        }
+        return mono;
+    }
+
+    @Override
+    public Mono<Void> deleteAllEventsInEventStream(String streamId) {
+        requireNonNull(streamId, "Stream id cannot be null");
+        Mono<Void> deleteEvents = mongoTemplate.remove(query(where(STREAM_ID).is(streamId)), eventStoreCollectionName).then();
+
+        final Mono<Void> mono;
+        if (streamConsistencyGuarantee instanceof Transactional) {
+            Transactional transactional = (Transactional) this.streamConsistencyGuarantee;
+            mono = transactional.transactionalOperator.transactional(deleteEvents);
+        } else {
+            mono = deleteEvents;
+        }
+        return mono;
+    }
+
+    @Override
+    public Mono<Void> deleteEvent(String cloudEventId, URI cloudEventSource) {
+        requireNonNull(cloudEventId, "Cloud event id cannot be null");
+        requireNonNull(cloudEventSource, "Cloud event source cannot be null");
+
+        return mongoTemplate.remove(query(where("id").is(cloudEventId).and("source").is(cloudEventSource))).then();
     }
 
     @SuppressWarnings("unused")
