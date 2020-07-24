@@ -681,9 +681,10 @@ public class SpringReactorMongoEventStoreTest {
                 // Then
                 VersionAndEvents versionAndEvents = deserialize(eventStore.read("name"));
                 assertAll(
-                        () -> assertThat(versionAndEvents.version).isZero(),
+                        () -> assertThat(versionAndEvents.version).isEqualTo(1),
                         () -> assertThat(versionAndEvents.events).isEmpty(),
-                        () -> assertThat(mongoTemplate.count(query(where(STREAM_ID).is("name")), "events").block()).isNotZero()
+                        () -> assertThat(mongoTemplate.count(query(where(STREAM_ID).is("name")), "events").block()).isZero(),
+                        () -> assertThat(mongoTemplate.count(query(where("_id").is("name")), "event-stream-version").block()).isNotZero()
                 );
             }
 
@@ -722,7 +723,7 @@ public class SpringReactorMongoEventStoreTest {
                 // Then
                 VersionAndEvents versionAndEvents = deserialize(eventStore.read("name"));
                 assertAll(
-                        () -> assertThat(versionAndEvents.version).isEqualTo(0),
+                        () -> assertThat(versionAndEvents.version).isEqualTo(1),
                         () -> assertThat(versionAndEvents.events).containsExactly(nameDefined),
                         () -> assertThat(eventStore.exists("name").block()).isTrue(),
                         () -> assertThat(mongoTemplate.count(query(where(STREAM_ID).is("name")), "events").block()).isEqualTo(1)
