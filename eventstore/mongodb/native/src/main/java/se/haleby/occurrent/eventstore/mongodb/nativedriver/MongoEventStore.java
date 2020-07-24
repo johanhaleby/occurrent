@@ -74,7 +74,7 @@ public class MongoEventStore implements EventStore, EventStoreOperations {
         final EventStream<Document> eventStream;
         if (streamConsistencyGuarantee instanceof None) {
             Stream<Document> stream = readCloudEvents(streamId, skip, limit, null);
-            eventStream = new EventStreamImpl<>(streamId, -1, stream);
+            eventStream = new EventStreamImpl<>(streamId, 0, stream);
         } else if (streamConsistencyGuarantee instanceof Transactional) {
             Transactional transactional = (Transactional) this.streamConsistencyGuarantee;
             eventStream = readEventStream(streamId, skip, limit, transactional);

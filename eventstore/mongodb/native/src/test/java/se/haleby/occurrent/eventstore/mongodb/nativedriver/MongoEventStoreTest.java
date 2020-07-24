@@ -168,7 +168,7 @@ class MongoEventStoreTest {
         List<DomainEvent> readEvents = deserialize(eventStream.events());
 
         assertAll(
-                () -> assertThat(eventStream.version()).isEqualTo(-1),
+                () -> assertThat(eventStream.version()).isZero(),
                 () -> assertThat(readEvents).hasSize(1),
                 () -> assertThat(readEvents).containsExactly(nameDefined)
         );
@@ -215,7 +215,7 @@ class MongoEventStoreTest {
 
         assertAll(
                 () -> assertThat(throwable).isExactlyInstanceOf(DuplicateCloudEventException.class).hasCauseExactlyInstanceOf(MongoBulkWriteException.class),
-                () -> assertThat(eventStream.version()).isEqualTo(-1),
+                () -> assertThat(eventStream.version()).isZero(),
                 // MongoDB inserts all events up until the error but ignores events after the failed events..
                 () -> assertThat(readEvents).containsExactly(nameDefined, nameWasChanged1)
         );
@@ -242,7 +242,7 @@ class MongoEventStoreTest {
 
         assertAll(
                 () -> assertThat(throwable).isExactlyInstanceOf(DuplicateCloudEventException.class).hasCauseExactlyInstanceOf(MongoBulkWriteException.class),
-                () -> assertThat(eventStream.version()).isEqualTo(-1),
+                () -> assertThat(eventStream.version()).isZero(),
                 () -> assertThat(readEvents).containsExactly(nameDefined, nameWasChanged1, nameWasChanged2)
         );
     }
@@ -401,7 +401,7 @@ class MongoEventStoreTest {
             EventStream<CloudEvent> eventStream = eventStore.read("name");
             List<DomainEvent> readEvents = deserialize(eventStream.events());
             assertAll(
-                    () -> assertThat(eventStream.version()).isEqualTo(-1),
+                    () -> assertThat(eventStream.version()).isZero(),
                     () -> assertThat(readEvents).isEmpty()
             );
         }
@@ -421,7 +421,7 @@ class MongoEventStoreTest {
             EventStream<CloudEvent> eventStream = eventStore.read("name");
             List<DomainEvent> readEvents = deserialize(eventStream.events());
             assertAll(
-                    () -> assertThat(eventStream.version()).isEqualTo(-1),
+                    () -> assertThat(eventStream.version()).isZero(),
                     () -> assertThat(readEvents).isEmpty(),
                     () -> assertThat(eventStore.exists("name")).isFalse(),
                     () -> assertThat(database.getCollection("events").countDocuments(Filters.eq(STREAM_ID, "name"))).isZero()
@@ -443,7 +443,7 @@ class MongoEventStoreTest {
             EventStream<CloudEvent> eventStream = eventStore.read("name");
             List<DomainEvent> readEvents = deserialize(eventStream.events());
             assertAll(
-                    () -> assertThat(eventStream.version()).isEqualTo(-1),
+                    () -> assertThat(eventStream.version()).isZero(),
                     () -> assertThat(readEvents).containsExactly(nameDefined),
                     () -> assertThat(eventStore.exists("name")).isTrue(),
                     () -> assertThat(database.getCollection("events").countDocuments(Filters.eq(STREAM_ID, "name"))).isNotZero()
