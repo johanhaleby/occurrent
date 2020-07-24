@@ -291,7 +291,7 @@ public class SpringBlockingMongoEventStoreTest {
                 EventStream<CloudEvent> eventStream = eventStore.read("name");
                 List<DomainEvent> readEvents = deserialize(eventStream.events());
                 assertAll(
-                        () -> assertThat(eventStream.version()).isEqualTo(1),
+                        () -> assertThat(eventStream.version()).isZero(),
                         () -> assertThat(readEvents).isEmpty(),
                         () -> assertThat(mongoTemplate.count(query(where(STREAM_ID).is("name")), "events")).isZero()
                 );
@@ -334,7 +334,7 @@ public class SpringBlockingMongoEventStoreTest {
                 EventStream<CloudEvent> eventStream = eventStore.read("name");
                 List<DomainEvent> readEvents = deserialize(eventStream.events());
                 assertAll(
-                        () -> assertThat(eventStream.version()).isEqualTo(1),
+                        () -> assertThat(eventStream.version()).isZero(),
                         () -> assertThat(readEvents).containsExactly(nameDefined),
                         () -> assertThat(eventStore.exists("name")).isTrue(),
                         () -> assertThat(mongoTemplate.count(query(where(STREAM_ID).is("name")), "events")).isEqualTo(1)
