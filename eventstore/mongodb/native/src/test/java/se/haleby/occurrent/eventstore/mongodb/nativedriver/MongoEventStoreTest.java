@@ -43,7 +43,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.catchThrowable;
 import static org.junit.jupiter.api.Assertions.assertAll;
 import static se.haleby.occurrent.domain.Composition.chain;
-import static se.haleby.occurrent.eventstore.api.WriteCondition.Condition.*;
+import static se.haleby.occurrent.eventstore.api.Condition.*;
 import static se.haleby.occurrent.eventstore.api.WriteCondition.*;
 import static se.haleby.occurrent.time.TimeConversion.toLocalDateTime;
 

@@ -18,11 +18,13 @@ import se.haleby.occurrent.eventstore.api.WriteCondition;
 import se.haleby.occurrent.eventstore.api.WriteCondition.StreamVersionWriteCondition;
 import se.haleby.occurrent.eventstore.api.WriteConditionNotFulfilledException;
 import se.haleby.occurrent.eventstore.api.blocking.EventStore;
+import se.haleby.occurrent.eventstore.api.blocking.EventStoreOperations;
 import se.haleby.occurrent.eventstore.api.blocking.EventStream;
 import se.haleby.occurrent.eventstore.mongodb.spring.blocking.StreamConsistencyGuarantee.None;
 import se.haleby.occurrent.eventstore.mongodb.spring.blocking.StreamConsistencyGuarantee.TransactionAlreadyStarted;
 import se.haleby.occurrent.eventstore.mongodb.spring.blocking.StreamConsistencyGuarantee.Transactional;
 
+import java.net.URI;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
@@ -39,7 +41,7 @@ import static se.haleby.occurrent.eventstore.mongodb.converter.OccurrentCloudEve
 import static se.haleby.occurrent.eventstore.mongodb.converter.OccurrentCloudEventMongoDBDocumentMapper.convertToDocument;
 import static se.haleby.occurrent.eventstore.mongodb.spring.common.internal.ConditionToCriteriaConverter.convertConditionToCriteria;
 
-public class SpringBlockingMongoEventStore implements EventStore {
+public class SpringBlockingMongoEventStore implements EventStore, EventStoreOperations {
 
     private static final String ID = "_id";
     private static final String VERSION = "version";
@@ -108,6 +110,42 @@ public class SpringBlockingMongoEventStore implements EventStore {
     @Override
     public boolean exists(String streamId) {
         return mongoTemplate.exists(query(where(STREAM_ID).is(streamId)), eventStoreCollectionName);
+    }
+
+    @Override
+    public void deleteEventStream(String streamId) {
+        requireNonNull(streamId, "Stream id cannot be null");
+
+        if (streamConsistencyGuarantee instanceof Transactional) {
+            Transactional transactional = (Transactional) this.streamConsistencyGuarantee;
+            transactional.transactionTemplate.executeWithoutResult(__ -> {
+                mongoTemplate.remove(query(where(ID).is(streamId)), transactional.streamVersionCollectionName);
+                deleteAllEventsInEventStream(streamId);
+            });
+        } else if (streamConsistencyGuarantee instanceof None) {
+            deleteAllEventsInEventStream(streamId);
+        }
+    }
+
+    @Override
+    public void deleteAllEventsInEventStream(String streamId) {
+        requireNonNull(streamId, "Stream id cannot be null");
+        Runnable deleteEvents = () -> mongoTemplate.remove(query(where(STREAM_ID).is(streamId)), eventStoreCollectionName);
+
+        if (streamConsistencyGuarantee instanceof Transactional) {
+            Transactional transactional = (Transactional) this.streamConsistencyGuarantee;
+            transactional.transactionTemplate.executeWithoutResult(__ -> deleteEvents.run());
+        } else if (streamConsistencyGuarantee instanceof None) {
+            deleteEvents.run();
+        }
+    }
+
+    @Override
+    public void deleteEvent(String cloudEventId, URI cloudEventSource) {
+        requireNonNull(cloudEventId, "Cloud event id cannot be null");
+        requireNonNull(cloudEventSource, "Cloud event source cannot be null");
+
+        mongoTemplate.remove(query(where("id").is(cloudEventId).and("source").is(cloudEventSource)));
     }
 
     @SuppressWarnings("unused")

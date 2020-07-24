@@ -51,7 +51,7 @@ import static org.assertj.core.api.Assertions.catchThrowable;
 import static org.junit.jupiter.api.Assertions.assertAll;
 import static org.springframework.data.mongodb.SessionSynchronization.ALWAYS;
 import static se.haleby.occurrent.domain.Composition.chain;
-import static se.haleby.occurrent.eventstore.api.WriteCondition.Condition.*;
+import static se.haleby.occurrent.eventstore.api.Condition.*;
 import static se.haleby.occurrent.eventstore.api.WriteCondition.streamVersion;
 import static se.haleby.occurrent.eventstore.api.WriteCondition.streamVersionEq;
 import static se.haleby.occurrent.functional.CheckedFunction.unchecked;

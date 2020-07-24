@@ -1,10 +1,9 @@
 package se.haleby.occurrent.eventstore.mongodb.spring.common.internal;
 
 import org.springframework.data.mongodb.core.query.Criteria;
-import se.haleby.occurrent.eventstore.api.WriteCondition;
-import se.haleby.occurrent.eventstore.api.WriteCondition.Condition;
-import se.haleby.occurrent.eventstore.api.WriteCondition.Condition.MultiOperation;
-import se.haleby.occurrent.eventstore.api.WriteCondition.Condition.Operation;
+import se.haleby.occurrent.eventstore.api.Condition;
+import se.haleby.occurrent.eventstore.api.Condition.MultiOperandCondition;
+import se.haleby.occurrent.eventstore.api.Condition.SingleOperandCondition;
 
 import java.util.List;
 
@@ -13,9 +12,9 @@ import static org.springframework.data.mongodb.core.query.Criteria.where;
 public class ConditionToCriteriaConverter {
 
     public static Criteria convertConditionToCriteria(String fieldName, Condition<Long> condition) {
-        if (condition instanceof MultiOperation) {
-            MultiOperation<Long> operation = (MultiOperation<Long>) condition;
-            WriteCondition.MultiOperationName operationName = operation.operationName;
+        if (condition instanceof Condition.MultiOperandCondition) {
+            MultiOperandCondition<Long> operation = (MultiOperandCondition<Long>) condition;
+            Condition.MultiOperandConditionName operationName = operation.operationName;
             List<Condition<Long>> operations = operation.operations;
             Criteria[] criteria = operations.stream().map(c -> convertConditionToCriteria(fieldName, c)).toArray(Criteria[]::new);
             switch (operationName) {
@@ -28,11 +27,11 @@ public class ConditionToCriteriaConverter {
                 default:
                     throw new IllegalStateException("Unexpected value: " + operationName);
             }
-        } else if (condition instanceof Operation) {
-            Operation<Long> operation = (Operation<Long>) condition;
-            long expectedVersion = operation.operand;
-            WriteCondition.OperationName operationName = operation.operationName;
-            switch (operationName) {
+        } else if (condition instanceof Condition.SingleOperandCondition) {
+            SingleOperandCondition<Long> singleOperandCondition = (SingleOperandCondition<Long>) condition;
+            long expectedVersion = singleOperandCondition.operand;
+            Condition.SingleOperandConditionName singleOperandConditionName = singleOperandCondition.singleOperandConditionName;
+            switch (singleOperandConditionName) {
                 case EQ:
                     return where(fieldName).is(expectedVersion);
                 case LT:
@@ -46,7 +45,7 @@ public class ConditionToCriteriaConverter {
                 case NE:
                     return where(fieldName).ne(expectedVersion);
                 default:
-                    throw new IllegalStateException("Unexpected value: " + operationName);
+                    throw new IllegalStateException("Unexpected value: " + singleOperandConditionName);
             }
         } else {
             throw new IllegalArgumentException("Unsupported condition: " + condition.getClass());

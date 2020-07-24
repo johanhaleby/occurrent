@@ -4,12 +4,12 @@ import io.cloudevents.CloudEvent;
 import io.cloudevents.SpecVersion;
 import io.cloudevents.core.builder.CloudEventBuilder;
 import se.haleby.occurrent.cloudevents.OccurrentCloudEventExtension;
+import se.haleby.occurrent.eventstore.api.Condition;
+import se.haleby.occurrent.eventstore.api.Condition.MultiOperandCondition;
+import se.haleby.occurrent.eventstore.api.Condition.MultiOperandConditionName;
+import se.haleby.occurrent.eventstore.api.Condition.SingleOperandCondition;
+import se.haleby.occurrent.eventstore.api.Condition.SingleOperandConditionName;
 import se.haleby.occurrent.eventstore.api.WriteCondition;
-import se.haleby.occurrent.eventstore.api.WriteCondition.Condition;
-import se.haleby.occurrent.eventstore.api.WriteCondition.Condition.MultiOperation;
-import se.haleby.occurrent.eventstore.api.WriteCondition.Condition.Operation;
-import se.haleby.occurrent.eventstore.api.WriteCondition.MultiOperationName;
-import se.haleby.occurrent.eventstore.api.WriteCondition.OperationName;
 import se.haleby.occurrent.eventstore.api.WriteCondition.StreamVersionWriteCondition;
 import se.haleby.occurrent.eventstore.api.WriteConditionNotFulfilledException;
 import se.haleby.occurrent.eventstore.api.blocking.EventStore;
@@ -89,9 +89,9 @@ public class InMemoryEventStore implements EventStore {
 
 
     private static boolean isConditionFulfilledBy(Condition<Long> condition, long actualVersion) {
-        if (condition instanceof MultiOperation) {
-            MultiOperation<Long> operation = (MultiOperation<Long>) condition;
-            MultiOperationName operationName = operation.operationName;
+        if (condition instanceof Condition.MultiOperandCondition) {
+            MultiOperandCondition<Long> operation = (MultiOperandCondition<Long>) condition;
+            MultiOperandConditionName operationName = operation.operationName;
             List<Condition<Long>> operations = operation.operations;
             Stream<Boolean> stream = operations.stream().map(c -> isConditionFulfilledBy(c, actualVersion));
             switch (operationName) {
@@ -104,11 +104,11 @@ public class InMemoryEventStore implements EventStore {
                 default:
                     throw new IllegalStateException("Unexpected value: " + operationName);
             }
-        } else if (condition instanceof Operation) {
-            Operation<Long> operation = (Operation<Long>) condition;
-            long expectedVersion = operation.operand;
-            OperationName operationName = operation.operationName;
-            switch (operationName) {
+        } else if (condition instanceof Condition.SingleOperandCondition) {
+            SingleOperandCondition<Long> singleOperandCondition = (SingleOperandCondition<Long>) condition;
+            long expectedVersion = singleOperandCondition.operand;
+            SingleOperandConditionName singleOperandConditionName = singleOperandCondition.singleOperandConditionName;
+            switch (singleOperandConditionName) {
                 case EQ:
                     return actualVersion == expectedVersion;
                 case LT:
@@ -122,7 +122,7 @@ public class InMemoryEventStore implements EventStore {
                 case NE:
                     return actualVersion != expectedVersion;
                 default:
-                    throw new IllegalStateException("Unexpected value: " + operationName);
+                    throw new IllegalStateException("Unexpected value: " + singleOperandConditionName);
             }
         } else {
             throw new IllegalArgumentException("Unsupported condition: " + condition.getClass());
