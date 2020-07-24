@@ -12,11 +12,11 @@ import org.springframework.data.mongodb.core.MongoTemplate;
 import org.springframework.data.mongodb.repository.config.EnableMongoRepositories;
 import se.haleby.occurrent.eventstore.api.blocking.EventStore;
 import se.haleby.occurrent.eventstore.mongodb.spring.blocking.SpringBlockingMongoEventStore;
+import se.haleby.occurrent.eventstore.mongodb.spring.blocking.StreamConsistencyGuarantee;
 
 import javax.annotation.PostConstruct;
 
 import static com.fasterxml.jackson.databind.ObjectMapper.DefaultTyping.EVERYTHING;
-import static se.haleby.occurrent.eventstore.mongodb.spring.blocking.StreamConsistencyGuarantee.transactionAlreadyStarted;
 
 @SpringBootApplication
 @EnableMongoRepositories
@@ -31,8 +31,8 @@ public class TransactionalProjectionsWithSpringAndMongoDBApplication {
     }
 
     @Bean
-    public EventStore eventStore(MongoTemplate mongoTemplate) {
-        return new SpringBlockingMongoEventStore(mongoTemplate, "events", transactionAlreadyStarted("stream-consistency"));
+    public EventStore eventStore(MongoTemplate mongoTemplate, MongoTransactionManager mongoTransactionManager) {
+        return new SpringBlockingMongoEventStore(mongoTemplate, "events", StreamConsistencyGuarantee.transactional("stream-consistency", mongoTransactionManager));
     }
 
     @Bean

@@ -3,8 +3,6 @@ package se.haleby.occurrent.eventstore.mongodb.spring.blocking;
 import org.springframework.data.mongodb.MongoTransactionManager;
 import org.springframework.transaction.support.TransactionTemplate;
 
-import java.util.stream.Stream;
-
 public abstract class StreamConsistencyGuarantee {
     private StreamConsistencyGuarantee() {
     }
@@ -13,14 +11,6 @@ public abstract class StreamConsistencyGuarantee {
         private static final None INSTANCE = new None();
 
         private None() {
-        }
-    }
-
-    public static final class TransactionAlreadyStarted extends StreamConsistencyGuarantee {
-        public final String streamVersionCollectionName;
-
-        private TransactionAlreadyStarted(String streamVersionCollectionName) {
-            this.streamVersionCollectionName = streamVersionCollectionName;
         }
     }
 
@@ -65,19 +55,5 @@ public abstract class StreamConsistencyGuarantee {
      */
     public static Transactional transactional(String streamVersionCollectionName, TransactionTemplate transactionTemplate) {
         return new Transactional(transactionTemplate, streamVersionCollectionName);
-    }
-
-
-    /**
-     * Will use transactions if the method calling {@link SpringBlockingMongoEventStore#write(String, long, Stream)}
-     * is annotated with {@link org.springframework.transaction.annotation.Transactional}.
-     * If the call is not annotated with `@Transactional` then the event store will make two writes
-     * to mongodb, one to <code>streamVersionCollectionName</code> for updating the version of the stream,
-     * and one to <code>eventCollectionName</code> for writing the events. If the latter fails the updated
-     * stream version will _not_ be reverted. This is probably not what you want, consider {@link #none()}
-     * if stream/aggregate consistency is not a concern in your application.
-     */
-    public static TransactionAlreadyStarted transactionAlreadyStarted(String streamVersionCollectionName) {
-        return new TransactionAlreadyStarted(streamVersionCollectionName);
     }
 }
