@@ -28,7 +28,6 @@ import se.haleby.occurrent.eventstore.api.reactor.EventStream;
 import se.haleby.occurrent.eventstore.mongodb.converter.MongoBulkWriteExceptionToDuplicateCloudEventExceptionTranslator;
 import se.haleby.occurrent.eventstore.mongodb.converter.OccurrentCloudEventMongoDBDocumentMapper;
 import se.haleby.occurrent.eventstore.mongodb.spring.reactor.StreamConsistencyGuarantee.None;
-import se.haleby.occurrent.eventstore.mongodb.spring.reactor.StreamConsistencyGuarantee.TransactionAlreadyStarted;
 import se.haleby.occurrent.eventstore.mongodb.spring.reactor.StreamConsistencyGuarantee.TransactionInsertsOnly;
 import se.haleby.occurrent.eventstore.mongodb.spring.reactor.StreamConsistencyGuarantee.Transactional;
 
@@ -85,9 +84,6 @@ public class SpringReactorMongoEventStore implements EventStore, EventStoreOpera
             Transactional transactional = (Transactional) this.streamConsistencyGuarantee;
             String streamVersionCollectionName = transactional.streamVersionCollectionName;
             result = transactional.transactionalOperator.execute(transactionStatus -> conditionallyWriteEvents(streamId, streamVersionCollectionName, writeCondition, serializedEvents)).then();
-        } else if (streamConsistencyGuarantee instanceof TransactionAlreadyStarted) {
-            String streamVersionCollectionName = ((TransactionAlreadyStarted) streamConsistencyGuarantee).streamVersionCollectionName;
-            result = conditionallyWriteEvents(streamId, streamVersionCollectionName, writeCondition, serializedEvents);
         } else {
             throw new IllegalStateException("Internal error, invalid stream write consistency guarantee");
         }
@@ -110,9 +106,6 @@ public class SpringReactorMongoEventStore implements EventStore, EventStoreOpera
             eventStream = transactional.transactionalOperator
                     .execute(transactionStatus -> readEventStream(streamId, skip, limit, transactional.streamVersionCollectionName))
                     .single();
-        } else if (streamConsistencyGuarantee instanceof TransactionAlreadyStarted) {
-            String streamVersionCollectionName = ((TransactionAlreadyStarted) streamConsistencyGuarantee).streamVersionCollectionName;
-            eventStream = readEventStream(streamId, skip, limit, streamVersionCollectionName);
         } else {
             throw new IllegalStateException("Internal error, invalid stream write consistency guarantee");
         }
@@ -204,9 +197,6 @@ public class SpringReactorMongoEventStore implements EventStore, EventStoreOpera
             additionalIndexes = createIndex(streamVersionCollectionName, mongoTemplate, Indexes.compoundIndex(Indexes.ascending(ID), Indexes.ascending(VERSION)), new IndexOptions().unique(true));
         } else if (streamConsistencyGuarantee instanceof TransactionInsertsOnly) {
             additionalIndexes = Mono.empty();
-        } else if (streamConsistencyGuarantee instanceof TransactionAlreadyStarted) {
-            String streamVersionCollectionName = ((TransactionAlreadyStarted) streamConsistencyGuarantee).streamVersionCollectionName;
-            additionalIndexes = createIndex(streamVersionCollectionName, mongoTemplate, Indexes.compoundIndex(Indexes.ascending(ID), Indexes.ascending(VERSION)), new IndexOptions().unique(true));
         } else {
             additionalIndexes = Mono.empty();
         }

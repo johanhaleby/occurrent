@@ -17,20 +17,11 @@ public abstract class StreamConsistencyGuarantee {
         }
     }
 
-
     public static final class TransactionInsertsOnly extends StreamConsistencyGuarantee {
         public final TransactionalOperator transactionalOperator;
 
         private TransactionInsertsOnly(TransactionalOperator transactionalOperator) {
             this.transactionalOperator = requireNonNull(transactionalOperator, "transactionalOperator cannot be null");
-        }
-    }
-
-    public static final class TransactionAlreadyStarted extends StreamConsistencyGuarantee {
-        public final String streamVersionCollectionName;
-
-        private TransactionAlreadyStarted(String streamVersionCollectionName) {
-            this.streamVersionCollectionName = streamVersionCollectionName;
         }
     }
 
@@ -99,19 +90,5 @@ public abstract class StreamConsistencyGuarantee {
      */
     public static Transactional transactional(String streamVersionCollectionName, TransactionalOperator transactionalOperator) {
         return new Transactional(transactionalOperator, streamVersionCollectionName);
-    }
-
-
-    /**
-     * Will use transactions if the method calling {@link SpringReactorMongoEventStore#write(String, Flux)}
-     * is annotated with {@link org.springframework.transaction.annotation.Transactional}.
-     * If the call is not annotated with `@Transactional` then the event store will make two writes
-     * to mongodb, one to <code>streamVersionCollectionName</code> for updating the version of the stream,
-     * and one to <code>eventCollectionName</code> for writing the events. If the latter fails the updated
-     * stream version will _not_ be reverted. This is probably not what you want, consider {@link #none()}
-     * if stream/aggregate consistency is not a concern in your application.
-     */
-    public static TransactionAlreadyStarted transactionAlreadyStarted(String streamVersionCollectionName) {
-        return new TransactionAlreadyStarted(streamVersionCollectionName);
     }
 }
