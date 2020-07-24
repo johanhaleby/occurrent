@@ -273,7 +273,7 @@ public class SpringReactorMongoEventStore implements EventStore, EventStoreOpera
         requireNonNull(cloudEventId, "Cloud event id cannot be null");
         requireNonNull(cloudEventSource, "Cloud event source cannot be null");
 
-        return mongoTemplate.remove(query(where("id").is(cloudEventId).and("source").is(cloudEventSource))).then();
+        return mongoTemplate.remove(query(where("id").is(cloudEventId).and("source").is(cloudEventSource)), eventStoreCollectionName).then();
     }
 
     @SuppressWarnings("unused")
