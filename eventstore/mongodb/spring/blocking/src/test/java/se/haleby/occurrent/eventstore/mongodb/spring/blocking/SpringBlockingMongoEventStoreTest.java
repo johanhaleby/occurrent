@@ -28,7 +28,6 @@ import se.haleby.occurrent.domain.NameWasChanged;
 import se.haleby.occurrent.eventstore.api.DuplicateCloudEventException;
 import se.haleby.occurrent.eventstore.api.WriteCondition;
 import se.haleby.occurrent.eventstore.api.WriteConditionNotFulfilledException;
-import se.haleby.occurrent.eventstore.api.blocking.EventStore;
 import se.haleby.occurrent.eventstore.api.blocking.EventStream;
 import se.haleby.occurrent.testsupport.mongodb.FlushMongoDBExtension;
 
@@ -48,6 +47,9 @@ import static java.util.Objects.requireNonNull;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.catchThrowable;
 import static org.junit.jupiter.api.Assertions.assertAll;
+import static org.springframework.data.mongodb.core.query.Criteria.where;
+import static org.springframework.data.mongodb.core.query.Query.query;
+import static se.haleby.occurrent.cloudevents.OccurrentCloudEventExtension.STREAM_ID;
 import static se.haleby.occurrent.domain.Composition.chain;
 import static se.haleby.occurrent.eventstore.api.Condition.*;
 import static se.haleby.occurrent.eventstore.api.WriteCondition.streamVersion;
@@ -60,6 +62,7 @@ public class SpringBlockingMongoEventStoreTest {
 
     @Container
     private static final MongoDBContainer mongoDBContainer;
+    private static final URI NAME_SOURCE = URI.create("http://name");
 
     static {
         mongoDBContainer = new MongoDBContainer("mongo:4.2.7");
@@ -68,7 +71,7 @@ public class SpringBlockingMongoEventStoreTest {
         mongoDBContainer.setPortBindings(ports);
     }
 
-    private EventStore eventStore;
+    private SpringBlockingMongoEventStore eventStore;
 
     @RegisterExtension
     FlushMongoDBExtension flushMongoDBExtension = new FlushMongoDBExtension(new ConnectionString(mongoDBContainer.getReplicaSetUrl() + ".events"));
@@ -268,6 +271,76 @@ public class SpringBlockingMongoEventStoreTest {
                     () -> assertThat(readEvents).containsExactly(nameDefined, nameWasChanged1, nameWasChanged2)
             );
         }
+
+        @Nested
+        @DisplayName("deletion")
+        class Delete {
+
+            @Test
+            void deleteAllEventsInEventStream_deletes_all_events() {
+                // Given
+                LocalDateTime now = LocalDateTime.now();
+                NameDefined nameDefined = new NameDefined(UUID.randomUUID().toString(), now, "name");
+                NameWasChanged nameWasChanged1 = new NameWasChanged(UUID.randomUUID().toString(), now.plusHours(1), "name2");
+                persist("name", Stream.of(nameDefined, nameWasChanged1));
+
+                // When
+                eventStore.deleteAllEventsInEventStream("name");
+
+                // Then
+                EventStream<CloudEvent> eventStream = eventStore.read("name");
+                List<DomainEvent> readEvents = deserialize(eventStream.events());
+                assertAll(
+                        () -> assertThat(eventStream.version()).isEqualTo(1),
+                        () -> assertThat(readEvents).isEmpty(),
+                        () -> assertThat(mongoTemplate.count(query(where(STREAM_ID).is("name")), "events")).isZero()
+                );
+            }
+
+            @Test
+            void deleteEventStream_deletes_all_events_in_event_stream_when_stream_consistency_guarantee_is_none() {
+                // Given
+                LocalDateTime now = LocalDateTime.now();
+                NameDefined nameDefined = new NameDefined(UUID.randomUUID().toString(), now, "name");
+                NameWasChanged nameWasChanged1 = new NameWasChanged(UUID.randomUUID().toString(), now.plusHours(1), "name2");
+                persist("name", Stream.of(nameDefined, nameWasChanged1));
+
+                // When
+                eventStore.deleteEventStream("name");
+
+                // Then
+                EventStream<CloudEvent> eventStream = eventStore.read("name");
+                List<DomainEvent> readEvents = deserialize(eventStream.events());
+                assertAll(
+                        () -> assertThat(eventStream.version()).isZero(),
+                        () -> assertThat(readEvents).isEmpty(),
+                        () -> assertThat(eventStore.exists("name")).isFalse(),
+                        () -> assertThat(mongoTemplate.count(query(where(STREAM_ID).is("name")), "events")).isZero()
+                );
+            }
+
+            @Test
+            void deleteEvent_deletes_only_specific_event_in_event_stream() {
+                // Given
+                LocalDateTime now = LocalDateTime.now();
+                NameDefined nameDefined = new NameDefined(UUID.randomUUID().toString(), now, "name");
+                NameWasChanged nameWasChanged1 = new NameWasChanged(UUID.randomUUID().toString(), now.plusHours(1), "name2");
+                persist("name", Stream.of(nameDefined, nameWasChanged1));
+
+                // When
+                eventStore.deleteEvent(nameWasChanged1.getEventId(), NAME_SOURCE);
+
+                // Then
+                EventStream<CloudEvent> eventStream = eventStore.read("name");
+                List<DomainEvent> readEvents = deserialize(eventStream.events());
+                assertAll(
+                        () -> assertThat(eventStream.version()).isEqualTo(1),
+                        () -> assertThat(readEvents).containsExactly(nameDefined),
+                        () -> assertThat(eventStore.exists("name")).isTrue(),
+                        () -> assertThat(mongoTemplate.count(query(where(STREAM_ID).is("name")), "events")).isEqualTo(1)
+                );
+            }
+        }
     }
 
     @DisplayName("when using StreamConsistencyGuarantee with type transactional")
@@ -457,6 +530,76 @@ public class SpringBlockingMongoEventStoreTest {
                         () -> assertThat(eventStream.version()).isEqualTo(1),
                         () -> assertThat(readEvents).hasSize(2),
                         () -> assertThat(readEvents).containsExactly(nameDefined, nameWasChanged1)
+                );
+            }
+        }
+
+        @Nested
+        @DisplayName("deletion")
+        class Delete {
+
+            @Test
+            void deleteAllEventsInEventStream_deletes_all_events_but_retains_metadata() {
+                // Given
+                LocalDateTime now = LocalDateTime.now();
+                NameDefined nameDefined = new NameDefined(UUID.randomUUID().toString(), now, "name");
+                NameWasChanged nameWasChanged1 = new NameWasChanged(UUID.randomUUID().toString(), now.plusHours(1), "name2");
+                persist("name", Stream.of(nameDefined, nameWasChanged1));
+
+                // When
+                eventStore.deleteAllEventsInEventStream("name");
+
+                // Then
+                EventStream<CloudEvent> eventStream = eventStore.read("name");
+                List<DomainEvent> readEvents = deserialize(eventStream.events());
+                assertAll(
+                        () -> assertThat(eventStream.version()).isEqualTo(1),
+                        () -> assertThat(readEvents).isEmpty(),
+                        () -> assertThat(mongoTemplate.count(query(where("_id").is("name")), "event-stream-version")).isNotZero()
+                );
+            }
+
+            @Test
+            void deleteEventStream_deletes_all_events_in_event_stream_when_stream_consistency_guarantee_is_transactional() {
+                // Given
+                LocalDateTime now = LocalDateTime.now();
+                NameDefined nameDefined = new NameDefined(UUID.randomUUID().toString(), now, "name");
+                NameWasChanged nameWasChanged1 = new NameWasChanged(UUID.randomUUID().toString(), now.plusHours(1), "name2");
+                persist("name", Stream.of(nameDefined, nameWasChanged1));
+
+                // When
+                eventStore.deleteEventStream("name");
+
+                // Then
+                EventStream<CloudEvent> eventStream = eventStore.read("name");
+                List<DomainEvent> readEvents = deserialize(eventStream.events());
+                assertAll(
+                        () -> assertThat(eventStream.version()).isZero(),
+                        () -> assertThat(readEvents).isEmpty(),
+                        () -> assertThat(eventStore.exists("name")).isFalse(),
+                        () -> assertThat(mongoTemplate.count(query(where(STREAM_ID).is("name")), "events")).isZero()
+                );
+            }
+
+            @Test
+            void deleteEvent_deletes_only_specific_event_in_event_stream() {
+                // Given
+                LocalDateTime now = LocalDateTime.now();
+                NameDefined nameDefined = new NameDefined(UUID.randomUUID().toString(), now, "name");
+                NameWasChanged nameWasChanged1 = new NameWasChanged(UUID.randomUUID().toString(), now.plusHours(1), "name2");
+                persist("name", Stream.of(nameDefined, nameWasChanged1));
+
+                // When
+                eventStore.deleteEvent(nameWasChanged1.getEventId(), NAME_SOURCE);
+
+                // Then
+                EventStream<CloudEvent> eventStream = eventStore.read("name");
+                List<DomainEvent> readEvents = deserialize(eventStream.events());
+                assertAll(
+                        () -> assertThat(eventStream.version()).isEqualTo(1),
+                        () -> assertThat(readEvents).containsExactly(nameDefined),
+                        () -> assertThat(eventStore.exists("name")).isTrue(),
+                        () -> assertThat(mongoTemplate.count(query(where(STREAM_ID).is("name")), "events")).isEqualTo(1)
                 );
             }
         }
@@ -901,7 +1044,7 @@ public class SpringBlockingMongoEventStoreTest {
     private CloudEvent convertDomainEventCloudEvent(DomainEvent domainEvent) {
         return CloudEventBuilder.v1()
                 .withId(domainEvent.getEventId())
-                .withSource(URI.create("http://name"))
+                .withSource(NAME_SOURCE)
                 .withType(domainEvent.getClass().getSimpleName())
                 .withTime(toLocalDateTime(domainEvent.getTimestamp()).atZone(UTC))
                 .withSubject(domainEvent.getName())

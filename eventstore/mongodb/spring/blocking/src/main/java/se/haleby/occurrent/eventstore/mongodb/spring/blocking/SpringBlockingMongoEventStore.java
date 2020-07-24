@@ -139,7 +139,7 @@ public class SpringBlockingMongoEventStore implements EventStore, EventStoreOper
         requireNonNull(cloudEventId, "Cloud event id cannot be null");
         requireNonNull(cloudEventSource, "Cloud event source cannot be null");
 
-        mongoTemplate.remove(query(where("id").is(cloudEventId).and("source").is(cloudEventSource)));
+        mongoTemplate.remove(query(where("id").is(cloudEventId).and("source").is(cloudEventSource)), eventStoreCollectionName);
     }
 
     @SuppressWarnings("unused")
