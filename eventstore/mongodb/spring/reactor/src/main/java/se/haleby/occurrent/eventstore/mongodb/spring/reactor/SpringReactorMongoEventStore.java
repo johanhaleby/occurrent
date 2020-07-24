@@ -195,8 +195,6 @@ public class SpringReactorMongoEventStore implements EventStore, EventStoreOpera
         if (streamConsistencyGuarantee instanceof Transactional) {
             String streamVersionCollectionName = ((Transactional) streamConsistencyGuarantee).streamVersionCollectionName;
             additionalIndexes = createIndex(streamVersionCollectionName, mongoTemplate, Indexes.compoundIndex(Indexes.ascending(ID), Indexes.ascending(VERSION)), new IndexOptions().unique(true));
-        } else if (streamConsistencyGuarantee instanceof TransactionInsertsOnly) {
-            additionalIndexes = Mono.empty();
         } else {
             additionalIndexes = Mono.empty();
         }
