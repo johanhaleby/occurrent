@@ -1,7 +1,6 @@
 package se.haleby.occurrent.changestreamer.mongodb.common;
 
 import com.mongodb.client.model.Filters;
-import org.bson.Document;
 import org.bson.conversions.Bson;
 
 import java.util.function.BiFunction;
@@ -28,32 +27,6 @@ public class MongoDBFilterSpecification {
 
         public static JsonMongoDBFilterSpecification filter(String json) {
             return new JsonMongoDBFilterSpecification(json);
-        }
-    }
-
-    /**
-     * Supply a document filter. For example if using Spring you can do:
-     * <pre>
-     * filter(where("type").is("MyEventType"))
-     * </pre>
-     * <p>
-     * Where <code>where</code> is imported from the <code>org.springframework.data.mongodb.core.query.Criteria</code> api.
-     */
-    public static class DocumentMongoDBFilterSpecification extends MongoDBFilterSpecification {
-        private final Document[] documents;
-
-        public DocumentMongoDBFilterSpecification(Document document, Document... documents) {
-            this.documents = new Document[1 + documents.length];
-            documents[0] = document;
-            System.arraycopy(documents, 0, this.documents, 1, documents.length);
-        }
-
-        public Document[] getDocuments() {
-            return documents;
-        }
-
-        public static DocumentMongoDBFilterSpecification filter(Document document, Document... documents) {
-            return new DocumentMongoDBFilterSpecification(document, documents);
         }
     }
 

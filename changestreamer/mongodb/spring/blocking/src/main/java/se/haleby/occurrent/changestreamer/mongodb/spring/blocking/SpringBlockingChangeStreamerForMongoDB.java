@@ -19,7 +19,6 @@ import se.haleby.occurrent.changestreamer.CloudEventWithStreamPosition;
 import se.haleby.occurrent.changestreamer.mongodb.common.DocumentAdapter;
 import se.haleby.occurrent.changestreamer.mongodb.common.MongoDBFilterSpecification;
 import se.haleby.occurrent.changestreamer.mongodb.common.MongoDBFilterSpecification.BsonMongoDBFilterSpecification;
-import se.haleby.occurrent.changestreamer.mongodb.common.MongoDBFilterSpecification.DocumentMongoDBFilterSpecification;
 import se.haleby.occurrent.changestreamer.mongodb.common.MongoDBFilterSpecification.JsonMongoDBFilterSpecification;
 
 import javax.annotation.PreDestroy;
@@ -82,10 +81,6 @@ public class SpringBlockingChangeStreamerForMongoDB {
             changeStreamOptions = changeStreamOptionsBuilder.build();
         } else if (filter instanceof JsonMongoDBFilterSpecification) {
             changeStreamOptions = changeStreamOptionsBuilder.filter(Document.parse(((JsonMongoDBFilterSpecification) filter).getJson())).build();
-        } else if (filter instanceof DocumentMongoDBFilterSpecification) {
-            Document[] documents = ((DocumentMongoDBFilterSpecification) filter).getDocuments();
-            Document[] aggregations = Stream.of(documents).map(d -> new Document("$match", d)).toArray(Document[]::new);
-            changeStreamOptions = changeStreamOptionsBuilder.filter(aggregations).build();
         } else if (filter instanceof BsonMongoDBFilterSpecification) {
             Bson[] aggregationStages = ((BsonMongoDBFilterSpecification) filter).getAggregationStages();
             DocumentAdapter documentAdapter = new DocumentAdapter(MongoClientSettings.getDefaultCodecRegistry());
