@@ -372,6 +372,96 @@ class MongoEventStoreTest {
         }
     }
 
+    @Nested
+    @DisplayName("exists")
+    class Exists {
+
+        @Test
+        void returns_true_when_stream_exists_and_there_are_events_and_stream_consistency_guarantee_is_transactional() {
+            // Given
+            LocalDateTime now = LocalDateTime.now();
+            NameDefined nameDefined = new NameDefined(UUID.randomUUID().toString(), now, "name");
+            NameWasChanged nameWasChanged1 = new NameWasChanged(UUID.randomUUID().toString(), now.plusHours(1), "name2");
+            persist("name", Stream.of(nameDefined, nameWasChanged1));
+
+            // When
+            boolean exists = eventStore.exists("name");
+
+            // Then
+            assertThat(exists).isTrue();
+        }
+
+        @Test
+        void returns_true_when_stream_exists_but_contains_no_events_and_stream_consistency_guarantee_is_transactional() {
+            // Given
+            LocalDateTime now = LocalDateTime.now();
+            NameDefined nameDefined = new NameDefined(UUID.randomUUID().toString(), now, "name");
+            NameWasChanged nameWasChanged1 = new NameWasChanged(UUID.randomUUID().toString(), now.plusHours(1), "name2");
+            persist("name", Stream.of(nameDefined, nameWasChanged1));
+            eventStore.deleteAllEventsInEventStream("name");
+
+            // When
+            boolean exists = eventStore.exists("name");
+
+            // Then
+            assertThat(exists).isTrue();
+        }
+
+        @Test
+        void returns_false_when_stream_does_not_exists_and_stream_consistency_guarantee_is_transactional() {
+            // When
+            boolean exists = eventStore.exists("name");
+
+            // Then
+            assertThat(exists).isFalse();
+        }
+
+        @Test
+        void returns_true_when_stream_exists_and_contains_events_and_stream_consistency_guarantee_is_none() {
+            // Given
+            eventStore = newMongoEventStore(StreamConsistencyGuarantee.none());
+            LocalDateTime now = LocalDateTime.now();
+            NameDefined nameDefined = new NameDefined(UUID.randomUUID().toString(), now, "name");
+            NameWasChanged nameWasChanged1 = new NameWasChanged(UUID.randomUUID().toString(), now.plusHours(1), "name2");
+            persist("name", Stream.of(nameDefined, nameWasChanged1));
+
+            // When
+            boolean exists = eventStore.exists("name");
+
+            // Then
+            assertThat(exists).isTrue();
+        }
+
+        @Test
+        void returns_false_when_all_events_are_deleted_from_event_stream_stream_consistency_guarantee_is_none() {
+            // Given
+            eventStore = newMongoEventStore(StreamConsistencyGuarantee.none());
+            LocalDateTime now = LocalDateTime.now();
+            NameDefined nameDefined = new NameDefined(UUID.randomUUID().toString(), now, "name");
+            NameWasChanged nameWasChanged1 = new NameWasChanged(UUID.randomUUID().toString(), now.plusHours(1), "name2");
+            persist("name", Stream.of(nameDefined, nameWasChanged1));
+            eventStore.deleteAllEventsInEventStream("name");
+
+            // When
+            boolean exists = eventStore.exists("name");
+
+            // Then
+            assertThat(exists).isFalse();
+        }
+
+        @Test
+        void returns_false_when_stream_does_not_exists_and_stream_consistency_guarantee_is_none() {
+            // Given
+            eventStore = newMongoEventStore(StreamConsistencyGuarantee.none());
+
+            // When
+            boolean exists = eventStore.exists("name");
+
+            // Then
+            assertThat(exists).isFalse();
+        }
+    }
+
     @SuppressWarnings("ConstantConditions")
     @Nested
     @DisplayName("deletion when stream consistency guarantee is none")

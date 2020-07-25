@@ -244,7 +244,12 @@ public class MongoEventStore implements EventStore, EventStoreOperations {
 
     @Override
     public boolean exists(String streamId) {
-        return eventCollection.countDocuments(eq(STREAM_ID, streamId)) > 0;
+        if (streamConsistencyGuarantee instanceof Transactional) {
+            String streamVersionCollectionName = ((Transactional) streamConsistencyGuarantee).streamVersionCollectionName;
+            return mongoDatabase.getCollection(streamVersionCollectionName).countDocuments(eq(ID, streamId)) > 0;
+        } else {
+            return eventCollection.countDocuments(eq(STREAM_ID, streamId)) > 0;
+        }
     }
 
     @Override

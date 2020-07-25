@@ -82,7 +82,49 @@ public class InMemoryEventStoreTest {
     }
 
     @Nested
-    @DisplayName("")
+    @DisplayName("exists")
+    class Exists {
+
+        @Test
+        void returns_true_when_stream_exists() {
+            // Given
+            InMemoryEventStore inMemoryEventStore = new InMemoryEventStore();
+            LocalDateTime now = LocalDateTime.now();
+
+            // When
+            DomainEvent event1 = new NameDefined(UUID.randomUUID().toString(), now, "John Doe");
+            DomainEvent event2 = new NameWasChanged(UUID.randomUUID().toString(), now, "Jan Doe");
+            unconditionallyPersist(inMemoryEventStore, "name", Stream.of(event1, event2));
+
+            // Then
+            assertThat(inMemoryEventStore.exists("name")).isTrue();
+        }
+
+        @Test
+        void returns_true_when_stream_exists_but_contains_no_events() {
+            // Given
+            InMemoryEventStore inMemoryEventStore = new InMemoryEventStore();
+            LocalDateTime now = LocalDateTime.now();
+
+            // When
+            DomainEvent event1 = new NameDefined(UUID.randomUUID().toString(), now, "John Doe");
+            DomainEvent event2 = new NameWasChanged(UUID.randomUUID().toString(), now, "Jan Doe");
+            unconditionallyPersist(inMemoryEventStore, "name", Stream.of(event1, event2));
+            inMemoryEventStore.deleteAllEventsInEventStream("name");
+
+            // Then
+            assertThat(inMemoryEventStore.exists("name")).isTrue();
+        }
+
+        @Test
+        void returns_false_when_stream_does_not_exists() {
+            InMemoryEventStore inMemoryEventStore = new InMemoryEventStore();
+            assertThat(inMemoryEventStore.exists("name")).isFalse();
+        }
+    }
+
+    @Nested
+    @DisplayName("deletion")
     class Deletion {
 
         @Test

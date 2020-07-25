@@ -92,7 +92,12 @@ public class SpringReactorMongoEventStore implements EventStore, EventStoreOpera
 
     @Override
     public Mono<Boolean> exists(String streamId) {
-        return mongoTemplate.exists(query(where(STREAM_ID).is(streamId)), eventStoreCollectionName);
+        if (streamConsistencyGuarantee instanceof Transactional) {
+            String streamVersionCollectionName = ((Transactional) streamConsistencyGuarantee).streamVersionCollectionName;
+            return mongoTemplate.exists(query(where(ID).is(streamId)), streamVersionCollectionName);
+        } else {
+            return mongoTemplate.exists(query(where(STREAM_ID).is(streamId)), eventStoreCollectionName);
+        }
     }
 
     @Override

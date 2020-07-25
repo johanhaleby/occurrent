@@ -338,6 +338,52 @@ public class SpringReactorMongoEventStoreTest {
                 );
             }
         }
+
+        @SuppressWarnings("ConstantConditions")
+        @Nested
+        @DisplayName("exists")
+        class ExistsWhenStreamConsistencyGuaranteeIsNone {
+
+            @Test
+            void returns_true_when_stream_contains_events() {
+                // Given
+                LocalDateTime now = LocalDateTime.now();
+                NameDefined nameDefined = new NameDefined(UUID.randomUUID().toString(), now, "name");
+                NameWasChanged nameWasChanged1 = new NameWasChanged(UUID.randomUUID().toString(), now.plusHours(1), "name2");
+                persist("name", Flux.just(nameDefined, nameWasChanged1)).block();
+
+                // When
+                boolean exists = eventStore.exists("name").block();
+
+                // Then
+                assertThat(exists).isTrue();
+            }
+
+            @Test
+            void returns_false_when_all_events_have_been_removed_from_stream() {
+                // Given
+                LocalDateTime now = LocalDateTime.now();
+                NameDefined nameDefined = new NameDefined(UUID.randomUUID().toString(), now, "name");
+                NameWasChanged nameWasChanged1 = new NameWasChanged(UUID.randomUUID().toString(), now.plusHours(1), "name2");
+                persist("name", Flux.just(nameDefined, nameWasChanged1)).block();
+                eventStore.deleteAllEventsInEventStream("name").block();
+
+                // When
+                boolean exists = eventStore.exists("name").block();
+
+                // Then
+                assertThat(exists).isFalse();
+            }
+
+            @Test
+            void returns_false_when_no_events_have_been_persisted_to_stream() {
+                // When
+                boolean exists = eventStore.exists("name").block();
+
+                // Then
+                assertThat(exists).isFalse();
+            }
+        }
     }
 
     @DisplayName("when using StreamConsistencyGuarantee with type transactional inserts only")
@@ -433,6 +479,52 @@ public class SpringReactorMongoEventStoreTest {
                         () -> assertThat(versionAndEvents.version).isEqualTo(0),
                         () -> assertThat(versionAndEvents.events).containsExactly(nameDefined)
                 );
+            }
+        }
+
+        @SuppressWarnings("ConstantConditions")
+        @Nested
+        @DisplayName("exists")
+        class ExistsWhenStreamConsistencyGuaranteeIsTransactionalInsertsOnly {
+
+            @Test
+            void returns_true_when_stream_contains_events() {
+                // Given
+                LocalDateTime now = LocalDateTime.now();
+                NameDefined nameDefined = new NameDefined(UUID.randomUUID().toString(), now, "name");
+                NameWasChanged nameWasChanged1 = new NameWasChanged(UUID.randomUUID().toString(), now.plusHours(1), "name2");
+                persist("name", Flux.just(nameDefined, nameWasChanged1)).block();
+
+                // When
+                boolean exists = eventStore.exists("name").block();
+
+                // Then
+                assertThat(exists).isTrue();
+            }
+
+            @Test
+            void returns_false_when_all_events_have_been_removed_from_stream() {
+                // Given
+                LocalDateTime now = LocalDateTime.now();
+                NameDefined nameDefined = new NameDefined(UUID.randomUUID().toString(), now, "name");
+                NameWasChanged nameWasChanged1 = new NameWasChanged(UUID.randomUUID().toString(), now.plusHours(1), "name2");
+                persist("name", Flux.just(nameDefined, nameWasChanged1)).block();
+                eventStore.deleteAllEventsInEventStream("name").block();
+
+                // When
+                boolean exists = eventStore.exists("name").block();
+
+                // Then
+                assertThat(exists).isFalse();
+            }
+
+            @Test
+            void returns_false_when_no_events_have_been_persisted_to_stream() {
+                // When
+                boolean exists = eventStore.exists("name").block();
+
+                // Then
+                assertThat(exists).isFalse();
             }
         }
     }
@@ -728,6 +820,52 @@ public class SpringReactorMongoEventStoreTest {
                         () -> assertThat(eventStore.exists("name").block()).isTrue(),
                         () -> assertThat(mongoTemplate.count(query(where(STREAM_ID).is("name")), "events").block()).isEqualTo(1)
                 );
+            }
+        }
+
+        @SuppressWarnings("ConstantConditions")
+        @Nested
+        @DisplayName("exists")
+        class ExistsWhenStreamConsistencyGuaranteeIsTransactional {
+
+            @Test
+            void returns_true_when_stream_exists_and_contains_events() {
+                // Given
+                LocalDateTime now = LocalDateTime.now();
+                NameDefined nameDefined = new NameDefined(UUID.randomUUID().toString(), now, "name");
+                NameWasChanged nameWasChanged1 = new NameWasChanged(UUID.randomUUID().toString(), now.plusHours(1), "name2");
+                persist("name", Flux.just(nameDefined, nameWasChanged1)).block();
+
+                // When
+                boolean exists = eventStore.exists("name").block();
+
+                // Then
+                assertThat(exists).isTrue();
+            }
+
+            @Test
+            void returns_true_when_stream_exists_but_contains_no_events() {
+                // Given
+                LocalDateTime now = LocalDateTime.now();
+                NameDefined nameDefined = new NameDefined(UUID.randomUUID().toString(), now, "name");
+                NameWasChanged nameWasChanged1 = new NameWasChanged(UUID.randomUUID().toString(), now.plusHours(1), "name2");
+                persist("name", Flux.just(nameDefined, nameWasChanged1)).block();
+                eventStore.deleteAllEventsInEventStream("name");
+
+                // When
+                boolean exists = eventStore.exists("name").block();
+
+                // Then
+                assertThat(exists).isTrue();
+            }
+
+            @Test
+            void returns_false_when_no_events_have_been_persisted_to_stream() {
+                // When
+                boolean exists = eventStore.exists("name").block();
+
+                // Then
+                assertThat(exists).isFalse();
             }
         }
     }

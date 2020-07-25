@@ -103,7 +103,12 @@ public class SpringBlockingMongoEventStore implements EventStore, EventStoreOper
 
     @Override
     public boolean exists(String streamId) {
-        return mongoTemplate.exists(query(where(STREAM_ID).is(streamId)), eventStoreCollectionName);
+        if (streamConsistencyGuarantee instanceof Transactional) {
+            String streamVersionCollectionName = ((Transactional) streamConsistencyGuarantee).streamVersionCollectionName;
+            return mongoTemplate.exists(query(where(ID).is(streamId)), streamVersionCollectionName);
+        } else {
+            return mongoTemplate.exists(query(where(STREAM_ID).is(streamId)), eventStoreCollectionName);
+        }
     }
 
     @Override
