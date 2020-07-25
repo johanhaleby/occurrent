@@ -1,4 +1,5 @@
-![Logo](https://raw.githubusercontent.com/johanhaleby/occurrent/master/occurrent-logo-196x196.png "Occurent")
+<img src="https://raw.githubusercontent.com/johanhaleby/occurrent/master/occurrent-logo-196x196.png" width="128" height="128"></img>
+<br>
 [![Build Status](https://travis-ci.com/johanhaleby/occurrent.svg?branch=master)](https://travis-ci.com/johanhaleby/occurrent)
 
 Experimental Event Sourcing Utilities based on the [cloud events](https://cloudevents.io/) specification. 
