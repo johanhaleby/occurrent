@@ -8,13 +8,13 @@ import org.bson.BsonDocument;
 import org.bson.BsonString;
 import org.bson.BsonValue;
 import org.bson.Document;
+import se.haleby.occurrent.eventstore.mongodb.converter.OccurrentCloudEventMongoDBDocumentMapper;
 
 import java.util.HashMap;
 import java.util.Map;
 import java.util.Optional;
 
 import static com.mongodb.client.model.changestream.OperationType.INSERT;
-import static java.nio.charset.StandardCharsets.UTF_8;
 
 public class MongoDBCloudEventsToJsonDeserializer {
 
@@ -24,16 +24,14 @@ public class MongoDBCloudEventsToJsonDeserializer {
 
     public static Optional<CloudEvent> deserializeToCloudEvent(EventFormat cloudEventSerializer, ChangeStreamDocument<Document> changeStreamDocument) {
         return changeStreamDocumentToCloudEventAsJson(changeStreamDocument)
-                .map(cloudEventString -> cloudEventString.getBytes(UTF_8))
-                .map(cloudEventSerializer::deserialize);
+                .map(document -> OccurrentCloudEventMongoDBDocumentMapper.convertToCloudEvent(cloudEventSerializer, document));
     }
 
-    @SuppressWarnings("ConstantConditions")
-    private static Optional<String> changeStreamDocumentToCloudEventAsJson(ChangeStreamDocument<Document> changeStreamDocument) {
-        final String eventsAsJson;
+    private static Optional<Document> changeStreamDocumentToCloudEventAsJson(ChangeStreamDocument<Document> changeStreamDocument) {
+        final Document eventsAsJson;
         OperationType operationType = changeStreamDocument.getOperationType();
         if (operationType == INSERT) {
-            eventsAsJson = changeStreamDocument.getFullDocument().toJson();
+            eventsAsJson = changeStreamDocument.getFullDocument();
         } else {
             eventsAsJson = null;
         }
