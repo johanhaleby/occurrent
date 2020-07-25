@@ -13,21 +13,25 @@ import se.haleby.occurrent.eventstore.api.WriteCondition;
 import se.haleby.occurrent.eventstore.api.WriteCondition.StreamVersionWriteCondition;
 import se.haleby.occurrent.eventstore.api.WriteConditionNotFulfilledException;
 import se.haleby.occurrent.eventstore.api.blocking.EventStore;
+import se.haleby.occurrent.eventstore.api.blocking.EventStoreOperations;
 import se.haleby.occurrent.eventstore.api.blocking.EventStream;
 
+import java.net.URI;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.List;
+import java.util.Map.Entry;
 import java.util.Objects;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ConcurrentMap;
 import java.util.function.Function;
+import java.util.function.Predicate;
 import java.util.stream.Collectors;
 import java.util.stream.Stream;
 
 import static java.util.function.Predicate.isEqual;
 
-public class InMemoryEventStore implements EventStore {
+public class InMemoryEventStore implements EventStore, EventStoreOperations {
 
     private final ConcurrentMap<String, VersionAndEvents> state = new ConcurrentHashMap<>();
 
@@ -127,6 +131,35 @@ public class InMemoryEventStore implements EventStore {
         } else {
             throw new IllegalArgumentException("Unsupported condition: " + condition.getClass());
         }
+    }
+
+    @Override
+    public void deleteEventStream(String streamId) {
+        state.remove(streamId);
+    }
+
+    @Override
+    public void deleteAllEventsInEventStream(String streamId) {
+        state.computeIfPresent(streamId, (__, versionAndEvents) -> new VersionAndEvents(versionAndEvents.version, Collections.emptyList()));
+    }
+
+    @Override
+    public void deleteEvent(String cloudEventId, URI cloudEventSource) {
+        Predicate<CloudEvent> cloudEventMatchesInput = e -> e.getId().equals(cloudEventId) && e.getSource().equals(cloudEventSource);
+        String streamId = state.entrySet().stream()
+                .filter(entry -> entry.getValue().events.stream().anyMatch(cloudEventMatchesInput))
+                .map(Entry::getKey)
+                .findFirst()
+                .orElse(null);
+
+        if (streamId == null) {
+            return;
+        }
+
+        state.computeIfPresent(streamId, (__, versionAndEvents) -> {
+            List<CloudEvent> cloudEvents = versionAndEvents.events.stream().filter(cloudEventMatchesInput.negate()).collect(Collectors.toList());
+            return new VersionAndEvents(versionAndEvents.version, cloudEvents);
+        });
     }
 
     private static class VersionAndEvents {
