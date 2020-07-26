@@ -18,9 +18,10 @@ public class OccurrentCloudEventMongoDBDocumentMapper {
     }
 
     public static CloudEvent convertToCloudEvent(EventFormat eventFormat, Document cloudEventDocument) {
-        String eventJsonString = cloudEventDocument.toJson();
+        Document document = new Document(cloudEventDocument);
+        document.remove("_id");
+        String eventJsonString = document.toJson();
         byte[] eventJsonBytes = eventJsonString.getBytes(UTF_8);
         return eventFormat.deserialize(eventJsonBytes);
-
     }
 }
