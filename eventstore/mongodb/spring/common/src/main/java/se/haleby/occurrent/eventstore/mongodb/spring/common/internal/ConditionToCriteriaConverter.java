@@ -11,11 +11,11 @@ import static org.springframework.data.mongodb.core.query.Criteria.where;
 
 public class ConditionToCriteriaConverter {
 
-    public static Criteria convertConditionToCriteria(String fieldName, Condition<Long> condition) {
+    public static <T> Criteria convertConditionToCriteria(String fieldName, Condition<T> condition) {
         if (condition instanceof Condition.MultiOperandCondition) {
-            MultiOperandCondition<Long> operation = (MultiOperandCondition<Long>) condition;
+            MultiOperandCondition<T> operation = (MultiOperandCondition<T>) condition;
             Condition.MultiOperandConditionName operationName = operation.operationName;
-            List<Condition<Long>> operations = operation.operations;
+            List<Condition<T>> operations = operation.operations;
             Criteria[] criteria = operations.stream().map(c -> convertConditionToCriteria(fieldName, c)).toArray(Criteria[]::new);
             switch (operationName) {
                 case AND:
@@ -27,23 +27,23 @@ public class ConditionToCriteriaConverter {
                 default:
                     throw new IllegalStateException("Unexpected value: " + operationName);
             }
-        } else if (condition instanceof Condition.SingleOperandCondition) {
-            SingleOperandCondition<Long> singleOperandCondition = (SingleOperandCondition<Long>) condition;
-            long expectedVersion = singleOperandCondition.operand;
+        } else if (condition instanceof SingleOperandCondition) {
+            SingleOperandCondition<T> singleOperandCondition = (SingleOperandCondition<T>) condition;
+            T value = singleOperandCondition.operand;
             Condition.SingleOperandConditionName singleOperandConditionName = singleOperandCondition.singleOperandConditionName;
             switch (singleOperandConditionName) {
                 case EQ:
-                    return where(fieldName).is(expectedVersion);
+                    return where(fieldName).is(value);
                 case LT:
-                    return where(fieldName).lt(expectedVersion);
+                    return where(fieldName).lt(value);
                 case GT:
-                    return where(fieldName).gt(expectedVersion);
+                    return where(fieldName).gt(value);
                 case LTE:
-                    return where(fieldName).lte(expectedVersion);
+                    return where(fieldName).lte(value);
                 case GTE:
-                    return where(fieldName).gte(expectedVersion);
+                    return where(fieldName).gte(value);
                 case NE:
-                    return where(fieldName).ne(expectedVersion);
+                    return where(fieldName).ne(value);
                 default:
                     throw new IllegalStateException("Unexpected value: " + singleOperandConditionName);
             }

@@ -21,6 +21,7 @@ The [CloudEvents](https://cloudevents.io/) are persisted like this in the "event
   "source": "http://name",
   "type": "se.haleby.occurrent.domain.NameDefined",
   "datacontenttype": "application/json",
+  "dataschema" : "http://someschema.com/schema.json",
   "subject": "name1",
   "time": "2020-07-10T14:48:23.272Z",
   "data": {

@@ -14,11 +14,13 @@ import org.springframework.data.mongodb.core.query.Criteria;
 import org.springframework.data.mongodb.core.query.Query;
 import org.springframework.data.mongodb.core.query.Update;
 import org.springframework.data.util.StreamUtils;
+import se.haleby.occurrent.eventstore.api.Filter;
 import se.haleby.occurrent.eventstore.api.WriteCondition;
 import se.haleby.occurrent.eventstore.api.WriteCondition.StreamVersionWriteCondition;
 import se.haleby.occurrent.eventstore.api.WriteConditionNotFulfilledException;
 import se.haleby.occurrent.eventstore.api.blocking.EventStore;
 import se.haleby.occurrent.eventstore.api.blocking.EventStoreOperations;
+import se.haleby.occurrent.eventstore.api.blocking.EventStoreQueries;
 import se.haleby.occurrent.eventstore.api.blocking.EventStream;
 import se.haleby.occurrent.eventstore.mongodb.spring.blocking.StreamConsistencyGuarantee.None;
 import se.haleby.occurrent.eventstore.mongodb.spring.blocking.StreamConsistencyGuarantee.Transactional;
@@ -33,14 +35,13 @@ import java.util.stream.Stream;
 import static java.util.Objects.requireNonNull;
 import static org.springframework.data.mongodb.SessionSynchronization.ALWAYS;
 import static org.springframework.data.mongodb.core.query.Criteria.where;
-import static org.springframework.data.mongodb.core.query.Query.query;
 import static se.haleby.occurrent.cloudevents.OccurrentCloudEventExtension.STREAM_ID;
 import static se.haleby.occurrent.eventstore.mongodb.converter.MongoBulkWriteExceptionToDuplicateCloudEventExceptionTranslator.translateToDuplicateCloudEventException;
 import static se.haleby.occurrent.eventstore.mongodb.converter.OccurrentCloudEventMongoDBDocumentMapper.convertToCloudEvent;
 import static se.haleby.occurrent.eventstore.mongodb.converter.OccurrentCloudEventMongoDBDocumentMapper.convertToDocument;
 import static se.haleby.occurrent.eventstore.mongodb.spring.common.internal.ConditionToCriteriaConverter.convertConditionToCriteria;
 
-public class SpringBlockingMongoEventStore implements EventStore, EventStoreOperations {
+public class SpringBlockingMongoEventStore implements EventStore, EventStoreOperations, EventStoreQueries {
 
     private static final String ID = "_id";
     private static final String VERSION = "version";
@@ -62,7 +63,7 @@ public class SpringBlockingMongoEventStore implements EventStore, EventStoreOper
     public EventStream<CloudEvent> read(String streamId, int skip, int limit) {
         final EventStream<Document> eventStream;
         if (streamConsistencyGuarantee instanceof None) {
-            Stream<Document> stream = readCloudEvents(streamId, skip, limit);
+            Stream<Document> stream = readCloudEvents(streamIdIs(streamId), skip, limit);
             eventStream = new EventStreamImpl<>(streamId, 0, stream);
         } else if (streamConsistencyGuarantee instanceof Transactional) {
             Transactional transactional = (Transactional) this.streamConsistencyGuarantee;
@@ -105,9 +106,9 @@ public class SpringBlockingMongoEventStore implements EventStore, EventStoreOper
     public boolean exists(String streamId) {
         if (streamConsistencyGuarantee instanceof Transactional) {
             String streamVersionCollectionName = ((Transactional) streamConsistencyGuarantee).streamVersionCollectionName;
-            return mongoTemplate.exists(query(where(ID).is(streamId)), streamVersionCollectionName);
+            return mongoTemplate.exists(Query.query(where(ID).is(streamId)), streamVersionCollectionName);
         } else {
-            return mongoTemplate.exists(query(where(STREAM_ID).is(streamId)), eventStoreCollectionName);
+            return mongoTemplate.exists(Query.query(where(STREAM_ID).is(streamId)), eventStoreCollectionName);
         }
     }
 
@@ -118,7 +119,7 @@ public class SpringBlockingMongoEventStore implements EventStore, EventStoreOper
         if (streamConsistencyGuarantee instanceof Transactional) {
             Transactional transactional = (Transactional) this.streamConsistencyGuarantee;
             transactional.transactionTemplate.executeWithoutResult(__ -> {
-                mongoTemplate.remove(query(where(ID).is(streamId)), transactional.streamVersionCollectionName);
+                mongoTemplate.remove(Query.query(where(ID).is(streamId)), transactional.streamVersionCollectionName);
                 deleteAllEventsInEventStream(streamId);
             });
         } else if (streamConsistencyGuarantee instanceof None) {
@@ -129,7 +130,7 @@ public class SpringBlockingMongoEventStore implements EventStore, EventStoreOper
     @Override
     public void deleteAllEventsInEventStream(String streamId) {
         requireNonNull(streamId, "Stream id cannot be null");
-        Runnable deleteEvents = () -> mongoTemplate.remove(query(where(STREAM_ID).is(streamId)), eventStoreCollectionName);
+        Runnable deleteEvents = () -> mongoTemplate.remove(Query.query(where(STREAM_ID).is(streamId)), eventStoreCollectionName);
 
         if (streamConsistencyGuarantee instanceof Transactional) {
             Transactional transactional = (Transactional) this.streamConsistencyGuarantee;
@@ -144,9 +145,27 @@ public class SpringBlockingMongoEventStore implements EventStore, EventStoreOper
         requireNonNull(cloudEventId, "Cloud event id cannot be null");
         requireNonNull(cloudEventSource, "Cloud event source cannot be null");
 
-        mongoTemplate.remove(query(where("id").is(cloudEventId).and("source").is(cloudEventSource)), eventStoreCollectionName);
+        mongoTemplate.remove(Query.query(where("id").is(cloudEventId).and("source").is(cloudEventSource)), eventStoreCollectionName);
     }
 
+    // Queries
+    @Override
+    public Stream<CloudEvent> all(int skip, int limit) {
+        return queryAndDeserialize(new Query(), skip, limit);
+    }
+
+    @Override
+    public Stream<CloudEvent> query(List<Filter> filters, int skip, int limit) {
+        Criteria composedCriteria = filters.stream().collect(Criteria::new, (criteria, f) -> criteria.andOperator(convertConditionToCriteria(f.fieldName, f.condition)), Criteria::andOperator);
+        Query query = Query.query(composedCriteria);
+        return queryAndDeserialize(query, skip, limit);
+    }
+
+    private Stream<CloudEvent> queryAndDeserialize(Query query, int skip, int limit) {
+        return readCloudEvents(query, skip, limit).map(document -> convertToCloudEvent(cloudEventSerializer, document));
+    }
+
+    // Data structures etc
     @SuppressWarnings("unused")
     private static class EventStreamImpl<T> implements EventStream<T> {
         private String _id;
@@ -206,11 +225,11 @@ public class SpringBlockingMongoEventStore implements EventStore, EventStoreOper
     }
 
     private void increaseStreamVersion(String streamId, WriteCondition writeCondition, String streamVersionCollectionName) {
-        UpdateResult updateResult = mongoTemplate.updateFirst(query(generateUpdateCondition(streamId, writeCondition)),
+        UpdateResult updateResult = mongoTemplate.updateFirst(Query.query(generateUpdateCondition(streamId, writeCondition)),
                 new Update().inc(VERSION, 1L), streamVersionCollectionName);
 
         if (updateResult.getMatchedCount() == 0) {
-            Document document = mongoTemplate.findOne(query(where(ID).is(streamId)), Document.class, streamVersionCollectionName);
+            Document document = mongoTemplate.findOne(Query.query(where(ID).is(streamId)), Document.class, streamVersionCollectionName);
             if (document == null) {
                 Map<String, Object> data = new HashMap<String, Object>() {{
                     put(ID, streamId);
@@ -239,20 +258,23 @@ public class SpringBlockingMongoEventStore implements EventStore, EventStoreOper
     }
 
     // Read
+    private static Query streamIdIs(String streamId) {
+        return Query.query(where(STREAM_ID).is(streamId));
+    }
+
     private EventStreamImpl<Document> readEventStream(String streamId, int skip, int limit, String streamVersionCollectionName) {
         @SuppressWarnings("unchecked")
-        EventStreamImpl<Document> es = mongoTemplate.findOne(query(where(ID).is(streamId)), EventStreamImpl.class, streamVersionCollectionName);
+        EventStreamImpl<Document> es = mongoTemplate.findOne(Query.query(where(ID).is(streamId)), EventStreamImpl.class, streamVersionCollectionName);
         if (es == null) {
             return new EventStreamImpl<>(streamId, 0, Stream.empty());
         }
 
-        Stream<Document> stream = readCloudEvents(streamId, skip, limit);
+        Stream<Document> stream = readCloudEvents(streamIdIs(streamId), skip, limit);
         es.setEvents(stream);
         return es;
     }
 
-    private Stream<Document> readCloudEvents(String streamId, int skip, int limit) {
-        Query query = query(where(STREAM_ID).is(streamId));
+    private Stream<Document> readCloudEvents(Query query, int skip, int limit) {
         if (skip != 0 || limit != Integer.MAX_VALUE) {
             query.skip(skip).limit(limit);
         }

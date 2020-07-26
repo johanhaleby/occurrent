@@ -98,6 +98,10 @@ public class MongoDBFilterSpecification {
             return new BsonMongoDBFilterSpecification(aggregationStages, matchStage(filter, "subject", value));
         }
 
+        public BsonMongoDBFilterSpecification dataSchema(BiFunction<String, String, Bson> filter, String value) {
+            return new BsonMongoDBFilterSpecification(aggregationStages, matchStage(filter, "dataschema", value));
+        }
+
         public BsonMongoDBFilterSpecification specVersion(BiFunction<String, String, Bson> filter, String value) {
             return new BsonMongoDBFilterSpecification(aggregationStages, matchStage(filter, "specversion", value));
         }

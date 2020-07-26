@@ -3,13 +3,17 @@ package se.haleby.occurrent.eventstore.api;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.List;
+import java.util.function.Function;
 import java.util.stream.Collectors;
 
+import static java.util.Objects.requireNonNull;
 import static se.haleby.occurrent.eventstore.api.Condition.MultiOperandConditionName.*;
 import static se.haleby.occurrent.eventstore.api.Condition.SingleOperandConditionName.*;
 
 public abstract class Condition<T> {
     public final String description;
+
+    public abstract <T2> Condition<T2> map(Function<T, T2> fn);
 
     private Condition(String description) {
         this.description = description;
@@ -29,6 +33,12 @@ public abstract class Condition<T> {
             this.singleOperandConditionName = singleOperandConditionName;
             this.operand = operand;
         }
+
+        @Override
+        public <T2> Condition<T2> map(Function<T, T2> fn) {
+            requireNonNull(fn, "Mapping function cannot be null");
+            return new SingleOperandCondition<>(singleOperandConditionName, fn.apply(operand), description);
+        }
     }
 
     public static class MultiOperandCondition<T> extends Condition<T> {
@@ -39,6 +49,13 @@ public abstract class Condition<T> {
             super(description);
             this.operationName = operationName;
             this.operations = Collections.unmodifiableList(operations);
+        }
+
+        @Override
+        public <T2> Condition<T2> map(Function<T, T2> fn) {
+            return new MultiOperandCondition<>(operationName,
+                    operations.stream().map(condition -> condition.map(fn)).collect(Collectors.toList()),
+                    description);
         }
     }
 
