@@ -42,6 +42,7 @@ import java.util.stream.Stream;
 
 import static io.vavr.API.*;
 import static io.vavr.Predicates.is;
+import static java.nio.charset.StandardCharsets.UTF_8;
 import static java.time.ZoneOffset.UTC;
 import static java.util.Objects.requireNonNull;
 import static org.assertj.core.api.Assertions.assertThat;
@@ -52,6 +53,7 @@ import static org.springframework.data.mongodb.core.query.Query.query;
 import static se.haleby.occurrent.cloudevents.OccurrentCloudEventExtension.STREAM_ID;
 import static se.haleby.occurrent.domain.Composition.chain;
 import static se.haleby.occurrent.eventstore.api.Condition.*;
+import static se.haleby.occurrent.eventstore.api.Filter.source;
 import static se.haleby.occurrent.eventstore.api.WriteCondition.streamVersion;
 import static se.haleby.occurrent.eventstore.api.WriteCondition.streamVersionEq;
 import static se.haleby.occurrent.functional.CheckedFunction.unchecked;
@@ -1084,6 +1086,105 @@ public class SpringBlockingMongoEventStoreTest {
         }
     }
 
+    @Nested
+    @DisplayName("queries")
+    class QueriesTest {
+
+        @BeforeEach
+        void create_mongo_spring_blocking_event_store() {
+            eventStore = new SpringBlockingMongoEventStore(mongoTemplate, connectionString.getCollection(), StreamConsistencyGuarantee.none());
+        }
+
+        @Test
+        void all_without_skip_and_limit_returns_all_events() {
+            // Given
+            LocalDateTime now = LocalDateTime.now();
+            NameDefined nameDefined = new NameDefined(UUID.randomUUID().toString(), now, "name");
+            NameWasChanged nameWasChanged1 = new NameWasChanged(UUID.randomUUID().toString(), now.plusHours(1), "name2");
+            NameWasChanged nameWasChanged2 = new NameWasChanged(UUID.randomUUID().toString(), now.plusHours(2), "name3");
+
+            // When
+            persist("name1", nameDefined);
+            persist("name2", nameWasChanged1);
+            persist("name3", nameWasChanged2);
+
+            // Then
+            Stream<CloudEvent> events = eventStore.all();
+            assertThat(deserialize(events)).containsExactly(nameDefined, nameWasChanged1, nameWasChanged2);
+        }
+
+        @Test
+        void all_with_skip_and_limit_returns_all_events_within_skip_and_limit() {
+            // Given
+            LocalDateTime now = LocalDateTime.now();
+            NameDefined nameDefined = new NameDefined(UUID.randomUUID().toString(), now, "name");
+            NameWasChanged nameWasChanged1 = new NameWasChanged(UUID.randomUUID().toString(), now.plusHours(1), "name2");
+            NameWasChanged nameWasChanged2 = new NameWasChanged(UUID.randomUUID().toString(), now.plusHours(2), "name3");
+
+            // When
+            persist("name1", Stream.of(nameDefined, nameWasChanged1));
+            persist("name2", Stream.of(nameWasChanged2));
+
+            // Then
+            Stream<CloudEvent> events = eventStore.all(1, 2);
+            assertThat(deserialize(events)).containsExactly(nameWasChanged1, nameWasChanged2);
+        }
+
+        @Test
+        void query_with_single_filter_without_skip_and_limit() {
+            // Given
+            LocalDateTime now = LocalDateTime.now();
+            NameDefined nameDefined = new NameDefined(UUID.randomUUID().toString(), now, "name");
+            NameWasChanged nameWasChanged1 = new NameWasChanged(UUID.randomUUID().toString(), now.plusHours(1), "name2");
+            NameWasChanged nameWasChanged2 = new NameWasChanged(UUID.randomUUID().toString(), now.plusHours(2), "name3");
+
+            // When
+            persist("name1", Stream.of(nameDefined, nameWasChanged1));
+            persist("name2", nameWasChanged2);
+            persist("something", CloudEventBuilder.v1()
+                    .withId(UUID.randomUUID().toString())
+                    .withSource(URI.create("http://something"))
+                    .withType("something")
+                    .withTime(LocalDateTime.now().atZone(UTC))
+                    .withSubject("subject")
+                    .withDataContentType("application/json")
+                    .withData("{\"hello\":\"world\"}".getBytes(UTF_8))
+                    .build()
+            );
+
+            // Then
+            Stream<CloudEvent> events = eventStore.query(source(NAME_SOURCE));
+            assertThat(deserialize(events)).containsExactly(nameDefined, nameWasChanged1, nameWasChanged2);
+        }
+        
+        @Test
+        void query_with_single_filter_with_skip_and_limit() {
+            // Given
+            LocalDateTime now = LocalDateTime.now();
+            NameDefined nameDefined = new NameDefined(UUID.randomUUID().toString(), now, "name");
+            NameWasChanged nameWasChanged1 = new NameWasChanged(UUID.randomUUID().toString(), now.plusHours(1), "name2");
+            NameWasChanged nameWasChanged2 = new NameWasChanged(UUID.randomUUID().toString(), now.plusHours(2), "name3");
+
+            // When
+            persist("name1", Stream.of(nameDefined, nameWasChanged1));
+            persist("name2", nameWasChanged2);
+            persist("something", CloudEventBuilder.v1()
+                    .withId(UUID.randomUUID().toString())
+                    .withSource(URI.create("http://something"))
+                    .withType("something")
+                    .withTime(LocalDateTime.now().atZone(UTC))
+                    .withSubject("subject")
+                    .withDataContentType("application/json")
+                    .withData("{\"hello\":\"world\"}".getBytes(UTF_8))
+                    .build()
+            );
+
+            // Then
+            Stream<CloudEvent> events = eventStore.query(source(NAME_SOURCE), 1, 1);
+            assertThat(deserialize(events)).containsExactly(nameWasChanged1);
+        }
+    }
+
     private List<DomainEvent> deserialize(Stream<CloudEvent> events) {
         return events
                 .map(CloudEvent::getData)
@@ -1102,6 +1203,10 @@ public class SpringBlockingMongoEventStoreTest {
                 })
                 .collect(Collectors.toList());
 
+    }
+
+    private void persist(String eventStreamId, CloudEvent event) {
+        eventStore.write(eventStreamId, Stream.of(event));
     }
 
     private void persist(String eventStreamId, DomainEvent event) {

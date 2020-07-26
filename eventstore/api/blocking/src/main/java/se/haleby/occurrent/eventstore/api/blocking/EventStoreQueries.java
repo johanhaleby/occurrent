@@ -53,6 +53,14 @@ public interface EventStoreQueries {
      */
     default Stream<CloudEvent> query(Filter filter) {
         requireNonNull(filter, "Filter cannot be null");
-        return query(Collections.singletonList(filter));
+        return query(filter, 0, Integer.MAX_VALUE);
+    }
+
+    /**
+     * @return All cloud events matching the specified filter with skip and limit
+     */
+    default Stream<CloudEvent> query(Filter filter, int skip, int limit) {
+        requireNonNull(filter, "Filter cannot be null");
+        return query(Collections.singletonList(filter), skip, limit);
     }
 }

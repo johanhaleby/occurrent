@@ -3,10 +3,8 @@ package se.haleby.occurrent.eventstore.api;
 import io.cloudevents.SpecVersion;
 
 import java.net.URI;
-import java.util.ArrayList;
-import java.util.Collections;
-import java.util.List;
-import java.util.Objects;
+import java.time.ZonedDateTime;
+import java.util.*;
 import java.util.function.Supplier;
 
 import static java.util.Objects.requireNonNull;
@@ -106,6 +104,23 @@ public class Filter {
 
     public static Filter dataContentType(Condition<String> condition) {
         return filter(DATA_CONTENT_TYPE, condition);
+    }
+
+
+    public static Filter time(ZonedDateTime value) {
+        return time(eq(value));
+    }
+
+    public static Filter time(Condition<ZonedDateTime> condition) {
+        return date(condition.map(zdt -> Date.from(zdt.toInstant())));
+    }
+
+    public static Filter date(Date value) {
+        return date(eq(value));
+    }
+
+    public static Filter date(Condition<Date> condition) {
+        return filter(TIME, condition);
     }
 
     public static Filter occurrentStreamId(String value) {
