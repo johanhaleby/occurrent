@@ -40,6 +40,7 @@ import static se.haleby.occurrent.eventstore.mongodb.converter.MongoBulkWriteExc
 import static se.haleby.occurrent.eventstore.mongodb.converter.OccurrentCloudEventMongoDBDocumentMapper.convertToCloudEvent;
 import static se.haleby.occurrent.eventstore.mongodb.converter.OccurrentCloudEventMongoDBDocumentMapper.convertToDocument;
 import static se.haleby.occurrent.eventstore.mongodb.spring.common.internal.ConditionToCriteriaConverter.convertConditionToCriteria;
+import static se.haleby.occurrent.eventstore.mongodb.spring.common.internal.FilterToQueryConverter.convertFilterToQuery;
 
 public class SpringBlockingMongoEventStore implements EventStore, EventStoreOperations, EventStoreQueries {
 
@@ -150,17 +151,9 @@ public class SpringBlockingMongoEventStore implements EventStore, EventStoreOper
 
     // Queries
     @Override
-    public Stream<CloudEvent> query(List<Filter> filters, int skip, int limit) {
-        final Query query;
-        if (filters == null || filters.isEmpty()) {
-            query = new Query();
-        } else if (filters.size() == 1) {
-            Filter filter = filters.get(0);
-            query = Query.query(convertConditionToCriteria(filter.fieldName, filter.condition));
-        } else {
-            query = Query.query(filters.stream().collect(Criteria::new, (criteria, f) -> criteria.andOperator(convertConditionToCriteria(f.fieldName, f.condition)), Criteria::andOperator));
-        }
-
+    public Stream<CloudEvent> query(Filter filter, int skip, int limit) {
+        requireNonNull(filter, "Filter cannot be null");
+        final Query query = convertFilterToQuery(filter);
         return queryAndDeserialize(query, skip, limit);
     }
 

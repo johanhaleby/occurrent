@@ -12,11 +12,13 @@ import static java.time.ZoneOffset.UTC;
 import static java.util.Objects.requireNonNull;
 import static se.haleby.occurrent.cloudevents.OccurrentCloudEventExtension.STREAM_ID;
 import static se.haleby.occurrent.eventstore.api.Condition.eq;
+import static se.haleby.occurrent.eventstore.api.Filter.CompositionOperator.AND;
+import static se.haleby.occurrent.eventstore.api.Filter.CompositionOperator.OR;
 
 /**
  * Filters that can be applied when queriying an event store
  */
-public class Filter {
+public abstract class Filter {
     public static final String SPEC_VERSION = "specversion";
     public static final String ID = "id";
     public static final String TYPE = "type";
@@ -26,14 +28,79 @@ public class Filter {
     public static final String DATA_SCHEMA = "dataschema";
     public static final String DATA_CONTENT_TYPE = "datacontenttype";
 
-    public final String fieldName;
-    public final Condition<?> condition;
+    private Filter() {
+    }
 
-    private Filter(String fieldName, Condition<?> condition) {
-        requireNonNull(fieldName, "Field name cannot be null");
-        requireNonNull(condition, "Condition cannot be null");
-        this.fieldName = fieldName;
-        this.condition = condition;
+
+    public static final class All extends Filter {
+        private All() {
+        }
+    }
+
+    public static final class SingleConditionFilter extends Filter {
+        public final String fieldName;
+        public final Condition<?> condition;
+
+        private SingleConditionFilter(String fieldName, Condition<?> condition) {
+            requireNonNull(fieldName, "Field name cannot be null");
+            requireNonNull(condition, "Condition cannot be null");
+            this.fieldName = fieldName;
+            this.condition = condition;
+        }
+
+        @Override
+        public boolean equals(Object o) {
+            if (this == o) return true;
+            if (!(o instanceof SingleConditionFilter)) return false;
+            SingleConditionFilter that = (SingleConditionFilter) o;
+            return Objects.equals(fieldName, that.fieldName) &&
+                    Objects.equals(condition, that.condition);
+        }
+
+        @Override
+        public int hashCode() {
+            return Objects.hash(fieldName, condition);
+        }
+
+        @Override
+        public String toString() {
+            return "SingleConditionFilter{" +
+                    "fieldName='" + fieldName + '\'' +
+                    ", condition=" + condition +
+                    '}';
+        }
+    }
+
+    public static final class CompositionFilter extends Filter {
+        public final CompositionOperator operator;
+        public final List<Filter> filters;
+
+        private CompositionFilter(CompositionOperator operator, List<Filter> filters) {
+            this.operator = operator;
+            this.filters = filters;
+        }
+
+        @Override
+        public boolean equals(Object o) {
+            if (this == o) return true;
+            if (!(o instanceof CompositionFilter)) return false;
+            CompositionFilter that = (CompositionFilter) o;
+            return operator == that.operator &&
+                    Objects.equals(filters, that.filters);
+        }
+
+        @Override
+        public int hashCode() {
+            return Objects.hash(operator, filters);
+        }
+
+        @Override
+        public String toString() {
+            return "ComposedFilter{" +
+                    "operator=" + operator +
+                    ", filters=" + filters +
+                    '}';
+        }
     }
 
     public static <T> Filter filter(Supplier<String> fieldName, Condition<T> condition) {
@@ -41,23 +108,42 @@ public class Filter {
     }
 
     public static <T> Filter filter(String fieldName, Condition<T> condition) {
-        return new Filter(fieldName, condition);
+        return new SingleConditionFilter(fieldName, condition);
     }
 
-    public <T> List<Filter> and(String fieldName, Condition<T> condition) {
-        return and(Filter.filter(fieldName, condition));
+    public <T> Filter and(String fieldName, Condition<T> condition) {
+        return and(filter(fieldName, condition));
     }
 
-    public List<Filter> and(Filter filter, Filter... filters) {
-        requireNonNull(filter, "Filter cannot be null");
-        requireNonNull(filters, "Filters cannot be null");
-
-        List<Filter> allFilters = new ArrayList<>(2 + filters.length);
-        allFilters.add(this);
-        Collections.addAll(allFilters, filters);
-        return Collections.unmodifiableList(allFilters);
+    public <T> Filter or(String fieldName, Condition<T> condition) {
+        return or(filter(fieldName, condition));
     }
 
+    public Filter and(Filter filter, Filter... filters) {
+        List<Filter> filterList = toList(this, filter, filters);
+        return new CompositionFilter(AND, filterList);
+    }
+
+    public Filter or(Filter filter, Filter... filters) {
+        List<Filter> filterList = toList(this, filter, filters);
+        return new CompositionFilter(OR, filterList);
+    }
+
+    private List<Filter> toList(Filter firstFilter, Filter secondFilter, Filter[] moreFilters) {
+        requireNonNull(secondFilter, "Filter cannot be null");
+
+        List<Filter> allFilters = new ArrayList<>(2 + (moreFilters == null ? 0 : moreFilters.length));
+        allFilters.add(firstFilter);
+        allFilters.add(secondFilter);
+        if (moreFilters != null) {
+            Collections.addAll(allFilters, moreFilters);
+        }
+        return allFilters;
+    }
+
+    public static Filter all() {
+        return new All();
+    }
 
     // Convenience methods
     public static Filter id(String value) {
@@ -160,29 +246,11 @@ public class Filter {
      * @param source The source of the cloud event
      * @return A filter list describing the query
      */
-    public static List<Filter> cloudEvent(String id, URI source) {
+    public static Filter cloudEvent(String id, URI source) {
         return id(id).and(source(source));
     }
 
-    @Override
-    public boolean equals(Object o) {
-        if (this == o) return true;
-        if (!(o instanceof Filter)) return false;
-        Filter filter = (Filter) o;
-        return Objects.equals(fieldName, filter.fieldName) &&
-                Objects.equals(condition, filter.condition);
-    }
-
-    @Override
-    public int hashCode() {
-        return Objects.hash(fieldName, condition);
-    }
-
-    @Override
-    public String toString() {
-        return "Filter{" +
-                "fieldName='" + fieldName + '\'' +
-                ", condition=" + condition +
-                '}';
+    public enum CompositionOperator {
+        AND, OR
     }
 }

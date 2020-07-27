@@ -4,8 +4,6 @@ import io.cloudevents.CloudEvent;
 import se.haleby.occurrent.eventstore.api.Condition;
 import se.haleby.occurrent.eventstore.api.Filter;
 
-import java.util.Collections;
-import java.util.List;
 import java.util.stream.Stream;
 
 import static java.util.Objects.requireNonNull;
@@ -20,13 +18,13 @@ public interface EventStoreQueries {
     /**
      * @return All cloud events matching the specified filters
      */
-    Stream<CloudEvent> query(List<Filter> filters, int skip, int limit);
+    Stream<CloudEvent> query(Filter filter, int skip, int limit);
 
     /**
      * @return All cloud events in insertion order
      */
     default Stream<CloudEvent> all(int skip, int limit) {
-        return query(Collections.emptyList(), skip, limit);
+        return query(Filter.all(), skip, limit);
     }
 
     /**
@@ -34,13 +32,6 @@ public interface EventStoreQueries {
      */
     default Stream<CloudEvent> all() {
         return all(0, Integer.MAX_VALUE);
-    }
-
-    /**
-     * @return All cloud events matching the specified filters
-     */
-    default Stream<CloudEvent> query(List<Filter> filters) {
-        return query(filters, 0, Integer.MAX_VALUE);
     }
 
     /**
@@ -56,13 +47,5 @@ public interface EventStoreQueries {
     default Stream<CloudEvent> query(Filter filter) {
         requireNonNull(filter, "Filter cannot be null");
         return query(filter, 0, Integer.MAX_VALUE);
-    }
-
-    /**
-     * @return All cloud events matching the specified filter with skip and limit
-     */
-    default Stream<CloudEvent> query(Filter filter, int skip, int limit) {
-        requireNonNull(filter, "Filter cannot be null");
-        return query(Collections.singletonList(filter), skip, limit);
     }
 }
