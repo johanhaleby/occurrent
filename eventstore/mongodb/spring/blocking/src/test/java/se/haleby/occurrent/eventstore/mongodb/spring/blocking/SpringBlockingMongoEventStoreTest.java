@@ -1198,8 +1198,25 @@ public class SpringBlockingMongoEventStoreTest {
             persist("name2", nameWasChanged2);
 
             // Then
-            Stream<CloudEvent> events = eventStore.query(timeFromLocalDateTime(lt(now.plusHours(2))).and(id(uuid.toString())));
+            Stream<CloudEvent> events = eventStore.query(localDateTime(lt(now.plusHours(2))).and(id(uuid.toString())));
             assertThat(deserialize(events)).containsExactly(nameDefined);
+        }
+
+        @Test
+        void compose_filters_using_or() {
+            // Given
+            LocalDateTime now = LocalDateTime.now();
+            NameDefined nameDefined = new NameDefined(UUID.randomUUID().toString(), now, "name");
+            NameWasChanged nameWasChanged1 = new NameWasChanged(UUID.randomUUID().toString(), now.plusHours(1), "name2");
+            NameWasChanged nameWasChanged2 = new NameWasChanged(UUID.randomUUID().toString(), now.plusHours(2), "name3");
+
+            // When
+            persist("name1", Stream.of(nameDefined, nameWasChanged1));
+            persist("name2", nameWasChanged2);
+
+            // Then
+            Stream<CloudEvent> events = eventStore.query(localDateTime(gt(now.plusHours(2))).or(source(NAME_SOURCE)));
+            assertThat(deserialize(events)).containsExactly(nameDefined, nameWasChanged1, nameWasChanged2);
         }
 
         @Test
@@ -1215,7 +1232,7 @@ public class SpringBlockingMongoEventStoreTest {
             persist("name2", nameWasChanged2);
 
             // Then
-            Stream<CloudEvent> events = eventStore.query(timeFromLocalDateTime(lt(now.plusHours(2))));
+            Stream<CloudEvent> events = eventStore.query(localDateTime(lt(now.plusHours(2))));
             assertThat(deserialize(events)).containsExactly(nameDefined, nameWasChanged1);
         }
     }

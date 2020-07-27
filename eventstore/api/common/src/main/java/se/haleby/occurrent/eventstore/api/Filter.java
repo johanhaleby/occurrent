@@ -200,22 +200,22 @@ public abstract class Filter {
     }
 
     public static Filter time(Condition<ZonedDateTime> condition) {
-        return timeFromDate(condition.map(zdt -> Date.from(zdt.toInstant())));
+        return date(condition.map(zdt -> Date.from(zdt.toInstant())));
     }
 
-    public static Filter timeFromDate(Date value) {
-        return timeFromDate(eq(value));
+    public static Filter date(Date value) {
+        return date(eq(value));
     }
 
-    public static Filter timeFromDate(Condition<Date> condition) {
+    public static Filter date(Condition<Date> condition) {
         return filter(TIME, condition);
     }
 
-    public static Filter timeFromLocalDateTime(LocalDateTime value) {
-        return timeFromLocalDateTime(eq(value));
+    public static Filter localDateTime(LocalDateTime value) {
+        return localDateTime(eq(value));
     }
 
-    public static Filter timeFromLocalDateTime(Condition<LocalDateTime> condition) {
+    public static Filter localDateTime(Condition<LocalDateTime> condition) {
         return time(condition.map(ldt -> ZonedDateTime.of(ldt, UTC)));
     }
 
