@@ -9,6 +9,7 @@ import io.cloudevents.core.format.EventFormat;
 import io.cloudevents.core.provider.EventFormatProvider;
 import io.cloudevents.jackson.JsonFormat;
 import org.bson.Document;
+import org.springframework.data.domain.Sort;
 import org.springframework.data.mongodb.core.MongoTemplate;
 import org.springframework.data.mongodb.core.query.Criteria;
 import org.springframework.data.mongodb.core.query.Query;
@@ -33,9 +34,13 @@ import java.util.stream.Collectors;
 import java.util.stream.Stream;
 
 import static java.util.Objects.requireNonNull;
+import static org.springframework.data.domain.Sort.Direction.ASC;
+import static org.springframework.data.domain.Sort.Direction.DESC;
 import static org.springframework.data.mongodb.SessionSynchronization.ALWAYS;
 import static org.springframework.data.mongodb.core.query.Criteria.where;
 import static se.haleby.occurrent.cloudevents.OccurrentCloudEventExtension.STREAM_ID;
+import static se.haleby.occurrent.eventstore.api.Filter.TIME;
+import static se.haleby.occurrent.eventstore.api.blocking.EventStoreQueries.SortBy.NATURAL_ASC;
 import static se.haleby.occurrent.eventstore.mongodb.converter.MongoBulkWriteExceptionToDuplicateCloudEventExceptionTranslator.translateToDuplicateCloudEventException;
 import static se.haleby.occurrent.eventstore.mongodb.converter.OccurrentCloudEventMongoDBDocumentMapper.convertToCloudEvent;
 import static se.haleby.occurrent.eventstore.mongodb.converter.OccurrentCloudEventMongoDBDocumentMapper.convertToDocument;
@@ -64,7 +69,7 @@ public class SpringBlockingMongoEventStore implements EventStore, EventStoreOper
     public EventStream<CloudEvent> read(String streamId, int skip, int limit) {
         final EventStream<Document> eventStream;
         if (streamConsistencyGuarantee instanceof None) {
-            Stream<Document> stream = readCloudEvents(streamIdIs(streamId), skip, limit);
+            Stream<Document> stream = readCloudEvents(streamIdIs(streamId), skip, limit, NATURAL_ASC);
             eventStream = new EventStreamImpl<>(streamId, 0, stream);
         } else if (streamConsistencyGuarantee instanceof Transactional) {
             Transactional transactional = (Transactional) this.streamConsistencyGuarantee;
@@ -151,14 +156,14 @@ public class SpringBlockingMongoEventStore implements EventStore, EventStoreOper
 
     // Queries
     @Override
-    public Stream<CloudEvent> query(Filter filter, int skip, int limit) {
+    public Stream<CloudEvent> query(Filter filter, int skip, int limit, SortBy sortBy) {
         requireNonNull(filter, "Filter cannot be null");
         final Query query = convertFilterToQuery(filter);
-        return queryAndDeserialize(query, skip, limit);
+        return queryAndDeserialize(query, skip, limit, sortBy);
     }
 
-    private Stream<CloudEvent> queryAndDeserialize(Query query, int skip, int limit) {
-        return readCloudEvents(query, skip, limit).map(document -> convertToCloudEvent(cloudEventSerializer, document));
+    private Stream<CloudEvent> queryAndDeserialize(Query query, int skip, int limit, SortBy sortBy) {
+        return readCloudEvents(query, skip, limit, sortBy).map(document -> convertToCloudEvent(cloudEventSerializer, document));
     }
 
     // Data structures etc
@@ -265,15 +270,32 @@ public class SpringBlockingMongoEventStore implements EventStore, EventStoreOper
             return new EventStreamImpl<>(streamId, 0, Stream.empty());
         }
 
-        Stream<Document> stream = readCloudEvents(streamIdIs(streamId), skip, limit);
+        Stream<Document> stream = readCloudEvents(streamIdIs(streamId), skip, limit, NATURAL_ASC);
         es.setEvents(stream);
         return es;
     }
 
-    private Stream<Document> readCloudEvents(Query query, int skip, int limit) {
+    private Stream<Document> readCloudEvents(Query query, int skip, int limit, SortBy sortBy) {
         if (skip != 0 || limit != Integer.MAX_VALUE) {
             query.skip(skip).limit(limit);
         }
+
+        switch (sortBy) {
+            case TIME_ASC:
+                query.with(Sort.by(ASC, TIME));
+                break;
+            case TIME_DESC:
+                query.with(Sort.by(DESC, TIME));
+                break;
+            case NATURAL_ASC:
+                break;
+            case NATURAL_DESC:
+                query.with(Sort.by(DESC, ID));
+                break;
+            default:
+                throw new IllegalStateException("Unexpected value: " + sortBy);
+        }
+
         return StreamUtils.createStreamFromIterator(mongoTemplate.stream(query, Document.class, eventStoreCollectionName));
     }
 

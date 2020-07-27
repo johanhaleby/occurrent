@@ -1,13 +1,11 @@
 package se.haleby.occurrent.eventstore.api.blocking;
 
 import io.cloudevents.CloudEvent;
-import se.haleby.occurrent.eventstore.api.Condition;
 import se.haleby.occurrent.eventstore.api.Filter;
 
 import java.util.stream.Stream;
 
 import static java.util.Objects.requireNonNull;
-import static se.haleby.occurrent.eventstore.api.Filter.filter;
 
 /**
  * Additional querying capabilities that may be supported by an {@link EventStore} implementation that is not typically part of a
@@ -16,9 +14,42 @@ import static se.haleby.occurrent.eventstore.api.Filter.filter;
 public interface EventStoreQueries {
 
     /**
-     * @return All cloud events matching the specified filters
+     * Note that it's recommended to create an index on the "time" field in the event store in order to make
+     * {@link SortBy#TIME_ASC} and {@link SortBy#TIME_DESC} efficient.
+     *
+     * @return All cloud events matching the specified filter, skip, limit and sort by <code>sortBy</code>.
      */
-    Stream<CloudEvent> query(Filter filter, int skip, int limit);
+    Stream<CloudEvent> query(Filter filter, int skip, int limit, SortBy sortBy);
+
+    /**
+     * @return All cloud events matching the specified filter sorted by <code>sortBy</code>.
+     */
+    default Stream<CloudEvent> query(Filter filter, SortBy sortBy) {
+        return query(filter, 0, Integer.MAX_VALUE, sortBy);
+    }
+
+    /**
+     * @return All cloud events matching the specified filter
+     */
+    default Stream<CloudEvent> query(Filter filter, int skip, int limit) {
+        return query(filter, skip, limit, SortBy.NATURAL_ASC);
+    }
+
+    /**
+     * @return All cloud events in insertion order
+     */
+    default Stream<CloudEvent> all(int skip, int limit, SortBy sortBy) {
+        return query(Filter.all(), skip, limit, sortBy);
+    }
+
+
+    /**
+     * @return All cloud events sorted by <code>sortBy</code>
+     */
+    default Stream<CloudEvent> all(SortBy sortBy) {
+        return query(Filter.all(), sortBy);
+    }
+
 
     /**
      * @return All cloud events in insertion order
@@ -37,15 +68,12 @@ public interface EventStoreQueries {
     /**
      * @return All cloud events matching the specified filter
      */
-    default <T> Stream<CloudEvent> query(String fieldName, Condition<T> condition) {
-        return query(filter(fieldName, condition));
-    }
-
-    /**
-     * @return All cloud events matching the specified filter
-     */
     default Stream<CloudEvent> query(Filter filter) {
         requireNonNull(filter, "Filter cannot be null");
         return query(filter, 0, Integer.MAX_VALUE);
+    }
+
+    enum SortBy {
+        TIME_ASC, TIME_DESC, NATURAL_ASC, NATURAL_DESC
     }
 }

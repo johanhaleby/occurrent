@@ -28,6 +28,7 @@ import se.haleby.occurrent.domain.NameWasChanged;
 import se.haleby.occurrent.eventstore.api.DuplicateCloudEventException;
 import se.haleby.occurrent.eventstore.api.WriteCondition;
 import se.haleby.occurrent.eventstore.api.WriteConditionNotFulfilledException;
+import se.haleby.occurrent.eventstore.api.blocking.EventStoreQueries.SortBy;
 import se.haleby.occurrent.eventstore.api.blocking.EventStream;
 import se.haleby.occurrent.testsupport.mongodb.FlushMongoDBExtension;
 
@@ -1345,6 +1346,83 @@ public class SpringBlockingMongoEventStoreTest {
             // Then
             Stream<CloudEvent> events = eventStore.query(dataContentType("text/plain"));
             assertThat(events).containsExactly(cloudEvent);
+        }
+
+        @Nested
+        @DisplayName("sort")
+        class SortTest {
+
+            @Test
+            void sort_by_natural_asc() {
+                // Given
+                LocalDateTime now = LocalDateTime.now();
+                NameDefined nameDefined = new NameDefined(UUID.randomUUID().toString(), now, "name");
+                NameWasChanged nameWasChanged1 = new NameWasChanged(UUID.randomUUID().toString(), now.plusHours(-2), "name2");
+                NameWasChanged nameWasChanged2 = new NameWasChanged(UUID.randomUUID().toString(), now.plusHours(1), "name3");
+
+                // When
+                persist("name3", nameWasChanged1);
+                persist("name2", nameWasChanged2);
+                persist("name1", nameDefined);
+
+                // Then
+                Stream<CloudEvent> events = eventStore.all(SortBy.NATURAL_ASC);
+                assertThat(deserialize(events)).containsExactly(nameWasChanged1, nameWasChanged2, nameDefined);
+            }
+
+            @Test
+            void sort_by_natural_desc() {
+                // Given
+                LocalDateTime now = LocalDateTime.now();
+                NameDefined nameDefined = new NameDefined(UUID.randomUUID().toString(), now, "name");
+                NameWasChanged nameWasChanged1 = new NameWasChanged(UUID.randomUUID().toString(), now.plusHours(-2), "name2");
+                NameWasChanged nameWasChanged2 = new NameWasChanged(UUID.randomUUID().toString(), now.plusHours(1), "name3");
+
+                // When
+                persist("name3", nameWasChanged1);
+                persist("name2", nameWasChanged2);
+                persist("name1", nameDefined);
+
+                // Then
+                Stream<CloudEvent> events = eventStore.all(SortBy.NATURAL_DESC);
+                assertThat(deserialize(events)).containsExactly(nameDefined, nameWasChanged2, nameWasChanged1);
+            }
+
+            @Test
+            void sort_by_time_asc() {
+                // Given
+                LocalDateTime now = LocalDateTime.now();
+                NameDefined nameDefined = new NameDefined(UUID.randomUUID().toString(), now, "name");
+                NameWasChanged nameWasChanged1 = new NameWasChanged(UUID.randomUUID().toString(), now.plusHours(-2), "name2");
+                NameWasChanged nameWasChanged2 = new NameWasChanged(UUID.randomUUID().toString(), now.plusHours(1), "name3");
+
+                // When
+                persist("name3", nameWasChanged1);
+                persist("name2", nameWasChanged2);
+                persist("name1", nameDefined);
+
+                // Then
+                Stream<CloudEvent> events = eventStore.all(SortBy.TIME_ASC);
+                assertThat(deserialize(events)).containsExactly(nameWasChanged1, nameDefined, nameWasChanged2);
+            }
+
+            @Test
+            void sort_by_time_desc() {
+                // Given
+                LocalDateTime now = LocalDateTime.now();
+                NameDefined nameDefined = new NameDefined(UUID.randomUUID().toString(), now.plusHours(3), "name");
+                NameWasChanged nameWasChanged1 = new NameWasChanged(UUID.randomUUID().toString(), now.plusHours(-2), "name2");
+                NameWasChanged nameWasChanged2 = new NameWasChanged(UUID.randomUUID().toString(), now.plusHours(1), "name3");
+
+                // When
+                persist("name3", nameWasChanged1);
+                persist("name2", nameWasChanged2);
+                persist("name1", nameDefined);
+
+                // Then
+                Stream<CloudEvent> events = eventStore.all(SortBy.TIME_DESC);
+                assertThat(deserialize(events)).containsExactly(nameDefined, nameWasChanged2, nameWasChanged1);
+            }
         }
     }
 
