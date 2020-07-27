@@ -18,14 +18,16 @@ import static se.haleby.occurrent.eventstore.api.Filter.filter;
 public interface EventStoreQueries {
 
     /**
-     * @return All cloud events in insertion order
-     */
-    Stream<CloudEvent> all(int skip, int limit);
-
-    /**
      * @return All cloud events matching the specified filters
      */
     Stream<CloudEvent> query(List<Filter> filters, int skip, int limit);
+
+    /**
+     * @return All cloud events in insertion order
+     */
+    default Stream<CloudEvent> all(int skip, int limit) {
+        return query(Collections.emptyList(), skip, limit);
+    }
 
     /**
      * @return All cloud events in an unspecified order (most likely insertion order but this is not guaranteed and it is database/implementation specific)

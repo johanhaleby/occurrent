@@ -54,6 +54,7 @@ import static se.haleby.occurrent.cloudevents.OccurrentCloudEventExtension.STREA
 import static se.haleby.occurrent.domain.Composition.chain;
 import static se.haleby.occurrent.eventstore.api.Condition.*;
 import static se.haleby.occurrent.eventstore.api.Filter.source;
+import static se.haleby.occurrent.eventstore.api.Filter.timeFromLocalDateTime;
 import static se.haleby.occurrent.eventstore.api.WriteCondition.streamVersion;
 import static se.haleby.occurrent.eventstore.api.WriteCondition.streamVersionEq;
 import static se.haleby.occurrent.functional.CheckedFunction.unchecked;
@@ -1156,7 +1157,7 @@ public class SpringBlockingMongoEventStoreTest {
             Stream<CloudEvent> events = eventStore.query(source(NAME_SOURCE));
             assertThat(deserialize(events)).containsExactly(nameDefined, nameWasChanged1, nameWasChanged2);
         }
-        
+
         @Test
         void query_with_single_filter_with_skip_and_limit() {
             // Given
@@ -1182,6 +1183,41 @@ public class SpringBlockingMongoEventStoreTest {
             // Then
             Stream<CloudEvent> events = eventStore.query(source(NAME_SOURCE), 1, 1);
             assertThat(deserialize(events)).containsExactly(nameWasChanged1);
+        }
+
+        // @Test
+        // void query_filter_by_multiple_properties() {
+        //     // Given
+        //     LocalDateTime now = LocalDateTime.now();
+        //     UUID uuid = UUID.randomUUID();
+        //     NameDefined nameDefined = new NameDefined(uuid.toString(), now, "name");
+        //     NameWasChanged nameWasChanged1 = new NameWasChanged(UUID.randomUUID().toString(), now.plusHours(1), "name2");
+        //     NameWasChanged nameWasChanged2 = new NameWasChanged(UUID.randomUUID().toString(), now.plusHours(2), "name3");
+        //
+        //     // When
+        //     persist("name1", Stream.of(nameDefined, nameWasChanged1));
+        //     persist("name2", nameWasChanged2);
+        //
+        //     // Then
+        //     Stream<CloudEvent> events = eventStore.query(timeFromLocalDateTime(lt(now.plusHours(2))).and(id(uuid.toString())));
+        //     assertThat(deserialize(events)).containsExactly(nameDefined);
+        // }
+
+        @Test
+        void query_filter_by_time() {
+            // Given
+            LocalDateTime now = LocalDateTime.now();
+            NameDefined nameDefined = new NameDefined(UUID.randomUUID().toString(), now, "name");
+            NameWasChanged nameWasChanged1 = new NameWasChanged(UUID.randomUUID().toString(), now.plusHours(1), "name2");
+            NameWasChanged nameWasChanged2 = new NameWasChanged(UUID.randomUUID().toString(), now.plusHours(2), "name3");
+
+            // When
+            persist("name1", Stream.of(nameDefined, nameWasChanged1));
+            persist("name2", nameWasChanged2);
+
+            // Then
+            Stream<CloudEvent> events = eventStore.query(timeFromLocalDateTime(lt(now.plusHours(2))));
+            assertThat(deserialize(events)).containsExactly(nameDefined, nameWasChanged1);
         }
     }
 

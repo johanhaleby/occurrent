@@ -150,14 +150,17 @@ public class SpringBlockingMongoEventStore implements EventStore, EventStoreOper
 
     // Queries
     @Override
-    public Stream<CloudEvent> all(int skip, int limit) {
-        return queryAndDeserialize(new Query(), skip, limit);
-    }
-
-    @Override
     public Stream<CloudEvent> query(List<Filter> filters, int skip, int limit) {
-        Criteria composedCriteria = filters.stream().collect(Criteria::new, (criteria, f) -> criteria.andOperator(convertConditionToCriteria(f.fieldName, f.condition)), Criteria::andOperator);
-        Query query = Query.query(composedCriteria);
+        final Query query;
+        if (filters == null || filters.isEmpty()) {
+            query = new Query();
+        } else if (filters.size() == 1) {
+            Filter filter = filters.get(0);
+            query = Query.query(convertConditionToCriteria(filter.fieldName, filter.condition));
+        } else {
+            query = Query.query(filters.stream().collect(Criteria::new, (criteria, f) -> criteria.andOperator(convertConditionToCriteria(f.fieldName, f.condition)), Criteria::andOperator));
+        }
+
         return queryAndDeserialize(query, skip, limit);
     }
 
