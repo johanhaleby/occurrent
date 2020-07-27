@@ -5,6 +5,7 @@ import io.cloudevents.Extension;
 
 import java.util.Collections;
 import java.util.HashSet;
+import java.util.Objects;
 import java.util.Set;
 
 public class OccurrentCloudEventExtension implements Extension {
@@ -15,7 +16,12 @@ public class OccurrentCloudEventExtension implements Extension {
     private String streamId;
 
     public OccurrentCloudEventExtension(String streamId) {
+        Objects.requireNonNull(streamId, "StreamId cannot be null");
         this.streamId = streamId;
+    }
+
+    public static OccurrentCloudEventExtension occurrent(String streamId) {
+        return new OccurrentCloudEventExtension(streamId);
     }
 
     @Override
