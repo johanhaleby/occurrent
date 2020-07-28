@@ -2,7 +2,7 @@
 <br>
 [![Build Status](https://travis-ci.com/johanhaleby/occurrent.svg?branch=master)](https://travis-ci.com/johanhaleby/occurrent)
 
-Occurrent is a set of experimental Event Sourcing utilities based on the [cloud events](https://cloudevents.io/) specification. 
+Occurrent is a set of Event Sourcing utilities based on the [cloud events](https://cloudevents.io/) specification. 
 
 Work in progress, don't use in production just yet :)
 
