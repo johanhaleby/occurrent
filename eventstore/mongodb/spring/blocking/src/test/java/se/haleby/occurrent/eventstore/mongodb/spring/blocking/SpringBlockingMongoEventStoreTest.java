@@ -33,8 +33,7 @@ import se.haleby.occurrent.eventstore.api.blocking.EventStream;
 import se.haleby.occurrent.testsupport.mongodb.FlushMongoDBExtension;
 
 import java.net.URI;
-import java.time.Instant;
-import java.time.LocalDateTime;
+import java.time.*;
 import java.util.List;
 import java.util.Map;
 import java.util.*;
@@ -1200,7 +1199,7 @@ public class SpringBlockingMongoEventStoreTest {
             persist("name2", nameWasChanged2);
 
             // Then
-            Stream<CloudEvent> events = eventStore.query(localDateTime(lt(now.plusHours(2))).and(id(uuid.toString())));
+            Stream<CloudEvent> events = eventStore.query(time(lt(ZonedDateTime.of(now.plusHours(2), UTC))).and(id(uuid.toString())));
             assertThat(deserialize(events)).containsExactly(nameDefined);
         }
 
@@ -1217,7 +1216,7 @@ public class SpringBlockingMongoEventStoreTest {
             persist("name2", nameWasChanged2);
 
             // Then
-            Stream<CloudEvent> events = eventStore.query(localDateTime(gt(now.plusHours(2))).or(source(NAME_SOURCE)));
+            Stream<CloudEvent> events = eventStore.query(time(ZonedDateTime.of(now.plusHours(2), UTC)).or(source(NAME_SOURCE)));
             assertThat(deserialize(events)).containsExactly(nameDefined, nameWasChanged1, nameWasChanged2);
         }
 
@@ -1234,7 +1233,7 @@ public class SpringBlockingMongoEventStoreTest {
             persist("name2", nameWasChanged2);
 
             // Then
-            Stream<CloudEvent> events = eventStore.query(localDateTime(lt(now.plusHours(2))));
+            Stream<CloudEvent> events = eventStore.query(time(lt(ZonedDateTime.of(now.plusHours(2), UTC))));
             assertThat(deserialize(events)).containsExactly(nameDefined, nameWasChanged1);
         }
 
@@ -1334,7 +1333,7 @@ public class SpringBlockingMongoEventStoreTest {
                     .withId(UUID.randomUUID().toString())
                     .withSource(URI.create("http://something"))
                     .withType("something")
-                    .withTime(LocalDateTime.now().atZone(UTC))
+                    .withTime(OffsetDateTime.from(LocalDateTime.now().atZone(ZoneId.of("Europe/Stockholm"))).toZonedDateTime())
                     .withSubject("subject")
                     .withDataSchema(URI.create("urn:myschema"))
                     .withDataContentType("text/plain")

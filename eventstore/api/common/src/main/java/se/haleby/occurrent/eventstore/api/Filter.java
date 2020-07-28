@@ -3,12 +3,13 @@ package se.haleby.occurrent.eventstore.api;
 import io.cloudevents.SpecVersion;
 
 import java.net.URI;
-import java.time.LocalDateTime;
 import java.time.ZonedDateTime;
-import java.util.*;
+import java.util.ArrayList;
+import java.util.Collections;
+import java.util.List;
+import java.util.Objects;
 import java.util.function.Supplier;
 
-import static java.time.ZoneOffset.UTC;
 import static java.util.Objects.requireNonNull;
 import static se.haleby.occurrent.cloudevents.OccurrentCloudEventExtension.STREAM_ID;
 import static se.haleby.occurrent.eventstore.api.Condition.eq;
@@ -200,23 +201,7 @@ public abstract class Filter {
     }
 
     public static Filter time(Condition<ZonedDateTime> condition) {
-        return date(condition.map(zdt -> Date.from(zdt.toInstant())));
-    }
-
-    public static Filter date(Date value) {
-        return date(eq(value));
-    }
-
-    public static Filter date(Condition<Date> condition) {
         return filter(TIME, condition);
-    }
-
-    public static Filter localDateTime(LocalDateTime value) {
-        return localDateTime(eq(value));
-    }
-
-    public static Filter localDateTime(Condition<LocalDateTime> condition) {
-        return time(condition.map(ldt -> ZonedDateTime.of(ldt, UTC)));
     }
 
     public static Filter occurrentStreamId(String value) {
