@@ -47,8 +47,7 @@ public abstract class StreamConsistencyGuarantee {
      * This will enforce that all events written using {@link SpringReactorMongoEventStore#write(String, Flux)}
      * will be inserted _or_ no events will be inserted if there's a failure (such as a duplicate). If using {@link #none()} then
      * failing inserts will behave in the manner described <a href="https://docs.mongodb.com/manual/reference/method/db.collection.insertMany/#execution-of-operations">here</a>.
-     * Note that this mode is implied in {@link #transactional(String, ReactiveTransactionManager)} and {@link #transactionAlreadyStarted(String)}
-     * modes.
+     * Note that this mode is implied in {@link #transactional(String, ReactiveTransactionManager)} mode.
      */
     public static TransactionInsertsOnly transactionalInsertsOnly(ReactiveTransactionManager reactiveTransactionManager) {
         return new TransactionInsertsOnly(TransactionalOperator.create(reactiveTransactionManager));
@@ -59,8 +58,7 @@ public abstract class StreamConsistencyGuarantee {
      * This will enforce that all events written using {@link SpringReactorMongoEventStore#write(String, Flux)}
      * will be inserted _or_ no events will be inserted if there's a failure (such as a duplicate). If using {@link #none()} then
      * failing inserts will behave in the manner described <a href="https://docs.mongodb.com/manual/reference/method/db.collection.insertMany/#execution-of-operations">here</a>.
-     * Note that this mode is implied in {@link #transactional(String, ReactiveTransactionManager)} and {@link #transactionAlreadyStarted(String)}
-     * modes.
+     * Note that this mode is implied in {@link #transactional(String, ReactiveTransactionManager)} mode.
      */
     public static TransactionInsertsOnly transactionalInsertsOnly(TransactionalOperator transactionalOperator) {
         return new TransactionInsertsOnly(transactionalOperator);

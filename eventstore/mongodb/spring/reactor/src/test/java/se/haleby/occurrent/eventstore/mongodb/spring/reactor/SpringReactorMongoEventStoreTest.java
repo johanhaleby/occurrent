@@ -13,6 +13,8 @@ import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Nested;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.condition.EnabledForJreRange;
+import org.junit.jupiter.api.condition.EnabledOnJre;
 import org.junit.jupiter.api.extension.RegisterExtension;
 import org.springframework.data.mongodb.ReactiveMongoTransactionManager;
 import org.springframework.data.mongodb.core.ReactiveMongoTemplate;
@@ -31,11 +33,16 @@ import se.haleby.occurrent.eventstore.api.Condition;
 import se.haleby.occurrent.eventstore.api.DuplicateCloudEventException;
 import se.haleby.occurrent.eventstore.api.WriteCondition;
 import se.haleby.occurrent.eventstore.api.WriteConditionNotFulfilledException;
+import se.haleby.occurrent.eventstore.api.reactor.EventStoreQueries.SortBy;
 import se.haleby.occurrent.eventstore.api.reactor.EventStream;
+import se.haleby.occurrent.eventstore.mongodb.converter.TimeRepresentation;
 import se.haleby.occurrent.testsupport.mongodb.FlushMongoDBExtension;
 
 import java.net.URI;
 import java.time.LocalDateTime;
+import java.time.OffsetDateTime;
+import java.time.ZoneId;
+import java.time.ZonedDateTime;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.UUID;
@@ -44,6 +51,7 @@ import java.util.concurrent.atomic.AtomicReference;
 import java.util.function.Function;
 import java.util.stream.Collectors;
 
+import static java.nio.charset.StandardCharsets.UTF_8;
 import static java.time.ZoneOffset.UTC;
 import static java.util.Objects.requireNonNull;
 import static org.assertj.core.api.Assertions.assertThat;
@@ -51,15 +59,21 @@ import static org.assertj.core.api.Assertions.catchThrowable;
 import static org.hamcrest.Matchers.not;
 import static org.hamcrest.Matchers.nullValue;
 import static org.junit.jupiter.api.Assertions.assertAll;
+import static org.junit.jupiter.api.condition.JRE.JAVA_11;
+import static org.junit.jupiter.api.condition.JRE.JAVA_8;
 import static org.springframework.data.mongodb.core.query.Criteria.where;
 import static org.springframework.data.mongodb.core.query.Query.query;
 import static se.haleby.occurrent.cloudevents.OccurrentCloudEventExtension.STREAM_ID;
+import static se.haleby.occurrent.cloudevents.OccurrentCloudEventExtension.occurrent;
 import static se.haleby.occurrent.domain.Composition.chain;
 import static se.haleby.occurrent.eventstore.api.Condition.*;
+import static se.haleby.occurrent.eventstore.api.Filter.*;
 import static se.haleby.occurrent.eventstore.api.WriteCondition.*;
+import static se.haleby.occurrent.eventstore.mongodb.converter.TimeRepresentation.RFC_3339_STRING;
 import static se.haleby.occurrent.functional.CheckedFunction.unchecked;
 import static se.haleby.occurrent.time.TimeConversion.toLocalDateTime;
 
+@SuppressWarnings("SameParameterValue")
 @Testcontainers
 public class SpringReactorMongoEventStoreTest {
 
@@ -97,7 +111,7 @@ public class SpringReactorMongoEventStoreTest {
 
         @BeforeEach
         void create_mongo_spring_reactive_event_store_with_stream_write_consistency_guarantee_none() {
-            eventStore = new SpringReactorMongoEventStore(mongoTemplate, connectionString.getCollection(), StreamConsistencyGuarantee.none());
+            eventStore = new SpringReactorMongoEventStore(mongoTemplate, new EventStoreConfig(connectionString.getCollection(), StreamConsistencyGuarantee.none(), RFC_3339_STRING));
         }
 
         @Test
@@ -393,7 +407,7 @@ public class SpringReactorMongoEventStoreTest {
         @BeforeEach
         void create_mongo_spring_reactive_event_store_with_stream_write_consistency_guarantee_transactional_inserts_only() {
             ReactiveMongoTransactionManager reactiveMongoTransactionManager = new ReactiveMongoTransactionManager(new SimpleReactiveMongoDatabaseFactory(mongoClient, requireNonNull(connectionString.getDatabase())));
-            eventStore = new SpringReactorMongoEventStore(mongoTemplate, connectionString.getCollection(), StreamConsistencyGuarantee.transactionalInsertsOnly(reactiveMongoTransactionManager));
+            eventStore = new SpringReactorMongoEventStore(mongoTemplate, new EventStoreConfig(connectionString.getCollection(), StreamConsistencyGuarantee.transactionalInsertsOnly(reactiveMongoTransactionManager), RFC_3339_STRING));
         }
 
         @Test
@@ -537,7 +551,7 @@ public class SpringReactorMongoEventStoreTest {
         @BeforeEach
         void create_mongo_spring_reactive_event_store_with_stream_write_consistency_guarantee_transactional() {
             reactiveMongoTransactionManager = new ReactiveMongoTransactionManager(new SimpleReactiveMongoDatabaseFactory(mongoClient, requireNonNull(connectionString.getDatabase())));
-            eventStore = new SpringReactorMongoEventStore(mongoTemplate, connectionString.getCollection(), StreamConsistencyGuarantee.transactional("event-stream-version", reactiveMongoTransactionManager));
+            eventStore = new SpringReactorMongoEventStore(mongoTemplate, new EventStoreConfig(connectionString.getCollection(), StreamConsistencyGuarantee.transactional("event-stream-version", reactiveMongoTransactionManager), RFC_3339_STRING));
         }
 
         @Test
@@ -879,7 +893,7 @@ public class SpringReactorMongoEventStoreTest {
         @BeforeEach
         void initialize_event_store() {
             ReactiveMongoTransactionManager mongoTransactionManager = new ReactiveMongoTransactionManager(new SimpleReactiveMongoDatabaseFactory(mongoClient, requireNonNull(connectionString.getDatabase())));
-            eventStore = new SpringReactorMongoEventStore(mongoTemplate, connectionString.getCollection(), StreamConsistencyGuarantee.transactional("event-stream-version", mongoTransactionManager));
+            eventStore = new SpringReactorMongoEventStore(mongoTemplate, new EventStoreConfig(connectionString.getCollection(), StreamConsistencyGuarantee.transactional("event-stream-version", mongoTransactionManager), RFC_3339_STRING));
         }
 
         @Nested
@@ -1259,6 +1273,498 @@ public class SpringReactorMongoEventStoreTest {
         }
     }
 
+    @Nested
+    @DisplayName("queries")
+    class QueriesTest {
+
+        @BeforeEach
+        void create_mongo_spring_reactor_event_store() {
+            eventStore = new SpringReactorMongoEventStore(mongoTemplate, new EventStoreConfig(connectionString.getCollection(), StreamConsistencyGuarantee.none(), RFC_3339_STRING));
+        }
+
+        @Test
+        void all_without_skip_and_limit_returns_all_events() {
+            // Given
+            LocalDateTime now = LocalDateTime.now();
+            NameDefined nameDefined = new NameDefined(UUID.randomUUID().toString(), now, "name");
+            NameWasChanged nameWasChanged1 = new NameWasChanged(UUID.randomUUID().toString(), now.plusHours(1), "name2");
+            NameWasChanged nameWasChanged2 = new NameWasChanged(UUID.randomUUID().toString(), now.plusHours(2), "name3");
+
+            // When
+            persist("name1", nameDefined).block();
+            persist("name2", nameWasChanged1).block();
+            persist("name3", nameWasChanged2).block();
+
+            // Then
+            Flux<CloudEvent> events = eventStore.all();
+            assertThat(deserialize(events)).containsExactly(nameDefined, nameWasChanged1, nameWasChanged2);
+        }
+
+        @Test
+        void all_with_skip_and_limit_returns_all_events_within_skip_and_limit() {
+            // Given
+            LocalDateTime now = LocalDateTime.now();
+            NameDefined nameDefined = new NameDefined(UUID.randomUUID().toString(), now, "name");
+            NameWasChanged nameWasChanged1 = new NameWasChanged(UUID.randomUUID().toString(), now.plusHours(1), "name2");
+            NameWasChanged nameWasChanged2 = new NameWasChanged(UUID.randomUUID().toString(), now.plusHours(2), "name3");
+
+            // When
+            persist("name1", Flux.just(nameDefined, nameWasChanged1)).block();
+            persist("name2", Flux.just(nameWasChanged2)).block();
+
+            // Then
+            Flux<CloudEvent> events = eventStore.all(1, 2);
+            assertThat(deserialize(events)).containsExactly(nameWasChanged1, nameWasChanged2);
+        }
+
+        @Test
+        void query_with_single_filter_without_skip_and_limit() {
+            // Given
+            LocalDateTime now = LocalDateTime.now();
+            NameDefined nameDefined = new NameDefined(UUID.randomUUID().toString(), now, "name");
+            NameWasChanged nameWasChanged1 = new NameWasChanged(UUID.randomUUID().toString(), now.plusHours(1), "name2");
+            NameWasChanged nameWasChanged2 = new NameWasChanged(UUID.randomUUID().toString(), now.plusHours(2), "name3");
+
+            // When
+            persist("name1", Flux.just(nameDefined, nameWasChanged1)).block();
+            persist("name2", nameWasChanged2).block();
+            persist("something", CloudEventBuilder.v1()
+                    .withId(UUID.randomUUID().toString())
+                    .withSource(URI.create("http://something"))
+                    .withType("something")
+                    .withTime(LocalDateTime.now().atZone(UTC))
+                    .withSubject("subject")
+                    .withDataContentType("application/json")
+                    .withData("{\"hello\":\"world\"}".getBytes(UTF_8))
+                    .build()
+            );
+
+            // Then
+            Flux<CloudEvent> events = eventStore.query(source(NAME_SOURCE));
+            assertThat(deserialize(events)).containsExactly(nameDefined, nameWasChanged1, nameWasChanged2);
+        }
+
+        @Test
+        void query_with_single_filter_with_skip_and_limit() {
+            // Given
+            LocalDateTime now = LocalDateTime.now();
+            NameDefined nameDefined = new NameDefined(UUID.randomUUID().toString(), now, "name");
+            NameWasChanged nameWasChanged1 = new NameWasChanged(UUID.randomUUID().toString(), now.plusHours(1), "name2");
+            NameWasChanged nameWasChanged2 = new NameWasChanged(UUID.randomUUID().toString(), now.plusHours(2), "name3");
+
+            // When
+            persist("name1", Flux.just(nameDefined, nameWasChanged1)).block();
+            persist("name2", nameWasChanged2).block();
+            persist("something", CloudEventBuilder.v1()
+                    .withId(UUID.randomUUID().toString())
+                    .withSource(URI.create("http://something"))
+                    .withType("something")
+                    .withTime(LocalDateTime.now().atZone(UTC))
+                    .withSubject("subject")
+                    .withDataContentType("application/json")
+                    .withData("{\"hello\":\"world\"}".getBytes(UTF_8))
+                    .build()
+            );
+
+            // Then
+            Flux<CloudEvent> events = eventStore.query(source(NAME_SOURCE), 1, 1);
+            assertThat(deserialize(events)).containsExactly(nameWasChanged1);
+        }
+
+        @Test
+        void compose_filters_using_and() {
+            // Given
+            LocalDateTime now = LocalDateTime.now();
+            UUID uuid = UUID.randomUUID();
+            NameDefined nameDefined = new NameDefined(uuid.toString(), now, "name");
+            NameWasChanged nameWasChanged1 = new NameWasChanged(UUID.randomUUID().toString(), now.plusHours(1), "name2");
+            NameWasChanged nameWasChanged2 = new NameWasChanged(UUID.randomUUID().toString(), now.plusHours(2), "name3");
+
+            // When
+            persist("name1", Flux.just(nameDefined, nameWasChanged1)).block();
+            persist("name2", nameWasChanged2).block();
+
+            // Then
+            Flux<CloudEvent> events = eventStore.query(time(lt(ZonedDateTime.of(now.plusHours(2), UTC))).and(id(uuid.toString())));
+            assertThat(deserialize(events)).containsExactly(nameDefined);
+        }
+
+        @Test
+        void compose_filters_using_or() {
+            // Given
+            LocalDateTime now = LocalDateTime.now();
+            NameDefined nameDefined = new NameDefined(UUID.randomUUID().toString(), now, "name");
+            NameWasChanged nameWasChanged1 = new NameWasChanged(UUID.randomUUID().toString(), now.plusHours(1), "name2");
+            NameWasChanged nameWasChanged2 = new NameWasChanged(UUID.randomUUID().toString(), now.plusHours(2), "name3");
+
+            // When
+            persist("name1", Flux.just(nameDefined, nameWasChanged1)).block();
+            persist("name2", nameWasChanged2).block();
+
+            // Then
+            Flux<CloudEvent> events = eventStore.query(time(ZonedDateTime.of(now.plusHours(2), UTC)).or(source(NAME_SOURCE)));
+            assertThat(deserialize(events)).containsExactly(nameDefined, nameWasChanged1, nameWasChanged2);
+        }
+
+        @Test
+        void query_filter_by_subject() {
+            // Given
+            LocalDateTime now = LocalDateTime.now();
+            NameDefined nameDefined = new NameDefined(UUID.randomUUID().toString(), now, "name");
+            NameWasChanged nameWasChanged1 = new NameWasChanged(UUID.randomUUID().toString(), now.plusHours(1), "name2");
+            NameWasChanged nameWasChanged2 = new NameWasChanged(UUID.randomUUID().toString(), now.plusHours(2), "name3");
+
+            // When
+            persist("name1", Flux.just(nameDefined, nameWasChanged1)).block();
+            persist("name2", nameWasChanged2).block();
+
+            // Then
+            Flux<CloudEvent> events = eventStore.query(subject("WasChanged"));
+            assertThat(deserialize(events)).containsExactly(nameWasChanged1, nameWasChanged2);
+        }
+
+        @Test
+        void query_filter_by_cloud_event() {
+            // Given
+            LocalDateTime now = LocalDateTime.now();
+            NameDefined nameDefined = new NameDefined(UUID.randomUUID().toString(), now, "name");
+            String eventId = UUID.randomUUID().toString();
+            NameWasChanged nameWasChanged1 = new NameWasChanged(eventId, now.plusHours(1), "name2");
+            NameWasChanged nameWasChanged2 = new NameWasChanged(UUID.randomUUID().toString(), now.plusHours(2), "name3");
+
+            // When
+            persist("name1", Flux.just(nameDefined, nameWasChanged1)).block();
+            persist("name2", nameWasChanged2).block();
+
+            // Then
+            Flux<CloudEvent> events = eventStore.query(cloudEvent(eventId, NAME_SOURCE));
+            assertThat(deserialize(events)).containsExactly(nameWasChanged1);
+        }
+
+        @Test
+        void query_filter_by_type() {
+            // Given
+            LocalDateTime now = LocalDateTime.now();
+            NameDefined nameDefined = new NameDefined(UUID.randomUUID().toString(), now, "name");
+            NameWasChanged nameWasChanged1 = new NameWasChanged(UUID.randomUUID().toString(), now.plusHours(1), "name2");
+            NameWasChanged nameWasChanged2 = new NameWasChanged(UUID.randomUUID().toString(), now.plusHours(2), "name3");
+
+            // When
+            persist("name1", Flux.just(nameDefined, nameWasChanged1)).block();
+            persist("name2", nameWasChanged2).block();
+
+            // Then
+            Flux<CloudEvent> events = eventStore.query(type(NameDefined.class.getName()));
+            assertThat(deserialize(events)).containsExactly(nameDefined);
+        }
+
+        @Test
+        void query_filter_by_data_schema() {
+            // Given
+            LocalDateTime now = LocalDateTime.now();
+            NameDefined nameDefined = new NameDefined(UUID.randomUUID().toString(), now, "name");
+            NameWasChanged nameWasChanged1 = new NameWasChanged(UUID.randomUUID().toString(), now.plusHours(1), "name2");
+            NameWasChanged nameWasChanged2 = new NameWasChanged(UUID.randomUUID().toString(), now.plusHours(2), "name3");
+
+            // When
+            persist("name1", Flux.just(nameDefined, nameWasChanged1)).block();
+            persist("name2", nameWasChanged2).block();
+            CloudEvent cloudEvent = CloudEventBuilder.v1()
+                    .withId(UUID.randomUUID().toString())
+                    .withSource(URI.create("http://something"))
+                    .withType("something")
+                    .withTime(LocalDateTime.now().atZone(UTC))
+                    .withSubject("subject")
+                    .withDataSchema(URI.create("urn:myschema"))
+                    .withDataContentType("application/json")
+                    .withData("{\"hello\":\"world\"}".getBytes(UTF_8))
+                    .withExtension(occurrent("something"))
+                    .build();
+            persist("something", cloudEvent).block();
+
+            // Then
+            Flux<CloudEvent> events = eventStore.query(dataSchema(URI.create("urn:myschema")));
+            assertThat(events.toStream()).containsExactly(cloudEvent);
+        }
+
+        @Test
+        void query_filter_by_data_content_type() {
+            // Given
+            LocalDateTime now = LocalDateTime.now();
+            NameDefined nameDefined = new NameDefined(UUID.randomUUID().toString(), now, "name");
+            NameWasChanged nameWasChanged1 = new NameWasChanged(UUID.randomUUID().toString(), now.plusHours(1), "name2");
+            NameWasChanged nameWasChanged2 = new NameWasChanged(UUID.randomUUID().toString(), now.plusHours(2), "name3");
+
+            // When
+            persist("name1", Flux.just(nameDefined, nameWasChanged1)).block();
+            persist("name2", nameWasChanged2).block();
+            CloudEvent cloudEvent = CloudEventBuilder.v1()
+                    .withId(UUID.randomUUID().toString())
+                    .withSource(URI.create("http://something"))
+                    .withType("something")
+                    .withTime(OffsetDateTime.from(LocalDateTime.now().atZone(ZoneId.of("Europe/Stockholm"))).toZonedDateTime())
+                    .withSubject("subject")
+                    .withDataSchema(URI.create("urn:myschema"))
+                    .withDataContentType("text/plain")
+                    .withData("text".getBytes(UTF_8))
+                    .withExtension(occurrent("something"))
+                    .build();
+            persist("something", cloudEvent).block();
+
+            // Then
+            Flux<CloudEvent> events = eventStore.query(dataContentType("text/plain"));
+            assertThat(events.toStream()).containsExactly(cloudEvent);
+        }
+
+        @Nested
+        @DisplayName("sort")
+        class SortTest {
+
+            @Test
+            void sort_by_natural_asc() {
+                // Given
+                LocalDateTime now = LocalDateTime.now();
+                NameDefined nameDefined = new NameDefined(UUID.randomUUID().toString(), now, "name");
+                NameWasChanged nameWasChanged1 = new NameWasChanged(UUID.randomUUID().toString(), now.plusHours(-2), "name2");
+                NameWasChanged nameWasChanged2 = new NameWasChanged(UUID.randomUUID().toString(), now.plusHours(1), "name3");
+
+                // When
+                persist("name3", nameWasChanged1).block();
+                persist("name2", nameWasChanged2).block();
+                persist("name1", nameDefined).block();
+
+                // Then
+                Flux<CloudEvent> events = eventStore.all(SortBy.NATURAL_ASC);
+                assertThat(deserialize(events)).containsExactly(nameWasChanged1, nameWasChanged2, nameDefined);
+            }
+
+            @Test
+            void sort_by_natural_desc() {
+                // Given
+                LocalDateTime now = LocalDateTime.now();
+                NameDefined nameDefined = new NameDefined(UUID.randomUUID().toString(), now, "name");
+                NameWasChanged nameWasChanged1 = new NameWasChanged(UUID.randomUUID().toString(), now.plusHours(-2), "name2");
+                NameWasChanged nameWasChanged2 = new NameWasChanged(UUID.randomUUID().toString(), now.plusHours(1), "name3");
+
+                // When
+                persist("name3", nameWasChanged1).block();
+                persist("name2", nameWasChanged2).block();
+                persist("name1", nameDefined).block();
+
+                // Then
+                Flux<CloudEvent> events = eventStore.all(SortBy.NATURAL_DESC);
+                assertThat(deserialize(events)).containsExactly(nameDefined, nameWasChanged2, nameWasChanged1);
+            }
+
+            @Test
+            void sort_by_time_asc() {
+                // Given
+                LocalDateTime now = LocalDateTime.now();
+                NameDefined nameDefined = new NameDefined(UUID.randomUUID().toString(), now, "name");
+                NameWasChanged nameWasChanged1 = new NameWasChanged(UUID.randomUUID().toString(), now.plusHours(-2), "name2");
+                NameWasChanged nameWasChanged2 = new NameWasChanged(UUID.randomUUID().toString(), now.plusHours(1), "name3");
+
+                // When
+                persist("name3", nameWasChanged1).block();
+                persist("name2", nameWasChanged2).block();
+                persist("name1", nameDefined).block();
+
+                // Then
+                Flux<CloudEvent> events = eventStore.all(SortBy.TIME_ASC);
+                assertThat(deserialize(events)).containsExactly(nameWasChanged1, nameDefined, nameWasChanged2);
+            }
+
+            @Test
+            void sort_by_time_desc() {
+                // Given
+                LocalDateTime now = LocalDateTime.now();
+                NameDefined nameDefined = new NameDefined(UUID.randomUUID().toString(), now.plusHours(3), "name");
+                NameWasChanged nameWasChanged1 = new NameWasChanged(UUID.randomUUID().toString(), now.plusHours(-2), "name2");
+                NameWasChanged nameWasChanged2 = new NameWasChanged(UUID.randomUUID().toString(), now.plusHours(1), "name3");
+
+                // When
+                persist("name3", nameWasChanged1).block();
+                persist("name2", nameWasChanged2).block();
+                persist("name1", nameDefined).block();
+
+                // Then
+                Flux<CloudEvent> events = eventStore.all(SortBy.TIME_DESC);
+                assertThat(deserialize(events)).containsExactly(nameDefined, nameWasChanged2, nameWasChanged1);
+            }
+        }
+
+        @Nested
+        @DisplayName("when time is represented as rfc 3339 string")
+        class TimeRepresentedAsRfc3339String {
+
+            @Test
+            void query_filter_by_time_but_is_using_slow_string_comparison() {
+                // Given
+                LocalDateTime now = LocalDateTime.now();
+                NameDefined nameDefined = new NameDefined(UUID.randomUUID().toString(), now, "name");
+                NameWasChanged nameWasChanged1 = new NameWasChanged(UUID.randomUUID().toString(), now.plusHours(1), "name2");
+                NameWasChanged nameWasChanged2 = new NameWasChanged(UUID.randomUUID().toString(), now.plusHours(2), "name3");
+
+                // When
+                persist("name1", Flux.just(nameDefined, nameWasChanged1)).block();
+                persist("name2", nameWasChanged2).block();
+
+                // Then
+                Flux<CloudEvent> events = eventStore.query(time(lt(ZonedDateTime.of(now.plusHours(2), UTC))));
+                assertThat(deserialize(events)).containsExactly(nameDefined, nameWasChanged1);
+            }
+
+            @Test
+            void query_filter_by_time_range_is_wider_than_persisted_time_range() {
+                // Given
+                LocalDateTime now = LocalDateTime.now();
+                NameDefined nameDefined = new NameDefined(UUID.randomUUID().toString(), now, "name");
+                NameWasChanged nameWasChanged1 = new NameWasChanged(UUID.randomUUID().toString(), now.plusHours(1), "name2");
+                NameWasChanged nameWasChanged2 = new NameWasChanged(UUID.randomUUID().toString(), now.plusHours(2), "name3");
+
+                // When
+                persist("name1", Flux.just(nameDefined, nameWasChanged1)).block();
+                persist("name2", nameWasChanged2).block();
+
+                // Then
+                Flux<CloudEvent> events = eventStore.query(time(and(gte(ZonedDateTime.of(now.plusMinutes(35), UTC)), lte(ZonedDateTime.of(now.plusHours(4), UTC)))));
+                assertThat(deserialize(events)).containsExactly(nameWasChanged1, nameWasChanged2);
+            }
+
+            @EnabledOnJre(JAVA_8)
+            @Test
+            void query_filter_by_time_range_has_exactly_the_same_range_as_persisted_time_range_when_using_java_8() {
+                // Given
+                LocalDateTime now = LocalDateTime.now();
+                NameDefined nameDefined = new NameDefined(UUID.randomUUID().toString(), now, "name");
+                NameWasChanged nameWasChanged1 = new NameWasChanged(UUID.randomUUID().toString(), now.plusHours(1), "name2");
+                NameWasChanged nameWasChanged2 = new NameWasChanged(UUID.randomUUID().toString(), now.plusHours(2), "name3");
+
+                // When
+                persist("name1", Flux.just(nameDefined, nameWasChanged1)).block();
+                persist("name2", nameWasChanged2).block();
+
+                // Then
+                Flux<CloudEvent> events = eventStore.query(time(and(gte(ZonedDateTime.of(now, UTC)), lte(ZonedDateTime.of(now.plusHours(2), UTC)))));
+                assertThat(deserialize(events)).isNotEmpty(); // Java 8 seem to return nondeterministic results
+            }
+
+            @EnabledForJreRange(min = JAVA_11)
+            @Test
+            void query_filter_by_time_range_has_exactly_the_same_range_as_persisted_time_range_when_using_java_11_and_above() {
+                // Given
+                LocalDateTime now = LocalDateTime.now();
+                NameDefined nameDefined = new NameDefined(UUID.randomUUID().toString(), now, "name");
+                NameWasChanged nameWasChanged1 = new NameWasChanged(UUID.randomUUID().toString(), now.plusHours(1), "name2");
+                NameWasChanged nameWasChanged2 = new NameWasChanged(UUID.randomUUID().toString(), now.plusHours(2), "name3");
+
+                // When
+                persist("name1", Flux.just(nameDefined, nameWasChanged1)).block();
+                persist("name2", nameWasChanged2).block();
+
+                // Then
+                Flux<CloudEvent> events = eventStore.query(time(and(gte(ZonedDateTime.of(now, UTC)), lte(ZonedDateTime.of(now.plusHours(2), UTC)))));
+                assertThat(deserialize(events)).containsExactly(nameDefined, nameWasChanged1); // nameWasChanged2 _should_ be included but it's not due to string comparison instead of date
+            }
+
+            @Test
+            void query_filter_by_time_range_has_a_range_smaller_as_persisted_time_range() {
+                // Given
+                LocalDateTime now = LocalDateTime.now();
+                NameDefined nameDefined = new NameDefined(UUID.randomUUID().toString(), now, "name");
+                NameWasChanged nameWasChanged1 = new NameWasChanged(UUID.randomUUID().toString(), now.plusHours(1), "name2");
+                NameWasChanged nameWasChanged2 = new NameWasChanged(UUID.randomUUID().toString(), now.plusHours(2), "name3");
+
+                // When
+                persist("name1", Flux.just(nameDefined, nameWasChanged1)).block();
+                persist("name2", nameWasChanged2).block();
+
+                // Then
+                Flux<CloudEvent> events = eventStore.query(time(and(gt(ZonedDateTime.of(now.plusMinutes(50), UTC)), lt(ZonedDateTime.of(now.plusMinutes(110), UTC)))));
+                assertThat(deserialize(events)).containsExactly(nameWasChanged1);
+            }
+        }
+
+        @Nested
+        @DisplayName("when time is represented as date")
+        class TimeRepresentedAsDate {
+
+            @BeforeEach
+            void event_store_is_configured_to_using_date_as_time_representation() {
+                eventStore = new SpringReactorMongoEventStore(mongoTemplate, new EventStoreConfig(connectionString.getCollection(), StreamConsistencyGuarantee.none(), TimeRepresentation.DATE));
+            }
+
+            @Test
+            void query_filter_by_time_lt() {
+                // Given
+                LocalDateTime now = LocalDateTime.now();
+                NameDefined nameDefined = new NameDefined(UUID.randomUUID().toString(), now, "name");
+                NameWasChanged nameWasChanged1 = new NameWasChanged(UUID.randomUUID().toString(), now.plusHours(1), "name2");
+                NameWasChanged nameWasChanged2 = new NameWasChanged(UUID.randomUUID().toString(), now.plusHours(2), "name3");
+
+                // When
+                persist("name1", Flux.just(nameDefined, nameWasChanged1)).block();
+                persist("name2", nameWasChanged2).block();
+
+                // Then
+                Flux<CloudEvent> events = eventStore.query(time(lt(ZonedDateTime.of(now.plusHours(2), UTC))));
+                assertThat(deserialize(events)).containsExactly(nameDefined, nameWasChanged1);
+            }
+
+            @Test
+            void query_filter_by_time_range_is_wider_than_persisted_time_range() {
+                // Given
+                LocalDateTime now = LocalDateTime.now();
+                NameDefined nameDefined = new NameDefined(UUID.randomUUID().toString(), now, "name");
+                NameWasChanged nameWasChanged1 = new NameWasChanged(UUID.randomUUID().toString(), now.plusHours(1), "name2");
+                NameWasChanged nameWasChanged2 = new NameWasChanged(UUID.randomUUID().toString(), now.plusHours(2), "name3");
+
+                // When
+                persist("name1", Flux.just(nameDefined, nameWasChanged1)).block();
+                persist("name2", nameWasChanged2).block();
+
+                // Then
+                Flux<CloudEvent> events = eventStore.query(time(and(gte(ZonedDateTime.of(now.plusMinutes(35), UTC)), lte(ZonedDateTime.of(now.plusHours(4), UTC)))));
+                assertThat(deserialize(events)).containsExactly(nameWasChanged1, nameWasChanged2);
+            }
+
+            @Test
+            void query_filter_by_time_range_has_exactly_the_same_range_as_persisted_time_range() {
+                // Given
+                LocalDateTime now = LocalDateTime.now();
+                NameDefined nameDefined = new NameDefined(UUID.randomUUID().toString(), now, "name");
+                NameWasChanged nameWasChanged1 = new NameWasChanged(UUID.randomUUID().toString(), now.plusHours(1), "name2");
+                NameWasChanged nameWasChanged2 = new NameWasChanged(UUID.randomUUID().toString(), now.plusHours(2), "name3");
+
+                // When
+                persist("name1", Flux.just(nameDefined, nameWasChanged1)).block();
+                persist("name2", nameWasChanged2).block();
+
+                // Then
+                Flux<CloudEvent> events = eventStore.query(time(and(gte(ZonedDateTime.of(now, UTC)), lte(ZonedDateTime.of(now.plusHours(2), UTC)))));
+                assertThat(deserialize(events)).containsExactly(nameDefined, nameWasChanged1, nameWasChanged2);
+            }
+
+            @Test
+            void query_filter_by_time_range_has_a_range_smaller_as_persisted_time_range() {
+                // Given
+                LocalDateTime now = LocalDateTime.now();
+                NameDefined nameDefined = new NameDefined(UUID.randomUUID().toString(), now, "name");
+                NameWasChanged nameWasChanged1 = new NameWasChanged(UUID.randomUUID().toString(), now.plusHours(1), "name2");
+                NameWasChanged nameWasChanged2 = new NameWasChanged(UUID.randomUUID().toString(), now.plusHours(2), "name3");
+
+                // When
+                persist("name1", Flux.just(nameDefined, nameWasChanged1)).block();
+                persist("name2", nameWasChanged2).block();
+
+                // Then
+                Flux<CloudEvent> events = eventStore.query(time(and(gt(ZonedDateTime.of(now.plusMinutes(50), UTC)), lt(ZonedDateTime.of(now.plusMinutes(110), UTC)))));
+                assertThat(deserialize(events)).containsExactly(nameWasChanged1);
+            }
+        }
+    }
+
+
     private VersionAndEvents deserialize(Mono<EventStream<CloudEvent>> eventStreamMono) {
         return eventStreamMono
                 .map(es -> {
@@ -1269,7 +1775,10 @@ public class SpringReactorMongoEventStoreTest {
                     return new VersionAndEvents(es.version(), events);
                 })
                 .block();
+    }
 
+    private List<DomainEvent> deserialize(Flux<CloudEvent> flux) {
+        return flux.map(deserialize()).toStream().collect(Collectors.toList());
     }
 
     @NotNull
@@ -1299,6 +1808,10 @@ public class SpringReactorMongoEventStoreTest {
         return eventStreamMono.map(EventStream::id).block();
     }
 
+
+    private Mono<Void> persist(String eventStreamId, CloudEvent event) {
+        return eventStore.write(eventStreamId, Flux.just(event));
+    }
 
     private Mono<Void> persist(String eventStreamId, DomainEvent event) {
         return eventStore.write(eventStreamId, Flux.just(convertDomainEventCloudEvent(event)));
@@ -1333,7 +1846,7 @@ public class SpringReactorMongoEventStoreTest {
                 .withSource(NAME_SOURCE)
                 .withType(domainEvent.getClass().getName())
                 .withTime(toLocalDateTime(domainEvent.getTimestamp()).atZone(UTC))
-                .withSubject(domainEvent.getName())
+                .withSubject(domainEvent.getClass().getSimpleName().substring(4)) // Defined or WasChanged
                 .withDataContentType("application/json")
                 .withData(unchecked(objectMapper::writeValueAsBytes).apply(domainEvent))
                 .build();

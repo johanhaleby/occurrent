@@ -10,6 +10,8 @@ import org.springframework.data.mongodb.core.MongoOperations;
 import org.springframework.data.mongodb.core.ReactiveMongoTemplate;
 import org.springframework.data.mongodb.repository.config.EnableReactiveMongoRepositories;
 import se.haleby.occurrent.eventstore.api.reactor.EventStore;
+import se.haleby.occurrent.eventstore.mongodb.converter.TimeRepresentation;
+import se.haleby.occurrent.eventstore.mongodb.spring.reactor.EventStoreConfig;
 import se.haleby.occurrent.eventstore.mongodb.spring.reactor.SpringReactorMongoEventStore;
 
 import javax.annotation.PostConstruct;
@@ -31,7 +33,7 @@ public class TransactionalProjectionsWithSpringAndMongoDBApplication {
 
     @Bean
     public EventStore eventStore(ReactiveMongoTemplate mongoTemplate, ReactiveMongoTransactionManager reactiveMongoTransactionManager) {
-        return new SpringReactorMongoEventStore(mongoTemplate, "events", transactional("stream-consistency", reactiveMongoTransactionManager));
+        return new SpringReactorMongoEventStore(mongoTemplate, new EventStoreConfig("events", transactional("stream-consistency", reactiveMongoTransactionManager), TimeRepresentation.RFC_3339_STRING));
     }
 
     @Bean
