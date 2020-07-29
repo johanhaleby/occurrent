@@ -23,6 +23,8 @@ import se.haleby.occurrent.domain.DomainEvent;
 import se.haleby.occurrent.domain.NameDefined;
 import se.haleby.occurrent.domain.NameWasChanged;
 import se.haleby.occurrent.eventstore.api.blocking.EventStore;
+import se.haleby.occurrent.eventstore.mongodb.converter.TimeRepresentation;
+import se.haleby.occurrent.eventstore.mongodb.spring.blocking.EventStoreConfig;
 import se.haleby.occurrent.eventstore.mongodb.spring.blocking.SpringBlockingMongoEventStore;
 import se.haleby.occurrent.testsupport.mongodb.FlushMongoDBExtension;
 
@@ -74,7 +76,7 @@ public class SpringBlockingChangeStreamerForMongoDBTest {
         MongoClient mongoClient = MongoClients.create(connectionString);
         mongoTemplate = new MongoTemplate(mongoClient, requireNonNull(connectionString.getDatabase()));
         MongoTransactionManager mongoTransactionManager = new MongoTransactionManager(new SimpleMongoClientDatabaseFactory(mongoClient, requireNonNull(connectionString.getDatabase())));
-        mongoEventStore = new SpringBlockingMongoEventStore(mongoTemplate, connectionString.getCollection(), transactional("stream-consistency", mongoTransactionManager));
+        mongoEventStore = new SpringBlockingMongoEventStore(mongoTemplate, new EventStoreConfig(connectionString.getCollection(), transactional("stream-consistency", mongoTransactionManager), TimeRepresentation.RFC_3339_STRING));
         changeStreamer = new SpringBlockingChangeStreamerForMongoDB(connectionString.getCollection(), new DefaultMessageListenerContainer(mongoTemplate));
         objectMapper = new ObjectMapper();
     }

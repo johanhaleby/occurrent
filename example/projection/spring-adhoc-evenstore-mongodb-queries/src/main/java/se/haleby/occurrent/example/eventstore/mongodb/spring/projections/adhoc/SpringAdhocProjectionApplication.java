@@ -9,6 +9,8 @@ import org.springframework.data.mongodb.core.MongoTemplate;
 import org.springframework.data.mongodb.repository.config.EnableMongoRepositories;
 import org.springframework.transaction.support.TransactionTemplate;
 import se.haleby.occurrent.eventstore.api.blocking.EventStore;
+import se.haleby.occurrent.eventstore.mongodb.converter.TimeRepresentation;
+import se.haleby.occurrent.eventstore.mongodb.spring.blocking.EventStoreConfig;
 import se.haleby.occurrent.eventstore.mongodb.spring.blocking.SpringBlockingMongoEventStore;
 
 import static se.haleby.occurrent.eventstore.mongodb.spring.blocking.StreamConsistencyGuarantee.transactional;
@@ -24,7 +26,7 @@ public class SpringAdhocProjectionApplication {
 
     @Bean
     public EventStore eventStore(MongoTemplate mongoTemplate, TransactionTemplate transactionTemplate) {
-        return new SpringBlockingMongoEventStore(mongoTemplate, "events", transactional("stream-consistency", transactionTemplate));
+        return new SpringBlockingMongoEventStore(mongoTemplate, new EventStoreConfig("events", transactional("stream-consistency", transactionTemplate), TimeRepresentation.RFC_3339_STRING));
     }
 
     @Bean

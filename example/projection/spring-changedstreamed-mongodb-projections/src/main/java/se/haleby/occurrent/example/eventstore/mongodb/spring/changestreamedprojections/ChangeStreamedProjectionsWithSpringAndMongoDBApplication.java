@@ -9,6 +9,8 @@ import org.springframework.data.mongodb.repository.config.EnableMongoRepositorie
 import se.haleby.occurrent.changestreamer.mongodb.spring.blocking.SpringBlockingChangeStreamerForMongoDB;
 import se.haleby.occurrent.changestreamer.mongodb.spring.blocking.SpringBlockingChangeStreamerWithPositionPersistenceForMongoDB;
 import se.haleby.occurrent.eventstore.api.blocking.EventStore;
+import se.haleby.occurrent.eventstore.mongodb.converter.TimeRepresentation;
+import se.haleby.occurrent.eventstore.mongodb.spring.blocking.EventStoreConfig;
 import se.haleby.occurrent.eventstore.mongodb.spring.blocking.SpringBlockingMongoEventStore;
 import se.haleby.occurrent.eventstore.mongodb.spring.blocking.StreamConsistencyGuarantee;
 
@@ -20,7 +22,7 @@ public class ChangeStreamedProjectionsWithSpringAndMongoDBApplication {
 
     @Bean
     public EventStore eventStore(MongoTemplate mongoTemplate) {
-        return new SpringBlockingMongoEventStore(mongoTemplate, EVENTS_COLLECTION, StreamConsistencyGuarantee.none());
+        return new SpringBlockingMongoEventStore(mongoTemplate, new EventStoreConfig(EVENTS_COLLECTION, StreamConsistencyGuarantee.none(), TimeRepresentation.RFC_3339_STRING));
     }
 
     @Bean

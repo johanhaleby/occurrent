@@ -23,6 +23,7 @@ import se.haleby.occurrent.domain.DomainEvent;
 import se.haleby.occurrent.domain.NameDefined;
 import se.haleby.occurrent.domain.NameWasChanged;
 import se.haleby.occurrent.eventstore.api.blocking.EventStore;
+import se.haleby.occurrent.eventstore.mongodb.spring.blocking.EventStoreConfig;
 import se.haleby.occurrent.eventstore.mongodb.spring.blocking.SpringBlockingMongoEventStore;
 import se.haleby.occurrent.testsupport.mongodb.FlushMongoDBExtension;
 
@@ -48,6 +49,7 @@ import static org.awaitility.Durations.ONE_SECOND;
 import static org.hamcrest.Matchers.is;
 import static se.haleby.occurrent.changestreamer.mongodb.common.MongoDBFilterSpecification.BsonMongoDBFilterSpecification.filter;
 import static se.haleby.occurrent.changestreamer.mongodb.common.MongoDBFilterSpecification.FULL_DOCUMENT;
+import static se.haleby.occurrent.eventstore.mongodb.converter.TimeRepresentation.RFC_3339_STRING;
 import static se.haleby.occurrent.eventstore.mongodb.spring.blocking.StreamConsistencyGuarantee.transactional;
 import static se.haleby.occurrent.functional.CheckedFunction.unchecked;
 import static se.haleby.occurrent.functional.Not.not;
@@ -74,7 +76,7 @@ public class SpringBlockingChangeStreamerWithPositionPersistenceForMongoDBTest {
         MongoClient mongoClient = MongoClients.create(connectionString);
         mongoTemplate = new MongoTemplate(mongoClient, requireNonNull(connectionString.getDatabase()));
         MongoTransactionManager mongoTransactionManager = new MongoTransactionManager(new SimpleMongoClientDatabaseFactory(mongoClient, requireNonNull(connectionString.getDatabase())));
-        mongoEventStore = new SpringBlockingMongoEventStore(mongoTemplate, connectionString.getCollection(), transactional("stream-consistency", mongoTransactionManager));
+        mongoEventStore = new SpringBlockingMongoEventStore(mongoTemplate, new EventStoreConfig(connectionString.getCollection(), transactional("stream-consistency", mongoTransactionManager), RFC_3339_STRING));
         SpringBlockingChangeStreamerForMongoDB springBlockingChangeStreamerForMongoDB = new SpringBlockingChangeStreamerForMongoDB(connectionString.getCollection(), new DefaultMessageListenerContainer(mongoTemplate));
         changeStreamer = new SpringBlockingChangeStreamerWithPositionPersistenceForMongoDB(springBlockingChangeStreamerForMongoDB, mongoTemplate, RESUME_TOKEN_COLLECTION);
         objectMapper = new ObjectMapper();

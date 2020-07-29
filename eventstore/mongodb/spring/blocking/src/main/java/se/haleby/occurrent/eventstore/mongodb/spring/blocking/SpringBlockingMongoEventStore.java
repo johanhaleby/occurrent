@@ -23,6 +23,7 @@ import se.haleby.occurrent.eventstore.api.blocking.EventStore;
 import se.haleby.occurrent.eventstore.api.blocking.EventStoreOperations;
 import se.haleby.occurrent.eventstore.api.blocking.EventStoreQueries;
 import se.haleby.occurrent.eventstore.api.blocking.EventStream;
+import se.haleby.occurrent.eventstore.mongodb.converter.TimeRepresentation;
 import se.haleby.occurrent.eventstore.mongodb.spring.blocking.StreamConsistencyGuarantee.None;
 import se.haleby.occurrent.eventstore.mongodb.spring.blocking.StreamConsistencyGuarantee.Transactional;
 
@@ -56,11 +57,13 @@ public class SpringBlockingMongoEventStore implements EventStore, EventStoreOper
     private final String eventStoreCollectionName;
     private final StreamConsistencyGuarantee streamConsistencyGuarantee;
     private final EventFormat cloudEventSerializer;
+    private final TimeRepresentation timeRepresentation;
 
-    public SpringBlockingMongoEventStore(MongoTemplate mongoTemplate, String eventStoreCollectionName, StreamConsistencyGuarantee streamConsistencyGuarantee) {
+    public SpringBlockingMongoEventStore(MongoTemplate mongoTemplate, EventStoreConfig config) {
         this.mongoTemplate = mongoTemplate;
-        this.eventStoreCollectionName = eventStoreCollectionName;
-        this.streamConsistencyGuarantee = streamConsistencyGuarantee;
+        this.eventStoreCollectionName = config.eventStoreCollectionName;
+        this.streamConsistencyGuarantee = config.streamConsistencyGuarantee;
+        this.timeRepresentation = config.timeRepresentation;
         cloudEventSerializer = EventFormatProvider.getInstance().resolveFormat(JsonFormat.CONTENT_TYPE);
         initializeEventStore(eventStoreCollectionName, streamConsistencyGuarantee, mongoTemplate);
     }
@@ -77,7 +80,7 @@ public class SpringBlockingMongoEventStore implements EventStore, EventStoreOper
         } else {
             throw new IllegalStateException("Internal error, invalid stream write consistency guarantee");
         }
-        return requireNonNull(eventStream).map(document -> convertToCloudEvent(cloudEventSerializer, document));
+        return requireNonNull(eventStream).map(document -> convertToCloudEvent(cloudEventSerializer, timeRepresentation, document));
     }
 
     @Override
@@ -89,7 +92,7 @@ public class SpringBlockingMongoEventStore implements EventStore, EventStoreOper
         }
 
         List<Document> serializedEvents = events
-                .map(cloudEvent -> convertToDocument(cloudEventSerializer, streamId, cloudEvent))
+                .map(cloudEvent -> convertToDocument(cloudEventSerializer, timeRepresentation, streamId, cloudEvent))
                 .collect(Collectors.toList());
 
         if (streamConsistencyGuarantee instanceof None) {
@@ -163,7 +166,7 @@ public class SpringBlockingMongoEventStore implements EventStore, EventStoreOper
     }
 
     private Stream<CloudEvent> queryAndDeserialize(Query query, int skip, int limit, SortBy sortBy) {
-        return readCloudEvents(query, skip, limit, sortBy).map(document -> convertToCloudEvent(cloudEventSerializer, document));
+        return readCloudEvents(query, skip, limit, sortBy).map(document -> convertToCloudEvent(cloudEventSerializer, timeRepresentation, document));
     }
 
     // Data structures etc

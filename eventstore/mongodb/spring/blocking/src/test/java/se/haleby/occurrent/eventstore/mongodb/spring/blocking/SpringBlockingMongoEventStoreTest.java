@@ -30,6 +30,7 @@ import se.haleby.occurrent.eventstore.api.WriteCondition;
 import se.haleby.occurrent.eventstore.api.WriteConditionNotFulfilledException;
 import se.haleby.occurrent.eventstore.api.blocking.EventStoreQueries.SortBy;
 import se.haleby.occurrent.eventstore.api.blocking.EventStream;
+import se.haleby.occurrent.eventstore.mongodb.converter.TimeRepresentation;
 import se.haleby.occurrent.testsupport.mongodb.FlushMongoDBExtension;
 
 import java.net.URI;
@@ -98,7 +99,7 @@ public class SpringBlockingMongoEventStoreTest {
 
         @BeforeEach
         void create_mongo_spring_blocking_event_store_with_stream_write_consistency_guarantee_none() {
-            eventStore = new SpringBlockingMongoEventStore(mongoTemplate, connectionString.getCollection(), StreamConsistencyGuarantee.none());
+            eventStore = new SpringBlockingMongoEventStore(mongoTemplate, new EventStoreConfig(connectionString.getCollection(), StreamConsistencyGuarantee.none(), TimeRepresentation.RFC_3339_STRING));
         }
 
         @Test
@@ -398,7 +399,7 @@ public class SpringBlockingMongoEventStoreTest {
         @BeforeEach
         void create_mongo_spring_blocking_event_store_with_stream_write_consistency_guarantee_transactional() {
             MongoTransactionManager mongoTransactionManager = new MongoTransactionManager(new SimpleMongoClientDatabaseFactory(mongoClient, requireNonNull(connectionString.getDatabase())));
-            eventStore = new SpringBlockingMongoEventStore(mongoTemplate, connectionString.getCollection(), StreamConsistencyGuarantee.transactional("event-stream-version", mongoTransactionManager));
+            eventStore = new SpringBlockingMongoEventStore(mongoTemplate, new EventStoreConfig(connectionString.getCollection(), StreamConsistencyGuarantee.transactional("event-stream-version", mongoTransactionManager), TimeRepresentation.RFC_3339_STRING));
         }
 
         @Test
@@ -707,7 +708,7 @@ public class SpringBlockingMongoEventStoreTest {
         @BeforeEach
         void initialize_event_store() {
             MongoTransactionManager mongoTransactionManager = new MongoTransactionManager(new SimpleMongoClientDatabaseFactory(mongoClient, requireNonNull(connectionString.getDatabase())));
-            eventStore = new SpringBlockingMongoEventStore(mongoTemplate, connectionString.getCollection(), StreamConsistencyGuarantee.transactional("event-stream-version", mongoTransactionManager));
+            eventStore = new SpringBlockingMongoEventStore(mongoTemplate, new EventStoreConfig(connectionString.getCollection(), StreamConsistencyGuarantee.transactional("event-stream-version", mongoTransactionManager), TimeRepresentation.RFC_3339_STRING));
         }
 
         @Nested
@@ -1093,7 +1094,7 @@ public class SpringBlockingMongoEventStoreTest {
 
         @BeforeEach
         void create_mongo_spring_blocking_event_store() {
-            eventStore = new SpringBlockingMongoEventStore(mongoTemplate, connectionString.getCollection(), StreamConsistencyGuarantee.none());
+            eventStore = new SpringBlockingMongoEventStore(mongoTemplate, new EventStoreConfig(connectionString.getCollection(), StreamConsistencyGuarantee.none(), TimeRepresentation.RFC_3339_STRING));
         }
 
         @Test
@@ -1499,10 +1500,6 @@ public class SpringBlockingMongoEventStoreTest {
         } catch (JsonProcessingException jsonProcessingException) {
             throw new RuntimeException(jsonProcessingException);
         }
-    }
-
-    private SpringBlockingMongoEventStore newSpringBlockingMongoEventStore(StreamConsistencyGuarantee streamConsistencyGuarantee) {
-        return new SpringBlockingMongoEventStore(mongoTemplate, connectionString.getCollection(), streamConsistencyGuarantee);
     }
 }
 

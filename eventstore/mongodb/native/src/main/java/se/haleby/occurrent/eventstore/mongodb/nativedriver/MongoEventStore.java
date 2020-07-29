@@ -44,6 +44,7 @@ import static se.haleby.occurrent.cloudevents.OccurrentCloudEventExtension.STREA
 import static se.haleby.occurrent.eventstore.mongodb.converter.MongoBulkWriteExceptionToDuplicateCloudEventExceptionTranslator.translateToDuplicateCloudEventException;
 import static se.haleby.occurrent.eventstore.mongodb.converter.OccurrentCloudEventMongoDBDocumentMapper.convertToCloudEvent;
 import static se.haleby.occurrent.eventstore.mongodb.converter.OccurrentCloudEventMongoDBDocumentMapper.convertToDocument;
+import static se.haleby.occurrent.eventstore.mongodb.converter.TimeRepresentation.RFC_3339_STRING;
 
 public class MongoEventStore implements EventStore, EventStoreOperations {
     private static final Logger log = LoggerFactory.getLogger(MongoEventStore.class);
@@ -81,7 +82,7 @@ public class MongoEventStore implements EventStore, EventStoreOperations {
         } else {
             throw new IllegalStateException("Internal error, invalid stream write consistency guarantee");
         }
-        return eventStream.map(document -> convertToCloudEvent(cloudEventSerializer, document));
+        return eventStream.map(document -> convertToCloudEvent(cloudEventSerializer, RFC_3339_STRING, document));
     }
 
     private EventStreamImpl<Document> readEventStream(String streamId, int skip, int limit, Transactional transactional) {
@@ -134,7 +135,7 @@ public class MongoEventStore implements EventStore, EventStoreOperations {
         }
 
         List<Document> cloudEventDocuments = events
-                .map(cloudEvent -> convertToDocument(cloudEventSerializer, streamId, cloudEvent))
+                .map(cloudEvent -> convertToDocument(cloudEventSerializer, RFC_3339_STRING, streamId, cloudEvent))
                 .collect(Collectors.toList());
 
         if (streamConsistencyGuarantee instanceof None) {

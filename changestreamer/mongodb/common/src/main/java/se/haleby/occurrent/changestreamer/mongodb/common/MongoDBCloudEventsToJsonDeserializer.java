@@ -15,6 +15,7 @@ import java.util.Map;
 import java.util.Optional;
 
 import static com.mongodb.client.model.changestream.OperationType.INSERT;
+import static se.haleby.occurrent.eventstore.mongodb.converter.TimeRepresentation.RFC_3339_STRING;
 
 public class MongoDBCloudEventsToJsonDeserializer {
 
@@ -24,7 +25,7 @@ public class MongoDBCloudEventsToJsonDeserializer {
 
     public static Optional<CloudEvent> deserializeToCloudEvent(EventFormat cloudEventSerializer, ChangeStreamDocument<Document> changeStreamDocument) {
         return changeStreamDocumentToCloudEventAsJson(changeStreamDocument)
-                .map(document -> OccurrentCloudEventMongoDBDocumentMapper.convertToCloudEvent(cloudEventSerializer, document));
+                .map(document -> OccurrentCloudEventMongoDBDocumentMapper.convertToCloudEvent(cloudEventSerializer, RFC_3339_STRING, document));
     }
 
     private static Optional<Document> changeStreamDocumentToCloudEventAsJson(ChangeStreamDocument<Document> changeStreamDocument) {

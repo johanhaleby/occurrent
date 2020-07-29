@@ -39,6 +39,7 @@ import static org.springframework.data.mongodb.SessionSynchronization.ALWAYS;
 import static org.springframework.data.mongodb.core.query.Criteria.where;
 import static org.springframework.data.mongodb.core.query.Query.query;
 import static se.haleby.occurrent.cloudevents.OccurrentCloudEventExtension.STREAM_ID;
+import static se.haleby.occurrent.eventstore.mongodb.converter.TimeRepresentation.RFC_3339_STRING;
 import static se.haleby.occurrent.eventstore.mongodb.spring.common.internal.ConditionToCriteriaConverter.convertConditionToCriteria;
 
 public class SpringReactorMongoEventStore implements EventStore, EventStoreOperations {
@@ -72,7 +73,7 @@ public class SpringReactorMongoEventStore implements EventStore, EventStoreOpera
             throw new IllegalArgumentException("Cannot use a " + WriteCondition.class.getSimpleName() + " other than 'any' when streamConsistencyGuarantee is " + None.class.getSimpleName());
         }
 
-        Flux<Document> serializedEvents = events.map(cloudEvent -> OccurrentCloudEventMongoDBDocumentMapper.convertToDocument(cloudEventSerializer, streamId, cloudEvent));
+        Flux<Document> serializedEvents = events.map(cloudEvent -> OccurrentCloudEventMongoDBDocumentMapper.convertToDocument(cloudEventSerializer, RFC_3339_STRING, streamId, cloudEvent));
 
         Mono<Void> result;
         if (streamConsistencyGuarantee instanceof None) {
@@ -222,7 +223,7 @@ public class SpringReactorMongoEventStore implements EventStore, EventStoreOpera
     }
 
     public static Mono<EventStream<CloudEvent>> convertToCloudEvent(EventFormat eventFormat, Mono<EventStreamImpl> eventStream) {
-        return eventStream.map(es -> es.map(document -> OccurrentCloudEventMongoDBDocumentMapper.convertToCloudEvent(eventFormat, document)));
+        return eventStream.map(es -> es.map(document -> OccurrentCloudEventMongoDBDocumentMapper.convertToCloudEvent(eventFormat, RFC_3339_STRING, document)));
     }
 
     private static boolean isSkipOrLimitDefined(int skip, int limit) {
