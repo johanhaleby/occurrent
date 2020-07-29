@@ -161,12 +161,9 @@ public class SpringBlockingMongoEventStore implements EventStore, EventStoreOper
     @Override
     public Stream<CloudEvent> query(Filter filter, int skip, int limit, SortBy sortBy) {
         requireNonNull(filter, "Filter cannot be null");
-        final Query query = convertFilterToQuery(filter);
-        return queryAndDeserialize(query, skip, limit, sortBy);
-    }
-
-    private Stream<CloudEvent> queryAndDeserialize(Query query, int skip, int limit, SortBy sortBy) {
-        return readCloudEvents(query, skip, limit, sortBy).map(document -> convertToCloudEvent(cloudEventSerializer, timeRepresentation, document));
+        final Query query = convertFilterToQuery(timeRepresentation, filter);
+        return readCloudEvents(query, skip, limit, sortBy)
+                .map(document -> convertToCloudEvent(cloudEventSerializer, timeRepresentation, document));
     }
 
     // Data structures etc
