@@ -41,10 +41,10 @@ import static com.mongodb.client.model.Filters.*;
 import static com.mongodb.client.model.Updates.inc;
 import static java.util.Objects.requireNonNull;
 import static se.haleby.occurrent.cloudevents.OccurrentCloudEventExtension.STREAM_ID;
-import static se.haleby.occurrent.eventstore.mongodb.converter.MongoBulkWriteExceptionToDuplicateCloudEventExceptionTranslator.translateToDuplicateCloudEventException;
-import static se.haleby.occurrent.eventstore.mongodb.converter.OccurrentCloudEventMongoDBDocumentMapper.convertToCloudEvent;
-import static se.haleby.occurrent.eventstore.mongodb.converter.OccurrentCloudEventMongoDBDocumentMapper.convertToDocument;
-import static se.haleby.occurrent.eventstore.mongodb.converter.TimeRepresentation.RFC_3339_STRING;
+import static se.haleby.occurrent.eventstore.mongodb.MongoBulkWriteExceptionToDuplicateCloudEventExceptionTranslator.translateToDuplicateCloudEventException;
+import static se.haleby.occurrent.eventstore.mongodb.OccurrentCloudEventMongoDBDocumentMapper.convertToCloudEvent;
+import static se.haleby.occurrent.eventstore.mongodb.OccurrentCloudEventMongoDBDocumentMapper.convertToDocument;
+import static se.haleby.occurrent.eventstore.mongodb.TimeRepresentation.RFC_3339_STRING;
 
 public class MongoEventStore implements EventStore, EventStoreOperations {
     private static final Logger log = LoggerFactory.getLogger(MongoEventStore.class);

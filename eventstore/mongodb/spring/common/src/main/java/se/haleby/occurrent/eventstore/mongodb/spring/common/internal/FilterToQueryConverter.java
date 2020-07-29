@@ -7,15 +7,15 @@ import se.haleby.occurrent.eventstore.api.Filter;
 import se.haleby.occurrent.eventstore.api.Filter.All;
 import se.haleby.occurrent.eventstore.api.Filter.CompositionFilter;
 import se.haleby.occurrent.eventstore.api.Filter.SingleConditionFilter;
-import se.haleby.occurrent.eventstore.mongodb.converter.TimeRepresentation;
+import se.haleby.occurrent.eventstore.mongodb.TimeRepresentation;
 
 import java.sql.Date;
 import java.time.ZonedDateTime;
 
 import static java.util.Objects.requireNonNull;
 import static se.haleby.occurrent.eventstore.api.Filter.TIME;
-import static se.haleby.occurrent.eventstore.mongodb.converter.RFC3339.RFC_3339_DATE_TIME_FORMATTER;
-import static se.haleby.occurrent.eventstore.mongodb.converter.TimeRepresentation.RFC_3339_STRING;
+import static se.haleby.occurrent.eventstore.mongodb.RFC3339.RFC_3339_DATE_TIME_FORMATTER;
+import static se.haleby.occurrent.eventstore.mongodb.TimeRepresentation.RFC_3339_STRING;
 import static se.haleby.occurrent.eventstore.mongodb.spring.common.internal.ConditionToCriteriaConverter.convertConditionToCriteria;
 
 public class FilterToQueryConverter {

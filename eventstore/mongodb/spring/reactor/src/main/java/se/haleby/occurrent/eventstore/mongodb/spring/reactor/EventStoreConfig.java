@@ -1,6 +1,6 @@
 package se.haleby.occurrent.eventstore.mongodb.spring.reactor;
 
-import se.haleby.occurrent.eventstore.mongodb.converter.TimeRepresentation;
+import se.haleby.occurrent.eventstore.mongodb.TimeRepresentation;
 
 import java.util.Objects;
 

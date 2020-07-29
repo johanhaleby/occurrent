@@ -1,4 +1,4 @@
-package se.haleby.occurrent.eventstore.mongodb.converter;
+package se.haleby.occurrent.eventstore.mongodb;
 
 import com.mongodb.MongoBulkWriteException;
 import com.mongodb.WriteError;

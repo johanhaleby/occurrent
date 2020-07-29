@@ -8,14 +8,14 @@ import org.bson.BsonDocument;
 import org.bson.BsonString;
 import org.bson.BsonValue;
 import org.bson.Document;
-import se.haleby.occurrent.eventstore.mongodb.converter.OccurrentCloudEventMongoDBDocumentMapper;
+import se.haleby.occurrent.eventstore.mongodb.OccurrentCloudEventMongoDBDocumentMapper;
 
 import java.util.HashMap;
 import java.util.Map;
 import java.util.Optional;
 
 import static com.mongodb.client.model.changestream.OperationType.INSERT;
-import static se.haleby.occurrent.eventstore.mongodb.converter.TimeRepresentation.RFC_3339_STRING;
+import static se.haleby.occurrent.eventstore.mongodb.TimeRepresentation.RFC_3339_STRING;
 
 public class MongoDBCloudEventsToJsonDeserializer {
 

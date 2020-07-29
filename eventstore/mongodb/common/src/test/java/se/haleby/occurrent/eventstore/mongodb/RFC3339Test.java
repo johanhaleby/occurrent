@@ -1,4 +1,4 @@
-package se.haleby.occurrent.eventstore.mongodb.converter;
+package se.haleby.occurrent.eventstore.mongodb;
 
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.Arguments;
@@ -11,7 +11,7 @@ import java.util.stream.Stream;
 
 import static java.time.ZoneOffset.UTC;
 import static org.assertj.core.api.Assertions.assertThat;
-import static se.haleby.occurrent.eventstore.mongodb.converter.RFC3339.RFC_3339_DATE_TIME_FORMATTER;
+import static se.haleby.occurrent.eventstore.mongodb.RFC3339.RFC_3339_DATE_TIME_FORMATTER;
 
 class RFC3339Test {
 
