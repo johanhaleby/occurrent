@@ -17,11 +17,8 @@ import se.haleby.occurrent.eventstore.api.blocking.EventStoreOperations;
 import se.haleby.occurrent.eventstore.api.blocking.EventStream;
 
 import java.net.URI;
-import java.util.ArrayList;
-import java.util.Collections;
-import java.util.List;
+import java.util.*;
 import java.util.Map.Entry;
-import java.util.Objects;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ConcurrentMap;
 import java.util.function.Function;
@@ -29,6 +26,7 @@ import java.util.function.Predicate;
 import java.util.stream.Collectors;
 import java.util.stream.Stream;
 
+import static java.util.Objects.requireNonNull;
 import static java.util.function.Predicate.isEqual;
 
 public class InMemoryEventStore implements EventStore, EventStoreOperations {
@@ -145,12 +143,8 @@ public class InMemoryEventStore implements EventStore, EventStoreOperations {
 
     @Override
     public void deleteEvent(String cloudEventId, URI cloudEventSource) {
-        Predicate<CloudEvent> cloudEventMatchesInput = e -> e.getId().equals(cloudEventId) && e.getSource().equals(cloudEventSource);
-        String streamId = state.entrySet().stream()
-                .filter(entry -> entry.getValue().events.stream().anyMatch(cloudEventMatchesInput))
-                .map(Entry::getKey)
-                .findFirst()
-                .orElse(null);
+        Predicate<CloudEvent> cloudEventMatchesInput = uniqueCloudEvent(cloudEventId, cloudEventSource);
+        String streamId = findStreamIdByCloudEvent(cloudEventMatchesInput).orElse(null);
 
         if (streamId == null) {
             return;
@@ -160,6 +154,27 @@ public class InMemoryEventStore implements EventStore, EventStoreOperations {
             List<CloudEvent> cloudEvents = versionAndEvents.events.stream().filter(cloudEventMatchesInput.negate()).collect(Collectors.toList());
             return new VersionAndEvents(versionAndEvents.version, cloudEvents);
         });
+    }
+
+    @Override
+    public Optional<CloudEvent> updateEvent(String cloudEventId, URI cloudEventSource, Function<CloudEvent, CloudEvent> fn) {
+        requireNonNull(fn, "Update function cannot be null");
+
+        Predicate<CloudEvent> cloudEventPredicate = uniqueCloudEvent(cloudEventId, cloudEventSource);
+        return findStreamIdByCloudEvent(cloudEventPredicate)
+                .map(streamId -> state.computeIfPresent(streamId, (__, versionAndEvents) ->
+                        versionAndEvents.map(cloudEvent -> {
+                            if (cloudEventPredicate.test(cloudEvent)) {
+                                CloudEvent updatedCloudEvent = fn.apply(cloudEvent);
+                                if (updatedCloudEvent == null) {
+                                    throw new IllegalArgumentException("It's not allowed to return a null CloudEvent from the update function.");
+                                }
+                                return updatedCloudEvent;
+                            } else {
+                                return cloudEvent;
+                            }
+                        })))
+                .flatMap(versionAndEvents -> versionAndEvents.events.stream().filter(cloudEventPredicate).findFirst());
     }
 
     private static class VersionAndEvents {
@@ -188,6 +203,11 @@ public class InMemoryEventStore implements EventStore, EventStoreOperations {
 
         VersionAndEvents flatMap(Function<VersionAndEvents, VersionAndEvents> fn) {
             return fn.apply(this);
+        }
+
+        VersionAndEvents map(Function<CloudEvent, CloudEvent> mapper) {
+            List<CloudEvent> newEvents = events.stream().map(mapper).collect(Collectors.toList());
+            return new VersionAndEvents(version, newEvents);
         }
     }
 
@@ -246,5 +266,18 @@ public class InMemoryEventStore implements EventStore, EventStoreOperations {
 
     private static Function<CloudEvent, CloudEvent> modifyCloudEvent(Function<CloudEventBuilder, CloudEventBuilder> fn) {
         return (cloudEvent) -> fn.apply(CloudEventBuilder.v1(cloudEvent)).build();
+    }
+
+    private static Predicate<CloudEvent> uniqueCloudEvent(String cloudEventId, URI cloudEventSource) {
+        requireNonNull(cloudEventId, "CloudEvent id cannot be null");
+        requireNonNull(cloudEventSource, "CloudEvent source cannot be null");
+        return e -> e.getId().equals(cloudEventId) && e.getSource().equals(cloudEventSource);
+    }
+
+    private Optional<String> findStreamIdByCloudEvent(Predicate<CloudEvent> predicate) {
+        return state.entrySet().stream()
+                .filter(entry -> entry.getValue().events.stream().anyMatch(predicate))
+                .map(Entry::getKey)
+                .findFirst();
     }
 }

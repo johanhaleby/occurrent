@@ -22,11 +22,13 @@ import se.haleby.occurrent.eventstore.api.blocking.EventStream;
 import java.net.URI;
 import java.time.LocalDateTime;
 import java.util.List;
+import java.util.Optional;
 import java.util.UUID;
 import java.util.function.Function;
 import java.util.stream.Collectors;
 import java.util.stream.Stream;
 
+import static java.nio.charset.StandardCharsets.UTF_8;
 import static java.time.ZoneOffset.UTC;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.catchThrowable;
@@ -40,6 +42,7 @@ import static se.haleby.occurrent.time.TimeConversion.toLocalDateTime;
 @ExtendWith(SoftAssertionsExtension.class)
 public class InMemoryEventStoreTest {
 
+    private static final URI NAME_SOURCE = URI.create("http://name");
     private ObjectMapper objectMapper;
 
     @BeforeEach
@@ -576,6 +579,67 @@ public class InMemoryEventStoreTest {
         }
     }
 
+    @Nested
+    @DisplayName("updaes")
+    class Updates {
+        InMemoryEventStore inMemoryEventStore = new InMemoryEventStore();
+        LocalDateTime now = LocalDateTime.now();
+
+        @Test
+        void update_specific_event_will_persist_the_updated_event_in_the_event_stream() {
+            // Given
+            String streamId = UUID.randomUUID().toString();
+            DomainEvent event1 = new NameDefined(UUID.randomUUID().toString(), now, "John Doe");
+            String eventId2 = UUID.randomUUID().toString();
+            DomainEvent event2 = new NameWasChanged(eventId2, now, "Jan Doe");
+            unconditionallyPersist(inMemoryEventStore, streamId, Stream.of(event1, event2));
+
+            NameWasChanged nameWasChanged2 = new NameWasChanged(eventId2, now, "Another Name");
+            // When
+            inMemoryEventStore.updateEvent(eventId2, NAME_SOURCE, c ->
+                    CloudEventBuilder.v1(c).withData(unchecked(objectMapper::writeValueAsBytes).apply(nameWasChanged2)).build());
+
+            // Then
+            EventStream<CloudEvent> eventStream = inMemoryEventStore.read(streamId);
+            assertThat(eventStream.map(deserialize(objectMapper))).containsExactly(event1, nameWasChanged2);
+        }
+
+        @Test
+        void update_specific_event_will_return_the_updated_event() {
+            // Given
+            String streamId = UUID.randomUUID().toString();
+            DomainEvent event1 = new NameDefined(UUID.randomUUID().toString(), now, "John Doe");
+            String eventId2 = UUID.randomUUID().toString();
+            DomainEvent event2 = new NameWasChanged(eventId2, now, "Jan Doe");
+            unconditionallyPersist(inMemoryEventStore, streamId, Stream.of(event1, event2));
+
+            NameWasChanged nameWasChanged2 = new NameWasChanged(eventId2, now, "Another Name");
+            // When
+            Optional<DomainEvent> updatedEvent = inMemoryEventStore.updateEvent(eventId2, NAME_SOURCE, c ->
+                    CloudEventBuilder.v1(c).withData(unchecked(objectMapper::writeValueAsBytes).apply(nameWasChanged2)).build())
+                    .map(deserialize(objectMapper));
+
+            // Then
+            assertThat(updatedEvent).hasValue(nameWasChanged2);
+        }
+
+        @Test
+        void update_specific_event_when_event_is_not_found_will_return_empty() {
+            // Given
+            String streamId = UUID.randomUUID().toString();
+            DomainEvent event1 = new NameDefined(UUID.randomUUID().toString(), now, "John Doe");
+            DomainEvent event2 = new NameWasChanged(UUID.randomUUID().toString(), now, "Jan Doe");
+            unconditionallyPersist(inMemoryEventStore, streamId, Stream.of(event1, event2));
+
+            // When
+            Optional<CloudEvent> updatedEvent = inMemoryEventStore.updateEvent(UUID.randomUUID().toString(), NAME_SOURCE, c ->
+                    CloudEventBuilder.v1(c).withData("data".getBytes(UTF_8)).build());
+
+            // Then
+            assertThat(updatedEvent).isEmpty();
+        }
+    }
+
     private void unconditionallyPersist(EventStore inMemoryEventStore, String eventStreamId, List<DomainEvent> events) {
         unconditionallyPersist(inMemoryEventStore, eventStreamId, events.stream());
     }
@@ -591,7 +655,7 @@ public class InMemoryEventStoreTest {
     private static Function<DomainEvent, CloudEvent> convertDomainEventToCloudEvent(ObjectMapper objectMapper) {
         return e -> CloudEventBuilder.v1()
                 .withId(e.getEventId())
-                .withSource(URI.create("http://name"))
+                .withSource(NAME_SOURCE)
                 .withType(e.getClass().getName())
                 .withTime(toLocalDateTime(e.getTimestamp()).atZone(UTC))
                 .withSubject(e.getName())
