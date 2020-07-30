@@ -10,7 +10,7 @@ import java.util.Date;
  * <br>
  * <br>
  * <b>!!IMPORTANT!!</b><br>
- * Changing this setting will lead to unexpected behavior so choose this optional carefully!
+ * Changing this setting may lead to unexpected behavior so choose the setting carefully!
  */
 public enum TimeRepresentation {
     /**
