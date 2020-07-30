@@ -27,9 +27,9 @@ import se.haleby.occurrent.eventstore.mongodb.nativedriver.StreamConsistencyGuar
 import se.haleby.occurrent.eventstore.mongodb.nativedriver.StreamConsistencyGuarantee.Transactional;
 
 import java.net.URI;
-import java.util.HashMap;
-import java.util.List;
-import java.util.Map;
+import java.util.*;
+import java.util.function.Function;
+import java.util.function.Supplier;
 import java.util.stream.Collectors;
 import java.util.stream.Stream;
 import java.util.stream.StreamSupport;
@@ -274,10 +274,45 @@ public class MongoEventStore implements EventStore, EventStoreOperations, EventS
 
     @Override
     public void deleteEvent(String cloudEventId, URI cloudEventSource) {
-        requireNonNull(cloudEventId, "Cloud event id cannot be null");
-        requireNonNull(cloudEventSource, "Cloud event source cannot be null");
+        eventCollection.deleteOne(uniqueCloudEvent(cloudEventId, cloudEventSource));
+    }
 
-        eventCollection.deleteOne(and(eq("id", cloudEventId), eq("source", cloudEventSource.toString())));
+    @Override
+    public Optional<CloudEvent> updateEvent(String cloudEventId, URI cloudEventSource, Function<CloudEvent, CloudEvent> fn) {
+        requireNonNull(fn, "Update function cannot be null");
+
+        Bson cloudEvent = uniqueCloudEvent(cloudEventId, cloudEventSource);
+        final Optional<CloudEvent> result;
+        if (streamConsistencyGuarantee instanceof None) {
+            result = updateCloudEvent(fn, () -> eventCollection.find(cloudEvent), updatedDocument -> eventCollection.replaceOne(cloudEvent, updatedDocument));
+        } else if (streamConsistencyGuarantee instanceof Transactional) {
+            TransactionOptions transactionOptions = ((Transactional) streamConsistencyGuarantee).transactionOptions;
+            try (ClientSession clientSession = mongoClient.startSession()) {
+                result = clientSession.withTransaction(
+                        () -> updateCloudEvent(fn, () -> eventCollection.find(clientSession, cloudEvent), updatedDocument -> eventCollection.replaceOne(clientSession, cloudEvent, updatedDocument)),
+                        transactionOptions);
+            }
+        } else {
+            throw new IllegalStateException("Stream consistency guarantee " + streamConsistencyGuarantee.getClass().getName() + " is invalid");
+        }
+        return result;
+    }
+
+    private Optional<CloudEvent> updateCloudEvent(Function<CloudEvent, CloudEvent> fn, Supplier<FindIterable<Document>> cloudEventFinder, Function<Document, UpdateResult> cloudEventUpdater) {
+        Document document = cloudEventFinder.get().first();
+        if (document == null) {
+            return Optional.empty();
+        } else {
+            CloudEvent currentCloudEvent = convertToCloudEvent(cloudEventSerializer, timeRepresentation, document);
+            CloudEvent updatedCloudEvent = fn.apply(currentCloudEvent);
+            if (!Objects.equals(updatedCloudEvent, currentCloudEvent)) {
+                String streamId = (String) currentCloudEvent.getExtension(STREAM_ID);
+                Document updatedDocument = convertToDocument(cloudEventSerializer, timeRepresentation, streamId, updatedCloudEvent);
+                updatedDocument.put(ID, document.get(ID)); // Insert the Mongo ObjectID
+                cloudEventUpdater.apply(updatedDocument);
+            }
+            return Optional.of(updatedCloudEvent);
+        }
     }
 
     @Override
@@ -313,9 +348,11 @@ public class MongoEventStore implements EventStore, EventStoreOperations, EventS
         public Stream<T> events() {
             return events;
         }
+
     }
 
-    private static void initializeEventStore(String eventStoreCollectionName, StreamConsistencyGuarantee streamConsistencyGuarantee, MongoDatabase mongoDatabase) {
+    private static void initializeEventStore(String eventStoreCollectionName, StreamConsistencyGuarantee streamConsistencyGuarantee, MongoDatabase
+            mongoDatabase) {
         if (!collectionExists(mongoDatabase, eventStoreCollectionName)) {
             mongoDatabase.createCollection(eventStoreCollectionName);
         }
@@ -347,5 +384,11 @@ public class MongoEventStore implements EventStore, EventStoreOperations, EventS
 
     private static Bson streamIdEqualTo(String streamId) {
         return eq(STREAM_ID, streamId);
+    }
+
+    private static Bson uniqueCloudEvent(String cloudEventId, URI cloudEventSource) {
+        requireNonNull(cloudEventId, "Cloud event id cannot be null");
+        requireNonNull(cloudEventSource, "Cloud event source cannot be null");
+        return and(eq("id", cloudEventId), eq("source", cloudEventSource.toString()));
     }
 }

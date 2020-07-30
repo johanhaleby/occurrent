@@ -47,6 +47,5 @@ public interface EventStoreOperations {
      * @return The updated cloud event or an empty <code>Optional</code> if no cloud event was found matching the <code>cloudEventId</code> and <code>cloudEventSource</code>.
      */
     Optional<CloudEvent> updateEvent(String cloudEventId, URI cloudEventSource, Function<CloudEvent, CloudEvent> fn);
-
     // TODO Implement generic delete method with a Condition
 }

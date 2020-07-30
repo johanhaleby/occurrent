@@ -59,6 +59,7 @@ import static se.haleby.occurrent.eventstore.api.Filter.*;
 import static se.haleby.occurrent.eventstore.api.WriteCondition.*;
 import static se.haleby.occurrent.time.TimeConversion.toLocalDateTime;
 
+@SuppressWarnings("SameParameterValue")
 @Testcontainers
 class MongoEventStoreTest {
 
@@ -1312,7 +1313,7 @@ class MongoEventStoreTest {
 
                     // Then
                     Stream<CloudEvent> events = eventStore.query(time(and(gte(ZonedDateTime.of(now, UTC)), lte(ZonedDateTime.of(now.plusHours(2), UTC)))));
-                    assertThat(deserialize(events)).isNotEmpty(); // Java 8 seem to return undeterministic results
+                    assertThat(deserialize(events)).isNotEmpty(); // Java 8 seem to return nondeterministic results
                 }
 
                 @EnabledForJreRange(min = JAVA_11)
