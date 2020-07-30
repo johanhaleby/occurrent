@@ -8,7 +8,7 @@ import org.bson.BsonDocument;
 import org.bson.BsonString;
 import org.bson.BsonValue;
 import org.bson.Document;
-import se.haleby.occurrent.eventstore.mongodb.OccurrentCloudEventMongoDBDocumentMapper;
+import se.haleby.occurrent.eventstore.mongodb.internal.OccurrentCloudEventMongoDBDocumentMapper;
 
 import java.util.HashMap;
 import java.util.Map;

@@ -19,6 +19,8 @@ import reactor.core.publisher.Mono;
 import se.haleby.occurrent.domain.DomainEvent;
 import se.haleby.occurrent.domain.NameDefined;
 import se.haleby.occurrent.domain.NameWasChanged;
+import se.haleby.occurrent.eventstore.mongodb.TimeRepresentation;
+import se.haleby.occurrent.eventstore.mongodb.nativedriver.EventStoreConfig;
 import se.haleby.occurrent.eventstore.mongodb.nativedriver.MongoEventStore;
 import se.haleby.occurrent.eventstore.mongodb.nativedriver.StreamConsistencyGuarantee;
 import se.haleby.occurrent.testsupport.mongodb.FlushMongoDBExtension;
@@ -61,7 +63,7 @@ public class SpringReactiveChangeStreamerWithPositionPersistenceForMongoDBTest {
     @BeforeEach
     void create_mongo_event_store() {
         ConnectionString connectionString = new ConnectionString(mongoDBContainer.getReplicaSetUrl() + ".events");
-        mongoEventStore = new MongoEventStore(connectionString, StreamConsistencyGuarantee.transactional("event-consistency"));
+        mongoEventStore = new MongoEventStore(connectionString, new EventStoreConfig(StreamConsistencyGuarantee.transactional("event-consistency"), TimeRepresentation.RFC_3339_STRING));
         reactiveMongoTemplate = new ReactiveMongoTemplate(MongoClients.create(connectionString), Objects.requireNonNull(connectionString.getDatabase()));
         SpringReactiveChangeStreamerForMongoDB springReactiveChangeStreamerForMongoDB = new SpringReactiveChangeStreamerForMongoDB(reactiveMongoTemplate, "events");
         changeStreamer = new SpringReactiveChangeStreamerWithPositionPersistenceForMongoDB(springReactiveChangeStreamerForMongoDB, reactiveMongoTemplate, RESUME_TOKEN_COLLECTION);

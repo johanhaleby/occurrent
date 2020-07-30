@@ -1,7 +1,8 @@
-package se.haleby.occurrent.eventstore.mongodb.spring.common.internal;
+package se.haleby.occurrent.eventstore.mongodb.nativedriver.internal;
 
-import org.springframework.data.mongodb.core.query.Criteria;
-import org.springframework.data.mongodb.core.query.Query;
+import com.mongodb.client.model.Filters;
+import org.bson.BsonDocument;
+import org.bson.conversions.Bson;
 import se.haleby.occurrent.eventstore.api.Condition;
 import se.haleby.occurrent.eventstore.api.Filter;
 import se.haleby.occurrent.eventstore.api.Filter.All;
@@ -11,50 +12,47 @@ import se.haleby.occurrent.eventstore.mongodb.TimeRepresentation;
 
 import static java.util.Objects.requireNonNull;
 import static se.haleby.occurrent.eventstore.mongodb.internal.SpecialFilterHandling.resolveSpecialCases;
-import static se.haleby.occurrent.eventstore.mongodb.spring.common.internal.ConditionToCriteriaConverter.convertConditionToCriteria;
+import static se.haleby.occurrent.eventstore.mongodb.nativedriver.internal.ConditionConverter.convertConditionToBsonCriteria;
 
-public class FilterToQueryConverter {
+public class FilterToBsonFilterConverter {
 
-    public static Query convertFilterToQuery(TimeRepresentation timeRepresentation, Filter filter) {
+    public static Bson convertFilterToBsonFilter(TimeRepresentation timeRepresentation, Filter filter) {
         requireNonNull(filter, "Filter cannot be null");
         requireNonNull(timeRepresentation, "TimeRepresentation cannot be null");
 
-        final Query query;
+        final Bson query;
         if (filter instanceof All) {
-            query = new Query();
+            query = new BsonDocument();
         } else {
-            query = Query.query(convertFilterToCriteria(timeRepresentation, filter));
+            query = innerConvert(timeRepresentation, filter);
         }
         return query;
     }
 
-    private static Criteria convertFilterToCriteria(TimeRepresentation timeRepresentation, Filter filter) {
-        final Criteria criteria;
+    private static Bson innerConvert(TimeRepresentation timeRepresentation, Filter filter) {
+        final Bson criteria;
         if (filter instanceof All) {
-            criteria = new Criteria();
+            criteria = new BsonDocument();
         } else if (filter instanceof SingleConditionFilter) {
             SingleConditionFilter scf = (SingleConditionFilter) filter;
             Condition<?> conditionToUse = resolveSpecialCases(timeRepresentation, scf);
-            criteria = convertConditionToCriteria(scf.fieldName, conditionToUse);
+            criteria = convertConditionToBsonCriteria(scf.fieldName, conditionToUse);
         } else if (filter instanceof CompositionFilter) {
             CompositionFilter cf = (CompositionFilter) filter;
-            Criteria[] composedCriteria = cf.filters.stream().map(f -> FilterToQueryConverter.convertFilterToCriteria(timeRepresentation, f)).toArray(Criteria[]::new);
-            Criteria c = new Criteria();
+            Bson[] composedBson = cf.filters.stream().map(f -> innerConvert(timeRepresentation, f)).toArray(Bson[]::new);
             switch (cf.operator) {
                 case AND:
-                    c.andOperator(composedCriteria);
+                    criteria = Filters.and(composedBson);
                     break;
                 case OR:
-                    c.orOperator(composedCriteria);
+                    criteria = Filters.or(composedBson);
                     break;
                 default:
                     throw new IllegalStateException("Unexpected value: " + cf.operator);
             }
-            criteria = c;
         } else {
             throw new IllegalStateException("Unexpected filter: " + filter.getClass().getName());
         }
         return criteria;
     }
-
 }

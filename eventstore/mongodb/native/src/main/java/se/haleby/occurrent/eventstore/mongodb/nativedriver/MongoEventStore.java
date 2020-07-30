@@ -4,7 +4,6 @@ import com.mongodb.ConnectionString;
 import com.mongodb.MongoBulkWriteException;
 import com.mongodb.TransactionOptions;
 import com.mongodb.client.*;
-import com.mongodb.client.model.Filters;
 import com.mongodb.client.model.IndexOptions;
 import com.mongodb.client.model.Indexes;
 import com.mongodb.client.result.UpdateResult;
@@ -16,16 +15,14 @@ import org.bson.Document;
 import org.bson.conversions.Bson;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
-import se.haleby.occurrent.eventstore.api.Condition;
-import se.haleby.occurrent.eventstore.api.Condition.MultiOperandCondition;
-import se.haleby.occurrent.eventstore.api.Condition.MultiOperandConditionName;
-import se.haleby.occurrent.eventstore.api.Condition.SingleOperandCondition;
-import se.haleby.occurrent.eventstore.api.Condition.SingleOperandConditionName;
+import se.haleby.occurrent.eventstore.api.Filter;
 import se.haleby.occurrent.eventstore.api.WriteCondition;
 import se.haleby.occurrent.eventstore.api.WriteConditionNotFulfilledException;
 import se.haleby.occurrent.eventstore.api.blocking.EventStore;
 import se.haleby.occurrent.eventstore.api.blocking.EventStoreOperations;
+import se.haleby.occurrent.eventstore.api.blocking.EventStoreQueries;
 import se.haleby.occurrent.eventstore.api.blocking.EventStream;
+import se.haleby.occurrent.eventstore.mongodb.TimeRepresentation;
 import se.haleby.occurrent.eventstore.mongodb.nativedriver.StreamConsistencyGuarantee.None;
 import se.haleby.occurrent.eventstore.mongodb.nativedriver.StreamConsistencyGuarantee.Transactional;
 
@@ -37,16 +34,23 @@ import java.util.stream.Collectors;
 import java.util.stream.Stream;
 import java.util.stream.StreamSupport;
 
-import static com.mongodb.client.model.Filters.*;
+import static com.mongodb.client.model.Filters.and;
+import static com.mongodb.client.model.Filters.eq;
+import static com.mongodb.client.model.Sorts.ascending;
+import static com.mongodb.client.model.Sorts.descending;
 import static com.mongodb.client.model.Updates.inc;
 import static java.util.Objects.requireNonNull;
 import static se.haleby.occurrent.cloudevents.OccurrentCloudEventExtension.STREAM_ID;
-import static se.haleby.occurrent.eventstore.mongodb.MongoBulkWriteExceptionToDuplicateCloudEventExceptionTranslator.translateToDuplicateCloudEventException;
-import static se.haleby.occurrent.eventstore.mongodb.OccurrentCloudEventMongoDBDocumentMapper.convertToCloudEvent;
-import static se.haleby.occurrent.eventstore.mongodb.OccurrentCloudEventMongoDBDocumentMapper.convertToDocument;
-import static se.haleby.occurrent.eventstore.mongodb.TimeRepresentation.RFC_3339_STRING;
+import static se.haleby.occurrent.eventstore.api.Filter.TIME;
+import static se.haleby.occurrent.eventstore.api.WriteCondition.StreamVersionWriteCondition;
+import static se.haleby.occurrent.eventstore.api.WriteCondition.anyStreamVersion;
+import static se.haleby.occurrent.eventstore.mongodb.internal.MongoBulkWriteExceptionToDuplicateCloudEventExceptionTranslator.translateToDuplicateCloudEventException;
+import static se.haleby.occurrent.eventstore.mongodb.internal.OccurrentCloudEventMongoDBDocumentMapper.convertToCloudEvent;
+import static se.haleby.occurrent.eventstore.mongodb.internal.OccurrentCloudEventMongoDBDocumentMapper.convertToDocument;
+import static se.haleby.occurrent.eventstore.mongodb.nativedriver.internal.ConditionConverter.convertConditionToBsonCriteria;
+import static se.haleby.occurrent.eventstore.mongodb.nativedriver.internal.FilterToBsonFilterConverter.convertFilterToBsonFilter;
 
-public class MongoEventStore implements EventStore, EventStoreOperations {
+public class MongoEventStore implements EventStore, EventStoreOperations, EventStoreQueries {
     private static final Logger log = LoggerFactory.getLogger(MongoEventStore.class);
 
     private static final String ID = "_id";
@@ -57,8 +61,11 @@ public class MongoEventStore implements EventStore, EventStoreOperations {
     private final StreamConsistencyGuarantee streamConsistencyGuarantee;
     private final MongoClient mongoClient;
     private final MongoDatabase mongoDatabase;
+    private final TimeRepresentation timeRepresentation;
 
-    public MongoEventStore(ConnectionString connectionString, StreamConsistencyGuarantee streamConsistencyGuarantee) {
+    public MongoEventStore(ConnectionString connectionString, EventStoreConfig config) {
+        requireNonNull(connectionString, "Connection string cannot be null");
+        requireNonNull(config, EventStoreConfig.class.getSimpleName() + " cannot be null");
         log.info("Connecting to MongoDB using connection string: {}", connectionString);
         mongoClient = MongoClients.create(connectionString);
         String databaseName = requireNonNull(connectionString.getDatabase());
@@ -66,7 +73,8 @@ public class MongoEventStore implements EventStore, EventStoreOperations {
         String eventCollectionName = requireNonNull(connectionString.getCollection());
         eventCollection = mongoDatabase.getCollection(eventCollectionName);
         cloudEventSerializer = EventFormatProvider.getInstance().resolveFormat(JsonFormat.CONTENT_TYPE);
-        this.streamConsistencyGuarantee = streamConsistencyGuarantee;
+        this.streamConsistencyGuarantee = config.streamConsistencyGuarantee;
+        this.timeRepresentation = config.timeRepresentation;
         initializeEventStore(eventCollectionName, streamConsistencyGuarantee, mongoDatabase);
     }
 
@@ -74,7 +82,7 @@ public class MongoEventStore implements EventStore, EventStoreOperations {
     public EventStream<CloudEvent> read(String streamId, int skip, int limit) {
         final EventStream<Document> eventStream;
         if (streamConsistencyGuarantee instanceof None) {
-            Stream<Document> stream = readCloudEvents(streamId, skip, limit, null);
+            Stream<Document> stream = readCloudEvents(streamIdEqualTo(streamId), skip, limit, SortBy.NATURAL_ASC, null);
             eventStream = new EventStreamImpl<>(streamId, 0, stream);
         } else if (streamConsistencyGuarantee instanceof Transactional) {
             Transactional transactional = (Transactional) this.streamConsistencyGuarantee;
@@ -82,7 +90,7 @@ public class MongoEventStore implements EventStore, EventStoreOperations {
         } else {
             throw new IllegalStateException("Internal error, invalid stream write consistency guarantee");
         }
-        return eventStream.map(document -> convertToCloudEvent(cloudEventSerializer, RFC_3339_STRING, document));
+        return eventStream.map(document -> convertToCloudEvent(cloudEventSerializer, timeRepresentation, document));
     }
 
     private EventStreamImpl<Document> readEventStream(String streamId, int skip, int limit, Transactional transactional) {
@@ -97,19 +105,18 @@ public class MongoEventStore implements EventStore, EventStoreOperations {
                     return new EventStreamImpl<>(streamId, 0, Stream.empty());
                 }
 
-                Stream<Document> stream = readCloudEvents(streamId, skip, limit, clientSession);
+                Stream<Document> stream = readCloudEvents(streamIdEqualTo(streamId), skip, limit, SortBy.NATURAL_ASC, clientSession);
                 return new EventStreamImpl<>(streamId, document.getLong(VERSION), stream);
             }, transactional.transactionOptions);
         }
     }
 
-    private Stream<Document> readCloudEvents(String streamId, int skip, int limit, ClientSession clientSession) {
-        final Bson filter = eq(STREAM_ID, streamId);
+    private Stream<Document> readCloudEvents(Bson query, int skip, int limit, SortBy sortBy, ClientSession clientSession) {
         final FindIterable<Document> documentsWithoutSkipAndLimit;
         if (clientSession == null) {
-            documentsWithoutSkipAndLimit = eventCollection.find(filter);
+            documentsWithoutSkipAndLimit = eventCollection.find(query);
         } else {
-            documentsWithoutSkipAndLimit = eventCollection.find(clientSession, filter);
+            documentsWithoutSkipAndLimit = eventCollection.find(clientSession, query);
         }
 
         final FindIterable<Document> documentsWithSkipAndLimit;
@@ -118,12 +125,29 @@ public class MongoEventStore implements EventStore, EventStoreOperations {
         } else {
             documentsWithSkipAndLimit = documentsWithoutSkipAndLimit;
         }
+
+        switch (sortBy) {
+            case TIME_ASC:
+                documentsWithoutSkipAndLimit.sort(ascending(TIME));
+                break;
+            case TIME_DESC:
+                documentsWithoutSkipAndLimit.sort(descending(TIME));
+                break;
+            case NATURAL_ASC:
+                break;
+            case NATURAL_DESC:
+                documentsWithoutSkipAndLimit.sort(descending(ID));
+                break;
+            default:
+                throw new IllegalStateException("Unexpected value: " + sortBy);
+        }
+
         return StreamSupport.stream(documentsWithSkipAndLimit.spliterator(), false);
     }
 
     @Override
     public void write(String streamId, Stream<CloudEvent> events) {
-        write(streamId, WriteCondition.anyStreamVersion(), events);
+        write(streamId, anyStreamVersion(), events);
     }
 
     @Override
@@ -135,7 +159,7 @@ public class MongoEventStore implements EventStore, EventStoreOperations {
         }
 
         List<Document> cloudEventDocuments = events
-                .map(cloudEvent -> convertToDocument(cloudEventSerializer, RFC_3339_STRING, streamId, cloudEvent))
+                .map(cloudEvent -> convertToDocument(cloudEventSerializer, timeRepresentation, streamId, cloudEvent))
                 .collect(Collectors.toList());
 
         if (streamConsistencyGuarantee instanceof None) {
@@ -160,7 +184,7 @@ public class MongoEventStore implements EventStore, EventStoreOperations {
                 MongoCollection<Document> streamVersionCollection = mongoDatabase.getCollection(streamVersionCollectionName);
 
                 UpdateResult updateResult = streamVersionCollection
-                        .updateOne(clientSession, generateUpdateCondition(streamId, writeCondition),
+                        .updateOne(clientSession, generateCriteriaFromCondition(streamId, writeCondition),
                                 inc(VERSION, 1L));
 
                 if (updateResult.getMatchedCount() == 0) {
@@ -187,61 +211,20 @@ public class MongoEventStore implements EventStore, EventStoreOperations {
         }
     }
 
-    private static Bson generateUpdateCondition(String streamId, WriteCondition writeCondition) {
+    private static Bson generateCriteriaFromCondition(String streamId, WriteCondition writeCondition) {
         Bson streamEq = eq(ID, streamId);
         if (writeCondition.isAnyStreamVersion()) {
             return streamEq;
         }
 
-        if (!(writeCondition instanceof WriteCondition.StreamVersionWriteCondition)) {
+        if (!(writeCondition instanceof StreamVersionWriteCondition)) {
             throw new IllegalArgumentException("Invalid " + WriteCondition.class.getSimpleName() + ": " + writeCondition);
         }
 
-        WriteCondition.StreamVersionWriteCondition c = (WriteCondition.StreamVersionWriteCondition) writeCondition;
-        return and(streamEq, generateUpdateCondition(c.condition));
+        StreamVersionWriteCondition c = (StreamVersionWriteCondition) writeCondition;
+        return and(streamEq, convertConditionToBsonCriteria(VERSION, c.condition));
     }
 
-
-    private static Bson generateUpdateCondition(Condition<Long> condition) {
-        if (condition instanceof MultiOperandCondition) {
-            MultiOperandCondition<Long> operation = (MultiOperandCondition<Long>) condition;
-            MultiOperandConditionName operationName = operation.operationName;
-            List<Condition<Long>> operations = operation.operations;
-            Bson[] filters = operations.stream().map(MongoEventStore::generateUpdateCondition).toArray(Bson[]::new);
-            switch (operationName) {
-                case AND:
-                    return Filters.and(filters);
-                case OR:
-                    return Filters.or(filters);
-                case NOT:
-                    return Filters.not(filters[0]);
-                default:
-                    throw new IllegalStateException("Unexpected value: " + operationName);
-            }
-        } else if (condition instanceof SingleOperandCondition) {
-            SingleOperandCondition<Long> singleOperandCondition = (SingleOperandCondition<Long>) condition;
-            long expectedVersion = singleOperandCondition.operand;
-            SingleOperandConditionName singleOperandConditionName = singleOperandCondition.singleOperandConditionName;
-            switch (singleOperandConditionName) {
-                case EQ:
-                    return eq(VERSION, expectedVersion);
-                case LT:
-                    return lt(VERSION, expectedVersion);
-                case GT:
-                    return gt(VERSION, expectedVersion);
-                case LTE:
-                    return lte(VERSION, expectedVersion);
-                case GTE:
-                    return gte(VERSION, expectedVersion);
-                case NE:
-                    return ne(VERSION, expectedVersion);
-                default:
-                    throw new IllegalStateException("Unexpected value: " + singleOperandConditionName);
-            }
-        } else {
-            throw new IllegalArgumentException("Unsupported condition: " + condition.getClass());
-        }
-    }
 
     @Override
     public boolean exists(String streamId) {
@@ -295,6 +278,14 @@ public class MongoEventStore implements EventStore, EventStoreOperations {
         requireNonNull(cloudEventSource, "Cloud event source cannot be null");
 
         eventCollection.deleteOne(and(eq("id", cloudEventId), eq("source", cloudEventSource.toString())));
+    }
+
+    @Override
+    public Stream<CloudEvent> query(Filter filter, int skip, int limit, SortBy sortBy) {
+        requireNonNull(filter, "Filter cannot be null");
+        final Bson query = convertFilterToBsonFilter(timeRepresentation, filter);
+        return readCloudEvents(query, skip, limit, sortBy, null)
+                .map(document -> convertToCloudEvent(cloudEventSerializer, timeRepresentation, document));
     }
 
     private static class EventStreamImpl<T> implements EventStream<T> {
@@ -352,5 +343,9 @@ public class MongoEventStore implements EventStore, EventStoreOperations {
             mongoDatabase.createCollection(streamVersionCollectionName);
         }
         mongoDatabase.getCollection(streamVersionCollectionName).createIndex(Indexes.compoundIndex(Indexes.ascending(ID), Indexes.ascending(VERSION)), new IndexOptions().unique(true));
+    }
+
+    private static Bson streamIdEqualTo(String streamId) {
+        return eq(STREAM_ID, streamId);
     }
 }

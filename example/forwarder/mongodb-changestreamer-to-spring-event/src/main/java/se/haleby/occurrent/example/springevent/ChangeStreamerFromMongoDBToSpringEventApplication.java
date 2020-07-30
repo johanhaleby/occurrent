@@ -10,6 +10,8 @@ import org.springframework.data.mongodb.core.ReactiveMongoOperations;
 import se.haleby.occurrent.changestreamer.mongodb.spring.reactor.SpringReactiveChangeStreamerForMongoDB;
 import se.haleby.occurrent.changestreamer.mongodb.spring.reactor.SpringReactiveChangeStreamerWithPositionPersistenceForMongoDB;
 import se.haleby.occurrent.eventstore.api.blocking.EventStore;
+import se.haleby.occurrent.eventstore.mongodb.TimeRepresentation;
+import se.haleby.occurrent.eventstore.mongodb.nativedriver.EventStoreConfig;
 import se.haleby.occurrent.eventstore.mongodb.nativedriver.MongoEventStore;
 import se.haleby.occurrent.eventstore.mongodb.nativedriver.StreamConsistencyGuarantee;
 
@@ -23,7 +25,7 @@ public class ChangeStreamerFromMongoDBToSpringEventApplication {
 
     @Bean
     public EventStore eventStore() {
-        return new MongoEventStore(connectionString(), StreamConsistencyGuarantee.transactional("event-consistency"));
+        return new MongoEventStore(connectionString(), new EventStoreConfig(StreamConsistencyGuarantee.transactional("event-consistency"), TimeRepresentation.RFC_3339_STRING));
     }
 
     @Bean

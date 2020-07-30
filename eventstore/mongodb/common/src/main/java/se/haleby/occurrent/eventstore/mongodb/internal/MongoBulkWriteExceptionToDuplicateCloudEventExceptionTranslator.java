@@ -1,4 +1,4 @@
-package se.haleby.occurrent.eventstore.mongodb;
+package se.haleby.occurrent.eventstore.mongodb.internal;
 
 import com.mongodb.MongoBulkWriteException;
 import com.mongodb.WriteError;
@@ -29,5 +29,4 @@ public class MongoBulkWriteExceptionToDuplicateCloudEventExceptionTranslator {
                 .findFirst()
                 .orElse(new DuplicateCloudEventException(null, null, e));
     }
-
 }
