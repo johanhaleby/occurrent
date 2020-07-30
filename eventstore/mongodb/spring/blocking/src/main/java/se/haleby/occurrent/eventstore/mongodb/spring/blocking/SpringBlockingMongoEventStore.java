@@ -31,6 +31,8 @@ import java.net.URI;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Optional;
+import java.util.function.Function;
 import java.util.stream.Collectors;
 import java.util.stream.Stream;
 
@@ -155,6 +157,11 @@ public class SpringBlockingMongoEventStore implements EventStore, EventStoreOper
         requireNonNull(cloudEventSource, "Cloud event source cannot be null");
 
         mongoTemplate.remove(Query.query(where("id").is(cloudEventId).and("source").is(cloudEventSource)), eventStoreCollectionName);
+    }
+
+    @Override
+    public Optional<CloudEvent> updateEvent(String cloudEventId, URI cloudEventSource, Function<CloudEvent, CloudEvent> fn) {
+        return Optional.empty();
     }
 
     // Queries
