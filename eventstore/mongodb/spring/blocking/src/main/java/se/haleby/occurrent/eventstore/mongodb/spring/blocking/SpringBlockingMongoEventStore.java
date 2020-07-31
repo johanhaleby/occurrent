@@ -28,10 +28,7 @@ import se.haleby.occurrent.eventstore.mongodb.spring.blocking.StreamConsistencyG
 import se.haleby.occurrent.eventstore.mongodb.spring.blocking.StreamConsistencyGuarantee.Transactional;
 
 import java.net.URI;
-import java.util.HashMap;
-import java.util.List;
-import java.util.Map;
-import java.util.Optional;
+import java.util.*;
 import java.util.function.Function;
 import java.util.stream.Collectors;
 import java.util.stream.Stream;
@@ -156,12 +153,42 @@ public class SpringBlockingMongoEventStore implements EventStore, EventStoreOper
         requireNonNull(cloudEventId, "Cloud event id cannot be null");
         requireNonNull(cloudEventSource, "Cloud event source cannot be null");
 
-        mongoTemplate.remove(Query.query(where("id").is(cloudEventId).and("source").is(cloudEventSource)), eventStoreCollectionName);
+        mongoTemplate.remove(cloudEventIdIs(cloudEventId, cloudEventSource), eventStoreCollectionName);
     }
 
     @Override
-    public Optional<CloudEvent> updateEvent(String cloudEventId, URI cloudEventSource, Function<CloudEvent, CloudEvent> fn) {
-        return Optional.empty();
+    public Optional<CloudEvent> updateEvent(String cloudEventId, URI cloudEventSource, Function<CloudEvent, CloudEvent> updateFunction) {
+        Function<Function<CloudEvent, CloudEvent>, Optional<CloudEvent>> logic = (fn) -> {
+            Query cloudEventQuery = cloudEventIdIs(cloudEventId, cloudEventSource);
+            Document document = mongoTemplate.findOne(cloudEventQuery, Document.class, eventStoreCollectionName);
+            if (document == null) {
+                return Optional.empty();
+            }
+
+            CloudEvent currentCloudEvent = convertToCloudEvent(cloudEventSerializer, timeRepresentation, document);
+            CloudEvent updatedCloudEvent = fn.apply(currentCloudEvent);
+            if (updatedCloudEvent == null) {
+                throw new IllegalArgumentException("Cloud event update function is not allowed to return null");
+            } else if (!Objects.equals(updatedCloudEvent, currentCloudEvent)) {
+                String streamId = (String) currentCloudEvent.getExtension(STREAM_ID);
+                Document updatedDocument = convertToDocument(cloudEventSerializer, timeRepresentation, streamId, updatedCloudEvent);
+                updatedDocument.put(ID, document.get(ID)); // Insert the Mongo ObjectID
+                mongoTemplate.findAndReplace(cloudEventQuery, updatedDocument, eventStoreCollectionName);
+            }
+            return Optional.of(updatedCloudEvent);
+        };
+
+        final Optional<CloudEvent> result;
+        if (streamConsistencyGuarantee instanceof None) {
+            result = logic.apply(updateFunction);
+        } else if (streamConsistencyGuarantee instanceof Transactional) {
+            Transactional tx = ((Transactional) streamConsistencyGuarantee);
+            result = tx.transactionTemplate.execute(__ -> logic.apply(updateFunction));
+        } else {
+            throw new IllegalStateException("Stream consistency guarantee " + streamConsistencyGuarantee.getClass().getName() + " is invalid");
+        }
+
+        return result;
     }
 
     // Queries
@@ -331,5 +358,9 @@ public class SpringBlockingMongoEventStore implements EventStore, EventStoreOper
             mongoTemplate.createCollection(streamVersionCollectionName);
         }
         mongoTemplate.getCollection(streamVersionCollectionName).createIndex(Indexes.compoundIndex(Indexes.ascending(ID), Indexes.ascending(VERSION)), new IndexOptions().unique(true));
+    }
+
+    private Query cloudEventIdIs(String cloudEventId, URI cloudEventSource) {
+        return Query.query(where("id").is(cloudEventId).and("source").is(cloudEventSource));
     }
 }

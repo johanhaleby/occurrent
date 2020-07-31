@@ -278,18 +278,18 @@ public class MongoEventStore implements EventStore, EventStoreOperations, EventS
     }
 
     @Override
-    public Optional<CloudEvent> updateEvent(String cloudEventId, URI cloudEventSource, Function<CloudEvent, CloudEvent> fn) {
-        requireNonNull(fn, "Update function cannot be null");
+    public Optional<CloudEvent> updateEvent(String cloudEventId, URI cloudEventSource, Function<CloudEvent, CloudEvent> updateFunction) {
+        requireNonNull(updateFunction, "Update function cannot be null");
 
         Bson cloudEvent = uniqueCloudEvent(cloudEventId, cloudEventSource);
         final Optional<CloudEvent> result;
         if (streamConsistencyGuarantee instanceof None) {
-            result = updateCloudEvent(fn, () -> eventCollection.find(cloudEvent), updatedDocument -> eventCollection.replaceOne(cloudEvent, updatedDocument));
+            result = updateCloudEvent(updateFunction, () -> eventCollection.find(cloudEvent), updatedDocument -> eventCollection.replaceOne(cloudEvent, updatedDocument));
         } else if (streamConsistencyGuarantee instanceof Transactional) {
             TransactionOptions transactionOptions = ((Transactional) streamConsistencyGuarantee).transactionOptions;
             try (ClientSession clientSession = mongoClient.startSession()) {
                 result = clientSession.withTransaction(
-                        () -> updateCloudEvent(fn, () -> eventCollection.find(clientSession, cloudEvent), updatedDocument -> eventCollection.replaceOne(clientSession, cloudEvent, updatedDocument)),
+                        () -> updateCloudEvent(updateFunction, () -> eventCollection.find(clientSession, cloudEvent), updatedDocument -> eventCollection.replaceOne(clientSession, cloudEvent, updatedDocument)),
                         transactionOptions);
             }
         } else {
@@ -305,7 +305,9 @@ public class MongoEventStore implements EventStore, EventStoreOperations, EventS
         } else {
             CloudEvent currentCloudEvent = convertToCloudEvent(cloudEventSerializer, timeRepresentation, document);
             CloudEvent updatedCloudEvent = fn.apply(currentCloudEvent);
-            if (!Objects.equals(updatedCloudEvent, currentCloudEvent)) {
+            if (updatedCloudEvent == null) {
+                throw new IllegalArgumentException("Cloud event update function is not allowed to return null");
+            } else if (!Objects.equals(updatedCloudEvent, currentCloudEvent)) {
                 String streamId = (String) currentCloudEvent.getExtension(STREAM_ID);
                 Document updatedDocument = convertToDocument(cloudEventSerializer, timeRepresentation, streamId, updatedCloudEvent);
                 updatedDocument.put(ID, document.get(ID)); // Insert the Mongo ObjectID

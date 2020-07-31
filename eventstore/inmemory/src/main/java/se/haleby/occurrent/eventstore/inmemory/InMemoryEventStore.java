@@ -157,15 +157,15 @@ public class InMemoryEventStore implements EventStore, EventStoreOperations {
     }
 
     @Override
-    public Optional<CloudEvent> updateEvent(String cloudEventId, URI cloudEventSource, Function<CloudEvent, CloudEvent> fn) {
-        requireNonNull(fn, "Update function cannot be null");
+    public Optional<CloudEvent> updateEvent(String cloudEventId, URI cloudEventSource, Function<CloudEvent, CloudEvent> updateFunction) {
+        requireNonNull(updateFunction, "Update function cannot be null");
 
         Predicate<CloudEvent> cloudEventPredicate = uniqueCloudEvent(cloudEventId, cloudEventSource);
         return findStreamIdByCloudEvent(cloudEventPredicate)
                 .map(streamId -> state.computeIfPresent(streamId, (__, versionAndEvents) ->
                         versionAndEvents.map(cloudEvent -> {
                             if (cloudEventPredicate.test(cloudEvent)) {
-                                CloudEvent updatedCloudEvent = fn.apply(cloudEvent);
+                                CloudEvent updatedCloudEvent = updateFunction.apply(cloudEvent);
                                 if (updatedCloudEvent == null) {
                                     throw new IllegalArgumentException("It's not allowed to return a null CloudEvent from the update function.");
                                 }
