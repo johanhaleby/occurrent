@@ -110,6 +110,7 @@ public class MongoDBFilterSpecification {
             return new BsonMongoDBFilterSpecification(aggregationStages, matchStage(filter, "datacontenttype", value));
         }
 
+        // TODO Take TimeRepresentation into account
         public BsonMongoDBFilterSpecification time(BiFunction<String, String, Bson> filter, String value) {
             return new BsonMongoDBFilterSpecification(aggregationStages, matchStage(filter, "time", value));
         }
