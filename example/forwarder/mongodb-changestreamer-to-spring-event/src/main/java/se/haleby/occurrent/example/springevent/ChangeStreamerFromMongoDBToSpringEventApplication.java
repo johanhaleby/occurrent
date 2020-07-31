@@ -30,7 +30,7 @@ public class ChangeStreamerFromMongoDBToSpringEventApplication {
 
     @Bean
     public SpringReactiveChangeStreamerWithPositionPersistenceForMongoDB changeStreamerForMongoDB(ReactiveMongoOperations mongoOperations) {
-        SpringReactiveChangeStreamerForMongoDB streamer = new SpringReactiveChangeStreamerForMongoDB(mongoOperations, "events");
+        SpringReactiveChangeStreamerForMongoDB streamer = new SpringReactiveChangeStreamerForMongoDB(mongoOperations, "events", TimeRepresentation.RFC_3339_STRING);
         return new SpringReactiveChangeStreamerWithPositionPersistenceForMongoDB(streamer, mongoOperations, "resumeTokens");
     }
 

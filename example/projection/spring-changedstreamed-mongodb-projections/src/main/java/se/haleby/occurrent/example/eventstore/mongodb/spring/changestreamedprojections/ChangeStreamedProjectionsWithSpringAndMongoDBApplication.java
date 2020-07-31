@@ -27,7 +27,7 @@ public class ChangeStreamedProjectionsWithSpringAndMongoDBApplication {
 
     @Bean
     public SpringBlockingChangeStreamerWithPositionPersistenceForMongoDB springBlockingChangeStreamerForMongoDB(MongoTemplate mongoTemplate) {
-        SpringBlockingChangeStreamerForMongoDB springBlockingChangeStreamerForMongoDB = new SpringBlockingChangeStreamerForMongoDB(EVENTS_COLLECTION, new DefaultMessageListenerContainer(mongoTemplate));
+        SpringBlockingChangeStreamerForMongoDB springBlockingChangeStreamerForMongoDB = new SpringBlockingChangeStreamerForMongoDB(EVENTS_COLLECTION, new DefaultMessageListenerContainer(mongoTemplate), TimeRepresentation.RFC_3339_STRING);
         return new SpringBlockingChangeStreamerWithPositionPersistenceForMongoDB(springBlockingChangeStreamerForMongoDB, mongoTemplate, "event-subscribers");
     }
 

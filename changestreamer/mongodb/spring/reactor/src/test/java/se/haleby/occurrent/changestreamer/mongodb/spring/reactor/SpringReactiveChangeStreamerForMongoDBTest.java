@@ -58,7 +58,7 @@ public class SpringReactiveChangeStreamerForMongoDBTest {
         ConnectionString connectionString = new ConnectionString(mongoDBContainer.getReplicaSetUrl() + ".events");
         mongoEventStore = new MongoEventStore(connectionString, new EventStoreConfig(StreamConsistencyGuarantee.transactional("event-consistency"), TimeRepresentation.RFC_3339_STRING));
         ReactiveMongoTemplate reactiveMongoTemplate = new ReactiveMongoTemplate(MongoClients.create(connectionString), Objects.requireNonNull(connectionString.getDatabase()));
-        changeStreamer = new SpringReactiveChangeStreamerForMongoDB(reactiveMongoTemplate, "events");
+        changeStreamer = new SpringReactiveChangeStreamerForMongoDB(reactiveMongoTemplate, "events", TimeRepresentation.RFC_3339_STRING);
         objectMapper = new ObjectMapper();
         disposables = new CopyOnWriteArrayList<>();
     }

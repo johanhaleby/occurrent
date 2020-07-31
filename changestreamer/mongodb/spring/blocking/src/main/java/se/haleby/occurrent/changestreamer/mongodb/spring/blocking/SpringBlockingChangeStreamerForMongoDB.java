@@ -16,10 +16,11 @@ import org.springframework.data.mongodb.core.messaging.MessageListener;
 import org.springframework.data.mongodb.core.messaging.MessageListenerContainer;
 import org.springframework.data.mongodb.core.messaging.Subscription;
 import se.haleby.occurrent.changestreamer.CloudEventWithStreamPosition;
-import se.haleby.occurrent.changestreamer.mongodb.internal.DocumentAdapter;
 import se.haleby.occurrent.changestreamer.mongodb.MongoDBFilterSpecification;
 import se.haleby.occurrent.changestreamer.mongodb.MongoDBFilterSpecification.BsonMongoDBFilterSpecification;
 import se.haleby.occurrent.changestreamer.mongodb.MongoDBFilterSpecification.JsonMongoDBFilterSpecification;
+import se.haleby.occurrent.changestreamer.mongodb.internal.DocumentAdapter;
+import se.haleby.occurrent.eventstore.mongodb.TimeRepresentation;
 
 import javax.annotation.PreDestroy;
 import java.util.concurrent.ConcurrentHashMap;
@@ -36,11 +37,14 @@ public class SpringBlockingChangeStreamerForMongoDB {
     private final MessageListenerContainer messageListenerContainer;
     private final ConcurrentMap<String, Subscription> subscriptions;
     private final EventFormat cloudEventSerializer;
+    private final TimeRepresentation timeRepresentation;
 
-    public SpringBlockingChangeStreamerForMongoDB(String eventCollection, MessageListenerContainer messageListenerContainer) {
+    public SpringBlockingChangeStreamerForMongoDB(String eventCollection, MessageListenerContainer messageListenerContainer, TimeRepresentation timeRepresentation) {
         requireNonNull(eventCollection, "eventCollection cannot be null");
         requireNonNull(messageListenerContainer, "messageListenerContainer cannot be null");
+        requireNonNull(timeRepresentation, TimeRepresentation.class.getSimpleName() + " cannot be null");
 
+        this.timeRepresentation = timeRepresentation;
         this.eventCollection = eventCollection;
         this.subscriptions = new ConcurrentHashMap<>();
         this.cloudEventSerializer = EventFormatProvider.getInstance().resolveFormat(JsonFormat.CONTENT_TYPE);
@@ -64,7 +68,7 @@ public class SpringBlockingChangeStreamerForMongoDB {
         MessageListener<ChangeStreamDocument<Document>, Document> listener = change -> {
             ChangeStreamDocument<Document> raw = change.getRaw();
             BsonDocument resumeToken = requireNonNull(raw).getResumeToken();
-            deserializeToCloudEvent(requireNonNull(cloudEventSerializer), raw)
+            deserializeToCloudEvent(requireNonNull(cloudEventSerializer), raw, timeRepresentation)
                     .map(cloudEvent -> new CloudEventWithStreamPosition<>(cloudEvent, resumeToken))
                     .ifPresent(action);
         };

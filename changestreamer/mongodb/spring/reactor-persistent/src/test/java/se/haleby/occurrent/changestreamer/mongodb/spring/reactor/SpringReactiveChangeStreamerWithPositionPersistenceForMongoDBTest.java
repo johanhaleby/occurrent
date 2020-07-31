@@ -63,9 +63,10 @@ public class SpringReactiveChangeStreamerWithPositionPersistenceForMongoDBTest {
     @BeforeEach
     void create_mongo_event_store() {
         ConnectionString connectionString = new ConnectionString(mongoDBContainer.getReplicaSetUrl() + ".events");
-        mongoEventStore = new MongoEventStore(connectionString, new EventStoreConfig(StreamConsistencyGuarantee.transactional("event-consistency"), TimeRepresentation.RFC_3339_STRING));
+        TimeRepresentation timeRepresentation = TimeRepresentation.RFC_3339_STRING;
+        mongoEventStore = new MongoEventStore(connectionString, new EventStoreConfig(StreamConsistencyGuarantee.transactional("event-consistency"), timeRepresentation));
         reactiveMongoTemplate = new ReactiveMongoTemplate(MongoClients.create(connectionString), Objects.requireNonNull(connectionString.getDatabase()));
-        SpringReactiveChangeStreamerForMongoDB springReactiveChangeStreamerForMongoDB = new SpringReactiveChangeStreamerForMongoDB(reactiveMongoTemplate, "events");
+        SpringReactiveChangeStreamerForMongoDB springReactiveChangeStreamerForMongoDB = new SpringReactiveChangeStreamerForMongoDB(reactiveMongoTemplate, "events", timeRepresentation);
         changeStreamer = new SpringReactiveChangeStreamerWithPositionPersistenceForMongoDB(springReactiveChangeStreamerForMongoDB, reactiveMongoTemplate, RESUME_TOKEN_COLLECTION);
         objectMapper = new ObjectMapper();
         disposables = new CopyOnWriteArrayList<>();
