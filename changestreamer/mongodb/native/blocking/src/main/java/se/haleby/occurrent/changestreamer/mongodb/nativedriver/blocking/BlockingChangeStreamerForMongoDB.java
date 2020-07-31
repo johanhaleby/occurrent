@@ -18,7 +18,6 @@ import se.haleby.occurrent.changestreamer.mongodb.MongoDBFilterSpecification.Jso
 import se.haleby.occurrent.changestreamer.mongodb.internal.DocumentAdapter;
 import se.haleby.occurrent.eventstore.mongodb.TimeRepresentation;
 
-import javax.annotation.PreDestroy;
 import java.util.Collections;
 import java.util.List;
 import java.util.concurrent.ConcurrentHashMap;
@@ -124,7 +123,6 @@ public class BlockingChangeStreamerForMongoDB {
         }
     }
 
-    @PreDestroy
     public void shutdown() {
         synchronized (subscriptions) {
             subscriptions.keySet().forEach(this::cancelSubscription);

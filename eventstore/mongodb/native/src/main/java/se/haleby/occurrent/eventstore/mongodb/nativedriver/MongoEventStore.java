@@ -24,7 +24,6 @@ import se.haleby.occurrent.eventstore.mongodb.TimeRepresentation;
 import se.haleby.occurrent.eventstore.mongodb.nativedriver.StreamConsistencyGuarantee.None;
 import se.haleby.occurrent.eventstore.mongodb.nativedriver.StreamConsistencyGuarantee.Transactional;
 
-import javax.annotation.PreDestroy;
 import java.net.URI;
 import java.util.*;
 import java.util.function.Function;
@@ -397,7 +396,6 @@ public class MongoEventStore implements EventStore, EventStoreOperations, EventS
         return and(eq("id", cloudEventId), eq("source", cloudEventSource.toString()));
     }
 
-    @PreDestroy
     public void shutdown() {
         mongoClient.close();
     }
