@@ -11,10 +11,7 @@ import com.mongodb.client.model.Filters;
 import io.cloudevents.CloudEvent;
 import io.cloudevents.core.builder.CloudEventBuilder;
 import org.jetbrains.annotations.NotNull;
-import org.junit.jupiter.api.BeforeEach;
-import org.junit.jupiter.api.DisplayName;
-import org.junit.jupiter.api.Nested;
-import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.*;
 import org.junit.jupiter.api.condition.EnabledForJreRange;
 import org.junit.jupiter.api.condition.EnabledOnJre;
 import org.junit.jupiter.api.extension.RegisterExtension;
@@ -85,6 +82,11 @@ class MongoEventStoreTest {
         StreamConsistencyGuarantee consistency = StreamConsistencyGuarantee.transactional("consistency");
         eventStore = newMongoEventStore(consistency, TimeRepresentation.RFC_3339_STRING);
         objectMapper = new ObjectMapper();
+    }
+    
+    @AfterEach
+    void event_store_is_shutdown_after_each_test() {
+        eventStore.shutdown();
     }
 
     @Test

@@ -22,7 +22,6 @@ import se.haleby.occurrent.changestreamer.mongodb.MongoDBFilterSpecification.Jso
 import se.haleby.occurrent.domain.DomainEvent;
 import se.haleby.occurrent.domain.NameDefined;
 import se.haleby.occurrent.domain.NameWasChanged;
-import se.haleby.occurrent.eventstore.api.blocking.EventStore;
 import se.haleby.occurrent.eventstore.mongodb.TimeRepresentation;
 import se.haleby.occurrent.eventstore.mongodb.nativedriver.EventStoreConfig;
 import se.haleby.occurrent.eventstore.mongodb.nativedriver.MongoEventStore;
@@ -66,7 +65,7 @@ public class BlockingChangeStreamerForMongoDBTest {
     @RegisterExtension
     FlushMongoDBExtension flushMongoDBExtension = new FlushMongoDBExtension(new ConnectionString(mongoDBContainer.getReplicaSetUrl()));
 
-    private EventStore mongoEventStore;
+    private MongoEventStore mongoEventStore;
     private BlockingChangeStreamerForMongoDB changeStreamer;
     private ObjectMapper objectMapper;
     private MongoClient mongoClient;
@@ -91,6 +90,7 @@ public class BlockingChangeStreamerForMongoDBTest {
         changeStreamer.shutdown();
         subscriptionExecutor.shutdown();
         subscriptionExecutor.awaitTermination(10, SECONDS);
+        mongoEventStore.shutdown();
         mongoClient.close();
     }
 
