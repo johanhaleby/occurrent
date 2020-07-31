@@ -10,7 +10,7 @@ import org.springframework.data.mongodb.core.ChangeStreamOptions.ChangeStreamOpt
 import org.springframework.data.mongodb.core.MongoTemplate;
 import org.springframework.data.mongodb.core.messaging.Subscription;
 import org.springframework.data.mongodb.core.query.Update;
-import se.haleby.occurrent.changestreamer.mongodb.common.MongoDBFilterSpecification;
+import se.haleby.occurrent.changestreamer.mongodb.MongoDBFilterSpecification;
 
 import javax.annotation.PreDestroy;
 import java.util.function.Consumer;
@@ -18,7 +18,7 @@ import java.util.function.Consumer;
 import static java.util.Objects.requireNonNull;
 import static org.springframework.data.mongodb.core.query.Criteria.where;
 import static org.springframework.data.mongodb.core.query.Query.query;
-import static se.haleby.occurrent.changestreamer.mongodb.common.MongoDBCloudEventsToJsonDeserializer.*;
+import static se.haleby.occurrent.changestreamer.mongodb.internal.MongoDBCloudEventsToJsonDeserializer.*;
 
 public class SpringBlockingChangeStreamerWithPositionPersistenceForMongoDB {
     private static final Logger log = LoggerFactory.getLogger(SpringBlockingChangeStreamerWithPositionPersistenceForMongoDB.class);

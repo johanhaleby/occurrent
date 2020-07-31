@@ -1,4 +1,4 @@
-package se.haleby.occurrent.changestreamer.mongodb.common;
+package se.haleby.occurrent.changestreamer.mongodb.internal;
 
 import com.mongodb.client.model.changestream.ChangeStreamDocument;
 import com.mongodb.client.model.changestream.OperationType;

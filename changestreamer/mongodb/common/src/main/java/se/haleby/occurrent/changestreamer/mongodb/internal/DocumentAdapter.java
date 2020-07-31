@@ -1,4 +1,4 @@
-package se.haleby.occurrent.changestreamer.mongodb.common;
+package se.haleby.occurrent.changestreamer.mongodb.internal;
 
 import org.bson.BsonDocument;
 import org.bson.Document;

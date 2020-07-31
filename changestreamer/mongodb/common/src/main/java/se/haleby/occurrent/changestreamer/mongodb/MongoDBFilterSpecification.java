@@ -1,4 +1,4 @@
-package se.haleby.occurrent.changestreamer.mongodb.common;
+package se.haleby.occurrent.changestreamer.mongodb;
 
 import com.mongodb.client.model.Filters;
 import org.bson.conversions.Bson;
@@ -9,6 +9,7 @@ import static com.mongodb.client.model.Aggregates.match;
 
 /**
  * Add filters when subscribing to a MongoDB change streamer if you're only interested in specify changes.
+ * These filters will be applied at the database level so they're efficient.
  */
 public class MongoDBFilterSpecification {
 

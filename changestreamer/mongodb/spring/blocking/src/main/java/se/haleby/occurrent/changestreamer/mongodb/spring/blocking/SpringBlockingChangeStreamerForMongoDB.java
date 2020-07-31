@@ -16,10 +16,10 @@ import org.springframework.data.mongodb.core.messaging.MessageListener;
 import org.springframework.data.mongodb.core.messaging.MessageListenerContainer;
 import org.springframework.data.mongodb.core.messaging.Subscription;
 import se.haleby.occurrent.changestreamer.CloudEventWithStreamPosition;
-import se.haleby.occurrent.changestreamer.mongodb.common.DocumentAdapter;
-import se.haleby.occurrent.changestreamer.mongodb.common.MongoDBFilterSpecification;
-import se.haleby.occurrent.changestreamer.mongodb.common.MongoDBFilterSpecification.BsonMongoDBFilterSpecification;
-import se.haleby.occurrent.changestreamer.mongodb.common.MongoDBFilterSpecification.JsonMongoDBFilterSpecification;
+import se.haleby.occurrent.changestreamer.mongodb.internal.DocumentAdapter;
+import se.haleby.occurrent.changestreamer.mongodb.MongoDBFilterSpecification;
+import se.haleby.occurrent.changestreamer.mongodb.MongoDBFilterSpecification.BsonMongoDBFilterSpecification;
+import se.haleby.occurrent.changestreamer.mongodb.MongoDBFilterSpecification.JsonMongoDBFilterSpecification;
 
 import javax.annotation.PreDestroy;
 import java.util.concurrent.ConcurrentHashMap;
@@ -28,7 +28,7 @@ import java.util.function.Consumer;
 import java.util.stream.Stream;
 
 import static java.util.Objects.requireNonNull;
-import static se.haleby.occurrent.changestreamer.mongodb.common.MongoDBCloudEventsToJsonDeserializer.deserializeToCloudEvent;
+import static se.haleby.occurrent.changestreamer.mongodb.internal.MongoDBCloudEventsToJsonDeserializer.deserializeToCloudEvent;
 
 public class SpringBlockingChangeStreamerForMongoDB {
 

@@ -14,7 +14,7 @@ import se.haleby.occurrent.changestreamer.CloudEventWithStreamPosition;
 
 import java.util.function.Function;
 
-import static se.haleby.occurrent.changestreamer.mongodb.common.MongoDBCloudEventsToJsonDeserializer.deserializeToCloudEvent;
+import static se.haleby.occurrent.changestreamer.mongodb.internal.MongoDBCloudEventsToJsonDeserializer.deserializeToCloudEvent;
 
 public class SpringReactiveChangeStreamerForMongoDB {
 
