@@ -13,8 +13,6 @@ import io.cloudevents.core.provider.EventFormatProvider;
 import io.cloudevents.jackson.JsonFormat;
 import org.bson.Document;
 import org.bson.conversions.Bson;
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
 import se.haleby.occurrent.eventstore.api.Filter;
 import se.haleby.occurrent.eventstore.api.WriteCondition;
 import se.haleby.occurrent.eventstore.api.WriteConditionNotFulfilledException;
@@ -51,8 +49,6 @@ import static se.haleby.occurrent.eventstore.mongodb.nativedriver.internal.Condi
 import static se.haleby.occurrent.eventstore.mongodb.nativedriver.internal.FilterToBsonFilterConverter.convertFilterToBsonFilter;
 
 public class MongoEventStore implements EventStore, EventStoreOperations, EventStoreQueries {
-    private static final Logger log = LoggerFactory.getLogger(MongoEventStore.class);
-
     private static final String ID = "_id";
     private static final String VERSION = "version";
 
@@ -64,15 +60,21 @@ public class MongoEventStore implements EventStore, EventStoreOperations, EventS
     private final TimeRepresentation timeRepresentation;
 
     public MongoEventStore(ConnectionString connectionString, EventStoreConfig config) {
-        requireNonNull(connectionString, "Connection string cannot be null");
+        this(MongoClients.create(requireNonNull(connectionString, "Connection string cannot be null")),
+                requireNonNull(connectionString.getDatabase(), "Database must be defined in connection string"),
+                requireNonNull(connectionString.getCollection(), "Event collection must be defined in connection string"),
+                config);
+    }
+
+    public MongoEventStore(MongoClient mongoClient, String databaseName, String eventCollectionName, EventStoreConfig config) {
+        requireNonNull(mongoClient, "Mongo client cannot be null");
+        requireNonNull(databaseName, "Database must be defined in connection string");
+        requireNonNull(eventCollectionName, "Event collection name must be defined");
         requireNonNull(config, EventStoreConfig.class.getSimpleName() + " cannot be null");
-        log.info("Connecting to MongoDB using connection string: {}", connectionString);
-        mongoClient = MongoClients.create(connectionString);
-        String databaseName = requireNonNull(connectionString.getDatabase());
-        mongoDatabase = mongoClient.getDatabase(databaseName);
-        String eventCollectionName = requireNonNull(connectionString.getCollection());
-        eventCollection = mongoDatabase.getCollection(eventCollectionName);
         cloudEventSerializer = EventFormatProvider.getInstance().resolveFormat(JsonFormat.CONTENT_TYPE);
+        this.mongoClient = mongoClient;
+        this.mongoDatabase = mongoClient.getDatabase(databaseName);
+        this.eventCollection = mongoDatabase.getCollection(eventCollectionName);
         this.streamConsistencyGuarantee = config.streamConsistencyGuarantee;
         this.timeRepresentation = config.timeRepresentation;
         initializeEventStore(eventCollectionName, streamConsistencyGuarantee, mongoDatabase);

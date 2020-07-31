@@ -8,6 +8,7 @@ import org.bson.BsonDocument;
 import org.bson.BsonString;
 import org.bson.BsonValue;
 import org.bson.Document;
+import se.haleby.occurrent.eventstore.mongodb.TimeRepresentation;
 import se.haleby.occurrent.eventstore.mongodb.internal.OccurrentCloudEventMongoDBDocumentMapper;
 
 import java.util.HashMap;
@@ -15,7 +16,6 @@ import java.util.Map;
 import java.util.Optional;
 
 import static com.mongodb.client.model.changestream.OperationType.INSERT;
-import static se.haleby.occurrent.eventstore.mongodb.TimeRepresentation.RFC_3339_STRING;
 
 public class MongoDBCloudEventsToJsonDeserializer {
 
@@ -23,9 +23,9 @@ public class MongoDBCloudEventsToJsonDeserializer {
     public static final String RESUME_TOKEN = "resumeToken";
     private static final String RESUME_TOKEN_DATA = "_data";
 
-    public static Optional<CloudEvent> deserializeToCloudEvent(EventFormat cloudEventSerializer, ChangeStreamDocument<Document> changeStreamDocument) {
+    public static Optional<CloudEvent> deserializeToCloudEvent(EventFormat cloudEventSerializer, ChangeStreamDocument<Document> changeStreamDocument, TimeRepresentation timeRepresentation) {
         return changeStreamDocumentToCloudEventAsJson(changeStreamDocument)
-                .map(document -> OccurrentCloudEventMongoDBDocumentMapper.convertToCloudEvent(cloudEventSerializer, RFC_3339_STRING, document));
+                .map(document -> OccurrentCloudEventMongoDBDocumentMapper.convertToCloudEvent(cloudEventSerializer, timeRepresentation, document));
     }
 
     private static Optional<Document> changeStreamDocumentToCloudEventAsJson(ChangeStreamDocument<Document> changeStreamDocument) {

@@ -3,18 +3,15 @@
          xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
          xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 http://maven.apache.org/xsd/maven-4.0.0.xsd">
     <parent>
-        <artifactId>changestreamer</artifactId>
+        <artifactId>changestreamer-mongodb</artifactId>
         <groupId>se.haleby.occurrent</groupId>
         <version>0.0.1-SNAPSHOT</version>
     </parent>
-    <modelVersion>4.0.0</modelVersion>
-
-    <artifactId>changestreamer-mongodb</artifactId>
     <packaging>pom</packaging>
+    <artifactId>changestreamer-mongodb-native</artifactId>
 
     <modules>
-        <module>common</module>
-        <module>spring</module>
-        <module>native</module>
+        <module>blocking</module>
     </modules>
+    <modelVersion>4.0.0</modelVersion>
 </project>
