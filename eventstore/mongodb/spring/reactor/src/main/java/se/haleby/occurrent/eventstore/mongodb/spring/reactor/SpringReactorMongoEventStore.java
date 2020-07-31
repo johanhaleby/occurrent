@@ -37,6 +37,8 @@ import se.haleby.occurrent.eventstore.mongodb.spring.reactor.StreamConsistencyGu
 
 import java.net.URI;
 import java.util.HashMap;
+import java.util.Objects;
+import java.util.function.Function;
 
 import static java.util.Objects.requireNonNull;
 import static org.springframework.data.domain.Sort.Direction.ASC;
@@ -45,6 +47,7 @@ import static org.springframework.data.mongodb.SessionSynchronization.ALWAYS;
 import static org.springframework.data.mongodb.core.query.Criteria.where;
 import static se.haleby.occurrent.cloudevents.OccurrentCloudEventExtension.STREAM_ID;
 import static se.haleby.occurrent.eventstore.api.Filter.TIME;
+import static se.haleby.occurrent.eventstore.mongodb.internal.OccurrentCloudEventMongoDBDocumentMapper.convertToDocument;
 import static se.haleby.occurrent.eventstore.mongodb.spring.common.internal.ConditionToCriteriaConverter.convertConditionToCriteria;
 import static se.haleby.occurrent.eventstore.mongodb.spring.common.internal.FilterToQueryConverter.convertFilterToQuery;
 
@@ -302,6 +305,43 @@ public class SpringReactorMongoEventStore implements EventStore, EventStoreOpera
     }
 
     @Override
+    public Mono<CloudEvent> updateEvent(String cloudEventId, URI cloudEventSource, Function<CloudEvent, CloudEvent> updateFunction) {
+        Function<Function<CloudEvent, CloudEvent>, Mono<CloudEvent>> logic = (fn) -> {
+            Query cloudEventQuery = cloudEventIdIs(cloudEventId, cloudEventSource);
+            return mongoTemplate.findOne(cloudEventQuery, Document.class, eventStoreCollectionName)
+                    .log()
+                    .flatMap(document -> {
+                        CloudEvent currentCloudEvent = convertToCloudEvent(cloudEventSerializer, timeRepresentation, document);
+                        CloudEvent updatedCloudEvent = fn.apply(currentCloudEvent);
+                        final Mono<CloudEvent> result;
+                        if (updatedCloudEvent == null) {
+                            result = Mono.error(new IllegalArgumentException("Cloud event update function is not allowed to return null"));
+                        } else if (!Objects.equals(updatedCloudEvent, currentCloudEvent)) {
+                            String streamId = (String) currentCloudEvent.getExtension(STREAM_ID);
+                            Document updatedDocument = convertToDocument(cloudEventSerializer, timeRepresentation, streamId, updatedCloudEvent);
+                            updatedDocument.put(ID, document.get(ID)); // Insert the Mongo ObjectID
+                            result = mongoTemplate.findAndReplace(cloudEventQuery, updatedDocument, eventStoreCollectionName).thenReturn(updatedCloudEvent);
+                        } else {
+                            result = Mono.empty();
+                        }
+                        return result;
+                    });
+        };
+
+        final Mono<CloudEvent> result;
+        if (streamConsistencyGuarantee instanceof None || streamConsistencyGuarantee instanceof TransactionInsertsOnly) {
+            result = logic.apply(updateFunction);
+        } else if (streamConsistencyGuarantee instanceof Transactional) {
+            Transactional tx = ((Transactional) streamConsistencyGuarantee);
+            result = tx.transactionalOperator.transactional(logic.apply(updateFunction));
+        } else {
+            throw new IllegalStateException("Stream consistency guarantee " + streamConsistencyGuarantee.getClass().getName() + " is invalid");
+        }
+
+        return result;
+    }
+
+    @Override
     public Flux<CloudEvent> query(Filter filter, int skip, int limit, SortBy sortBy) {
         requireNonNull(filter, "Filter cannot be null");
         final Query query = convertFilterToQuery(timeRepresentation, filter);
@@ -355,5 +395,9 @@ public class SpringReactorMongoEventStore implements EventStore, EventStoreOpera
 
     private static Query streamIdEqualTo(String streamId) {
         return Query.query(where(STREAM_ID).is(streamId));
+    }
+
+    private static Query cloudEventIdIs(String cloudEventId, URI cloudEventSource) {
+        return Query.query(where("id").is(cloudEventId).and("source").is(cloudEventSource));
     }
 }

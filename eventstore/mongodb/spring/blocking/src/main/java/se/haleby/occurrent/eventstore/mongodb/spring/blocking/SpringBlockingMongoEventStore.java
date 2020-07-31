@@ -360,7 +360,7 @@ public class SpringBlockingMongoEventStore implements EventStore, EventStoreOper
         mongoTemplate.getCollection(streamVersionCollectionName).createIndex(Indexes.compoundIndex(Indexes.ascending(ID), Indexes.ascending(VERSION)), new IndexOptions().unique(true));
     }
 
-    private Query cloudEventIdIs(String cloudEventId, URI cloudEventSource) {
+    private static Query cloudEventIdIs(String cloudEventId, URI cloudEventSource) {
         return Query.query(where("id").is(cloudEventId).and("source").is(cloudEventSource));
     }
 }
