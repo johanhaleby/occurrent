@@ -12,6 +12,7 @@
 
     <modules>
         <module>blocking</module>
+        <module>blocking-persistent</module>
     </modules>
     <modelVersion>4.0.0</modelVersion>
 </project>

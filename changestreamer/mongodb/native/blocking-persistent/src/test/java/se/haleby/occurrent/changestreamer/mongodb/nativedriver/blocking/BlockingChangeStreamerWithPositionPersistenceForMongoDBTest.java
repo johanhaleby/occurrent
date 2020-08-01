@@ -4,16 +4,13 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import com.mongodb.ConnectionString;
 import com.mongodb.client.MongoClient;
 import com.mongodb.client.MongoClients;
-import com.mongodb.client.MongoCollection;
 import com.mongodb.client.MongoDatabase;
 import com.mongodb.client.model.Filters;
 import io.cloudevents.CloudEvent;
 import io.cloudevents.core.builder.CloudEventBuilder;
-import org.bson.Document;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
-import org.junit.jupiter.api.Timeout;
 import org.junit.jupiter.api.extension.RegisterExtension;
 import org.testcontainers.containers.MongoDBContainer;
 import org.testcontainers.junit.jupiter.Container;
@@ -22,6 +19,7 @@ import se.haleby.occurrent.changestreamer.mongodb.MongoDBFilterSpecification.Jso
 import se.haleby.occurrent.domain.DomainEvent;
 import se.haleby.occurrent.domain.NameDefined;
 import se.haleby.occurrent.domain.NameWasChanged;
+import se.haleby.occurrent.eventstore.api.blocking.EventStore;
 import se.haleby.occurrent.eventstore.mongodb.TimeRepresentation;
 import se.haleby.occurrent.eventstore.mongodb.nativedriver.EventStoreConfig;
 import se.haleby.occurrent.eventstore.mongodb.nativedriver.MongoEventStore;
@@ -34,7 +32,6 @@ import java.util.UUID;
 import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
-import java.util.concurrent.atomic.AtomicInteger;
 import java.util.stream.Stream;
 
 import static com.mongodb.client.model.Aggregates.match;
@@ -42,7 +39,6 @@ import static com.mongodb.client.model.Filters.and;
 import static com.mongodb.client.model.Filters.eq;
 import static java.time.ZoneOffset.UTC;
 import static java.time.temporal.ChronoUnit.MILLIS;
-import static java.util.Objects.requireNonNull;
 import static java.util.concurrent.TimeUnit.SECONDS;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.groups.Tuple.tuple;
@@ -51,38 +47,42 @@ import static org.awaitility.Durations.ONE_SECOND;
 import static org.hamcrest.Matchers.is;
 import static se.haleby.occurrent.changestreamer.mongodb.MongoDBFilterSpecification.BsonMongoDBFilterSpecification.filter;
 import static se.haleby.occurrent.changestreamer.mongodb.MongoDBFilterSpecification.FULL_DOCUMENT;
+import static se.haleby.occurrent.eventstore.mongodb.TimeRepresentation.RFC_3339_STRING;
 import static se.haleby.occurrent.eventstore.mongodb.nativedriver.StreamConsistencyGuarantee.transactional;
 import static se.haleby.occurrent.functional.CheckedFunction.unchecked;
 import static se.haleby.occurrent.functional.Not.not;
 import static se.haleby.occurrent.time.TimeConversion.toLocalDateTime;
 
+@SuppressWarnings("ConstantConditions")
 @Testcontainers
-@Timeout(15000)
-public class BlockingChangeStreamerForMongoDBTest {
+public class BlockingChangeStreamerWithPositionPersistenceForMongoDBTest {
 
     @Container
     private static final MongoDBContainer mongoDBContainer = new MongoDBContainer("mongo:4.2.7");
+    private static final String RESUME_TOKEN_COLLECTION = "subscriptions";
 
     @RegisterExtension
     FlushMongoDBExtension flushMongoDBExtension = new FlushMongoDBExtension(new ConnectionString(mongoDBContainer.getReplicaSetUrl()));
 
-    private MongoEventStore mongoEventStore;
-    private BlockingChangeStreamerForMongoDB changeStreamer;
+    private EventStore mongoEventStore;
+    private BlockingChangeStreamerWithPositionPersistenceForMongoDB changeStreamer;
     private ObjectMapper objectMapper;
-    private MongoClient mongoClient;
     private ExecutorService subscriptionExecutor;
+    private MongoClient mongoClient;
+    private MongoDatabase database;
 
     @BeforeEach
     void create_mongo_event_store() {
         ConnectionString connectionString = new ConnectionString(mongoDBContainer.getReplicaSetUrl() + ".events");
-        this.mongoClient = MongoClients.create(connectionString);
-        TimeRepresentation timeRepresentation = TimeRepresentation.RFC_3339_STRING;
-        EventStoreConfig config = new EventStoreConfig(transactional("stream-consistency"), timeRepresentation);
-        MongoDatabase database = mongoClient.getDatabase(requireNonNull(connectionString.getDatabase()));
-        MongoCollection<Document> eventCollection = database.getCollection(requireNonNull(connectionString.getCollection()));
-        mongoEventStore = new MongoEventStore(mongoClient, connectionString.getDatabase(), connectionString.getCollection(), config);
-        subscriptionExecutor = Executors.newFixedThreadPool(1);
-        changeStreamer = new BlockingChangeStreamerForMongoDB(eventCollection, timeRepresentation, subscriptionExecutor, RetryStrategy.backoff(Duration.of(100, MILLIS), Duration.of(500, MILLIS), 2));
+        mongoClient = MongoClients.create(connectionString);
+        String databaseName = connectionString.getDatabase();
+        String eventCollectionName = connectionString.getCollection();
+        database = mongoClient.getDatabase(databaseName);
+        TimeRepresentation timeRepresentation = RFC_3339_STRING;
+        mongoEventStore = new MongoEventStore(mongoClient, databaseName, eventCollectionName, new EventStoreConfig(transactional("stream-consistency"), timeRepresentation));
+        subscriptionExecutor = Executors.newSingleThreadExecutor();
+        BlockingChangeStreamerForMongoDB blockingChangeStreamerForMongoDB = new BlockingChangeStreamerForMongoDB(database.getCollection(eventCollectionName), timeRepresentation, subscriptionExecutor, RetryStrategy.fixed(200));
+        changeStreamer = new BlockingChangeStreamerWithPositionPersistenceForMongoDB(blockingChangeStreamerForMongoDB, database.getCollection(RESUME_TOKEN_COLLECTION));
         objectMapper = new ObjectMapper();
     }
 
@@ -90,13 +90,12 @@ public class BlockingChangeStreamerForMongoDBTest {
     void shutdown() throws InterruptedException {
         changeStreamer.shutdown();
         subscriptionExecutor.shutdown();
-        subscriptionExecutor.awaitTermination(10, SECONDS);
-        mongoEventStore.shutdown();
+        subscriptionExecutor.awaitTermination(4, SECONDS);
         mongoClient.close();
     }
 
     @Test
-    void blocking_native_mongodb_change_streamer_calls_listener_for_each_new_event() {
+    void blocking_spring_change_streamer_calls_listener_for_each_new_event() {
         // Given
         LocalDateTime now = LocalDateTime.now();
         CopyOnWriteArrayList<CloudEvent> state = new CopyOnWriteArrayList<>();
@@ -115,53 +114,46 @@ public class BlockingChangeStreamerForMongoDBTest {
     }
 
     @Test
-    void retrying_on_failure() {
+    void blocking_spring_change_streamer_allows_resuming_events_from_where_it_left_off() {
         // Given
         LocalDateTime now = LocalDateTime.now();
-        final AtomicInteger counter = new AtomicInteger(0);
-        final CopyOnWriteArrayList<CloudEvent> state = new CopyOnWriteArrayList<>();
-        changeStreamer.stream(UUID.randomUUID().toString(), cloudEvent -> {
-            int value = counter.incrementAndGet();
-            if (value <= 4) {
-                throw new IllegalArgumentException("expected");
-            }
-            state.add(cloudEvent);
-        });
+        CopyOnWriteArrayList<CloudEvent> state = new CopyOnWriteArrayList<>();
+        String subscriberId = UUID.randomUUID().toString();
+        changeStreamer.stream(subscriberId, state::add);
         NameDefined nameDefined1 = new NameDefined(UUID.randomUUID().toString(), now, "name1");
         NameDefined nameDefined2 = new NameDefined(UUID.randomUUID().toString(), now.plusSeconds(2), "name2");
         NameWasChanged nameWasChanged1 = new NameWasChanged(UUID.randomUUID().toString(), now.plusSeconds(10), "name3");
 
         // When
         mongoEventStore.write("1", 0, serialize(nameDefined1));
+        // The change streamer is async so we need to wait for it
+        await().atMost(ONE_SECOND).until(not(state::isEmpty));
+        changeStreamer.pauseSubscription(subscriberId);
         mongoEventStore.write("2", 0, serialize(nameDefined2));
         mongoEventStore.write("1", 1, serialize(nameWasChanged1));
+        changeStreamer.stream(subscriberId, state::add);
 
         // Then
-        await().atMost(5, SECONDS).with().pollInterval(Duration.of(20, MILLIS)).untilAsserted(() -> assertThat(state).hasSize(3));
+        await().atMost(2, SECONDS).with().pollInterval(Duration.of(20, MILLIS)).untilAsserted(() -> assertThat(state).hasSize(3));
     }
 
     @Test
-    void blocking_native_mongodb_change_streamer_allows_cancelling_subscription() throws InterruptedException {
+    void blocking_spring_change_streamer_allows_cancelling_subscription() {
         // Given
         LocalDateTime now = LocalDateTime.now();
         CopyOnWriteArrayList<CloudEvent> state = new CopyOnWriteArrayList<>();
         String subscriberId = UUID.randomUUID().toString();
         changeStreamer.stream(subscriberId, state::add);
-        NameDefined nameDefined = new NameDefined(UUID.randomUUID().toString(), now, "name1");
-        NameWasChanged nameWasChanged = new NameWasChanged(UUID.randomUUID().toString(), now, "name2");
+        NameDefined nameDefined1 = new NameDefined(UUID.randomUUID().toString(), now, "name1");
 
         // When
-        mongoEventStore.write("1", 0, serialize(nameDefined));
+        mongoEventStore.write("1", 0, serialize(nameDefined1));
         // The change streamer is async so we need to wait for it
         await().atMost(ONE_SECOND).until(not(state::isEmpty));
         changeStreamer.cancelSubscription(subscriberId);
 
         // Then
-        mongoEventStore.write("1", 1, serialize(nameWasChanged));
-        Thread.sleep(500);
-
-        // Assert that no event has been consumed by subscriber
-        assertThat(state).hasSize(1);
+        assertThat(database.getCollection(RESUME_TOKEN_COLLECTION).countDocuments()).isZero();
     }
 
     @Test
@@ -170,7 +162,8 @@ public class BlockingChangeStreamerForMongoDBTest {
         LocalDateTime now = LocalDateTime.now();
         CopyOnWriteArrayList<CloudEvent> state = new CopyOnWriteArrayList<>();
         String subscriberId = UUID.randomUUID().toString();
-        changeStreamer.stream(subscriberId, state::add, filter().type(Filters::eq, NameDefined.class.getName()));
+        changeStreamer.stream(subscriberId, state::add, filter().type(Filters::eq, NameDefined.class.getName()))
+        ;
         NameDefined nameDefined1 = new NameDefined(UUID.randomUUID().toString(), now, "name1");
         NameDefined nameDefined2 = new NameDefined(UUID.randomUUID().toString(), now.plusSeconds(2), "name2");
         NameWasChanged nameWasChanged1 = new NameWasChanged(UUID.randomUUID().toString(), now.plusSeconds(3), "name3");
@@ -243,7 +236,8 @@ public class BlockingChangeStreamerForMongoDBTest {
         LocalDateTime now = LocalDateTime.now();
         CopyOnWriteArrayList<CloudEvent> state = new CopyOnWriteArrayList<>();
         String subscriberId = UUID.randomUUID().toString();
-        changeStreamer.stream(subscriberId, state::add, JsonMongoDBFilterSpecification.filter("{ $match : { \"" + FULL_DOCUMENT + ".type\" : \"" + NameDefined.class.getName() + "\" } }"));
+        changeStreamer.stream(subscriberId, state::add, JsonMongoDBFilterSpecification.filter("{ $match : { \"" + FULL_DOCUMENT + ".type\" : \"" + NameDefined.class.getName() + "\" } }"))
+        ;
         NameDefined nameDefined1 = new NameDefined(UUID.randomUUID().toString(), now, "name1");
         NameDefined nameDefined2 = new NameDefined(UUID.randomUUID().toString(), now.plusSeconds(2), "name2");
         NameWasChanged nameWasChanged1 = new NameWasChanged(UUID.randomUUID().toString(), now.plusSeconds(3), "name3");
