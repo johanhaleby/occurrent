@@ -1,6 +1,7 @@
 package se.haleby.occurrent.changestreamer.mongodb.nativedriver.blocking;
 
 import com.mongodb.MongoClientSettings;
+import com.mongodb.MongoException;
 import com.mongodb.client.ChangeStreamIterable;
 import com.mongodb.client.MongoChangeStreamCursor;
 import com.mongodb.client.MongoCollection;
@@ -101,9 +102,13 @@ public class BlockingChangeStreamerForMongoDB {
             subscriptions.put(subscriptionId, subscription);
 
             subscriptionStarted.countDown();
-            cursor.forEachRemaining(changeStreamDocument -> deserializeToCloudEvent(cloudEventSerializer, changeStreamDocument, timeRepresentation)
-                    .map(cloudEvent -> new CloudEventWithStreamPosition<>(cloudEvent, changeStreamDocument.getResumeToken()))
-                    .ifPresent(retry(action, __ -> true, convertToDelayStream(retryStrategy))));
+            try {
+                cursor.forEachRemaining(changeStreamDocument -> deserializeToCloudEvent(cloudEventSerializer, changeStreamDocument, timeRepresentation)
+                        .map(cloudEvent -> new CloudEventWithStreamPosition<>(cloudEvent, changeStreamDocument.getResumeToken()))
+                        .ifPresent(retry(action, __ -> true, convertToDelayStream(retryStrategy))));
+            } catch (MongoException e) {
+                log.debug("Caught {} (code={}, message={}), this might happen when cursor is shutdown.", e.getClass().getName(), e.getCode(), e.getMessage(), e);
+            }
         };
 
         cloudEventDispatcher.execute(retry(runnable, __ -> !shuttingDown, convertToDelayStream(retryStrategy)));
