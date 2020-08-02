@@ -1,10 +1,10 @@
-package se.haleby.occurrent.example.domain.numberguessinggame;
+package se.haleby.occurrent.example.domain.numberguessinggame.model;
 
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Nested;
 import org.junit.jupiter.api.Test;
-import se.haleby.occurrent.example.domain.numberguessinggame.domainevents.*;
+import se.haleby.occurrent.example.domain.numberguessinggame.model.domainevents.*;
 
 import java.time.LocalDateTime;
 import java.util.List;

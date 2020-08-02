@@ -1,4 +1,4 @@
-package se.haleby.occurrent.example.domain.numberguessinggame;
+package se.haleby.occurrent.example.domain.numberguessinggame.model;
 
 import net.jqwik.api.Assume;
 import net.jqwik.api.ForAll;

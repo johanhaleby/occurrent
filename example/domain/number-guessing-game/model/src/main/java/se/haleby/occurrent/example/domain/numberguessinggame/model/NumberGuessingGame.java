@@ -1,6 +1,6 @@
-package se.haleby.occurrent.example.domain.numberguessinggame;
+package se.haleby.occurrent.example.domain.numberguessinggame.model;
 
-import se.haleby.occurrent.example.domain.numberguessinggame.domainevents.*;
+import se.haleby.occurrent.example.domain.numberguessinggame.model.domainevents.*;
 
 import java.time.LocalDateTime;
 import java.util.ArrayList;

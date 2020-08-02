@@ -1,13 +1,13 @@
-package se.haleby.occurrent.example.domain.numberguessinggame;
+package se.haleby.occurrent.example.domain.numberguessinggame.model;
 
 import java.util.Objects;
 
-public class Guess {
+public class MaxNumberOfGuesses {
     public final int value;
 
-    public Guess(int value) {
-        if (value < 1 || value > 1000) {
-            throw new IllegalArgumentException("A guess must be between 1 and 1000");
+    public MaxNumberOfGuesses(int value) {
+        if (value > 100 || value < 1) {
+            throw new IllegalArgumentException("Max number of guesses must be between 1 and 100");
         }
         this.value = value;
     }
@@ -15,8 +15,8 @@ public class Guess {
     @Override
     public boolean equals(Object o) {
         if (this == o) return true;
-        if (!(o instanceof Guess)) return false;
-        Guess that = (Guess) o;
+        if (!(o instanceof MaxNumberOfGuesses)) return false;
+        MaxNumberOfGuesses that = (MaxNumberOfGuesses) o;
         return value == that.value;
     }
 

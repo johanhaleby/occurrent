@@ -1,17 +1,17 @@
-package se.haleby.occurrent.example.domain.numberguessinggame.domainevents;
+package se.haleby.occurrent.example.domain.numberguessinggame.model.domainevents;
 
 import java.time.LocalDateTime;
 import java.util.Objects;
 import java.util.UUID;
 
-public class PlayerGuessedANumberThatWasTooBig implements GameEvent {
+public class PlayerGuessedTheRightNumber implements GameEvent {
     private final UUID eventId;
     private final LocalDateTime timestamp;
     private final UUID gameId;
     private final UUID playerId;
     private final int guessedNumber;
 
-    public PlayerGuessedANumberThatWasTooBig(UUID eventId, UUID gameId, LocalDateTime timestamp, UUID playerId, int guessedNumber) {
+    public PlayerGuessedTheRightNumber(UUID eventId, UUID gameId, LocalDateTime timestamp, UUID playerId, int guessedNumber) {
         this.eventId = eventId;
         this.timestamp = timestamp;
         this.gameId = gameId;
@@ -45,8 +45,8 @@ public class PlayerGuessedANumberThatWasTooBig implements GameEvent {
     @Override
     public boolean equals(Object o) {
         if (this == o) return true;
-        if (!(o instanceof PlayerGuessedANumberThatWasTooBig)) return false;
-        PlayerGuessedANumberThatWasTooBig that = (PlayerGuessedANumberThatWasTooBig) o;
+        if (!(o instanceof PlayerGuessedTheRightNumber)) return false;
+        PlayerGuessedTheRightNumber that = (PlayerGuessedTheRightNumber) o;
         return guessedNumber == that.guessedNumber &&
                 Objects.equals(eventId, that.eventId) &&
                 Objects.equals(timestamp, that.timestamp) &&
@@ -61,7 +61,7 @@ public class PlayerGuessedANumberThatWasTooBig implements GameEvent {
 
     @Override
     public String toString() {
-        return "PlayerGuessedANumberThatWasTooBig{" +
+        return "PlayerGuessedTheRightNumber{" +
                 "eventId=" + eventId +
                 ", timestamp=" + timestamp +
                 ", gameId=" + gameId +
@@ -69,5 +69,4 @@ public class PlayerGuessedANumberThatWasTooBig implements GameEvent {
                 ", guessedNumber=" + guessedNumber +
                 '}';
     }
-
 }

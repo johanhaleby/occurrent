@@ -1,4 +1,4 @@
-package se.haleby.occurrent.example.domain.numberguessinggame.domainevents;
+package se.haleby.occurrent.example.domain.numberguessinggame.model.domainevents;
 
 import java.time.LocalDateTime;
 import java.util.UUID;

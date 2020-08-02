@@ -1,4 +1,4 @@
-package se.haleby.occurrent.example.domain.numberguessinggame;
+package se.haleby.occurrent.example.domain.numberguessinggame.model;
 
 import java.util.Random;
 
