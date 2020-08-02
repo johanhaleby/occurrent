@@ -26,9 +26,7 @@ import se.haleby.occurrent.eventstore.mongodb.TimeRepresentation;
 import java.util.Collections;
 import java.util.Iterator;
 import java.util.List;
-import java.util.concurrent.ConcurrentHashMap;
-import java.util.concurrent.ConcurrentMap;
-import java.util.concurrent.Executor;
+import java.util.concurrent.*;
 import java.util.function.Consumer;
 import java.util.function.Function;
 import java.util.function.Predicate;
@@ -86,6 +84,8 @@ public class BlockingChangeStreamerForMongoDB {
         requireNonNull(changeStreamConfigurer, "Change stream configurer cannot be null");
 
         List<Bson> pipeline = createPipeline(filter);
+        CountDownLatch subscriptionStarted = new CountDownLatch(1);
+
         Runnable runnable = () -> {
             ChangeStreamIterable<Document> changeStreamDocuments = eventCollection.watch(pipeline, Document.class);
             ChangeStreamIterable<Document> changeStreamDocumentsAfterConfiguration = changeStreamConfigurer.apply(changeStreamDocuments);
@@ -97,12 +97,18 @@ public class BlockingChangeStreamerForMongoDB {
             Subscription subscription = new Subscription(subscriptionId, cursor);
             subscriptions.put(subscriptionId, subscription);
 
+            subscriptionStarted.countDown();
             cursor.forEachRemaining(changeStreamDocument -> deserializeToCloudEvent(cloudEventSerializer, changeStreamDocument, timeRepresentation)
                     .map(cloudEvent -> new CloudEventWithStreamPosition<>(cloudEvent, changeStreamDocument.getResumeToken()))
                     .ifPresent(retry(action, __ -> true, convertToDelayStream(retryStrategy))));
         };
 
         cloudEventDispatcher.execute(retry(runnable, __ -> !shuttingDown, convertToDelayStream(retryStrategy)));
+        try {
+            subscriptionStarted.await(10, TimeUnit.SECONDS);
+        } catch (InterruptedException e) {
+            throw new RuntimeException(e);
+        }
     }
 
     private static List<Bson> createPipeline(MongoDBFilterSpecification filter) {
