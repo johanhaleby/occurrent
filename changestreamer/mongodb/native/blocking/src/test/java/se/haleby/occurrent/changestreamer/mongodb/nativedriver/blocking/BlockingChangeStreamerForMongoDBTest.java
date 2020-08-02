@@ -47,7 +47,7 @@ import static java.util.concurrent.TimeUnit.SECONDS;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.groups.Tuple.tuple;
 import static org.awaitility.Awaitility.await;
-import static org.awaitility.Durations.ONE_SECOND;
+import static org.awaitility.Durations.FIVE_SECONDS;
 import static org.hamcrest.Matchers.is;
 import static se.haleby.occurrent.changestreamer.mongodb.MongoDBFilterSpecification.BsonMongoDBFilterSpecification.filter;
 import static se.haleby.occurrent.changestreamer.mongodb.MongoDBFilterSpecification.FULL_DOCUMENT;
@@ -111,7 +111,7 @@ public class BlockingChangeStreamerForMongoDBTest {
         mongoEventStore.write("1", 1, serialize(nameWasChanged1));
 
         // Then
-        await().atMost(2, SECONDS).with().pollInterval(Duration.of(20, MILLIS)).untilAsserted(() -> assertThat(state).hasSize(3));
+        await().atMost(FIVE_SECONDS).with().pollInterval(Duration.of(20, MILLIS)).untilAsserted(() -> assertThat(state).hasSize(3));
     }
 
     @Test
@@ -137,7 +137,7 @@ public class BlockingChangeStreamerForMongoDBTest {
         mongoEventStore.write("1", 1, serialize(nameWasChanged1));
 
         // Then
-        await().atMost(5, SECONDS).with().pollInterval(Duration.of(20, MILLIS)).untilAsserted(() -> assertThat(state).hasSize(3));
+        await().atMost(FIVE_SECONDS).with().pollInterval(Duration.of(20, MILLIS)).untilAsserted(() -> assertThat(state).hasSize(3));
     }
 
     @Test
@@ -153,7 +153,7 @@ public class BlockingChangeStreamerForMongoDBTest {
         // When
         mongoEventStore.write("1", 0, serialize(nameDefined));
         // The change streamer is async so we need to wait for it
-        await().atMost(ONE_SECOND).until(not(state::isEmpty));
+        await().atMost(FIVE_SECONDS).until(not(state::isEmpty));
         changeStreamer.cancelSubscription(subscriberId);
 
         // Then
@@ -183,7 +183,7 @@ public class BlockingChangeStreamerForMongoDBTest {
         mongoEventStore.write("2", 1, serialize(nameWasChanged2));
 
         // Then
-        await().atMost(ONE_SECOND).until(state::size, is(2));
+        await().atMost(FIVE_SECONDS).until(state::size, is(2));
         assertThat(state).extracting(CloudEvent::getType).containsOnly(NameDefined.class.getName());
     }
 
@@ -208,7 +208,7 @@ public class BlockingChangeStreamerForMongoDBTest {
         mongoEventStore.write("2", 1, serialize(nameWasChanged2));
 
         // Then
-        await().atMost(ONE_SECOND).until(state::size, is(1));
+        await().atMost(FIVE_SECONDS).until(state::size, is(1));
         assertThat(state).extracting(CloudEvent::getId, CloudEvent::getType).containsOnly(tuple(nameDefined2.getEventId(), NameDefined.class.getName()));
     }
 
@@ -233,7 +233,7 @@ public class BlockingChangeStreamerForMongoDBTest {
         mongoEventStore.write("2", 1, serialize(nameWasChanged2));
 
         // Then
-        await().atMost(ONE_SECOND).until(state::size, is(1));
+        await().atMost(FIVE_SECONDS).until(state::size, is(1));
         assertThat(state).extracting(CloudEvent::getId, CloudEvent::getType).containsOnly(tuple(nameDefined2.getEventId(), NameDefined.class.getName()));
     }
 
@@ -256,7 +256,7 @@ public class BlockingChangeStreamerForMongoDBTest {
         mongoEventStore.write("2", 1, serialize(nameWasChanged2));
 
         // Then
-        await().atMost(ONE_SECOND).until(state::size, is(2));
+        await().atMost(FIVE_SECONDS).until(state::size, is(2));
         assertThat(state).extracting(CloudEvent::getType).containsOnly(NameDefined.class.getName());
     }
 
