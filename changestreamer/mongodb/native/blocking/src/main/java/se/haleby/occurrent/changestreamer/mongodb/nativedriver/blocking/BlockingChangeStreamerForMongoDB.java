@@ -26,7 +26,10 @@ import se.haleby.occurrent.eventstore.mongodb.TimeRepresentation;
 import java.util.Collections;
 import java.util.Iterator;
 import java.util.List;
-import java.util.concurrent.*;
+import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.ConcurrentMap;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.Executor;
 import java.util.function.Consumer;
 import java.util.function.Function;
 import java.util.function.Predicate;
@@ -105,7 +108,7 @@ public class BlockingChangeStreamerForMongoDB {
 
         cloudEventDispatcher.execute(retry(runnable, __ -> !shuttingDown, convertToDelayStream(retryStrategy)));
         try {
-            subscriptionStarted.await(10, TimeUnit.SECONDS);
+            subscriptionStarted.await();
         } catch (InterruptedException e) {
             throw new RuntimeException(e);
         }
