@@ -12,6 +12,10 @@ public class MaxNumberOfGuesses {
         this.value = value;
     }
 
+    public static MaxNumberOfGuesses of(int value) {
+        return new MaxNumberOfGuesses(value);
+    }
+
     @Override
     public boolean equals(Object o) {
         if (this == o) return true;

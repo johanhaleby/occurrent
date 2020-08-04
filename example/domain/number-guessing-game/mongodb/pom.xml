@@ -3,19 +3,17 @@
          xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
          xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 http://maven.apache.org/xsd/maven-4.0.0.xsd">
     <parent>
-        <artifactId>example-domain</artifactId>
+        <artifactId>example-number-guessing-game</artifactId>
         <groupId>se.haleby.occurrent</groupId>
         <version>0.0.1-SNAPSHOT</version>
     </parent>
-    <packaging>pom</packaging>
     <modelVersion>4.0.0</modelVersion>
-
-    <artifactId>example-number-guessing-game</artifactId>
-
+    <packaging>pom</packaging>
     <modules>
-        <module>model</module>
-        <module>mongodb</module>
+        <module>native</module>
     </modules>
+
+    <artifactId>example-number-guessing-game-es-mongodb</artifactId>
 
 
 </project>

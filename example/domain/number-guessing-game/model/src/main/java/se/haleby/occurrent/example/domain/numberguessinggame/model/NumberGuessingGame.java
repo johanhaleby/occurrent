@@ -26,7 +26,6 @@ public class NumberGuessingGame {
             throw new GameAlreadyEnded(gameId);
         }
 
-
         Consumer<List<GameEvent>> exhaustGameAttemptsIfLastGuess = gameEvents -> {
             if (game.isThisTheLastGuess()) {
                 gameEvents.add(new GuessingAttemptsExhausted(UUID.randomUUID(), gameId, guessingDate));

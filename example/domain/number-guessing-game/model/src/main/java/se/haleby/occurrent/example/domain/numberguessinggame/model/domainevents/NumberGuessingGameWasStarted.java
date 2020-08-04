@@ -25,7 +25,7 @@ public class NumberGuessingGameWasStarted implements GameEvent {
 
     @Override
     public UUID eventId() {
-        return gameId;
+        return eventId;
     }
 
     @Override
