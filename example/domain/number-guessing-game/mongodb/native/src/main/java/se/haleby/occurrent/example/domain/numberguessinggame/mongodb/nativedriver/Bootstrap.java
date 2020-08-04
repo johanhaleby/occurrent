@@ -24,22 +24,22 @@ import java.util.UUID;
 
 import static se.haleby.occurrent.eventstore.api.Filter.subject;
 
-public class NumberGuessingGameApplication {
+public class Bootstrap {
 
 
     private static Javalin javalin;
     private final MongoEventStore mongoEventStore;
 
-    public NumberGuessingGameApplication(MongoEventStore mongoEventStore) {
+    public Bootstrap(MongoEventStore mongoEventStore) {
         this.mongoEventStore = mongoEventStore;
     }
 
     public static void main(String[] args) {
-        NumberGuessingGameApplication application = NumberGuessingGameApplication.bootstrap();
+        Bootstrap application = Bootstrap.bootstrap();
         Runtime.getRuntime().addShutdownHook(new Thread(application::shutdown));
     }
 
-    public static NumberGuessingGameApplication bootstrap() {
+    public static Bootstrap bootstrap() {
         MongoClient mongoClient = MongoClients.create("mongodb://localhost:27017");
         MongoEventStore mongoEventStore = new MongoEventStore(mongoClient, "test", "events", new EventStoreConfig(StreamConsistencyGuarantee.transactional("versions"), TimeRepresentation.DATE));
 
@@ -68,7 +68,7 @@ public class NumberGuessingGameApplication {
                 .build();
 
         HttpApi.configureRoutes(javalin, numberGuessingGameApplicationService, whatIsTheStatusOfGame, 1, 20, MaxNumberOfGuesses.of(5));
-        return new NumberGuessingGameApplication(mongoEventStore);
+        return new Bootstrap(mongoEventStore);
     }
 
     public void shutdown() {
