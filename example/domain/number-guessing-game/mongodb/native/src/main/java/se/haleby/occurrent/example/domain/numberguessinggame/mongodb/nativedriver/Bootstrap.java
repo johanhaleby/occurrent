@@ -14,6 +14,7 @@ import se.haleby.occurrent.example.domain.numberguessinggame.model.domainevents.
 import se.haleby.occurrent.example.domain.numberguessinggame.model.domainevents.PlayerGuessedANumberThatWasTooSmall;
 import se.haleby.occurrent.example.domain.numberguessinggame.model.domainevents.PlayerGuessedTheRightNumber;
 import se.haleby.occurrent.example.domain.numberguessinggame.mongodb.nativedriver.projection.GameStatus;
+import se.haleby.occurrent.example.domain.numberguessinggame.mongodb.nativedriver.projection.GameStatus.GuessAndTime;
 import se.haleby.occurrent.example.domain.numberguessinggame.mongodb.nativedriver.projection.WhatIsTheStatusOfGame;
 
 import java.net.URI;
@@ -57,11 +58,14 @@ public class Bootstrap {
                                 gameStatus.secretNumber = ((NumberGuessingGameWasStarted) event).secretNumberToGuess();
                                 gameStatus.maxNumberOfGuesses = ((NumberGuessingGameWasStarted) event).maxNumberOfGuesses();
                             } else if (event instanceof PlayerGuessedANumberThatWasTooSmall) {
-                                gameStatus.guesses.add(((PlayerGuessedANumberThatWasTooSmall) event).guessedNumber());
+                                PlayerGuessedANumberThatWasTooSmall e = (PlayerGuessedANumberThatWasTooSmall) event;
+                                gameStatus.guesses.add(new GuessAndTime(e.guessedNumber(), e.timestamp()));
                             } else if (event instanceof PlayerGuessedANumberThatWasTooBig) {
-                                gameStatus.guesses.add(((PlayerGuessedANumberThatWasTooBig) event).guessedNumber());
+                                PlayerGuessedANumberThatWasTooBig e = (PlayerGuessedANumberThatWasTooBig) event;
+                                gameStatus.guesses.add(new GuessAndTime(e.guessedNumber(), e.timestamp()));
                             } else if (event instanceof PlayerGuessedTheRightNumber) {
-                                gameStatus.guesses.add(((PlayerGuessedTheRightNumber) event).guessedNumber());
+                                PlayerGuessedTheRightNumber e = (PlayerGuessedTheRightNumber) event;
+                                gameStatus.guesses.add(new GuessAndTime(e.guessedNumber(), e.timestamp()));
                             }
                         }, (gameStatus, gameStatus2) -> {
                         })
@@ -80,7 +84,7 @@ public class Bootstrap {
         public UUID gameId;
         public int maxNumberOfGuesses;
         public int secretNumber;
-        public List<Integer> guesses = new ArrayList<>();
+        public List<GuessAndTime> guesses = new ArrayList<>();
 
         private Optional<GameStatus> build() {
             return gameId == null ? Optional.empty() : Optional.of(new GameStatus(gameId, secretNumber, maxNumberOfGuesses, guesses));
