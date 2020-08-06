@@ -73,7 +73,7 @@ public class BlockingChangeStreamerWithPositionPersistenceForMongoDB {
                 new ReplaceOptions().upsert(true));
     }
 
-    void shutdown() {
+    public void shutdown() {
         changeStreamer.shutdown();
     }
 }

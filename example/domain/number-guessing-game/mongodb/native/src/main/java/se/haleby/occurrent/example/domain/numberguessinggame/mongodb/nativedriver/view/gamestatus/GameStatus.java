@@ -1,4 +1,4 @@
-package se.haleby.occurrent.example.domain.numberguessinggame.mongodb.nativedriver.projection;
+package se.haleby.occurrent.example.domain.numberguessinggame.mongodb.nativedriver.view.gamestatus;
 
 import java.time.LocalDateTime;
 import java.util.List;

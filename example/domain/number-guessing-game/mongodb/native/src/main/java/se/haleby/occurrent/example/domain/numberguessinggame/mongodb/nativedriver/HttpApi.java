@@ -6,8 +6,11 @@ import se.haleby.occurrent.example.domain.numberguessinggame.model.Guess;
 import se.haleby.occurrent.example.domain.numberguessinggame.model.MaxNumberOfGuesses;
 import se.haleby.occurrent.example.domain.numberguessinggame.model.NumberGuessingGame;
 import se.haleby.occurrent.example.domain.numberguessinggame.model.SecretNumberToGuess;
-import se.haleby.occurrent.example.domain.numberguessinggame.mongodb.nativedriver.projection.GameStatus;
-import se.haleby.occurrent.example.domain.numberguessinggame.mongodb.nativedriver.projection.WhatIsTheStatusOfGame;
+import se.haleby.occurrent.example.domain.numberguessinggame.mongodb.nativedriver.view.gamestatus.GameStatus;
+import se.haleby.occurrent.example.domain.numberguessinggame.mongodb.nativedriver.view.gamestatus.WhatIsTheStatusOfGame;
+import se.haleby.occurrent.example.domain.numberguessinggame.mongodb.nativedriver.view.latestgamesoverview.GameOverview.GameState.Ended;
+import se.haleby.occurrent.example.domain.numberguessinggame.mongodb.nativedriver.view.latestgamesoverview.GameOverview.GameState.Ongoing;
+import se.haleby.occurrent.example.domain.numberguessinggame.mongodb.nativedriver.view.latestgamesoverview.LatestGamesOverview;
 
 import java.time.LocalDateTime;
 import java.time.ZoneId;
@@ -22,19 +25,8 @@ public class HttpApi {
 
     private static final DateTimeFormatter DATE_TIME_FORMATTER = DateTimeFormatter.ofPattern("yyyy-MM-dd hh:mm:ss");
 
-    public static void configureRoutes(Javalin javalin, NumberGuessingGameApplicationService as, WhatIsTheStatusOfGame whatIsTheStatusOfGame, int minNumberToGuess, int maxNumberToGuess, MaxNumberOfGuesses maxNumberOfGuesses) {
-        javalin.get("/", ctx -> {
-            String body = body(
-                    h1("Number Guessing Game"),
-                    form().withMethod("post").withAction("/games").with(
-                            input().withName("gameId").withType("hidden").withValue(UUID.randomUUID().toString()),
-                            input().withName("playerId").withType("hidden").withValue(UUID.randomUUID().toString()),
-                            button("Start new game").withType("submit")
-                    )
-            ).render();
-
-            ctx.html(body);
-        });
+    public static void configureRoutes(Javalin javalin, NumberGuessingGameApplicationService as, LatestGamesOverview latestGamesOverview, WhatIsTheStatusOfGame whatIsTheStatusOfGame, int minNumberToGuess, int maxNumberToGuess, MaxNumberOfGuesses maxNumberOfGuesses) {
+        javalin.get("/", ctx -> ctx.redirect("/games"));
 
         javalin.get("/games/:gameId", ctx -> {
             UUID gameId = UUID.fromString(requireNonNull(ctx.pathParam("gameId")));
@@ -58,6 +50,21 @@ public class HttpApi {
                     .render();
 
             ctx.html(html);
+        });
+
+        javalin.get("/games", ctx -> {
+            String body = body(
+                    h1("Number Guessing Game"),
+                    generateGameOverview(latestGamesOverview),
+                    form().withMethod("post").withAction("/games").with(
+                            input().withName("gameId").withType("hidden").withValue(UUID.randomUUID().toString()),
+                            input().withName("playerId").withType("hidden").withValue(UUID.randomUUID().toString()),
+                            br(),
+                            button("Start new game").withType("submit")
+                    )
+            ).render();
+
+            ctx.html(body);
         });
 
         javalin.post("/games", ctx -> {
@@ -89,10 +96,36 @@ public class HttpApi {
                 button("Make guess").withType("submit"));
     }
 
+    private static ContainerTag generateGameOverview(LatestGamesOverview latestGamesOverview) {
+        ContainerTag[] trs = latestGamesOverview.findOverviewOfLatestGames()
+                .map(game -> {
+                    final String text;
+                    if (game.state instanceof Ongoing) {
+                        text = "Attempts left: " + ((Ongoing) game.state).numberOfAttemptsLeft;
+                    } else {
+                        Ended ended = (Ended) game.state;
+                        text = "Ended At: " + fmt(ended.endedAt) + "Won: " + ended.playerGuessedTheRightNumber;
+                    }
+
+                    return tr(td(fmt(game.startedAt)), td(game.state.getClass().getSimpleName()), td(text));
+                })
+                .toArray(ContainerTag[]::new);
+
+        if (trs.length == 0) {
+            return div();
+        }
+
+        ContainerTag header = tr(th("Started At"), th("State"), th("Info"));
+        ContainerTag[] allTableData = new ContainerTag[1 + trs.length];
+        allTableData[0] = header;
+        System.arraycopy(trs, 0, allTableData, 1, trs.length);
+        return div(h3("Latest Games"), table(allTableData));
+    }
+
     private static ContainerTag generateGuessesList(GameStatus gameStatus) {
         ContainerTag[] guesses = gameStatus.guesses.stream()
                 .map(guessAndTime -> {
-                    StringBuilder description = new StringBuilder(DATE_TIME_FORMATTER.format(guessAndTime.localDateTime.atZone(ZoneId.systemDefault())))
+                    StringBuilder description = new StringBuilder(fmt(guessAndTime.localDateTime))
                             .append(" -- ")
                             .append(guessAndTime.guess)
                             .append(" was ");
@@ -105,5 +138,9 @@ public class HttpApi {
                 })
                 .toArray(ContainerTag[]::new);
         return div(h3("Guesses"), div(guesses));
+    }
+
+    private static String fmt(LocalDateTime localDateTime) {
+        return DATE_TIME_FORMATTER.format(localDateTime.atZone(ZoneId.systemDefault()));
     }
 }
