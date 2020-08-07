@@ -168,7 +168,6 @@ public class Bootstrap {
     public void shutdown() {
         javalin.stop();
         streamer.shutdown();
-        mongoEventStore.shutdown();
         mongoClient.close();
     }
 

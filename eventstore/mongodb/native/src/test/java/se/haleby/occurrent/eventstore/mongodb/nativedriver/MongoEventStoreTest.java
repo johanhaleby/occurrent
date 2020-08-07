@@ -5,6 +5,7 @@ import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.mongodb.ConnectionString;
 import com.mongodb.MongoBulkWriteException;
+import com.mongodb.client.MongoClient;
 import com.mongodb.client.MongoClients;
 import com.mongodb.client.MongoDatabase;
 import com.mongodb.client.model.Filters;
@@ -72,6 +73,7 @@ class MongoEventStoreTest {
 
     private static final URI NAME_SOURCE = URI.create("http://name");
     private MongoEventStore eventStore;
+    private MongoClient mongoClient;
 
     @RegisterExtension
     FlushMongoDBExtension flushMongoDBExtension = new FlushMongoDBExtension(new ConnectionString(mongoDBContainer.getReplicaSetUrl()));
@@ -79,14 +81,17 @@ class MongoEventStoreTest {
 
     @BeforeEach
     void create_mongo_event_store() {
+        ConnectionString connectionString = new ConnectionString(mongoDBContainer.getReplicaSetUrl());
+        mongoClient = MongoClients.create(connectionString);
+
         StreamConsistencyGuarantee consistency = StreamConsistencyGuarantee.transactional("consistency");
         eventStore = newMongoEventStore(consistency, TimeRepresentation.RFC_3339_STRING);
         objectMapper = new ObjectMapper();
     }
     
     @AfterEach
-    void event_store_is_shutdown_after_each_test() {
-        eventStore.shutdown();
+    void mongo_client_is_closed_after_each_test() {
+        mongoClient.close();
     }
 
     @Test
@@ -623,7 +628,7 @@ class MongoEventStoreTest {
             assertThat(updatedCloudEvent).isEmpty();
         }
     }
-    
+
     @Nested
     @DisplayName("update when stream consistency guarantee is none")
     class UpdateWhenStreamConsistencyGuaranteeIsNone {
@@ -1650,7 +1655,7 @@ class MongoEventStoreTest {
     }
 
     private MongoEventStore newMongoEventStore(StreamConsistencyGuarantee consistency, TimeRepresentation timeRepresentation) {
-        ConnectionString connectionString = new ConnectionString(mongoDBContainer.getReplicaSetUrl() + ".events");
-        return new MongoEventStore(connectionString, new EventStoreConfig(consistency, timeRepresentation));
+        ConnectionString connectionString = new ConnectionString(mongoDBContainer.getReplicaSetUrl());
+        return new MongoEventStore(mongoClient, connectionString.getDatabase(), "events", new EventStoreConfig(consistency, timeRepresentation));
     }
 }

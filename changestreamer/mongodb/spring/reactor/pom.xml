@@ -45,7 +45,7 @@
         <!-- Test -->
         <dependency>
             <groupId>se.haleby.occurrent</groupId>
-            <artifactId>eventstore-mongodb-native</artifactId>
+            <artifactId>eventstore-mongodb-spring-reactor</artifactId>
             <version>0.0.1-SNAPSHOT</version>
             <scope>test</scope>
         </dependency>

@@ -3,6 +3,8 @@ package se.haleby.occurrent.example.springevent;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.jsontype.impl.LaissezFaireSubTypeValidator;
 import com.mongodb.ConnectionString;
+import com.mongodb.client.MongoClient;
+import com.mongodb.client.MongoClients;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.boot.autoconfigure.SpringBootApplication;
 import org.springframework.context.annotation.Bean;
@@ -23,9 +25,18 @@ public class ChangeStreamerFromMongoDBToSpringEventApplication {
     @Value("${spring.data.mongodb.uri}")
     private String mongoUri;
 
+    @Bean(destroyMethod = "close")
+    public MongoClient mongoClient() {
+        return MongoClients.create(connectionString());
+    }
+
     @Bean
-    public EventStore eventStore() {
-        return new MongoEventStore(connectionString(), new EventStoreConfig(StreamConsistencyGuarantee.transactional("event-consistency"), TimeRepresentation.RFC_3339_STRING));
+    public EventStore eventStore(MongoClient mongoClient) {
+        ConnectionString connectionString = connectionString();
+        String database = connectionString.getDatabase();
+        String collection = connectionString.getCollection();
+
+        return new MongoEventStore(mongoClient, database, collection, new EventStoreConfig(StreamConsistencyGuarantee.transactional("event-consistency"), TimeRepresentation.RFC_3339_STRING));
     }
 
     @Bean

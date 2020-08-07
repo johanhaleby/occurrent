@@ -91,7 +91,6 @@ public class BlockingChangeStreamerForMongoDBTest {
         changeStreamer.shutdown();
         subscriptionExecutor.shutdown();
         subscriptionExecutor.awaitTermination(10, SECONDS);
-        mongoEventStore.shutdown();
         mongoClient.close();
     }
 

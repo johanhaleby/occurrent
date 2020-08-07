@@ -2,6 +2,7 @@ package se.haleby.occurrent.changestreamer.mongodb.spring.reactor;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.mongodb.ConnectionString;
+import com.mongodb.reactivestreams.client.MongoClient;
 import com.mongodb.reactivestreams.client.MongoClients;
 import io.cloudevents.CloudEvent;
 import io.cloudevents.core.builder.CloudEventBuilder;
@@ -9,20 +10,25 @@ import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.RegisterExtension;
+import org.springframework.data.mongodb.ReactiveMongoTransactionManager;
 import org.springframework.data.mongodb.core.ReactiveMongoTemplate;
+import org.springframework.data.mongodb.core.SimpleReactiveMongoDatabaseFactory;
 import org.springframework.data.mongodb.core.query.Query;
+import org.springframework.transaction.ReactiveTransactionManager;
 import org.testcontainers.containers.MongoDBContainer;
 import org.testcontainers.junit.jupiter.Container;
 import org.testcontainers.junit.jupiter.Testcontainers;
 import reactor.core.Disposable;
+import reactor.core.publisher.Flux;
 import reactor.core.publisher.Mono;
 import se.haleby.occurrent.domain.DomainEvent;
 import se.haleby.occurrent.domain.NameDefined;
 import se.haleby.occurrent.domain.NameWasChanged;
+import se.haleby.occurrent.eventstore.api.reactor.EventStore;
 import se.haleby.occurrent.eventstore.mongodb.TimeRepresentation;
-import se.haleby.occurrent.eventstore.mongodb.nativedriver.EventStoreConfig;
-import se.haleby.occurrent.eventstore.mongodb.nativedriver.MongoEventStore;
-import se.haleby.occurrent.eventstore.mongodb.nativedriver.StreamConsistencyGuarantee;
+import se.haleby.occurrent.eventstore.mongodb.spring.reactor.EventStoreConfig;
+import se.haleby.occurrent.eventstore.mongodb.spring.reactor.SpringReactorMongoEventStore;
+import se.haleby.occurrent.eventstore.mongodb.spring.reactor.StreamConsistencyGuarantee;
 import se.haleby.occurrent.testsupport.mongodb.FlushMongoDBExtension;
 
 import java.net.URI;
@@ -32,10 +38,10 @@ import java.util.Objects;
 import java.util.UUID;
 import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.function.Function;
-import java.util.stream.Stream;
 
 import static java.time.ZoneOffset.UTC;
 import static java.time.temporal.ChronoUnit.MILLIS;
+import static java.util.Objects.requireNonNull;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.awaitility.Awaitility.await;
 import static org.awaitility.Durations.ONE_SECOND;
@@ -51,7 +57,7 @@ public class SpringReactiveChangeStreamerWithPositionPersistenceForMongoDBTest {
     private static final MongoDBContainer mongoDBContainer = new MongoDBContainer("mongo:4.2.7");
     private static final String RESUME_TOKEN_COLLECTION = "ack";
 
-    private MongoEventStore mongoEventStore;
+    private EventStore mongoEventStore;
     private SpringReactiveChangeStreamerWithPositionPersistenceForMongoDB changeStreamer;
     private ObjectMapper objectMapper;
     private ReactiveMongoTemplate reactiveMongoTemplate;
@@ -59,13 +65,16 @@ public class SpringReactiveChangeStreamerWithPositionPersistenceForMongoDBTest {
 
     @RegisterExtension
     FlushMongoDBExtension flushMongoDBExtension = new FlushMongoDBExtension(new ConnectionString(mongoDBContainer.getReplicaSetUrl()));
+    private MongoClient mongoClient;
 
     @BeforeEach
     void create_mongo_event_store() {
         ConnectionString connectionString = new ConnectionString(mongoDBContainer.getReplicaSetUrl() + ".events");
         TimeRepresentation timeRepresentation = TimeRepresentation.RFC_3339_STRING;
-        mongoEventStore = new MongoEventStore(connectionString, new EventStoreConfig(StreamConsistencyGuarantee.transactional("event-consistency"), timeRepresentation));
+        mongoClient = MongoClients.create(connectionString);
         reactiveMongoTemplate = new ReactiveMongoTemplate(MongoClients.create(connectionString), Objects.requireNonNull(connectionString.getDatabase()));
+        ReactiveTransactionManager reactiveMongoTransactionManager = new ReactiveMongoTransactionManager(new SimpleReactiveMongoDatabaseFactory(mongoClient, requireNonNull(connectionString.getDatabase())));
+        mongoEventStore = new SpringReactorMongoEventStore(reactiveMongoTemplate, new EventStoreConfig("events", StreamConsistencyGuarantee.transactional("event-consistency", reactiveMongoTransactionManager), TimeRepresentation.RFC_3339_STRING));
         SpringReactiveChangeStreamerForMongoDB springReactiveChangeStreamerForMongoDB = new SpringReactiveChangeStreamerForMongoDB(reactiveMongoTemplate, "events", timeRepresentation);
         changeStreamer = new SpringReactiveChangeStreamerWithPositionPersistenceForMongoDB(springReactiveChangeStreamerForMongoDB, reactiveMongoTemplate, RESUME_TOKEN_COLLECTION);
         objectMapper = new ObjectMapper();
@@ -75,6 +84,7 @@ public class SpringReactiveChangeStreamerWithPositionPersistenceForMongoDBTest {
     @AfterEach
     void dispose() {
         disposables.forEach(Disposable::dispose);
+        mongoClient.close();
     }
 
     @Test
@@ -89,9 +99,9 @@ public class SpringReactiveChangeStreamerWithPositionPersistenceForMongoDBTest {
         NameWasChanged nameWasChanged1 = new NameWasChanged(UUID.randomUUID().toString(), now.plusSeconds(10), "name3");
 
         // When
-        mongoEventStore.write("1", 0, serialize(nameDefined1));
-        mongoEventStore.write("2", 0, serialize(nameDefined2));
-        mongoEventStore.write("1", 1, serialize(nameWasChanged1));
+        mongoEventStore.write("1", 0, serialize(nameDefined1)).block();
+        mongoEventStore.write("2", 0, serialize(nameDefined2)).block();
+        mongoEventStore.write("1", 1, serialize(nameWasChanged1)).block();
 
         // Then
         await().with().pollInterval(Duration.of(20, MILLIS)).untilAsserted(() -> assertThat(state).hasSize(3));
@@ -111,12 +121,12 @@ public class SpringReactiveChangeStreamerWithPositionPersistenceForMongoDBTest {
         NameWasChanged nameWasChanged1 = new NameWasChanged(UUID.randomUUID().toString(), now.plusSeconds(10), "name3");
 
         // When
-        mongoEventStore.write("1", 0, serialize(nameDefined1));
+        mongoEventStore.write("1", 0, serialize(nameDefined1)).block();
         // The change streamer is async so we need to wait for it
         await().atMost(ONE_SECOND).until(not(state::isEmpty));
         subscription1.dispose();
-        mongoEventStore.write("2", 0, serialize(nameDefined2));
-        mongoEventStore.write("1", 1, serialize(nameWasChanged1));
+        mongoEventStore.write("2", 0, serialize(nameDefined2)).block();
+        mongoEventStore.write("1", 1, serialize(nameWasChanged1)).block();
         disposeAfterTest(changeStreamer.stream(subscriberId, function).subscribe());
 
         // Then
@@ -134,7 +144,7 @@ public class SpringReactiveChangeStreamerWithPositionPersistenceForMongoDBTest {
         NameDefined nameDefined1 = new NameDefined(UUID.randomUUID().toString(), now, "name1");
 
         // When
-        mongoEventStore.write("1", 0, serialize(nameDefined1));
+        mongoEventStore.write("1", 0, serialize(nameDefined1)).block();
         // The change streamer is async so we need to wait for it
         await().atMost(ONE_SECOND).until(not(state::isEmpty));
 
@@ -144,8 +154,8 @@ public class SpringReactiveChangeStreamerWithPositionPersistenceForMongoDBTest {
         assertThat(reactiveMongoTemplate.count(new Query(), RESUME_TOKEN_COLLECTION).block()).isZero();
     }
 
-    private Stream<CloudEvent> serialize(DomainEvent e) {
-        return Stream.of(CloudEventBuilder.v1()
+    private Flux<CloudEvent> serialize(DomainEvent e) {
+        return Flux.just(CloudEventBuilder.v1()
                 .withId(UUID.randomUUID().toString())
                 .withSource(URI.create("http://name"))
                 .withType(e.getClass().getSimpleName())

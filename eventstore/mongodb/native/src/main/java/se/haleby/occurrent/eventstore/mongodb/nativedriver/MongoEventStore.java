@@ -1,6 +1,5 @@
 package se.haleby.occurrent.eventstore.mongodb.nativedriver;
 
-import com.mongodb.ConnectionString;
 import com.mongodb.MongoBulkWriteException;
 import com.mongodb.TransactionOptions;
 import com.mongodb.client.*;
@@ -59,25 +58,24 @@ public class MongoEventStore implements EventStore, EventStoreOperations, EventS
     private final MongoDatabase mongoDatabase;
     private final TimeRepresentation timeRepresentation;
 
-    public MongoEventStore(ConnectionString connectionString, EventStoreConfig config) {
-        this(MongoClients.create(requireNonNull(connectionString, "Connection string cannot be null")),
-                requireNonNull(connectionString.getDatabase(), "Database must be defined in connection string"),
-                requireNonNull(connectionString.getCollection(), "Event collection must be defined in connection string"),
-                config);
+    public MongoEventStore(MongoClient mongoClient, String databaseName, String eventCollectionName, EventStoreConfig config) {
+        this(requireNonNull(mongoClient, "Mongo client cannot be null"),
+                requireNonNull(mongoClient.getDatabase(databaseName), "Database must be defined"),
+                mongoClient.getDatabase(databaseName).getCollection(eventCollectionName), config);
     }
 
-    public MongoEventStore(MongoClient mongoClient, String databaseName, String eventCollectionName, EventStoreConfig config) {
+    public MongoEventStore(MongoClient mongoClient, MongoDatabase database, MongoCollection<Document> eventCollection, EventStoreConfig config) {
         requireNonNull(mongoClient, "Mongo client cannot be null");
-        requireNonNull(databaseName, "Database must be defined in connection string");
-        requireNonNull(eventCollectionName, "Event collection name must be defined");
+        requireNonNull(database, "Database must be defined");
+        requireNonNull(eventCollection, "Event collection must be defined");
         requireNonNull(config, EventStoreConfig.class.getSimpleName() + " cannot be null");
         cloudEventSerializer = EventFormatProvider.getInstance().resolveFormat(JsonFormat.CONTENT_TYPE);
         this.mongoClient = mongoClient;
-        this.mongoDatabase = mongoClient.getDatabase(databaseName);
-        this.eventCollection = mongoDatabase.getCollection(eventCollectionName);
+        this.mongoDatabase = database;
+        this.eventCollection = eventCollection;
         this.streamConsistencyGuarantee = config.streamConsistencyGuarantee;
         this.timeRepresentation = config.timeRepresentation;
-        initializeEventStore(eventCollectionName, streamConsistencyGuarantee, mongoDatabase);
+        initializeEventStore(eventCollection, streamConsistencyGuarantee, mongoDatabase);
     }
 
     @Override
@@ -355,14 +353,15 @@ public class MongoEventStore implements EventStore, EventStoreOperations, EventS
 
     }
 
-    private static void initializeEventStore(String eventStoreCollectionName, StreamConsistencyGuarantee streamConsistencyGuarantee, MongoDatabase
+    private static void initializeEventStore(MongoCollection<Document> eventStoreCollection, StreamConsistencyGuarantee streamConsistencyGuarantee, MongoDatabase
             mongoDatabase) {
+        String eventStoreCollectionName = eventStoreCollection.getNamespace().getCollectionName();
         if (!collectionExists(mongoDatabase, eventStoreCollectionName)) {
             mongoDatabase.createCollection(eventStoreCollectionName);
         }
-        mongoDatabase.getCollection(eventStoreCollectionName).createIndex(Indexes.ascending(STREAM_ID));
+        eventStoreCollection.createIndex(Indexes.ascending(STREAM_ID));
         // Cloud spec defines id + source must be unique!
-        mongoDatabase.getCollection(eventStoreCollectionName).createIndex(Indexes.compoundIndex(Indexes.ascending("id"), Indexes.ascending("source")), new IndexOptions().unique(true));
+        eventStoreCollection.createIndex(Indexes.compoundIndex(Indexes.ascending("id"), Indexes.ascending("source")), new IndexOptions().unique(true));
         if (streamConsistencyGuarantee instanceof Transactional) {
             String streamVersionCollectionName = ((Transactional) streamConsistencyGuarantee).streamVersionCollectionName;
             createStreamVersionCollectionAndIndex(streamVersionCollectionName, mongoDatabase);
@@ -394,9 +393,5 @@ public class MongoEventStore implements EventStore, EventStoreOperations, EventS
         requireNonNull(cloudEventId, "Cloud event id cannot be null");
         requireNonNull(cloudEventSource, "Cloud event source cannot be null");
         return and(eq("id", cloudEventId), eq("source", cloudEventSource.toString()));
-    }
-
-    public void shutdown() {
-        mongoClient.close();
     }
 }
