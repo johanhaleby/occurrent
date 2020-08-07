@@ -97,7 +97,7 @@ public class HttpApi {
     }
 
     private static ContainerTag generateGameOverview(LatestGamesOverview latestGamesOverview) {
-        ContainerTag[] trs = latestGamesOverview.findOverviewOfLatestGames()
+        ContainerTag[] trs = latestGamesOverview.findOverviewOfLatestGames(10)
                 .map(game -> {
                     final String text;
                     if (game.state instanceof Ongoing) {

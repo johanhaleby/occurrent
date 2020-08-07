@@ -33,6 +33,7 @@ import java.util.concurrent.Executors;
 import java.util.stream.Stream;
 import java.util.stream.StreamSupport;
 
+import static com.mongodb.client.model.Sorts.descending;
 import static java.time.ZoneOffset.UTC;
 import static se.haleby.occurrent.eventstore.api.Filter.subject;
 import static se.haleby.occurrent.example.domain.numberguessinggame.mongodb.nativedriver.view.latestgamesoverview.GameOverview.GameState;
@@ -121,8 +122,10 @@ public class Bootstrap {
 
         MongoCollection<Document> latestGamesOverviewCollection = database.getCollection(LATEST_GAMES_OVERVIEW_COLLECTION_NAME);
 
-        LatestGamesOverview latestGamesOverview = () -> toStream(
+        LatestGamesOverview latestGamesOverview = count -> toStream(
                 latestGamesOverviewCollection.find(Document.class)
+                        .sort(descending("startedAt"))
+                        .limit(count)
                         .map(game -> {
                             UUID gameId = UUID.fromString(game.getString("_id"));
                             LocalDateTime startedAt = toLocalDateTime(game.getDate("startedAt"));
