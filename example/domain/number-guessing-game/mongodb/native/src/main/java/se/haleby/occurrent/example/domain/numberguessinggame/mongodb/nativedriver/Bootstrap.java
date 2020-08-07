@@ -43,18 +43,15 @@ public class Bootstrap {
 
     private static final String EVENTS_COLLECTION_NAME = "events";
     private static final String DATABASE_NAME = "test";
-    private static final int NUMBER_OF_GAMES_IN_LATEST_GAMES_OVERVIEW = 10;
     private static final String LATEST_GAMES_OVERVIEW_COLLECTION_NAME = "latestGamesOverview";
 
     private final Javalin javalin;
-    private final MongoEventStore mongoEventStore;
     private final BlockingChangeStreamerWithPositionPersistenceForMongoDB streamer;
     private final MongoClient mongoClient;
 
-    public Bootstrap(Javalin javalin, MongoEventStore mongoEventStore, BlockingChangeStreamerWithPositionPersistenceForMongoDB streamer,
+    public Bootstrap(Javalin javalin, BlockingChangeStreamerWithPositionPersistenceForMongoDB streamer,
                      MongoClient mongoClient) {
         this.javalin = javalin;
-        this.mongoEventStore = mongoEventStore;
         this.streamer = streamer;
         this.mongoClient = mongoClient;
     }
@@ -78,7 +75,7 @@ public class Bootstrap {
         LatestGamesOverview latestGamesOverview = initializeLatestGamesOverview(mongoClient, serialization, streamer);
 
         HttpApi.configureRoutes(javalin, numberGuessingGameApplicationService, latestGamesOverview, whatIsTheStatusOfGame, 1, 20, MaxNumberOfGuesses.of(5));
-        return new Bootstrap(javalin, mongoEventStore, streamer, mongoClient);
+        return new Bootstrap(javalin, streamer, mongoClient);
     }
 
     @NotNull
