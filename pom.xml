@@ -115,7 +115,11 @@
                 <artifactId>reactor-core</artifactId>
                 <version>${reactor.version}</version>
             </dependency>
-
+            <dependency>
+                <groupId>com.rabbitmq</groupId>
+                <artifactId>amqp-client</artifactId>
+                <version>5.9.0</version>
+            </dependency>
 
             <!-- Test -->
             <dependency>
