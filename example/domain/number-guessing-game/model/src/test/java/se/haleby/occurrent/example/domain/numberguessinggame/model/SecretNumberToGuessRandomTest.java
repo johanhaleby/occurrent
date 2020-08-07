@@ -18,7 +18,6 @@ class SecretNumberToGuessRandomTest {
         SecretNumberToGuess secretNumberToGuess = SecretNumberToGuess.randomBetween(minNumber, maxNumber);
 
         // Then
-        System.out.println("min = " + minNumber + ", max = " + maxNumber + " => " + secretNumberToGuess.value);
         assertThat(secretNumberToGuess.value).isBetween(minNumber, maxNumber);
     }
 }
