@@ -21,7 +21,7 @@ import java.util.UUID;
 import static j2html.TagCreator.*;
 import static java.util.Objects.requireNonNull;
 
-public class HttpApi {
+public class WebApi {
 
     private static final DateTimeFormatter DATE_TIME_FORMATTER = DateTimeFormatter.ofPattern("yyyy-MM-dd hh:mm:ss");
 

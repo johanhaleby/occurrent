@@ -204,11 +204,11 @@ public abstract class Filter {
         return filter(TIME, condition);
     }
 
-    public static Filter occurrentStreamId(String value) {
-        return occurrentStreamId(eq(value));
+    public static Filter streamId(String value) {
+        return streamId(eq(value));
     }
 
-    public static Filter occurrentStreamId(Condition<String> condition) {
+    public static Filter streamId(Condition<String> condition) {
         return filter(STREAM_ID, condition);
     }
 

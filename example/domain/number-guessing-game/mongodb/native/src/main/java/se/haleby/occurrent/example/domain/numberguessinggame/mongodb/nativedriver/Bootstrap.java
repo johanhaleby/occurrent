@@ -95,7 +95,7 @@ public class Bootstrap {
         RabbitMQConnectionAndChannel rabbitMQConnectionAndChannel = initializeRabbitMQConnection("amqp://localhost:5672").declareTopic(NUMBER_GUESSING_GAME_TOPIC, true);
         initializeNumberGuessingGameCompletedIntegrationEventPublisher(mongoEventStore, serialization::deserialize, streamer, rabbitMQConnectionAndChannel.channel, objectMapper);
 
-        HttpApi.configureRoutes(javalin, numberGuessingGameApplicationService, latestGamesOverview, whatIsTheStatusOfGame, 1, 20, MaxNumberOfGuesses.of(5));
+        WebApi.configureRoutes(javalin, numberGuessingGameApplicationService, latestGamesOverview, whatIsTheStatusOfGame, 1, 20, MaxNumberOfGuesses.of(5));
         return new Bootstrap(javalin, streamer, mongoClient, rabbitMQConnectionAndChannel);
     }
 
