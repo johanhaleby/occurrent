@@ -79,7 +79,7 @@ public class SpringBlockingChangeStreamerWithPositionPersistenceForMongoDB {
     }
 
     @PreDestroy
-    void shutdownSubscribers() {
+    public void shutdownSubscribers() {
         changeStreamer.shutdownSubscribers();
     }
 }
