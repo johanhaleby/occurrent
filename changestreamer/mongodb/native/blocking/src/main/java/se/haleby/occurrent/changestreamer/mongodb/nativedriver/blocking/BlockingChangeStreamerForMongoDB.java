@@ -18,6 +18,7 @@ import se.haleby.occurrent.changestreamer.CloudEventWithStreamPosition;
 import se.haleby.occurrent.changestreamer.mongodb.MongoDBFilterSpecification;
 import se.haleby.occurrent.changestreamer.mongodb.MongoDBFilterSpecification.BsonMongoDBFilterSpecification;
 import se.haleby.occurrent.changestreamer.mongodb.MongoDBFilterSpecification.JsonMongoDBFilterSpecification;
+import se.haleby.occurrent.changestreamer.mongodb.MongoDBStreamPosition;
 import se.haleby.occurrent.changestreamer.mongodb.internal.DocumentAdapter;
 import se.haleby.occurrent.changestreamer.mongodb.nativedriver.blocking.RetryStrategy.Backoff;
 import se.haleby.occurrent.changestreamer.mongodb.nativedriver.blocking.RetryStrategy.Fixed;
@@ -73,15 +74,15 @@ public class BlockingChangeStreamerForMongoDB {
         this.cloudEventSerializer = EventFormatProvider.getInstance().resolveFormat(JsonFormat.CONTENT_TYPE);
     }
 
-    public void stream(String subscriptionId, Consumer<CloudEventWithStreamPosition<BsonDocument>> action) {
+    public void stream(String subscriptionId, Consumer<CloudEventWithStreamPosition<MongoDBStreamPosition>> action) {
         stream(subscriptionId, action, null);
     }
 
-    public void stream(String subscriptionId, Consumer<CloudEventWithStreamPosition<BsonDocument>> action, MongoDBFilterSpecification filter) {
+    public void stream(String subscriptionId, Consumer<CloudEventWithStreamPosition<MongoDBStreamPosition>> action, MongoDBFilterSpecification filter) {
         stream(subscriptionId, action, filter, Function.identity());
     }
 
-    public void stream(String subscriptionId, Consumer<CloudEventWithStreamPosition<BsonDocument>> action, MongoDBFilterSpecification filter,
+    public void stream(String subscriptionId, Consumer<CloudEventWithStreamPosition<MongoDBStreamPosition>> action, MongoDBFilterSpecification filter,
                        Function<ChangeStreamIterable<Document>, ChangeStreamIterable<Document>> changeStreamConfigurer) {
         requireNonNull(subscriptionId, "subscriptionId cannot be null");
         requireNonNull(action, "Action cannot be null");
@@ -104,7 +105,7 @@ public class BlockingChangeStreamerForMongoDB {
             subscriptionStarted.countDown();
             try {
                 cursor.forEachRemaining(changeStreamDocument -> deserializeToCloudEvent(cloudEventSerializer, changeStreamDocument, timeRepresentation)
-                        .map(cloudEvent -> new CloudEventWithStreamPosition<>(cloudEvent, changeStreamDocument.getResumeToken()))
+                        .map(cloudEvent -> new CloudEventWithStreamPosition<>(cloudEvent, new MongoDBStreamPosition(changeStreamDocument.getClusterTime(), changeStreamDocument.getResumeToken())))
                         .ifPresent(retry(action, __ -> true, convertToDelayStream(retryStrategy))));
             } catch (MongoException e) {
                 log.debug("Caught {} (code={}, message={}), this might happen when cursor is shutdown.", e.getClass().getName(), e.getCode(), e.getMessage(), e);
@@ -206,6 +207,6 @@ public class BlockingChangeStreamerForMongoDB {
         } else {
             throw new IllegalStateException("Invalid retry strategy: " + retryStrategy.getClass().getName());
         }
-        return requireNonNull(delay).iterator();
+        return delay == null ? null : delay.iterator();
     }
 }

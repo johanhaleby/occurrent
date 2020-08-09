@@ -8,6 +8,7 @@ import com.mongodb.client.MongoDatabase;
 import com.mongodb.client.model.Filters;
 import io.cloudevents.CloudEvent;
 import io.cloudevents.core.builder.CloudEventBuilder;
+import org.bson.BsonDocument;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -32,6 +33,7 @@ import java.util.UUID;
 import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
+import java.util.concurrent.atomic.AtomicInteger;
 import java.util.stream.Stream;
 
 import static com.mongodb.client.model.Aggregates.match;
@@ -44,6 +46,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.groups.Tuple.tuple;
 import static org.awaitility.Awaitility.await;
 import static org.awaitility.Durations.ONE_SECOND;
+import static org.hamcrest.Matchers.equalTo;
 import static org.hamcrest.Matchers.is;
 import static se.haleby.occurrent.changestreamer.mongodb.MongoDBFilterSpecification.BsonMongoDBFilterSpecification.filter;
 import static se.haleby.occurrent.changestreamer.mongodb.MongoDBFilterSpecification.FULL_DOCUMENT;
@@ -59,7 +62,7 @@ public class BlockingChangeStreamerWithPositionPersistenceForMongoDBTest {
 
     @Container
     private static final MongoDBContainer mongoDBContainer = new MongoDBContainer("mongo:4.2.7");
-    private static final String RESUME_TOKEN_COLLECTION = "subscriptions";
+    private static final String TIMESTAMP_TOKEN_COLLECTION = "subscriptions";
 
     @RegisterExtension
     FlushMongoDBExtension flushMongoDBExtension = new FlushMongoDBExtension(new ConnectionString(mongoDBContainer.getReplicaSetUrl()));
@@ -81,8 +84,7 @@ public class BlockingChangeStreamerWithPositionPersistenceForMongoDBTest {
         TimeRepresentation timeRepresentation = RFC_3339_STRING;
         mongoEventStore = new MongoEventStore(mongoClient, databaseName, eventCollectionName, new EventStoreConfig(transactional("stream-consistency"), timeRepresentation));
         subscriptionExecutor = Executors.newSingleThreadExecutor();
-        BlockingChangeStreamerForMongoDB blockingChangeStreamerForMongoDB = new BlockingChangeStreamerForMongoDB(database.getCollection(eventCollectionName), timeRepresentation, subscriptionExecutor, RetryStrategy.fixed(200));
-        changeStreamer = new BlockingChangeStreamerWithPositionPersistenceForMongoDB(blockingChangeStreamerForMongoDB, database.getCollection(RESUME_TOKEN_COLLECTION));
+        changeStreamer = newPersistentChangeStreamer(eventCollectionName, timeRepresentation, RetryStrategy.fixed(200));
         objectMapper = new ObjectMapper();
     }
 
@@ -138,6 +140,44 @@ public class BlockingChangeStreamerWithPositionPersistenceForMongoDBTest {
     }
 
     @Test
+    void blocking_spring_change_streamer_allows_resuming_events_from_where_it_left_when_first_event_for_change_streamer_fails_the_first_time() {
+        // Given
+        LocalDateTime now = LocalDateTime.now();
+
+        // Disable retry
+        changeStreamer = newPersistentChangeStreamer("events", RFC_3339_STRING, RetryStrategy.none());
+
+        AtomicInteger counter = new AtomicInteger();
+        CopyOnWriteArrayList<CloudEvent> state = new CopyOnWriteArrayList<>();
+        String subscriberId = UUID.randomUUID().toString();
+        Runnable stream = () -> changeStreamer.stream(subscriberId, cloudEvent -> {
+            if (counter.incrementAndGet() == 1) {
+                // We simulate error on first event
+                throw new IllegalArgumentException("Expected");
+            } else {
+                state.add(cloudEvent);
+            }
+        });
+        stream.run();
+        NameDefined nameDefined1 = new NameDefined(UUID.randomUUID().toString(), now, "name1");
+        NameDefined nameDefined2 = new NameDefined(UUID.randomUUID().toString(), now.plusSeconds(2), "name2");
+        NameWasChanged nameWasChanged1 = new NameWasChanged(UUID.randomUUID().toString(), now.plusSeconds(10), "name3");
+
+        // When
+        mongoEventStore.write("1", 0, serialize(nameDefined1));
+        // The change streamer is async so we need to wait for it
+        await().atMost(ONE_SECOND).and().dontCatchUncaughtExceptions().untilAtomic(counter, equalTo(1));
+        // Since an exception occurred we need to run the stream again
+        BsonDocument resumeToken = database.watch().cursor().getResumeToken();
+        stream.run();
+        mongoEventStore.write("2", 0, serialize(nameDefined2));
+        mongoEventStore.write("1", 1, serialize(nameWasChanged1));
+
+        // Then
+        await().atMost(2, SECONDS).with().pollInterval(Duration.of(20, MILLIS)).untilAsserted(() -> assertThat(state).hasSize(3));
+    }
+
+    @Test
     void blocking_spring_change_streamer_allows_cancelling_subscription() {
         // Given
         LocalDateTime now = LocalDateTime.now();
@@ -153,7 +193,7 @@ public class BlockingChangeStreamerWithPositionPersistenceForMongoDBTest {
         changeStreamer.cancelSubscription(subscriberId);
 
         // Then
-        assertThat(database.getCollection(RESUME_TOKEN_COLLECTION).countDocuments()).isZero();
+        assertThat(database.getCollection(TIMESTAMP_TOKEN_COLLECTION).countDocuments()).isZero();
     }
 
     @Test
@@ -264,5 +304,10 @@ public class BlockingChangeStreamerWithPositionPersistenceForMongoDBTest {
                 .withDataContentType("application/json")
                 .withData(unchecked(objectMapper::writeValueAsBytes).apply(e))
                 .build());
+    }
+
+    private BlockingChangeStreamerWithPositionPersistenceForMongoDB newPersistentChangeStreamer(String eventCollectionName, TimeRepresentation timeRepresentation, RetryStrategy retryStrategy) {
+        BlockingChangeStreamerForMongoDB blockingChangeStreamerForMongoDB = new BlockingChangeStreamerForMongoDB(database.getCollection(eventCollectionName), timeRepresentation, subscriptionExecutor, retryStrategy);
+        return new BlockingChangeStreamerWithPositionPersistenceForMongoDB(blockingChangeStreamerForMongoDB, database, database.getCollection(TIMESTAMP_TOKEN_COLLECTION));
     }
 }

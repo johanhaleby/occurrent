@@ -19,7 +19,7 @@ import java.util.function.Function;
 import static org.springframework.data.mongodb.core.query.Criteria.where;
 import static org.springframework.data.mongodb.core.query.Query.query;
 import static se.haleby.occurrent.changestreamer.mongodb.internal.MongoDBCloudEventsToJsonDeserializer.ID;
-import static se.haleby.occurrent.changestreamer.mongodb.internal.MongoDBCloudEventsToJsonDeserializer.generateResumeTokenDocument;
+import static se.haleby.occurrent.changestreamer.mongodb.internal.MongoDBCloudEventsToJsonDeserializer.generateResumeTokenStreamPositionDocument;
 
 public class SpringReactiveChangeStreamerWithPositionPersistenceForMongoDB {
     private static final Logger log = LoggerFactory.getLogger(SpringReactiveChangeStreamerWithPositionPersistenceForMongoDB.class);
@@ -57,7 +57,7 @@ public class SpringReactiveChangeStreamerWithPositionPersistenceForMongoDB {
 
     private Mono<UpdateResult> persistResumeToken(String subscriberId, BsonValue resumeToken) {
         return mongo.upsert(query(where(ID).is(subscriberId)),
-                Update.fromDocument(generateResumeTokenDocument(subscriberId, resumeToken)),
+                Update.fromDocument(generateResumeTokenStreamPositionDocument(subscriberId, resumeToken)),
                 resumeTokenCollection);
     }
 }

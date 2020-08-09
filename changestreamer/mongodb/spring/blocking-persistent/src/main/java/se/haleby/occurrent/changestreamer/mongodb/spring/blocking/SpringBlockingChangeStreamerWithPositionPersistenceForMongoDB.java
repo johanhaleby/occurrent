@@ -74,7 +74,7 @@ public class SpringBlockingChangeStreamerWithPositionPersistenceForMongoDB {
 
     private void persistResumeToken(String subscriptionId, BsonValue resumeToken) {
         mongoTemplate.upsert(query(where(ID).is(subscriptionId)),
-                Update.fromDocument(generateResumeTokenDocument(subscriptionId, resumeToken)),
+                Update.fromDocument(generateResumeTokenStreamPositionDocument(subscriptionId, resumeToken)),
                 resumeTokenCollection);
     }
 
