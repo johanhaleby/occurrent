@@ -6,6 +6,7 @@ import com.mongodb.reactivestreams.client.MongoClient;
 import com.mongodb.reactivestreams.client.MongoClients;
 import io.cloudevents.CloudEvent;
 import io.cloudevents.core.builder.CloudEventBuilder;
+import io.github.artsok.RepeatedIfExceptionsTest;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -172,7 +173,7 @@ public class SpringReactiveChangeStreamerWithPositionPersistenceForMongoDBTest {
     }
 
 
-    @Test
+    @RepeatedIfExceptionsTest(repeats = 2)
     void reactive_persistent_spring_change_streamer_allows_cancelling_subscription() throws InterruptedException {
         // Given
         LocalDateTime now = LocalDateTime.now();

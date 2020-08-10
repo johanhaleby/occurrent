@@ -7,6 +7,7 @@ import com.mongodb.client.MongoClients;
 import com.mongodb.client.model.Filters;
 import io.cloudevents.CloudEvent;
 import io.cloudevents.core.builder.CloudEventBuilder;
+import io.github.artsok.RepeatedIfExceptionsTest;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -168,7 +169,7 @@ public class SpringBlockingChangeStreamerWithPositionPersistenceForMongoDBTest {
         await().atMost(2, SECONDS).with().pollInterval(Duration.of(20, MILLIS)).untilAsserted(() -> assertThat(state).hasSize(3));
     }
 
-    @Test
+    @RepeatedIfExceptionsTest(repeats = 2)
     void blocking_spring_change_streamer_allows_cancelling_subscription() throws InterruptedException {
         // Given
         LocalDateTime now = LocalDateTime.now();
