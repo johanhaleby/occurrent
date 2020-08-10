@@ -37,15 +37,18 @@ import java.time.LocalDateTime;
 import java.util.Objects;
 import java.util.UUID;
 import java.util.concurrent.CopyOnWriteArrayList;
+import java.util.concurrent.atomic.AtomicInteger;
 import java.util.function.Function;
 
 import static java.time.ZoneOffset.UTC;
 import static java.time.temporal.ChronoUnit.MILLIS;
 import static java.util.Objects.requireNonNull;
+import static java.util.concurrent.TimeUnit.SECONDS;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.awaitility.Awaitility.await;
 import static org.awaitility.Durations.ONE_SECOND;
 import static org.awaitility.Durations.TWO_SECONDS;
+import static org.hamcrest.Matchers.equalTo;
 import static se.haleby.occurrent.functional.CheckedFunction.unchecked;
 import static se.haleby.occurrent.functional.Not.not;
 import static se.haleby.occurrent.time.TimeConversion.toLocalDateTime;
@@ -132,6 +135,42 @@ public class SpringReactiveChangeStreamerWithPositionPersistenceForMongoDBTest {
         // Then
         await().atMost(TWO_SECONDS).with().pollInterval(Duration.of(20, MILLIS)).untilAsserted(() -> assertThat(state).hasSize(3));
     }
+
+    @Test
+    void reactive_persistent_spring_change_streamer_allows_resuming_events_from_where_it_left_when_first_event_for_change_streamer_fails_the_first_time() {
+        // Given
+        LocalDateTime now = LocalDateTime.now();
+
+        AtomicInteger counter = new AtomicInteger();
+        CopyOnWriteArrayList<CloudEvent> state = new CopyOnWriteArrayList<>();
+        String subscriberId = UUID.randomUUID().toString();
+        Runnable stream = () -> changeStreamer.stream(subscriberId, cloudEvent -> {
+            if (counter.incrementAndGet() == 1) {
+                // We simulate error on first event
+                return Mono.error(new IllegalArgumentException("Expected"));
+            } else {
+                state.add(cloudEvent);
+                return Mono.empty();
+            }
+        }).subscribe();
+        stream.run();
+        NameDefined nameDefined1 = new NameDefined(UUID.randomUUID().toString(), now, "name1");
+        NameDefined nameDefined2 = new NameDefined(UUID.randomUUID().toString(), now.plusSeconds(2), "name2");
+        NameWasChanged nameWasChanged1 = new NameWasChanged(UUID.randomUUID().toString(), now.plusSeconds(10), "name3");
+
+        // When
+        mongoEventStore.write("1", 0, serialize(nameDefined1)).block();
+        // The change streamer is async so we need to wait for it
+        await().atMost(ONE_SECOND).and().dontCatchUncaughtExceptions().untilAtomic(counter, equalTo(1));
+        // Since an exception occurred we need to run the stream again
+        stream.run();
+        mongoEventStore.write("2", 0, serialize(nameDefined2)).block();
+        mongoEventStore.write("1", 1, serialize(nameWasChanged1)).block();
+
+        // Then
+        await().atMost(2, SECONDS).with().pollInterval(Duration.of(20, MILLIS)).untilAsserted(() -> assertThat(state).hasSize(3));
+    }
+
 
     @Test
     void reactive_persistent_spring_change_streamer_allows_cancelling_subscription() throws InterruptedException {
