@@ -188,9 +188,8 @@ public class Bootstrap {
     private static BlockingChangeStreamerWithPositionPersistenceForMongoDB initializeChangeStreamer(MongoClient mongoClient) {
         MongoDatabase database = mongoClient.getDatabase(DATABASE_NAME);
         MongoCollection<Document> eventCollection = database.getCollection(EVENTS_COLLECTION_NAME);
-        MongoCollection<Document> streamPositionCollection = database.getCollection(CHANGE_STEAMER_POSITIONS_COLLECTION_NAME);
         BlockingChangeStreamerForMongoDB blockingChangeStreamerForMongoDB = new BlockingChangeStreamerForMongoDB(eventCollection, TimeRepresentation.DATE, Executors.newCachedThreadPool(), RetryStrategy.fixed(200));
-        return new BlockingChangeStreamerWithPositionPersistenceForMongoDB(blockingChangeStreamerForMongoDB, streamPositionCollection);
+        return new BlockingChangeStreamerWithPositionPersistenceForMongoDB(blockingChangeStreamerForMongoDB, database, CHANGE_STEAMER_POSITIONS_COLLECTION_NAME);
     }
 
     private static LatestGamesOverview initializeLatestGamesOverview(MongoClient mongoClient, Serialization serialization, BlockingChangeStreamerWithPositionPersistenceForMongoDB streamer) {

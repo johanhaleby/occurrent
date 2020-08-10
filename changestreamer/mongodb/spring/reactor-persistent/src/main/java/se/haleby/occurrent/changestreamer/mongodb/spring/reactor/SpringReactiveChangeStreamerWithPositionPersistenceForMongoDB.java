@@ -37,7 +37,7 @@ public class SpringReactiveChangeStreamerWithPositionPersistenceForMongoDB {
     public Flux<CloudEvent> stream(String subscriberId, Function<CloudEvent, Mono<Void>> action) {
         return changeStreamer.stream(resumeFromPersistencePosition(subscriberId))
                 .flatMap(cloudEventWithStreamPosition -> action.apply(cloudEventWithStreamPosition).thenReturn(cloudEventWithStreamPosition))
-                .flatMap(cloudEventWithStreamPosition -> persistResumeToken(subscriberId, cloudEventWithStreamPosition.getStreamPosition()).thenReturn(cloudEventWithStreamPosition));
+                .flatMap(cloudEventWithStreamPosition -> persistResumeToken(subscriberId, cloudEventWithStreamPosition.getStreamPosition().getResumeToken()).thenReturn(cloudEventWithStreamPosition));
     }
 
     private Function<ChangeStreamWithFilterAndProjection<Document>, Flux<ChangeStreamEvent<Document>>> resumeFromPersistencePosition(String subscriberId) {

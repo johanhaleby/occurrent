@@ -8,7 +8,6 @@ import com.mongodb.client.MongoDatabase;
 import com.mongodb.client.model.Filters;
 import io.cloudevents.CloudEvent;
 import io.cloudevents.core.builder.CloudEventBuilder;
-import org.bson.BsonDocument;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -168,7 +167,6 @@ public class BlockingChangeStreamerWithPositionPersistenceForMongoDBTest {
         // The change streamer is async so we need to wait for it
         await().atMost(ONE_SECOND).and().dontCatchUncaughtExceptions().untilAtomic(counter, equalTo(1));
         // Since an exception occurred we need to run the stream again
-        BsonDocument resumeToken = database.watch().cursor().getResumeToken();
         stream.run();
         mongoEventStore.write("2", 0, serialize(nameDefined2));
         mongoEventStore.write("1", 1, serialize(nameWasChanged1));

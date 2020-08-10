@@ -1,6 +1,7 @@
 package se.haleby.occurrent.changestreamer.mongodb.spring.blocking;
 
 import io.cloudevents.CloudEvent;
+import org.bson.BsonTimestamp;
 import org.bson.BsonValue;
 import org.bson.Document;
 import org.slf4j.Logger;
@@ -47,16 +48,25 @@ public class SpringBlockingChangeStreamerWithPositionPersistenceForMongoDB {
         final ChangeStreamOptionsBuilder changeStreamOptionsBuilder = ChangeStreamOptions.builder();
         if (document == null) {
             log.info("Couldn't find resume token for subscription {}, will start subscribing to events at this moment in time.", subscriptionId);
-        } else {
+            BsonTimestamp currentOperationTime = getServerOperationTime(mongoTemplate.executeCommand(new Document("hostInfo", 1)));
+            persistOperationTimeStreamPosition(subscriptionId, currentOperationTime);
+            // TODO We should change this to startAtOperationTime once Spring adds support for it (see https://jira.spring.io/browse/DATAMONGO-2607)
+            changeStreamOptionsBuilder.resumeAt(currentOperationTime);
+        } else if (document.containsKey(RESUME_TOKEN)) {
             ResumeToken resumeToken = extractResumeTokenFromPersistedResumeTokenDocument(document);
             log.info("Found resume token {} for subscription {}, will resume stream.", resumeToken.asString(), subscriptionId);
             changeStreamOptionsBuilder.startAfter(resumeToken.asBsonDocument());
+        } else if (document.containsKey(OPERATION_TIME)) {
+            BsonTimestamp lastOperationTime = extractOperationTimeFromPersistedPositionDocument(document);
+            log.info("Found last operation time {} for subscription {}, will resume stream.", lastOperationTime.getValue(), subscriptionId);
+            // TODO We should change this to startAtOperationTime once Spring adds support for it (see https://jira.spring.io/browse/DATAMONGO-2607)
+            changeStreamOptionsBuilder.resumeAt(lastOperationTime);
         }
 
         return changeStreamer.stream(subscriptionId,
                 cloudEventWithStreamPosition -> {
                     action.accept(cloudEventWithStreamPosition);
-                    persistResumeToken(subscriptionId, cloudEventWithStreamPosition.getStreamPosition());
+                    persistResumeTokenStreamPosition(subscriptionId, cloudEventWithStreamPosition.getStreamPosition().resumeToken);
                 },
                 filter,
                 changeStreamOptionsBuilder);
@@ -72,9 +82,17 @@ public class SpringBlockingChangeStreamerWithPositionPersistenceForMongoDB {
     }
 
 
-    private void persistResumeToken(String subscriptionId, BsonValue resumeToken) {
+    private void persistResumeTokenStreamPosition(String subscriptionId, BsonValue resumeToken) {
+        persistStreamPosition(subscriptionId, generateResumeTokenStreamPositionDocument(subscriptionId, resumeToken));
+    }
+
+    private void persistOperationTimeStreamPosition(String subscriptionId, BsonTimestamp operationTime) {
+        persistStreamPosition(subscriptionId, generateOperationTimeStreamPositionDocument(subscriptionId, operationTime));
+    }
+
+    private void persistStreamPosition(String subscriptionId, Document document) {
         mongoTemplate.upsert(query(where(ID).is(subscriptionId)),
-                Update.fromDocument(generateResumeTokenStreamPositionDocument(subscriptionId, resumeToken)),
+                Update.fromDocument(document),
                 resumeTokenCollection);
     }
 

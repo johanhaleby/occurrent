@@ -9,7 +9,7 @@ import java.time.ZonedDateTime;
 import java.util.Objects;
 import java.util.Set;
 
-public class CloudEventWithStreamPosition<T> implements CloudEvent {
+public class CloudEventWithStreamPosition<T extends StreamPosition> implements CloudEvent {
     private final CloudEvent cloudEvent;
     private final T streamPosition;
 

@@ -6,6 +6,7 @@ import io.cloudevents.core.format.EventFormat;
 import io.cloudevents.core.provider.EventFormatProvider;
 import io.cloudevents.jackson.JsonFormat;
 import org.bson.BsonDocument;
+import org.bson.BsonTimestamp;
 import org.bson.Document;
 import org.bson.conversions.Bson;
 import org.springframework.data.mongodb.core.ChangeStreamOptions;
@@ -19,6 +20,7 @@ import se.haleby.occurrent.changestreamer.CloudEventWithStreamPosition;
 import se.haleby.occurrent.changestreamer.mongodb.MongoDBFilterSpecification;
 import se.haleby.occurrent.changestreamer.mongodb.MongoDBFilterSpecification.BsonMongoDBFilterSpecification;
 import se.haleby.occurrent.changestreamer.mongodb.MongoDBFilterSpecification.JsonMongoDBFilterSpecification;
+import se.haleby.occurrent.changestreamer.mongodb.MongoDBStreamPosition;
 import se.haleby.occurrent.changestreamer.mongodb.internal.DocumentAdapter;
 import se.haleby.occurrent.eventstore.mongodb.TimeRepresentation;
 
@@ -52,15 +54,15 @@ public class SpringBlockingChangeStreamerForMongoDB {
         this.messageListenerContainer.start();
     }
 
-    public Subscription stream(String subscriptionId, Consumer<CloudEventWithStreamPosition<BsonDocument>> action) {
+    public Subscription stream(String subscriptionId, Consumer<CloudEventWithStreamPosition<MongoDBStreamPosition>> action) {
         return stream(subscriptionId, action, null);
     }
 
-    public Subscription stream(String subscriptionId, Consumer<CloudEventWithStreamPosition<BsonDocument>> action, MongoDBFilterSpecification filter) {
+    public Subscription stream(String subscriptionId, Consumer<CloudEventWithStreamPosition<MongoDBStreamPosition>> action, MongoDBFilterSpecification filter) {
         return stream(subscriptionId, action, filter, ChangeStreamOptions.builder());
     }
 
-    public Subscription stream(String subscriptionId, Consumer<CloudEventWithStreamPosition<BsonDocument>> action, MongoDBFilterSpecification filter, ChangeStreamOptionsBuilder changeStreamOptionsBuilder) {
+    public Subscription stream(String subscriptionId, Consumer<CloudEventWithStreamPosition<MongoDBStreamPosition>> action, MongoDBFilterSpecification filter, ChangeStreamOptionsBuilder changeStreamOptionsBuilder) {
         requireNonNull(subscriptionId, "subscriptionId cannot be null");
         requireNonNull(action, "Action cannot be null");
         requireNonNull(changeStreamOptionsBuilder, "ChangeStreamOptionsBuilder cannot be null");
@@ -68,8 +70,9 @@ public class SpringBlockingChangeStreamerForMongoDB {
         MessageListener<ChangeStreamDocument<Document>, Document> listener = change -> {
             ChangeStreamDocument<Document> raw = change.getRaw();
             BsonDocument resumeToken = requireNonNull(raw).getResumeToken();
+            BsonTimestamp clusterTime = requireNonNull(raw).getClusterTime();
             deserializeToCloudEvent(requireNonNull(cloudEventSerializer), raw, timeRepresentation)
-                    .map(cloudEvent -> new CloudEventWithStreamPosition<>(cloudEvent, resumeToken))
+                    .map(cloudEvent -> new CloudEventWithStreamPosition<>(cloudEvent, new MongoDBStreamPosition(clusterTime, resumeToken)))
                     .ifPresent(action);
         };
 

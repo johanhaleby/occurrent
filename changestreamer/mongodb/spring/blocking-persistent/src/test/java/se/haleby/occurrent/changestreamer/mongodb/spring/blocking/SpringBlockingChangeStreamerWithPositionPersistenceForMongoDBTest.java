@@ -34,6 +34,7 @@ import java.time.LocalDateTime;
 import java.time.temporal.ChronoUnit;
 import java.util.UUID;
 import java.util.concurrent.CopyOnWriteArrayList;
+import java.util.concurrent.atomic.AtomicInteger;
 import java.util.stream.Stream;
 
 import static com.mongodb.client.model.Aggregates.match;
@@ -47,6 +48,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.groups.Tuple.tuple;
 import static org.awaitility.Awaitility.await;
 import static org.awaitility.Durations.ONE_SECOND;
+import static org.hamcrest.Matchers.equalTo;
 import static org.hamcrest.Matchers.is;
 import static se.haleby.occurrent.changestreamer.mongodb.MongoDBFilterSpecification.BsonMongoDBFilterSpecification.filter;
 import static se.haleby.occurrent.changestreamer.mongodb.MongoDBFilterSpecification.FULL_DOCUMENT;
@@ -127,6 +129,40 @@ public class SpringBlockingChangeStreamerWithPositionPersistenceForMongoDBTest {
         mongoEventStore.write("2", 0, serialize(nameDefined2));
         mongoEventStore.write("1", 1, serialize(nameWasChanged1));
         changeStreamer.stream(subscriberId, state::add);
+
+        // Then
+        await().atMost(2, SECONDS).with().pollInterval(Duration.of(20, MILLIS)).untilAsserted(() -> assertThat(state).hasSize(3));
+    }
+
+    @Test
+    void blocking_spring_change_streamer_allows_resuming_events_from_where_it_left_when_first_event_for_change_streamer_fails_the_first_time() {
+        // Given
+        LocalDateTime now = LocalDateTime.now();
+
+        AtomicInteger counter = new AtomicInteger();
+        CopyOnWriteArrayList<CloudEvent> state = new CopyOnWriteArrayList<>();
+        String subscriberId = UUID.randomUUID().toString();
+        Runnable stream = () -> changeStreamer.stream(subscriberId, cloudEvent -> {
+            if (counter.incrementAndGet() == 1) {
+                // We simulate error on first event
+                throw new IllegalArgumentException("Expected");
+            } else {
+                state.add(cloudEvent);
+            }
+        });
+        stream.run();
+        NameDefined nameDefined1 = new NameDefined(UUID.randomUUID().toString(), now, "name1");
+        NameDefined nameDefined2 = new NameDefined(UUID.randomUUID().toString(), now.plusSeconds(2), "name2");
+        NameWasChanged nameWasChanged1 = new NameWasChanged(UUID.randomUUID().toString(), now.plusSeconds(10), "name3");
+
+        // When
+        mongoEventStore.write("1", 0, serialize(nameDefined1));
+        // The change streamer is async so we need to wait for it
+        await().atMost(ONE_SECOND).and().dontCatchUncaughtExceptions().untilAtomic(counter, equalTo(1));
+        // Since an exception occurred we need to run the stream again
+        stream.run();
+        mongoEventStore.write("2", 0, serialize(nameDefined2));
+        mongoEventStore.write("1", 1, serialize(nameWasChanged1));
 
         // Then
         await().atMost(2, SECONDS).with().pollInterval(Duration.of(20, MILLIS)).untilAsserted(() -> assertThat(state).hasSize(3));

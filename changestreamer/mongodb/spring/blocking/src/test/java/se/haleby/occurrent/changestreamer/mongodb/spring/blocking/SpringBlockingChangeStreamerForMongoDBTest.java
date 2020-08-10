@@ -174,7 +174,7 @@ public class SpringBlockingChangeStreamerForMongoDBTest {
         await().atMost(ONE_SECOND).until(state::size, is(1));
         assertThat(state).extracting(CloudEvent::getId, CloudEvent::getType).containsOnly(tuple(nameDefined2.getEventId(), NameDefined.class.getName()));
     }
-    
+
     @Test
     void using_bson_query_native_mongo_filters_composition() throws InterruptedException {
         // Given

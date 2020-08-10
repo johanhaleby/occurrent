@@ -1,24 +1,25 @@
 package se.haleby.occurrent.changestreamer.mongodb;
 
-import org.bson.BsonDocument;
 import org.bson.BsonTimestamp;
+import org.bson.BsonValue;
+import se.haleby.occurrent.changestreamer.StreamPosition;
 
 import java.util.Objects;
 
-public class MongoDBStreamPosition {
-    public final BsonTimestamp operationTime;
-    public final BsonDocument resumeToken;
+public class MongoDBStreamPosition implements StreamPosition {
+    public final BsonTimestamp clusterTime;
+    public final BsonValue resumeToken;
 
-    public MongoDBStreamPosition(BsonTimestamp operationTime, BsonDocument resumeToken) {
-        this.operationTime = operationTime;
+    public MongoDBStreamPosition(BsonTimestamp clusterTime, BsonValue resumeToken) {
+        this.clusterTime = clusterTime;
         this.resumeToken = resumeToken;
     }
 
-    public BsonTimestamp getOperationTime() {
-        return operationTime;
+    public BsonTimestamp getClusterTime() {
+        return clusterTime;
     }
 
-    public BsonDocument getResumeToken() {
+    public BsonValue getResumeToken() {
         return resumeToken;
     }
 
@@ -27,19 +28,19 @@ public class MongoDBStreamPosition {
         if (this == o) return true;
         if (!(o instanceof MongoDBStreamPosition)) return false;
         MongoDBStreamPosition that = (MongoDBStreamPosition) o;
-        return Objects.equals(operationTime, that.operationTime) &&
+        return Objects.equals(clusterTime, that.clusterTime) &&
                 Objects.equals(resumeToken, that.resumeToken);
     }
 
     @Override
     public int hashCode() {
-        return Objects.hash(operationTime, resumeToken);
+        return Objects.hash(clusterTime, resumeToken);
     }
 
     @Override
     public String toString() {
         return "MongoDBStreamPosition{" +
-                "operationTime=" + operationTime +
+                "clusterTime=" + clusterTime +
                 ", resumeToken=" + resumeToken +
                 '}';
     }
