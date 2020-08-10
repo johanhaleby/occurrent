@@ -3,31 +3,47 @@ package se.haleby.occurrent.changestreamer.mongodb.nativedriver.blocking;
 import java.time.Duration;
 import java.util.Objects;
 
+/**
+ * Retry strategy to use if the action throws an exception.
+ */
 public abstract class RetryStrategy {
 
     private RetryStrategy() {
     }
 
+    /**
+     * @return Don't retry and re-throw an exception thrown when action is invoked.
+     */
     public static RetryStrategy none() {
         return new None();
     }
 
+    /**
+     * @return Retry after a fixed number of millis if an action throws an exception.
+     */
     public static RetryStrategy fixed(long millis) {
         return new Fixed(millis);
     }
 
+    /**
+     * @return Retry after a fixed duration if an action throws an exception.
+     */
     public static RetryStrategy fixed(Duration duration) {
         Objects.requireNonNull(duration, "Duration cannot be null");
         return new Fixed(duration.toMillis());
     }
 
+    /**
+     * @return Retry after with exponential backoff if an action throws an exception.
+     */
+    public static RetryStrategy backoff(Duration initial, Duration max, double multiplier) {
+        return new Backoff(initial, max, multiplier);
+    }
+
+
     final static class None extends RetryStrategy {
         private None() {
         }
-    }
-
-    public static RetryStrategy backoff(Duration initial, Duration max, double multiplier) {
-        return new Backoff(initial, max, multiplier);
     }
 
     final static class Fixed extends RetryStrategy {

@@ -41,6 +41,11 @@ import java.util.stream.Stream;
 import static java.util.Objects.requireNonNull;
 import static se.haleby.occurrent.changestreamer.mongodb.internal.MongoDBCloudEventsToJsonDeserializer.deserializeToCloudEvent;
 
+/**
+ * This is a change streamer that uses the "native" MongoDB Java driver (sync) to listen to changes from the event store.
+ * This ChangeStreamer doesn't maintain the stream position, you need to store it yourself in order to continue the stream
+ * from where it's left off on application restart/crash etc.
+ */
 public class BlockingChangeStreamerForMongoDB {
     private static final Logger log = LoggerFactory.getLogger(BlockingChangeStreamerForMongoDB.class);
 
@@ -57,8 +62,9 @@ public class BlockingChangeStreamerForMongoDB {
      * Create a change streamer using the native MongoDB sync driver.
      *
      * @param eventCollection      The collection that contains the events
-     * @param timeRepresentation   How time is represented in the databased
+     * @param timeRepresentation   How time is represented in the database, should be the same as what's specified for the EventStore that stores the events.
      * @param subscriptionExecutor The executor that will be used for the subscription. Typically a dedicated thread will be required per subscription.
+     * @param retryStrategy        Configure how retries should be handled
      */
     public BlockingChangeStreamerForMongoDB(MongoCollection<Document> eventCollection, TimeRepresentation timeRepresentation,
                                             Executor subscriptionExecutor, RetryStrategy retryStrategy) {
@@ -74,14 +80,35 @@ public class BlockingChangeStreamerForMongoDB {
         this.cloudEventSerializer = EventFormatProvider.getInstance().resolveFormat(JsonFormat.CONTENT_TYPE);
     }
 
+    /**
+     * Start listening to cloud events persisted to the event store.
+     *
+     * @param subscriptionId The id of the subscription, must be unique!
+     * @param action         This action will be invoked for each cloud event that is stored in the EventStore.
+     */
     public void stream(String subscriptionId, Consumer<CloudEventWithStreamPosition<MongoDBStreamPosition>> action) {
         stream(subscriptionId, action, null);
     }
 
+    /**
+     * Start listening to cloud events persisted to the event store.
+     *
+     * @param subscriptionId The id of the subscription, must be unique!
+     * @param action         This action will be invoked for each cloud event that is stored in the EventStore that matches the supplied <code>filter</code>.
+     * @param filter         The filter to apply for this subscription. Only events matching the filter will cause the <code>action</code> to be called.
+     */
     public void stream(String subscriptionId, Consumer<CloudEventWithStreamPosition<MongoDBStreamPosition>> action, MongoDBFilterSpecification filter) {
         stream(subscriptionId, action, filter, Function.identity());
     }
 
+    /**
+     * Start listening to cloud events persisted to the event store.
+     *
+     * @param subscriptionId         The id of the subscription, must be unique!
+     * @param action                 This action will be invoked for each cloud event that is stored in the EventStore that matches the supplied <code>filter</code>.
+     * @param filter                 The filter to apply for this subscription. Only events matching the filter will cause the <code>action</code> to be called.
+     * @param changeStreamConfigurer Configure the underlying change stream {@link ChangeStreamIterable}. This is useful for example if you have persisted the current stream position and need to resume from this position on application restart.
+     */
     public void stream(String subscriptionId, Consumer<CloudEventWithStreamPosition<MongoDBStreamPosition>> action, MongoDBFilterSpecification filter,
                        Function<ChangeStreamIterable<Document>, ChangeStreamIterable<Document>> changeStreamConfigurer) {
         requireNonNull(subscriptionId, "subscriptionId cannot be null");

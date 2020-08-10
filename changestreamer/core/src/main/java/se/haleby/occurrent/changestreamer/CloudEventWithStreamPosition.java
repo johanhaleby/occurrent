@@ -9,6 +9,12 @@ import java.time.ZonedDateTime;
 import java.util.Objects;
 import java.util.Set;
 
+/**
+ * A wrapper around a {@link CloudEvent} that also includes a {@link StreamPosition} so that
+ * it's possible to resume the stream from a particular state.
+ *
+ * @param <T> The type of {@link StreamPosition}
+ */
 public class CloudEventWithStreamPosition<T extends StreamPosition> implements CloudEvent {
     private final CloudEvent cloudEvent;
     private final T streamPosition;

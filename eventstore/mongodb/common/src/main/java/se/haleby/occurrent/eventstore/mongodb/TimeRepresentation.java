@@ -10,7 +10,7 @@ import java.util.Date;
  * <br>
  * <br>
  * <b>!!IMPORTANT!!</b><br>
- * Changing this setting may lead to unexpected behavior so choose the setting carefully!
+ * Changing this setting for an EventStore implementation may lead to unexpected behavior so choose the setting carefully!
  */
 public enum TimeRepresentation {
     /**

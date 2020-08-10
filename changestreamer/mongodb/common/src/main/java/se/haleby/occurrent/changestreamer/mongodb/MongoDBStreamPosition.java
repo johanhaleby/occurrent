@@ -6,6 +6,10 @@ import se.haleby.occurrent.changestreamer.StreamPosition;
 
 import java.util.Objects;
 
+/**
+ * A {@link StreamPosition} implementation for MongoDB. It provides both the clusterTime and resumeToken
+ * so that consumers may decide which to use when continuing the stream.
+ */
 public class MongoDBStreamPosition implements StreamPosition {
     public final BsonTimestamp clusterTime;
     public final BsonValue resumeToken;
