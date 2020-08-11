@@ -2,6 +2,7 @@ package se.haleby.occurrent.changestreamer.mongodb;
 
 import com.mongodb.client.model.Filters;
 import org.bson.conversions.Bson;
+import se.haleby.occurrent.changestreamer.ChangeStreamFilter;
 
 import java.util.function.BiFunction;
 
@@ -11,7 +12,7 @@ import static com.mongodb.client.model.Aggregates.match;
  * Add filters when subscribing to a MongoDB change streamer if you're only interested in specify changes.
  * These filters will be applied at the database level so they're efficient.
  */
-public class MongoDBFilterSpecification {
+public class MongoDBFilterSpecification implements ChangeStreamFilter {
 
     public static final String FULL_DOCUMENT = "fullDocument";
 

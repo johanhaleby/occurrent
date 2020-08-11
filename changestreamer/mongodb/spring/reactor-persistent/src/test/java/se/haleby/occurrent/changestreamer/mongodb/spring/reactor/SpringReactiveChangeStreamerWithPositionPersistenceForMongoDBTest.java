@@ -172,7 +172,6 @@ public class SpringReactiveChangeStreamerWithPositionPersistenceForMongoDBTest {
         await().atMost(2, SECONDS).with().pollInterval(Duration.of(20, MILLIS)).untilAsserted(() -> assertThat(state).hasSize(3));
     }
 
-
     @RepeatedIfExceptionsTest(repeats = 2)
     void reactive_persistent_spring_change_streamer_allows_cancelling_subscription() throws InterruptedException {
         // Given

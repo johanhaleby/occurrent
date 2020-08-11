@@ -6,7 +6,6 @@ import io.cloudevents.core.format.EventFormat;
 import io.cloudevents.core.provider.EventFormatProvider;
 import io.cloudevents.jackson.JsonFormat;
 import org.bson.BsonDocument;
-import org.bson.BsonTimestamp;
 import org.bson.Document;
 import org.bson.conversions.Bson;
 import org.springframework.data.mongodb.core.ChangeStreamOptions;
@@ -20,7 +19,7 @@ import se.haleby.occurrent.changestreamer.CloudEventWithStreamPosition;
 import se.haleby.occurrent.changestreamer.mongodb.MongoDBFilterSpecification;
 import se.haleby.occurrent.changestreamer.mongodb.MongoDBFilterSpecification.BsonMongoDBFilterSpecification;
 import se.haleby.occurrent.changestreamer.mongodb.MongoDBFilterSpecification.JsonMongoDBFilterSpecification;
-import se.haleby.occurrent.changestreamer.mongodb.MongoDBStreamPosition;
+import se.haleby.occurrent.changestreamer.mongodb.MongoDBResumeTokenBasedStreamPosition;
 import se.haleby.occurrent.changestreamer.mongodb.internal.DocumentAdapter;
 import se.haleby.occurrent.eventstore.mongodb.TimeRepresentation;
 
@@ -75,7 +74,7 @@ public class SpringBlockingChangeStreamerForMongoDB {
      * @param subscriptionId The id of the subscription, must be unique!
      * @param action         This action will be invoked for each cloud event that is stored in the EventStore.
      */
-    public Subscription stream(String subscriptionId, Consumer<CloudEventWithStreamPosition<MongoDBStreamPosition>> action) {
+    public Subscription stream(String subscriptionId, Consumer<CloudEventWithStreamPosition> action) {
         return stream(subscriptionId, action, null);
     }
 
@@ -86,7 +85,7 @@ public class SpringBlockingChangeStreamerForMongoDB {
      * @param action         This action will be invoked for each cloud event that is stored in the EventStore that matches the supplied <code>filter</code>.
      * @param filter         The filter to apply for this subscription. Only events matching the filter will cause the <code>action</code> to be called.
      */
-    public Subscription stream(String subscriptionId, Consumer<CloudEventWithStreamPosition<MongoDBStreamPosition>> action, MongoDBFilterSpecification filter) {
+    public Subscription stream(String subscriptionId, Consumer<CloudEventWithStreamPosition> action, MongoDBFilterSpecification filter) {
         return stream(subscriptionId, action, filter, ChangeStreamOptions.builder());
     }
 
@@ -98,7 +97,7 @@ public class SpringBlockingChangeStreamerForMongoDB {
      * @param filter                     The filter to apply for this subscription. Only events matching the filter will cause the <code>action</code> to be called.
      * @param changeStreamOptionsBuilder Pass in an {@link ChangeStreamOptionsBuilder} that will be used when subscribing. This is useful for example if you have persisted the current stream position and need to resume from this position on application restart.
      */
-    public Subscription stream(String subscriptionId, Consumer<CloudEventWithStreamPosition<MongoDBStreamPosition>> action, MongoDBFilterSpecification filter, ChangeStreamOptionsBuilder changeStreamOptionsBuilder) {
+    public Subscription stream(String subscriptionId, Consumer<CloudEventWithStreamPosition> action, MongoDBFilterSpecification filter, ChangeStreamOptionsBuilder changeStreamOptionsBuilder) {
         requireNonNull(subscriptionId, "subscriptionId cannot be null");
         requireNonNull(action, "Action cannot be null");
         requireNonNull(changeStreamOptionsBuilder, "ChangeStreamOptionsBuilder cannot be null");
@@ -106,9 +105,8 @@ public class SpringBlockingChangeStreamerForMongoDB {
         MessageListener<ChangeStreamDocument<Document>, Document> listener = change -> {
             ChangeStreamDocument<Document> raw = change.getRaw();
             BsonDocument resumeToken = requireNonNull(raw).getResumeToken();
-            BsonTimestamp clusterTime = requireNonNull(raw).getClusterTime();
             deserializeToCloudEvent(requireNonNull(cloudEventSerializer), raw, timeRepresentation)
-                    .map(cloudEvent -> new CloudEventWithStreamPosition<>(cloudEvent, new MongoDBStreamPosition(clusterTime, resumeToken)))
+                    .map(cloudEvent -> new CloudEventWithStreamPosition(cloudEvent, new MongoDBResumeTokenBasedStreamPosition(resumeToken)))
                     .ifPresent(action);
         };
 

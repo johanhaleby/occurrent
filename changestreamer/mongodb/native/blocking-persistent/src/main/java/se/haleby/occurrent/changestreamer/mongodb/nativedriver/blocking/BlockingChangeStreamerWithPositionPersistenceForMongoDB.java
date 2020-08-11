@@ -1,6 +1,5 @@
 package se.haleby.occurrent.changestreamer.mongodb.nativedriver.blocking;
 
-import com.mongodb.client.ChangeStreamIterable;
 import com.mongodb.client.MongoCollection;
 import com.mongodb.client.MongoDatabase;
 import com.mongodb.client.model.ReplaceOptions;
@@ -10,10 +9,16 @@ import org.bson.BsonValue;
 import org.bson.Document;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
-import se.haleby.occurrent.changestreamer.mongodb.MongoDBFilterSpecification;
+import se.haleby.occurrent.changestreamer.ChangeStreamFilter;
+import se.haleby.occurrent.changestreamer.StartAt;
+import se.haleby.occurrent.changestreamer.StreamPosition;
+import se.haleby.occurrent.changestreamer.StringBasedStreamPosition;
+import se.haleby.occurrent.changestreamer.api.blocking.BlockingChangeStreamer;
+import se.haleby.occurrent.changestreamer.mongodb.MongoDBOperationTimeBasedStreamPosition;
+import se.haleby.occurrent.changestreamer.mongodb.MongoDBResumeTokenBasedStreamPosition;
 
 import java.util.function.Consumer;
-import java.util.function.Function;
+import java.util.function.Supplier;
 
 import static com.mongodb.client.model.Filters.eq;
 import static java.util.Objects.requireNonNull;
@@ -31,7 +36,7 @@ public class BlockingChangeStreamerWithPositionPersistenceForMongoDB {
     private static final Logger log = LoggerFactory.getLogger(BlockingChangeStreamerWithPositionPersistenceForMongoDB.class);
 
     private final MongoCollection<Document> streamPositionCollection;
-    private final BlockingChangeStreamerForMongoDB changeStreamer;
+    private final BlockingChangeStreamer changeStreamer;
     private final MongoDatabase database;
 
     /**
@@ -41,7 +46,7 @@ public class BlockingChangeStreamerWithPositionPersistenceForMongoDB {
      * @param database                 The database into which stream positions will be stored
      * @param streamPositionCollection The collection into which stream positions will be stored
      */
-    public BlockingChangeStreamerWithPositionPersistenceForMongoDB(BlockingChangeStreamerForMongoDB changeStreamer, MongoDatabase database, String streamPositionCollection) {
+    public BlockingChangeStreamerWithPositionPersistenceForMongoDB(BlockingChangeStreamer changeStreamer, MongoDatabase database, String streamPositionCollection) {
         this(changeStreamer, database, requireNonNull(database, "Database cannot be null").getCollection(streamPositionCollection));
     }
 
@@ -52,7 +57,7 @@ public class BlockingChangeStreamerWithPositionPersistenceForMongoDB {
      * @param database                 The database into which stream positions will be stored
      * @param streamPositionCollection The collection into which stream positions will be stored
      */
-    public BlockingChangeStreamerWithPositionPersistenceForMongoDB(BlockingChangeStreamerForMongoDB changeStreamer, MongoDatabase database, MongoCollection<Document> streamPositionCollection) {
+    public BlockingChangeStreamerWithPositionPersistenceForMongoDB(BlockingChangeStreamer changeStreamer, MongoDatabase database, MongoCollection<Document> streamPositionCollection) {
         requireNonNull(changeStreamer, "changeStreamer cannot be null");
         requireNonNull(streamPositionCollection, "streamPositionCollection cannot be null");
         requireNonNull(database, "Database cannot be null");
@@ -78,34 +83,40 @@ public class BlockingChangeStreamerWithPositionPersistenceForMongoDB {
      * @param action         This action will be invoked for each cloud event that is stored in the EventStore that matches the supplied <code>filter</code>.
      * @param filter         The filter to apply for this subscription. Only events matching the filter will cause the <code>action</code> to be called.
      */
-    public void stream(String subscriptionId, Consumer<CloudEvent> action, MongoDBFilterSpecification filter) {
-        Function<ChangeStreamIterable<Document>, ChangeStreamIterable<Document>> changeStreamConfigurer = changeStreamIterable -> {
+    public void stream(String subscriptionId, Consumer<CloudEvent> action, ChangeStreamFilter filter) {
+        Supplier<StartAt> startAtSupplier = () -> {
             // It's important that we find the document instead the function so that we lookup the latest resume token on retry
             Document document = streamPositionCollection.find(eq(ID, subscriptionId), Document.class).first();
+            final StreamPosition streamPosition;
             if (document == null) {
                 log.info("Couldn't find resume token for subscription {}, will start subscribing to events at this moment in time.", subscriptionId);
                 BsonTimestamp currentOperationTime = getServerOperationTime(database.runCommand(new Document("hostInfo", 1)));
                 persistOperationTimeStreamPosition(subscriptionId, currentOperationTime);
-                changeStreamIterable.startAtOperationTime(currentOperationTime);
+                streamPosition = new MongoDBOperationTimeBasedStreamPosition(currentOperationTime);
             } else if (document.containsKey(RESUME_TOKEN)) {
                 ResumeToken resumeToken = extractResumeTokenFromPersistedResumeTokenDocument(document);
                 log.info("Found resume token {} for subscription {}, will resume stream.", resumeToken.asString(), subscriptionId);
-                changeStreamIterable.startAfter(resumeToken.asBsonDocument());
+                streamPosition = new MongoDBResumeTokenBasedStreamPosition(resumeToken.asBsonDocument());
             } else if (document.containsKey(OPERATION_TIME)) {
                 BsonTimestamp lastOperationTime = extractOperationTimeFromPersistedPositionDocument(document);
                 log.info("Found last operation time {} for subscription {}, will resume stream.", lastOperationTime.getValue(), subscriptionId);
-                changeStreamIterable.startAtOperationTime(lastOperationTime);
+                streamPosition = new MongoDBOperationTimeBasedStreamPosition(lastOperationTime);
+            } else if (document.containsKey(GENERIC_STREAM_POSITION)) {
+                String value = document.getString(GENERIC_STREAM_POSITION);
+                streamPosition = new StringBasedStreamPosition(value);
+            } else {
+                throw new IllegalStateException("Doesn't recognize " + document + " as a valid stream position document");
             }
-            return changeStreamIterable;
+            return StartAt.streamPosition(streamPosition);
         };
 
         changeStreamer.stream(subscriptionId,
                 cloudEventWithStreamPosition -> {
                     action.accept(cloudEventWithStreamPosition);
-                    persistResumeTokenStreamPosition(subscriptionId, cloudEventWithStreamPosition.getStreamPosition().resumeToken);
+                    persistStreamPosition(subscriptionId, cloudEventWithStreamPosition.getStreamPosition());
                 },
                 filter,
-                changeStreamConfigurer);
+                startAtSupplier);
     }
 
     void pauseSubscription(String subscriptionId) {
@@ -117,15 +128,26 @@ public class BlockingChangeStreamerWithPositionPersistenceForMongoDB {
         streamPositionCollection.deleteOne(eq(ID, subscriptionId));
     }
 
+    private void persistStreamPosition(String subscriptionId, StreamPosition streamPosition) {
+        if (streamPosition instanceof MongoDBResumeTokenBasedStreamPosition) {
+            persistResumeTokenStreamPosition(subscriptionId, ((MongoDBResumeTokenBasedStreamPosition) streamPosition).resumeToken);
+        } else if (streamPosition instanceof MongoDBOperationTimeBasedStreamPosition) {
+            persistOperationTimeStreamPosition(subscriptionId, ((MongoDBOperationTimeBasedStreamPosition) streamPosition).operationTime);
+        } else {
+            String streamPositionString = streamPosition.asString();
+            persistDocumentStreamPosition(subscriptionId, generateGenericStreamPositionDocument(subscriptionId, streamPositionString));
+        }
+    }
+
     private void persistResumeTokenStreamPosition(String subscriptionId, BsonValue resumeToken) {
-        persistStreamPosition(subscriptionId, generateResumeTokenStreamPositionDocument(subscriptionId, resumeToken));
+        persistDocumentStreamPosition(subscriptionId, generateResumeTokenStreamPositionDocument(subscriptionId, resumeToken));
     }
 
     private void persistOperationTimeStreamPosition(String subscriptionId, BsonTimestamp operationTime) {
-        persistStreamPosition(subscriptionId, generateOperationTimeStreamPositionDocument(subscriptionId, operationTime));
+        persistDocumentStreamPosition(subscriptionId, generateOperationTimeStreamPositionDocument(subscriptionId, operationTime));
     }
 
-    private void persistStreamPosition(String subscriptionId, Document document) {
+    private void persistDocumentStreamPosition(String subscriptionId, Document document) {
         streamPositionCollection.replaceOne(eq(ID, subscriptionId), document, new ReplaceOptions().upsert(true));
     }
 

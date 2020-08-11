@@ -12,14 +12,12 @@ import java.util.Set;
 /**
  * A wrapper around a {@link CloudEvent} that also includes a {@link StreamPosition} so that
  * it's possible to resume the stream from a particular state.
- *
- * @param <T> The type of {@link StreamPosition}
  */
-public class CloudEventWithStreamPosition<T extends StreamPosition> implements CloudEvent {
+public class CloudEventWithStreamPosition implements CloudEvent {
     private final CloudEvent cloudEvent;
-    private final T streamPosition;
+    private final StreamPosition streamPosition;
 
-    public CloudEventWithStreamPosition(CloudEvent cloudEvent, T streamPosition) {
+    public CloudEventWithStreamPosition(CloudEvent cloudEvent, StreamPosition streamPosition) {
         this.cloudEvent = cloudEvent;
         this.streamPosition = streamPosition;
     }
@@ -83,7 +81,7 @@ public class CloudEventWithStreamPosition<T extends StreamPosition> implements C
         return cloudEvent.getExtensionNames();
     }
 
-    public T getStreamPosition() {
+    public StreamPosition getStreamPosition() {
         return streamPosition;
     }
 
@@ -91,7 +89,7 @@ public class CloudEventWithStreamPosition<T extends StreamPosition> implements C
     public boolean equals(Object o) {
         if (this == o) return true;
         if (!(o instanceof CloudEventWithStreamPosition)) return false;
-        CloudEventWithStreamPosition<?> that = (CloudEventWithStreamPosition<?>) o;
+        CloudEventWithStreamPosition that = (CloudEventWithStreamPosition) o;
         return Objects.equals(cloudEvent, that.cloudEvent) &&
                 Objects.equals(streamPosition, that.streamPosition);
     }

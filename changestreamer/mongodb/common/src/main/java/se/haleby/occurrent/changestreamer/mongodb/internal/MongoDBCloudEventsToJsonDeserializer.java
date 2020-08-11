@@ -19,6 +19,7 @@ public class MongoDBCloudEventsToJsonDeserializer {
     public static final String ID = "_id";
     public static final String RESUME_TOKEN = "resumeToken";
     public static final String OPERATION_TIME = "operationTime";
+    public static final String GENERIC_STREAM_POSITION = "streamPosition";
     private static final String RESUME_TOKEN_DATA = "_data";
 
     public static Optional<CloudEvent> deserializeToCloudEvent(EventFormat cloudEventSerializer, ChangeStreamDocument<Document> changeStreamDocument, TimeRepresentation timeRepresentation) {
@@ -49,6 +50,13 @@ public class MongoDBCloudEventsToJsonDeserializer {
         Map<String, Object> data = new HashMap<>();
         data.put(ID, subscriptionId);
         data.put(OPERATION_TIME, operationTime);
+        return new Document(data);
+    }
+
+    public static Document generateGenericStreamPositionDocument(String subscriptionId, String streamPositionAsString) {
+        Map<String, Object> data = new HashMap<>();
+        data.put(ID, subscriptionId);
+        data.put(GENERIC_STREAM_POSITION, streamPositionAsString);
         return new Document(data);
     }
 

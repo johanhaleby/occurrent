@@ -2,8 +2,8 @@ package se.haleby.occurrent.changestreamer.mongodb.spring.reactor;
 
 import com.mongodb.client.result.UpdateResult;
 import io.cloudevents.CloudEvent;
+import org.bson.BsonDocument;
 import org.bson.BsonTimestamp;
-import org.bson.BsonValue;
 import org.bson.Document;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -13,6 +13,7 @@ import org.springframework.data.mongodb.core.ReactiveMongoOperations;
 import org.springframework.data.mongodb.core.query.Update;
 import reactor.core.publisher.Flux;
 import reactor.core.publisher.Mono;
+import se.haleby.occurrent.changestreamer.mongodb.MongoDBResumeTokenBasedStreamPosition;
 import se.haleby.occurrent.changestreamer.mongodb.internal.MongoDBCloudEventsToJsonDeserializer;
 
 import java.util.function.Function;
@@ -62,7 +63,7 @@ public class SpringReactiveChangeStreamerWithPositionPersistenceForMongoDB {
     public Flux<CloudEvent> stream(String subscriptionId, Function<CloudEvent, Mono<Void>> action) {
         return changeStreamer.stream(resumeFromPersistencePosition(subscriptionId))
                 .flatMap(cloudEventWithStreamPosition -> action.apply(cloudEventWithStreamPosition).thenReturn(cloudEventWithStreamPosition))
-                .flatMap(cloudEventWithStreamPosition -> persistResumeTokenStreamPosition(subscriptionId, cloudEventWithStreamPosition.getStreamPosition().getResumeToken()).thenReturn(cloudEventWithStreamPosition));
+                .flatMap(cloudEventWithStreamPosition -> persistResumeTokenStreamPosition(subscriptionId, ((MongoDBResumeTokenBasedStreamPosition) cloudEventWithStreamPosition.getStreamPosition()).resumeToken).thenReturn(cloudEventWithStreamPosition));
     }
 
     private Function<ChangeStreamWithFilterAndProjection<Document>, Flux<ChangeStreamEvent<Document>>> resumeFromPersistencePosition(String subscriptionId) {
@@ -103,7 +104,7 @@ public class SpringReactiveChangeStreamerWithPositionPersistenceForMongoDB {
         return mongo.remove(query(where(ID).is(subscriptionId)), streamPositionCollection).then();
     }
 
-    private Mono<UpdateResult> persistResumeTokenStreamPosition(String subscriptionId, BsonValue resumeToken) {
+    private Mono<UpdateResult> persistResumeTokenStreamPosition(String subscriptionId, BsonDocument resumeToken) {
         return persistStreamPosition(subscriptionId, generateResumeTokenStreamPositionDocument(subscriptionId, resumeToken));
 
     }

@@ -10,11 +10,12 @@ import org.springframework.data.mongodb.core.ReactiveMongoOperations;
 import reactor.core.publisher.Flux;
 import reactor.core.publisher.Mono;
 import se.haleby.occurrent.changestreamer.CloudEventWithStreamPosition;
-import se.haleby.occurrent.changestreamer.mongodb.MongoDBStreamPosition;
+import se.haleby.occurrent.changestreamer.mongodb.MongoDBResumeTokenBasedStreamPosition;
 import se.haleby.occurrent.eventstore.mongodb.TimeRepresentation;
 
 import java.util.function.Function;
 
+import static java.util.Objects.requireNonNull;
 import static se.haleby.occurrent.changestreamer.mongodb.internal.MongoDBCloudEventsToJsonDeserializer.deserializeToCloudEvent;
 
 /**
@@ -49,7 +50,7 @@ public class SpringReactiveChangeStreamerForMongoDB {
      *
      * @return A {@link Flux} with cloud events which also includes the {@link se.haleby.occurrent.changestreamer.StreamPosition} that can be used to resume the stream from the current position.
      */
-    public Flux<CloudEventWithStreamPosition<MongoDBStreamPosition>> stream() {
+    public Flux<CloudEventWithStreamPosition> stream() {
         return stream(ChangeStreamWithFilterAndProjection::listen);
     }
 
@@ -60,12 +61,12 @@ public class SpringReactiveChangeStreamerForMongoDB {
      *
      * @return A {@link Flux} with cloud events which also includes the {@link se.haleby.occurrent.changestreamer.StreamPosition} that can be used to resume the stream from the current position.
      */
-    public Flux<CloudEventWithStreamPosition<MongoDBStreamPosition>> stream(Function<ChangeStreamWithFilterAndProjection<Document>, Flux<ChangeStreamEvent<Document>>> fn) {
+    public Flux<CloudEventWithStreamPosition> stream(Function<ChangeStreamWithFilterAndProjection<Document>, Flux<ChangeStreamEvent<Document>>> fn) {
         ChangeStreamWithFilterAndProjection<Document> changeStream = mongo.changeStream(Document.class).watchCollection(eventCollection);
         return fn.apply(changeStream)
                 .flatMap(changeEvent ->
                         deserializeToCloudEvent(cloudEventSerializer, changeEvent.getRaw(), timeRepresentation)
-                                .map(cloudEvent -> new CloudEventWithStreamPosition<>(cloudEvent, new MongoDBStreamPosition(changeEvent.getBsonTimestamp(), changeEvent.getResumeToken())))
+                                .map(cloudEvent -> new CloudEventWithStreamPosition(cloudEvent, new MongoDBResumeTokenBasedStreamPosition(requireNonNull(changeEvent.getResumeToken()).asDocument())))
                                 .map(Mono::just)
                                 .orElse(Mono.empty())
                 );
