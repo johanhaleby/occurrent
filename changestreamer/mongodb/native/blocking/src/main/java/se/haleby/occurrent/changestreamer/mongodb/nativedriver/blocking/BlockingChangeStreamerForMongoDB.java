@@ -62,7 +62,7 @@ public class BlockingChangeStreamerForMongoDB {
      * Create a change streamer using the native MongoDB sync driver.
      *
      * @param eventCollection      The collection that contains the events
-     * @param timeRepresentation   How time is represented in the database, should be the same as what's specified for the EventStore that stores the events.
+     * @param timeRepresentation   How time is represented in the database, must be the same as what's specified for the EventStore that stores the events.
      * @param subscriptionExecutor The executor that will be used for the subscription. Typically a dedicated thread will be required per subscription.
      * @param retryStrategy        Configure how retries should be handled
      */
