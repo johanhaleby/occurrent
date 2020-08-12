@@ -14,9 +14,11 @@ import org.springframework.data.mongodb.core.messaging.ChangeStreamRequest;
 import org.springframework.data.mongodb.core.messaging.ChangeStreamRequest.ChangeStreamRequestOptions;
 import org.springframework.data.mongodb.core.messaging.MessageListener;
 import org.springframework.data.mongodb.core.messaging.MessageListenerContainer;
-import org.springframework.data.mongodb.core.messaging.Subscription;
+import se.haleby.occurrent.changestreamer.ChangeStreamFilter;
 import se.haleby.occurrent.changestreamer.CloudEventWithStreamPosition;
-import se.haleby.occurrent.changestreamer.mongodb.MongoDBFilterSpecification;
+import se.haleby.occurrent.changestreamer.StartAt;
+import se.haleby.occurrent.changestreamer.api.blocking.BlockingChangeStreamer;
+import se.haleby.occurrent.changestreamer.api.blocking.Subscription;
 import se.haleby.occurrent.changestreamer.mongodb.MongoDBFilterSpecification.BsonMongoDBFilterSpecification;
 import se.haleby.occurrent.changestreamer.mongodb.MongoDBFilterSpecification.JsonMongoDBFilterSpecification;
 import se.haleby.occurrent.changestreamer.mongodb.MongoDBResumeTokenBasedStreamPosition;
@@ -27,10 +29,12 @@ import javax.annotation.PreDestroy;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ConcurrentMap;
 import java.util.function.Consumer;
+import java.util.function.Supplier;
 import java.util.stream.Stream;
 
 import static java.util.Objects.requireNonNull;
 import static se.haleby.occurrent.changestreamer.mongodb.internal.MongoDBCloudEventsToJsonDeserializer.deserializeToCloudEvent;
+import static se.haleby.occurrent.changestreamer.mongodb.internal.MongoDBCommons.applyStartPosition;
 
 /**
  * This is a change streamer that uses Spring and its {@link MessageListenerContainer} for MongoDB to listen to changes from an event store.
@@ -40,11 +44,11 @@ import static se.haleby.occurrent.changestreamer.mongodb.internal.MongoDBCloudEv
  * Note that this change streamer doesn't provide retries if an exception is thrown when handling a {@link io.cloudevents.CloudEvent} (<code>action</code>).
  * This reason for this is that Spring provides retry capabilities (such as spring-retry) that you can easily hook into your <code>action</code>.
  */
-public class SpringBlockingChangeStreamerForMongoDB {
+public class SpringBlockingChangeStreamerForMongoDB implements BlockingChangeStreamer {
 
     private final String eventCollection;
     private final MessageListenerContainer messageListenerContainer;
-    private final ConcurrentMap<String, Subscription> subscriptions;
+    private final ConcurrentMap<String, org.springframework.data.mongodb.core.messaging.Subscription> subscriptions;
     private final EventFormat cloudEventSerializer;
     private final TimeRepresentation timeRepresentation;
 
@@ -68,40 +72,17 @@ public class SpringBlockingChangeStreamerForMongoDB {
         this.messageListenerContainer.start();
     }
 
-    /**
-     * Start listening to cloud events persisted to the event store.
-     *
-     * @param subscriptionId The id of the subscription, must be unique!
-     * @param action         This action will be invoked for each cloud event that is stored in the EventStore.
-     */
-    public Subscription stream(String subscriptionId, Consumer<CloudEventWithStreamPosition> action) {
-        return stream(subscriptionId, action, null);
-    }
-
-    /**
-     * Start listening to cloud events persisted to the event store.
-     *
-     * @param subscriptionId The id of the subscription, must be unique!
-     * @param action         This action will be invoked for each cloud event that is stored in the EventStore that matches the supplied <code>filter</code>.
-     * @param filter         The filter to apply for this subscription. Only events matching the filter will cause the <code>action</code> to be called.
-     */
-    public Subscription stream(String subscriptionId, Consumer<CloudEventWithStreamPosition> action, MongoDBFilterSpecification filter) {
-        return stream(subscriptionId, action, filter, ChangeStreamOptions.builder());
-    }
-
-    /**
-     * Start listening to cloud events persisted to the event store.
-     *
-     * @param subscriptionId             The id of the subscription, must be unique!
-     * @param action                     This action will be invoked for each cloud event that is stored in the EventStore that matches the supplied <code>filter</code>.
-     * @param filter                     The filter to apply for this subscription. Only events matching the filter will cause the <code>action</code> to be called.
-     * @param changeStreamOptionsBuilder Pass in an {@link ChangeStreamOptionsBuilder} that will be used when subscribing. This is useful for example if you have persisted the current stream position and need to resume from this position on application restart.
-     */
-    public Subscription stream(String subscriptionId, Consumer<CloudEventWithStreamPosition> action, MongoDBFilterSpecification filter, ChangeStreamOptionsBuilder changeStreamOptionsBuilder) {
+    @Override
+    public Subscription stream(String subscriptionId, Consumer<CloudEventWithStreamPosition> action, ChangeStreamFilter filter, Supplier<StartAt> startAtSupplier) {
         requireNonNull(subscriptionId, "subscriptionId cannot be null");
         requireNonNull(action, "Action cannot be null");
-        requireNonNull(changeStreamOptionsBuilder, "ChangeStreamOptionsBuilder cannot be null");
-        final ChangeStreamOptions changeStreamOptions = applyFilter(filter, changeStreamOptionsBuilder);
+        requireNonNull(startAtSupplier, "StartAt cannot be null");
+
+        ChangeStreamOptionsBuilder builder = ChangeStreamOptions.builder();
+        // TODO We should change builder::resumeAt to builder::startAtOperationTime once Spring adds support for it (see https://jira.spring.io/browse/DATAMONGO-2607)
+        applyStartPosition(builder::startAfter, builder::resumeAt, startAtSupplier.get());
+        final ChangeStreamOptions changeStreamOptions = applyFilter(filter, builder);
+
         MessageListener<ChangeStreamDocument<Document>, Document> listener = change -> {
             ChangeStreamDocument<Document> raw = change.getRaw();
             BsonDocument resumeToken = requireNonNull(raw).getResumeToken();
@@ -111,12 +92,12 @@ public class SpringBlockingChangeStreamerForMongoDB {
         };
 
         ChangeStreamRequestOptions options = new ChangeStreamRequestOptions(null, eventCollection, changeStreamOptions);
-        final Subscription subscription = messageListenerContainer.register(new ChangeStreamRequest<>(listener, options), Document.class);
+        final org.springframework.data.mongodb.core.messaging.Subscription subscription = messageListenerContainer.register(new ChangeStreamRequest<>(listener, options), Document.class);
         subscriptions.put(subscriptionId, subscription);
-        return subscription;
+        return new MongoDBSpringSubscription(subscriptionId, subscription);
     }
 
-    private static ChangeStreamOptions applyFilter(MongoDBFilterSpecification filter, ChangeStreamOptionsBuilder changeStreamOptionsBuilder) {
+    private static ChangeStreamOptions applyFilter(ChangeStreamFilter filter, ChangeStreamOptionsBuilder changeStreamOptionsBuilder) {
         final ChangeStreamOptions changeStreamOptions;
         if (filter == null) {
             changeStreamOptions = changeStreamOptionsBuilder.build();
@@ -140,20 +121,21 @@ public class SpringBlockingChangeStreamerForMongoDB {
 
             changeStreamOptions = changeStreamOptionsBuilder.filter(documents).build();
         } else {
-            throw new IllegalArgumentException("Invalid " + MongoDBFilterSpecification.class.getSimpleName());
+            throw new IllegalArgumentException("Unrecognized " + ChangeStreamFilter.class.getSimpleName() + " for MongoDB change streamer");
         }
         return changeStreamOptions;
     }
 
     public void cancelSubscription(String subscriptionId) {
-        Subscription subscription = subscriptions.remove(subscriptionId);
+        org.springframework.data.mongodb.core.messaging.Subscription subscription = subscriptions.remove(subscriptionId);
         if (subscription != null) {
             messageListenerContainer.remove(subscription);
         }
     }
 
     @PreDestroy
-    void shutdownSubscribers() {
+    @Override
+    public void shutdown() {
         subscriptions.clear();
         messageListenerContainer.stop();
     }

@@ -10,7 +10,6 @@ import io.cloudevents.core.format.EventFormat;
 import io.cloudevents.core.provider.EventFormatProvider;
 import io.cloudevents.jackson.JsonFormat;
 import org.bson.BsonDocument;
-import org.bson.BsonTimestamp;
 import org.bson.Document;
 import org.bson.conversions.Bson;
 import org.slf4j.Logger;
@@ -18,12 +17,10 @@ import org.slf4j.LoggerFactory;
 import se.haleby.occurrent.changestreamer.ChangeStreamFilter;
 import se.haleby.occurrent.changestreamer.CloudEventWithStreamPosition;
 import se.haleby.occurrent.changestreamer.StartAt;
-import se.haleby.occurrent.changestreamer.StartAt.StartAtStreamPosition;
-import se.haleby.occurrent.changestreamer.StreamPosition;
 import se.haleby.occurrent.changestreamer.api.blocking.BlockingChangeStreamer;
+import se.haleby.occurrent.changestreamer.api.blocking.Subscription;
 import se.haleby.occurrent.changestreamer.mongodb.MongoDBFilterSpecification.BsonMongoDBFilterSpecification;
 import se.haleby.occurrent.changestreamer.mongodb.MongoDBFilterSpecification.JsonMongoDBFilterSpecification;
-import se.haleby.occurrent.changestreamer.mongodb.MongoDBOperationTimeBasedStreamPosition;
 import se.haleby.occurrent.changestreamer.mongodb.MongoDBResumeTokenBasedStreamPosition;
 import se.haleby.occurrent.changestreamer.mongodb.internal.DocumentAdapter;
 import se.haleby.occurrent.changestreamer.mongodb.nativedriver.blocking.RetryStrategy.Backoff;
@@ -45,7 +42,8 @@ import java.util.stream.Collectors;
 import java.util.stream.Stream;
 
 import static java.util.Objects.requireNonNull;
-import static se.haleby.occurrent.changestreamer.mongodb.internal.MongoDBCloudEventsToJsonDeserializer.*;
+import static se.haleby.occurrent.changestreamer.mongodb.internal.MongoDBCloudEventsToJsonDeserializer.deserializeToCloudEvent;
+import static se.haleby.occurrent.changestreamer.mongodb.internal.MongoDBCommons.applyStartPosition;
 
 /**
  * This is a change streamer that uses the "native" MongoDB Java driver (sync) to listen to changes from the event store.
@@ -56,7 +54,7 @@ public class BlockingChangeStreamerForMongoDB implements BlockingChangeStreamer 
     private static final Logger log = LoggerFactory.getLogger(BlockingChangeStreamerForMongoDB.class);
 
     private final MongoCollection<Document> eventCollection;
-    private final ConcurrentMap<String, Subscription> subscriptions;
+    private final ConcurrentMap<String, MongoChangeStreamCursor<ChangeStreamDocument<Document>>> subscriptions;
     private final EventFormat cloudEventSerializer;
     private final TimeRepresentation timeRepresentation;
     private final Executor cloudEventDispatcher;
@@ -87,23 +85,22 @@ public class BlockingChangeStreamerForMongoDB implements BlockingChangeStreamer 
     }
 
     @Override
-    public void stream(String subscriptionId, Consumer<CloudEventWithStreamPosition> action, ChangeStreamFilter filter, Supplier<StartAt> startAtSupplier) {
+    public Subscription stream(String subscriptionId, Consumer<CloudEventWithStreamPosition> action, ChangeStreamFilter filter, Supplier<StartAt> startAtSupplier) {
         requireNonNull(subscriptionId, "subscriptionId cannot be null");
         requireNonNull(action, "Action cannot be null");
         requireNonNull(startAtSupplier, "Start at cannot be null");
 
         List<Bson> pipeline = createPipeline(filter);
-        CountDownLatch subscriptionStarted = new CountDownLatch(1);
+        CountDownLatch subscriptionStartedLatch = new CountDownLatch(1);
 
         Runnable runnable = () -> {
             ChangeStreamIterable<Document> changeStreamDocuments = eventCollection.watch(pipeline, Document.class);
-            ChangeStreamIterable<Document> changeStreamDocumentsAfterConfiguration = applyStartPosition(changeStreamDocuments, startAtSupplier.get());
-            MongoChangeStreamCursor<ChangeStreamDocument<Document>> cursor = changeStreamDocumentsAfterConfiguration.cursor();
+            applyStartPosition(changeStreamDocuments::startAfter, changeStreamDocuments::startAtOperationTime, startAtSupplier.get());
+            MongoChangeStreamCursor<ChangeStreamDocument<Document>> cursor = changeStreamDocuments.cursor();
 
-            Subscription subscription = new Subscription(subscriptionId, cursor);
-            subscriptions.put(subscriptionId, subscription);
+            subscriptions.put(subscriptionId, cursor);
 
-            subscriptionStarted.countDown();
+            subscriptionStartedLatch.countDown();
             try {
                 cursor.forEachRemaining(changeStreamDocument -> deserializeToCloudEvent(cloudEventSerializer, changeStreamDocument, timeRepresentation)
                         .map(cloudEvent -> new CloudEventWithStreamPosition(cloudEvent, new MongoDBResumeTokenBasedStreamPosition(changeStreamDocument.getResumeToken())))
@@ -114,36 +111,7 @@ public class BlockingChangeStreamerForMongoDB implements BlockingChangeStreamer 
         };
 
         cloudEventDispatcher.execute(retry(runnable, __ -> !shuttingDown, convertToDelayStream(retryStrategy)));
-        try {
-            subscriptionStarted.await();
-        } catch (InterruptedException e) {
-            throw new RuntimeException(e);
-        }
-    }
-
-    private static ChangeStreamIterable<Document> applyStartPosition(ChangeStreamIterable<Document> changeStream, StartAt startAt) {
-        if (!startAt.isNow()) {
-            StartAtStreamPosition position = (StartAtStreamPosition) startAt;
-            StreamPosition streamPosition = position.streamPosition;
-            if (streamPosition instanceof MongoDBResumeTokenBasedStreamPosition) {
-                BsonDocument resumeToken = ((MongoDBResumeTokenBasedStreamPosition) streamPosition).resumeToken;
-                changeStream.startAfter(resumeToken);
-            } else if (streamPosition instanceof MongoDBOperationTimeBasedStreamPosition) {
-                changeStream.startAtOperationTime(((MongoDBOperationTimeBasedStreamPosition) streamPosition).operationTime);
-            } else {
-                Document document = Document.parse(streamPosition.asString());
-                if (document.containsKey(RESUME_TOKEN)) {
-                    BsonDocument resumeToken = document.get(RESUME_TOKEN, BsonDocument.class);
-                    changeStream.startAfter(resumeToken);
-                } else if (document.containsKey(OPERATION_TIME)) {
-                    BsonTimestamp operationTime = document.get(RESUME_TOKEN, BsonTimestamp.class);
-                    changeStream.startAtOperationTime(operationTime);
-                } else {
-                    throw new IllegalArgumentException("Doesn't recognize stream position " + streamPosition + " as a valid MongoDB stream position");
-                }
-            }
-        }
-        return changeStream;
+        return new NativeMongoDBSubscription(subscriptionId, subscriptionStartedLatch);
     }
 
     private static List<Bson> createPipeline(ChangeStreamFilter filter) {
@@ -175,10 +143,10 @@ public class BlockingChangeStreamerForMongoDB implements BlockingChangeStreamer 
 
     @Override
     public void cancelSubscription(String subscriptionId) {
-        Subscription subscription = subscriptions.remove(subscriptionId);
-        if (subscription != null) {
+        MongoChangeStreamCursor<ChangeStreamDocument<Document>> cursor = subscriptions.remove(subscriptionId);
+        if (cursor != null) {
             try {
-                subscription.cursor.close();
+                cursor.close();
             } catch (Exception e) {
                 log.error("Failed to cancel subscription, this might happen if Mongo connection has been shutdown", e);
             }

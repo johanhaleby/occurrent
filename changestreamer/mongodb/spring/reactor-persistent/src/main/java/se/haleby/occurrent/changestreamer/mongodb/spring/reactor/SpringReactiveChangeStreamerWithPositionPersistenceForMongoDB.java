@@ -14,13 +14,13 @@ import org.springframework.data.mongodb.core.query.Update;
 import reactor.core.publisher.Flux;
 import reactor.core.publisher.Mono;
 import se.haleby.occurrent.changestreamer.mongodb.MongoDBResumeTokenBasedStreamPosition;
-import se.haleby.occurrent.changestreamer.mongodb.internal.MongoDBCloudEventsToJsonDeserializer;
+import se.haleby.occurrent.changestreamer.mongodb.internal.MongoDBCommons;
 
 import java.util.function.Function;
 
 import static org.springframework.data.mongodb.core.query.Criteria.where;
 import static org.springframework.data.mongodb.core.query.Query.query;
-import static se.haleby.occurrent.changestreamer.mongodb.internal.MongoDBCloudEventsToJsonDeserializer.*;
+import static se.haleby.occurrent.changestreamer.mongodb.internal.MongoDBCloudEventsToJsonDeserializer.ID;
 
 /**
  * Wraps a {@link SpringReactiveChangeStreamerForMongoDB} and adds persistent stream position support. It stores the stream position
@@ -71,12 +71,12 @@ public class SpringReactiveChangeStreamerWithPositionPersistenceForMongoDB {
                 .flatMap(streamPositionDocument -> {
                     Flux<ChangeStreamEvent<Document>> flux;
                     // TODO Replace with startAtOperationTime when Spring adds support for it
-                    if (streamPositionDocument.containsKey(RESUME_TOKEN)) {
-                        ResumeToken resumeToken = extractResumeTokenFromPersistedResumeTokenDocument(streamPositionDocument);
+                    if (streamPositionDocument.containsKey(MongoDBCommons.RESUME_TOKEN)) {
+                        MongoDBCommons.ResumeToken resumeToken = MongoDBCommons.extractResumeTokenFromPersistedResumeTokenDocument(streamPositionDocument);
                         log.info("Found resume token {} for subscription {}, will resume stream.", resumeToken.asString(), subscriptionId);
                         flux = changeStream.startAfter(resumeToken.asBsonDocument()).listen();
-                    } else if (streamPositionDocument.containsKey(OPERATION_TIME)) {
-                        BsonTimestamp lastOperationTime = extractOperationTimeFromPersistedPositionDocument(streamPositionDocument);
+                    } else if (streamPositionDocument.containsKey(MongoDBCommons.OPERATION_TIME)) {
+                        BsonTimestamp lastOperationTime = MongoDBCommons.extractOperationTimeFromPersistedPositionDocument(streamPositionDocument);
                         log.info("Found last operation time {} for subscription {}, will resume stream.", lastOperationTime.getValue(), subscriptionId);
                         flux = changeStream.resumeAt(lastOperationTime).listen();
                     } else {
@@ -85,7 +85,7 @@ public class SpringReactiveChangeStreamerWithPositionPersistenceForMongoDB {
                     return flux;
                 })
                 .switchIfEmpty(Flux.defer(() -> mongo.executeCommand(new Document("hostInfo", 1))
-                        .map(MongoDBCloudEventsToJsonDeserializer::getServerOperationTime)
+                        .map(MongoDBCommons::getServerOperationTime)
                         .flatMap(operationTime -> persistOperationTimeStreamPosition(subscriptionId, operationTime).thenReturn(operationTime))
                         .flatMapMany(operationTime -> {
                             log.info("Couldn't find resume token for subscriber {}, will start subscribing to events at this moment in time.", subscriptionId);
@@ -105,12 +105,12 @@ public class SpringReactiveChangeStreamerWithPositionPersistenceForMongoDB {
     }
 
     private Mono<UpdateResult> persistResumeTokenStreamPosition(String subscriptionId, BsonDocument resumeToken) {
-        return persistStreamPosition(subscriptionId, generateResumeTokenStreamPositionDocument(subscriptionId, resumeToken));
+        return persistStreamPosition(subscriptionId, MongoDBCommons.generateResumeTokenStreamPositionDocument(subscriptionId, resumeToken));
 
     }
 
     private Mono<UpdateResult> persistOperationTimeStreamPosition(String subscriptionId, BsonTimestamp timestamp) {
-        return persistStreamPosition(subscriptionId, generateOperationTimeStreamPositionDocument(subscriptionId, timestamp));
+        return persistStreamPosition(subscriptionId, MongoDBCommons.generateOperationTimeStreamPositionDocument(subscriptionId, timestamp));
     }
 
     private Mono<UpdateResult> persistStreamPosition(String subscriptionId, Document document) {

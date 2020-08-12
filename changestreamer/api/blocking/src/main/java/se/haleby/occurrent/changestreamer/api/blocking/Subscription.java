@@ -1,0 +1,29 @@
+package se.haleby.occurrent.changestreamer.api.blocking;
+
+import java.time.Duration;
+
+/**
+ * Represents a unique subscription to a change stream. Subscriptions are typically started in a background thread
+ * and you may wish to wait ({@link #await(Duration)} for them to start before continuing.
+ */
+public interface Subscription {
+
+    /**
+     * @return The id of the subscription
+     */
+    String id();
+
+    /**
+     * Synchronous, <strong>blocking</strong> call returns once the {@link Subscription} has started.
+     */
+    void await();
+
+    /**
+     * Synchronous, <strong>blocking</strong> call returns once the {@link Subscription} has started or
+     * {@link Duration timeout} exceeds.
+     *
+     * @param timeout must not be <code>null</code>
+     * @return <code>true</code> if the subscription was started within the given Duration, <code>false</code> otherwise.
+     */
+    boolean await(Duration timeout);
+}

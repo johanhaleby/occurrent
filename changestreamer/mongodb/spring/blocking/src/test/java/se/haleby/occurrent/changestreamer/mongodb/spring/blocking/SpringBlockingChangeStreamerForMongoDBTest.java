@@ -84,7 +84,7 @@ public class SpringBlockingChangeStreamerForMongoDBTest {
 
     @AfterEach
     void shutdown() {
-        changeStreamer.shutdownSubscribers();
+        changeStreamer.shutdown();
     }
 
     @Test
