@@ -22,6 +22,7 @@ import static com.mongodb.client.model.Filters.eq;
 import static java.util.Objects.requireNonNull;
 import static se.haleby.occurrent.changestreamer.mongodb.internal.MongoDBCloudEventsToJsonDeserializer.ID;
 import static se.haleby.occurrent.changestreamer.mongodb.internal.MongoDBCommons.calculateStartAtFromStreamPositionDocument;
+import static se.haleby.occurrent.changestreamer.mongodb.internal.MongoDBCommons.getServerOperationTime;
 
 /**
  * Wraps a {@link BlockingChangeStreamerForMongoDB} and adds persistent stream position support. It stores the stream position
@@ -82,11 +83,15 @@ public class BlockingChangeStreamerWithPositionPersistenceForMongoDB {
      * @param filter         The filter to apply for this subscription. Only events matching the filter will cause the <code>action</code> to be called.
      */
     public void stream(String subscriptionId, Consumer<CloudEvent> action, ChangeStreamFilter filter) {
-        Supplier<StartAt> startAtSupplier = () -> calculateStartAtFromStreamPositionDocument(subscriptionId,
-                // It's important that we find the document inside the supplier so that we lookup the latest resume token on retry
-                streamPositionCollection.find(eq(ID, subscriptionId), Document.class).first(),
-                () -> database.runCommand(new Document("hostInfo", 1)),
-                this::persistOperationTimeStreamPosition);
+        Supplier<StartAt> startAtSupplier = () -> {
+            // It's important that we find the document inside the supplier so that we lookup the latest resume token on retry
+            Document streamPositionDocument = streamPositionCollection.find(eq(ID, subscriptionId), Document.class).first();
+            if (streamPositionDocument == null) {
+                BsonTimestamp currentOperationTime = getServerOperationTime(database.runCommand(new Document("hostInfo", 1)));
+                streamPositionDocument = persistOperationTimeStreamPosition(subscriptionId, currentOperationTime);
+            }
+            return calculateStartAtFromStreamPositionDocument(streamPositionDocument);
+        };
 
         changeStreamer.stream(subscriptionId,
                 cloudEventWithStreamPosition -> {
@@ -121,8 +126,10 @@ public class BlockingChangeStreamerWithPositionPersistenceForMongoDB {
         persistDocumentStreamPosition(subscriptionId, MongoDBCommons.generateResumeTokenStreamPositionDocument(subscriptionId, resumeToken));
     }
 
-    private void persistOperationTimeStreamPosition(String subscriptionId, BsonTimestamp operationTime) {
-        persistDocumentStreamPosition(subscriptionId, MongoDBCommons.generateOperationTimeStreamPositionDocument(subscriptionId, operationTime));
+    private Document persistOperationTimeStreamPosition(String subscriptionId, BsonTimestamp operationTime) {
+        Document document = MongoDBCommons.generateOperationTimeStreamPositionDocument(subscriptionId, operationTime);
+        persistDocumentStreamPosition(subscriptionId, document);
+        return document;
     }
 
     private void persistDocumentStreamPosition(String subscriptionId, Document document) {

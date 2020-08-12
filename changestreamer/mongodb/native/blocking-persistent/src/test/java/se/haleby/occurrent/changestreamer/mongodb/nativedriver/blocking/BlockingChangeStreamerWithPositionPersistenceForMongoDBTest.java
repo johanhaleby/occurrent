@@ -217,7 +217,7 @@ public class BlockingChangeStreamerWithPositionPersistenceForMongoDBTest {
         // Then
         await().atMost(ONE_SECOND).until(state::size, is(2));
         assertThat(state).extracting(CloudEvent::getType).containsOnly(NameDefined.class.getName());
-    }
+    }                   
 
     @Test
     void using_bson_query_dsl_composition() {

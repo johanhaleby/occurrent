@@ -7,19 +7,21 @@ import org.bson.BsonTimestamp;
 import org.bson.Document;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
-import org.springframework.data.mongodb.core.ChangeStreamEvent;
-import org.springframework.data.mongodb.core.ReactiveChangeStreamOperation.ChangeStreamWithFilterAndProjection;
 import org.springframework.data.mongodb.core.ReactiveMongoOperations;
 import org.springframework.data.mongodb.core.query.Update;
 import reactor.core.publisher.Flux;
 import reactor.core.publisher.Mono;
+import se.haleby.occurrent.changestreamer.StartAt;
+import se.haleby.occurrent.changestreamer.api.reactor.ReactorChangeStreamer;
 import se.haleby.occurrent.changestreamer.mongodb.MongoDBResumeTokenBasedStreamPosition;
 import se.haleby.occurrent.changestreamer.mongodb.internal.MongoDBCommons;
 
+import java.time.Duration;
 import java.util.function.Function;
 
 import static org.springframework.data.mongodb.core.query.Criteria.where;
 import static org.springframework.data.mongodb.core.query.Query.query;
+import static reactor.util.retry.Retry.backoff;
 import static se.haleby.occurrent.changestreamer.mongodb.internal.MongoDBCloudEventsToJsonDeserializer.ID;
 
 /**
@@ -33,7 +35,7 @@ import static se.haleby.occurrent.changestreamer.mongodb.internal.MongoDBCloudEv
 public class SpringReactiveChangeStreamerWithPositionPersistenceForMongoDB {
     private static final Logger log = LoggerFactory.getLogger(SpringReactiveChangeStreamerWithPositionPersistenceForMongoDB.class);
 
-    private final SpringReactiveChangeStreamerForMongoDB changeStreamer;
+    private final ReactorChangeStreamer changeStreamer;
     private final ReactiveMongoOperations mongo;
     private final String streamPositionCollection;
 
@@ -44,7 +46,7 @@ public class SpringReactiveChangeStreamerWithPositionPersistenceForMongoDB {
      * @param mongo                    The {@link ReactiveMongoOperations} implementation to use persisting stream positions to MongoDB.
      * @param streamPositionCollection The collection that will contain the stream position for each subscriber.
      */
-    public SpringReactiveChangeStreamerWithPositionPersistenceForMongoDB(SpringReactiveChangeStreamerForMongoDB changeStreamer, ReactiveMongoOperations mongo, String streamPositionCollection) {
+    public SpringReactiveChangeStreamerWithPositionPersistenceForMongoDB(ReactorChangeStreamer changeStreamer, ReactiveMongoOperations mongo, String streamPositionCollection) {
         this.changeStreamer = changeStreamer;
         this.mongo = mongo;
         this.streamPositionCollection = streamPositionCollection;
@@ -61,36 +63,25 @@ public class SpringReactiveChangeStreamerWithPositionPersistenceForMongoDB {
      * @return A stream of {@link CloudEvent}'s. The stream position of the cloud event will already have been persisted when consumed by this stream so use <code>action</code> to perform side-effects.
      */
     public Flux<CloudEvent> stream(String subscriptionId, Function<CloudEvent, Mono<Void>> action) {
-        return changeStreamer.stream(resumeFromPersistencePosition(subscriptionId))
+        return findStartPosition(subscriptionId)
+                .doOnNext(startAt -> log.info("Starting change streamer for subscription {} from stream position {}", subscriptionId, startAt.toString()))
+                .flatMapMany(startAt -> changeStreamer.stream(startAt)
+                        .retryWhen(backoff(Long.MAX_VALUE, Duration.ofMillis(100)).maxBackoff(Duration.ofSeconds(5))
+                                .doBeforeRetry(signal -> log.info("Retrying due to exception: {} {}", signal.failure().getClass().getName(), signal.failure().getMessage()))))
                 .flatMap(cloudEventWithStreamPosition -> action.apply(cloudEventWithStreamPosition).thenReturn(cloudEventWithStreamPosition))
                 .flatMap(cloudEventWithStreamPosition -> persistResumeTokenStreamPosition(subscriptionId, ((MongoDBResumeTokenBasedStreamPosition) cloudEventWithStreamPosition.getStreamPosition()).resumeToken).thenReturn(cloudEventWithStreamPosition));
     }
 
-    private Function<ChangeStreamWithFilterAndProjection<Document>, Flux<ChangeStreamEvent<Document>>> resumeFromPersistencePosition(String subscriptionId) {
-        return changeStream -> mongo.find(query(where(ID).is(subscriptionId)), Document.class, streamPositionCollection)
-                .flatMap(streamPositionDocument -> {
-                    Flux<ChangeStreamEvent<Document>> flux;
-                    // TODO Replace with startAtOperationTime when Spring adds support for it
-                    if (streamPositionDocument.containsKey(MongoDBCommons.RESUME_TOKEN)) {
-                        MongoDBCommons.ResumeToken resumeToken = MongoDBCommons.extractResumeTokenFromPersistedResumeTokenDocument(streamPositionDocument);
-                        log.info("Found resume token {} for subscription {}, will resume stream.", resumeToken.asString(), subscriptionId);
-                        flux = changeStream.startAfter(resumeToken.asBsonDocument()).listen();
-                    } else if (streamPositionDocument.containsKey(MongoDBCommons.OPERATION_TIME)) {
-                        BsonTimestamp lastOperationTime = MongoDBCommons.extractOperationTimeFromPersistedPositionDocument(streamPositionDocument);
-                        log.info("Found last operation time {} for subscription {}, will resume stream.", lastOperationTime.getValue(), subscriptionId);
-                        flux = changeStream.resumeAt(lastOperationTime).listen();
-                    } else {
-                        flux = Flux.error(new IllegalStateException("Couldn't identify resume token or operation time in stream position document: " + streamPositionDocument.toJson()));
-                    }
-                    return flux;
-                })
-                .switchIfEmpty(Flux.defer(() -> mongo.executeCommand(new Document("hostInfo", 1))
-                        .map(MongoDBCommons::getServerOperationTime)
-                        .flatMap(operationTime -> persistOperationTimeStreamPosition(subscriptionId, operationTime).thenReturn(operationTime))
-                        .flatMapMany(operationTime -> {
-                            log.info("Couldn't find resume token for subscriber {}, will start subscribing to events at this moment in time.", subscriptionId);
-                            return changeStream.resumeAt(operationTime).listen();
-                        })));
+    private Mono<StartAt> findStartPosition(String subscriptionId) {
+        return mongo.findOne(query(where(ID).is(subscriptionId)), Document.class, streamPositionCollection)
+                .doOnNext(document -> log.info("Found change stream position: {}", document))
+                .switchIfEmpty(Mono.defer(() -> {
+                    log.info("No stream position found for {}, will initialize a new one.", subscriptionId);
+                    return mongo.executeCommand(new Document("hostInfo", 1))
+                            .map(MongoDBCommons::getServerOperationTime)
+                            .flatMap(currentOperationTime -> persistOperationTimeStreamPosition(subscriptionId, currentOperationTime));
+                }))
+                .map(MongoDBCommons::calculateStartAtFromStreamPositionDocument);
     }
 
     /**
@@ -109,8 +100,9 @@ public class SpringReactiveChangeStreamerWithPositionPersistenceForMongoDB {
 
     }
 
-    private Mono<UpdateResult> persistOperationTimeStreamPosition(String subscriptionId, BsonTimestamp timestamp) {
-        return persistStreamPosition(subscriptionId, MongoDBCommons.generateOperationTimeStreamPositionDocument(subscriptionId, timestamp));
+    private Mono<Document> persistOperationTimeStreamPosition(String subscriptionId, BsonTimestamp timestamp) {
+        Document document = MongoDBCommons.generateOperationTimeStreamPositionDocument(subscriptionId, timestamp);
+        return persistStreamPosition(subscriptionId, document).thenReturn(document);
     }
 
     private Mono<UpdateResult> persistStreamPosition(String subscriptionId, Document document) {

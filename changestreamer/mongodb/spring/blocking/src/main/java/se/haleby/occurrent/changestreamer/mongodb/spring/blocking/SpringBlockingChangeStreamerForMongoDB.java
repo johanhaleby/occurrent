@@ -78,9 +78,8 @@ public class SpringBlockingChangeStreamerForMongoDB implements BlockingChangeStr
         requireNonNull(action, "Action cannot be null");
         requireNonNull(startAtSupplier, "StartAt cannot be null");
 
-        ChangeStreamOptionsBuilder builder = ChangeStreamOptions.builder();
         // TODO We should change builder::resumeAt to builder::startAtOperationTime once Spring adds support for it (see https://jira.spring.io/browse/DATAMONGO-2607)
-        applyStartPosition(builder::startAfter, builder::resumeAt, startAtSupplier.get());
+        ChangeStreamOptionsBuilder builder = applyStartPosition(ChangeStreamOptions.builder(), ChangeStreamOptionsBuilder::startAfter, ChangeStreamOptionsBuilder::resumeAt, startAtSupplier.get());
         final ChangeStreamOptions changeStreamOptions = applyFilter(filter, builder);
 
         MessageListener<ChangeStreamDocument<Document>, Document> listener = change -> {

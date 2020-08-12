@@ -14,6 +14,11 @@ public abstract class StartAt {
     public static class Now extends StartAt {
         private Now() {
         }
+
+        @Override
+        public String toString() {
+            return this.getClass().getSimpleName();
+        }
     }
 
     public static class StartAtStreamPosition extends StartAt {
@@ -22,6 +27,11 @@ public abstract class StartAt {
         private StartAtStreamPosition(StreamPosition streamPosition) {
             this.streamPosition = streamPosition;
             Objects.requireNonNull(streamPosition, StreamPosition.class.getSimpleName() + " cannot be null");
+        }
+
+        @Override
+        public String toString() {
+            return streamPosition.asString();
         }
     }
 

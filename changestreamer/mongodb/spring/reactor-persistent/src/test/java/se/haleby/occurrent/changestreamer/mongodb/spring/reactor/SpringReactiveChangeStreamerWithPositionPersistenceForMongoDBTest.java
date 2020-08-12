@@ -22,6 +22,7 @@ import org.testcontainers.junit.jupiter.Testcontainers;
 import reactor.core.Disposable;
 import reactor.core.publisher.Flux;
 import reactor.core.publisher.Mono;
+import se.haleby.occurrent.changestreamer.api.reactor.ReactorChangeStreamer;
 import se.haleby.occurrent.domain.DomainEvent;
 import se.haleby.occurrent.domain.NameDefined;
 import se.haleby.occurrent.domain.NameWasChanged;
@@ -79,7 +80,7 @@ public class SpringReactiveChangeStreamerWithPositionPersistenceForMongoDBTest {
         reactiveMongoTemplate = new ReactiveMongoTemplate(MongoClients.create(connectionString), Objects.requireNonNull(connectionString.getDatabase()));
         ReactiveTransactionManager reactiveMongoTransactionManager = new ReactiveMongoTransactionManager(new SimpleReactiveMongoDatabaseFactory(mongoClient, requireNonNull(connectionString.getDatabase())));
         mongoEventStore = new SpringReactorMongoEventStore(reactiveMongoTemplate, new EventStoreConfig("events", StreamConsistencyGuarantee.transactional("event-consistency", reactiveMongoTransactionManager), TimeRepresentation.RFC_3339_STRING));
-        SpringReactiveChangeStreamerForMongoDB springReactiveChangeStreamerForMongoDB = new SpringReactiveChangeStreamerForMongoDB(reactiveMongoTemplate, "events", timeRepresentation);
+        ReactorChangeStreamer springReactiveChangeStreamerForMongoDB = new SpringReactiveChangeStreamerForMongoDB(reactiveMongoTemplate, "events", timeRepresentation);
         changeStreamer = new SpringReactiveChangeStreamerWithPositionPersistenceForMongoDB(springReactiveChangeStreamerForMongoDB, reactiveMongoTemplate, RESUME_TOKEN_COLLECTION);
         objectMapper = new ObjectMapper();
         disposables = new CopyOnWriteArrayList<>();
@@ -138,7 +139,7 @@ public class SpringReactiveChangeStreamerWithPositionPersistenceForMongoDBTest {
     }
 
     @Test
-    void reactive_persistent_spring_change_streamer_allows_resuming_events_from_where_it_left_when_first_event_for_change_streamer_fails_the_first_time() {
+    void reactive_persistent_spring_change_streamer_allows_resuming_events_from_where_it_left_when_first_event_for_change_streamer_fails_the_first_time() throws InterruptedException {
         // Given
         LocalDateTime now = LocalDateTime.now();
 

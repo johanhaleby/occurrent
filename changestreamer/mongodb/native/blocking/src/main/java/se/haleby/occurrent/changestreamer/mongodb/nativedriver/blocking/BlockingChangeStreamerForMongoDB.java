@@ -95,8 +95,8 @@ public class BlockingChangeStreamerForMongoDB implements BlockingChangeStreamer 
 
         Runnable runnable = () -> {
             ChangeStreamIterable<Document> changeStreamDocuments = eventCollection.watch(pipeline, Document.class);
-            applyStartPosition(changeStreamDocuments::startAfter, changeStreamDocuments::startAtOperationTime, startAtSupplier.get());
-            MongoChangeStreamCursor<ChangeStreamDocument<Document>> cursor = changeStreamDocuments.cursor();
+            ChangeStreamIterable<Document> changeStreamDocumentsAtPosition = applyStartPosition(changeStreamDocuments, ChangeStreamIterable::startAfter, ChangeStreamIterable::startAtOperationTime, startAtSupplier.get());
+            MongoChangeStreamCursor<ChangeStreamDocument<Document>> cursor = changeStreamDocumentsAtPosition.cursor();
 
             subscriptions.put(subscriptionId, cursor);
 
