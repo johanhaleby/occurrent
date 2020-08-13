@@ -139,7 +139,7 @@ public class SpringReactiveChangeStreamerWithPositionPersistenceForMongoDBTest {
     }
 
     @Test
-    void reactive_persistent_spring_change_streamer_allows_resuming_events_from_where_it_left_when_first_event_for_change_streamer_fails_the_first_time() throws InterruptedException {
+    void reactive_persistent_spring_change_streamer_allows_resuming_events_from_where_it_left_when_first_event_for_change_streamer_fails_the_first_time() {
         // Given
         LocalDateTime now = LocalDateTime.now();
 

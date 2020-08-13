@@ -99,7 +99,7 @@ public class BlockingChangeStreamerForMongoDBTest {
         // Given
         LocalDateTime now = LocalDateTime.now();
         CopyOnWriteArrayList<CloudEvent> state = new CopyOnWriteArrayList<>();
-        changeStreamer.stream(UUID.randomUUID().toString(), state::add);
+        changeStreamer.stream(UUID.randomUUID().toString(), state::add).await();
         NameDefined nameDefined1 = new NameDefined(UUID.randomUUID().toString(), now, "name1");
         NameDefined nameDefined2 = new NameDefined(UUID.randomUUID().toString(), now.plusSeconds(2), "name2");
         NameWasChanged nameWasChanged1 = new NameWasChanged(UUID.randomUUID().toString(), now.plusSeconds(10), "name3");
@@ -125,7 +125,7 @@ public class BlockingChangeStreamerForMongoDBTest {
                 throw new IllegalArgumentException("expected");
             }
             state.add(cloudEvent);
-        });
+        }).await();
         NameDefined nameDefined1 = new NameDefined(UUID.randomUUID().toString(), now, "name1");
         NameDefined nameDefined2 = new NameDefined(UUID.randomUUID().toString(), now.plusSeconds(2), "name2");
         NameWasChanged nameWasChanged1 = new NameWasChanged(UUID.randomUUID().toString(), now.plusSeconds(10), "name3");
@@ -145,7 +145,7 @@ public class BlockingChangeStreamerForMongoDBTest {
         LocalDateTime now = LocalDateTime.now();
         CopyOnWriteArrayList<CloudEvent> state = new CopyOnWriteArrayList<>();
         String subscriberId = UUID.randomUUID().toString();
-        changeStreamer.stream(subscriberId, state::add);
+        changeStreamer.stream(subscriberId, state::add).await();
         NameDefined nameDefined = new NameDefined(UUID.randomUUID().toString(), now, "name1");
         NameWasChanged nameWasChanged = new NameWasChanged(UUID.randomUUID().toString(), now, "name2");
 
@@ -169,7 +169,7 @@ public class BlockingChangeStreamerForMongoDBTest {
         LocalDateTime now = LocalDateTime.now();
         CopyOnWriteArrayList<CloudEvent> state = new CopyOnWriteArrayList<>();
         String subscriberId = UUID.randomUUID().toString();
-        changeStreamer.stream(subscriberId, state::add, filter().type(Filters::eq, NameDefined.class.getName()));
+        changeStreamer.stream(subscriberId, state::add, filter().type(Filters::eq, NameDefined.class.getName())).await();
         NameDefined nameDefined1 = new NameDefined(UUID.randomUUID().toString(), now, "name1");
         NameDefined nameDefined2 = new NameDefined(UUID.randomUUID().toString(), now.plusSeconds(2), "name2");
         NameWasChanged nameWasChanged1 = new NameWasChanged(UUID.randomUUID().toString(), now.plusSeconds(3), "name3");
@@ -198,7 +198,7 @@ public class BlockingChangeStreamerForMongoDBTest {
         NameWasChanged nameWasChanged2 = new NameWasChanged(UUID.randomUUID().toString(), now.plusSeconds(4), "name4");
 
         changeStreamer.stream(subscriberId, state::add,
-                filter().id(Filters::eq, nameDefined2.getEventId()).type(Filters::eq, NameDefined.class.getName()));
+                filter().id(Filters::eq, nameDefined2.getEventId()).type(Filters::eq, NameDefined.class.getName())).await();
 
         // When
         mongoEventStore.write("1", 0, serialize(nameDefined1));
@@ -223,7 +223,8 @@ public class BlockingChangeStreamerForMongoDBTest {
         NameWasChanged nameWasChanged2 = new NameWasChanged(UUID.randomUUID().toString(), now.plusSeconds(4), "name4");
 
         changeStreamer.stream(subscriberId, state::add,
-                filter(match(and(eq("fullDocument.id", nameDefined2.getEventId()), eq("fullDocument.type", NameDefined.class.getName())))));
+                filter(match(and(eq("fullDocument.id", nameDefined2.getEventId()), eq("fullDocument.type", NameDefined.class.getName())))))
+                .await();
 
         // When
         mongoEventStore.write("1", 0, serialize(nameDefined1));
@@ -242,7 +243,7 @@ public class BlockingChangeStreamerForMongoDBTest {
         LocalDateTime now = LocalDateTime.now();
         CopyOnWriteArrayList<CloudEvent> state = new CopyOnWriteArrayList<>();
         String subscriberId = UUID.randomUUID().toString();
-        changeStreamer.stream(subscriberId, state::add, JsonMongoDBFilterSpecification.filter("{ $match : { \"" + FULL_DOCUMENT + ".type\" : \"" + NameDefined.class.getName() + "\" } }"));
+        changeStreamer.stream(subscriberId, state::add, JsonMongoDBFilterSpecification.filter("{ $match : { \"" + FULL_DOCUMENT + ".type\" : \"" + NameDefined.class.getName() + "\" } }")).await();
         NameDefined nameDefined1 = new NameDefined(UUID.randomUUID().toString(), now, "name1");
         NameDefined nameDefined2 = new NameDefined(UUID.randomUUID().toString(), now.plusSeconds(2), "name2");
         NameWasChanged nameWasChanged1 = new NameWasChanged(UUID.randomUUID().toString(), now.plusSeconds(3), "name3");
