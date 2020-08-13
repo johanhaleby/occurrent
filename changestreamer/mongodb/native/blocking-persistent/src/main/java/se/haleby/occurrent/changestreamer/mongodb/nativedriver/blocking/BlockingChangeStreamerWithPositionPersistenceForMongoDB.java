@@ -11,6 +11,7 @@ import se.haleby.occurrent.changestreamer.ChangeStreamFilter;
 import se.haleby.occurrent.changestreamer.StartAt;
 import se.haleby.occurrent.changestreamer.StreamPosition;
 import se.haleby.occurrent.changestreamer.api.blocking.BlockingChangeStreamer;
+import se.haleby.occurrent.changestreamer.api.blocking.Subscription;
 import se.haleby.occurrent.changestreamer.mongodb.MongoDBOperationTimeBasedStreamPosition;
 import se.haleby.occurrent.changestreamer.mongodb.MongoDBResumeTokenBasedStreamPosition;
 import se.haleby.occurrent.changestreamer.mongodb.internal.MongoDBCommons;
@@ -71,8 +72,8 @@ public class BlockingChangeStreamerWithPositionPersistenceForMongoDB {
      * @param subscriptionId The id of the subscription, must be unique!
      * @param action         This action will be invoked for each cloud event that is stored in the EventStore.
      */
-    public void stream(String subscriptionId, Consumer<CloudEvent> action) {
-        stream(subscriptionId, action, null);
+    public Subscription stream(String subscriptionId, Consumer<CloudEvent> action) {
+        return stream(subscriptionId, action, null);
     }
 
     /**
@@ -81,8 +82,9 @@ public class BlockingChangeStreamerWithPositionPersistenceForMongoDB {
      * @param subscriptionId The id of the subscription, must be unique!
      * @param action         This action will be invoked for each cloud event that is stored in the EventStore that matches the supplied <code>filter</code>.
      * @param filter         The filter to apply for this subscription. Only events matching the filter will cause the <code>action</code> to be called.
+     * @return The subscription
      */
-    public void stream(String subscriptionId, Consumer<CloudEvent> action, ChangeStreamFilter filter) {
+    public Subscription stream(String subscriptionId, Consumer<CloudEvent> action, ChangeStreamFilter filter) {
         Supplier<StartAt> startAtSupplier = () -> {
             // It's important that we find the document inside the supplier so that we lookup the latest resume token on retry
             Document streamPositionDocument = streamPositionCollection.find(eq(ID, subscriptionId), Document.class).first();
@@ -93,7 +95,7 @@ public class BlockingChangeStreamerWithPositionPersistenceForMongoDB {
             return calculateStartAtFromStreamPositionDocument(streamPositionDocument);
         };
 
-        changeStreamer.stream(subscriptionId,
+        return changeStreamer.stream(subscriptionId,
                 cloudEventWithStreamPosition -> {
                     action.accept(cloudEventWithStreamPosition);
                     persistStreamPosition(subscriptionId, cloudEventWithStreamPosition.getStreamPosition());
