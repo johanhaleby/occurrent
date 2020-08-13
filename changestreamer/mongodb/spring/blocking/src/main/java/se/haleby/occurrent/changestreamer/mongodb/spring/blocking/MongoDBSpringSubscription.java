@@ -24,7 +24,7 @@ public class MongoDBSpringSubscription implements Subscription {
     @Override
     public void waitUntilStarted() {
         try {
-            subscription.await(Duration.of(Long.MAX_VALUE, ChronoUnit.CENTURIES));
+            subscription.await(Duration.of(100000, ChronoUnit.DAYS)); // "Forever" :)
         } catch (InterruptedException e) {
             throw new RuntimeException(e);
         }
