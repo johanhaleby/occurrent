@@ -88,7 +88,7 @@ public class SpringBlockingChangeStreamerForMongoDBTest {
     }
 
     @Test
-    void blocking_spring_change_streamer_calls_listener_for_each_new_event() throws InterruptedException {
+    void blocking_spring_change_streamer_calls_listener_for_each_new_event() {
         // Given
         LocalDateTime now = LocalDateTime.now();
         CopyOnWriteArrayList<CloudEvent> state = new CopyOnWriteArrayList<>();
@@ -107,7 +107,7 @@ public class SpringBlockingChangeStreamerForMongoDBTest {
     }
 
     @Test
-    void blocking_spring_change_streamer_allows_cancelling_subscription() throws InterruptedException {
+    void blocking_spring_change_streamer_allows_cancelling_subscription() {
         // Given
         LocalDateTime now = LocalDateTime.now();
         CopyOnWriteArrayList<CloudEvent> state = new CopyOnWriteArrayList<>();
@@ -126,7 +126,7 @@ public class SpringBlockingChangeStreamerForMongoDBTest {
     }
 
     @Test
-    void using_bson_query_for_type() throws InterruptedException {
+    void using_bson_query_for_type() {
         // Given
         LocalDateTime now = LocalDateTime.now();
         CopyOnWriteArrayList<CloudEvent> state = new CopyOnWriteArrayList<>();
@@ -150,7 +150,7 @@ public class SpringBlockingChangeStreamerForMongoDBTest {
     }
 
     @Test
-    void using_bson_query_dsl_composition() throws InterruptedException {
+    void using_bson_query_dsl_composition() {
         // Given
         LocalDateTime now = LocalDateTime.now();
         CopyOnWriteArrayList<CloudEvent> state = new CopyOnWriteArrayList<>();
@@ -176,7 +176,7 @@ public class SpringBlockingChangeStreamerForMongoDBTest {
     }
 
     @Test
-    void using_bson_query_native_mongo_filters_composition() throws InterruptedException {
+    void using_bson_query_native_mongo_filters_composition() {
         // Given
         LocalDateTime now = LocalDateTime.now();
         CopyOnWriteArrayList<CloudEvent> state = new CopyOnWriteArrayList<>();
@@ -202,7 +202,7 @@ public class SpringBlockingChangeStreamerForMongoDBTest {
     }
 
     @Test
-    void using_json_query_for_type() throws InterruptedException {
+    void using_json_query_for_type() {
         // Given
         LocalDateTime now = LocalDateTime.now();
         CopyOnWriteArrayList<CloudEvent> state = new CopyOnWriteArrayList<>();
