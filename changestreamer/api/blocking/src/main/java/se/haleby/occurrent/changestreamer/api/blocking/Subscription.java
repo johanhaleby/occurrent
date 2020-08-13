@@ -4,7 +4,7 @@ import java.time.Duration;
 
 /**
  * Represents a unique subscription to a change stream. Subscriptions are typically started in a background thread
- * and you may wish to wait ({@link #await(Duration)} for them to start before continuing.
+ * and you may wish to wait ({@link #waitUntilStarted(Duration)} for them to start before continuing.
  */
 public interface Subscription {
 
@@ -16,7 +16,7 @@ public interface Subscription {
     /**
      * Synchronous, <strong>blocking</strong> call returns once the {@link Subscription} has started.
      */
-    void await();
+    void waitUntilStarted();
 
     /**
      * Synchronous, <strong>blocking</strong> call returns once the {@link Subscription} has started or
@@ -25,5 +25,5 @@ public interface Subscription {
      * @param timeout must not be <code>null</code>
      * @return <code>true</code> if the subscription was started within the given Duration, <code>false</code> otherwise.
      */
-    boolean await(Duration timeout);
+    boolean waitUntilStarted(Duration timeout);
 }

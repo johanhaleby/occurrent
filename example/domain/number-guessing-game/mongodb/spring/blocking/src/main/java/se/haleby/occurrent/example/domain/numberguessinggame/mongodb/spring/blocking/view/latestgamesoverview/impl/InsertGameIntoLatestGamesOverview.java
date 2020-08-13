@@ -43,7 +43,7 @@ class InsertGameIntoLatestGamesOverview {
     @PostConstruct
     void initializeChangeStreamer() throws InterruptedException {
         changeStreamer.stream(InsertGameIntoLatestGamesOverview.class.getSimpleName(), this::insertGame)
-                .await(Duration.ofSeconds(4));
+                .waitUntilStarted(Duration.ofSeconds(4));
     }
 
     @Retryable(maxAttempts = 10, backoff = @Backoff(delay = 100, multiplier = 2, maxDelay = 5000))

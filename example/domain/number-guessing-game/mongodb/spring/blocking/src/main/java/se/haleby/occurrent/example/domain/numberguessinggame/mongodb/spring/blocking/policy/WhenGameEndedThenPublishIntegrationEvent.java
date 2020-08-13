@@ -49,7 +49,7 @@ class WhenGameEndedThenPublishIntegrationEvent {
                 // We're only interested in events of type NumberGuessingGameEnded since then we know that
                 // we should publish the integration event
                 filter().type(Filters::eq, NumberGuessingGameEnded.class.getSimpleName()))
-                .await(Duration.ofSeconds(4));
+                .waitUntilStarted(Duration.ofSeconds(4));
     }
 
 

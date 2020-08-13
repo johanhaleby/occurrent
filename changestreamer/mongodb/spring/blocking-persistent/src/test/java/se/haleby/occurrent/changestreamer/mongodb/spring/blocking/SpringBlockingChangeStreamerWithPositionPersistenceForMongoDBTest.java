@@ -97,7 +97,7 @@ public class SpringBlockingChangeStreamerWithPositionPersistenceForMongoDBTest {
         // Given
         LocalDateTime now = LocalDateTime.now();
         CopyOnWriteArrayList<CloudEvent> state = new CopyOnWriteArrayList<>();
-        changeStreamer.stream(UUID.randomUUID().toString(), state::add).await(Duration.of(10, ChronoUnit.SECONDS));
+        changeStreamer.stream(UUID.randomUUID().toString(), state::add).waitUntilStarted(Duration.of(10, ChronoUnit.SECONDS));
         NameDefined nameDefined1 = new NameDefined(UUID.randomUUID().toString(), now, "name1");
         NameDefined nameDefined2 = new NameDefined(UUID.randomUUID().toString(), now.plusSeconds(2), "name2");
         NameWasChanged nameWasChanged1 = new NameWasChanged(UUID.randomUUID().toString(), now.plusSeconds(10), "name3");
@@ -117,7 +117,7 @@ public class SpringBlockingChangeStreamerWithPositionPersistenceForMongoDBTest {
         LocalDateTime now = LocalDateTime.now();
         CopyOnWriteArrayList<CloudEvent> state = new CopyOnWriteArrayList<>();
         String subscriberId = UUID.randomUUID().toString();
-        changeStreamer.stream(subscriberId, state::add).await(Duration.of(10, ChronoUnit.SECONDS));
+        changeStreamer.stream(subscriberId, state::add).waitUntilStarted(Duration.of(10, ChronoUnit.SECONDS));
         NameDefined nameDefined1 = new NameDefined(UUID.randomUUID().toString(), now, "name1");
         NameDefined nameDefined2 = new NameDefined(UUID.randomUUID().toString(), now.plusSeconds(2), "name2");
         NameWasChanged nameWasChanged1 = new NameWasChanged(UUID.randomUUID().toString(), now.plusSeconds(10), "name3");
@@ -175,7 +175,7 @@ public class SpringBlockingChangeStreamerWithPositionPersistenceForMongoDBTest {
         LocalDateTime now = LocalDateTime.now();
         CopyOnWriteArrayList<CloudEvent> state = new CopyOnWriteArrayList<>();
         String subscriberId = UUID.randomUUID().toString();
-        changeStreamer.stream(subscriberId, state::add).await(Duration.of(10, ChronoUnit.SECONDS));
+        changeStreamer.stream(subscriberId, state::add).waitUntilStarted(Duration.of(10, ChronoUnit.SECONDS));
         NameDefined nameDefined1 = new NameDefined(UUID.randomUUID().toString(), now, "name1");
 
         // When
@@ -195,7 +195,7 @@ public class SpringBlockingChangeStreamerWithPositionPersistenceForMongoDBTest {
         CopyOnWriteArrayList<CloudEvent> state = new CopyOnWriteArrayList<>();
         String subscriberId = UUID.randomUUID().toString();
         changeStreamer.stream(subscriberId, state::add, filter().type(Filters::eq, NameDefined.class.getName()))
-                .await(Duration.of(10, ChronoUnit.SECONDS));
+                .waitUntilStarted(Duration.of(10, ChronoUnit.SECONDS));
         NameDefined nameDefined1 = new NameDefined(UUID.randomUUID().toString(), now, "name1");
         NameDefined nameDefined2 = new NameDefined(UUID.randomUUID().toString(), now.plusSeconds(2), "name2");
         NameWasChanged nameWasChanged1 = new NameWasChanged(UUID.randomUUID().toString(), now.plusSeconds(3), "name3");
@@ -225,7 +225,7 @@ public class SpringBlockingChangeStreamerWithPositionPersistenceForMongoDBTest {
 
         changeStreamer.stream(subscriberId, state::add,
                 filter().id(Filters::eq, nameDefined2.getEventId()).type(Filters::eq, NameDefined.class.getName()))
-                .await(Duration.of(10, ChronoUnit.SECONDS));
+                .waitUntilStarted(Duration.of(10, ChronoUnit.SECONDS));
 
         // When
         mongoEventStore.write("1", 0, serialize(nameDefined1));
@@ -251,7 +251,7 @@ public class SpringBlockingChangeStreamerWithPositionPersistenceForMongoDBTest {
 
         changeStreamer.stream(subscriberId, state::add,
                 filter(match(and(eq("fullDocument.id", nameDefined2.getEventId()), eq("fullDocument.type", NameDefined.class.getName())))))
-                .await(Duration.of(10, ChronoUnit.SECONDS));
+                .waitUntilStarted(Duration.of(10, ChronoUnit.SECONDS));
 
         // When
         mongoEventStore.write("1", 0, serialize(nameDefined1));
@@ -271,7 +271,7 @@ public class SpringBlockingChangeStreamerWithPositionPersistenceForMongoDBTest {
         CopyOnWriteArrayList<CloudEvent> state = new CopyOnWriteArrayList<>();
         String subscriberId = UUID.randomUUID().toString();
         changeStreamer.stream(subscriberId, state::add, JsonMongoDBFilterSpecification.filter("{ $match : { \"" + FULL_DOCUMENT + ".type\" : \"" + NameDefined.class.getName() + "\" } }"))
-                .await(Duration.of(10, ChronoUnit.SECONDS));
+                .waitUntilStarted(Duration.of(10, ChronoUnit.SECONDS));
         NameDefined nameDefined1 = new NameDefined(UUID.randomUUID().toString(), now, "name1");
         NameDefined nameDefined2 = new NameDefined(UUID.randomUUID().toString(), now.plusSeconds(2), "name2");
         NameWasChanged nameWasChanged1 = new NameWasChanged(UUID.randomUUID().toString(), now.plusSeconds(3), "name3");

@@ -39,6 +39,6 @@ public class CurrentNameProjectionUpdater {
                             Case($(instanceOf(NameWasChanged.class)), e -> new CurrentName(eventId, e.getName())));
                     currentNameProjection.save(currentName);
                 })
-                .await(Duration.of(2, SECONDS));
+                .waitUntilStarted(Duration.of(2, SECONDS));
     }
 }

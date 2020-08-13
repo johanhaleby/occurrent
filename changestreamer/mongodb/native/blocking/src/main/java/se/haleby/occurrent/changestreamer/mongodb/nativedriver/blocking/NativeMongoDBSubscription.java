@@ -44,7 +44,7 @@ public class NativeMongoDBSubscription implements Subscription {
     }
 
     @Override
-    public void await() {
+    public void waitUntilStarted() {
         try {
             subscriptionStartedLatch.await();
         } catch (InterruptedException e) {
@@ -53,7 +53,7 @@ public class NativeMongoDBSubscription implements Subscription {
     }
 
     @Override
-    public boolean await(Duration timeout) {
+    public boolean waitUntilStarted(Duration timeout) {
         try {
             return subscriptionStartedLatch.await(timeout.toNanos(), TimeUnit.NANOSECONDS);
         } catch (InterruptedException e) {

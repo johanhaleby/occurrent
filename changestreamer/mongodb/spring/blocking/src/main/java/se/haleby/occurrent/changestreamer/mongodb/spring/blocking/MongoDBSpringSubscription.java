@@ -22,7 +22,7 @@ public class MongoDBSpringSubscription implements Subscription {
     }
 
     @Override
-    public void await() {
+    public void waitUntilStarted() {
         try {
             subscription.await(Duration.of(Long.MAX_VALUE, ChronoUnit.CENTURIES));
         } catch (InterruptedException e) {
@@ -31,7 +31,7 @@ public class MongoDBSpringSubscription implements Subscription {
     }
 
     @Override
-    public boolean await(Duration timeout) {
+    public boolean waitUntilStarted(Duration timeout) {
         try {
             return subscription.await(timeout);
         } catch (InterruptedException e) {
