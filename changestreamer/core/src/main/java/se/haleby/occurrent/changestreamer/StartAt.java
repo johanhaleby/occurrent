@@ -22,16 +22,16 @@ public abstract class StartAt {
     }
 
     public static class StartAtStreamPosition extends StartAt {
-        public final StreamPosition streamPosition;
+        public final ChangeStreamPosition changeStreamPosition;
 
-        private StartAtStreamPosition(StreamPosition streamPosition) {
-            this.streamPosition = streamPosition;
-            Objects.requireNonNull(streamPosition, StreamPosition.class.getSimpleName() + " cannot be null");
+        private StartAtStreamPosition(ChangeStreamPosition changeStreamPosition) {
+            this.changeStreamPosition = changeStreamPosition;
+            Objects.requireNonNull(changeStreamPosition, ChangeStreamPosition.class.getSimpleName() + " cannot be null");
         }
 
         @Override
         public String toString() {
-            return streamPosition.asString();
+            return changeStreamPosition.asString();
         }
     }
 
@@ -45,7 +45,7 @@ public abstract class StartAt {
     /**
      * Start subscribing to the change stream from the given stream position
      */
-    public static StartAt streamPosition(StreamPosition streamPosition) {
-        return new StartAt.StartAtStreamPosition(streamPosition);
+    public static StartAt streamPosition(ChangeStreamPosition changeStreamPosition) {
+        return new StartAt.StartAtStreamPosition(changeStreamPosition);
     }
 }

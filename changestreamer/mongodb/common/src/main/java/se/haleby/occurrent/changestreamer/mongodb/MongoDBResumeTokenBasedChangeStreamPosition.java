@@ -3,18 +3,18 @@ package se.haleby.occurrent.changestreamer.mongodb;
 import org.bson.BsonDocument;
 import org.bson.BsonValue;
 import org.bson.Document;
-import se.haleby.occurrent.changestreamer.StreamPosition;
+import se.haleby.occurrent.changestreamer.ChangeStreamPosition;
 
 import java.util.Objects;
 
 /**
- * A {@link StreamPosition} implementation for MongoDB that provides a resumeToken
+ * A {@link ChangeStreamPosition} implementation for MongoDB that provides a resumeToken
  * that consumers may decide which to use when continuing the stream.
  */
-public class MongoDBResumeTokenBasedStreamPosition implements StreamPosition {
+public class MongoDBResumeTokenBasedChangeStreamPosition implements ChangeStreamPosition {
     public final BsonDocument resumeToken;
 
-    public MongoDBResumeTokenBasedStreamPosition(BsonDocument resumeToken) {
+    public MongoDBResumeTokenBasedChangeStreamPosition(BsonDocument resumeToken) {
         this.resumeToken = resumeToken;
     }
 
@@ -25,8 +25,8 @@ public class MongoDBResumeTokenBasedStreamPosition implements StreamPosition {
     @Override
     public boolean equals(Object o) {
         if (this == o) return true;
-        if (!(o instanceof MongoDBResumeTokenBasedStreamPosition)) return false;
-        MongoDBResumeTokenBasedStreamPosition that = (MongoDBResumeTokenBasedStreamPosition) o;
+        if (!(o instanceof MongoDBResumeTokenBasedChangeStreamPosition)) return false;
+        MongoDBResumeTokenBasedChangeStreamPosition that = (MongoDBResumeTokenBasedChangeStreamPosition) o;
         return Objects.equals(resumeToken, that.resumeToken);
     }
 

@@ -10,16 +10,16 @@ import java.util.Objects;
 import java.util.Set;
 
 /**
- * A wrapper around a {@link CloudEvent} that also includes a {@link StreamPosition} so that
+ * A wrapper around a {@link CloudEvent} that also includes a {@link ChangeStreamPosition} so that
  * it's possible to resume the stream from a particular state.
  */
 public class CloudEventWithStreamPosition implements CloudEvent {
     private final CloudEvent cloudEvent;
-    private final StreamPosition streamPosition;
+    private final ChangeStreamPosition changeStreamPosition;
 
-    public CloudEventWithStreamPosition(CloudEvent cloudEvent, StreamPosition streamPosition) {
+    public CloudEventWithStreamPosition(CloudEvent cloudEvent, ChangeStreamPosition changeStreamPosition) {
         this.cloudEvent = cloudEvent;
-        this.streamPosition = streamPosition;
+        this.changeStreamPosition = changeStreamPosition;
     }
 
     @Nullable
@@ -81,8 +81,8 @@ public class CloudEventWithStreamPosition implements CloudEvent {
         return cloudEvent.getExtensionNames();
     }
 
-    public StreamPosition getStreamPosition() {
-        return streamPosition;
+    public ChangeStreamPosition getStreamPosition() {
+        return changeStreamPosition;
     }
 
     @Override
@@ -91,19 +91,19 @@ public class CloudEventWithStreamPosition implements CloudEvent {
         if (!(o instanceof CloudEventWithStreamPosition)) return false;
         CloudEventWithStreamPosition that = (CloudEventWithStreamPosition) o;
         return Objects.equals(cloudEvent, that.cloudEvent) &&
-                Objects.equals(streamPosition, that.streamPosition);
+                Objects.equals(changeStreamPosition, that.changeStreamPosition);
     }
 
     @Override
     public int hashCode() {
-        return Objects.hash(cloudEvent, streamPosition);
+        return Objects.hash(cloudEvent, changeStreamPosition);
     }
 
     @Override
     public String toString() {
         return "CloudEventWithStreamPosition{" +
                 "cloudEvent=" + cloudEvent +
-                ", streamPosition=" + streamPosition +
+                ", streamPosition=" + changeStreamPosition +
                 '}';
     }
 }

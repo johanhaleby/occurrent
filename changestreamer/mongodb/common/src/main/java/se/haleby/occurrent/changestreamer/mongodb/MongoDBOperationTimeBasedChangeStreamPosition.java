@@ -3,18 +3,18 @@ package se.haleby.occurrent.changestreamer.mongodb;
 import org.bson.BsonTimestamp;
 import org.bson.BsonValue;
 import org.bson.Document;
-import se.haleby.occurrent.changestreamer.StreamPosition;
+import se.haleby.occurrent.changestreamer.ChangeStreamPosition;
 
 import java.util.Objects;
 
 /**
- * A {@link StreamPosition} implementation for MongoDB that provides the operation time
+ * A {@link ChangeStreamPosition} implementation for MongoDB that provides the operation time
  * that consumers may decide which to use when continuing the stream.
  */
-public class MongoDBOperationTimeBasedStreamPosition implements StreamPosition {
+public class MongoDBOperationTimeBasedChangeStreamPosition implements ChangeStreamPosition {
     public final BsonTimestamp operationTime;
 
-    public MongoDBOperationTimeBasedStreamPosition(BsonTimestamp operationTime) {
+    public MongoDBOperationTimeBasedChangeStreamPosition(BsonTimestamp operationTime) {
         this.operationTime = operationTime;
     }
 
@@ -25,8 +25,8 @@ public class MongoDBOperationTimeBasedStreamPosition implements StreamPosition {
     @Override
     public boolean equals(Object o) {
         if (this == o) return true;
-        if (!(o instanceof MongoDBOperationTimeBasedStreamPosition)) return false;
-        MongoDBOperationTimeBasedStreamPosition that = (MongoDBOperationTimeBasedStreamPosition) o;
+        if (!(o instanceof MongoDBOperationTimeBasedChangeStreamPosition)) return false;
+        MongoDBOperationTimeBasedChangeStreamPosition that = (MongoDBOperationTimeBasedChangeStreamPosition) o;
         return Objects.equals(operationTime, that.operationTime);
     }
 

@@ -8,12 +8,12 @@ import org.bson.BsonTimestamp;
 import org.bson.BsonValue;
 import org.bson.Document;
 import se.haleby.occurrent.changestreamer.ChangeStreamFilter;
+import se.haleby.occurrent.changestreamer.ChangeStreamPosition;
 import se.haleby.occurrent.changestreamer.StartAt;
-import se.haleby.occurrent.changestreamer.StreamPosition;
 import se.haleby.occurrent.changestreamer.api.blocking.BlockingChangeStreamer;
 import se.haleby.occurrent.changestreamer.api.blocking.Subscription;
-import se.haleby.occurrent.changestreamer.mongodb.MongoDBOperationTimeBasedStreamPosition;
-import se.haleby.occurrent.changestreamer.mongodb.MongoDBResumeTokenBasedStreamPosition;
+import se.haleby.occurrent.changestreamer.mongodb.MongoDBOperationTimeBasedChangeStreamPosition;
+import se.haleby.occurrent.changestreamer.mongodb.MongoDBResumeTokenBasedChangeStreamPosition;
 import se.haleby.occurrent.changestreamer.mongodb.internal.MongoDBCommons;
 
 import java.util.function.Consumer;
@@ -113,13 +113,13 @@ public class BlockingChangeStreamerWithPositionPersistenceForMongoDB {
         streamPositionCollection.deleteOne(eq(ID, subscriptionId));
     }
 
-    private void persistStreamPosition(String subscriptionId, StreamPosition streamPosition) {
-        if (streamPosition instanceof MongoDBResumeTokenBasedStreamPosition) {
-            persistResumeTokenStreamPosition(subscriptionId, ((MongoDBResumeTokenBasedStreamPosition) streamPosition).resumeToken);
-        } else if (streamPosition instanceof MongoDBOperationTimeBasedStreamPosition) {
-            persistOperationTimeStreamPosition(subscriptionId, ((MongoDBOperationTimeBasedStreamPosition) streamPosition).operationTime);
+    private void persistStreamPosition(String subscriptionId, ChangeStreamPosition changeStreamPosition) {
+        if (changeStreamPosition instanceof MongoDBResumeTokenBasedChangeStreamPosition) {
+            persistResumeTokenStreamPosition(subscriptionId, ((MongoDBResumeTokenBasedChangeStreamPosition) changeStreamPosition).resumeToken);
+        } else if (changeStreamPosition instanceof MongoDBOperationTimeBasedChangeStreamPosition) {
+            persistOperationTimeStreamPosition(subscriptionId, ((MongoDBOperationTimeBasedChangeStreamPosition) changeStreamPosition).operationTime);
         } else {
-            String streamPositionString = streamPosition.asString();
+            String streamPositionString = changeStreamPosition.asString();
             persistDocumentStreamPosition(subscriptionId, MongoDBCommons.generateGenericStreamPositionDocument(subscriptionId, streamPositionString));
         }
     }

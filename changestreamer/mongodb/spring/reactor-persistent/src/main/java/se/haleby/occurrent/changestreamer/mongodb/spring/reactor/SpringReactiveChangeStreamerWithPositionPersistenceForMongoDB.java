@@ -14,7 +14,7 @@ import reactor.core.publisher.Mono;
 import se.haleby.occurrent.changestreamer.ChangeStreamFilter;
 import se.haleby.occurrent.changestreamer.StartAt;
 import se.haleby.occurrent.changestreamer.api.reactor.ReactorChangeStreamer;
-import se.haleby.occurrent.changestreamer.mongodb.MongoDBResumeTokenBasedStreamPosition;
+import se.haleby.occurrent.changestreamer.mongodb.MongoDBResumeTokenBasedChangeStreamPosition;
 import se.haleby.occurrent.changestreamer.mongodb.internal.MongoDBCommons;
 
 import java.time.Duration;
@@ -86,7 +86,7 @@ public class SpringReactiveChangeStreamerWithPositionPersistenceForMongoDB {
                         .retryWhen(backoff(Long.MAX_VALUE, Duration.ofMillis(100)).maxBackoff(Duration.ofSeconds(5))
                                 .doBeforeRetry(signal -> log.info("Retrying due to exception: {} {}", signal.failure().getClass().getName(), signal.failure().getMessage()))))
                 .flatMap(cloudEventWithStreamPosition -> action.apply(cloudEventWithStreamPosition).thenReturn(cloudEventWithStreamPosition))
-                .flatMap(cloudEventWithStreamPosition -> persistResumeTokenStreamPosition(subscriptionId, ((MongoDBResumeTokenBasedStreamPosition) cloudEventWithStreamPosition.getStreamPosition()).resumeToken).thenReturn(cloudEventWithStreamPosition));
+                .flatMap(cloudEventWithStreamPosition -> persistResumeTokenStreamPosition(subscriptionId, ((MongoDBResumeTokenBasedChangeStreamPosition) cloudEventWithStreamPosition.getStreamPosition()).resumeToken).thenReturn(cloudEventWithStreamPosition));
     }
 
     private Mono<StartAt> findStartPosition(String subscriptionId) {

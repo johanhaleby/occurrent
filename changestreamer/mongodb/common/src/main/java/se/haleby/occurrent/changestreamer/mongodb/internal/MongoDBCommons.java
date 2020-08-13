@@ -1,12 +1,12 @@
 package se.haleby.occurrent.changestreamer.mongodb.internal;
 
 import org.bson.*;
+import se.haleby.occurrent.changestreamer.ChangeStreamPosition;
 import se.haleby.occurrent.changestreamer.StartAt;
 import se.haleby.occurrent.changestreamer.StartAt.StartAtStreamPosition;
-import se.haleby.occurrent.changestreamer.StreamPosition;
-import se.haleby.occurrent.changestreamer.StringBasedStreamPosition;
-import se.haleby.occurrent.changestreamer.mongodb.MongoDBOperationTimeBasedStreamPosition;
-import se.haleby.occurrent.changestreamer.mongodb.MongoDBResumeTokenBasedStreamPosition;
+import se.haleby.occurrent.changestreamer.StringBasedChangeStreamPosition;
+import se.haleby.occurrent.changestreamer.mongodb.MongoDBOperationTimeBasedChangeStreamPosition;
+import se.haleby.occurrent.changestreamer.mongodb.MongoDBResumeTokenBasedChangeStreamPosition;
 
 import java.util.HashMap;
 import java.util.Map;
@@ -61,14 +61,14 @@ public class MongoDBCommons {
 
         final T withStartPositionApplied;
         StartAtStreamPosition position = (StartAtStreamPosition) startAt;
-        StreamPosition streamPosition = position.streamPosition;
-        if (streamPosition instanceof MongoDBResumeTokenBasedStreamPosition) {
-            BsonDocument resumeToken = ((MongoDBResumeTokenBasedStreamPosition) streamPosition).resumeToken;
+        ChangeStreamPosition changeStreamPosition = position.changeStreamPosition;
+        if (changeStreamPosition instanceof MongoDBResumeTokenBasedChangeStreamPosition) {
+            BsonDocument resumeToken = ((MongoDBResumeTokenBasedChangeStreamPosition) changeStreamPosition).resumeToken;
             withStartPositionApplied = applyResumeToken.apply(t, resumeToken);
-        } else if (streamPosition instanceof MongoDBOperationTimeBasedStreamPosition) {
-            withStartPositionApplied = applyOperationTime.apply(t, ((MongoDBOperationTimeBasedStreamPosition) streamPosition).operationTime);
+        } else if (changeStreamPosition instanceof MongoDBOperationTimeBasedChangeStreamPosition) {
+            withStartPositionApplied = applyOperationTime.apply(t, ((MongoDBOperationTimeBasedChangeStreamPosition) changeStreamPosition).operationTime);
         } else {
-            Document document = Document.parse(streamPosition.asString());
+            Document document = Document.parse(changeStreamPosition.asString());
             if (document.containsKey(RESUME_TOKEN)) {
                 BsonDocument resumeToken = document.get(RESUME_TOKEN, BsonDocument.class);
                 withStartPositionApplied = applyResumeToken.apply(t, resumeToken);
@@ -76,27 +76,27 @@ public class MongoDBCommons {
                 BsonTimestamp operationTime = document.get(RESUME_TOKEN, BsonTimestamp.class);
                 withStartPositionApplied = applyOperationTime.apply(t, operationTime);
             } else {
-                throw new IllegalArgumentException("Doesn't recognize stream position " + streamPosition + " as a valid MongoDB stream position");
+                throw new IllegalArgumentException("Doesn't recognize stream position " + changeStreamPosition + " as a valid MongoDB stream position");
             }
         }
         return withStartPositionApplied;
     }
 
     public static StartAt calculateStartAtFromStreamPositionDocument(Document streamPositionDocument) {
-        final StreamPosition streamPosition;
+        final ChangeStreamPosition changeStreamPosition;
         if (streamPositionDocument.containsKey(MongoDBCommons.RESUME_TOKEN)) {
             ResumeToken resumeToken = MongoDBCommons.extractResumeTokenFromPersistedResumeTokenDocument(streamPositionDocument);
-            streamPosition = new MongoDBResumeTokenBasedStreamPosition(resumeToken.asBsonDocument());
+            changeStreamPosition = new MongoDBResumeTokenBasedChangeStreamPosition(resumeToken.asBsonDocument());
         } else if (streamPositionDocument.containsKey(MongoDBCommons.OPERATION_TIME)) {
             BsonTimestamp lastOperationTime = MongoDBCommons.extractOperationTimeFromPersistedPositionDocument(streamPositionDocument);
-            streamPosition = new MongoDBOperationTimeBasedStreamPosition(lastOperationTime);
+            changeStreamPosition = new MongoDBOperationTimeBasedChangeStreamPosition(lastOperationTime);
         } else if (streamPositionDocument.containsKey(MongoDBCommons.GENERIC_STREAM_POSITION)) {
             String value = streamPositionDocument.getString(MongoDBCommons.GENERIC_STREAM_POSITION);
-            streamPosition = new StringBasedStreamPosition(value);
+            changeStreamPosition = new StringBasedChangeStreamPosition(value);
         } else {
             throw new IllegalStateException("Doesn't recognize " + streamPositionDocument + " as a valid stream position document");
         }
-        return StartAt.streamPosition(streamPosition);
+        return StartAt.streamPosition(changeStreamPosition);
     }
 
     public static class ResumeToken {

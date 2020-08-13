@@ -3,12 +3,12 @@ package se.haleby.occurrent.changestreamer;
 import java.util.Objects;
 
 /**
- * A simple {@link StreamPosition} that is backed by a fixed String
+ * A simple {@link ChangeStreamPosition} that is backed by a fixed String
  */
-public class StringBasedStreamPosition implements StreamPosition {
+public class StringBasedChangeStreamPosition implements ChangeStreamPosition {
     private final String value;
 
-    public StringBasedStreamPosition(String value) {
+    public StringBasedChangeStreamPosition(String value) {
         Objects.requireNonNull(value, "Stream position value cannot be null");
         this.value = value;
     }
@@ -16,8 +16,8 @@ public class StringBasedStreamPosition implements StreamPosition {
     @Override
     public boolean equals(Object o) {
         if (this == o) return true;
-        if (!(o instanceof StringBasedStreamPosition)) return false;
-        StringBasedStreamPosition that = (StringBasedStreamPosition) o;
+        if (!(o instanceof StringBasedChangeStreamPosition)) return false;
+        StringBasedChangeStreamPosition that = (StringBasedChangeStreamPosition) o;
         return Objects.equals(value, that.value);
     }
 

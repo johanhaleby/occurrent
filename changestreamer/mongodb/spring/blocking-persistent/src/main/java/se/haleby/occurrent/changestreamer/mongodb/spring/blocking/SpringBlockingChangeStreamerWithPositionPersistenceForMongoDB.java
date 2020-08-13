@@ -9,7 +9,7 @@ import org.springframework.data.mongodb.core.query.Update;
 import se.haleby.occurrent.changestreamer.StartAt;
 import se.haleby.occurrent.changestreamer.api.blocking.Subscription;
 import se.haleby.occurrent.changestreamer.mongodb.MongoDBFilterSpecification;
-import se.haleby.occurrent.changestreamer.mongodb.MongoDBResumeTokenBasedStreamPosition;
+import se.haleby.occurrent.changestreamer.mongodb.MongoDBResumeTokenBasedChangeStreamPosition;
 
 import javax.annotation.PreDestroy;
 import java.util.function.Consumer;
@@ -83,7 +83,7 @@ public class SpringBlockingChangeStreamerWithPositionPersistenceForMongoDB {
         return changeStreamer.stream(subscriptionId,
                 cloudEventWithStreamPosition -> {
                     action.accept(cloudEventWithStreamPosition);
-                    persistResumeTokenStreamPosition(subscriptionId, ((MongoDBResumeTokenBasedStreamPosition) cloudEventWithStreamPosition.getStreamPosition()).resumeToken);
+                    persistResumeTokenStreamPosition(subscriptionId, ((MongoDBResumeTokenBasedChangeStreamPosition) cloudEventWithStreamPosition.getStreamPosition()).resumeToken);
                 },
                 filter,
                 startAtSupplier);
