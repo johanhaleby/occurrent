@@ -1,11 +1,15 @@
 package se.haleby.occurrent.changestreamer.mongodb.spring.reactor;
 
+import com.mongodb.MongoClientSettings;
 import io.cloudevents.core.format.EventFormat;
 import io.cloudevents.core.provider.EventFormatProvider;
 import io.cloudevents.jackson.JsonFormat;
+import org.bson.BsonDocument;
 import org.bson.Document;
-import org.springframework.data.mongodb.core.ReactiveChangeStreamOperation.ChangeStreamWithFilterAndProjection;
-import org.springframework.data.mongodb.core.ReactiveChangeStreamOperation.TerminatingChangeStream;
+import org.bson.conversions.Bson;
+import org.springframework.data.mongodb.core.ChangeStreamEvent;
+import org.springframework.data.mongodb.core.ChangeStreamOptions;
+import org.springframework.data.mongodb.core.ChangeStreamOptions.ChangeStreamOptionsBuilder;
 import org.springframework.data.mongodb.core.ReactiveMongoOperations;
 import reactor.core.publisher.Flux;
 import reactor.core.publisher.Mono;
@@ -13,10 +17,13 @@ import se.haleby.occurrent.changestreamer.ChangeStreamFilter;
 import se.haleby.occurrent.changestreamer.CloudEventWithStreamPosition;
 import se.haleby.occurrent.changestreamer.StartAt;
 import se.haleby.occurrent.changestreamer.api.reactor.ReactorChangeStreamer;
+import se.haleby.occurrent.changestreamer.mongodb.MongoDBFilterSpecification.BsonMongoDBFilterSpecification;
+import se.haleby.occurrent.changestreamer.mongodb.MongoDBFilterSpecification.JsonMongoDBFilterSpecification;
 import se.haleby.occurrent.changestreamer.mongodb.MongoDBResumeTokenBasedStreamPosition;
+import se.haleby.occurrent.changestreamer.mongodb.internal.DocumentAdapter;
 import se.haleby.occurrent.eventstore.mongodb.TimeRepresentation;
 
-import java.util.function.BiFunction;
+import java.util.stream.Stream;
 
 import static java.util.Objects.requireNonNull;
 import static se.haleby.occurrent.changestreamer.mongodb.internal.MongoDBCloudEventsToJsonDeserializer.deserializeToCloudEvent;
@@ -51,19 +58,44 @@ public class SpringReactiveChangeStreamerForMongoDB implements ReactorChangeStre
 
     @Override
     public Flux<CloudEventWithStreamPosition> stream(ChangeStreamFilter filter, StartAt startAt) {
-        ChangeStreamWithFilterAndProjection<Document> changeStream = mongo.changeStream(Document.class).watchCollection(eventCollection);
-        TerminatingChangeStream<Document> changeStreamAtStreamPosition = applyStartPosition(changeStream, cast(ChangeStreamWithFilterAndProjection::startAfter), cast(ChangeStreamWithFilterAndProjection::resumeAt), startAt);
-        return changeStreamAtStreamPosition.listen()
+        // TODO We should change builder::resumeAt to builder::startAtOperationTime once Spring adds support for it (see https://jira.spring.io/browse/DATAMONGO-2607)
+        ChangeStreamOptionsBuilder builder = applyStartPosition(ChangeStreamOptions.builder(), ChangeStreamOptionsBuilder::startAfter, ChangeStreamOptionsBuilder::resumeAt, startAt);
+        final ChangeStreamOptions changeStreamOptions = applyFilter(filter, builder);
+        Flux<ChangeStreamEvent<Document>> changeStream = mongo.changeStream(eventCollection, changeStreamOptions, Document.class);
+        return changeStream
                 .flatMap(changeEvent ->
                         deserializeToCloudEvent(cloudEventSerializer, changeEvent.getRaw(), timeRepresentation)
                                 .map(cloudEvent -> new CloudEventWithStreamPosition(cloudEvent, new MongoDBResumeTokenBasedStreamPosition(requireNonNull(changeEvent.getResumeToken()).asDocument())))
                                 .map(Mono::just)
-                                .orElse(Mono.empty())
-                );
+                                .orElse(Mono.empty()));
     }
 
-    private static <T1, Type, T2> BiFunction<T1, Type, T1> cast(BiFunction<T1, Type, T2> fn) {
-        //noinspection unchecked
-        return fn.andThen(t2 -> (T1) t2);
+    private static ChangeStreamOptions applyFilter(ChangeStreamFilter filter, ChangeStreamOptionsBuilder changeStreamOptionsBuilder) {
+        final ChangeStreamOptions changeStreamOptions;
+        if (filter == null) {
+            changeStreamOptions = changeStreamOptionsBuilder.build();
+        } else if (filter instanceof JsonMongoDBFilterSpecification) {
+            changeStreamOptions = changeStreamOptionsBuilder.filter(Document.parse(((JsonMongoDBFilterSpecification) filter).getJson())).build();
+        } else if (filter instanceof BsonMongoDBFilterSpecification) {
+            Bson[] aggregationStages = ((BsonMongoDBFilterSpecification) filter).getAggregationStages();
+            DocumentAdapter documentAdapter = new DocumentAdapter(MongoClientSettings.getDefaultCodecRegistry());
+            Document[] documents = Stream.of(aggregationStages).map(aggregationStage -> {
+                final Document result;
+                if (aggregationStage instanceof Document) {
+                    result = (Document) aggregationStage;
+                } else if (aggregationStage instanceof BsonDocument) {
+                    result = documentAdapter.fromBson((BsonDocument) aggregationStage);
+                } else {
+                    BsonDocument bsonDocument = aggregationStage.toBsonDocument(null, MongoClientSettings.getDefaultCodecRegistry());
+                    result = documentAdapter.fromBson(bsonDocument);
+                }
+                return result;
+            }).toArray(Document[]::new);
+
+            changeStreamOptions = changeStreamOptionsBuilder.filter(documents).build();
+        } else {
+            throw new IllegalArgumentException("Unrecognized " + ChangeStreamFilter.class.getSimpleName() + " for MongoDB change streamer");
+        }
+        return changeStreamOptions;
     }
 }

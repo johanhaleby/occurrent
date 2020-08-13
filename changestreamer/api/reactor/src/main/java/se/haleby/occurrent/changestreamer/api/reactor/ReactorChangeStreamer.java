@@ -14,7 +14,7 @@ public interface ReactorChangeStreamer {
      *
      * @return A {@link Flux} with cloud events which also includes the {@link se.haleby.occurrent.changestreamer.StreamPosition} that can be used to resume the stream from the current position.
      */
-    Flux<CloudEventWithStreamPosition> stream(ChangeStreamFilter filter, StartAt startAtSupplier);
+    Flux<CloudEventWithStreamPosition> stream(ChangeStreamFilter filter, StartAt startAt);
 
     /**
      * Stream events from the event store as they arrive but filter only events that matches the <code>filter</code>.
