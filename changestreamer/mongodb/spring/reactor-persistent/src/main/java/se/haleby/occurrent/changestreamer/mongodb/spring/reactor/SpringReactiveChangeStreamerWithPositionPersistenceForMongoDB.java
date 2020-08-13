@@ -11,6 +11,7 @@ import org.springframework.data.mongodb.core.ReactiveMongoOperations;
 import org.springframework.data.mongodb.core.query.Update;
 import reactor.core.publisher.Flux;
 import reactor.core.publisher.Mono;
+import se.haleby.occurrent.changestreamer.ChangeStreamFilter;
 import se.haleby.occurrent.changestreamer.StartAt;
 import se.haleby.occurrent.changestreamer.api.reactor.ReactorChangeStreamer;
 import se.haleby.occurrent.changestreamer.mongodb.MongoDBResumeTokenBasedStreamPosition;
@@ -63,9 +64,25 @@ public class SpringReactiveChangeStreamerWithPositionPersistenceForMongoDB {
      * @return A stream of {@link CloudEvent}'s. The stream position of the cloud event will already have been persisted when consumed by this stream so use <code>action</code> to perform side-effects.
      */
     public Flux<CloudEvent> stream(String subscriptionId, Function<CloudEvent, Mono<Void>> action) {
+        return stream(subscriptionId, action, null);
+    }
+
+    /**
+     * Subscribe the event stream and automatically persist the stream position in MongoDB after each <code>action</code>
+     * has completed successfully. It's VERY important that side-effects take place within the <code>action</code> function
+     * because if you perform side-effects on the returned <code>Flux<CloudEvent></code> stream then the stream position
+     * has already been stored in MongoDB and the <code>action</code> will not be re-run if side-effect fails.
+     *
+     * @param subscriptionId The id of the subscription, must be unique!
+     * @param action         This action will be invoked for each cloud event that is stored in the EventStore.
+     * @param filter         The {@link ChangeStreamFilter} to use to limit the events receive by the event store
+     * @return A stream of {@link CloudEvent}'s. The stream position of the cloud event will already have been persisted when consumed by this stream so use <code>action</code> to perform side-effects.
+     */
+    public Flux<CloudEvent> stream(String subscriptionId, Function<CloudEvent, Mono<Void>> action, ChangeStreamFilter filter) {
         return findStartPosition(subscriptionId)
                 .doOnNext(startAt -> log.info("Starting change streamer for subscription {} from stream position {}", subscriptionId, startAt.toString()))
-                .flatMapMany(startAt -> changeStreamer.stream(startAt)
+                .flatMapMany(startAt -> changeStreamer.stream(filter, startAt)
+                        // TODO Make retry configurable
                         .retryWhen(backoff(Long.MAX_VALUE, Duration.ofMillis(100)).maxBackoff(Duration.ofSeconds(5))
                                 .doBeforeRetry(signal -> log.info("Retrying due to exception: {} {}", signal.failure().getClass().getName(), signal.failure().getMessage()))))
                 .flatMap(cloudEventWithStreamPosition -> action.apply(cloudEventWithStreamPosition).thenReturn(cloudEventWithStreamPosition))
