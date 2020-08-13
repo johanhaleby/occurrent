@@ -63,7 +63,7 @@ import static se.haleby.occurrent.time.TimeConversion.toLocalDateTime;
 public class SpringBlockingChangeStreamerWithPositionPersistenceForMongoDBTest {
 
     @Container
-    private static final MongoDBContainer mongoDBContainer = new MongoDBContainer("mongo:4.2.7");
+    private static final MongoDBContainer mongoDBContainer = new MongoDBContainer("mongo:4.2.8");
     private static final String RESUME_TOKEN_COLLECTION = "ack";
 
     @RegisterExtension

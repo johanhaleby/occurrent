@@ -12,10 +12,10 @@ import org.testcontainers.containers.MongoDBContainer;
 import org.testcontainers.junit.jupiter.Container;
 import org.testcontainers.junit.jupiter.Testcontainers;
 import reactor.core.publisher.Hooks;
-import se.haleby.occurrent.eventstore.api.blocking.EventStore;
 import se.haleby.occurrent.domain.DomainEvent;
 import se.haleby.occurrent.domain.NameDefined;
 import se.haleby.occurrent.domain.NameWasChanged;
+import se.haleby.occurrent.eventstore.api.blocking.EventStore;
 
 import java.net.URI;
 import java.time.Duration;
@@ -40,7 +40,7 @@ public class ChangeStreamerFromMongoDBToSpringEventTest {
     private static final MongoDBContainer mongoDBContainer;
 
     static {
-        mongoDBContainer = new MongoDBContainer("mongo:4.2.7");
+        mongoDBContainer = new MongoDBContainer("mongo:4.2.8");
         List<String> ports = new ArrayList<>();
         ports.add("27017:27017");
         mongoDBContainer.setPortBindings(ports);

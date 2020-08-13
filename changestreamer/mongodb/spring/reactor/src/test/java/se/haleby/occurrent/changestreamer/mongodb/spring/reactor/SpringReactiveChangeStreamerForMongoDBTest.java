@@ -48,7 +48,7 @@ import static se.haleby.occurrent.time.TimeConversion.toLocalDateTime;
 public class SpringReactiveChangeStreamerForMongoDBTest {
 
     @Container
-    private static final MongoDBContainer mongoDBContainer = new MongoDBContainer("mongo:4.2.7");
+    private static final MongoDBContainer mongoDBContainer = new MongoDBContainer("mongo:4.2.8");
 
     private SpringReactorMongoEventStore mongoEventStore;
     private SpringReactiveChangeStreamerForMongoDB changeStreamer;

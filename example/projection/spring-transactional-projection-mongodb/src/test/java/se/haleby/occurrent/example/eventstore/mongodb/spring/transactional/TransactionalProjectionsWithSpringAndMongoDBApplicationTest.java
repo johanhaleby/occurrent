@@ -30,7 +30,7 @@ public class TransactionalProjectionsWithSpringAndMongoDBApplicationTest {
     private static final MongoDBContainer mongoDBContainer;
 
     static {
-        mongoDBContainer = new MongoDBContainer("mongo:4.2.7");
+        mongoDBContainer = new MongoDBContainer("mongo:4.2.8");
         List<String> ports = new ArrayList<>();
         ports.add("27017:27017");
         mongoDBContainer.setPortBindings(ports);

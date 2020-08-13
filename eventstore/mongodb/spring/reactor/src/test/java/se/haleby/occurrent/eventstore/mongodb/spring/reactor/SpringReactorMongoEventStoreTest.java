@@ -82,7 +82,7 @@ public class SpringReactorMongoEventStoreTest {
     private static final URI NAME_SOURCE = URI.create("http://name");
 
     static {
-        mongoDBContainer = new MongoDBContainer("mongo:4.2.7");
+        mongoDBContainer = new MongoDBContainer("mongo:4.2.8");
         List<String> ports = new ArrayList<>();
         ports.add("27017:27017");
         mongoDBContainer.setPortBindings(ports);

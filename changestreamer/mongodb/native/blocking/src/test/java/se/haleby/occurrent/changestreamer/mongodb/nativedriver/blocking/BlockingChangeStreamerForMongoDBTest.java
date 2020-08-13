@@ -61,7 +61,7 @@ import static se.haleby.occurrent.time.TimeConversion.toLocalDateTime;
 public class BlockingChangeStreamerForMongoDBTest {
 
     @Container
-    private static final MongoDBContainer mongoDBContainer = new MongoDBContainer("mongo:4.2.7");
+    private static final MongoDBContainer mongoDBContainer = new MongoDBContainer("mongo:4.2.8");
 
     @RegisterExtension
     FlushMongoDBExtension flushMongoDBExtension = new FlushMongoDBExtension(new ConnectionString(mongoDBContainer.getReplicaSetUrl()));
