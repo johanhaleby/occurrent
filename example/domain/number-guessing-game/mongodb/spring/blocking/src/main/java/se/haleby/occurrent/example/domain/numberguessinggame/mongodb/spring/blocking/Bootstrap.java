@@ -19,7 +19,6 @@ import se.haleby.occurrent.changestreamer.mongodb.spring.blocking.SpringBlocking
 import se.haleby.occurrent.eventstore.mongodb.TimeRepresentation;
 import se.haleby.occurrent.eventstore.mongodb.spring.blocking.EventStoreConfig;
 import se.haleby.occurrent.eventstore.mongodb.spring.blocking.SpringBlockingMongoEventStore;
-import se.haleby.occurrent.eventstore.mongodb.spring.blocking.StreamConsistencyGuarantee;
 import se.haleby.occurrent.example.domain.numberguessinggame.mongodb.spring.blocking.infrastructure.Serialization;
 
 import java.net.URI;
@@ -43,7 +42,8 @@ public class Bootstrap {
 
     @Bean
     public SpringBlockingMongoEventStore eventStore(MongoTemplate template, MongoTransactionManager transactionManager) {
-        return new SpringBlockingMongoEventStore(template, new EventStoreConfig(EVENTS_COLLECTION_NAME, StreamConsistencyGuarantee.transactional("streamVersion", transactionManager), TimeRepresentation.DATE));
+        EventStoreConfig eventStoreConfig = new EventStoreConfig.Builder().eventStoreCollectionName(EVENTS_COLLECTION_NAME).transactionConfig(transactionManager).timeRepresentation(TimeRepresentation.DATE).build();
+        return new SpringBlockingMongoEventStore(template, eventStoreConfig);
     }
 
     @Bean

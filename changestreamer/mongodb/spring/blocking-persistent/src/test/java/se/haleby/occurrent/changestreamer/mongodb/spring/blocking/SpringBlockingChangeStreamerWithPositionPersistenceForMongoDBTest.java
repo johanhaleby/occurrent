@@ -54,7 +54,6 @@ import static org.hamcrest.Matchers.is;
 import static se.haleby.occurrent.changestreamer.mongodb.MongoDBFilterSpecification.BsonMongoDBFilterSpecification.filter;
 import static se.haleby.occurrent.changestreamer.mongodb.MongoDBFilterSpecification.FULL_DOCUMENT;
 import static se.haleby.occurrent.eventstore.mongodb.TimeRepresentation.RFC_3339_STRING;
-import static se.haleby.occurrent.eventstore.mongodb.spring.blocking.StreamConsistencyGuarantee.transactional;
 import static se.haleby.occurrent.functional.CheckedFunction.unchecked;
 import static se.haleby.occurrent.functional.Not.not;
 import static se.haleby.occurrent.time.TimeConversion.toLocalDateTime;
@@ -81,7 +80,8 @@ public class SpringBlockingChangeStreamerWithPositionPersistenceForMongoDBTest {
         mongoTemplate = new MongoTemplate(mongoClient, requireNonNull(connectionString.getDatabase()));
         MongoTransactionManager mongoTransactionManager = new MongoTransactionManager(new SimpleMongoClientDatabaseFactory(mongoClient, requireNonNull(connectionString.getDatabase())));
         TimeRepresentation timeRepresentation = RFC_3339_STRING;
-        mongoEventStore = new SpringBlockingMongoEventStore(mongoTemplate, new EventStoreConfig(connectionString.getCollection(), transactional("stream-consistency", mongoTransactionManager), timeRepresentation));
+        EventStoreConfig eventStoreConfig = new EventStoreConfig.Builder().eventStoreCollectionName(connectionString.getCollection()).transactionConfig(mongoTransactionManager).timeRepresentation(timeRepresentation).build();
+        mongoEventStore = new SpringBlockingMongoEventStore(mongoTemplate, eventStoreConfig);
         SpringBlockingChangeStreamerForMongoDB springBlockingChangeStreamerForMongoDB = new SpringBlockingChangeStreamerForMongoDB(connectionString.getCollection(), new DefaultMessageListenerContainer(mongoTemplate), timeRepresentation);
         changeStreamer = new SpringBlockingChangeStreamerWithPositionPersistenceForMongoDB(springBlockingChangeStreamerForMongoDB, mongoTemplate, RESUME_TOKEN_COLLECTION);
         objectMapper = new ObjectMapper();

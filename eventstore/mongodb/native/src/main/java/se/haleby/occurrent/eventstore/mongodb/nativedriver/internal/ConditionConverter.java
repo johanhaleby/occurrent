@@ -3,6 +3,8 @@ package se.haleby.occurrent.eventstore.mongodb.nativedriver.internal;
 import com.mongodb.client.model.Filters;
 import org.bson.conversions.Bson;
 import se.haleby.occurrent.eventstore.api.Condition;
+import se.haleby.occurrent.eventstore.api.Condition.MultiOperandCondition;
+import se.haleby.occurrent.eventstore.api.Condition.SingleOperandCondition;
 
 import java.util.List;
 
@@ -11,8 +13,8 @@ import static com.mongodb.client.model.Filters.*;
 public class ConditionConverter {
 
     public static <T> Bson convertConditionToBsonCriteria(String fieldName, Condition<T> condition) {
-        if (condition instanceof Condition.MultiOperandCondition) {
-            Condition.MultiOperandCondition<T> operation = (Condition.MultiOperandCondition<T>) condition;
+        if (condition instanceof MultiOperandCondition) {
+            MultiOperandCondition<T> operation = (MultiOperandCondition<T>) condition;
             Condition.MultiOperandConditionName operationName = operation.operationName;
             List<Condition<T>> operations = operation.operations;
             Bson[] filters = operations.stream().map(c -> convertConditionToBsonCriteria(fieldName, c)).toArray(Bson[]::new);
@@ -26,8 +28,8 @@ public class ConditionConverter {
                 default:
                     throw new IllegalStateException("Unexpected value: " + operationName);
             }
-        } else if (condition instanceof Condition.SingleOperandCondition) {
-            Condition.SingleOperandCondition<T> singleOperandCondition = (Condition.SingleOperandCondition<T>) condition;
+        } else if (condition instanceof SingleOperandCondition) {
+            SingleOperandCondition<T> singleOperandCondition = (SingleOperandCondition<T>) condition;
             T expectedVersion = singleOperandCondition.operand;
             Condition.SingleOperandConditionName singleOperandConditionName = singleOperandCondition.singleOperandConditionName;
             switch (singleOperandConditionName) {

@@ -14,18 +14,24 @@ import static java.nio.charset.StandardCharsets.UTF_8;
 import static java.time.ZoneOffset.UTC;
 import static java.time.temporal.ChronoUnit.MILLIS;
 import static se.haleby.occurrent.cloudevents.OccurrentCloudEventExtension.STREAM_ID;
+import static se.haleby.occurrent.cloudevents.OccurrentCloudEventExtension.STREAM_VERSION;
 import static se.haleby.occurrent.eventstore.mongodb.TimeRepresentation.DATE;
 import static se.haleby.occurrent.eventstore.mongodb.TimeRepresentation.RFC_3339_STRING;
 import static se.haleby.occurrent.eventstore.mongodb.internal.RFC3339.RFC_3339_DATE_TIME_FORMATTER;
 
 public class OccurrentCloudEventMongoDBDocumentMapper {
 
-    public static Document convertToDocument(EventFormat eventFormat, TimeRepresentation timeRepresentation, String streamId, CloudEvent cloudEvent) {
+    public static Document convertToDocument(EventFormat eventFormat, TimeRepresentation timeRepresentation,
+                                             String streamId, long streamVersion, CloudEvent cloudEvent) {
         final CloudEvent cloudEventToUse = timeRepresentation == RFC_3339_STRING ? fixTimestamp(cloudEvent) : cloudEvent;
         byte[] bytes = eventFormat.serialize(cloudEventToUse);
         String serializedAsString = new String(bytes, UTF_8);
         Document cloudEventDocument = Document.parse(serializedAsString);
         cloudEventDocument.put(STREAM_ID, streamId);
+        // TODO Remove once refactoring is complete
+        if (streamVersion != -1) {
+            cloudEventDocument.put(STREAM_VERSION, streamVersion);
+        }
 
         if (timeRepresentation == DATE && cloudEvent.getTime() != null) {
             ZonedDateTime time = cloudEvent.getTime();
@@ -64,7 +70,8 @@ public class OccurrentCloudEventMongoDBDocumentMapper {
         }
         String eventJsonString = document.toJson();
         byte[] eventJsonBytes = eventJsonString.getBytes(UTF_8);
-        return eventFormat.deserialize(eventJsonBytes);
+        // When converting to JSON (document.toJson()) the stream version is interpreted as an int in Jackson, we convert it manually to long afterwards.
+        return CloudEventBuilder.v1(eventFormat.deserialize(eventJsonBytes)).withExtension(STREAM_VERSION, document.getLong(STREAM_VERSION)).build();
     }
 
     // Creates a workaround for issue 200: https://github.com/cloudevents/sdk-java/issues/200

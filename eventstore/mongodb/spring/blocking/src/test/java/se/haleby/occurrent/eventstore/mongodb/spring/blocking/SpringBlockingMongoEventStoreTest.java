@@ -89,154 +89,154 @@ public class SpringBlockingMongoEventStoreTest {
     private ObjectMapper objectMapper;
     private MongoTemplate mongoTemplate;
     private ConnectionString connectionString;
-    private MongoClient mongoClient;
+    private MongoTransactionManager mongoTransactionManager;
 
     @BeforeEach
     void create_mongo_spring_blocking_event_store() {
         connectionString = new ConnectionString(mongoDBContainer.getReplicaSetUrl() + ".events");
-        mongoClient = MongoClients.create(connectionString);
+        MongoClient mongoClient = MongoClients.create(connectionString);
         mongoTemplate = new MongoTemplate(mongoClient, requireNonNull(connectionString.getDatabase()));
         objectMapper = new ObjectMapper();
+        mongoTransactionManager = new MongoTransactionManager(new SimpleMongoClientDatabaseFactory(mongoClient, requireNonNull(connectionString.getDatabase())));
+        EventStoreConfig eventStoreConfig = new EventStoreConfig.Builder().eventStoreCollectionName(connectionString.getCollection()).transactionConfig(mongoTransactionManager).timeRepresentation(TimeRepresentation.RFC_3339_STRING).build();
+        eventStore = new SpringBlockingMongoEventStore(mongoTemplate, eventStoreConfig);
     }
 
-    @DisplayName("when using StreamConsistencyGuarantee with type None")
+    @Test
+    void can_read_and_write_single_event_to_mongo_spring_blocking_event_store() {
+        LocalDateTime now = LocalDateTime.now();
+
+        // When
+        List<DomainEvent> events = Name.defineName(UUID.randomUUID().toString(), now, "John Doe");
+        persist("name", streamVersionEq(0), events);
+
+        // Then
+        EventStream<CloudEvent> eventStream = eventStore.read("name");
+        List<DomainEvent> readEvents = deserialize(eventStream.events());
+
+        assertAll(
+                () -> assertThat(eventStream.version()).isEqualTo(1),
+                () -> assertThat(readEvents).hasSize(1),
+                () -> assertThat(readEvents).containsExactlyElementsOf(events)
+        );
+    }
+
+    @Test
+    void can_read_and_write_multiple_events_at_once_to_mongo_spring_blocking_event_store() {
+        LocalDateTime now = LocalDateTime.now();
+        List<DomainEvent> events = chain(Name.defineName(UUID.randomUUID().toString(), now, "Hello World"), es -> Name.changeName(es, UUID.randomUUID().toString(), now, "John Doe"));
+
+        // When
+        persist("name", streamVersionEq(0), events);
+
+        // Then
+        EventStream<CloudEvent> eventStream = eventStore.read("name");
+        List<DomainEvent> readEvents = deserialize(eventStream.events());
+
+        assertAll(
+                () -> assertThat(eventStream.version()).isEqualTo(events.size()),
+                () -> assertThat(readEvents).hasSize(2),
+                () -> assertThat(readEvents).containsExactlyElementsOf(events)
+        );
+    }
+
+    @Test
+    void can_read_and_write_multiple_events_at_different_occasions_to_mongo_spring_blocking_event_store() {
+        LocalDateTime now = LocalDateTime.now();
+        NameDefined nameDefined = new NameDefined(UUID.randomUUID().toString(), now, "name");
+        NameWasChanged nameWasChanged1 = new NameWasChanged(UUID.randomUUID().toString(), now.plusHours(1), "name2");
+        NameWasChanged nameWasChanged2 = new NameWasChanged(UUID.randomUUID().toString(), now.plusHours(2), "name3");
+
+        // When
+        persist("name", streamVersionEq(0), nameDefined);
+        persist("name", streamVersionEq(1), nameWasChanged1);
+        persist("name", streamVersionEq(2), nameWasChanged2);
+
+        // Then
+        EventStream<CloudEvent> eventStream = eventStore.read("name");
+        List<DomainEvent> readEvents = deserialize(eventStream.events());
+
+        assertAll(
+                () -> assertThat(eventStream.version()).isEqualTo(3),
+                () -> assertThat(readEvents).hasSize(3),
+                () -> assertThat(readEvents).containsExactly(nameDefined, nameWasChanged1, nameWasChanged2)
+        );
+    }
+
+    @Test
+    void can_read_events_with_skip_and_limit_using_mongo_event_store() {
+        LocalDateTime now = LocalDateTime.now();
+        NameDefined nameDefined = new NameDefined(UUID.randomUUID().toString(), now, "name");
+        NameWasChanged nameWasChanged1 = new NameWasChanged(UUID.randomUUID().toString(), now.plusHours(1), "name2");
+        NameWasChanged nameWasChanged2 = new NameWasChanged(UUID.randomUUID().toString(), now.plusHours(2), "name3");
+
+        // When
+        persist("name", streamVersionEq(0), nameDefined);
+        persist("name", streamVersionEq(1), nameWasChanged1);
+        persist("name", streamVersionEq(2), nameWasChanged2);
+
+        // Then
+        EventStream<CloudEvent> eventStream = eventStore.read("name", 1, 1);
+        List<DomainEvent> readEvents = deserialize(eventStream.events());
+
+        assertAll(
+                () -> assertThat(eventStream.version()).isEqualTo(3),
+                () -> assertThat(readEvents).hasSize(1),
+                () -> assertThat(readEvents).containsExactly(nameWasChanged1)
+        );
+    }
+
+    @Test
+    void stream_version_is_not_updated_when_event_insertion_fails() {
+        LocalDateTime now = LocalDateTime.now();
+        List<DomainEvent> events = chain(Name.defineName(UUID.randomUUID().toString(), now, "Hello World"), es -> Name.changeName(es, UUID.randomUUID().toString(), now, "John Doe"));
+
+        persist("name", streamVersionEq(0), events);
+
+        // When
+        Throwable throwable = catchThrowable(() -> persist("name", streamVersionEq(events.size()), events));
+
+        // Then
+        EventStream<CloudEvent> eventStream = eventStore.read("name");
+        List<DomainEvent> readEvents = deserialize(eventStream.events());
+
+        assertAll(
+                () -> assertThat(throwable).isExactlyInstanceOf(DuplicateCloudEventException.class).hasCauseExactlyInstanceOf(MongoBulkWriteException.class),
+                () -> assertThat(eventStream.version()).isEqualTo(events.size()),
+                () -> assertThat(readEvents).hasSize(2),
+                () -> assertThat(readEvents).containsExactlyElementsOf(events)
+        );
+    }
+
+    @Test
+    void read_skew_is_not_allowed_for_blocking_implementation() {
+        LocalDateTime now = LocalDateTime.now();
+        NameDefined nameDefined = new NameDefined(UUID.randomUUID().toString(), now, "name");
+        NameWasChanged nameWasChanged1 = new NameWasChanged(UUID.randomUUID().toString(), now.plusHours(1), "name2");
+        NameWasChanged nameWasChanged2 = new NameWasChanged(UUID.randomUUID().toString(), now.plusHours(2), "name3");
+        persist("name", nameDefined);
+        persist("name", nameWasChanged1);
+
+        // When
+        EventStream<CloudEvent> eventStream = eventStore.read("name");
+        persist("name", nameWasChanged2);
+
+        // Then
+        List<DomainEvent> readEvents = deserialize(eventStream.events());
+
+        assertAll(
+                () -> assertThat(eventStream.version()).isEqualTo(2),
+                () -> assertThat(readEvents).hasSize(2),
+                () -> assertThat(readEvents).containsExactly(nameDefined, nameWasChanged1)
+        );
+    }
+
     @Nested
-    class StreamConsistencyGuaranteeNone {
-
-        @BeforeEach
-        void create_mongo_spring_blocking_event_store_with_stream_write_consistency_guarantee_none() {
-            eventStore = new SpringBlockingMongoEventStore(mongoTemplate, new EventStoreConfig(connectionString.getCollection(), StreamConsistencyGuarantee.none(), TimeRepresentation.RFC_3339_STRING));
-        }
+    @DisplayName("and there are duplicate events")
+    class DuplicatesTest {
 
         @Test
-        void can_read_and_write_single_event_to_mongo_spring_blocking_event_store() {
-            LocalDateTime now = LocalDateTime.now();
-
-            // When
-            List<DomainEvent> events = Name.defineName(UUID.randomUUID().toString(), now, "John Doe");
-            persist("name", events);
-
-            // Then
-            EventStream<CloudEvent> eventStream = eventStore.read("name");
-            List<DomainEvent> readEvents = deserialize(eventStream.events());
-
-            assertAll(
-                    () -> assertThat(eventStream.version()).isEqualTo(0),
-                    () -> assertThat(readEvents).hasSize(1),
-                    () -> assertThat(readEvents).containsExactlyElementsOf(events)
-            );
-        }
-
-        @Test
-        void can_read_and_write_multiple_events_at_once_to_mongo_spring_blocking_event_store() {
-            LocalDateTime now = LocalDateTime.now();
-            List<DomainEvent> events = chain(Name.defineName(UUID.randomUUID().toString(), now, "Hello World"), es -> Name.changeName(es, UUID.randomUUID().toString(), now, "John Doe"));
-
-            // When
-            persist("name", events);
-
-            // Then
-            EventStream<CloudEvent> eventStream = eventStore.read("name");
-            List<DomainEvent> readEvents = deserialize(eventStream.events());
-
-            assertAll(
-                    () -> assertThat(eventStream.version()).isEqualTo(0),
-                    () -> assertThat(readEvents).hasSize(2),
-                    () -> assertThat(readEvents).containsExactlyElementsOf(events)
-            );
-        }
-
-        @Test
-        void can_read_and_write_multiple_events_at_different_occasions_to_mongo_spring_blocking_event_store() {
-            LocalDateTime now = LocalDateTime.now();
-            NameDefined nameDefined = new NameDefined(UUID.randomUUID().toString(), now, "name");
-            NameWasChanged nameWasChanged1 = new NameWasChanged(UUID.randomUUID().toString(), now.plusHours(1), "name2");
-            NameWasChanged nameWasChanged2 = new NameWasChanged(UUID.randomUUID().toString(), now.plusHours(2), "name3");
-
-            // When
-            persist("name", nameDefined);
-            persist("name", nameWasChanged1);
-            persist("name", nameWasChanged2);
-
-            // Then
-            EventStream<CloudEvent> eventStream = eventStore.read("name");
-            List<DomainEvent> readEvents = deserialize(eventStream.events());
-
-            assertAll(
-                    () -> assertThat(eventStream.version()).isEqualTo(0),
-                    () -> assertThat(readEvents).hasSize(3),
-                    () -> assertThat(readEvents).containsExactly(nameDefined, nameWasChanged1, nameWasChanged2)
-            );
-        }
-
-        @Test
-        void can_read_events_with_skip_and_limit_using_mongo_event_store() {
-            LocalDateTime now = LocalDateTime.now();
-            NameDefined nameDefined = new NameDefined(UUID.randomUUID().toString(), now, "name");
-            NameWasChanged nameWasChanged1 = new NameWasChanged(UUID.randomUUID().toString(), now.plusHours(1), "name2");
-            NameWasChanged nameWasChanged2 = new NameWasChanged(UUID.randomUUID().toString(), now.plusHours(2), "name3");
-
-            // When
-            persist("name", nameDefined);
-            persist("name", nameWasChanged1);
-            persist("name", nameWasChanged2);
-
-            // Then
-            EventStream<CloudEvent> eventStream = eventStore.read("name", 1, 1);
-            List<DomainEvent> readEvents = deserialize(eventStream.events());
-
-            assertAll(
-                    () -> assertThat(eventStream.version()).isEqualTo(0),
-                    () -> assertThat(readEvents).hasSize(1),
-                    () -> assertThat(readEvents).containsExactly(nameWasChanged1)
-            );
-        }
-
-        @Test
-        void read_skew_does_not_happen_for_blocking_implementation_when_stream_consistency_guarantee_is_none() {
-            LocalDateTime now = LocalDateTime.now();
-            NameDefined nameDefined = new NameDefined(UUID.randomUUID().toString(), now, "name");
-            NameWasChanged nameWasChanged1 = new NameWasChanged(UUID.randomUUID().toString(), now.plusHours(1), "name2");
-            NameWasChanged nameWasChanged2 = new NameWasChanged(UUID.randomUUID().toString(), now.plusHours(2), "name3");
-            persist("name", nameDefined);
-            persist("name", nameWasChanged1);
-
-            // When
-            EventStream<CloudEvent> eventStream = eventStore.read("name");
-            persist("name", nameWasChanged2);
-
-            // Then
-            List<DomainEvent> readEvents = deserialize(eventStream.events());
-
-            assertAll(
-                    () -> assertThat(eventStream.version()).isEqualTo(0),
-                    () -> assertThat(readEvents).hasSize(2),
-                    () -> assertThat(readEvents).containsExactly(nameDefined, nameWasChanged1)
-            );
-        }
-
-        @Test
-        void any_write_condition_may_be_explicitly_specified_when_stream_consistency_guarantee_is_none() {
-            LocalDateTime now = LocalDateTime.now();
-            NameDefined nameDefined = new NameDefined(UUID.randomUUID().toString(), now, "name");
-            NameWasChanged nameWasChanged1 = new NameWasChanged(UUID.randomUUID().toString(), now.plusHours(1), "name2");
-
-            // When
-            persist("name", WriteCondition.anyStreamVersion(), Stream.of(nameDefined, nameWasChanged1));
-
-            // Then
-            EventStream<CloudEvent> eventStream = eventStore.read("name");
-            List<DomainEvent> readEvents = deserialize(eventStream.events());
-
-            assertAll(
-                    () -> assertThat(eventStream.version()).isEqualTo(0),
-                    () -> assertThat(readEvents).hasSize(2),
-                    () -> assertThat(readEvents).containsExactly(nameDefined, nameWasChanged1)
-            );
-        }
-
-        @Test
-        void events_that_are_inserted_before_duplicate_event_in_batch_is_written_when_stream_consistency_guarantee_is_none() {
+        void no_events_are_inserted_when_batch_contains_duplicate_events() {
             LocalDateTime now = LocalDateTime.now();
 
             NameDefined nameDefined = new NameDefined(UUID.randomUUID().toString(), now, "name");
@@ -244,7 +244,7 @@ public class SpringBlockingMongoEventStoreTest {
             NameWasChanged nameWasChanged2 = new NameWasChanged(UUID.randomUUID().toString(), now.plusHours(2), "name4");
 
             // When
-            Throwable throwable = catchThrowable(() -> persist("name", Stream.of(nameDefined, nameWasChanged1, nameWasChanged1, nameWasChanged2)));
+            Throwable throwable = catchThrowable(() -> persist("name", streamVersionEq(0), Stream.of(nameDefined, nameWasChanged1, nameWasChanged1, nameWasChanged2)));
 
             // Then
             EventStream<CloudEvent> eventStream = eventStore.read("name");
@@ -253,23 +253,22 @@ public class SpringBlockingMongoEventStoreTest {
             assertAll(
                     () -> assertThat(throwable).isExactlyInstanceOf(DuplicateCloudEventException.class).hasCauseExactlyInstanceOf(MongoBulkWriteException.class),
                     () -> assertThat(eventStream.version()).isEqualTo(0),
-                    // MongoDB inserts all events up until the error but ignores events after the failed events..
-                    () -> assertThat(readEvents).containsExactly(nameDefined, nameWasChanged1)
+                    () -> assertThat(readEvents).isEmpty()
             );
         }
 
         @Test
-        void events_that_are_inserted_before_the_duplicate_event_in_batch_are_retained_when_stream_consistency_guarantee_is_none() {
+        void no_events_are_inserted_when_batch_contains_event_that_has_already_been_persisted() {
             LocalDateTime now = LocalDateTime.now();
 
             NameDefined nameDefined = new NameDefined(UUID.randomUUID().toString(), now, "name");
             NameWasChanged nameWasChanged1 = new NameWasChanged(UUID.randomUUID().toString(), now.plusHours(1), "name2");
             NameWasChanged nameWasChanged2 = new NameWasChanged(UUID.randomUUID().toString(), now.plusHours(2), "name4");
 
-            persist("name", Stream.of(nameDefined, nameWasChanged1));
+            persist("name", streamVersionEq(0), Stream.of(nameDefined, nameWasChanged1));
 
             // When
-            Throwable throwable = catchThrowable(() -> persist("name", Stream.of(nameWasChanged2, nameWasChanged1)));
+            Throwable throwable = catchThrowable(() -> persist("name", streamVersionEq(2), Stream.of(nameWasChanged2, nameWasChanged1)));
 
             // Then
             EventStream<CloudEvent> eventStream = eventStore.read("name");
@@ -277,629 +276,187 @@ public class SpringBlockingMongoEventStoreTest {
 
             assertAll(
                     () -> assertThat(throwable).isExactlyInstanceOf(DuplicateCloudEventException.class).hasCauseExactlyInstanceOf(MongoBulkWriteException.class),
-                    () -> assertThat(eventStream.version()).isEqualTo(0),
-                    () -> assertThat(readEvents).containsExactly(nameDefined, nameWasChanged1, nameWasChanged2)
-            );
-        }
-
-        @Nested
-        @DisplayName("deletion")
-        class Delete {
-
-            @Test
-            void deleteAllEventsInEventStream_deletes_all_events() {
-                // Given
-                LocalDateTime now = LocalDateTime.now();
-                NameDefined nameDefined = new NameDefined(UUID.randomUUID().toString(), now, "name");
-                NameWasChanged nameWasChanged1 = new NameWasChanged(UUID.randomUUID().toString(), now.plusHours(1), "name2");
-                persist("name", Stream.of(nameDefined, nameWasChanged1));
-
-                // When
-                eventStore.deleteAllEventsInEventStream("name");
-
-                // Then
-                EventStream<CloudEvent> eventStream = eventStore.read("name");
-                List<DomainEvent> readEvents = deserialize(eventStream.events());
-                assertAll(
-                        () -> assertThat(eventStream.version()).isZero(),
-                        () -> assertThat(readEvents).isEmpty(),
-                        () -> assertThat(mongoTemplate.count(query(where(STREAM_ID).is("name")), "events")).isZero()
-                );
-            }
-
-            @Test
-            void deleteEventStream_deletes_all_events_in_event_stream_when_stream_consistency_guarantee_is_none() {
-                // Given
-                LocalDateTime now = LocalDateTime.now();
-                NameDefined nameDefined = new NameDefined(UUID.randomUUID().toString(), now, "name");
-                NameWasChanged nameWasChanged1 = new NameWasChanged(UUID.randomUUID().toString(), now.plusHours(1), "name2");
-                persist("name", Stream.of(nameDefined, nameWasChanged1));
-
-                // When
-                eventStore.deleteEventStream("name");
-
-                // Then
-                EventStream<CloudEvent> eventStream = eventStore.read("name");
-                List<DomainEvent> readEvents = deserialize(eventStream.events());
-                assertAll(
-                        () -> assertThat(eventStream.version()).isZero(),
-                        () -> assertThat(readEvents).isEmpty(),
-                        () -> assertThat(eventStore.exists("name")).isFalse(),
-                        () -> assertThat(mongoTemplate.count(query(where(STREAM_ID).is("name")), "events")).isZero()
-                );
-            }
-
-            @Test
-            void deleteEvent_deletes_only_specific_event_in_event_stream() {
-                // Given
-                LocalDateTime now = LocalDateTime.now();
-                NameDefined nameDefined = new NameDefined(UUID.randomUUID().toString(), now, "name");
-                NameWasChanged nameWasChanged1 = new NameWasChanged(UUID.randomUUID().toString(), now.plusHours(1), "name2");
-                persist("name", Stream.of(nameDefined, nameWasChanged1));
-
-                // When
-                eventStore.deleteEvent(nameWasChanged1.getEventId(), NAME_SOURCE);
-
-                // Then
-                EventStream<CloudEvent> eventStream = eventStore.read("name");
-                List<DomainEvent> readEvents = deserialize(eventStream.events());
-                assertAll(
-                        () -> assertThat(eventStream.version()).isZero(),
-                        () -> assertThat(readEvents).containsExactly(nameDefined),
-                        () -> assertThat(eventStore.exists("name")).isTrue(),
-                        () -> assertThat(mongoTemplate.count(query(where(STREAM_ID).is("name")), "events")).isEqualTo(1)
-                );
-            }
-        }
-
-        @Nested
-        @DisplayName("exists")
-        class ExistsWhenStreamConsistencyGuaranteeIsNone {
-
-            @Test
-            void returns_true_when_stream_contains_events() {
-                // Given
-                LocalDateTime now = LocalDateTime.now();
-                NameDefined nameDefined = new NameDefined(UUID.randomUUID().toString(), now, "name");
-                NameWasChanged nameWasChanged1 = new NameWasChanged(UUID.randomUUID().toString(), now.plusHours(1), "name2");
-                persist("name", Stream.of(nameDefined, nameWasChanged1));
-
-                // When
-                boolean exists = eventStore.exists("name");
-
-                // Then
-                assertThat(exists).isTrue();
-            }
-
-            @Test
-            void returns_false_when_all_events_have_been_removed_from_stream() {
-                // Given
-                LocalDateTime now = LocalDateTime.now();
-                NameDefined nameDefined = new NameDefined(UUID.randomUUID().toString(), now, "name");
-                NameWasChanged nameWasChanged1 = new NameWasChanged(UUID.randomUUID().toString(), now.plusHours(1), "name2");
-                persist("name", Stream.of(nameDefined, nameWasChanged1));
-                eventStore.deleteAllEventsInEventStream("name");
-
-                // When
-                boolean exists = eventStore.exists("name");
-
-                // Then
-                assertThat(exists).isFalse();
-            }
-
-            @Test
-            void returns_false_when_no_events_have_been_persisted_to_stream() {
-                // When
-                boolean exists = eventStore.exists("name");
-
-                // Then
-                assertThat(exists).isFalse();
-            }
-        }
-
-        @Nested
-        @DisplayName("update when stream consistency guarantee is none")
-        class UpdateWhenStreamConsistencyGuaranteeIsNone {
-
-            @Test
-            void updates_cloud_event_when_cloud_event_exists() {
-                // Given
-                LocalDateTime now = LocalDateTime.now();
-                NameDefined nameDefined = new NameDefined(UUID.randomUUID().toString(), now, "name");
-                String eventId2 = UUID.randomUUID().toString();
-                NameWasChanged nameWasChanged1 = new NameWasChanged(eventId2, now.plusHours(1), "name2");
-                persist("name", Stream.of(nameDefined, nameWasChanged1));
-
-                // When
-                eventStore.updateEvent(eventId2, NAME_SOURCE, cloudEvent -> {
-                    NameWasChanged e = deserialize(cloudEvent);
-                    NameWasChanged correctedName = new NameWasChanged(e.getEventId(), e.getTimestamp(), "name3");
-                    return CloudEventBuilder.v1(cloudEvent).withData(serializeEvent(correctedName)).build();
-                });
-
-                // Then
-                EventStream<CloudEvent> eventStream = eventStore.read("name");
-                List<DomainEvent> readEvents = deserialize(eventStream.events());
-                assertThat(readEvents).containsExactly(nameDefined, new NameWasChanged(eventId2, now.plusHours(1), "name3"));
-            }
-
-            @Test
-            void returns_updated_cloud_event_when_cloud_event_exists() {
-                // Given
-                LocalDateTime now = LocalDateTime.now();
-                NameDefined nameDefined = new NameDefined(UUID.randomUUID().toString(), now, "name");
-                String eventId2 = UUID.randomUUID().toString();
-                NameWasChanged nameWasChanged1 = new NameWasChanged(eventId2, now.plusHours(1), "name2");
-                persist("name", Stream.of(nameDefined, nameWasChanged1));
-
-                // When
-                Optional<NameWasChanged> updatedCloudEvent = eventStore.updateEvent(eventId2, NAME_SOURCE, cloudEvent -> {
-                    NameWasChanged e = deserialize(cloudEvent);
-                    NameWasChanged correctedName = new NameWasChanged(e.getEventId(), e.getTimestamp(), "name3");
-                    return CloudEventBuilder.v1(cloudEvent).withData(serializeEvent(correctedName)).build();
-                }).map(SpringBlockingMongoEventStoreTest.this::deserialize);
-
-                // Then
-                assertThat(updatedCloudEvent).contains(new NameWasChanged(eventId2, now.plusHours(1), "name3"));
-            }
-
-            @Test
-            void returns_empty_optional_when_cloud_event_does_not_exists() {
-                // Given
-                LocalDateTime now = LocalDateTime.now();
-                NameDefined nameDefined = new NameDefined(UUID.randomUUID().toString(), now, "name");
-                NameWasChanged nameWasChanged1 = new NameWasChanged(UUID.randomUUID().toString(), now.plusHours(1), "name2");
-                persist("name", Stream.of(nameDefined, nameWasChanged1));
-
-                // When
-                Optional<CloudEvent> updatedCloudEvent = eventStore.updateEvent(UUID.randomUUID().toString(), NAME_SOURCE, cloudEvent -> {
-                    NameWasChanged e = deserialize(cloudEvent);
-                    NameWasChanged correctedName = new NameWasChanged(e.getEventId(), e.getTimestamp(), "name3");
-                    return CloudEventBuilder.v1(cloudEvent).withData(serializeEvent(correctedName)).build();
-                });
-                // Then
-                assertThat(updatedCloudEvent).isEmpty();
-            }
-
-            @Test
-            void throw_iae_when_update_function_returns_null() {
-                // Given
-                LocalDateTime now = LocalDateTime.now();
-                NameDefined nameDefined = new NameDefined(UUID.randomUUID().toString(), now, "name");
-                String eventId2 = UUID.randomUUID().toString();
-                NameWasChanged nameWasChanged1 = new NameWasChanged(eventId2, now.plusHours(1), "name2");
-                persist("name", Stream.of(nameDefined, nameWasChanged1));
-
-                // When
-                Throwable throwable = catchThrowable(() -> eventStore.updateEvent(eventId2, NAME_SOURCE, cloudEvent -> null));
-
-                // Then
-                assertThat(throwable).isExactlyInstanceOf(IllegalArgumentException.class).hasMessage("Cloud event update function is not allowed to return null");
-            }
-
-            @Test
-            void when_update_function_returns_the_same_argument_then_cloud_event_is_unchanged_in_the_database() {
-                // Given
-                LocalDateTime now = LocalDateTime.now();
-                NameDefined nameDefined = new NameDefined(UUID.randomUUID().toString(), now, "name");
-                String eventId2 = UUID.randomUUID().toString();
-                NameWasChanged nameWasChanged1 = new NameWasChanged(eventId2, now.plusHours(1), "name2");
-                persist("name", Stream.of(nameDefined, nameWasChanged1));
-
-                // When
-                eventStore.updateEvent(eventId2, NAME_SOURCE, Function.identity());
-
-                // Then
-                EventStream<CloudEvent> eventStream = eventStore.read("name");
-                List<DomainEvent> readEvents = deserialize(eventStream.events());
-                assertThat(readEvents).containsExactly(nameDefined, nameWasChanged1);
-            }
-        }
-    }
-
-    @DisplayName("when using StreamConsistencyGuarantee with type transactional")
-    @Nested
-    class StreamConsistencyGuaranteeTransactional {
-
-        @BeforeEach
-        void create_mongo_spring_blocking_event_store_with_stream_write_consistency_guarantee_transactional() {
-            MongoTransactionManager mongoTransactionManager = new MongoTransactionManager(new SimpleMongoClientDatabaseFactory(mongoClient, requireNonNull(connectionString.getDatabase())));
-            eventStore = new SpringBlockingMongoEventStore(mongoTemplate, new EventStoreConfig(connectionString.getCollection(), StreamConsistencyGuarantee.transactional("event-stream-version", mongoTransactionManager), TimeRepresentation.RFC_3339_STRING));
-        }
-
-        @Test
-        void can_read_and_write_single_event_to_mongo_spring_blocking_event_store() {
-            LocalDateTime now = LocalDateTime.now();
-
-            // When
-            List<DomainEvent> events = Name.defineName(UUID.randomUUID().toString(), now, "John Doe");
-            persist("name", streamVersionEq(0), events);
-
-            // Then
-            EventStream<CloudEvent> eventStream = eventStore.read("name");
-            List<DomainEvent> readEvents = deserialize(eventStream.events());
-
-            assertAll(
-                    () -> assertThat(eventStream.version()).isEqualTo(1),
-                    () -> assertThat(readEvents).hasSize(1),
-                    () -> assertThat(readEvents).containsExactlyElementsOf(events)
-            );
-        }
-
-        @Test
-        void can_read_and_write_multiple_events_at_once_to_mongo_spring_blocking_event_store() {
-            LocalDateTime now = LocalDateTime.now();
-            List<DomainEvent> events = chain(Name.defineName(UUID.randomUUID().toString(), now, "Hello World"), es -> Name.changeName(es, UUID.randomUUID().toString(), now, "John Doe"));
-
-            // When
-            persist("name", streamVersionEq(0), events);
-
-            // Then
-            EventStream<CloudEvent> eventStream = eventStore.read("name");
-            List<DomainEvent> readEvents = deserialize(eventStream.events());
-
-            assertAll(
-                    () -> assertThat(eventStream.version()).isEqualTo(1),
-                    () -> assertThat(readEvents).hasSize(2),
-                    () -> assertThat(readEvents).containsExactlyElementsOf(events)
-            );
-        }
-
-        @Test
-        void can_read_and_write_multiple_events_at_different_occasions_to_mongo_spring_blocking_event_store() {
-            LocalDateTime now = LocalDateTime.now();
-            NameDefined nameDefined = new NameDefined(UUID.randomUUID().toString(), now, "name");
-            NameWasChanged nameWasChanged1 = new NameWasChanged(UUID.randomUUID().toString(), now.plusHours(1), "name2");
-            NameWasChanged nameWasChanged2 = new NameWasChanged(UUID.randomUUID().toString(), now.plusHours(2), "name3");
-
-            // When
-            persist("name", streamVersionEq(0), nameDefined);
-            persist("name", streamVersionEq(1), nameWasChanged1);
-            persist("name", streamVersionEq(2), nameWasChanged2);
-
-            // Then
-            EventStream<CloudEvent> eventStream = eventStore.read("name");
-            List<DomainEvent> readEvents = deserialize(eventStream.events());
-
-            assertAll(
-                    () -> assertThat(eventStream.version()).isEqualTo(3),
-                    () -> assertThat(readEvents).hasSize(3),
-                    () -> assertThat(readEvents).containsExactly(nameDefined, nameWasChanged1, nameWasChanged2)
-            );
-        }
-
-        @Test
-        void can_read_events_with_skip_and_limit_using_mongo_event_store() {
-            LocalDateTime now = LocalDateTime.now();
-            NameDefined nameDefined = new NameDefined(UUID.randomUUID().toString(), now, "name");
-            NameWasChanged nameWasChanged1 = new NameWasChanged(UUID.randomUUID().toString(), now.plusHours(1), "name2");
-            NameWasChanged nameWasChanged2 = new NameWasChanged(UUID.randomUUID().toString(), now.plusHours(2), "name3");
-
-            // When
-            persist("name", streamVersionEq(0), nameDefined);
-            persist("name", streamVersionEq(1), nameWasChanged1);
-            persist("name", streamVersionEq(2), nameWasChanged2);
-
-            // Then
-            EventStream<CloudEvent> eventStream = eventStore.read("name", 1, 1);
-            List<DomainEvent> readEvents = deserialize(eventStream.events());
-
-            assertAll(
-                    () -> assertThat(eventStream.version()).isEqualTo(3),
-                    () -> assertThat(readEvents).hasSize(1),
-                    () -> assertThat(readEvents).containsExactly(nameWasChanged1)
-            );
-        }
-
-        @Test
-        void stream_version_is_not_updated_when_event_insertion_fails() {
-            LocalDateTime now = LocalDateTime.now();
-            List<DomainEvent> events = chain(Name.defineName(UUID.randomUUID().toString(), now, "Hello World"), es -> Name.changeName(es, UUID.randomUUID().toString(), now, "John Doe"));
-
-            persist("name", streamVersionEq(0), events);
-
-            // When
-            Throwable throwable = catchThrowable(() -> persist("name", streamVersionEq(1), events));
-
-            // Then
-            EventStream<CloudEvent> eventStream = eventStore.read("name");
-            List<DomainEvent> readEvents = deserialize(eventStream.events());
-
-            assertAll(
-                    () -> assertThat(throwable).isExactlyInstanceOf(DuplicateCloudEventException.class).hasCauseExactlyInstanceOf(MongoBulkWriteException.class),
-                    () -> assertThat(eventStream.version()).isEqualTo(1),
-                    () -> assertThat(readEvents).hasSize(2),
-                    () -> assertThat(readEvents).containsExactlyElementsOf(events)
-            );
-        }
-
-        @Test
-        void read_skew_is_not_allowed_for_blocking_implementation_when_stream_consistency_guarantee_is_transactional() {
-            LocalDateTime now = LocalDateTime.now();
-            NameDefined nameDefined = new NameDefined(UUID.randomUUID().toString(), now, "name");
-            NameWasChanged nameWasChanged1 = new NameWasChanged(UUID.randomUUID().toString(), now.plusHours(1), "name2");
-            NameWasChanged nameWasChanged2 = new NameWasChanged(UUID.randomUUID().toString(), now.plusHours(2), "name3");
-            persist("name", nameDefined);
-            persist("name", nameWasChanged1);
-
-            // When
-            EventStream<CloudEvent> eventStream = eventStore.read("name");
-            persist("name", nameWasChanged2);
-
-            // Then
-            List<DomainEvent> readEvents = deserialize(eventStream.events());
-
-            assertAll(
                     () -> assertThat(eventStream.version()).isEqualTo(2),
                     () -> assertThat(readEvents).hasSize(2),
                     () -> assertThat(readEvents).containsExactly(nameDefined, nameWasChanged1)
             );
         }
+    }
 
-        @Nested
-        @DisplayName("and there are duplicate events")
-        class DuplicatesTest {
+    @Nested
+    @DisplayName("deletion")
+    class Delete {
 
-            @Test
-            void no_events_are_inserted_when_batch_contains_duplicate_events_when_stream_consistency_guarantee_is_transactional() {
-                LocalDateTime now = LocalDateTime.now();
+        @Test
+        void deleteEventStream_deletes_all_events_in_event_stream() {
+            // Given
+            LocalDateTime now = LocalDateTime.now();
+            NameDefined nameDefined = new NameDefined(UUID.randomUUID().toString(), now, "name");
+            NameWasChanged nameWasChanged1 = new NameWasChanged(UUID.randomUUID().toString(), now.plusHours(1), "name2");
+            persist("name", Stream.of(nameDefined, nameWasChanged1));
 
-                NameDefined nameDefined = new NameDefined(UUID.randomUUID().toString(), now, "name");
-                NameWasChanged nameWasChanged1 = new NameWasChanged(UUID.randomUUID().toString(), now.plusHours(1), "name2");
-                NameWasChanged nameWasChanged2 = new NameWasChanged(UUID.randomUUID().toString(), now.plusHours(2), "name4");
+            // When
+            eventStore.deleteEventStream("name");
 
-                // When
-                Throwable throwable = catchThrowable(() -> persist("name", streamVersionEq(0), Stream.of(nameDefined, nameWasChanged1, nameWasChanged1, nameWasChanged2)));
-
-                // Then
-                EventStream<CloudEvent> eventStream = eventStore.read("name");
-                List<DomainEvent> readEvents = deserialize(eventStream.events());
-
-                assertAll(
-                        () -> assertThat(throwable).isExactlyInstanceOf(DuplicateCloudEventException.class).hasCauseExactlyInstanceOf(MongoBulkWriteException.class),
-                        () -> assertThat(eventStream.version()).isEqualTo(0),
-                        () -> assertThat(readEvents).isEmpty()
-                );
-            }
-
-            @Test
-            void no_events_are_inserted_when_batch_contains_event_that_has_already_been_persisted_when_stream_consistency_guarantee_is_transactional() {
-                LocalDateTime now = LocalDateTime.now();
-
-                NameDefined nameDefined = new NameDefined(UUID.randomUUID().toString(), now, "name");
-                NameWasChanged nameWasChanged1 = new NameWasChanged(UUID.randomUUID().toString(), now.plusHours(1), "name2");
-                NameWasChanged nameWasChanged2 = new NameWasChanged(UUID.randomUUID().toString(), now.plusHours(2), "name4");
-
-                persist("name", streamVersionEq(0), Stream.of(nameDefined, nameWasChanged1));
-
-                // When
-                Throwable throwable = catchThrowable(() -> persist("name", streamVersionEq(1), Stream.of(nameWasChanged2, nameWasChanged1)));
-
-                // Then
-                EventStream<CloudEvent> eventStream = eventStore.read("name");
-                List<DomainEvent> readEvents = deserialize(eventStream.events());
-
-                assertAll(
-                        () -> assertThat(throwable).isExactlyInstanceOf(DuplicateCloudEventException.class).hasCauseExactlyInstanceOf(MongoBulkWriteException.class),
-                        () -> assertThat(eventStream.version()).isEqualTo(1),
-                        () -> assertThat(readEvents).hasSize(2),
-                        () -> assertThat(readEvents).containsExactly(nameDefined, nameWasChanged1)
-                );
-            }
+            // Then
+            EventStream<CloudEvent> eventStream = eventStore.read("name");
+            List<DomainEvent> readEvents = deserialize(eventStream.events());
+            assertAll(
+                    () -> assertThat(eventStream.version()).isZero(),
+                    () -> assertThat(readEvents).isEmpty(),
+                    () -> assertThat(eventStore.exists("name")).isFalse(),
+                    () -> assertThat(mongoTemplate.count(query(where(STREAM_ID).is("name")), "events")).isZero()
+            );
         }
 
-        @Nested
-        @DisplayName("deletion")
-        class Delete {
+        @Test
+        void deleteEvent_deletes_only_specific_event_in_event_stream() {
+            // Given
+            LocalDateTime now = LocalDateTime.now();
+            NameDefined nameDefined = new NameDefined(UUID.randomUUID().toString(), now, "name");
+            NameWasChanged nameWasChanged1 = new NameWasChanged(UUID.randomUUID().toString(), now.plusHours(1), "name2");
+            persist("name", Stream.of(nameDefined, nameWasChanged1));
 
-            @Test
-            void deleteAllEventsInEventStream_deletes_all_events_but_retains_metadata() {
-                // Given
-                LocalDateTime now = LocalDateTime.now();
-                NameDefined nameDefined = new NameDefined(UUID.randomUUID().toString(), now, "name");
-                NameWasChanged nameWasChanged1 = new NameWasChanged(UUID.randomUUID().toString(), now.plusHours(1), "name2");
-                persist("name", Stream.of(nameDefined, nameWasChanged1));
+            // When
+            eventStore.deleteEvent(nameWasChanged1.getEventId(), NAME_SOURCE);
 
-                // When
-                eventStore.deleteAllEventsInEventStream("name");
+            // Then
+            EventStream<CloudEvent> eventStream = eventStore.read("name");
+            List<DomainEvent> readEvents = deserialize(eventStream.events());
+            assertAll(
+                    () -> assertThat(eventStream.version()).isEqualTo(1),
+                    () -> assertThat(readEvents).containsExactly(nameDefined),
+                    () -> assertThat(eventStore.exists("name")).isTrue(),
+                    () -> assertThat(mongoTemplate.count(query(where(STREAM_ID).is("name")), "events")).isEqualTo(1)
+            );
+        }
+    }
 
-                // Then
-                EventStream<CloudEvent> eventStream = eventStore.read("name");
-                List<DomainEvent> readEvents = deserialize(eventStream.events());
-                assertAll(
-                        () -> assertThat(eventStream.version()).isEqualTo(1),
-                        () -> assertThat(readEvents).isEmpty(),
-                        () -> assertThat(mongoTemplate.count(query(where("_id").is("name")), "event-stream-version")).isNotZero()
-                );
-            }
+    @Nested
+    @DisplayName("exists")
+    class Exists {
 
-            @Test
-            void deleteEventStream_deletes_all_events_in_event_stream_when_stream_consistency_guarantee_is_transactional() {
-                // Given
-                LocalDateTime now = LocalDateTime.now();
-                NameDefined nameDefined = new NameDefined(UUID.randomUUID().toString(), now, "name");
-                NameWasChanged nameWasChanged1 = new NameWasChanged(UUID.randomUUID().toString(), now.plusHours(1), "name2");
-                persist("name", Stream.of(nameDefined, nameWasChanged1));
+        @Test
+        void returns_true_when_stream_exists_and_contains_events() {
+            // Given
+            LocalDateTime now = LocalDateTime.now();
+            NameDefined nameDefined = new NameDefined(UUID.randomUUID().toString(), now, "name");
+            NameWasChanged nameWasChanged1 = new NameWasChanged(UUID.randomUUID().toString(), now.plusHours(1), "name2");
+            persist("name", Stream.of(nameDefined, nameWasChanged1));
 
-                // When
-                eventStore.deleteEventStream("name");
+            // When
+            boolean exists = eventStore.exists("name");
 
-                // Then
-                EventStream<CloudEvent> eventStream = eventStore.read("name");
-                List<DomainEvent> readEvents = deserialize(eventStream.events());
-                assertAll(
-                        () -> assertThat(eventStream.version()).isZero(),
-                        () -> assertThat(readEvents).isEmpty(),
-                        () -> assertThat(eventStore.exists("name")).isFalse(),
-                        () -> assertThat(mongoTemplate.count(query(where(STREAM_ID).is("name")), "events")).isZero()
-                );
-            }
-
-            @Test
-            void deleteEvent_deletes_only_specific_event_in_event_stream() {
-                // Given
-                LocalDateTime now = LocalDateTime.now();
-                NameDefined nameDefined = new NameDefined(UUID.randomUUID().toString(), now, "name");
-                NameWasChanged nameWasChanged1 = new NameWasChanged(UUID.randomUUID().toString(), now.plusHours(1), "name2");
-                persist("name", Stream.of(nameDefined, nameWasChanged1));
-
-                // When
-                eventStore.deleteEvent(nameWasChanged1.getEventId(), NAME_SOURCE);
-
-                // Then
-                EventStream<CloudEvent> eventStream = eventStore.read("name");
-                List<DomainEvent> readEvents = deserialize(eventStream.events());
-                assertAll(
-                        () -> assertThat(eventStream.version()).isEqualTo(1),
-                        () -> assertThat(readEvents).containsExactly(nameDefined),
-                        () -> assertThat(eventStore.exists("name")).isTrue(),
-                        () -> assertThat(mongoTemplate.count(query(where(STREAM_ID).is("name")), "events")).isEqualTo(1)
-                );
-            }
+            // Then
+            assertThat(exists).isTrue();
         }
 
-        @Nested
-        @DisplayName("exists")
-        class ExistsWhenStreamConsistencyGuaranteeIsTransactional {
+        @Test
+        void returns_false_when_no_events_have_been_persisted_to_stream() {
+            // When
+            boolean exists = eventStore.exists("name");
 
-            @Test
-            void returns_true_when_stream_exists_and_contains_events() {
-                // Given
-                LocalDateTime now = LocalDateTime.now();
-                NameDefined nameDefined = new NameDefined(UUID.randomUUID().toString(), now, "name");
-                NameWasChanged nameWasChanged1 = new NameWasChanged(UUID.randomUUID().toString(), now.plusHours(1), "name2");
-                persist("name", Stream.of(nameDefined, nameWasChanged1));
+            // Then
+            assertThat(exists).isFalse();
+        }
+    }
 
-                // When
-                boolean exists = eventStore.exists("name");
+    @Nested
+    @DisplayName("update")
+    class Update {
 
-                // Then
-                assertThat(exists).isTrue();
-            }
+        @Test
+        void updates_cloud_event_when_cloud_event_exists() {
+            // Given
+            LocalDateTime now = LocalDateTime.now();
+            NameDefined nameDefined = new NameDefined(UUID.randomUUID().toString(), now, "name");
+            String eventId2 = UUID.randomUUID().toString();
+            NameWasChanged nameWasChanged1 = new NameWasChanged(eventId2, now.plusHours(1), "name2");
+            persist("name", Stream.of(nameDefined, nameWasChanged1));
 
-            @Test
-            void returns_true_when_stream_exists_but_contains_no_events() {
-                // Given
-                LocalDateTime now = LocalDateTime.now();
-                NameDefined nameDefined = new NameDefined(UUID.randomUUID().toString(), now, "name");
-                NameWasChanged nameWasChanged1 = new NameWasChanged(UUID.randomUUID().toString(), now.plusHours(1), "name2");
-                persist("name", Stream.of(nameDefined, nameWasChanged1));
-                eventStore.deleteAllEventsInEventStream("name");
+            // When
+            eventStore.updateEvent(eventId2, NAME_SOURCE, cloudEvent -> {
+                NameWasChanged e = deserialize(cloudEvent);
+                NameWasChanged correctedName = new NameWasChanged(e.getEventId(), e.getTimestamp(), "name3");
+                return CloudEventBuilder.v1(cloudEvent).withData(serializeEvent(correctedName)).build();
+            });
 
-                // When
-                boolean exists = eventStore.exists("name");
-
-                // Then
-                assertThat(exists).isTrue();
-            }
-
-            @Test
-            void returns_false_when_no_events_have_been_persisted_to_stream() {
-                // When
-                boolean exists = eventStore.exists("name");
-
-                // Then
-                assertThat(exists).isFalse();
-            }
+            // Then
+            EventStream<CloudEvent> eventStream = eventStore.read("name");
+            List<DomainEvent> readEvents = deserialize(eventStream.events());
+            assertThat(readEvents).containsExactly(nameDefined, new NameWasChanged(eventId2, now.plusHours(1), "name3"));
         }
 
-        @Nested
-        @DisplayName("update when stream consistency guarantee is transactional")
-        class UpdateWhenStreamConsistencyGuaranteeIsTransactional {
+        @Test
+        void returns_updated_cloud_event_when_cloud_event_exists() {
+            // Given
+            LocalDateTime now = LocalDateTime.now();
+            NameDefined nameDefined = new NameDefined(UUID.randomUUID().toString(), now, "name");
+            String eventId2 = UUID.randomUUID().toString();
+            NameWasChanged nameWasChanged1 = new NameWasChanged(eventId2, now.plusHours(1), "name2");
+            persist("name", Stream.of(nameDefined, nameWasChanged1));
 
-            @Test
-            void updates_cloud_event_when_cloud_event_exists() {
-                // Given
-                LocalDateTime now = LocalDateTime.now();
-                NameDefined nameDefined = new NameDefined(UUID.randomUUID().toString(), now, "name");
-                String eventId2 = UUID.randomUUID().toString();
-                NameWasChanged nameWasChanged1 = new NameWasChanged(eventId2, now.plusHours(1), "name2");
-                persist("name", Stream.of(nameDefined, nameWasChanged1));
+            // When
+            Optional<NameWasChanged> updatedCloudEvent = eventStore.updateEvent(eventId2, NAME_SOURCE, cloudEvent -> {
+                NameWasChanged e = deserialize(cloudEvent);
+                NameWasChanged correctedName = new NameWasChanged(e.getEventId(), e.getTimestamp(), "name3");
+                return CloudEventBuilder.v1(cloudEvent).withData(serializeEvent(correctedName)).build();
+            }).map(SpringBlockingMongoEventStoreTest.this::deserialize);
 
-                // When
-                eventStore.updateEvent(eventId2, NAME_SOURCE, cloudEvent -> {
-                    NameWasChanged e = deserialize(cloudEvent);
-                    NameWasChanged correctedName = new NameWasChanged(e.getEventId(), e.getTimestamp(), "name3");
-                    return CloudEventBuilder.v1(cloudEvent).withData(serializeEvent(correctedName)).build();
-                });
+            // Then
+            assertThat(updatedCloudEvent).contains(new NameWasChanged(eventId2, now.plusHours(1), "name3"));
+        }
 
-                // Then
-                EventStream<CloudEvent> eventStream = eventStore.read("name");
-                List<DomainEvent> readEvents = deserialize(eventStream.events());
-                assertThat(readEvents).containsExactly(nameDefined, new NameWasChanged(eventId2, now.plusHours(1), "name3"));
-            }
+        @Test
+        void returns_empty_optional_when_cloud_event_does_not_exists() {
+            // Given
+            LocalDateTime now = LocalDateTime.now();
+            NameDefined nameDefined = new NameDefined(UUID.randomUUID().toString(), now, "name");
+            NameWasChanged nameWasChanged1 = new NameWasChanged(UUID.randomUUID().toString(), now.plusHours(1), "name2");
+            persist("name", Stream.of(nameDefined, nameWasChanged1));
 
-            @Test
-            void returns_updated_cloud_event_when_cloud_event_exists() {
-                // Given
-                LocalDateTime now = LocalDateTime.now();
-                NameDefined nameDefined = new NameDefined(UUID.randomUUID().toString(), now, "name");
-                String eventId2 = UUID.randomUUID().toString();
-                NameWasChanged nameWasChanged1 = new NameWasChanged(eventId2, now.plusHours(1), "name2");
-                persist("name", Stream.of(nameDefined, nameWasChanged1));
+            // When
+            Optional<CloudEvent> updatedCloudEvent = eventStore.updateEvent(UUID.randomUUID().toString(), NAME_SOURCE, cloudEvent -> {
+                NameWasChanged e = deserialize(cloudEvent);
+                NameWasChanged correctedName = new NameWasChanged(e.getEventId(), e.getTimestamp(), "name3");
+                return CloudEventBuilder.v1(cloudEvent).withData(serializeEvent(correctedName)).build();
+            });
+            // Then
+            assertThat(updatedCloudEvent).isEmpty();
+        }
 
-                // When
-                Optional<NameWasChanged> updatedCloudEvent = eventStore.updateEvent(eventId2, NAME_SOURCE, cloudEvent -> {
-                    NameWasChanged e = deserialize(cloudEvent);
-                    NameWasChanged correctedName = new NameWasChanged(e.getEventId(), e.getTimestamp(), "name3");
-                    return CloudEventBuilder.v1(cloudEvent).withData(serializeEvent(correctedName)).build();
-                }).map(SpringBlockingMongoEventStoreTest.this::deserialize);
+        @Test
+        void throw_iae_when_update_function_returns_null() {
+            // Given
+            LocalDateTime now = LocalDateTime.now();
+            NameDefined nameDefined = new NameDefined(UUID.randomUUID().toString(), now, "name");
+            String eventId2 = UUID.randomUUID().toString();
+            NameWasChanged nameWasChanged1 = new NameWasChanged(eventId2, now.plusHours(1), "name2");
+            persist("name", Stream.of(nameDefined, nameWasChanged1));
 
-                // Then
-                assertThat(updatedCloudEvent).contains(new NameWasChanged(eventId2, now.plusHours(1), "name3"));
-            }
+            // When
+            Throwable throwable = catchThrowable(() -> eventStore.updateEvent(eventId2, NAME_SOURCE, cloudEvent -> null));
 
-            @Test
-            void returns_empty_optional_when_cloud_event_does_not_exists() {
-                // Given
-                LocalDateTime now = LocalDateTime.now();
-                NameDefined nameDefined = new NameDefined(UUID.randomUUID().toString(), now, "name");
-                NameWasChanged nameWasChanged1 = new NameWasChanged(UUID.randomUUID().toString(), now.plusHours(1), "name2");
-                persist("name", Stream.of(nameDefined, nameWasChanged1));
+            // Then
+            assertThat(throwable).isExactlyInstanceOf(IllegalArgumentException.class).hasMessage("Cloud event update function is not allowed to return null");
+        }
 
-                // When
-                Optional<CloudEvent> updatedCloudEvent = eventStore.updateEvent(UUID.randomUUID().toString(), NAME_SOURCE, cloudEvent -> {
-                    NameWasChanged e = deserialize(cloudEvent);
-                    NameWasChanged correctedName = new NameWasChanged(e.getEventId(), e.getTimestamp(), "name3");
-                    return CloudEventBuilder.v1(cloudEvent).withData(serializeEvent(correctedName)).build();
-                });
-                // Then
-                assertThat(updatedCloudEvent).isEmpty();
-            }
+        @Test
+        void when_update_function_returns_the_same_argument_then_cloud_event_is_unchanged_in_the_database() {
+            // Given
+            LocalDateTime now = LocalDateTime.now();
+            NameDefined nameDefined = new NameDefined(UUID.randomUUID().toString(), now, "name");
+            String eventId2 = UUID.randomUUID().toString();
+            NameWasChanged nameWasChanged1 = new NameWasChanged(eventId2, now.plusHours(1), "name2");
+            persist("name", Stream.of(nameDefined, nameWasChanged1));
 
-            @Test
-            void throw_iae_when_update_function_returns_null() {
-                // Given
-                LocalDateTime now = LocalDateTime.now();
-                NameDefined nameDefined = new NameDefined(UUID.randomUUID().toString(), now, "name");
-                String eventId2 = UUID.randomUUID().toString();
-                NameWasChanged nameWasChanged1 = new NameWasChanged(eventId2, now.plusHours(1), "name2");
-                persist("name", Stream.of(nameDefined, nameWasChanged1));
+            // When
+            eventStore.updateEvent(eventId2, NAME_SOURCE, Function.identity());
 
-                // When
-                Throwable throwable = catchThrowable(() -> eventStore.updateEvent(eventId2, NAME_SOURCE, cloudEvent -> null));
-
-                // Then
-                assertThat(throwable).isExactlyInstanceOf(IllegalArgumentException.class).hasMessage("Cloud event update function is not allowed to return null");
-            }
-
-            @Test
-            void when_update_function_returns_the_same_argument_then_cloud_event_is_unchanged_in_the_database() {
-                // Given
-                LocalDateTime now = LocalDateTime.now();
-                NameDefined nameDefined = new NameDefined(UUID.randomUUID().toString(), now, "name");
-                String eventId2 = UUID.randomUUID().toString();
-                NameWasChanged nameWasChanged1 = new NameWasChanged(eventId2, now.plusHours(1), "name2");
-                persist("name", Stream.of(nameDefined, nameWasChanged1));
-
-                // When
-                eventStore.updateEvent(eventId2, NAME_SOURCE, Function.identity());
-
-                // Then
-                EventStream<CloudEvent> eventStream = eventStore.read("name");
-                List<DomainEvent> readEvents = deserialize(eventStream.events());
-                assertThat(readEvents).containsExactly(nameDefined, nameWasChanged1);
-            }
+            // Then
+            EventStream<CloudEvent> eventStream = eventStore.read("name");
+            List<DomainEvent> readEvents = deserialize(eventStream.events());
+            assertThat(readEvents).containsExactly(nameDefined, nameWasChanged1);
         }
     }
 
@@ -908,12 +465,6 @@ public class SpringBlockingMongoEventStoreTest {
     class ConditionallyWriteToSpringMongoEventStore {
 
         LocalDateTime now = LocalDateTime.now();
-
-        @BeforeEach
-        void initialize_event_store() {
-            MongoTransactionManager mongoTransactionManager = new MongoTransactionManager(new SimpleMongoClientDatabaseFactory(mongoClient, requireNonNull(connectionString.getDatabase())));
-            eventStore = new SpringBlockingMongoEventStore(mongoTemplate, new EventStoreConfig(connectionString.getCollection(), StreamConsistencyGuarantee.transactional("event-stream-version", mongoTransactionManager), TimeRepresentation.RFC_3339_STRING));
-        }
 
         @Nested
         @DisplayName("eq")
@@ -1296,11 +847,6 @@ public class SpringBlockingMongoEventStoreTest {
     @DisplayName("queries")
     class QueriesTest {
 
-        @BeforeEach
-        void create_mongo_spring_blocking_event_store() {
-            eventStore = new SpringBlockingMongoEventStore(mongoTemplate, new EventStoreConfig(connectionString.getCollection(), StreamConsistencyGuarantee.none(), TimeRepresentation.RFC_3339_STRING));
-        }
-
         @Test
         void all_without_skip_and_limit_returns_all_events() {
             // Given
@@ -1497,7 +1043,7 @@ public class SpringBlockingMongoEventStoreTest {
                     .withDataSchema(URI.create("urn:myschema"))
                     .withDataContentType("application/json")
                     .withData("{\"hello\":\"world\"}".getBytes(UTF_8))
-                    .withExtension(occurrent("something"))
+                    .withExtension(occurrent("something", 1))
                     .build();
             persist("something", cloudEvent);
 
@@ -1526,7 +1072,7 @@ public class SpringBlockingMongoEventStoreTest {
                     .withDataSchema(URI.create("urn:myschema"))
                     .withDataContentType("text/plain")
                     .withData("text".getBytes(UTF_8))
-                    .withExtension(occurrent("something"))
+                    .withExtension(occurrent("something", 1))
                     .build();
             persist("something", cloudEvent);
 
@@ -1710,7 +1256,8 @@ public class SpringBlockingMongoEventStoreTest {
 
             @BeforeEach
             void event_store_is_configured_to_using_date_as_time_representation() {
-                eventStore = new SpringBlockingMongoEventStore(mongoTemplate, new EventStoreConfig(connectionString.getCollection(), StreamConsistencyGuarantee.none(), TimeRepresentation.DATE));
+                EventStoreConfig eventStoreConfig = new EventStoreConfig.Builder().eventStoreCollectionName(connectionString.getCollection()).transactionConfig(mongoTransactionManager).timeRepresentation(TimeRepresentation.DATE).build();
+                eventStore = new SpringBlockingMongoEventStore(mongoTemplate, eventStoreConfig);
             }
 
             @Test

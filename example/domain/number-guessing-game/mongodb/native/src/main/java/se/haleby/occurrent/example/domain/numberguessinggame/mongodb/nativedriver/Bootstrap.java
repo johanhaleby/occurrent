@@ -21,7 +21,6 @@ import se.haleby.occurrent.eventstore.api.blocking.EventStoreQueries;
 import se.haleby.occurrent.eventstore.mongodb.TimeRepresentation;
 import se.haleby.occurrent.eventstore.mongodb.nativedriver.EventStoreConfig;
 import se.haleby.occurrent.eventstore.mongodb.nativedriver.MongoEventStore;
-import se.haleby.occurrent.eventstore.mongodb.nativedriver.StreamConsistencyGuarantee;
 import se.haleby.occurrent.example.domain.numberguessinggame.model.MaxNumberOfGuesses;
 import se.haleby.occurrent.example.domain.numberguessinggame.model.domainevents.*;
 import se.haleby.occurrent.example.domain.numberguessinggame.mongodb.nativedriver.integrationevent.NumberGuessingGameCompleted;
@@ -81,7 +80,7 @@ public class Bootstrap {
 
     public static Bootstrap bootstrap() {
         MongoClient mongoClient = MongoClients.create("mongodb://localhost:27017");
-        MongoEventStore mongoEventStore = new MongoEventStore(mongoClient, DATABASE_NAME, EVENTS_COLLECTION_NAME, new EventStoreConfig(StreamConsistencyGuarantee.transactional("versions"), TimeRepresentation.DATE));
+        MongoEventStore mongoEventStore = new MongoEventStore(mongoClient, DATABASE_NAME, EVENTS_COLLECTION_NAME, new EventStoreConfig(TimeRepresentation.DATE));
 
         ObjectMapper objectMapper = new ObjectMapper();
         Serialization serialization = new Serialization(objectMapper, URI.create("urn:occurrent:domain:numberguessinggame"));

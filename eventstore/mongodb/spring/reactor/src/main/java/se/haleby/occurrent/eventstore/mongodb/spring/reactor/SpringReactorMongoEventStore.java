@@ -13,14 +13,12 @@ import org.bson.conversions.Bson;
 import org.springframework.dao.DuplicateKeyException;
 import org.springframework.data.domain.Sort;
 import org.springframework.data.mongodb.core.ReactiveMongoTemplate;
-import org.springframework.data.mongodb.core.query.Criteria;
 import org.springframework.data.mongodb.core.query.Query;
-import org.springframework.data.mongodb.core.query.Update;
 import org.springframework.transaction.reactive.TransactionalOperator;
 import reactor.core.publisher.Flux;
 import reactor.core.publisher.Mono;
-import se.haleby.occurrent.cloudevents.OccurrentCloudEventExtension;
 import se.haleby.occurrent.eventstore.api.Filter;
+import se.haleby.occurrent.eventstore.api.LongConditionEvaluator;
 import se.haleby.occurrent.eventstore.api.WriteCondition;
 import se.haleby.occurrent.eventstore.api.WriteCondition.StreamVersionWriteCondition;
 import se.haleby.occurrent.eventstore.api.WriteConditionNotFulfilledException;
@@ -31,12 +29,8 @@ import se.haleby.occurrent.eventstore.api.reactor.EventStream;
 import se.haleby.occurrent.eventstore.mongodb.TimeRepresentation;
 import se.haleby.occurrent.eventstore.mongodb.internal.MongoBulkWriteExceptionToDuplicateCloudEventExceptionTranslator;
 import se.haleby.occurrent.eventstore.mongodb.internal.OccurrentCloudEventMongoDBDocumentMapper;
-import se.haleby.occurrent.eventstore.mongodb.spring.reactor.StreamConsistencyGuarantee.None;
-import se.haleby.occurrent.eventstore.mongodb.spring.reactor.StreamConsistencyGuarantee.TransactionInsertsOnly;
-import se.haleby.occurrent.eventstore.mongodb.spring.reactor.StreamConsistencyGuarantee.Transactional;
 
 import java.net.URI;
-import java.util.HashMap;
 import java.util.Objects;
 import java.util.function.Function;
 
@@ -46,9 +40,9 @@ import static org.springframework.data.domain.Sort.Direction.DESC;
 import static org.springframework.data.mongodb.SessionSynchronization.ALWAYS;
 import static org.springframework.data.mongodb.core.query.Criteria.where;
 import static se.haleby.occurrent.cloudevents.OccurrentCloudEventExtension.STREAM_ID;
+import static se.haleby.occurrent.cloudevents.OccurrentCloudEventExtension.STREAM_VERSION;
 import static se.haleby.occurrent.eventstore.api.Filter.TIME;
 import static se.haleby.occurrent.eventstore.mongodb.internal.OccurrentCloudEventMongoDBDocumentMapper.convertToDocument;
-import static se.haleby.occurrent.eventstore.mongodb.spring.common.internal.ConditionToCriteriaConverter.convertConditionToCriteria;
 import static se.haleby.occurrent.eventstore.mongodb.spring.common.internal.FilterToQueryConverter.convertFilterToQuery;
 
 public class SpringReactorMongoEventStore implements EventStore, EventStoreOperations, EventStoreQueries {
@@ -58,19 +52,19 @@ public class SpringReactorMongoEventStore implements EventStore, EventStoreOpera
 
     private final ReactiveMongoTemplate mongoTemplate;
     private final String eventStoreCollectionName;
-    private final StreamConsistencyGuarantee streamConsistencyGuarantee;
     private final EventFormat cloudEventSerializer;
     private final TimeRepresentation timeRepresentation;
+    private final TransactionalOperator transactionalOperator;
 
     public SpringReactorMongoEventStore(ReactiveMongoTemplate mongoTemplate, EventStoreConfig config) {
         requireNonNull(mongoTemplate, ReactiveMongoTemplate.class.getSimpleName() + " cannot be null");
         requireNonNull(config, EventStoreConfig.class.getSimpleName() + " cannot be null");
         this.mongoTemplate = mongoTemplate;
         this.eventStoreCollectionName = config.eventStoreCollectionName;
-        this.streamConsistencyGuarantee = config.streamConsistencyGuarantee;
+        this.transactionalOperator = config.transactionalOperator;
         this.timeRepresentation = config.timeRepresentation;
         cloudEventSerializer = EventFormatProvider.getInstance().resolveFormat(JsonFormat.CONTENT_TYPE);
-        initializeEventStore(eventStoreCollectionName, streamConsistencyGuarantee, mongoTemplate).block();
+        initializeEventStore(eventStoreCollectionName, mongoTemplate).block();
     }
 
     @Override
@@ -82,65 +76,59 @@ public class SpringReactorMongoEventStore implements EventStore, EventStoreOpera
     public Mono<Void> write(String streamId, WriteCondition writeCondition, Flux<CloudEvent> events) {
         if (writeCondition == null) {
             throw new IllegalArgumentException(WriteCondition.class.getSimpleName() + " cannot be null");
-        } else if (streamConsistencyGuarantee instanceof None && !writeCondition.isAnyStreamVersion()) {
-            throw new IllegalArgumentException("Cannot use a " + WriteCondition.class.getSimpleName() + " other than 'any' when streamConsistencyGuarantee is " + None.class.getSimpleName());
         }
 
-        Flux<Document> serializedEvents = events.map(cloudEvent -> OccurrentCloudEventMongoDBDocumentMapper.convertToDocument(cloudEventSerializer, timeRepresentation, streamId, cloudEvent));
+        return transactionalOperator.execute(transactionStatus -> {
+                    Flux<Document> documentFlux = currentStreamVersion(streamId)
+                            .flatMap(currentStreamVersion -> {
+                                final Mono<Long> result;
+                                if (isFulfilled(currentStreamVersion, writeCondition)) {
+                                    result = Mono.just(currentStreamVersion);
+                                } else {
+                                    result = Mono.error(new WriteConditionNotFulfilledException(streamId, currentStreamVersion, writeCondition, String.format("%s was not fulfilled. Expected version %s but was %s.", WriteCondition.class.getSimpleName(), writeCondition.toString(), currentStreamVersion)));
+                                }
+                                return result;
+                            })
+                            .flatMapMany(currentStreamVersion ->
+                                    infiniteFluxFrom(currentStreamVersion)
+                                            .zipWith(events)
+                                            .map(streamVersionAndEvent -> {
+                                                long streamVersion = streamVersionAndEvent.getT1();
+                                                CloudEvent event = streamVersionAndEvent.getT2();
+                                                return convertToDocument(cloudEventSerializer, timeRepresentation, streamId, streamVersion, event);
+                                            }));
+                    return insertAll(documentFlux);
+                }
+        ).then();
+    }
 
-        Mono<Void> result;
-        if (streamConsistencyGuarantee instanceof None) {
-            result = insertAll(serializedEvents).then();
-        } else if (streamConsistencyGuarantee instanceof TransactionInsertsOnly) {
-            TransactionalOperator transactional = ((TransactionInsertsOnly) streamConsistencyGuarantee).transactionalOperator;
-            result = transactional.execute(__ -> insertAll(serializedEvents)).then();
-        } else if (streamConsistencyGuarantee instanceof Transactional) {
-            Transactional transactional = (Transactional) this.streamConsistencyGuarantee;
-            String streamVersionCollectionName = transactional.streamVersionCollectionName;
-            result = transactional.transactionalOperator.execute(transactionStatus -> conditionallyWriteEvents(streamId, streamVersionCollectionName, writeCondition, serializedEvents)).then();
-        } else {
-            throw new IllegalStateException("Internal error, invalid stream write consistency guarantee");
-        }
-        return result;
+    private static Flux<Long> infiniteFluxFrom(Long currentStreamVersion) {
+        return Flux.generate(() -> currentStreamVersion, (version, sink) -> {
+            long nextVersion = version + 1L;
+            sink.next(nextVersion);
+            return nextVersion;
+        });
     }
 
     @Override
     public Mono<Boolean> exists(String streamId) {
-        if (streamConsistencyGuarantee instanceof Transactional) {
-            String streamVersionCollectionName = ((Transactional) streamConsistencyGuarantee).streamVersionCollectionName;
-            return mongoTemplate.exists(Query.query(where(ID).is(streamId)), streamVersionCollectionName);
-        } else {
-            return mongoTemplate.exists(streamIdEqualTo(streamId), eventStoreCollectionName);
-        }
+        return mongoTemplate.exists(streamIdEqualTo(streamId), eventStoreCollectionName);
     }
 
     @Override
     public Mono<EventStream<CloudEvent>> read(String streamId, int skip, int limit) {
-        final Mono<EventStreamImpl> eventStream;
-        if (streamConsistencyGuarantee instanceof None || streamConsistencyGuarantee instanceof TransactionInsertsOnly) {
-            Flux<Document> flux = readCloudEvents(streamIdEqualTo(streamId), skip, limit, SortBy.NATURAL_ASC);
-            eventStream = Mono.just(new EventStreamImpl(streamId, 0, flux));
-        } else if (streamConsistencyGuarantee instanceof Transactional) {
-            Transactional transactional = (Transactional) this.streamConsistencyGuarantee;
-            eventStream = transactional.transactionalOperator
-                    .execute(transactionStatus -> readEventStream(streamId, skip, limit, transactional.streamVersionCollectionName))
-                    .single();
-        } else {
-            throw new IllegalStateException("Internal error, invalid stream write consistency guarantee");
-        }
+        Mono<EventStreamImpl> eventStream = transactionalOperator.execute(transactionStatus -> readEventStream(streamId, skip, limit)).single();
         return convertToCloudEvent(cloudEventSerializer, timeRepresentation, eventStream);
     }
 
     // Read
-    private Mono<EventStreamImpl> readEventStream(String streamId, int skip, int limit, String streamVersionCollectionName) {
-        return mongoTemplate.findOne(Query.query(where(ID).is(streamId)), EventStreamImpl.class, streamVersionCollectionName)
-                .map(es -> {
-                    Query query = streamIdEqualTo(streamId);
-                    Flux<Document> cloudEventDocuments = readCloudEvents(query, skip, limit, SortBy.NATURAL_ASC);
-                    es.setEvents(cloudEventDocuments);
-                    return es;
+    private Mono<EventStreamImpl> readEventStream(String streamId, int skip, int limit) {
+        return currentStreamVersion(streamId)
+                .flatMap(currentStreamVersion -> {
+                    Flux<Document> cloudEventDocuments = readCloudEvents(streamIdEqualTo(streamId), skip, limit, SortBy.NATURAL_ASC);
+                    return Mono.just(new EventStreamImpl(streamId, currentStreamVersion, cloudEventDocuments));
                 })
-                .switchIfEmpty(Mono.just(new EventStreamImpl(streamId, 0, Flux.empty())));
+                .switchIfEmpty(Mono.fromSupplier(() -> new EventStreamImpl(streamId, 0, Flux.empty())));
     }
 
     private Flux<Document> readCloudEvents(Query query, int skip, int limit, SortBy sortBy) {
@@ -167,12 +155,14 @@ public class SpringReactorMongoEventStore implements EventStore, EventStoreOpera
         return mongoTemplate.find(query, Document.class, eventStoreCollectionName);
     }
 
-    // Write
-    private Mono<Void> conditionallyWriteEvents(String streamId, String streamVersionCollectionName, WriteCondition writeCondition, Flux<Document> serializedEvents) {
-        return increaseStreamVersion(streamId, writeCondition, streamVersionCollectionName)
-                .thenMany(insertAll(serializedEvents))
-                .then();
+    private Mono<Long> currentStreamVersion(String streamId) {
+        Query query = Query.query(where(STREAM_ID).is(streamId));
+        query.fields().include(STREAM_VERSION);
+        return mongoTemplate.findOne(query.with(Sort.by(DESC, STREAM_VERSION)).limit(1), Document.class, eventStoreCollectionName)
+                .map(documentWithLatestStreamVersion -> documentWithLatestStreamVersion.getLong(STREAM_VERSION))
+                .switchIfEmpty(Mono.just(0L));
     }
+
 
     private Flux<Document> insertAll(Flux<Document> documents) {
         return mongoTemplate.insertAll(documents.collectList(), eventStoreCollectionName)
@@ -180,35 +170,9 @@ public class SpringReactorMongoEventStore implements EventStore, EventStoreOpera
                 .onErrorMap(MongoBulkWriteException.class, MongoBulkWriteExceptionToDuplicateCloudEventExceptionTranslator::translateToDuplicateCloudEventException);
     }
 
-    private Mono<Void> increaseStreamVersion(String streamId, WriteCondition writeCondition, String streamVersionCollectionName) {
-        return mongoTemplate.updateFirst(Query.query(generateUpdateCondition(streamId, writeCondition)),
-                new Update().inc(VERSION, 1L), streamVersionCollectionName)
-                .flatMap(updateResult -> {
-                    final Mono<Void> mono;
-                    if (updateResult.getMatchedCount() == 0) {
-                        mono = mongoTemplate.findOne(Query.query(where(ID).is(streamId)), Document.class, streamVersionCollectionName)
-                                .flatMap(document -> {
-                                    long eventStreamVersion = document.getLong(VERSION);
-                                    return Mono.error(new WriteConditionNotFulfilledException(streamId, eventStreamVersion, writeCondition, String.format("%s was not fulfilled. Expected version %s but was %s.", WriteCondition.class.getSimpleName(), writeCondition.toString(), eventStreamVersion)));
-                                })
-                                .switchIfEmpty(
-                                        Mono.fromSupplier(() -> new Document(new HashMap<String, Object>() {{
-                                            put(ID, streamId);
-                                            put(VERSION, 1L);
-                                        }})).flatMap(data -> mongoTemplate.insert(data, streamVersionCollectionName)))
-                                .then();
-
-                    } else {
-                        mono = Mono.empty();
-                    }
-                    return mono;
-                });
-    }
-
-    private static Criteria generateUpdateCondition(String streamId, WriteCondition writeCondition) {
-        Criteria streamEq = where(ID).is(streamId);
+    private static boolean isFulfilled(long streamVersion, WriteCondition writeCondition) {
         if (writeCondition.isAnyStreamVersion()) {
-            return streamEq;
+            return true;
         }
 
         if (!(writeCondition instanceof StreamVersionWriteCondition)) {
@@ -216,32 +180,27 @@ public class SpringReactorMongoEventStore implements EventStore, EventStoreOpera
         }
 
         StreamVersionWriteCondition c = (StreamVersionWriteCondition) writeCondition;
-        return streamEq.andOperator(convertConditionToCriteria(VERSION, c.condition));
+        return LongConditionEvaluator.evaluate(c.condition, streamVersion);
     }
 
     // Initialization
-    private static Mono<Void> initializeEventStore(String eventStoreCollectionName, StreamConsistencyGuarantee streamConsistencyGuarantee, ReactiveMongoTemplate mongoTemplate) {
+    private static Mono<Void> initializeEventStore(String eventStoreCollectionName, ReactiveMongoTemplate mongoTemplate) {
         Mono<MongoCollection<Document>> createEventStoreCollection = createCollection(eventStoreCollectionName, mongoTemplate);
-        Mono<String> indexStreamId = createIndex(eventStoreCollectionName, mongoTemplate, Indexes.ascending(OccurrentCloudEventExtension.STREAM_ID), new IndexOptions());
+
+        // Stream id
+        Mono<String> indexStreamId = createIndex(eventStoreCollectionName, mongoTemplate, Indexes.ascending(STREAM_ID), new IndexOptions());
 
         // Cloud spec defines id + source must be unique!
         Mono<String> indexIdAndSource = createIndex(eventStoreCollectionName, mongoTemplate, Indexes.compoundIndex(Indexes.ascending("id"), Indexes.ascending("source")), new IndexOptions().unique(true));
 
-        final Mono<String> additionalIndexes;
-        if (streamConsistencyGuarantee instanceof Transactional) {
-            String streamVersionCollectionName = ((Transactional) streamConsistencyGuarantee).streamVersionCollectionName;
-            additionalIndexes = createIndex(streamVersionCollectionName, mongoTemplate, Indexes.compoundIndex(Indexes.ascending(ID), Indexes.ascending(VERSION)), new IndexOptions().unique(true));
-        } else {
-            additionalIndexes = Mono.empty();
-        }
+        // Create a streamId + streamVersion index
+        Mono<String> indexStreamIdAndStreamVersion = createIndex(eventStoreCollectionName, mongoTemplate, Indexes.compoundIndex(Indexes.ascending(STREAM_ID), Indexes.descending(STREAM_VERSION)), new IndexOptions().unique(true));
 
-        if (!(streamConsistencyGuarantee instanceof None)) {
-            // SessionSynchronization need to be "ALWAYS" in order for TransactionTemplate to work with mongo template!
-            // See https://docs.spring.io/spring-data/mongodb/docs/current/reference/html/#mongo.transactions.transaction-template
-            mongoTemplate.setSessionSynchronization(ALWAYS);
-        }
+        // SessionSynchronization need to be "ALWAYS" in order for TransactionTemplate to work with mongo template!
+        // See https://docs.spring.io/spring-data/mongodb/docs/current/reference/html/#mongo.transactions.transaction-template
+        mongoTemplate.setSessionSynchronization(ALWAYS);
 
-        return createEventStoreCollection.then(indexStreamId).then(indexIdAndSource).then(additionalIndexes).then();
+        return createEventStoreCollection.then(indexStreamId).then(indexIdAndSource).then(indexStreamIdAndStreamVersion).then();
     }
 
     private static Mono<String> createIndex(String eventStoreCollectionName, ReactiveMongoTemplate mongoTemplate, Bson index, IndexOptions indexOptions) {
@@ -268,32 +227,7 @@ public class SpringReactorMongoEventStore implements EventStore, EventStoreOpera
     public Mono<Void> deleteEventStream(String streamId) {
         requireNonNull(streamId, "Stream id cannot be null");
 
-        final Mono<Void> mono;
-        if (streamConsistencyGuarantee instanceof Transactional) {
-            Transactional transactional = (Transactional) this.streamConsistencyGuarantee;
-            Mono<Void> removeMetadataAndEvents = mongoTemplate
-                    .remove(Query.query(where(ID).is(streamId)), transactional.streamVersionCollectionName)
-                    .then(deleteAllEventsInEventStream(streamId));
-            mono = transactional.transactionalOperator.transactional(removeMetadataAndEvents);
-        } else {
-            mono = deleteAllEventsInEventStream(streamId);
-        }
-        return mono;
-    }
-
-    @Override
-    public Mono<Void> deleteAllEventsInEventStream(String streamId) {
-        requireNonNull(streamId, "Stream id cannot be null");
-        Mono<Void> deleteEvents = mongoTemplate.remove(streamIdEqualTo(streamId), eventStoreCollectionName).then();
-
-        final Mono<Void> mono;
-        if (streamConsistencyGuarantee instanceof Transactional) {
-            Transactional transactional = (Transactional) this.streamConsistencyGuarantee;
-            mono = transactional.transactionalOperator.transactional(deleteEvents);
-        } else {
-            mono = deleteEvents;
-        }
-        return mono;
+        return mongoTemplate.remove(streamIdEqualTo(streamId), eventStoreCollectionName).then();
     }
 
     @Override
@@ -304,6 +238,7 @@ public class SpringReactorMongoEventStore implements EventStore, EventStoreOpera
         return mongoTemplate.remove(Query.query(where("id").is(cloudEventId).and("source").is(cloudEventSource)), eventStoreCollectionName).then();
     }
 
+    @SuppressWarnings("ConstantConditions")
     @Override
     public Mono<CloudEvent> updateEvent(String cloudEventId, URI cloudEventSource, Function<CloudEvent, CloudEvent> updateFunction) {
         Function<Function<CloudEvent, CloudEvent>, Mono<CloudEvent>> logic = (fn) -> {
@@ -318,7 +253,8 @@ public class SpringReactorMongoEventStore implements EventStore, EventStoreOpera
                             result = Mono.error(new IllegalArgumentException("Cloud event update function is not allowed to return null"));
                         } else if (!Objects.equals(updatedCloudEvent, currentCloudEvent)) {
                             String streamId = (String) currentCloudEvent.getExtension(STREAM_ID);
-                            Document updatedDocument = convertToDocument(cloudEventSerializer, timeRepresentation, streamId, updatedCloudEvent);
+                            long streamVersion = (long) currentCloudEvent.getExtension(STREAM_VERSION);
+                            Document updatedDocument = convertToDocument(cloudEventSerializer, timeRepresentation, streamId, streamVersion, updatedCloudEvent);
                             updatedDocument.put(ID, document.get(ID)); // Insert the Mongo ObjectID
                             result = mongoTemplate.findAndReplace(cloudEventQuery, updatedDocument, eventStoreCollectionName).thenReturn(updatedCloudEvent);
                         } else {
@@ -328,17 +264,7 @@ public class SpringReactorMongoEventStore implements EventStore, EventStoreOpera
                     });
         };
 
-        final Mono<CloudEvent> result;
-        if (streamConsistencyGuarantee instanceof None || streamConsistencyGuarantee instanceof TransactionInsertsOnly) {
-            result = logic.apply(updateFunction);
-        } else if (streamConsistencyGuarantee instanceof Transactional) {
-            Transactional tx = ((Transactional) streamConsistencyGuarantee);
-            result = tx.transactionalOperator.transactional(logic.apply(updateFunction));
-        } else {
-            throw new IllegalStateException("Stream consistency guarantee " + streamConsistencyGuarantee.getClass().getName() + " is invalid");
-        }
-
-        return result;
+        return transactionalOperator.transactional(logic.apply(updateFunction));
     }
 
     @Override
@@ -351,7 +277,7 @@ public class SpringReactorMongoEventStore implements EventStore, EventStoreOpera
 
     @SuppressWarnings("unused")
     private static class EventStreamImpl implements EventStream<Document> {
-        private String _id;
+        private String id;
         private long version;
         private Flux<Document> events;
 
@@ -359,15 +285,15 @@ public class SpringReactorMongoEventStore implements EventStore, EventStoreOpera
         EventStreamImpl() {
         }
 
-        EventStreamImpl(String _id, long version, Flux<Document> events) {
-            this._id = _id;
+        EventStreamImpl(String id, long version, Flux<Document> events) {
+            this.id = id;
             this.version = version;
             this.events = events;
         }
 
         @Override
         public String id() {
-            return _id;
+            return id;
         }
 
         @Override
@@ -378,18 +304,6 @@ public class SpringReactorMongoEventStore implements EventStore, EventStoreOpera
         @Override
         public Flux<Document> events() {
             return events;
-        }
-
-        public void set_id(String _id) {
-            this._id = _id;
-        }
-
-        public void setVersion(long version) {
-            this.version = version;
-        }
-
-        public void setEvents(Flux<Document> events) {
-            this.events = events;
         }
     }
 

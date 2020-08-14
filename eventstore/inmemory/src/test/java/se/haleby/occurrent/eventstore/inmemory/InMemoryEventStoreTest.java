@@ -33,6 +33,7 @@ import static java.time.ZoneOffset.UTC;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.catchThrowable;
 import static se.haleby.occurrent.cloudevents.OccurrentCloudEventExtension.STREAM_ID;
+import static se.haleby.occurrent.cloudevents.OccurrentCloudEventExtension.STREAM_VERSION;
 import static se.haleby.occurrent.eventstore.api.Condition.*;
 import static se.haleby.occurrent.eventstore.api.WriteCondition.streamVersion;
 import static se.haleby.occurrent.eventstore.api.WriteCondition.streamVersionEq;
@@ -63,7 +64,7 @@ public class InMemoryEventStoreTest {
 
         // Then
         EventStream<NameDefined> eventStream = inMemoryEventStore.read("name").map(unchecked(cloudEvent -> objectMapper.readValue(cloudEvent.getData(), NameDefined.class)));
-        softly.assertThat(eventStream.version()).isEqualTo(1L);
+        softly.assertThat(eventStream.version()).isEqualTo(events.size());
         softly.assertThat(eventStream.events()).hasSize(1);
         softly.assertThat(eventStream.events().collect(Collectors.toList())).containsExactly(new NameDefined(eventId, now, "John Doe"));
     }
@@ -84,6 +85,22 @@ public class InMemoryEventStoreTest {
         assertThat(eventStream.events().map(e -> e.getExtension(STREAM_ID))).containsOnly("name");
     }
 
+    @Test
+    void adds_stream_version_extension_to_each_event() {
+        // Given
+        InMemoryEventStore inMemoryEventStore = new InMemoryEventStore();
+        LocalDateTime now = LocalDateTime.now();
+
+        // When
+        DomainEvent event1 = new NameDefined(UUID.randomUUID().toString(), now, "John Doe");
+        DomainEvent event2 = new NameWasChanged(UUID.randomUUID().toString(), now, "Jan Doe");
+        unconditionallyPersist(inMemoryEventStore, "name", Stream.of(event1, event2).collect(Collectors.toList()));
+
+        // Then
+        EventStream<CloudEvent> eventStream = inMemoryEventStore.read("name");
+        assertThat(eventStream.events().map(e -> e.getExtension(STREAM_VERSION))).containsExactly(1L, 2L);
+    }
+
     @Nested
     @DisplayName("exists")
     class Exists {
@@ -98,22 +115,6 @@ public class InMemoryEventStoreTest {
             DomainEvent event1 = new NameDefined(UUID.randomUUID().toString(), now, "John Doe");
             DomainEvent event2 = new NameWasChanged(UUID.randomUUID().toString(), now, "Jan Doe");
             unconditionallyPersist(inMemoryEventStore, "name", Stream.of(event1, event2));
-
-            // Then
-            assertThat(inMemoryEventStore.exists("name")).isTrue();
-        }
-
-        @Test
-        void returns_true_when_stream_exists_but_contains_no_events() {
-            // Given
-            InMemoryEventStore inMemoryEventStore = new InMemoryEventStore();
-            LocalDateTime now = LocalDateTime.now();
-
-            // When
-            DomainEvent event1 = new NameDefined(UUID.randomUUID().toString(), now, "John Doe");
-            DomainEvent event2 = new NameWasChanged(UUID.randomUUID().toString(), now, "Jan Doe");
-            unconditionallyPersist(inMemoryEventStore, "name", Stream.of(event1, event2));
-            inMemoryEventStore.deleteAllEventsInEventStream("name");
 
             // Then
             assertThat(inMemoryEventStore.exists("name")).isTrue();
@@ -151,27 +152,6 @@ public class InMemoryEventStoreTest {
         }
 
         @Test
-        void delete_all_events_in_event_stream_deletes_the_events_in_the_stream_but_retains_stream_metadata(SoftAssertions softly) {
-            // Given
-            InMemoryEventStore inMemoryEventStore = new InMemoryEventStore();
-            LocalDateTime now = LocalDateTime.now();
-
-            String streamId = UUID.randomUUID().toString();
-            DomainEvent event1 = new NameDefined(UUID.randomUUID().toString(), now, "John Doe");
-            DomainEvent event2 = new NameWasChanged(UUID.randomUUID().toString(), now, "Jan Doe");
-            unconditionallyPersist(inMemoryEventStore, streamId, Stream.of(event1, event2));
-
-            // When
-            inMemoryEventStore.deleteAllEventsInEventStream(streamId);
-
-            // Then
-            EventStream<CloudEvent> eventStream = inMemoryEventStore.read(streamId);
-            softly.assertThat(eventStream.version()).isEqualTo(1);
-            softly.assertThat(eventStream.events()).isEmpty();
-            softly.assertThat(inMemoryEventStore.exists(streamId)).isTrue();
-        }
-
-        @Test
         void delete_event_deletes_only_the_specified_event(SoftAssertions softly) {
             // Given
             InMemoryEventStore inMemoryEventStore = new InMemoryEventStore();
@@ -193,7 +173,6 @@ public class InMemoryEventStoreTest {
             softly.assertThat(inMemoryEventStore.exists(streamId)).isTrue();
         }
     }
-
 
     @Nested
     @DisplayName("Conditionally Write to InMemory Event Store")
@@ -580,7 +559,7 @@ public class InMemoryEventStoreTest {
     }
 
     @Nested
-    @DisplayName("updaes")
+    @DisplayName("updates")
     class Updates {
         InMemoryEventStore inMemoryEventStore = new InMemoryEventStore();
         LocalDateTime now = LocalDateTime.now();

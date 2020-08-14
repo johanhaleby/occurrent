@@ -20,13 +20,6 @@ public interface EventStoreOperations {
     Mono<Void> deleteEventStream(String streamId);
 
     /**
-     * Delete all events associated with a event stream (metadata is retained if available)
-     *
-     * @param streamId The id of the event stream whose events to delete
-     */
-    Mono<Void> deleteAllEventsInEventStream(String streamId);
-
-    /**
      * Delete a specific cloud event from an event stream
      *
      * @param cloudEventId     The id of the cloud event (see {@link CloudEvent#getId()})

@@ -51,7 +51,6 @@ import static org.awaitility.Durations.FIVE_SECONDS;
 import static org.hamcrest.Matchers.is;
 import static se.haleby.occurrent.changestreamer.mongodb.MongoDBFilterSpecification.BsonMongoDBFilterSpecification.filter;
 import static se.haleby.occurrent.changestreamer.mongodb.MongoDBFilterSpecification.FULL_DOCUMENT;
-import static se.haleby.occurrent.eventstore.mongodb.nativedriver.StreamConsistencyGuarantee.transactional;
 import static se.haleby.occurrent.functional.CheckedFunction.unchecked;
 import static se.haleby.occurrent.functional.Not.not;
 import static se.haleby.occurrent.time.TimeConversion.toLocalDateTime;
@@ -77,7 +76,7 @@ public class BlockingChangeStreamerForMongoDBTest {
         ConnectionString connectionString = new ConnectionString(mongoDBContainer.getReplicaSetUrl() + ".events");
         this.mongoClient = MongoClients.create(connectionString);
         TimeRepresentation timeRepresentation = TimeRepresentation.RFC_3339_STRING;
-        EventStoreConfig config = new EventStoreConfig(transactional("stream-consistency"), timeRepresentation);
+        EventStoreConfig config = new EventStoreConfig(timeRepresentation);
         MongoDatabase database = mongoClient.getDatabase(requireNonNull(connectionString.getDatabase()));
         MongoCollection<Document> eventCollection = database.getCollection(requireNonNull(connectionString.getCollection()));
         mongoEventStore = new MongoEventStore(mongoClient, connectionString.getDatabase(), connectionString.getCollection(), config);

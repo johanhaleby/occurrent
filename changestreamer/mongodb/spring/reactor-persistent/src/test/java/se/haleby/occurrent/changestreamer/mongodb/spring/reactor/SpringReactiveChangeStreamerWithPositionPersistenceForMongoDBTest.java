@@ -30,7 +30,6 @@ import se.haleby.occurrent.eventstore.api.reactor.EventStore;
 import se.haleby.occurrent.eventstore.mongodb.TimeRepresentation;
 import se.haleby.occurrent.eventstore.mongodb.spring.reactor.EventStoreConfig;
 import se.haleby.occurrent.eventstore.mongodb.spring.reactor.SpringReactorMongoEventStore;
-import se.haleby.occurrent.eventstore.mongodb.spring.reactor.StreamConsistencyGuarantee;
 import se.haleby.occurrent.testsupport.mongodb.FlushMongoDBExtension;
 
 import java.net.URI;
@@ -79,7 +78,8 @@ public class SpringReactiveChangeStreamerWithPositionPersistenceForMongoDBTest {
         mongoClient = MongoClients.create(connectionString);
         reactiveMongoTemplate = new ReactiveMongoTemplate(MongoClients.create(connectionString), Objects.requireNonNull(connectionString.getDatabase()));
         ReactiveTransactionManager reactiveMongoTransactionManager = new ReactiveMongoTransactionManager(new SimpleReactiveMongoDatabaseFactory(mongoClient, requireNonNull(connectionString.getDatabase())));
-        mongoEventStore = new SpringReactorMongoEventStore(reactiveMongoTemplate, new EventStoreConfig("events", StreamConsistencyGuarantee.transactional("event-consistency", reactiveMongoTransactionManager), TimeRepresentation.RFC_3339_STRING));
+        EventStoreConfig eventStoreConfig = new EventStoreConfig.Builder().eventStoreCollectionName("events").transactionConfig(reactiveMongoTransactionManager).timeRepresentation(TimeRepresentation.RFC_3339_STRING).build();
+        mongoEventStore = new SpringReactorMongoEventStore(reactiveMongoTemplate, eventStoreConfig);
         ReactorChangeStreamer springReactiveChangeStreamerForMongoDB = new SpringReactiveChangeStreamerForMongoDB(reactiveMongoTemplate, "events", timeRepresentation);
         changeStreamer = new SpringReactiveChangeStreamerWithPositionPersistenceForMongoDB(springReactiveChangeStreamerForMongoDB, reactiveMongoTemplate, RESUME_TOKEN_COLLECTION);
         objectMapper = new ObjectMapper();

@@ -50,7 +50,6 @@ import static org.awaitility.Durations.ONE_SECOND;
 import static org.hamcrest.Matchers.is;
 import static se.haleby.occurrent.changestreamer.mongodb.MongoDBFilterSpecification.BsonMongoDBFilterSpecification.filter;
 import static se.haleby.occurrent.changestreamer.mongodb.MongoDBFilterSpecification.FULL_DOCUMENT;
-import static se.haleby.occurrent.eventstore.mongodb.spring.blocking.StreamConsistencyGuarantee.transactional;
 import static se.haleby.occurrent.functional.CheckedFunction.unchecked;
 import static se.haleby.occurrent.functional.Not.not;
 import static se.haleby.occurrent.time.TimeConversion.toLocalDateTime;
@@ -77,7 +76,8 @@ public class SpringBlockingChangeStreamerForMongoDBTest {
         mongoTemplate = new MongoTemplate(mongoClient, requireNonNull(connectionString.getDatabase()));
         MongoTransactionManager mongoTransactionManager = new MongoTransactionManager(new SimpleMongoClientDatabaseFactory(mongoClient, requireNonNull(connectionString.getDatabase())));
         TimeRepresentation timeRepresentation = TimeRepresentation.RFC_3339_STRING;
-        mongoEventStore = new SpringBlockingMongoEventStore(mongoTemplate, new EventStoreConfig(connectionString.getCollection(), transactional("stream-consistency", mongoTransactionManager), timeRepresentation));
+        EventStoreConfig eventStoreConfig = new EventStoreConfig.Builder().eventStoreCollectionName(connectionString.getCollection()).transactionConfig(mongoTransactionManager).timeRepresentation(timeRepresentation).build();
+        mongoEventStore = new SpringBlockingMongoEventStore(mongoTemplate, eventStoreConfig);
         changeStreamer = new SpringBlockingChangeStreamerForMongoDB(connectionString.getCollection(), new DefaultMessageListenerContainer(mongoTemplate), timeRepresentation);
         objectMapper = new ObjectMapper();
     }

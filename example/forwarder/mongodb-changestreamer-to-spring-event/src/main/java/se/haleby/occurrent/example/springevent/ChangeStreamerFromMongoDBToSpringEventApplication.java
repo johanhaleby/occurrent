@@ -15,7 +15,6 @@ import se.haleby.occurrent.eventstore.api.blocking.EventStore;
 import se.haleby.occurrent.eventstore.mongodb.TimeRepresentation;
 import se.haleby.occurrent.eventstore.mongodb.nativedriver.EventStoreConfig;
 import se.haleby.occurrent.eventstore.mongodb.nativedriver.MongoEventStore;
-import se.haleby.occurrent.eventstore.mongodb.nativedriver.StreamConsistencyGuarantee;
 
 import static com.fasterxml.jackson.databind.ObjectMapper.DefaultTyping.EVERYTHING;
 
@@ -36,7 +35,7 @@ public class ChangeStreamerFromMongoDBToSpringEventApplication {
         String database = connectionString.getDatabase();
         String collection = connectionString.getCollection();
 
-        return new MongoEventStore(mongoClient, database, collection, new EventStoreConfig(StreamConsistencyGuarantee.transactional("event-consistency"), TimeRepresentation.RFC_3339_STRING));
+        return new MongoEventStore(mongoClient, database, collection, new EventStoreConfig(TimeRepresentation.RFC_3339_STRING));
     }
 
     @Bean

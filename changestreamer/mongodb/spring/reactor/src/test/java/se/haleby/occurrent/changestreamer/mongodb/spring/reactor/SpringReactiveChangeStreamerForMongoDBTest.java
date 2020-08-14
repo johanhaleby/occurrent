@@ -28,7 +28,6 @@ import se.haleby.occurrent.domain.NameWasChanged;
 import se.haleby.occurrent.eventstore.mongodb.TimeRepresentation;
 import se.haleby.occurrent.eventstore.mongodb.spring.reactor.EventStoreConfig;
 import se.haleby.occurrent.eventstore.mongodb.spring.reactor.SpringReactorMongoEventStore;
-import se.haleby.occurrent.eventstore.mongodb.spring.reactor.StreamConsistencyGuarantee;
 import se.haleby.occurrent.testsupport.mongodb.FlushMongoDBExtension;
 
 import java.net.URI;
@@ -76,7 +75,8 @@ public class SpringReactiveChangeStreamerForMongoDBTest {
         ReactiveMongoTemplate reactiveMongoTemplate = new ReactiveMongoTemplate(mongoClient, Objects.requireNonNull(connectionString.getDatabase()));
         changeStreamer = new SpringReactiveChangeStreamerForMongoDB(reactiveMongoTemplate, "events", TimeRepresentation.RFC_3339_STRING);
         ReactiveTransactionManager reactiveMongoTransactionManager = new ReactiveMongoTransactionManager(new SimpleReactiveMongoDatabaseFactory(mongoClient, requireNonNull(connectionString.getDatabase())));
-        mongoEventStore = new SpringReactorMongoEventStore(reactiveMongoTemplate, new EventStoreConfig("events", StreamConsistencyGuarantee.transactional("event-consistency", reactiveMongoTransactionManager), TimeRepresentation.RFC_3339_STRING));
+        EventStoreConfig eventStoreConfig = new EventStoreConfig.Builder().eventStoreCollectionName("events").transactionConfig(reactiveMongoTransactionManager).timeRepresentation(TimeRepresentation.RFC_3339_STRING).build();
+        mongoEventStore = new SpringReactorMongoEventStore(reactiveMongoTemplate, eventStoreConfig);
         objectMapper = new ObjectMapper();
         disposables = new CopyOnWriteArrayList<>();
     }
