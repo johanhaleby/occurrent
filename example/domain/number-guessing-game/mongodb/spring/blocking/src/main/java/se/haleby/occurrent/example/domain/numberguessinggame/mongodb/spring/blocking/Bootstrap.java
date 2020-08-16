@@ -11,7 +11,6 @@ import org.springframework.context.annotation.Bean;
 import org.springframework.data.mongodb.MongoDatabaseFactory;
 import org.springframework.data.mongodb.MongoTransactionManager;
 import org.springframework.data.mongodb.core.MongoTemplate;
-import org.springframework.data.mongodb.core.messaging.DefaultMessageListenerContainer;
 import org.springframework.data.mongodb.repository.config.EnableMongoRepositories;
 import org.springframework.retry.annotation.EnableRetry;
 import se.haleby.occurrent.changestreamer.mongodb.spring.blocking.SpringBlockingChangeStreamerForMongoDB;
@@ -48,8 +47,7 @@ public class Bootstrap {
 
     @Bean
     public SpringBlockingChangeStreamerWithPositionPersistenceForMongoDB changeStreamer(MongoTemplate mongoTemplate) {
-        DefaultMessageListenerContainer container = new DefaultMessageListenerContainer(mongoTemplate);
-        SpringBlockingChangeStreamerForMongoDB streamer = new SpringBlockingChangeStreamerForMongoDB(EVENTS_COLLECTION_NAME, container, TimeRepresentation.DATE);
+        SpringBlockingChangeStreamerForMongoDB streamer = new SpringBlockingChangeStreamerForMongoDB(mongoTemplate, EVENTS_COLLECTION_NAME, TimeRepresentation.DATE);
         return new SpringBlockingChangeStreamerWithPositionPersistenceForMongoDB(streamer, mongoTemplate, "changeStreamPosition");
     }
 

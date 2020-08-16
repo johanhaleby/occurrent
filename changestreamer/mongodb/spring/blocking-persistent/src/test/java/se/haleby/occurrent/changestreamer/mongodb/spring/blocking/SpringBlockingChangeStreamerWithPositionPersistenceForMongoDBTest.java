@@ -15,7 +15,6 @@ import org.junit.jupiter.api.extension.RegisterExtension;
 import org.springframework.data.mongodb.MongoTransactionManager;
 import org.springframework.data.mongodb.core.MongoTemplate;
 import org.springframework.data.mongodb.core.SimpleMongoClientDatabaseFactory;
-import org.springframework.data.mongodb.core.messaging.DefaultMessageListenerContainer;
 import org.testcontainers.containers.MongoDBContainer;
 import org.testcontainers.junit.jupiter.Container;
 import org.testcontainers.junit.jupiter.Testcontainers;
@@ -72,17 +71,18 @@ public class SpringBlockingChangeStreamerWithPositionPersistenceForMongoDBTest {
     private SpringBlockingChangeStreamerWithPositionPersistenceForMongoDB changeStreamer;
     private ObjectMapper objectMapper;
     private MongoTemplate mongoTemplate;
+    private MongoClient mongoClient;
 
     @BeforeEach
     void create_mongo_event_store() {
         ConnectionString connectionString = new ConnectionString(mongoDBContainer.getReplicaSetUrl() + ".events");
-        MongoClient mongoClient = MongoClients.create(connectionString);
+        mongoClient = MongoClients.create(connectionString);
         mongoTemplate = new MongoTemplate(mongoClient, requireNonNull(connectionString.getDatabase()));
         MongoTransactionManager mongoTransactionManager = new MongoTransactionManager(new SimpleMongoClientDatabaseFactory(mongoClient, requireNonNull(connectionString.getDatabase())));
         TimeRepresentation timeRepresentation = RFC_3339_STRING;
         EventStoreConfig eventStoreConfig = new EventStoreConfig.Builder().eventStoreCollectionName(connectionString.getCollection()).transactionConfig(mongoTransactionManager).timeRepresentation(timeRepresentation).build();
         mongoEventStore = new SpringBlockingMongoEventStore(mongoTemplate, eventStoreConfig);
-        SpringBlockingChangeStreamerForMongoDB springBlockingChangeStreamerForMongoDB = new SpringBlockingChangeStreamerForMongoDB(connectionString.getCollection(), new DefaultMessageListenerContainer(mongoTemplate), timeRepresentation);
+        SpringBlockingChangeStreamerForMongoDB springBlockingChangeStreamerForMongoDB = new SpringBlockingChangeStreamerForMongoDB(mongoTemplate, connectionString.getCollection(), timeRepresentation);
         changeStreamer = new SpringBlockingChangeStreamerWithPositionPersistenceForMongoDB(springBlockingChangeStreamerForMongoDB, mongoTemplate, RESUME_TOKEN_COLLECTION);
         objectMapper = new ObjectMapper();
     }
@@ -90,6 +90,7 @@ public class SpringBlockingChangeStreamerWithPositionPersistenceForMongoDBTest {
     @AfterEach
     void shutdown() {
         changeStreamer.shutdownSubscribers();
+        mongoClient.close();
     }
 
     @Test

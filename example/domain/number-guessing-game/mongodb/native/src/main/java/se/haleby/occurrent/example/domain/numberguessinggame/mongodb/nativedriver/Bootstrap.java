@@ -186,8 +186,7 @@ public class Bootstrap {
 
     private static BlockingChangeStreamerWithPositionPersistenceForMongoDB initializeChangeStreamer(MongoClient mongoClient) {
         MongoDatabase database = mongoClient.getDatabase(DATABASE_NAME);
-        MongoCollection<Document> eventCollection = database.getCollection(EVENTS_COLLECTION_NAME);
-        BlockingChangeStreamerForMongoDB blockingChangeStreamerForMongoDB = new BlockingChangeStreamerForMongoDB(eventCollection, TimeRepresentation.DATE, Executors.newCachedThreadPool(), RetryStrategy.fixed(200));
+        BlockingChangeStreamerForMongoDB blockingChangeStreamerForMongoDB = new BlockingChangeStreamerForMongoDB(database, EVENTS_COLLECTION_NAME, TimeRepresentation.DATE, Executors.newCachedThreadPool(), RetryStrategy.fixed(200));
         return new BlockingChangeStreamerWithPositionPersistenceForMongoDB(blockingChangeStreamerForMongoDB, database, CHANGE_STEAMER_POSITIONS_COLLECTION_NAME);
     }
 

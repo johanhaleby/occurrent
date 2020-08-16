@@ -81,7 +81,7 @@ public class BlockingChangeStreamerForMongoDBTest {
         MongoCollection<Document> eventCollection = database.getCollection(requireNonNull(connectionString.getCollection()));
         mongoEventStore = new MongoEventStore(mongoClient, connectionString.getDatabase(), connectionString.getCollection(), config);
         subscriptionExecutor = Executors.newFixedThreadPool(1);
-        changeStreamer = new BlockingChangeStreamerForMongoDB(eventCollection, timeRepresentation, subscriptionExecutor, RetryStrategy.backoff(Duration.of(100, MILLIS), Duration.of(500, MILLIS), 2));
+        changeStreamer = new BlockingChangeStreamerForMongoDB(database, eventCollection, timeRepresentation, subscriptionExecutor, RetryStrategy.backoff(Duration.of(100, MILLIS), Duration.of(500, MILLIS), 2));
         objectMapper = new ObjectMapper();
     }
 

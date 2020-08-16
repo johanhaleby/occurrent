@@ -14,7 +14,6 @@ import org.junit.jupiter.api.extension.RegisterExtension;
 import org.springframework.data.mongodb.MongoTransactionManager;
 import org.springframework.data.mongodb.core.MongoTemplate;
 import org.springframework.data.mongodb.core.SimpleMongoClientDatabaseFactory;
-import org.springframework.data.mongodb.core.messaging.DefaultMessageListenerContainer;
 import org.testcontainers.containers.MongoDBContainer;
 import org.testcontainers.junit.jupiter.Container;
 import org.testcontainers.junit.jupiter.Testcontainers;
@@ -78,7 +77,7 @@ public class SpringBlockingChangeStreamerForMongoDBTest {
         TimeRepresentation timeRepresentation = TimeRepresentation.RFC_3339_STRING;
         EventStoreConfig eventStoreConfig = new EventStoreConfig.Builder().eventStoreCollectionName(connectionString.getCollection()).transactionConfig(mongoTransactionManager).timeRepresentation(timeRepresentation).build();
         mongoEventStore = new SpringBlockingMongoEventStore(mongoTemplate, eventStoreConfig);
-        changeStreamer = new SpringBlockingChangeStreamerForMongoDB(connectionString.getCollection(), new DefaultMessageListenerContainer(mongoTemplate), timeRepresentation);
+        changeStreamer = new SpringBlockingChangeStreamerForMongoDB(mongoTemplate, connectionString.getCollection(), timeRepresentation);
         objectMapper = new ObjectMapper();
     }
 

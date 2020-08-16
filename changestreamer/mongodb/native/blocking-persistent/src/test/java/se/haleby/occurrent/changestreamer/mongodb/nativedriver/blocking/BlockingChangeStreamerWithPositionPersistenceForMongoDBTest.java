@@ -215,7 +215,7 @@ public class BlockingChangeStreamerWithPositionPersistenceForMongoDBTest {
         // Then
         await().atMost(ONE_SECOND).until(state::size, is(2));
         assertThat(state).extracting(CloudEvent::getType).containsOnly(NameDefined.class.getName());
-    }                   
+    }
 
     @Test
     void using_bson_query_dsl_composition() {
@@ -305,7 +305,7 @@ public class BlockingChangeStreamerWithPositionPersistenceForMongoDBTest {
     }
 
     private BlockingChangeStreamerWithPositionPersistenceForMongoDB newPersistentChangeStreamer(String eventCollectionName, TimeRepresentation timeRepresentation, RetryStrategy retryStrategy) {
-        BlockingChangeStreamer blockingChangeStreamerForMongoDB = new BlockingChangeStreamerForMongoDB(database.getCollection(eventCollectionName), timeRepresentation, subscriptionExecutor, retryStrategy);
+        BlockingChangeStreamer blockingChangeStreamerForMongoDB = new BlockingChangeStreamerForMongoDB(database, eventCollectionName, timeRepresentation, subscriptionExecutor, retryStrategy);
         return new BlockingChangeStreamerWithPositionPersistenceForMongoDB(blockingChangeStreamerForMongoDB, database, database.getCollection(TIMESTAMP_TOKEN_COLLECTION));
     }
 }

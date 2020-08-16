@@ -1,6 +1,7 @@
 package se.haleby.occurrent.testsupport.mongodb;
 
 import com.mongodb.ConnectionString;
+import com.mongodb.client.MongoClient;
 import com.mongodb.client.MongoClients;
 import org.junit.jupiter.api.extension.BeforeEachCallback;
 import org.junit.jupiter.api.extension.ExtensionContext;
@@ -17,8 +18,9 @@ public class FlushMongoDBExtension implements BeforeEachCallback {
 
     @Override
     public void beforeEach(ExtensionContext extensionContext) {
-        MongoClients.create(connectionString)
-                .getDatabase(requireNonNull(connectionString.getDatabase(), "Database cannot be null in MongoDB connection string"))
-                .drop();
+        String databaseName = requireNonNull(connectionString.getDatabase(), "Database cannot be null in MongoDB connection string");
+        try (MongoClient mongoClient = MongoClients.create(connectionString)) {
+            mongoClient.getDatabase(databaseName).drop();
+        }
     }
 }

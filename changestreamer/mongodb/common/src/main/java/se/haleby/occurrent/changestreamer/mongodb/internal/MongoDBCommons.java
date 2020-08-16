@@ -68,12 +68,14 @@ public class MongoDBCommons {
         } else if (changeStreamPosition instanceof MongoDBOperationTimeBasedChangeStreamPosition) {
             withStartPositionApplied = applyOperationTime.apply(t, ((MongoDBOperationTimeBasedChangeStreamPosition) changeStreamPosition).operationTime);
         } else {
-            Document document = Document.parse(changeStreamPosition.asString());
-            if (document.containsKey(RESUME_TOKEN)) {
-                BsonDocument resumeToken = document.get(RESUME_TOKEN, BsonDocument.class);
+            String changeStreamPositionString = changeStreamPosition.asString();
+            if (changeStreamPositionString.contains(RESUME_TOKEN)) {
+                BsonDocument bsonDocument = BsonDocument.parse(changeStreamPositionString);
+                BsonDocument resumeToken = bsonDocument.getDocument(RESUME_TOKEN);
                 withStartPositionApplied = applyResumeToken.apply(t, resumeToken);
-            } else if (document.containsKey(OPERATION_TIME)) {
-                BsonTimestamp operationTime = document.get(RESUME_TOKEN, BsonTimestamp.class);
+            } else if (changeStreamPositionString.contains(OPERATION_TIME)) {
+                Document document = Document.parse(changeStreamPositionString);
+                BsonTimestamp operationTime = document.get(OPERATION_TIME, BsonTimestamp.class);
                 withStartPositionApplied = applyOperationTime.apply(t, operationTime);
             } else {
                 throw new IllegalArgumentException("Doesn't recognize stream position " + changeStreamPosition + " as a valid MongoDB stream position");

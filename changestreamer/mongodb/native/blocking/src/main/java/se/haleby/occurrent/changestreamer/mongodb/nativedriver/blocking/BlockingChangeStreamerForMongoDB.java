@@ -5,22 +5,26 @@ import com.mongodb.MongoException;
 import com.mongodb.client.ChangeStreamIterable;
 import com.mongodb.client.MongoChangeStreamCursor;
 import com.mongodb.client.MongoCollection;
+import com.mongodb.client.MongoDatabase;
 import com.mongodb.client.model.changestream.ChangeStreamDocument;
 import io.cloudevents.core.format.EventFormat;
 import io.cloudevents.core.provider.EventFormatProvider;
 import io.cloudevents.jackson.JsonFormat;
 import org.bson.BsonDocument;
+import org.bson.BsonTimestamp;
 import org.bson.Document;
 import org.bson.conversions.Bson;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import se.haleby.occurrent.changestreamer.ChangeStreamFilter;
+import se.haleby.occurrent.changestreamer.ChangeStreamPosition;
 import se.haleby.occurrent.changestreamer.CloudEventWithStreamPosition;
 import se.haleby.occurrent.changestreamer.StartAt;
 import se.haleby.occurrent.changestreamer.api.blocking.BlockingChangeStreamer;
 import se.haleby.occurrent.changestreamer.api.blocking.Subscription;
 import se.haleby.occurrent.changestreamer.mongodb.MongoDBFilterSpecification.BsonMongoDBFilterSpecification;
 import se.haleby.occurrent.changestreamer.mongodb.MongoDBFilterSpecification.JsonMongoDBFilterSpecification;
+import se.haleby.occurrent.changestreamer.mongodb.MongoDBOperationTimeBasedChangeStreamPosition;
 import se.haleby.occurrent.changestreamer.mongodb.MongoDBResumeTokenBasedChangeStreamPosition;
 import se.haleby.occurrent.changestreamer.mongodb.internal.DocumentAdapter;
 import se.haleby.occurrent.changestreamer.mongodb.nativedriver.blocking.RetryStrategy.Backoff;
@@ -44,6 +48,7 @@ import java.util.stream.Stream;
 import static java.util.Objects.requireNonNull;
 import static se.haleby.occurrent.changestreamer.mongodb.internal.MongoDBCloudEventsToJsonDeserializer.deserializeToCloudEvent;
 import static se.haleby.occurrent.changestreamer.mongodb.internal.MongoDBCommons.applyStartPosition;
+import static se.haleby.occurrent.changestreamer.mongodb.internal.MongoDBCommons.getServerOperationTime;
 
 /**
  * This is a change streamer that uses the "native" MongoDB Java driver (sync) to listen to changes from the event store.
@@ -59,24 +64,42 @@ public class BlockingChangeStreamerForMongoDB implements BlockingChangeStreamer 
     private final TimeRepresentation timeRepresentation;
     private final Executor cloudEventDispatcher;
     private final RetryStrategy retryStrategy;
+    private final MongoDatabase database;
 
     private volatile boolean shuttingDown = false;
 
     /**
      * Create a change streamer using the native MongoDB sync driver.
      *
+     * @param database             The MongoDB database to use
+     * @param eventCollectionName  The name of the collection that contains the events
+     * @param timeRepresentation   How time is represented in the database, must be the same as what's specified for the EventStore that stores the events.
+     * @param subscriptionExecutor The executor that will be used for the subscription. Typically a dedicated thread will be required per subscription.
+     * @param retryStrategy        Configure how retries should be handled
+     */
+    public BlockingChangeStreamerForMongoDB(MongoDatabase database, String eventCollectionName, TimeRepresentation timeRepresentation,
+                                            Executor subscriptionExecutor, RetryStrategy retryStrategy) {
+        this(database, database.getCollection(requireNonNull(eventCollectionName, "Event collection cannot be null")), timeRepresentation, subscriptionExecutor, retryStrategy);
+    }
+
+    /**
+     * Create a change streamer using the native MongoDB sync driver.
+     *
+     * @param database             The MongoDB database to use
      * @param eventCollection      The collection that contains the events
      * @param timeRepresentation   How time is represented in the database, must be the same as what's specified for the EventStore that stores the events.
      * @param subscriptionExecutor The executor that will be used for the subscription. Typically a dedicated thread will be required per subscription.
      * @param retryStrategy        Configure how retries should be handled
      */
-    public BlockingChangeStreamerForMongoDB(MongoCollection<Document> eventCollection, TimeRepresentation timeRepresentation,
+    public BlockingChangeStreamerForMongoDB(MongoDatabase database, MongoCollection<Document> eventCollection, TimeRepresentation timeRepresentation,
                                             Executor subscriptionExecutor, RetryStrategy retryStrategy) {
-        this.retryStrategy = retryStrategy;
+        requireNonNull(database, MongoDatabase.class.getSimpleName() + " cannot be null");
         requireNonNull(eventCollection, "Event collection cannot be null");
         requireNonNull(timeRepresentation, "Time representation cannot be null");
         requireNonNull(subscriptionExecutor, "CloudEventDispatcher cannot  be null");
         requireNonNull(retryStrategy, "RetryStrategy cannot be null");
+        this.database = database;
+        this.retryStrategy = retryStrategy;
         this.cloudEventDispatcher = subscriptionExecutor;
         this.timeRepresentation = timeRepresentation;
         this.eventCollection = eventCollection;
@@ -85,7 +108,8 @@ public class BlockingChangeStreamerForMongoDB implements BlockingChangeStreamer 
     }
 
     @Override
-    public Subscription stream(String subscriptionId, Consumer<CloudEventWithStreamPosition> action, ChangeStreamFilter filter, Supplier<StartAt> startAtSupplier) {
+    public Subscription stream(String subscriptionId, Consumer<CloudEventWithStreamPosition> action, ChangeStreamFilter
+            filter, Supplier<StartAt> startAtSupplier) {
         requireNonNull(subscriptionId, "subscriptionId cannot be null");
         requireNonNull(action, "Action cannot be null");
         requireNonNull(startAtSupplier, "Start at cannot be null");
@@ -158,6 +182,12 @@ public class BlockingChangeStreamerForMongoDB implements BlockingChangeStreamer 
             shuttingDown = true;
             subscriptions.keySet().forEach(this::cancelSubscription);
         }
+    }
+
+    @Override
+    public ChangeStreamPosition globalChangeStreamPosition() {
+        BsonTimestamp currentOperationTime = getServerOperationTime(database.runCommand(new Document("hostInfo", 1)));
+        return new MongoDBOperationTimeBasedChangeStreamPosition(currentOperationTime);
     }
 
     private static Runnable retry(Runnable runnable, Predicate<Exception> retryPredicate, Iterator<Long> delay) {

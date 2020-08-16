@@ -6,21 +6,27 @@ import io.cloudevents.core.format.EventFormat;
 import io.cloudevents.core.provider.EventFormatProvider;
 import io.cloudevents.jackson.JsonFormat;
 import org.bson.BsonDocument;
+import org.bson.BsonTimestamp;
 import org.bson.Document;
 import org.bson.conversions.Bson;
 import org.springframework.data.mongodb.core.ChangeStreamOptions;
 import org.springframework.data.mongodb.core.ChangeStreamOptions.ChangeStreamOptionsBuilder;
+import org.springframework.data.mongodb.core.MongoOperations;
+import org.springframework.data.mongodb.core.MongoTemplate;
 import org.springframework.data.mongodb.core.messaging.ChangeStreamRequest;
 import org.springframework.data.mongodb.core.messaging.ChangeStreamRequest.ChangeStreamRequestOptions;
+import org.springframework.data.mongodb.core.messaging.DefaultMessageListenerContainer;
 import org.springframework.data.mongodb.core.messaging.MessageListener;
 import org.springframework.data.mongodb.core.messaging.MessageListenerContainer;
 import se.haleby.occurrent.changestreamer.ChangeStreamFilter;
+import se.haleby.occurrent.changestreamer.ChangeStreamPosition;
 import se.haleby.occurrent.changestreamer.CloudEventWithStreamPosition;
 import se.haleby.occurrent.changestreamer.StartAt;
 import se.haleby.occurrent.changestreamer.api.blocking.BlockingChangeStreamer;
 import se.haleby.occurrent.changestreamer.api.blocking.Subscription;
 import se.haleby.occurrent.changestreamer.mongodb.MongoDBFilterSpecification.BsonMongoDBFilterSpecification;
 import se.haleby.occurrent.changestreamer.mongodb.MongoDBFilterSpecification.JsonMongoDBFilterSpecification;
+import se.haleby.occurrent.changestreamer.mongodb.MongoDBOperationTimeBasedChangeStreamPosition;
 import se.haleby.occurrent.changestreamer.mongodb.MongoDBResumeTokenBasedChangeStreamPosition;
 import se.haleby.occurrent.changestreamer.mongodb.internal.DocumentAdapter;
 import se.haleby.occurrent.eventstore.mongodb.TimeRepresentation;
@@ -35,6 +41,7 @@ import java.util.stream.Stream;
 import static java.util.Objects.requireNonNull;
 import static se.haleby.occurrent.changestreamer.mongodb.internal.MongoDBCloudEventsToJsonDeserializer.deserializeToCloudEvent;
 import static se.haleby.occurrent.changestreamer.mongodb.internal.MongoDBCommons.applyStartPosition;
+import static se.haleby.occurrent.changestreamer.mongodb.internal.MongoDBCommons.getServerOperationTime;
 
 /**
  * This is a change streamer that uses Spring and its {@link MessageListenerContainer} for MongoDB to listen to changes from an event store.
@@ -51,24 +58,26 @@ public class SpringBlockingChangeStreamerForMongoDB implements BlockingChangeStr
     private final ConcurrentMap<String, org.springframework.data.mongodb.core.messaging.Subscription> subscriptions;
     private final EventFormat cloudEventSerializer;
     private final TimeRepresentation timeRepresentation;
+    private final MongoOperations mongoOperations;
 
     /**
      * Create a blocking change streamer using Spring
      *
-     * @param eventCollection          The collection that contains the events
-     * @param messageListenerContainer The message listener container that'll be used when subscribing to events from the event store. Typically you would instantiate it using <code>new DefaultMessageListenerContainer(mongoTemplate)</code>.
-     * @param timeRepresentation       How time is represented in the database, must be the same as what's specified for the EventStore that stores the events.
+     * @param mongoTemplate      The mongo template to use
+     * @param eventCollection    The collection that contains the events
+     * @param timeRepresentation How time is represented in the database, must be the same as what's specified for the EventStore that stores the events.
      */
-    public SpringBlockingChangeStreamerForMongoDB(String eventCollection, MessageListenerContainer messageListenerContainer, TimeRepresentation timeRepresentation) {
+    public SpringBlockingChangeStreamerForMongoDB(MongoTemplate mongoTemplate, String eventCollection, TimeRepresentation timeRepresentation) {
+        requireNonNull(mongoTemplate, MongoOperations.class.getSimpleName() + " cannot be null");
         requireNonNull(eventCollection, "eventCollection cannot be null");
-        requireNonNull(messageListenerContainer, "messageListenerContainer cannot be null");
         requireNonNull(timeRepresentation, TimeRepresentation.class.getSimpleName() + " cannot be null");
 
+        this.mongoOperations = mongoTemplate;
         this.timeRepresentation = timeRepresentation;
         this.eventCollection = eventCollection;
         this.subscriptions = new ConcurrentHashMap<>();
         this.cloudEventSerializer = EventFormatProvider.getInstance().resolveFormat(JsonFormat.CONTENT_TYPE);
-        this.messageListenerContainer = messageListenerContainer;
+        this.messageListenerContainer = new DefaultMessageListenerContainer(mongoTemplate);
         this.messageListenerContainer.start();
     }
 
@@ -137,5 +146,11 @@ public class SpringBlockingChangeStreamerForMongoDB implements BlockingChangeStr
     public void shutdown() {
         subscriptions.clear();
         messageListenerContainer.stop();
+    }
+
+    @Override
+    public ChangeStreamPosition globalChangeStreamPosition() {
+        BsonTimestamp currentOperationTime = getServerOperationTime(mongoOperations.executeCommand(new Document("hostInfo", 1)));
+        return new MongoDBOperationTimeBasedChangeStreamPosition(currentOperationTime);
     }
 }

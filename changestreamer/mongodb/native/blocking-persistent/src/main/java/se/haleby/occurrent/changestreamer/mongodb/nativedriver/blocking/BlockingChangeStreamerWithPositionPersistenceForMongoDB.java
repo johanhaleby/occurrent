@@ -23,7 +23,6 @@ import static com.mongodb.client.model.Filters.eq;
 import static java.util.Objects.requireNonNull;
 import static se.haleby.occurrent.changestreamer.mongodb.internal.MongoDBCloudEventsToJsonDeserializer.ID;
 import static se.haleby.occurrent.changestreamer.mongodb.internal.MongoDBCommons.calculateStartAtFromStreamPositionDocument;
-import static se.haleby.occurrent.changestreamer.mongodb.internal.MongoDBCommons.getServerOperationTime;
 
 /**
  * Wraps a {@link BlockingChangeStreamerForMongoDB} and adds persistent stream position support. It stores the stream position
@@ -89,8 +88,7 @@ public class BlockingChangeStreamerWithPositionPersistenceForMongoDB {
             // It's important that we find the document inside the supplier so that we lookup the latest resume token on retry
             Document streamPositionDocument = streamPositionCollection.find(eq(ID, subscriptionId), Document.class).first();
             if (streamPositionDocument == null) {
-                BsonTimestamp currentOperationTime = getServerOperationTime(database.runCommand(new Document("hostInfo", 1)));
-                streamPositionDocument = persistOperationTimeStreamPosition(subscriptionId, currentOperationTime);
+                streamPositionDocument = persistStreamPosition(subscriptionId, changeStreamer.globalChangeStreamPosition());
             }
             return calculateStartAtFromStreamPositionDocument(streamPositionDocument);
         };
@@ -113,29 +111,28 @@ public class BlockingChangeStreamerWithPositionPersistenceForMongoDB {
         streamPositionCollection.deleteOne(eq(ID, subscriptionId));
     }
 
-    private void persistStreamPosition(String subscriptionId, ChangeStreamPosition changeStreamPosition) {
+    private Document persistStreamPosition(String subscriptionId, ChangeStreamPosition changeStreamPosition) {
         if (changeStreamPosition instanceof MongoDBResumeTokenBasedChangeStreamPosition) {
-            persistResumeTokenStreamPosition(subscriptionId, ((MongoDBResumeTokenBasedChangeStreamPosition) changeStreamPosition).resumeToken);
+            return persistResumeTokenStreamPosition(subscriptionId, ((MongoDBResumeTokenBasedChangeStreamPosition) changeStreamPosition).resumeToken);
         } else if (changeStreamPosition instanceof MongoDBOperationTimeBasedChangeStreamPosition) {
-            persistOperationTimeStreamPosition(subscriptionId, ((MongoDBOperationTimeBasedChangeStreamPosition) changeStreamPosition).operationTime);
+            return persistOperationTimeStreamPosition(subscriptionId, ((MongoDBOperationTimeBasedChangeStreamPosition) changeStreamPosition).operationTime);
         } else {
             String streamPositionString = changeStreamPosition.asString();
-            persistDocumentStreamPosition(subscriptionId, MongoDBCommons.generateGenericStreamPositionDocument(subscriptionId, streamPositionString));
+            return persistDocumentStreamPosition(subscriptionId, MongoDBCommons.generateGenericStreamPositionDocument(subscriptionId, streamPositionString));
         }
     }
 
-    private void persistResumeTokenStreamPosition(String subscriptionId, BsonValue resumeToken) {
-        persistDocumentStreamPosition(subscriptionId, MongoDBCommons.generateResumeTokenStreamPositionDocument(subscriptionId, resumeToken));
+    private Document persistResumeTokenStreamPosition(String subscriptionId, BsonValue resumeToken) {
+        return persistDocumentStreamPosition(subscriptionId, MongoDBCommons.generateResumeTokenStreamPositionDocument(subscriptionId, resumeToken));
     }
 
     private Document persistOperationTimeStreamPosition(String subscriptionId, BsonTimestamp operationTime) {
-        Document document = MongoDBCommons.generateOperationTimeStreamPositionDocument(subscriptionId, operationTime);
-        persistDocumentStreamPosition(subscriptionId, document);
-        return document;
+        return persistDocumentStreamPosition(subscriptionId, MongoDBCommons.generateOperationTimeStreamPositionDocument(subscriptionId, operationTime));
     }
 
-    private void persistDocumentStreamPosition(String subscriptionId, Document document) {
+    private Document persistDocumentStreamPosition(String subscriptionId, Document document) {
         streamPositionCollection.replaceOne(eq(ID, subscriptionId), document, new ReplaceOptions().upsert(true));
+        return document;
     }
 
     public void shutdown() {
