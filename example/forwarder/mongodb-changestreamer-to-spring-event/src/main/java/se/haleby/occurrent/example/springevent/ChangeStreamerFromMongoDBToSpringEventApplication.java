@@ -9,7 +9,7 @@ import org.springframework.beans.factory.annotation.Value;
 import org.springframework.boot.autoconfigure.SpringBootApplication;
 import org.springframework.context.annotation.Bean;
 import org.springframework.data.mongodb.core.ReactiveMongoOperations;
-import se.haleby.occurrent.changestreamer.mongodb.spring.reactor.SpringReactiveChangeStreamerForMongoDB;
+import se.haleby.occurrent.changestreamer.mongodb.spring.reactor.SpringReactorChangeStreamerForMongoDB;
 import se.haleby.occurrent.changestreamer.mongodb.spring.reactor.SpringReactorChangeStreamerWithPositionPersistenceForMongoDB;
 import se.haleby.occurrent.eventstore.api.blocking.EventStore;
 import se.haleby.occurrent.eventstore.mongodb.TimeRepresentation;
@@ -40,7 +40,7 @@ public class ChangeStreamerFromMongoDBToSpringEventApplication {
 
     @Bean
     public SpringReactorChangeStreamerWithPositionPersistenceForMongoDB changeStreamerForMongoDB(ReactiveMongoOperations mongoOperations) {
-        SpringReactiveChangeStreamerForMongoDB streamer = new SpringReactiveChangeStreamerForMongoDB(mongoOperations, "events", TimeRepresentation.RFC_3339_STRING);
+        SpringReactorChangeStreamerForMongoDB streamer = new SpringReactorChangeStreamerForMongoDB(mongoOperations, "events", TimeRepresentation.RFC_3339_STRING);
         return new SpringReactorChangeStreamerWithPositionPersistenceForMongoDB(streamer, mongoOperations, "resumeTokens");
     }
 

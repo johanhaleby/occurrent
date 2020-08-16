@@ -30,7 +30,7 @@ import static se.haleby.occurrent.changestreamer.mongodb.internal.MongoDBCommons
 import static se.haleby.occurrent.changestreamer.mongodb.internal.MongoDBCommons.generateResumeTokenStreamPositionDocument;
 
 /**
- * Wraps a {@link SpringReactiveChangeStreamerForMongoDB} and adds persistent stream position support. It stores the stream position
+ * Wraps a {@link SpringReactorChangeStreamerForMongoDB} and adds persistent stream position support. It stores the stream position
  * after an "action" (the "function" in this method {@link SpringReactorChangeStreamerWithPositionPersistenceForMongoDB#stream(String, Function)}) has completed successfully.
  * It stores the stream position in MongoDB. Note that it doesn't have to be the same MongoDB database that stores the actual events.
  * <p>
@@ -47,7 +47,7 @@ public class SpringReactorChangeStreamerWithPositionPersistenceForMongoDB {
     /**
      * Create a new instance of {@link SpringReactorChangeStreamerWithPositionPersistenceForMongoDB}
      *
-     * @param changeStreamer           The {@link SpringReactiveChangeStreamerForMongoDB} to use when streaming events from the event store.
+     * @param changeStreamer           The {@link SpringReactorChangeStreamerForMongoDB} to use when streaming events from the event store.
      * @param mongo                    The {@link ReactiveMongoOperations} implementation to use persisting stream positions to MongoDB.
      * @param streamPositionCollection The collection that will contain the stream position for each subscriber.
      */

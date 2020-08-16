@@ -38,7 +38,7 @@ import static se.haleby.occurrent.changestreamer.mongodb.internal.MongoDBCommons
  * (or use another pre-existing component in conjunction with this one) in order to continue the stream from where
  * it's left off on application restart/crash etc.
  */
-public class SpringReactiveChangeStreamerForMongoDB implements PositionAwareReactorChangeStreamer {
+public class SpringReactorChangeStreamerForMongoDB implements PositionAwareReactorChangeStreamer {
 
     private final ReactiveMongoOperations mongo;
     private final String eventCollection;
@@ -52,7 +52,7 @@ public class SpringReactiveChangeStreamerForMongoDB implements PositionAwareReac
      * @param eventCollection    The collection that contains the events
      * @param timeRepresentation How time is represented in the database, must be the same as what's specified for the EventStore that stores the events.
      */
-    public SpringReactiveChangeStreamerForMongoDB(ReactiveMongoOperations mongo, String eventCollection, TimeRepresentation timeRepresentation) {
+    public SpringReactorChangeStreamerForMongoDB(ReactiveMongoOperations mongo, String eventCollection, TimeRepresentation timeRepresentation) {
         this.mongo = mongo;
         this.eventCollection = eventCollection;
         this.timeRepresentation = timeRepresentation;

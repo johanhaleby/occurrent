@@ -54,13 +54,13 @@ import static se.haleby.occurrent.functional.CheckedFunction.unchecked;
 import static se.haleby.occurrent.time.TimeConversion.toLocalDateTime;
 
 @Testcontainers
-public class SpringReactiveChangeStreamerForMongoDBTest {
+public class SpringReactorChangeStreamerForMongoDBTest {
 
     @Container
     private static final MongoDBContainer mongoDBContainer = new MongoDBContainer("mongo:4.2.8");
 
     private SpringReactorMongoEventStore mongoEventStore;
-    private SpringReactiveChangeStreamerForMongoDB changeStreamer;
+    private SpringReactorChangeStreamerForMongoDB changeStreamer;
     private ObjectMapper objectMapper;
     private CopyOnWriteArrayList<Disposable> disposables;
 
@@ -73,7 +73,7 @@ public class SpringReactiveChangeStreamerForMongoDBTest {
         ConnectionString connectionString = new ConnectionString(mongoDBContainer.getReplicaSetUrl() + ".events");
         mongoClient = MongoClients.create(connectionString);
         ReactiveMongoTemplate reactiveMongoTemplate = new ReactiveMongoTemplate(mongoClient, Objects.requireNonNull(connectionString.getDatabase()));
-        changeStreamer = new SpringReactiveChangeStreamerForMongoDB(reactiveMongoTemplate, "events", TimeRepresentation.RFC_3339_STRING);
+        changeStreamer = new SpringReactorChangeStreamerForMongoDB(reactiveMongoTemplate, "events", TimeRepresentation.RFC_3339_STRING);
         ReactiveTransactionManager reactiveMongoTransactionManager = new ReactiveMongoTransactionManager(new SimpleReactiveMongoDatabaseFactory(mongoClient, requireNonNull(connectionString.getDatabase())));
         EventStoreConfig eventStoreConfig = new EventStoreConfig.Builder().eventStoreCollectionName("events").transactionConfig(reactiveMongoTransactionManager).timeRepresentation(TimeRepresentation.RFC_3339_STRING).build();
         mongoEventStore = new SpringReactorMongoEventStore(reactiveMongoTemplate, eventStoreConfig);
