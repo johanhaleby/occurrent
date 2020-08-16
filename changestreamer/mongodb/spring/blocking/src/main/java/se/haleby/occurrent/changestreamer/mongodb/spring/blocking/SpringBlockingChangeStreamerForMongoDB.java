@@ -20,7 +20,7 @@ import org.springframework.data.mongodb.core.messaging.MessageListener;
 import org.springframework.data.mongodb.core.messaging.MessageListenerContainer;
 import se.haleby.occurrent.changestreamer.ChangeStreamFilter;
 import se.haleby.occurrent.changestreamer.ChangeStreamPosition;
-import se.haleby.occurrent.changestreamer.CloudEventWithStreamPosition;
+import se.haleby.occurrent.changestreamer.CloudEventWithChangeStreamPosition;
 import se.haleby.occurrent.changestreamer.StartAt;
 import se.haleby.occurrent.changestreamer.api.blocking.BlockingChangeStreamer;
 import se.haleby.occurrent.changestreamer.api.blocking.Subscription;
@@ -82,7 +82,7 @@ public class SpringBlockingChangeStreamerForMongoDB implements BlockingChangeStr
     }
 
     @Override
-    public Subscription stream(String subscriptionId, ChangeStreamFilter filter, Supplier<StartAt> startAtSupplier, Consumer<CloudEventWithStreamPosition> action) {
+    public Subscription stream(String subscriptionId, ChangeStreamFilter filter, Supplier<StartAt> startAtSupplier, Consumer<CloudEventWithChangeStreamPosition> action) {
         requireNonNull(subscriptionId, "subscriptionId cannot be null");
         requireNonNull(action, "Action cannot be null");
         requireNonNull(startAtSupplier, "StartAt cannot be null");
@@ -95,7 +95,7 @@ public class SpringBlockingChangeStreamerForMongoDB implements BlockingChangeStr
             ChangeStreamDocument<Document> raw = change.getRaw();
             BsonDocument resumeToken = requireNonNull(raw).getResumeToken();
             deserializeToCloudEvent(requireNonNull(cloudEventSerializer), raw, timeRepresentation)
-                    .map(cloudEvent -> new CloudEventWithStreamPosition(cloudEvent, new MongoDBResumeTokenBasedChangeStreamPosition(resumeToken)))
+                    .map(cloudEvent -> new CloudEventWithChangeStreamPosition(cloudEvent, new MongoDBResumeTokenBasedChangeStreamPosition(resumeToken)))
                     .ifPresent(action);
         };
 

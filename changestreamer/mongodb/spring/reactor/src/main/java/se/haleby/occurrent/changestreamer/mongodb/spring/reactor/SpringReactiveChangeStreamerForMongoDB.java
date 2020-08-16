@@ -15,7 +15,7 @@ import reactor.core.publisher.Flux;
 import reactor.core.publisher.Mono;
 import se.haleby.occurrent.changestreamer.ChangeStreamFilter;
 import se.haleby.occurrent.changestreamer.ChangeStreamPosition;
-import se.haleby.occurrent.changestreamer.CloudEventWithStreamPosition;
+import se.haleby.occurrent.changestreamer.CloudEventWithChangeStreamPosition;
 import se.haleby.occurrent.changestreamer.StartAt;
 import se.haleby.occurrent.changestreamer.api.reactor.ReactorChangeStreamer;
 import se.haleby.occurrent.changestreamer.mongodb.MongoDBFilterSpecification.BsonMongoDBFilterSpecification;
@@ -60,7 +60,7 @@ public class SpringReactiveChangeStreamerForMongoDB implements ReactorChangeStre
     }
 
     @Override
-    public Flux<CloudEventWithStreamPosition> stream(ChangeStreamFilter filter, StartAt startAt) {
+    public Flux<CloudEventWithChangeStreamPosition> stream(ChangeStreamFilter filter, StartAt startAt) {
         // TODO We should change builder::resumeAt to builder::startAtOperationTime once Spring adds support for it (see https://jira.spring.io/browse/DATAMONGO-2607)
         ChangeStreamOptionsBuilder builder = applyStartPosition(ChangeStreamOptions.builder(), ChangeStreamOptionsBuilder::startAfter, ChangeStreamOptionsBuilder::resumeAt, startAt);
         final ChangeStreamOptions changeStreamOptions = applyFilter(filter, builder);
@@ -68,7 +68,7 @@ public class SpringReactiveChangeStreamerForMongoDB implements ReactorChangeStre
         return changeStream
                 .flatMap(changeEvent ->
                         deserializeToCloudEvent(cloudEventSerializer, changeEvent.getRaw(), timeRepresentation)
-                                .map(cloudEvent -> new CloudEventWithStreamPosition(cloudEvent, new MongoDBResumeTokenBasedChangeStreamPosition(requireNonNull(changeEvent.getResumeToken()).asDocument())))
+                                .map(cloudEvent -> new CloudEventWithChangeStreamPosition(cloudEvent, new MongoDBResumeTokenBasedChangeStreamPosition(requireNonNull(changeEvent.getResumeToken()).asDocument())))
                                 .map(Mono::just)
                                 .orElse(Mono.empty()));
     }

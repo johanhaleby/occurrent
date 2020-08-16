@@ -2,7 +2,7 @@ package se.haleby.occurrent.changestreamer.api.blocking;
 
 import se.haleby.occurrent.changestreamer.ChangeStreamFilter;
 import se.haleby.occurrent.changestreamer.ChangeStreamPosition;
-import se.haleby.occurrent.changestreamer.CloudEventWithStreamPosition;
+import se.haleby.occurrent.changestreamer.CloudEventWithChangeStreamPosition;
 import se.haleby.occurrent.changestreamer.StartAt;
 
 import java.util.function.Consumer;
@@ -25,7 +25,7 @@ public interface BlockingChangeStreamer {
      *                        In this cases streams should be restarted from the latest position and not the start position as it were when the application
      * @param action          This action will be invoked for each cloud event that is stored in the EventStore.
      */
-    Subscription stream(String subscriptionId, ChangeStreamFilter filter, Supplier<StartAt> startAtSupplier, Consumer<CloudEventWithStreamPosition> action);
+    Subscription stream(String subscriptionId, ChangeStreamFilter filter, Supplier<StartAt> startAtSupplier, Consumer<CloudEventWithChangeStreamPosition> action);
 
 
     /**
@@ -35,7 +35,7 @@ public interface BlockingChangeStreamer {
      * @param startAt        The position to start the subscription from
      * @param action         This action will be invoked for each cloud event that is stored in the EventStore.
      */
-    default Subscription stream(String subscriptionId, ChangeStreamFilter filter, StartAt startAt, Consumer<CloudEventWithStreamPosition> action) {
+    default Subscription stream(String subscriptionId, ChangeStreamFilter filter, StartAt startAt, Consumer<CloudEventWithChangeStreamPosition> action) {
         return stream(subscriptionId, filter, () -> startAt, action);
     }
 
@@ -46,7 +46,7 @@ public interface BlockingChangeStreamer {
      * @param startAt        The position to start the subscription from
      * @param action         This action will be invoked for each cloud event that is stored in the EventStore.
      */
-    default Subscription stream(String subscriptionId, StartAt startAt, Consumer<CloudEventWithStreamPosition> action) {
+    default Subscription stream(String subscriptionId, StartAt startAt, Consumer<CloudEventWithChangeStreamPosition> action) {
         return stream(subscriptionId, null, startAt, action);
     }
 
@@ -57,7 +57,7 @@ public interface BlockingChangeStreamer {
      * @param filter         The filter to use to limit which events that are of interest from the EventStore.
      * @param action         This action will be invoked for each cloud event that is stored in the EventStore.
      */
-    default Subscription stream(String subscriptionId, ChangeStreamFilter filter, Consumer<CloudEventWithStreamPosition> action) {
+    default Subscription stream(String subscriptionId, ChangeStreamFilter filter, Consumer<CloudEventWithChangeStreamPosition> action) {
         return stream(subscriptionId, filter, StartAt.now(), action);
     }
 
@@ -67,7 +67,7 @@ public interface BlockingChangeStreamer {
      * @param subscriptionId The id of the subscription, must be unique!
      * @param action         This action will be invoked for each cloud event that is stored in the EventStore.
      */
-    default Subscription stream(String subscriptionId, Consumer<CloudEventWithStreamPosition> action) {
+    default Subscription stream(String subscriptionId, Consumer<CloudEventWithChangeStreamPosition> action) {
         return stream(subscriptionId, null, StartAt.now(), action);
     }
 

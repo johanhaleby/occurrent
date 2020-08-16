@@ -18,7 +18,7 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import se.haleby.occurrent.changestreamer.ChangeStreamFilter;
 import se.haleby.occurrent.changestreamer.ChangeStreamPosition;
-import se.haleby.occurrent.changestreamer.CloudEventWithStreamPosition;
+import se.haleby.occurrent.changestreamer.CloudEventWithChangeStreamPosition;
 import se.haleby.occurrent.changestreamer.StartAt;
 import se.haleby.occurrent.changestreamer.api.blocking.BlockingChangeStreamer;
 import se.haleby.occurrent.changestreamer.api.blocking.Subscription;
@@ -109,7 +109,7 @@ public class BlockingChangeStreamerForMongoDB implements BlockingChangeStreamer 
 
     @Override
     public Subscription stream(String subscriptionId, ChangeStreamFilter
-            filter, Supplier<StartAt> startAtSupplier, Consumer<CloudEventWithStreamPosition> action) {
+            filter, Supplier<StartAt> startAtSupplier, Consumer<CloudEventWithChangeStreamPosition> action) {
         requireNonNull(subscriptionId, "subscriptionId cannot be null");
         requireNonNull(action, "Action cannot be null");
         requireNonNull(startAtSupplier, "Start at cannot be null");
@@ -127,7 +127,7 @@ public class BlockingChangeStreamerForMongoDB implements BlockingChangeStreamer 
             subscriptionStartedLatch.countDown();
             try {
                 cursor.forEachRemaining(changeStreamDocument -> deserializeToCloudEvent(cloudEventSerializer, changeStreamDocument, timeRepresentation)
-                        .map(cloudEvent -> new CloudEventWithStreamPosition(cloudEvent, new MongoDBResumeTokenBasedChangeStreamPosition(changeStreamDocument.getResumeToken())))
+                        .map(cloudEvent -> new CloudEventWithChangeStreamPosition(cloudEvent, new MongoDBResumeTokenBasedChangeStreamPosition(changeStreamDocument.getResumeToken())))
                         .ifPresent(retry(action, __ -> true, convertToDelayStream(retryStrategy))));
             } catch (MongoException e) {
                 log.debug("Caught {} (code={}, message={}), this might happen when cursor is shutdown.", e.getClass().getName(), e.getCode(), e.getMessage(), e);

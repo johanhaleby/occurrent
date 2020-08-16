@@ -4,26 +4,26 @@ import reactor.core.publisher.Flux;
 import reactor.core.publisher.Mono;
 import se.haleby.occurrent.changestreamer.ChangeStreamFilter;
 import se.haleby.occurrent.changestreamer.ChangeStreamPosition;
-import se.haleby.occurrent.changestreamer.CloudEventWithStreamPosition;
+import se.haleby.occurrent.changestreamer.CloudEventWithChangeStreamPosition;
 import se.haleby.occurrent.changestreamer.StartAt;
 
 public interface ReactorChangeStreamer {
 
     /**
      * Stream events from the event store as they arrive and provide a function which allows to configure the
-     * {@link CloudEventWithStreamPosition} that is used. Use this method if want to start streaming from a specific
+     * {@link CloudEventWithChangeStreamPosition} that is used. Use this method if want to start streaming from a specific
      * position.
      *
      * @return A {@link Flux} with cloud events which also includes the {@link ChangeStreamPosition} that can be used to resume the stream from the current position.
      */
-    Flux<CloudEventWithStreamPosition> stream(ChangeStreamFilter filter, StartAt startAt);
+    Flux<CloudEventWithChangeStreamPosition> stream(ChangeStreamFilter filter, StartAt startAt);
 
     /**
      * Stream events from the event store as they arrive but filter only events that matches the <code>filter</code>.
      *
      * @return A {@link Flux} with cloud events which also includes the {@link ChangeStreamPosition} that can be used to resume the stream from the current position.
      */
-    default Flux<CloudEventWithStreamPosition> stream(ChangeStreamFilter filter) {
+    default Flux<CloudEventWithChangeStreamPosition> stream(ChangeStreamFilter filter) {
         return stream(filter, StartAt.now());
     }
 
@@ -33,7 +33,7 @@ public interface ReactorChangeStreamer {
      *
      * @return A {@link Flux} with cloud events which also includes the {@link ChangeStreamPosition} that can be used to resume the stream from the current position.
      */
-    default Flux<CloudEventWithStreamPosition> stream(StartAt startAt) {
+    default Flux<CloudEventWithChangeStreamPosition> stream(StartAt startAt) {
         return stream(null, startAt);
     }
 
@@ -42,7 +42,7 @@ public interface ReactorChangeStreamer {
      *
      * @return A {@link Flux} with cloud events which also includes the {@link ChangeStreamPosition} that can be used to resume the stream from the current position.
      */
-    default Flux<CloudEventWithStreamPosition> stream() {
+    default Flux<CloudEventWithChangeStreamPosition> stream() {
         return stream(null, StartAt.now());
     }
 

@@ -13,11 +13,11 @@ import java.util.Set;
  * A wrapper around a {@link CloudEvent} that also includes a {@link ChangeStreamPosition} so that
  * it's possible to resume the stream from a particular state.
  */
-public class CloudEventWithStreamPosition implements CloudEvent {
+public class CloudEventWithChangeStreamPosition implements CloudEvent {
     private final CloudEvent cloudEvent;
     private final ChangeStreamPosition changeStreamPosition;
 
-    public CloudEventWithStreamPosition(CloudEvent cloudEvent, ChangeStreamPosition changeStreamPosition) {
+    public CloudEventWithChangeStreamPosition(CloudEvent cloudEvent, ChangeStreamPosition changeStreamPosition) {
         this.cloudEvent = cloudEvent;
         this.changeStreamPosition = changeStreamPosition;
     }
@@ -88,8 +88,8 @@ public class CloudEventWithStreamPosition implements CloudEvent {
     @Override
     public boolean equals(Object o) {
         if (this == o) return true;
-        if (!(o instanceof CloudEventWithStreamPosition)) return false;
-        CloudEventWithStreamPosition that = (CloudEventWithStreamPosition) o;
+        if (!(o instanceof CloudEventWithChangeStreamPosition)) return false;
+        CloudEventWithChangeStreamPosition that = (CloudEventWithChangeStreamPosition) o;
         return Objects.equals(cloudEvent, that.cloudEvent) &&
                 Objects.equals(changeStreamPosition, that.changeStreamPosition);
     }
