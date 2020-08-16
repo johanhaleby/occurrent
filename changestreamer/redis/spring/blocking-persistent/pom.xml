@@ -30,6 +30,10 @@
             <artifactId>changestreamer-api-blocking</artifactId>
             <version>0.0.1-SNAPSHOT</version>
         </dependency>
+        <dependency> <!-- Required for @PreDestroy -->
+            <groupId>jakarta.annotation</groupId>
+            <artifactId>jakarta.annotation-api</artifactId>
+        </dependency>
 
         <!-- Test -->
         <dependency>
