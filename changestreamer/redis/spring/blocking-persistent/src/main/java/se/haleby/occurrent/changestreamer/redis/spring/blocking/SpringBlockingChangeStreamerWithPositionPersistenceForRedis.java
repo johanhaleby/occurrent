@@ -48,17 +48,17 @@ public class SpringBlockingChangeStreamerWithPositionPersistenceForRedis {
      * @param action         This action will be invoked for each cloud event that is stored in the EventStore.
      */
     public Subscription stream(String subscriptionId, Consumer<CloudEvent> action) {
-        return stream(subscriptionId, action, null);
+        return stream(subscriptionId, null, action);
     }
 
     /**
      * Start listening to cloud events persisted to the event store.
      *
      * @param subscriptionId The id of the subscription, must be unique!
-     * @param action         This action will be invoked for each cloud event that is stored in the EventStore that matches the supplied <code>filter</code>.
      * @param filter         The filter to apply for this subscription. Only events matching the filter will cause the <code>action</code> to be called.
+     * @param action         This action will be invoked for each cloud event that is stored in the EventStore that matches the supplied <code>filter</code>.
      */
-    public Subscription stream(String subscriptionId, Consumer<CloudEvent> action, ChangeStreamFilter filter) {
+    public Subscription stream(String subscriptionId, ChangeStreamFilter filter, Consumer<CloudEvent> action) {
         Supplier<StartAt> startAtSupplier = () -> {
             // It's important that we find the document inside the supplier so that we lookup the latest resume token on retry
             String changeStreamPosition = redis.opsForValue().get(subscriptionId);
@@ -69,12 +69,11 @@ public class SpringBlockingChangeStreamerWithPositionPersistenceForRedis {
         };
 
         return changeStreamer.stream(subscriptionId,
-                cloudEventWithStreamPosition -> {
+                filter, startAtSupplier, cloudEventWithStreamPosition -> {
                     action.accept(cloudEventWithStreamPosition);
                     persistChangeStreamPosition(subscriptionId, cloudEventWithStreamPosition.getStreamPosition());
-                },
-                filter,
-                startAtSupplier);
+                }
+        );
     }
 
     void pauseSubscription(String subscriptionId) {

@@ -45,10 +45,10 @@ class WhenGameEndedThenPublishIntegrationEvent {
 
     @PostConstruct
     void subscribeToChangeStream() throws InterruptedException {
-        streamer.stream(WhenGameEndedThenPublishIntegrationEvent.class.getSimpleName(), this::publishIntegrationEventWhenGameEnded,
+        streamer.stream(WhenGameEndedThenPublishIntegrationEvent.class.getSimpleName(), filter().type(Filters::eq, NumberGuessingGameEnded.class.getSimpleName()), this::publishIntegrationEventWhenGameEnded
                 // We're only interested in events of type NumberGuessingGameEnded since then we know that
                 // we should publish the integration event
-                filter().type(Filters::eq, NumberGuessingGameEnded.class.getSimpleName()))
+        )
                 .waitUntilStarted(Duration.ofSeconds(4));
     }
 

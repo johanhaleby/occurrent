@@ -108,8 +108,8 @@ public class BlockingChangeStreamerForMongoDB implements BlockingChangeStreamer 
     }
 
     @Override
-    public Subscription stream(String subscriptionId, Consumer<CloudEventWithStreamPosition> action, ChangeStreamFilter
-            filter, Supplier<StartAt> startAtSupplier) {
+    public Subscription stream(String subscriptionId, ChangeStreamFilter
+            filter, Supplier<StartAt> startAtSupplier, Consumer<CloudEventWithStreamPosition> action) {
         requireNonNull(subscriptionId, "subscriptionId cannot be null");
         requireNonNull(action, "Action cannot be null");
         requireNonNull(startAtSupplier, "Start at cannot be null");

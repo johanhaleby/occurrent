@@ -68,7 +68,7 @@ public class SpringReactorChangeStreamerWithPositionPersistenceForMongoDB {
      * @return A stream of {@link CloudEvent}'s. The stream position of the cloud event will already have been persisted when consumed by this stream so use <code>action</code> to perform side-effects.
      */
     public Flux<CloudEvent> stream(String subscriptionId, Function<CloudEvent, Mono<Void>> action) {
-        return stream(subscriptionId, action, null);
+        return stream(subscriptionId, null, action);
     }
 
     /**
@@ -78,11 +78,11 @@ public class SpringReactorChangeStreamerWithPositionPersistenceForMongoDB {
      * has already been stored in MongoDB and the <code>action</code> will not be re-run if side-effect fails.
      *
      * @param subscriptionId The id of the subscription, must be unique!
-     * @param action         This action will be invoked for each cloud event that is stored in the EventStore.
      * @param filter         The {@link ChangeStreamFilter} to use to limit the events receive by the event store
+     * @param action         This action will be invoked for each cloud event that is stored in the EventStore.
      * @return A stream of {@link CloudEvent}'s. The stream position of the cloud event will already have been persisted when consumed by this stream so use <code>action</code> to perform side-effects.
      */
-    public Flux<CloudEvent> stream(String subscriptionId, Function<CloudEvent, Mono<Void>> action, ChangeStreamFilter filter) {
+    public Flux<CloudEvent> stream(String subscriptionId, ChangeStreamFilter filter, Function<CloudEvent, Mono<Void>> action) {
         return findStartPosition(subscriptionId)
                 .doOnNext(startAt -> log.info("Starting change streamer for subscription {} from stream position {}", subscriptionId, startAt.toString()))
                 .flatMapMany(startAt -> changeStreamer.stream(filter, startAt)
