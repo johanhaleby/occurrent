@@ -19,12 +19,10 @@ import se.haleby.occurrent.changestreamer.mongodb.MongoDBOperationTimeBasedChang
 import se.haleby.occurrent.changestreamer.mongodb.MongoDBResumeTokenBasedChangeStreamPosition;
 import se.haleby.occurrent.changestreamer.mongodb.internal.MongoDBCommons;
 
-import java.time.Duration;
 import java.util.function.Function;
 
 import static org.springframework.data.mongodb.core.query.Criteria.where;
 import static org.springframework.data.mongodb.core.query.Query.query;
-import static reactor.util.retry.Retry.backoff;
 import static se.haleby.occurrent.changestreamer.mongodb.internal.MongoDBCloudEventsToJsonDeserializer.ID;
 import static se.haleby.occurrent.changestreamer.mongodb.internal.MongoDBCommons.generateOperationTimeStreamPositionDocument;
 import static se.haleby.occurrent.changestreamer.mongodb.internal.MongoDBCommons.generateResumeTokenStreamPositionDocument;
@@ -85,10 +83,7 @@ public class SpringReactorChangeStreamerWithPositionPersistenceForMongoDB {
     public Flux<CloudEvent> stream(String subscriptionId, ChangeStreamFilter filter, Function<CloudEvent, Mono<Void>> action) {
         return findStartPosition(subscriptionId)
                 .doOnNext(startAt -> log.info("Starting change streamer for subscription {} from stream position {}", subscriptionId, startAt.toString()))
-                .flatMapMany(startAt -> changeStreamer.stream(filter, startAt)
-                        // TODO Make retry configurable? Or maybe we should just delete it?
-                        .retryWhen(backoff(Long.MAX_VALUE, Duration.ofMillis(100)).maxBackoff(Duration.ofSeconds(5))
-                                .doBeforeRetry(signal -> log.info("Retrying due to exception: {} {}", signal.failure().getClass().getName(), signal.failure().getMessage()))))
+                .flatMapMany(startAt -> changeStreamer.stream(filter, startAt))
                 .flatMap(cloudEventWithStreamPosition -> action.apply(cloudEventWithStreamPosition).thenReturn(cloudEventWithStreamPosition))
                 .flatMap(cloudEventWithStreamPosition -> persistStreamPosition(subscriptionId, cloudEventWithStreamPosition.getStreamPosition()).thenReturn(cloudEventWithStreamPosition));
     }
