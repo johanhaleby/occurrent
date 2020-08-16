@@ -7,7 +7,7 @@ import org.springframework.context.ApplicationEventPublisher;
 import org.springframework.stereotype.Component;
 import reactor.core.Disposable;
 import reactor.core.publisher.Mono;
-import se.haleby.occurrent.changestreamer.mongodb.spring.reactor.SpringReactiveChangeStreamerWithPositionPersistenceForMongoDB;
+import se.haleby.occurrent.changestreamer.mongodb.spring.reactor.SpringReactorChangeStreamerWithPositionPersistenceForMongoDB;
 import se.haleby.occurrent.domain.DomainEvent;
 
 import javax.annotation.PostConstruct;
@@ -22,12 +22,12 @@ public class EventChangeStreaming {
     private static final Logger log = LoggerFactory.getLogger(EventChangeStreaming.class);
 
     private static final String SUBSCRIBER_ID = "test-app";
-    private final SpringReactiveChangeStreamerWithPositionPersistenceForMongoDB changeStreamerForMongoDB;
+    private final SpringReactorChangeStreamerWithPositionPersistenceForMongoDB changeStreamerForMongoDB;
     private final ObjectMapper objectMapper;
     private final ApplicationEventPublisher eventPublisher;
     private final AtomicReference<Disposable> subscription;
 
-    public EventChangeStreaming(SpringReactiveChangeStreamerWithPositionPersistenceForMongoDB changeStreamerForMongoDB,
+    public EventChangeStreaming(SpringReactorChangeStreamerWithPositionPersistenceForMongoDB changeStreamerForMongoDB,
                                 ObjectMapper objectMapper,
                                 ApplicationEventPublisher eventPublisher) {
         this.changeStreamerForMongoDB = changeStreamerForMongoDB;

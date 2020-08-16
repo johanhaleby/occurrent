@@ -31,27 +31,27 @@ import static se.haleby.occurrent.changestreamer.mongodb.internal.MongoDBCommons
 
 /**
  * Wraps a {@link SpringReactiveChangeStreamerForMongoDB} and adds persistent stream position support. It stores the stream position
- * after an "action" (the "function" in this method {@link SpringReactiveChangeStreamerWithPositionPersistenceForMongoDB#stream(String, Function)}) has completed successfully.
+ * after an "action" (the "function" in this method {@link SpringReactorChangeStreamerWithPositionPersistenceForMongoDB#stream(String, Function)}) has completed successfully.
  * It stores the stream position in MongoDB. Note that it doesn't have to be the same MongoDB database that stores the actual events.
  * <p>
  * Note that this implementation stores the stream position after _every_ action. If you have a lot of events and duplication is not
  * that much of a deal consider cloning/extending this class and add your own customizations.
  */
-public class SpringReactiveChangeStreamerWithPositionPersistenceForMongoDB {
-    private static final Logger log = LoggerFactory.getLogger(SpringReactiveChangeStreamerWithPositionPersistenceForMongoDB.class);
+public class SpringReactorChangeStreamerWithPositionPersistenceForMongoDB {
+    private static final Logger log = LoggerFactory.getLogger(SpringReactorChangeStreamerWithPositionPersistenceForMongoDB.class);
 
     private final ReactorChangeStreamer changeStreamer;
     private final ReactiveMongoOperations mongo;
     private final String streamPositionCollection;
 
     /**
-     * Create a new instance of {@link SpringReactiveChangeStreamerWithPositionPersistenceForMongoDB}
+     * Create a new instance of {@link SpringReactorChangeStreamerWithPositionPersistenceForMongoDB}
      *
      * @param changeStreamer           The {@link SpringReactiveChangeStreamerForMongoDB} to use when streaming events from the event store.
      * @param mongo                    The {@link ReactiveMongoOperations} implementation to use persisting stream positions to MongoDB.
      * @param streamPositionCollection The collection that will contain the stream position for each subscriber.
      */
-    public SpringReactiveChangeStreamerWithPositionPersistenceForMongoDB(ReactorChangeStreamer changeStreamer, ReactiveMongoOperations mongo, String streamPositionCollection) {
+    public SpringReactorChangeStreamerWithPositionPersistenceForMongoDB(ReactorChangeStreamer changeStreamer, ReactiveMongoOperations mongo, String streamPositionCollection) {
         this.changeStreamer = changeStreamer;
         this.mongo = mongo;
         this.streamPositionCollection = streamPositionCollection;

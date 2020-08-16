@@ -55,14 +55,14 @@ import static se.haleby.occurrent.functional.Not.not;
 import static se.haleby.occurrent.time.TimeConversion.toLocalDateTime;
 
 @Testcontainers
-public class SpringReactiveChangeStreamerWithPositionPersistenceForMongoDBTest {
+public class SpringReactorChangeStreamerWithPositionPersistenceForMongoDBTest {
 
     @Container
     private static final MongoDBContainer mongoDBContainer = new MongoDBContainer("mongo:4.2.8");
     private static final String RESUME_TOKEN_COLLECTION = "ack";
 
     private EventStore mongoEventStore;
-    private SpringReactiveChangeStreamerWithPositionPersistenceForMongoDB changeStreamer;
+    private SpringReactorChangeStreamerWithPositionPersistenceForMongoDB changeStreamer;
     private ObjectMapper objectMapper;
     private ReactiveMongoTemplate reactiveMongoTemplate;
     private CopyOnWriteArrayList<Disposable> disposables;
@@ -81,7 +81,7 @@ public class SpringReactiveChangeStreamerWithPositionPersistenceForMongoDBTest {
         EventStoreConfig eventStoreConfig = new EventStoreConfig.Builder().eventStoreCollectionName("events").transactionConfig(reactiveMongoTransactionManager).timeRepresentation(TimeRepresentation.RFC_3339_STRING).build();
         mongoEventStore = new SpringReactorMongoEventStore(reactiveMongoTemplate, eventStoreConfig);
         ReactorChangeStreamer springReactiveChangeStreamerForMongoDB = new SpringReactiveChangeStreamerForMongoDB(reactiveMongoTemplate, "events", timeRepresentation);
-        changeStreamer = new SpringReactiveChangeStreamerWithPositionPersistenceForMongoDB(springReactiveChangeStreamerForMongoDB, reactiveMongoTemplate, RESUME_TOKEN_COLLECTION);
+        changeStreamer = new SpringReactorChangeStreamerWithPositionPersistenceForMongoDB(springReactiveChangeStreamerForMongoDB, reactiveMongoTemplate, RESUME_TOKEN_COLLECTION);
         objectMapper = new ObjectMapper();
         disposables = new CopyOnWriteArrayList<>();
     }
