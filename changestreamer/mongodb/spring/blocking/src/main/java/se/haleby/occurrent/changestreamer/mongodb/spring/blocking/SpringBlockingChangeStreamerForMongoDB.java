@@ -22,7 +22,7 @@ import se.haleby.occurrent.changestreamer.ChangeStreamFilter;
 import se.haleby.occurrent.changestreamer.ChangeStreamPosition;
 import se.haleby.occurrent.changestreamer.CloudEventWithChangeStreamPosition;
 import se.haleby.occurrent.changestreamer.StartAt;
-import se.haleby.occurrent.changestreamer.api.blocking.BlockingChangeStreamer;
+import se.haleby.occurrent.changestreamer.api.blocking.PositionAwareBlockingChangeStreamer;
 import se.haleby.occurrent.changestreamer.api.blocking.Subscription;
 import se.haleby.occurrent.changestreamer.mongodb.MongoDBFilterSpecification.BsonMongoDBFilterSpecification;
 import se.haleby.occurrent.changestreamer.mongodb.MongoDBFilterSpecification.JsonMongoDBFilterSpecification;
@@ -51,7 +51,7 @@ import static se.haleby.occurrent.changestreamer.mongodb.internal.MongoDBCommons
  * Note that this change streamer doesn't provide retries if an exception is thrown when handling a {@link io.cloudevents.CloudEvent} (<code>action</code>).
  * This reason for this is that Spring provides retry capabilities (such as spring-retry) that you can easily hook into your <code>action</code>.
  */
-public class SpringBlockingChangeStreamerForMongoDB implements BlockingChangeStreamer {
+public class SpringBlockingChangeStreamerForMongoDB implements PositionAwareBlockingChangeStreamer {
 
     private final String eventCollection;
     private final MessageListenerContainer messageListenerContainer;

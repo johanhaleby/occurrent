@@ -15,7 +15,7 @@ import org.junit.jupiter.api.extension.RegisterExtension;
 import org.testcontainers.containers.MongoDBContainer;
 import org.testcontainers.junit.jupiter.Container;
 import org.testcontainers.junit.jupiter.Testcontainers;
-import se.haleby.occurrent.changestreamer.api.blocking.BlockingChangeStreamer;
+import se.haleby.occurrent.changestreamer.api.blocking.PositionAwareBlockingChangeStreamer;
 import se.haleby.occurrent.changestreamer.mongodb.MongoDBFilterSpecification.JsonMongoDBFilterSpecification;
 import se.haleby.occurrent.domain.DomainEvent;
 import se.haleby.occurrent.domain.NameDefined;
@@ -305,7 +305,7 @@ public class BlockingChangeStreamerWithPositionPersistenceForMongoDBTest {
     }
 
     private BlockingChangeStreamerWithPositionPersistenceForMongoDB newPersistentChangeStreamer(String eventCollectionName, TimeRepresentation timeRepresentation, RetryStrategy retryStrategy) {
-        BlockingChangeStreamer blockingChangeStreamerForMongoDB = new BlockingChangeStreamerForMongoDB(database, eventCollectionName, timeRepresentation, subscriptionExecutor, retryStrategy);
-        return new BlockingChangeStreamerWithPositionPersistenceForMongoDB(blockingChangeStreamerForMongoDB, database, database.getCollection(TIMESTAMP_TOKEN_COLLECTION));
+        PositionAwareBlockingChangeStreamer blockingChangeStreamerForMongoDB = new BlockingChangeStreamerForMongoDB(database, eventCollectionName, timeRepresentation, subscriptionExecutor, retryStrategy);
+        return new BlockingChangeStreamerWithPositionPersistenceForMongoDB(blockingChangeStreamerForMongoDB, database.getCollection(TIMESTAMP_TOKEN_COLLECTION));
     }
 }

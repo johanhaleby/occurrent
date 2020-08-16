@@ -10,6 +10,7 @@ import se.haleby.occurrent.changestreamer.ChangeStreamFilter;
 import se.haleby.occurrent.changestreamer.ChangeStreamPosition;
 import se.haleby.occurrent.changestreamer.StartAt;
 import se.haleby.occurrent.changestreamer.api.blocking.BlockingChangeStreamer;
+import se.haleby.occurrent.changestreamer.api.blocking.PositionAwareBlockingChangeStreamer;
 import se.haleby.occurrent.changestreamer.api.blocking.Subscription;
 import se.haleby.occurrent.changestreamer.mongodb.MongoDBOperationTimeBasedChangeStreamPosition;
 import se.haleby.occurrent.changestreamer.mongodb.MongoDBResumeTokenBasedChangeStreamPosition;
@@ -33,11 +34,11 @@ import static se.haleby.occurrent.changestreamer.mongodb.internal.MongoDBCommons
  * Note that this implementation stores the stream position after _every_ action. If you have a lot of events and duplication is not
  * that much of a deal consider cloning/extending this class and add your own customizations.
  */
-public class SpringBlockingChangeStreamerWithPositionPersistenceForMongoDB {
+public class SpringBlockingChangeStreamerWithPositionPersistenceForMongoDB implements BlockingChangeStreamer<CloudEvent> {
 
     private final MongoTemplate mongoTemplate;
     private final String streamPositionCollection;
-    private final BlockingChangeStreamer changeStreamer;
+    private final PositionAwareBlockingChangeStreamer changeStreamer;
 
     /**
      * Create a change streamer that uses the Native sync Java MongoDB driver to persists the stream position in MongoDB.
@@ -46,7 +47,7 @@ public class SpringBlockingChangeStreamerWithPositionPersistenceForMongoDB {
      * @param mongoTemplate            The {@link MongoTemplate} that'll be used to store the stream position
      * @param streamPositionCollection The collection into which stream positions will be stored
      */
-    public SpringBlockingChangeStreamerWithPositionPersistenceForMongoDB(BlockingChangeStreamer changeStreamer, MongoTemplate mongoTemplate, String streamPositionCollection) {
+    public SpringBlockingChangeStreamerWithPositionPersistenceForMongoDB(PositionAwareBlockingChangeStreamer changeStreamer, MongoTemplate mongoTemplate, String streamPositionCollection) {
         requireNonNull(changeStreamer, "changeStreamer cannot be null");
         requireNonNull(mongoTemplate, "Mongo template cannot be null");
         requireNonNull(streamPositionCollection, "streamPositionCollection cannot be null");
@@ -56,14 +57,19 @@ public class SpringBlockingChangeStreamerWithPositionPersistenceForMongoDB {
         this.streamPositionCollection = streamPositionCollection;
     }
 
-    /**
-     * Start listening to cloud events persisted to the event store.
-     *
-     * @param subscriptionId The id of the subscription, must be unique!
-     * @param action         This action will be invoked for each cloud event that is stored in the EventStore.
-     */
+    @Override
+    public Subscription stream(String subscriptionId, ChangeStreamFilter filter, Supplier<StartAt> startAtSupplier, Consumer<CloudEvent> action) {
+        return changeStreamer.stream(subscriptionId,
+                filter, startAtSupplier, cloudEventWithStreamPosition -> {
+                    action.accept(cloudEventWithStreamPosition);
+                    persistStreamPosition(subscriptionId, cloudEventWithStreamPosition.getStreamPosition());
+                }
+        );
+    }
+
+    @Override
     public Subscription stream(String subscriptionId, Consumer<CloudEvent> action) {
-        return stream(subscriptionId, null, action);
+        return stream(subscriptionId, (ChangeStreamFilter) null, action);
     }
 
     /**
@@ -73,6 +79,7 @@ public class SpringBlockingChangeStreamerWithPositionPersistenceForMongoDB {
      * @param filter         The filter to apply for this subscription. Only events matching the filter will cause the <code>action</code> to be called.
      * @param action         This action will be invoked for each cloud event that is stored in the EventStore that matches the supplied <code>filter</code>.
      */
+    @Override
     public Subscription stream(String subscriptionId, ChangeStreamFilter filter, Consumer<CloudEvent> action) {
         Supplier<StartAt> startAtSupplier = () -> {
             // It's important that we find the document inside the supplier so that we lookup the latest resume token on retry
@@ -82,13 +89,7 @@ public class SpringBlockingChangeStreamerWithPositionPersistenceForMongoDB {
             }
             return calculateStartAtFromStreamPositionDocument(streamPositionDocument);
         };
-
-        return changeStreamer.stream(subscriptionId,
-                filter, startAtSupplier, cloudEventWithStreamPosition -> {
-                    action.accept(cloudEventWithStreamPosition);
-                    persistStreamPosition(subscriptionId, cloudEventWithStreamPosition.getStreamPosition());
-                }
-        );
+        return stream(subscriptionId, filter, startAtSupplier, action);
     }
 
     void pauseSubscription(String subscriptionId) {

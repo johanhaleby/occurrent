@@ -17,7 +17,7 @@ import se.haleby.occurrent.changestreamer.ChangeStreamFilter;
 import se.haleby.occurrent.changestreamer.ChangeStreamPosition;
 import se.haleby.occurrent.changestreamer.CloudEventWithChangeStreamPosition;
 import se.haleby.occurrent.changestreamer.StartAt;
-import se.haleby.occurrent.changestreamer.api.reactor.ReactorChangeStreamer;
+import se.haleby.occurrent.changestreamer.api.reactor.PositionAwareReactorChangeStreamer;
 import se.haleby.occurrent.changestreamer.mongodb.MongoDBFilterSpecification.BsonMongoDBFilterSpecification;
 import se.haleby.occurrent.changestreamer.mongodb.MongoDBFilterSpecification.JsonMongoDBFilterSpecification;
 import se.haleby.occurrent.changestreamer.mongodb.MongoDBOperationTimeBasedChangeStreamPosition;
@@ -38,7 +38,7 @@ import static se.haleby.occurrent.changestreamer.mongodb.internal.MongoDBCommons
  * (or use another pre-existing component in conjunction with this one) in order to continue the stream from where
  * it's left off on application restart/crash etc.
  */
-public class SpringReactiveChangeStreamerForMongoDB implements ReactorChangeStreamer {
+public class SpringReactiveChangeStreamerForMongoDB implements PositionAwareReactorChangeStreamer {
 
     private final ReactiveMongoOperations mongo;
     private final String eventCollection;

@@ -7,6 +7,7 @@ import se.haleby.occurrent.changestreamer.ChangeStreamPosition;
 import se.haleby.occurrent.changestreamer.StartAt;
 import se.haleby.occurrent.changestreamer.StringBasedChangeStreamPosition;
 import se.haleby.occurrent.changestreamer.api.blocking.BlockingChangeStreamer;
+import se.haleby.occurrent.changestreamer.api.blocking.PositionAwareBlockingChangeStreamer;
 import se.haleby.occurrent.changestreamer.api.blocking.Subscription;
 
 import javax.annotation.PreDestroy;
@@ -23,10 +24,10 @@ import static java.util.Objects.requireNonNull;
  * Note that this implementation stores the stream position after _every_ action. If you have a lot of events and duplication is not
  * that much of a deal consider cloning/extending this class and add your own customizations.
  */
-public class SpringBlockingChangeStreamerWithPositionPersistenceForRedis {
+public class SpringBlockingChangeStreamerWithPositionPersistenceForRedis implements BlockingChangeStreamer<CloudEvent> {
 
     private final RedisOperations<String, String> redis;
-    private final BlockingChangeStreamer changeStreamer;
+    private final PositionAwareBlockingChangeStreamer changeStreamer;
 
     /**
      * Create a change streamer that uses the Native sync Java MongoDB driver to persists the stream position in MongoDB.
@@ -34,21 +35,26 @@ public class SpringBlockingChangeStreamerWithPositionPersistenceForRedis {
      * @param changeStreamer The change streamer that will read events from the event store
      * @param redis          The {@link RedisOperations} that'll be used to store the stream position
      */
-    public SpringBlockingChangeStreamerWithPositionPersistenceForRedis(BlockingChangeStreamer changeStreamer, RedisOperations<String, String> redis) {
+    public SpringBlockingChangeStreamerWithPositionPersistenceForRedis(PositionAwareBlockingChangeStreamer changeStreamer, RedisOperations<String, String> redis) {
         requireNonNull(changeStreamer, "changeStreamer cannot be null");
         requireNonNull(redis, "Redis operations cannot be null");
         this.changeStreamer = changeStreamer;
         this.redis = redis;
     }
 
-    /**
-     * Start listening to cloud events persisted to the event store.
-     *
-     * @param subscriptionId The id of the subscription, must be unique!
-     * @param action         This action will be invoked for each cloud event that is stored in the EventStore.
-     */
+    @Override
+    public Subscription stream(String subscriptionId, ChangeStreamFilter filter, Supplier<StartAt> startAtSupplier, Consumer<CloudEvent> action) {
+        return changeStreamer.stream(subscriptionId,
+                filter, startAtSupplier, cloudEventWithStreamPosition -> {
+                    action.accept(cloudEventWithStreamPosition);
+                    persistChangeStreamPosition(subscriptionId, cloudEventWithStreamPosition.getStreamPosition());
+                }
+        );
+    }
+
+    @Override
     public Subscription stream(String subscriptionId, Consumer<CloudEvent> action) {
-        return stream(subscriptionId, null, action);
+        return stream(subscriptionId, (ChangeStreamFilter) null, action);
     }
 
     /**
@@ -67,13 +73,7 @@ public class SpringBlockingChangeStreamerWithPositionPersistenceForRedis {
             }
             return StartAt.streamPosition(new StringBasedChangeStreamPosition(changeStreamPosition));
         };
-
-        return changeStreamer.stream(subscriptionId,
-                filter, startAtSupplier, cloudEventWithStreamPosition -> {
-                    action.accept(cloudEventWithStreamPosition);
-                    persistChangeStreamPosition(subscriptionId, cloudEventWithStreamPosition.getStreamPosition());
-                }
-        );
+        return stream(subscriptionId, filter, startAtSupplier, action);
     }
 
     void pauseSubscription(String subscriptionId) {

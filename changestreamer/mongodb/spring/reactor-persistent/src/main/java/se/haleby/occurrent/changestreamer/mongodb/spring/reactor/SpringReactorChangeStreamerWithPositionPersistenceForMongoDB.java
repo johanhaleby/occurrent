@@ -14,7 +14,7 @@ import reactor.core.publisher.Mono;
 import se.haleby.occurrent.changestreamer.ChangeStreamFilter;
 import se.haleby.occurrent.changestreamer.ChangeStreamPosition;
 import se.haleby.occurrent.changestreamer.StartAt;
-import se.haleby.occurrent.changestreamer.api.reactor.ReactorChangeStreamer;
+import se.haleby.occurrent.changestreamer.api.reactor.PositionAwareReactorChangeStreamer;
 import se.haleby.occurrent.changestreamer.mongodb.MongoDBOperationTimeBasedChangeStreamPosition;
 import se.haleby.occurrent.changestreamer.mongodb.MongoDBResumeTokenBasedChangeStreamPosition;
 import se.haleby.occurrent.changestreamer.mongodb.internal.MongoDBCommons;
@@ -40,7 +40,7 @@ import static se.haleby.occurrent.changestreamer.mongodb.internal.MongoDBCommons
 public class SpringReactorChangeStreamerWithPositionPersistenceForMongoDB {
     private static final Logger log = LoggerFactory.getLogger(SpringReactorChangeStreamerWithPositionPersistenceForMongoDB.class);
 
-    private final ReactorChangeStreamer changeStreamer;
+    private final PositionAwareReactorChangeStreamer changeStreamer;
     private final ReactiveMongoOperations mongo;
     private final String streamPositionCollection;
 
@@ -51,7 +51,7 @@ public class SpringReactorChangeStreamerWithPositionPersistenceForMongoDB {
      * @param mongo                    The {@link ReactiveMongoOperations} implementation to use persisting stream positions to MongoDB.
      * @param streamPositionCollection The collection that will contain the stream position for each subscriber.
      */
-    public SpringReactorChangeStreamerWithPositionPersistenceForMongoDB(ReactorChangeStreamer changeStreamer, ReactiveMongoOperations mongo, String streamPositionCollection) {
+    public SpringReactorChangeStreamerWithPositionPersistenceForMongoDB(PositionAwareReactorChangeStreamer changeStreamer, ReactiveMongoOperations mongo, String streamPositionCollection) {
         this.changeStreamer = changeStreamer;
         this.mongo = mongo;
         this.streamPositionCollection = streamPositionCollection;
@@ -86,7 +86,7 @@ public class SpringReactorChangeStreamerWithPositionPersistenceForMongoDB {
         return findStartPosition(subscriptionId)
                 .doOnNext(startAt -> log.info("Starting change streamer for subscription {} from stream position {}", subscriptionId, startAt.toString()))
                 .flatMapMany(startAt -> changeStreamer.stream(filter, startAt)
-                        // TODO Make retry configurable
+                        // TODO Make retry configurable? Or maybe we should just delete it?
                         .retryWhen(backoff(Long.MAX_VALUE, Duration.ofMillis(100)).maxBackoff(Duration.ofSeconds(5))
                                 .doBeforeRetry(signal -> log.info("Retrying due to exception: {} {}", signal.failure().getClass().getName(), signal.failure().getMessage()))))
                 .flatMap(cloudEventWithStreamPosition -> action.apply(cloudEventWithStreamPosition).thenReturn(cloudEventWithStreamPosition))

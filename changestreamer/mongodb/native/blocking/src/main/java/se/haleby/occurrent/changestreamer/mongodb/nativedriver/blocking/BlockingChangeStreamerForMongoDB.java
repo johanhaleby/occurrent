@@ -20,7 +20,7 @@ import se.haleby.occurrent.changestreamer.ChangeStreamFilter;
 import se.haleby.occurrent.changestreamer.ChangeStreamPosition;
 import se.haleby.occurrent.changestreamer.CloudEventWithChangeStreamPosition;
 import se.haleby.occurrent.changestreamer.StartAt;
-import se.haleby.occurrent.changestreamer.api.blocking.BlockingChangeStreamer;
+import se.haleby.occurrent.changestreamer.api.blocking.PositionAwareBlockingChangeStreamer;
 import se.haleby.occurrent.changestreamer.api.blocking.Subscription;
 import se.haleby.occurrent.changestreamer.mongodb.MongoDBFilterSpecification.BsonMongoDBFilterSpecification;
 import se.haleby.occurrent.changestreamer.mongodb.MongoDBFilterSpecification.JsonMongoDBFilterSpecification;
@@ -55,7 +55,7 @@ import static se.haleby.occurrent.changestreamer.mongodb.internal.MongoDBCommons
  * This ChangeStreamer doesn't maintain the stream position, you need to store it yourself in order to continue the stream
  * from where it's left off on application restart/crash etc.
  */
-public class BlockingChangeStreamerForMongoDB implements BlockingChangeStreamer {
+public class BlockingChangeStreamerForMongoDB implements PositionAwareBlockingChangeStreamer {
     private static final Logger log = LoggerFactory.getLogger(BlockingChangeStreamerForMongoDB.class);
 
     private final MongoCollection<Document> eventCollection;
