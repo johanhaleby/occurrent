@@ -14,13 +14,16 @@ import org.springframework.data.mongodb.core.ReactiveMongoOperations;
 import reactor.core.publisher.Flux;
 import reactor.core.publisher.Mono;
 import se.haleby.occurrent.changestreamer.ChangeStreamFilter;
+import se.haleby.occurrent.changestreamer.ChangeStreamPosition;
 import se.haleby.occurrent.changestreamer.CloudEventWithStreamPosition;
 import se.haleby.occurrent.changestreamer.StartAt;
 import se.haleby.occurrent.changestreamer.api.reactor.ReactorChangeStreamer;
 import se.haleby.occurrent.changestreamer.mongodb.MongoDBFilterSpecification.BsonMongoDBFilterSpecification;
 import se.haleby.occurrent.changestreamer.mongodb.MongoDBFilterSpecification.JsonMongoDBFilterSpecification;
+import se.haleby.occurrent.changestreamer.mongodb.MongoDBOperationTimeBasedChangeStreamPosition;
 import se.haleby.occurrent.changestreamer.mongodb.MongoDBResumeTokenBasedChangeStreamPosition;
 import se.haleby.occurrent.changestreamer.mongodb.internal.DocumentAdapter;
+import se.haleby.occurrent.changestreamer.mongodb.internal.MongoDBCommons;
 import se.haleby.occurrent.eventstore.mongodb.TimeRepresentation;
 
 import java.util.stream.Stream;
@@ -68,6 +71,13 @@ public class SpringReactiveChangeStreamerForMongoDB implements ReactorChangeStre
                                 .map(cloudEvent -> new CloudEventWithStreamPosition(cloudEvent, new MongoDBResumeTokenBasedChangeStreamPosition(requireNonNull(changeEvent.getResumeToken()).asDocument())))
                                 .map(Mono::just)
                                 .orElse(Mono.empty()));
+    }
+
+    @Override
+    public Mono<ChangeStreamPosition> globalChangeStreamPosition() {
+        return mongo.executeCommand(new Document("hostInfo", 1))
+                .map(MongoDBCommons::getServerOperationTime)
+                .map(MongoDBOperationTimeBasedChangeStreamPosition::new);
     }
 
     private static ChangeStreamOptions applyFilter(ChangeStreamFilter filter, ChangeStreamOptionsBuilder changeStreamOptionsBuilder) {

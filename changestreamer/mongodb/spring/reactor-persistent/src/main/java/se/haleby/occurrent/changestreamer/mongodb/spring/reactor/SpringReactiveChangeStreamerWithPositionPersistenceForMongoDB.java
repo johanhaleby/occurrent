@@ -98,9 +98,8 @@ public class SpringReactiveChangeStreamerWithPositionPersistenceForMongoDB {
                 .doOnNext(document -> log.info("Found change stream position: {}", document))
                 .switchIfEmpty(Mono.defer(() -> {
                     log.info("No stream position found for {}, will initialize a new one.", subscriptionId);
-                    return mongo.executeCommand(new Document("hostInfo", 1))
-                            .map(MongoDBCommons::getServerOperationTime)
-                            .flatMap(currentOperationTime -> persistOperationTimeStreamPosition(subscriptionId, currentOperationTime));
+                    return changeStreamer.globalChangeStreamPosition()
+                            .flatMap(streamPosition -> persistStreamPosition(subscriptionId, streamPosition));
                 }))
                 .map(MongoDBCommons::calculateStartAtFromStreamPositionDocument);
     }
