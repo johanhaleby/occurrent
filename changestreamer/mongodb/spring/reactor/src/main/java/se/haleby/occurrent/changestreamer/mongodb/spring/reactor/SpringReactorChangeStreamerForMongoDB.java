@@ -1,12 +1,9 @@
 package se.haleby.occurrent.changestreamer.mongodb.spring.reactor;
 
-import com.mongodb.MongoClientSettings;
 import io.cloudevents.core.format.EventFormat;
 import io.cloudevents.core.provider.EventFormatProvider;
 import io.cloudevents.jackson.JsonFormat;
-import org.bson.BsonDocument;
 import org.bson.Document;
-import org.bson.conversions.Bson;
 import org.springframework.data.mongodb.core.ChangeStreamEvent;
 import org.springframework.data.mongodb.core.ChangeStreamOptions;
 import org.springframework.data.mongodb.core.ChangeStreamOptions.ChangeStreamOptionsBuilder;
@@ -18,19 +15,15 @@ import se.haleby.occurrent.changestreamer.ChangeStreamPosition;
 import se.haleby.occurrent.changestreamer.CloudEventWithChangeStreamPosition;
 import se.haleby.occurrent.changestreamer.StartAt;
 import se.haleby.occurrent.changestreamer.api.reactor.PositionAwareReactorChangeStreamer;
-import se.haleby.occurrent.changestreamer.mongodb.MongoDBFilterSpecification.BsonMongoDBFilterSpecification;
-import se.haleby.occurrent.changestreamer.mongodb.MongoDBFilterSpecification.JsonMongoDBFilterSpecification;
 import se.haleby.occurrent.changestreamer.mongodb.MongoDBOperationTimeBasedChangeStreamPosition;
 import se.haleby.occurrent.changestreamer.mongodb.MongoDBResumeTokenBasedChangeStreamPosition;
-import se.haleby.occurrent.changestreamer.mongodb.internal.DocumentAdapter;
 import se.haleby.occurrent.changestreamer.mongodb.internal.MongoDBCommons;
 import se.haleby.occurrent.eventstore.mongodb.TimeRepresentation;
-
-import java.util.stream.Stream;
 
 import static java.util.Objects.requireNonNull;
 import static se.haleby.occurrent.changestreamer.mongodb.internal.MongoDBCloudEventsToJsonDeserializer.deserializeToCloudEvent;
 import static se.haleby.occurrent.changestreamer.mongodb.internal.MongoDBCommons.applyStartPosition;
+import static se.haleby.occurrent.changestreamer.mongodb.spring.internal.ApplyFilterToChangeStreamOptionsBuilder.applyFilter;
 
 /**
  * This is a change streamer that uses project reactor and Spring to listen to changes from an event store.
@@ -80,32 +73,5 @@ public class SpringReactorChangeStreamerForMongoDB implements PositionAwareReact
                 .map(MongoDBOperationTimeBasedChangeStreamPosition::new);
     }
 
-    private static ChangeStreamOptions applyFilter(ChangeStreamFilter filter, ChangeStreamOptionsBuilder changeStreamOptionsBuilder) {
-        final ChangeStreamOptions changeStreamOptions;
-        if (filter == null) {
-            changeStreamOptions = changeStreamOptionsBuilder.build();
-        } else if (filter instanceof JsonMongoDBFilterSpecification) {
-            changeStreamOptions = changeStreamOptionsBuilder.filter(Document.parse(((JsonMongoDBFilterSpecification) filter).getJson())).build();
-        } else if (filter instanceof BsonMongoDBFilterSpecification) {
-            Bson[] aggregationStages = ((BsonMongoDBFilterSpecification) filter).getAggregationStages();
-            DocumentAdapter documentAdapter = new DocumentAdapter(MongoClientSettings.getDefaultCodecRegistry());
-            Document[] documents = Stream.of(aggregationStages).map(aggregationStage -> {
-                final Document result;
-                if (aggregationStage instanceof Document) {
-                    result = (Document) aggregationStage;
-                } else if (aggregationStage instanceof BsonDocument) {
-                    result = documentAdapter.fromBson((BsonDocument) aggregationStage);
-                } else {
-                    BsonDocument bsonDocument = aggregationStage.toBsonDocument(null, MongoClientSettings.getDefaultCodecRegistry());
-                    result = documentAdapter.fromBson(bsonDocument);
-                }
-                return result;
-            }).toArray(Document[]::new);
 
-            changeStreamOptions = changeStreamOptionsBuilder.filter(documents).build();
-        } else {
-            throw new IllegalArgumentException("Unrecognized " + ChangeStreamFilter.class.getSimpleName() + " for MongoDB change streamer");
-        }
-        return changeStreamOptions;
-    }
 }

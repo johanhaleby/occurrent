@@ -18,6 +18,7 @@
         <module>reactor-persistent</module>
         <module>blocking</module>
         <module>blocking-persistent</module>
+        <module>common</module>
     </modules>
 
 

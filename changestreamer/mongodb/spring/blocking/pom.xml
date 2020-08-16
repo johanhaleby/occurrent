@@ -35,6 +35,11 @@
         </dependency>
         <dependency>
             <groupId>se.haleby.occurrent</groupId>
+            <artifactId>changestreamer-mongodb-spring-common</artifactId>
+            <version>0.0.1-SNAPSHOT</version>
+        </dependency>
+        <dependency>
+            <groupId>se.haleby.occurrent</groupId>
             <artifactId>changestreamer-api-blocking</artifactId>
             <version>0.0.1-SNAPSHOT</version>
         </dependency>

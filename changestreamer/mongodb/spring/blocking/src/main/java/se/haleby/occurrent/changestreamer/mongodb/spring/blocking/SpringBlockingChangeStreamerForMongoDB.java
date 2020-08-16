@@ -1,6 +1,5 @@
 package se.haleby.occurrent.changestreamer.mongodb.spring.blocking;
 
-import com.mongodb.MongoClientSettings;
 import com.mongodb.client.model.changestream.ChangeStreamDocument;
 import io.cloudevents.core.format.EventFormat;
 import io.cloudevents.core.provider.EventFormatProvider;
@@ -8,7 +7,6 @@ import io.cloudevents.jackson.JsonFormat;
 import org.bson.BsonDocument;
 import org.bson.BsonTimestamp;
 import org.bson.Document;
-import org.bson.conversions.Bson;
 import org.springframework.data.mongodb.core.ChangeStreamOptions;
 import org.springframework.data.mongodb.core.ChangeStreamOptions.ChangeStreamOptionsBuilder;
 import org.springframework.data.mongodb.core.MongoOperations;
@@ -24,11 +22,8 @@ import se.haleby.occurrent.changestreamer.CloudEventWithChangeStreamPosition;
 import se.haleby.occurrent.changestreamer.StartAt;
 import se.haleby.occurrent.changestreamer.api.blocking.PositionAwareBlockingChangeStreamer;
 import se.haleby.occurrent.changestreamer.api.blocking.Subscription;
-import se.haleby.occurrent.changestreamer.mongodb.MongoDBFilterSpecification.BsonMongoDBFilterSpecification;
-import se.haleby.occurrent.changestreamer.mongodb.MongoDBFilterSpecification.JsonMongoDBFilterSpecification;
 import se.haleby.occurrent.changestreamer.mongodb.MongoDBOperationTimeBasedChangeStreamPosition;
 import se.haleby.occurrent.changestreamer.mongodb.MongoDBResumeTokenBasedChangeStreamPosition;
-import se.haleby.occurrent.changestreamer.mongodb.internal.DocumentAdapter;
 import se.haleby.occurrent.eventstore.mongodb.TimeRepresentation;
 
 import javax.annotation.PreDestroy;
@@ -36,12 +31,12 @@ import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ConcurrentMap;
 import java.util.function.Consumer;
 import java.util.function.Supplier;
-import java.util.stream.Stream;
 
 import static java.util.Objects.requireNonNull;
 import static se.haleby.occurrent.changestreamer.mongodb.internal.MongoDBCloudEventsToJsonDeserializer.deserializeToCloudEvent;
 import static se.haleby.occurrent.changestreamer.mongodb.internal.MongoDBCommons.applyStartPosition;
 import static se.haleby.occurrent.changestreamer.mongodb.internal.MongoDBCommons.getServerOperationTime;
+import static se.haleby.occurrent.changestreamer.mongodb.spring.internal.ApplyFilterToChangeStreamOptionsBuilder.applyFilter;
 
 /**
  * This is a change streamer that uses Spring and its {@link MessageListenerContainer} for MongoDB to listen to changes from an event store.
@@ -103,35 +98,6 @@ public class SpringBlockingChangeStreamerForMongoDB implements PositionAwareBloc
         final org.springframework.data.mongodb.core.messaging.Subscription subscription = messageListenerContainer.register(new ChangeStreamRequest<>(listener, options), Document.class);
         subscriptions.put(subscriptionId, subscription);
         return new MongoDBSpringSubscription(subscriptionId, subscription);
-    }
-
-    private static ChangeStreamOptions applyFilter(ChangeStreamFilter filter, ChangeStreamOptionsBuilder changeStreamOptionsBuilder) {
-        final ChangeStreamOptions changeStreamOptions;
-        if (filter == null) {
-            changeStreamOptions = changeStreamOptionsBuilder.build();
-        } else if (filter instanceof JsonMongoDBFilterSpecification) {
-            changeStreamOptions = changeStreamOptionsBuilder.filter(Document.parse(((JsonMongoDBFilterSpecification) filter).getJson())).build();
-        } else if (filter instanceof BsonMongoDBFilterSpecification) {
-            Bson[] aggregationStages = ((BsonMongoDBFilterSpecification) filter).getAggregationStages();
-            DocumentAdapter documentAdapter = new DocumentAdapter(MongoClientSettings.getDefaultCodecRegistry());
-            Document[] documents = Stream.of(aggregationStages).map(aggregationStage -> {
-                final Document result;
-                if (aggregationStage instanceof Document) {
-                    result = (Document) aggregationStage;
-                } else if (aggregationStage instanceof BsonDocument) {
-                    result = documentAdapter.fromBson((BsonDocument) aggregationStage);
-                } else {
-                    BsonDocument bsonDocument = aggregationStage.toBsonDocument(null, MongoClientSettings.getDefaultCodecRegistry());
-                    result = documentAdapter.fromBson(bsonDocument);
-                }
-                return result;
-            }).toArray(Document[]::new);
-
-            changeStreamOptions = changeStreamOptionsBuilder.filter(documents).build();
-        } else {
-            throw new IllegalArgumentException("Unrecognized " + ChangeStreamFilter.class.getSimpleName() + " for MongoDB change streamer");
-        }
-        return changeStreamOptions;
     }
 
     public void cancelSubscription(String subscriptionId) {
