@@ -24,7 +24,7 @@
         </dependency>
         <dependency>
             <groupId>se.haleby.occurrent</groupId>
-            <artifactId>changestreamer-mongodb-spring-blocking-persistent</artifactId>
+            <artifactId>subscription-mongodb-spring-blocking-persistent</artifactId>
             <version>0.0.1-SNAPSHOT</version>
         </dependency>
         <dependency>

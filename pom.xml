@@ -12,7 +12,7 @@
         <module>test-support</module>
         <module>example</module>
         <module>eventstore</module>
-        <module>changestreamer</module>
+        <module>subscription</module>
         <module>cloudevents-extension</module>
     </modules>
 

@@ -7,7 +7,7 @@ import org.slf4j.LoggerFactory;
 import org.springframework.amqp.core.TopicExchange;
 import org.springframework.amqp.rabbit.core.RabbitTemplate;
 import org.springframework.stereotype.Component;
-import se.haleby.occurrent.changestreamer.mongodb.spring.blocking.SpringBlockingChangeStreamerWithPositionPersistenceForMongoDB;
+import se.haleby.occurrent.subscription.mongodb.spring.blocking.SpringBlockingSubscriptionWithPositionPersistenceForMongoDB;
 import se.haleby.occurrent.eventstore.api.blocking.EventStoreQueries;
 import se.haleby.occurrent.example.domain.numberguessinggame.model.domainevents.*;
 import se.haleby.occurrent.example.domain.numberguessinggame.mongodb.spring.blocking.infrastructure.Serialization;
@@ -19,7 +19,7 @@ import java.time.LocalDateTime;
 import java.util.Date;
 
 import static java.time.ZoneOffset.UTC;
-import static se.haleby.occurrent.changestreamer.mongodb.MongoDBFilterSpecification.BsonMongoDBFilterSpecification.filter;
+import static se.haleby.occurrent.subscription.mongodb.MongoDBFilterSpecification.BsonMongoDBFilterSpecification.filter;
 import static se.haleby.occurrent.eventstore.api.Condition.eq;
 import static se.haleby.occurrent.eventstore.api.Filter.subject;
 
@@ -29,12 +29,12 @@ class WhenGameEndedThenPublishIntegrationEvent {
 
     private final EventStoreQueries eventStoreQueries;
     private final Serialization serialization;
-    private final SpringBlockingChangeStreamerWithPositionPersistenceForMongoDB streamer;
+    private final SpringBlockingSubscriptionWithPositionPersistenceForMongoDB streamer;
     private final RabbitTemplate rabbitTemplate;
     private final TopicExchange numberGuessingGameTopic;
 
     WhenGameEndedThenPublishIntegrationEvent(EventStoreQueries eventStoreQueries, Serialization serialization,
-                                             SpringBlockingChangeStreamerWithPositionPersistenceForMongoDB streamer,
+                                             SpringBlockingSubscriptionWithPositionPersistenceForMongoDB streamer,
                                              RabbitTemplate rabbitTemplate, TopicExchange numberGuessingGameTopic) {
         this.eventStoreQueries = eventStoreQueries;
         this.serialization = serialization;
@@ -44,8 +44,8 @@ class WhenGameEndedThenPublishIntegrationEvent {
     }
 
     @PostConstruct
-    void subscribeToChangeStream() throws InterruptedException {
-        streamer.stream(WhenGameEndedThenPublishIntegrationEvent.class.getSimpleName(), filter().type(Filters::eq, NumberGuessingGameEnded.class.getSimpleName()), this::publishIntegrationEventWhenGameEnded
+    void subscribeToSubscription() throws InterruptedException {
+        streamer.subscribe(WhenGameEndedThenPublishIntegrationEvent.class.getSimpleName(), filter().type(Filters::eq, NumberGuessingGameEnded.class.getSimpleName()), this::publishIntegrationEventWhenGameEnded
                 // We're only interested in events of type NumberGuessingGameEnded since then we know that
                 // we should publish the integration event
         )

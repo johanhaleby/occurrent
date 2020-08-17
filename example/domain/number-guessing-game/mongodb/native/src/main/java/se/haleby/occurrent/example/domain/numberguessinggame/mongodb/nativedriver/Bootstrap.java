@@ -14,9 +14,9 @@ import org.jetbrains.annotations.NotNull;
 import org.jetbrains.annotations.Nullable;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
-import se.haleby.occurrent.changestreamer.mongodb.nativedriver.blocking.BlockingChangeStreamerForMongoDB;
-import se.haleby.occurrent.changestreamer.mongodb.nativedriver.blocking.BlockingChangeStreamerWithPositionPersistenceForMongoDB;
-import se.haleby.occurrent.changestreamer.mongodb.nativedriver.blocking.RetryStrategy;
+import se.haleby.occurrent.subscription.mongodb.nativedriver.blocking.BlockingSubscriptionForMongoDB;
+import se.haleby.occurrent.subscription.mongodb.nativedriver.blocking.BlockingSubscriptionWithPositionPersistenceForMongoDB;
+import se.haleby.occurrent.subscription.mongodb.nativedriver.blocking.RetryStrategy;
 import se.haleby.occurrent.eventstore.api.blocking.EventStoreQueries;
 import se.haleby.occurrent.eventstore.mongodb.TimeRepresentation;
 import se.haleby.occurrent.eventstore.mongodb.nativedriver.EventStoreConfig;
@@ -45,7 +45,7 @@ import java.util.stream.StreamSupport;
 
 import static com.mongodb.client.model.Sorts.descending;
 import static java.time.ZoneOffset.UTC;
-import static se.haleby.occurrent.changestreamer.mongodb.MongoDBFilterSpecification.BsonMongoDBFilterSpecification.filter;
+import static se.haleby.occurrent.subscription.mongodb.MongoDBFilterSpecification.BsonMongoDBFilterSpecification.filter;
 import static se.haleby.occurrent.eventstore.api.Condition.eq;
 import static se.haleby.occurrent.eventstore.api.Filter.subject;
 import static se.haleby.occurrent.example.domain.numberguessinggame.mongodb.nativedriver.view.latestgamesoverview.GameOverview.GameState;
@@ -57,15 +57,15 @@ public class Bootstrap {
     private static final String EVENTS_COLLECTION_NAME = "events";
     private static final String DATABASE_NAME = "test";
     private static final String LATEST_GAMES_OVERVIEW_COLLECTION_NAME = "latestGamesOverview";
-    private static final String CHANGE_STEAMER_POSITIONS_COLLECTION_NAME = "changeSteamerPositions";
+    private static final String SUBSCRIPTION_POSITIONS_COLLECTION_NAME = "subscriptionPositions";
     private static final String NUMBER_GUESSING_GAME_TOPIC = "number-guessing-game";
 
     private final Javalin javalin;
-    private final BlockingChangeStreamerWithPositionPersistenceForMongoDB streamer;
+    private final BlockingSubscriptionWithPositionPersistenceForMongoDB streamer;
     private final MongoClient mongoClient;
     private final RabbitMQConnectionAndChannel rabbitMQConnectionAndChannel;
 
-    public Bootstrap(Javalin javalin, BlockingChangeStreamerWithPositionPersistenceForMongoDB streamer,
+    public Bootstrap(Javalin javalin, BlockingSubscriptionWithPositionPersistenceForMongoDB streamer,
                      MongoClient mongoClient, RabbitMQConnectionAndChannel rabbitMQConnectionAndChannel) {
         this.javalin = javalin;
         this.streamer = streamer;
@@ -89,7 +89,7 @@ public class Bootstrap {
         Javalin javalin = Javalin.create(cfg -> cfg.showJavalinBanner = false).start(7000);
 
         WhatIsTheStatusOfGame whatIsTheStatusOfGame = initializeWhatIsTheStatusOfGame(mongoEventStore, serialization);
-        BlockingChangeStreamerWithPositionPersistenceForMongoDB streamer = initializeChangeStreamer(mongoClient);
+        BlockingSubscriptionWithPositionPersistenceForMongoDB streamer = initializeSubscription(mongoClient);
         LatestGamesOverview latestGamesOverview = initializeLatestGamesOverview(mongoClient, serialization, streamer);
         RabbitMQConnectionAndChannel rabbitMQConnectionAndChannel = initializeRabbitMQConnection("amqp://localhost:5672").declareTopic(NUMBER_GUESSING_GAME_TOPIC, true);
         initializeNumberGuessingGameCompletedIntegrationEventPublisher(mongoEventStore, serialization::deserialize, streamer, rabbitMQConnectionAndChannel.channel, objectMapper);
@@ -99,7 +99,7 @@ public class Bootstrap {
     }
 
     private static void initializeNumberGuessingGameCompletedIntegrationEventPublisher(EventStoreQueries eventStoreQueries, Function<CloudEvent, GameEvent> deserialize,
-                                                                                       BlockingChangeStreamerWithPositionPersistenceForMongoDB streamer, Channel rabbit,
+                                                                                       BlockingSubscriptionWithPositionPersistenceForMongoDB streamer, Channel rabbit,
                                                                                        ObjectMapper objectMapper) {
         Consumer<CloudEvent> cloudEventConsumer = cloudEvent -> {
             String gameId = cloudEvent.getSubject();
@@ -141,7 +141,7 @@ public class Bootstrap {
             }
         };
 
-        streamer.stream("NumberGuessingGameCompletedIntegrationEventPublisher", filter().type(Filters::eq, NumberGuessingGameEnded.class.getSimpleName()), cloudEventConsumer
+        streamer.subscribe("NumberGuessingGameCompletedIntegrationEventPublisher", filter().type(Filters::eq, NumberGuessingGameEnded.class.getSimpleName()), cloudEventConsumer
                 // We're only interested in events of type NumberGuessingGameEnded since then we know that
                 // we should publish the integration event
         );
@@ -184,13 +184,13 @@ public class Bootstrap {
                 .build();
     }
 
-    private static BlockingChangeStreamerWithPositionPersistenceForMongoDB initializeChangeStreamer(MongoClient mongoClient) {
+    private static BlockingSubscriptionWithPositionPersistenceForMongoDB initializeSubscription(MongoClient mongoClient) {
         MongoDatabase database = mongoClient.getDatabase(DATABASE_NAME);
-        BlockingChangeStreamerForMongoDB blockingChangeStreamerForMongoDB = new BlockingChangeStreamerForMongoDB(database, EVENTS_COLLECTION_NAME, TimeRepresentation.DATE, Executors.newCachedThreadPool(), RetryStrategy.fixed(200));
-        return new BlockingChangeStreamerWithPositionPersistenceForMongoDB(blockingChangeStreamerForMongoDB, database, CHANGE_STEAMER_POSITIONS_COLLECTION_NAME);
+        BlockingSubscriptionForMongoDB blockingSubscriptionForMongoDB = new BlockingSubscriptionForMongoDB(database, EVENTS_COLLECTION_NAME, TimeRepresentation.DATE, Executors.newCachedThreadPool(), RetryStrategy.fixed(200));
+        return new BlockingSubscriptionWithPositionPersistenceForMongoDB(blockingSubscriptionForMongoDB, database, SUBSCRIPTION_POSITIONS_COLLECTION_NAME);
     }
 
-    private static LatestGamesOverview initializeLatestGamesOverview(MongoClient mongoClient, Serialization serialization, BlockingChangeStreamerWithPositionPersistenceForMongoDB streamer) {
+    private static LatestGamesOverview initializeLatestGamesOverview(MongoClient mongoClient, Serialization serialization, BlockingSubscriptionWithPositionPersistenceForMongoDB streamer) {
         MongoDatabase database = mongoClient.getDatabase(DATABASE_NAME);
         if (!collectionExists(database, LATEST_GAMES_OVERVIEW_COLLECTION_NAME)) {
             database.createCollection(LATEST_GAMES_OVERVIEW_COLLECTION_NAME);

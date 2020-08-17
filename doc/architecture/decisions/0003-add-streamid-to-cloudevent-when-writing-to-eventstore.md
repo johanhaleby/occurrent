@@ -28,7 +28,7 @@ Negative:
   `streamId` extension property. Could be a bit of an effort depending on the version of the `CloudEvent` (although we could limit the support for version 1 only).
 
 Positive:
-* Implementations of snapshotting and sagas and even custom change streamers will be simpler.
+* Implementations of snapshotting and sagas and even custom subscriptions will be simpler.
 
 ### Alternatives
 

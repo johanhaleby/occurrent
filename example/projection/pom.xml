@@ -13,7 +13,7 @@
     <artifactId>example-projection</artifactId>
 
     <modules>
-        <module>spring-changedstreamed-mongodb-projections</module>
+        <module>spring-subscription-based-mongodb-projections</module>
         <module>spring-transactional-projection-mongodb</module>
         <module>spring-adhoc-evenstore-mongodb-queries</module>
         <module>spring-reactor-transactional-projection-mongodb</module>

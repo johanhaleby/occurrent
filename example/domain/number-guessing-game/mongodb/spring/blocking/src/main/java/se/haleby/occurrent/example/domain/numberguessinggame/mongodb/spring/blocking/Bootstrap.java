@@ -13,8 +13,8 @@ import org.springframework.data.mongodb.MongoTransactionManager;
 import org.springframework.data.mongodb.core.MongoTemplate;
 import org.springframework.data.mongodb.repository.config.EnableMongoRepositories;
 import org.springframework.retry.annotation.EnableRetry;
-import se.haleby.occurrent.changestreamer.mongodb.spring.blocking.SpringBlockingChangeStreamerForMongoDB;
-import se.haleby.occurrent.changestreamer.mongodb.spring.blocking.SpringBlockingChangeStreamerWithPositionPersistenceForMongoDB;
+import se.haleby.occurrent.subscription.mongodb.spring.blocking.SpringBlockingSubscriptionForMongoDB;
+import se.haleby.occurrent.subscription.mongodb.spring.blocking.SpringBlockingSubscriptionWithPositionPersistenceForMongoDB;
 import se.haleby.occurrent.eventstore.mongodb.TimeRepresentation;
 import se.haleby.occurrent.eventstore.mongodb.spring.blocking.EventStoreConfig;
 import se.haleby.occurrent.eventstore.mongodb.spring.blocking.SpringBlockingMongoEventStore;
@@ -46,9 +46,9 @@ public class Bootstrap {
     }
 
     @Bean
-    public SpringBlockingChangeStreamerWithPositionPersistenceForMongoDB changeStreamer(MongoTemplate mongoTemplate) {
-        SpringBlockingChangeStreamerForMongoDB streamer = new SpringBlockingChangeStreamerForMongoDB(mongoTemplate, EVENTS_COLLECTION_NAME, TimeRepresentation.DATE);
-        return new SpringBlockingChangeStreamerWithPositionPersistenceForMongoDB(streamer, mongoTemplate, "changeStreamPosition");
+    public SpringBlockingSubscriptionWithPositionPersistenceForMongoDB subscription(MongoTemplate mongoTemplate) {
+        SpringBlockingSubscriptionForMongoDB streamer = new SpringBlockingSubscriptionForMongoDB(mongoTemplate, EVENTS_COLLECTION_NAME, TimeRepresentation.DATE);
+        return new SpringBlockingSubscriptionWithPositionPersistenceForMongoDB(streamer, mongoTemplate, "changeStreamPosition");
     }
 
     @Bean

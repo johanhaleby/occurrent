@@ -78,19 +78,19 @@ I.e. the events were stored inside a single document. While there are several be
                     new UpdateOptions().upsert(true));
     ``` 
 1. Reads could be done in a streaming fashion even though the events were stored as a subarray using aggregations
-1. Change streamers could take a `List<CloudEvent>`, i.e. all events written in the same transaction to the event store. 
-   When not using the approach change streamers gets notified once for each event and the consumer needs to reassemble 
+1. Subscriptions could take a `List<CloudEvent>`, i.e. all events written in the same transaction to the event store. 
+   When not using the approach subscriptions gets notified once for each event and the consumer needs to reassemble 
    the "transaction" somehow. This is a major drawback when not using this approach.  
  
 There are however two major drawbacks that lead to not using this approach:
 
 1. There's 16Mb document size limit in MongoDB so this approach wouldn't work for large streams
-1. It's much hard to implement queries/filters for changestreamers. The aggregation support is 
+1. It's much hard to implement queries/filters for subscriptions. The aggregation support is 
    [limited](https://stackoverflow.com/questions/62846085/remove-element-from-subarray-using-an-aggregation-stage-applied-to-a-change-stre)
-   when working with change streams preventing simple filters (it would have been much simpler if `unwind`
+   when working with subscriptions preventing simple filters (it would have been much simpler if `unwind`
    was supported since then we could flatten out the `events` subarray before applying the queries, i.e. something like
    `(unwind("$events"), replaceRoot("$events"), match(filter.apply("type", item))`).
-   Another problem with change streams is the format, when a document is _created_ the content is specified 
+   Another problem with subscriptions is the format, when a document is _created_ the content is specified 
    in the `fullDocument` property but it's a different property when the document is updated. Thus a filter/query
    would not need to consider both these cases which is very difficult. With the new approach a query/filter is much
    easier since we only need to care about inserts.    

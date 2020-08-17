@@ -6,7 +6,7 @@ import io.cloudevents.CloudEvent;
 import org.bson.Document;
 import org.bson.conversions.Bson;
 import org.jetbrains.annotations.NotNull;
-import se.haleby.occurrent.changestreamer.mongodb.nativedriver.blocking.BlockingChangeStreamerWithPositionPersistenceForMongoDB;
+import se.haleby.occurrent.subscription.mongodb.nativedriver.blocking.BlockingSubscriptionWithPositionPersistenceForMongoDB;
 import se.haleby.occurrent.example.domain.numberguessinggame.model.domainevents.*;
 
 import java.time.LocalDateTime;
@@ -20,10 +20,10 @@ import static java.time.temporal.ChronoUnit.MILLIS;
 
 public class InsertGameIntoLatestGamesOverview {
 
-    public static void insertGameIntoLatestGamesOverview(BlockingChangeStreamerWithPositionPersistenceForMongoDB changeStreamer,
+    public static void insertGameIntoLatestGamesOverview(BlockingSubscriptionWithPositionPersistenceForMongoDB subscription,
                                                          MongoCollection<Document> latestGamesOverviewCollection,
                                                          Function<CloudEvent, GameEvent> deserialize) {
-        changeStreamer.stream(InsertGameIntoLatestGamesOverview.class.getSimpleName(), insertGame(latestGamesOverviewCollection, deserialize));
+        subscription.subscribe(InsertGameIntoLatestGamesOverview.class.getSimpleName(), insertGame(latestGamesOverviewCollection, deserialize));
     }
 
     @NotNull

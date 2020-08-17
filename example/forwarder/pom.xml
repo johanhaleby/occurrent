@@ -13,7 +13,7 @@
     <artifactId>example-forwarder</artifactId>
 
     <modules>
-        <module>mongodb-changestreamer-to-spring-event</module>
+        <module>mongodb-subscription-to-spring-event</module>
     </modules>
 
 

@@ -11,7 +11,7 @@ import org.springframework.data.mongodb.core.query.Query;
 import org.springframework.retry.annotation.Backoff;
 import org.springframework.retry.annotation.Retryable;
 import org.springframework.stereotype.Component;
-import se.haleby.occurrent.changestreamer.mongodb.spring.blocking.SpringBlockingChangeStreamerWithPositionPersistenceForMongoDB;
+import se.haleby.occurrent.subscription.mongodb.spring.blocking.SpringBlockingSubscriptionWithPositionPersistenceForMongoDB;
 import se.haleby.occurrent.example.domain.numberguessinggame.model.domainevents.*;
 import se.haleby.occurrent.example.domain.numberguessinggame.mongodb.spring.blocking.infrastructure.Serialization;
 
@@ -29,20 +29,20 @@ import static org.springframework.data.mongodb.core.query.Query.query;
 class InsertGameIntoLatestGamesOverview {
     private static final Logger log = LoggerFactory.getLogger(InsertGameIntoLatestGamesOverview.class);
 
-    private final SpringBlockingChangeStreamerWithPositionPersistenceForMongoDB changeStreamer;
+    private final SpringBlockingSubscriptionWithPositionPersistenceForMongoDB subscription;
     private final Serialization serialization;
     private final MongoOperations mongoOperations;
 
-    InsertGameIntoLatestGamesOverview(SpringBlockingChangeStreamerWithPositionPersistenceForMongoDB changeStreamer,
+    InsertGameIntoLatestGamesOverview(SpringBlockingSubscriptionWithPositionPersistenceForMongoDB subscription,
                                       Serialization serialization, MongoOperations mongoOperations) {
-        this.changeStreamer = changeStreamer;
+        this.subscription = subscription;
         this.serialization = serialization;
         this.mongoOperations = mongoOperations;
     }
 
     @PostConstruct
-    void initializeChangeStreamer() throws InterruptedException {
-        changeStreamer.stream(InsertGameIntoLatestGamesOverview.class.getSimpleName(), this::insertGame)
+    void initializeSubscription() throws InterruptedException {
+        subscription.subscribe(InsertGameIntoLatestGamesOverview.class.getSimpleName(), this::insertGame)
                 .waitUntilStarted(Duration.ofSeconds(4));
     }
 
