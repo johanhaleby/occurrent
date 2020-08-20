@@ -2,11 +2,11 @@ package se.haleby.occurrent.eventstore.mongodb.spring.common.internal;
 
 import org.springframework.data.mongodb.core.query.Criteria;
 import org.springframework.data.mongodb.core.query.Query;
-import se.haleby.occurrent.eventstore.api.Condition;
-import se.haleby.occurrent.eventstore.api.Filter;
-import se.haleby.occurrent.eventstore.api.Filter.All;
-import se.haleby.occurrent.eventstore.api.Filter.CompositionFilter;
-import se.haleby.occurrent.eventstore.api.Filter.SingleConditionFilter;
+import se.haleby.occurrent.condition.Condition;
+import se.haleby.occurrent.filter.Filter;
+import se.haleby.occurrent.filter.Filter.All;
+import se.haleby.occurrent.filter.Filter.CompositionFilter;
+import se.haleby.occurrent.filter.Filter.SingleConditionFilter;
 import se.haleby.occurrent.eventstore.mongodb.TimeRepresentation;
 
 import static java.util.Objects.requireNonNull;

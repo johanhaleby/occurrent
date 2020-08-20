@@ -1,4 +1,4 @@
-package se.haleby.occurrent.eventstore.api;
+package se.haleby.occurrent.condition;
 
 import java.util.ArrayList;
 import java.util.Collections;
@@ -7,8 +7,8 @@ import java.util.function.Function;
 import java.util.stream.Collectors;
 
 import static java.util.Objects.requireNonNull;
-import static se.haleby.occurrent.eventstore.api.Condition.MultiOperandConditionName.*;
-import static se.haleby.occurrent.eventstore.api.Condition.SingleOperandConditionName.*;
+import static se.haleby.occurrent.condition.Condition.MultiOperandConditionName.*;
+import static se.haleby.occurrent.condition.Condition.SingleOperandConditionName.*;
 
 public abstract class Condition<T> {
     public final String description;

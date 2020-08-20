@@ -1,7 +1,7 @@
 package se.haleby.occurrent.eventstore.api.blocking;
 
 import io.cloudevents.CloudEvent;
-import se.haleby.occurrent.eventstore.api.Filter;
+import se.haleby.occurrent.filter.Filter;
 
 import java.util.stream.Stream;
 

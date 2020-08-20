@@ -1,7 +1,9 @@
 package se.haleby.occurrent.eventstore.api;
 
+import se.haleby.occurrent.condition.Condition;
+
 import static java.util.Objects.requireNonNull;
-import static se.haleby.occurrent.eventstore.api.Condition.eq;
+import static se.haleby.occurrent.condition.Condition.eq;
 
 public abstract class WriteCondition {
 

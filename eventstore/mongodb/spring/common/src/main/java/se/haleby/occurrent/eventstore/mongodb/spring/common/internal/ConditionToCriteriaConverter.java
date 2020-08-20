@@ -1,9 +1,9 @@
 package se.haleby.occurrent.eventstore.mongodb.spring.common.internal;
 
 import org.springframework.data.mongodb.core.query.Criteria;
-import se.haleby.occurrent.eventstore.api.Condition;
-import se.haleby.occurrent.eventstore.api.Condition.MultiOperandCondition;
-import se.haleby.occurrent.eventstore.api.Condition.SingleOperandCondition;
+import se.haleby.occurrent.condition.Condition;
+import se.haleby.occurrent.condition.Condition.MultiOperandCondition;
+import se.haleby.occurrent.condition.Condition.SingleOperandCondition;
 
 import java.util.List;
 

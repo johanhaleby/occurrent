@@ -19,6 +19,8 @@ import se.haleby.occurrent.eventstore.api.blocking.EventStoreQueries;
 import se.haleby.occurrent.eventstore.api.blocking.EventStream;
 import se.haleby.occurrent.eventstore.mongodb.TimeRepresentation;
 import se.haleby.occurrent.eventstore.api.internal.functional.FunctionalSupport.Pair;
+import se.haleby.occurrent.condition.Condition;
+import se.haleby.occurrent.filter.Filter;
 
 import java.net.URI;
 import java.util.List;
@@ -39,7 +41,7 @@ import static com.mongodb.client.model.Sorts.descending;
 import static java.util.Objects.requireNonNull;
 import static se.haleby.occurrent.cloudevents.OccurrentCloudEventExtension.STREAM_ID;
 import static se.haleby.occurrent.cloudevents.OccurrentCloudEventExtension.STREAM_VERSION;
-import static se.haleby.occurrent.eventstore.api.Filter.TIME;
+import static se.haleby.occurrent.filter.Filter.TIME;
 import static se.haleby.occurrent.eventstore.api.WriteCondition.StreamVersionWriteCondition;
 import static se.haleby.occurrent.eventstore.api.WriteCondition.anyStreamVersion;
 import static se.haleby.occurrent.eventstore.api.internal.functional.FunctionalSupport.zip;

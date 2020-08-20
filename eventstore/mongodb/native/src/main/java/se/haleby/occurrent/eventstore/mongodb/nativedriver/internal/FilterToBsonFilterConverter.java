@@ -3,11 +3,11 @@ package se.haleby.occurrent.eventstore.mongodb.nativedriver.internal;
 import com.mongodb.client.model.Filters;
 import org.bson.BsonDocument;
 import org.bson.conversions.Bson;
-import se.haleby.occurrent.eventstore.api.Condition;
-import se.haleby.occurrent.eventstore.api.Filter;
-import se.haleby.occurrent.eventstore.api.Filter.All;
-import se.haleby.occurrent.eventstore.api.Filter.CompositionFilter;
-import se.haleby.occurrent.eventstore.api.Filter.SingleConditionFilter;
+import se.haleby.occurrent.condition.Condition;
+import se.haleby.occurrent.filter.Filter;
+import se.haleby.occurrent.filter.Filter.All;
+import se.haleby.occurrent.filter.Filter.CompositionFilter;
+import se.haleby.occurrent.filter.Filter.SingleConditionFilter;
 import se.haleby.occurrent.eventstore.mongodb.TimeRepresentation;
 
 import static java.util.Objects.requireNonNull;

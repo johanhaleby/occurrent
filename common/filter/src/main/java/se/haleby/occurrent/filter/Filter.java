@@ -1,6 +1,8 @@
-package se.haleby.occurrent.eventstore.api;
+package se.haleby.occurrent.filter;
 
 import io.cloudevents.SpecVersion;
+import se.haleby.occurrent.cloudevents.OccurrentCloudEventExtension;
+import se.haleby.occurrent.condition.Condition;
 
 import java.net.URI;
 import java.time.ZonedDateTime;
@@ -11,13 +13,12 @@ import java.util.Objects;
 import java.util.function.Supplier;
 
 import static java.util.Objects.requireNonNull;
-import static se.haleby.occurrent.cloudevents.OccurrentCloudEventExtension.STREAM_ID;
-import static se.haleby.occurrent.eventstore.api.Condition.eq;
-import static se.haleby.occurrent.eventstore.api.Filter.CompositionOperator.AND;
-import static se.haleby.occurrent.eventstore.api.Filter.CompositionOperator.OR;
+import static se.haleby.occurrent.condition.Condition.eq;
+import static se.haleby.occurrent.filter.Filter.CompositionOperator.AND;
+import static se.haleby.occurrent.filter.Filter.CompositionOperator.OR;
 
 /**
- * Filters that can be applied when queriying an event store
+ * Filters that can be applied when querying an event store or subscription that supports querying capabilities
  */
 public abstract class Filter {
     public static final String SPEC_VERSION = "specversion";
@@ -209,7 +210,7 @@ public abstract class Filter {
     }
 
     public static Filter streamId(Condition<String> condition) {
-        return filter(STREAM_ID, condition);
+        return filter(OccurrentCloudEventExtension.STREAM_ID, condition);
     }
 
     public static Filter specVersion(SpecVersion value) {

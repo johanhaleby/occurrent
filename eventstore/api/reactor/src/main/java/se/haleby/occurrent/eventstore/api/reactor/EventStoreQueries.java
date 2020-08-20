@@ -2,7 +2,7 @@ package se.haleby.occurrent.eventstore.api.reactor;
 
 import io.cloudevents.CloudEvent;
 import reactor.core.publisher.Flux;
-import se.haleby.occurrent.eventstore.api.Filter;
+import se.haleby.occurrent.filter.Filter;
 
 import static java.util.Objects.requireNonNull;
 

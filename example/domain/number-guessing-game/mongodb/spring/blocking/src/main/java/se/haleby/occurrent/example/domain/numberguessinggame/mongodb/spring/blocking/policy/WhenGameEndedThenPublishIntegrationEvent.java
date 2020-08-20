@@ -20,8 +20,8 @@ import java.util.Date;
 
 import static java.time.ZoneOffset.UTC;
 import static se.haleby.occurrent.subscription.mongodb.MongoDBFilterSpecification.BsonMongoDBFilterSpecification.filter;
-import static se.haleby.occurrent.eventstore.api.Condition.eq;
-import static se.haleby.occurrent.eventstore.api.Filter.subject;
+import static se.haleby.occurrent.condition.Condition.eq;
+import static se.haleby.occurrent.filter.Filter.subject;
 
 @Component
 class WhenGameEndedThenPublishIntegrationEvent {

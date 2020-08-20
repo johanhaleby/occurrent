@@ -14,6 +14,7 @@
         <module>eventstore</module>
         <module>subscription</module>
         <module>cloudevents-extension</module>
+        <module>common</module>
     </modules>
 
     <name>occurrent</name>

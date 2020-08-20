@@ -1,13 +1,13 @@
 package se.haleby.occurrent.eventstore.mongodb.internal;
 
-import se.haleby.occurrent.eventstore.api.Condition;
-import se.haleby.occurrent.eventstore.api.Filter.SingleConditionFilter;
+import se.haleby.occurrent.condition.Condition;
+import se.haleby.occurrent.filter.Filter.SingleConditionFilter;
 import se.haleby.occurrent.eventstore.mongodb.TimeRepresentation;
 
 import java.sql.Date;
 import java.time.ZonedDateTime;
 
-import static se.haleby.occurrent.eventstore.api.Filter.TIME;
+import static se.haleby.occurrent.filter.Filter.TIME;
 import static se.haleby.occurrent.eventstore.mongodb.TimeRepresentation.RFC_3339_STRING;
 import static se.haleby.occurrent.eventstore.mongodb.internal.RFC3339.RFC_3339_DATE_TIME_FORMATTER;
 

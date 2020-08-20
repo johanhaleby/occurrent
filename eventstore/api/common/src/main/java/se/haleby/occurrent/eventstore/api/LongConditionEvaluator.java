@@ -1,9 +1,10 @@
 package se.haleby.occurrent.eventstore.api;
 
-import se.haleby.occurrent.eventstore.api.Condition.MultiOperandCondition;
-import se.haleby.occurrent.eventstore.api.Condition.MultiOperandConditionName;
-import se.haleby.occurrent.eventstore.api.Condition.SingleOperandCondition;
-import se.haleby.occurrent.eventstore.api.Condition.SingleOperandConditionName;
+import se.haleby.occurrent.condition.Condition;
+import se.haleby.occurrent.condition.Condition.MultiOperandCondition;
+import se.haleby.occurrent.condition.Condition.MultiOperandConditionName;
+import se.haleby.occurrent.condition.Condition.SingleOperandCondition;
+import se.haleby.occurrent.condition.Condition.SingleOperandConditionName;
 
 import java.util.Objects;
 import java.util.stream.Stream;

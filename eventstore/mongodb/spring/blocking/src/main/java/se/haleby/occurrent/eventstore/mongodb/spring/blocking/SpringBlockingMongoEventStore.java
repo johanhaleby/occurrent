@@ -21,6 +21,8 @@ import se.haleby.occurrent.eventstore.api.blocking.EventStoreOperations;
 import se.haleby.occurrent.eventstore.api.blocking.EventStoreQueries;
 import se.haleby.occurrent.eventstore.api.blocking.EventStream;
 import se.haleby.occurrent.eventstore.mongodb.TimeRepresentation;
+import se.haleby.occurrent.condition.Condition;
+import se.haleby.occurrent.filter.Filter;
 
 import java.net.URI;
 import java.util.List;
@@ -37,7 +39,7 @@ import static org.springframework.data.mongodb.SessionSynchronization.ALWAYS;
 import static org.springframework.data.mongodb.core.query.Criteria.where;
 import static se.haleby.occurrent.cloudevents.OccurrentCloudEventExtension.STREAM_ID;
 import static se.haleby.occurrent.cloudevents.OccurrentCloudEventExtension.STREAM_VERSION;
-import static se.haleby.occurrent.eventstore.api.Filter.TIME;
+import static se.haleby.occurrent.filter.Filter.TIME;
 import static se.haleby.occurrent.eventstore.api.blocking.EventStoreQueries.SortBy.NATURAL_ASC;
 import static se.haleby.occurrent.eventstore.api.internal.functional.FunctionalSupport.mapWithIndex;
 import static se.haleby.occurrent.eventstore.mongodb.internal.MongoBulkWriteExceptionToDuplicateCloudEventExceptionTranslator.translateToDuplicateCloudEventException;

@@ -2,9 +2,9 @@ package se.haleby.occurrent.eventstore.mongodb.nativedriver.internal;
 
 import com.mongodb.client.model.Filters;
 import org.bson.conversions.Bson;
-import se.haleby.occurrent.eventstore.api.Condition;
-import se.haleby.occurrent.eventstore.api.Condition.MultiOperandCondition;
-import se.haleby.occurrent.eventstore.api.Condition.SingleOperandCondition;
+import se.haleby.occurrent.condition.Condition;
+import se.haleby.occurrent.condition.Condition.MultiOperandCondition;
+import se.haleby.occurrent.condition.Condition.SingleOperandCondition;
 
 import java.util.List;
 

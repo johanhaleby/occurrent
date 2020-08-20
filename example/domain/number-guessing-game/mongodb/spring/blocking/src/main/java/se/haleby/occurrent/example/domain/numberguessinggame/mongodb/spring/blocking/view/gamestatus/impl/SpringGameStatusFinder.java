@@ -16,7 +16,7 @@ import java.util.List;
 import java.util.Optional;
 import java.util.UUID;
 
-import static se.haleby.occurrent.eventstore.api.Filter.subject;
+import static se.haleby.occurrent.filter.Filter.subject;
 
 @Component
 class SpringGameStatusFinder implements WhatIsTheStatusOfGame {
