@@ -6,9 +6,9 @@ import org.bson.BsonValue;
 import org.bson.Document;
 import org.springframework.data.mongodb.core.MongoTemplate;
 import org.springframework.data.mongodb.core.query.Update;
+import se.haleby.occurrent.subscription.StartAt;
 import se.haleby.occurrent.subscription.SubscriptionFilter;
 import se.haleby.occurrent.subscription.SubscriptionPosition;
-import se.haleby.occurrent.subscription.StartAt;
 import se.haleby.occurrent.subscription.api.blocking.BlockingSubscription;
 import se.haleby.occurrent.subscription.api.blocking.PositionAwareBlockingSubscription;
 import se.haleby.occurrent.subscription.api.blocking.Subscription;
@@ -27,11 +27,11 @@ import static se.haleby.occurrent.subscription.mongodb.internal.MongoDBCloudEven
 import static se.haleby.occurrent.subscription.mongodb.internal.MongoDBCommons.*;
 
 /**
- * Wraps a {@link BlockingSubscription} (with optimized support {@link SpringBlockingSubscriptionForMongoDB}) and adds persistent stream position support. It stores the stream position
+ * Wraps a {@link BlockingSubscription} (with optimized support {@link SpringBlockingSubscriptionForMongoDB}) and adds persistent subscription position support. It stores the subscription position
  * after an "action" (the consumer in this method {@link SpringBlockingSubscriptionWithPositionPersistenceForMongoDB#subscribe(String, Consumer)}) has completed successfully.
- * It stores the stream position in MongoDB. Note that it doesn't have to be the same MongoDB database that stores the actual events.
+ * It stores the subscription position in MongoDB. Note that it doesn't have to be the same MongoDB database that stores the actual events.
  * <p>
- * Note that this implementation stores the stream position after _every_ action. If you have a lot of events and duplication is not
+ * Note that this implementation stores the subscription position after _every_ action. If you have a lot of events and duplication is not
  * that much of a deal consider cloning/extending this class and add your own customizations.
  */
 public class SpringBlockingSubscriptionWithPositionPersistenceForMongoDB implements BlockingSubscription<CloudEvent> {
@@ -41,11 +41,11 @@ public class SpringBlockingSubscriptionWithPositionPersistenceForMongoDB impleme
     private final PositionAwareBlockingSubscription subscription;
 
     /**
-     * Create a subscription that uses the Native sync Java MongoDB driver to persists the stream position in MongoDB.
+     * Create a subscription that uses the Native sync Java MongoDB driver to persists the subscription position in MongoDB.
      *
      * @param subscription           The subscription that will read events from the event store
-     * @param mongoTemplate            The {@link MongoTemplate} that'll be used to store the stream position
-     * @param streamPositionCollection The collection into which stream positions will be stored
+     * @param mongoTemplate            The {@link MongoTemplate} that'll be used to store the subscription position
+     * @param streamPositionCollection The collection into which subscription positions will be stored
      */
     public SpringBlockingSubscriptionWithPositionPersistenceForMongoDB(PositionAwareBlockingSubscription subscription, MongoTemplate mongoTemplate, String streamPositionCollection) {
         requireNonNull(subscription, "subscription cannot be null");
@@ -87,7 +87,7 @@ public class SpringBlockingSubscriptionWithPositionPersistenceForMongoDB impleme
             if (streamPositionDocument == null) {
                 streamPositionDocument = persistStreamPosition(subscriptionId, subscription.globalSubscriptionPosition());
             }
-            return calculateSubscriptionPositionFromMongoStreamPositionDocument(streamPositionDocument);
+            return StartAt.streamPosition(calculateSubscriptionPositionFromMongoStreamPositionDocument(streamPositionDocument));
         };
         return subscribe(subscriptionId, filter, startAtSupplier, action);
     }
@@ -98,7 +98,7 @@ public class SpringBlockingSubscriptionWithPositionPersistenceForMongoDB impleme
 
     /**
      * Cancel a subscription. This means that it'll no longer receive events as they are persisted to the event store.
-     * The stream position that is persisted to MongoDB will also be removed.
+     * The subscription position that is persisted to MongoDB will also be removed.
      *
      * @param subscriptionId The subscription id to cancel
      */

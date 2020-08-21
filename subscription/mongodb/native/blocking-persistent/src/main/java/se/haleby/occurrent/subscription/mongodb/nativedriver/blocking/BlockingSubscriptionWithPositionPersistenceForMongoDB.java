@@ -7,9 +7,9 @@ import io.cloudevents.CloudEvent;
 import org.bson.BsonTimestamp;
 import org.bson.BsonValue;
 import org.bson.Document;
+import se.haleby.occurrent.subscription.StartAt;
 import se.haleby.occurrent.subscription.SubscriptionFilter;
 import se.haleby.occurrent.subscription.SubscriptionPosition;
-import se.haleby.occurrent.subscription.StartAt;
 import se.haleby.occurrent.subscription.api.blocking.BlockingSubscription;
 import se.haleby.occurrent.subscription.api.blocking.PositionAwareBlockingSubscription;
 import se.haleby.occurrent.subscription.api.blocking.Subscription;
@@ -26,11 +26,11 @@ import static se.haleby.occurrent.subscription.mongodb.internal.MongoDBCloudEven
 import static se.haleby.occurrent.subscription.mongodb.internal.MongoDBCommons.calculateSubscriptionPositionFromMongoStreamPositionDocument;
 
 /**
- * Wraps a {@link BlockingSubscriptionForMongoDB} and adds persistent stream position support. It stores the stream position
- * after an "action" (the consumer in this method {@link BlockingSubscriptionForMongoDB#stream(String, Consumer)}) has completed successfully.
- * It stores the stream position in MongoDB. Note that it doesn't have to be the same MongoDB database that stores the actual events.
+ * Wraps a {@link BlockingSubscriptionForMongoDB} and adds persistent subscription position support. It stores the subscription position
+ * after an "action" (the consumer in this method {@link BlockingSubscriptionForMongoDB#subscribe(String, Consumer)}) has completed successfully.
+ * It stores the subscription position in MongoDB. Note that it doesn't have to be the same MongoDB database that stores the actual events.
  * <p>
- * Note that this implementation stores the stream position after _every_ action. If you have a lot of events and duplication is not
+ * Note that this implementation stores the subscription position after _every_ action. If you have a lot of events and duplication is not
  * that much of a deal consider cloning/extending this class and add your own customizations.
  */
 public class BlockingSubscriptionWithPositionPersistenceForMongoDB implements BlockingSubscription<CloudEvent> {
@@ -39,21 +39,21 @@ public class BlockingSubscriptionWithPositionPersistenceForMongoDB implements Bl
     private final PositionAwareBlockingSubscription subscription;
 
     /**
-     * Create a subscription that uses the Native sync Java MongoDB driver to persists the stream position in MongoDB.
+     * Create a subscription that uses the Native sync Java MongoDB driver to persists the subscription position in MongoDB.
      *
      * @param subscription           The subscription that will read events from the event store
-     * @param database                 The database into which stream positions will be stored
-     * @param streamPositionCollection The collection into which stream positions will be stored
+     * @param database                 The database into which subscription positions will be stored
+     * @param streamPositionCollection The collection into which subscription positions will be stored
      */
     public BlockingSubscriptionWithPositionPersistenceForMongoDB(PositionAwareBlockingSubscription subscription, MongoDatabase database, String streamPositionCollection) {
         this(subscription, requireNonNull(database, "Database cannot be null").getCollection(streamPositionCollection));
     }
 
     /**
-     * Create a subscription that uses the Native sync Java MongoDB driver to persists the stream position in MongoDB.
+     * Create a subscription that uses the Native sync Java MongoDB driver to persists the subscription position in MongoDB.
      *
      * @param subscription           The subscription that will read events from the event store
-     * @param streamPositionCollection The collection into which stream positions will be stored
+     * @param streamPositionCollection The collection into which subscription positions will be stored
      */
     public BlockingSubscriptionWithPositionPersistenceForMongoDB(PositionAwareBlockingSubscription subscription, MongoCollection<Document> streamPositionCollection) {
         requireNonNull(subscription, "subscription cannot be null");
@@ -78,7 +78,7 @@ public class BlockingSubscriptionWithPositionPersistenceForMongoDB implements Bl
     }
 
     /**
-     * Start streaming cloud events from the event store and persist the stream position in MongoDB
+     * Start streaming cloud events from the event store and persist the subscription position in MongoDB
      *
      * @param subscriptionId The id of the subscription, must be unique!
      * @param filter         The filter to apply for this subscription. Only events matching the filter will cause the <code>action</code> to be called.
@@ -93,7 +93,7 @@ public class BlockingSubscriptionWithPositionPersistenceForMongoDB implements Bl
             if (streamPositionDocument == null) {
                 streamPositionDocument = persistStreamPosition(subscriptionId, subscription.globalSubscriptionPosition());
             }
-            return calculateSubscriptionPositionFromMongoStreamPositionDocument(streamPositionDocument);
+            return StartAt.streamPosition(calculateSubscriptionPositionFromMongoStreamPositionDocument(streamPositionDocument));
         };
 
         return subscribe(subscriptionId, filter, startAtSupplier, action);

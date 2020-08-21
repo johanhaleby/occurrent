@@ -43,7 +43,7 @@ public abstract class StartAt {
     }
 
     /**
-     * Start subscribing to the subscription from the given stream position
+     * Start subscribing to the subscription from the given subscription position
      */
     public static StartAt streamPosition(SubscriptionPosition changeStreamPosition) {
         return new StartAt.StartAtStreamPosition(changeStreamPosition);

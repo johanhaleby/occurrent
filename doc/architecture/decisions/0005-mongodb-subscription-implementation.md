@@ -18,7 +18,7 @@ in the following scenario:
 ## Decision
 
 To avoid this the subscription must be a bit more complex. When a new subscription is started it reads the operation time from MongoDB and persists it 
-as the "stream position document" for the subscription. This means that if the scenario described above where to happen the stream will be resumed from the 
+as the "subscription position document" for the subscription. This means that if the scenario described above where to happen the stream will be resumed from the 
 operation time and _not_ a resume token. Once the first resume token is persisted the stream will use the resume token position instead.
 
 Also see [stackoverflow](https://stackoverflow.com/questions/63323190/get-resume-token-with-mongodb-java-driver-before-first-document-received-in-chan).

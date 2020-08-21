@@ -52,7 +52,7 @@ import static se.haleby.occurrent.subscription.mongodb.internal.MongoDBCommons.g
 
 /**
  * This is a subscription that uses the "native" MongoDB Java driver (sync) to listen to changes from the event store.
- * This Subscription doesn't maintain the stream position, you need to store it yourself in order to continue the stream
+ * This Subscription doesn't maintain the subscription position, you need to store it yourself in order to continue the stream
  * from where it's left off on application restart/crash etc.
  */
 public class BlockingSubscriptionForMongoDB implements PositionAwareBlockingSubscription {

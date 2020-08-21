@@ -32,7 +32,7 @@ import static org.awaitility.Awaitility.await;
 import static se.haleby.occurrent.functional.CheckedFunction.unchecked;
 import static se.haleby.occurrent.time.TimeConversion.toLocalDateTime;
 
-@SpringBootTest(classes = SubscriptionFromMongoDBToSpringEventApplication.class)
+@SpringBootTest(classes = ForwardEventsFromMongoDBToSpringApplication.class)
 @Testcontainers
 public class SubscriptionFromMongoDBToSpringEventTest {
 

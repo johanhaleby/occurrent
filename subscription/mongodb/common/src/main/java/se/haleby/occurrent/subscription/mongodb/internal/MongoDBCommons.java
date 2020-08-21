@@ -78,7 +78,7 @@ public class MongoDBCommons {
                 BsonTimestamp operationTime = document.get(OPERATION_TIME, BsonTimestamp.class);
                 withStartPositionApplied = applyOperationTime.apply(t, operationTime);
             } else {
-                throw new IllegalArgumentException("Doesn't recognize stream position " + changeStreamPosition + " as a valid MongoDB stream position");
+                throw new IllegalArgumentException("Doesn't recognize subscription position " + changeStreamPosition + " as a valid MongoDB subscription position");
             }
         }
         return withStartPositionApplied;
@@ -96,7 +96,7 @@ public class MongoDBCommons {
             String value = streamPositionDocument.getString(MongoDBCommons.GENERIC_STREAM_POSITION);
             changeStreamPosition = new StringBasedSubscriptionPosition(value);
         } else {
-            throw new IllegalStateException("Doesn't recognize " + streamPositionDocument + " as a valid stream position document");
+            throw new IllegalStateException("Doesn't recognize " + streamPositionDocument + " as a valid subscription position document");
         }
         return changeStreamPosition;
     }

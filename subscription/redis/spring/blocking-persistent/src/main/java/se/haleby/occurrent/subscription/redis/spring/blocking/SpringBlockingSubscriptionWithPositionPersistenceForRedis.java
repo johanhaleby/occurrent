@@ -17,11 +17,11 @@ import java.util.function.Supplier;
 import static java.util.Objects.requireNonNull;
 
 /**
- * Wraps a {@link BlockingSubscription} and adds persistent stream position support. It stores the stream position
+ * Wraps a {@link BlockingSubscription} and adds persistent subscription position support. It stores the subscription position
  * after an "action" (the consumer in this method {@link SpringBlockingSubscriptionWithPositionPersistenceForRedis#subscribe(String, Consumer)}) has completed successfully.
- * It stores the stream position in Redis, one value for each subscription.
+ * It stores the subscription position in Redis, one value for each subscription.
  * <p>
- * Note that this implementation stores the stream position after _every_ action. If you have a lot of events and duplication is not
+ * Note that this implementation stores the subscription position after _every_ action. If you have a lot of events and duplication is not
  * that much of a deal consider cloning/extending this class and add your own customizations.
  */
 public class SpringBlockingSubscriptionWithPositionPersistenceForRedis implements BlockingSubscription<CloudEvent> {
@@ -30,10 +30,10 @@ public class SpringBlockingSubscriptionWithPositionPersistenceForRedis implement
     private final PositionAwareBlockingSubscription subscription;
 
     /**
-     * Create a subscription that uses the Native sync Java MongoDB driver to persists the stream position in MongoDB.
+     * Create a subscription that uses the Native sync Java MongoDB driver to persists the subscription position in MongoDB.
      *
      * @param subscription The subscription that will read events from the event store
-     * @param redis          The {@link RedisOperations} that'll be used to store the stream position
+     * @param redis          The {@link RedisOperations} that'll be used to store the subscription position
      */
     public SpringBlockingSubscriptionWithPositionPersistenceForRedis(PositionAwareBlockingSubscription subscription, RedisOperations<String, String> redis) {
         requireNonNull(subscription, "subscription cannot be null");
@@ -82,7 +82,7 @@ public class SpringBlockingSubscriptionWithPositionPersistenceForRedis implement
 
     /**
      * Cancel a subscription. This means that it'll no longer receive events as they are persisted to the event store.
-     * The stream position that is persisted to MongoDB will also be removed.
+     * The subscription position that is persisted to MongoDB will also be removed.
      *
      * @param subscriptionId The subscription id to cancel
      */

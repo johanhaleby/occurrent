@@ -9,17 +9,20 @@ import org.springframework.beans.factory.annotation.Value;
 import org.springframework.boot.autoconfigure.SpringBootApplication;
 import org.springframework.context.annotation.Bean;
 import org.springframework.data.mongodb.core.ReactiveMongoOperations;
-import se.haleby.occurrent.subscription.mongodb.spring.reactor.SpringReactorSubscriptionForMongoDB;
-import se.haleby.occurrent.subscription.mongodb.spring.reactor.SpringReactorSubscriptionPositionStorageForMongoDB;
 import se.haleby.occurrent.eventstore.api.blocking.EventStore;
 import se.haleby.occurrent.eventstore.mongodb.TimeRepresentation;
 import se.haleby.occurrent.eventstore.mongodb.nativedriver.EventStoreConfig;
 import se.haleby.occurrent.eventstore.mongodb.nativedriver.MongoEventStore;
+import se.haleby.occurrent.subscription.api.reactor.PositionAwareReactorSubscription;
+import se.haleby.occurrent.subscription.api.reactor.ReactorSubscriptionPositionStorage;
+import se.haleby.occurrent.subscription.mongodb.spring.reactor.SpringReactorSubscriptionForMongoDB;
+import se.haleby.occurrent.subscription.mongodb.spring.reactor.SpringReactorSubscriptionPositionStorageForMongoDB;
+import se.haleby.occurrent.subscription.mongodb.spring.reactor.SpringReactorSubscriptionThatStoresSubscriptionPositionInMongoDB;
 
 import static com.fasterxml.jackson.databind.ObjectMapper.DefaultTyping.EVERYTHING;
 
 @SpringBootApplication
-public class SubscriptionFromMongoDBToSpringEventApplication {
+public class ForwardEventsFromMongoDBToSpringApplication {
 
     @Value("${spring.data.mongodb.uri}")
     private String mongoUri;
@@ -39,9 +42,18 @@ public class SubscriptionFromMongoDBToSpringEventApplication {
     }
 
     @Bean
-    public SpringReactorSubscriptionPositionStorageForMongoDB subscriptionForMongoDB(ReactiveMongoOperations mongoOperations) {
-        SpringReactorSubscriptionForMongoDB streamer = new SpringReactorSubscriptionForMongoDB(mongoOperations, "events", TimeRepresentation.RFC_3339_STRING);
-        return new SpringReactorSubscriptionPositionStorageForMongoDB(streamer, mongoOperations, "resumeTokens");
+    public ReactorSubscriptionPositionStorage reactorSubscriptionPositionStorage(ReactiveMongoOperations mongoOperations) {
+        return new SpringReactorSubscriptionPositionStorageForMongoDB(mongoOperations, "subscriptions");
+    }
+
+    @Bean
+    public PositionAwareReactorSubscription subscription(ReactiveMongoOperations mongoOperations) {
+        return new SpringReactorSubscriptionForMongoDB(mongoOperations, "events", TimeRepresentation.RFC_3339_STRING);
+    }
+
+    @Bean
+    public SpringReactorSubscriptionThatStoresSubscriptionPositionInMongoDB autoPersistingSubscription(PositionAwareReactorSubscription subscription, ReactorSubscriptionPositionStorage storage) {
+        return new SpringReactorSubscriptionThatStoresSubscriptionPositionInMongoDB(subscription, storage);
     }
 
     @Bean

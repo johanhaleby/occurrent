@@ -40,7 +40,7 @@ import static se.haleby.occurrent.subscription.mongodb.spring.internal.ApplyFilt
 
 /**
  * This is a subscription that uses Spring and its {@link MessageListenerContainer} for MongoDB to listen to changes from an event store.
- * This Subscription doesn't maintain the stream position, you need to store it yourself in order to continue the stream
+ * This Subscription doesn't maintain the subscription position, you need to store it yourself in order to continue the stream
  * from where it's left off on application restart/crash etc.
  * <p>
  * Note that this subscription doesn't provide retries if an exception is thrown when handling a {@link io.cloudevents.CloudEvent} (<code>action</code>).

@@ -6,7 +6,7 @@ import se.haleby.occurrent.subscription.CloudEventWithSubscriptionPosition;
 
 /**
  * A {@link BlockingSubscription} that produces {@link CloudEventWithSubscriptionPosition} compatible {@link CloudEvent}'s.
- * This is useful for subscribers that want to persist the stream position for a given subscription if the event store doesn't
+ * This is useful for subscribers that want to persist the subscription position for a given subscription if the event store doesn't
  * maintain the position for subscriptions.
  */
 public interface PositionAwareBlockingSubscription extends BlockingSubscription<CloudEventWithSubscriptionPosition> {

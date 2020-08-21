@@ -81,7 +81,7 @@ public interface BlockingSubscription<T extends CloudEvent> {
     void cancelSubscription(String subscriptionId);
 
     /**
-     * Shutdown the subscription and close all subscriptions (they can be resumed later if you start from a persisted stream position).
+     * Shutdown the subscription and close all subscriptions (they can be resumed later if you start from a persisted subscription position).
      */
     default void shutdown() {
     }

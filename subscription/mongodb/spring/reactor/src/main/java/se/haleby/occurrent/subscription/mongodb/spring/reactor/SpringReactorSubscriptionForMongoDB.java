@@ -27,7 +27,7 @@ import static se.haleby.occurrent.subscription.mongodb.spring.internal.ApplyFilt
 
 /**
  * This is a subscription that uses project reactor and Spring to listen to changes from an event store.
- * This Subscription doesn't maintain the stream position, you need to store it yourself
+ * This Subscription doesn't maintain the subscription position, you need to store it yourself
  * (or use another pre-existing component in conjunction with this one) in order to continue the stream from where
  * it's left off on application restart/crash etc.
  */
