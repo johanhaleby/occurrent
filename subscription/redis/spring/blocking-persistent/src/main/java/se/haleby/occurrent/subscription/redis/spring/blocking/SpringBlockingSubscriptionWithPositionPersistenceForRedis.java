@@ -1,12 +1,11 @@
 package se.haleby.occurrent.subscription.redis.spring.blocking;
 
 import io.cloudevents.CloudEvent;
-import org.springframework.data.redis.core.RedisOperations;
+import se.haleby.occurrent.subscription.StartAt;
 import se.haleby.occurrent.subscription.SubscriptionFilter;
 import se.haleby.occurrent.subscription.SubscriptionPosition;
-import se.haleby.occurrent.subscription.StartAt;
-import se.haleby.occurrent.subscription.StringBasedSubscriptionPosition;
 import se.haleby.occurrent.subscription.api.blocking.BlockingSubscription;
+import se.haleby.occurrent.subscription.api.blocking.BlockingSubscriptionPositionStorage;
 import se.haleby.occurrent.subscription.api.blocking.PositionAwareBlockingSubscription;
 import se.haleby.occurrent.subscription.api.blocking.Subscription;
 
@@ -26,20 +25,20 @@ import static java.util.Objects.requireNonNull;
  */
 public class SpringBlockingSubscriptionWithPositionPersistenceForRedis implements BlockingSubscription<CloudEvent> {
 
-    private final RedisOperations<String, String> redis;
     private final PositionAwareBlockingSubscription subscription;
+    private final BlockingSubscriptionPositionStorage storage;
 
     /**
      * Create a subscription that uses the Native sync Java MongoDB driver to persists the subscription position in MongoDB.
      *
      * @param subscription The subscription that will read events from the event store
-     * @param redis          The {@link RedisOperations} that'll be used to store the subscription position
+     * @param storage      The storage that'll be used to store the subscription position
      */
-    public SpringBlockingSubscriptionWithPositionPersistenceForRedis(PositionAwareBlockingSubscription subscription, RedisOperations<String, String> redis) {
+    public SpringBlockingSubscriptionWithPositionPersistenceForRedis(PositionAwareBlockingSubscription subscription, BlockingSubscriptionPositionStorage storage) {
         requireNonNull(subscription, "subscription cannot be null");
-        requireNonNull(redis, "Redis operations cannot be null");
+        requireNonNull(storage, "Storage cannot be null");
+        this.storage = storage;
         this.subscription = subscription;
-        this.redis = redis;
     }
 
     @Override
@@ -47,7 +46,7 @@ public class SpringBlockingSubscriptionWithPositionPersistenceForRedis implement
         return subscription.subscribe(subscriptionId,
                 filter, startAtSupplier, cloudEventWithStreamPosition -> {
                     action.accept(cloudEventWithStreamPosition);
-                    persistSubscriptionPosition(subscriptionId, cloudEventWithStreamPosition.getStreamPosition());
+                    storage.save(subscriptionId, cloudEventWithStreamPosition.getStreamPosition());
                 }
         );
     }
@@ -67,11 +66,11 @@ public class SpringBlockingSubscriptionWithPositionPersistenceForRedis implement
     public Subscription subscribe(String subscriptionId, SubscriptionFilter filter, Consumer<CloudEvent> action) {
         Supplier<StartAt> startAtSupplier = () -> {
             // It's important that we find the document inside the supplier so that we lookup the latest resume token on retry
-            String changeStreamPosition = redis.opsForValue().get(subscriptionId);
-            if (changeStreamPosition == null) {
-                changeStreamPosition = persistSubscriptionPosition(subscriptionId, subscription.globalSubscriptionPosition());
+            SubscriptionPosition subscriptionPosition = storage.read(subscriptionId);
+            if (subscriptionPosition == null) {
+                subscriptionPosition = storage.save(subscriptionId, subscription.globalSubscriptionPosition());
             }
-            return StartAt.subscriptionPosition(new StringBasedSubscriptionPosition(changeStreamPosition));
+            return StartAt.subscriptionPosition(subscriptionPosition);
         };
         return subscribe(subscriptionId, filter, startAtSupplier, action);
     }
@@ -88,16 +87,8 @@ public class SpringBlockingSubscriptionWithPositionPersistenceForRedis implement
      */
     public void cancelSubscription(String subscriptionId) {
         pauseSubscription(subscriptionId);
-        redis.delete(subscriptionId);
+        storage.delete(subscriptionId);
     }
-
-
-    private String persistSubscriptionPosition(String subscriptionId, SubscriptionPosition changeStreamPosition) {
-        String changeStreamPositionAsString = changeStreamPosition.asString();
-        redis.opsForValue().set(subscriptionId, changeStreamPositionAsString);
-        return changeStreamPositionAsString;
-    }
-
 
     @PreDestroy
     public void shutdownSubscribers() {

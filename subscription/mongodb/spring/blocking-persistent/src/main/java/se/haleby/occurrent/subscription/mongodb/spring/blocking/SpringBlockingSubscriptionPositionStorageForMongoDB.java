@@ -25,7 +25,7 @@ public class SpringBlockingSubscriptionPositionStorageForMongoDB implements Bloc
     private final String subscriptionPositionCollection;
 
     /**
-     * Create a subscription that uses the Spring's {@link MongoOperations} to persist subscription positions in MongoDB.
+     * Create a {@link BlockingSubscriptionPositionStorage} that uses the Spring's {@link MongoOperations} to persist subscription positions in MongoDB.
      *
      * @param mongoOperations                The {@link MongoOperations} that'll be used to store the subscription position
      * @param subscriptionPositionCollection The collection into which subscription positions will be stored

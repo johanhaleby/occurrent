@@ -21,12 +21,13 @@ import org.testcontainers.containers.GenericContainer;
 import org.testcontainers.containers.MongoDBContainer;
 import org.testcontainers.junit.jupiter.Container;
 import org.testcontainers.junit.jupiter.Testcontainers;
-import se.haleby.occurrent.subscription.mongodb.spring.blocking.SpringBlockingSubscriptionForMongoDB;
 import se.haleby.occurrent.domain.DomainEvent;
 import se.haleby.occurrent.domain.NameDefined;
 import se.haleby.occurrent.domain.NameWasChanged;
 import se.haleby.occurrent.eventstore.mongodb.spring.blocking.EventStoreConfig;
 import se.haleby.occurrent.eventstore.mongodb.spring.blocking.SpringBlockingMongoEventStore;
+import se.haleby.occurrent.subscription.api.blocking.BlockingSubscriptionPositionStorage;
+import se.haleby.occurrent.subscription.mongodb.spring.blocking.SpringBlockingSubscriptionForMongoDB;
 import se.haleby.occurrent.testsupport.mongodb.FlushMongoDBExtension;
 
 import java.net.URI;
@@ -84,7 +85,8 @@ class SpringBlockingSubscriptionWithPositionPersistenceForRedisTest {
         springBlockingSubscriptionForMongoDB = new SpringBlockingSubscriptionForMongoDB(mongoTemplate, connectionString.getCollection(), RFC_3339_STRING);
         lettuceConnectionFactory = new LettuceConnectionFactory(redisContainer.getHost(), redisContainer.getFirstMappedPort());
         redisTemplate = createRedisTemplate(lettuceConnectionFactory);
-        redisSubscription = new SpringBlockingSubscriptionWithPositionPersistenceForRedis(springBlockingSubscriptionForMongoDB, redisTemplate);
+        BlockingSubscriptionPositionStorage storage = new SpringBlockingSubscriptionPositionStorageForRedis(redisTemplate);
+        redisSubscription = new SpringBlockingSubscriptionWithPositionPersistenceForRedis(springBlockingSubscriptionForMongoDB, storage);
         objectMapper = new ObjectMapper();
     }
 
