@@ -15,8 +15,6 @@ import org.junit.jupiter.api.extension.RegisterExtension;
 import org.testcontainers.containers.MongoDBContainer;
 import org.testcontainers.junit.jupiter.Container;
 import org.testcontainers.junit.jupiter.Testcontainers;
-import se.haleby.occurrent.subscription.api.blocking.PositionAwareBlockingSubscription;
-import se.haleby.occurrent.subscription.mongodb.MongoDBFilterSpecification.JsonMongoDBFilterSpecification;
 import se.haleby.occurrent.domain.DomainEvent;
 import se.haleby.occurrent.domain.NameDefined;
 import se.haleby.occurrent.domain.NameWasChanged;
@@ -24,6 +22,9 @@ import se.haleby.occurrent.eventstore.api.blocking.EventStore;
 import se.haleby.occurrent.eventstore.mongodb.TimeRepresentation;
 import se.haleby.occurrent.eventstore.mongodb.nativedriver.EventStoreConfig;
 import se.haleby.occurrent.eventstore.mongodb.nativedriver.MongoEventStore;
+import se.haleby.occurrent.subscription.api.blocking.BlockingSubscriptionPositionStorage;
+import se.haleby.occurrent.subscription.api.blocking.PositionAwareBlockingSubscription;
+import se.haleby.occurrent.subscription.mongodb.MongoDBFilterSpecification.JsonMongoDBFilterSpecification;
 import se.haleby.occurrent.testsupport.mongodb.FlushMongoDBExtension;
 
 import java.net.URI;
@@ -48,11 +49,11 @@ import static org.awaitility.Awaitility.await;
 import static org.awaitility.Durations.ONE_SECOND;
 import static org.hamcrest.Matchers.equalTo;
 import static org.hamcrest.Matchers.is;
-import static se.haleby.occurrent.subscription.mongodb.MongoDBFilterSpecification.BsonMongoDBFilterSpecification.filter;
-import static se.haleby.occurrent.subscription.mongodb.MongoDBFilterSpecification.FULL_DOCUMENT;
 import static se.haleby.occurrent.eventstore.mongodb.TimeRepresentation.RFC_3339_STRING;
 import static se.haleby.occurrent.functional.CheckedFunction.unchecked;
 import static se.haleby.occurrent.functional.Not.not;
+import static se.haleby.occurrent.subscription.mongodb.MongoDBFilterSpecification.BsonMongoDBFilterSpecification.filter;
+import static se.haleby.occurrent.subscription.mongodb.MongoDBFilterSpecification.FULL_DOCUMENT;
 import static se.haleby.occurrent.time.TimeConversion.toLocalDateTime;
 
 @SuppressWarnings("ConstantConditions")
@@ -306,6 +307,7 @@ public class BlockingSubscriptionWithPositionPersistenceForMongoDBTest {
 
     private BlockingSubscriptionWithPositionPersistenceForMongoDB newPersistentSubscription(String eventCollectionName, TimeRepresentation timeRepresentation, RetryStrategy retryStrategy) {
         PositionAwareBlockingSubscription blockingSubscriptionForMongoDB = new BlockingSubscriptionForMongoDB(database, eventCollectionName, timeRepresentation, subscriptionExecutor, retryStrategy);
-        return new BlockingSubscriptionWithPositionPersistenceForMongoDB(blockingSubscriptionForMongoDB, database.getCollection(TIMESTAMP_TOKEN_COLLECTION));
+        BlockingSubscriptionPositionStorage storage = new BlockingSubscriptionPositionStorageForMongoDB(database.getCollection(TIMESTAMP_TOKEN_COLLECTION));
+        return new BlockingSubscriptionWithPositionPersistenceForMongoDB(blockingSubscriptionForMongoDB, storage);
     }
 }

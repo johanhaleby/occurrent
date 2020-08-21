@@ -72,6 +72,4 @@ public class SpringReactorSubscriptionForMongoDB implements PositionAwareReactor
                 .map(MongoDBCommons::getServerOperationTime)
                 .map(MongoDBOperationTimeBasedSubscriptionPosition::new);
     }
-
-
 }

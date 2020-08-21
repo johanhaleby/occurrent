@@ -6,6 +6,7 @@ import io.cloudevents.CloudEvent;
 import org.bson.Document;
 import org.bson.conversions.Bson;
 import org.jetbrains.annotations.NotNull;
+import se.haleby.occurrent.subscription.api.blocking.BlockingSubscription;
 import se.haleby.occurrent.subscription.mongodb.nativedriver.blocking.BlockingSubscriptionWithPositionPersistenceForMongoDB;
 import se.haleby.occurrent.example.domain.numberguessinggame.model.domainevents.*;
 
@@ -20,7 +21,7 @@ import static java.time.temporal.ChronoUnit.MILLIS;
 
 public class InsertGameIntoLatestGamesOverview {
 
-    public static void insertGameIntoLatestGamesOverview(BlockingSubscriptionWithPositionPersistenceForMongoDB subscription,
+    public static void insertGameIntoLatestGamesOverview(BlockingSubscription<CloudEvent> subscription,
                                                          MongoCollection<Document> latestGamesOverviewCollection,
                                                          Function<CloudEvent, GameEvent> deserialize) {
         subscription.subscribe(InsertGameIntoLatestGamesOverview.class.getSimpleName(), insertGame(latestGamesOverviewCollection, deserialize));

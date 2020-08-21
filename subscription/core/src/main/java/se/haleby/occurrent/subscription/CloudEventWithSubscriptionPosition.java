@@ -103,7 +103,7 @@ public class CloudEventWithSubscriptionPosition implements CloudEvent {
     public String toString() {
         return "CloudEventWithStreamPosition{" +
                 "cloudEvent=" + cloudEvent +
-                ", streamPosition=" + changeStreamPosition +
+                ", subscriptionPosition=" + changeStreamPosition +
                 '}';
     }
 }

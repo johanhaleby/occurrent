@@ -71,7 +71,7 @@ public class SpringBlockingSubscriptionWithPositionPersistenceForRedis implement
             if (changeStreamPosition == null) {
                 changeStreamPosition = persistSubscriptionPosition(subscriptionId, subscription.globalSubscriptionPosition());
             }
-            return StartAt.streamPosition(new StringBasedSubscriptionPosition(changeStreamPosition));
+            return StartAt.subscriptionPosition(new StringBasedSubscriptionPosition(changeStreamPosition));
         };
         return subscribe(subscriptionId, filter, startAtSupplier, action);
     }

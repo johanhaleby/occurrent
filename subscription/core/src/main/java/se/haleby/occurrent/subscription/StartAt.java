@@ -21,17 +21,17 @@ public abstract class StartAt {
         }
     }
 
-    public static class StartAtStreamPosition extends StartAt {
-        public final SubscriptionPosition changeStreamPosition;
+    public static class StartAtSubscriptionPosition extends StartAt {
+        public final SubscriptionPosition subscriptionPosition;
 
-        private StartAtStreamPosition(SubscriptionPosition changeStreamPosition) {
-            this.changeStreamPosition = changeStreamPosition;
-            Objects.requireNonNull(changeStreamPosition, SubscriptionPosition.class.getSimpleName() + " cannot be null");
+        private StartAtSubscriptionPosition(SubscriptionPosition subscriptionPosition) {
+            Objects.requireNonNull(subscriptionPosition, SubscriptionPosition.class.getSimpleName() + " cannot be null");
+            this.subscriptionPosition = subscriptionPosition;
         }
 
         @Override
         public String toString() {
-            return changeStreamPosition.asString();
+            return subscriptionPosition.asString();
         }
     }
 
@@ -45,7 +45,7 @@ public abstract class StartAt {
     /**
      * Start subscribing to the subscription from the given subscription position
      */
-    public static StartAt streamPosition(SubscriptionPosition changeStreamPosition) {
-        return new StartAt.StartAtStreamPosition(changeStreamPosition);
+    public static StartAt subscriptionPosition(SubscriptionPosition subscriptionPosition) {
+        return new StartAtSubscriptionPosition(subscriptionPosition);
     }
 }

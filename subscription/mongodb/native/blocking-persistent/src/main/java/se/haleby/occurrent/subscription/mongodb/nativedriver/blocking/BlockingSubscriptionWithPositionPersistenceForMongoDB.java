@@ -1,29 +1,18 @@
 package se.haleby.occurrent.subscription.mongodb.nativedriver.blocking;
 
-import com.mongodb.client.MongoCollection;
-import com.mongodb.client.MongoDatabase;
-import com.mongodb.client.model.ReplaceOptions;
 import io.cloudevents.CloudEvent;
-import org.bson.BsonTimestamp;
-import org.bson.BsonValue;
-import org.bson.Document;
 import se.haleby.occurrent.subscription.StartAt;
 import se.haleby.occurrent.subscription.SubscriptionFilter;
 import se.haleby.occurrent.subscription.SubscriptionPosition;
 import se.haleby.occurrent.subscription.api.blocking.BlockingSubscription;
+import se.haleby.occurrent.subscription.api.blocking.BlockingSubscriptionPositionStorage;
 import se.haleby.occurrent.subscription.api.blocking.PositionAwareBlockingSubscription;
 import se.haleby.occurrent.subscription.api.blocking.Subscription;
-import se.haleby.occurrent.subscription.mongodb.MongoDBOperationTimeBasedSubscriptionPosition;
-import se.haleby.occurrent.subscription.mongodb.MongoDBResumeTokenBasedSubscriptionPosition;
-import se.haleby.occurrent.subscription.mongodb.internal.MongoDBCommons;
 
 import java.util.function.Consumer;
 import java.util.function.Supplier;
 
-import static com.mongodb.client.model.Filters.eq;
 import static java.util.Objects.requireNonNull;
-import static se.haleby.occurrent.subscription.mongodb.internal.MongoDBCloudEventsToJsonDeserializer.ID;
-import static se.haleby.occurrent.subscription.mongodb.internal.MongoDBCommons.calculateSubscriptionPositionFromMongoStreamPositionDocument;
 
 /**
  * Wraps a {@link BlockingSubscriptionForMongoDB} and adds persistent subscription position support. It stores the subscription position
@@ -35,31 +24,20 @@ import static se.haleby.occurrent.subscription.mongodb.internal.MongoDBCommons.c
  */
 public class BlockingSubscriptionWithPositionPersistenceForMongoDB implements BlockingSubscription<CloudEvent> {
 
-    private final MongoCollection<Document> streamPositionCollection;
     private final PositionAwareBlockingSubscription subscription;
+    private final BlockingSubscriptionPositionStorage storage;
 
     /**
      * Create a subscription that uses the Native sync Java MongoDB driver to persists the subscription position in MongoDB.
      *
-     * @param subscription           The subscription that will read events from the event store
-     * @param database                 The database into which subscription positions will be stored
-     * @param streamPositionCollection The collection into which subscription positions will be stored
+     * @param subscription The subscription that will read events from the event store
+     * @param storage      The storage that holds the subscription positions
      */
-    public BlockingSubscriptionWithPositionPersistenceForMongoDB(PositionAwareBlockingSubscription subscription, MongoDatabase database, String streamPositionCollection) {
-        this(subscription, requireNonNull(database, "Database cannot be null").getCollection(streamPositionCollection));
-    }
-
-    /**
-     * Create a subscription that uses the Native sync Java MongoDB driver to persists the subscription position in MongoDB.
-     *
-     * @param subscription           The subscription that will read events from the event store
-     * @param streamPositionCollection The collection into which subscription positions will be stored
-     */
-    public BlockingSubscriptionWithPositionPersistenceForMongoDB(PositionAwareBlockingSubscription subscription, MongoCollection<Document> streamPositionCollection) {
+    public BlockingSubscriptionWithPositionPersistenceForMongoDB(PositionAwareBlockingSubscription subscription, BlockingSubscriptionPositionStorage storage) {
         requireNonNull(subscription, "subscription cannot be null");
-        requireNonNull(streamPositionCollection, "streamPositionCollection cannot be null");
+        requireNonNull(storage, BlockingSubscriptionPositionStorage.class.getSimpleName() + " cannot be null");
+        this.storage = storage;
         this.subscription = subscription;
-        this.streamPositionCollection = streamPositionCollection;
     }
 
     @Override
@@ -67,7 +45,7 @@ public class BlockingSubscriptionWithPositionPersistenceForMongoDB implements Bl
         return subscription.subscribe(subscriptionId,
                 filter, startAtSupplier, cloudEventWithStreamPosition -> {
                     action.accept(cloudEventWithStreamPosition);
-                    persistStreamPosition(subscriptionId, cloudEventWithStreamPosition.getStreamPosition());
+                    storage.save(subscriptionId, cloudEventWithStreamPosition.getStreamPosition());
                 }
         );
     }
@@ -89,11 +67,11 @@ public class BlockingSubscriptionWithPositionPersistenceForMongoDB implements Bl
     public Subscription subscribe(String subscriptionId, SubscriptionFilter filter, Consumer<CloudEvent> action) {
         Supplier<StartAt> startAtSupplier = () -> {
             // It's important that we find the document inside the supplier so that we lookup the latest resume token on retry
-            Document streamPositionDocument = streamPositionCollection.find(eq(ID, subscriptionId), Document.class).first();
-            if (streamPositionDocument == null) {
-                streamPositionDocument = persistStreamPosition(subscriptionId, subscription.globalSubscriptionPosition());
+            SubscriptionPosition subscriptionPosition = storage.read(subscriptionId);
+            if (subscriptionPosition == null) {
+                subscriptionPosition = storage.save(subscriptionId, subscription.globalSubscriptionPosition());
             }
-            return StartAt.streamPosition(calculateSubscriptionPositionFromMongoStreamPositionDocument(streamPositionDocument));
+            return StartAt.subscriptionPosition(subscriptionPosition);
         };
 
         return subscribe(subscriptionId, filter, startAtSupplier, action);
@@ -105,31 +83,7 @@ public class BlockingSubscriptionWithPositionPersistenceForMongoDB implements Bl
 
     public void cancelSubscription(String subscriptionId) {
         pauseSubscription(subscriptionId);
-        streamPositionCollection.deleteOne(eq(ID, subscriptionId));
-    }
-
-    private Document persistStreamPosition(String subscriptionId, SubscriptionPosition changeStreamPosition) {
-        if (changeStreamPosition instanceof MongoDBResumeTokenBasedSubscriptionPosition) {
-            return persistResumeTokenStreamPosition(subscriptionId, ((MongoDBResumeTokenBasedSubscriptionPosition) changeStreamPosition).resumeToken);
-        } else if (changeStreamPosition instanceof MongoDBOperationTimeBasedSubscriptionPosition) {
-            return persistOperationTimeStreamPosition(subscriptionId, ((MongoDBOperationTimeBasedSubscriptionPosition) changeStreamPosition).operationTime);
-        } else {
-            String streamPositionString = changeStreamPosition.asString();
-            return persistDocumentStreamPosition(subscriptionId, MongoDBCommons.generateGenericStreamPositionDocument(subscriptionId, streamPositionString));
-        }
-    }
-
-    private Document persistResumeTokenStreamPosition(String subscriptionId, BsonValue resumeToken) {
-        return persistDocumentStreamPosition(subscriptionId, MongoDBCommons.generateResumeTokenStreamPositionDocument(subscriptionId, resumeToken));
-    }
-
-    private Document persistOperationTimeStreamPosition(String subscriptionId, BsonTimestamp operationTime) {
-        return persistDocumentStreamPosition(subscriptionId, MongoDBCommons.generateOperationTimeStreamPositionDocument(subscriptionId, operationTime));
-    }
-
-    private Document persistDocumentStreamPosition(String subscriptionId, Document document) {
-        streamPositionCollection.replaceOne(eq(ID, subscriptionId), document, new ReplaceOptions().upsert(true));
-        return document;
+        storage.delete(subscriptionId);
     }
 
     public void shutdown() {

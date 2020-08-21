@@ -26,31 +26,31 @@ import static se.haleby.occurrent.subscription.mongodb.internal.MongoDBCommons.g
 public class SpringReactorSubscriptionPositionStorageForMongoDB implements ReactorSubscriptionPositionStorage {
 
     private final ReactiveMongoOperations mongo;
-    private final String streamPositionCollection;
+    private final String subscriptionPositionCollection;
 
     /**
      * Create a new instance of {@link SpringReactorSubscriptionPositionStorageForMongoDB}
      *
      * @param mongo                    The {@link ReactiveMongoOperations} implementation to use persisting subscription positions to MongoDB.
-     * @param streamPositionCollection The collection that will contain the subscription position for each subscriber.
+     * @param subscriptionPositionCollection The collection that will contain the subscription position for each subscriber.
      */
-    public SpringReactorSubscriptionPositionStorageForMongoDB(ReactiveMongoOperations mongo, String streamPositionCollection) {
+    public SpringReactorSubscriptionPositionStorageForMongoDB(ReactiveMongoOperations mongo, String subscriptionPositionCollection) {
         requireNonNull(mongo, ReactiveMongoOperations.class.getSimpleName() + " cannot be null");
-        requireNonNull(streamPositionCollection, "streamPositionCollection cannot be null");
+        requireNonNull(subscriptionPositionCollection, "subscriptionPositionCollection cannot be null");
         this.mongo = mongo;
-        this.streamPositionCollection = streamPositionCollection;
+        this.subscriptionPositionCollection = subscriptionPositionCollection;
     }
 
     @Override
-    public Mono<SubscriptionPosition> write(String subscriptionId, SubscriptionPosition changeStreamPosition) {
+    public Mono<SubscriptionPosition> save(String subscriptionId, SubscriptionPosition changeStreamPosition) {
         Mono<?> result;
         if (changeStreamPosition instanceof MongoDBResumeTokenBasedSubscriptionPosition) {
             result = persistResumeTokenStreamPosition(subscriptionId, ((MongoDBResumeTokenBasedSubscriptionPosition) changeStreamPosition).resumeToken);
         } else if (changeStreamPosition instanceof MongoDBOperationTimeBasedSubscriptionPosition) {
             result = persistOperationTimeStreamPosition(subscriptionId, ((MongoDBOperationTimeBasedSubscriptionPosition) changeStreamPosition).operationTime);
         } else {
-            String streamPositionString = changeStreamPosition.asString();
-            Document document = MongoDBCommons.generateGenericStreamPositionDocument(subscriptionId, streamPositionString);
+            String subscriptionPositionString = changeStreamPosition.asString();
+            Document document = MongoDBCommons.generateGenericStreamPositionDocument(subscriptionId, subscriptionPositionString);
             result = persistDocumentStreamPosition(subscriptionId, document);
         }
         return result.thenReturn(changeStreamPosition);
@@ -58,7 +58,7 @@ public class SpringReactorSubscriptionPositionStorageForMongoDB implements React
 
     @Override
     public Mono<Void> delete(String subscriptionId) {
-        return mongo.remove(query(where(ID).is(subscriptionId)), streamPositionCollection).then();
+        return mongo.remove(query(where(ID).is(subscriptionId)), subscriptionPositionCollection).then();
     }
 
     private Mono<Document> persistResumeTokenStreamPosition(String subscriptionId, BsonDocument resumeToken) {
@@ -74,12 +74,12 @@ public class SpringReactorSubscriptionPositionStorageForMongoDB implements React
     private Mono<UpdateResult> persistDocumentStreamPosition(String subscriptionId, Document document) {
         return mongo.upsert(query(where(ID).is(subscriptionId)),
                 Update.fromDocument(document),
-                streamPositionCollection);
+                subscriptionPositionCollection);
     }
 
     @Override
     public Mono<SubscriptionPosition> read(String subscriptionId) {
-        return mongo.findOne(query(where(ID).is(subscriptionId)), Document.class, streamPositionCollection)
+        return mongo.findOne(query(where(ID).is(subscriptionId)), Document.class, subscriptionPositionCollection)
                 .map(MongoDBCommons::calculateSubscriptionPositionFromMongoStreamPositionDocument);
     }
 }

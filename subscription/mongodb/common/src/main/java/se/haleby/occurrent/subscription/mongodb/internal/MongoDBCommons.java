@@ -2,7 +2,7 @@ package se.haleby.occurrent.subscription.mongodb.internal;
 
 import org.bson.*;
 import se.haleby.occurrent.subscription.StartAt;
-import se.haleby.occurrent.subscription.StartAt.StartAtStreamPosition;
+import se.haleby.occurrent.subscription.StartAt.StartAtSubscriptionPosition;
 import se.haleby.occurrent.subscription.StringBasedSubscriptionPosition;
 import se.haleby.occurrent.subscription.SubscriptionPosition;
 import se.haleby.occurrent.subscription.mongodb.MongoDBOperationTimeBasedSubscriptionPosition;
@@ -16,7 +16,7 @@ public class MongoDBCommons {
 
     public static final String RESUME_TOKEN = "resumeToken";
     public static final String OPERATION_TIME = "operationTime";
-    public static final String GENERIC_STREAM_POSITION = "streamPosition";
+    public static final String GENERIC_SUBSCRIPTION_POSITION = "subscriptionPosition";
     static final String RESUME_TOKEN_DATA = "_data";
 
     public static Document generateResumeTokenStreamPositionDocument(String subscriptionId, BsonValue resumeToken) {
@@ -33,10 +33,10 @@ public class MongoDBCommons {
         return new Document(data);
     }
 
-    public static Document generateGenericStreamPositionDocument(String subscriptionId, String streamPositionAsString) {
+    public static Document generateGenericStreamPositionDocument(String subscriptionId, String subscriptionPositionAsString) {
         Map<String, Object> data = new HashMap<>();
         data.put(MongoDBCloudEventsToJsonDeserializer.ID, subscriptionId);
-        data.put(GENERIC_STREAM_POSITION, streamPositionAsString);
+        data.put(GENERIC_SUBSCRIPTION_POSITION, subscriptionPositionAsString);
         return new Document(data);
     }
 
@@ -50,8 +50,8 @@ public class MongoDBCommons {
         return new ResumeToken(resumeToken);
     }
 
-    public static BsonTimestamp extractOperationTimeFromPersistedPositionDocument(Document streamPositionDocument) {
-        return streamPositionDocument.get(OPERATION_TIME, BsonTimestamp.class);
+    public static BsonTimestamp extractOperationTimeFromPersistedPositionDocument(Document subscriptionPositionDocument) {
+        return subscriptionPositionDocument.get(OPERATION_TIME, BsonTimestamp.class);
     }
 
     public static <T> T applyStartPosition(T t, BiFunction<T, BsonDocument, T> applyResumeToken, BiFunction<T, BsonTimestamp, T> applyOperationTime, StartAt startAt) {
@@ -60,8 +60,8 @@ public class MongoDBCommons {
         }
 
         final T withStartPositionApplied;
-        StartAtStreamPosition position = (StartAtStreamPosition) startAt;
-        SubscriptionPosition changeStreamPosition = position.changeStreamPosition;
+        StartAtSubscriptionPosition position = (StartAtSubscriptionPosition) startAt;
+        SubscriptionPosition changeStreamPosition = position.subscriptionPosition;
         if (changeStreamPosition instanceof MongoDBResumeTokenBasedSubscriptionPosition) {
             BsonDocument resumeToken = ((MongoDBResumeTokenBasedSubscriptionPosition) changeStreamPosition).resumeToken;
             withStartPositionApplied = applyResumeToken.apply(t, resumeToken);
@@ -84,19 +84,19 @@ public class MongoDBCommons {
         return withStartPositionApplied;
     }
 
-    public static SubscriptionPosition calculateSubscriptionPositionFromMongoStreamPositionDocument(Document streamPositionDocument) {
+    public static SubscriptionPosition calculateSubscriptionPositionFromMongoStreamPositionDocument(Document subscriptionPositionDocument) {
         final SubscriptionPosition changeStreamPosition;
-        if (streamPositionDocument.containsKey(MongoDBCommons.RESUME_TOKEN)) {
-            ResumeToken resumeToken = MongoDBCommons.extractResumeTokenFromPersistedResumeTokenDocument(streamPositionDocument);
+        if (subscriptionPositionDocument.containsKey(MongoDBCommons.RESUME_TOKEN)) {
+            ResumeToken resumeToken = MongoDBCommons.extractResumeTokenFromPersistedResumeTokenDocument(subscriptionPositionDocument);
             changeStreamPosition = new MongoDBResumeTokenBasedSubscriptionPosition(resumeToken.asBsonDocument());
-        } else if (streamPositionDocument.containsKey(MongoDBCommons.OPERATION_TIME)) {
-            BsonTimestamp lastOperationTime = MongoDBCommons.extractOperationTimeFromPersistedPositionDocument(streamPositionDocument);
+        } else if (subscriptionPositionDocument.containsKey(MongoDBCommons.OPERATION_TIME)) {
+            BsonTimestamp lastOperationTime = MongoDBCommons.extractOperationTimeFromPersistedPositionDocument(subscriptionPositionDocument);
             changeStreamPosition = new MongoDBOperationTimeBasedSubscriptionPosition(lastOperationTime);
-        } else if (streamPositionDocument.containsKey(MongoDBCommons.GENERIC_STREAM_POSITION)) {
-            String value = streamPositionDocument.getString(MongoDBCommons.GENERIC_STREAM_POSITION);
+        } else if (subscriptionPositionDocument.containsKey(MongoDBCommons.GENERIC_SUBSCRIPTION_POSITION)) {
+            String value = subscriptionPositionDocument.getString(MongoDBCommons.GENERIC_SUBSCRIPTION_POSITION);
             changeStreamPosition = new StringBasedSubscriptionPosition(value);
         } else {
-            throw new IllegalStateException("Doesn't recognize " + streamPositionDocument + " as a valid subscription position document");
+            throw new IllegalStateException("Doesn't recognize " + subscriptionPositionDocument + " as a valid subscription position document");
         }
         return changeStreamPosition;
     }

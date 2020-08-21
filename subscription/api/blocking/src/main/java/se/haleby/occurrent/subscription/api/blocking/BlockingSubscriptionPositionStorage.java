@@ -1,6 +1,5 @@
-package se.haleby.occurrent.subscription.api.reactor;
+package se.haleby.occurrent.subscription.api.blocking;
 
-import reactor.core.publisher.Mono;
 import se.haleby.occurrent.subscription.StartAt;
 import se.haleby.occurrent.subscription.SubscriptionPosition;
 
@@ -8,32 +7,35 @@ import se.haleby.occurrent.subscription.SubscriptionPosition;
 /**
  * A {@code ReactorSubscriptionPositionStorage} provides means to read and write the subscription position to storage.
  * This subscriptions can continue where they left off by passing the {@link SubscriptionPosition} provided by {@link #read(String)}
- * to a {@link PositionAwareReactorSubscription} when the application is restarted etc.
+ * to a {@link PositionAwareBlockingSubscription} when the application is restarted etc.
  */
-public interface ReactorSubscriptionPositionStorage {
+public interface BlockingSubscriptionPositionStorage {
 
     /**
      * Read the raw subscription position for a given subscription.
      * <p>
      * Note that when starting a new subscription you typically want to create {@link StartAt} from the global subscription position
-     * (using {@link PositionAwareReactorSubscription#globalSubscriptionPosition()}) if no {@code SubscriptionPosition} is found for the given subscription.
+     * (using {@link PositionAwareBlockingSubscription#globalSubscriptionPosition()}) if no {@code SubscriptionPosition} is found for the given subscription.
      * </p>
      * For example:
      * <pre>
-     * StartAt startAt = storage.read(subscriptionId)
-     *                          .switchIfEmpty(Mono.defer(() -> positionAwareReactorSubscription.globalSubscriptionPosition().flatMap(subscriptionPosition -> storage.save(subscriptionId, subscriptionPosition))))
-     *                          .map(StartAt::subscriptionPosition);
+     * SubscriptionPosition subscriptionPosition = storage.read(subscriptionId);
+     * if (subscriptionPosition == null) {
+     *      subscriptionPosition = positionAwareReactorSubscription.globalSubscriptionPosition();
+     *      storage.save(subscriptionId, subscriptionPosition);
+     * }
+     * StartAt startAt = StartAt.subscriptionPosition(subscriptionPosition);
      * </pre>
      *
      * @param subscriptionId The id of the subscription whose position to find
      * @return A Mono with the {@link SubscriptionPosition} data point for the supplied subscriptionId
      */
-    Mono<SubscriptionPosition> read(String subscriptionId);
+    SubscriptionPosition read(String subscriptionId);
 
     /*
-     * Save subscription position for the supplied subscriptionId to storage and then return it for easier chaining.
+     * Save the subscription position for the supplied subscriptionId to storage and then return it for easier chaining.
      */
-    Mono<SubscriptionPosition> save(String subscriptionId, SubscriptionPosition subscriptionPosition);
+    SubscriptionPosition save(String subscriptionId, SubscriptionPosition subscriptionPosition);
 
 
     /**
@@ -41,5 +43,5 @@ public interface ReactorSubscriptionPositionStorage {
      *
      * @param subscriptionId The id of the subscription to delete the {@link SubscriptionPosition} for.
      */
-    Mono<Void> delete(String subscriptionId);
+    void delete(String subscriptionId);
 }

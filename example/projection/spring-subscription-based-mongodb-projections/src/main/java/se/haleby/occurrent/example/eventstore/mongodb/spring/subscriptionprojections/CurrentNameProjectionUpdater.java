@@ -1,10 +1,11 @@
 package se.haleby.occurrent.example.eventstore.mongodb.spring.subscriptionprojections;
 
+import io.cloudevents.CloudEvent;
 import org.springframework.stereotype.Component;
-import se.haleby.occurrent.subscription.mongodb.spring.blocking.SpringBlockingSubscriptionWithPositionPersistenceForMongoDB;
 import se.haleby.occurrent.domain.DomainEvent;
 import se.haleby.occurrent.domain.NameDefined;
 import se.haleby.occurrent.domain.NameWasChanged;
+import se.haleby.occurrent.subscription.api.blocking.BlockingSubscription;
 
 import javax.annotation.PostConstruct;
 import java.time.Duration;
@@ -16,11 +17,11 @@ import static java.time.temporal.ChronoUnit.SECONDS;
 @Component
 public class CurrentNameProjectionUpdater {
 
-    private final SpringBlockingSubscriptionWithPositionPersistenceForMongoDB subscription;
+    private final BlockingSubscription<CloudEvent> subscription;
     private final CurrentNameProjection currentNameProjection;
     private final DeserializeCloudEventToDomainEvent deserializeCloudEventToDomainEvent;
 
-    public CurrentNameProjectionUpdater(SpringBlockingSubscriptionWithPositionPersistenceForMongoDB subscription,
+    public CurrentNameProjectionUpdater(BlockingSubscription<CloudEvent> subscription,
                                         CurrentNameProjection currentNameProjection,
                                         DeserializeCloudEventToDomainEvent deserializeCloudEventToDomainEvent) {
         this.subscription = subscription;
@@ -29,7 +30,7 @@ public class CurrentNameProjectionUpdater {
     }
 
     @PostConstruct
-    void startProjectionUpdater() throws InterruptedException {
+    void startProjectionUpdater() {
         subscription
                 .subscribe("current-name", cloudEvent -> {
                     DomainEvent domainEvent = deserializeCloudEventToDomainEvent.deserialize(cloudEvent);

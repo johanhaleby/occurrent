@@ -39,7 +39,7 @@ public class SpringReactorSubscriptionThatStoresSubscriptionPositionInMongoDB {
     /**
      * A convenience function that automatically starts from the latest persisted subscription position and saves the new position after each call to {@code action}
      * has completed successfully. If you don't want to save the position after every event then don't use this method and instead save the position yourself by calling
-     * {@link SpringReactorSubscriptionPositionStorageForMongoDB#write(String, SubscriptionPosition)} when appropriate.
+     * {@link SpringReactorSubscriptionPositionStorageForMongoDB#save(String, SubscriptionPosition)} when appropriate.
      * <p>
      * It's VERY important that side-effects take place within the <code>action</code> function
      * because if you perform side-effects on the returned <code>Mono<Void></code> stream then the subscription position
@@ -57,7 +57,7 @@ public class SpringReactorSubscriptionThatStoresSubscriptionPositionInMongoDB {
     /**
      * A convenience function that automatically starts from the latest persisted subscription position and saves the new position after each call to {@code action}
      * has completed successfully. If you don't want to save the position after every event then don't use this method and instead save the position yourself by calling
-     * {@link SpringReactorSubscriptionPositionStorageForMongoDB#write(String, SubscriptionPosition)} when appropriate.
+     * {@link SpringReactorSubscriptionPositionStorageForMongoDB#save(String, SubscriptionPosition)} when appropriate.
      *
      * <p>
      * It's VERY important that side-effects take place within the <code>action</code> function
@@ -75,7 +75,7 @@ public class SpringReactorSubscriptionThatStoresSubscriptionPositionInMongoDB {
                 .doOnNext(startAt -> log.info("Starting subscription {} from subscription position {}", subscriptionId, startAt.toString()))
                 .flatMapMany(startAt -> subscription.subscribe(filter, startAt))
                 .flatMap(cloudEventWithStreamPosition -> action.apply(cloudEventWithStreamPosition).thenReturn(cloudEventWithStreamPosition))
-                .flatMap(cloudEventWithStreamPosition -> storage.write(subscriptionId, cloudEventWithStreamPosition.getStreamPosition()).thenReturn(cloudEventWithStreamPosition))
+                .flatMap(cloudEventWithStreamPosition -> storage.save(subscriptionId, cloudEventWithStreamPosition.getStreamPosition()).thenReturn(cloudEventWithStreamPosition))
                 .then();
     }
 
@@ -94,8 +94,8 @@ public class SpringReactorSubscriptionThatStoresSubscriptionPositionInMongoDB {
                 .switchIfEmpty(Mono.defer(() -> {
                     log.info("No subscription position found for {}, will initialize a new one.", subscriptionId);
                     return subscription.globalSubscriptionPosition()
-                            .flatMap(streamPosition -> storage.write(subscriptionId, streamPosition));
+                            .flatMap(subscriptionPosition -> storage.save(subscriptionId, subscriptionPosition));
                 }))
-                .map(StartAt::streamPosition);
+                .map(StartAt::subscriptionPosition);
     }
 }

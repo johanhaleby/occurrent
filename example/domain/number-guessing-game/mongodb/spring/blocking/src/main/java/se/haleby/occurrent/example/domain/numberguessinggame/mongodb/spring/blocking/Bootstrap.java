@@ -1,6 +1,7 @@
 package se.haleby.occurrent.example.domain.numberguessinggame.mongodb.spring.blocking;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
+import io.cloudevents.CloudEvent;
 import org.springframework.amqp.core.TopicExchange;
 import org.springframework.amqp.rabbit.annotation.EnableRabbit;
 import org.springframework.amqp.support.converter.Jackson2JsonMessageConverter;
@@ -13,12 +14,16 @@ import org.springframework.data.mongodb.MongoTransactionManager;
 import org.springframework.data.mongodb.core.MongoTemplate;
 import org.springframework.data.mongodb.repository.config.EnableMongoRepositories;
 import org.springframework.retry.annotation.EnableRetry;
-import se.haleby.occurrent.subscription.mongodb.spring.blocking.SpringBlockingSubscriptionForMongoDB;
-import se.haleby.occurrent.subscription.mongodb.spring.blocking.SpringBlockingSubscriptionWithPositionPersistenceForMongoDB;
 import se.haleby.occurrent.eventstore.mongodb.TimeRepresentation;
 import se.haleby.occurrent.eventstore.mongodb.spring.blocking.EventStoreConfig;
 import se.haleby.occurrent.eventstore.mongodb.spring.blocking.SpringBlockingMongoEventStore;
 import se.haleby.occurrent.example.domain.numberguessinggame.mongodb.spring.blocking.infrastructure.Serialization;
+import se.haleby.occurrent.subscription.api.blocking.BlockingSubscription;
+import se.haleby.occurrent.subscription.api.blocking.BlockingSubscriptionPositionStorage;
+import se.haleby.occurrent.subscription.api.blocking.PositionAwareBlockingSubscription;
+import se.haleby.occurrent.subscription.mongodb.spring.blocking.SpringBlockingSubscriptionForMongoDB;
+import se.haleby.occurrent.subscription.mongodb.spring.blocking.SpringBlockingSubscriptionPositionStorageForMongoDB;
+import se.haleby.occurrent.subscription.mongodb.spring.blocking.SpringBlockingSubscriptionWithPositionPersistenceForMongoDB;
 
 import java.net.URI;
 
@@ -46,9 +51,18 @@ public class Bootstrap {
     }
 
     @Bean
-    public SpringBlockingSubscriptionWithPositionPersistenceForMongoDB subscription(MongoTemplate mongoTemplate) {
-        SpringBlockingSubscriptionForMongoDB streamer = new SpringBlockingSubscriptionForMongoDB(mongoTemplate, EVENTS_COLLECTION_NAME, TimeRepresentation.DATE);
-        return new SpringBlockingSubscriptionWithPositionPersistenceForMongoDB(streamer, mongoTemplate, "changeStreamPosition");
+    public PositionAwareBlockingSubscription subscription(MongoTemplate mongoTemplate) {
+        return new SpringBlockingSubscriptionForMongoDB(mongoTemplate, EVENTS_COLLECTION_NAME, TimeRepresentation.DATE);
+    }
+
+    @Bean
+    public BlockingSubscriptionPositionStorage storage(MongoTemplate mongoTemplate) {
+        return new SpringBlockingSubscriptionPositionStorageForMongoDB(mongoTemplate, "subscriptions");
+    }
+
+    @Bean
+    public BlockingSubscription<CloudEvent> subscriptionWithAutomaticPersistence(PositionAwareBlockingSubscription subscription, BlockingSubscriptionPositionStorage storage) {
+        return new SpringBlockingSubscriptionWithPositionPersistenceForMongoDB(subscription, storage);
     }
 
     @Bean
