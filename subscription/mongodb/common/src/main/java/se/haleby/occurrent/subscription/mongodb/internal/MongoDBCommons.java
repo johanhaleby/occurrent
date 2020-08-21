@@ -1,10 +1,10 @@
 package se.haleby.occurrent.subscription.mongodb.internal;
 
 import org.bson.*;
-import se.haleby.occurrent.subscription.SubscriptionPosition;
 import se.haleby.occurrent.subscription.StartAt;
 import se.haleby.occurrent.subscription.StartAt.StartAtStreamPosition;
 import se.haleby.occurrent.subscription.StringBasedSubscriptionPosition;
+import se.haleby.occurrent.subscription.SubscriptionPosition;
 import se.haleby.occurrent.subscription.mongodb.MongoDBOperationTimeBasedSubscriptionPosition;
 import se.haleby.occurrent.subscription.mongodb.MongoDBResumeTokenBasedSubscriptionPosition;
 
@@ -84,7 +84,7 @@ public class MongoDBCommons {
         return withStartPositionApplied;
     }
 
-    public static StartAt calculateStartAtFromStreamPositionDocument(Document streamPositionDocument) {
+    public static SubscriptionPosition calculateSubscriptionPositionFromMongoStreamPositionDocument(Document streamPositionDocument) {
         final SubscriptionPosition changeStreamPosition;
         if (streamPositionDocument.containsKey(MongoDBCommons.RESUME_TOKEN)) {
             ResumeToken resumeToken = MongoDBCommons.extractResumeTokenFromPersistedResumeTokenDocument(streamPositionDocument);
@@ -98,7 +98,7 @@ public class MongoDBCommons {
         } else {
             throw new IllegalStateException("Doesn't recognize " + streamPositionDocument + " as a valid stream position document");
         }
-        return StartAt.streamPosition(changeStreamPosition);
+        return changeStreamPosition;
     }
 
     public static class ResumeToken {

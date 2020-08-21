@@ -55,14 +55,14 @@ import static se.haleby.occurrent.functional.Not.not;
 import static se.haleby.occurrent.time.TimeConversion.toLocalDateTime;
 
 @Testcontainers
-public class SpringReactorSubscriptionWithPositionPersistenceForMongoDBTest {
+public class SpringReactorSubscriptionPositionStorageForMongoDBTest {
 
     @Container
     private static final MongoDBContainer mongoDBContainer = new MongoDBContainer("mongo:4.2.8");
     private static final String RESUME_TOKEN_COLLECTION = "ack";
 
     private EventStore mongoEventStore;
-    private SpringReactorSubscriptionWithPositionPersistenceForMongoDB subscription;
+    private SpringReactorSubscriptionPositionStorageForMongoDB subscription;
     private ObjectMapper objectMapper;
     private ReactiveMongoTemplate reactiveMongoTemplate;
     private CopyOnWriteArrayList<Disposable> disposables;
@@ -81,7 +81,7 @@ public class SpringReactorSubscriptionWithPositionPersistenceForMongoDBTest {
         EventStoreConfig eventStoreConfig = new EventStoreConfig.Builder().eventStoreCollectionName("events").transactionConfig(reactiveMongoTransactionManager).timeRepresentation(TimeRepresentation.RFC_3339_STRING).build();
         mongoEventStore = new SpringReactorMongoEventStore(reactiveMongoTemplate, eventStoreConfig);
         PositionAwareReactorSubscription springReactiveSubscriptionForMongoDB = new SpringReactorSubscriptionForMongoDB(reactiveMongoTemplate, "events", timeRepresentation);
-        subscription = new SpringReactorSubscriptionWithPositionPersistenceForMongoDB(springReactiveSubscriptionForMongoDB, reactiveMongoTemplate, RESUME_TOKEN_COLLECTION);
+        subscription = new SpringReactorSubscriptionPositionStorageForMongoDB(springReactiveSubscriptionForMongoDB, reactiveMongoTemplate, RESUME_TOKEN_COLLECTION);
         objectMapper = new ObjectMapper();
         disposables = new CopyOnWriteArrayList<>();
     }

@@ -23,7 +23,7 @@ import java.util.function.Supplier;
 import static com.mongodb.client.model.Filters.eq;
 import static java.util.Objects.requireNonNull;
 import static se.haleby.occurrent.subscription.mongodb.internal.MongoDBCloudEventsToJsonDeserializer.ID;
-import static se.haleby.occurrent.subscription.mongodb.internal.MongoDBCommons.calculateStartAtFromStreamPositionDocument;
+import static se.haleby.occurrent.subscription.mongodb.internal.MongoDBCommons.calculateSubscriptionPositionFromMongoStreamPositionDocument;
 
 /**
  * Wraps a {@link BlockingSubscriptionForMongoDB} and adds persistent stream position support. It stores the stream position
@@ -93,7 +93,7 @@ public class BlockingSubscriptionWithPositionPersistenceForMongoDB implements Bl
             if (streamPositionDocument == null) {
                 streamPositionDocument = persistStreamPosition(subscriptionId, subscription.globalSubscriptionPosition());
             }
-            return calculateStartAtFromStreamPositionDocument(streamPositionDocument);
+            return calculateSubscriptionPositionFromMongoStreamPositionDocument(streamPositionDocument);
         };
 
         return subscribe(subscriptionId, filter, startAtSupplier, action);

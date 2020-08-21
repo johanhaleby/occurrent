@@ -7,7 +7,7 @@ import org.springframework.context.ApplicationEventPublisher;
 import org.springframework.stereotype.Component;
 import reactor.core.Disposable;
 import reactor.core.publisher.Mono;
-import se.haleby.occurrent.subscription.mongodb.spring.reactor.SpringReactorSubscriptionWithPositionPersistenceForMongoDB;
+import se.haleby.occurrent.subscription.mongodb.spring.reactor.SpringReactorSubscriptionPositionStorageForMongoDB;
 import se.haleby.occurrent.domain.DomainEvent;
 
 import javax.annotation.PostConstruct;
@@ -22,12 +22,12 @@ public class EventSubscriptioning {
     private static final Logger log = LoggerFactory.getLogger(EventSubscriptioning.class);
 
     private static final String SUBSCRIBER_ID = "test-app";
-    private final SpringReactorSubscriptionWithPositionPersistenceForMongoDB subscriptionForMongoDB;
+    private final SpringReactorSubscriptionPositionStorageForMongoDB subscriptionForMongoDB;
     private final ObjectMapper objectMapper;
     private final ApplicationEventPublisher eventPublisher;
     private final AtomicReference<Disposable> subscription;
 
-    public EventSubscriptioning(SpringReactorSubscriptionWithPositionPersistenceForMongoDB subscriptionForMongoDB,
+    public EventSubscriptioning(SpringReactorSubscriptionPositionStorageForMongoDB subscriptionForMongoDB,
                                 ObjectMapper objectMapper,
                                 ApplicationEventPublisher eventPublisher) {
         this.subscriptionForMongoDB = subscriptionForMongoDB;

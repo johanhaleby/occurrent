@@ -87,7 +87,7 @@ public class SpringBlockingSubscriptionWithPositionPersistenceForMongoDB impleme
             if (streamPositionDocument == null) {
                 streamPositionDocument = persistStreamPosition(subscriptionId, subscription.globalSubscriptionPosition());
             }
-            return calculateStartAtFromStreamPositionDocument(streamPositionDocument);
+            return calculateSubscriptionPositionFromMongoStreamPositionDocument(streamPositionDocument);
         };
         return subscribe(subscriptionId, filter, startAtSupplier, action);
     }

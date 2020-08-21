@@ -10,7 +10,7 @@ import org.springframework.boot.autoconfigure.SpringBootApplication;
 import org.springframework.context.annotation.Bean;
 import org.springframework.data.mongodb.core.ReactiveMongoOperations;
 import se.haleby.occurrent.subscription.mongodb.spring.reactor.SpringReactorSubscriptionForMongoDB;
-import se.haleby.occurrent.subscription.mongodb.spring.reactor.SpringReactorSubscriptionWithPositionPersistenceForMongoDB;
+import se.haleby.occurrent.subscription.mongodb.spring.reactor.SpringReactorSubscriptionPositionStorageForMongoDB;
 import se.haleby.occurrent.eventstore.api.blocking.EventStore;
 import se.haleby.occurrent.eventstore.mongodb.TimeRepresentation;
 import se.haleby.occurrent.eventstore.mongodb.nativedriver.EventStoreConfig;
@@ -39,9 +39,9 @@ public class SubscriptionFromMongoDBToSpringEventApplication {
     }
 
     @Bean
-    public SpringReactorSubscriptionWithPositionPersistenceForMongoDB subscriptionForMongoDB(ReactiveMongoOperations mongoOperations) {
+    public SpringReactorSubscriptionPositionStorageForMongoDB subscriptionForMongoDB(ReactiveMongoOperations mongoOperations) {
         SpringReactorSubscriptionForMongoDB streamer = new SpringReactorSubscriptionForMongoDB(mongoOperations, "events", TimeRepresentation.RFC_3339_STRING);
-        return new SpringReactorSubscriptionWithPositionPersistenceForMongoDB(streamer, mongoOperations, "resumeTokens");
+        return new SpringReactorSubscriptionPositionStorageForMongoDB(streamer, mongoOperations, "resumeTokens");
     }
 
     @Bean
