@@ -10,6 +10,11 @@ import static java.util.Objects.requireNonNull;
 import static se.haleby.occurrent.condition.Condition.MultiOperandConditionName.*;
 import static se.haleby.occurrent.condition.Condition.SingleOperandConditionName.*;
 
+/**
+ * Conditions that can be used when querying an event store or filtering a subscription when applied to a {@code Filter}.
+ *
+ * @param <T> The type of the value in the condition
+ */
 public abstract class Condition<T> {
     public final String description;
 

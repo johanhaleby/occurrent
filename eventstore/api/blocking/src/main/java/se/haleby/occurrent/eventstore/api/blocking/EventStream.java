@@ -6,13 +6,28 @@ import java.util.function.Function;
 import java.util.stream.Collectors;
 import java.util.stream.Stream;
 
+/**
+ * Represents an event stream.
+ */
 @SuppressWarnings("NullableProblems")
 public interface EventStream<T> extends Iterable<T> {
 
+    /**
+     * @return The id of the event stream
+     */
     String id();
 
+    /**
+     * The event stream version. It is equal to {@code 0} if event stream is empty.
+     *
+     * @return The current version of the event stream
+     * @see #isEmpty()
+     */
     long version();
 
+    /**
+     * @return The events as a {@link Stream}.
+     */
     Stream<T> events();
 
     @Override
@@ -20,14 +35,27 @@ public interface EventStream<T> extends Iterable<T> {
         return events().iterator();
     }
 
+    /**
+     * @return {@code true} if event stream is empty, {@code false} otherwise.
+     */
     default boolean isEmpty() {
         return version() == 0;
     }
 
+    /**
+     * @return The events in this stream as a list
+     */
     default List<T> eventList() {
         return events().collect(Collectors.toList());
     }
 
+    /**
+     * Apply a mapping function to the {@link EventStream}
+     *
+     * @param fn   The function to apply for each event.
+     * @param <T2> The return type
+     * @return A new {@link EventStream} where events are converted to {@code T2}.
+     */
     default <T2> EventStream<T2> map(Function<T, T2> fn) {
         return new EventStream<T2>() {
 

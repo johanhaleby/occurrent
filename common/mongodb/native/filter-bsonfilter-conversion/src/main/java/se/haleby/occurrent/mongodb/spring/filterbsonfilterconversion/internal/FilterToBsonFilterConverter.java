@@ -14,6 +14,9 @@ import static java.util.Objects.requireNonNull;
 import static se.haleby.occurrent.mongodb.specialfilterhandling.internal.SpecialFilterHandling.resolveSpecialCases;
 import static se.haleby.occurrent.mongodb.spring.filterbsonfilterconversion.internal.ConditionConverter.convertConditionToBsonCriteria;
 
+/**
+ * Converts a {@link Filter} into a {@link Bson} filter that can be used when querying MongoDB.
+ */
 public class FilterToBsonFilterConverter {
     public static Bson convertFilterToBsonFilter(TimeRepresentation timeRepresentation, Filter filter) {
         return convertFilterToBsonFilter(null, timeRepresentation, filter);

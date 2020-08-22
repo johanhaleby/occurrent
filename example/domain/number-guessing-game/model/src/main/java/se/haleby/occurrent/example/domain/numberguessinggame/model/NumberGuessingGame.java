@@ -10,6 +10,9 @@ import java.util.function.BiConsumer;
 import java.util.function.Consumer;
 import java.util.stream.Stream;
 
+/**
+ * The heart of the game. This is the domain model that contains the game logic.
+ */
 public class NumberGuessingGame {
 
     public static Stream<GameEvent> startNewGame(UUID gameId, LocalDateTime startDate, UUID whoIsStartingTheGame,

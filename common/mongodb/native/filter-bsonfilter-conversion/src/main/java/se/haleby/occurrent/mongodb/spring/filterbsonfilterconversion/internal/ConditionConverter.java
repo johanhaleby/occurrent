@@ -9,6 +9,9 @@ import se.haleby.occurrent.condition.Condition.SingleOperandConditionName;
 
 import java.util.List;
 
+/**
+ * Converts a {@link Condition} into a {@link Bson} document.
+ */
 public class ConditionConverter {
 
     public static <T> Bson convertConditionToBsonCriteria(String fieldName, Condition<T> condition) {

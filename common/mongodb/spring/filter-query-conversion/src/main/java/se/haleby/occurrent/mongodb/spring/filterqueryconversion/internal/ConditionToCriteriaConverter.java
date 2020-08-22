@@ -7,6 +7,9 @@ import se.haleby.occurrent.condition.Condition.SingleOperandCondition;
 
 import java.util.List;
 
+/**
+ * Converts a {@link Condition} into a Spring MongoDB {@link Criteria}.
+ */
 public class ConditionToCriteriaConverter {
 
     public static <T> Criteria convertConditionToCriteria(String fieldName, Condition<T> condition) {

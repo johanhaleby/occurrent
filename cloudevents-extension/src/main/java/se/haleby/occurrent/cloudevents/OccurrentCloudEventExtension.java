@@ -1,10 +1,20 @@
 package se.haleby.occurrent.cloudevents;
 
+import io.cloudevents.CloudEvent;
 import io.cloudevents.CloudEventExtensions;
 import io.cloudevents.Extension;
 
 import java.util.*;
 
+/**
+ * A {@link CloudEvent} {@link Extension} that adds required extensions for Occurrent. These are:<br><br>
+ *
+ * <table>
+ *     <tr><th>Key</th><th>Description</th></tr>
+ *     <tr><td>{@value #STREAM_ID}</td><td>The id of a particular event stream</td></tr>
+ *     <tr><td>{@value #STREAM_VERSION}</td><td>The version of an event in a particular event stream</td></tr>
+ * </table>
+ */
 public class OccurrentCloudEventExtension implements Extension {
     public static final String STREAM_ID = "streamId";
     public static final String STREAM_VERSION = "streamVersion";

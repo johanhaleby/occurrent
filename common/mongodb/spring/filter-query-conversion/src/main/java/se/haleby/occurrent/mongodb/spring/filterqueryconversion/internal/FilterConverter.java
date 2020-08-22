@@ -13,6 +13,10 @@ import static java.util.Objects.requireNonNull;
 import static se.haleby.occurrent.mongodb.specialfilterhandling.internal.SpecialFilterHandling.resolveSpecialCases;
 import static se.haleby.occurrent.mongodb.spring.filterqueryconversion.internal.ConditionToCriteriaConverter.convertConditionToCriteria;
 
+/**
+ * Converts a {@link Filter} into either a {@link Query} or {@link Criteria} that can be used for e.g. querying
+ * an event store using Spring.
+ */
 public class FilterConverter {
 
     public static Query convertFilterToQuery(TimeRepresentation timeRepresentation, Filter filter) {

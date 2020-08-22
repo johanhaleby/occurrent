@@ -9,6 +9,9 @@ import java.util.stream.Stream;
 
 import static se.haleby.occurrent.eventstore.api.WriteCondition.streamVersionEq;
 
+/**
+ * Event stores that supports conditional writes to an event stream should implement this interface.
+ */
 public interface ConditionallyWriteToEventStream {
     default void write(String streamId, long expectedStreamVersion, Stream<CloudEvent> events) {
         write(streamId, streamVersionEq(expectedStreamVersion), events);
