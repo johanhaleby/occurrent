@@ -15,8 +15,11 @@ import static se.haleby.occurrent.mongodb.specialfilterhandling.internal.Special
 import static se.haleby.occurrent.mongodb.spring.filterbsonfilterconversion.internal.ConditionConverter.convertConditionToBsonCriteria;
 
 public class FilterToBsonFilterConverter {
-
     public static Bson convertFilterToBsonFilter(TimeRepresentation timeRepresentation, Filter filter) {
+        return convertFilterToBsonFilter(null, timeRepresentation, filter);
+    }
+
+    public static Bson convertFilterToBsonFilter(String fieldNamePrefix, TimeRepresentation timeRepresentation, Filter filter) {
         requireNonNull(filter, "Filter cannot be null");
         requireNonNull(timeRepresentation, "TimeRepresentation cannot be null");
 
@@ -24,22 +27,22 @@ public class FilterToBsonFilterConverter {
         if (filter instanceof All) {
             query = new BsonDocument();
         } else {
-            query = innerConvert(timeRepresentation, filter);
+            query = innerConvert(fieldNamePrefix, timeRepresentation, filter);
         }
         return query;
     }
 
-    private static Bson innerConvert(TimeRepresentation timeRepresentation, Filter filter) {
+    private static Bson innerConvert(String fieldNamePrefix, TimeRepresentation timeRepresentation, Filter filter) {
         final Bson criteria;
         if (filter instanceof All) {
             criteria = new BsonDocument();
         } else if (filter instanceof SingleConditionFilter) {
             SingleConditionFilter scf = (SingleConditionFilter) filter;
             Condition<?> conditionToUse = resolveSpecialCases(timeRepresentation, scf);
-            criteria = convertConditionToBsonCriteria(scf.fieldName, conditionToUse);
+            criteria = convertConditionToBsonCriteria(fieldNamePrefix + "." + scf.fieldName, conditionToUse);
         } else if (filter instanceof CompositionFilter) {
             CompositionFilter cf = (CompositionFilter) filter;
-            Bson[] composedBson = cf.filters.stream().map(f -> innerConvert(timeRepresentation, f)).toArray(Bson[]::new);
+            Bson[] composedBson = cf.filters.stream().map(f -> innerConvert(fieldNamePrefix, timeRepresentation, f)).toArray(Bson[]::new);
             switch (cf.operator) {
                 case AND:
                     criteria = Filters.and(composedBson);

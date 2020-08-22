@@ -196,7 +196,6 @@ public abstract class Filter {
         return filter(DATA_CONTENT_TYPE, condition);
     }
 
-
     public static Filter time(ZonedDateTime value) {
         return time(eq(value));
     }

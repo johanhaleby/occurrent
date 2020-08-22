@@ -16,10 +16,9 @@ import org.bson.Document;
 import org.bson.conversions.Bson;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
-import se.haleby.occurrent.subscription.SubscriptionFilter;
-import se.haleby.occurrent.subscription.SubscriptionPosition;
-import se.haleby.occurrent.subscription.CloudEventWithSubscriptionPosition;
-import se.haleby.occurrent.subscription.StartAt;
+import se.haleby.occurrent.filter.Filter;
+import se.haleby.occurrent.mongodb.timerepresentation.TimeRepresentation;
+import se.haleby.occurrent.subscription.*;
 import se.haleby.occurrent.subscription.api.blocking.PositionAwareBlockingSubscription;
 import se.haleby.occurrent.subscription.api.blocking.Subscription;
 import se.haleby.occurrent.subscription.mongodb.MongoDBFilterSpecification.BsonMongoDBFilterSpecification;
@@ -30,7 +29,6 @@ import se.haleby.occurrent.subscription.mongodb.internal.DocumentAdapter;
 import se.haleby.occurrent.subscription.mongodb.nativedriver.blocking.RetryStrategy.Backoff;
 import se.haleby.occurrent.subscription.mongodb.nativedriver.blocking.RetryStrategy.Fixed;
 import se.haleby.occurrent.subscription.mongodb.nativedriver.blocking.RetryStrategy.None;
-import se.haleby.occurrent.mongodb.timerepresentation.TimeRepresentation;
 
 import java.util.Collections;
 import java.util.Iterator;
@@ -45,7 +43,10 @@ import java.util.function.Supplier;
 import java.util.stream.Collectors;
 import java.util.stream.Stream;
 
+import static com.mongodb.client.model.Aggregates.match;
 import static java.util.Objects.requireNonNull;
+import static se.haleby.occurrent.mongodb.spring.filterbsonfilterconversion.internal.FilterToBsonFilterConverter.convertFilterToBsonFilter;
+import static se.haleby.occurrent.subscription.mongodb.MongoDBFilterSpecification.FULL_DOCUMENT;
 import static se.haleby.occurrent.subscription.mongodb.internal.MongoDBCloudEventsToJsonDeserializer.deserializeToCloudEvent;
 import static se.haleby.occurrent.subscription.mongodb.internal.MongoDBCommons.applyStartPosition;
 import static se.haleby.occurrent.subscription.mongodb.internal.MongoDBCommons.getServerOperationTime;
@@ -78,7 +79,7 @@ public class BlockingSubscriptionForMongoDB implements PositionAwareBlockingSubs
      * @param retryStrategy        Configure how retries should be handled
      */
     public BlockingSubscriptionForMongoDB(MongoDatabase database, String eventCollectionName, TimeRepresentation timeRepresentation,
-                                            Executor subscriptionExecutor, RetryStrategy retryStrategy) {
+                                          Executor subscriptionExecutor, RetryStrategy retryStrategy) {
         this(database, database.getCollection(requireNonNull(eventCollectionName, "Event collection cannot be null")), timeRepresentation, subscriptionExecutor, retryStrategy);
     }
 
@@ -92,7 +93,7 @@ public class BlockingSubscriptionForMongoDB implements PositionAwareBlockingSubs
      * @param retryStrategy        Configure how retries should be handled
      */
     public BlockingSubscriptionForMongoDB(MongoDatabase database, MongoCollection<Document> eventCollection, TimeRepresentation timeRepresentation,
-                                            Executor subscriptionExecutor, RetryStrategy retryStrategy) {
+                                          Executor subscriptionExecutor, RetryStrategy retryStrategy) {
         requireNonNull(database, MongoDatabase.class.getSimpleName() + " cannot be null");
         requireNonNull(eventCollection, "Event collection cannot be null");
         requireNonNull(timeRepresentation, "Time representation cannot be null");
@@ -114,7 +115,7 @@ public class BlockingSubscriptionForMongoDB implements PositionAwareBlockingSubs
         requireNonNull(action, "Action cannot be null");
         requireNonNull(startAtSupplier, "Start at cannot be null");
 
-        List<Bson> pipeline = createPipeline(filter);
+        List<Bson> pipeline = createPipeline(timeRepresentation, filter);
         CountDownLatch subscriptionStartedLatch = new CountDownLatch(1);
 
         Runnable runnable = () -> {
@@ -138,10 +139,14 @@ public class BlockingSubscriptionForMongoDB implements PositionAwareBlockingSubs
         return new NativeMongoDBSubscription(subscriptionId, subscriptionStartedLatch);
     }
 
-    private static List<Bson> createPipeline(SubscriptionFilter filter) {
+    private static List<Bson> createPipeline(TimeRepresentation timeRepresentation, SubscriptionFilter filter) {
         final List<Bson> pipeline;
         if (filter == null) {
             pipeline = Collections.emptyList();
+        } else if (filter instanceof OccurrentSubscriptionFilter) {
+            Filter occurrentFilter = ((OccurrentSubscriptionFilter) filter).filter;
+            Bson bson = convertFilterToBsonFilter(FULL_DOCUMENT, timeRepresentation, occurrentFilter);
+            pipeline = Collections.singletonList(match(bson));
         } else if (filter instanceof JsonMongoDBFilterSpecification) {
             pipeline = Collections.singletonList(Document.parse(((JsonMongoDBFilterSpecification) filter).getJson()));
         } else if (filter instanceof BsonMongoDBFilterSpecification) {
