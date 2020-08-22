@@ -15,7 +15,6 @@ import org.jetbrains.annotations.Nullable;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import se.haleby.occurrent.eventstore.api.blocking.EventStoreQueries;
-import se.haleby.occurrent.mongodb.timerepresentation.TimeRepresentation;
 import se.haleby.occurrent.eventstore.mongodb.nativedriver.EventStoreConfig;
 import se.haleby.occurrent.eventstore.mongodb.nativedriver.MongoEventStore;
 import se.haleby.occurrent.example.domain.numberguessinggame.model.MaxNumberOfGuesses;
@@ -29,6 +28,7 @@ import se.haleby.occurrent.example.domain.numberguessinggame.mongodb.nativedrive
 import se.haleby.occurrent.example.domain.numberguessinggame.mongodb.nativedriver.view.latestgamesoverview.GameOverview.GameState.Ended;
 import se.haleby.occurrent.example.domain.numberguessinggame.mongodb.nativedriver.view.latestgamesoverview.GameOverview.GameState.Ongoing;
 import se.haleby.occurrent.example.domain.numberguessinggame.mongodb.nativedriver.view.latestgamesoverview.LatestGamesOverview;
+import se.haleby.occurrent.mongodb.timerepresentation.TimeRepresentation;
 import se.haleby.occurrent.subscription.api.blocking.BlockingSubscription;
 import se.haleby.occurrent.subscription.api.blocking.BlockingSubscriptionPositionStorage;
 import se.haleby.occurrent.subscription.mongodb.nativedriver.blocking.BlockingSubscriptionForMongoDB;
@@ -144,10 +144,8 @@ public class Bootstrap {
             }
         };
 
-        subscription.subscribe("NumberGuessingGameCompletedIntegrationEventPublisher", filter().type(Filters::eq, NumberGuessingGameEnded.class.getSimpleName()), cloudEventConsumer
-                // We're only interested in events of type NumberGuessingGameEnded since then we know that
-                // we should publish the integration event
-        );
+        // We're only interested in events of type NumberGuessingGameEnded since then we know that we should publish the integration event
+        subscription.subscribe("NumberGuessingGameCompletedIntegrationEventPublisher", filter().type(Filters::eq, NumberGuessingGameEnded.class.getSimpleName()), cloudEventConsumer);
     }
 
     private static RabbitMQConnectionAndChannel initializeRabbitMQConnection(String uri) {
