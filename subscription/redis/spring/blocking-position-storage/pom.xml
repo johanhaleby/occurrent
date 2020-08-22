@@ -3,49 +3,53 @@
          xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
          xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 http://maven.apache.org/xsd/maven-4.0.0.xsd">
     <parent>
-        <artifactId>subscription-mongodb-spring</artifactId>
+        <artifactId>subscription-redis-spring</artifactId>
         <groupId>se.haleby.occurrent</groupId>
         <version>0.0.1-SNAPSHOT</version>
     </parent>
     <modelVersion>4.0.0</modelVersion>
 
-    <artifactId>subscription-mongodb-spring-reactor-persistent</artifactId>
+    <artifactId>subscription-redis-spring-blocking-position-storage</artifactId>
 
     <dependencies>
         <dependency>
-            <groupId>se.haleby.occurrent</groupId>
-            <artifactId>subscription-mongodb-spring-reactor</artifactId>
-            <version>0.0.1-SNAPSHOT</version>
+            <groupId>org.springframework.data</groupId>
+            <artifactId>spring-data-redis</artifactId>
         </dependency>
         <dependency>
             <groupId>io.cloudevents</groupId>
             <artifactId>cloudevents-json-jackson</artifactId>
         </dependency>
         <dependency>
-            <groupId>com.fasterxml.jackson.core</groupId>
-            <artifactId>jackson-core</artifactId>
+            <groupId>se.haleby.occurrent</groupId>
+            <artifactId>subscription-core</artifactId>
+            <version>0.0.1-SNAPSHOT</version>
         </dependency>
         <dependency>
-            <groupId>com.fasterxml.jackson.core</groupId>
-            <artifactId>jackson-databind</artifactId>
+            <groupId>se.haleby.occurrent</groupId>
+            <artifactId>subscription-api-blocking</artifactId>
+            <version>0.0.1-SNAPSHOT</version>
         </dependency>
-        <dependency>
-            <groupId>io.projectreactor</groupId>
-            <artifactId>reactor-core</artifactId>
-        </dependency>
-        <dependency>
-            <groupId>org.mongodb</groupId>
-            <artifactId>mongodb-driver-reactivestreams</artifactId>
-        </dependency>
-        <dependency>
-            <groupId>org.springframework.data</groupId>
-            <artifactId>spring-data-mongodb</artifactId>
+        <dependency> <!-- Required for @PreDestroy -->
+            <groupId>jakarta.annotation</groupId>
+            <artifactId>jakarta.annotation-api</artifactId>
         </dependency>
 
         <!-- Test -->
         <dependency>
+            <groupId>io.lettuce</groupId>
+            <artifactId>lettuce-core</artifactId>
+            <scope>test</scope>
+        </dependency>
+        <dependency>
             <groupId>se.haleby.occurrent</groupId>
-            <artifactId>eventstore-mongodb-spring-reactor</artifactId>
+            <artifactId>subscription-mongodb-spring-blocking</artifactId>
+            <version>0.0.1-SNAPSHOT</version>
+            <scope>test</scope>
+        </dependency>
+        <dependency>
+            <groupId>se.haleby.occurrent</groupId>
+            <artifactId>eventstore-mongodb-spring-blocking</artifactId>
             <version>0.0.1-SNAPSHOT</version>
             <scope>test</scope>
         </dependency>

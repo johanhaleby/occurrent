@@ -9,7 +9,7 @@
     </parent>
     <modelVersion>4.0.0</modelVersion>
 
-    <artifactId>subscription-mongodb-native-blocking-persistent</artifactId>
+    <artifactId>subscription-mongodb-native-blocking-position-storage</artifactId>
 
     <dependencies>
         <dependency>

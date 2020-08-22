@@ -15,9 +15,9 @@
 
     <modules>
         <module>reactor</module>
-        <module>reactor-persistent</module>
+        <module>reactor-position-storage</module>
         <module>blocking</module>
-        <module>blocking-persistent</module>
+        <module>blocking-position-storage</module>
         <module>common</module>
     </modules>
 

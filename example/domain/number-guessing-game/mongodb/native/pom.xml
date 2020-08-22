@@ -25,7 +25,7 @@
         </dependency>
         <dependency>
             <groupId>se.haleby.occurrent</groupId>
-            <artifactId>subscription-mongodb-native-blocking-persistent</artifactId>
+            <artifactId>subscription-mongodb-native-blocking-position-storage</artifactId>
             <version>0.0.1-SNAPSHOT</version>
         </dependency>
         <dependency>

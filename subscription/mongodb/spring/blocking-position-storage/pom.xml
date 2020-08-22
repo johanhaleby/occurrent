@@ -3,50 +3,38 @@
          xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
          xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 http://maven.apache.org/xsd/maven-4.0.0.xsd">
     <parent>
-        <artifactId>subscription-redis-spring</artifactId>
+        <artifactId>subscription-mongodb-spring</artifactId>
         <groupId>se.haleby.occurrent</groupId>
         <version>0.0.1-SNAPSHOT</version>
     </parent>
     <modelVersion>4.0.0</modelVersion>
 
-    <artifactId>subscription-redis-spring-blocking-persistent</artifactId>
+    <artifactId>subscription-mongodb-spring-blocking-position-storage</artifactId>
 
     <dependencies>
         <dependency>
-            <groupId>org.springframework.data</groupId>
-            <artifactId>spring-data-redis</artifactId>
+            <groupId>org.springframework.boot</groupId>
+            <artifactId>spring-boot-starter-data-mongodb</artifactId>
         </dependency>
         <dependency>
             <groupId>io.cloudevents</groupId>
             <artifactId>cloudevents-json-jackson</artifactId>
         </dependency>
         <dependency>
-            <groupId>se.haleby.occurrent</groupId>
-            <artifactId>subscription-core</artifactId>
-            <version>0.0.1-SNAPSHOT</version>
+            <groupId>org.springframework.data</groupId>
+            <artifactId>spring-data-mongodb</artifactId>
         </dependency>
         <dependency>
-            <groupId>se.haleby.occurrent</groupId>
-            <artifactId>subscription-api-blocking</artifactId>
-            <version>0.0.1-SNAPSHOT</version>
-        </dependency>
-        <dependency> <!-- Required for @PreDestroy -->
-            <groupId>jakarta.annotation</groupId>
-            <artifactId>jakarta.annotation-api</artifactId>
-        </dependency>
-
-        <!-- Test -->
-        <dependency>
-            <groupId>io.lettuce</groupId>
-            <artifactId>lettuce-core</artifactId>
-            <scope>test</scope>
+            <groupId>org.mongodb</groupId>
+            <artifactId>mongodb-driver-sync</artifactId>
         </dependency>
         <dependency>
             <groupId>se.haleby.occurrent</groupId>
             <artifactId>subscription-mongodb-spring-blocking</artifactId>
             <version>0.0.1-SNAPSHOT</version>
-            <scope>test</scope>
         </dependency>
+
+        <!-- Test -->
         <dependency>
             <groupId>se.haleby.occurrent</groupId>
             <artifactId>eventstore-mongodb-spring-blocking</artifactId>

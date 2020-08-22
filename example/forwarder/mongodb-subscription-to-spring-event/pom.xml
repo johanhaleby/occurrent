@@ -14,7 +14,7 @@
     <dependencies>
         <dependency>
             <groupId>se.haleby.occurrent</groupId>
-            <artifactId>subscription-mongodb-spring-reactor-persistent</artifactId>
+            <artifactId>subscription-mongodb-spring-reactor-position-storage</artifactId>
             <version>0.0.1-SNAPSHOT</version>
         </dependency>
         <dependency>
