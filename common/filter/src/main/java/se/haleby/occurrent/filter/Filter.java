@@ -212,6 +212,14 @@ public abstract class Filter {
         return filter(OccurrentCloudEventExtension.STREAM_ID, condition);
     }
 
+    public static Filter streamVersion(long value) {
+        return streamVersion(eq(value));
+    }
+
+    public static Filter streamVersion(Condition<Long> condition) {
+        return filter(OccurrentCloudEventExtension.STREAM_VERSION, condition);
+    }
+
     public static Filter specVersion(SpecVersion value) {
         return specVersion(value.toString());
     }

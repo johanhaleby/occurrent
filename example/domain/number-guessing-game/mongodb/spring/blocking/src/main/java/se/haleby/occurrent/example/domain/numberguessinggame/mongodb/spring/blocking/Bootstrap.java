@@ -14,10 +14,10 @@ import org.springframework.data.mongodb.MongoTransactionManager;
 import org.springframework.data.mongodb.core.MongoTemplate;
 import org.springframework.data.mongodb.repository.config.EnableMongoRepositories;
 import org.springframework.retry.annotation.EnableRetry;
-import se.haleby.occurrent.mongodb.timerepresentation.TimeRepresentation;
 import se.haleby.occurrent.eventstore.mongodb.spring.blocking.EventStoreConfig;
 import se.haleby.occurrent.eventstore.mongodb.spring.blocking.SpringBlockingMongoEventStore;
 import se.haleby.occurrent.example.domain.numberguessinggame.mongodb.spring.blocking.infrastructure.Serialization;
+import se.haleby.occurrent.mongodb.timerepresentation.TimeRepresentation;
 import se.haleby.occurrent.subscription.api.blocking.BlockingSubscription;
 import se.haleby.occurrent.subscription.api.blocking.BlockingSubscriptionPositionStorage;
 import se.haleby.occurrent.subscription.api.blocking.PositionAwareBlockingSubscription;
@@ -48,6 +48,11 @@ public class Bootstrap {
     public SpringBlockingMongoEventStore eventStore(MongoTemplate template, MongoTransactionManager transactionManager) {
         EventStoreConfig eventStoreConfig = new EventStoreConfig.Builder().eventStoreCollectionName(EVENTS_COLLECTION_NAME).transactionConfig(transactionManager).timeRepresentation(TimeRepresentation.DATE).build();
         return new SpringBlockingMongoEventStore(template, eventStoreConfig);
+    }
+
+    @Bean
+    public SpringBlockingSubscriptionWithPositionPersistenceForMongoDB springBlockingSubscriptionWithPositionPersistenceForMongoDB(PositionAwareBlockingSubscription subscription, BlockingSubscriptionPositionStorage storage) {
+        return new SpringBlockingSubscriptionWithPositionPersistenceForMongoDB(subscription, storage);
     }
 
     @Bean

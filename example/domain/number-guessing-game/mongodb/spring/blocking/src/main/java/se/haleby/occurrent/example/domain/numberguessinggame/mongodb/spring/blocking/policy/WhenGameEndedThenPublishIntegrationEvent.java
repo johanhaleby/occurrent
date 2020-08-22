@@ -1,17 +1,16 @@
 package se.haleby.occurrent.example.domain.numberguessinggame.mongodb.spring.blocking.policy;
 
-import com.mongodb.client.model.Filters;
 import io.cloudevents.CloudEvent;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.amqp.core.TopicExchange;
 import org.springframework.amqp.rabbit.core.RabbitTemplate;
 import org.springframework.stereotype.Component;
-import se.haleby.occurrent.subscription.mongodb.spring.blocking.SpringBlockingSubscriptionWithPositionPersistenceForMongoDB;
 import se.haleby.occurrent.eventstore.api.blocking.EventStoreQueries;
 import se.haleby.occurrent.example.domain.numberguessinggame.model.domainevents.*;
 import se.haleby.occurrent.example.domain.numberguessinggame.mongodb.spring.blocking.infrastructure.Serialization;
 import se.haleby.occurrent.example.domain.numberguessinggame.mongodb.spring.blocking.policy.NumberGuessingGameCompleted.GuessedNumber;
+import se.haleby.occurrent.subscription.mongodb.spring.blocking.SpringBlockingSubscriptionWithPositionPersistenceForMongoDB;
 
 import javax.annotation.PostConstruct;
 import java.time.Duration;
@@ -19,9 +18,11 @@ import java.time.LocalDateTime;
 import java.util.Date;
 
 import static java.time.ZoneOffset.UTC;
-import static se.haleby.occurrent.subscription.mongodb.MongoDBFilterSpecification.BsonMongoDBFilterSpecification.filter;
+import static se.haleby.occurrent.cloudevents.OccurrentExtensionGetter.getStreamVersion;
 import static se.haleby.occurrent.condition.Condition.eq;
-import static se.haleby.occurrent.filter.Filter.subject;
+import static se.haleby.occurrent.condition.Condition.lte;
+import static se.haleby.occurrent.filter.Filter.*;
+import static se.haleby.occurrent.subscription.OccurrentSubscriptionFilter.filter;
 
 @Component
 class WhenGameEndedThenPublishIntegrationEvent {
@@ -44,8 +45,8 @@ class WhenGameEndedThenPublishIntegrationEvent {
     }
 
     @PostConstruct
-    void subscribeToSubscription() throws InterruptedException {
-        streamer.subscribe(WhenGameEndedThenPublishIntegrationEvent.class.getSimpleName(), filter().type(Filters::eq, NumberGuessingGameEnded.class.getSimpleName()), this::publishIntegrationEventWhenGameEnded
+    void subscribeToSubscription() {
+        streamer.subscribe(WhenGameEndedThenPublishIntegrationEvent.class.getSimpleName(), filter(type(NumberGuessingGameEnded.class.getSimpleName())), this::publishIntegrationEventWhenGameEnded
                 // We're only interested in events of type NumberGuessingGameEnded since then we know that
                 // we should publish the integration event
         )
@@ -55,7 +56,7 @@ class WhenGameEndedThenPublishIntegrationEvent {
 
     private void publishIntegrationEventWhenGameEnded(CloudEvent cloudEvent) {
         String gameId = cloudEvent.getSubject();
-        NumberGuessingGameCompleted numberGuessingGameCompleted = eventStoreQueries.query(subject(eq(gameId)))
+        NumberGuessingGameCompleted numberGuessingGameCompleted = eventStoreQueries.query(subject(eq(gameId)).and(streamVersion(lte(getStreamVersion(cloudEvent)))))
                 .map(serialization::deserialize)
                 .collect(NumberGuessingGameCompleted::new, (integrationEvent, gameEvent) -> {
                     if (gameEvent instanceof NumberGuessingGameWasStarted) {
