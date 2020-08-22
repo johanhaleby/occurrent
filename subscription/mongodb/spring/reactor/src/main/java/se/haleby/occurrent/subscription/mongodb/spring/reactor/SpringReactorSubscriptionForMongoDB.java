@@ -10,15 +10,15 @@ import org.springframework.data.mongodb.core.ChangeStreamOptions.ChangeStreamOpt
 import org.springframework.data.mongodb.core.ReactiveMongoOperations;
 import reactor.core.publisher.Flux;
 import reactor.core.publisher.Mono;
-import se.haleby.occurrent.subscription.SubscriptionFilter;
-import se.haleby.occurrent.subscription.SubscriptionPosition;
+import se.haleby.occurrent.mongodb.timerepresentation.TimeRepresentation;
 import se.haleby.occurrent.subscription.CloudEventWithSubscriptionPosition;
 import se.haleby.occurrent.subscription.StartAt;
+import se.haleby.occurrent.subscription.SubscriptionFilter;
+import se.haleby.occurrent.subscription.SubscriptionPosition;
 import se.haleby.occurrent.subscription.api.reactor.PositionAwareReactorSubscription;
 import se.haleby.occurrent.subscription.mongodb.MongoDBOperationTimeBasedSubscriptionPosition;
 import se.haleby.occurrent.subscription.mongodb.MongoDBResumeTokenBasedSubscriptionPosition;
 import se.haleby.occurrent.subscription.mongodb.internal.MongoDBCommons;
-import se.haleby.occurrent.mongodb.timerepresentation.TimeRepresentation;
 
 import static java.util.Objects.requireNonNull;
 import static se.haleby.occurrent.subscription.mongodb.internal.MongoDBCloudEventsToJsonDeserializer.deserializeToCloudEvent;
@@ -56,7 +56,7 @@ public class SpringReactorSubscriptionForMongoDB implements PositionAwareReactor
     public Flux<CloudEventWithSubscriptionPosition> subscribe(SubscriptionFilter filter, StartAt startAt) {
         // TODO We should change builder::resumeAt to builder::startAtOperationTime once Spring adds support for it (see https://jira.spring.io/browse/DATAMONGO-2607)
         ChangeStreamOptionsBuilder builder = applyStartPosition(ChangeStreamOptions.builder(), ChangeStreamOptionsBuilder::startAfter, ChangeStreamOptionsBuilder::resumeAt, startAt);
-        final ChangeStreamOptions changeStreamOptions = applyFilter(filter, builder);
+        final ChangeStreamOptions changeStreamOptions = applyFilter(timeRepresentation, filter, builder);
         Flux<ChangeStreamEvent<Document>> changeStream = mongo.changeStream(eventCollection, changeStreamOptions, Document.class);
         return changeStream
                 .flatMap(changeEvent ->

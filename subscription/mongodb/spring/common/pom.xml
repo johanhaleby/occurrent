@@ -22,6 +22,11 @@
             <artifactId>subscription-mongodb-common</artifactId>
             <version>0.0.1-SNAPSHOT</version>
         </dependency>
+        <dependency>
+            <groupId>se.haleby.occurrent</groupId>
+            <artifactId>mongodb-spring-filter-query-conversion</artifactId>
+            <version>0.0.1-SNAPSHOT</version>
+        </dependency>
     </dependencies>
 
 </project>

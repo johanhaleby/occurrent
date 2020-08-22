@@ -84,7 +84,7 @@ public class SpringBlockingSubscriptionForMongoDB implements PositionAwareBlocki
 
         // TODO We should change builder::resumeAt to builder::startAtOperationTime once Spring adds support for it (see https://jira.spring.io/browse/DATAMONGO-2607)
         ChangeStreamOptionsBuilder builder = applyStartPosition(ChangeStreamOptions.builder(), ChangeStreamOptionsBuilder::startAfter, ChangeStreamOptionsBuilder::resumeAt, startAtSupplier.get());
-        final ChangeStreamOptions changeStreamOptions = applyFilter(filter, builder);
+        final ChangeStreamOptions changeStreamOptions = applyFilter(timeRepresentation, filter, builder);
 
         MessageListener<ChangeStreamDocument<Document>, Document> listener = change -> {
             ChangeStreamDocument<Document> raw = change.getRaw();

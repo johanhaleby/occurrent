@@ -39,7 +39,8 @@ public class FilterToBsonFilterConverter {
         } else if (filter instanceof SingleConditionFilter) {
             SingleConditionFilter scf = (SingleConditionFilter) filter;
             Condition<?> conditionToUse = resolveSpecialCases(timeRepresentation, scf);
-            criteria = convertConditionToBsonCriteria(fieldNamePrefix + "." + scf.fieldName, conditionToUse);
+            String fieldName = fieldNameOf(fieldNamePrefix, scf.fieldName);
+            criteria = convertConditionToBsonCriteria(fieldName, conditionToUse);
         } else if (filter instanceof CompositionFilter) {
             CompositionFilter cf = (CompositionFilter) filter;
             Bson[] composedBson = cf.filters.stream().map(f -> innerConvert(fieldNamePrefix, timeRepresentation, f)).toArray(Bson[]::new);
@@ -57,5 +58,9 @@ public class FilterToBsonFilterConverter {
             throw new IllegalStateException("Unexpected filter: " + filter.getClass().getName());
         }
         return criteria;
+    }
+
+    private static String fieldNameOf(String fieldNamePrefix, String fieldName) {
+        return fieldNamePrefix == null ? fieldName : fieldNamePrefix + "." + fieldName;
     }
 }

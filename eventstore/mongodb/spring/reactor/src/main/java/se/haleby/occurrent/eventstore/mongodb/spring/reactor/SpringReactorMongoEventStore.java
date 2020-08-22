@@ -43,7 +43,7 @@ import static se.haleby.occurrent.cloudevents.OccurrentCloudEventExtension.STREA
 import static se.haleby.occurrent.cloudevents.OccurrentCloudEventExtension.STREAM_VERSION;
 import static se.haleby.occurrent.eventstore.mongodb.internal.OccurrentCloudEventMongoDBDocumentMapper.convertToDocument;
 import static se.haleby.occurrent.filter.Filter.TIME;
-import static se.haleby.occurrent.mongodb.spring.filterqueryconversion.internal.FilterToQueryConverter.convertFilterToQuery;
+import static se.haleby.occurrent.mongodb.spring.filterqueryconversion.internal.FilterConverter.convertFilterToQuery;
 
 public class SpringReactorMongoEventStore implements EventStore, EventStoreOperations, EventStoreQueries {
 

@@ -224,9 +224,7 @@ public class BlockingSubscriptionForMongoDBTest {
             NameWasChanged nameWasChanged1 = new NameWasChanged(UUID.randomUUID().toString(), now.plusSeconds(3), "name3");
             NameWasChanged nameWasChanged2 = new NameWasChanged(UUID.randomUUID().toString(), now.plusSeconds(4), "name4");
 
-            subscription.subscribe(subscriberId, filter(match(and(eq("fullDocument.id", nameDefined2.getEventId()), eq("fullDocument.type", NameDefined.class.getName())))), state::add
-            )
-                    .waitUntilStarted();
+            subscription.subscribe(subscriberId, filter(match(and(eq("fullDocument.id", nameDefined2.getEventId()), eq("fullDocument.type", NameDefined.class.getName())))), state::add).waitUntilStarted();
 
             // When
             mongoEventStore.write("1", 0, serialize(nameDefined1));

@@ -7,9 +7,7 @@ import com.mongodb.client.MongoClients;
 import com.mongodb.client.model.Filters;
 import io.cloudevents.CloudEvent;
 import io.cloudevents.core.builder.CloudEventBuilder;
-import org.junit.jupiter.api.AfterEach;
-import org.junit.jupiter.api.BeforeEach;
-import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.*;
 import org.junit.jupiter.api.extension.RegisterExtension;
 import org.springframework.data.mongodb.MongoTransactionManager;
 import org.springframework.data.mongodb.core.MongoTemplate;
@@ -17,14 +15,16 @@ import org.springframework.data.mongodb.core.SimpleMongoClientDatabaseFactory;
 import org.testcontainers.containers.MongoDBContainer;
 import org.testcontainers.junit.jupiter.Container;
 import org.testcontainers.junit.jupiter.Testcontainers;
-import se.haleby.occurrent.subscription.mongodb.MongoDBFilterSpecification.JsonMongoDBFilterSpecification;
 import se.haleby.occurrent.domain.DomainEvent;
 import se.haleby.occurrent.domain.NameDefined;
 import se.haleby.occurrent.domain.NameWasChanged;
 import se.haleby.occurrent.eventstore.api.blocking.EventStore;
-import se.haleby.occurrent.mongodb.timerepresentation.TimeRepresentation;
 import se.haleby.occurrent.eventstore.mongodb.spring.blocking.EventStoreConfig;
 import se.haleby.occurrent.eventstore.mongodb.spring.blocking.SpringBlockingMongoEventStore;
+import se.haleby.occurrent.filter.Filter;
+import se.haleby.occurrent.mongodb.timerepresentation.TimeRepresentation;
+import se.haleby.occurrent.subscription.OccurrentSubscriptionFilter;
+import se.haleby.occurrent.subscription.mongodb.MongoDBFilterSpecification.JsonMongoDBFilterSpecification;
 import se.haleby.occurrent.testsupport.mongodb.FlushMongoDBExtension;
 
 import java.net.URI;
@@ -45,12 +45,13 @@ import static java.util.concurrent.TimeUnit.SECONDS;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.groups.Tuple.tuple;
 import static org.awaitility.Awaitility.await;
+import static org.awaitility.Durations.FIVE_SECONDS;
 import static org.awaitility.Durations.ONE_SECOND;
 import static org.hamcrest.Matchers.is;
-import static se.haleby.occurrent.subscription.mongodb.MongoDBFilterSpecification.BsonMongoDBFilterSpecification.filter;
-import static se.haleby.occurrent.subscription.mongodb.MongoDBFilterSpecification.FULL_DOCUMENT;
 import static se.haleby.occurrent.functional.CheckedFunction.unchecked;
 import static se.haleby.occurrent.functional.Not.not;
+import static se.haleby.occurrent.subscription.mongodb.MongoDBFilterSpecification.BsonMongoDBFilterSpecification.filter;
+import static se.haleby.occurrent.subscription.mongodb.MongoDBFilterSpecification.FULL_DOCUMENT;
 import static se.haleby.occurrent.time.TimeConversion.toLocalDateTime;
 
 @Testcontainers
@@ -124,105 +125,168 @@ public class SpringBlockingSubscriptionForMongoDBTest {
         assertThat(mongoTemplate.getCollection(RESUME_TOKEN_COLLECTION).countDocuments()).isZero();
     }
 
-    @Test
-    void using_bson_query_for_type() {
-        // Given
-        LocalDateTime now = LocalDateTime.now();
-        CopyOnWriteArrayList<CloudEvent> state = new CopyOnWriteArrayList<>();
-        String subscriberId = UUID.randomUUID().toString();
-        subscription.subscribe(subscriberId, filter().type(Filters::eq, NameDefined.class.getName()), state::add)
-                .waitUntilStarted(Duration.of(10, ChronoUnit.SECONDS));
-        NameDefined nameDefined1 = new NameDefined(UUID.randomUUID().toString(), now, "name1");
-        NameDefined nameDefined2 = new NameDefined(UUID.randomUUID().toString(), now.plusSeconds(2), "name2");
-        NameWasChanged nameWasChanged1 = new NameWasChanged(UUID.randomUUID().toString(), now.plusSeconds(3), "name3");
-        NameWasChanged nameWasChanged2 = new NameWasChanged(UUID.randomUUID().toString(), now.plusSeconds(4), "name4");
+    @Nested
+    @DisplayName("SubscriptionFilter for BsonMongoDBFilterSpecification")
+    class BsonMongoDBFilterSpecificationTest {
+        @Test
+        void using_bson_query_for_type() {
+            // Given
+            LocalDateTime now = LocalDateTime.now();
+            CopyOnWriteArrayList<CloudEvent> state = new CopyOnWriteArrayList<>();
+            String subscriberId = UUID.randomUUID().toString();
+            subscription.subscribe(subscriberId, filter().type(Filters::eq, NameDefined.class.getName()), state::add)
+                    .waitUntilStarted(Duration.of(10, ChronoUnit.SECONDS));
+            NameDefined nameDefined1 = new NameDefined(UUID.randomUUID().toString(), now, "name1");
+            NameDefined nameDefined2 = new NameDefined(UUID.randomUUID().toString(), now.plusSeconds(2), "name2");
+            NameWasChanged nameWasChanged1 = new NameWasChanged(UUID.randomUUID().toString(), now.plusSeconds(3), "name3");
+            NameWasChanged nameWasChanged2 = new NameWasChanged(UUID.randomUUID().toString(), now.plusSeconds(4), "name4");
 
-        // When
-        mongoEventStore.write("1", 0, serialize(nameDefined1));
-        mongoEventStore.write("1", 1, serialize(nameWasChanged1));
-        mongoEventStore.write("2", 0, serialize(nameDefined2));
-        mongoEventStore.write("2", 1, serialize(nameWasChanged2));
+            // When
+            mongoEventStore.write("1", 0, serialize(nameDefined1));
+            mongoEventStore.write("1", 1, serialize(nameWasChanged1));
+            mongoEventStore.write("2", 0, serialize(nameDefined2));
+            mongoEventStore.write("2", 1, serialize(nameWasChanged2));
 
-        // Then
-        await().atMost(ONE_SECOND).until(state::size, is(2));
-        assertThat(state).extracting(CloudEvent::getType).containsOnly(NameDefined.class.getName());
+            // Then
+            await().atMost(ONE_SECOND).until(state::size, is(2));
+            assertThat(state).extracting(CloudEvent::getType).containsOnly(NameDefined.class.getName());
+        }
+
+        @Test
+        void using_bson_query_dsl_composition() {
+            // Given
+            LocalDateTime now = LocalDateTime.now();
+            CopyOnWriteArrayList<CloudEvent> state = new CopyOnWriteArrayList<>();
+            String subscriberId = UUID.randomUUID().toString();
+            NameDefined nameDefined1 = new NameDefined(UUID.randomUUID().toString(), now, "name1");
+            NameDefined nameDefined2 = new NameDefined(UUID.randomUUID().toString(), now.plusSeconds(2), "name2");
+            NameWasChanged nameWasChanged1 = new NameWasChanged(UUID.randomUUID().toString(), now.plusSeconds(3), "name3");
+            NameWasChanged nameWasChanged2 = new NameWasChanged(UUID.randomUUID().toString(), now.plusSeconds(4), "name4");
+
+            subscription.subscribe(subscriberId, filter().id(Filters::eq, nameDefined2.getEventId()).type(Filters::eq, NameDefined.class.getName()), state::add
+            )
+                    .waitUntilStarted(Duration.of(10, ChronoUnit.SECONDS));
+
+            // When
+            mongoEventStore.write("1", 0, serialize(nameDefined1));
+            mongoEventStore.write("1", 1, serialize(nameWasChanged1));
+            mongoEventStore.write("2", 0, serialize(nameDefined2));
+            mongoEventStore.write("2", 1, serialize(nameWasChanged2));
+
+            // Then
+            await().atMost(ONE_SECOND).until(state::size, is(1));
+            assertThat(state).extracting(CloudEvent::getId, CloudEvent::getType).containsOnly(tuple(nameDefined2.getEventId(), NameDefined.class.getName()));
+        }
+
+        @Test
+        void using_bson_query_native_mongo_filters_composition() {
+            // Given
+            LocalDateTime now = LocalDateTime.now();
+            CopyOnWriteArrayList<CloudEvent> state = new CopyOnWriteArrayList<>();
+            String subscriberId = UUID.randomUUID().toString();
+            NameDefined nameDefined1 = new NameDefined(UUID.randomUUID().toString(), now, "name1");
+            NameDefined nameDefined2 = new NameDefined(UUID.randomUUID().toString(), now.plusSeconds(2), "name2");
+            NameWasChanged nameWasChanged1 = new NameWasChanged(UUID.randomUUID().toString(), now.plusSeconds(3), "name3");
+            NameWasChanged nameWasChanged2 = new NameWasChanged(UUID.randomUUID().toString(), now.plusSeconds(4), "name4");
+
+            subscription.subscribe(subscriberId, filter(match(and(eq("fullDocument.id", nameDefined2.getEventId()), eq("fullDocument.type", NameDefined.class.getName())))), state::add
+            )
+                    .waitUntilStarted(Duration.of(10, ChronoUnit.SECONDS));
+
+            // When
+            mongoEventStore.write("1", 0, serialize(nameDefined1));
+            mongoEventStore.write("1", 1, serialize(nameWasChanged1));
+            mongoEventStore.write("2", 0, serialize(nameDefined2));
+            mongoEventStore.write("2", 1, serialize(nameWasChanged2));
+
+            // Then
+            await().atMost(ONE_SECOND).until(state::size, is(1));
+            assertThat(state).extracting(CloudEvent::getId, CloudEvent::getType).containsOnly(tuple(nameDefined2.getEventId(), NameDefined.class.getName()));
+        }
     }
 
-    @Test
-    void using_bson_query_dsl_composition() {
-        // Given
-        LocalDateTime now = LocalDateTime.now();
-        CopyOnWriteArrayList<CloudEvent> state = new CopyOnWriteArrayList<>();
-        String subscriberId = UUID.randomUUID().toString();
-        NameDefined nameDefined1 = new NameDefined(UUID.randomUUID().toString(), now, "name1");
-        NameDefined nameDefined2 = new NameDefined(UUID.randomUUID().toString(), now.plusSeconds(2), "name2");
-        NameWasChanged nameWasChanged1 = new NameWasChanged(UUID.randomUUID().toString(), now.plusSeconds(3), "name3");
-        NameWasChanged nameWasChanged2 = new NameWasChanged(UUID.randomUUID().toString(), now.plusSeconds(4), "name4");
+    @Nested
+    @DisplayName("SubscriptionFilter for JsonMongoDBFilterSpecification")
+    class JsonMongoDBFilterSpecificationTest {
+        @Test
+        void using_json_query_for_type() {
+            // Given
+            LocalDateTime now = LocalDateTime.now();
+            CopyOnWriteArrayList<CloudEvent> state = new CopyOnWriteArrayList<>();
+            String subscriberId = UUID.randomUUID().toString();
+            subscription.subscribe(subscriberId, JsonMongoDBFilterSpecification.filter("{ $match : { \"" + FULL_DOCUMENT + ".type\" : \"" + NameDefined.class.getName() + "\" } }"), state::add)
+                    .waitUntilStarted(Duration.of(10, ChronoUnit.SECONDS));
+            NameDefined nameDefined1 = new NameDefined(UUID.randomUUID().toString(), now, "name1");
+            NameDefined nameDefined2 = new NameDefined(UUID.randomUUID().toString(), now.plusSeconds(2), "name2");
+            NameWasChanged nameWasChanged1 = new NameWasChanged(UUID.randomUUID().toString(), now.plusSeconds(3), "name3");
+            NameWasChanged nameWasChanged2 = new NameWasChanged(UUID.randomUUID().toString(), now.plusSeconds(4), "name4");
 
-        subscription.subscribe(subscriberId, filter().id(Filters::eq, nameDefined2.getEventId()).type(Filters::eq, NameDefined.class.getName()), state::add
-        )
-                .waitUntilStarted(Duration.of(10, ChronoUnit.SECONDS));
+            // When
+            mongoEventStore.write("1", 0, serialize(nameDefined1));
+            mongoEventStore.write("1", 1, serialize(nameWasChanged1));
+            mongoEventStore.write("2", 0, serialize(nameDefined2));
+            mongoEventStore.write("2", 1, serialize(nameWasChanged2));
 
-        // When
-        mongoEventStore.write("1", 0, serialize(nameDefined1));
-        mongoEventStore.write("1", 1, serialize(nameWasChanged1));
-        mongoEventStore.write("2", 0, serialize(nameDefined2));
-        mongoEventStore.write("2", 1, serialize(nameWasChanged2));
+            // Then
+            await().atMost(ONE_SECOND).until(state::size, is(2));
+            assertThat(state).extracting(CloudEvent::getType).containsOnly(NameDefined.class.getName());
+        }
 
-        // Then
-        await().atMost(ONE_SECOND).until(state::size, is(1));
-        assertThat(state).extracting(CloudEvent::getId, CloudEvent::getType).containsOnly(tuple(nameDefined2.getEventId(), NameDefined.class.getName()));
     }
 
-    @Test
-    void using_bson_query_native_mongo_filters_composition() {
-        // Given
-        LocalDateTime now = LocalDateTime.now();
-        CopyOnWriteArrayList<CloudEvent> state = new CopyOnWriteArrayList<>();
-        String subscriberId = UUID.randomUUID().toString();
-        NameDefined nameDefined1 = new NameDefined(UUID.randomUUID().toString(), now, "name1");
-        NameDefined nameDefined2 = new NameDefined(UUID.randomUUID().toString(), now.plusSeconds(2), "name2");
-        NameWasChanged nameWasChanged1 = new NameWasChanged(UUID.randomUUID().toString(), now.plusSeconds(3), "name3");
-        NameWasChanged nameWasChanged2 = new NameWasChanged(UUID.randomUUID().toString(), now.plusSeconds(4), "name4");
+    @Nested
+    @DisplayName("SubscriptionFilter using OccurrentSubscriptionFilter")
+    class OccurrentSubscriptionFilterTest {
 
-        subscription.subscribe(subscriberId, filter(match(and(eq("fullDocument.id", nameDefined2.getEventId()), eq("fullDocument.type", NameDefined.class.getName())))), state::add
-        )
-                .waitUntilStarted(Duration.of(10, ChronoUnit.SECONDS));
+        @Test
+        void using_occurrent_subscription_filter_for_type() {
+            // Given
+            LocalDateTime now = LocalDateTime.now();
+            CopyOnWriteArrayList<CloudEvent> state = new CopyOnWriteArrayList<>();
+            String subscriberId = UUID.randomUUID().toString();
+            subscription.subscribe(subscriberId, OccurrentSubscriptionFilter.filter(Filter.type(NameDefined.class.getName())), state::add).waitUntilStarted();
+            NameDefined nameDefined1 = new NameDefined(UUID.randomUUID().toString(), now, "name1");
+            NameDefined nameDefined2 = new NameDefined(UUID.randomUUID().toString(), now.plusSeconds(2), "name2");
+            NameWasChanged nameWasChanged1 = new NameWasChanged(UUID.randomUUID().toString(), now.plusSeconds(3), "name3");
+            NameWasChanged nameWasChanged2 = new NameWasChanged(UUID.randomUUID().toString(), now.plusSeconds(4), "name4");
 
-        // When
-        mongoEventStore.write("1", 0, serialize(nameDefined1));
-        mongoEventStore.write("1", 1, serialize(nameWasChanged1));
-        mongoEventStore.write("2", 0, serialize(nameDefined2));
-        mongoEventStore.write("2", 1, serialize(nameWasChanged2));
+            // When
+            mongoEventStore.write("1", 0, serialize(nameDefined1));
+            mongoEventStore.write("1", 1, serialize(nameWasChanged1));
+            mongoEventStore.write("2", 0, serialize(nameDefined2));
+            mongoEventStore.write("2", 1, serialize(nameWasChanged2));
 
-        // Then
-        await().atMost(ONE_SECOND).until(state::size, is(1));
-        assertThat(state).extracting(CloudEvent::getId, CloudEvent::getType).containsOnly(tuple(nameDefined2.getEventId(), NameDefined.class.getName()));
+            // Then
+            await().atMost(FIVE_SECONDS).until(state::size, is(2));
+            assertThat(state).extracting(CloudEvent::getType).containsOnly(NameDefined.class.getName());
+        }
+
+        @Test
+        void using_occurrent_subscription_filter_dsl_composition() {
+            // Given
+            LocalDateTime now = LocalDateTime.now();
+            CopyOnWriteArrayList<CloudEvent> state = new CopyOnWriteArrayList<>();
+            String subscriberId = UUID.randomUUID().toString();
+            NameDefined nameDefined1 = new NameDefined(UUID.randomUUID().toString(), now, "name1");
+            NameDefined nameDefined2 = new NameDefined(UUID.randomUUID().toString(), now.plusSeconds(2), "name2");
+            NameWasChanged nameWasChanged1 = new NameWasChanged(UUID.randomUUID().toString(), now.plusSeconds(3), "name3");
+            NameWasChanged nameWasChanged2 = new NameWasChanged(UUID.randomUUID().toString(), now.plusSeconds(4), "name4");
+
+            Filter filter = Filter.id(nameDefined2.getEventId()).and(Filter.type(NameDefined.class.getName()));
+            subscription.subscribe(subscriberId, OccurrentSubscriptionFilter.filter(filter), state::add).waitUntilStarted();
+
+            // When
+            mongoEventStore.write("1", 0, serialize(nameDefined1));
+            mongoEventStore.write("1", 1, serialize(nameWasChanged1));
+            mongoEventStore.write("2", 0, serialize(nameDefined2));
+            mongoEventStore.write("2", 1, serialize(nameWasChanged2));
+
+            // Then
+            await().atMost(FIVE_SECONDS).until(state::size, is(1));
+            assertThat(state).extracting(CloudEvent::getId, CloudEvent::getType).containsOnly(tuple(nameDefined2.getEventId(), NameDefined.class.getName()));
+        }
     }
 
-    @Test
-    void using_json_query_for_type() {
-        // Given
-        LocalDateTime now = LocalDateTime.now();
-        CopyOnWriteArrayList<CloudEvent> state = new CopyOnWriteArrayList<>();
-        String subscriberId = UUID.randomUUID().toString();
-        subscription.subscribe(subscriberId, JsonMongoDBFilterSpecification.filter("{ $match : { \"" + FULL_DOCUMENT + ".type\" : \"" + NameDefined.class.getName() + "\" } }"), state::add)
-                .waitUntilStarted(Duration.of(10, ChronoUnit.SECONDS));
-        NameDefined nameDefined1 = new NameDefined(UUID.randomUUID().toString(), now, "name1");
-        NameDefined nameDefined2 = new NameDefined(UUID.randomUUID().toString(), now.plusSeconds(2), "name2");
-        NameWasChanged nameWasChanged1 = new NameWasChanged(UUID.randomUUID().toString(), now.plusSeconds(3), "name3");
-        NameWasChanged nameWasChanged2 = new NameWasChanged(UUID.randomUUID().toString(), now.plusSeconds(4), "name4");
-
-        // When
-        mongoEventStore.write("1", 0, serialize(nameDefined1));
-        mongoEventStore.write("1", 1, serialize(nameWasChanged1));
-        mongoEventStore.write("2", 0, serialize(nameDefined2));
-        mongoEventStore.write("2", 1, serialize(nameWasChanged2));
-
-        // Then
-        await().atMost(ONE_SECOND).until(state::size, is(2));
-        assertThat(state).extracting(CloudEvent::getType).containsOnly(NameDefined.class.getName());
-    }
 
     private Stream<CloudEvent> serialize(DomainEvent e) {
         return Stream.of(CloudEventBuilder.v1()

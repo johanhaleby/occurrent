@@ -45,7 +45,7 @@ import static se.haleby.occurrent.eventstore.api.internal.functional.FunctionalS
 import static se.haleby.occurrent.eventstore.mongodb.internal.MongoBulkWriteExceptionToDuplicateCloudEventExceptionTranslator.translateToDuplicateCloudEventException;
 import static se.haleby.occurrent.eventstore.mongodb.internal.OccurrentCloudEventMongoDBDocumentMapper.convertToCloudEvent;
 import static se.haleby.occurrent.eventstore.mongodb.internal.OccurrentCloudEventMongoDBDocumentMapper.convertToDocument;
-import static se.haleby.occurrent.mongodb.spring.filterqueryconversion.internal.FilterToQueryConverter.convertFilterToQuery;
+import static se.haleby.occurrent.mongodb.spring.filterqueryconversion.internal.FilterConverter.convertFilterToQuery;
 
 public class SpringBlockingMongoEventStore implements EventStore, EventStoreOperations, EventStoreQueries {
 
