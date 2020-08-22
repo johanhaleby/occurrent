@@ -32,7 +32,7 @@ import se.haleby.occurrent.eventstore.api.WriteCondition;
 import se.haleby.occurrent.eventstore.api.WriteConditionNotFulfilledException;
 import se.haleby.occurrent.eventstore.api.blocking.EventStoreQueries.SortBy;
 import se.haleby.occurrent.eventstore.api.blocking.EventStream;
-import se.haleby.occurrent.eventstore.mongodb.TimeRepresentation;
+import se.haleby.occurrent.mongodb.timerepresentation.TimeRepresentation;
 import se.haleby.occurrent.testsupport.mongodb.FlushMongoDBExtension;
 
 import java.net.URI;

@@ -1,7 +1,7 @@
 package se.haleby.occurrent.eventstore.mongodb.nativedriver;
 
 import com.mongodb.TransactionOptions;
-import se.haleby.occurrent.eventstore.mongodb.TimeRepresentation;
+import se.haleby.occurrent.mongodb.timerepresentation.TimeRepresentation;
 
 import java.util.Objects;
 

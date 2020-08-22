@@ -10,7 +10,7 @@ import org.springframework.data.mongodb.core.MongoOperations;
 import org.springframework.data.mongodb.core.ReactiveMongoTemplate;
 import org.springframework.data.mongodb.repository.config.EnableReactiveMongoRepositories;
 import se.haleby.occurrent.eventstore.api.reactor.EventStore;
-import se.haleby.occurrent.eventstore.mongodb.TimeRepresentation;
+import se.haleby.occurrent.mongodb.timerepresentation.TimeRepresentation;
 import se.haleby.occurrent.eventstore.mongodb.spring.reactor.EventStoreConfig;
 import se.haleby.occurrent.eventstore.mongodb.spring.reactor.SpringReactorMongoEventStore;
 

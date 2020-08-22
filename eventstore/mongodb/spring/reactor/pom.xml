@@ -24,6 +24,11 @@
             <version>0.0.1-SNAPSHOT</version>
         </dependency>
         <dependency>
+            <groupId>se.haleby.occurrent</groupId>
+            <artifactId>mongodb-spring-filter-query-conversion</artifactId>
+            <version>0.0.1-SNAPSHOT</version>
+        </dependency>
+        <dependency>
             <groupId>io.cloudevents</groupId>
             <artifactId>cloudevents-json-jackson</artifactId>
         </dependency>
@@ -36,7 +41,6 @@
             <artifactId>mongodb-driver-reactivestreams</artifactId>
         </dependency>
 
-        <!-- Test -->
         <!-- Test -->
         <dependency>
             <groupId>org.junit.jupiter</groupId>

@@ -18,7 +18,7 @@ import se.haleby.occurrent.subscription.api.reactor.PositionAwareReactorSubscrip
 import se.haleby.occurrent.subscription.mongodb.MongoDBOperationTimeBasedSubscriptionPosition;
 import se.haleby.occurrent.subscription.mongodb.MongoDBResumeTokenBasedSubscriptionPosition;
 import se.haleby.occurrent.subscription.mongodb.internal.MongoDBCommons;
-import se.haleby.occurrent.eventstore.mongodb.TimeRepresentation;
+import se.haleby.occurrent.mongodb.timerepresentation.TimeRepresentation;
 
 import static java.util.Objects.requireNonNull;
 import static se.haleby.occurrent.subscription.mongodb.internal.MongoDBCloudEventsToJsonDeserializer.deserializeToCloudEvent;

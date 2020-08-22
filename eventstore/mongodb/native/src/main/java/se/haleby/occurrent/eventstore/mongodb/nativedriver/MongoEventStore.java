@@ -12,15 +12,17 @@ import io.cloudevents.core.provider.EventFormatProvider;
 import io.cloudevents.jackson.JsonFormat;
 import org.bson.Document;
 import org.bson.conversions.Bson;
-import se.haleby.occurrent.eventstore.api.*;
+import se.haleby.occurrent.condition.Condition;
+import se.haleby.occurrent.eventstore.api.LongConditionEvaluator;
+import se.haleby.occurrent.eventstore.api.WriteCondition;
+import se.haleby.occurrent.eventstore.api.WriteConditionNotFulfilledException;
 import se.haleby.occurrent.eventstore.api.blocking.EventStore;
 import se.haleby.occurrent.eventstore.api.blocking.EventStoreOperations;
 import se.haleby.occurrent.eventstore.api.blocking.EventStoreQueries;
 import se.haleby.occurrent.eventstore.api.blocking.EventStream;
-import se.haleby.occurrent.eventstore.mongodb.TimeRepresentation;
 import se.haleby.occurrent.eventstore.api.internal.functional.FunctionalSupport.Pair;
-import se.haleby.occurrent.condition.Condition;
 import se.haleby.occurrent.filter.Filter;
+import se.haleby.occurrent.mongodb.timerepresentation.TimeRepresentation;
 
 import java.net.URI;
 import java.util.List;
@@ -41,14 +43,14 @@ import static com.mongodb.client.model.Sorts.descending;
 import static java.util.Objects.requireNonNull;
 import static se.haleby.occurrent.cloudevents.OccurrentCloudEventExtension.STREAM_ID;
 import static se.haleby.occurrent.cloudevents.OccurrentCloudEventExtension.STREAM_VERSION;
-import static se.haleby.occurrent.filter.Filter.TIME;
 import static se.haleby.occurrent.eventstore.api.WriteCondition.StreamVersionWriteCondition;
 import static se.haleby.occurrent.eventstore.api.WriteCondition.anyStreamVersion;
 import static se.haleby.occurrent.eventstore.api.internal.functional.FunctionalSupport.zip;
 import static se.haleby.occurrent.eventstore.mongodb.internal.MongoBulkWriteExceptionToDuplicateCloudEventExceptionTranslator.translateToDuplicateCloudEventException;
 import static se.haleby.occurrent.eventstore.mongodb.internal.OccurrentCloudEventMongoDBDocumentMapper.convertToCloudEvent;
 import static se.haleby.occurrent.eventstore.mongodb.internal.OccurrentCloudEventMongoDBDocumentMapper.convertToDocument;
-import static se.haleby.occurrent.eventstore.mongodb.nativedriver.internal.FilterToBsonFilterConverter.convertFilterToBsonFilter;
+import static se.haleby.occurrent.filter.Filter.TIME;
+import static se.haleby.occurrent.mongodb.spring.filterbsonfilterconversion.internal.FilterToBsonFilterConverter.convertFilterToBsonFilter;
 
 public class MongoEventStore implements EventStore, EventStoreOperations, EventStoreQueries {
     private static final String ID = "_id";

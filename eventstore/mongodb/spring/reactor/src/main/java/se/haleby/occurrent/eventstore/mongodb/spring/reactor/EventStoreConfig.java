@@ -2,7 +2,7 @@ package se.haleby.occurrent.eventstore.mongodb.spring.reactor;
 
 import org.springframework.transaction.ReactiveTransactionManager;
 import org.springframework.transaction.reactive.TransactionalOperator;
-import se.haleby.occurrent.eventstore.mongodb.TimeRepresentation;
+import se.haleby.occurrent.mongodb.timerepresentation.TimeRepresentation;
 
 import java.util.Objects;
 

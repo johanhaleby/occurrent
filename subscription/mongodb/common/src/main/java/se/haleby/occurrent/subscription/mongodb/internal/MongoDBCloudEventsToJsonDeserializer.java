@@ -5,7 +5,7 @@ import com.mongodb.client.model.changestream.OperationType;
 import io.cloudevents.CloudEvent;
 import io.cloudevents.core.format.EventFormat;
 import org.bson.Document;
-import se.haleby.occurrent.eventstore.mongodb.TimeRepresentation;
+import se.haleby.occurrent.mongodb.timerepresentation.TimeRepresentation;
 import se.haleby.occurrent.eventstore.mongodb.internal.OccurrentCloudEventMongoDBDocumentMapper;
 
 import java.util.Optional;

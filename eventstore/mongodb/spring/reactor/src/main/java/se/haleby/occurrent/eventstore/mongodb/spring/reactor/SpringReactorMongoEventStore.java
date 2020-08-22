@@ -17,7 +17,6 @@ import org.springframework.data.mongodb.core.query.Query;
 import org.springframework.transaction.reactive.TransactionalOperator;
 import reactor.core.publisher.Flux;
 import reactor.core.publisher.Mono;
-import se.haleby.occurrent.filter.Filter;
 import se.haleby.occurrent.eventstore.api.LongConditionEvaluator;
 import se.haleby.occurrent.eventstore.api.WriteCondition;
 import se.haleby.occurrent.eventstore.api.WriteCondition.StreamVersionWriteCondition;
@@ -26,9 +25,10 @@ import se.haleby.occurrent.eventstore.api.reactor.EventStore;
 import se.haleby.occurrent.eventstore.api.reactor.EventStoreOperations;
 import se.haleby.occurrent.eventstore.api.reactor.EventStoreQueries;
 import se.haleby.occurrent.eventstore.api.reactor.EventStream;
-import se.haleby.occurrent.eventstore.mongodb.TimeRepresentation;
 import se.haleby.occurrent.eventstore.mongodb.internal.MongoBulkWriteExceptionToDuplicateCloudEventExceptionTranslator;
 import se.haleby.occurrent.eventstore.mongodb.internal.OccurrentCloudEventMongoDBDocumentMapper;
+import se.haleby.occurrent.filter.Filter;
+import se.haleby.occurrent.mongodb.timerepresentation.TimeRepresentation;
 
 import java.net.URI;
 import java.util.Objects;
@@ -41,14 +41,13 @@ import static org.springframework.data.mongodb.SessionSynchronization.ALWAYS;
 import static org.springframework.data.mongodb.core.query.Criteria.where;
 import static se.haleby.occurrent.cloudevents.OccurrentCloudEventExtension.STREAM_ID;
 import static se.haleby.occurrent.cloudevents.OccurrentCloudEventExtension.STREAM_VERSION;
-import static se.haleby.occurrent.filter.Filter.TIME;
 import static se.haleby.occurrent.eventstore.mongodb.internal.OccurrentCloudEventMongoDBDocumentMapper.convertToDocument;
-import static se.haleby.occurrent.eventstore.mongodb.spring.common.internal.FilterToQueryConverter.convertFilterToQuery;
+import static se.haleby.occurrent.filter.Filter.TIME;
+import static se.haleby.occurrent.mongodb.spring.filterqueryconversion.internal.FilterToQueryConverter.convertFilterToQuery;
 
 public class SpringReactorMongoEventStore implements EventStore, EventStoreOperations, EventStoreQueries {
 
     private static final String ID = "_id";
-    private static final String VERSION = "version";
 
     private final ReactiveMongoTemplate mongoTemplate;
     private final String eventStoreCollectionName;

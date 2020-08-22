@@ -11,6 +11,7 @@
     <packaging>pom</packaging>
     <modules>
         <module>filter</module>
+        <module>mongodb</module>
     </modules>
 
     <artifactId>common</artifactId>

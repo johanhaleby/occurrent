@@ -47,7 +47,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.awaitility.Awaitility.await;
 import static org.awaitility.Durations.ONE_SECOND;
 import static org.hamcrest.Matchers.equalTo;
-import static se.haleby.occurrent.eventstore.mongodb.TimeRepresentation.RFC_3339_STRING;
+import static se.haleby.occurrent.mongodb.timerepresentation.TimeRepresentation.RFC_3339_STRING;
 import static se.haleby.occurrent.functional.CheckedFunction.unchecked;
 import static se.haleby.occurrent.functional.Not.not;
 import static se.haleby.occurrent.time.TimeConversion.toLocalDateTime;

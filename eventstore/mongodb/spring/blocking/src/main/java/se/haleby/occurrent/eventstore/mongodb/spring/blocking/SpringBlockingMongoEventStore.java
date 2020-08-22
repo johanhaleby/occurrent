@@ -20,9 +20,9 @@ import se.haleby.occurrent.eventstore.api.blocking.EventStore;
 import se.haleby.occurrent.eventstore.api.blocking.EventStoreOperations;
 import se.haleby.occurrent.eventstore.api.blocking.EventStoreQueries;
 import se.haleby.occurrent.eventstore.api.blocking.EventStream;
-import se.haleby.occurrent.eventstore.mongodb.TimeRepresentation;
 import se.haleby.occurrent.condition.Condition;
 import se.haleby.occurrent.filter.Filter;
+import se.haleby.occurrent.mongodb.timerepresentation.TimeRepresentation;
 
 import java.net.URI;
 import java.util.List;
@@ -45,7 +45,7 @@ import static se.haleby.occurrent.eventstore.api.internal.functional.FunctionalS
 import static se.haleby.occurrent.eventstore.mongodb.internal.MongoBulkWriteExceptionToDuplicateCloudEventExceptionTranslator.translateToDuplicateCloudEventException;
 import static se.haleby.occurrent.eventstore.mongodb.internal.OccurrentCloudEventMongoDBDocumentMapper.convertToCloudEvent;
 import static se.haleby.occurrent.eventstore.mongodb.internal.OccurrentCloudEventMongoDBDocumentMapper.convertToDocument;
-import static se.haleby.occurrent.eventstore.mongodb.spring.common.internal.FilterToQueryConverter.convertFilterToQuery;
+import static se.haleby.occurrent.mongodb.spring.filterqueryconversion.internal.FilterToQueryConverter.convertFilterToQuery;
 
 public class SpringBlockingMongoEventStore implements EventStore, EventStoreOperations, EventStoreQueries {
 

@@ -35,7 +35,7 @@ import se.haleby.occurrent.eventstore.api.WriteCondition;
 import se.haleby.occurrent.eventstore.api.WriteConditionNotFulfilledException;
 import se.haleby.occurrent.eventstore.api.reactor.EventStoreQueries.SortBy;
 import se.haleby.occurrent.eventstore.api.reactor.EventStream;
-import se.haleby.occurrent.eventstore.mongodb.TimeRepresentation;
+import se.haleby.occurrent.mongodb.timerepresentation.TimeRepresentation;
 import se.haleby.occurrent.testsupport.mongodb.FlushMongoDBExtension;
 
 import java.net.URI;
@@ -70,7 +70,7 @@ import static se.haleby.occurrent.condition.Condition.*;
 import static se.haleby.occurrent.filter.Filter.*;
 import static se.haleby.occurrent.eventstore.api.WriteCondition.streamVersion;
 import static se.haleby.occurrent.eventstore.api.WriteCondition.streamVersionEq;
-import static se.haleby.occurrent.eventstore.mongodb.TimeRepresentation.RFC_3339_STRING;
+import static se.haleby.occurrent.mongodb.timerepresentation.TimeRepresentation.RFC_3339_STRING;
 import static se.haleby.occurrent.functional.CheckedFunction.unchecked;
 import static se.haleby.occurrent.time.TimeConversion.toLocalDateTime;
 

@@ -2,7 +2,7 @@ package se.haleby.occurrent.eventstore.mongodb.spring.blocking;
 
 import org.springframework.data.mongodb.MongoTransactionManager;
 import org.springframework.transaction.support.TransactionTemplate;
-import se.haleby.occurrent.eventstore.mongodb.TimeRepresentation;
+import se.haleby.occurrent.mongodb.timerepresentation.TimeRepresentation;
 
 import java.util.Objects;
 

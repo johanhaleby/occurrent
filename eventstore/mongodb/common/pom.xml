@@ -30,6 +30,11 @@
             <artifactId>eventstore-api-common</artifactId>
             <version>0.0.1-SNAPSHOT</version>
         </dependency>
+        <dependency>
+            <groupId>se.haleby.occurrent</groupId>
+            <artifactId>mongodb-timerepresentation</artifactId>
+            <version>0.0.1-SNAPSHOT</version>
+        </dependency>
 
         <!-- Test -->
         <dependency>

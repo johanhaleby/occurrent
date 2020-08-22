@@ -30,7 +30,7 @@ import se.haleby.occurrent.subscription.mongodb.internal.DocumentAdapter;
 import se.haleby.occurrent.subscription.mongodb.nativedriver.blocking.RetryStrategy.Backoff;
 import se.haleby.occurrent.subscription.mongodb.nativedriver.blocking.RetryStrategy.Fixed;
 import se.haleby.occurrent.subscription.mongodb.nativedriver.blocking.RetryStrategy.None;
-import se.haleby.occurrent.eventstore.mongodb.TimeRepresentation;
+import se.haleby.occurrent.mongodb.timerepresentation.TimeRepresentation;
 
 import java.util.Collections;
 import java.util.Iterator;

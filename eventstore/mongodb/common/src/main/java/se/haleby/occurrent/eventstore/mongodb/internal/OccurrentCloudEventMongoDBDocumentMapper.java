@@ -4,7 +4,7 @@ import io.cloudevents.CloudEvent;
 import io.cloudevents.core.builder.CloudEventBuilder;
 import io.cloudevents.core.format.EventFormat;
 import org.bson.Document;
-import se.haleby.occurrent.eventstore.mongodb.TimeRepresentation;
+import se.haleby.occurrent.mongodb.timerepresentation.TimeRepresentation;
 
 import java.time.OffsetDateTime;
 import java.time.ZonedDateTime;
@@ -15,9 +15,9 @@ import static java.time.ZoneOffset.UTC;
 import static java.time.temporal.ChronoUnit.MILLIS;
 import static se.haleby.occurrent.cloudevents.OccurrentCloudEventExtension.STREAM_ID;
 import static se.haleby.occurrent.cloudevents.OccurrentCloudEventExtension.STREAM_VERSION;
-import static se.haleby.occurrent.eventstore.mongodb.TimeRepresentation.DATE;
-import static se.haleby.occurrent.eventstore.mongodb.TimeRepresentation.RFC_3339_STRING;
-import static se.haleby.occurrent.eventstore.mongodb.internal.RFC3339.RFC_3339_DATE_TIME_FORMATTER;
+import static se.haleby.occurrent.mongodb.timerepresentation.internal.RFC3339.RFC_3339_DATE_TIME_FORMATTER;
+import static se.haleby.occurrent.mongodb.timerepresentation.TimeRepresentation.DATE;
+import static se.haleby.occurrent.mongodb.timerepresentation.TimeRepresentation.RFC_3339_STRING;
 
 public class OccurrentCloudEventMongoDBDocumentMapper {
 
