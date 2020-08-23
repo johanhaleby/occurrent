@@ -13,6 +13,17 @@ import static se.haleby.occurrent.eventstore.api.WriteCondition.streamVersionEq;
  * Event stores that supports conditional writes to an event stream should implement this interface.
  */
 public interface ConditionallyWriteToEventStream {
+
+    /**
+     * A convenience function that writes events to an event store if the stream version is equal to {@code expectedStreamVersion}.
+     *
+     * @param streamId              The id of the stream
+     * @param expectedStreamVersion The stream must be equal to this version in order for the events to be written
+     * @param events                The events to be appended/written to the stream
+     * @throws WriteConditionNotFulfilledException When the <code>writeCondition</code> was not fulfilled and the events couldn't be written
+     * @throws DuplicateCloudEventException        If a cloud event in the supplied <code>events</code> stream already exists in the event store
+     * @see #write(String, WriteCondition, Stream) for more advanced write conditions
+     */
     default void write(String streamId, long expectedStreamVersion, Stream<CloudEvent> events) {
         write(streamId, streamVersionEq(expectedStreamVersion), events);
     }

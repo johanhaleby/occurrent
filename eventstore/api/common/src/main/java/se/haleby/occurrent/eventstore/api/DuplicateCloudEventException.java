@@ -3,6 +3,9 @@ package se.haleby.occurrent.eventstore.api;
 import java.net.URI;
 import java.util.Objects;
 
+/**
+ * An exception thrown if a cloud event already exists in the event store or if it violates some unique indexing rules.
+ */
 public class DuplicateCloudEventException extends RuntimeException {
     private final String id;
     private final URI source;
