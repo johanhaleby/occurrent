@@ -12,6 +12,7 @@ import io.cloudevents.core.provider.EventFormatProvider;
 import io.cloudevents.jackson.JsonFormat;
 import org.bson.Document;
 import org.bson.conversions.Bson;
+import se.haleby.occurrent.cloudevents.OccurrentExtensionGetter;
 import se.haleby.occurrent.condition.Condition;
 import se.haleby.occurrent.eventstore.api.LongConditionEvaluator;
 import se.haleby.occurrent.eventstore.api.WriteCondition;
@@ -52,6 +53,10 @@ import static se.haleby.occurrent.eventstore.mongodb.internal.OccurrentCloudEven
 import static se.haleby.occurrent.filter.Filter.TIME;
 import static se.haleby.occurrent.mongodb.spring.filterbsonfilterconversion.internal.FilterToBsonFilterConverter.convertFilterToBsonFilter;
 
+/**
+ * This is an {@link EventStore} that stores events in MongoDB using the "native" synchronous java driver MongoDB.
+ * It also supports the {@link EventStoreOperations} and {@link EventStoreQueries} contracts.
+ */
 public class MongoEventStore implements EventStore, EventStoreOperations, EventStoreQueries {
     private static final String ID = "_id";
 
@@ -61,12 +66,28 @@ public class MongoEventStore implements EventStore, EventStoreOperations, EventS
     private final TimeRepresentation timeRepresentation;
     private final TransactionOptions transactionOptions;
 
+    /**
+     * Create a new instance of {@code MongoEventStore}
+     *
+     * @param mongoClient         The mongo client that the {@code MongoEventStore} will use
+     * @param databaseName        The name of the database in which events will be persisted
+     * @param eventCollectionName The name of the collection in which events will be persisted
+     * @param config              The {@link EventStoreConfig} that will be used
+     */
     public MongoEventStore(MongoClient mongoClient, String databaseName, String eventCollectionName, EventStoreConfig config) {
         this(requireNonNull(mongoClient, "Mongo client cannot be null"),
                 requireNonNull(mongoClient.getDatabase(databaseName), "Database must be defined"),
                 mongoClient.getDatabase(databaseName).getCollection(eventCollectionName), config);
     }
 
+    /**
+     * Create a new instance of {@code MongoEventStore}
+     *
+     * @param mongoClient     The mongo client that the {@code MongoEventStore} will use
+     * @param database        The database in which events will be persisted
+     * @param eventCollection The collection in which events will be persisted
+     * @param config          The {@link EventStoreConfig} that will be used
+     */
     public MongoEventStore(MongoClient mongoClient, MongoDatabase database, MongoCollection<Document> eventCollection, EventStoreConfig config) {
         requireNonNull(mongoClient, "Mongo client cannot be null");
         requireNonNull(database, "Database must be defined");
@@ -230,8 +251,8 @@ public class MongoEventStore implements EventStore, EventStoreOperations, EventS
             if (updatedCloudEvent == null) {
                 throw new IllegalArgumentException("Cloud event update function is not allowed to return null");
             } else if (!Objects.equals(updatedCloudEvent, currentCloudEvent)) {
-                String streamId = (String) currentCloudEvent.getExtension(STREAM_ID);
-                long streamVersion = (long) currentCloudEvent.getExtension(STREAM_VERSION);
+                String streamId = OccurrentExtensionGetter.getStreamId(currentCloudEvent);
+                long streamVersion = OccurrentExtensionGetter.getStreamVersion(currentCloudEvent);
                 Document updatedDocument = convertToDocument(cloudEventSerializer, timeRepresentation, streamId, streamVersion, updatedCloudEvent);
                 updatedDocument.put(ID, document.get(ID)); // Insert the Mongo ObjectID
                 cloudEventUpdater.apply(updatedDocument);

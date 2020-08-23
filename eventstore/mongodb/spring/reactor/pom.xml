@@ -20,12 +20,12 @@
         </dependency>
         <dependency>
             <groupId>se.haleby.occurrent</groupId>
-            <artifactId>eventstore-mongodb-spring-common</artifactId>
+            <artifactId>mongodb-spring-filter-query-conversion</artifactId>
             <version>0.0.1-SNAPSHOT</version>
         </dependency>
         <dependency>
             <groupId>se.haleby.occurrent</groupId>
-            <artifactId>mongodb-spring-filter-query-conversion</artifactId>
+            <artifactId>eventstore-mongodb-common</artifactId>
             <version>0.0.1-SNAPSHOT</version>
         </dependency>
         <dependency>

@@ -8,6 +8,9 @@ import java.util.Objects;
 
 import static java.util.Objects.requireNonNull;
 
+/**
+ * Configuration for the <a href="https://projectreactor.io/">project reactor</a> Spring java driver for MongoDB EventStore
+ */
 public class EventStoreConfig {
     public final String eventStoreCollectionName;
     public final TransactionalOperator transactionalOperator;

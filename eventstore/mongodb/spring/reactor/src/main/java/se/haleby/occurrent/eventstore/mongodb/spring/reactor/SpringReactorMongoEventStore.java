@@ -17,6 +17,7 @@ import org.springframework.data.mongodb.core.query.Query;
 import org.springframework.transaction.reactive.TransactionalOperator;
 import reactor.core.publisher.Flux;
 import reactor.core.publisher.Mono;
+import se.haleby.occurrent.cloudevents.OccurrentExtensionGetter;
 import se.haleby.occurrent.eventstore.api.LongConditionEvaluator;
 import se.haleby.occurrent.eventstore.api.WriteCondition;
 import se.haleby.occurrent.eventstore.api.WriteCondition.StreamVersionWriteCondition;
@@ -45,6 +46,11 @@ import static se.haleby.occurrent.eventstore.mongodb.internal.OccurrentCloudEven
 import static se.haleby.occurrent.filter.Filter.TIME;
 import static se.haleby.occurrent.mongodb.spring.filterqueryconversion.internal.FilterConverter.convertFilterToQuery;
 
+/**
+ * This is a reactive {@link EventStore} implementation that stores events in MongoDB using
+ * Spring's {@link ReactiveMongoTemplate} that is based on <a href="https://projectreactor.io/">project reactor</a>.
+ * It also supports the {@link EventStoreOperations} and {@link EventStoreQueries} contracts.
+ */
 public class SpringReactorMongoEventStore implements EventStore, EventStoreOperations, EventStoreQueries {
 
     private static final String ID = "_id";
@@ -55,6 +61,12 @@ public class SpringReactorMongoEventStore implements EventStore, EventStoreOpera
     private final TimeRepresentation timeRepresentation;
     private final TransactionalOperator transactionalOperator;
 
+    /**
+     * Create a new instance of {@code SpringReactorMongoEventStore}
+     *
+     * @param mongoTemplate The {@link ReactiveMongoTemplate} that the {@code SpringReactorMongoEventStore} will use
+     * @param config        The {@link EventStoreConfig} that will be used
+     */
     public SpringReactorMongoEventStore(ReactiveMongoTemplate mongoTemplate, EventStoreConfig config) {
         requireNonNull(mongoTemplate, ReactiveMongoTemplate.class.getSimpleName() + " cannot be null");
         requireNonNull(config, EventStoreConfig.class.getSimpleName() + " cannot be null");
@@ -237,7 +249,6 @@ public class SpringReactorMongoEventStore implements EventStore, EventStoreOpera
         return mongoTemplate.remove(Query.query(where("id").is(cloudEventId).and("source").is(cloudEventSource)), eventStoreCollectionName).then();
     }
 
-    @SuppressWarnings("ConstantConditions")
     @Override
     public Mono<CloudEvent> updateEvent(String cloudEventId, URI cloudEventSource, Function<CloudEvent, CloudEvent> updateFunction) {
         Function<Function<CloudEvent, CloudEvent>, Mono<CloudEvent>> logic = (fn) -> {
@@ -251,8 +262,8 @@ public class SpringReactorMongoEventStore implements EventStore, EventStoreOpera
                         if (updatedCloudEvent == null) {
                             result = Mono.error(new IllegalArgumentException("Cloud event update function is not allowed to return null"));
                         } else if (!Objects.equals(updatedCloudEvent, currentCloudEvent)) {
-                            String streamId = (String) currentCloudEvent.getExtension(STREAM_ID);
-                            long streamVersion = (long) currentCloudEvent.getExtension(STREAM_VERSION);
+                            String streamId = OccurrentExtensionGetter.getStreamId(currentCloudEvent);
+                            long streamVersion = OccurrentExtensionGetter.getStreamVersion(currentCloudEvent);
                             Document updatedDocument = convertToDocument(cloudEventSerializer, timeRepresentation, streamId, streamVersion, updatedCloudEvent);
                             updatedDocument.put(ID, document.get(ID)); // Insert the Mongo ObjectID
                             result = mongoTemplate.findAndReplace(cloudEventQuery, updatedDocument, eventStoreCollectionName).thenReturn(updatedCloudEvent);

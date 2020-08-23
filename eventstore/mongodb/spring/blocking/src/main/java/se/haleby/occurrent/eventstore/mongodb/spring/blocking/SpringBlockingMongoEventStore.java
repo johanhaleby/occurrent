@@ -14,13 +14,16 @@ import org.springframework.data.mongodb.core.MongoTemplate;
 import org.springframework.data.mongodb.core.query.Query;
 import org.springframework.data.util.StreamUtils;
 import org.springframework.transaction.support.TransactionTemplate;
-import se.haleby.occurrent.eventstore.api.*;
+import se.haleby.occurrent.cloudevents.OccurrentExtensionGetter;
+import se.haleby.occurrent.condition.Condition;
+import se.haleby.occurrent.eventstore.api.LongConditionEvaluator;
+import se.haleby.occurrent.eventstore.api.WriteCondition;
 import se.haleby.occurrent.eventstore.api.WriteCondition.StreamVersionWriteCondition;
+import se.haleby.occurrent.eventstore.api.WriteConditionNotFulfilledException;
 import se.haleby.occurrent.eventstore.api.blocking.EventStore;
 import se.haleby.occurrent.eventstore.api.blocking.EventStoreOperations;
 import se.haleby.occurrent.eventstore.api.blocking.EventStoreQueries;
 import se.haleby.occurrent.eventstore.api.blocking.EventStream;
-import se.haleby.occurrent.condition.Condition;
 import se.haleby.occurrent.filter.Filter;
 import se.haleby.occurrent.mongodb.timerepresentation.TimeRepresentation;
 
@@ -39,14 +42,18 @@ import static org.springframework.data.mongodb.SessionSynchronization.ALWAYS;
 import static org.springframework.data.mongodb.core.query.Criteria.where;
 import static se.haleby.occurrent.cloudevents.OccurrentCloudEventExtension.STREAM_ID;
 import static se.haleby.occurrent.cloudevents.OccurrentCloudEventExtension.STREAM_VERSION;
-import static se.haleby.occurrent.filter.Filter.TIME;
 import static se.haleby.occurrent.eventstore.api.blocking.EventStoreQueries.SortBy.NATURAL_ASC;
 import static se.haleby.occurrent.eventstore.api.internal.functional.FunctionalSupport.mapWithIndex;
 import static se.haleby.occurrent.eventstore.mongodb.internal.MongoBulkWriteExceptionToDuplicateCloudEventExceptionTranslator.translateToDuplicateCloudEventException;
 import static se.haleby.occurrent.eventstore.mongodb.internal.OccurrentCloudEventMongoDBDocumentMapper.convertToCloudEvent;
 import static se.haleby.occurrent.eventstore.mongodb.internal.OccurrentCloudEventMongoDBDocumentMapper.convertToDocument;
+import static se.haleby.occurrent.filter.Filter.TIME;
 import static se.haleby.occurrent.mongodb.spring.filterqueryconversion.internal.FilterConverter.convertFilterToQuery;
 
+/**
+ * This is an {@link EventStore} that stores events in MongoDB using Spring's {@link MongoTemplate}.
+ * It also supports the {@link EventStoreOperations} and {@link EventStoreQueries} contracts.
+ */
 public class SpringBlockingMongoEventStore implements EventStore, EventStoreOperations, EventStoreQueries {
 
     private static final String ID = "_id";
@@ -57,6 +64,12 @@ public class SpringBlockingMongoEventStore implements EventStore, EventStoreOper
     private final TimeRepresentation timeRepresentation;
     private final TransactionTemplate transactionTemplate;
 
+    /**
+     * Create a new instance of {@code SpringBlockingMongoEventStore}
+     *
+     * @param mongoTemplate The {@link MongoTemplate} that the {@code SpringBlockingMongoEventStore} will use
+     * @param config        The {@link EventStoreConfig} that will be used
+     */
     public SpringBlockingMongoEventStore(MongoTemplate mongoTemplate, EventStoreConfig config) {
         requireNonNull(mongoTemplate, MongoTemplate.class.getSimpleName() + " cannot be null");
         requireNonNull(mongoTemplate, EventStoreConfig.class.getSimpleName() + " cannot be null");
@@ -120,7 +133,6 @@ public class SpringBlockingMongoEventStore implements EventStore, EventStoreOper
         mongoTemplate.remove(cloudEventIdEqualTo(cloudEventId, cloudEventSource), eventStoreCollectionName);
     }
 
-    @SuppressWarnings("ConstantConditions")
     @Override
     public Optional<CloudEvent> updateEvent(String cloudEventId, URI cloudEventSource, Function<CloudEvent, CloudEvent> updateFunction) {
         Function<Function<CloudEvent, CloudEvent>, Optional<CloudEvent>> logic = (fn) -> {
@@ -135,8 +147,8 @@ public class SpringBlockingMongoEventStore implements EventStore, EventStoreOper
             if (updatedCloudEvent == null) {
                 throw new IllegalArgumentException("Cloud event update function is not allowed to return null");
             } else if (!Objects.equals(updatedCloudEvent, currentCloudEvent)) {
-                String streamId = (String) currentCloudEvent.getExtension(STREAM_ID);
-                long streamVersion = (long) currentCloudEvent.getExtension(STREAM_VERSION);
+                String streamId = OccurrentExtensionGetter.getStreamId(currentCloudEvent);
+                long streamVersion = OccurrentExtensionGetter.getStreamVersion(currentCloudEvent);
                 Document updatedDocument = convertToDocument(cloudEventSerializer, timeRepresentation, streamId, streamVersion, updatedCloudEvent);
                 updatedDocument.put(ID, document.get(ID)); // Insert the Mongo ObjectID
                 mongoTemplate.findAndReplace(cloudEventQuery, updatedDocument, eventStoreCollectionName);

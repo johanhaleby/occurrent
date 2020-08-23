@@ -8,6 +8,9 @@ import java.util.Objects;
 
 import static java.util.Objects.requireNonNull;
 
+/**
+ * Configuration for the blocking Spring java driver for MongoDB EventStore
+ */
 public class EventStoreConfig {
     public final String eventStoreCollectionName;
     public final TransactionTemplate transactionTemplate;
@@ -28,7 +31,6 @@ public class EventStoreConfig {
         this.transactionTemplate = transactionTemplate;
         this.timeRepresentation = timeRepresentation;
     }
-
 
     @Override
     public boolean equals(Object o) {

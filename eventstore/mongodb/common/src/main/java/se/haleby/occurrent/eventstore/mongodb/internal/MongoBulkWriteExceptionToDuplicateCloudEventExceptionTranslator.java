@@ -6,8 +6,17 @@ import se.haleby.occurrent.eventstore.api.DuplicateCloudEventException;
 
 import java.net.URI;
 
+/**
+ * Translates a {@link MongoBulkWriteException} to a {@link DuplicateCloudEventException}.
+ */
 public class MongoBulkWriteExceptionToDuplicateCloudEventExceptionTranslator {
 
+    /**
+     * Translates a {@link MongoBulkWriteException} to a {@link DuplicateCloudEventException}.
+     *
+     * @param e The {@code MongoBulkWriteException} to translate
+     * @return The resulting {@code DuplicateCloudEventException}
+     */
     public static DuplicateCloudEventException translateToDuplicateCloudEventException(MongoBulkWriteException e) {
         return e.getWriteErrors().stream()
                 .filter(error -> error.getCode() == 11000)

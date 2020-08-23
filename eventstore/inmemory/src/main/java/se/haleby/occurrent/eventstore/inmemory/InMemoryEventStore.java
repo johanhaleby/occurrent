@@ -28,6 +28,10 @@ import static java.util.Objects.requireNonNull;
 import static se.haleby.occurrent.cloudevents.OccurrentCloudEventExtension.STREAM_VERSION;
 import static se.haleby.occurrent.eventstore.api.internal.functional.FunctionalSupport.zip;
 
+/**
+ * This is an {@link EventStore} that stores events in-memory. This is mainly useful for testing
+ * and/or demo purposes. It also supports the {@link EventStoreOperations} contract.
+ */
 public class InMemoryEventStore implements EventStore, EventStoreOperations {
 
     private final ConcurrentMap<String, List<CloudEvent>> state = new ConcurrentHashMap<>();
