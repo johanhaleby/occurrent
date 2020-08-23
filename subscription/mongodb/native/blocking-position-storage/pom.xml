@@ -4,7 +4,7 @@
          xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 http://maven.apache.org/xsd/maven-4.0.0.xsd">
     <parent>
         <artifactId>subscription-mongodb-native</artifactId>
-        <groupId>se.haleby.occurrent</groupId>
+        <groupId>org.occurrent</groupId>
         <version>0.0.1-SNAPSHOT</version>
     </parent>
     <modelVersion>4.0.0</modelVersion>
@@ -13,7 +13,7 @@
 
     <dependencies>
         <dependency>
-            <groupId>se.haleby.occurrent</groupId>
+            <groupId>org.occurrent</groupId>
             <artifactId>subscription-mongodb-native-blocking</artifactId>
             <version>0.0.1-SNAPSHOT</version>
         </dependency>
@@ -24,7 +24,7 @@
 
         <!-- Test -->
         <dependency>
-            <groupId>se.haleby.occurrent</groupId>
+            <groupId>org.occurrent</groupId>
             <artifactId>eventstore-mongodb-native</artifactId>
             <version>0.0.1-SNAPSHOT</version>
             <scope>test</scope>
@@ -65,7 +65,7 @@
             <scope>test</scope>
         </dependency>
         <dependency>
-            <groupId>se.haleby.occurrent</groupId>
+            <groupId>org.occurrent</groupId>
             <artifactId>test-support</artifactId>
             <version>0.0.1-SNAPSHOT</version>
             <scope>test</scope>

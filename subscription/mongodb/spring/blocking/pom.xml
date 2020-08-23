@@ -4,7 +4,7 @@
          xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 http://maven.apache.org/xsd/maven-4.0.0.xsd">
     <parent>
         <artifactId>subscription-mongodb-spring</artifactId>
-        <groupId>se.haleby.occurrent</groupId>
+        <groupId>org.occurrent</groupId>
         <version>0.0.1-SNAPSHOT</version>
     </parent>
     <modelVersion>4.0.0</modelVersion>
@@ -29,24 +29,24 @@
             <artifactId>mongodb-driver-sync</artifactId>
         </dependency>
         <dependency>
-            <groupId>se.haleby.occurrent</groupId>
+            <groupId>org.occurrent</groupId>
             <artifactId>subscription-mongodb-common</artifactId>
             <version>0.0.1-SNAPSHOT</version>
         </dependency>
         <dependency>
-            <groupId>se.haleby.occurrent</groupId>
+            <groupId>org.occurrent</groupId>
             <artifactId>subscription-mongodb-spring-common</artifactId>
             <version>0.0.1-SNAPSHOT</version>
         </dependency>
         <dependency>
-            <groupId>se.haleby.occurrent</groupId>
+            <groupId>org.occurrent</groupId>
             <artifactId>subscription-api-blocking</artifactId>
             <version>0.0.1-SNAPSHOT</version>
         </dependency>
 
         <!-- Test -->
         <dependency>
-            <groupId>se.haleby.occurrent</groupId>
+            <groupId>org.occurrent</groupId>
             <artifactId>eventstore-mongodb-spring-blocking</artifactId>
             <version>0.0.1-SNAPSHOT</version>
             <scope>test</scope>
@@ -92,7 +92,7 @@
             <scope>test</scope>
         </dependency>
         <dependency>
-            <groupId>se.haleby.occurrent</groupId>
+            <groupId>org.occurrent</groupId>
             <artifactId>test-support</artifactId>
             <version>0.0.1-SNAPSHOT</version>
             <scope>test</scope>

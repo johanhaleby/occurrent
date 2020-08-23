@@ -9,5 +9,5 @@
         <appender-ref ref="STDOUT"/>
     </root>
 
-    <logger name="se.haleby.occurrent.example.domain.numberguessinggame.mongodb.nativedriver.Bootstrap" level="debug"/>
+    <logger name="org.occurrent.example.domain.numberguessinggame.mongodb.nativedriver.Bootstrap" level="debug"/>
 </configuration>

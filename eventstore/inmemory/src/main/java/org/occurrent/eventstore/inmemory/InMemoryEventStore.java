@@ -1,0 +1,224 @@
+package org.occurrent.eventstore.inmemory;
+
+import io.cloudevents.CloudEvent;
+import io.cloudevents.SpecVersion;
+import io.cloudevents.core.builder.CloudEventBuilder;
+import org.occurrent.cloudevents.OccurrentCloudEventExtension;
+import org.occurrent.eventstore.api.LongConditionEvaluator;
+import org.occurrent.eventstore.api.WriteCondition;
+import org.occurrent.eventstore.api.WriteCondition.StreamVersionWriteCondition;
+import org.occurrent.eventstore.api.WriteConditionNotFulfilledException;
+import org.occurrent.eventstore.api.blocking.EventStore;
+import org.occurrent.eventstore.api.blocking.EventStoreOperations;
+import org.occurrent.eventstore.api.blocking.EventStream;
+import org.occurrent.eventstore.api.internal.functional.FunctionalSupport.Pair;
+
+import java.net.URI;
+import java.util.*;
+import java.util.Map.Entry;
+import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.ConcurrentMap;
+import java.util.function.Function;
+import java.util.function.Predicate;
+import java.util.stream.Collectors;
+import java.util.stream.LongStream;
+import java.util.stream.Stream;
+
+import static java.util.Objects.requireNonNull;
+import static org.occurrent.cloudevents.OccurrentCloudEventExtension.STREAM_VERSION;
+import static org.occurrent.eventstore.api.internal.functional.FunctionalSupport.zip;
+
+/**
+ * This is an {@link EventStore} that stores events in-memory. This is mainly useful for testing
+ * and/or demo purposes. It also supports the {@link EventStoreOperations} contract.
+ */
+public class InMemoryEventStore implements EventStore, EventStoreOperations {
+
+    private final ConcurrentMap<String, List<CloudEvent>> state = new ConcurrentHashMap<>();
+
+    @Override
+    public EventStream<CloudEvent> read(String streamId, int skip, int limit) {
+        List<CloudEvent> events = state.get(streamId);
+        if (events == null) {
+            return new EventStreamImpl(streamId, 0, Collections.emptyList());
+        } else if (skip == 0 && limit == Integer.MAX_VALUE) {
+            return new EventStreamImpl(streamId, calculateStreamVersion(events), events);
+        }
+        return new EventStreamImpl(streamId, calculateStreamVersion(events), events.subList(skip, limit));
+    }
+
+    @Override
+    public void write(String streamId, WriteCondition writeCondition, Stream<CloudEvent> events) {
+        requireTrue(writeCondition != null, WriteCondition.class.getSimpleName() + " cannot be null");
+        Stream<CloudEvent> cloudEventStream = events.peek(e -> requireTrue(e.getSpecVersion() == SpecVersion.V1, "Spec version needs to be " + SpecVersion.V1));
+
+        state.compute(streamId, (__, currentEvents) -> {
+            long currentStreamVersion = calculateStreamVersion(currentEvents);
+
+            if (currentEvents == null && isConditionFulfilledBy(writeCondition, 0)) {
+                return applyOccurrentCloudEventExtension(cloudEventStream, streamId, 0);
+            } else if (currentEvents != null && isConditionFulfilledBy(writeCondition, currentStreamVersion)) {
+                List<CloudEvent> newEvents = new ArrayList<>(currentEvents);
+                newEvents.addAll(applyOccurrentCloudEventExtension(cloudEventStream, streamId, currentStreamVersion));
+                return newEvents;
+            } else {
+                throw new WriteConditionNotFulfilledException(streamId, currentStreamVersion, writeCondition, String.format("%s was not fulfilled. Expected version %s but was %s.", WriteCondition.class.getSimpleName(), writeCondition.toString(), currentStreamVersion));
+            }
+        });
+    }
+
+    private static List<CloudEvent> applyOccurrentCloudEventExtension(Stream<CloudEvent> events, String streamId, long streamVersion) {
+        return zip(LongStream.iterate(streamVersion + 1, i -> i + 1).boxed(), events, Pair::new)
+                .map(pair -> modifyCloudEvent(e -> e.withExtension(new OccurrentCloudEventExtension(streamId, streamVersion + pair.t1))).apply(pair.t2))
+                .collect(Collectors.toList());
+    }
+
+    @Override
+    public void write(String streamId, Stream<CloudEvent> events) {
+        write(streamId, WriteCondition.anyStreamVersion(), events);
+    }
+
+    @Override
+    public boolean exists(String streamId) {
+        return state.containsKey(streamId);
+    }
+
+    private static boolean isConditionFulfilledBy(WriteCondition writeCondition, long version) {
+        if (writeCondition.isAnyStreamVersion()) {
+            return true;
+        }
+
+        if (!(writeCondition instanceof StreamVersionWriteCondition)) {
+            return false;
+        }
+
+        StreamVersionWriteCondition c = (StreamVersionWriteCondition) writeCondition;
+        return LongConditionEvaluator.evaluate(c.condition, version);
+    }
+
+    @Override
+    public void deleteEventStream(String streamId) {
+        state.remove(streamId);
+    }
+
+    @Override
+    public void deleteEvent(String cloudEventId, URI cloudEventSource) {
+        Predicate<CloudEvent> cloudEventMatchesInput = uniqueCloudEvent(cloudEventId, cloudEventSource);
+        String streamId = findStreamIdByCloudEvent(cloudEventMatchesInput).orElse(null);
+
+        if (streamId == null) {
+            return;
+        }
+
+        state.computeIfPresent(streamId, (__, events) -> {
+            List<CloudEvent> newEvents = events.stream().filter(cloudEventMatchesInput.negate()).collect(Collectors.toList());
+            if (newEvents.isEmpty()) {
+                return null;
+            }
+            return newEvents;
+        });
+    }
+
+    @Override
+    public Optional<CloudEvent> updateEvent(String cloudEventId, URI cloudEventSource, Function<CloudEvent, CloudEvent> updateFunction) {
+        requireNonNull(updateFunction, "Update function cannot be null");
+
+        Predicate<CloudEvent> cloudEventPredicate = uniqueCloudEvent(cloudEventId, cloudEventSource);
+        return findStreamIdByCloudEvent(cloudEventPredicate)
+                .map(streamId -> state.computeIfPresent(streamId, (__, events) ->
+                        events.stream().map(cloudEvent -> {
+                            if (cloudEventPredicate.test(cloudEvent)) {
+                                CloudEvent updatedCloudEvent = updateFunction.apply(cloudEvent);
+                                if (updatedCloudEvent == null) {
+                                    throw new IllegalArgumentException("It's not allowed to return a null CloudEvent from the update function.");
+                                }
+                                return updatedCloudEvent;
+                            } else {
+                                return cloudEvent;
+                            }
+                        }).collect(Collectors.toList())))
+                .flatMap(events -> events.stream().filter(cloudEventPredicate).findFirst());
+    }
+
+    private static class EventStreamImpl implements EventStream<CloudEvent> {
+        private final String streamId;
+        private final long version;
+        private final List<CloudEvent> events;
+
+        public EventStreamImpl(String streamId, long version, List<CloudEvent> events) {
+            this.streamId = streamId;
+            this.version = version;
+            this.events = Collections.unmodifiableList(events);
+        }
+
+        @Override
+        public String id() {
+            return streamId;
+        }
+
+        @Override
+        public long version() {
+            return version;
+        }
+
+        @Override
+        public Stream<CloudEvent> events() {
+            return events.stream();
+        }
+
+        @Override
+        public boolean equals(Object o) {
+            if (this == o) return true;
+            if (!(o instanceof EventStreamImpl)) return false;
+            EventStreamImpl that = (EventStreamImpl) o;
+            return version == that.version &&
+                    Objects.equals(streamId, that.streamId) &&
+                    Objects.equals(events, that.events);
+        }
+
+        @Override
+        public int hashCode() {
+            return Objects.hash(streamId, version, events);
+        }
+
+        @Override
+        public String toString() {
+            return "EventStreamImpl{" +
+                    "streamId='" + streamId + '\'' +
+                    ", version=" + version +
+                    ", events=" + events +
+                    '}';
+        }
+    }
+
+    private static void requireTrue(boolean bool, String message) {
+        if (!bool) {
+            throw new IllegalArgumentException(message);
+        }
+    }
+
+    private static Function<CloudEvent, CloudEvent> modifyCloudEvent(Function<CloudEventBuilder, CloudEventBuilder> fn) {
+        return (cloudEvent) -> fn.apply(CloudEventBuilder.v1(cloudEvent)).build();
+    }
+
+    private static Predicate<CloudEvent> uniqueCloudEvent(String cloudEventId, URI cloudEventSource) {
+        requireNonNull(cloudEventId, "CloudEvent id cannot be null");
+        requireNonNull(cloudEventSource, "CloudEvent source cannot be null");
+        return e -> e.getId().equals(cloudEventId) && e.getSource().equals(cloudEventSource);
+    }
+
+    private Optional<String> findStreamIdByCloudEvent(Predicate<CloudEvent> predicate) {
+        return state.entrySet().stream()
+                .filter(entry -> entry.getValue().stream().anyMatch(predicate))
+                .map(Entry::getKey)
+                .findFirst();
+    }
+
+    @SuppressWarnings("ConstantConditions")
+    private static long calculateStreamVersion(List<CloudEvent> events) {
+        if (events == null || events.isEmpty()) {
+            return 0;
+        }
+        return (long) events.get(events.size() - 1).getExtension(STREAM_VERSION);
+    }
+}

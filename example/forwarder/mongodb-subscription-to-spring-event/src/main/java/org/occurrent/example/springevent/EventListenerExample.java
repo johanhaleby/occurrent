@@ -1,0 +1,31 @@
+package org.occurrent.example.springevent;
+
+
+import org.occurrent.domain.NameDefined;
+import org.occurrent.domain.NameWasChanged;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+import org.springframework.context.event.EventListener;
+import org.springframework.stereotype.Component;
+
+import java.util.concurrent.CopyOnWriteArrayList;
+
+@Component
+public class EventListenerExample {
+    private static final Logger log = LoggerFactory.getLogger(EventListenerExample.class);
+
+    public final CopyOnWriteArrayList<NameDefined> definedNames = new CopyOnWriteArrayList<>();
+    public final CopyOnWriteArrayList<NameWasChanged> changedNames = new CopyOnWriteArrayList<>();
+
+    @EventListener
+    public void handleNameDefined(NameDefined nameDefined) {
+        log.info("Received {}", nameDefined);
+        definedNames.add(nameDefined);
+    }
+
+    @EventListener
+    public void handleNameWasChanged(NameWasChanged nameWasChanged) {
+        log.info("Received {}", nameWasChanged);
+        changedNames.add(nameWasChanged);
+    }
+}
