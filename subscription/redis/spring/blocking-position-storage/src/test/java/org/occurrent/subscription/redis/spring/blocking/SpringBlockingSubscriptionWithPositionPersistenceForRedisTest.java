@@ -67,7 +67,6 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.awaitility.Awaitility.await;
 import static org.awaitility.Durations.ONE_SECOND;
 import static org.hamcrest.Matchers.equalTo;
-import static org.occurrent.functional.Not.not;
 
 @Testcontainers
 class SpringBlockingSubscriptionWithPositionPersistenceForRedisTest {
@@ -133,7 +132,7 @@ class SpringBlockingSubscriptionWithPositionPersistenceForRedisTest {
         await().atMost(2, SECONDS).with().pollInterval(Duration.of(20, MILLIS)).untilAsserted(() -> assertThat(state).hasSize(3));
     }
 
-    @Test
+    @RepeatedIfExceptionsTest(repeats = 2)
     void redis_blocking_spring_subscription_allows_resuming_events_from_where_it_left_off() {
         // Given
         LocalDateTime now = LocalDateTime.now();
@@ -151,7 +150,7 @@ class SpringBlockingSubscriptionWithPositionPersistenceForRedisTest {
         await().atMost(ONE_SECOND).until(Not.not(state::isEmpty));
         mongoEventStore.write("2", 0, serialize(nameDefined2));
         mongoEventStore.write("1", 1, serialize(nameWasChanged1));
-        redisSubscription.subscribe(subscriberId, state::add);
+        redisSubscription.subscribe(subscriberId, state::add).waitUntilStarted(Duration.of(10, ChronoUnit.SECONDS));
 
         // Then
         await().atMost(2, SECONDS).with().pollInterval(Duration.of(20, MILLIS)).untilAsserted(() -> assertThat(state).hasSize(3));
