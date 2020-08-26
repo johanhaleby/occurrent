@@ -34,7 +34,7 @@ public class OccurrentCloudEventExtension implements Extension {
     public static final String STREAM_ID = "streamId";
     public static final String STREAM_VERSION = "streamVersion";
 
-    private static final Set<String> KEY_SET = Collections.unmodifiableSet(new HashSet<>(Arrays.asList(STREAM_ID, STREAM_VERSION)));
+    static final Set<String> KEYS = Collections.unmodifiableSet(new HashSet<>(Arrays.asList(STREAM_ID, STREAM_VERSION)));
     private String streamId;
     private long streamVersion;
 
@@ -76,6 +76,6 @@ public class OccurrentCloudEventExtension implements Extension {
 
     @Override
     public Set<String> getKeys() {
-        return KEY_SET;
+        return KEYS;
     }
 }
