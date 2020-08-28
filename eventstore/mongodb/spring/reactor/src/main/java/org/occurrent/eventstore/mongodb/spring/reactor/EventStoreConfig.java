@@ -16,9 +16,9 @@
 
 package org.occurrent.eventstore.mongodb.spring.reactor;
 
+import org.occurrent.mongodb.timerepresentation.TimeRepresentation;
 import org.springframework.transaction.ReactiveTransactionManager;
 import org.springframework.transaction.reactive.TransactionalOperator;
-import org.occurrent.mongodb.timerepresentation.TimeRepresentation;
 
 import java.util.Objects;
 

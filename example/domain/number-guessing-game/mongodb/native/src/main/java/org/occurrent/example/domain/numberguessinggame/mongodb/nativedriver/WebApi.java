@@ -24,8 +24,8 @@ import org.occurrent.example.domain.numberguessinggame.model.NumberGuessingGame;
 import org.occurrent.example.domain.numberguessinggame.model.SecretNumberToGuess;
 import org.occurrent.example.domain.numberguessinggame.mongodb.nativedriver.view.gamestatus.GameStatus;
 import org.occurrent.example.domain.numberguessinggame.mongodb.nativedriver.view.gamestatus.WhatIsTheStatusOfGame;
-import org.occurrent.example.domain.numberguessinggame.mongodb.nativedriver.view.latestgamesoverview.LatestGamesOverview;
 import org.occurrent.example.domain.numberguessinggame.mongodb.nativedriver.view.latestgamesoverview.GameOverview;
+import org.occurrent.example.domain.numberguessinggame.mongodb.nativedriver.view.latestgamesoverview.LatestGamesOverview;
 
 import java.time.LocalDateTime;
 import java.time.ZoneId;

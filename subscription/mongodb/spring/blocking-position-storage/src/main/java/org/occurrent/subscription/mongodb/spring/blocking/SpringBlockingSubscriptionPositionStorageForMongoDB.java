@@ -19,6 +19,7 @@ package org.occurrent.subscription.mongodb.spring.blocking;
 import org.bson.BsonTimestamp;
 import org.bson.BsonValue;
 import org.bson.Document;
+import org.occurrent.subscription.SubscriptionPosition;
 import org.occurrent.subscription.api.blocking.BlockingSubscriptionPositionStorage;
 import org.occurrent.subscription.mongodb.MongoDBOperationTimeBasedSubscriptionPosition;
 import org.occurrent.subscription.mongodb.MongoDBResumeTokenBasedSubscriptionPosition;
@@ -26,7 +27,6 @@ import org.occurrent.subscription.mongodb.internal.MongoDBCloudEventsToJsonDeser
 import org.occurrent.subscription.mongodb.internal.MongoDBCommons;
 import org.springframework.data.mongodb.core.MongoOperations;
 import org.springframework.data.mongodb.core.query.Update;
-import org.occurrent.subscription.SubscriptionPosition;
 
 import static java.util.Objects.requireNonNull;
 import static org.springframework.data.mongodb.core.query.Criteria.where;

@@ -23,6 +23,11 @@ import io.cloudevents.jackson.JsonFormat;
 import org.bson.BsonDocument;
 import org.bson.BsonTimestamp;
 import org.bson.Document;
+import org.occurrent.mongodb.timerepresentation.TimeRepresentation;
+import org.occurrent.subscription.CloudEventWithSubscriptionPosition;
+import org.occurrent.subscription.StartAt;
+import org.occurrent.subscription.SubscriptionFilter;
+import org.occurrent.subscription.SubscriptionPosition;
 import org.occurrent.subscription.api.blocking.PositionAwareBlockingSubscription;
 import org.occurrent.subscription.api.blocking.Subscription;
 import org.occurrent.subscription.mongodb.MongoDBOperationTimeBasedSubscriptionPosition;
@@ -39,11 +44,6 @@ import org.springframework.data.mongodb.core.messaging.ChangeStreamRequest.Chang
 import org.springframework.data.mongodb.core.messaging.DefaultMessageListenerContainer;
 import org.springframework.data.mongodb.core.messaging.MessageListener;
 import org.springframework.data.mongodb.core.messaging.MessageListenerContainer;
-import org.occurrent.mongodb.timerepresentation.TimeRepresentation;
-import org.occurrent.subscription.CloudEventWithSubscriptionPosition;
-import org.occurrent.subscription.StartAt;
-import org.occurrent.subscription.SubscriptionFilter;
-import org.occurrent.subscription.SubscriptionPosition;
 
 import javax.annotation.PreDestroy;
 import java.util.concurrent.ConcurrentHashMap;

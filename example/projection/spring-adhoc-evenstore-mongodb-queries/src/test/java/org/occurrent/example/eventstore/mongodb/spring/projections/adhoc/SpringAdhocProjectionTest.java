@@ -18,12 +18,12 @@ package org.occurrent.example.eventstore.mongodb.spring.projections.adhoc;
 
 
 import org.junit.jupiter.api.Test;
+import org.occurrent.example.eventstore.mongodb.spring.projections.adhoc.MostNumberOfWorkouts.PersonWithMostNumberOfWorkouts;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.testcontainers.containers.MongoDBContainer;
 import org.testcontainers.junit.jupiter.Container;
 import org.testcontainers.junit.jupiter.Testcontainers;
-import org.occurrent.example.eventstore.mongodb.spring.projections.adhoc.MostNumberOfWorkouts.PersonWithMostNumberOfWorkouts;
 
 import java.time.LocalDateTime;
 import java.util.ArrayList;

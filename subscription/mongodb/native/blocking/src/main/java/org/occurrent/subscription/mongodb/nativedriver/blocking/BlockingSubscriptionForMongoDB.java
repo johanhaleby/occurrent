@@ -30,7 +30,9 @@ import org.bson.BsonDocument;
 import org.bson.BsonTimestamp;
 import org.bson.Document;
 import org.bson.conversions.Bson;
+import org.occurrent.filter.Filter;
 import org.occurrent.mongodb.spring.filterbsonfilterconversion.internal.FilterToBsonFilterConverter;
+import org.occurrent.mongodb.timerepresentation.TimeRepresentation;
 import org.occurrent.subscription.*;
 import org.occurrent.subscription.api.blocking.PositionAwareBlockingSubscription;
 import org.occurrent.subscription.api.blocking.Subscription;
@@ -42,8 +44,6 @@ import org.occurrent.subscription.mongodb.internal.MongoDBCloudEventsToJsonDeser
 import org.occurrent.subscription.mongodb.internal.MongoDBCommons;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
-import org.occurrent.filter.Filter;
-import org.occurrent.mongodb.timerepresentation.TimeRepresentation;
 
 import java.util.Collections;
 import java.util.Iterator;
@@ -60,7 +60,6 @@ import java.util.stream.Stream;
 
 import static com.mongodb.client.model.Aggregates.match;
 import static java.util.Objects.requireNonNull;
-import static org.occurrent.mongodb.spring.filterbsonfilterconversion.internal.FilterToBsonFilterConverter.convertFilterToBsonFilter;
 
 /**
  * This is a subscription that uses the "native" MongoDB Java driver (sync) to listen to changes from the event store.

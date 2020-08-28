@@ -25,24 +25,24 @@ import io.cloudevents.core.format.EventFormat;
 import io.cloudevents.core.provider.EventFormatProvider;
 import io.cloudevents.jackson.JsonFormat;
 import org.bson.Document;
-import org.occurrent.eventstore.api.blocking.EventStore;
-import org.occurrent.eventstore.api.blocking.EventStoreOperations;
-import org.occurrent.eventstore.api.blocking.EventStoreQueries;
-import org.occurrent.eventstore.api.blocking.EventStream;
-import org.occurrent.mongodb.spring.filterqueryconversion.internal.FilterConverter;
-import org.springframework.data.domain.Sort;
-import org.springframework.data.mongodb.core.MongoTemplate;
-import org.springframework.data.mongodb.core.query.Query;
-import org.springframework.data.util.StreamUtils;
-import org.springframework.transaction.support.TransactionTemplate;
 import org.occurrent.cloudevents.OccurrentExtensionGetter;
 import org.occurrent.condition.Condition;
 import org.occurrent.eventstore.api.LongConditionEvaluator;
 import org.occurrent.eventstore.api.WriteCondition;
 import org.occurrent.eventstore.api.WriteCondition.StreamVersionWriteCondition;
 import org.occurrent.eventstore.api.WriteConditionNotFulfilledException;
+import org.occurrent.eventstore.api.blocking.EventStore;
+import org.occurrent.eventstore.api.blocking.EventStoreOperations;
+import org.occurrent.eventstore.api.blocking.EventStoreQueries;
+import org.occurrent.eventstore.api.blocking.EventStream;
 import org.occurrent.filter.Filter;
+import org.occurrent.mongodb.spring.filterqueryconversion.internal.FilterConverter;
 import org.occurrent.mongodb.timerepresentation.TimeRepresentation;
+import org.springframework.data.domain.Sort;
+import org.springframework.data.mongodb.core.MongoTemplate;
+import org.springframework.data.mongodb.core.query.Query;
+import org.springframework.data.util.StreamUtils;
+import org.springframework.transaction.support.TransactionTemplate;
 
 import java.net.URI;
 import java.util.List;
@@ -53,10 +53,6 @@ import java.util.stream.Collectors;
 import java.util.stream.Stream;
 
 import static java.util.Objects.requireNonNull;
-import static org.springframework.data.domain.Sort.Direction.ASC;
-import static org.springframework.data.domain.Sort.Direction.DESC;
-import static org.springframework.data.mongodb.SessionSynchronization.ALWAYS;
-import static org.springframework.data.mongodb.core.query.Criteria.where;
 import static org.occurrent.cloudevents.OccurrentCloudEventExtension.STREAM_ID;
 import static org.occurrent.cloudevents.OccurrentCloudEventExtension.STREAM_VERSION;
 import static org.occurrent.eventstore.api.internal.functional.FunctionalSupport.mapWithIndex;
@@ -64,7 +60,10 @@ import static org.occurrent.eventstore.mongodb.internal.MongoBulkWriteExceptionT
 import static org.occurrent.eventstore.mongodb.internal.OccurrentCloudEventMongoDBDocumentMapper.convertToCloudEvent;
 import static org.occurrent.eventstore.mongodb.internal.OccurrentCloudEventMongoDBDocumentMapper.convertToDocument;
 import static org.occurrent.filter.Filter.TIME;
-import static org.occurrent.mongodb.spring.filterqueryconversion.internal.FilterConverter.convertFilterToQuery;
+import static org.springframework.data.domain.Sort.Direction.ASC;
+import static org.springframework.data.domain.Sort.Direction.DESC;
+import static org.springframework.data.mongodb.SessionSynchronization.ALWAYS;
+import static org.springframework.data.mongodb.core.query.Criteria.where;
 
 /**
  * This is an {@link EventStore} that stores events in MongoDB using Spring's {@link MongoTemplate}.

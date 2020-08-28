@@ -24,7 +24,6 @@ import org.bson.conversions.Bson;
 import org.jetbrains.annotations.NotNull;
 import org.occurrent.example.domain.numberguessinggame.model.domainevents.*;
 import org.occurrent.subscription.api.blocking.BlockingSubscription;
-import org.occurrent.example.domain.numberguessinggame.model.domainevents.*;
 
 import java.time.LocalDateTime;
 import java.util.Date;

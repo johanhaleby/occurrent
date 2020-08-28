@@ -46,7 +46,6 @@ import java.util.stream.Stream;
 
 import static java.time.ZoneOffset.UTC;
 import static java.time.temporal.ChronoUnit.MILLIS;
-import static org.assertj.core.api.Assertions.assertThat;
 import static org.awaitility.Awaitility.await;
 
 @SpringBootTest(classes = ForwardEventsFromMongoDBToSpringApplication.class)

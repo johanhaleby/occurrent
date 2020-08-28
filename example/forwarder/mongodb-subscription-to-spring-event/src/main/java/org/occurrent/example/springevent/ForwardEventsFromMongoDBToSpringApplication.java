@@ -24,6 +24,7 @@ import com.mongodb.client.MongoClients;
 import org.occurrent.eventstore.api.blocking.EventStore;
 import org.occurrent.eventstore.mongodb.nativedriver.EventStoreConfig;
 import org.occurrent.eventstore.mongodb.nativedriver.MongoEventStore;
+import org.occurrent.mongodb.timerepresentation.TimeRepresentation;
 import org.occurrent.subscription.api.reactor.PositionAwareReactorSubscription;
 import org.occurrent.subscription.api.reactor.ReactorSubscriptionPositionStorage;
 import org.occurrent.subscription.mongodb.spring.reactor.SpringReactorSubscriptionForMongoDB;
@@ -33,7 +34,6 @@ import org.springframework.beans.factory.annotation.Value;
 import org.springframework.boot.autoconfigure.SpringBootApplication;
 import org.springframework.context.annotation.Bean;
 import org.springframework.data.mongodb.core.ReactiveMongoOperations;
-import org.occurrent.mongodb.timerepresentation.TimeRepresentation;
 
 import static com.fasterxml.jackson.databind.ObjectMapper.DefaultTyping.EVERYTHING;
 

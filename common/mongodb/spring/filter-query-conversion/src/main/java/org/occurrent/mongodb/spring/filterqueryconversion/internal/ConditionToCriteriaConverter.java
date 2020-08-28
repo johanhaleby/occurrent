@@ -16,10 +16,10 @@
 
 package org.occurrent.mongodb.spring.filterqueryconversion.internal;
 
-import org.springframework.data.mongodb.core.query.Criteria;
 import org.occurrent.condition.Condition;
 import org.occurrent.condition.Condition.MultiOperandCondition;
 import org.occurrent.condition.Condition.SingleOperandCondition;
+import org.springframework.data.mongodb.core.query.Criteria;
 
 import java.util.List;
 

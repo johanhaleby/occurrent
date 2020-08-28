@@ -20,21 +20,21 @@ import com.mongodb.client.result.UpdateResult;
 import org.bson.BsonDocument;
 import org.bson.BsonTimestamp;
 import org.bson.Document;
-import org.springframework.data.mongodb.core.ReactiveMongoOperations;
-import org.springframework.data.mongodb.core.query.Update;
-import reactor.core.publisher.Mono;
 import org.occurrent.subscription.SubscriptionPosition;
 import org.occurrent.subscription.api.reactor.ReactorSubscriptionPositionStorage;
 import org.occurrent.subscription.mongodb.MongoDBOperationTimeBasedSubscriptionPosition;
 import org.occurrent.subscription.mongodb.MongoDBResumeTokenBasedSubscriptionPosition;
 import org.occurrent.subscription.mongodb.internal.MongoDBCommons;
+import org.springframework.data.mongodb.core.ReactiveMongoOperations;
+import org.springframework.data.mongodb.core.query.Update;
+import reactor.core.publisher.Mono;
 
 import static java.util.Objects.requireNonNull;
-import static org.springframework.data.mongodb.core.query.Criteria.where;
-import static org.springframework.data.mongodb.core.query.Query.query;
 import static org.occurrent.subscription.mongodb.internal.MongoDBCloudEventsToJsonDeserializer.ID;
 import static org.occurrent.subscription.mongodb.internal.MongoDBCommons.generateOperationTimeStreamPositionDocument;
 import static org.occurrent.subscription.mongodb.internal.MongoDBCommons.generateResumeTokenStreamPositionDocument;
+import static org.springframework.data.mongodb.core.query.Criteria.where;
+import static org.springframework.data.mongodb.core.query.Query.query;
 
 /**
  * A Spring implementation of {@link ReactorSubscriptionPositionStorage} that stores {@link SubscriptionPosition} in MongoDB.

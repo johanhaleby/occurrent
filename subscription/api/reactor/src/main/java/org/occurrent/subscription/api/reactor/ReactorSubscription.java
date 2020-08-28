@@ -17,10 +17,10 @@
 package org.occurrent.subscription.api.reactor;
 
 import io.cloudevents.CloudEvent;
-import reactor.core.publisher.Flux;
+import org.occurrent.subscription.StartAt;
 import org.occurrent.subscription.SubscriptionFilter;
 import org.occurrent.subscription.SubscriptionPosition;
-import org.occurrent.subscription.StartAt;
+import reactor.core.publisher.Flux;
 
 /**
  * Common interface for reactor (reactive) subscriptions. The purpose of a subscription is to read events from an event store

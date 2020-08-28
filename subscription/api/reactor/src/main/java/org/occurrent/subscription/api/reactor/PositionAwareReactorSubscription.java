@@ -17,9 +17,9 @@
 package org.occurrent.subscription.api.reactor;
 
 import io.cloudevents.CloudEvent;
-import reactor.core.publisher.Mono;
 import org.occurrent.subscription.CloudEventWithSubscriptionPosition;
 import org.occurrent.subscription.SubscriptionPosition;
+import reactor.core.publisher.Mono;
 
 /**
  * A {@link ReactorSubscription} that produces {@link CloudEventWithSubscriptionPosition} compatible {@link CloudEvent}'s.

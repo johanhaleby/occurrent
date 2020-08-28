@@ -21,6 +21,7 @@ import io.cloudevents.CloudEvent;
 import org.occurrent.eventstore.mongodb.spring.blocking.EventStoreConfig;
 import org.occurrent.eventstore.mongodb.spring.blocking.SpringBlockingMongoEventStore;
 import org.occurrent.example.domain.numberguessinggame.mongodb.spring.blocking.infrastructure.Serialization;
+import org.occurrent.mongodb.timerepresentation.TimeRepresentation;
 import org.occurrent.subscription.api.blocking.BlockingSubscription;
 import org.occurrent.subscription.api.blocking.BlockingSubscriptionPositionStorage;
 import org.occurrent.subscription.api.blocking.PositionAwareBlockingSubscription;
@@ -39,7 +40,6 @@ import org.springframework.data.mongodb.MongoTransactionManager;
 import org.springframework.data.mongodb.core.MongoTemplate;
 import org.springframework.data.mongodb.repository.config.EnableMongoRepositories;
 import org.springframework.retry.annotation.EnableRetry;
-import org.occurrent.mongodb.timerepresentation.TimeRepresentation;
 
 import java.net.URI;
 

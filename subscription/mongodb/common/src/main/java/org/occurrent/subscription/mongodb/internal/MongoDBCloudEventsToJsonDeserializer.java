@@ -21,8 +21,8 @@ import com.mongodb.client.model.changestream.OperationType;
 import io.cloudevents.CloudEvent;
 import io.cloudevents.core.format.EventFormat;
 import org.bson.Document;
-import org.occurrent.mongodb.timerepresentation.TimeRepresentation;
 import org.occurrent.eventstore.mongodb.internal.OccurrentCloudEventMongoDBDocumentMapper;
+import org.occurrent.mongodb.timerepresentation.TimeRepresentation;
 
 import java.util.Optional;
 

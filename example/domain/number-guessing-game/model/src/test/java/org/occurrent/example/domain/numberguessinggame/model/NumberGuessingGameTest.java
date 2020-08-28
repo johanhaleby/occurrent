@@ -21,7 +21,6 @@ import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Nested;
 import org.junit.jupiter.api.Test;
 import org.occurrent.example.domain.numberguessinggame.model.domainevents.*;
-import org.occurrent.example.domain.numberguessinggame.model.domainevents.*;
 
 import java.time.LocalDateTime;
 import java.util.List;

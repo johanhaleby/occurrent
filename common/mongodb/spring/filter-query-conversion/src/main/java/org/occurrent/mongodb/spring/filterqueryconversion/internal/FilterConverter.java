@@ -16,15 +16,15 @@
 
 package org.occurrent.mongodb.spring.filterqueryconversion.internal;
 
-import org.occurrent.mongodb.specialfilterhandling.internal.SpecialFilterHandling;
-import org.springframework.data.mongodb.core.query.Criteria;
-import org.springframework.data.mongodb.core.query.Query;
 import org.occurrent.condition.Condition;
 import org.occurrent.filter.Filter;
 import org.occurrent.filter.Filter.All;
 import org.occurrent.filter.Filter.CompositionFilter;
 import org.occurrent.filter.Filter.SingleConditionFilter;
+import org.occurrent.mongodb.specialfilterhandling.internal.SpecialFilterHandling;
 import org.occurrent.mongodb.timerepresentation.TimeRepresentation;
+import org.springframework.data.mongodb.core.query.Criteria;
+import org.springframework.data.mongodb.core.query.Query;
 
 import static java.util.Objects.requireNonNull;
 

@@ -22,7 +22,6 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import io.cloudevents.CloudEvent;
 import io.cloudevents.core.builder.CloudEventBuilder;
 import org.occurrent.example.domain.numberguessinggame.model.domainevents.*;
-import org.occurrent.example.domain.numberguessinggame.model.domainevents.*;
 
 import java.net.URI;
 import java.time.LocalDateTime;

@@ -17,11 +17,11 @@
 package org.occurrent.example.eventstore.mongodb.spring.subscriptionprojections;
 
 import io.cloudevents.CloudEvent;
-import org.springframework.stereotype.Component;
 import org.occurrent.domain.DomainEvent;
 import org.occurrent.domain.NameDefined;
 import org.occurrent.domain.NameWasChanged;
 import org.occurrent.subscription.api.blocking.BlockingSubscription;
+import org.springframework.stereotype.Component;
 
 import javax.annotation.PostConstruct;
 import java.time.Duration;

@@ -16,10 +16,10 @@
 
 package org.occurrent.example.eventstore.mongodb.spring.subscriptionprojections;
 
-import org.occurrent.eventstore.api.blocking.EventStream;
-import org.springframework.stereotype.Service;
 import org.occurrent.domain.DomainEvent;
 import org.occurrent.domain.Name;
+import org.occurrent.eventstore.api.blocking.EventStream;
+import org.springframework.stereotype.Service;
 
 import java.time.LocalDateTime;
 import java.util.List;

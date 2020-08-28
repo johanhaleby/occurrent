@@ -20,6 +20,11 @@ import io.cloudevents.core.format.EventFormat;
 import io.cloudevents.core.provider.EventFormatProvider;
 import io.cloudevents.jackson.JsonFormat;
 import org.bson.Document;
+import org.occurrent.mongodb.timerepresentation.TimeRepresentation;
+import org.occurrent.subscription.CloudEventWithSubscriptionPosition;
+import org.occurrent.subscription.StartAt;
+import org.occurrent.subscription.SubscriptionFilter;
+import org.occurrent.subscription.SubscriptionPosition;
 import org.occurrent.subscription.api.reactor.PositionAwareReactorSubscription;
 import org.occurrent.subscription.mongodb.MongoDBOperationTimeBasedSubscriptionPosition;
 import org.occurrent.subscription.mongodb.MongoDBResumeTokenBasedSubscriptionPosition;
@@ -32,11 +37,6 @@ import org.springframework.data.mongodb.core.ChangeStreamOptions.ChangeStreamOpt
 import org.springframework.data.mongodb.core.ReactiveMongoOperations;
 import reactor.core.publisher.Flux;
 import reactor.core.publisher.Mono;
-import org.occurrent.mongodb.timerepresentation.TimeRepresentation;
-import org.occurrent.subscription.CloudEventWithSubscriptionPosition;
-import org.occurrent.subscription.StartAt;
-import org.occurrent.subscription.SubscriptionFilter;
-import org.occurrent.subscription.SubscriptionPosition;
 
 import static java.util.Objects.requireNonNull;
 

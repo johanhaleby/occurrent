@@ -31,8 +31,11 @@ import org.occurrent.domain.NameWasChanged;
 import org.occurrent.eventstore.api.blocking.EventStore;
 import org.occurrent.eventstore.mongodb.spring.blocking.EventStoreConfig;
 import org.occurrent.eventstore.mongodb.spring.blocking.SpringBlockingMongoEventStore;
+import org.occurrent.filter.Filter;
 import org.occurrent.functional.CheckedFunction;
 import org.occurrent.functional.Not;
+import org.occurrent.mongodb.timerepresentation.TimeRepresentation;
+import org.occurrent.subscription.OccurrentSubscriptionFilter;
 import org.occurrent.subscription.mongodb.MongoDBFilterSpecification;
 import org.occurrent.testsupport.mongodb.FlushMongoDBExtension;
 import org.occurrent.time.TimeConversion;
@@ -42,9 +45,6 @@ import org.springframework.data.mongodb.core.SimpleMongoClientDatabaseFactory;
 import org.testcontainers.containers.MongoDBContainer;
 import org.testcontainers.junit.jupiter.Container;
 import org.testcontainers.junit.jupiter.Testcontainers;
-import org.occurrent.filter.Filter;
-import org.occurrent.mongodb.timerepresentation.TimeRepresentation;
-import org.occurrent.subscription.OccurrentSubscriptionFilter;
 
 import java.net.URI;
 import java.time.Duration;
@@ -67,8 +67,6 @@ import static org.awaitility.Awaitility.await;
 import static org.awaitility.Durations.FIVE_SECONDS;
 import static org.awaitility.Durations.ONE_SECOND;
 import static org.hamcrest.Matchers.is;
-import static org.occurrent.functional.Not.not;
-import static org.occurrent.subscription.mongodb.MongoDBFilterSpecification.BsonMongoDBFilterSpecification.filter;
 
 @Testcontainers
 public class SpringBlockingSubscriptionForMongoDBTest {

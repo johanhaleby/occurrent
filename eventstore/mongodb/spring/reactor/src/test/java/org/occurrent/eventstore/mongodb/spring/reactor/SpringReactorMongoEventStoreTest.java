@@ -33,6 +33,7 @@ import org.junit.jupiter.api.condition.EnabledForJreRange;
 import org.junit.jupiter.api.condition.EnabledOnJre;
 import org.junit.jupiter.api.extension.RegisterExtension;
 import org.occurrent.cloudevents.OccurrentCloudEventExtension;
+import org.occurrent.condition.Condition;
 import org.occurrent.domain.*;
 import org.occurrent.eventstore.api.DuplicateCloudEventException;
 import org.occurrent.eventstore.api.WriteCondition;
@@ -40,6 +41,7 @@ import org.occurrent.eventstore.api.WriteConditionNotFulfilledException;
 import org.occurrent.eventstore.api.reactor.EventStoreQueries;
 import org.occurrent.eventstore.api.reactor.EventStream;
 import org.occurrent.functional.CheckedFunction;
+import org.occurrent.mongodb.timerepresentation.TimeRepresentation;
 import org.occurrent.testsupport.mongodb.FlushMongoDBExtension;
 import org.occurrent.time.TimeConversion;
 import org.springframework.data.mongodb.ReactiveMongoTransactionManager;
@@ -51,12 +53,6 @@ import org.testcontainers.junit.jupiter.Container;
 import org.testcontainers.junit.jupiter.Testcontainers;
 import reactor.core.publisher.Flux;
 import reactor.core.publisher.Mono;
-import org.occurrent.domain.DomainEvent;
-import org.occurrent.domain.Name;
-import org.occurrent.domain.NameDefined;
-import org.occurrent.domain.NameWasChanged;
-import org.occurrent.condition.Condition;
-import org.occurrent.mongodb.timerepresentation.TimeRepresentation;
 
 import java.net.URI;
 import java.time.LocalDateTime;
@@ -81,11 +77,11 @@ import static org.hamcrest.Matchers.nullValue;
 import static org.junit.jupiter.api.Assertions.assertAll;
 import static org.junit.jupiter.api.condition.JRE.JAVA_11;
 import static org.junit.jupiter.api.condition.JRE.JAVA_8;
-import static org.springframework.data.mongodb.core.query.Criteria.where;
-import static org.springframework.data.mongodb.core.query.Query.query;
 import static org.occurrent.condition.Condition.*;
 import static org.occurrent.filter.Filter.*;
 import static org.occurrent.mongodb.timerepresentation.TimeRepresentation.RFC_3339_STRING;
+import static org.springframework.data.mongodb.core.query.Criteria.where;
+import static org.springframework.data.mongodb.core.query.Query.query;
 
 @SuppressWarnings("SameParameterValue")
 @Testcontainers

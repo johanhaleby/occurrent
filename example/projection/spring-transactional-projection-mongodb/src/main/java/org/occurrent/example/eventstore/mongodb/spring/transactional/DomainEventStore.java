@@ -19,10 +19,10 @@ package org.occurrent.example.eventstore.mongodb.spring.transactional;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import io.cloudevents.CloudEvent;
 import io.cloudevents.core.builder.CloudEventBuilder;
+import org.occurrent.domain.DomainEvent;
 import org.occurrent.eventstore.api.blocking.EventStore;
 import org.occurrent.eventstore.api.blocking.EventStream;
 import org.springframework.stereotype.Component;
-import org.occurrent.domain.DomainEvent;
 
 import java.net.URI;
 import java.util.List;

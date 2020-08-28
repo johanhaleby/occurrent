@@ -20,9 +20,6 @@ import com.mongodb.MongoClientSettings;
 import org.bson.BsonDocument;
 import org.bson.Document;
 import org.bson.conversions.Bson;
-import org.springframework.data.mongodb.core.ChangeStreamOptions;
-import org.springframework.data.mongodb.core.ChangeStreamOptions.ChangeStreamOptionsBuilder;
-import org.springframework.data.mongodb.core.query.Criteria;
 import org.occurrent.filter.Filter;
 import org.occurrent.mongodb.timerepresentation.TimeRepresentation;
 import org.occurrent.subscription.OccurrentSubscriptionFilter;
@@ -30,13 +27,16 @@ import org.occurrent.subscription.SubscriptionFilter;
 import org.occurrent.subscription.mongodb.MongoDBFilterSpecification.BsonMongoDBFilterSpecification;
 import org.occurrent.subscription.mongodb.MongoDBFilterSpecification.JsonMongoDBFilterSpecification;
 import org.occurrent.subscription.mongodb.internal.DocumentAdapter;
+import org.springframework.data.mongodb.core.ChangeStreamOptions;
+import org.springframework.data.mongodb.core.ChangeStreamOptions.ChangeStreamOptionsBuilder;
+import org.springframework.data.mongodb.core.query.Criteria;
 
 import java.util.stream.Stream;
 
-import static org.springframework.data.mongodb.core.aggregation.Aggregation.match;
-import static org.springframework.data.mongodb.core.aggregation.Aggregation.newAggregation;
 import static org.occurrent.mongodb.spring.filterqueryconversion.internal.FilterConverter.convertFilterToCriteria;
 import static org.occurrent.subscription.mongodb.MongoDBFilterSpecification.FULL_DOCUMENT;
+import static org.springframework.data.mongodb.core.aggregation.Aggregation.match;
+import static org.springframework.data.mongodb.core.aggregation.Aggregation.newAggregation;
 
 public class ApplyFilterToChangeStreamOptionsBuilder {
 

@@ -17,7 +17,6 @@
 package org.occurrent.example.domain.numberguessinggame.model;
 
 import org.occurrent.example.domain.numberguessinggame.model.domainevents.*;
-import org.occurrent.example.domain.numberguessinggame.model.domainevents.*;
 
 import java.time.LocalDateTime;
 import java.util.ArrayList;

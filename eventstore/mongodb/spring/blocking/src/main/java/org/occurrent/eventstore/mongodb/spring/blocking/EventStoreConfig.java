@@ -16,9 +16,9 @@
 
 package org.occurrent.eventstore.mongodb.spring.blocking;
 
+import org.occurrent.mongodb.timerepresentation.TimeRepresentation;
 import org.springframework.data.mongodb.MongoTransactionManager;
 import org.springframework.transaction.support.TransactionTemplate;
-import org.occurrent.mongodb.timerepresentation.TimeRepresentation;
 
 import java.util.Objects;
 

@@ -32,9 +32,6 @@ import org.junit.jupiter.api.*;
 import org.junit.jupiter.api.condition.EnabledForJreRange;
 import org.junit.jupiter.api.condition.EnabledOnJre;
 import org.junit.jupiter.api.extension.RegisterExtension;
-import org.testcontainers.containers.MongoDBContainer;
-import org.testcontainers.junit.jupiter.Container;
-import org.testcontainers.junit.jupiter.Testcontainers;
 import org.occurrent.domain.DomainEvent;
 import org.occurrent.domain.Name;
 import org.occurrent.domain.NameDefined;
@@ -46,6 +43,9 @@ import org.occurrent.eventstore.api.blocking.EventStoreQueries;
 import org.occurrent.eventstore.api.blocking.EventStream;
 import org.occurrent.mongodb.timerepresentation.TimeRepresentation;
 import org.occurrent.testsupport.mongodb.FlushMongoDBExtension;
+import org.testcontainers.containers.MongoDBContainer;
+import org.testcontainers.junit.jupiter.Container;
+import org.testcontainers.junit.jupiter.Testcontainers;
 
 import java.net.URI;
 import java.time.*;
@@ -66,11 +66,11 @@ import static org.junit.jupiter.api.Assertions.assertAll;
 import static org.junit.jupiter.api.condition.JRE.JAVA_11;
 import static org.junit.jupiter.api.condition.JRE.JAVA_8;
 import static org.occurrent.cloudevents.OccurrentCloudEventExtension.*;
-import static org.occurrent.domain.Composition.chain;
 import static org.occurrent.condition.Condition.*;
-import static org.occurrent.filter.Filter.*;
+import static org.occurrent.domain.Composition.chain;
 import static org.occurrent.eventstore.api.WriteCondition.streamVersion;
 import static org.occurrent.eventstore.api.WriteCondition.streamVersionEq;
+import static org.occurrent.filter.Filter.*;
 import static org.occurrent.time.TimeConversion.toLocalDateTime;
 
 @SuppressWarnings("SameParameterValue")

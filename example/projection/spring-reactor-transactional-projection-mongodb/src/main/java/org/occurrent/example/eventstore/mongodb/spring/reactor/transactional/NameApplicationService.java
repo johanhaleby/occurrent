@@ -31,7 +31,7 @@ import java.util.Collections;
 import java.util.List;
 import java.util.UUID;
 
-import static io.vavr.API.*;
+import static io.vavr.API.Match;
 import static io.vavr.Predicates.instanceOf;
 
 @Service

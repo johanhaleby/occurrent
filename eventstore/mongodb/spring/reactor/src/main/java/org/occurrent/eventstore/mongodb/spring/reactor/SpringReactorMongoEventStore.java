@@ -37,7 +37,9 @@ import org.occurrent.eventstore.api.reactor.EventStoreQueries;
 import org.occurrent.eventstore.api.reactor.EventStream;
 import org.occurrent.eventstore.mongodb.internal.MongoBulkWriteExceptionToDuplicateCloudEventExceptionTranslator;
 import org.occurrent.eventstore.mongodb.internal.OccurrentCloudEventMongoDBDocumentMapper;
+import org.occurrent.filter.Filter;
 import org.occurrent.mongodb.spring.filterqueryconversion.internal.FilterConverter;
+import org.occurrent.mongodb.timerepresentation.TimeRepresentation;
 import org.springframework.dao.DuplicateKeyException;
 import org.springframework.data.domain.Sort;
 import org.springframework.data.mongodb.core.ReactiveMongoTemplate;
@@ -45,20 +47,17 @@ import org.springframework.data.mongodb.core.query.Query;
 import org.springframework.transaction.reactive.TransactionalOperator;
 import reactor.core.publisher.Flux;
 import reactor.core.publisher.Mono;
-import org.occurrent.filter.Filter;
-import org.occurrent.mongodb.timerepresentation.TimeRepresentation;
 
 import java.net.URI;
 import java.util.Objects;
 import java.util.function.Function;
 
 import static java.util.Objects.requireNonNull;
+import static org.occurrent.filter.Filter.TIME;
 import static org.springframework.data.domain.Sort.Direction.ASC;
 import static org.springframework.data.domain.Sort.Direction.DESC;
 import static org.springframework.data.mongodb.SessionSynchronization.ALWAYS;
 import static org.springframework.data.mongodb.core.query.Criteria.where;
-import static org.occurrent.filter.Filter.TIME;
-import static org.occurrent.mongodb.spring.filterqueryconversion.internal.FilterConverter.convertFilterToQuery;
 
 /**
  * This is a reactive {@link EventStore} implementation that stores events in MongoDB using

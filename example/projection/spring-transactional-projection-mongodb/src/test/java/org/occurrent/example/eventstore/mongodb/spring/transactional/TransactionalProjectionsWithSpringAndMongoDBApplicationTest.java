@@ -18,14 +18,14 @@ package org.occurrent.example.eventstore.mongodb.spring.transactional;
 
 import org.junit.jupiter.api.Test;
 import org.mockito.Mock;
+import org.occurrent.domain.DomainEvent;
+import org.occurrent.domain.NameDefined;
 import org.occurrent.eventstore.api.blocking.EventStream;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.testcontainers.containers.MongoDBContainer;
 import org.testcontainers.junit.jupiter.Container;
 import org.testcontainers.junit.jupiter.Testcontainers;
-import org.occurrent.domain.DomainEvent;
-import org.occurrent.domain.NameDefined;
 
 import java.time.LocalDateTime;
 import java.util.ArrayList;

@@ -17,8 +17,8 @@
 package org.occurrent.subscription.api.blocking;
 
 import io.cloudevents.CloudEvent;
-import org.occurrent.subscription.SubscriptionPosition;
 import org.occurrent.subscription.CloudEventWithSubscriptionPosition;
+import org.occurrent.subscription.SubscriptionPosition;
 
 /**
  * A {@link BlockingSubscription} that produces {@link CloudEventWithSubscriptionPosition} compatible {@link CloudEvent}'s.

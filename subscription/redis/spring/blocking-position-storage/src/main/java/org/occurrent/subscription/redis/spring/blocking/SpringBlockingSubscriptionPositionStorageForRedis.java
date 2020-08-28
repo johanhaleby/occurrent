@@ -16,10 +16,10 @@
 
 package org.occurrent.subscription.redis.spring.blocking;
 
-import org.occurrent.subscription.api.blocking.BlockingSubscriptionPositionStorage;
-import org.springframework.data.redis.core.RedisOperations;
 import org.occurrent.subscription.StringBasedSubscriptionPosition;
 import org.occurrent.subscription.SubscriptionPosition;
+import org.occurrent.subscription.api.blocking.BlockingSubscriptionPositionStorage;
+import org.springframework.data.redis.core.RedisOperations;
 
 import static java.util.Objects.requireNonNull;
 
