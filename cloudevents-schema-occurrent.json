@@ -98,7 +98,9 @@
     "id",
     "source",
     "specversion",
-    "type"
+    "type",
+    "streamId",
+    "streamVersion"
   ],
   "definitions": {
     "iddef": {
