@@ -67,6 +67,7 @@ import static org.awaitility.Awaitility.await;
 import static org.awaitility.Durations.FIVE_SECONDS;
 import static org.awaitility.Durations.ONE_SECOND;
 import static org.hamcrest.Matchers.is;
+import static org.occurrent.subscription.mongodb.MongoDBFilterSpecification.BsonMongoDBFilterSpecification.filter;
 
 @Testcontainers
 public class SpringBlockingSubscriptionForMongoDBTest {
@@ -148,7 +149,7 @@ public class SpringBlockingSubscriptionForMongoDBTest {
             LocalDateTime now = LocalDateTime.now();
             CopyOnWriteArrayList<CloudEvent> state = new CopyOnWriteArrayList<>();
             String subscriberId = UUID.randomUUID().toString();
-            subscription.subscribe(subscriberId, MongoDBFilterSpecification.BsonMongoDBFilterSpecification.filter().type(Filters::eq, NameDefined.class.getName()), state::add)
+            subscription.subscribe(subscriberId, filter().type(Filters::eq, NameDefined.class.getName()), state::add)
                     .waitUntilStarted(Duration.of(10, ChronoUnit.SECONDS));
             NameDefined nameDefined1 = new NameDefined(UUID.randomUUID().toString(), now, "name1");
             NameDefined nameDefined2 = new NameDefined(UUID.randomUUID().toString(), now.plusSeconds(2), "name2");
@@ -177,7 +178,7 @@ public class SpringBlockingSubscriptionForMongoDBTest {
             NameWasChanged nameWasChanged1 = new NameWasChanged(UUID.randomUUID().toString(), now.plusSeconds(3), "name3");
             NameWasChanged nameWasChanged2 = new NameWasChanged(UUID.randomUUID().toString(), now.plusSeconds(4), "name4");
 
-            subscription.subscribe(subscriberId, MongoDBFilterSpecification.BsonMongoDBFilterSpecification.filter().id(Filters::eq, nameDefined2.getEventId()).type(Filters::eq, NameDefined.class.getName()), state::add
+            subscription.subscribe(subscriberId, filter().id(Filters::eq, nameDefined2.getEventId()).type(Filters::eq, NameDefined.class.getName()), state::add
             )
                     .waitUntilStarted(Duration.of(10, ChronoUnit.SECONDS));
 
@@ -203,7 +204,7 @@ public class SpringBlockingSubscriptionForMongoDBTest {
             NameWasChanged nameWasChanged1 = new NameWasChanged(UUID.randomUUID().toString(), now.plusSeconds(3), "name3");
             NameWasChanged nameWasChanged2 = new NameWasChanged(UUID.randomUUID().toString(), now.plusSeconds(4), "name4");
 
-            subscription.subscribe(subscriberId, MongoDBFilterSpecification.BsonMongoDBFilterSpecification.filter(match(and(eq("fullDocument.id", nameDefined2.getEventId()), eq("fullDocument.type", NameDefined.class.getName())))), state::add
+            subscription.subscribe(subscriberId, filter(match(and(eq("fullDocument.id", nameDefined2.getEventId()), eq("fullDocument.type", NameDefined.class.getName())))), state::add
             )
                     .waitUntilStarted(Duration.of(10, ChronoUnit.SECONDS));
 
