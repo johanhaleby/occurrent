@@ -41,7 +41,8 @@ public interface BlockingSubscription<T extends CloudEvent> {
      * @param filter          The filter used to limit which events that are of interest from the EventStore.
      * @param startAtSupplier A supplier that returns the start position to start the subscription from.
      *                        This is a useful alternative to just passing a fixed "StartAt" value if the stream is broken and re-subscribed to.
-     *                        In this cases streams should be restarted from the latest position and not the start position as it were when the application
+     *                        In these cases, streams should be restarted from the latest persisted position and not the start position as it
+     *                        were when the application was first started.
      * @param action          This action will be invoked for each cloud event that is stored in the EventStore.
      */
     Subscription subscribe(String subscriptionId, SubscriptionFilter filter, Supplier<StartAt> startAtSupplier, Consumer<T> action);
