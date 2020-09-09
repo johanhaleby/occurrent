@@ -28,7 +28,7 @@ import org.occurrent.subscription.SubscriptionPosition;
 public interface BlockingSubscriptionPositionStorage {
 
     /**
-     * Read the raw subscription position for a given subscription.
+     * Read the subscription position for a given subscription.
      * <p>
      * Note that when starting a new subscription you typically want to create {@link StartAt} from the global subscription position
      * (using {@link PositionAwareBlockingSubscription#globalSubscriptionPosition()}) if no {@code SubscriptionPosition} is found for the given subscription.
