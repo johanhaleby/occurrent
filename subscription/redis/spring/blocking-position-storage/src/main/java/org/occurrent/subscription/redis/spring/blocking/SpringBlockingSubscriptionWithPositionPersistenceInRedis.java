@@ -33,13 +33,13 @@ import static java.util.Objects.requireNonNull;
 
 /**
  * Wraps a {@link BlockingSubscription} and adds persistent subscription position support. It stores the subscription position
- * after an "action" (the consumer in this method {@link SpringBlockingSubscriptionWithPositionPersistenceForRedis#subscribe(String, Consumer)}) has completed successfully.
+ * after an "action" (the consumer in this method {@link SpringBlockingSubscriptionWithPositionPersistenceInRedis#subscribe(String, Consumer)}) has completed successfully.
  * It stores the subscription position in Redis, one value for each subscription.
  * <p>
  * Note that this implementation stores the subscription position after _every_ action. If you have a lot of events and duplication is not
  * that much of a deal consider cloning/extending this class and add your own customizations.
  */
-public class SpringBlockingSubscriptionWithPositionPersistenceForRedis implements BlockingSubscription<CloudEvent> {
+public class SpringBlockingSubscriptionWithPositionPersistenceInRedis implements BlockingSubscription<CloudEvent> {
 
     private final PositionAwareBlockingSubscription subscription;
     private final BlockingSubscriptionPositionStorage storage;
@@ -50,7 +50,7 @@ public class SpringBlockingSubscriptionWithPositionPersistenceForRedis implement
      * @param subscription The subscription that will read events from the event store
      * @param storage      The storage that'll be used to store the subscription position
      */
-    public SpringBlockingSubscriptionWithPositionPersistenceForRedis(PositionAwareBlockingSubscription subscription, BlockingSubscriptionPositionStorage storage) {
+    public SpringBlockingSubscriptionWithPositionPersistenceInRedis(PositionAwareBlockingSubscription subscription, BlockingSubscriptionPositionStorage storage) {
         requireNonNull(subscription, "subscription cannot be null");
         requireNonNull(storage, "Storage cannot be null");
         this.storage = storage;

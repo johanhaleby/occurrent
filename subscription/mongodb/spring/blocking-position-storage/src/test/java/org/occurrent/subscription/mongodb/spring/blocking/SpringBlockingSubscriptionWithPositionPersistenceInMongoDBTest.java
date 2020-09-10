@@ -76,7 +76,7 @@ import static org.occurrent.subscription.mongodb.MongoDBFilterSpecification.FULL
 import static org.occurrent.time.TimeConversion.toLocalDateTime;
 
 @Testcontainers
-public class SpringBlockingSubscriptionWithPositionPersistenceForMongoDBTest {
+public class SpringBlockingSubscriptionWithPositionPersistenceInMongoDBTest {
 
     @Container
     private static final MongoDBContainer mongoDBContainer = new MongoDBContainer("mongo:4.2.8");
@@ -86,7 +86,7 @@ public class SpringBlockingSubscriptionWithPositionPersistenceForMongoDBTest {
     FlushMongoDBExtension flushMongoDBExtension = new FlushMongoDBExtension(new ConnectionString(mongoDBContainer.getReplicaSetUrl()));
 
     private EventStore mongoEventStore;
-    private SpringBlockingSubscriptionWithPositionPersistenceForMongoDB subscription;
+    private SpringBlockingSubscriptionWithPositionPersistenceInMongoDB subscription;
     private ObjectMapper objectMapper;
     private MongoTemplate mongoTemplate;
     private MongoClient mongoClient;
@@ -102,7 +102,7 @@ public class SpringBlockingSubscriptionWithPositionPersistenceForMongoDBTest {
         mongoEventStore = new SpringBlockingMongoEventStore(mongoTemplate, eventStoreConfig);
         PositionAwareBlockingSubscription positionAwareBlockingSubscription = new SpringBlockingSubscriptionForMongoDB(mongoTemplate, connectionString.getCollection(), timeRepresentation);
         BlockingSubscriptionPositionStorage storage = new SpringBlockingSubscriptionPositionStorageForMongoDB(mongoTemplate, RESUME_TOKEN_COLLECTION);
-        this.subscription = new SpringBlockingSubscriptionWithPositionPersistenceForMongoDB(positionAwareBlockingSubscription, storage);
+        this.subscription = new SpringBlockingSubscriptionWithPositionPersistenceInMongoDB(positionAwareBlockingSubscription, storage);
         objectMapper = new ObjectMapper();
     }
 

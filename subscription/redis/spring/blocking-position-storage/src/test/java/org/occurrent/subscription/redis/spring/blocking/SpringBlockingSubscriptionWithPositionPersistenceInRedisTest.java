@@ -69,7 +69,7 @@ import static org.awaitility.Durations.ONE_SECOND;
 import static org.hamcrest.Matchers.equalTo;
 
 @Testcontainers
-class SpringBlockingSubscriptionWithPositionPersistenceForRedisTest {
+class SpringBlockingSubscriptionWithPositionPersistenceInRedisTest {
 
     @Container
     private static final MongoDBContainer mongoDBContainer = new MongoDBContainer("mongo:4.2.8");
@@ -87,7 +87,7 @@ class SpringBlockingSubscriptionWithPositionPersistenceForRedisTest {
     private ObjectMapper objectMapper;
     private SpringBlockingSubscriptionForMongoDB springBlockingSubscriptionForMongoDB;
     private LettuceConnectionFactory lettuceConnectionFactory;
-    private SpringBlockingSubscriptionWithPositionPersistenceForRedis redisSubscription;
+    private SpringBlockingSubscriptionWithPositionPersistenceInRedis redisSubscription;
     private RedisOperations<String, String> redisTemplate;
 
     @BeforeEach
@@ -102,7 +102,7 @@ class SpringBlockingSubscriptionWithPositionPersistenceForRedisTest {
         lettuceConnectionFactory = new LettuceConnectionFactory(redisContainer.getHost(), redisContainer.getFirstMappedPort());
         redisTemplate = createRedisTemplate(lettuceConnectionFactory);
         BlockingSubscriptionPositionStorage storage = new SpringBlockingSubscriptionPositionStorageForRedis(redisTemplate);
-        redisSubscription = new SpringBlockingSubscriptionWithPositionPersistenceForRedis(springBlockingSubscriptionForMongoDB, storage);
+        redisSubscription = new SpringBlockingSubscriptionWithPositionPersistenceInRedis(springBlockingSubscriptionForMongoDB, storage);
         objectMapper = new ObjectMapper();
     }
 

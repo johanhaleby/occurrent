@@ -74,7 +74,7 @@ import static org.occurrent.time.TimeConversion.toLocalDateTime;
 
 @SuppressWarnings("ConstantConditions")
 @Testcontainers
-public class BlockingSubscriptionWithPositionPersistenceForMongoDBTest {
+public class BlockingSubscriptionWithPositionPersistenceInMongoDBTest {
 
     @Container
     private static final MongoDBContainer mongoDBContainer = new MongoDBContainer("mongo:4.2.8");
@@ -84,7 +84,7 @@ public class BlockingSubscriptionWithPositionPersistenceForMongoDBTest {
     FlushMongoDBExtension flushMongoDBExtension = new FlushMongoDBExtension(new ConnectionString(mongoDBContainer.getReplicaSetUrl()));
 
     private EventStore mongoEventStore;
-    private BlockingSubscriptionWithPositionPersistenceForMongoDB subscription;
+    private BlockingSubscriptionWithPositionPersistenceInMongoDB subscription;
     private ObjectMapper objectMapper;
     private ExecutorService subscriptionExecutor;
     private MongoClient mongoClient;
@@ -321,9 +321,9 @@ public class BlockingSubscriptionWithPositionPersistenceForMongoDBTest {
                 .build());
     }
 
-    private BlockingSubscriptionWithPositionPersistenceForMongoDB newPersistentSubscription(String eventCollectionName, TimeRepresentation timeRepresentation, RetryStrategy retryStrategy) {
+    private BlockingSubscriptionWithPositionPersistenceInMongoDB newPersistentSubscription(String eventCollectionName, TimeRepresentation timeRepresentation, RetryStrategy retryStrategy) {
         PositionAwareBlockingSubscription blockingSubscriptionForMongoDB = new BlockingSubscriptionForMongoDB(database, eventCollectionName, timeRepresentation, subscriptionExecutor, retryStrategy);
         BlockingSubscriptionPositionStorage storage = new BlockingSubscriptionPositionStorageForMongoDB(database.getCollection(TIMESTAMP_TOKEN_COLLECTION));
-        return new BlockingSubscriptionWithPositionPersistenceForMongoDB(blockingSubscriptionForMongoDB, storage);
+        return new BlockingSubscriptionWithPositionPersistenceInMongoDB(blockingSubscriptionForMongoDB, storage);
     }
 }

@@ -14,7 +14,7 @@
  * limitations under the License.
  */
 
-package org.occurrent.subscription.mongodb.nativedriver.blocking;
+package org.occurrent.subscription.mongodb.spring.blocking;
 
 import io.cloudevents.CloudEvent;
 import org.occurrent.subscription.StartAt;
@@ -25,20 +25,21 @@ import org.occurrent.subscription.api.blocking.BlockingSubscriptionPositionStora
 import org.occurrent.subscription.api.blocking.PositionAwareBlockingSubscription;
 import org.occurrent.subscription.api.blocking.Subscription;
 
+import javax.annotation.PreDestroy;
 import java.util.function.Consumer;
 import java.util.function.Supplier;
 
 import static java.util.Objects.requireNonNull;
 
 /**
- * Wraps a {@link BlockingSubscriptionForMongoDB} and adds persistent subscription position support. It stores the subscription position
- * after an "action" (the consumer in this method {@link BlockingSubscriptionForMongoDB#subscribe(String, Consumer)}) has completed successfully.
+ * Wraps a {@link BlockingSubscription} (with optimized support {@link SpringBlockingSubscriptionForMongoDB}) and adds persistent subscription position support. It stores the subscription position
+ * after an "action" (the consumer in this method {@link SpringBlockingSubscriptionWithPositionPersistenceInMongoDB#subscribe(String, Consumer)}) has completed successfully.
  * It stores the subscription position in MongoDB. Note that it doesn't have to be the same MongoDB database that stores the actual events.
  * <p>
  * Note that this implementation stores the subscription position after _every_ action. If you have a lot of events and duplication is not
  * that much of a deal consider cloning/extending this class and add your own customizations.
  */
-public class BlockingSubscriptionWithPositionPersistenceForMongoDB implements BlockingSubscription<CloudEvent> {
+public class SpringBlockingSubscriptionWithPositionPersistenceInMongoDB implements BlockingSubscription<CloudEvent> {
 
     private final PositionAwareBlockingSubscription subscription;
     private final BlockingSubscriptionPositionStorage storage;
@@ -47,11 +48,12 @@ public class BlockingSubscriptionWithPositionPersistenceForMongoDB implements Bl
      * Create a subscription that uses the Native sync Java MongoDB driver to persists the subscription position in MongoDB.
      *
      * @param subscription The subscription that will read events from the event store
-     * @param storage      The storage that holds the subscription positions
+     * @param storage      The {@link BlockingSubscriptionPositionStorage} that'll be used to persist the stream position
      */
-    public BlockingSubscriptionWithPositionPersistenceForMongoDB(PositionAwareBlockingSubscription subscription, BlockingSubscriptionPositionStorage storage) {
+    public SpringBlockingSubscriptionWithPositionPersistenceInMongoDB(PositionAwareBlockingSubscription subscription, BlockingSubscriptionPositionStorage storage) {
         requireNonNull(subscription, "subscription cannot be null");
         requireNonNull(storage, BlockingSubscriptionPositionStorage.class.getSimpleName() + " cannot be null");
+
         this.storage = storage;
         this.subscription = subscription;
     }
@@ -72,12 +74,11 @@ public class BlockingSubscriptionWithPositionPersistenceForMongoDB implements Bl
     }
 
     /**
-     * Start streaming cloud events from the event store and persist the subscription position in MongoDB
+     * Start listening to cloud events persisted to the event store.
      *
      * @param subscriptionId The id of the subscription, must be unique!
      * @param filter         The filter to apply for this subscription. Only events matching the filter will cause the <code>action</code> to be called.
      * @param action         This action will be invoked for each cloud event that is stored in the EventStore that matches the supplied <code>filter</code>.
-     * @return The subscription
      */
     @Override
     public Subscription subscribe(String subscriptionId, SubscriptionFilter filter, Consumer<CloudEvent> action) {
@@ -89,7 +90,6 @@ public class BlockingSubscriptionWithPositionPersistenceForMongoDB implements Bl
             }
             return StartAt.subscriptionPosition(subscriptionPosition);
         };
-
         return subscribe(subscriptionId, filter, startAtSupplier, action);
     }
 
@@ -97,12 +97,19 @@ public class BlockingSubscriptionWithPositionPersistenceForMongoDB implements Bl
         subscription.cancelSubscription(subscriptionId);
     }
 
+    /**
+     * Cancel a subscription. This means that it'll no longer receive events as they are persisted to the event store.
+     * The subscription position that is persisted to MongoDB will also be removed.
+     *
+     * @param subscriptionId The subscription id to cancel
+     */
     public void cancelSubscription(String subscriptionId) {
         pauseSubscription(subscriptionId);
         storage.delete(subscriptionId);
     }
 
-    public void shutdown() {
+    @PreDestroy
+    public void shutdownSubscribers() {
         subscription.shutdown();
     }
 }

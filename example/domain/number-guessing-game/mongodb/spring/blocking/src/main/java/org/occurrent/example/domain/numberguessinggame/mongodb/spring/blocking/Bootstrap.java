@@ -27,7 +27,7 @@ import org.occurrent.subscription.api.blocking.BlockingSubscriptionPositionStora
 import org.occurrent.subscription.api.blocking.PositionAwareBlockingSubscription;
 import org.occurrent.subscription.mongodb.spring.blocking.SpringBlockingSubscriptionForMongoDB;
 import org.occurrent.subscription.mongodb.spring.blocking.SpringBlockingSubscriptionPositionStorageForMongoDB;
-import org.occurrent.subscription.mongodb.spring.blocking.SpringBlockingSubscriptionWithPositionPersistenceForMongoDB;
+import org.occurrent.subscription.mongodb.spring.blocking.SpringBlockingSubscriptionWithPositionPersistenceInMongoDB;
 import org.springframework.amqp.core.TopicExchange;
 import org.springframework.amqp.rabbit.annotation.EnableRabbit;
 import org.springframework.amqp.support.converter.Jackson2JsonMessageConverter;
@@ -67,8 +67,8 @@ public class Bootstrap {
     }
 
     @Bean
-    public SpringBlockingSubscriptionWithPositionPersistenceForMongoDB springBlockingSubscriptionWithPositionPersistenceForMongoDB(PositionAwareBlockingSubscription subscription, BlockingSubscriptionPositionStorage storage) {
-        return new SpringBlockingSubscriptionWithPositionPersistenceForMongoDB(subscription, storage);
+    public SpringBlockingSubscriptionWithPositionPersistenceInMongoDB springBlockingSubscriptionWithPositionPersistenceForMongoDB(PositionAwareBlockingSubscription subscription, BlockingSubscriptionPositionStorage storage) {
+        return new SpringBlockingSubscriptionWithPositionPersistenceInMongoDB(subscription, storage);
     }
 
     @Bean
@@ -83,7 +83,7 @@ public class Bootstrap {
 
     @Bean
     public BlockingSubscription<CloudEvent> subscriptionWithAutomaticPersistence(PositionAwareBlockingSubscription subscription, BlockingSubscriptionPositionStorage storage) {
-        return new SpringBlockingSubscriptionWithPositionPersistenceForMongoDB(subscription, storage);
+        return new SpringBlockingSubscriptionWithPositionPersistenceInMongoDB(subscription, storage);
     }
 
     @Bean

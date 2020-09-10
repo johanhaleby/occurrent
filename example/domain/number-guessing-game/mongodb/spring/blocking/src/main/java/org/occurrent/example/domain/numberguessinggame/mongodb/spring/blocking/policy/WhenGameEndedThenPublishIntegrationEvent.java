@@ -21,7 +21,7 @@ import org.occurrent.cloudevents.OccurrentExtensionGetter;
 import org.occurrent.eventstore.api.blocking.EventStoreQueries;
 import org.occurrent.example.domain.numberguessinggame.model.domainevents.*;
 import org.occurrent.example.domain.numberguessinggame.mongodb.spring.blocking.infrastructure.Serialization;
-import org.occurrent.subscription.mongodb.spring.blocking.SpringBlockingSubscriptionWithPositionPersistenceForMongoDB;
+import org.occurrent.subscription.mongodb.spring.blocking.SpringBlockingSubscriptionWithPositionPersistenceInMongoDB;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.amqp.core.TopicExchange;
@@ -45,12 +45,12 @@ class WhenGameEndedThenPublishIntegrationEvent {
 
     private final EventStoreQueries eventStoreQueries;
     private final Serialization serialization;
-    private final SpringBlockingSubscriptionWithPositionPersistenceForMongoDB streamer;
+    private final SpringBlockingSubscriptionWithPositionPersistenceInMongoDB streamer;
     private final RabbitTemplate rabbitTemplate;
     private final TopicExchange numberGuessingGameTopic;
 
     WhenGameEndedThenPublishIntegrationEvent(EventStoreQueries eventStoreQueries, Serialization serialization,
-                                             SpringBlockingSubscriptionWithPositionPersistenceForMongoDB streamer,
+                                             SpringBlockingSubscriptionWithPositionPersistenceInMongoDB streamer,
                                              RabbitTemplate rabbitTemplate, TopicExchange numberGuessingGameTopic) {
         this.eventStoreQueries = eventStoreQueries;
         this.serialization = serialization;

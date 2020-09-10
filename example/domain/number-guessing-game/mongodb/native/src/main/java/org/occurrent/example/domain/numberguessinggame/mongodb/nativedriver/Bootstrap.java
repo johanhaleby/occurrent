@@ -46,7 +46,7 @@ import org.occurrent.subscription.api.blocking.BlockingSubscriptionPositionStora
 import org.occurrent.subscription.mongodb.MongoDBFilterSpecification;
 import org.occurrent.subscription.mongodb.nativedriver.blocking.BlockingSubscriptionForMongoDB;
 import org.occurrent.subscription.mongodb.nativedriver.blocking.BlockingSubscriptionPositionStorageForMongoDB;
-import org.occurrent.subscription.mongodb.nativedriver.blocking.BlockingSubscriptionWithPositionPersistenceForMongoDB;
+import org.occurrent.subscription.mongodb.nativedriver.blocking.BlockingSubscriptionWithPositionPersistenceInMongoDB;
 import org.occurrent.subscription.mongodb.nativedriver.blocking.RetryStrategy;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -76,11 +76,11 @@ public class Bootstrap {
     private static final String NUMBER_GUESSING_GAME_TOPIC = "number-guessing-game";
 
     private final Javalin javalin;
-    private final BlockingSubscriptionWithPositionPersistenceForMongoDB subscription;
+    private final BlockingSubscriptionWithPositionPersistenceInMongoDB subscription;
     private final MongoClient mongoClient;
     private final RabbitMQConnectionAndChannel rabbitMQConnectionAndChannel;
 
-    public Bootstrap(Javalin javalin, BlockingSubscriptionWithPositionPersistenceForMongoDB subscription,
+    public Bootstrap(Javalin javalin, BlockingSubscriptionWithPositionPersistenceInMongoDB subscription,
                      MongoClient mongoClient, RabbitMQConnectionAndChannel rabbitMQConnectionAndChannel) {
         this.javalin = javalin;
         this.subscription = subscription;
@@ -104,7 +104,7 @@ public class Bootstrap {
         Javalin javalin = Javalin.create(cfg -> cfg.showJavalinBanner = false).start(7000);
 
         WhatIsTheStatusOfGame whatIsTheStatusOfGame = initializeWhatIsTheStatusOfGame(mongoEventStore, serialization);
-        BlockingSubscriptionWithPositionPersistenceForMongoDB subscription = initializeSubscription(mongoClient);
+        BlockingSubscriptionWithPositionPersistenceInMongoDB subscription = initializeSubscription(mongoClient);
         LatestGamesOverview latestGamesOverview = initializeLatestGamesOverview(mongoClient, serialization, subscription);
         RabbitMQConnectionAndChannel rabbitMQConnectionAndChannel = initializeRabbitMQConnection("amqp://localhost:5672").declareTopic(NUMBER_GUESSING_GAME_TOPIC, true);
         initializeNumberGuessingGameCompletedIntegrationEventPublisher(mongoEventStore, serialization::deserialize, subscription, rabbitMQConnectionAndChannel.channel, objectMapper);
@@ -197,11 +197,11 @@ public class Bootstrap {
                 .build();
     }
 
-    private static BlockingSubscriptionWithPositionPersistenceForMongoDB initializeSubscription(MongoClient mongoClient) {
+    private static BlockingSubscriptionWithPositionPersistenceInMongoDB initializeSubscription(MongoClient mongoClient) {
         MongoDatabase database = mongoClient.getDatabase(DATABASE_NAME);
         BlockingSubscriptionForMongoDB blockingSubscriptionForMongoDB = new BlockingSubscriptionForMongoDB(database, EVENTS_COLLECTION_NAME, TimeRepresentation.DATE, Executors.newCachedThreadPool(), RetryStrategy.fixed(200));
         BlockingSubscriptionPositionStorage storage = new BlockingSubscriptionPositionStorageForMongoDB(database, SUBSCRIPTION_POSITIONS_COLLECTION_NAME);
-        return new BlockingSubscriptionWithPositionPersistenceForMongoDB(blockingSubscriptionForMongoDB, storage);
+        return new BlockingSubscriptionWithPositionPersistenceInMongoDB(blockingSubscriptionForMongoDB, storage);
     }
 
     private static LatestGamesOverview initializeLatestGamesOverview(MongoClient mongoClient, Serialization serialization, BlockingSubscription<CloudEvent> subscription) {
