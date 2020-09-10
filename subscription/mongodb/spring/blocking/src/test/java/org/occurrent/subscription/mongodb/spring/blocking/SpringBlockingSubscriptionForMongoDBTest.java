@@ -308,7 +308,7 @@ public class SpringBlockingSubscriptionForMongoDBTest {
                 .withId(e.getEventId())
                 .withSource(URI.create("http://name"))
                 .withType(e.getClass().getName())
-                .withTime(TimeConversion.toLocalDateTime(e.getTimestamp()).atZone(UTC))
+                .withTime(TimeConversion.toLocalDateTime(e.getTimestamp()).atOffset(UTC))
                 .withSubject(e.getName())
                 .withDataContentType("application/json")
                 .withData(CheckedFunction.unchecked(objectMapper::writeValueAsBytes).apply(e))

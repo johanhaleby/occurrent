@@ -34,7 +34,7 @@ import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.*;
 
 import java.time.LocalDateTime;
-import java.time.ZoneId;
+import java.time.OffsetDateTime;
 import java.time.format.DateTimeFormatter;
 import java.util.UUID;
 
@@ -168,6 +168,6 @@ public class WebApi {
     }
 
     private static String fmt(LocalDateTime localDateTime) {
-        return DATE_TIME_FORMATTER.format(localDateTime.atZone(ZoneId.systemDefault()));
+        return DATE_TIME_FORMATTER.format(localDateTime.atOffset(OffsetDateTime.now().getOffset()));
     }
 }

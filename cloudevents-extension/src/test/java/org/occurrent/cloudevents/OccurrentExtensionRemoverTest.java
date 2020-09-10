@@ -19,25 +19,22 @@ package org.occurrent.cloudevents;
 
 import io.cloudevents.CloudEvent;
 import io.cloudevents.core.v1.CloudEventBuilder;
-import org.assertj.core.api.SoftAssertions;
-import org.assertj.core.api.junit.jupiter.SoftAssertionsExtension;
 import org.junit.jupiter.api.Test;
-import org.junit.jupiter.api.extension.ExtendWith;
 
 import java.net.URI;
-import java.time.ZonedDateTime;
+import java.time.OffsetDateTime;
 
 import static java.nio.charset.StandardCharsets.UTF_8;
+import static org.assertj.core.api.Assertions.assertThat;
 
-@ExtendWith(SoftAssertionsExtension.class)
 class OccurrentExtensionRemoverTest {
 
     @Test
-    void removes_all_occurrent_extensions(SoftAssertions softly) {
+    void removes_all_occurrent_extensions() {
         // Given
         CloudEvent originalCloudEvent = new CloudEventBuilder()
                 .withId("id")
-                .withTime(ZonedDateTime.now())
+                .withTime(OffsetDateTime.now())
                 .withDataSchema(URI.create("urn:schema"))
                 .withSource(URI.create("urn:test"))
                 .withSubject("subject")
@@ -53,10 +50,6 @@ class OccurrentExtensionRemoverTest {
         CloudEvent removedExtensionsFromOccurrentCloudEvent = OccurrentExtensionRemover.removeOccurrentExtensions(occurrentCloudEvent);
 
         // Then
-
-        // Unfortunately "assertThat(removedExtensionsFromOccurrentCloudEvent).isEqualTo(originalCloudEvent);" doesn't work, see https://github.com/cloudevents/sdk-java/issues/215
-        OccurrentCloudEventExtension.KEYS.forEach(occurrentExtensionKey -> {
-            softly.assertThat(removedExtensionsFromOccurrentCloudEvent.getExtension(occurrentExtensionKey)).isNull();
-        });
+        assertThat(removedExtensionsFromOccurrentCloudEvent).isEqualTo(originalCloudEvent);
     }
 }

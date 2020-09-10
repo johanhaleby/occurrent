@@ -13,9 +13,9 @@ This is because MongoDB internally represents a Date with only millisecond resol
 
 > Internally, Date objects are stored as a signed 64-bit integer representing the number of milliseconds since the Unix epoch (Jan 1, 1970).
 
-Since the Java CloudEvent SDK uses `ZonedDateTime` we'll lose nanosecond precision and the timezone if converting the `ZonedDateTime` 
+Since the Java CloudEvent SDK uses `OffsetDateTime` we'll lose nanosecond precision and the timezone if converting the `OffsetDateTime` 
 to `Date`. This is really bad since it goes against the "understandability" and "transparent" goals of Occurrent. I.e. if you create
-a CloudEvent with a ZonedDateTime containing nanoseconds in timezone "Europe/Stockholm" you would expect to get the same value back on read 
+a CloudEvent with a OffsetDateTime containing nanoseconds in timezone "Europe/Stockholm" you would expect to get the same value back on read 
 which is not possible if we convert it to a date. 
 
 ## Decision
@@ -48,5 +48,5 @@ The `EventStoreQueries` api event supports querying custom fields right now
 ## Consequences
 
 This decision is quite sad since it's still very common represent time in Java application as a `Date`. In these cases it would be perfectly 
-fine to use the native `ISODate` in MongoDB. If converting a `Date` to a `ZonedDateTime` it would be possible to get the best of both worlds and just
+fine to use the native `ISODate` in MongoDB. If converting a `Date` to a `OffsetDateTime` it would be possible to get the best of both worlds and just
 store the `Date` in MongoDB and one of the nice benefits of using CloudEvents are lost. 

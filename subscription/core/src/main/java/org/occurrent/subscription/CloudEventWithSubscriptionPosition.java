@@ -21,7 +21,7 @@ import io.cloudevents.SpecVersion;
 import io.cloudevents.lang.Nullable;
 
 import java.net.URI;
-import java.time.ZonedDateTime;
+import java.time.OffsetDateTime;
 import java.util.Objects;
 import java.util.Set;
 
@@ -75,7 +75,7 @@ public class CloudEventWithSubscriptionPosition implements CloudEvent {
     }
 
     @Nullable
-    public ZonedDateTime getTime() {
+    public OffsetDateTime getTime() {
         return cloudEvent.getTime();
     }
 

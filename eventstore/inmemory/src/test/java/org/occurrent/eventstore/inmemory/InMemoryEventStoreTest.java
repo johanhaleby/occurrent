@@ -652,7 +652,7 @@ public class InMemoryEventStoreTest {
                 .withId(e.getEventId())
                 .withSource(NAME_SOURCE)
                 .withType(e.getClass().getName())
-                .withTime(toLocalDateTime(e.getTimestamp()).atZone(UTC))
+                .withTime(toLocalDateTime(e.getTimestamp()).atOffset(UTC))
                 .withSubject(e.getName())
                 .withData(unchecked(objectMapper::writeValueAsBytes).apply(e))
                 .build();

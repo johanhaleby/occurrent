@@ -24,7 +24,6 @@ import org.occurrent.cloudevents.OccurrentCloudEventExtension;
 import org.occurrent.mongodb.timerepresentation.TimeRepresentation;
 
 import java.time.OffsetDateTime;
-import java.time.ZonedDateTime;
 import java.util.Date;
 
 import static java.nio.charset.StandardCharsets.UTF_8;
@@ -42,8 +41,7 @@ public class OccurrentCloudEventMongoDBDocumentMapper {
 
     public static Document convertToDocument(EventFormat eventFormat, TimeRepresentation timeRepresentation,
                                              String streamId, long streamVersion, CloudEvent cloudEvent) {
-        final CloudEvent cloudEventToUse = timeRepresentation == RFC_3339_STRING ? fixTimestamp(cloudEvent) : cloudEvent;
-        byte[] bytes = eventFormat.serialize(cloudEventToUse);
+        byte[] bytes = eventFormat.serialize(cloudEvent);
         String serializedAsString = new String(bytes, UTF_8);
         Document cloudEventDocument = Document.parse(serializedAsString);
         cloudEventDocument.put(OccurrentCloudEventExtension.STREAM_ID, streamId);
@@ -53,17 +51,17 @@ public class OccurrentCloudEventMongoDBDocumentMapper {
         }
 
         if (timeRepresentation == DATE && cloudEvent.getTime() != null) {
-            ZonedDateTime time = cloudEvent.getTime();
+            OffsetDateTime time = cloudEvent.getTime();
             if (!time.truncatedTo(MILLIS).equals(time)) {
-                throw new IllegalArgumentException("The " + ZonedDateTime.class.getSimpleName() + " in the CloudEvent time field contains micro-/nanoseconds. " +
+                throw new IllegalArgumentException("The " + OffsetDateTime.class.getSimpleName() + " in the CloudEvent time field contains micro-/nanoseconds. " +
                         "This is is not possible to represent when using " + TimeRepresentation.class.getSimpleName() + " " + DATE.name() +
                         ", either change to " + TimeRepresentation.class.getSimpleName() + " " + RFC_3339_STRING.name() +
-                        " or remove micro-/nanoseconds using \"zonedDateTime.truncatedTo(ChronoUnit.MILLIS)\".");
-            } else if (!time.equals(time.withZoneSameInstant(UTC))) {
-                throw new IllegalArgumentException("The " + ZonedDateTime.class.getSimpleName() + " in the CloudEvent time field is not defined using UTC. " +
+                        " or remove micro-/nanoseconds using \"offsetDateTime.truncatedTo(ChronoUnit.MILLIS)\".");
+            } else if (!time.equals(time.withOffsetSameInstant(UTC))) {
+                throw new IllegalArgumentException("The " + OffsetDateTime.class.getSimpleName() + " in the CloudEvent time field is not defined in UTC. " +
                         TimeRepresentation.class.getSimpleName() + " " + DATE.name() + " require UTC as timezone to not loose precision. " +
                         "Either change to " + TimeRepresentation.class.getSimpleName() + " " + RFC_3339_STRING.name() +
-                        " or convert the " + ZonedDateTime.class.getSimpleName() + " to UTC using e.g. \"zonedDateTime.withZoneSameInstant(ZoneOffset.UTC)\".");
+                        " or convert the " + OffsetDateTime.class.getSimpleName() + " to UTC using e.g. \"offsetDateTime.withOffsetSameInstant(ZoneOffset.UTC)\".");
             }
 
             // Convert date string to a date in order to be able to perform date/time queries on the "time" property name
@@ -82,8 +80,8 @@ public class OccurrentCloudEventMongoDBDocumentMapper {
             Object time = document.get("time"); // Be a bit nice and don't enforce Date here if TimeRepresentation has been changed
             if (time instanceof Date) {
                 Date timeAsDate = (Date) time;
-                ZonedDateTime zonedDateTime = ZonedDateTime.ofInstant(timeAsDate.toInstant(), UTC);
-                String format = RFC_3339_DATE_TIME_FORMATTER.format(zonedDateTime);
+                OffsetDateTime offsetDateTime = OffsetDateTime.ofInstant(timeAsDate.toInstant(), UTC);
+                String format = RFC_3339_DATE_TIME_FORMATTER.format(offsetDateTime);
                 document.put("time", format);
             }
         }
@@ -91,16 +89,5 @@ public class OccurrentCloudEventMongoDBDocumentMapper {
         byte[] eventJsonBytes = eventJsonString.getBytes(UTF_8);
         // When converting to JSON (document.toJson()) the stream version is interpreted as an int in Jackson, we convert it manually to long afterwards.
         return CloudEventBuilder.v1(eventFormat.deserialize(eventJsonBytes)).withExtension(OccurrentCloudEventExtension.STREAM_VERSION, document.getLong(OccurrentCloudEventExtension.STREAM_VERSION)).build();
-    }
-
-    // Creates a workaround for issue 200: https://github.com/cloudevents/sdk-java/issues/200
-    // Remove when milestone 2 is released
-    private static CloudEvent fixTimestamp(CloudEvent cloudEvent) {
-        if (cloudEvent.getTime() == null) {
-            return cloudEvent;
-        }
-        return CloudEventBuilder.v1(cloudEvent)
-                .withTime(OffsetDateTime.from(cloudEvent.getTime()).toZonedDateTime())
-                .build();
     }
 }

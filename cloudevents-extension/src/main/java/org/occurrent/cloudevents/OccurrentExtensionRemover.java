@@ -17,14 +17,12 @@ public class OccurrentExtensionRemover {
      * event store but you don't want to occurrent extensions (metadata) to be included.
      *
      * @param cloudEvent The cloud event to remove Occurrent's {@code CloudEvent} extensions from.
-     * @return A {@code CloudEvent} without Occurrents extension
+     * @return A {@code CloudEvent} without Occurrent's extension
      */
     public static CloudEvent removeOccurrentExtensions(CloudEvent cloudEvent) {
         Objects.requireNonNull(cloudEvent, CloudEvent.class.getSimpleName() + " cannot be null");
-        io.cloudevents.core.v1.CloudEventBuilder b = CloudEventBuilder.v1(cloudEvent);
-        OccurrentCloudEventExtension.KEYS.forEach(occurrentExtensionKey -> {
-            b.setExtension(occurrentExtensionKey, (String) null);
-        });
-        return b.build();
+        CloudEventBuilder builder = CloudEventBuilder.v1(cloudEvent);
+        OccurrentCloudEventExtension.KEYS.forEach(builder::withoutExtension);
+        return builder.build();
     }
 }

@@ -97,7 +97,7 @@ public class Serialization {
                 .withSource(source)
                 .withSubject(e.gameId().toString())
                 .withType(e.getClass().getSimpleName())
-                .withTime(e.timestamp().atZone(UTC).truncatedTo(ChronoUnit.MILLIS))
+                .withTime(e.timestamp().atOffset(UTC).truncatedTo(ChronoUnit.MILLIS))
                 .withData(toBytes(e))
                 .build();
     }

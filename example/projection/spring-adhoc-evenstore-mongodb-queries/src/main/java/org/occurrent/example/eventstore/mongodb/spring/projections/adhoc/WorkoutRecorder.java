@@ -47,7 +47,7 @@ public class WorkoutRecorder {
                         .withType(e.getClass().getName())
                         .withSubject(e.getWorkoutId().toString())
                         .withSource(URI.create("http://source"))
-                        .withTime(e.getCompletedAt().atZone(UTC))
+                        .withTime(e.getCompletedAt().atOffset(UTC))
                         .withData(CheckedFunction.unchecked(objectMapper::writeValueAsBytes).apply(e))
                         .build())
                 .collect(groupingBy(CloudEventAttributes::getSubject))

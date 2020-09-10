@@ -17,7 +17,7 @@
 package org.occurrent.mongodb.timerepresentation;
 
 
-import java.time.ZonedDateTime;
+import java.time.OffsetDateTime;
 import java.util.Date;
 
 /**
@@ -37,7 +37,7 @@ public enum TimeRepresentation {
      * <p>Note that the downside of using this is that you cannot do range queries on the "time" field.
      * If you need nanosecond precision and/or timezone information <i>and</i> need to time queries
      * then it's recommended to add a custom field (extension) to your {@code CloudEvent}'s
-     * where you convert the {@link ZonedDateTime} to a {@link Date}. Then index this field and
+     * where you convert the {@link OffsetDateTime} to a {@link Date}. Then index this field and
      * query it using the Mongo Client API (or a derivative such as MongoTemplate in Spring).
      * </p>
      */

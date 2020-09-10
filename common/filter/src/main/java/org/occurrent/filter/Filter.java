@@ -21,7 +21,7 @@ import org.occurrent.cloudevents.OccurrentCloudEventExtension;
 import org.occurrent.condition.Condition;
 
 import java.net.URI;
-import java.time.ZonedDateTime;
+import java.time.OffsetDateTime;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.List;
@@ -212,11 +212,11 @@ public abstract class Filter {
         return filter(DATA_CONTENT_TYPE, condition);
     }
 
-    public static Filter time(ZonedDateTime value) {
+    public static Filter time(OffsetDateTime value) {
         return time(eq(value));
     }
 
-    public static Filter time(Condition<ZonedDateTime> condition) {
+    public static Filter time(Condition<OffsetDateTime> condition) {
         return filter(TIME, condition);
     }
 

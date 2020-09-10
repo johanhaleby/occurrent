@@ -127,7 +127,7 @@ public class SpringReactorSubscriptionPositionStorageForMongoDBTest {
                 .withId(UUID.randomUUID().toString())
                 .withSource(URI.create("http://name"))
                 .withType(e.getClass().getSimpleName())
-                .withTime(toLocalDateTime(e.getTimestamp()).atZone(UTC))
+                .withTime(toLocalDateTime(e.getTimestamp()).atOffset(UTC))
                 .withSubject(e.getName())
                 .withDataContentType("application/json")
                 .withData(unchecked(objectMapper::writeValueAsBytes).apply(e))

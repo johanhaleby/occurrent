@@ -29,10 +29,7 @@ import org.junit.jupiter.api.Test;
 import org.occurrent.cloudevents.OccurrentCloudEventExtension;
 
 import java.net.URI;
-import java.time.LocalDateTime;
-import java.time.ZoneId;
-import java.time.ZoneOffset;
-import java.time.ZonedDateTime;
+import java.time.*;
 import java.util.Date;
 import java.util.HashMap;
 import java.util.Map;
@@ -63,12 +60,12 @@ class OccurrentCloudEventMongoDBDocumentMapperTest {
         @Test
         void converts_cloud_event_to_document_with_expected_values() {
             // Given
-            ZonedDateTime zonedDateTime = ZonedDateTime.of(LocalDateTime.of(2020, 7, 26, 9, 13, 3, 223_000000), UTC);
+            OffsetDateTime offsetDateTime = OffsetDateTime.of(LocalDateTime.of(2020, 7, 26, 9, 13, 3, 223_000000), UTC);
 
             CloudEvent cloudEvent = new CloudEventBuilder()
                     .withSubject("subject")
                     .withType("type")
-                    .withTime(zonedDateTime)
+                    .withTime(offsetDateTime)
                     .withSource(URI.create("urn:name"))
                     .withId("id")
                     .withData("application/json", "{\"name\" : \"hello\"}".getBytes(UTF_8))
@@ -81,7 +78,7 @@ class OccurrentCloudEventMongoDBDocumentMapperTest {
             assertAll(
                     () -> assertThat(document.getString("subject")).isEqualTo("subject"),
                     () -> assertThat(document.getString("type")).isEqualTo("type"),
-                    () -> assertThat(document.getString("time")).isEqualTo(RFC_3339_DATE_TIME_FORMATTER.format(zonedDateTime)),
+                    () -> assertThat(document.getString("time")).isEqualTo(RFC_3339_DATE_TIME_FORMATTER.format(offsetDateTime)),
                     () -> assertThat(document.getString("source")).isEqualTo("urn:name"),
                     () -> assertThat(document.getString("id")).isEqualTo("id"),
                     () -> assertThat(document.get("data", Map.class)).containsOnly(entry("name", "hello")),
@@ -94,12 +91,12 @@ class OccurrentCloudEventMongoDBDocumentMapperTest {
         @Test
         void converts_cloud_event_with_nanoseconds_in_non_utc_timezone_to_rfc_3339() {
             // Given
-            ZonedDateTime zonedDateTime = ZonedDateTime.of(LocalDateTime.of(2020, 7, 26, 9, 13, 3, 123_456_789), ZoneId.of("Europe/Stockholm"));
+            OffsetDateTime offsetDateTime = offsetDateTimeFrom(LocalDateTime.of(2020, 7, 26, 9, 13, 3, 123_456_789), ZoneId.of("Europe/Stockholm"));
 
             CloudEvent cloudEvent = new CloudEventBuilder()
                     .withSubject("subject")
                     .withType("type")
-                    .withTime(zonedDateTime)
+                    .withTime(offsetDateTime)
                     .withSource(URI.create("urn:name"))
                     .withId("id")
                     .withData("application/json", "{\"name\" : \"hello\"}".getBytes(UTF_8))
@@ -112,7 +109,7 @@ class OccurrentCloudEventMongoDBDocumentMapperTest {
             assertAll(
                     () -> assertThat(document.getString("subject")).isEqualTo("subject"),
                     () -> assertThat(document.getString("type")).isEqualTo("type"),
-                    () -> assertThat(document.getString("time")).isEqualTo(RFC_3339_DATE_TIME_FORMATTER.format(zonedDateTime)),
+                    () -> assertThat(document.getString("time")).isEqualTo(RFC_3339_DATE_TIME_FORMATTER.format(offsetDateTime)),
                     () -> assertThat(document.getString("source")).isEqualTo("urn:name"),
                     () -> assertThat(document.getString("id")).isEqualTo("id"),
                     () -> assertThat(document.get("data", Map.class)).containsOnly(entry("name", "hello")),
@@ -148,7 +145,7 @@ class OccurrentCloudEventMongoDBDocumentMapperTest {
             CloudEvent expected = new CloudEventBuilder()
                     .withSubject("subject")
                     .withType("type")
-                    .withTime(ZonedDateTime.of(LocalDateTime.of(2020, 7, 26, 9, 13, 3), UTC))
+                    .withTime(OffsetDateTime.of(LocalDateTime.of(2020, 7, 26, 9, 13, 3), UTC))
                     .withSource(URI.create("urn:name"))
                     .withId("id")
                     .withData("application/json", "{\"name\":\"hello\"}".getBytes(UTF_8))
@@ -180,7 +177,7 @@ class OccurrentCloudEventMongoDBDocumentMapperTest {
             CloudEvent actual = OccurrentCloudEventMongoDBDocumentMapper.convertToCloudEvent(eventFormat, RFC_3339_STRING, document);
 
             // Then
-            assertThat(actual.getTime()).isEqualTo(ZonedDateTime.of(LocalDateTime.of(2020, 7, 26, 9, 13, 3, 234_000000), UTC));
+            assertThat(actual.getTime()).isEqualTo(OffsetDateTime.of(LocalDateTime.of(2020, 7, 26, 9, 13, 3, 234_000000), UTC));
         }
 
         @Test
@@ -205,7 +202,7 @@ class OccurrentCloudEventMongoDBDocumentMapperTest {
             CloudEvent actual = OccurrentCloudEventMongoDBDocumentMapper.convertToCloudEvent(eventFormat, RFC_3339_STRING, document);
 
             // Then
-            assertThat(actual.getTime()).isEqualTo(ZonedDateTime.of(LocalDateTime.of(2020, 7, 26, 9, 13, 3), ZoneId.of("CET")));
+            assertThat(actual.getTime()).isEqualTo(offsetDateTimeFrom(LocalDateTime.of(2020, 7, 26, 9, 13, 3), ZoneId.of("CET")));
         }
 
         @Test
@@ -230,7 +227,7 @@ class OccurrentCloudEventMongoDBDocumentMapperTest {
             CloudEvent actual = OccurrentCloudEventMongoDBDocumentMapper.convertToCloudEvent(eventFormat, RFC_3339_STRING, document);
 
             // Then
-            assertThat(actual.getTime()).isEqualTo(ZonedDateTime.of(LocalDateTime.of(2020, 7, 26, 9, 13, 3), ZoneOffset.of("-02:00")));
+            assertThat(actual.getTime()).isEqualTo(OffsetDateTime.of(LocalDateTime.of(2020, 7, 26, 9, 13, 3), ZoneOffset.of("-02:00")));
         }
     }
 
@@ -242,12 +239,12 @@ class OccurrentCloudEventMongoDBDocumentMapperTest {
         @Test
         void converts_cloud_event_to_document_with_expected_values() {
             // Given
-            ZonedDateTime zonedDateTime = ZonedDateTime.of(LocalDateTime.of(2020, 7, 26, 9, 13, 3, 223_000000), UTC);
+            OffsetDateTime offsetDateTime = OffsetDateTime.of(LocalDateTime.of(2020, 7, 26, 9, 13, 3, 223_000000), UTC);
 
             CloudEvent cloudEvent = new CloudEventBuilder()
                     .withSubject("subject")
                     .withType("type")
-                    .withTime(zonedDateTime)
+                    .withTime(offsetDateTime)
                     .withSource(URI.create("urn:name"))
                     .withId("id")
                     .withData("application/json", "{\"name\" : \"hello\"}".getBytes(UTF_8))
@@ -260,7 +257,7 @@ class OccurrentCloudEventMongoDBDocumentMapperTest {
             assertAll(
                     () -> assertThat(document.getString("subject")).isEqualTo("subject"),
                     () -> assertThat(document.getString("type")).isEqualTo("type"),
-                    () -> assertThat(document.getDate("time")).isEqualTo(toDate(zonedDateTime)),
+                    () -> assertThat(document.getDate("time")).isEqualTo(toDate(offsetDateTime)),
                     () -> assertThat(document.getString("source")).isEqualTo("urn:name"),
                     () -> assertThat(document.getString("id")).isEqualTo("id"),
                     () -> assertThat(document.get("data", Map.class)).containsOnly(entry("name", "hello")),
@@ -272,12 +269,12 @@ class OccurrentCloudEventMongoDBDocumentMapperTest {
         @Test
         void throws_iae_when_time_is_using_with_nanoseconds_and_timezone_is_utc() {
             // Given
-            ZonedDateTime zonedDateTime = ZonedDateTime.of(LocalDateTime.of(2020, 7, 26, 9, 13, 3, 123_456_789), UTC);
+            OffsetDateTime offsetDateTime = OffsetDateTime.of(LocalDateTime.of(2020, 7, 26, 9, 13, 3, 123_456_789), UTC);
 
             CloudEvent cloudEvent = new CloudEventBuilder()
                     .withSubject("subject")
                     .withType("type")
-                    .withTime(zonedDateTime)
+                    .withTime(offsetDateTime)
                     .withSource(URI.create("urn:name"))
                     .withId("id")
                     .withData("application/json", "{\"name\" : \"hello\"}".getBytes(UTF_8))
@@ -288,18 +285,18 @@ class OccurrentCloudEventMongoDBDocumentMapperTest {
 
             // Then
             assertThat(throwable).isExactlyInstanceOf(IllegalArgumentException.class)
-                    .hasMessage("The ZonedDateTime in the CloudEvent time field contains micro-/nanoseconds. This is is not possible to represent when using TimeRepresentation DATE, either change to TimeRepresentation RFC_3339_STRING or remove micro-/nanoseconds using \"zonedDateTime.truncatedTo(ChronoUnit.MILLIS)\".");
+                    .hasMessage("The OffsetDateTime in the CloudEvent time field contains micro-/nanoseconds. This is is not possible to represent when using TimeRepresentation DATE, either change to TimeRepresentation RFC_3339_STRING or remove micro-/nanoseconds using \"offsetDateTime.truncatedTo(ChronoUnit.MILLIS)\".");
         }
 
         @Test
         void throws_iae_when_time_another_timezone_than_utc() {
             // Given
-            ZonedDateTime zonedDateTime = ZonedDateTime.of(LocalDateTime.of(2020, 7, 26, 9, 13, 3, 123_000_000), ZoneId.of("Europe/Stockholm")).truncatedTo(MILLIS);
+            OffsetDateTime offsetDateTime = offsetDateTimeFrom(LocalDateTime.of(2020, 7, 26, 9, 13, 3, 123_000_000), ZoneId.of("Europe/Stockholm")).truncatedTo(MILLIS);
 
             CloudEvent cloudEvent = new CloudEventBuilder()
                     .withSubject("subject")
                     .withType("type")
-                    .withTime(zonedDateTime)
+                    .withTime(offsetDateTime)
                     .withSource(URI.create("urn:name"))
                     .withId("id")
                     .withData("application/json", "{\"name\" : \"hello\"}".getBytes(UTF_8))
@@ -310,7 +307,7 @@ class OccurrentCloudEventMongoDBDocumentMapperTest {
 
             // Then
             assertThat(throwable).isExactlyInstanceOf(IllegalArgumentException.class)
-                    .hasMessage("The ZonedDateTime in the CloudEvent time field is not defined using UTC. TimeRepresentation DATE require UTC as timezone to not loose precision. Either change to TimeRepresentation RFC_3339_STRING or convert the ZonedDateTime to UTC using e.g. \"zonedDateTime.withZoneSameInstant(ZoneOffset.UTC)\".");
+                    .hasMessage("The OffsetDateTime in the CloudEvent time field is not defined in UTC. TimeRepresentation DATE require UTC as timezone to not loose precision. Either change to TimeRepresentation RFC_3339_STRING or convert the OffsetDateTime to UTC using e.g. \"offsetDateTime.withOffsetSameInstant(ZoneOffset.UTC)\".");
         }
 
         @Test
@@ -339,7 +336,7 @@ class OccurrentCloudEventMongoDBDocumentMapperTest {
             CloudEvent expected = new CloudEventBuilder()
                     .withSubject("subject")
                     .withType("type")
-                    .withTime(ZonedDateTime.of(LocalDateTime.of(2020, 7, 26, 9, 13, 3), UTC))
+                    .withTime(OffsetDateTime.of(LocalDateTime.of(2020, 7, 26, 9, 13, 3), UTC))
                     .withSource(URI.create("urn:name"))
                     .withId("id")
                     .withData("application/json", "{\"name\":\"hello\"}".getBytes(UTF_8))
@@ -371,7 +368,7 @@ class OccurrentCloudEventMongoDBDocumentMapperTest {
             CloudEvent actual = OccurrentCloudEventMongoDBDocumentMapper.convertToCloudEvent(eventFormat, DATE, document);
 
             // Then
-            assertThat(actual.getTime()).isEqualTo(ZonedDateTime.of(LocalDateTime.of(2020, 7, 26, 9, 13, 3, 234_000000), UTC));
+            assertThat(actual.getTime()).isEqualTo(OffsetDateTime.of(LocalDateTime.of(2020, 7, 26, 9, 13, 3, 234_000000), UTC));
         }
 
         @Test
@@ -396,7 +393,7 @@ class OccurrentCloudEventMongoDBDocumentMapperTest {
             CloudEvent actual = OccurrentCloudEventMongoDBDocumentMapper.convertToCloudEvent(eventFormat, DATE, document);
 
             // Then
-            assertThat(actual.getTime()).isEqualTo(ZonedDateTime.of(LocalDateTime.of(2020, 7, 26, 9, 13, 3), ZoneId.of("CET")));
+            assertThat(actual.getTime()).isEqualTo(offsetDateTimeFrom(LocalDateTime.of(2020, 7, 26, 9, 13, 3), ZoneId.of("CET")));
         }
 
         @Test
@@ -421,15 +418,19 @@ class OccurrentCloudEventMongoDBDocumentMapperTest {
             CloudEvent actual = OccurrentCloudEventMongoDBDocumentMapper.convertToCloudEvent(eventFormat, DATE, document);
 
             // Then
-            assertThat(actual.getTime()).isEqualTo(ZonedDateTime.of(LocalDateTime.of(2020, 7, 26, 9, 13, 3), ZoneOffset.of("-02:00")));
+            assertThat(actual.getTime()).isEqualTo(OffsetDateTime.of(LocalDateTime.of(2020, 7, 26, 9, 13, 3), ZoneOffset.of("-02:00")));
         }
 
-        private Date toDate(ZonedDateTime zonedDateTime) {
-            return Date.from(zonedDateTime.toInstant());
+        private Date toDate(OffsetDateTime offsetDateTime) {
+            return Date.from(offsetDateTime.toInstant());
         }
 
         private Date toDate(String rfc3339FormattedString) {
-            return toDate(ZonedDateTime.from(RFC_3339_DATE_TIME_FORMATTER.parse(rfc3339FormattedString)));
+            return toDate(OffsetDateTime.from(RFC_3339_DATE_TIME_FORMATTER.parse(rfc3339FormattedString)));
         }
+    }
+
+    private static OffsetDateTime offsetDateTimeFrom(LocalDateTime ldf, ZoneId zoneId) {
+        return ZonedDateTime.of(ldf, zoneId).toOffsetDateTime();
     }
 }

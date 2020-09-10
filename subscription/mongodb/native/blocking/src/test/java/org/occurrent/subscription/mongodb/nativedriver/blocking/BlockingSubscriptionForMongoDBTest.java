@@ -340,7 +340,7 @@ public class BlockingSubscriptionForMongoDBTest {
                 .withId(e.getEventId())
                 .withSource(URI.create("http://name"))
                 .withType(e.getClass().getName())
-                .withTime(toLocalDateTime(e.getTimestamp()).atZone(UTC))
+                .withTime(toLocalDateTime(e.getTimestamp()).atOffset(UTC))
                 .withSubject(e.getName())
                 .withDataContentType("application/json")
                 .withData(unchecked(objectMapper::writeValueAsBytes).apply(e))

@@ -48,7 +48,10 @@ import org.testcontainers.junit.jupiter.Container;
 import org.testcontainers.junit.jupiter.Testcontainers;
 
 import java.net.URI;
-import java.time.*;
+import java.time.Instant;
+import java.time.LocalDateTime;
+import java.time.OffsetDateTime;
+import java.time.ZoneId;
 import java.util.List;
 import java.util.Map;
 import java.util.*;
@@ -71,6 +74,7 @@ import static org.occurrent.domain.Composition.chain;
 import static org.occurrent.eventstore.api.WriteCondition.streamVersion;
 import static org.occurrent.eventstore.api.WriteCondition.streamVersionEq;
 import static org.occurrent.filter.Filter.*;
+import static org.occurrent.time.TimeConversion.offsetDateTimeFrom;
 import static org.occurrent.time.TimeConversion.toLocalDateTime;
 
 @SuppressWarnings("SameParameterValue")
@@ -887,7 +891,7 @@ class MongoEventStoreTest {
                         .withId(UUID.randomUUID().toString())
                         .withSource(URI.create("http://something"))
                         .withType("something")
-                        .withTime(LocalDateTime.now().atZone(UTC))
+                        .withTime(LocalDateTime.now().atOffset(UTC))
                         .withSubject("subject")
                         .withDataContentType("application/json")
                         .withData("{\"hello\":\"world\"}".getBytes(UTF_8))
@@ -914,7 +918,7 @@ class MongoEventStoreTest {
                         .withId(UUID.randomUUID().toString())
                         .withSource(URI.create("http://something"))
                         .withType("something")
-                        .withTime(LocalDateTime.now().atZone(UTC))
+                        .withTime(LocalDateTime.now().atOffset(UTC))
                         .withSubject("subject")
                         .withDataContentType("application/json")
                         .withData("{\"hello\":\"world\"}".getBytes(UTF_8))
@@ -940,7 +944,7 @@ class MongoEventStoreTest {
                 persist("name2", nameWasChanged2);
 
                 // Then
-                Stream<CloudEvent> events = eventStore.query(time(lt(ZonedDateTime.of(now.plusHours(2), UTC))).and(id(uuid.toString())));
+                Stream<CloudEvent> events = eventStore.query(time(lt(OffsetDateTime.of(now.plusHours(2), UTC))).and(id(uuid.toString())));
                 assertThat(deserialize(events)).containsExactly(nameDefined);
             }
 
@@ -957,7 +961,7 @@ class MongoEventStoreTest {
                 persist("name2", nameWasChanged2);
 
                 // Then
-                Stream<CloudEvent> events = eventStore.query(time(ZonedDateTime.of(now.plusHours(2), UTC)).or(source(NAME_SOURCE)));
+                Stream<CloudEvent> events = eventStore.query(time(OffsetDateTime.of(now.plusHours(2), UTC)).or(source(NAME_SOURCE)));
                 assertThat(deserialize(events)).containsExactly(nameDefined, nameWasChanged1, nameWasChanged2);
             }
 
@@ -1028,7 +1032,7 @@ class MongoEventStoreTest {
                         .withId(UUID.randomUUID().toString())
                         .withSource(URI.create("http://something"))
                         .withType("something")
-                        .withTime(LocalDateTime.now().atZone(UTC))
+                        .withTime(LocalDateTime.now().atOffset(UTC))
                         .withSubject("subject")
                         .withDataSchema(URI.create("urn:myschema"))
                         .withDataContentType("application/json")
@@ -1057,7 +1061,7 @@ class MongoEventStoreTest {
                         .withId(UUID.randomUUID().toString())
                         .withSource(URI.create("http://something"))
                         .withType("something")
-                        .withTime(OffsetDateTime.from(LocalDateTime.now().atZone(ZoneId.of("Europe/Stockholm"))).toZonedDateTime())
+                        .withTime(offsetDateTimeFrom(LocalDateTime.now(), ZoneId.of("Europe/Stockholm")))
                         .withSubject("subject")
                         .withDataSchema(URI.create("urn:myschema"))
                         .withDataContentType("text/plain")
@@ -1165,7 +1169,7 @@ class MongoEventStoreTest {
                     persist("name2", nameWasChanged2);
 
                     // Then
-                    Stream<CloudEvent> events = eventStore.query(time(lt(ZonedDateTime.of(now.plusHours(2), UTC))));
+                    Stream<CloudEvent> events = eventStore.query(time(lt(OffsetDateTime.of(now.plusHours(2), UTC))));
                     assertThat(deserialize(events)).containsExactly(nameDefined, nameWasChanged1);
                 }
 
@@ -1182,7 +1186,7 @@ class MongoEventStoreTest {
                     persist("name2", nameWasChanged2);
 
                     // Then
-                    Stream<CloudEvent> events = eventStore.query(time(and(gte(ZonedDateTime.of(now.plusMinutes(35), UTC)), lte(ZonedDateTime.of(now.plusHours(4), UTC)))));
+                    Stream<CloudEvent> events = eventStore.query(time(and(gte(OffsetDateTime.of(now.plusMinutes(35), UTC)), lte(OffsetDateTime.of(now.plusHours(4), UTC)))));
                     assertThat(deserialize(events)).containsExactly(nameWasChanged1, nameWasChanged2);
                 }
 
@@ -1200,7 +1204,7 @@ class MongoEventStoreTest {
                     persist("name2", nameWasChanged2);
 
                     // Then
-                    Stream<CloudEvent> events = eventStore.query(time(and(gte(ZonedDateTime.of(now, UTC)), lte(ZonedDateTime.of(now.plusHours(2), UTC)))));
+                    Stream<CloudEvent> events = eventStore.query(time(and(gte(OffsetDateTime.of(now, UTC)), lte(OffsetDateTime.of(now.plusHours(2), UTC)))));
                     assertThat(deserialize(events)).isNotEmpty(); // Java 8 seem to return nondeterministic results
                 }
 
@@ -1218,7 +1222,7 @@ class MongoEventStoreTest {
                     persist("name2", nameWasChanged2);
 
                     // Then
-                    Stream<CloudEvent> events = eventStore.query(time(and(gte(ZonedDateTime.of(now, UTC)), lte(ZonedDateTime.of(now.plusHours(2), UTC)))));
+                    Stream<CloudEvent> events = eventStore.query(time(and(gte(OffsetDateTime.of(now, UTC)), lte(OffsetDateTime.of(now.plusHours(2), UTC)))));
                     assertThat(deserialize(events)).containsExactly(nameDefined, nameWasChanged1); // nameWasChanged2 _should_ be included but it's not due to string comparison instead of date
                 }
 
@@ -1235,7 +1239,7 @@ class MongoEventStoreTest {
                     persist("name2", nameWasChanged2);
 
                     // Then
-                    Stream<CloudEvent> events = eventStore.query(time(and(gt(ZonedDateTime.of(now.plusMinutes(50), UTC)), lt(ZonedDateTime.of(now.plusMinutes(110), UTC)))));
+                    Stream<CloudEvent> events = eventStore.query(time(and(gt(OffsetDateTime.of(now.plusMinutes(50), UTC)), lt(OffsetDateTime.of(now.plusMinutes(110), UTC)))));
                     assertThat(deserialize(events)).containsExactly(nameWasChanged1);
                 }
             }
@@ -1262,7 +1266,7 @@ class MongoEventStoreTest {
                     persist("name2", nameWasChanged2);
 
                     // Then
-                    Stream<CloudEvent> events = eventStore.query(time(lt(ZonedDateTime.of(now.plusHours(2), UTC))));
+                    Stream<CloudEvent> events = eventStore.query(time(lt(OffsetDateTime.of(now.plusHours(2), UTC))));
                     assertThat(deserialize(events)).containsExactly(nameDefined, nameWasChanged1);
                 }
 
@@ -1279,7 +1283,7 @@ class MongoEventStoreTest {
                     persist("name2", nameWasChanged2);
 
                     // Then
-                    Stream<CloudEvent> events = eventStore.query(time(and(gte(ZonedDateTime.of(now.plusMinutes(35), UTC)), lte(ZonedDateTime.of(now.plusHours(4), UTC)))));
+                    Stream<CloudEvent> events = eventStore.query(time(and(gte(OffsetDateTime.of(now.plusMinutes(35), UTC)), lte(OffsetDateTime.of(now.plusHours(4), UTC)))));
                     assertThat(deserialize(events)).containsExactly(nameWasChanged1, nameWasChanged2);
                 }
 
@@ -1296,7 +1300,7 @@ class MongoEventStoreTest {
                     persist("name2", nameWasChanged2);
 
                     // Then
-                    Stream<CloudEvent> events = eventStore.query(time(and(gte(ZonedDateTime.of(now, UTC)), lte(ZonedDateTime.of(now.plusHours(2), UTC)))));
+                    Stream<CloudEvent> events = eventStore.query(time(and(gte(OffsetDateTime.of(now, UTC)), lte(OffsetDateTime.of(now.plusHours(2), UTC)))));
                     assertThat(deserialize(events)).containsExactly(nameDefined, nameWasChanged1, nameWasChanged2);
                 }
 
@@ -1313,7 +1317,7 @@ class MongoEventStoreTest {
                     persist("name2", nameWasChanged2);
 
                     // Then
-                    Stream<CloudEvent> events = eventStore.query(time(and(gt(ZonedDateTime.of(now.plusMinutes(50), UTC)), lt(ZonedDateTime.of(now.plusMinutes(110), UTC)))));
+                    Stream<CloudEvent> events = eventStore.query(time(and(gt(OffsetDateTime.of(now.plusMinutes(50), UTC)), lt(OffsetDateTime.of(now.plusMinutes(110), UTC)))));
                     assertThat(deserialize(events)).containsExactly(nameWasChanged1);
                 }
             }
@@ -1383,7 +1387,7 @@ class MongoEventStoreTest {
                 .withId(e.getEventId())
                 .withSource(NAME_SOURCE)
                 .withType(e.getClass().getSimpleName())
-                .withTime(toLocalDateTime(e.getTimestamp()).atZone(UTC))
+                .withTime(toLocalDateTime(e.getTimestamp()).atOffset(UTC))
                 .withSubject(e.getClass().getSimpleName().substring(4)) // Defined or WasChanged
                 .withDataContentType("application/json")
                 .withData(serializeEvent(e))

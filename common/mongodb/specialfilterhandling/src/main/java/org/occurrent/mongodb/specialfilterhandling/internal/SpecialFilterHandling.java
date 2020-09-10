@@ -21,7 +21,7 @@ import org.occurrent.filter.Filter.SingleConditionFilter;
 import org.occurrent.mongodb.timerepresentation.TimeRepresentation;
 
 import java.sql.Date;
-import java.time.ZonedDateTime;
+import java.time.OffsetDateTime;
 
 import static org.occurrent.filter.Filter.TIME;
 import static org.occurrent.mongodb.timerepresentation.TimeRepresentation.RFC_3339_STRING;
@@ -35,7 +35,7 @@ public class SpecialFilterHandling {
     @SuppressWarnings("unchecked")
     public static Condition<?> resolveSpecialCases(TimeRepresentation timeRepresentation, SingleConditionFilter scf) {
         if (TIME.equals(scf.fieldName)) {
-            Condition<ZonedDateTime> zdfCondition = (Condition<ZonedDateTime>) scf.condition;
+            Condition<OffsetDateTime> zdfCondition = (Condition<OffsetDateTime>) scf.condition;
             if (timeRepresentation == RFC_3339_STRING) {
                 return zdfCondition.map(RFC_3339_DATE_TIME_FORMATTER::format);
             } else {
