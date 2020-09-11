@@ -55,7 +55,7 @@
 
     <scm>
         <connection>scm:git:https://github.com/johanhaleby/occurrent.git</connection>
-        <developerConnection>scm:git:ssh://github.com/johanhaleby/occurrent.git</developerConnection>
+        <developerConnection>scm:git:ssh://git@github.com/johanhaleby/occurrent.git</developerConnection>
         <url>https://github.com/johanhaleby/occurrent.git</url>
         <tag>HEAD</tag>
     </scm>
