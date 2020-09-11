@@ -25,6 +25,7 @@ import com.mongodb.client.MongoClient;
 import com.mongodb.client.MongoClients;
 import io.cloudevents.CloudEvent;
 import io.cloudevents.core.builder.CloudEventBuilder;
+import io.github.artsok.RepeatedIfExceptionsTest;
 import org.jetbrains.annotations.NotNull;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
@@ -1175,7 +1176,7 @@ public class SpringBlockingMongoEventStoreTest {
         @DisplayName("when time is represented as rfc 3339 string")
         class TimeRepresentedAsRfc3339String {
 
-            @Test
+            @RepeatedIfExceptionsTest(repeats = 3)
             void query_filter_by_time_but_is_using_slow_string_comparision() {
                 // Given
                 LocalDateTime now = LocalDateTime.now();
