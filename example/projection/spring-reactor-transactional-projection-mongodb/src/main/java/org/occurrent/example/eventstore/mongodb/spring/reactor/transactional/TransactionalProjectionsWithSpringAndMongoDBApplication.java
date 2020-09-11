@@ -32,7 +32,9 @@ import org.springframework.data.mongodb.repository.config.EnableReactiveMongoRep
 
 import javax.annotation.PostConstruct;
 
-
+/**
+ * Bootstrap the application
+ */
 @SpringBootApplication
 @EnableReactiveMongoRepositories
 public class TransactionalProjectionsWithSpringAndMongoDBApplication {

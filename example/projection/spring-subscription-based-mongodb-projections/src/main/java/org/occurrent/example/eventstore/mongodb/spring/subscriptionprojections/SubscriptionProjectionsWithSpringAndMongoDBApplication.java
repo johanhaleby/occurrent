@@ -35,6 +35,9 @@ import org.springframework.data.mongodb.MongoTransactionManager;
 import org.springframework.data.mongodb.core.MongoTemplate;
 import org.springframework.data.mongodb.repository.config.EnableMongoRepositories;
 
+/**
+ * Bootstrap the application
+ */
 @SpringBootApplication
 @EnableMongoRepositories
 public class SubscriptionProjectionsWithSpringAndMongoDBApplication {

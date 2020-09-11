@@ -35,6 +35,9 @@ import javax.annotation.PostConstruct;
 
 import static com.fasterxml.jackson.databind.ObjectMapper.DefaultTyping.EVERYTHING;
 
+/**
+ * Bootstrap the application
+ */
 @SpringBootApplication
 @EnableMongoRepositories
 public class TransactionalProjectionsWithSpringAndMongoDBApplication {

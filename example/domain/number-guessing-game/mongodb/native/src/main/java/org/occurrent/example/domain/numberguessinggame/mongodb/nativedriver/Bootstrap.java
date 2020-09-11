@@ -66,6 +66,9 @@ import static java.time.ZoneOffset.UTC;
 import static org.occurrent.condition.Condition.eq;
 import static org.occurrent.filter.Filter.subject;
 
+/**
+ * Bootstrap the application
+ */
 public class Bootstrap {
     private static final Logger log = LoggerFactory.getLogger(Bootstrap.class);
 

@@ -37,6 +37,9 @@ import org.springframework.data.mongodb.core.ReactiveMongoOperations;
 
 import static com.fasterxml.jackson.databind.ObjectMapper.DefaultTyping.EVERYTHING;
 
+/**
+ * Bootstrap the application
+ */
 @SpringBootApplication
 public class ForwardEventsFromMongoDBToSpringApplication {
 

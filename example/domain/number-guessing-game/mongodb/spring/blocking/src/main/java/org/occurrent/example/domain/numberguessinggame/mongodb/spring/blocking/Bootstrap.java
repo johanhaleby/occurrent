@@ -41,6 +41,9 @@ import org.springframework.retry.annotation.EnableRetry;
 
 import java.net.URI;
 
+/**
+ * Bootstrap the application
+ */
 @SpringBootApplication
 @EnableRetry
 @EnableMongoRepositories

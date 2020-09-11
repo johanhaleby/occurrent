@@ -30,6 +30,9 @@ import org.springframework.data.mongodb.repository.config.EnableMongoRepositorie
 import org.springframework.transaction.support.TransactionTemplate;
 
 
+/**
+ * Bootstrap the application
+ */
 @SpringBootApplication
 @EnableMongoRepositories
 public class SpringAdhocProjectionApplication {

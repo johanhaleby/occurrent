@@ -24,6 +24,9 @@ import java.util.Date;
 
 import static java.time.ZoneOffset.UTC;
 
+/**
+ * Time conversion support
+ */
 public class TimeConversion {
     public static Date toDate(LocalDateTime localDateTime) {
         return Date.from(localDateTime.atOffset(UTC).toInstant());
