@@ -33,6 +33,7 @@ import org.occurrent.eventstore.mongodb.spring.reactor.EventStoreConfig;
 import org.occurrent.eventstore.mongodb.spring.reactor.SpringReactorMongoEventStore;
 import org.occurrent.mongodb.timerepresentation.TimeRepresentation;
 import org.occurrent.subscription.api.reactor.PositionAwareReactorSubscription;
+import org.occurrent.subscription.util.reactor.ReactorSubscriptionWithAutomaticPositionPersistence;
 import org.occurrent.testsupport.mongodb.FlushMongoDBExtension;
 import org.springframework.data.mongodb.ReactiveMongoTransactionManager;
 import org.springframework.data.mongodb.core.ReactiveMongoTemplate;
@@ -69,7 +70,7 @@ public class SpringReactorSubscriptionPositionStorageForMongoDBTest {
     private static final String RESUME_TOKEN_COLLECTION = "ack";
 
     private EventStore mongoEventStore;
-    private SpringReactorSubscriptionThatStoresSubscriptionPositionInMongoDB subscription;
+    private ReactorSubscriptionWithAutomaticPositionPersistence subscription;
     private ObjectMapper objectMapper;
     private ReactiveMongoTemplate reactiveMongoTemplate;
     private CopyOnWriteArrayList<Disposable> disposables;
@@ -90,7 +91,7 @@ public class SpringReactorSubscriptionPositionStorageForMongoDBTest {
         mongoEventStore = new SpringReactorMongoEventStore(reactiveMongoTemplate, eventStoreConfig);
         PositionAwareReactorSubscription springReactiveSubscriptionForMongoDB = new SpringReactorSubscriptionForMongoDB(reactiveMongoTemplate, "events", timeRepresentation);
         storage = new SpringReactorSubscriptionPositionStorageForMongoDB(reactiveMongoTemplate, RESUME_TOKEN_COLLECTION);
-        subscription = new SpringReactorSubscriptionThatStoresSubscriptionPositionInMongoDB(springReactiveSubscriptionForMongoDB, storage);
+        subscription = new ReactorSubscriptionWithAutomaticPositionPersistence(springReactiveSubscriptionForMongoDB, storage);
         objectMapper = new ObjectMapper();
         disposables = new CopyOnWriteArrayList<>();
     }

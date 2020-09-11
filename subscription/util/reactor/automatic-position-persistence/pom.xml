@@ -19,17 +19,24 @@
          xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
          xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 http://maven.apache.org/xsd/maven-4.0.0.xsd">
     <parent>
-        <artifactId>subscription</artifactId>
+        <artifactId>subscription-util-reactor</artifactId>
         <groupId>org.occurrent</groupId>
         <version>0.0.1-SNAPSHOT</version>
     </parent>
     <modelVersion>4.0.0</modelVersion>
 
-    <artifactId>subscription-util</artifactId>
-    <packaging>pom</packaging>
-    <modules>
-        <module>reactor</module>
-    </modules>
+    <artifactId>subscription-util-reactor-automatic-position-persistence</artifactId>
 
+    <dependencies>
+        <dependency>
+            <groupId>org.occurrent</groupId>
+            <artifactId>subscription-api-reactor</artifactId>
+            <version>0.0.1-SNAPSHOT</version>
+        </dependency>
+        <dependency>
+            <groupId>ch.qos.logback</groupId>
+            <artifactId>logback-classic</artifactId>
+        </dependency>
+    </dependencies>
 
 </project>

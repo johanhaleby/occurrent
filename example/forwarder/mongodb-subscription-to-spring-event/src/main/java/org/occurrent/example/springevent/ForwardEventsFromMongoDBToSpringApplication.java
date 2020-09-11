@@ -29,7 +29,7 @@ import org.occurrent.subscription.api.reactor.PositionAwareReactorSubscription;
 import org.occurrent.subscription.api.reactor.ReactorSubscriptionPositionStorage;
 import org.occurrent.subscription.mongodb.spring.reactor.SpringReactorSubscriptionForMongoDB;
 import org.occurrent.subscription.mongodb.spring.reactor.SpringReactorSubscriptionPositionStorageForMongoDB;
-import org.occurrent.subscription.mongodb.spring.reactor.SpringReactorSubscriptionThatStoresSubscriptionPositionInMongoDB;
+import org.occurrent.subscription.util.reactor.ReactorSubscriptionWithAutomaticPositionPersistence;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.boot.autoconfigure.SpringBootApplication;
 import org.springframework.context.annotation.Bean;
@@ -68,8 +68,8 @@ public class ForwardEventsFromMongoDBToSpringApplication {
     }
 
     @Bean
-    public SpringReactorSubscriptionThatStoresSubscriptionPositionInMongoDB autoPersistingSubscription(PositionAwareReactorSubscription subscription, ReactorSubscriptionPositionStorage storage) {
-        return new SpringReactorSubscriptionThatStoresSubscriptionPositionInMongoDB(subscription, storage);
+    public ReactorSubscriptionWithAutomaticPositionPersistence autoPersistingSubscription(PositionAwareReactorSubscription subscription, ReactorSubscriptionPositionStorage storage) {
+        return new ReactorSubscriptionWithAutomaticPositionPersistence(subscription, storage);
     }
 
     @Bean

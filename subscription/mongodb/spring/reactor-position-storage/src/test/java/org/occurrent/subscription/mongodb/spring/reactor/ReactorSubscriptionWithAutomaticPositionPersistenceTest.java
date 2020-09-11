@@ -35,6 +35,7 @@ import org.occurrent.eventstore.mongodb.spring.reactor.SpringReactorMongoEventSt
 import org.occurrent.mongodb.timerepresentation.TimeRepresentation;
 import org.occurrent.subscription.api.reactor.PositionAwareReactorSubscription;
 import org.occurrent.subscription.api.reactor.ReactorSubscriptionPositionStorage;
+import org.occurrent.subscription.util.reactor.ReactorSubscriptionWithAutomaticPositionPersistence;
 import org.occurrent.testsupport.mongodb.FlushMongoDBExtension;
 import org.springframework.data.mongodb.ReactiveMongoTransactionManager;
 import org.springframework.data.mongodb.core.ReactiveMongoTemplate;
@@ -69,15 +70,16 @@ import static org.occurrent.functional.CheckedFunction.unchecked;
 import static org.occurrent.functional.Not.not;
 import static org.occurrent.time.TimeConversion.toLocalDateTime;
 
+// TODO This test should be moved
 @Testcontainers
-public class SpringReactorSubscriptionThatStoresSubscriptionPositionInMongoDBTest {
+public class ReactorSubscriptionWithAutomaticPositionPersistenceTest {
 
     @Container
     private static final MongoDBContainer mongoDBContainer = new MongoDBContainer("mongo:4.2.8");
     private static final String RESUME_TOKEN_COLLECTION = "ack";
 
     private EventStore mongoEventStore;
-    private SpringReactorSubscriptionThatStoresSubscriptionPositionInMongoDB subscription;
+    private ReactorSubscriptionWithAutomaticPositionPersistence subscription;
     private ObjectMapper objectMapper;
     private ReactiveMongoTemplate reactiveMongoTemplate;
     private CopyOnWriteArrayList<Disposable> disposables;
@@ -97,7 +99,7 @@ public class SpringReactorSubscriptionThatStoresSubscriptionPositionInMongoDBTes
         mongoEventStore = new SpringReactorMongoEventStore(reactiveMongoTemplate, eventStoreConfig);
         PositionAwareReactorSubscription springReactiveSubscriptionForMongoDB = new SpringReactorSubscriptionForMongoDB(reactiveMongoTemplate, "events", timeRepresentation);
         ReactorSubscriptionPositionStorage storage = new SpringReactorSubscriptionPositionStorageForMongoDB(reactiveMongoTemplate, RESUME_TOKEN_COLLECTION);
-        subscription = new SpringReactorSubscriptionThatStoresSubscriptionPositionInMongoDB(springReactiveSubscriptionForMongoDB, storage);
+        subscription = new ReactorSubscriptionWithAutomaticPositionPersistence(springReactiveSubscriptionForMongoDB, storage);
         objectMapper = new ObjectMapper();
         disposables = new CopyOnWriteArrayList<>();
     }

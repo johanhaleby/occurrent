@@ -14,7 +14,7 @@
  * limitations under the License.
  */
 
-package org.occurrent.subscription.mongodb.spring.reactor;
+package org.occurrent.subscription.util.reactor;
 
 import io.cloudevents.CloudEvent;
 import org.occurrent.subscription.StartAt;
@@ -32,30 +32,29 @@ import static java.util.Objects.requireNonNull;
 
 /**
  * Wraps a {@link PositionAwareReactorSubscription} and adds persistent subscription position support. It adds some convenience methods that stores the subscription position
- * after an "action" (the "function" in this method {@link SpringReactorSubscriptionThatStoresSubscriptionPositionInMongoDB#subscribe(String, Function)}) has completed successfully.
- * It stores the subscription position in MongoDB. Note that it doesn't have to be the same MongoDB database that stores the actual events.
+ * after an "action" (the "function" in this method {@link ReactorSubscriptionWithAutomaticPositionPersistence#subscribe(String, Function)}) has completed successfully.
+ * It stores the subscription position in a {@link ReactorSubscriptionPositionStorage} implementation.
  * <p>
  * Note that this implementation stores the subscription position after _every_ action. If you have a lot of events and duplication is not
  * that much of a deal consider cloning/extending this class and add your own customizations. Use the methods provided by a {@link ReactorSubscriptionPositionStorage}
  * implementation.
  */
-public class SpringReactorSubscriptionThatStoresSubscriptionPositionInMongoDB {
-    private static final Logger log = LoggerFactory.getLogger(SpringReactorSubscriptionThatStoresSubscriptionPositionInMongoDB.class);
+public class ReactorSubscriptionWithAutomaticPositionPersistence {
+    private static final Logger log = LoggerFactory.getLogger(ReactorSubscriptionWithAutomaticPositionPersistence.class);
     private final PositionAwareReactorSubscription subscription;
     private final ReactorSubscriptionPositionStorage storage;
 
-    public SpringReactorSubscriptionThatStoresSubscriptionPositionInMongoDB(PositionAwareReactorSubscription subscription, ReactorSubscriptionPositionStorage storage) {
+    public ReactorSubscriptionWithAutomaticPositionPersistence(PositionAwareReactorSubscription subscription, ReactorSubscriptionPositionStorage storage) {
         this.subscription = subscription;
         this.storage = storage;
         requireNonNull(subscription, PositionAwareReactorSubscription.class.getSimpleName() + " cannot be null");
         requireNonNull(storage, ReactorSubscriptionPositionStorage.class.getSimpleName() + " cannot be null");
-
     }
 
     /**
      * A convenience function that automatically starts from the latest persisted subscription position and saves the new position after each call to {@code action}
      * has completed successfully. If you don't want to save the position after every event then don't use this method and instead save the position yourself by calling
-     * {@link SpringReactorSubscriptionPositionStorageForMongoDB#save(String, SubscriptionPosition)} when appropriate.
+     * {@link ReactorSubscriptionPositionStorage#save(String, SubscriptionPosition)} when appropriate.
      * <p>
      * It's VERY important that side-effects take place within the <code>action</code> function
      * because if you perform side-effects on the returned <code>Mono<Void></code> stream then the subscription position
@@ -73,7 +72,7 @@ public class SpringReactorSubscriptionThatStoresSubscriptionPositionInMongoDB {
     /**
      * A convenience function that automatically starts from the latest persisted subscription position and saves the new position after each call to {@code action}
      * has completed successfully. If you don't want to save the position after every event then don't use this method and instead save the position yourself by calling
-     * {@link SpringReactorSubscriptionPositionStorageForMongoDB#save(String, SubscriptionPosition)} when appropriate.
+     * {@link ReactorSubscriptionPositionStorage#save(String, SubscriptionPosition)} when appropriate.
      *
      * <p>
      * It's VERY important that side-effects take place within the <code>action</code> function
