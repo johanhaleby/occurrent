@@ -6,6 +6,10 @@ Occurrent is a set of Event Sourcing utilities based on the [cloud events](https
 
 Work in progress, don't use in production just yet :)
 
+#### Documentation
+
+You can find documentation on the [website](https://www.occurrent.org).
+
 #### Design Choices
 
 Occurrent is designed to be [simple](https://www.infoq.com/presentations/Simple-Made-Easy/), non-intrusive and pragmatic. It emphasises understandability, composability, transparentness and pragmatism.
