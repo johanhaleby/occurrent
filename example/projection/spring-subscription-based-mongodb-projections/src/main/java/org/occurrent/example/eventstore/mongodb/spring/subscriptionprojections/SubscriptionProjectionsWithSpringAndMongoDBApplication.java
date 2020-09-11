@@ -27,7 +27,7 @@ import org.occurrent.subscription.api.blocking.BlockingSubscriptionPositionStora
 import org.occurrent.subscription.api.blocking.PositionAwareBlockingSubscription;
 import org.occurrent.subscription.mongodb.spring.blocking.SpringBlockingSubscriptionForMongoDB;
 import org.occurrent.subscription.mongodb.spring.blocking.SpringBlockingSubscriptionPositionStorageForMongoDB;
-import org.occurrent.subscription.mongodb.spring.blocking.SpringBlockingSubscriptionWithPositionPersistenceInMongoDB;
+import org.occurrent.subscription.util.blocking.BlockingSubscriptionWithAutomaticPositionPersistence;
 import org.springframework.boot.autoconfigure.SpringBootApplication;
 import org.springframework.context.annotation.Bean;
 import org.springframework.data.mongodb.MongoDatabaseFactory;
@@ -63,8 +63,8 @@ public class SubscriptionProjectionsWithSpringAndMongoDBApplication {
     }
 
     @Bean
-    public BlockingSubscription<CloudEvent> springBlockingSubscriptionForMongoDB(PositionAwareBlockingSubscription subscription, BlockingSubscriptionPositionStorage storage) {
-        return new SpringBlockingSubscriptionWithPositionPersistenceInMongoDB(subscription, storage);
+    public BlockingSubscription<CloudEvent> blockingSubscriptionWithAutomaticPositionPersistence(PositionAwareBlockingSubscription subscription, BlockingSubscriptionPositionStorage storage) {
+        return new BlockingSubscriptionWithAutomaticPositionPersistence(subscription, storage);
     }
 
     @Bean

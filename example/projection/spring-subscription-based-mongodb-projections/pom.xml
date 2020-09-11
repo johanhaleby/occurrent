@@ -32,9 +32,15 @@
             <groupId>org.occurrent</groupId>
             <artifactId>eventstore-mongodb-spring-blocking</artifactId>
             <version>0.0.1-SNAPSHOT</version>
-        </dependency><dependency>
+        </dependency>
+        <dependency>
             <groupId>org.occurrent</groupId>
             <artifactId>subscription-mongodb-spring-blocking-position-storage</artifactId>
+            <version>0.0.1-SNAPSHOT</version>
+        </dependency>
+        <dependency>
+            <groupId>org.occurrent</groupId>
+            <artifactId>subscription-util-blocking-automatic-position-persistence</artifactId>
             <version>0.0.1-SNAPSHOT</version>
         </dependency>
         <dependency>

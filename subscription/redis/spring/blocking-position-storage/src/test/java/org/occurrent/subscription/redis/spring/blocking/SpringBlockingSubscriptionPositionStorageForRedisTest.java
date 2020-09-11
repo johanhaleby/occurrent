@@ -37,6 +37,7 @@ import org.occurrent.functional.Not;
 import org.occurrent.mongodb.timerepresentation.TimeRepresentation;
 import org.occurrent.subscription.api.blocking.BlockingSubscriptionPositionStorage;
 import org.occurrent.subscription.mongodb.spring.blocking.SpringBlockingSubscriptionForMongoDB;
+import org.occurrent.subscription.util.blocking.BlockingSubscriptionWithAutomaticPositionPersistence;
 import org.occurrent.testsupport.mongodb.FlushMongoDBExtension;
 import org.occurrent.time.TimeConversion;
 import org.springframework.data.mongodb.MongoTransactionManager;
@@ -69,7 +70,7 @@ import static org.awaitility.Durations.ONE_SECOND;
 import static org.hamcrest.Matchers.equalTo;
 
 @Testcontainers
-class SpringBlockingSubscriptionWithPositionPersistenceInRedisTest {
+class SpringBlockingSubscriptionPositionStorageForRedisTest {
 
     @Container
     private static final MongoDBContainer mongoDBContainer = new MongoDBContainer("mongo:4.2.8");
@@ -87,7 +88,7 @@ class SpringBlockingSubscriptionWithPositionPersistenceInRedisTest {
     private ObjectMapper objectMapper;
     private SpringBlockingSubscriptionForMongoDB springBlockingSubscriptionForMongoDB;
     private LettuceConnectionFactory lettuceConnectionFactory;
-    private SpringBlockingSubscriptionWithPositionPersistenceInRedis redisSubscription;
+    private BlockingSubscriptionWithAutomaticPositionPersistence redisSubscription;
     private RedisOperations<String, String> redisTemplate;
 
     @BeforeEach
@@ -102,7 +103,7 @@ class SpringBlockingSubscriptionWithPositionPersistenceInRedisTest {
         lettuceConnectionFactory = new LettuceConnectionFactory(redisContainer.getHost(), redisContainer.getFirstMappedPort());
         redisTemplate = createRedisTemplate(lettuceConnectionFactory);
         BlockingSubscriptionPositionStorage storage = new SpringBlockingSubscriptionPositionStorageForRedis(redisTemplate);
-        redisSubscription = new SpringBlockingSubscriptionWithPositionPersistenceInRedis(springBlockingSubscriptionForMongoDB, storage);
+        redisSubscription = new BlockingSubscriptionWithAutomaticPositionPersistence(springBlockingSubscriptionForMongoDB, storage);
         objectMapper = new ObjectMapper();
     }
 

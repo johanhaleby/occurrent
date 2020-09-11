@@ -17,17 +17,15 @@
 package org.occurrent.example.domain.numberguessinggame.mongodb.spring.blocking;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
-import io.cloudevents.CloudEvent;
 import org.occurrent.eventstore.mongodb.spring.blocking.EventStoreConfig;
 import org.occurrent.eventstore.mongodb.spring.blocking.SpringBlockingMongoEventStore;
 import org.occurrent.example.domain.numberguessinggame.mongodb.spring.blocking.infrastructure.Serialization;
 import org.occurrent.mongodb.timerepresentation.TimeRepresentation;
-import org.occurrent.subscription.api.blocking.BlockingSubscription;
 import org.occurrent.subscription.api.blocking.BlockingSubscriptionPositionStorage;
 import org.occurrent.subscription.api.blocking.PositionAwareBlockingSubscription;
 import org.occurrent.subscription.mongodb.spring.blocking.SpringBlockingSubscriptionForMongoDB;
 import org.occurrent.subscription.mongodb.spring.blocking.SpringBlockingSubscriptionPositionStorageForMongoDB;
-import org.occurrent.subscription.mongodb.spring.blocking.SpringBlockingSubscriptionWithPositionPersistenceInMongoDB;
+import org.occurrent.subscription.util.blocking.BlockingSubscriptionWithAutomaticPositionPersistence;
 import org.springframework.amqp.core.TopicExchange;
 import org.springframework.amqp.rabbit.annotation.EnableRabbit;
 import org.springframework.amqp.support.converter.Jackson2JsonMessageConverter;
@@ -67,11 +65,6 @@ public class Bootstrap {
     }
 
     @Bean
-    public SpringBlockingSubscriptionWithPositionPersistenceInMongoDB springBlockingSubscriptionWithPositionPersistenceForMongoDB(PositionAwareBlockingSubscription subscription, BlockingSubscriptionPositionStorage storage) {
-        return new SpringBlockingSubscriptionWithPositionPersistenceInMongoDB(subscription, storage);
-    }
-
-    @Bean
     public PositionAwareBlockingSubscription subscription(MongoTemplate mongoTemplate) {
         return new SpringBlockingSubscriptionForMongoDB(mongoTemplate, EVENTS_COLLECTION_NAME, TimeRepresentation.DATE);
     }
@@ -82,8 +75,8 @@ public class Bootstrap {
     }
 
     @Bean
-    public BlockingSubscription<CloudEvent> subscriptionWithAutomaticPersistence(PositionAwareBlockingSubscription subscription, BlockingSubscriptionPositionStorage storage) {
-        return new SpringBlockingSubscriptionWithPositionPersistenceInMongoDB(subscription, storage);
+    public BlockingSubscriptionWithAutomaticPositionPersistence subscriptionWithAutomaticPersistence(PositionAwareBlockingSubscription subscription, BlockingSubscriptionPositionStorage storage) {
+        return new BlockingSubscriptionWithAutomaticPositionPersistence(subscription, storage);
     }
 
     @Bean

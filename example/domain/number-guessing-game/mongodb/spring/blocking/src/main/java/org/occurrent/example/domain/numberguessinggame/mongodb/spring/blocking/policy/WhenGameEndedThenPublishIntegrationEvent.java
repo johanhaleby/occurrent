@@ -21,7 +21,7 @@ import org.occurrent.cloudevents.OccurrentExtensionGetter;
 import org.occurrent.eventstore.api.blocking.EventStoreQueries;
 import org.occurrent.example.domain.numberguessinggame.model.domainevents.*;
 import org.occurrent.example.domain.numberguessinggame.mongodb.spring.blocking.infrastructure.Serialization;
-import org.occurrent.subscription.mongodb.spring.blocking.SpringBlockingSubscriptionWithPositionPersistenceInMongoDB;
+import org.occurrent.subscription.util.blocking.BlockingSubscriptionWithAutomaticPositionPersistence;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.amqp.core.TopicExchange;
@@ -45,27 +45,26 @@ class WhenGameEndedThenPublishIntegrationEvent {
 
     private final EventStoreQueries eventStoreQueries;
     private final Serialization serialization;
-    private final SpringBlockingSubscriptionWithPositionPersistenceInMongoDB streamer;
+    private final BlockingSubscriptionWithAutomaticPositionPersistence subscription;
     private final RabbitTemplate rabbitTemplate;
     private final TopicExchange numberGuessingGameTopic;
 
     WhenGameEndedThenPublishIntegrationEvent(EventStoreQueries eventStoreQueries, Serialization serialization,
-                                             SpringBlockingSubscriptionWithPositionPersistenceInMongoDB streamer,
+                                             BlockingSubscriptionWithAutomaticPositionPersistence subscription,
                                              RabbitTemplate rabbitTemplate, TopicExchange numberGuessingGameTopic) {
         this.eventStoreQueries = eventStoreQueries;
         this.serialization = serialization;
-        this.streamer = streamer;
+        this.subscription = subscription;
         this.rabbitTemplate = rabbitTemplate;
         this.numberGuessingGameTopic = numberGuessingGameTopic;
     }
 
     @PostConstruct
     void subscribeToSubscription() {
-        streamer.subscribe(WhenGameEndedThenPublishIntegrationEvent.class.getSimpleName(), filter(type(NumberGuessingGameEnded.class.getSimpleName())), this::publishIntegrationEventWhenGameEnded
+        subscription.subscribe(WhenGameEndedThenPublishIntegrationEvent.class.getSimpleName(), filter(type(NumberGuessingGameEnded.class.getSimpleName())), this::publishIntegrationEventWhenGameEnded
                 // We're only interested in events of type NumberGuessingGameEnded since then we know that
                 // we should publish the integration event
-        )
-                .waitUntilStarted(Duration.ofSeconds(4));
+        ).waitUntilStarted(Duration.ofSeconds(4));
     }
 
 

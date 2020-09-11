@@ -14,7 +14,7 @@
  * limitations under the License.
  */
 
-package org.occurrent.subscription.mongodb.spring.blocking;
+package org.occurrent.subscription.util.blocking;
 
 import io.cloudevents.CloudEvent;
 import org.occurrent.subscription.StartAt;
@@ -32,14 +32,15 @@ import java.util.function.Supplier;
 import static java.util.Objects.requireNonNull;
 
 /**
- * Wraps a {@link BlockingSubscription} (with optimized support {@link SpringBlockingSubscriptionForMongoDB}) and adds persistent subscription position support. It stores the subscription position
- * after an "action" (the consumer in this method {@link SpringBlockingSubscriptionWithPositionPersistenceInMongoDB#subscribe(String, Consumer)}) has completed successfully.
- * It stores the subscription position in MongoDB. Note that it doesn't have to be the same MongoDB database that stores the actual events.
+ * Combines  a {@link BlockingSubscription} and with a {@link BlockingSubscriptionPositionStorage} to automatically persist
+ * the subscription position after each successful call to the "action" method
+ * (i.e. when the consumer in this method {@link BlockingSubscriptionWithAutomaticPositionPersistence#subscribe(String, Consumer)} has completed successfully).
+ *
  * <p>
  * Note that this implementation stores the subscription position after _every_ action. If you have a lot of events and duplication is not
  * that much of a deal consider cloning/extending this class and add your own customizations.
  */
-public class SpringBlockingSubscriptionWithPositionPersistenceInMongoDB implements BlockingSubscription<CloudEvent> {
+public class BlockingSubscriptionWithAutomaticPositionPersistence implements BlockingSubscription<CloudEvent> {
 
     private final PositionAwareBlockingSubscription subscription;
     private final BlockingSubscriptionPositionStorage storage;
@@ -50,7 +51,7 @@ public class SpringBlockingSubscriptionWithPositionPersistenceInMongoDB implemen
      * @param subscription The subscription that will read events from the event store
      * @param storage      The {@link BlockingSubscriptionPositionStorage} that'll be used to persist the stream position
      */
-    public SpringBlockingSubscriptionWithPositionPersistenceInMongoDB(PositionAwareBlockingSubscription subscription, BlockingSubscriptionPositionStorage storage) {
+    public BlockingSubscriptionWithAutomaticPositionPersistence(PositionAwareBlockingSubscription subscription, BlockingSubscriptionPositionStorage storage) {
         requireNonNull(subscription, "subscription cannot be null");
         requireNonNull(storage, BlockingSubscriptionPositionStorage.class.getSimpleName() + " cannot be null");
 
@@ -93,13 +94,18 @@ public class SpringBlockingSubscriptionWithPositionPersistenceInMongoDB implemen
         return subscribe(subscriptionId, filter, startAtSupplier, action);
     }
 
-    void pauseSubscription(String subscriptionId) {
+    /**
+     * Pause a subscription temporarily without deleting the subscription position from the {@link BlockingSubscriptionPositionStorage}.
+     *
+     * @param subscriptionId The id of the subscription to pause
+     */
+    public void pauseSubscription(String subscriptionId) {
         subscription.cancelSubscription(subscriptionId);
     }
 
     /**
      * Cancel a subscription. This means that it'll no longer receive events as they are persisted to the event store.
-     * The subscription position that is persisted to MongoDB will also be removed.
+     * The subscription position that is persisted in the {@link BlockingSubscriptionPositionStorage} will also be removed.
      *
      * @param subscriptionId The subscription id to cancel
      */
