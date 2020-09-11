@@ -8,7 +8,7 @@ Work in progress, don't use in production just yet :)
 
 #### Documentation
 
-You can find documentation on the [website](https://www.occurrent.org).
+You can find documentation on the [website](https://occurrent.org).
 
 #### Design Choices
 
