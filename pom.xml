@@ -34,6 +34,7 @@
     </modules>
 
     <name>Occurrent</name>
+    <description>Event Sourcing Utilities for the JVM based on the CloudEvents specification</description>
     <url>http://occurrent.org</url>
 
     <licenses>
