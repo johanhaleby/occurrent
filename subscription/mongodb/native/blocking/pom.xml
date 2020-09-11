@@ -19,7 +19,7 @@
     <parent>
         <artifactId>subscription-mongodb-native</artifactId>
         <groupId>org.occurrent</groupId>
-        <version>0.1.0</version>
+        <version>0.1.1-SNAPSHOT</version>
     </parent>
     <modelVersion>4.0.0</modelVersion>
 
@@ -41,17 +41,17 @@
         <dependency>
             <groupId>org.occurrent</groupId>
             <artifactId>subscription-mongodb-common</artifactId>
-            <version>0.1.0</version>
+            <version>0.1.1-SNAPSHOT</version>
         </dependency>
         <dependency>
             <groupId>org.occurrent</groupId>
             <artifactId>subscription-api-blocking</artifactId>
-            <version>0.1.0</version>
+            <version>0.1.1-SNAPSHOT</version>
         </dependency>
         <dependency>
             <groupId>org.occurrent</groupId>
             <artifactId>mongodb-native-filter-bsonfilter-conversion</artifactId>
-            <version>0.1.0</version>
+            <version>0.1.1-SNAPSHOT</version>
         </dependency>
         <dependency>
             <groupId>org.slf4j</groupId>
@@ -62,7 +62,7 @@
         <dependency>
             <groupId>org.occurrent</groupId>
             <artifactId>eventstore-mongodb-native</artifactId>
-            <version>0.1.0</version>
+            <version>0.1.1-SNAPSHOT</version>
             <scope>test</scope>
         </dependency>
         <dependency>
@@ -103,7 +103,7 @@
         <dependency>
             <groupId>org.occurrent</groupId>
             <artifactId>test-support</artifactId>
-            <version>0.1.0</version>
+            <version>0.1.1-SNAPSHOT</version>
             <scope>test</scope>
         </dependency>
         <dependency>
