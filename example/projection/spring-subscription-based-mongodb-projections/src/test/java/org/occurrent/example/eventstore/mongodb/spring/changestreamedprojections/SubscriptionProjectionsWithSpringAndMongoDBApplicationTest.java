@@ -63,7 +63,6 @@ public class SubscriptionProjectionsWithSpringAndMongoDBApplicationTest {
         // Given
         LocalDateTime now = LocalDateTime.now();
         UUID id = UUID.randomUUID();
-        CurrentName notFound = new CurrentName(null, null);
 
         // When
         nameApplicationService.defineName(id, now, "John Doe");
@@ -79,7 +78,6 @@ public class SubscriptionProjectionsWithSpringAndMongoDBApplicationTest {
         // Given
         LocalDateTime now = LocalDateTime.now();
         UUID id = UUID.randomUUID();
-        CurrentName notFound = new CurrentName(null, null);
 
         // When
         nameApplicationService.defineName(id, now, "Jane Doe");
