@@ -66,7 +66,7 @@ public class SubscriptionProjectionsWithSpringAndMongoDBApplicationTest {
         nameApplicationService.defineName(id, now, "John Doe");
 
         // Then
-        await().atMost(Duration.ofMillis(200L)).until(() -> currentNameProjection.findById(id.toString())
+        await().atMost(Duration.ofMillis(1000L)).until(() -> currentNameProjection.findById(id.toString())
                 .orElse(notFound), cn -> cn.getName().equals("John Doe"));
     }
 
@@ -82,7 +82,7 @@ public class SubscriptionProjectionsWithSpringAndMongoDBApplicationTest {
         nameApplicationService.changeName(id, now, "John Doe");
 
         // Then
-        await().atMost(Duration.ofMillis(200L)).until(() -> currentNameProjection.findById(id.toString())
+        await().atMost(Duration.ofMillis(1000L)).until(() -> currentNameProjection.findById(id.toString())
                 .orElse(notFound), cn -> cn.getName().equals("John Doe"));
     }
 }
