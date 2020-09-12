@@ -31,10 +31,13 @@ import java.time.Duration;
 import java.time.LocalDateTime;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Objects;
 import java.util.UUID;
 
+import static org.assertj.core.api.Assertions.assertThat;
 import static org.awaitility.Awaitility.await;
 
+@SuppressWarnings("ResultOfMethodCallIgnored")
 @SpringBootTest(classes = SubscriptionProjectionsWithSpringAndMongoDBApplication.class)
 @Testcontainers
 public class SubscriptionProjectionsWithSpringAndMongoDBApplicationTest {
@@ -66,12 +69,13 @@ public class SubscriptionProjectionsWithSpringAndMongoDBApplicationTest {
         nameApplicationService.defineName(id, now, "John Doe");
 
         // Then
-        await().atMost(Duration.ofMillis(2000L)).until(() -> currentNameProjection.findById(id.toString())
-                .orElse(notFound), cn -> cn.getName().equals("John Doe"));
+        await().atMost(Duration.ofMillis(2000L)).untilAsserted(() ->
+                assertThat(currentNameProjection.findById(id.toString())).hasValueSatisfying(cn -> Objects.equals(cn.getName(), "John Doe"))
+        );
     }
 
     @Test
-    void current_name_projection_is_updated_asynchronously_after_events_are_written() {
+    void current_name_projection_is_updated_asynchronously_after_multiple_events_are_written_to_the_same_stream() {
         // Given
         LocalDateTime now = LocalDateTime.now();
         UUID id = UUID.randomUUID();
@@ -82,7 +86,8 @@ public class SubscriptionProjectionsWithSpringAndMongoDBApplicationTest {
         nameApplicationService.changeName(id, now, "John Doe");
 
         // Then
-        await().atMost(Duration.ofMillis(2000L)).until(() -> currentNameProjection.findById(id.toString())
-                .orElse(notFound), cn -> cn.getName().equals("John Doe"));
+        await().atMost(Duration.ofMillis(2000L)).untilAsserted(() ->
+                assertThat(currentNameProjection.findById(id.toString())).hasValueSatisfying(cn -> Objects.equals(cn.getName(), "John Doe"))
+        );
     }
 }
