@@ -47,17 +47,17 @@ public class DomainEventStore {
     }
 
     public void append(UUID id, List<DomainEvent> events) {
-        eventStore.write(id.toString(), serialize(id, events));
+        eventStore.write(id.toString(), serialize(events));
     }
 
     public EventStream<DomainEvent> loadEventStream(UUID id) {
         return eventStore.read(id.toString()).map(deserializeCloudEventToDomainEvent::deserialize);
     }
 
-    private Stream<CloudEvent> serialize(UUID id, List<DomainEvent> events) {
+    private Stream<CloudEvent> serialize(List<DomainEvent> events) {
         return events.stream()
                 .map(e -> CloudEventBuilder.v1()
-                        .withId(id.toString())
+                        .withId(e.getEventId())
                         .withSource(URI.create("http://name"))
                         .withType(e.getClass().getName())
                         .withTime(toLocalDateTime(e.getTimestamp()).atOffset(UTC))

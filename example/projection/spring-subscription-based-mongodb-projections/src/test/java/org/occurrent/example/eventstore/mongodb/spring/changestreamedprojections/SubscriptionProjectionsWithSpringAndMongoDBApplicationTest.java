@@ -28,6 +28,7 @@ import org.testcontainers.containers.MongoDBContainer;
 import org.testcontainers.junit.jupiter.Container;
 import org.testcontainers.junit.jupiter.Testcontainers;
 
+import java.time.Duration;
 import java.time.LocalDateTime;
 import java.util.ArrayList;
 import java.util.List;
@@ -69,5 +70,20 @@ public class SubscriptionProjectionsWithSpringAndMongoDBApplicationTest {
         // Then
         CurrentName currentName = await().until(() -> currentNameProjection.findById(id.toString()).orElse(null), not(Matchers.nullValue()));
         assertThat(currentName.getName()).isEqualTo("John Doe");
+    }
+
+    @Test
+    void current_name_projection_is_updated_asynchronously_after_events_are_written() {
+        // Given
+        LocalDateTime now = LocalDateTime.now();
+        UUID id = UUID.randomUUID();
+
+        // When
+        nameApplicationService.defineName(id, now, "Jane Doe");
+        nameApplicationService.changeName(id, now, "John Doe");
+
+        // Then
+        await().atMost(Duration.ofMillis(200L)).until(() -> currentNameProjection.findById(id.toString())
+                .orElse(null), cn -> cn.getName().equals("John Doe"));
     }
 }

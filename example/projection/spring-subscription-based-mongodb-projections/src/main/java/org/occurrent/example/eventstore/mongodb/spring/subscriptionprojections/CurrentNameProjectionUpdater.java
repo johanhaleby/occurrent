@@ -26,9 +26,12 @@ import org.springframework.stereotype.Component;
 import javax.annotation.PostConstruct;
 import java.time.Duration;
 
-import static io.vavr.API.*;
+import static io.vavr.API.$;
+import static io.vavr.API.Case;
+import static io.vavr.API.Match;
 import static io.vavr.Predicates.instanceOf;
 import static java.time.temporal.ChronoUnit.SECONDS;
+import static org.occurrent.cloudevents.OccurrentExtensionGetter.getStreamId;
 
 @Component
 public class CurrentNameProjectionUpdater {
@@ -50,10 +53,10 @@ public class CurrentNameProjectionUpdater {
         subscription
                 .subscribe("current-name", cloudEvent -> {
                     DomainEvent domainEvent = deserializeCloudEventToDomainEvent.deserialize(cloudEvent);
-                    String eventId = cloudEvent.getId();
+                    String streamId = getStreamId(cloudEvent);
                     CurrentName currentName = Match(domainEvent).of(
-                            Case($(instanceOf(NameDefined.class)), e -> new CurrentName(eventId, e.getName())),
-                            Case($(instanceOf(NameWasChanged.class)), e -> new CurrentName(eventId, e.getName())));
+                            Case($(instanceOf(NameDefined.class)), e -> new CurrentName(streamId, e.getName())),
+                            Case($(instanceOf(NameWasChanged.class)), e -> new CurrentName(streamId, e.getName())));
                     currentNameProjection.save(currentName);
                 })
                 .waitUntilStarted(Duration.of(2, SECONDS));
