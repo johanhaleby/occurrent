@@ -63,8 +63,9 @@ import static java.util.Objects.requireNonNull;
 
 /**
  * This is a subscription that uses the "native" MongoDB Java driver (sync) to listen to changes from the event store.
- * This Subscription doesn't maintain the subscription position, you need to store it yourself in order to continue the stream
- * from where it's left off on application restart/crash etc.
+ * This Subscription doesn't maintain the subscription position, you need to store itin order to continue the stream
+ * from where it's left off on application restart/crash etc. You can do this yourself or use a
+ * <a href="https://occurrent.org/documentation#blocking-subscription-position-storage">subscription position storage implementation</a>.
  */
 public class BlockingSubscriptionForMongoDB implements PositionAwareBlockingSubscription {
     private static final Logger log = LoggerFactory.getLogger(BlockingSubscriptionForMongoDB.class);
