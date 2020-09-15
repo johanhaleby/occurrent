@@ -14,7 +14,7 @@
  * limitations under the License.
  */
 
-package org.occurrent.mongodb.timerepresentation.internal;
+package org.occurrent.time.internal;
 
 import java.time.format.DateTimeFormatter;
 import java.time.format.DateTimeFormatterBuilder;

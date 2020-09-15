@@ -25,7 +25,7 @@ import java.time.OffsetDateTime;
 
 import static org.occurrent.filter.Filter.TIME;
 import static org.occurrent.mongodb.timerepresentation.TimeRepresentation.RFC_3339_STRING;
-import static org.occurrent.mongodb.timerepresentation.internal.RFC3339.RFC_3339_DATE_TIME_FORMATTER;
+import static org.occurrent.time.internal.RFC3339.RFC_3339_DATE_TIME_FORMATTER;
 
 /**
  * Some filters need to be treated specially, for example they may be dependent on the EventStore configuration.

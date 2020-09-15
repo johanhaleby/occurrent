@@ -14,7 +14,7 @@
  * limitations under the License.
  */
 
-package org.occurrent.mongodb.timerepresentation.internal;
+package org.occurrent.time.internal;
 
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.Arguments;
@@ -27,7 +27,7 @@ import java.util.stream.Stream;
 
 import static java.time.ZoneOffset.UTC;
 import static org.assertj.core.api.Assertions.assertThat;
-import static org.occurrent.mongodb.timerepresentation.internal.RFC3339.RFC_3339_DATE_TIME_FORMATTER;
+import static org.occurrent.time.internal.RFC3339.RFC_3339_DATE_TIME_FORMATTER;
 
 class RFC3339Test {
 

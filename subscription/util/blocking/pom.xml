@@ -27,6 +27,7 @@
     <artifactId>subscription-util-blocking</artifactId>
     <modules>
         <module>auto-position-persistence</module>
+        <module>catchup-subscription</module>
     </modules>
 
 

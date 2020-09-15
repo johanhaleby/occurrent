@@ -26,6 +26,7 @@
     <modules>
         <module>filter</module>
         <module>mongodb</module>
+        <module>time</module>
     </modules>
 
     <artifactId>common</artifactId>

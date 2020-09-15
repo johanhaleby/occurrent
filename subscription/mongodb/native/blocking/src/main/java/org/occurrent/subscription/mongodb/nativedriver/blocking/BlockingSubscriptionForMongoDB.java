@@ -143,6 +143,8 @@ public class BlockingSubscriptionForMongoDB implements PositionAwareBlockingSubs
                         .ifPresent(retry(action, __ -> true, convertToDelayStream(retryStrategy))));
             } catch (MongoException e) {
                 log.debug("Caught {} (code={}, message={}), this might happen when cursor is shutdown.", e.getClass().getName(), e.getCode(), e.getMessage(), e);
+            } catch (IllegalStateException e) {
+                log.debug("Caught {} (message={}), this might happen when cursor is shutdown.", e.getClass().getName(), e.getMessage(), e);
             }
         };
 
