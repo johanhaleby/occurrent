@@ -27,7 +27,7 @@ import org.occurrent.eventstore.api.WriteConditionNotFulfilledException;
 import org.occurrent.eventstore.api.blocking.EventStore;
 import org.occurrent.eventstore.api.blocking.EventStoreOperations;
 import org.occurrent.eventstore.api.blocking.EventStream;
-import org.occurrent.eventstore.api.internal.functional.FunctionalSupport.Pair;
+import org.occurrent.functionalsupport.internal.FunctionalSupport.Pair;
 
 import java.net.URI;
 import java.util.*;
@@ -42,7 +42,7 @@ import java.util.stream.Stream;
 
 import static java.util.Objects.requireNonNull;
 import static org.occurrent.cloudevents.OccurrentCloudEventExtension.STREAM_VERSION;
-import static org.occurrent.eventstore.api.internal.functional.FunctionalSupport.zip;
+import static org.occurrent.functionalsupport.internal.FunctionalSupport.zip;
 
 /**
  * This is an {@link EventStore} that stores events in-memory. This is mainly useful for testing

@@ -40,8 +40,8 @@ import org.occurrent.eventstore.api.blocking.EventStore;
 import org.occurrent.eventstore.api.blocking.EventStoreOperations;
 import org.occurrent.eventstore.api.blocking.EventStoreQueries;
 import org.occurrent.eventstore.api.blocking.EventStream;
-import org.occurrent.eventstore.api.internal.functional.FunctionalSupport.Pair;
 import org.occurrent.filter.Filter;
+import org.occurrent.functionalsupport.internal.FunctionalSupport.Pair;
 import org.occurrent.mongodb.spring.filterbsonfilterconversion.internal.FilterToBsonFilterConverter;
 import org.occurrent.mongodb.timerepresentation.TimeRepresentation;
 
@@ -63,11 +63,11 @@ import static com.mongodb.client.model.Sorts.descending;
 import static java.util.Objects.requireNonNull;
 import static org.occurrent.eventstore.api.WriteCondition.StreamVersionWriteCondition;
 import static org.occurrent.eventstore.api.WriteCondition.anyStreamVersion;
-import static org.occurrent.eventstore.api.internal.functional.FunctionalSupport.zip;
 import static org.occurrent.eventstore.mongodb.internal.MongoBulkWriteExceptionToDuplicateCloudEventExceptionTranslator.translateToDuplicateCloudEventException;
 import static org.occurrent.eventstore.mongodb.internal.OccurrentCloudEventMongoDBDocumentMapper.convertToCloudEvent;
 import static org.occurrent.eventstore.mongodb.internal.OccurrentCloudEventMongoDBDocumentMapper.convertToDocument;
 import static org.occurrent.filter.Filter.TIME;
+import static org.occurrent.functionalsupport.internal.FunctionalSupport.zip;
 
 /**
  * This is an {@link EventStore} that stores events in MongoDB using the "native" synchronous java driver MongoDB.

@@ -19,25 +19,27 @@ package org.occurrent.subscription.util.blocking.catchup.subscription;
 import io.cloudevents.CloudEvent;
 import org.occurrent.eventstore.api.blocking.EventStoreQueries;
 import org.occurrent.filter.Filter;
-import org.occurrent.subscription.OccurrentSubscriptionFilter;
-import org.occurrent.subscription.StartAt;
+import org.occurrent.subscription.*;
 import org.occurrent.subscription.StartAt.StartAtSubscriptionPosition;
-import org.occurrent.subscription.SubscriptionFilter;
-import org.occurrent.subscription.SubscriptionPosition;
 import org.occurrent.subscription.api.blocking.BlockingSubscription;
 import org.occurrent.subscription.api.blocking.BlockingSubscriptionPositionStorage;
 import org.occurrent.subscription.api.blocking.PositionAwareBlockingSubscription;
 import org.occurrent.subscription.api.blocking.Subscription;
 
+import javax.annotation.PreDestroy;
 import java.time.OffsetDateTime;
 import java.util.LinkedHashMap;
 import java.util.Map;
+import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.ConcurrentMap;
 import java.util.function.Consumer;
 import java.util.function.Supplier;
 import java.util.stream.Stream;
 
-import static org.occurrent.condition.Condition.gte;
+import static org.occurrent.condition.Condition.gt;
+import static org.occurrent.eventstore.api.blocking.EventStoreQueries.SortBy.TIME_ASC;
 import static org.occurrent.filter.Filter.time;
+import static org.occurrent.functionalsupport.internal.FunctionalSupport.takeWhile;
 import static org.occurrent.time.internal.RFC3339.RFC_3339_DATE_TIME_FORMATTER;
 
 // Not that we don't implement PositionAwareBlockingSubscription since we don't have a "globalSubscruptionPosition"
@@ -46,7 +48,7 @@ public class CatchupSupportingBlockingSubscription implements BlockingSubscripti
     private final PositionAwareBlockingSubscription subscription;
     private final EventStoreQueries eventStoreQueries;
     private final BlockingSubscriptionPositionStorage storage;
-
+    private final ConcurrentMap<String, Boolean> runningCatchupSubscriptions = new ConcurrentHashMap<>();
 
     // TODO Strategy catch-up peristence strategy (hur många events innan vi ska spara position)
     public CatchupSupportingBlockingSubscription(PositionAwareBlockingSubscription subscription, EventStoreQueries eventStoreQueries, BlockingSubscriptionPositionStorage storage) {
@@ -61,6 +63,8 @@ public class CatchupSupportingBlockingSubscription implements BlockingSubscripti
             throw new IllegalArgumentException("Unsupported!");
         }
 
+        runningCatchupSubscriptions.put(subscriptionId, true);
+
         final StartAt startAt;
         if (startAtSupplier == null) {
             startAt = StartAt.subscriptionPosition(TimeBasedSubscriptionPosition.beginningOfTime());
@@ -72,15 +76,14 @@ public class CatchupSupportingBlockingSubscription implements BlockingSubscripti
             return subscription.subscribe(subscriptionId, filter, startAtSupplier, action::accept);
         }
 
-        TimeBasedSubscriptionPosition subscriptionPosition = (TimeBasedSubscriptionPosition) ((StartAtSubscriptionPosition) startAt).subscriptionPosition;
-
+        SubscriptionPosition subscriptionPosition = ((StartAtSubscriptionPosition) startAt).subscriptionPosition;
 
         final Filter timeFilter;
-        if (subscriptionPosition.isBeginningOfTime()) {
+        if (isBeginningOfTime(subscriptionPosition)) {
             timeFilter = Filter.all();
         } else {
-            OffsetDateTime offsetDateTime = (OffsetDateTime) RFC_3339_DATE_TIME_FORMATTER.parse(subscriptionPosition.asString());
-            timeFilter = time(gte(offsetDateTime));
+            OffsetDateTime offsetDateTime = OffsetDateTime.parse(subscriptionPosition.asString(), RFC_3339_DATE_TIME_FORMATTER);
+            timeFilter = time(gt(offsetDateTime));
         }
 
         // Here's the reason why we're forcing the wrapping subscription to be a PositionAwareBlockingSubscription.
@@ -92,14 +95,22 @@ public class CatchupSupportingBlockingSubscription implements BlockingSubscripti
         FixedSizeCache cache = new FixedSizeCache(100);
         final Stream<CloudEvent> stream;
         if (filter == null) {
-            stream = eventStoreQueries.query(timeFilter);
+            stream = eventStoreQueries.query(timeFilter, TIME_ASC);
         } else {
             Filter userSuppliedFilter = ((OccurrentSubscriptionFilter) filter).filter;
-            stream = eventStoreQueries.query(timeFilter.and(userSuppliedFilter));
+            stream = eventStoreQueries.query(timeFilter.and(userSuppliedFilter), TIME_ASC);
         }
 
-        stream.peek(e -> cache.put(e.getId())).peek(action).forEach(e -> storage.save(subscriptionId, TimeBasedSubscriptionPosition.from(e.getTime())));
+        takeWhile(stream, __ -> runningCatchupSubscriptions.containsKey(subscriptionId))
+                .peek(action)
+                .peek(e -> cache.put(e.getId()))
+                .forEach(e -> {
+                    storage.save(subscriptionId, TimeBasedSubscriptionPosition.from(e.getTime()));
+                });
+
+        runningCatchupSubscriptions.remove(subscriptionId);
         return subscription.subscribe(subscriptionId, filter, wrappingSubscriptionStartPosition, cloudEvent -> {
+            
             if (!cache.isCached(cloudEvent.getId())) {
                 action.accept(cloudEvent);
             }
@@ -108,8 +119,14 @@ public class CatchupSupportingBlockingSubscription implements BlockingSubscripti
 
     @Override
     public void cancelSubscription(String subscriptionId) {
+        runningCatchupSubscriptions.remove(subscriptionId);
         subscription.cancelSubscription(subscriptionId);
         storage.delete(subscriptionId);
+    }
+
+    @Override
+    public Subscription subscribe(String subscriptionId, Consumer<CloudEvent> action) {
+        return subscribe(subscriptionId, (SubscriptionFilter) null, action);
     }
 
 
@@ -122,13 +139,34 @@ public class CatchupSupportingBlockingSubscription implements BlockingSubscripti
         }, action);
     }
 
+    @PreDestroy
     @Override
     public void shutdown() {
+        runningCatchupSubscriptions.clear();
         subscription.shutdown();
     }
 
     public static boolean isTimeBasedSubscriptionPosition(StartAt startAt) {
-        return (startAt instanceof StartAtSubscriptionPosition) && ((StartAtSubscriptionPosition) startAt).subscriptionPosition instanceof TimeBasedSubscriptionPosition;
+        if (!(startAt instanceof StartAtSubscriptionPosition)) {
+            return false;
+        }
+
+        SubscriptionPosition subscriptionPosition = ((StartAtSubscriptionPosition) startAt).subscriptionPosition;
+        return subscriptionPosition instanceof TimeBasedSubscriptionPosition ||
+                (subscriptionPosition instanceof StringBasedSubscriptionPosition && isRfc3339Timestamp(subscriptionPosition.asString()));
+    }
+
+    private static boolean isRfc3339Timestamp(String string) {
+        try {
+            OffsetDateTime.parse(string, RFC_3339_DATE_TIME_FORMATTER);
+            return true;
+        } catch (Exception exception) {
+            return false;
+        }
+    }
+
+    private static boolean isBeginningOfTime(SubscriptionPosition subscriptionPosition) {
+        return subscriptionPosition instanceof TimeBasedSubscriptionPosition && ((TimeBasedSubscriptionPosition) subscriptionPosition).isBeginningOfTime();
     }
 
     private static class FixedSizeCache {
@@ -143,8 +181,8 @@ public class CatchupSupportingBlockingSubscription implements BlockingSubscripti
             };
         }
 
-        private String put(String value) {
-            return cacheContent.put(value, null);
+        private void put(String value) {
+            cacheContent.put(value, null);
         }
 
         public boolean isCached(String key) {
