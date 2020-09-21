@@ -42,7 +42,7 @@ import static org.occurrent.filter.Filter.time;
 import static org.occurrent.functionalsupport.internal.FunctionalSupport.takeWhile;
 import static org.occurrent.time.internal.RFC3339.RFC_3339_DATE_TIME_FORMATTER;
 
-// Not that we don't implement PositionAwareBlockingSubscription since we don't have a "globalSubscruptionPosition"
+// Note that we don't implement PositionAwareBlockingSubscription since we don't have a "globalSubscruptionPosition"
 public class CatchupSupportingBlockingSubscription implements BlockingSubscription<CloudEvent> {
 
     private final PositionAwareBlockingSubscription subscription;
@@ -113,8 +113,9 @@ public class CatchupSupportingBlockingSubscription implements BlockingSubscripti
                 .forEach(e -> storage.save(subscriptionId, TimeBasedSubscriptionPosition.from(e.getTime())));
 
         runningCatchupSubscriptions.remove(subscriptionId);
+        // TODO Should we remove the position from storage?! For example if the wrapping subscription is not storing the position?
+        // Be careful since the wrapping subscription has not yet saved the global position here...
         return subscription.subscribe(subscriptionId, filter, wrappingSubscriptionStartPosition, cloudEvent -> {
-            
             if (!cache.isCached(cloudEvent.getId())) {
                 action.accept(cloudEvent);
             }
