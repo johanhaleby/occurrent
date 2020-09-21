@@ -48,13 +48,20 @@ public class CatchupSupportingBlockingSubscription implements BlockingSubscripti
     private final PositionAwareBlockingSubscription subscription;
     private final EventStoreQueries eventStoreQueries;
     private final BlockingSubscriptionPositionStorage storage;
+    private final CatchupSupportingBlockingSubscriptionConfig config;
     private final ConcurrentMap<String, Boolean> runningCatchupSubscriptions = new ConcurrentHashMap<>();
 
     // TODO Strategy catch-up peristence strategy (hur många events innan vi ska spara position)
     public CatchupSupportingBlockingSubscription(PositionAwareBlockingSubscription subscription, EventStoreQueries eventStoreQueries, BlockingSubscriptionPositionStorage storage) {
+        this(subscription, eventStoreQueries, storage, new CatchupSupportingBlockingSubscriptionConfig(100));
+    }
+
+    public CatchupSupportingBlockingSubscription(PositionAwareBlockingSubscription subscription, EventStoreQueries eventStoreQueries, BlockingSubscriptionPositionStorage storage,
+                                                 CatchupSupportingBlockingSubscriptionConfig config) {
         this.subscription = subscription;
         this.eventStoreQueries = eventStoreQueries;
         this.storage = storage;
+        this.config = config;
     }
 
     @Override
@@ -91,8 +98,7 @@ public class CatchupSupportingBlockingSubscription implements BlockingSubscripti
         // is executed. Thus we need the global position of the stream at the time of starting the query.
         final StartAt wrappingSubscriptionStartPosition = StartAt.subscriptionPosition(subscription.globalSubscriptionPosition());
 
-        // TODO Make configurable
-        FixedSizeCache cache = new FixedSizeCache(100);
+        FixedSizeCache cache = new FixedSizeCache(config.cacheSize);
         final Stream<CloudEvent> stream;
         if (filter == null) {
             stream = eventStoreQueries.query(timeFilter, TIME_ASC);
@@ -104,9 +110,7 @@ public class CatchupSupportingBlockingSubscription implements BlockingSubscripti
         takeWhile(stream, __ -> runningCatchupSubscriptions.containsKey(subscriptionId))
                 .peek(action)
                 .peek(e -> cache.put(e.getId()))
-                .forEach(e -> {
-                    storage.save(subscriptionId, TimeBasedSubscriptionPosition.from(e.getTime()));
-                });
+                .forEach(e -> storage.save(subscriptionId, TimeBasedSubscriptionPosition.from(e.getTime())));
 
         runningCatchupSubscriptions.remove(subscriptionId);
         return subscription.subscribe(subscriptionId, filter, wrappingSubscriptionStartPosition, cloudEvent -> {
