@@ -37,6 +37,7 @@ import org.occurrent.eventstore.mongodb.nativedriver.EventStoreConfig;
 import org.occurrent.eventstore.mongodb.nativedriver.MongoEventStore;
 import org.occurrent.mongodb.timerepresentation.TimeRepresentation;
 import org.occurrent.subscription.StartAt;
+import org.occurrent.subscription.SubscriptionPosition;
 import org.occurrent.subscription.api.blocking.BlockingSubscriptionPositionStorage;
 import org.occurrent.subscription.mongodb.nativedriver.blocking.BlockingSubscriptionForMongoDB;
 import org.occurrent.subscription.mongodb.nativedriver.blocking.BlockingSubscriptionPositionStorageForMongoDB;
@@ -54,6 +55,7 @@ import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
+import java.util.concurrent.atomic.AtomicInteger;
 import java.util.stream.Stream;
 
 import static java.time.ZoneOffset.UTC;
@@ -96,7 +98,7 @@ public class CatchupSupportingBlockingSubscriptionTest {
         mongoEventStore = new MongoEventStore(mongoClient, connectionString.getDatabase(), connectionString.getCollection(), config);
         subscriptionExecutor = Executors.newCachedThreadPool();
         storage = new BlockingSubscriptionPositionStorageForMongoDB(database, "storage");
-        subscription = newCatchupSubscription(database, eventCollection, timeRepresentation, storage);
+        subscription = newCatchupSubscription(database, eventCollection, timeRepresentation, storage, new CatchupSupportingBlockingSubscriptionConfig(100, 1));
         objectMapper = new ObjectMapper();
     }
 
@@ -219,12 +221,44 @@ public class CatchupSupportingBlockingSubscriptionTest {
         }).waitUntilStarted();
 
         awaitLatch(waitUntilSecondEventProcessed);
-        subscription = newCatchupSubscription(database, eventCollection, TimeRepresentation.DATE, storage);
+        subscription = newCatchupSubscription(database, eventCollection, TimeRepresentation.DATE, storage, new CatchupSupportingBlockingSubscriptionConfig(100, 1));
         subscription.subscribe(subscriptionId, state::add).waitUntilStarted();
 
         // Then
         await().atMost(FIVE_SECONDS).with().pollInterval(Duration.of(100, MILLIS)).untilAsserted(() ->
-                 assertThat(state).hasSize(4).extracting(this::deserialize).containsExactly(nameDefined1, nameDefined2, nameDefined3, nameWasChanged1));
+                assertThat(state).hasSize(4).extracting(this::deserialize).containsExactly(nameDefined1, nameDefined2, nameDefined3, nameWasChanged1));
+    }
+
+    @Test
+    void catchup_subscription_can_be_configured_to_only_store_the_position_of_every_tenth_event() {
+        // Given
+        LocalDateTime now = LocalDateTime.now();
+
+        for (int i = 0; i < 100; i++) {
+            mongoEventStore.write(String.valueOf(i), 0, serialize(new NameDefined(UUID.randomUUID().toString(), now.plusMinutes(i), "name" + i)));
+        }
+
+        AtomicInteger numberOfSavedPositions = new AtomicInteger();
+        storage = new BlockingSubscriptionPositionStorageForMongoDB(database, "storage") {
+            @Override
+            public SubscriptionPosition save(String subscriptionId, SubscriptionPosition subscriptionPosition) {
+                numberOfSavedPositions.incrementAndGet();
+                return super.save(subscriptionId, subscriptionPosition);
+            }
+        };
+
+        subscription = newCatchupSubscription(database, eventCollection, TimeRepresentation.DATE, this.storage, new CatchupSupportingBlockingSubscriptionConfig(100, 10));
+
+        CopyOnWriteArrayList<CloudEvent> state = new CopyOnWriteArrayList<>();
+
+        // When
+        String subscriptionId = UUID.randomUUID().toString();
+        subscription.subscribe(subscriptionId, StartAt.subscriptionPosition(TimeBasedSubscriptionPosition.beginningOfTime()), state::add).waitUntilStarted();
+
+        // Then
+        await().atMost(FIVE_SECONDS).with().pollInterval(Duration.of(20, MILLIS)).untilAsserted(() -> assertThat(state).hasSize(100));
+        assertThat(numberOfSavedPositions).hasValue(10); // Store every 10th position equals 10 for 100 events
+        assertThat(storage.read(subscriptionId)).isNotNull();
     }
 
     private void awaitLatch(CountDownLatch latch) {
@@ -255,8 +289,9 @@ public class CatchupSupportingBlockingSubscriptionTest {
                 .build());
     }
 
-    private CatchupSupportingBlockingSubscription newCatchupSubscription(MongoDatabase database, MongoCollection<Document> eventCollection, TimeRepresentation timeRepresentation, BlockingSubscriptionPositionStorage storage) {
+    private CatchupSupportingBlockingSubscription newCatchupSubscription(MongoDatabase database, MongoCollection<Document> eventCollection, TimeRepresentation timeRepresentation, BlockingSubscriptionPositionStorage storage,
+                                                                         CatchupSupportingBlockingSubscriptionConfig config) {
         BlockingSubscriptionForMongoDB blockingSubscriptionForMongoDB = new BlockingSubscriptionForMongoDB(database, eventCollection, timeRepresentation, subscriptionExecutor, RetryStrategy.none());
-        return new CatchupSupportingBlockingSubscription(blockingSubscriptionForMongoDB, mongoEventStore, storage);
+        return new CatchupSupportingBlockingSubscription(blockingSubscriptionForMongoDB, mongoEventStore, storage, config);
     }
 }

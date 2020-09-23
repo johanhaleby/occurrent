@@ -42,7 +42,6 @@ import static org.occurrent.filter.Filter.time;
 import static org.occurrent.functionalsupport.internal.FunctionalSupport.takeWhile;
 import static org.occurrent.time.internal.RFC3339.RFC_3339_DATE_TIME_FORMATTER;
 
-// Note that we don't implement PositionAwareBlockingSubscription since we don't have a "globalSubscruptionPosition"
 public class CatchupSupportingBlockingSubscription implements BlockingSubscription<CloudEvent> {
 
     private final PositionAwareBlockingSubscription subscription;
@@ -53,7 +52,7 @@ public class CatchupSupportingBlockingSubscription implements BlockingSubscripti
 
     // TODO Strategy catch-up peristence strategy (hur många events innan vi ska spara position)
     public CatchupSupportingBlockingSubscription(PositionAwareBlockingSubscription subscription, EventStoreQueries eventStoreQueries, BlockingSubscriptionPositionStorage storage) {
-        this(subscription, eventStoreQueries, storage, new CatchupSupportingBlockingSubscriptionConfig(100));
+        this(subscription, eventStoreQueries, storage, new CatchupSupportingBlockingSubscriptionConfig(100, EveryN.every(10)));
     }
 
     public CatchupSupportingBlockingSubscription(PositionAwareBlockingSubscription subscription, EventStoreQueries eventStoreQueries, BlockingSubscriptionPositionStorage storage,
@@ -110,6 +109,7 @@ public class CatchupSupportingBlockingSubscription implements BlockingSubscripti
         takeWhile(stream, __ -> runningCatchupSubscriptions.containsKey(subscriptionId))
                 .peek(action)
                 .peek(e -> cache.put(e.getId()))
+                .filter(config.persistCloudEventPositionPredicate)
                 .forEach(e -> storage.save(subscriptionId, TimeBasedSubscriptionPosition.from(e.getTime())));
 
         runningCatchupSubscriptions.remove(subscriptionId);
@@ -194,5 +194,4 @@ public class CatchupSupportingBlockingSubscription implements BlockingSubscripti
             return cacheContent.containsKey(key);
         }
     }
-
 }
