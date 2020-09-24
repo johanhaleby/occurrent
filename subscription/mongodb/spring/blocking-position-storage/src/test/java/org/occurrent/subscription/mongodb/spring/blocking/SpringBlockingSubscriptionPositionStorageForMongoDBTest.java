@@ -35,10 +35,11 @@ import org.occurrent.eventstore.api.blocking.EventStore;
 import org.occurrent.eventstore.mongodb.spring.blocking.EventStoreConfig;
 import org.occurrent.eventstore.mongodb.spring.blocking.SpringBlockingMongoEventStore;
 import org.occurrent.mongodb.timerepresentation.TimeRepresentation;
+import org.occurrent.subscription.SubscriptionPosition;
 import org.occurrent.subscription.api.blocking.BlockingSubscriptionPositionStorage;
-import org.occurrent.subscription.api.blocking.PositionAwareBlockingSubscription;
 import org.occurrent.subscription.mongodb.MongoDBFilterSpecification.JsonMongoDBFilterSpecification;
 import org.occurrent.subscription.util.blocking.BlockingSubscriptionWithAutomaticPositionPersistence;
+import org.occurrent.subscription.util.blocking.BlockingSubscriptionWithAutomaticPositionPersistenceConfig;
 import org.occurrent.testsupport.mongodb.FlushMongoDBExtension;
 import org.springframework.data.mongodb.MongoTransactionManager;
 import org.springframework.data.mongodb.core.MongoTemplate;
@@ -91,6 +92,7 @@ public class SpringBlockingSubscriptionPositionStorageForMongoDBTest {
     private ObjectMapper objectMapper;
     private MongoTemplate mongoTemplate;
     private MongoClient mongoClient;
+    private SpringBlockingSubscriptionForMongoDB positionAwareBlockingSubscription;
 
     @BeforeEach
     void create_mongo_event_store() {
@@ -101,8 +103,8 @@ public class SpringBlockingSubscriptionPositionStorageForMongoDBTest {
         TimeRepresentation timeRepresentation = RFC_3339_STRING;
         EventStoreConfig eventStoreConfig = new EventStoreConfig.Builder().eventStoreCollectionName(connectionString.getCollection()).transactionConfig(mongoTransactionManager).timeRepresentation(timeRepresentation).build();
         mongoEventStore = new SpringBlockingMongoEventStore(mongoTemplate, eventStoreConfig);
-        PositionAwareBlockingSubscription positionAwareBlockingSubscription = new SpringBlockingSubscriptionForMongoDB(mongoTemplate, connectionString.getCollection(), timeRepresentation);
-        BlockingSubscriptionPositionStorage storage = new SpringBlockingSubscriptionPositionStorageForMongoDB(mongoTemplate, RESUME_TOKEN_COLLECTION);
+        positionAwareBlockingSubscription = new SpringBlockingSubscriptionForMongoDB(mongoTemplate, connectionString.getCollection(), timeRepresentation);
+        SpringBlockingSubscriptionPositionStorageForMongoDB storage = new SpringBlockingSubscriptionPositionStorageForMongoDB(mongoTemplate, RESUME_TOKEN_COLLECTION);
         this.subscription = new BlockingSubscriptionWithAutomaticPositionPersistence(positionAwareBlockingSubscription, storage);
         objectMapper = new ObjectMapper();
     }
@@ -130,6 +132,92 @@ public class SpringBlockingSubscriptionPositionStorageForMongoDBTest {
 
         // Then
         await().atMost(2, SECONDS).with().pollInterval(Duration.of(20, MILLIS)).untilAsserted(() -> assertThat(state).hasSize(3));
+    }
+
+    @Test
+    void blocking_spring_subscription_stores_every_event_by_default() {
+        // Given
+        LocalDateTime now = LocalDateTime.now();
+        CopyOnWriteArrayList<CloudEvent> state = new CopyOnWriteArrayList<>();
+        NameDefined nameDefined1 = new NameDefined(UUID.randomUUID().toString(), now, "name1");
+        NameDefined nameDefined2 = new NameDefined(UUID.randomUUID().toString(), now.plusSeconds(2), "name2");
+        NameWasChanged nameWasChanged1 = new NameWasChanged(UUID.randomUUID().toString(), now.plusSeconds(10), "name3");
+
+        AtomicInteger numberOfWritesToBlockingSubscriptionStorage = new AtomicInteger(0);
+        BlockingSubscriptionPositionStorage storage = new BlockingSubscriptionPositionStorage() {
+
+            @Override
+            public SubscriptionPosition read(String subscriptionId) {
+                return null;
+            }
+
+            @Override
+            public SubscriptionPosition save(String subscriptionId, SubscriptionPosition subscriptionPosition) {
+                numberOfWritesToBlockingSubscriptionStorage.incrementAndGet();
+                return subscriptionPosition;
+            }
+
+            @Override
+            public void delete(String subscriptionId) {
+
+            }
+        };
+        subscription = new BlockingSubscriptionWithAutomaticPositionPersistence(positionAwareBlockingSubscription, storage);
+        subscription.subscribe(UUID.randomUUID().toString(), state::add).waitUntilStarted(Duration.of(10, ChronoUnit.SECONDS));
+
+        // When
+        mongoEventStore.write("1", 0, serialize(nameDefined1));
+        mongoEventStore.write("2", 0, serialize(nameDefined2));
+        mongoEventStore.write("1", 1, serialize(nameWasChanged1));
+
+        // Then
+        await().atMost(2, SECONDS).with().pollInterval(Duration.of(20, MILLIS)).untilAsserted(() -> {
+            assertThat(state).hasSize(3);
+            assertThat(numberOfWritesToBlockingSubscriptionStorage).hasValue(4); // 3 events and one for global subscription position
+        });
+    }
+
+    @Test
+    void blocking_spring_subscription_stores_every_n_events_was_defined_config() {
+        // Given
+        LocalDateTime now = LocalDateTime.now();
+        CopyOnWriteArrayList<CloudEvent> state = new CopyOnWriteArrayList<>();
+        NameDefined nameDefined1 = new NameDefined(UUID.randomUUID().toString(), now, "name1");
+        NameDefined nameDefined2 = new NameDefined(UUID.randomUUID().toString(), now.plusSeconds(2), "name2");
+        NameWasChanged nameWasChanged1 = new NameWasChanged(UUID.randomUUID().toString(), now.plusSeconds(10), "name3");
+
+        AtomicInteger numberOfWritesToBlockingSubscriptionStorage = new AtomicInteger(0);
+        BlockingSubscriptionPositionStorage storage = new BlockingSubscriptionPositionStorage() {
+
+            @Override
+            public SubscriptionPosition read(String subscriptionId) {
+                return null;
+            }
+
+            @Override
+            public SubscriptionPosition save(String subscriptionId, SubscriptionPosition subscriptionPosition) {
+                numberOfWritesToBlockingSubscriptionStorage.incrementAndGet();
+                return subscriptionPosition;
+            }
+
+            @Override
+            public void delete(String subscriptionId) {
+
+            }
+        };
+        subscription = new BlockingSubscriptionWithAutomaticPositionPersistence(positionAwareBlockingSubscription, storage, new BlockingSubscriptionWithAutomaticPositionPersistenceConfig(3));
+        subscription.subscribe(UUID.randomUUID().toString(), state::add).waitUntilStarted(Duration.of(10, ChronoUnit.SECONDS));
+
+        // When
+        mongoEventStore.write("1", 0, serialize(nameDefined1));
+        mongoEventStore.write("2", 0, serialize(nameDefined2));
+        mongoEventStore.write("1", 1, serialize(nameWasChanged1));
+
+        // Then
+        await().atMost(2, SECONDS).with().pollInterval(Duration.of(20, MILLIS)).untilAsserted(() -> {
+            assertThat(state).hasSize(3);
+            assertThat(numberOfWritesToBlockingSubscriptionStorage).hasValue(2); // 1 event and one for global subscription position
+        });
     }
 
     @Test

@@ -25,6 +25,7 @@ import org.occurrent.subscription.api.blocking.BlockingSubscription;
 import org.occurrent.subscription.api.blocking.BlockingSubscriptionPositionStorage;
 import org.occurrent.subscription.api.blocking.PositionAwareBlockingSubscription;
 import org.occurrent.subscription.api.blocking.Subscription;
+import org.occurrent.subscription.util.predicate.EveryN;
 
 import javax.annotation.PreDestroy;
 import java.time.OffsetDateTime;
@@ -42,7 +43,27 @@ import static org.occurrent.filter.Filter.time;
 import static org.occurrent.functionalsupport.internal.FunctionalSupport.takeWhile;
 import static org.occurrent.time.internal.RFC3339.RFC_3339_DATE_TIME_FORMATTER;
 
+/**
+ * A {@link BlockingSubscription} that reads historic cloud events from the all event streams (see {@link EventStoreQueries#all()}) until caught up with the
+ * {@link PositionAwareBlockingSubscription#globalSubscriptionPosition()} of the {@code subscription} (you probably want to narrow the historic set events of events
+ * by using a {@link Filter} when subscribing). It'll automatically switch over to the supplied {@code subscription} when all history events are read and the subscription has caught-up.
+ * <br>
+ * <br>
+ * <p>
+ * Note that the implementation uses an in-memory cache (default size is {@value #DEFAULT_CACHE_SIZE} but this can be configured using a {@link CatchupSupportingBlockingSubscriptionConfig})
+ * to reduce the number of duplicate event when switching from historic events to the current cloud event position. It's highly recommended that the application logic is idempotent if the
+ * cache size doesn't cover all duplicate events.
+ * </p>
+ * <br>
+ * <p>
+ * Also note that the if a the subscription crashes during catch-up mode it'll continue where it left-off on restart, given the no specific `StartAt` position is supplied.
+ * For this to work, the subscription must store the subscription position in a {@link BlockingSubscriptionPositionStorage} implementation periodically. It's possible to configure
+ * how often this should happen in the {@link CatchupSupportingBlockingSubscriptionConfig}.
+ * </p>
+ */
 public class CatchupSupportingBlockingSubscription implements BlockingSubscription<CloudEvent> {
+
+    private static final int DEFAULT_CACHE_SIZE = 100;
 
     private final PositionAwareBlockingSubscription subscription;
     private final EventStoreQueries eventStoreQueries;
@@ -50,11 +71,27 @@ public class CatchupSupportingBlockingSubscription implements BlockingSubscripti
     private final CatchupSupportingBlockingSubscriptionConfig config;
     private final ConcurrentMap<String, Boolean> runningCatchupSubscriptions = new ConcurrentHashMap<>();
 
-    // TODO Strategy catch-up peristence strategy (hur många events innan vi ska spara position)
+    /**
+     * Create a new instance of {@link CatchupSupportingBlockingSubscription} the uses a default {@link CatchupSupportingBlockingSubscriptionConfig} with a cache size of
+     * {@value #DEFAULT_CACHE_SIZE} and that stores subscription position of every 10th event when in catch-up mode. After catch-up mode has completed, the {@link PositionAwareBlockingSubscription}
+     * will dictate how often the subscription position is stored.
+     *
+     * @param subscription      The subscription that'll be used to subscribe to new events <i>after</i> catch-up is completed.
+     * @param eventStoreQueries The API that will be used for catch-up
+     * @param storage           The storage that will maintain the subscription position during catch-up mode.
+     */
     public CatchupSupportingBlockingSubscription(PositionAwareBlockingSubscription subscription, EventStoreQueries eventStoreQueries, BlockingSubscriptionPositionStorage storage) {
-        this(subscription, eventStoreQueries, storage, new CatchupSupportingBlockingSubscriptionConfig(100, EveryN.every(10)));
+        this(subscription, eventStoreQueries, storage, new CatchupSupportingBlockingSubscriptionConfig(DEFAULT_CACHE_SIZE, EveryN.every(10)));
     }
 
+    /**
+     * Create a new instance of {@link CatchupSupportingBlockingSubscription} the uses the supplied {@link CatchupSupportingBlockingSubscriptionConfig}.
+     * After catch-up mode has completed, the {@link PositionAwareBlockingSubscription} will dictate how often the subscription position is stored.
+     *
+     * @param subscription      The subscription that'll be used to subscribe to new events <i>after</i> catch-up is completed.
+     * @param eventStoreQueries The API that will be used for catch-up
+     * @param storage           The storage that will maintain the subscription position during catch-up mode.
+     */
     public CatchupSupportingBlockingSubscription(PositionAwareBlockingSubscription subscription, EventStoreQueries eventStoreQueries, BlockingSubscriptionPositionStorage storage,
                                                  CatchupSupportingBlockingSubscriptionConfig config) {
         this.subscription = subscription;
@@ -94,7 +131,7 @@ public class CatchupSupportingBlockingSubscription implements BlockingSubscripti
 
         // Here's the reason why we're forcing the wrapping subscription to be a PositionAwareBlockingSubscription.
         // This is in order to be 100% safe since we need to take events that are published meanwhile the EventStoreQuery
-        // is executed. Thus we need the global position of the stream at the time of starting the query.
+        // is executed. Thus we need the global position of the subscription at the time of starting the query.
         final StartAt wrappingSubscriptionStartPosition = StartAt.subscriptionPosition(subscription.globalSubscriptionPosition());
 
         FixedSizeCache cache = new FixedSizeCache(config.cacheSize);

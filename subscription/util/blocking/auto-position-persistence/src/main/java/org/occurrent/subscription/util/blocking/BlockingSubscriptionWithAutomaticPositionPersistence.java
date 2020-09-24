@@ -30,6 +30,7 @@ import java.util.function.Consumer;
 import java.util.function.Supplier;
 
 import static java.util.Objects.requireNonNull;
+import static org.occurrent.subscription.util.predicate.EveryN.everyEvent;
 
 /**
  * Combines  a {@link BlockingSubscription} and with a {@link BlockingSubscriptionPositionStorage} to automatically persist
@@ -44,6 +45,7 @@ public class BlockingSubscriptionWithAutomaticPositionPersistence implements Blo
 
     private final PositionAwareBlockingSubscription subscription;
     private final BlockingSubscriptionPositionStorage storage;
+    private final BlockingSubscriptionWithAutomaticPositionPersistenceConfig config;
 
     /**
      * Create a subscription that uses the Native sync Java MongoDB driver to persists the subscription position in MongoDB.
@@ -52,11 +54,24 @@ public class BlockingSubscriptionWithAutomaticPositionPersistence implements Blo
      * @param storage      The {@link BlockingSubscriptionPositionStorage} that'll be used to persist the stream position
      */
     public BlockingSubscriptionWithAutomaticPositionPersistence(PositionAwareBlockingSubscription subscription, BlockingSubscriptionPositionStorage storage) {
+        this(subscription, storage, new BlockingSubscriptionWithAutomaticPositionPersistenceConfig(everyEvent()));
+    }
+
+    /**
+     * Create a subscription that uses the Native sync Java MongoDB driver to persists the subscription position in MongoDB.
+     *
+     * @param subscription The subscription that will read events from the event store
+     * @param storage      The {@link BlockingSubscriptionPositionStorage} that'll be used to persist the stream position
+     */
+    public BlockingSubscriptionWithAutomaticPositionPersistence(PositionAwareBlockingSubscription subscription, BlockingSubscriptionPositionStorage storage,
+                                                                BlockingSubscriptionWithAutomaticPositionPersistenceConfig config) {
         requireNonNull(subscription, "subscription cannot be null");
         requireNonNull(storage, BlockingSubscriptionPositionStorage.class.getSimpleName() + " cannot be null");
+        requireNonNull(config, BlockingSubscriptionWithAutomaticPositionPersistenceConfig.class.getSimpleName() + " cannot be null");
 
         this.storage = storage;
         this.subscription = subscription;
+        this.config = config;
     }
 
     @Override
@@ -64,7 +79,9 @@ public class BlockingSubscriptionWithAutomaticPositionPersistence implements Blo
         return subscription.subscribe(subscriptionId,
                 filter, startAtSupplier, cloudEventWithStreamPosition -> {
                     action.accept(cloudEventWithStreamPosition);
-                    storage.save(subscriptionId, cloudEventWithStreamPosition.getStreamPosition());
+                    if (config.persistCloudEventPositionPredicate.test(cloudEventWithStreamPosition)) {
+                        storage.save(subscriptionId, cloudEventWithStreamPosition.getStreamPosition());
+                    }
                 }
         );
     }

@@ -1,3 +1,4 @@
 Changelog next version:
 
-* Catchup subscriptions
+* Catchup subscriptions (blocking)
+* EveryN for stream persistence

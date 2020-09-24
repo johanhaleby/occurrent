@@ -14,16 +14,20 @@
  * limitations under the License.
  */
 
-package org.occurrent.subscription.util.blocking.catchup.subscription;
+package org.occurrent.subscription.util.predicate;
 
 import io.cloudevents.CloudEvent;
 
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.function.Predicate;
 
+/**
+ * A stateful predicate that matches every N event. I.e. if {@code n} is set to 10 then this predicate will return {@code true} for every 10th event.
+ */
 public class EveryN implements Predicate<CloudEvent> {
     private final int n;
     private final AtomicInteger state = new AtomicInteger(1);
+
 
     public EveryN(int n) {
         if (n < 1) {
@@ -32,10 +36,16 @@ public class EveryN implements Predicate<CloudEvent> {
         this.n = n;
     }
 
+    /**
+     * @return An instance of {@link EveryN} that returns {@code true} for every event
+     */
     public static EveryN everyEvent() {
         return new EveryN(1);
     }
 
+    /**
+     * @return An instance of {@link EveryN} that returns {@code true} for every {@code n} event.
+     */
     public static EveryN every(int n) {
         return new EveryN(n);
     }
