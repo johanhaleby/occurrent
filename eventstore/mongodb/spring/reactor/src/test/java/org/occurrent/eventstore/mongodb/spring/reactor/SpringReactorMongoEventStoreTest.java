@@ -65,6 +65,7 @@ import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.atomic.AtomicReference;
 import java.util.function.Function;
 import java.util.stream.Collectors;
+import java.util.stream.Stream;
 
 import static java.nio.charset.StandardCharsets.UTF_8;
 import static java.time.ZoneOffset.UTC;
@@ -332,6 +333,44 @@ public class SpringReactorMongoEventStoreTest {
                 () -> assertThat(versionAndEvents.events).hasSize(2),
                 () -> assertThat(versionAndEvents.events).containsExactly(nameDefined, nameWasChanged1)
         );
+    }
+
+    @SuppressWarnings("ConstantConditions")
+    @Nested
+    @DisplayName("count")
+    class CountTest {
+
+        @Test
+        void count_without_any_filter_returns_all_the_count_of_all_events_in_the_event_store() {
+            // Given
+            LocalDateTime now = LocalDateTime.now();
+            DomainEvent event1 = new NameDefined(UUID.randomUUID().toString(), now, "John Doe");
+            DomainEvent event2 = new NameWasChanged(UUID.randomUUID().toString(), now, "Jan Doe");
+            DomainEvent event3 = new NameDefined(UUID.randomUUID().toString(), now, "Hello Doe");
+            persist("name", Stream.of(event1, event2, event3).collect(Collectors.toList())).block();
+
+            // When
+            long count = eventStore.count().block();
+
+            // Then
+            assertThat(count).isEqualTo(3);
+        }
+
+        @Test
+        void count_with_filter_returns_only_events_that_matches_the_filter() {
+            // Given
+            LocalDateTime now = LocalDateTime.now();
+            DomainEvent event1 = new NameDefined(UUID.randomUUID().toString(), now, "John Doe");
+            DomainEvent event2 = new NameWasChanged(UUID.randomUUID().toString(), now, "Jan Doe");
+            DomainEvent event3 = new NameDefined(UUID.randomUUID().toString(), now, "Hello Doe");
+            persist("name", Stream.of(event1, event2, event3).collect(Collectors.toList())).block();
+
+            // When
+            long count = eventStore.count(type(NameDefined.class.getName())).block();
+
+            // Then
+            assertThat(count).isEqualTo(2);
+        }
     }
 
     @Nested

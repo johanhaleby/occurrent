@@ -298,6 +298,18 @@ public class SpringReactorMongoEventStore implements EventStore, EventStoreOpera
                 .map(document -> convertToCloudEvent(cloudEventSerializer, timeRepresentation, document));
     }
 
+    @Override
+    public Mono<Long> count(Filter filter) {
+        requireNonNull(filter, "Filter cannot be null");
+        if (filter instanceof Filter.All) {
+            //noinspection NullableProblems
+            return mongoTemplate.createMono(eventStoreCollectionName, MongoCollection::estimatedDocumentCount);
+        } else {
+            final Query query = FilterConverter.convertFilterToQuery(timeRepresentation, filter);
+            return mongoTemplate.count(query, eventStoreCollectionName);
+        }
+    }
+
     private static class EventStreamImpl implements EventStream<Document> {
         private String id;
         private long version;

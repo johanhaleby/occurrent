@@ -19,6 +19,7 @@ package org.occurrent.eventstore.api.reactor;
 import io.cloudevents.CloudEvent;
 import org.occurrent.filter.Filter;
 import reactor.core.publisher.Flux;
+import reactor.core.publisher.Mono;
 
 import static java.util.Objects.requireNonNull;
 
@@ -35,6 +36,22 @@ public interface EventStoreQueries {
      * @return All cloud events matching the specified filter, skip, limit and sort by <code>sortBy</code>.
      */
     Flux<CloudEvent> query(Filter filter, int skip, int limit, SortBy sortBy);
+
+    /**
+     * Count specific events in the event store that matches the supplied {@code filter}.
+     *
+     * @return The number of events in the event store matching the {@code filter}.
+     */
+    Mono<Long> count(Filter filter);
+
+    /**
+     * Count all events in the event store
+     *
+     * @return The number of events in the event store
+     */
+    default Mono<Long> count() {
+        return count(Filter.all());
+    }
 
     /**
      * @return All cloud events matching the specified filter sorted by <code>sortBy</code>.
