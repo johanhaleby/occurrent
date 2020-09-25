@@ -183,8 +183,19 @@ public class SpringBlockingMongoEventStore implements EventStore, EventStoreOper
                 .map(document -> convertToCloudEvent(cloudEventSerializer, timeRepresentation, document));
     }
 
+    @Override
+    public long count(Filter filter) {
+        requireNonNull(filter, "Filter cannot be null");
+        if (filter instanceof Filter.All) {
+            //noinspection ConstantConditions
+            return mongoTemplate.execute(eventStoreCollectionName, MongoCollection::estimatedDocumentCount);
+        } else {
+            final Query query = FilterConverter.convertFilterToQuery(timeRepresentation, filter);
+            return mongoTemplate.count(query, eventStoreCollectionName);
+        }
+    }
+
     // Data structures etc
-    @SuppressWarnings("unused")
     private static class EventStreamImpl<T> implements EventStream<T> {
         private String _id;
         private long version;

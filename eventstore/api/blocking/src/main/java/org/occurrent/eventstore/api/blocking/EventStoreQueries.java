@@ -38,6 +38,22 @@ public interface EventStoreQueries {
     Stream<CloudEvent> query(Filter filter, int skip, int limit, SortBy sortBy);
 
     /**
+     * Count specific events in the event store that matches the supplied {@code filter}.
+     *
+     * @return The number of events in the event store matching the {@code filter}.
+     */
+    long count(Filter filter);
+
+    /**
+     * Count all events in the event store
+     *
+     * @return The number of events in the event store
+     */
+    default long count() {
+        return count(Filter.all());
+    }
+
+    /**
      * @return All cloud events matching the specified filter sorted by <code>sortBy</code>.
      */
     default Stream<CloudEvent> query(Filter filter, SortBy sortBy) {

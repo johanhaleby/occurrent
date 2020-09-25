@@ -285,6 +285,17 @@ public class MongoEventStore implements EventStore, EventStoreOperations, EventS
                 .map(document -> convertToCloudEvent(cloudEventSerializer, timeRepresentation, document));
     }
 
+    @Override
+    public long count(Filter filter) {
+        requireNonNull(filter, "Filter cannot be null");
+        if (filter instanceof Filter.All) {
+            return eventCollection.estimatedDocumentCount();
+        } else {
+            final Bson query = FilterToBsonFilterConverter.convertFilterToBsonFilter(timeRepresentation, filter);
+            return eventCollection.countDocuments(query);
+        }
+    }
+
     private static class EventStreamImpl<T> implements EventStream<T> {
         private final String id;
         private final long version;
