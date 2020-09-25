@@ -48,7 +48,8 @@ public class BlockingSubscriptionWithAutomaticPositionPersistence implements Blo
     private final BlockingSubscriptionWithAutomaticPositionPersistenceConfig config;
 
     /**
-     * Create a subscription that uses the Native sync Java MongoDB driver to persists the subscription position in MongoDB.
+     * Create a subscription that combines a {@link PositionAwareBlockingSubscription} with a {@link BlockingSubscriptionPositionStorage} to automatically
+     * store the subscription after each successful call to <code>action</code> (The "consumer" in {@link #subscribe(String, Consumer)}).
      *
      * @param subscription The subscription that will read events from the event store
      * @param storage      The {@link BlockingSubscriptionPositionStorage} that'll be used to persist the stream position
@@ -58,7 +59,9 @@ public class BlockingSubscriptionWithAutomaticPositionPersistence implements Blo
     }
 
     /**
-     * Create a subscription that uses the Native sync Java MongoDB driver to persists the subscription position in MongoDB.
+     * Create a subscription that combines a {@link PositionAwareBlockingSubscription} with a {@link BlockingSubscriptionPositionStorage} to automatically
+     * store the subscription when the predicate defined in {@link BlockingSubscriptionWithAutomaticPositionPersistenceConfig#persistCloudEventPositionPredicate} is fulfilled.
+
      *
      * @param subscription The subscription that will read events from the event store
      * @param storage      The {@link BlockingSubscriptionPositionStorage} that'll be used to persist the stream position

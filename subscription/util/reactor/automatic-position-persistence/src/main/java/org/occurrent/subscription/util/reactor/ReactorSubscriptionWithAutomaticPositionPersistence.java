@@ -22,6 +22,7 @@ import org.occurrent.subscription.SubscriptionFilter;
 import org.occurrent.subscription.SubscriptionPosition;
 import org.occurrent.subscription.api.reactor.PositionAwareReactorSubscription;
 import org.occurrent.subscription.api.reactor.ReactorSubscriptionPositionStorage;
+import org.occurrent.subscription.util.predicate.EveryN;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import reactor.core.publisher.Mono;
@@ -43,12 +44,34 @@ public class ReactorSubscriptionWithAutomaticPositionPersistence {
     private static final Logger log = LoggerFactory.getLogger(ReactorSubscriptionWithAutomaticPositionPersistence.class);
     private final PositionAwareReactorSubscription subscription;
     private final ReactorSubscriptionPositionStorage storage;
+    private final ReactorSubscriptionWithAutomaticPositionPersistenceConfig config;
 
+    /**
+     * Create a subscription that combines a {@link ReactorSubscriptionWithAutomaticPositionPersistence} with a {@link ReactorSubscriptionWithAutomaticPositionPersistence} to automatically
+     * store the subscription after each successful call to <code>action</code> (The "consumer" in {@link #subscribe(String, Function)}).
+     *
+     * @param subscription The subscription that will read events from the event store
+     * @param storage      The {@link ReactorSubscriptionWithAutomaticPositionPersistence} that'll be used to persist the stream position
+     */
     public ReactorSubscriptionWithAutomaticPositionPersistence(PositionAwareReactorSubscription subscription, ReactorSubscriptionPositionStorage storage) {
-        this.subscription = subscription;
-        this.storage = storage;
+        this(subscription, storage, new ReactorSubscriptionWithAutomaticPositionPersistenceConfig(EveryN.everyEvent()));
+    }
+
+    /**
+     * Create a subscription that combines a {@link ReactorSubscriptionWithAutomaticPositionPersistence} with a {@link ReactorSubscriptionWithAutomaticPositionPersistence} to automatically
+     * store the subscription when the predicate defined in {@link ReactorSubscriptionWithAutomaticPositionPersistenceConfig#persistCloudEventPositionPredicate} is fulfilled.
+     *
+     * @param subscription The subscription that will read events from the event store
+     * @param storage      The {@link ReactorSubscriptionWithAutomaticPositionPersistence} that'll be used to persist the stream position
+     */
+    public ReactorSubscriptionWithAutomaticPositionPersistence(PositionAwareReactorSubscription subscription, ReactorSubscriptionPositionStorage storage,
+                                                               ReactorSubscriptionWithAutomaticPositionPersistenceConfig config) {
         requireNonNull(subscription, PositionAwareReactorSubscription.class.getSimpleName() + " cannot be null");
         requireNonNull(storage, ReactorSubscriptionPositionStorage.class.getSimpleName() + " cannot be null");
+        requireNonNull(config, ReactorSubscriptionWithAutomaticPositionPersistenceConfig.class.getSimpleName() + " cannot be null");
+        this.subscription = subscription;
+        this.storage = storage;
+        this.config = config;
     }
 
     /**
@@ -90,6 +113,7 @@ public class ReactorSubscriptionWithAutomaticPositionPersistence {
                 .doOnNext(startAt -> log.info("Starting subscription {} from subscription position {}", subscriptionId, startAt.toString()))
                 .flatMapMany(startAt -> subscription.subscribe(filter, startAt))
                 .flatMap(cloudEventWithStreamPosition -> action.apply(cloudEventWithStreamPosition).thenReturn(cloudEventWithStreamPosition))
+                .filter(config.persistCloudEventPositionPredicate)
                 .flatMap(cloudEventWithStreamPosition -> storage.save(subscriptionId, cloudEventWithStreamPosition.getStreamPosition()).thenReturn(cloudEventWithStreamPosition))
                 .then();
     }

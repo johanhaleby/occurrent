@@ -15,7 +15,8 @@
   ~ limitations under the License.
   -->
 
-<project xmlns="http://maven.apache.org/POM/4.0.0" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 http://maven.apache.org/xsd/maven-4.0.0.xsd">
+<project xmlns="http://maven.apache.org/POM/4.0.0" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+         xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 http://maven.apache.org/xsd/maven-4.0.0.xsd">
     <parent>
         <artifactId>subscription-mongodb-spring</artifactId>
         <groupId>org.occurrent</groupId>
@@ -28,7 +29,12 @@
     <dependencies>
         <dependency>
             <groupId>org.occurrent</groupId>
-            <artifactId>subscription-mongodb-spring-reactor</artifactId>
+            <artifactId>subscription-api-reactor</artifactId>
+            <version>0.1.1-SNAPSHOT</version>
+        </dependency>
+        <dependency>
+            <groupId>org.occurrent</groupId>
+            <artifactId>subscription-mongodb-common</artifactId>
             <version>0.1.1-SNAPSHOT</version>
         </dependency>
         <dependency>
@@ -65,7 +71,7 @@
         </dependency>
         <dependency>
             <groupId>org.occurrent</groupId>
-            <artifactId>subscription-util-reactor-automatic-position-persistence</artifactId>
+            <artifactId>subscription-mongodb-spring-reactor</artifactId>
             <version>0.1.1-SNAPSHOT</version>
             <scope>test</scope>
         </dependency>

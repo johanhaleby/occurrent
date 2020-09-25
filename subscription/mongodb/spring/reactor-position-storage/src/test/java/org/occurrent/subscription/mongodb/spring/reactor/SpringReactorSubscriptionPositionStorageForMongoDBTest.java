@@ -32,8 +32,6 @@ import org.occurrent.eventstore.api.reactor.EventStore;
 import org.occurrent.eventstore.mongodb.spring.reactor.EventStoreConfig;
 import org.occurrent.eventstore.mongodb.spring.reactor.SpringReactorMongoEventStore;
 import org.occurrent.mongodb.timerepresentation.TimeRepresentation;
-import org.occurrent.subscription.api.reactor.PositionAwareReactorSubscription;
-import org.occurrent.subscription.util.reactor.ReactorSubscriptionWithAutomaticPositionPersistence;
 import org.occurrent.testsupport.mongodb.FlushMongoDBExtension;
 import org.springframework.data.mongodb.ReactiveMongoTransactionManager;
 import org.springframework.data.mongodb.core.ReactiveMongoTemplate;
@@ -45,7 +43,6 @@ import org.testcontainers.junit.jupiter.Container;
 import org.testcontainers.junit.jupiter.Testcontainers;
 import reactor.core.Disposable;
 import reactor.core.publisher.Flux;
-import reactor.core.publisher.Mono;
 
 import java.net.URI;
 import java.time.LocalDateTime;
@@ -65,18 +62,18 @@ import static org.occurrent.time.TimeConversion.toLocalDateTime;
 @Testcontainers
 public class SpringReactorSubscriptionPositionStorageForMongoDBTest {
 
+    @RegisterExtension
+    FlushMongoDBExtension flushMongoDBExtension = new FlushMongoDBExtension(new ConnectionString(mongoDBContainer.getReplicaSetUrl()));
+
     @Container
     private static final MongoDBContainer mongoDBContainer = new MongoDBContainer("mongo:4.2.8");
     private static final String RESUME_TOKEN_COLLECTION = "ack";
 
     private EventStore mongoEventStore;
-    private ReactorSubscriptionWithAutomaticPositionPersistence subscription;
+    private SpringReactorSubscriptionForMongoDB subscription;
     private ObjectMapper objectMapper;
     private ReactiveMongoTemplate reactiveMongoTemplate;
     private CopyOnWriteArrayList<Disposable> disposables;
-
-    @RegisterExtension
-    FlushMongoDBExtension flushMongoDBExtension = new FlushMongoDBExtension(new ConnectionString(mongoDBContainer.getReplicaSetUrl()));
     private MongoClient mongoClient;
     private SpringReactorSubscriptionPositionStorageForMongoDB storage;
 
@@ -89,9 +86,8 @@ public class SpringReactorSubscriptionPositionStorageForMongoDBTest {
         ReactiveTransactionManager reactiveMongoTransactionManager = new ReactiveMongoTransactionManager(new SimpleReactiveMongoDatabaseFactory(mongoClient, requireNonNull(connectionString.getDatabase())));
         EventStoreConfig eventStoreConfig = new EventStoreConfig.Builder().eventStoreCollectionName("events").transactionConfig(reactiveMongoTransactionManager).timeRepresentation(TimeRepresentation.RFC_3339_STRING).build();
         mongoEventStore = new SpringReactorMongoEventStore(reactiveMongoTemplate, eventStoreConfig);
-        PositionAwareReactorSubscription springReactiveSubscriptionForMongoDB = new SpringReactorSubscriptionForMongoDB(reactiveMongoTemplate, "events", timeRepresentation);
         storage = new SpringReactorSubscriptionPositionStorageForMongoDB(reactiveMongoTemplate, RESUME_TOKEN_COLLECTION);
-        subscription = new ReactorSubscriptionWithAutomaticPositionPersistence(springReactiveSubscriptionForMongoDB, storage);
+        subscription = new SpringReactorSubscriptionForMongoDB(reactiveMongoTemplate, "events", timeRepresentation);
         objectMapper = new ObjectMapper();
         disposables = new CopyOnWriteArrayList<>();
     }
@@ -108,7 +104,10 @@ public class SpringReactorSubscriptionPositionStorageForMongoDBTest {
         LocalDateTime now = LocalDateTime.now();
         CopyOnWriteArrayList<CloudEvent> state = new CopyOnWriteArrayList<>();
         String subscriberId = UUID.randomUUID().toString();
-        disposeAfterTest(subscription.subscribe(subscriberId, cloudEvents -> Mono.fromRunnable(() -> state.add(cloudEvents))).subscribe());
+        disposeAfterTest(subscription.subscribe().flatMap(ce -> {
+            state.add(ce);
+            return storage.save(subscriberId, ce.getStreamPosition());
+        }).subscribe());
         Thread.sleep(200);
         NameDefined nameDefined1 = new NameDefined(UUID.randomUUID().toString(), now, "name1");
 

@@ -33,6 +33,11 @@
         </dependency>
         <dependency>
             <groupId>org.occurrent</groupId>
+            <artifactId>subscription-mongodb-spring-reactor</artifactId>
+            <version>0.1.1-SNAPSHOT</version>
+        </dependency>
+        <dependency>
+            <groupId>org.occurrent</groupId>
             <artifactId>eventstore-mongodb-native</artifactId>
             <version>0.1.1-SNAPSHOT</version>
         </dependency>

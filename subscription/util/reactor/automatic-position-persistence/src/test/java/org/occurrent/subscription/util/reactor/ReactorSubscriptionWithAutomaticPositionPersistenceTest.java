@@ -14,7 +14,7 @@
  * limitations under the License.
  */
 
-package org.occurrent.subscription.mongodb.spring.reactor;
+package org.occurrent.subscription.util.reactor;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.mongodb.ConnectionString;
@@ -22,6 +22,7 @@ import com.mongodb.reactivestreams.client.MongoClient;
 import com.mongodb.reactivestreams.client.MongoClients;
 import io.cloudevents.CloudEvent;
 import io.cloudevents.core.builder.CloudEventBuilder;
+import org.awaitility.Durations;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -33,9 +34,10 @@ import org.occurrent.eventstore.api.reactor.EventStore;
 import org.occurrent.eventstore.mongodb.spring.reactor.EventStoreConfig;
 import org.occurrent.eventstore.mongodb.spring.reactor.SpringReactorMongoEventStore;
 import org.occurrent.mongodb.timerepresentation.TimeRepresentation;
-import org.occurrent.subscription.api.reactor.PositionAwareReactorSubscription;
+import org.occurrent.subscription.SubscriptionPosition;
 import org.occurrent.subscription.api.reactor.ReactorSubscriptionPositionStorage;
-import org.occurrent.subscription.util.reactor.ReactorSubscriptionWithAutomaticPositionPersistence;
+import org.occurrent.subscription.mongodb.spring.reactor.SpringReactorSubscriptionForMongoDB;
+import org.occurrent.subscription.mongodb.spring.reactor.SpringReactorSubscriptionPositionStorageForMongoDB;
 import org.occurrent.testsupport.mongodb.FlushMongoDBExtension;
 import org.springframework.data.mongodb.ReactiveMongoTransactionManager;
 import org.springframework.data.mongodb.core.ReactiveMongoTemplate;
@@ -63,14 +65,11 @@ import static java.util.Objects.requireNonNull;
 import static java.util.concurrent.TimeUnit.SECONDS;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.awaitility.Awaitility.await;
-import static org.awaitility.Durations.ONE_SECOND;
-import static org.awaitility.Durations.TWO_SECONDS;
 import static org.hamcrest.Matchers.equalTo;
 import static org.occurrent.functional.CheckedFunction.unchecked;
 import static org.occurrent.functional.Not.not;
 import static org.occurrent.time.TimeConversion.toLocalDateTime;
 
-// TODO This test should be moved
 @Testcontainers
 public class ReactorSubscriptionWithAutomaticPositionPersistenceTest {
 
@@ -87,6 +86,7 @@ public class ReactorSubscriptionWithAutomaticPositionPersistenceTest {
     @RegisterExtension
     FlushMongoDBExtension flushMongoDBExtension = new FlushMongoDBExtension(new ConnectionString(mongoDBContainer.getReplicaSetUrl()));
     private MongoClient mongoClient;
+    private SpringReactorSubscriptionForMongoDB springReactorSubscriptionForMongoDB;
 
     @BeforeEach
     void create_mongo_event_store() {
@@ -97,9 +97,9 @@ public class ReactorSubscriptionWithAutomaticPositionPersistenceTest {
         ReactiveTransactionManager reactiveMongoTransactionManager = new ReactiveMongoTransactionManager(new SimpleReactiveMongoDatabaseFactory(mongoClient, requireNonNull(connectionString.getDatabase())));
         EventStoreConfig eventStoreConfig = new EventStoreConfig.Builder().eventStoreCollectionName("events").transactionConfig(reactiveMongoTransactionManager).timeRepresentation(TimeRepresentation.RFC_3339_STRING).build();
         mongoEventStore = new SpringReactorMongoEventStore(reactiveMongoTemplate, eventStoreConfig);
-        PositionAwareReactorSubscription springReactiveSubscriptionForMongoDB = new SpringReactorSubscriptionForMongoDB(reactiveMongoTemplate, "events", timeRepresentation);
+        springReactorSubscriptionForMongoDB = new SpringReactorSubscriptionForMongoDB(reactiveMongoTemplate, "events", timeRepresentation);
         ReactorSubscriptionPositionStorage storage = new SpringReactorSubscriptionPositionStorageForMongoDB(reactiveMongoTemplate, RESUME_TOKEN_COLLECTION);
-        subscription = new ReactorSubscriptionWithAutomaticPositionPersistence(springReactiveSubscriptionForMongoDB, storage);
+        subscription = new ReactorSubscriptionWithAutomaticPositionPersistence(springReactorSubscriptionForMongoDB, storage);
         objectMapper = new ObjectMapper();
         disposables = new CopyOnWriteArrayList<>();
     }
@@ -111,7 +111,7 @@ public class ReactorSubscriptionWithAutomaticPositionPersistenceTest {
     }
 
     @Test
-    void reactive_persistent_spring_subscription_calls_action_for_each_new_event() throws InterruptedException {
+    void reactor_subscription_with_automatic_position_persistence_calls_action_for_each_new_event() throws InterruptedException {
         // Given
         LocalDateTime now = LocalDateTime.now();
         CopyOnWriteArrayList<CloudEvent> state = new CopyOnWriteArrayList<>();
@@ -131,7 +131,90 @@ public class ReactorSubscriptionWithAutomaticPositionPersistenceTest {
     }
 
     @Test
-    void reactive_persistent_spring_subscription_allows_resuming_events_from_where_it_left_off() throws Exception {
+    void reactor_subscription_with_automatic_position_persistence_stores_every_event_position_by_default() throws InterruptedException {
+        // Given
+        LocalDateTime now = LocalDateTime.now();
+        CopyOnWriteArrayList<CloudEvent> state = new CopyOnWriteArrayList<>();
+        Thread.sleep(200);
+        NameDefined nameDefined1 = new NameDefined(UUID.randomUUID().toString(), now, "name1");
+        NameDefined nameDefined2 = new NameDefined(UUID.randomUUID().toString(), now.plusSeconds(2), "name2");
+        NameWasChanged nameWasChanged1 = new NameWasChanged(UUID.randomUUID().toString(), now.plusSeconds(10), "name3");
+
+        AtomicInteger numberOfWritesToSubscriptionStorage = new AtomicInteger(0);
+
+        ReactorSubscriptionPositionStorage reactorSubscriptionPositionStorage = new ReactorSubscriptionPositionStorage() {
+            @Override
+            public Mono<SubscriptionPosition> read(String subscriptionId) {
+                return Mono.empty();
+            }
+
+            @Override
+            public Mono<SubscriptionPosition> save(String subscriptionId, SubscriptionPosition subscriptionPosition) {
+                return Mono.fromRunnable(numberOfWritesToSubscriptionStorage::incrementAndGet).thenReturn(subscriptionPosition);
+            }
+
+            @Override
+            public Mono<Void> delete(String subscriptionId) {
+                return Mono.empty();
+            }
+        };
+        subscription = new ReactorSubscriptionWithAutomaticPositionPersistence(springReactorSubscriptionForMongoDB, reactorSubscriptionPositionStorage);
+        disposeAfterTest(subscription.subscribe(UUID.randomUUID().toString(), e -> Mono.fromRunnable(() -> state.add(e))).subscribe());
+
+        // When
+        mongoEventStore.write("1", 0, serialize(nameDefined1)).block();
+        mongoEventStore.write("2", 0, serialize(nameDefined2)).block();
+        mongoEventStore.write("1", 1, serialize(nameWasChanged1)).block();
+
+        // Then
+        await().with().pollInterval(Duration.of(20, MILLIS)).untilAsserted(() -> assertThat(state).hasSize(3));
+    }
+
+    @Test
+    void reactor_subscription_with_automatic_position_persistence_stores_every_n_events_as_defined_in_config() throws InterruptedException {
+        // Given
+        LocalDateTime now = LocalDateTime.now();
+        CopyOnWriteArrayList<CloudEvent> state = new CopyOnWriteArrayList<>();
+        Thread.sleep(200);
+        NameDefined nameDefined1 = new NameDefined(UUID.randomUUID().toString(), now, "name1");
+        NameDefined nameDefined2 = new NameDefined(UUID.randomUUID().toString(), now.plusSeconds(2), "name2");
+        NameWasChanged nameWasChanged1 = new NameWasChanged(UUID.randomUUID().toString(), now.plusSeconds(10), "name3");
+
+        AtomicInteger numberOfWritesToSubscriptionStorage = new AtomicInteger(0);
+
+        ReactorSubscriptionPositionStorage reactorSubscriptionPositionStorage = new ReactorSubscriptionPositionStorage() {
+            @Override
+            public Mono<SubscriptionPosition> read(String subscriptionId) {
+                return Mono.empty();
+            }
+
+            @Override
+            public Mono<SubscriptionPosition> save(String subscriptionId, SubscriptionPosition subscriptionPosition) {
+                return Mono.fromRunnable(numberOfWritesToSubscriptionStorage::incrementAndGet).thenReturn(subscriptionPosition);
+            }
+
+            @Override
+            public Mono<Void> delete(String subscriptionId) {
+                return Mono.empty();
+            }
+        };
+        subscription = new ReactorSubscriptionWithAutomaticPositionPersistence(springReactorSubscriptionForMongoDB, reactorSubscriptionPositionStorage, new ReactorSubscriptionWithAutomaticPositionPersistenceConfig(3));
+        disposeAfterTest(subscription.subscribe(UUID.randomUUID().toString(), e -> Mono.fromRunnable(() -> state.add(e))).subscribe());
+
+        // When
+        mongoEventStore.write("1", 0, serialize(nameDefined1)).block();
+        mongoEventStore.write("2", 0, serialize(nameDefined2)).block();
+        mongoEventStore.write("1", 1, serialize(nameWasChanged1)).block();
+
+        // Then
+        await().with().pollInterval(Duration.of(20, MILLIS)).untilAsserted(() -> {
+            assertThat(state).hasSize(3);
+            assertThat(numberOfWritesToSubscriptionStorage).hasValue(2); // 1 event and one for global subscription position
+        });
+    }
+
+    @Test
+    void reactor_subscription_with_automatic_position_persistence_allows_resuming_events_from_where_it_left_off() throws Exception {
         // Given
         LocalDateTime now = LocalDateTime.now();
         CopyOnWriteArrayList<CloudEvent> state = new CopyOnWriteArrayList<>();
@@ -146,18 +229,18 @@ public class ReactorSubscriptionWithAutomaticPositionPersistenceTest {
         // When
         mongoEventStore.write("1", 0, serialize(nameDefined1)).block();
         // The subscription is async so we need to wait for it
-        await().atMost(ONE_SECOND).until(not(state::isEmpty));
+        await().atMost(Durations.ONE_SECOND).until(not(state::isEmpty));
         subscription1.dispose();
         mongoEventStore.write("2", 0, serialize(nameDefined2)).block();
         mongoEventStore.write("1", 1, serialize(nameWasChanged1)).block();
         disposeAfterTest(subscription.subscribe(subscriberId, function).subscribe());
 
         // Then
-        await().atMost(TWO_SECONDS).with().pollInterval(Duration.of(20, MILLIS)).untilAsserted(() -> assertThat(state).hasSize(3));
+        await().atMost(Durations.TWO_SECONDS).with().pollInterval(Duration.of(20, MILLIS)).untilAsserted(() -> assertThat(state).hasSize(3));
     }
 
     @Test
-    void reactive_persistent_spring_subscription_allows_resuming_events_from_where_it_left_when_first_event_for_subscription_fails_the_first_time() {
+    void reactor_subscription_with_automatic_position_persistence_allows_resuming_events_from_where_it_left_when_first_event_for_subscription_fails_the_first_time() {
         // Given
         LocalDateTime now = LocalDateTime.now();
 
@@ -181,7 +264,7 @@ public class ReactorSubscriptionWithAutomaticPositionPersistenceTest {
         // When
         mongoEventStore.write("1", 0, serialize(nameDefined1)).block();
         // The subscription is async so we need to wait for it
-        await().atMost(ONE_SECOND).and().dontCatchUncaughtExceptions().untilAtomic(counter, equalTo(1));
+        await().atMost(Durations.ONE_SECOND).and().dontCatchUncaughtExceptions().untilAtomic(counter, equalTo(1));
         // Since an exception occurred we need to run the stream again
         stream.run();
         mongoEventStore.write("2", 0, serialize(nameDefined2)).block();

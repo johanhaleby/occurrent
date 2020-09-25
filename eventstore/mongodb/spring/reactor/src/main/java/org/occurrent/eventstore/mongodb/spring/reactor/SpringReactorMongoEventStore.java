@@ -298,7 +298,6 @@ public class SpringReactorMongoEventStore implements EventStore, EventStoreOpera
                 .map(document -> convertToCloudEvent(cloudEventSerializer, timeRepresentation, document));
     }
 
-    @SuppressWarnings("unused")
     private static class EventStreamImpl implements EventStream<Document> {
         private String id;
         private long version;
