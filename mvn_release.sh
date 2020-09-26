@@ -1,5 +1,5 @@
 #!/bin/bash
-sdk use java 8.0.222.hs-adpt
+echo "!!!!!DON'T FORGET TO SWTICH TO JAVA 8!!!!!"
 read -p "Enter the version to release: " releaseVersion
 echo "Starting to release Occurrent $releaseVersion"
 
