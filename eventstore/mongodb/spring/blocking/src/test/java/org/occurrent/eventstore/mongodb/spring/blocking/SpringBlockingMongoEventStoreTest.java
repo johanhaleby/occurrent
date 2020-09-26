@@ -1040,6 +1040,23 @@ public class SpringBlockingMongoEventStoreTest {
         }
 
         @Test
+        void query_filter_by_data() {
+            // Given
+            LocalDateTime now = LocalDateTime.now();
+            NameDefined nameDefined = new NameDefined(UUID.randomUUID().toString(), now, "name");
+            NameWasChanged nameWasChanged1 = new NameWasChanged(UUID.randomUUID().toString(), now.plusHours(1), "name2");
+            NameWasChanged nameWasChanged2 = new NameWasChanged(UUID.randomUUID().toString(), now.plusHours(2), "name3");
+
+            // When
+            persist("name1", Stream.of(nameDefined, nameWasChanged1));
+            persist("name2", nameWasChanged2);
+
+            // Then
+            Stream<CloudEvent> events = eventStore.query(data("name", eq("name3")));
+            assertThat(deserialize(events)).containsExactly(nameWasChanged2);
+        }
+
+        @Test
         void query_filter_by_cloud_event() {
             // Given
             LocalDateTime now = LocalDateTime.now();

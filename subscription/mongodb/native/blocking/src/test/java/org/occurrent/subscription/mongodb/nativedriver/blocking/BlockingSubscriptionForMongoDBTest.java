@@ -28,6 +28,7 @@ import io.cloudevents.core.builder.CloudEventBuilder;
 import org.bson.Document;
 import org.junit.jupiter.api.*;
 import org.junit.jupiter.api.extension.RegisterExtension;
+import org.occurrent.condition.Condition;
 import org.occurrent.domain.DomainEvent;
 import org.occurrent.domain.NameDefined;
 import org.occurrent.domain.NameWasChanged;
@@ -64,6 +65,8 @@ import static org.assertj.core.groups.Tuple.tuple;
 import static org.awaitility.Awaitility.await;
 import static org.awaitility.Durations.FIVE_SECONDS;
 import static org.hamcrest.Matchers.is;
+import static org.occurrent.filter.Filter.data;
+import static org.occurrent.filter.Filter.type;
 import static org.occurrent.functional.CheckedFunction.unchecked;
 import static org.occurrent.functional.Not.not;
 import static org.occurrent.subscription.mongodb.MongoDBFilterSpecification.BsonMongoDBFilterSpecification.filter;
@@ -292,7 +295,7 @@ public class BlockingSubscriptionForMongoDBTest {
             LocalDateTime now = LocalDateTime.now();
             CopyOnWriteArrayList<CloudEvent> state = new CopyOnWriteArrayList<>();
             String subscriberId = UUID.randomUUID().toString();
-            subscription.subscribe(subscriberId, OccurrentSubscriptionFilter.filter(Filter.type(NameDefined.class.getName())), state::add).waitUntilStarted();
+            subscription.subscribe(subscriberId, OccurrentSubscriptionFilter.filter(type(NameDefined.class.getName())), state::add).waitUntilStarted();
             NameDefined nameDefined1 = new NameDefined(UUID.randomUUID().toString(), now, "name1");
             NameDefined nameDefined2 = new NameDefined(UUID.randomUUID().toString(), now.plusSeconds(2), "name2");
             NameWasChanged nameWasChanged1 = new NameWasChanged(UUID.randomUUID().toString(), now.plusSeconds(3), "name3");
@@ -310,6 +313,29 @@ public class BlockingSubscriptionForMongoDBTest {
         }
 
         @Test
+        void using_occurrent_subscription_filter_for_data() {
+            // Given
+            LocalDateTime now = LocalDateTime.now();
+            CopyOnWriteArrayList<CloudEvent> state = new CopyOnWriteArrayList<>();
+            String subscriberId = UUID.randomUUID().toString();
+            subscription.subscribe(subscriberId, OccurrentSubscriptionFilter.filter(data("name", Condition.eq("name3"))), state::add).waitUntilStarted();
+            NameDefined nameDefined1 = new NameDefined(UUID.randomUUID().toString(), now, "name1");
+            NameDefined nameDefined2 = new NameDefined(UUID.randomUUID().toString(), now.plusSeconds(2), "name2");
+            NameWasChanged nameWasChanged1 = new NameWasChanged(UUID.randomUUID().toString(), now.plusSeconds(3), "name3");
+            NameWasChanged nameWasChanged2 = new NameWasChanged(UUID.randomUUID().toString(), now.plusSeconds(4), "name4");
+
+            // When
+            mongoEventStore.write("1", 0, serialize(nameDefined1));
+            mongoEventStore.write("1", 1, serialize(nameWasChanged1));
+            mongoEventStore.write("2", 0, serialize(nameDefined2));
+            mongoEventStore.write("2", 1, serialize(nameWasChanged2));
+
+            // Then
+            await().atMost(FIVE_SECONDS).until(state::size, is(1));
+            assertThat(state).extracting(CloudEvent::getId).containsOnly(nameWasChanged1.getEventId());
+        }
+
+        @Test
         void using_occurrent_subscription_filter_dsl_composition() {
             // Given
             LocalDateTime now = LocalDateTime.now();
@@ -320,7 +346,7 @@ public class BlockingSubscriptionForMongoDBTest {
             NameWasChanged nameWasChanged1 = new NameWasChanged(UUID.randomUUID().toString(), now.plusSeconds(3), "name3");
             NameWasChanged nameWasChanged2 = new NameWasChanged(UUID.randomUUID().toString(), now.plusSeconds(4), "name4");
 
-            Filter filter = Filter.id(nameDefined2.getEventId()).and(Filter.type(NameDefined.class.getName()));
+            Filter filter = Filter.id(nameDefined2.getEventId()).and(type(NameDefined.class.getName()));
             subscription.subscribe(subscriberId, OccurrentSubscriptionFilter.filter(filter), state::add).waitUntilStarted();
 
             // When

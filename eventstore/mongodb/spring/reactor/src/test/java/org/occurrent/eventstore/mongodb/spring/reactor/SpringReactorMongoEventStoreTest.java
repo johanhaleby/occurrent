@@ -1078,6 +1078,23 @@ public class SpringReactorMongoEventStoreTest {
         }
 
         @Test
+        void query_filter_by_data() {
+            // Given
+            LocalDateTime now = LocalDateTime.now();
+            NameDefined nameDefined = new NameDefined(UUID.randomUUID().toString(), now, "name");
+            NameWasChanged nameWasChanged1 = new NameWasChanged(UUID.randomUUID().toString(), now.plusHours(1), "name2");
+            NameWasChanged nameWasChanged2 = new NameWasChanged(UUID.randomUUID().toString(), now.plusHours(2), "name3");
+
+            // When
+            persist("name1", Flux.just(nameDefined, nameWasChanged1)).block();
+            persist("name2", nameWasChanged2).block();
+
+            // Then
+            Flux<CloudEvent> events = eventStore.query(data("name", eq("name2")).or(data("name", eq("name"))));
+            assertThat(deserialize(events)).containsOnly(nameWasChanged1, nameDefined);
+        }
+
+        @Test
         void query_filter_by_cloud_event() {
             // Given
             LocalDateTime now = LocalDateTime.now();
