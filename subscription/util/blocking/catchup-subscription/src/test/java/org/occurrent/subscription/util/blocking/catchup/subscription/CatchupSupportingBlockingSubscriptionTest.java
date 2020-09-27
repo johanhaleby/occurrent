@@ -65,7 +65,9 @@ import static java.util.concurrent.TimeUnit.SECONDS;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.awaitility.Awaitility.await;
 import static org.awaitility.Durations.FIVE_SECONDS;
+import static org.occurrent.filter.Filter.type;
 import static org.occurrent.functional.CheckedFunction.unchecked;
+import static org.occurrent.subscription.OccurrentSubscriptionFilter.filter;
 import static org.occurrent.time.TimeConversion.toLocalDateTime;
 
 @Testcontainers
@@ -130,6 +132,30 @@ public class CatchupSupportingBlockingSubscriptionTest {
 
         // Then
         await().atMost(FIVE_SECONDS).with().pollInterval(Duration.of(20, MILLIS)).untilAsserted(() -> assertThat(state).hasSize(3));
+    }
+
+    @Test
+    void catchup_subscription_reads_historic_events_with_filter() {
+        // Given
+        LocalDateTime now = LocalDateTime.now();
+        NameDefined nameDefined1 = new NameDefined(UUID.randomUUID().toString(), now, "name1");
+        NameDefined nameDefined2 = new NameDefined(UUID.randomUUID().toString(), now.plusSeconds(2), "name2");
+        NameWasChanged nameWasChanged1 = new NameWasChanged(UUID.randomUUID().toString(), now.plusSeconds(10), "name3");
+
+        mongoEventStore.write("1", 0, serialize(nameDefined1));
+        mongoEventStore.write("2", 0, serialize(nameDefined2));
+        mongoEventStore.write("1", 1, serialize(nameWasChanged1));
+
+        CopyOnWriteArrayList<CloudEvent> state = new CopyOnWriteArrayList<>();
+
+        // When
+        subscription.subscribe(UUID.randomUUID().toString(), filter(type(NameDefined.class.getName())), StartAt.subscriptionPosition(TimeBasedSubscriptionPosition.beginningOfTime()), state::add).waitUntilStarted();
+
+        // Then
+        await().atMost(FIVE_SECONDS).with().pollInterval(Duration.of(20, MILLIS)).untilAsserted(() -> {
+            assertThat(state).hasSize(2);
+            assertThat(state).extracting(CloudEvent::getType).containsOnly(NameDefined.class.getName());
+        });
     }
 
     @Test
