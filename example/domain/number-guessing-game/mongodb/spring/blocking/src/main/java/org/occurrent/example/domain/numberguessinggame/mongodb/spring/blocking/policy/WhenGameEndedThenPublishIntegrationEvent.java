@@ -21,6 +21,7 @@ import org.occurrent.cloudevents.OccurrentExtensionGetter;
 import org.occurrent.eventstore.api.blocking.EventStoreQueries;
 import org.occurrent.example.domain.numberguessinggame.model.domainevents.*;
 import org.occurrent.example.domain.numberguessinggame.mongodb.spring.blocking.infrastructure.Serialization;
+import org.occurrent.example.domain.numberguessinggame.mongodb.spring.blocking.policy.NumberGuessingGameCompleted.GuessedNumber;
 import org.occurrent.subscription.util.blocking.BlockingSubscriptionWithAutomaticPositionPersistence;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -81,13 +82,13 @@ class WhenGameEndedThenPublishIntegrationEvent {
                         integrationEvent.setStartedAt(toDate(e.timestamp()));
                     } else if (gameEvent instanceof PlayerGuessedANumberThatWasTooSmall) {
                         PlayerGuessedANumberThatWasTooSmall e = (PlayerGuessedANumberThatWasTooSmall) gameEvent;
-                        integrationEvent.addGuess(new NumberGuessingGameCompleted.GuessedNumber(e.playerId().toString(), e.guessedNumber(), toDate(e.timestamp())));
+                        integrationEvent.addGuess(new GuessedNumber(e.playerId().toString(), e.guessedNumber(), toDate(e.timestamp())));
                     } else if (gameEvent instanceof PlayerGuessedANumberThatWasTooBig) {
                         PlayerGuessedANumberThatWasTooBig e = (PlayerGuessedANumberThatWasTooBig) gameEvent;
-                        integrationEvent.addGuess(new NumberGuessingGameCompleted.GuessedNumber(e.playerId().toString(), e.guessedNumber(), toDate(e.timestamp())));
+                        integrationEvent.addGuess(new GuessedNumber(e.playerId().toString(), e.guessedNumber(), toDate(e.timestamp())));
                     } else if (gameEvent instanceof PlayerGuessedTheRightNumber) {
                         PlayerGuessedTheRightNumber e = (PlayerGuessedTheRightNumber) gameEvent;
-                        integrationEvent.addGuess(new NumberGuessingGameCompleted.GuessedNumber(e.playerId().toString(), e.guessedNumber(), toDate(e.timestamp())));
+                        integrationEvent.addGuess(new GuessedNumber(e.playerId().toString(), e.guessedNumber(), toDate(e.timestamp())));
                         integrationEvent.setRightNumberWasGuessed(true);
                     } else if (gameEvent instanceof GuessingAttemptsExhausted) {
                         integrationEvent.setRightNumberWasGuessed(false);
