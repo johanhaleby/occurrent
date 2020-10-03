@@ -164,7 +164,7 @@ class GameLogicKtTest {
             }
 
             @Nested
-            @DisplayName("when last guess for player")
+            @DisplayName("when last guess for player but more guesses remaining in game")
             inner class WhenLastGuessForPlayer {
 
                 private lateinit var currentEvents: Sequence<DomainEvent>
@@ -175,18 +175,95 @@ class GameLogicKtTest {
                     playerId = PlayerId.randomUUID()
 
                     currentEvents = sequenceOf(
-                            GameWasStarted(UUID.randomUUID(), Timestamp(), gameId, playerId, "Category", "Secret", 2, 2),
+                            GameWasStarted(UUID.randomUUID(), Timestamp(), gameId, playerId, "Category", "Secret", 2, 4),
                             PlayerGuessedTheWrongWord(UUID.randomUUID(), Timestamp(), gameId, playerId, "Wrong"))
+                }
+
+                @Test
+                fun `then PlayerGuessTheWrongWord and NumberOfGuessesWasExhaustedForPlayer is returned`() {
+                    // Given
+                    val timestamp = Timestamp()
+
+                    // When
+                    val events = guessWord(currentEvents, timestamp, playerId, Word("Wrong Word")).toList()
+
+                    // Then
+                    assertThat(events).hasSize(2)
+                    val playerGuessedTheWrongWord = events.find<PlayerGuessedTheWrongWord>()
+                    val numberOfGuessesWasExhaustedForPlayer = events.find<NumberOfGuessesWasExhaustedForPlayer>()
+
+                    assertAll(
+                            // PlayerGuessedTheWrongWord
+                            { assertThat(playerGuessedTheWrongWord.gameId).isEqualTo(gameId) },
+                            { assertThat(playerGuessedTheWrongWord.playerId).isEqualTo(playerId) },
+                            { assertThat(playerGuessedTheWrongWord.timestamp).isEqualTo(timestamp) },
+                            { assertThat(playerGuessedTheWrongWord.guessedWord).isEqualTo("Wrong Word") },
+                            { assertThat(playerGuessedTheWrongWord.type).isEqualTo(PlayerGuessedTheWrongWord::class.simpleName) },
+                            // NumberOfGuessesWasExhaustedForPlayer
+                            { assertThat(numberOfGuessesWasExhaustedForPlayer.gameId).isEqualTo(gameId) },
+                            { assertThat(numberOfGuessesWasExhaustedForPlayer.timestamp).isEqualTo(timestamp) },
+                            { assertThat(numberOfGuessesWasExhaustedForPlayer.playerId).isEqualTo(playerId) },
+                            { assertThat(numberOfGuessesWasExhaustedForPlayer.type).isEqualTo(NumberOfGuessesWasExhaustedForPlayer::class.simpleName) },
+                    )
+                }
+            }
+
+            @Nested
+            @DisplayName("when player tries to guess but attempts are already exhausted")
+            inner class WhenPlayerTriesToGuessButAttemptsAreAlreadyExhausted {
+
+                private lateinit var currentEvents: Sequence<DomainEvent>
+                private lateinit var playerId: PlayerId
+
+                @BeforeEach
+                fun `game is started`() {
+                    playerId = PlayerId.randomUUID()
+
+                    currentEvents = sequenceOf(
+                            GameWasStarted(UUID.randomUUID(), Timestamp(), gameId, playerId, "Category", "Secret", 2, 4),
+                            PlayerGuessedTheWrongWord(UUID.randomUUID(), Timestamp(), gameId, playerId, "Wrong1"),
+                            PlayerGuessedTheWrongWord(UUID.randomUUID(), Timestamp(), gameId, playerId, "Wrong2"))
+                }
+
+                @Test
+                fun `then PlayerGuessTheWrongWord is returned`() {
+                    // Given
+                    val timestamp = Timestamp()
+
+                    // When
+                    val throwable = catchThrowable { guessWord(currentEvents, timestamp, playerId, Word("Wrong Word")) }
+
+                    // Then
+                    assertThat(throwable).isExactlyInstanceOf(IllegalArgumentException::class.java).hasMessage("Number of guessing attempts exhausted for player $playerId.")
+                }
+            }
+
+            @Nested
+            @DisplayName("when last guess for game")
+            inner class WhenLastGuessForGame {
+
+                private lateinit var currentEvents: Sequence<DomainEvent>
+                private lateinit var playerId1: PlayerId
+                private lateinit var playerId2: PlayerId
+
+                @BeforeEach
+                fun `game is started`() {
+                    playerId1 = PlayerId.randomUUID()
+                    playerId2 = PlayerId.randomUUID()
+
+                    currentEvents = sequenceOf(
+                            GameWasStarted(UUID.randomUUID(), Timestamp(), gameId, playerId1, "Category", "Secret", 2, 3),
+                            PlayerGuessedTheWrongWord(UUID.randomUUID(), Timestamp(), gameId, playerId1, "Wrong1"),
+                            PlayerGuessedTheWrongWord(UUID.randomUUID(), Timestamp(), gameId, playerId1, "Wrong2"))
                 }
 
                 @Test
                 fun `then PlayerGuessTheWrongWord and GameWasLost is returned`() {
                     // Given
-                    val playerId = PlayerId.randomUUID()
                     val timestamp = Timestamp()
 
                     // When
-                    val events = guessWord(currentEvents, timestamp, playerId, Word("Wrong Word")).toList()
+                    val events = guessWord(currentEvents, timestamp, playerId2, Word("Wrong Word")).toList()
 
                     // Then
                     assertThat(events).hasSize(2)
@@ -196,7 +273,7 @@ class GameLogicKtTest {
                     assertAll(
                             // PlayerGuessedTheWrongWord
                             { assertThat(playerGuessedTheWrongWord.gameId).isEqualTo(gameId) },
-                            { assertThat(playerGuessedTheWrongWord.playerId).isEqualTo(playerId) },
+                            { assertThat(playerGuessedTheWrongWord.playerId).isEqualTo(playerId2) },
                             { assertThat(playerGuessedTheWrongWord.timestamp).isEqualTo(timestamp) },
                             { assertThat(playerGuessedTheWrongWord.guessedWord).isEqualTo("Wrong Word") },
                             { assertThat(playerGuessedTheWrongWord.type).isEqualTo(PlayerGuessedTheWrongWord::class.simpleName) },
@@ -207,6 +284,52 @@ class GameLogicKtTest {
                     )
                 }
             }
+        }
+    }
+
+    @Nested
+    @DisplayName("when game is lost")
+    inner class WhenGameIsLost {
+
+        @Test
+        fun `then it's not possible for any player to make a guess`() {
+            // Given
+            val gameId = GameId.randomUUID()
+            val playerId = PlayerId.randomUUID()
+            val timestamp = Timestamp()
+
+            val currentEvents = sequenceOf(GameWasStarted(UUID.randomUUID(), Timestamp(), gameId, playerId, "Category", "Secret", 2, 1),
+                    PlayerGuessedTheWrongWord(UUID.randomUUID(), Timestamp(), gameId, playerId, "Wrong"),
+                    GameWasLost(UUID.randomUUID(), Timestamp(), gameId))
+
+            // When
+            val throwable = catchThrowable { guessWord(currentEvents, timestamp, playerId, Word("Secret")) }
+
+            // Then
+            assertThat(throwable).isExactlyInstanceOf(IllegalStateException::class.java).hasMessage("Cannot guess word for a game that is already ended")
+        }
+    }
+
+    @Nested
+    @DisplayName("when game is won")
+    inner class WhenGameIsWon {
+
+        @Test
+        fun `then it's not possible for any player to make a guess`() {
+            // Given
+            val gameId = GameId.randomUUID()
+            val playerId = PlayerId.randomUUID()
+            val timestamp = Timestamp()
+
+            val currentEvents = sequenceOf(GameWasStarted(UUID.randomUUID(), Timestamp(), gameId, playerId, "Category", "Secret", 2, 4),
+                    PlayerGuessedTheRightWord(UUID.randomUUID(), Timestamp(), gameId, playerId, "Secret"),
+                    GameWasWon(UUID.randomUUID(), Timestamp(), gameId, winnerId = playerId))
+
+            // When
+            val throwable = catchThrowable { guessWord(currentEvents, timestamp, playerId, Word("Secret")) }
+
+            // Then
+            assertThat(throwable).isExactlyInstanceOf(IllegalStateException::class.java).hasMessage("Cannot guess word for a game that is already ended")
         }
     }
 }
