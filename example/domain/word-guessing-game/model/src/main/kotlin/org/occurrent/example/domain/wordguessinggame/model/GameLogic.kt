@@ -13,7 +13,7 @@ fun startGame(previousEvents: Sequence<DomainEvent>, gameId: GameId, timestamp: 
 
     val wordToGuess = wordsToChooseFrom.words.random()
 
-    val gameStarted = GameWasStarted(eventId = UUID.randomUUID(), timestamp = timestamp, startedBy = playerId, gameId = gameId, category = wordsToChooseFrom.category.value,
+    val gameStarted = GameWasStarted(eventId = UUID.randomUUID(), timestamp = timestamp, gameId = gameId, startedBy = playerId, category = wordsToChooseFrom.category.value,
             wordToGuess = wordToGuess.value, maxNumberOfGuessesPerPlayer = maxNumberOfGuessesPerPlayer.value, maxNumberOfGuessesTotal = maxNumberOfGuessesTotal.value)
 
     return sequenceOf(gameStarted)
@@ -30,17 +30,17 @@ fun guessWord(previousEvents: Sequence<DomainEvent>, timestamp: Timestamp, playe
         val events = mutableListOf<DomainEvent>()
 
         if (guessedWord.hasValue(state.wordToGuess)) {
-            events.add(PlayerGuessedTheRightWord(UUID.randomUUID(), timestamp, playerId, guessedWord.value))
-            events.add(GameWasWon(UUID.randomUUID(), timestamp, playerId))
+            events.add(PlayerGuessedTheRightWord(UUID.randomUUID(), timestamp, state.gameId, playerId, guessedWord.value))
+            events.add(GameWasWon(UUID.randomUUID(), timestamp, state.gameId, playerId))
         } else {
-            events.add(PlayerGuessedTheWrongWord(UUID.randomUUID(), timestamp, playerId, guessedWord.value))
+            events.add(PlayerGuessedTheWrongWord(UUID.randomUUID(), timestamp, state.gameId, playerId, guessedWord.value))
 
             if (state.isLastGuessForPlayer(playerId)) {
-                events.add(NumberOfGuessesWasExhaustedForPlayer(UUID.randomUUID(), timestamp, playerId))
+                events.add(NumberOfGuessesWasExhaustedForPlayer(UUID.randomUUID(), timestamp, state.gameId, playerId))
             }
 
             if (state.isLastGuessForGame()) {
-                events.add(GameWasLost(UUID.randomUUID(), timestamp))
+                events.add(GameWasLost(UUID.randomUUID(), timestamp, state.gameId))
             }
         }
 
