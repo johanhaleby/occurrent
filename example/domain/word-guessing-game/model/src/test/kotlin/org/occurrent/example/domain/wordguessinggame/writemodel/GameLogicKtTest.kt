@@ -1,4 +1,4 @@
-package org.occurrent.example.domain.wordguessinggame.model
+package org.occurrent.example.domain.wordguessinggame.writemodel
 
 import org.assertj.core.api.Assertions.assertThat
 import org.assertj.core.api.Assertions.catchThrowable
