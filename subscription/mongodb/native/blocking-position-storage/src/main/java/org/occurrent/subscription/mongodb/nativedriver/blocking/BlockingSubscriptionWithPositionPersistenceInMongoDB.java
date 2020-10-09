@@ -61,7 +61,7 @@ public class BlockingSubscriptionWithPositionPersistenceInMongoDB implements Blo
         return subscription.subscribe(subscriptionId,
                 filter, startAtSupplier, cloudEventWithStreamPosition -> {
                     action.accept(cloudEventWithStreamPosition);
-                    storage.save(subscriptionId, cloudEventWithStreamPosition.getStreamPosition());
+                    storage.save(subscriptionId, cloudEventWithStreamPosition.getSubscriptionPosition());
                 }
         );
     }

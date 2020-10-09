@@ -114,7 +114,7 @@ public class ReactorSubscriptionWithAutomaticPositionPersistence {
                 .flatMapMany(startAt -> subscription.subscribe(filter, startAt))
                 .flatMap(cloudEventWithStreamPosition -> action.apply(cloudEventWithStreamPosition).thenReturn(cloudEventWithStreamPosition))
                 .filter(config.persistCloudEventPositionPredicate)
-                .flatMap(cloudEventWithStreamPosition -> storage.save(subscriptionId, cloudEventWithStreamPosition.getStreamPosition()).thenReturn(cloudEventWithStreamPosition))
+                .flatMap(cloudEventWithStreamPosition -> storage.save(subscriptionId, cloudEventWithStreamPosition.getSubscriptionPosition()).thenReturn(cloudEventWithStreamPosition))
                 .then();
     }
 

@@ -83,7 +83,7 @@ public class BlockingSubscriptionWithAutomaticPositionPersistence implements Blo
                 filter, startAtSupplier, cloudEventWithStreamPosition -> {
                     action.accept(cloudEventWithStreamPosition);
                     if (config.persistCloudEventPositionPredicate.test(cloudEventWithStreamPosition)) {
-                        storage.save(subscriptionId, cloudEventWithStreamPosition.getStreamPosition());
+                        storage.save(subscriptionId, cloudEventWithStreamPosition.getSubscriptionPosition());
                     }
                 }
         );

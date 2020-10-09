@@ -97,7 +97,7 @@ public class CloudEventWithSubscriptionPosition implements CloudEvent {
         return cloudEvent.getExtensionNames();
     }
 
-    public SubscriptionPosition getStreamPosition() {
+    public SubscriptionPosition getSubscriptionPosition() {
         return changeStreamPosition;
     }
 

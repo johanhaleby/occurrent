@@ -106,7 +106,7 @@ public class SpringReactorSubscriptionPositionStorageForMongoDBTest {
         String subscriberId = UUID.randomUUID().toString();
         disposeAfterTest(subscription.subscribe().flatMap(ce -> {
             state.add(ce);
-            return storage.save(subscriberId, ce.getStreamPosition());
+            return storage.save(subscriberId, ce.getSubscriptionPosition());
         }).subscribe());
         Thread.sleep(200);
         NameDefined nameDefined1 = new NameDefined(UUID.randomUUID().toString(), now, "name1");
