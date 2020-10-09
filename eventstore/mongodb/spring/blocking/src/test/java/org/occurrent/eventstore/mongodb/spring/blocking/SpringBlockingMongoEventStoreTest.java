@@ -26,7 +26,6 @@ import com.mongodb.client.MongoClients;
 import io.cloudevents.CloudEvent;
 import io.cloudevents.core.builder.CloudEventBuilder;
 import io.github.artsok.RepeatedIfExceptionsTest;
-import org.jetbrains.annotations.NotNull;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Nested;
@@ -1453,7 +1452,6 @@ public class SpringBlockingMongoEventStoreTest {
         eventStore.write(eventStreamId, writeCondition, events.map(this::convertDomainEventCloudEvent));
     }
 
-    @NotNull
     private CloudEvent convertDomainEventCloudEvent(DomainEvent domainEvent) {
         return CloudEventBuilder.v1()
                 .withId(domainEvent.getEventId())

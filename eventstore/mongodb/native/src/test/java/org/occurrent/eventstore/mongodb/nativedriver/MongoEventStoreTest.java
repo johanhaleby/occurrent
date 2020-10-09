@@ -28,7 +28,6 @@ import com.mongodb.client.model.Filters;
 import io.cloudevents.CloudEvent;
 import io.cloudevents.core.builder.CloudEventBuilder;
 import io.github.artsok.RepeatedIfExceptionsTest;
-import org.jetbrains.annotations.NotNull;
 import org.junit.jupiter.api.*;
 import org.junit.jupiter.api.condition.EnabledForJreRange;
 import org.junit.jupiter.api.condition.EnabledOnJre;
@@ -1436,7 +1435,6 @@ class MongoEventStoreTest {
         eventStore.write(eventStreamId, events.map(convertDomainEventToCloudEvent()));
     }
 
-    @NotNull
     private Function<DomainEvent, CloudEvent> convertDomainEventToCloudEvent() {
         return e -> CloudEventBuilder.v1()
                 .withId(e.getEventId())

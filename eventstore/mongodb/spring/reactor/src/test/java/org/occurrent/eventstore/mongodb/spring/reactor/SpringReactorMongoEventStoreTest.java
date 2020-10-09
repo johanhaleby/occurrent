@@ -24,7 +24,6 @@ import com.mongodb.reactivestreams.client.MongoClients;
 import io.cloudevents.CloudEvent;
 import io.cloudevents.core.builder.CloudEventBuilder;
 import org.awaitility.Awaitility;
-import org.jetbrains.annotations.NotNull;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Nested;
@@ -1452,7 +1451,6 @@ public class SpringReactorMongoEventStoreTest {
         return flux.map(deserialize()).toStream().collect(Collectors.toList());
     }
 
-    @NotNull
     private Function<CloudEvent, DomainEvent> deserialize() {
         return CheckedFunction.unchecked(this::deserialize);
     }
@@ -1519,7 +1517,6 @@ public class SpringReactorMongoEventStoreTest {
         return eventStore.write(eventStreamId, writeCondition, events.map(this::convertDomainEventCloudEvent));
     }
 
-    @NotNull
     private CloudEvent convertDomainEventCloudEvent(DomainEvent domainEvent) {
         return CloudEventBuilder.v1()
                 .withId(domainEvent.getEventId())
