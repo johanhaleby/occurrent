@@ -13,10 +13,10 @@ typealias GuessedWord = String
 typealias Category = String
 
 internal object WordHintGenerator {
-    private const val obfuscationCharacter = '_'
-    private const val whitespace = ' '
-    private const val minimumNumberOfRevealedCharactersForWordHint = 2
-    private const val maximumNumberOfRevealedCharactersForWordHint = 2
+    internal const val obfuscationCharacter = '_'
+    internal const val whitespace = ' '
+    private const val minimumNumberOfRevealedCharactersInWordHint = 2
+    private const val minimumNumberOfObfuscatedCharactersInWordHint = 2
 
     private fun WordHint.findObfuscationPositions(): List<Int> = mapIndexedNotNull { index, char -> if (char == obfuscationCharacter && char != whitespace) index else null }
 
@@ -30,12 +30,20 @@ internal object WordHintGenerator {
 
 
     internal fun WordToGuess.generateNewHint(): WordHint {
-        // Minimum number of characters that are not obfuscated are two
-        fun WordHint.needsToRevealMoreCharacters() = count { character -> character != obfuscationCharacter && character != whitespace } < minimumNumberOfRevealedCharactersForWordHint
+        fun WordHint.needToRevealMoreCharacters(): Boolean {
+            val characterFrequenciesInWord = groupBy { it }.mapValues { (_, v) -> v.size }
+            val numberOfWhitespace = characterFrequenciesInWord.getOrElse(whitespace) { 0 }
+            val numberOfObfuscatedCharacters = characterFrequenciesInWord.getOrElse(obfuscationCharacter) { 0 }
+            val numberOfRevealedCharactersIncludingWhitespace = length - numberOfObfuscatedCharacters
+            val numberOfRevealedCharactersExcludingWhitespace = numberOfRevealedCharactersIncludingWhitespace - numberOfWhitespace
+
+            return numberOfRevealedCharactersExcludingWhitespace < minimumNumberOfRevealedCharactersInWordHint
+                    && numberOfRevealedCharactersIncludingWhitespace < (length - minimumNumberOfObfuscatedCharactersInWordHint)
+        }
 
         fun WordHint.revealMinimumNumberOfCharacters(wordToGuess: WordToGuess): WordHint {
             val newHint = revealAdditionalCharacterFrom(wordToGuess)
-            return if (newHint.needsToRevealMoreCharacters()) newHint.revealMinimumNumberOfCharacters(wordToGuess) else newHint
+            return if (newHint.needToRevealMoreCharacters()) newHint.revealMinimumNumberOfCharacters(wordToGuess) else newHint
         }
 
         val hintWithAllCharactersObfuscated: WordHint = obfuscateCharacters()
@@ -44,7 +52,7 @@ internal object WordHintGenerator {
 
     internal fun WordHint.revealAdditionalCharacterFrom(wordToGuess: WordToGuess): WordHint {
         val findObfuscationPositions = findObfuscationPositions()
-        return if (findObfuscationPositions.size <= maximumNumberOfRevealedCharactersForWordHint) {
+        return if (findObfuscationPositions.size == minimumNumberOfObfuscatedCharactersInWordHint) {
             // The hint should never obfuscate the last two characters
             this
         } else {
@@ -61,7 +69,8 @@ data class OngoingGameView internal constructor(val gameId: UUID, val startedAt:
                                                 internal val wordToGuess: WordToGuess)
 
 fun initializeOngoingGameViewWhenGameWasStarted(e: GameWasStarted): OngoingGameView = e.run {
-    OngoingGameView(gameId, timestamp, category, wordToGuess.generateNewHint(), emptyList(), wordToGuess)
+    val upperCaseWordToGuess = wordToGuess.toUpperCase()
+    OngoingGameView(gameId, timestamp, category, upperCaseWordToGuess.generateNewHint(), emptyList(), upperCaseWordToGuess)
 }
 
 fun addGuessToOngoingGameViewWhenPlayerGuessedTheWrongWord(view: OngoingGameView, e: PlayerGuessedTheWrongWord): OngoingGameView = e.run {
