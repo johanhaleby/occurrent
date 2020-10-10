@@ -6,7 +6,9 @@ typealias GameId = UUID
 typealias Timestamp = Date
 typealias PlayerId = UUID
 
-data class Word(val value: String) {
+class Word(value: String) {
+    val value: String
+
     init {
         require(value.length in 4..10) {
             "A word must be between 4 and 10 characters long"
@@ -14,9 +16,20 @@ data class Word(val value: String) {
         require(value.trim() == value) {
             "Word cannot start or end with whitespace"
         }
+        require(!value.contains("  ")) {
+            "Word cannot contain two consecutive whitespaces"
+        }
+        require(!value.matches(Regex("""^([A-Za-z]|\s)+\$"""))) {
+            "Word can only contain alphabetic characters and whitespace"
+        }
+        this.value = value.toUpperCase()
     }
 
     fun hasValue(value: String): Boolean = this.value == value
+
+    override fun toString(): String {
+        return "Word(value='$value')"
+    }
 }
 
 data class WordCategory(val value: String) {
