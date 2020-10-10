@@ -3,6 +3,7 @@ package org.occurrent.example.domain.wordguessinggame.writemodel
 import org.assertj.core.api.Assertions.assertThat
 import org.assertj.core.api.Assertions.catchThrowable
 import org.junit.jupiter.api.*
+import org.occurrent.example.domain.wordguessinggame.event.*
 import java.util.*
 
 @DisplayName("game specification")

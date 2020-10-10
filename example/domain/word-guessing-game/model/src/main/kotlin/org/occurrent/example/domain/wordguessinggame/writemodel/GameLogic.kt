@@ -1,7 +1,8 @@
 package org.occurrent.example.domain.wordguessinggame.writemodel
 
+import org.occurrent.example.domain.wordguessinggame.event.*
+import org.occurrent.example.domain.wordguessinggame.support.add
 import java.util.*
-import kotlin.collections.ArrayList
 
 fun startGame(previousEvents: Sequence<DomainEvent>, gameId: GameId, timestamp: Timestamp, playerId: PlayerId, wordsToChooseFrom: WordsToChooseFrom, maxNumberOfGuessesPerPlayer: MaxNumberOfGuessesPerPlayer,
               maxNumberOfGuessesTotal: MaxNumberOfGuessesTotal): Sequence<DomainEvent> {
@@ -72,10 +73,4 @@ private fun Sequence<DomainEvent>.deriveGameState(): GameState = fold<DomainEven
         state is Ongoing && event is GameWasLost -> Ended
         else -> throw IllegalStateException("Event ${event.type} is not applicable in state ${state::class.simpleName!!}")
     }
-}
-
-private fun List<Guess>.add(guess: Guess): List<Guess> = run {
-    val arrayList = ArrayList(this)
-    arrayList.add(guess)
-    return arrayList
 }

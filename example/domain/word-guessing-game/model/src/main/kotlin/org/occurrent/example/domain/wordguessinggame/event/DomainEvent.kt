@@ -1,5 +1,6 @@
-package org.occurrent.example.domain.wordguessinggame.writemodel
+package org.occurrent.example.domain.wordguessinggame.event
 
+import org.occurrent.example.domain.wordguessinggame.writemodel.PlayerId
 import java.util.*
 
 sealed class DomainEvent {
