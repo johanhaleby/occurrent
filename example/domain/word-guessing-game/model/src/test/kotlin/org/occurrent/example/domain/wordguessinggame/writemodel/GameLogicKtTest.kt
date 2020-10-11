@@ -125,6 +125,47 @@ class GameLogicKtTest {
         }
 
         @Nested
+        @DisplayName("and player guess the right word with different case")
+        inner class AndPlayerGuessTheRightWordWithDifferentCase {
+
+            private lateinit var currentEvents: Sequence<DomainEvent>
+
+            @BeforeEach
+            fun `game is started`() {
+                currentEvents = sequenceOf(GameWasStarted(UUID.randomUUID(), Timestamp(), gameId, PlayerId.randomUUID(), "Category", "Secret", 2, 4))
+            }
+
+            @Test
+            fun `then guessWord returns PlayerGuessedTheRightWord and GameWasWon`() {
+                // Given
+                val playerId = PlayerId.randomUUID()
+                val timestamp = Timestamp()
+
+                // When
+                val events = guessWord(currentEvents, timestamp, playerId, Word("secret")).toList()
+
+                // Then
+                assertThat(events).hasSize(2)
+                val playerGuessedTheRightWord = events.find<PlayerGuessedTheRightWord>()
+                val gameWon = events.find<GameWasWon>()
+
+                assertAll(
+                        // PlayerGuessedTheRightWord
+                        { assertThat(playerGuessedTheRightWord.gameId).isEqualTo(gameId) },
+                        { assertThat(playerGuessedTheRightWord.playerId).isEqualTo(playerId) },
+                        { assertThat(playerGuessedTheRightWord.timestamp).isEqualTo(timestamp) },
+                        { assertThat(playerGuessedTheRightWord.guessedWord).isEqualTo("secret") },
+                        { assertThat(playerGuessedTheRightWord.type).isEqualTo(PlayerGuessedTheRightWord::class.simpleName) },
+                        // GameWasWon
+                        { assertThat(gameWon.gameId).isEqualTo(gameId) },
+                        { assertThat(gameWon.winnerId).isEqualTo(playerId) },
+                        { assertThat(gameWon.timestamp).isEqualTo(timestamp) },
+                        { assertThat(gameWon.type).isEqualTo(GameWasWon::class.simpleName) },
+                )
+            }
+        }
+
+        @Nested
         @DisplayName("and player guess the wrong word")
         inner class AndPlayerGuessTheWrongWord {
 

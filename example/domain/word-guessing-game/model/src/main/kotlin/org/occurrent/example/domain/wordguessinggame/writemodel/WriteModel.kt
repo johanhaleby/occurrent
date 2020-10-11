@@ -22,7 +22,7 @@ class Word(value: String) {
         require(!value.matches(Regex("""^([A-Za-z]|\s)+\$"""))) {
             "Word can only contain alphabetic characters and whitespace"
         }
-        this.value = value.toUpperCase()
+        this.value = value
     }
 
     fun hasValue(value: String): Boolean = this.value == value

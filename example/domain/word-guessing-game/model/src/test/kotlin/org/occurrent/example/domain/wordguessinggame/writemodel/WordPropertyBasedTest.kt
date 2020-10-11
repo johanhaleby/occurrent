@@ -10,12 +10,13 @@ import org.occurrent.example.domain.wordguessinggame.RandomValidWordProvider
 internal class WordPropertyBasedTest {
 
     @Property
-    fun `generates word from random valid words`(@ForAll("words") wordToGuess: String) {
+    fun `generates word from list of random valid words without throwing exception`(@ForAll("words") wordToGuess: String) {
         // When
         val word = Word(wordToGuess)
 
         // Then
-        assertThat(word.value).isEqualTo(wordToGuess.toUpperCase())
+        assertThat(word.hasValue(wordToGuess)).isTrue
+        assertThat(word.value).isEqualTo(wordToGuess)
     }
 
     @Provide

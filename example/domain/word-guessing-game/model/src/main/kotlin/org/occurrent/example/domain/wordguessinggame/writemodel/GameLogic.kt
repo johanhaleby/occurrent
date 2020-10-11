@@ -30,7 +30,7 @@ fun guessWord(previousEvents: Sequence<DomainEvent>, timestamp: Timestamp, playe
 
         val events = mutableListOf<DomainEvent>()
 
-        if (guessedWord.hasValue(state.wordToGuess)) {
+        if (state.isRightGuess(guessedWord)) {
             events.add(PlayerGuessedTheRightWord(UUID.randomUUID(), timestamp, state.gameId, playerId, guessedWord.value))
             events.add(GameWasWon(UUID.randomUUID(), timestamp, state.gameId, playerId))
         } else {
@@ -59,6 +59,7 @@ private data class Ongoing(val gameId: GameId, val wordToGuess: String, val maxN
     fun isMaxNumberOfGuessesExceededForPlayer(playerId: PlayerId): Boolean = numberOfGuessesForPlayer(playerId) == maxNumberOfGuessesPerPlayer
     fun isLastGuessForPlayer(playerId: PlayerId): Boolean = numberOfGuessesForPlayer(playerId) + 1 == maxNumberOfGuessesPerPlayer
     fun isLastGuessForGame(): Boolean = guesses.size == maxNumberOfGuessesTotal - 1
+    fun isRightGuess(guessedWord: Word) = guessedWord.value.toUpperCase() == wordToGuess.toUpperCase()
 }
 
 private object Ended : GameState()
