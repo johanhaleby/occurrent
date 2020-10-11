@@ -64,15 +64,15 @@ internal object WordHintGenerator {
 }
 
 data class Guess internal constructor(val playerId: UUID, val word: GuessedWord, val guessMadeAt: Date)
-data class OngoingGameView internal constructor(val gameId: UUID, val startedAt: Date, val category: Category,
-                                                val hint: WordHint, val guesses: List<Guess>,
-                                                internal val wordToGuess: WordToGuess)
+data class OngoingGameReadModel internal constructor(val gameId: UUID, val startedAt: Date, val category: Category,
+                                                     val hint: WordHint, val guesses: List<Guess>,
+                                                     internal val wordToGuess: WordToGuess)
 
-fun initializeOngoingGameViewWhenGameWasStarted(e: GameWasStarted): OngoingGameView = e.run {
+fun initializeOngoingGameReadModelWhenGameWasStarted(e: GameWasStarted): OngoingGameReadModel = e.run {
     val upperCaseWordToGuess = wordToGuess.toUpperCase()
-    OngoingGameView(gameId, timestamp, category, upperCaseWordToGuess.generateNewHint(), emptyList(), upperCaseWordToGuess)
+    OngoingGameReadModel(gameId, timestamp, category, upperCaseWordToGuess.generateNewHint(), emptyList(), upperCaseWordToGuess)
 }
 
-fun addGuessToOngoingGameViewWhenPlayerGuessedTheWrongWord(view: OngoingGameView, e: PlayerGuessedTheWrongWord): OngoingGameView = e.run {
-    view.copy(guesses = view.guesses.add(Guess(playerId, guessedWord, timestamp)), hint = view.hint.revealAdditionalCharacterFrom(view.wordToGuess))
+fun addGuessToOngoingGameViewWhenPlayerGuessedTheWrongWord(readModel: OngoingGameReadModel, e: PlayerGuessedTheWrongWord): OngoingGameReadModel = e.run {
+    readModel.copy(guesses = readModel.guesses.add(Guess(playerId, guessedWord, timestamp)), hint = readModel.hint.revealAdditionalCharacterFrom(readModel.wordToGuess))
 }
