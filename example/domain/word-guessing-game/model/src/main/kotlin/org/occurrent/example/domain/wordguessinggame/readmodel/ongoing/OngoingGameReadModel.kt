@@ -65,12 +65,18 @@ internal object WordHintGenerator {
 
 data class Guess internal constructor(val playerId: UUID, val word: GuessedWord, val guessMadeAt: Date)
 data class OngoingGameReadModel internal constructor(val gameId: UUID, val startedAt: Date, val category: Category,
+                                                     val maxNumberOfGuessesPerPlayer: Int, val maxNumberOfGuessesTotal: Int,
                                                      val hint: WordHint, val guesses: List<Guess>,
-                                                     internal val wordToGuess: WordToGuess)
+                                                     internal val wordToGuess: WordToGuess) {
+    val totalNumberOfGuessesLeft
+        get() = maxNumberOfGuessesTotal - guesses.size
+
+    fun numberOfGuessesLeftForPlayer(playerId: UUID) = maxNumberOfGuessesPerPlayer - guesses.count { it.playerId == playerId }
+}
 
 fun initializeOngoingGameReadModelWhenGameWasStarted(e: GameWasStarted): OngoingGameReadModel = e.run {
     val upperCaseWordToGuess = wordToGuess.toUpperCase()
-    OngoingGameReadModel(gameId, timestamp, category, upperCaseWordToGuess.generateNewHint(), emptyList(), upperCaseWordToGuess)
+    OngoingGameReadModel(gameId, timestamp, category, maxNumberOfGuessesPerPlayer, maxNumberOfGuessesTotal, upperCaseWordToGuess.generateNewHint(), emptyList(), upperCaseWordToGuess)
 }
 
 fun addGuessToOngoingGameViewWhenPlayerGuessedTheWrongWord(readModel: OngoingGameReadModel, e: PlayerGuessedTheWrongWord): OngoingGameReadModel = e.run {

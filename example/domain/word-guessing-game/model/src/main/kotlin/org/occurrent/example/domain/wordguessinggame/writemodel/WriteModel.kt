@@ -7,20 +7,27 @@ typealias Timestamp = Date
 typealias PlayerId = UUID
 
 class Word(value: String) {
+
+    companion object {
+        const val VALID_WORD_REGEX = """^([A-Za-z]|\s)+\$"""
+        const val MINIMUM_NUMBER_OF_CHARACTERS = 4
+        const val MAXIMUM_NUMBER_OF_CHARACTERS = 10
+    }
+
     val value: String
 
     init {
-        require(value.length in 4..10) {
-            "A word must be between 4 and 10 characters long"
+        require(value.length in MINIMUM_NUMBER_OF_CHARACTERS..MAXIMUM_NUMBER_OF_CHARACTERS) {
+            "A word must be between $MINIMUM_NUMBER_OF_CHARACTERS and $MAXIMUM_NUMBER_OF_CHARACTERS characters long (\"$value\" doesn't fulfill this criteria)"
         }
         require(value.trim() == value) {
-            "Word cannot start or end with whitespace"
+            "Word cannot start or end with whitespace (\"$value\")"
         }
         require(!value.contains("  ")) {
-            "Word cannot contain two consecutive whitespaces"
+            "Word cannot contain two consecutive whitespaces (\"$value\")"
         }
-        require(!value.matches(Regex("""^([A-Za-z]|\s)+\$"""))) {
-            "Word can only contain alphabetic characters and whitespace"
+        require(!value.matches(Regex(VALID_WORD_REGEX))) {
+            "Word can only contain alphabetic characters and whitespace, was \"$value\"."
         }
         this.value = value
     }
