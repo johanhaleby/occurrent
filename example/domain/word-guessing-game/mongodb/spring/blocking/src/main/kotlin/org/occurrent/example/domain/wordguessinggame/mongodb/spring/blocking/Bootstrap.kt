@@ -19,15 +19,28 @@ import com.fasterxml.jackson.databind.ObjectMapper
 import com.fasterxml.jackson.module.kotlin.KotlinModule
 import org.occurrent.eventstore.mongodb.spring.blocking.EventStoreConfig
 import org.occurrent.eventstore.mongodb.spring.blocking.SpringBlockingMongoEventStore
+import org.occurrent.example.domain.wordguessinggame.event.GameWasWon
+import org.occurrent.example.domain.wordguessinggame.event.eventType
 import org.occurrent.example.domain.wordguessinggame.mongodb.spring.blocking.event.CloudEventConverter
+import org.occurrent.example.domain.wordguessinggame.mongodb.spring.blocking.util.loggerFor
+import org.occurrent.example.domain.wordguessinggame.policy.WhenGameWasWonThenSendEmailToWinner
+import org.occurrent.filter.Filter
+import org.occurrent.filter.Filter.type
 import org.occurrent.mongodb.timerepresentation.TimeRepresentation
+import org.occurrent.subscription.OccurrentSubscriptionFilter
+import org.occurrent.subscription.OccurrentSubscriptionFilter.filter
+import org.occurrent.subscription.SubscriptionFilter
 import org.occurrent.subscription.api.blocking.BlockingSubscriptionPositionStorage
 import org.occurrent.subscription.api.blocking.PositionAwareBlockingSubscription
 import org.occurrent.subscription.mongodb.spring.blocking.SpringBlockingSubscriptionForMongoDB
 import org.occurrent.subscription.mongodb.spring.blocking.SpringBlockingSubscriptionPositionStorageForMongoDB
 import org.occurrent.subscription.util.blocking.BlockingSubscriptionWithAutomaticPositionPersistence
+import org.springframework.beans.factory.annotation.Autowired
 import org.springframework.boot.autoconfigure.SpringBootApplication
+import org.springframework.boot.runApplication
 import org.springframework.context.annotation.Bean
+import org.springframework.context.annotation.Configuration
+import org.springframework.context.annotation.Import
 import org.springframework.data.mongodb.MongoDatabaseFactory
 import org.springframework.data.mongodb.MongoTransactionManager
 import org.springframework.data.mongodb.core.MongoTemplate
@@ -41,6 +54,7 @@ import java.net.URI
 @SpringBootApplication
 @EnableMongoRepositories
 @EnableRetry
+@Import(Policies::class)
 class Bootstrap {
     companion object {
         private const val EVENTS_COLLECTION_NAME = "events"
@@ -72,4 +86,26 @@ class Bootstrap {
 
     @Bean
     fun cloudEventConverter(objectMapper: ObjectMapper) = CloudEventConverter(objectMapper, URI.create("urn:occurrent:domain:wordguessinggame"))
+}
+
+@Configuration
+class Policies {
+    private val log = loggerFor<Policies>()
+
+    @Autowired
+    lateinit var subscriptions: BlockingSubscriptionWithAutomaticPositionPersistence
+    @Autowired
+    lateinit var cloudEventConverter: CloudEventConverter
+
+    @Bean
+    fun whenGameWasWonThenSendEmailToWinnerPolicy() {
+        subscriptions.subscribe(WhenGameWasWonThenSendEmailToWinner::class.simpleName, filter(type(GameWasWon::class.eventType()))) { cloudEvent ->
+            val gameWasWon = cloudEventConverter.toDomainEvent(cloudEvent) as GameWasWon
+            log.info("Sending email to player ${gameWasWon.winnerId} since he/she was a winner of game ${gameWasWon.winnerId}")
+        }
+    }
+}
+
+fun main(args: Array<String>) {
+    runApplication<Bootstrap>(*args)
 }
