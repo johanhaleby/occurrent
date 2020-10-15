@@ -1,4 +1,4 @@
-package org.occurrent.example.domain.wordguessinggame.readmodel.ongoing
+package org.occurrent.example.domain.wordguessinggame.readmodel.game
 
 import net.jqwik.api.Arbitrary
 import net.jqwik.api.ForAll
@@ -7,9 +7,9 @@ import net.jqwik.api.Provide
 import org.assertj.core.api.Assertions.assertThat
 import org.junit.jupiter.api.assertAll
 import org.occurrent.example.domain.wordguessinggame.RandomValidWordProvider
-import org.occurrent.example.domain.wordguessinggame.readmodel.ongoing.WordHintGenerator.generateNewHint
-import org.occurrent.example.domain.wordguessinggame.readmodel.ongoing.WordHintGenerator.obfuscationCharacter
-import org.occurrent.example.domain.wordguessinggame.readmodel.ongoing.WordHintGenerator.whitespace
+import org.occurrent.example.domain.wordguessinggame.readmodel.game.WordHintGenerator.generateNewHint
+import org.occurrent.example.domain.wordguessinggame.readmodel.game.WordHintGenerator.obfuscationCharacter
+import org.occurrent.example.domain.wordguessinggame.readmodel.game.WordHintGenerator.whitespace
 
 internal class WordHintGeneratorPropertyBasedTest {
 

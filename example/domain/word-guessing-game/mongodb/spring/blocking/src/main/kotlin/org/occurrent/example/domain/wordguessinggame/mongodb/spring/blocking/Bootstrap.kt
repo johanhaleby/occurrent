@@ -16,9 +16,10 @@
 package org.occurrent.example.domain.wordguessinggame.mongodb.spring.blocking
 
 import com.fasterxml.jackson.databind.ObjectMapper
+import com.fasterxml.jackson.module.kotlin.KotlinModule
 import org.occurrent.eventstore.mongodb.spring.blocking.EventStoreConfig
 import org.occurrent.eventstore.mongodb.spring.blocking.SpringBlockingMongoEventStore
-import org.occurrent.example.domain.wordguessinggame.mongodb.spring.blocking.application.CloudEventConverter
+import org.occurrent.example.domain.wordguessinggame.mongodb.spring.blocking.event.CloudEventConverter
 import org.occurrent.mongodb.timerepresentation.TimeRepresentation
 import org.occurrent.subscription.api.blocking.BlockingSubscriptionPositionStorage
 import org.occurrent.subscription.api.blocking.PositionAwareBlockingSubscription
@@ -67,7 +68,7 @@ class Bootstrap {
             BlockingSubscriptionWithAutomaticPositionPersistence(subscription, storage)
 
     @Bean
-    fun objectMapper() = ObjectMapper()
+    fun objectMapper() = ObjectMapper().apply { registerModule(KotlinModule()) }
 
     @Bean
     fun cloudEventConverter(objectMapper: ObjectMapper) = CloudEventConverter(objectMapper, URI.create("urn:occurrent:domain:wordguessinggame"))

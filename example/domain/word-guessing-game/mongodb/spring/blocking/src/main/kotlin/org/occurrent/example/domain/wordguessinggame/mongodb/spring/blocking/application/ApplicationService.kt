@@ -5,6 +5,7 @@ import org.occurrent.eventstore.api.WriteConditionNotFulfilledException
 import org.occurrent.eventstore.api.blocking.EventStore
 import org.occurrent.eventstore.api.blocking.EventStream
 import org.occurrent.example.domain.wordguessinggame.event.DomainEvent
+import org.occurrent.example.domain.wordguessinggame.mongodb.spring.blocking.event.CloudEventConverter
 import org.springframework.retry.annotation.Backoff
 import org.springframework.retry.annotation.Retryable
 import org.springframework.stereotype.Service

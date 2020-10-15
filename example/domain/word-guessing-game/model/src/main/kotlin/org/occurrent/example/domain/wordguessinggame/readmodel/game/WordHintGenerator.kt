@@ -1,16 +1,4 @@
-package org.occurrent.example.domain.wordguessinggame.readmodel.ongoing
-
-import org.occurrent.example.domain.wordguessinggame.event.GameWasStarted
-import org.occurrent.example.domain.wordguessinggame.event.PlayerGuessedTheWrongWord
-import org.occurrent.example.domain.wordguessinggame.readmodel.ongoing.WordHintGenerator.generateNewHint
-import org.occurrent.example.domain.wordguessinggame.readmodel.ongoing.WordHintGenerator.revealAdditionalCharacterFrom
-import org.occurrent.example.domain.wordguessinggame.support.add
-import java.util.*
-
-typealias WordToGuess = String
-typealias WordHint = String
-typealias GuessedWord = String
-typealias Category = String
+package org.occurrent.example.domain.wordguessinggame.readmodel.game
 
 internal object WordHintGenerator {
     internal const val obfuscationCharacter = '_'
@@ -61,24 +49,4 @@ internal object WordHintGenerator {
             replaceCharAt(randomPositionThatIsCurrentlyObfuscated, charAtRandomPosition)
         }
     }
-}
-
-data class Guess internal constructor(val playerId: UUID, val word: GuessedWord, val guessMadeAt: Date)
-data class OngoingGameReadModel internal constructor(val gameId: UUID, val startedAt: Date, val category: Category,
-                                                     val maxNumberOfGuessesPerPlayer: Int, val maxNumberOfGuessesTotal: Int,
-                                                     val hint: WordHint, val guesses: List<Guess>,
-                                                     internal val wordToGuess: WordToGuess) {
-    val totalNumberOfGuessesLeft
-        get() = maxNumberOfGuessesTotal - guesses.size
-
-    fun numberOfGuessesLeftForPlayer(playerId: UUID) = maxNumberOfGuessesPerPlayer - guesses.count { it.playerId == playerId }
-}
-
-fun initializeOngoingGameReadModelWhenGameWasStarted(e: GameWasStarted): OngoingGameReadModel = e.run {
-    val upperCaseWordToGuess = wordToGuess.toUpperCase()
-    OngoingGameReadModel(gameId, timestamp, category, maxNumberOfGuessesPerPlayer, maxNumberOfGuessesTotal, upperCaseWordToGuess.generateNewHint(), emptyList(), upperCaseWordToGuess)
-}
-
-fun addGuessToOngoingGameViewWhenPlayerGuessedTheWrongWord(readModel: OngoingGameReadModel, e: PlayerGuessedTheWrongWord): OngoingGameReadModel = e.run {
-    readModel.copy(guesses = readModel.guesses.add(Guess(playerId, guessedWord, timestamp)), hint = readModel.hint.revealAdditionalCharacterFrom(readModel.wordToGuess))
 }

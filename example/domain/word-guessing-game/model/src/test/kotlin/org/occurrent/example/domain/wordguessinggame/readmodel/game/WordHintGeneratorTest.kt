@@ -1,13 +1,13 @@
-package org.occurrent.example.domain.wordguessinggame.readmodel.ongoing
+package org.occurrent.example.domain.wordguessinggame.readmodel.game
 
 import org.assertj.core.api.Assertions.assertThat
 import org.junit.jupiter.api.DisplayName
 import org.junit.jupiter.api.Nested
 import org.junit.jupiter.api.Test
 import org.junit.jupiter.api.assertAll
-import org.occurrent.example.domain.wordguessinggame.readmodel.ongoing.WordHintGenerator.generateNewHint
-import org.occurrent.example.domain.wordguessinggame.readmodel.ongoing.WordHintGenerator.obfuscationCharacter
-import org.occurrent.example.domain.wordguessinggame.readmodel.ongoing.WordHintGenerator.whitespace
+import org.occurrent.example.domain.wordguessinggame.readmodel.game.WordHintGenerator.generateNewHint
+import org.occurrent.example.domain.wordguessinggame.readmodel.game.WordHintGenerator.obfuscationCharacter
+import org.occurrent.example.domain.wordguessinggame.readmodel.game.WordHintGenerator.whitespace
 
 @DisplayName("word hint generator")
 internal class WordHintGeneratorTest {

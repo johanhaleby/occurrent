@@ -2,12 +2,13 @@ package org.occurrent.example.domain.wordguessinggame.event
 
 import org.occurrent.example.domain.wordguessinggame.writemodel.PlayerId
 import java.util.*
+import kotlin.reflect.KClass
 
 sealed class DomainEvent {
     abstract val eventId: UUID
     abstract val timestamp: Date
     abstract val gameId: UUID
-    open val type: String = this::class.simpleName!!
+    open val type: String = this::class.eventType()
 }
 
 data class GameWasStarted(override val eventId: UUID, override val timestamp: Date, override val gameId: UUID,
@@ -23,3 +24,6 @@ data class PlayerGuessedTheRightWord(override val eventId: UUID, override val ti
 data class GameWasWon(override val eventId: UUID, override val timestamp: Date, override val gameId: UUID, val winnerId: PlayerId) : DomainEvent()
 
 data class GameWasLost(override val eventId: UUID, override val timestamp: Date, override val gameId: UUID) : DomainEvent()
+
+
+fun <T : DomainEvent> KClass<out T>.eventType() = simpleName!!
