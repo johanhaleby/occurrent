@@ -1,4 +1,4 @@
-package org.occurrent.example.domain.wordguessinggame.mongodb.spring.blocking.util
+package org.occurrent.example.domain.wordguessinggame.mongodb.spring.blocking.infrastructure
 
 import org.slf4j.Logger
 import org.slf4j.LoggerFactory

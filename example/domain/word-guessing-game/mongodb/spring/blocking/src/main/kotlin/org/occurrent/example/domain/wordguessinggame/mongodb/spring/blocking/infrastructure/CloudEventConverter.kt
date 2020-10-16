@@ -1,4 +1,4 @@
-package org.occurrent.example.domain.wordguessinggame.mongodb.spring.blocking.event
+package org.occurrent.example.domain.wordguessinggame.mongodb.spring.blocking.infrastructure
 
 import com.fasterxml.jackson.databind.ObjectMapper
 import com.fasterxml.jackson.module.kotlin.readValue

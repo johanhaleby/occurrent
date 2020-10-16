@@ -23,8 +23,9 @@ import org.occurrent.eventstore.mongodb.spring.blocking.SpringBlockingMongoEvent
 import org.occurrent.example.domain.wordguessinggame.event.DomainEvent
 import org.occurrent.example.domain.wordguessinggame.event.GameWasWon
 import org.occurrent.example.domain.wordguessinggame.event.eventType
-import org.occurrent.example.domain.wordguessinggame.mongodb.spring.blocking.event.CloudEventConverter
-import org.occurrent.example.domain.wordguessinggame.mongodb.spring.blocking.util.loggerFor
+import org.occurrent.example.domain.wordguessinggame.mongodb.spring.blocking.features.game.policy.GamePolicyConfiguration
+import org.occurrent.example.domain.wordguessinggame.mongodb.spring.blocking.infrastructure.CloudEventConverter
+import org.occurrent.example.domain.wordguessinggame.mongodb.spring.blocking.infrastructure.loggerFor
 import org.occurrent.example.domain.wordguessinggame.policy.WhenGameWasWonThenSendEmailToWinnerPolicy
 import org.occurrent.filter.Filter.type
 import org.occurrent.mongodb.timerepresentation.TimeRepresentation
@@ -54,7 +55,7 @@ import java.net.URI
 @SpringBootApplication
 @EnableMongoRepositories
 @EnableRetry
-@Import(Policies::class)
+@Import(GamePolicyConfiguration::class)
 class Bootstrap {
     companion object {
         private const val EVENTS_COLLECTION_NAME = "events"
@@ -86,33 +87,6 @@ class Bootstrap {
 
     @Bean
     fun cloudEventConverter(objectMapper: ObjectMapper) = CloudEventConverter(objectMapper, URI.create("urn:occurrent:domain:wordguessinggame"))
-}
-
-@Configuration
-class Policies {
-    private val log = loggerFor<Policies>()
-
-    @Autowired
-    lateinit var subscriptions: BlockingSubscriptionWithAutomaticPositionPersistence
-
-    @Autowired
-    lateinit var cloudEventConverter: CloudEventConverter
-
-    @Autowired
-    lateinit var eventStoreQueries: EventStoreQueries
-
-    @Bean
-    fun whenGameWasWonThenSendEmailToWinner() = policy<GameWasWon>(WhenGameWasWonThenSendEmailToWinnerPolicy::class.simpleName!!) { gameWasWon ->
-        log.info("Sending email to player ${gameWasWon.winnerId} since he/she was a winner of game ${gameWasWon.gameId}")
-    }
-
-    // Helper function that creates simple policies using a specific event type
-    private inline fun <reified T : DomainEvent> policy(policyId: String, crossinline fn: (T) -> Unit): Subscription = subscriptions.subscribe(policyId, filter(type(T::class.eventType()))) { cloudEvent ->
-        val event = cloudEventConverter.toDomainEvent(cloudEvent) as T
-        fn(event)
-    }.apply {
-        waitUntilStarted()
-    }
 }
 
 fun main(args: Array<String>) {

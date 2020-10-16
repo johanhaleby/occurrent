@@ -13,11 +13,11 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-package org.occurrent.example.domain.wordguessinggame.mongodb.spring.blocking.web
+package org.occurrent.example.domain.wordguessinggame.mongodb.spring.blocking.features.game.website
 
 import j2html.TagCreator
 import j2html.tags.ContainerTag
-import org.occurrent.example.domain.wordguessinggame.mongodb.spring.blocking.application.ApplicationService
+import org.occurrent.example.domain.wordguessinggame.mongodb.spring.blocking.infrastructure.GenericApplicationService
 import org.occurrent.example.domain.wordguessinggame.writemodel.game.*
 import org.springframework.http.HttpHeaders
 import org.springframework.http.HttpStatus
@@ -31,7 +31,7 @@ import java.util.*
 
 @RestController
 @RequestMapping(path = ["/games"], produces = [MediaType.TEXT_HTML_VALUE])
-class WebInterface(private val applicationService: ApplicationService) {
+class Website(private val applicationService: GenericApplicationService) {
 
     @GetMapping
     fun games(): String {

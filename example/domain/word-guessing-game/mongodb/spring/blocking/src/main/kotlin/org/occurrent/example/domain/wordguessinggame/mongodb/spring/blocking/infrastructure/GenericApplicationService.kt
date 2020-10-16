@@ -1,11 +1,10 @@
-package org.occurrent.example.domain.wordguessinggame.mongodb.spring.blocking.application
+package org.occurrent.example.domain.wordguessinggame.mongodb.spring.blocking.infrastructure
 
 import io.cloudevents.CloudEvent
 import org.occurrent.eventstore.api.WriteConditionNotFulfilledException
 import org.occurrent.eventstore.api.blocking.EventStore
 import org.occurrent.eventstore.api.blocking.EventStream
 import org.occurrent.example.domain.wordguessinggame.event.DomainEvent
-import org.occurrent.example.domain.wordguessinggame.mongodb.spring.blocking.event.CloudEventConverter
 import org.springframework.retry.annotation.Backoff
 import org.springframework.retry.annotation.Retryable
 import org.springframework.stereotype.Service
@@ -14,8 +13,8 @@ import kotlin.streams.asSequence
 import kotlin.streams.asStream
 
 @Service
-class ApplicationService constructor(private val eventStore: EventStore,
-                                     private val cloudEventConverter: CloudEventConverter) {
+class GenericApplicationService constructor(private val eventStore: EventStore,
+                                            private val cloudEventConverter: CloudEventConverter) {
 
     @Retryable(include = [WriteConditionNotFulfilledException::class], maxAttempts = 5, backoff = Backoff(delay = 100, multiplier = 2.0, maxDelay = 1000))
     fun execute(streamId: UUID, functionThatCallsDomainModel: (Sequence<DomainEvent>) -> Sequence<DomainEvent>) {
