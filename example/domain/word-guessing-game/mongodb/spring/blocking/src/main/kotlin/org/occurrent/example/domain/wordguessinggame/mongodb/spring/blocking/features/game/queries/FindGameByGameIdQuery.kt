@@ -3,7 +3,7 @@ package org.occurrent.example.domain.wordguessinggame.mongodb.spring.blocking.fe
 import org.occurrent.eventstore.api.blocking.EventStoreQueries
 import org.occurrent.example.domain.wordguessinggame.mongodb.spring.blocking.infrastructure.CloudEventConverter
 import org.occurrent.example.domain.wordguessinggame.readmodel.game.GameReadModel
-import org.occurrent.example.domain.wordguessinggame.readmodel.game.GameReadModelStateMachine
+import org.occurrent.example.domain.wordguessinggame.readmodel.game.AssembleGameReadModelFromDomainEvents
 import org.occurrent.filter.Filter.streamId
 import org.springframework.stereotype.Component
 import java.util.*
@@ -15,6 +15,6 @@ class FindGameByGameIdQuery(private val eventStoreQueries: EventStoreQueries, pr
     fun execute(gameId: UUID): GameReadModel? =
             eventStoreQueries.query(streamId(gameId.toString())).asSequence()
                     .map(cloudEventConverter::toDomainEvent)
-                    .fold(GameReadModelStateMachine(), GameReadModelStateMachine::applyEvent)
-                    .state
+                    .fold(AssembleGameReadModelFromDomainEvents(), AssembleGameReadModelFromDomainEvents::applyEvent)
+                    .gameReadModel
 }
