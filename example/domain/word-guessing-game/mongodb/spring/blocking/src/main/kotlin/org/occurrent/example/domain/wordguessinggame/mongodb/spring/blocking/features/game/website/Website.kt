@@ -17,9 +17,10 @@ package org.occurrent.example.domain.wordguessinggame.mongodb.spring.blocking.fe
 
 import j2html.TagCreator
 import j2html.tags.ContainerTag
+import kotlinx.html.*
+import kotlinx.html.stream.appendHTML
 import org.occurrent.example.domain.wordguessinggame.mongodb.spring.blocking.infrastructure.GenericApplicationService
 import org.occurrent.example.domain.wordguessinggame.writemodel.*
-import org.occurrent.example.domain.wordguessinggame.writemodel.game.*
 import org.springframework.http.HttpHeaders
 import org.springframework.http.HttpStatus
 import org.springframework.http.MediaType
@@ -29,23 +30,30 @@ import java.time.LocalDateTime
 import java.time.OffsetDateTime
 import java.time.format.DateTimeFormatter
 import java.util.*
+import javax.servlet.ServletResponse
 
 @RestController
 @RequestMapping(path = ["/games"], produces = [MediaType.TEXT_HTML_VALUE])
 class Website(private val applicationService: GenericApplicationService) {
 
     @GetMapping
-    fun games(): String {
-        return TagCreator.body(
-                TagCreator.h1("Word Guessing Game"),
-                //                generateGameOverview(latestGamesOverview),
-                TagCreator.form().withMethod("post").withAction("/games").with(
-                        TagCreator.input().withName("gameId").withType("hidden").withValue(UUID.randomUUID().toString()),
-                        TagCreator.input().withName("playerId").withType("hidden").withValue(UUID.randomUUID().toString()),
-                        TagCreator.br(),
-                        TagCreator.button("Start new game").withType("submit")
-                )
-        ).render()
+    fun games(r: ServletResponse) {
+        r.writer.appendHTML().html {
+            body {
+                h1 { +"Word Guessing Game" }
+                form(action = "/games", encType = FormEncType.multipartFormData, method = FormMethod.post) {
+                    textInput(name = "gameId") { hidden = true }
+                    textInput(name = "playerId") {
+                        hidden = true
+                        value = UUID.randomUUID().toString()
+                    }
+                    br()
+                    button(type = ButtonType.submit) {
+                        +"Start new game"
+                    }
+                }
+            }
+        }
     }
 
     @GetMapping("/{game}")
@@ -102,46 +110,46 @@ class Website(private val applicationService: GenericApplicationService) {
                     TagCreator.button("Make guess").withType("submit"))
         }
 
-//        private fun generateGameOverview(latestGamesOverview: LatestGamesOverview): ContainerTag {
-//            val trs: Array<ContainerTag> = latestGamesOverview.findOverviewOfLatestGames(10)
-//                    .map { game ->
-//                        val text: String
-//                        text = if (game.state is GameOverview.GameState.Ongoing) {
-//                            "Attempts left: " + (game.state as GameOverview.GameState.Ongoing).numberOfAttemptsLeft
-//                        } else {
-//                            val ended: Ended = game.state as Ended
-//                            (if (ended.playerGuessedTheRightNumber) "Won" else "Lost") + " at " + fmt(ended.endedAt)
-//                        }
-//                        TagCreator.tr(TagCreator.td(fmt(game.startedAt)), td(game.state.getClass().getSimpleName()), TagCreator.td(text))
-//                    }
-//                    .toArray()
-//            if (trs.size == 0) {
-//                return TagCreator.div()
-//            }
-//            val header = TagCreator.tr(TagCreator.th("Started At"), TagCreator.th("State"), TagCreator.th("Info"))
-//            val allTableData = arrayOfNulls<ContainerTag>(1 + trs.size)
-//            allTableData[0] = header
-//            System.arraycopy(trs, 0, allTableData, 1, trs.size)
-//            return TagCreator.div(TagCreator.h3("Latest Games"), TagCreator.table(*allTableData))
-//        }
-//
-//        private fun generateGuessesList(gameStatus: GameStatus): ContainerTag {
-//            val guesses: Array<ContainerTag> = gameStatus.guesses.stream()
-//                    .map { guessAndTime ->
-//                        val description: StringBuilder = StringBuilder(fmt(guessAndTime.localDateTime))
-//                                .append(" -- ")
-//                                .append(guessAndTime.guess)
-//                                .append(" was ")
-//                        if (guessAndTime.guess === gameStatus.secretNumber) {
-//                            description.append("correct. Well done :)")
-//                        } else {
-//                            description.append(if (guessAndTime.guess < gameStatus.secretNumber) "too small." else "too big.")
-//                        }
-//                        TagCreator.div(TagCreator.div(description.toString()), TagCreator.br())
-//                    }
-//                    .toArray()
-//            return TagCreator.div(TagCreator.h3("Guesses"), TagCreator.div(*guesses))
-//        }
+        //        private fun generateGameOverview(latestGamesOverview: LatestGamesOverview): ContainerTag {
+        //            val trs: Array<ContainerTag> = latestGamesOverview.findOverviewOfLatestGames(10)
+        //                    .map { game ->
+        //                        val text: String
+        //                        text = if (game.state is GameOverview.GameState.Ongoing) {
+        //                            "Attempts left: " + (game.state as GameOverview.GameState.Ongoing).numberOfAttemptsLeft
+        //                        } else {
+        //                            val ended: Ended = game.state as Ended
+        //                            (if (ended.playerGuessedTheRightNumber) "Won" else "Lost") + " at " + fmt(ended.endedAt)
+        //                        }
+        //                        TagCreator.tr(TagCreator.td(fmt(game.startedAt)), td(game.state.getClass().getSimpleName()), TagCreator.td(text))
+        //                    }
+        //                    .toArray()
+        //            if (trs.size == 0) {
+        //                return TagCreator.div()
+        //            }
+        //            val header = TagCreator.tr(TagCreator.th("Started At"), TagCreator.th("State"), TagCreator.th("Info"))
+        //            val allTableData = arrayOfNulls<ContainerTag>(1 + trs.size)
+        //            allTableData[0] = header
+        //            System.arraycopy(trs, 0, allTableData, 1, trs.size)
+        //            return TagCreator.div(TagCreator.h3("Latest Games"), TagCreator.table(*allTableData))
+        //        }
+        //
+        //        private fun generateGuessesList(gameStatus: GameStatus): ContainerTag {
+        //            val guesses: Array<ContainerTag> = gameStatus.guesses.stream()
+        //                    .map { guessAndTime ->
+        //                        val description: StringBuilder = StringBuilder(fmt(guessAndTime.localDateTime))
+        //                                .append(" -- ")
+        //                                .append(guessAndTime.guess)
+        //                                .append(" was ")
+        //                        if (guessAndTime.guess === gameStatus.secretNumber) {
+        //                            description.append("correct. Well done :)")
+        //                        } else {
+        //                            description.append(if (guessAndTime.guess < gameStatus.secretNumber) "too small." else "too big.")
+        //                        }
+        //                        TagCreator.div(TagCreator.div(description.toString()), TagCreator.br())
+        //                    }
+        //                    .toArray()
+        //            return TagCreator.div(TagCreator.h3("Guesses"), TagCreator.div(*guesses))
+        //        }
 
         private fun fmt(localDateTime: LocalDateTime): String {
             return DATE_TIME_FORMATTER.format(localDateTime.atOffset(OffsetDateTime.now().offset))

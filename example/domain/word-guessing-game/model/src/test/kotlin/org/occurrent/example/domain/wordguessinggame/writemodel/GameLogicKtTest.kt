@@ -4,7 +4,7 @@ import org.assertj.core.api.Assertions.assertThat
 import org.assertj.core.api.Assertions.catchThrowable
 import org.junit.jupiter.api.*
 import org.occurrent.example.domain.wordguessinggame.event.*
-import org.occurrent.example.domain.wordguessinggame.writemodel.game.*
+import org.occurrent.example.domain.wordguessinggame.writemodel.*
 import java.util.*
 
 @DisplayName("game specification")

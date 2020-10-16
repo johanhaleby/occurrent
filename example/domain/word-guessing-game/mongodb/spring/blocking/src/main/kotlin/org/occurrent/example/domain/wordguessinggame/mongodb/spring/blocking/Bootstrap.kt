@@ -54,7 +54,7 @@ import java.net.URI
  */
 @SpringBootApplication
 @EnableMongoRepositories
-@EnableRetry
+//@EnableRetry
 @Import(GamePolicyConfiguration::class)
 class Bootstrap {
     companion object {
