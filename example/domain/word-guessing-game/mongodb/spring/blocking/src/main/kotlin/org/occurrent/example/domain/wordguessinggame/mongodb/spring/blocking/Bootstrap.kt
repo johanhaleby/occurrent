@@ -53,7 +53,6 @@ import java.net.URI
  * Bootstrap the application
  */
 @SpringBootApplication
-@EnableMongoRepositories
 @EnableRetry(proxyTargetClass = true)
 @Import(GamePolicyConfiguration::class)
 class Bootstrap {
