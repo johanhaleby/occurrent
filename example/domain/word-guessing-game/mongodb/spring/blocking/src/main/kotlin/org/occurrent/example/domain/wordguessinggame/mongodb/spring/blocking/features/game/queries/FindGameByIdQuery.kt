@@ -7,7 +7,7 @@ import org.springframework.stereotype.Component
 import java.util.*
 
 @Component
-class FindGameByGameIdQuery(private val domainEvents: DomainEventQueries) {
+class FindGameByIdQuery(private val domainEvents: DomainEventQueries) {
 
     fun execute(gameId: UUID): GameReadModel? =
             domainEvents.forGame(gameId)
