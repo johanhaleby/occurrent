@@ -5,8 +5,8 @@ import com.fasterxml.jackson.module.kotlin.readValue
 import io.cloudevents.CloudEvent
 import io.cloudevents.core.builder.CloudEventBuilder
 import org.occurrent.example.domain.wordguessinggame.event.*
-import org.occurrent.example.domain.wordguessinggame.writemodel.PlayerId
-import org.occurrent.example.domain.wordguessinggame.writemodel.Timestamp
+import org.occurrent.example.domain.wordguessinggame.writemodel.game.PlayerId
+import org.occurrent.example.domain.wordguessinggame.writemodel.game.Timestamp
 import java.net.URI
 import java.time.ZoneOffset
 import java.time.temporal.ChronoUnit
@@ -20,6 +20,7 @@ class CloudEventConverter(private val objectMapper: ObjectMapper, private val cl
             is PlayerGuessedTheWrongWord -> domainEvent.run { PlayerGuessedTheWrongWordData(playerId, guessedWord) }
             is NumberOfGuessesWasExhaustedForPlayer -> NumberOfGuessesWasExhaustedForPlayerData(domainEvent.playerId)
             is PlayerGuessedTheRightWord -> domainEvent.run { PlayerGuessedTheRightWordData(playerId, guessedWord) }
+            is PlayerWasAwardedPointsForGuessingTheRightWord -> domainEvent.run { PlayerWasAwardedPointsForGuessingTheRightWordData(playerId, points) }
             is GameWasWon -> GameWasWonData(domainEvent.winnerId)
             is GameWasLost -> null
         }
@@ -67,7 +68,6 @@ class CloudEventConverter(private val objectMapper: ObjectMapper, private val cl
 
     private fun EventData.toBytes() = objectMapper.writeValueAsBytes(this)
     private inline fun <reified T : EventData> CloudEvent.data(): T = objectMapper.readValue(data!!)
-
 }
 
 private sealed class EventData
@@ -75,4 +75,5 @@ private data class GameWasStartedData(val startedBy: PlayerId, val category: Str
 private data class PlayerGuessedTheWrongWordData(val playerId: PlayerId, val guessedWord: String) : EventData()
 private data class NumberOfGuessesWasExhaustedForPlayerData(val playerId: PlayerId) : EventData()
 private data class PlayerGuessedTheRightWordData(val playerId: PlayerId, val guessedWord: String) : EventData()
+private data class PlayerWasAwardedPointsForGuessingTheRightWordData(val playerId: PlayerId, val points: Int) : EventData()
 private data class GameWasWonData(val winnerId: PlayerId) : EventData()

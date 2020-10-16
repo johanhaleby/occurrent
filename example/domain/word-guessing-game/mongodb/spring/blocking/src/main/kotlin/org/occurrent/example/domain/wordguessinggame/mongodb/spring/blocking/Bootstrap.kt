@@ -17,21 +17,21 @@ package org.occurrent.example.domain.wordguessinggame.mongodb.spring.blocking
 
 import com.fasterxml.jackson.databind.ObjectMapper
 import com.fasterxml.jackson.module.kotlin.KotlinModule
+import org.occurrent.eventstore.api.blocking.EventStoreQueries
 import org.occurrent.eventstore.mongodb.spring.blocking.EventStoreConfig
 import org.occurrent.eventstore.mongodb.spring.blocking.SpringBlockingMongoEventStore
+import org.occurrent.example.domain.wordguessinggame.event.DomainEvent
 import org.occurrent.example.domain.wordguessinggame.event.GameWasWon
 import org.occurrent.example.domain.wordguessinggame.event.eventType
 import org.occurrent.example.domain.wordguessinggame.mongodb.spring.blocking.event.CloudEventConverter
 import org.occurrent.example.domain.wordguessinggame.mongodb.spring.blocking.util.loggerFor
-import org.occurrent.example.domain.wordguessinggame.policy.WhenGameWasWonThenSendEmailToWinner
-import org.occurrent.filter.Filter
+import org.occurrent.example.domain.wordguessinggame.policy.WhenGameWasWonThenSendEmailToWinnerPolicy
 import org.occurrent.filter.Filter.type
 import org.occurrent.mongodb.timerepresentation.TimeRepresentation
-import org.occurrent.subscription.OccurrentSubscriptionFilter
 import org.occurrent.subscription.OccurrentSubscriptionFilter.filter
-import org.occurrent.subscription.SubscriptionFilter
 import org.occurrent.subscription.api.blocking.BlockingSubscriptionPositionStorage
 import org.occurrent.subscription.api.blocking.PositionAwareBlockingSubscription
+import org.occurrent.subscription.api.blocking.Subscription
 import org.occurrent.subscription.mongodb.spring.blocking.SpringBlockingSubscriptionForMongoDB
 import org.occurrent.subscription.mongodb.spring.blocking.SpringBlockingSubscriptionPositionStorageForMongoDB
 import org.occurrent.subscription.util.blocking.BlockingSubscriptionWithAutomaticPositionPersistence
@@ -94,15 +94,24 @@ class Policies {
 
     @Autowired
     lateinit var subscriptions: BlockingSubscriptionWithAutomaticPositionPersistence
+
     @Autowired
     lateinit var cloudEventConverter: CloudEventConverter
 
+    @Autowired
+    lateinit var eventStoreQueries: EventStoreQueries
+
     @Bean
-    fun whenGameWasWonThenSendEmailToWinnerPolicy() {
-        subscriptions.subscribe(WhenGameWasWonThenSendEmailToWinner::class.simpleName, filter(type(GameWasWon::class.eventType()))) { cloudEvent ->
-            val gameWasWon = cloudEventConverter.toDomainEvent(cloudEvent) as GameWasWon
-            log.info("Sending email to player ${gameWasWon.winnerId} since he/she was a winner of game ${gameWasWon.winnerId}")
-        }
+    fun whenGameWasWonThenSendEmailToWinner() = policy<GameWasWon>(WhenGameWasWonThenSendEmailToWinnerPolicy::class.simpleName!!) { gameWasWon ->
+        log.info("Sending email to player ${gameWasWon.winnerId} since he/she was a winner of game ${gameWasWon.gameId}")
+    }
+
+    // Helper function that creates simple policies using a specific event type
+    private inline fun <reified T : DomainEvent> policy(policyId: String, crossinline fn: (T) -> Unit): Subscription = subscriptions.subscribe(policyId, filter(type(T::class.eventType()))) { cloudEvent ->
+        val event = cloudEventConverter.toDomainEvent(cloudEvent) as T
+        fn(event)
+    }.apply {
+        waitUntilStarted()
     }
 }
 

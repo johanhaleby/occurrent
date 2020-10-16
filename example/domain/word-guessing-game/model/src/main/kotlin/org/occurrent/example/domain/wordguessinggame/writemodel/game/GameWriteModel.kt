@@ -1,4 +1,4 @@
-package org.occurrent.example.domain.wordguessinggame.writemodel
+package org.occurrent.example.domain.wordguessinggame.writemodel.game
 
 import java.util.*
 

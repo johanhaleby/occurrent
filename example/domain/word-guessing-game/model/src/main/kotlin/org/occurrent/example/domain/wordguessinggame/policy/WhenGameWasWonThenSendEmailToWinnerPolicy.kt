@@ -1,3 +1,3 @@
 package org.occurrent.example.domain.wordguessinggame.policy
 
-interface WhenGameWasWonThenSendEmailToWinner
+interface WhenGameWasWonThenSendEmailToWinnerPolicy

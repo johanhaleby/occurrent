@@ -1,4 +1,4 @@
-package org.occurrent.example.domain.wordguessinggame.writemodel
+package org.occurrent.example.domain.wordguessinggame.writemodel.game
 
 import org.occurrent.example.domain.wordguessinggame.event.*
 import org.occurrent.example.domain.wordguessinggame.support.add
@@ -15,7 +15,7 @@ fun startGame(previousEvents: Sequence<DomainEvent>, gameId: GameId, timestamp: 
     val wordToGuess = wordsToChooseFrom.words.random()
 
     val gameStarted = GameWasStarted(eventId = UUID.randomUUID(), timestamp = timestamp, gameId = gameId, startedBy = playerId, category = wordsToChooseFrom.category.value,
-            wordToGuess = wordToGuess.value, maxNumberOfGuessesPerPlayer = maxNumberOfGuessesPerPlayer.value, maxNumberOfGuessesTotal = maxNumberOfGuessesTotal.value)
+            wordToGuess = wordToGuess.value, maxNumberOfGuessesPerPlayer = MaxNumberOfGuessesPerPlayer.value, maxNumberOfGuessesTotal = MaxNumberOfGuessesTotal.value)
 
     return sequenceOf(gameStarted)
 }
@@ -32,6 +32,7 @@ fun guessWord(previousEvents: Sequence<DomainEvent>, timestamp: Timestamp, playe
 
         if (state.isRightGuess(guessedWord)) {
             events.add(PlayerGuessedTheRightWord(UUID.randomUUID(), timestamp, state.gameId, playerId, guessedWord.value))
+            events.addAll(awardPointsToPlayerThatGuessedTheRightWord(playerId, timestamp, state))
             events.add(GameWasWon(UUID.randomUUID(), timestamp, state.gameId, playerId))
         } else {
             events.add(PlayerGuessedTheWrongWord(UUID.randomUUID(), timestamp, state.gameId, playerId, guessedWord.value))
@@ -74,4 +75,12 @@ private fun Sequence<DomainEvent>.deriveGameState(): GameState = fold<DomainEven
         state is Ongoing && event is GameWasLost -> Ended
         else -> throw IllegalStateException("Event ${event.type} is not applicable in state ${state::class.simpleName!!}")
     }
+}
+
+// Helper functions
+private fun awardPointsToPlayerThatGuessedTheRightWord(playerId: PlayerId, timestamp: Timestamp, state: Ongoing): List<DomainEvent> {
+    val numberOfWrongGuessesForPlayerInGame = state.guesses.count { it.playerId == playerId }
+    val totalGuessesForPlayerInGame = numberOfWrongGuessesForPlayerInGame + 1
+    val points = PointAwardingLogic.calculatePointsToAwardPlayerAfterSuccessfullyGuessedTheRightWord(totalGuessesForPlayerInGame)
+    return listOf(PlayerWasAwardedPointsForGuessingTheRightWord(UUID.randomUUID(), timestamp, state.gameId, playerId, points))
 }

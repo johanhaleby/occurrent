@@ -17,6 +17,7 @@ class GameReadModelStateMachine internal constructor(val state: GameReadModel?) 
         is GameWasWon -> applyEvent(e)
         is GameWasLost -> applyEvent(e)
         is NumberOfGuessesWasExhaustedForPlayer -> this
+        is PlayerWasAwardedPointsForGuessingTheRightWord -> this
     }
 
     private fun applyEvent(e: GameWasStarted): GameReadModelStateMachine = e.run {
