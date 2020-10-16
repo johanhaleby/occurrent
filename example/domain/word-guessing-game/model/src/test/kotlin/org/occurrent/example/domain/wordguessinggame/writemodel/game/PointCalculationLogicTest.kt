@@ -5,8 +5,8 @@ import org.junit.jupiter.api.DisplayName
 import org.junit.jupiter.api.Nested
 import org.junit.jupiter.api.Test
 
-@DisplayName("point awarding logic")
-internal class PointAwardingLogicTest {
+@DisplayName("point calculation logic")
+internal class PointCalculationLogicTest {
 
     @Nested
     @DisplayName("calculate points to award player after successfully guessed the right word")
@@ -18,7 +18,7 @@ internal class PointAwardingLogicTest {
             val totalNumberOfGuessedForPlayer = 1
 
             // When
-            val points = PointAwardingLogic.calculatePointsToAwardPlayerAfterSuccessfullyGuessedTheRightWord(totalNumberOfGuessedForPlayer)
+            val points = PointCalculationLogic.calculatePointsToAwardPlayerAfterSuccessfullyGuessedTheRightWord(totalNumberOfGuessedForPlayer)
 
             // Then
             assertThat(points).isEqualTo(5)
@@ -30,7 +30,7 @@ internal class PointAwardingLogicTest {
             val totalNumberOfGuessedForPlayer = 2
 
             // When
-            val points = PointAwardingLogic.calculatePointsToAwardPlayerAfterSuccessfullyGuessedTheRightWord(totalNumberOfGuessedForPlayer)
+            val points = PointCalculationLogic.calculatePointsToAwardPlayerAfterSuccessfullyGuessedTheRightWord(totalNumberOfGuessedForPlayer)
 
             // Then
             assertThat(points).isEqualTo(3)
@@ -42,7 +42,7 @@ internal class PointAwardingLogicTest {
             val totalNumberOfGuessedForPlayer = 3
 
             // When
-            val points = PointAwardingLogic.calculatePointsToAwardPlayerAfterSuccessfullyGuessedTheRightWord(totalNumberOfGuessedForPlayer)
+            val points = PointCalculationLogic.calculatePointsToAwardPlayerAfterSuccessfullyGuessedTheRightWord(totalNumberOfGuessedForPlayer)
 
             // Then
             assertThat(points).isEqualTo(1)
@@ -54,7 +54,7 @@ internal class PointAwardingLogicTest {
             val totalNumberOfGuessedForPlayer = 4
 
             // When
-            val points = PointAwardingLogic.calculatePointsToAwardPlayerAfterSuccessfullyGuessedTheRightWord(totalNumberOfGuessedForPlayer)
+            val points = PointCalculationLogic.calculatePointsToAwardPlayerAfterSuccessfullyGuessedTheRightWord(totalNumberOfGuessedForPlayer)
 
             // Then
             assertThat(points).isZero

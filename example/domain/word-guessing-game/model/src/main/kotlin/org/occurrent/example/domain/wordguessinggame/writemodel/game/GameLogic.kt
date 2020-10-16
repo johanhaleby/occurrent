@@ -81,6 +81,6 @@ private fun Sequence<DomainEvent>.deriveGameState(): GameState = fold<DomainEven
 private fun awardPointsToPlayerThatGuessedTheRightWord(playerId: PlayerId, timestamp: Timestamp, state: Ongoing): List<DomainEvent> {
     val numberOfWrongGuessesForPlayerInGame = state.guesses.count { it.playerId == playerId }
     val totalGuessesForPlayerInGame = numberOfWrongGuessesForPlayerInGame + 1
-    val points = PointAwardingLogic.calculatePointsToAwardPlayerAfterSuccessfullyGuessedTheRightWord(totalGuessesForPlayerInGame)
+    val points = PointCalculationLogic.calculatePointsToAwardPlayerAfterSuccessfullyGuessedTheRightWord(totalGuessesForPlayerInGame)
     return listOf(PlayerWasAwardedPointsForGuessingTheRightWord(UUID.randomUUID(), timestamp, state.gameId, playerId, points))
 }

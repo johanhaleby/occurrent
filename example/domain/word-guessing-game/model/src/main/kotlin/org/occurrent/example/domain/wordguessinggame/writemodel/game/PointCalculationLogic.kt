@@ -3,7 +3,7 @@ package org.occurrent.example.domain.wordguessinggame.writemodel.game
 typealias Points = Int
 typealias NumberOfGuessesRequiredToGuessToRightWord = Int
 
-internal object PointAwardingLogic {
+internal object PointCalculationLogic {
 
     private const val NUMBER_OF_POINTS_FOR_FIRST_GUESS = 5
     private const val NUMBER_OF_POINTS_FOR_SECOND_GUESS = 3
