@@ -15,10 +15,10 @@ internal class PointCalculationLogicTest {
         @Test
         fun `awards 5 points when player guessed the right word on the first attempt`() {
             // Given
-            val totalNumberOfGuessedForPlayer = 1
+            val totalNumberOfGuessesForPlayer = 1
 
             // When
-            val points = PointCalculationLogic.calculatePointsToAwardPlayerAfterSuccessfullyGuessedTheRightWord(totalNumberOfGuessedForPlayer)
+            val points = PointCalculationLogic.calculatePointsToAwardPlayerAfterSuccessfullyGuessedTheRightWord(totalNumberOfGuessesForPlayer)
 
             // Then
             assertThat(points).isEqualTo(5)
@@ -27,10 +27,10 @@ internal class PointCalculationLogicTest {
         @Test
         fun `awards 3 points when player guessed the right word on the second attempt`() {
             // Given
-            val totalNumberOfGuessedForPlayer = 2
+            val totalNumberOfGuessesForPlayer = 2
 
             // When
-            val points = PointCalculationLogic.calculatePointsToAwardPlayerAfterSuccessfullyGuessedTheRightWord(totalNumberOfGuessedForPlayer)
+            val points = PointCalculationLogic.calculatePointsToAwardPlayerAfterSuccessfullyGuessedTheRightWord(totalNumberOfGuessesForPlayer)
 
             // Then
             assertThat(points).isEqualTo(3)
@@ -39,10 +39,10 @@ internal class PointCalculationLogicTest {
         @Test
         fun `awards 1 points when player guessed the right word on the third attempt`() {
             // Given
-            val totalNumberOfGuessedForPlayer = 3
+            val totalNumberOfGuessesForPlayer = 3
 
             // When
-            val points = PointCalculationLogic.calculatePointsToAwardPlayerAfterSuccessfullyGuessedTheRightWord(totalNumberOfGuessedForPlayer)
+            val points = PointCalculationLogic.calculatePointsToAwardPlayerAfterSuccessfullyGuessedTheRightWord(totalNumberOfGuessesForPlayer)
 
             // Then
             assertThat(points).isEqualTo(1)
@@ -51,10 +51,10 @@ internal class PointCalculationLogicTest {
         @Test
         fun `doesn't award any points when player guessed the right word on additional attempt`() {
             // Given
-            val totalNumberOfGuessedForPlayer = 4
+            val totalNumberOfGuessesForPlayer = 4
 
             // When
-            val points = PointCalculationLogic.calculatePointsToAwardPlayerAfterSuccessfullyGuessedTheRightWord(totalNumberOfGuessedForPlayer)
+            val points = PointCalculationLogic.calculatePointsToAwardPlayerAfterSuccessfullyGuessedTheRightWord(totalNumberOfGuessesForPlayer)
 
             // Then
             assertThat(points).isZero
