@@ -1,7 +1,7 @@
 package org.occurrent.example.domain.wordguessinggame.event
 
-import org.occurrent.example.domain.wordguessinggame.writemodel.game.PlayerId
-import org.occurrent.example.domain.wordguessinggame.writemodel.game.Points
+import org.occurrent.example.domain.wordguessinggame.writemodel.PlayerId
+import org.occurrent.example.domain.wordguessinggame.writemodel.Points
 import java.util.*
 import kotlin.reflect.KClass
 

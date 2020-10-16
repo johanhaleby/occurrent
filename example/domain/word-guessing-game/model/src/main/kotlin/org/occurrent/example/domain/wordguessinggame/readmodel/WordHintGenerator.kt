@@ -1,4 +1,4 @@
-package org.occurrent.example.domain.wordguessinggame.readmodel.game
+package org.occurrent.example.domain.wordguessinggame.readmodel
 
 internal object WordHintGenerator {
     internal const val obfuscationCharacter = '_'

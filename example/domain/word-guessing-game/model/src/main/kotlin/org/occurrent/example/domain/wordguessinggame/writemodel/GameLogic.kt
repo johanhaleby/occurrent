@@ -1,4 +1,4 @@
-package org.occurrent.example.domain.wordguessinggame.writemodel.game
+package org.occurrent.example.domain.wordguessinggame.writemodel
 
 import org.occurrent.example.domain.wordguessinggame.event.*
 import org.occurrent.example.domain.wordguessinggame.support.add

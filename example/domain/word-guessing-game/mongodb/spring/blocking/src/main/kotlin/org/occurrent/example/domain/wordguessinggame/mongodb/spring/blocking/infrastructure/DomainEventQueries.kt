@@ -2,7 +2,7 @@ package org.occurrent.example.domain.wordguessinggame.mongodb.spring.blocking.in
 
 import org.occurrent.eventstore.api.blocking.EventStoreQueries
 import org.occurrent.example.domain.wordguessinggame.event.DomainEvent
-import org.occurrent.example.domain.wordguessinggame.writemodel.game.GameId
+import org.occurrent.example.domain.wordguessinggame.writemodel.GameId
 import org.occurrent.filter.Filter.streamId
 import org.springframework.stereotype.Component
 import kotlin.streams.asSequence

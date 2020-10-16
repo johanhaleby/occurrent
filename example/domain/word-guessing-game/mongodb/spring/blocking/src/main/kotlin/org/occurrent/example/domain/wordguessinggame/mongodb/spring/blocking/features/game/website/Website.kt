@@ -18,6 +18,7 @@ package org.occurrent.example.domain.wordguessinggame.mongodb.spring.blocking.fe
 import j2html.TagCreator
 import j2html.tags.ContainerTag
 import org.occurrent.example.domain.wordguessinggame.mongodb.spring.blocking.infrastructure.GenericApplicationService
+import org.occurrent.example.domain.wordguessinggame.writemodel.*
 import org.occurrent.example.domain.wordguessinggame.writemodel.game.*
 import org.springframework.http.HttpHeaders
 import org.springframework.http.HttpStatus
@@ -73,7 +74,7 @@ class Website(private val applicationService: GenericApplicationService) {
     fun startGame(@RequestParam("gameId") gameId: UUID, @RequestParam("playerId") playerId: UUID,
                   @RequestParam("category") category: String, @RequestParam("words") words: String): ResponseEntity<*> {
         val wordsToChooseFrom = WordsToChooseFrom(WordCategory(category.trim()), words.split('\n').map(::Word))
-        applicationService.execute(gameId) { events -> org.occurrent.example.domain.wordguessinggame.writemodel.game.startGame(events, gameId, Timestamp(), playerId, wordsToChooseFrom, MaxNumberOfGuessesPerPlayer, MaxNumberOfGuessesTotal) }
+        applicationService.execute(gameId) { events -> org.occurrent.example.domain.wordguessinggame.writemodel.startGame(events, gameId, Timestamp(), playerId, wordsToChooseFrom, MaxNumberOfGuessesPerPlayer, MaxNumberOfGuessesTotal) }
         return ResponseEntity.status(HttpStatus.SEE_OTHER).header(HttpHeaders.LOCATION, gameLocation(gameId, playerId)).build<Any>()
     }
 

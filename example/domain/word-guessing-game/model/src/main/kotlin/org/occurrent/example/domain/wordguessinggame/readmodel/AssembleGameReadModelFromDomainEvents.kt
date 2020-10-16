@@ -1,9 +1,9 @@
-package org.occurrent.example.domain.wordguessinggame.readmodel.game
+package org.occurrent.example.domain.wordguessinggame.readmodel
 
 import org.occurrent.example.domain.wordguessinggame.event.*
-import org.occurrent.example.domain.wordguessinggame.readmodel.game.OngoingGameReadModel.Guess
-import org.occurrent.example.domain.wordguessinggame.readmodel.game.WordHintGenerator.generateNewHint
-import org.occurrent.example.domain.wordguessinggame.readmodel.game.WordHintGenerator.revealAdditionalCharacterFrom
+import org.occurrent.example.domain.wordguessinggame.readmodel.OngoingGameReadModel.Guess
+import org.occurrent.example.domain.wordguessinggame.readmodel.WordHintGenerator.generateNewHint
+import org.occurrent.example.domain.wordguessinggame.readmodel.WordHintGenerator.revealAdditionalCharacterFrom
 import org.occurrent.example.domain.wordguessinggame.support.add
 
 class AssembleGameReadModelFromDomainEvents internal constructor(val gameReadModel: GameReadModel?) {

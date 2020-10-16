@@ -1,4 +1,4 @@
-package org.occurrent.example.domain.wordguessinggame.writemodel.game
+package org.occurrent.example.domain.wordguessinggame.writemodel
 
 import org.assertj.core.api.Assertions.assertThat
 import org.junit.jupiter.api.DisplayName

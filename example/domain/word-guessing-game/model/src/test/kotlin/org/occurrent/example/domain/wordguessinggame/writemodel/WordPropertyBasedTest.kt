@@ -6,7 +6,7 @@ import net.jqwik.api.Property
 import net.jqwik.api.Provide
 import org.assertj.core.api.Assertions.assertThat
 import org.occurrent.example.domain.wordguessinggame.RandomValidWordProvider
-import org.occurrent.example.domain.wordguessinggame.writemodel.game.Word
+import org.occurrent.example.domain.wordguessinggame.writemodel.Word
 
 internal class WordPropertyBasedTest {
 

@@ -5,8 +5,8 @@ import com.fasterxml.jackson.module.kotlin.readValue
 import io.cloudevents.CloudEvent
 import io.cloudevents.core.builder.CloudEventBuilder
 import org.occurrent.example.domain.wordguessinggame.event.*
-import org.occurrent.example.domain.wordguessinggame.writemodel.game.PlayerId
-import org.occurrent.example.domain.wordguessinggame.writemodel.game.Timestamp
+import org.occurrent.example.domain.wordguessinggame.writemodel.PlayerId
+import org.occurrent.example.domain.wordguessinggame.writemodel.Timestamp
 import java.net.URI
 import java.time.ZoneOffset
 import java.time.temporal.ChronoUnit

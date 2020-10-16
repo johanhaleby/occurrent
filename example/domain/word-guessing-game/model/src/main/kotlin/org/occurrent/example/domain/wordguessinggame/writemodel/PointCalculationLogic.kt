@@ -1,4 +1,4 @@
-package org.occurrent.example.domain.wordguessinggame.writemodel.game
+package org.occurrent.example.domain.wordguessinggame.writemodel
 
 typealias Points = Int
 typealias NumberOfGuessesRequiredToGuessToRightWord = Int
