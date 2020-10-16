@@ -10,9 +10,9 @@ import java.util.*
 import kotlin.streams.asSequence
 
 @Component
-class FindGameByGameId(private val eventStoreQueries: EventStoreQueries, private val cloudEventConverter: CloudEventConverter) {
+class FindGameByGameIdQuery(private val eventStoreQueries: EventStoreQueries, private val cloudEventConverter: CloudEventConverter) {
 
-    fun queryFor(gameId: UUID): GameReadModel? =
+    fun execute(gameId: UUID): GameReadModel? =
             eventStoreQueries.query(streamId(gameId.toString())).asSequence()
                     .map(cloudEventConverter::toDomainEvent)
                     .fold(GameReadModelStateMachine(), GameReadModelStateMachine::applyEvent)
