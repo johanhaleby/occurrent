@@ -9,6 +9,9 @@ import org.occurrent.subscription.util.blocking.BlockingSubscriptionWithAutomati
 import org.springframework.stereotype.Component
 
 
+/**
+ * Just a convenience utility that makes it easier, and more consistent, to create policies.
+ */
 @Component
 class Policies(val subscriptions: BlockingSubscriptionWithAutomaticPositionPersistence, val cloudEventConverter: CloudEventConverter) {
 
