@@ -43,8 +43,7 @@ class Website(private val applicationService: GenericApplicationService,
         response.writer.appendHTML().html {
             body {
                 h1 { +"Word Guessing Game" }
-                form(action = "/games", encType = FormEncType.multipartFormData, method = FormMethod.post) {
-                    textInput(name = "gameId") { hidden = true }
+                form(action = "/games/${GameId.randomUUID()}", method = FormMethod.get) {
                     br()
                     button(type = ButtonType.submit) {
                         +"Start new game"
@@ -61,20 +60,57 @@ class Website(private val applicationService: GenericApplicationService,
         return StringBuilder().appendHTML().html {
             body {
                 when (game) {
-                    null -> h1 { +"Game not found" }
+                    null -> {
+                        h1 { +"Start New Game" }
+                        form(action = "/games", encType = FormEncType.multipartFormData, method = FormMethod.post) {
+                            textInput(name = "gameId") {
+                                hidden = true
+                                value = gameId.toString()
+                            }
+                            label {
+                                htmlFor = "category"
+                                +"Category: "
+                            }
+                            textInput(name = "category") {
+                                id = "category"
+                                required = true
+                                placeholder = "animals"
+                                autoFocus = true
+                            }
+                            br()
+                            label {
+                                htmlFor = "words"
+                                +"Words: "
+                            }
+                            textArea {
+                                id = "words"
+                                name = "words"
+                                required = true
+                                placeholder = "mouse, moose, bird, octopus, .."
+                            }
+                            br()
+                            button(type = ButtonType.submit) {
+                                +"Start"
+                            }
+                        }
+                    }
                     is OngoingGameReadModel -> {
                         h1 { +game.category }
-                        div { +"Number of guesses left in game: ${game.totalNumberOfGuessesLeft}. You can guess ${game.numberOfGuessesLeftForPlayer(playerId)} more times." }
-                        h3 { +game.hint }
-                        form(action = "/games/$gameId", encType = FormEncType.multipartFormData, method = FormMethod.post) {
-                            textInput(name = "word") {
-                                pattern = Word.VALID_WORD_REGEX
-                                minLength = Word.MINIMUM_NUMBER_OF_CHARACTERS.toString()
-                                maxLength = Word.MAXIMUM_NUMBER_OF_CHARACTERS.toString()
+                        val numberOfGuessesLeftForPlayer = game.numberOfGuessesLeftForPlayer(playerId)
+                        if (numberOfGuessesLeftForPlayer >= 1) {
+                            div { +"Number of guesses left in game: ${game.totalNumberOfGuessesLeft}. You can guess $numberOfGuessesLeftForPlayer more times." }
+                            h3 { +game.hint }
+                            form(action = "/games/$gameId", encType = FormEncType.multipartFormData, method = FormMethod.post) {
+                                textInput(name = "word") {
+                                    minLength = Word.MINIMUM_NUMBER_OF_CHARACTERS.toString()
+                                    maxLength = Word.MAXIMUM_NUMBER_OF_CHARACTERS.toString()
+                                }
+                                button(type = ButtonType.submit) {
+                                    +"Make Guess"
+                                }
                             }
-                            button(type = ButtonType.submit) {
-                                +"Make Guess"
-                            }
+                        } else {
+                            div { +"You've exhausted all your guesses for this game. Try another game or check back later to see who the winner is. Number of guesses left for other players are ${game.totalNumberOfGuessesLeft}." }
                         }
                     }
                     is EndedGameReadModel -> {
@@ -87,9 +123,11 @@ class Website(private val applicationService: GenericApplicationService,
     }
 
     @PostMapping
-    fun startGame(@RequestParam("gameId") gameId: UUID, @RequestParam(PLAYER_ID) playerId: UUID,
-                  @RequestParam("category") category: String, @RequestParam("words") words: String): ResponseEntity<*> {
-        val wordsToChooseFrom = WordsToChooseFrom(WordCategory(category.trim()), words.split('\n').map(::Word))
+    fun startGame(@RequestParam("gameId") gameId: UUID, @RequestParam("category") category: String,
+                  @RequestParam("words") words: String, session: HttpSession): ResponseEntity<*> {
+        val playerId = session.getOrGeneratePlayerId()
+        val wordsInCategory = words.split('\n').map { it.split(',') }.flatten().map(String::trim).map(::Word)
+        val wordsToChooseFrom = WordsToChooseFrom(WordCategory(category.trim()), wordsInCategory)
         applicationService.execute(gameId) { events -> startGame(events, gameId, Timestamp(), playerId, wordsToChooseFrom, MaxNumberOfGuessesPerPlayer, MaxNumberOfGuessesTotal) }
         return ResponseEntity.status(HttpStatus.SEE_OTHER).header(HttpHeaders.LOCATION, gameLocation(gameId)).build<Any>()
     }
@@ -118,7 +156,6 @@ class Website(private val applicationService: GenericApplicationService,
                 PlayerId.randomUUID().also { playerId -> setAttribute(PLAYER_ID, playerId) }
             }
 }
-
 
 private inline fun <reified T> HttpSession.attribute(name: String) = getAttribute(name) as T
 private fun HttpSession.hasAttribute(name: String) = getAttribute(name) != null
