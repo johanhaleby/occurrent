@@ -107,7 +107,7 @@ public abstract class Condition<T> {
 
     @SafeVarargs
     public static <T> Condition<T> and(Condition<T> firstCondition, Condition<T> secondCondition, Condition<T>... additionalConditions) {
-        List<Condition<T>> conditions = createConditionsFrom(firstCondition, secondCondition, additionalConditions);
+        List<Condition<T>> conditions = createList(firstCondition, secondCondition, additionalConditions);
         return and(conditions);
     }
 
@@ -115,9 +115,27 @@ public abstract class Condition<T> {
         return new MultiOperandCondition<>(AND, conditions, conditions.stream().map(Condition::toString).collect(Collectors.joining(" and ")));
     }
 
+    /**
+     * Special case of {@link #and(Condition, Condition, Condition[])} where each element will be mapped to equal conditions ({@link #eq(Object)}).
+     */
+    @SafeVarargs
+    public static <T> Condition<T> and(T first, T second, T... additional) {
+        List<Condition<T>> conditions = createList(first, second, additional).stream().map(Condition::eq).collect(Collectors.toList());
+        return and(conditions);
+    }
+
+    /**
+     * Special case of {@link #or(Condition, Condition, Condition[])} where each element will be mapped to equal conditions ({@link #eq(Object)}).
+     */
+    @SafeVarargs
+    public static <T> Condition<T> or(T first, T second, T... additional) {
+        List<Condition<T>> conditions = createList(first, second, additional).stream().map(Condition::eq).collect(Collectors.toList());
+        return or(conditions);
+    }
+
     @SafeVarargs
     public static <T> Condition<T> or(Condition<T> firstCondition, Condition<T> secondCondition, Condition<T>... additionalConditions) {
-        List<Condition<T>> conditions = createConditionsFrom(firstCondition, secondCondition, additionalConditions);
+        List<Condition<T>> conditions = createList(firstCondition, secondCondition, additionalConditions);
         return or(conditions);
     }
 
@@ -129,11 +147,15 @@ public abstract class Condition<T> {
         return new MultiOperandCondition<>(NOT, Collections.singletonList(condition), "not " + condition);
     }
 
-    private static <T> List<Condition<T>> createConditionsFrom(Condition<T> firstCondition, Condition<T> secondCondition, Condition<T>[] additionalConditions) {
-        List<Condition<T>> conditions = new ArrayList<>(2 + additionalConditions.length);
+    @SuppressWarnings("unchecked")
+    private static <T> List<T> createList(T firstCondition, T secondCondition, T[] additionalConditions) {
+        requireNonNull(firstCondition, "First condition cannot be null");
+        requireNonNull(secondCondition, "Second condition cannot be null");
+        T[] additionalConditionsToUse = additionalConditions == null ? (T[]) Collections.emptyList().toArray() : additionalConditions;
+        List<T> conditions = new ArrayList<>(2 + additionalConditionsToUse.length);
         conditions.add(firstCondition);
         conditions.add(secondCondition);
-        Collections.addAll(conditions, additionalConditions);
+        Collections.addAll(conditions, additionalConditionsToUse);
         return conditions;
     }
 
