@@ -1,5 +1,6 @@
 Changelog next version:
 * Renamed method `CloudEventWithSubscriptionPosition.getStreamPosition()` to `CloudEventWithSubscriptionPosition.getSubscriptionPosition()` since this was a typo.
+* Added ability to provide a list of conditions when composing them with `and` and `or`. 
 
 Version 0.1.1 (2020-09-26):
 

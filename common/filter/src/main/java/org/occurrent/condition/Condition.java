@@ -68,6 +68,7 @@ public abstract class Condition<T> {
 
         private MultiOperandCondition(final MultiOperandConditionName operationName, List<Condition<T>> operations, String description) {
             super(description);
+            requireNonNull(operations, "Operations cannot be null");
             this.operationName = operationName;
             this.operations = Collections.unmodifiableList(operations);
         }
@@ -107,12 +108,20 @@ public abstract class Condition<T> {
     @SafeVarargs
     public static <T> Condition<T> and(Condition<T> firstCondition, Condition<T> secondCondition, Condition<T>... additionalConditions) {
         List<Condition<T>> conditions = createConditionsFrom(firstCondition, secondCondition, additionalConditions);
+        return and(conditions);
+    }
+
+    public static <T> Condition<T> and(List<Condition<T>> conditions) {
         return new MultiOperandCondition<>(AND, conditions, conditions.stream().map(Condition::toString).collect(Collectors.joining(" and ")));
     }
 
     @SafeVarargs
     public static <T> Condition<T> or(Condition<T> firstCondition, Condition<T> secondCondition, Condition<T>... additionalConditions) {
         List<Condition<T>> conditions = createConditionsFrom(firstCondition, secondCondition, additionalConditions);
+        return or(conditions);
+    }
+
+    public static <T> Condition<T> or(List<Condition<T>> conditions) {
         return new MultiOperandCondition<>(OR, conditions, conditions.stream().map(Condition::toString).collect(Collectors.joining(" or ")));
     }
 
