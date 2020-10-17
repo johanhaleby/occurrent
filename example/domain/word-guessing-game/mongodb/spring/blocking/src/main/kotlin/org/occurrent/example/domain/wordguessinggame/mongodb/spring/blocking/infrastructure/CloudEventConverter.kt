@@ -62,6 +62,9 @@ class CloudEventConverter(private val objectMapper: ObjectMapper, private val cl
                 GameWasWon(eventId, timestamp, gameId, winnerId)
             }
             GameWasLost::class.eventType() -> GameWasLost(eventId, timestamp, gameId)
+            PlayerWasAwardedPointsForGuessingTheRightWord::class.eventType() -> cloudEvent.data<PlayerWasAwardedPointsForGuessingTheRightWordData>().run {
+                PlayerWasAwardedPointsForGuessingTheRightWord(eventId, timestamp, gameId, playerId, points)
+            }
             else -> throw IllegalStateException("Unrecognized event type: ${cloudEvent.type}")
         }
     }
