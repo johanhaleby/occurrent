@@ -17,7 +17,7 @@ class AssembleGameReadModelFromDomainEvents internal constructor(val gameReadMod
         is GameWasWon -> applyEvent(e)
         is GameWasLost -> applyEvent(e)
         is NumberOfGuessesWasExhaustedForPlayer -> this
-        is PlayerWasAwardedPointsForGuessingTheRightWord -> this
+        is PlayerWasAwardedPointsForGuessingTheRightWord -> applyEvent(e)
     }
 
     private fun applyEvent(e: GameWasStarted): AssembleGameReadModelFromDomainEvents = e.run {
@@ -39,13 +39,24 @@ class AssembleGameReadModelFromDomainEvents internal constructor(val gameReadMod
         AssembleGameReadModelFromDomainEvents(ongoingGameReadModel.copy(guesses = ongoingGameReadModel.guesses.add(Guess(playerId, guessedWord, timestamp))))
     }
 
+    private fun applyEvent(e: PlayerWasAwardedPointsForGuessingTheRightWord): AssembleGameReadModelFromDomainEvents = e.run {
+        val model = gameReadModel as GameWasWonReadModel
+
+        AssembleGameReadModelFromDomainEvents(model.copy(pointsAwardedToWinner = points))
+    }
+
     private fun applyEvent(e: GameWasWon): AssembleGameReadModelFromDomainEvents = e.run {
         val (gameId, startedAt, category, _, _, _, guesses, wordToGuess) = gameReadModel as OngoingGameReadModel
-        AssembleGameReadModelFromDomainEvents(EndedGameReadModel(gameId, startedAt, timestamp, category, guesses.size, wordToGuess, winnerId))
+        val numberOfGuessesByWinner = guesses.count { it.playerId == winnerId }
+        val numberOfPlayersInGame = guesses.distinctBy { it.playerId }.count()
+
+        AssembleGameReadModelFromDomainEvents(GameWasWonReadModel(gameId, startedAt, timestamp, category, guesses.size, numberOfPlayersInGame, wordToGuess, winnerId, numberOfGuessesByWinner))
     }
 
     private fun applyEvent(e: GameWasLost): AssembleGameReadModelFromDomainEvents = e.run {
         val (gameId, startedAt, category, _, _, _, guesses, wordToGuess) = gameReadModel as OngoingGameReadModel
-        AssembleGameReadModelFromDomainEvents(EndedGameReadModel(gameId, startedAt, timestamp, category, guesses.size, wordToGuess))
+        val numberOfPlayersInGame = guesses.distinctBy { it.playerId }.count()
+
+        AssembleGameReadModelFromDomainEvents(GameWasLostReadModel(gameId, startedAt, timestamp, category, guesses.size, numberOfPlayersInGame, wordToGuess))
     }
 }

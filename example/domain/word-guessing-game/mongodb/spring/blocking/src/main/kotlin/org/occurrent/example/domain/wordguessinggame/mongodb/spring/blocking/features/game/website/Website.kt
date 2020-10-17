@@ -18,8 +18,12 @@ package org.occurrent.example.domain.wordguessinggame.mongodb.spring.blocking.fe
 import kotlinx.html.*
 import kotlinx.html.stream.appendHTML
 import org.occurrent.example.domain.wordguessinggame.mongodb.spring.blocking.features.game.queries.FindGameByIdQuery
+import org.occurrent.example.domain.wordguessinggame.mongodb.spring.blocking.features.game.website.Website.Views.gameEndedView
+import org.occurrent.example.domain.wordguessinggame.mongodb.spring.blocking.features.game.website.Website.Views.makeGuessView
+import org.occurrent.example.domain.wordguessinggame.mongodb.spring.blocking.features.game.website.Website.Views.newGameView
 import org.occurrent.example.domain.wordguessinggame.mongodb.spring.blocking.infrastructure.GenericApplicationService
-import org.occurrent.example.domain.wordguessinggame.readmodel.EndedGameReadModel
+import org.occurrent.example.domain.wordguessinggame.readmodel.GameEndedReadModel
+import org.occurrent.example.domain.wordguessinggame.readmodel.GameWasWonReadModel
 import org.occurrent.example.domain.wordguessinggame.readmodel.OngoingGameReadModel
 import org.occurrent.example.domain.wordguessinggame.writemodel.*
 import org.springframework.http.HttpHeaders
@@ -60,63 +64,9 @@ class Website(private val applicationService: GenericApplicationService,
         return StringBuilder().appendHTML().html {
             body {
                 when (game) {
-                    null -> {
-                        h1 { +"Start New Game" }
-                        form(action = "/games", encType = FormEncType.multipartFormData, method = FormMethod.post) {
-                            textInput(name = "gameId") {
-                                hidden = true
-                                value = gameId.toString()
-                            }
-                            label {
-                                htmlFor = "category"
-                                +"Category: "
-                            }
-                            textInput(name = "category") {
-                                id = "category"
-                                required = true
-                                placeholder = "animals"
-                                autoFocus = true
-                            }
-                            br()
-                            label {
-                                htmlFor = "words"
-                                +"Words: "
-                            }
-                            textArea {
-                                id = "words"
-                                name = "words"
-                                required = true
-                                placeholder = "mouse, moose, bird, octopus, .."
-                            }
-                            br()
-                            button(type = ButtonType.submit) {
-                                +"Start"
-                            }
-                        }
-                    }
-                    is OngoingGameReadModel -> {
-                        h1 { +game.category }
-                        val numberOfGuessesLeftForPlayer = game.numberOfGuessesLeftForPlayer(playerId)
-                        if (numberOfGuessesLeftForPlayer >= 1) {
-                            div { +"Number of guesses left in game: ${game.totalNumberOfGuessesLeft}. You can guess $numberOfGuessesLeftForPlayer more times." }
-                            h3 { +game.hint }
-                            form(action = "/games/$gameId", encType = FormEncType.multipartFormData, method = FormMethod.post) {
-                                textInput(name = "word") {
-                                    minLength = Word.MINIMUM_NUMBER_OF_CHARACTERS.toString()
-                                    maxLength = Word.MAXIMUM_NUMBER_OF_CHARACTERS.toString()
-                                }
-                                button(type = ButtonType.submit) {
-                                    +"Make Guess"
-                                }
-                            }
-                        } else {
-                            div { +"You've exhausted all your guesses for this game. Try another game or check back later to see who the winner is. Number of guesses left for other players are ${game.totalNumberOfGuessesLeft}." }
-                        }
-                    }
-                    is EndedGameReadModel -> {
-                        h1 { +game.category }
-
-                    }
+                    null -> newGameView(gameId)
+                    is OngoingGameReadModel -> makeGuessView(game, playerId)
+                    is GameEndedReadModel -> gameEndedView(game)
                 }
             }
         }.toString()
@@ -137,6 +87,87 @@ class Website(private val applicationService: GenericApplicationService,
         val playerId = session.getOrGeneratePlayerId()
         applicationService.execute(gameId) { events -> guessWord(events, Timestamp(), playerId, Word(word)) }
         return ResponseEntity.status(HttpStatus.SEE_OTHER).header(HttpHeaders.LOCATION, gameLocation(gameId)).build<Any>()
+    }
+
+    private object Views {
+        fun BODY.newGameView(gameId: UUID) {
+            h1 { +"Start New Game" }
+            form(action = "/games", encType = FormEncType.multipartFormData, method = FormMethod.post) {
+                textInput(name = "gameId") {
+                    hidden = true
+                    value = gameId.toString()
+                }
+                label {
+                    htmlFor = "category"
+                    +"Category: "
+                }
+                textInput(name = "category") {
+                    id = "category"
+                    required = true
+                    placeholder = "animals"
+                    autoFocus = true
+                }
+                br()
+                label {
+                    htmlFor = "words"
+                    +"Words: "
+                }
+                textArea {
+                    id = "words"
+                    name = "words"
+                    required = true
+                    placeholder = "mouse, moose, bird, octopus, .."
+                }
+                br()
+                button(type = ButtonType.submit) {
+                    +"Start"
+                }
+            }
+        }
+
+
+        fun BODY.gameEndedView(game: GameEndedReadModel) {
+            h1 { +game.category }
+            div { +"Game was ${game.status}. Word to guess was \"${game.wordToGuess}\"." }
+            br()
+            if (game is GameWasWonReadModel) {
+                div { +"The word was guessed by ${game.winner} after a total of ${game.totalNumberOfGuesses} guesses by ${game.numberOfPlayersInGame} players." }
+                div { +"Player ${game.winner} guessed the word after ${game.numberOfGuessesByWinner} attempts and was awarded ${game.pointsAwardedToWinner} points." }
+            } else {
+                div { +"No one managed to guess the right word after a total of ${game.totalNumberOfGuesses} guesses. ${game.numberOfPlayersInGame} players attempted to guess the word." }
+            }
+            returnToStartPageButton()
+        }
+
+        fun BODY.makeGuessView(game: OngoingGameReadModel, playerId: PlayerId) {
+            h1 { +game.category }
+            val numberOfGuessesLeftForPlayer = game.numberOfGuessesLeftForPlayer(playerId)
+            if (numberOfGuessesLeftForPlayer >= 1) {
+                div { +"Number of guesses left in game: ${game.totalNumberOfGuessesLeft}. You can guess $numberOfGuessesLeftForPlayer more times." }
+                h3 { +game.hint }
+                form(action = "/games/${game.gameId}", encType = FormEncType.multipartFormData, method = FormMethod.post) {
+                    textInput(name = "word") {
+                        minLength = Word.MINIMUM_NUMBER_OF_CHARACTERS.toString()
+                        maxLength = Word.MAXIMUM_NUMBER_OF_CHARACTERS.toString()
+                    }
+                    button(type = ButtonType.submit) {
+                        +"Make Guess"
+                    }
+                }
+            } else {
+                div { +"You've exhausted all your guesses for this game. Try another game or check back later to see who the winner is. Number of guesses left for other players are ${game.totalNumberOfGuessesLeft}." }
+                returnToStartPageButton()
+            }
+        }
+
+        private fun BODY.returnToStartPageButton() {
+            form(action = "/games", method = FormMethod.get) {
+                br()
+                button(type = ButtonType.submit) {
+                    +"Return to start page"
+                }
+            }
+        }
     }
 
     companion object {

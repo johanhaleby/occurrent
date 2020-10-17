@@ -61,7 +61,7 @@ object MaxNumberOfGuessesTotal {
 data class WordsToChooseFrom(val category: WordCategory, val words: List<Word>) : Sequence<Word> {
     init {
         require(words.size in 5..20) {
-            "You need to supply between 5 to 20 words in the $category category"
+            "You need to supply between 5 to 20 words in the ${category.value} category, was ${words.size}."
         }
     }
 

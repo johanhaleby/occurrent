@@ -32,8 +32,8 @@ fun guessWord(previousEvents: Sequence<DomainEvent>, timestamp: Timestamp, playe
 
         if (state.isRightGuess(guessedWord)) {
             events.add(PlayerGuessedTheRightWord(UUID.randomUUID(), timestamp, state.gameId, playerId, guessedWord.value))
-            events.addAll(awardPointsToPlayerThatGuessedTheRightWord(playerId, timestamp, state))
             events.add(GameWasWon(UUID.randomUUID(), timestamp, state.gameId, playerId))
+            events.addAll(awardPointsToPlayerThatGuessedTheRightWord(playerId, timestamp, state))
         } else {
             events.add(PlayerGuessedTheWrongWord(UUID.randomUUID(), timestamp, state.gameId, playerId, guessedWord.value))
 

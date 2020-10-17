@@ -13,9 +13,24 @@ sealed class GameReadModel {
     abstract val gameId: UUID
 }
 
-class EndedGameReadModel(override val gameId: UUID, val startedAt: Date, val endedAt: Date,
-                         val category: String, val numberOfGuesses: Int, val wordToGuess: String,
-                         val winner: UUID? = null) : GameReadModel()
+abstract class GameEndedReadModel(val status : String) : GameReadModel() {
+    abstract val startedAt: Date
+    abstract val endedAt: Date
+    abstract val category: String
+    abstract val totalNumberOfGuesses: Int
+    abstract val numberOfPlayersInGame: Int
+    abstract val wordToGuess: String
+}
+
+
+class GameWasLostReadModel(override val gameId: UUID, override val startedAt: Date, override val endedAt: Date,
+                           override val category: String, override val totalNumberOfGuesses: Int,
+                           override val numberOfPlayersInGame: Int, override val wordToGuess: String) : GameEndedReadModel("lost")
+
+data class GameWasWonReadModel(override val gameId: UUID, override val startedAt: Date, override val endedAt: Date,
+                               override val category: String, override val totalNumberOfGuesses: Int,
+                               override val numberOfPlayersInGame: Int, override val wordToGuess: String,
+                               val winner: UUID, val numberOfGuessesByWinner: Int, val pointsAwardedToWinner: Int? = null) : GameEndedReadModel("won")
 
 data class OngoingGameReadModel(override val gameId: UUID, val startedAt: Date, val category: Category,
                                 val maxNumberOfGuessesPerPlayer: Int, val maxNumberOfGuessesTotal: Int,
