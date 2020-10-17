@@ -1,6 +1,7 @@
 package org.occurrent.example.domain.wordguessinggame.readmodel
 
 import java.util.*
+import kotlin.math.min
 
 typealias WordToGuess = String
 typealias WordHint = String
@@ -25,5 +26,8 @@ data class OngoingGameReadModel(override val gameId: UUID, val startedAt: Date, 
     val totalNumberOfGuessesLeft
         get() = maxNumberOfGuessesTotal - guesses.size
 
-    fun numberOfGuessesLeftForPlayer(playerId: UUID) = maxNumberOfGuessesPerPlayer - guesses.count { it.playerId == playerId }
+    fun numberOfGuessesLeftForPlayer(playerId: UUID): Int {
+        val numberOfGuessesLeftForPlayer = maxNumberOfGuessesPerPlayer - guesses.count { it.playerId == playerId }
+        return min(numberOfGuessesLeftForPlayer, totalNumberOfGuessesLeft)
+    }
 }

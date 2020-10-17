@@ -66,10 +66,6 @@
             <artifactId>kotlinx-html-jvm</artifactId>
             <version>0.7.2</version>
         </dependency>
-        <dependency>
-            <groupId>com.j2html</groupId>
-            <artifactId>j2html</artifactId>
-        </dependency>
 
         <!-- Test -->
         <dependency>
