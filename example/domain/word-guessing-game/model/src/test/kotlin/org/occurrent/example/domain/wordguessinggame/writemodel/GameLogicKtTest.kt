@@ -104,7 +104,6 @@ class GameLogicKtTest {
                 val events = guessWord(currentEvents, timestamp, playerId, Word("Secret")).toList()
 
                 // Then
-                assertThat(events).hasSize(2)
                 val playerGuessedTheRightWord = events.find<PlayerGuessedTheRightWord>()
                 val gameWon = events.find<GameWasWon>()
 
@@ -145,7 +144,6 @@ class GameLogicKtTest {
                 val events = guessWord(currentEvents, timestamp, playerId, Word("secret")).toList()
 
                 // Then
-                assertThat(events).hasSize(2)
                 val playerGuessedTheRightWord = events.find<PlayerGuessedTheRightWord>()
                 val gameWon = events.find<GameWasWon>()
 

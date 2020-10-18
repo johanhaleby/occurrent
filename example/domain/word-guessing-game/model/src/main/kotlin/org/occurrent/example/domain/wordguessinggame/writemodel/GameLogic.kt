@@ -55,7 +55,7 @@ private data class Guess(val playerId: PlayerId, val timestamp: Timestamp, val w
 // States
 private sealed class GameState
 private object NotStarted : GameState()
-private data class Ongoing(val gameId: GameId, val wordToGuess: String, val maxNumberOfGuessesPerPlayer: Int, val maxNumberOfGuessesTotal: Int, val guesses: List<Guess> = emptyList()) : GameState() {
+private data class Ongoing(val gameId: GameId, val wordToGuess: String, val maxNumberOfGuessesPerPlayer: Int, val maxNumberOfGuessesTotal: Int, val startedBy: PlayerId, val guesses: List<Guess> = emptyList()) : GameState() {
     fun numberOfGuessesForPlayer(playerId: PlayerId) = guesses.count { it.playerId == playerId }
     fun isMaxNumberOfGuessesExceededForPlayer(playerId: PlayerId): Boolean = numberOfGuessesForPlayer(playerId) == maxNumberOfGuessesPerPlayer
     fun isLastGuessForPlayer(playerId: PlayerId): Boolean = numberOfGuessesForPlayer(playerId) + 1 == maxNumberOfGuessesPerPlayer
@@ -67,7 +67,7 @@ private object Ended : GameState()
 
 private fun Sequence<DomainEvent>.deriveGameState(): GameState = fold<DomainEvent, GameState>(NotStarted) { state, event ->
     when {
-        state is NotStarted && event is GameWasStarted -> Ongoing(event.gameId, event.wordToGuess, event.maxNumberOfGuessesPerPlayer, event.maxNumberOfGuessesTotal)
+        state is NotStarted && event is GameWasStarted -> Ongoing(event.gameId, event.wordToGuess, event.maxNumberOfGuessesPerPlayer, event.maxNumberOfGuessesTotal, event.startedBy)
         state is Ongoing && event is PlayerGuessedTheWrongWord -> state.copy(guesses = state.guesses.add(Guess(event.playerId, event.timestamp, event.guessedWord)))
         state is Ongoing && event is PlayerGuessedTheRightWord -> state.copy(guesses = state.guesses.add(Guess(event.playerId, event.timestamp, event.guessedWord)))
         state is Ongoing && event is NumberOfGuessesWasExhaustedForPlayer -> state
@@ -78,9 +78,14 @@ private fun Sequence<DomainEvent>.deriveGameState(): GameState = fold<DomainEven
 }
 
 // Helper functions
-private fun awardPointsToPlayerThatGuessedTheRightWord(playerId: PlayerId, timestamp: Timestamp, state: Ongoing): List<DomainEvent> {
-    val numberOfWrongGuessesForPlayerInGame = state.guesses.count { it.playerId == playerId }
+private fun awardPointsToPlayerThatGuessedTheRightWord(winnerId: PlayerId, timestamp: Timestamp, state: Ongoing): List<DomainEvent> {
+    if (winnerId == state.startedBy) {
+        // No points awarded to player if game was started by winner
+        return emptyList()
+    }
+
+    val numberOfWrongGuessesForPlayerInGame = state.guesses.count { it.playerId == winnerId }
     val totalGuessesForPlayerInGame = numberOfWrongGuessesForPlayerInGame + 1
     val points = PointCalculationLogic.calculatePointsToAwardPlayerAfterSuccessfullyGuessedTheRightWord(totalGuessesForPlayerInGame)
-    return listOf(PlayerWasAwardedPointsForGuessingTheRightWord(UUID.randomUUID(), timestamp, state.gameId, playerId, points))
+    return listOf(PlayerWasAwardedPointsForGuessingTheRightWord(UUID.randomUUID(), timestamp, state.gameId, winnerId, points))
 }
