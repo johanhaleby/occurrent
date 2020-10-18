@@ -18,6 +18,7 @@ package org.occurrent.example.domain.wordguessinggame.mongodb.spring.blocking.fe
 import kotlinx.html.*
 import kotlinx.html.stream.appendHTML
 import org.occurrent.example.domain.wordguessinggame.mongodb.spring.blocking.features.game.queries.FindGameByIdQuery
+import org.occurrent.example.domain.wordguessinggame.mongodb.spring.blocking.features.game.queries.OngoingGamesQuery
 import org.occurrent.example.domain.wordguessinggame.mongodb.spring.blocking.features.game.website.Website.Views.gameEndedView
 import org.occurrent.example.domain.wordguessinggame.mongodb.spring.blocking.features.game.website.Website.Views.makeGuessView
 import org.occurrent.example.domain.wordguessinggame.mongodb.spring.blocking.features.game.website.Website.Views.newGameView
@@ -39,14 +40,38 @@ import javax.servlet.http.HttpSession
 
 @RestController
 @RequestMapping(path = ["/games"], produces = [MediaType.TEXT_HTML_VALUE])
-class Website(private val applicationService: GenericApplicationService,
-              private val findGameByIdQuery: FindGameByIdQuery) {
+class Website(private val applicationService: GenericApplicationService, private val findGameByIdQuery: FindGameByIdQuery,
+              private val ongoingGamesQuery: OngoingGamesQuery) {
 
     @GetMapping
     fun games(response: ServletResponse) {
+        val ongoingGames = ongoingGamesQuery.execute(10).toList()
+
         response.writer.appendHTML().html {
             body {
                 h1 { +"Word Guessing Game" }
+                br()
+                if (ongoingGames.isNotEmpty()) {
+                    h3 { +"Ongoing Games" }
+                    table {
+                        tr {
+                            th { +"Category" }
+                            th { +"Started At" }
+                            th { +"Play" }
+                        }
+                        ongoingGames.forEach { game ->
+                            tr {
+                                td { +game.category }
+                                td { +game.startedAt.humanReadable() }
+                                td {
+                                    a("/games/${game.gameId}") { +"Link" }
+                                }
+                            }
+                        }
+                    }
+                } else {
+                    h3 { +"No games are currently ongoing" }
+                }
                 form(action = "/games/${GameId.randomUUID()}", method = FormMethod.get) {
                     br()
                     button(type = ButtonType.submit) {
@@ -175,8 +200,8 @@ class Website(private val applicationService: GenericApplicationService,
         private fun gameLocation(gameId: UUID): String = String.format("/games/%s", gameId)
         private const val PLAYER_ID = "playerId"
 
-        private fun fmt(timestamp: Timestamp): String {
-            return DATE_TIME_FORMATTER.format(timestamp.toInstant().atOffset(OffsetDateTime.now().offset))
+        private fun Timestamp.humanReadable(): String {
+            return DATE_TIME_FORMATTER.format(toInstant().atOffset(OffsetDateTime.now().offset))
         }
     }
 

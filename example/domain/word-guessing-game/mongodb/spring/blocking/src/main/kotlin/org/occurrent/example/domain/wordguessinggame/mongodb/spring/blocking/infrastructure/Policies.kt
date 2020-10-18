@@ -1,5 +1,7 @@
 package org.occurrent.example.domain.wordguessinggame.mongodb.spring.blocking.infrastructure
 
+import org.occurrent.condition.Condition.eq
+import org.occurrent.condition.Condition.or
 import org.occurrent.example.domain.wordguessinggame.event.DomainEvent
 import org.occurrent.example.domain.wordguessinggame.event.eventType
 import org.occurrent.filter.Filter.type
@@ -7,6 +9,7 @@ import org.occurrent.subscription.OccurrentSubscriptionFilter.filter
 import org.occurrent.subscription.api.blocking.Subscription
 import org.occurrent.subscription.util.blocking.BlockingSubscriptionWithAutomaticPositionPersistence
 import org.springframework.stereotype.Component
+import kotlin.reflect.KClass
 
 
 /**
@@ -23,6 +26,16 @@ class Policies(val subscriptions: BlockingSubscriptionWithAutomaticPositionPersi
         fn(event)
     }.apply {
         waitUntilStarted()
+    }
+
+    fun newPolicy(policyId: String, vararg domainEventTypes: KClass<out DomainEvent>, fn: (DomainEvent) -> Unit): Subscription {
+        val filter = filter(type(or(domainEventTypes.map { e -> eq(e.eventType()) })))
+        val subscription = subscriptions.subscribe(policyId, filter) { cloudEvent ->
+            val event = cloudEventConverter.toDomainEvent(cloudEvent)
+            fn(event)
+        }
+        subscription.waitUntilStarted()
+        return subscription
     }
 }
 
