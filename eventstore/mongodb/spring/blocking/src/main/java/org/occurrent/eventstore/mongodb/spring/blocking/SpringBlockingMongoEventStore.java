@@ -72,6 +72,7 @@ import static org.springframework.data.mongodb.core.query.Criteria.where;
 public class SpringBlockingMongoEventStore implements EventStore, EventStoreOperations, EventStoreQueries {
 
     private static final String ID = "_id";
+    private static final String NATURAL = "$natural";
 
     private final MongoTemplate mongoTemplate;
     private final String eventStoreCollectionName;
@@ -301,10 +302,10 @@ public class SpringBlockingMongoEventStore implements EventStore, EventStoreOper
                 query.with(Sort.by(DESC, TIME));
                 break;
             case NATURAL_ASC:
-                query.with(Sort.by(ASC, ID));
+                query.with(Sort.by(ASC, NATURAL));
                 break;
             case NATURAL_DESC:
-                query.with(Sort.by(DESC, ID));
+                query.with(Sort.by(DESC, NATURAL));
                 break;
             default:
                 throw new IllegalStateException("Unexpected value: " + sortBy);

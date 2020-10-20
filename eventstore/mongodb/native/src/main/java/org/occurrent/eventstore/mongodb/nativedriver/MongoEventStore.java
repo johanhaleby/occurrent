@@ -75,6 +75,7 @@ import static org.occurrent.functionalsupport.internal.FunctionalSupport.zip;
  */
 public class MongoEventStore implements EventStore, EventStoreOperations, EventStoreQueries {
     private static final String ID = "_id";
+    private static final String NATURAL = "$natural";
 
     private final MongoCollection<Document> eventCollection;
     private final EventFormat cloudEventSerializer;
@@ -171,10 +172,10 @@ public class MongoEventStore implements EventStore, EventStoreOperations, EventS
                 documentsWithoutSkipAndLimit.sort(descending(TIME));
                 break;
             case NATURAL_ASC:
-                documentsWithoutSkipAndLimit.sort(ascending(ID));
+                documentsWithoutSkipAndLimit.sort(ascending(NATURAL));
                 break;
             case NATURAL_DESC:
-                documentsWithoutSkipAndLimit.sort(descending(ID));
+                documentsWithoutSkipAndLimit.sort(descending(NATURAL));
                 break;
             default:
                 throw new IllegalStateException("Unexpected value: " + sortBy);

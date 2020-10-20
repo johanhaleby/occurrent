@@ -67,6 +67,7 @@ import static org.springframework.data.mongodb.core.query.Criteria.where;
 public class SpringReactorMongoEventStore implements EventStore, EventStoreOperations, EventStoreQueries {
 
     private static final String ID = "_id";
+    private static final String NATURAL = "$natural";
 
     private final ReactiveMongoTemplate mongoTemplate;
     private final String eventStoreCollectionName;
@@ -168,10 +169,10 @@ public class SpringReactorMongoEventStore implements EventStore, EventStoreOpera
                 query.with(Sort.by(DESC, TIME));
                 break;
             case NATURAL_ASC:
-                query.with(Sort.by(ASC, ID));
+                query.with(Sort.by(ASC, NATURAL));
                 break;
             case NATURAL_DESC:
-                query.with(Sort.by(DESC, ID));
+                query.with(Sort.by(DESC, NATURAL));
                 break;
             default:
                 throw new IllegalStateException("Unexpected value: " + sortBy);
@@ -316,8 +317,7 @@ public class SpringReactorMongoEventStore implements EventStore, EventStoreOpera
         private long version;
         private Flux<Document> events;
 
-        @SuppressWarnings("unused")
-        EventStreamImpl() {
+        @SuppressWarnings("unused") EventStreamImpl() {
         }
 
         EventStreamImpl(String id, long version, Flux<Document> events) {
