@@ -168,6 +168,7 @@ public class SpringReactorMongoEventStore implements EventStore, EventStoreOpera
                 query.with(Sort.by(DESC, TIME));
                 break;
             case NATURAL_ASC:
+                query.with(Sort.by(ASC, ID));
                 break;
             case NATURAL_DESC:
                 query.with(Sort.by(DESC, ID));

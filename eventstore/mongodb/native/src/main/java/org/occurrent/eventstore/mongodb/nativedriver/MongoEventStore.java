@@ -171,6 +171,7 @@ public class MongoEventStore implements EventStore, EventStoreOperations, EventS
                 documentsWithoutSkipAndLimit.sort(descending(TIME));
                 break;
             case NATURAL_ASC:
+                documentsWithoutSkipAndLimit.sort(ascending(ID));
                 break;
             case NATURAL_DESC:
                 documentsWithoutSkipAndLimit.sort(descending(ID));
