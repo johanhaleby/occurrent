@@ -3,7 +3,8 @@ Changelog next version:
 * Added ability to provide a list of conditions when composing them with `and` and `or`.
 * Added special convenience (overloaded) method for creating "or" with "equal to" conditions. For example you can now do: `filter(type(or("x", "y"))`. 
   Before you had to do: `filter(type(or(eq("x"), eq("y")))`.
-* MongoDB event streams are now explicitly sorted by natural order by default. The reason for this is that just relying on default "sorting" on read lead to wrong order on certain occasions.  
+* MongoDB event streams are now explicitly sorted by natural order by default. The reason for this is that just relying on default "sorting" on read lead to wrong order on certain occasions.
+* Writing an empty stream to a mongodb-based event store will just ignore the stream and not try to persist the empty stream to the datastore.
 
 Version 0.1.1 (2020-09-26):
 

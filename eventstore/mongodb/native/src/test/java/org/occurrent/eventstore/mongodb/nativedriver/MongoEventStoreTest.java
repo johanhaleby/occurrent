@@ -146,6 +146,17 @@ class MongoEventStoreTest {
     }
 
     @Test
+    void does_not_change_event_store_content_when_writing_an_empty_stream_of_events() {
+        // When
+        persist("name", Stream.empty());
+
+        // Then
+        EventStream<CloudEvent> eventStream = eventStore.read("name");
+
+        assertThat(eventStream.isEmpty()).isTrue();
+    }
+
+    @Test
     void can_read_and_write_single_event_to_mongo_event_store() {
         LocalDateTime now = LocalDateTime.now();
 

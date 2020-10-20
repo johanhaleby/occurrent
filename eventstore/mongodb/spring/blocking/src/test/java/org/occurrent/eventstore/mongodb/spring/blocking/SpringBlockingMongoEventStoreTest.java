@@ -154,6 +154,17 @@ public class SpringBlockingMongoEventStoreTest {
     }
 
     @Test
+    void does_not_change_event_store_content_when_writing_an_empty_stream_of_eventsusing_spring_blocking_event_store() {
+        // When
+        persist("name", Stream.empty());
+
+        // Then
+        EventStream<CloudEvent> eventStream = eventStore.read("name");
+
+        assertThat(eventStream.isEmpty()).isTrue();
+    }
+
+    @Test
     void can_read_and_write_multiple_events_at_different_occasions_to_mongo_spring_blocking_event_store() {
         LocalDateTime now = LocalDateTime.now();
         NameDefined nameDefined = new NameDefined(UUID.randomUUID().toString(), now, "name");

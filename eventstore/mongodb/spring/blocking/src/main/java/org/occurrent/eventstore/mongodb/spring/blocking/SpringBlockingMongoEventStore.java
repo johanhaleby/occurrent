@@ -118,7 +118,9 @@ public class SpringBlockingMongoEventStore implements EventStore, EventStoreOper
 
             List<Document> cloudEventDocuments = mapWithIndex(events, currentStreamVersion, pair -> convertToDocument(cloudEventSerializer, timeRepresentation, streamId, pair.t1, pair.t2)).collect(Collectors.toList());
 
-            insertAll(cloudEventDocuments);
+            if (!cloudEventDocuments.isEmpty()) {
+                insertAll(cloudEventDocuments);
+            }
         });
     }
 
@@ -202,8 +204,7 @@ public class SpringBlockingMongoEventStore implements EventStore, EventStoreOper
         private long version;
         private Stream<T> events;
 
-        @SuppressWarnings("unused")
-        EventStreamImpl() {
+        @SuppressWarnings("unused") EventStreamImpl() {
         }
 
         EventStreamImpl(String _id, long version, Stream<T> events) {

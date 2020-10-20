@@ -207,10 +207,12 @@ public class MongoEventStore implements EventStore, EventStoreOperations, EventS
                         .map(pair -> convertToDocument(cloudEventSerializer, timeRepresentation, streamId, pair.t1, pair.t2))
                         .collect(Collectors.toList());
 
-                try {
-                    eventCollection.insertMany(clientSession, cloudEventDocuments);
-                } catch (MongoBulkWriteException e) {
-                    throw translateToDuplicateCloudEventException(e);
+                if (!cloudEventDocuments.isEmpty()) {
+                    try {
+                        eventCollection.insertMany(clientSession, cloudEventDocuments);
+                    } catch (MongoBulkWriteException e) {
+                        throw translateToDuplicateCloudEventException(e);
+                    }
                 }
                 return "";
             }, transactionOptions);
