@@ -12,23 +12,24 @@ import java.time.ZoneOffset
 import java.time.temporal.ChronoUnit
 import java.util.*
 
-class CloudEventConverter(private val objectMapper: ObjectMapper, private val cloudEventSource: URI) {
+class CloudEventConverter(private val objectMapper: ObjectMapper, private val gameSource: URI, private val wordHintSource : URI) {
 
     fun toCloudEvent(domainEvent: DomainEvent): CloudEvent {
-        val data: EventData? = when (domainEvent) {
-            is GameWasStarted -> domainEvent.run { GameWasStartedData(startedBy, category, wordToGuess, maxNumberOfGuessesPerPlayer, maxNumberOfGuessesTotal) }
-            is PlayerGuessedTheWrongWord -> domainEvent.run { PlayerGuessedTheWrongWordData(playerId, guessedWord) }
-            is NumberOfGuessesWasExhaustedForPlayer -> NumberOfGuessesWasExhaustedForPlayerData(domainEvent.playerId)
-            is PlayerGuessedTheRightWord -> domainEvent.run { PlayerGuessedTheRightWordData(playerId, guessedWord) }
-            is PlayerWasAwardedPointsForGuessingTheRightWord -> domainEvent.run { PlayerWasAwardedPointsForGuessingTheRightWordData(playerId, points) }
-            is GameWasWon -> GameWasWonData(domainEvent.winnerId)
-            is GameWasLost -> null
+        val (source: URI, data: EventData?) = when (domainEvent) {
+            is GameWasStarted -> gameSource to domainEvent.run { GameWasStartedData(startedBy, category, wordToGuess, maxNumberOfGuessesPerPlayer, maxNumberOfGuessesTotal) }
+            is PlayerGuessedTheWrongWord -> gameSource to domainEvent.run { PlayerGuessedTheWrongWordData(playerId, guessedWord) }
+            is CharacterInWordHintWasRevealed -> wordHintSource to domainEvent.run { CharacterInWordHintWasRevealedData(character, characterPositionInWord) }
+            is NumberOfGuessesWasExhaustedForPlayer -> gameSource to NumberOfGuessesWasExhaustedForPlayerData(domainEvent.playerId)
+            is PlayerGuessedTheRightWord -> gameSource to domainEvent.run { PlayerGuessedTheRightWordData(playerId, guessedWord) }
+            is PlayerWasAwardedPointsForGuessingTheRightWord -> gameSource to domainEvent.run { PlayerWasAwardedPointsForGuessingTheRightWordData(playerId, points) }
+            is GameWasWon -> gameSource to GameWasWonData(domainEvent.winnerId)
+            is GameWasLost -> gameSource to null
         }
 
         return CloudEventBuilder.v1()
                 .withId(domainEvent.eventId.toString())
                 .withSubject(domainEvent.gameId.toString())
-                .withSource(cloudEventSource)
+                .withSource(source)
                 .withType(domainEvent.type)
                 .withTime(domainEvent.timestamp.toInstant().atOffset(ZoneOffset.UTC).truncatedTo(ChronoUnit.MILLIS))
                 .apply {
@@ -65,6 +66,9 @@ class CloudEventConverter(private val objectMapper: ObjectMapper, private val cl
             PlayerWasAwardedPointsForGuessingTheRightWord::class.eventType() -> cloudEvent.data<PlayerWasAwardedPointsForGuessingTheRightWordData>().run {
                 PlayerWasAwardedPointsForGuessingTheRightWord(eventId, timestamp, gameId, playerId, points)
             }
+            CharacterInWordHintWasRevealed::class.eventType() -> cloudEvent.data<CharacterInWordHintWasRevealedData>().run {
+                CharacterInWordHintWasRevealed(eventId, timestamp, gameId, character, characterPositionInWord)
+            }
             else -> throw IllegalStateException("Unrecognized event type: ${cloudEvent.type}")
         }
     }
@@ -74,9 +78,14 @@ class CloudEventConverter(private val objectMapper: ObjectMapper, private val cl
 }
 
 private sealed class EventData
+
+// Game
 private data class GameWasStartedData(val startedBy: PlayerId, val category: String, val wordToGuess: String, val maxNumberOfGuessesPerPlayer: Int, val maxNumberOfGuessesTotal: Int) : EventData()
 private data class PlayerGuessedTheWrongWordData(val playerId: PlayerId, val guessedWord: String) : EventData()
 private data class NumberOfGuessesWasExhaustedForPlayerData(val playerId: PlayerId) : EventData()
 private data class PlayerGuessedTheRightWordData(val playerId: PlayerId, val guessedWord: String) : EventData()
 private data class PlayerWasAwardedPointsForGuessingTheRightWordData(val playerId: PlayerId, val points: Int) : EventData()
 private data class GameWasWonData(val winnerId: PlayerId) : EventData()
+
+// Word Hint
+private data class CharacterInWordHintWasRevealedData(val character: Char, val characterPositionInWord : Int) : EventData()

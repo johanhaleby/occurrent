@@ -1,6 +1,7 @@
 package org.occurrent.example.domain.wordguessinggame.writemodel
 
 import org.occurrent.example.domain.wordguessinggame.event.*
+import org.occurrent.example.domain.wordguessinggame.readmodel.WordHintGenerator
 import org.occurrent.example.domain.wordguessinggame.support.add
 import java.util.*
 
@@ -16,6 +17,8 @@ fun startGame(previousEvents: Sequence<DomainEvent>, gameId: GameId, timestamp: 
 
     val gameStarted = GameWasStarted(eventId = UUID.randomUUID(), timestamp = timestamp, gameId = gameId, startedBy = playerId, category = wordsToChooseFrom.category.value,
             wordToGuess = wordToGuess.value, maxNumberOfGuessesPerPlayer = MaxNumberOfGuessesPerPlayer.value, maxNumberOfGuessesTotal = MaxNumberOfGuessesTotal.value)
+
+
 
     return sequenceOf(gameStarted)
 }

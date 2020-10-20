@@ -22,11 +22,12 @@ data class NumberOfGuessesWasExhaustedForPlayer(override val eventId: UUID, over
 
 data class PlayerGuessedTheRightWord(override val eventId: UUID, override val timestamp: Date, override val gameId: UUID, val playerId: PlayerId, val guessedWord: String) : DomainEvent()
 
-data class PlayerWasAwardedPointsForGuessingTheRightWord(override val eventId: UUID, override val timestamp: Date, override val gameId: UUID, val playerId: PlayerId, val points : Points) : DomainEvent()
+data class PlayerWasAwardedPointsForGuessingTheRightWord(override val eventId: UUID, override val timestamp: Date, override val gameId: UUID, val playerId: PlayerId, val points: Points) : DomainEvent()
 
 data class GameWasWon(override val eventId: UUID, override val timestamp: Date, override val gameId: UUID, val winnerId: PlayerId) : DomainEvent()
 
 data class GameWasLost(override val eventId: UUID, override val timestamp: Date, override val gameId: UUID) : DomainEvent()
 
+data class CharacterInWordHintWasRevealed(override val eventId: UUID, override val timestamp: Date, override val gameId: UUID, val character: Char, val characterPositionInWord: Int) : DomainEvent()
 
 fun <T : DomainEvent> KClass<out T>.eventType() = simpleName!!

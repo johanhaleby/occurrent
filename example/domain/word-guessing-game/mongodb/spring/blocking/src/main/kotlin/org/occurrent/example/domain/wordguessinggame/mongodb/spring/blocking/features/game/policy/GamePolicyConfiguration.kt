@@ -1,25 +1,25 @@
 package org.occurrent.example.domain.wordguessinggame.mongodb.spring.blocking.features.game.policy
 
-import org.occurrent.example.domain.wordguessinggame.event.GameWasLost
-import org.occurrent.example.domain.wordguessinggame.event.GameWasStarted
-import org.occurrent.example.domain.wordguessinggame.event.GameWasWon
+import org.occurrent.example.domain.wordguessinggame.event.*
 import org.occurrent.example.domain.wordguessinggame.mongodb.spring.blocking.features.game.persistence.OngoingGameOverviewMongoDTO
 import org.occurrent.example.domain.wordguessinggame.mongodb.spring.blocking.features.game.persistence.toDTO
+import org.occurrent.example.domain.wordguessinggame.mongodb.spring.blocking.infrastructure.DomainEventQueries
+import org.occurrent.example.domain.wordguessinggame.mongodb.spring.blocking.infrastructure.GenericApplicationService
 import org.occurrent.example.domain.wordguessinggame.mongodb.spring.blocking.infrastructure.Policies
 import org.occurrent.example.domain.wordguessinggame.mongodb.spring.blocking.infrastructure.loggerFor
 import org.occurrent.example.domain.wordguessinggame.policy.WhenGameWasWonThenSendEmailToWinnerPolicy
 import org.occurrent.example.domain.wordguessinggame.readmodel.OngoingGameOverview
+import org.occurrent.example.domain.wordguessinggame.writemodel.WordHintCharacterRevelation
+import org.occurrent.example.domain.wordguessinggame.writemodel.WordHintData
+import org.occurrent.filter.Filter.streamId
+import org.occurrent.filter.Filter.type
 import org.springframework.beans.factory.annotation.Autowired
 import org.springframework.context.annotation.Bean
 import org.springframework.context.annotation.Configuration
-import org.springframework.data.annotation.Id
-import org.springframework.data.annotation.TypeAlias
 import org.springframework.data.mongodb.core.MongoOperations
-import org.springframework.data.mongodb.core.mapping.Document
 import org.springframework.data.mongodb.core.query.Query.query
 import org.springframework.data.mongodb.core.query.isEqualTo
 import org.springframework.data.mongodb.core.query.where
-import java.util.*
 
 @Configuration
 class GamePolicyConfiguration {
@@ -30,6 +30,12 @@ class GamePolicyConfiguration {
 
     @Autowired
     lateinit var mongo: MongoOperations
+
+    @Autowired
+    lateinit var applicationService: GenericApplicationService
+
+    @Autowired
+    lateinit var domainEventQueries: DomainEventQueries
 
     @Bean
     fun whenGameWasWonThenSendEmailToWinner() = policies.newPolicy<GameWasWon>(WhenGameWasWonThenSendEmailToWinnerPolicy::class.simpleName!!) { gameWasWon ->
@@ -53,5 +59,26 @@ class GamePolicyConfiguration {
         }
         mongo.remove(query(where(OngoingGameOverviewMongoDTO::gameId).isEqualTo(gameId)), "ongoingGames")
     }
-}
 
+    @Bean
+    fun whenGameWasStartedThenRevealInitialCharactersInWordHint() = policies.newPolicy<GameWasStarted>("WhenGameWasStartedThenRevealInitialCharactersInWordHint") { gameWasStarted ->
+        applicationService.execute("wordhint:${gameWasStarted.gameId}") { events ->
+            if (events.toList().isEmpty()) {
+                WordHintCharacterRevelation.revealInitialCharactersInWordHintWhenGameWasStarted(WordHintData(gameWasStarted.gameId, gameWasStarted.wordToGuess))
+            } else {
+                emptySequence()
+            }
+        }
+    }
+
+    @Bean
+    fun whenPlayerGuessedTheWrongWordThenRevealCharacterInWordHint() = policies.newPolicy<PlayerGuessedTheWrongWord>("WhenPlayerGuessedTheWrongWordThenRevealCharacterInWordHint") { playerGuessedTheWrongWord ->
+        val gameId = playerGuessedTheWrongWord.gameId
+        applicationService.execute("wordhint:$gameId") { events ->
+            val characterPositionsInWord = events.map { it as CharacterInWordHintWasRevealed }.map { it.characterPositionInWord }.toSet()
+            val gameWasStarted = domainEventQueries.queryOne<GameWasStarted>(streamId(gameId.toString()).and(type(GameWasStarted::class.eventType())))
+            val wordHintData = WordHintData(gameId, wordToGuess = gameWasStarted.wordToGuess, currentlyRevealedPositions = characterPositionsInWord)
+            WordHintCharacterRevelation.revealInitialCharactersInWordHintWhenGameWasStarted(wordHintData)
+        }
+    }
+}

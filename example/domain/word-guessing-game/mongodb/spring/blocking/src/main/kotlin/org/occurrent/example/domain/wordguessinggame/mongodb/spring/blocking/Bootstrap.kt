@@ -85,7 +85,7 @@ class Bootstrap {
     fun objectMapper() = ObjectMapper().apply { registerModule(KotlinModule()) }
 
     @Bean
-    fun cloudEventConverter(objectMapper: ObjectMapper) = CloudEventConverter(objectMapper, URI.create("urn:occurrent:domain:wordguessinggame"))
+    fun cloudEventConverter(objectMapper: ObjectMapper) = CloudEventConverter(objectMapper, URI.create("urn:occurrent:domain:wordguessinggame:game"), URI.create("urn:occurrent:domain:wordguessinggame:wordhint"))
 }
 
 fun main(args: Array<String>) {

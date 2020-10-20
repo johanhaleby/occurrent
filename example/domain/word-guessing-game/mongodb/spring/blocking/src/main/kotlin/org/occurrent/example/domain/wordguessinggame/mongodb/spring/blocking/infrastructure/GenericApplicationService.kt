@@ -17,9 +17,13 @@ class GenericApplicationService constructor(private val eventStore: EventStore,
                                             private val cloudEventConverter: CloudEventConverter) {
 
     @Retryable(include = [WriteConditionNotFulfilledException::class], maxAttempts = 5, backoff = Backoff(delay = 100, multiplier = 2.0, maxDelay = 1000))
-    fun execute(streamId: UUID, functionThatCallsDomainModel: (Sequence<DomainEvent>) -> Sequence<DomainEvent>) {
+    fun execute(streamId: UUID, functionThatCallsDomainModel: (Sequence<DomainEvent>) -> Sequence<DomainEvent>) =
+            execute(streamId.toString(), functionThatCallsDomainModel)
+
+    @Retryable(include = [WriteConditionNotFulfilledException::class], maxAttempts = 5, backoff = Backoff(delay = 100, multiplier = 2.0, maxDelay = 1000))
+    fun execute(streamId: String, functionThatCallsDomainModel: (Sequence<DomainEvent>) -> Sequence<DomainEvent>) {
         // Read all events from the event store for a particular stream
-        val eventStream: EventStream<CloudEvent> = eventStore.read(streamId.toString())
+        val eventStream: EventStream<CloudEvent> = eventStore.read(streamId)
         // Convert the cloud events into domain events
         val domainEventsInStream: Sequence<DomainEvent> = eventStream.events().map(cloudEventConverter::toDomainEvent).asSequence()
 
@@ -27,6 +31,6 @@ class GenericApplicationService constructor(private val eventStore: EventStore,
         val newDomainEvents = functionThatCallsDomainModel(domainEventsInStream)
 
         // Convert domain events to cloud events and write them to the event store
-        eventStore.write(streamId.toString(), eventStream.version(), newDomainEvents.map(cloudEventConverter::toCloudEvent).asStream())
+        eventStore.write(streamId, eventStream.version(), newDomainEvents.map(cloudEventConverter::toCloudEvent).asStream())
     }
 }

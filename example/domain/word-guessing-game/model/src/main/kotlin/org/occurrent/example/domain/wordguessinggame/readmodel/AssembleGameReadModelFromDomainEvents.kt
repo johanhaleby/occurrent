@@ -2,8 +2,6 @@ package org.occurrent.example.domain.wordguessinggame.readmodel
 
 import org.occurrent.example.domain.wordguessinggame.event.*
 import org.occurrent.example.domain.wordguessinggame.readmodel.OngoingGameReadModel.Guess
-import org.occurrent.example.domain.wordguessinggame.readmodel.WordHintGenerator.generateNewHint
-import org.occurrent.example.domain.wordguessinggame.readmodel.WordHintGenerator.revealAdditionalCharacterFrom
 import org.occurrent.example.domain.wordguessinggame.support.add
 
 class AssembleGameReadModelFromDomainEvents internal constructor(val gameReadModel: GameReadModel?) {
@@ -18,19 +16,27 @@ class AssembleGameReadModelFromDomainEvents internal constructor(val gameReadMod
         is GameWasLost -> applyEvent(e)
         is NumberOfGuessesWasExhaustedForPlayer -> this
         is PlayerWasAwardedPointsForGuessingTheRightWord -> applyEvent(e)
+        is CharacterInWordHintWasRevealed -> applyEvent(e)
     }
 
     private fun applyEvent(e: GameWasStarted): AssembleGameReadModelFromDomainEvents = e.run {
         val upperCaseWordToGuess = wordToGuess.toUpperCase()
-        AssembleGameReadModelFromDomainEvents(OngoingGameReadModel(gameId, timestamp, category, maxNumberOfGuessesPerPlayer, maxNumberOfGuessesTotal, upperCaseWordToGuess.generateNewHint(), emptyList(), upperCaseWordToGuess))
+        val fullyObfuscatedWordHint = wordToGuess.indices.map { '_' }.joinToString("")
+        AssembleGameReadModelFromDomainEvents(OngoingGameReadModel(gameId, timestamp, category, maxNumberOfGuessesPerPlayer, maxNumberOfGuessesTotal, fullyObfuscatedWordHint, emptyList(), upperCaseWordToGuess))
     }
 
     private fun applyEvent(e: PlayerGuessedTheWrongWord): AssembleGameReadModelFromDomainEvents = e.run {
         val ongoingGameReadModel = gameReadModel as OngoingGameReadModel
 
-        AssembleGameReadModelFromDomainEvents(ongoingGameReadModel.copy(
-                guesses = ongoingGameReadModel.guesses.add(Guess(playerId, guessedWord, timestamp)),
-                hint = ongoingGameReadModel.hint.revealAdditionalCharacterFrom(ongoingGameReadModel.wordToGuess)))
+        AssembleGameReadModelFromDomainEvents(ongoingGameReadModel.copy(guesses = ongoingGameReadModel.guesses.add(Guess(playerId, guessedWord, timestamp))))
+    }
+
+    private fun applyEvent(e: CharacterInWordHintWasRevealed): AssembleGameReadModelFromDomainEvents = e.run {
+        val ongoingGameReadModel = gameReadModel as OngoingGameReadModel
+
+        val newHint = ongoingGameReadModel.hint.replaceCharAt(characterPositionInWord - 1, ongoingGameReadModel.wordToGuess[characterPositionInWord - 1])
+
+        AssembleGameReadModelFromDomainEvents(ongoingGameReadModel.copy(hint = newHint))
     }
 
     private fun applyEvent(e: PlayerGuessedTheRightWord): AssembleGameReadModelFromDomainEvents = e.run {
@@ -58,5 +64,11 @@ class AssembleGameReadModelFromDomainEvents internal constructor(val gameReadMod
         val numberOfPlayersInGame = guesses.distinctBy { it.playerId }.count()
 
         AssembleGameReadModelFromDomainEvents(GameWasLostReadModel(gameId, startedAt, timestamp, category, guesses.size, numberOfPlayersInGame, wordToGuess))
+    }
+
+    private fun String.replaceCharAt(index: Int, char: Char): String {
+        val b = StringBuilder(this)
+        b.setCharAt(index, char)
+        return b.toString()
     }
 }
