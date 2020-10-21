@@ -14,34 +14,30 @@
  * limitations under the License.
  */
 
-package org.occurrent.domain;
+package org.occurrent.application.command.composition;
 
+import org.occurrent.domain.DomainEvent;
+import org.occurrent.domain.NameDefined;
+import org.occurrent.domain.NameWasChanged;
 import org.occurrent.time.TimeConversion;
 
 import java.time.LocalDateTime;
-import java.util.Collections;
-import java.util.List;
 import java.util.Objects;
 import java.util.function.Predicate;
+import java.util.stream.Stream;
 
-public class Name {
+class NameWithStreamCommand {
 
-    public static List<DomainEvent> defineName(List<DomainEvent> events, String eventId, LocalDateTime time, String name) {
-        if (!events.isEmpty()) {
-            throw new IllegalStateException("No previous events can exist when defining a name");
-        }
-        return defineName(eventId, time, name);
+    static Stream<DomainEvent> defineName(Stream<DomainEvent> __, String eventId, LocalDateTime time, String name) {
+        return Stream.of(new NameDefined(eventId, TimeConversion.toDate(time), name));
     }
 
-    public static List<DomainEvent> defineName(String eventId, LocalDateTime time, String name) {
-        return Collections.singletonList(new NameDefined(eventId, TimeConversion.toDate(time), name));
-    }
 
-    public static List<DomainEvent> changeName(List<DomainEvent> events, String eventId, LocalDateTime time, String newName) {
+    static Stream<DomainEvent> changeName(Stream<DomainEvent> events, String eventId, LocalDateTime time, String newName) {
         Predicate<DomainEvent> isInstanceOfNameDefined = NameDefined.class::isInstance;
         Predicate<DomainEvent> isInstanceOfNameWasChanged = NameWasChanged.class::isInstance;
 
-        String currentName = events.stream()
+        String currentName = events
                 .filter(isInstanceOfNameDefined.or(isInstanceOfNameWasChanged))
                 .reduce("", (__, e) -> e instanceof NameDefined ? e.getName() : e.getName(), (name1, name2) -> name2);
 
@@ -50,6 +46,6 @@ public class Name {
         } else if (currentName.isEmpty()) {
             throw new IllegalArgumentException("Cannot change name this it is currently undefined");
         }
-        return Collections.singletonList(new NameWasChanged(eventId, TimeConversion.toDate(time), newName));
+        return Stream.of(new NameWasChanged(eventId, TimeConversion.toDate(time), newName));
     }
 }

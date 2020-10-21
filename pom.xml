@@ -30,6 +30,7 @@
         <module>subscription</module>
         <module>cloudevents-extension</module>
         <module>common</module>
+        <module>application</module>
     </modules>
 
     <name>Occurrent</name>

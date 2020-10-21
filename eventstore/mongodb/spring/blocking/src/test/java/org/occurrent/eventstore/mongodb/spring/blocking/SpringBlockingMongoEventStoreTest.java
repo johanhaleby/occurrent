@@ -1412,8 +1412,8 @@ public class SpringBlockingMongoEventStoreTest {
         return events
                 .map(CloudEvent::getData)
                 // @formatter:off
-                    .map(CheckedFunction.unchecked(data -> objectMapper.readValue(data, new TypeReference<Map<String, Object>>() {})))
-                    // @formatter:on
+                .map(CheckedFunction.unchecked(data -> objectMapper.readValue(data, new TypeReference<Map<String, Object>>() {})))
+                // @formatter:on
                 .map(event -> {
                     Instant instant = Instant.ofEpochMilli((long) event.get("time"));
                     LocalDateTime time = LocalDateTime.ofInstant(instant, UTC);
