@@ -1,0 +1,44 @@
+package org.occurrent.application.service.blocking;
+
+import io.cloudevents.CloudEvent;
+
+import java.util.UUID;
+import java.util.function.Function;
+import java.util.stream.Stream;
+
+/**
+ * An application service interface that should be good enough for most scenarios.
+ * Combine it with command composition ({@code org.occurrent:command-composition:<version>}) to solve
+ * an even more wide-range of use cases. See <a href="https://occurrent.org/documentation#commands">command documentation</a> for more information.
+ *
+ * @param <T> The type of the event to store. Normally this would be your custom "DomainEvent" class but it could also be {@link CloudEvent}.
+ */
+public interface ApplicationService<T> {
+
+    /**
+     * Convenience function that lets you specify {@code streamId} as a {@code UUID} instead of a {@code String}. Simply delegates to {@link #execute(String, Function)}.
+     *
+     * @param streamId                     The id of the stream to load events from and also write the events returned from {@code functionThatCallsDomainModel} to.
+     * @param functionThatCallsDomainModel A <i>pure</i> function that calls the domain model. Use partial application ({@code org.occurrent:command-composition:<version>})
+     *                                     if required.
+     * @see #execute(String, Function)
+     */
+    void execute(UUID streamId, Function<Stream<T>, Stream<T>> functionThatCallsDomainModel);
+
+    /**
+     * Execute a function that loads the events from the event store and apply them to the {@code functionThatCallsDomainModel}.
+     * <br>
+     * <br>
+     * <p>
+     * Note that if you domain model works with {@code java.util.List} as input and output, then depend on the
+     * command composition ({@code org.occurrent:command-composition:<version>}) library to convert {@code functionThatCallsDomainModel}
+     * from {@code Function<Stream<T>, Stream<T>>} to {@code Function<List<T>, List<T>>} by using
+     * {@code org.occurrent.application.command.composition.toListCommand(functionThatCallsDomainModel)}.
+     * </p>
+     *
+     * @param streamId                     The id of the stream to load events from and also write the events returned from {@code functionThatCallsDomainModel} to.
+     * @param functionThatCallsDomainModel A <i>pure</i> function that calls the domain model. Use partial application ({@code org.occurrent:command-composition:<version>})
+     *                                     if required.
+     */
+    void execute(String streamId, Function<Stream<T>, Stream<T>> functionThatCallsDomainModel);
+}
