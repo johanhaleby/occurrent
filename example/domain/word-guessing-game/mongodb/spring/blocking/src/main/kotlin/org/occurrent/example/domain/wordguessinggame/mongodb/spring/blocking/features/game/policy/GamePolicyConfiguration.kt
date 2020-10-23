@@ -4,7 +4,7 @@ import org.occurrent.example.domain.wordguessinggame.event.*
 import org.occurrent.example.domain.wordguessinggame.mongodb.spring.blocking.features.game.persistence.OngoingGameOverviewMongoDTO
 import org.occurrent.example.domain.wordguessinggame.mongodb.spring.blocking.features.game.persistence.toDTO
 import org.occurrent.example.domain.wordguessinggame.mongodb.spring.blocking.infrastructure.DomainEventQueries
-import org.occurrent.example.domain.wordguessinggame.mongodb.spring.blocking.infrastructure.GenericApplicationService
+import org.occurrent.example.domain.wordguessinggame.mongodb.spring.blocking.infrastructure.ApplicationService
 import org.occurrent.example.domain.wordguessinggame.mongodb.spring.blocking.infrastructure.Policies
 import org.occurrent.example.domain.wordguessinggame.mongodb.spring.blocking.infrastructure.loggerFor
 import org.occurrent.example.domain.wordguessinggame.policy.WhenGameWasWonThenSendEmailToWinnerPolicy
@@ -32,7 +32,7 @@ class GamePolicyConfiguration {
     lateinit var mongo: MongoOperations
 
     @Autowired
-    lateinit var applicationService: GenericApplicationService
+    lateinit var applicationService: ApplicationService
 
     @Autowired
     lateinit var domainEventQueries: DomainEventQueries

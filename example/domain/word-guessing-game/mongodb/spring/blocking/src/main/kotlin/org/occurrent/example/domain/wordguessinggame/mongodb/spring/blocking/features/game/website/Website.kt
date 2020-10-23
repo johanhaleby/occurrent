@@ -22,7 +22,7 @@ import org.occurrent.example.domain.wordguessinggame.mongodb.spring.blocking.fea
 import org.occurrent.example.domain.wordguessinggame.mongodb.spring.blocking.features.game.website.Website.Views.gameEndedView
 import org.occurrent.example.domain.wordguessinggame.mongodb.spring.blocking.features.game.website.Website.Views.makeGuessView
 import org.occurrent.example.domain.wordguessinggame.mongodb.spring.blocking.features.game.website.Website.Views.newGameView
-import org.occurrent.example.domain.wordguessinggame.mongodb.spring.blocking.infrastructure.GenericApplicationService
+import org.occurrent.example.domain.wordguessinggame.mongodb.spring.blocking.infrastructure.ApplicationService
 import org.occurrent.example.domain.wordguessinggame.readmodel.GameEndedReadModel
 import org.occurrent.example.domain.wordguessinggame.readmodel.GameWasWonReadModel
 import org.occurrent.example.domain.wordguessinggame.readmodel.OngoingGameReadModel
@@ -40,7 +40,7 @@ import javax.servlet.http.HttpSession
 
 @RestController
 @RequestMapping(path = ["/games"], produces = [MediaType.TEXT_HTML_VALUE])
-class Website(private val applicationService: GenericApplicationService, private val findGameByIdQuery: FindGameByIdQuery,
+class Website(private val applicationService: ApplicationService, private val findGameByIdQuery: FindGameByIdQuery,
               private val ongoingGamesQuery: OngoingGamesQuery) {
 
     @GetMapping

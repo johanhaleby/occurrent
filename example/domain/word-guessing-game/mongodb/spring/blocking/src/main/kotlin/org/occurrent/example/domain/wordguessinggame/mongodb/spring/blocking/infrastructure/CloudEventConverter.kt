@@ -4,6 +4,7 @@ import com.fasterxml.jackson.databind.ObjectMapper
 import com.fasterxml.jackson.module.kotlin.readValue
 import io.cloudevents.CloudEvent
 import io.cloudevents.core.builder.CloudEventBuilder
+import org.occurrent.application.service.blocking.CloudEventConverter
 import org.occurrent.example.domain.wordguessinggame.event.*
 import org.occurrent.example.domain.wordguessinggame.writemodel.PlayerId
 import org.occurrent.example.domain.wordguessinggame.writemodel.Timestamp
@@ -12,9 +13,9 @@ import java.time.ZoneOffset
 import java.time.temporal.ChronoUnit
 import java.util.*
 
-class CloudEventConverter(private val objectMapper: ObjectMapper, private val gameSource: URI, private val wordHintSource : URI) {
+class CloudEventConverter(private val objectMapper: ObjectMapper, private val gameSource: URI, private val wordHintSource: URI) : CloudEventConverter<DomainEvent> {
 
-    fun toCloudEvent(domainEvent: DomainEvent): CloudEvent {
+    override fun toCloudEvent(domainEvent: DomainEvent): CloudEvent {
         val (source: URI, data: EventData?) = when (domainEvent) {
             is GameWasStarted -> gameSource to domainEvent.run { GameWasStartedData(startedBy, category, wordToGuess, maxNumberOfGuessesPerPlayer, maxNumberOfGuessesTotal) }
             is PlayerGuessedTheWrongWord -> gameSource to domainEvent.run { PlayerGuessedTheWrongWordData(playerId, guessedWord) }
@@ -41,7 +42,7 @@ class CloudEventConverter(private val objectMapper: ObjectMapper, private val ga
                 .build()
     }
 
-    fun toDomainEvent(cloudEvent: CloudEvent): DomainEvent {
+    override fun toDomainEvent(cloudEvent: CloudEvent): DomainEvent {
         val eventId = UUID.fromString(cloudEvent.id)
         val gameId = UUID.fromString(cloudEvent.subject)
         val timestamp = Timestamp.from(cloudEvent.time!!.toInstant())
@@ -88,4 +89,4 @@ private data class PlayerWasAwardedPointsForGuessingTheRightWordData(val playerI
 private data class GameWasWonData(val winnerId: PlayerId) : EventData()
 
 // Word Hint
-private data class CharacterInWordHintWasRevealedData(val character: Char, val characterPositionInWord : Int) : EventData()
+private data class CharacterInWordHintWasRevealedData(val character: Char, val characterPositionInWord: Int) : EventData()

@@ -62,6 +62,11 @@
             <version>0.1.2-SNAPSHOT</version>
         </dependency>
         <dependency>
+            <groupId>org.occurrent</groupId>
+            <artifactId>application-service-blocking-kotlin</artifactId>
+            <version>0.1.2-SNAPSHOT</version>
+        </dependency>
+        <dependency>
             <groupId>org.jetbrains.kotlinx</groupId>
             <artifactId>kotlinx-html-jvm</artifactId>
             <version>0.7.2</version>
