@@ -1,5 +1,6 @@
 package org.occurrent.example.domain.wordguessinggame.mongodb.spring.blocking.infrastructure
 
+import org.occurrent.application.service.blocking.CloudEventConverter
 import org.occurrent.condition.Condition.eq
 import org.occurrent.condition.Condition.or
 import org.occurrent.example.domain.wordguessinggame.event.DomainEvent
@@ -16,7 +17,7 @@ import kotlin.reflect.KClass
  * Just a convenience utility that makes it easier, and more consistent, to create policies.
  */
 @Component
-class Policies(val subscriptions: BlockingSubscriptionWithAutomaticPositionPersistence, val cloudEventConverter: CloudEventConverter) {
+class Policies(val subscriptions: BlockingSubscriptionWithAutomaticPositionPersistence, val cloudEventConverter: CloudEventConverter<DomainEvent>) {
 
     /**
      * Create a new policy that is invoked after a specific domain event is written to the event store

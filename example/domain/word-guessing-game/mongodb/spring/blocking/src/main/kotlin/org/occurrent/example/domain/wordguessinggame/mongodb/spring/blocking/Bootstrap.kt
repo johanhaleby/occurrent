@@ -17,37 +17,28 @@ package org.occurrent.example.domain.wordguessinggame.mongodb.spring.blocking
 
 import com.fasterxml.jackson.databind.ObjectMapper
 import com.fasterxml.jackson.module.kotlin.KotlinModule
+import org.occurrent.application.service.blocking.CloudEventConverter
 import org.occurrent.application.service.blocking.implementation.GenericApplicationService
-import org.occurrent.eventstore.api.blocking.EventStoreQueries
 import org.occurrent.eventstore.mongodb.spring.blocking.EventStoreConfig
 import org.occurrent.eventstore.mongodb.spring.blocking.SpringBlockingMongoEventStore
 import org.occurrent.example.domain.wordguessinggame.event.DomainEvent
-import org.occurrent.example.domain.wordguessinggame.event.GameWasWon
-import org.occurrent.example.domain.wordguessinggame.event.eventType
 import org.occurrent.example.domain.wordguessinggame.mongodb.spring.blocking.features.game.policy.GamePolicyConfiguration
 import org.occurrent.example.domain.wordguessinggame.mongodb.spring.blocking.infrastructure.ApplicationService
-import org.occurrent.example.domain.wordguessinggame.mongodb.spring.blocking.infrastructure.CloudEventConverter
-import org.occurrent.example.domain.wordguessinggame.mongodb.spring.blocking.infrastructure.loggerFor
-import org.occurrent.example.domain.wordguessinggame.policy.WhenGameWasWonThenSendEmailToWinnerPolicy
-import org.occurrent.filter.Filter.type
+import org.occurrent.example.domain.wordguessinggame.mongodb.spring.blocking.infrastructure.GameCloudEventConverter
+import org.occurrent.example.domain.wordguessinggame.mongodb.spring.blocking.infrastructure.RetryableApplicationService
 import org.occurrent.mongodb.timerepresentation.TimeRepresentation
-import org.occurrent.subscription.OccurrentSubscriptionFilter.filter
 import org.occurrent.subscription.api.blocking.BlockingSubscriptionPositionStorage
 import org.occurrent.subscription.api.blocking.PositionAwareBlockingSubscription
-import org.occurrent.subscription.api.blocking.Subscription
 import org.occurrent.subscription.mongodb.spring.blocking.SpringBlockingSubscriptionForMongoDB
 import org.occurrent.subscription.mongodb.spring.blocking.SpringBlockingSubscriptionPositionStorageForMongoDB
 import org.occurrent.subscription.util.blocking.BlockingSubscriptionWithAutomaticPositionPersistence
-import org.springframework.beans.factory.annotation.Autowired
 import org.springframework.boot.autoconfigure.SpringBootApplication
 import org.springframework.boot.runApplication
 import org.springframework.context.annotation.Bean
-import org.springframework.context.annotation.Configuration
 import org.springframework.context.annotation.Import
 import org.springframework.data.mongodb.MongoDatabaseFactory
 import org.springframework.data.mongodb.MongoTransactionManager
 import org.springframework.data.mongodb.core.MongoTemplate
-import org.springframework.data.mongodb.repository.config.EnableMongoRepositories
 import org.springframework.retry.annotation.EnableRetry
 import java.net.URI
 
@@ -55,7 +46,7 @@ import java.net.URI
  * Bootstrap the application
  */
 @SpringBootApplication
-@EnableRetry(proxyTargetClass = true)
+@EnableRetry
 @Import(GamePolicyConfiguration::class)
 class Bootstrap {
     companion object {
@@ -87,10 +78,10 @@ class Bootstrap {
     fun objectMapper() = ObjectMapper().apply { registerModule(KotlinModule()) }
 
     @Bean
-    fun cloudEventConverter(objectMapper: ObjectMapper) = CloudEventConverter(objectMapper, URI.create("urn:occurrent:domain:wordguessinggame:game"), URI.create("urn:occurrent:domain:wordguessinggame:wordhint"))
+    fun cloudEventConverter(objectMapper: ObjectMapper): CloudEventConverter<DomainEvent> = GameCloudEventConverter(objectMapper, URI.create("urn:occurrent:domain:wordguessinggame:game"), URI.create("urn:occurrent:domain:wordguessinggame:wordhint"))
 
     @Bean
-    fun applicationService(eventStore: SpringBlockingMongoEventStore, eventConverter: CloudEventConverter) : ApplicationService = ApplicationService(GenericApplicationService<DomainEvent>(eventStore, eventConverter))
+    fun applicationService(eventStore: SpringBlockingMongoEventStore, eventConverter: CloudEventConverter<DomainEvent>): ApplicationService = RetryableApplicationService(GenericApplicationService(eventStore, eventConverter))
 }
 
 fun main(args: Array<String>) {

@@ -8,11 +8,16 @@ import org.springframework.retry.annotation.Backoff
 import org.springframework.retry.annotation.Retryable
 import java.util.*
 
-class ApplicationService constructor(private val applicationService: GenericApplicationService<DomainEvent>) {
+interface ApplicationService {
+    fun execute(streamId: UUID, functionThatCallsDomainModel: (Sequence<DomainEvent>) -> Sequence<DomainEvent>)
+    fun execute(streamId: String, functionThatCallsDomainModel: (Sequence<DomainEvent>) -> Sequence<DomainEvent>)
+}
+
+open class RetryableApplicationService constructor(private val applicationService: GenericApplicationService<DomainEvent>) : ApplicationService {
 
     @Retryable(include = [WriteConditionNotFulfilledException::class], maxAttempts = 5, backoff = Backoff(delay = 100, multiplier = 2.0, maxDelay = 1000))
-    fun execute(streamId: UUID, functionThatCallsDomainModel: (Sequence<DomainEvent>) -> Sequence<DomainEvent>) = applicationService.execute(streamId, functionThatCallsDomainModel)
+    override fun execute(streamId: UUID, functionThatCallsDomainModel: (Sequence<DomainEvent>) -> Sequence<DomainEvent>) = applicationService.execute(streamId, functionThatCallsDomainModel)
 
     @Retryable(include = [WriteConditionNotFulfilledException::class], maxAttempts = 5, backoff = Backoff(delay = 100, multiplier = 2.0, maxDelay = 1000))
-    fun execute(streamId: String, functionThatCallsDomainModel: (Sequence<DomainEvent>) -> Sequence<DomainEvent>) = applicationService.execute(streamId, functionThatCallsDomainModel)
+    override fun execute(streamId: String, functionThatCallsDomainModel: (Sequence<DomainEvent>) -> Sequence<DomainEvent>) = applicationService.execute(streamId, functionThatCallsDomainModel)
 }

@@ -13,7 +13,7 @@ import java.time.ZoneOffset
 import java.time.temporal.ChronoUnit
 import java.util.*
 
-class CloudEventConverter(private val objectMapper: ObjectMapper, private val gameSource: URI, private val wordHintSource: URI) : CloudEventConverter<DomainEvent> {
+class GameCloudEventConverter(private val objectMapper: ObjectMapper, private val gameSource: URI, private val wordHintSource: URI) : CloudEventConverter<DomainEvent> {
 
     override fun toCloudEvent(domainEvent: DomainEvent): CloudEvent {
         val (source: URI, data: EventData?) = when (domainEvent) {

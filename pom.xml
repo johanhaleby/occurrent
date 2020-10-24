@@ -159,10 +159,10 @@
                 <version>${spring-boot.version}</version>
             </dependency>
             <dependency>
-                 <groupId>org.springframework</groupId>
-                 <artifactId>spring-aspects</artifactId>
+                <groupId>org.springframework</groupId>
+                <artifactId>spring-aspects</artifactId>
                 <version>5.2.9.RELEASE</version>
-             </dependency>
+            </dependency>
             <dependency>
                 <groupId>org.springframework.boot</groupId>
                 <artifactId>spring-boot-starter-amqp</artifactId>
