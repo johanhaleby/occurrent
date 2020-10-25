@@ -17,6 +17,8 @@ package org.occurrent.example.domain.wordguessinggame.mongodb.spring.blocking.fe
 
 import kotlinx.html.*
 import kotlinx.html.stream.appendHTML
+import org.occurrent.application.service.blocking.executePolicy
+import org.occurrent.example.domain.wordguessinggame.mongodb.spring.blocking.features.game.policy.WordHintPolicies
 import org.occurrent.example.domain.wordguessinggame.mongodb.spring.blocking.features.game.queries.FindGameByIdQuery
 import org.occurrent.example.domain.wordguessinggame.mongodb.spring.blocking.features.game.queries.OngoingGamesQuery
 import org.occurrent.example.domain.wordguessinggame.mongodb.spring.blocking.features.game.website.Website.Views.gameEndedView
@@ -41,7 +43,7 @@ import javax.servlet.http.HttpSession
 @RestController
 @RequestMapping(path = ["/games"], produces = [MediaType.TEXT_HTML_VALUE])
 class Website(private val applicationService: ApplicationService, private val findGameByIdQuery: FindGameByIdQuery,
-              private val ongoingGamesQuery: OngoingGamesQuery) {
+              private val ongoingGamesQuery: OngoingGamesQuery, private val wordHintPolicies: WordHintPolicies) {
 
     @GetMapping
     fun games(response: ServletResponse) {
@@ -103,14 +105,17 @@ class Website(private val applicationService: ApplicationService, private val fi
         val playerId = session.getOrGeneratePlayerId()
         val wordsInCategory = words.split('\n').map { it.split(',') }.flatten().map(String::trim).map(::Word)
         val wordsToChooseFrom = WordsToChooseFrom(WordCategory(category.trim()), wordsInCategory)
-        applicationService.execute(gameId) { events -> startGame(events, gameId, Timestamp(), playerId, wordsToChooseFrom, MaxNumberOfGuessesPerPlayer, MaxNumberOfGuessesTotal) }
+        applicationService.execute(gameId,
+                { events -> startGame(events, gameId, Timestamp(), playerId, wordsToChooseFrom, MaxNumberOfGuessesPerPlayer, MaxNumberOfGuessesTotal) },
+                executePolicy(wordHintPolicies::whenGameWasStartedThenRevealInitialCharactersInWordHint)
+        )
         return ResponseEntity.status(HttpStatus.SEE_OTHER).header(HttpHeaders.LOCATION, gameLocation(gameId)).build<Any>()
     }
 
     @PostMapping("/{gameId}")
     fun makeGuess(@PathVariable("gameId") gameId: UUID, @RequestParam("word") word: String, session: HttpSession): ResponseEntity<*> {
         val playerId = session.getOrGeneratePlayerId()
-        applicationService.execute(gameId) { events -> guessWord(events, Timestamp(), playerId, Word(word)) }
+        applicationService.execute(gameId, { events -> guessWord(events, Timestamp(), playerId, Word(word)) }, executePolicy(wordHintPolicies::whenPlayerGuessedTheWrongWordThenRevealCharacterInWordHint))
         return ResponseEntity.status(HttpStatus.SEE_OTHER).header(HttpHeaders.LOCATION, gameLocation(gameId)).build<Any>()
     }
 
