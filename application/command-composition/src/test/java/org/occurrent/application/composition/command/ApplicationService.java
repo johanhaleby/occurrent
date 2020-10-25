@@ -1,4 +1,4 @@
-package org.occurrent.application.command.composition;
+package org.occurrent.application.composition.command;
 
 import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.core.type.TypeReference;
@@ -26,7 +26,6 @@ import java.util.stream.Stream;
 import static io.vavr.API.*;
 import static io.vavr.Predicates.is;
 import static java.time.ZoneOffset.UTC;
-import static org.occurrent.application.command.composition.CommandConversion.toStreamCommand;
 
 @Disabled
 class ApplicationService {
@@ -48,7 +47,7 @@ class ApplicationService {
     }
 
     public void executeListCommand(String streamId, Function<List<DomainEvent>, List<DomainEvent>> functionThatCallsDomainModel) {
-        executeStreamCommand(streamId, toStreamCommand(functionThatCallsDomainModel));
+        executeStreamCommand(streamId, CommandConversion.toStreamCommand(functionThatCallsDomainModel));
     }
 
     public DomainEvent convertCloudEventToDomainEvent(CloudEvent cloudEvent) {

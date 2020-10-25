@@ -1,19 +1,20 @@
 
-package org.occurrent.application.command.composition;
+package org.occurrent.application.composition.command;
 
+
+import org.occurrent.application.composition.command.internal.CreateListFromVarArgs;
 
 import java.util.List;
 import java.util.function.Function;
 import java.util.stream.Collectors;
 import java.util.stream.Stream;
 
-import static org.occurrent.application.command.composition.InternalCommandComposer.createList;
 
 public class StreamCommandComposition {
 
     @SafeVarargs
     public static <T> Function<Stream<T>, Stream<T>> composeCommands(Function<Stream<T>, Stream<T>> firstCommand, Function<Stream<T>, Stream<T>> secondCommand, Function<Stream<T>, Stream<T>>... additionalCommands) {
-        return composeCommands(createList(firstCommand, secondCommand, additionalCommands));
+        return composeCommands(CreateListFromVarArgs.createList(firstCommand, secondCommand, additionalCommands));
     }
 
     public static <T> Function<Stream<T>, Stream<T>> composeCommands(Stream<Function<Stream<T>, Stream<T>>> commands) {

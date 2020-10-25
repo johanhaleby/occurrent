@@ -1,4 +1,4 @@
-package org.occurrent.application.command.composition;
+package org.occurrent.application.composition.command;
 
 import java.util.List;
 import java.util.function.Function;

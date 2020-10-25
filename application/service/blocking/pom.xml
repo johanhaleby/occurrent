@@ -17,6 +17,45 @@
             <artifactId>eventstore-api-blocking</artifactId>
             <version>0.1.2-SNAPSHOT</version>
         </dependency>
+
+        <!-- Test -->
+        <dependency>
+            <groupId>org.occurrent</groupId>
+            <artifactId>command-composition</artifactId>
+            <version>0.1.2-SNAPSHOT</version>
+            <scope>test</scope>
+        </dependency>
+        <dependency>
+            <groupId>org.occurrent.inmemory</groupId>
+            <artifactId>eventstore-inmemory</artifactId>
+            <version>0.1.2-SNAPSHOT</version>
+        </dependency>
+        <dependency>
+            <groupId>com.fasterxml.jackson.core</groupId>
+            <artifactId>jackson-databind</artifactId>
+            <scope>test</scope>
+        </dependency>
+        <dependency>
+            <groupId>org.junit.jupiter</groupId>
+            <artifactId>junit-jupiter-engine</artifactId>
+            <scope>test</scope>
+        </dependency>
+        <dependency>
+            <groupId>org.assertj</groupId>
+            <artifactId>assertj-core</artifactId>
+            <scope>test</scope>
+        </dependency>
+        <dependency>
+            <groupId>org.occurrent</groupId>
+            <artifactId>test-support</artifactId>
+            <version>0.1.2-SNAPSHOT</version>
+            <scope>test</scope>
+        </dependency>
+        <dependency>
+            <groupId>io.vavr</groupId>
+            <artifactId>vavr</artifactId>
+            <scope>test</scope>
+        </dependency>
     </dependencies>
 
 </project>

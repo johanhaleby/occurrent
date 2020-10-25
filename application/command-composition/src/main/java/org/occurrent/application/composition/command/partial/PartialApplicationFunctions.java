@@ -1,4 +1,4 @@
-package org.occurrent.application.command.composition;
+package org.occurrent.application.composition.command.partial;
 
 public class PartialApplicationFunctions {
     @FunctionalInterface

@@ -1,6 +1,6 @@
-package org.occurrent.application.command.composition;
+package org.occurrent.application.composition.command.partial;
 
-import org.occurrent.application.command.composition.PartialApplicationFunctions.*;
+import org.occurrent.application.composition.command.partial.PartialApplicationFunctions.*;
 
 import java.util.function.BiFunction;
 import java.util.function.Function;

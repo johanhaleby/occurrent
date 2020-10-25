@@ -1,8 +1,9 @@
-package org.occurrent.application.command.composition;
+package org.occurrent.application.composition.command;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
+import org.occurrent.application.composition.command.partial.PartialStreamCommandApplication;
 import org.occurrent.domain.DomainEvent;
 import org.occurrent.domain.NameDefined;
 import org.occurrent.domain.NameWasChanged;
@@ -14,8 +15,8 @@ import java.util.UUID;
 import java.util.stream.Collectors;
 
 import static org.assertj.core.api.Assertions.assertThat;
-import static org.occurrent.application.command.composition.PartialStreamCommandApplication.partial;
-import static org.occurrent.application.command.composition.StreamCommandComposition.composeCommands;
+import static org.occurrent.application.composition.command.partial.PartialStreamCommandApplication.partial;
+import static org.occurrent.application.composition.command.StreamCommandComposition.composeCommands;
 
 public class StreamCommandCompositionTest {
 
@@ -36,7 +37,7 @@ public class StreamCommandCompositionTest {
         LocalDateTime now = LocalDateTime.now();
 
         // When
-        applicationService.executeStreamCommand("name1", composeCommands(partial(NameWithStreamCommand::defineName, eventId1, now, "My name"), partial(NameWithStreamCommand::changeName, eventId2, now, "My name 2")));
+        applicationService.executeStreamCommand("name1", StreamCommandComposition.composeCommands(PartialStreamCommandApplication.partial(NameWithStreamCommand::defineName, eventId1, now, "My name"), PartialStreamCommandApplication.partial(NameWithStreamCommand::changeName, eventId2, now, "My name 2")));
 
         // Then
         List<DomainEvent> domainEvents = eventStore.read("name1").events().map(applicationService::convertCloudEventToDomainEvent).collect(Collectors.toList());

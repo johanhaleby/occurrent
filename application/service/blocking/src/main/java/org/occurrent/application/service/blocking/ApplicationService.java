@@ -34,6 +34,10 @@ public interface ApplicationService<T> {
      */
     void execute(String streamId, Function<Stream<T>, Stream<T>> functionThatCallsDomainModel, Consumer<Stream<T>> sideEffect);
 
+    default void execute(UUID streamId, Function<Stream<T>, Stream<T>> functionThatCallsDomainModel, Consumer<Stream<T>> sideEffect) {
+        Objects.requireNonNull(streamId, "Stream id cannot be null");
+        execute(streamId.toString(), functionThatCallsDomainModel, sideEffect);
+    }
 
     /**
      * Execute a function that loads the events from the event store and apply them to the {@code functionThatCallsDomainModel}.

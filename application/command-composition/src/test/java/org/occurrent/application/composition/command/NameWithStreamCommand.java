@@ -14,7 +14,7 @@
  * limitations under the License.
  */
 
-package org.occurrent.application.command.composition;
+package org.occurrent.application.composition.command;
 
 import org.occurrent.domain.DomainEvent;
 import org.occurrent.domain.NameDefined;
