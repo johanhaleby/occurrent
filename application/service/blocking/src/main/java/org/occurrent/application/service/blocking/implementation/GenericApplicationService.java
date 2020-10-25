@@ -8,6 +8,7 @@ import org.occurrent.eventstore.api.blocking.EventStream;
 
 import java.util.List;
 import java.util.Objects;
+import java.util.function.Consumer;
 import java.util.function.Function;
 import java.util.stream.Collectors;
 import java.util.stream.Stream;
@@ -29,7 +30,7 @@ public class GenericApplicationService<T> implements ApplicationService<T> {
     }
 
     @Override
-    public void execute(String streamId, Function<Stream<T>, Stream<T>> functionThatCallsDomainModel, Function<Stream<T>, Void> sideEffect) {
+    public void execute(String streamId, Function<Stream<T>, Stream<T>> functionThatCallsDomainModel, Consumer<Stream<T>> sideEffect) {
         Objects.requireNonNull(streamId, "Stream id cannot be null");
         Objects.requireNonNull(functionThatCallsDomainModel, "Function that calls domain model cannot be null");
         // Read all events from the event store for a particular stream
@@ -51,7 +52,7 @@ public class GenericApplicationService<T> implements ApplicationService<T> {
 
         // Invoke side-effect
         if (sideEffect != null) {
-            sideEffect.apply(newEventsAsList.stream());
+            sideEffect.accept(newEventsAsList.stream());
         }
     }
 }

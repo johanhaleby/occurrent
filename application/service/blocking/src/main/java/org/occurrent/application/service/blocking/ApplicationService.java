@@ -4,6 +4,7 @@ import io.cloudevents.CloudEvent;
 
 import java.util.Objects;
 import java.util.UUID;
+import java.util.function.Consumer;
 import java.util.function.Function;
 import java.util.stream.Stream;
 
@@ -31,7 +32,7 @@ public interface ApplicationService<T> {
      * @param functionThatCallsDomainModel A <i>pure</i> function that calls the domain model. Use partial application ({@code org.occurrent:command-composition:<version>})
      *                                     if required.
      */
-    void execute(String streamId, Function<Stream<T>, Stream<T>> functionThatCallsDomainModel, Function<Stream<T>, Void> sideEffect);
+    void execute(String streamId, Function<Stream<T>, Stream<T>> functionThatCallsDomainModel, Consumer<Stream<T>> sideEffect);
 
 
     /**
