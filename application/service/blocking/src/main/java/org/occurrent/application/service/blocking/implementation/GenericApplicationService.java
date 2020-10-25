@@ -6,9 +6,10 @@ import org.occurrent.application.service.blocking.CloudEventConverter;
 import org.occurrent.eventstore.api.blocking.EventStore;
 import org.occurrent.eventstore.api.blocking.EventStream;
 
+import java.util.List;
 import java.util.Objects;
-import java.util.UUID;
 import java.util.function.Function;
+import java.util.stream.Collectors;
 import java.util.stream.Stream;
 
 /**
@@ -28,13 +29,7 @@ public class GenericApplicationService<T> implements ApplicationService<T> {
     }
 
     @Override
-    public void execute(UUID streamId, Function<Stream<T>, Stream<T>> functionThatCallsDomainModel) {
-        Objects.requireNonNull(streamId, "Stream id cannot be null");
-        execute(streamId.toString(), functionThatCallsDomainModel);
-    }
-
-    @Override
-    public void execute(String streamId, Function<Stream<T>, Stream<T>> functionThatCallsDomainModel) {
+    public void execute(String streamId, Function<Stream<T>, Stream<T>> functionThatCallsDomainModel, Function<Stream<T>, Void> sideEffect) {
         Objects.requireNonNull(streamId, "Stream id cannot be null");
         Objects.requireNonNull(functionThatCallsDomainModel, "Function that calls domain model cannot be null");
         // Read all events from the event store for a particular stream
@@ -44,9 +39,19 @@ public class GenericApplicationService<T> implements ApplicationService<T> {
         Stream<T> eventsInStream = eventStream.events().map(cloudEventConverter::toDomainEvent);
 
         // Call a pure function from the domain model which returns a Stream of events
-        Stream<CloudEvent> newEvents = functionThatCallsDomainModel.apply(eventsInStream).map(cloudEventConverter::toCloudEvent);
+        Stream<T> newDomainEvents = functionThatCallsDomainModel.apply(eventsInStream);
 
-        // Write the new events to the event store
+        // We need to convert the new domain event stream into a list in order to be able to call side-effects with new events
+        // if side effect is defined
+        final List<T> newEventsAsList = sideEffect == null ? null : newDomainEvents.collect(Collectors.toList());
+
+        // Convert to cloud events and write the new events to the event store
+        Stream<CloudEvent> newEvents = (newEventsAsList == null ? newDomainEvents : newEventsAsList.stream()).map(cloudEventConverter::toCloudEvent);
         eventStore.write(streamId, eventStream.version(), newEvents);
+
+        // Invoke side-effect
+        if (sideEffect != null) {
+            sideEffect.apply(newEventsAsList.stream());
+        }
     }
 }
