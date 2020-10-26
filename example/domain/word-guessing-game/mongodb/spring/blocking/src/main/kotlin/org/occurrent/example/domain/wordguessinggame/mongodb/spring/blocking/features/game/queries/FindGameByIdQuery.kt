@@ -4,7 +4,6 @@ import org.occurrent.example.domain.wordguessinggame.event.DomainEvent
 import org.occurrent.example.domain.wordguessinggame.mongodb.spring.blocking.infrastructure.DomainEventQueries
 import org.occurrent.example.domain.wordguessinggame.readmodel.AssembleGameReadModelFromDomainEvents
 import org.occurrent.example.domain.wordguessinggame.readmodel.GameReadModel
-import org.occurrent.filter.Filter.streamId
 import org.occurrent.filter.Filter.subject
 import org.springframework.stereotype.Component
 import java.util.*

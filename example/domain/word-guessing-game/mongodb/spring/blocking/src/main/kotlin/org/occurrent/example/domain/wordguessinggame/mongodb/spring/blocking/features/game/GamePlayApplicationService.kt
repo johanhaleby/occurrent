@@ -1,4 +1,4 @@
-package org.occurrent.example.domain.wordguessinggame.mongodb.spring.blocking.infrastructure
+package org.occurrent.example.domain.wordguessinggame.mongodb.spring.blocking.features.game
 
 import org.occurrent.application.service.blocking.ApplicationService
 import org.occurrent.application.service.blocking.execute
