@@ -5,6 +5,12 @@ import java.util.stream.Stream
 import kotlin.streams.asSequence
 import kotlin.streams.asStream
 
+fun <T> ApplicationService<T>.execute(streamId: UUID, functionThatCallsDomainModel: (Sequence<T>) -> Sequence<T>) =
+        execute(streamId, functionThatCallsDomainModel, null)
+
+fun <T> ApplicationService<T>.execute(streamId: String, functionThatCallsDomainModel: (Sequence<T>) -> Sequence<T>) =
+        execute(streamId, functionThatCallsDomainModel, null)
+
 /**
  * Extension function to [ApplicationService] that allows working with Kotlin sequences
  */
