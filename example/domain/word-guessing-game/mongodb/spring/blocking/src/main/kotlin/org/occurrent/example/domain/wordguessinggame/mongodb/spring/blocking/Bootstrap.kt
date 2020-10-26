@@ -23,9 +23,9 @@ import org.occurrent.eventstore.mongodb.spring.blocking.EventStoreConfig
 import org.occurrent.eventstore.mongodb.spring.blocking.SpringBlockingMongoEventStore
 import org.occurrent.example.domain.wordguessinggame.event.DomainEvent
 import org.occurrent.example.domain.wordguessinggame.mongodb.spring.blocking.features.game.policy.AsyncPolicyConfiguration
-import org.occurrent.example.domain.wordguessinggame.mongodb.spring.blocking.infrastructure.ApplicationService
+import org.occurrent.example.domain.wordguessinggame.mongodb.spring.blocking.features.game.policy.WordHintPolicies
 import org.occurrent.example.domain.wordguessinggame.mongodb.spring.blocking.infrastructure.GameCloudEventConverter
-import org.occurrent.example.domain.wordguessinggame.mongodb.spring.blocking.infrastructure.RetryableApplicationService
+import org.occurrent.example.domain.wordguessinggame.mongodb.spring.blocking.infrastructure.GamePlayApplicationService
 import org.occurrent.mongodb.timerepresentation.TimeRepresentation
 import org.occurrent.subscription.api.blocking.BlockingSubscriptionPositionStorage
 import org.occurrent.subscription.api.blocking.PositionAwareBlockingSubscription
@@ -41,6 +41,7 @@ import org.springframework.data.mongodb.MongoTransactionManager
 import org.springframework.data.mongodb.core.MongoTemplate
 import org.springframework.retry.annotation.EnableRetry
 import java.net.URI
+import org.occurrent.application.service.blocking.ApplicationService as OccurrentApplicationService
 
 /**
  * Bootstrap the application
@@ -81,7 +82,10 @@ class Bootstrap {
     fun cloudEventConverter(objectMapper: ObjectMapper): CloudEventConverter<DomainEvent> = GameCloudEventConverter(objectMapper, URI.create("urn:occurrent:domain:wordguessinggame:game"), URI.create("urn:occurrent:domain:wordguessinggame:wordhint"))
 
     @Bean
-    fun applicationService(eventStore: SpringBlockingMongoEventStore, eventConverter: CloudEventConverter<DomainEvent>): ApplicationService = RetryableApplicationService(GenericApplicationService(eventStore, eventConverter))
+    fun occurrentApplicationService(eventStore: SpringBlockingMongoEventStore, eventConverter: CloudEventConverter<DomainEvent>): OccurrentApplicationService<DomainEvent> = GenericApplicationService(eventStore, eventConverter)
+
+    @Bean
+    fun gamePlayApplicationService(occurrentApplicationService: OccurrentApplicationService<DomainEvent>, wordHintPolicies: WordHintPolicies): GamePlayApplicationService = GamePlayApplicationService(occurrentApplicationService, wordHintPolicies)
 }
 
 fun main(args: Array<String>) {
