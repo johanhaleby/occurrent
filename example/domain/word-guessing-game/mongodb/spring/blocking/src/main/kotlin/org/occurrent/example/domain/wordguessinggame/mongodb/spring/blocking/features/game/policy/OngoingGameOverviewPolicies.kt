@@ -7,7 +7,6 @@ import org.occurrent.example.domain.wordguessinggame.mongodb.spring.blocking.fea
 import org.occurrent.example.domain.wordguessinggame.mongodb.spring.blocking.features.game.persistence.toDTO
 import org.occurrent.example.domain.wordguessinggame.mongodb.spring.blocking.infrastructure.Policies
 import org.occurrent.example.domain.wordguessinggame.mongodb.spring.blocking.infrastructure.loggerFor
-import org.occurrent.example.domain.wordguessinggame.policy.WhenGameWasWonThenSendEmailToWinnerPolicy
 import org.occurrent.example.domain.wordguessinggame.readmodel.OngoingGameOverview
 import org.springframework.beans.factory.annotation.Autowired
 import org.springframework.context.annotation.Bean
@@ -19,19 +18,14 @@ import org.springframework.data.mongodb.core.query.isEqualTo
 import org.springframework.data.mongodb.core.remove
 
 @Configuration
-class AsyncPolicyConfiguration {
-    private val log = loggerFor<AsyncPolicyConfiguration>()
+class OngoingGameOverviewPolicies {
+    private val log = loggerFor<OngoingGameOverviewPolicies>()
 
     @Autowired
     lateinit var policies: Policies
 
     @Autowired
     lateinit var mongo: MongoOperations
-
-    @Bean
-    fun whenGameWasWonThenSendEmailToWinner() = policies.newPolicy<GameWasWon>(WhenGameWasWonThenSendEmailToWinnerPolicy::class.simpleName!!) { gameWasWon ->
-        log.info("Sending email to player ${gameWasWon.winnerId} since he/she was a winner of game ${gameWasWon.gameId}")
-    }
 
     @Bean
     fun whenGameWasStartedThenAddGameToOngoingGamesOverview() = policies.newPolicy<GameWasStarted>("WhenGameWasStartedThenAddGameToOngoingGamesOverview") { gameWasStarted ->

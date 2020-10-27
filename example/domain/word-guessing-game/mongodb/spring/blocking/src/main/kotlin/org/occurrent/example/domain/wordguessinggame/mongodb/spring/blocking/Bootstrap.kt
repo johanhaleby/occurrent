@@ -22,11 +22,8 @@ import org.occurrent.application.service.blocking.implementation.GenericApplicat
 import org.occurrent.eventstore.mongodb.spring.blocking.EventStoreConfig
 import org.occurrent.eventstore.mongodb.spring.blocking.SpringBlockingMongoEventStore
 import org.occurrent.example.domain.wordguessinggame.event.DomainEvent
-import org.occurrent.example.domain.wordguessinggame.mongodb.spring.blocking.features.game.policy.AsyncPolicyConfiguration
-import org.occurrent.example.domain.wordguessinggame.mongodb.spring.blocking.features.game.policy.WordHintPolicies
 import org.occurrent.example.domain.wordguessinggame.mongodb.spring.blocking.features.game.GameCloudEventConverter
-import org.occurrent.example.domain.wordguessinggame.mongodb.spring.blocking.features.game.GamePlayApplicationService
-import org.occurrent.example.domain.wordguessinggame.mongodb.spring.blocking.features.game.policy.PointAwardingPolicy
+import org.occurrent.example.domain.wordguessinggame.mongodb.spring.blocking.features.game.policy.SendEmailToWinnerPolicy
 import org.occurrent.mongodb.timerepresentation.TimeRepresentation
 import org.occurrent.subscription.api.blocking.BlockingSubscriptionPositionStorage
 import org.occurrent.subscription.api.blocking.PositionAwareBlockingSubscription
@@ -49,7 +46,7 @@ import org.occurrent.application.service.blocking.ApplicationService as Occurren
  */
 @SpringBootApplication
 @EnableRetry
-@Import(AsyncPolicyConfiguration::class)
+@Import(SendEmailToWinnerPolicy::class)
 class Bootstrap {
     companion object {
         private const val EVENTS_COLLECTION_NAME = "events"

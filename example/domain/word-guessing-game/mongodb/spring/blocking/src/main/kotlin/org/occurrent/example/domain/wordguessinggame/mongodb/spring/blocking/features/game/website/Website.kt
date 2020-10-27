@@ -18,6 +18,7 @@ package org.occurrent.example.domain.wordguessinggame.mongodb.spring.blocking.fe
 import kotlinx.html.*
 import kotlinx.html.stream.appendHTML
 import org.occurrent.example.domain.wordguessinggame.mongodb.spring.blocking.features.game.GamePlayApplicationService
+import org.occurrent.example.domain.wordguessinggame.mongodb.spring.blocking.features.game.queries.EndedGamesQuery
 import org.occurrent.example.domain.wordguessinggame.mongodb.spring.blocking.features.game.queries.FindGameByIdQuery
 import org.occurrent.example.domain.wordguessinggame.mongodb.spring.blocking.features.game.queries.OngoingGamesQuery
 import org.occurrent.example.domain.wordguessinggame.mongodb.spring.blocking.features.game.website.Website.Views.gameEndedView
@@ -27,6 +28,7 @@ import org.occurrent.example.domain.wordguessinggame.mongodb.spring.blocking.inf
 import org.occurrent.example.domain.wordguessinggame.readmodel.GameEndedReadModel
 import org.occurrent.example.domain.wordguessinggame.readmodel.GameWasWonReadModel
 import org.occurrent.example.domain.wordguessinggame.readmodel.OngoingGameReadModel
+import org.occurrent.example.domain.wordguessinggame.readmodel.WonGameOverview
 import org.occurrent.example.domain.wordguessinggame.writemodel.*
 import org.springframework.http.HttpHeaders
 import org.springframework.http.HttpStatus
@@ -41,12 +43,14 @@ import javax.servlet.http.HttpSession
 
 @RestController
 @RequestMapping(path = ["/games"], produces = [MediaType.TEXT_HTML_VALUE])
-class Website(private val applicationService: GamePlayApplicationService, private val findGameByIdQuery: FindGameByIdQuery, private val ongoingGamesQuery: OngoingGamesQuery) {
+class Website(private val applicationService: GamePlayApplicationService, private val findGameByIdQuery: FindGameByIdQuery,
+              private val ongoingGamesQuery: OngoingGamesQuery, private val endedGamesQuery: EndedGamesQuery) {
     private val log = loggerFor<Website>()
 
     @GetMapping
     fun games(response: ServletResponse) {
         val ongoingGames = ongoingGamesQuery.execute(10).toList()
+        val endedGames = endedGamesQuery.execute(10).toList()
 
         response.writer.appendHTML().html {
             body {
@@ -73,6 +77,33 @@ class Website(private val applicationService: GamePlayApplicationService, privat
                 } else {
                     h3 { +"No games are currently ongoing" }
                 }
+
+                if (endedGames.isNotEmpty()) {
+                    h3 { +"Ended Games" }
+                    table {
+                        tr {
+                            th { +"Category" }
+                            th { +"Word To Guess" }
+                            th { +"Started At" }
+                            th { +"Ended At" }
+                            th { +"Result" }
+                            th { +"More Info" }
+                        }
+                        endedGames.forEach { game ->
+                            tr {
+                                td { +game.category }
+                                td { +game.wordToGuess }
+                                td { +game.startedAt.humanReadable() }
+                                td { +game.endedAt.humanReadable() }
+                                td { if (game is WonGameOverview) +"Won by ${game.winnerId}" else +"Game was lost" }
+                                td {
+                                    a("/games/${game.gameId}") { +"Link" }
+                                }
+                            }
+                        }
+                    }
+                }
+
                 form(action = "/games/${GameId.randomUUID()}", method = FormMethod.get) {
                     br()
                     button(type = ButtonType.submit) {
