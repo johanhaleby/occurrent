@@ -24,6 +24,11 @@ data class PlayerGuessedTheRightWord(override val eventId: UUID, override val ti
 
 data class PlayerWasAwardedPointsForGuessingTheRightWord(override val eventId: UUID, override val timestamp: Date, override val gameId: UUID, val playerId: PlayerId, val points: Points) : DomainEvent()
 
+sealed class ReasonForNotBeingAwardedPoints {
+    object PlayerCreatedListOfWords : ReasonForNotBeingAwardedPoints()
+}
+data class PlayerWasNotAwardedAnyPointsForGuessingTheRightWord(override val eventId: UUID, override val timestamp: Date, override val gameId: UUID, val playerId: PlayerId, val reason: ReasonForNotBeingAwardedPoints) : DomainEvent()
+
 data class GameWasWon(override val eventId: UUID, override val timestamp: Date, override val gameId: UUID, val winnerId: PlayerId) : DomainEvent()
 
 data class GameWasLost(override val eventId: UUID, override val timestamp: Date, override val gameId: UUID) : DomainEvent()

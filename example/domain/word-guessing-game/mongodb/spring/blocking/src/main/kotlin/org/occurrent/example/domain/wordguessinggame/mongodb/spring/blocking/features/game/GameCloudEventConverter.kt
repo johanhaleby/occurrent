@@ -6,6 +6,7 @@ import io.cloudevents.CloudEvent
 import io.cloudevents.core.builder.CloudEventBuilder
 import org.occurrent.application.service.blocking.CloudEventConverter
 import org.occurrent.example.domain.wordguessinggame.event.*
+import org.occurrent.example.domain.wordguessinggame.event.ReasonForNotBeingAwardedPoints.PlayerCreatedListOfWords
 import org.occurrent.example.domain.wordguessinggame.writemodel.PlayerId
 import org.occurrent.example.domain.wordguessinggame.writemodel.Timestamp
 import java.net.URI
@@ -23,6 +24,7 @@ class GameCloudEventConverter(private val objectMapper: ObjectMapper, private va
             is NumberOfGuessesWasExhaustedForPlayer -> gameSource to NumberOfGuessesWasExhaustedForPlayerData(domainEvent.playerId)
             is PlayerGuessedTheRightWord -> gameSource to domainEvent.run { PlayerGuessedTheRightWordData(playerId, guessedWord) }
             is PlayerWasAwardedPointsForGuessingTheRightWord -> gameSource to domainEvent.run { PlayerWasAwardedPointsForGuessingTheRightWordData(playerId, points) }
+            is PlayerWasNotAwardedAnyPointsForGuessingTheRightWord -> gameSource to domainEvent.run { PlayerWasNotAwardedAnyPointsForGuessingTheRightWordData(playerId, reason::class.simpleName!!) }
             is GameWasWon -> gameSource to GameWasWonData(domainEvent.winnerId)
             is GameWasLost -> gameSource to null
         }
@@ -67,6 +69,15 @@ class GameCloudEventConverter(private val objectMapper: ObjectMapper, private va
             PlayerWasAwardedPointsForGuessingTheRightWord::class.eventType() -> cloudEvent.data<PlayerWasAwardedPointsForGuessingTheRightWordData>().run {
                 PlayerWasAwardedPointsForGuessingTheRightWord(eventId, timestamp, gameId, playerId, points)
             }
+            PlayerWasNotAwardedAnyPointsForGuessingTheRightWord::class.eventType() -> cloudEvent.data<PlayerWasNotAwardedAnyPointsForGuessingTheRightWordData>().run {
+                val reason = if (reason == PlayerCreatedListOfWords::class.simpleName) {
+                    PlayerCreatedListOfWords
+                } else {
+                    throw IllegalStateException("Unrecognized ${ReasonForNotBeingAwardedPoints::class.simpleName}: $reason")
+                }
+
+                PlayerWasNotAwardedAnyPointsForGuessingTheRightWord(eventId, timestamp, gameId, playerId, reason)
+            }
             CharacterInWordHintWasRevealed::class.eventType() -> cloudEvent.data<CharacterInWordHintWasRevealedData>().run {
                 CharacterInWordHintWasRevealed(eventId, timestamp, gameId, character, characterPositionInWord)
             }
@@ -86,6 +97,7 @@ private data class PlayerGuessedTheWrongWordData(val playerId: PlayerId, val gue
 private data class NumberOfGuessesWasExhaustedForPlayerData(val playerId: PlayerId) : EventData()
 private data class PlayerGuessedTheRightWordData(val playerId: PlayerId, val guessedWord: String) : EventData()
 private data class PlayerWasAwardedPointsForGuessingTheRightWordData(val playerId: PlayerId, val points: Int) : EventData()
+private data class PlayerWasNotAwardedAnyPointsForGuessingTheRightWordData(val playerId: PlayerId, val reason: String) : EventData()
 private data class GameWasWonData(val winnerId: PlayerId) : EventData()
 
 // Word Hint

@@ -1,7 +1,7 @@
 package org.occurrent.example.domain.wordguessinggame.writemodel
 
 import org.occurrent.example.domain.wordguessinggame.event.*
-import org.occurrent.example.domain.wordguessinggame.readmodel.WordHintGenerator
+import org.occurrent.example.domain.wordguessinggame.event.ReasonForNotBeingAwardedPoints.PlayerCreatedListOfWords
 import org.occurrent.example.domain.wordguessinggame.support.add
 import java.util.*
 
@@ -17,8 +17,6 @@ fun startGame(previousEvents: Sequence<DomainEvent>, gameId: GameId, timestamp: 
 
     val gameStarted = GameWasStarted(eventId = UUID.randomUUID(), timestamp = timestamp, gameId = gameId, startedBy = playerId, category = wordsToChooseFrom.category.value,
             wordToGuess = wordToGuess.value, maxNumberOfGuessesPerPlayer = MaxNumberOfGuessesPerPlayer.value, maxNumberOfGuessesTotal = MaxNumberOfGuessesTotal.value)
-
-
 
     return sequenceOf(gameStarted)
 }
@@ -83,8 +81,7 @@ private fun Sequence<DomainEvent>.deriveGameState(): GameState = fold<DomainEven
 // Helper functions
 private fun awardPointsToPlayerThatGuessedTheRightWord(winnerId: PlayerId, timestamp: Timestamp, state: Ongoing): List<DomainEvent> {
     if (winnerId == state.startedBy) {
-        // No points awarded to player if game was started by winner
-        return emptyList()
+        return listOf(PlayerWasNotAwardedAnyPointsForGuessingTheRightWord(UUID.randomUUID(), timestamp, state.gameId, winnerId, reason = PlayerCreatedListOfWords))
     }
 
     val numberOfWrongGuessesForPlayerInGame = state.guesses.count { it.playerId == winnerId }

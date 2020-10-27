@@ -15,8 +15,9 @@ class AssembleGameReadModelFromDomainEvents internal constructor(val gameReadMod
         is GameWasWon -> applyEvent(e)
         is GameWasLost -> applyEvent(e)
         is NumberOfGuessesWasExhaustedForPlayer -> this
-        is PlayerWasAwardedPointsForGuessingTheRightWord -> applyEvent(e)
         is CharacterInWordHintWasRevealed -> applyEvent(e)
+        is PlayerWasAwardedPointsForGuessingTheRightWord -> applyEvent(e)
+        is PlayerWasNotAwardedAnyPointsForGuessingTheRightWord -> applyEvent(e)
     }
 
     private fun applyEvent(e: GameWasStarted): AssembleGameReadModelFromDomainEvents = e.run {
@@ -49,6 +50,12 @@ class AssembleGameReadModelFromDomainEvents internal constructor(val gameReadMod
         val model = gameReadModel as GameWasWonReadModel
 
         AssembleGameReadModelFromDomainEvents(model.copy(pointsAwardedToWinner = points))
+    }
+
+    private fun applyEvent(e: PlayerWasNotAwardedAnyPointsForGuessingTheRightWord): AssembleGameReadModelFromDomainEvents = e.run {
+        val model = gameReadModel as GameWasWonReadModel
+
+        AssembleGameReadModelFromDomainEvents(model.copy(pointsAwardedToWinner = 0))
     }
 
     private fun applyEvent(e: GameWasWon): AssembleGameReadModelFromDomainEvents = e.run {
