@@ -16,7 +16,7 @@
 
 package org.occurrent.subscription.util.blocking;
 
-import io.cloudevents.CloudEvent;
+import org.occurrent.subscription.CloudEventWithSubscriptionPosition;
 import org.occurrent.subscription.StartAt;
 import org.occurrent.subscription.SubscriptionFilter;
 import org.occurrent.subscription.SubscriptionPosition;
@@ -41,7 +41,7 @@ import static org.occurrent.subscription.util.predicate.EveryN.everyEvent;
  * Note that this implementation stores the subscription position after _every_ action. If you have a lot of events and duplication is not
  * that much of a deal consider cloning/extending this class and add your own customizations.
  */
-public class BlockingSubscriptionWithAutomaticPositionPersistence implements BlockingSubscription<CloudEvent> {
+public class BlockingSubscriptionWithAutomaticPositionPersistence implements PositionAwareBlockingSubscription {
 
     private final PositionAwareBlockingSubscription subscription;
     private final BlockingSubscriptionPositionStorage storage;
@@ -78,7 +78,7 @@ public class BlockingSubscriptionWithAutomaticPositionPersistence implements Blo
     }
 
     @Override
-    public Subscription subscribe(String subscriptionId, SubscriptionFilter filter, Supplier<StartAt> startAtSupplier, Consumer<CloudEvent> action) {
+    public Subscription subscribe(String subscriptionId, SubscriptionFilter filter, Supplier<StartAt> startAtSupplier, Consumer<CloudEventWithSubscriptionPosition> action) {
         return subscription.subscribe(subscriptionId,
                 filter, startAtSupplier, cloudEventWithStreamPosition -> {
                     action.accept(cloudEventWithStreamPosition);
@@ -90,7 +90,7 @@ public class BlockingSubscriptionWithAutomaticPositionPersistence implements Blo
     }
 
     @Override
-    public Subscription subscribe(String subscriptionId, Consumer<CloudEvent> action) {
+    public Subscription subscribe(String subscriptionId, Consumer<CloudEventWithSubscriptionPosition> action) {
         return subscribe(subscriptionId, (SubscriptionFilter) null, action);
     }
 
@@ -102,7 +102,7 @@ public class BlockingSubscriptionWithAutomaticPositionPersistence implements Blo
      * @param action         This action will be invoked for each cloud event that is stored in the EventStore that matches the supplied <code>filter</code>.
      */
     @Override
-    public Subscription subscribe(String subscriptionId, SubscriptionFilter filter, Consumer<CloudEvent> action) {
+    public Subscription subscribe(String subscriptionId, SubscriptionFilter filter, Consumer<CloudEventWithSubscriptionPosition> action) {
         Supplier<StartAt> startAtSupplier = () -> {
             // It's important that we find the document inside the supplier so that we lookup the latest resume token on retry
             SubscriptionPosition subscriptionPosition = storage.read(subscriptionId);
@@ -137,5 +137,10 @@ public class BlockingSubscriptionWithAutomaticPositionPersistence implements Blo
     @PreDestroy
     public void shutdownSubscribers() {
         subscription.shutdown();
+    }
+
+    @Override
+    public SubscriptionPosition globalSubscriptionPosition() {
+        return subscription.globalSubscriptionPosition();
     }
 }
