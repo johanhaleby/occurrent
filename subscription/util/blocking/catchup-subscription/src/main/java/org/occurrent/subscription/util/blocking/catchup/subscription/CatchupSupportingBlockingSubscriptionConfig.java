@@ -18,7 +18,7 @@ package org.occurrent.subscription.util.blocking.catchup.subscription;
 
 import org.occurrent.eventstore.api.blocking.EventStoreQueries;
 import org.occurrent.subscription.api.blocking.Subscription;
-import org.occurrent.subscription.util.blocking.catchup.subscription.CatchupPositionPersistenceConfig.DontPersistSubscriptionPositionDuringCatchupPhase;
+import org.occurrent.subscription.util.blocking.catchup.subscription.SubscriptionPositionStorageConfig.DontPersistSubscriptionPositionDuringCatchupPhase;
 
 import java.util.Objects;
 
@@ -28,7 +28,7 @@ import java.util.Objects;
 public class CatchupSupportingBlockingSubscriptionConfig {
 
     public final int cacheSize;
-    public final CatchupPositionPersistenceConfig catchupPositionPersistenceConfig;
+    public final SubscriptionPositionStorageConfig subscriptionStorageConfig;
 
     /**
      * @param cacheSize The number of cloud events id's to store in-memory when switching from "catch-up" mode (i.e. querying the {@link EventStoreQueries} API)
@@ -41,15 +41,15 @@ public class CatchupSupportingBlockingSubscriptionConfig {
     /**
      * @param cacheSize                        The number of cloud events id's to store in-memory when switching from "catch-up" mode (i.e. querying the {@link EventStoreQueries} API)
      *                                         and "subscription" mode ({@link Subscription}). The cache is needed to reduce the number of duplicate events the occurs when switching.
-     * @param catchupPositionPersistenceConfig Configures if and how subscription position persistence should be handled during the catch-up phase.
+     * @param subscriptionStorageConfig Configures if and how subscription position persistence should be handled during the catch-up phase.
      */
-    public CatchupSupportingBlockingSubscriptionConfig(int cacheSize, CatchupPositionPersistenceConfig catchupPositionPersistenceConfig) {
+    public CatchupSupportingBlockingSubscriptionConfig(int cacheSize, SubscriptionPositionStorageConfig subscriptionStorageConfig) {
         if (cacheSize < 1) {
             throw new IllegalArgumentException("Cache size must be greater than or equal to 1");
         }
-        Objects.requireNonNull(catchupPositionPersistenceConfig, CatchupPositionPersistenceConfig.class.getSimpleName() + " cannot be null");
+        Objects.requireNonNull(subscriptionStorageConfig, SubscriptionPositionStorageConfig.class.getSimpleName() + " cannot be null");
         this.cacheSize = cacheSize;
-        this.catchupPositionPersistenceConfig = catchupPositionPersistenceConfig;
+        this.subscriptionStorageConfig = subscriptionStorageConfig;
     }
 
 
@@ -59,19 +59,19 @@ public class CatchupSupportingBlockingSubscriptionConfig {
         if (!(o instanceof CatchupSupportingBlockingSubscriptionConfig)) return false;
         CatchupSupportingBlockingSubscriptionConfig that = (CatchupSupportingBlockingSubscriptionConfig) o;
         return cacheSize == that.cacheSize &&
-                Objects.equals(catchupPositionPersistenceConfig, that.catchupPositionPersistenceConfig);
+                Objects.equals(subscriptionStorageConfig, that.subscriptionStorageConfig);
     }
 
     @Override
     public int hashCode() {
-        return Objects.hash(cacheSize, catchupPositionPersistenceConfig);
+        return Objects.hash(cacheSize, subscriptionStorageConfig);
     }
 
     @Override
     public String toString() {
         return "CatchupSupportingBlockingSubscriptionConfig{" +
                 "cacheSize=" + cacheSize +
-                ", catchupPositionPersistenceConfig=" + catchupPositionPersistenceConfig +
+                ", catchupPositionPersistenceConfig=" + subscriptionStorageConfig +
                 '}';
     }
 }

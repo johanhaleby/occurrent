@@ -41,7 +41,7 @@ import org.occurrent.subscription.SubscriptionPosition;
 import org.occurrent.subscription.mongodb.nativedriver.blocking.BlockingSubscriptionForMongoDB;
 import org.occurrent.subscription.mongodb.nativedriver.blocking.BlockingSubscriptionPositionStorageForMongoDB;
 import org.occurrent.subscription.mongodb.nativedriver.blocking.RetryStrategy;
-import org.occurrent.subscription.util.blocking.catchup.subscription.CatchupPositionPersistenceConfig.PersistSubscriptionPositionDuringCatchupPhase;
+import org.occurrent.subscription.util.blocking.catchup.subscription.SubscriptionPositionStorageConfig.PersistSubscriptionPositionDuringCatchupPhase;
 import org.occurrent.testsupport.mongodb.FlushMongoDBExtension;
 import org.testcontainers.containers.MongoDBContainer;
 import org.testcontainers.junit.jupiter.Container;

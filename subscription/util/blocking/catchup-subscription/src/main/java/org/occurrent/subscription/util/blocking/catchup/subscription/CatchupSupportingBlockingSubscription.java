@@ -25,7 +25,8 @@ import org.occurrent.subscription.api.blocking.BlockingSubscription;
 import org.occurrent.subscription.api.blocking.BlockingSubscriptionPositionStorage;
 import org.occurrent.subscription.api.blocking.PositionAwareBlockingSubscription;
 import org.occurrent.subscription.api.blocking.Subscription;
-import org.occurrent.subscription.util.blocking.catchup.subscription.CatchupPositionPersistenceConfig.PersistSubscriptionPositionDuringCatchupPhase;
+import org.occurrent.subscription.util.blocking.catchup.subscription.SubscriptionPositionStorageConfig.PersistSubscriptionPositionDuringCatchupPhase;
+import org.occurrent.subscription.util.blocking.catchup.subscription.SubscriptionPositionStorageConfig.UseSubscriptionPositionInStorage;
 
 import javax.annotation.PreDestroy;
 import java.time.OffsetDateTime;
@@ -114,6 +115,7 @@ public class CatchupSupportingBlockingSubscription implements BlockingSubscripti
             startAt = startAtSupplier.get();
         }
 
+        // TODO!! We want to continue from the wrapping subscription if it has something stored in it's position storage!!!!
         if (!isTimeBasedSubscriptionPosition(startAt)) {
             return subscription.subscribe(subscriptionId, filter, startAtSupplier, action::accept);
         }
@@ -145,8 +147,8 @@ public class CatchupSupportingBlockingSubscription implements BlockingSubscripti
         takeWhile(stream, __ -> runningCatchupSubscriptions.containsKey(subscriptionId))
                 .peek(action)
                 .peek(e -> cache.put(e.getId()))
-                .filter(returnIfPersistSubscriptionPositionDuringCatchupPhase(cfg -> cfg.persistCloudEventPositionPredicate).orElse(__ -> false))
-                .forEach(e -> doIfPersistSubscriptionPositionDuringCatchupPhase(cfg -> cfg.storage.save(subscriptionId, TimeBasedSubscriptionPosition.from(e.getTime()))));
+                .filter(returnIfSubscriptionPositionStorageConfigIs(PersistSubscriptionPositionDuringCatchupPhase.class, cfg -> cfg.persistCloudEventPositionPredicate).orElse(__ -> false))
+                .forEach(e -> doIfSubscriptionPositionStorageConfigIs(PersistSubscriptionPositionDuringCatchupPhase.class, cfg -> cfg.storage.save(subscriptionId, TimeBasedSubscriptionPosition.from(e.getTime()))));
 
         runningCatchupSubscriptions.remove(subscriptionId);
         // TODO Should we remove the position from storage?! For example if the wrapping subscription is not storing the position?
@@ -162,7 +164,7 @@ public class CatchupSupportingBlockingSubscription implements BlockingSubscripti
     public void cancelSubscription(String subscriptionId) {
         runningCatchupSubscriptions.remove(subscriptionId);
         subscription.cancelSubscription(subscriptionId);
-        doIfPersistSubscriptionPositionDuringCatchupPhase(cfg -> cfg.storage.delete(subscriptionId));
+        doIfSubscriptionPositionStorageConfigIs(UseSubscriptionPositionInStorage.class, cfg -> cfg.storage.delete(subscriptionId));
     }
 
     @Override
@@ -174,7 +176,7 @@ public class CatchupSupportingBlockingSubscription implements BlockingSubscripti
     @Override
     public Subscription subscribe(String subscriptionId, SubscriptionFilter filter, Consumer<CloudEvent> action) {
         return subscribe(subscriptionId, filter, () -> {
-            SubscriptionPosition subscriptionPosition = returnIfPersistSubscriptionPositionDuringCatchupPhase(cfg -> cfg.storage.read(subscriptionId)).orElse(null);
+            SubscriptionPosition subscriptionPosition = returnIfSubscriptionPositionStorageConfigIs(UseSubscriptionPositionInStorage.class, cfg -> cfg.storage.read(subscriptionId)).orElse(null);
             // We use null instead of StartAt.now() if subscriptionPosition doesn't exist so that the wrapping subscription can determine what to do
             return subscriptionPosition == null ? null : StartAt.subscriptionPosition(subscriptionPosition);
         }, action);
@@ -231,16 +233,16 @@ public class CatchupSupportingBlockingSubscription implements BlockingSubscripti
         }
     }
 
-    private <T> Optional<T> returnIfPersistSubscriptionPositionDuringCatchupPhase(Function<PersistSubscriptionPositionDuringCatchupPhase, T> fn) {
-        if (config.catchupPositionPersistenceConfig instanceof PersistSubscriptionPositionDuringCatchupPhase) {
-            return Optional.ofNullable(fn.apply((PersistSubscriptionPositionDuringCatchupPhase) config.catchupPositionPersistenceConfig));
+    private <T, C extends SubscriptionPositionStorageConfig> Optional<T> returnIfSubscriptionPositionStorageConfigIs(Class<C> cls, Function<C, T> fn) {
+        if (cls.isInstance(config.subscriptionStorageConfig)) {
+            return Optional.ofNullable(fn.apply(cls.cast(config.subscriptionStorageConfig)));
         }
         return Optional.empty();
     }
 
-    private <T> void doIfPersistSubscriptionPositionDuringCatchupPhase(Consumer<PersistSubscriptionPositionDuringCatchupPhase> consumer) {
-        if (config.catchupPositionPersistenceConfig instanceof PersistSubscriptionPositionDuringCatchupPhase) {
-            consumer.accept((PersistSubscriptionPositionDuringCatchupPhase) config.catchupPositionPersistenceConfig);
+    private <T, C extends SubscriptionPositionStorageConfig> void doIfSubscriptionPositionStorageConfigIs(Class<C> cls, Consumer<C> consumer) {
+        if (cls.isInstance(config.subscriptionStorageConfig)) {
+            consumer.accept(cls.cast(config.subscriptionStorageConfig));
         }
     }
 }
