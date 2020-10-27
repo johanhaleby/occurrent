@@ -10,8 +10,8 @@ class Word(value: String) {
 
     companion object {
         const val VALID_WORD_REGEX = """^([A-Za-z]|\s)+\$"""
-        const val MINIMUM_NUMBER_OF_CHARACTERS = 4
-        const val MAXIMUM_NUMBER_OF_CHARACTERS = 10
+        const val MINIMUM_NUMBER_OF_CHARACTERS = 3
+        const val MAXIMUM_NUMBER_OF_CHARACTERS = 15
     }
 
     val value: String
@@ -60,8 +60,8 @@ object MaxNumberOfGuessesTotal {
 
 data class WordsToChooseFrom(val category: WordCategory, val words: List<Word>) : Sequence<Word> {
     init {
-        require(words.size in 5..20) {
-            "You need to supply between 5 to 20 words in the ${category.value} category, was ${words.size}."
+        require(words.size in 4..20) {
+            "You need to supply between 4 to 20 words in the ${category.value} category, was ${words.size}."
         }
     }
 
