@@ -26,7 +26,7 @@ public abstract class SubscriptionPositionStorageConfig {
     }
 
 
-    static class UseSubscriptionPositionInStorage extends SubscriptionPositionStorageConfig {
+    public static class UseSubscriptionPositionInStorage extends SubscriptionPositionStorageConfig {
         public final BlockingSubscriptionPositionStorage storage;
 
         UseSubscriptionPositionInStorage(BlockingSubscriptionPositionStorage storage) {
@@ -73,15 +73,8 @@ public abstract class SubscriptionPositionStorageConfig {
         }
     }
 
-    static final class PersistSubscriptionPositionDuringCatchupPhase extends UseSubscriptionPositionInStorage {
+    public static final class PersistSubscriptionPositionDuringCatchupPhase extends UseSubscriptionPositionInStorage {
         public final Predicate<CloudEvent> persistCloudEventPositionPredicate;
-
-        /*
-         * @param storage                            The storage that will maintain the subscription position during catch-up mode.
-         */
-        PersistSubscriptionPositionDuringCatchupPhase(BlockingSubscriptionPositionStorage storage) {
-            this(storage, EveryN.every(10));
-        }
 
         /**
          * @param storage                            The storage that will maintain the subscription position during catch-up mode.

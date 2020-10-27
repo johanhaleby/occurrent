@@ -18,9 +18,10 @@ package org.occurrent.subscription.util.blocking.catchup.subscription;
 
 import org.occurrent.eventstore.api.blocking.EventStoreQueries;
 import org.occurrent.subscription.api.blocking.Subscription;
-import org.occurrent.subscription.util.blocking.catchup.subscription.SubscriptionPositionStorageConfig.DontPersistSubscriptionPositionDuringCatchupPhase;
 
 import java.util.Objects;
+
+import static org.occurrent.subscription.util.blocking.catchup.subscription.SubscriptionPositionStorageConfig.dontSubscriptionPositionStorage;
 
 /**
  * Configuration for {@link CatchupSupportingBlockingSubscription}
@@ -35,12 +36,19 @@ public class CatchupSupportingBlockingSubscriptionConfig {
      *                  and "subscription" mode ({@link Subscription}). The cache is needed to reduce the number of duplicate events the occurs when switching.
      */
     public CatchupSupportingBlockingSubscriptionConfig(int cacheSize) {
-        this(cacheSize, new DontPersistSubscriptionPositionDuringCatchupPhase());
+        this(cacheSize, dontSubscriptionPositionStorage());
     }
 
     /**
-     * @param cacheSize                        The number of cloud events id's to store in-memory when switching from "catch-up" mode (i.e. querying the {@link EventStoreQueries} API)
-     *                                         and "subscription" mode ({@link Subscription}). The cache is needed to reduce the number of duplicate events the occurs when switching.
+     * @param subscriptionStorageConfig Configures if and how subscription position persistence should be handled during the catch-up phase.
+     */
+    public CatchupSupportingBlockingSubscriptionConfig(SubscriptionPositionStorageConfig subscriptionStorageConfig) {
+        this(100, subscriptionStorageConfig);
+    }
+
+    /**
+     * @param cacheSize                 The number of cloud events id's to store in-memory when switching from "catch-up" mode (i.e. querying the {@link EventStoreQueries} API)
+     *                                  and "subscription" mode ({@link Subscription}). The cache is needed to reduce the number of duplicate events the occurs when switching.
      * @param subscriptionStorageConfig Configures if and how subscription position persistence should be handled during the catch-up phase.
      */
     public CatchupSupportingBlockingSubscriptionConfig(int cacheSize, SubscriptionPositionStorageConfig subscriptionStorageConfig) {
