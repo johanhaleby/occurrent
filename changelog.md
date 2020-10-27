@@ -6,6 +6,8 @@ Changelog next version:
 * MongoDB event streams are now explicitly sorted by natural order by default. The reason for this is that just relying on default "sorting" on read lead to wrong order on certain occasions.
 * Writing an empty stream to a mongodb-based event store will just ignore the stream and not try to persist the empty stream to the datastore.
 * Upgraded to cloudevents sdk 2.0.0-milestone3
+* Non-backward compatible change: `CatchupSupportingBlockingSubscription` no longer requires a subscription position storage during the catch-up phase. 
+  Instead, you pass the storage implementation to `CatchupSupportingBlockingSubscriptionConfig` along with the position persistence predicate. 
 
 Version 0.1.1 (2020-09-26):
 

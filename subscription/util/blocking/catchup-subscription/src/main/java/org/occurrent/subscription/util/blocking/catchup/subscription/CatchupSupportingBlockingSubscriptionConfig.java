@@ -16,13 +16,11 @@
 
 package org.occurrent.subscription.util.blocking.catchup.subscription;
 
-import io.cloudevents.CloudEvent;
 import org.occurrent.eventstore.api.blocking.EventStoreQueries;
 import org.occurrent.subscription.api.blocking.Subscription;
-import org.occurrent.subscription.util.predicate.EveryN;
+import org.occurrent.subscription.util.blocking.catchup.subscription.CatchupPositionPersistenceConfig.DontPersistSubscriptionPositionDuringCatchupPhase;
 
 import java.util.Objects;
-import java.util.function.Predicate;
 
 /**
  * Configuration for {@link CatchupSupportingBlockingSubscription}
@@ -30,31 +28,28 @@ import java.util.function.Predicate;
 public class CatchupSupportingBlockingSubscriptionConfig {
 
     public final int cacheSize;
-    public final Predicate<CloudEvent> persistCloudEventPositionPredicate;
+    public final CatchupPositionPersistenceConfig catchupPositionPersistenceConfig;
 
     /**
-     * @param cacheSize                          The number of cloud events id's to store in-memory when switching from "catch-up" mode (i.e. querying the {@link EventStoreQueries} API)
-     *                                           and "subscription" mode ({@link Subscription}). The cache is needed to reduce the number of duplicate events the occurs when switching.
-     * @param persistCloudEventPositionPredicate A predicate that evaluates to <code>true</code> if the cloud event position should be persisted. See {@link EveryN}.
-     *                                           Supply a predicate that always returns {@code false} to never store the position.
+     * @param cacheSize The number of cloud events id's to store in-memory when switching from "catch-up" mode (i.e. querying the {@link EventStoreQueries} API)
+     *                  and "subscription" mode ({@link Subscription}). The cache is needed to reduce the number of duplicate events the occurs when switching.
      */
-    public CatchupSupportingBlockingSubscriptionConfig(int cacheSize, Predicate<CloudEvent> persistCloudEventPositionPredicate) {
+    public CatchupSupportingBlockingSubscriptionConfig(int cacheSize) {
+        this(cacheSize, new DontPersistSubscriptionPositionDuringCatchupPhase());
+    }
+
+    /**
+     * @param cacheSize                        The number of cloud events id's to store in-memory when switching from "catch-up" mode (i.e. querying the {@link EventStoreQueries} API)
+     *                                         and "subscription" mode ({@link Subscription}). The cache is needed to reduce the number of duplicate events the occurs when switching.
+     * @param catchupPositionPersistenceConfig Configures if and how subscription position persistence should be handled during the catch-up phase.
+     */
+    public CatchupSupportingBlockingSubscriptionConfig(int cacheSize, CatchupPositionPersistenceConfig catchupPositionPersistenceConfig) {
         if (cacheSize < 1) {
             throw new IllegalArgumentException("Cache size must be greater than or equal to 1");
         }
-        Objects.requireNonNull(persistCloudEventPositionPredicate, "persistCloudEventPositionPredicate cannot be null");
+        Objects.requireNonNull(catchupPositionPersistenceConfig, CatchupPositionPersistenceConfig.class.getSimpleName() + " cannot be null");
         this.cacheSize = cacheSize;
-        this.persistCloudEventPositionPredicate = persistCloudEventPositionPredicate;
-    }
-
-
-    /**
-     * @param cacheSize                          The number of cloud events id's to store in-memory when switching from "catch-up" mode (i.e. querying the {@link EventStoreQueries} API)
-     *                                           and "subscription" mode ({@link Subscription}). The cache is needed to reduce the number of duplicate events the occurs when switching.
-     * @param persistPositionForEveryNCloudEvent Persist the position of every N cloud event so that it's possible to avoid restarting from scratch when subscription is restarted.
-     */
-    public CatchupSupportingBlockingSubscriptionConfig(int cacheSize, int persistPositionForEveryNCloudEvent) {
-        this(cacheSize, new EveryN(persistPositionForEveryNCloudEvent));
+        this.catchupPositionPersistenceConfig = catchupPositionPersistenceConfig;
     }
 
 
@@ -64,19 +59,19 @@ public class CatchupSupportingBlockingSubscriptionConfig {
         if (!(o instanceof CatchupSupportingBlockingSubscriptionConfig)) return false;
         CatchupSupportingBlockingSubscriptionConfig that = (CatchupSupportingBlockingSubscriptionConfig) o;
         return cacheSize == that.cacheSize &&
-                Objects.equals(persistCloudEventPositionPredicate, that.persistCloudEventPositionPredicate);
+                Objects.equals(catchupPositionPersistenceConfig, that.catchupPositionPersistenceConfig);
     }
 
     @Override
     public int hashCode() {
-        return Objects.hash(cacheSize, persistCloudEventPositionPredicate);
+        return Objects.hash(cacheSize, catchupPositionPersistenceConfig);
     }
 
     @Override
     public String toString() {
         return "CatchupSupportingBlockingSubscriptionConfig{" +
                 "cacheSize=" + cacheSize +
-                ", persistCloudEventPositionPredicate=" + persistCloudEventPositionPredicate +
+                ", catchupPositionPersistenceConfig=" + catchupPositionPersistenceConfig +
                 '}';
     }
 }

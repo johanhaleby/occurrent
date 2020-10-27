@@ -38,10 +38,10 @@ import org.occurrent.eventstore.mongodb.nativedriver.MongoEventStore;
 import org.occurrent.mongodb.timerepresentation.TimeRepresentation;
 import org.occurrent.subscription.StartAt;
 import org.occurrent.subscription.SubscriptionPosition;
-import org.occurrent.subscription.api.blocking.BlockingSubscriptionPositionStorage;
 import org.occurrent.subscription.mongodb.nativedriver.blocking.BlockingSubscriptionForMongoDB;
 import org.occurrent.subscription.mongodb.nativedriver.blocking.BlockingSubscriptionPositionStorageForMongoDB;
 import org.occurrent.subscription.mongodb.nativedriver.blocking.RetryStrategy;
+import org.occurrent.subscription.util.blocking.catchup.subscription.CatchupPositionPersistenceConfig.PersistSubscriptionPositionDuringCatchupPhase;
 import org.occurrent.testsupport.mongodb.FlushMongoDBExtension;
 import org.testcontainers.containers.MongoDBContainer;
 import org.testcontainers.junit.jupiter.Container;
@@ -100,7 +100,7 @@ public class CatchupSupportingBlockingSubscriptionTest {
         mongoEventStore = new MongoEventStore(mongoClient, connectionString.getDatabase(), connectionString.getCollection(), config);
         subscriptionExecutor = Executors.newCachedThreadPool();
         storage = new BlockingSubscriptionPositionStorageForMongoDB(database, "storage");
-        subscription = newCatchupSubscription(database, eventCollection, timeRepresentation, storage, new CatchupSupportingBlockingSubscriptionConfig(100, 1));
+        subscription = newCatchupSubscription(database, eventCollection, timeRepresentation, new CatchupSupportingBlockingSubscriptionConfig(100, new PersistSubscriptionPositionDuringCatchupPhase(storage, 1)));
         objectMapper = new ObjectMapper();
     }
 
@@ -247,7 +247,7 @@ public class CatchupSupportingBlockingSubscriptionTest {
         }).waitUntilStarted();
 
         awaitLatch(waitUntilSecondEventProcessed);
-        subscription = newCatchupSubscription(database, eventCollection, TimeRepresentation.DATE, storage, new CatchupSupportingBlockingSubscriptionConfig(100, 1));
+        subscription = newCatchupSubscription(database, eventCollection, TimeRepresentation.DATE, new CatchupSupportingBlockingSubscriptionConfig(100, new PersistSubscriptionPositionDuringCatchupPhase(storage, 1)));
         subscription.subscribe(subscriptionId, state::add).waitUntilStarted();
 
         // Then
@@ -273,7 +273,7 @@ public class CatchupSupportingBlockingSubscriptionTest {
             }
         };
 
-        subscription = newCatchupSubscription(database, eventCollection, TimeRepresentation.DATE, this.storage, new CatchupSupportingBlockingSubscriptionConfig(100, 10));
+        subscription = newCatchupSubscription(database, eventCollection, TimeRepresentation.DATE, new CatchupSupportingBlockingSubscriptionConfig(100, new PersistSubscriptionPositionDuringCatchupPhase(this.storage, 10)));
 
         CopyOnWriteArrayList<CloudEvent> state = new CopyOnWriteArrayList<>();
 
@@ -315,9 +315,8 @@ public class CatchupSupportingBlockingSubscriptionTest {
                 .build());
     }
 
-    private CatchupSupportingBlockingSubscription newCatchupSubscription(MongoDatabase database, MongoCollection<Document> eventCollection, TimeRepresentation timeRepresentation, BlockingSubscriptionPositionStorage storage,
-                                                                         CatchupSupportingBlockingSubscriptionConfig config) {
+    private CatchupSupportingBlockingSubscription newCatchupSubscription(MongoDatabase database, MongoCollection<Document> eventCollection, TimeRepresentation timeRepresentation, CatchupSupportingBlockingSubscriptionConfig config) {
         BlockingSubscriptionForMongoDB blockingSubscriptionForMongoDB = new BlockingSubscriptionForMongoDB(database, eventCollection, timeRepresentation, subscriptionExecutor, RetryStrategy.none());
-        return new CatchupSupportingBlockingSubscription(blockingSubscriptionForMongoDB, mongoEventStore, storage, config);
+        return new CatchupSupportingBlockingSubscription(blockingSubscriptionForMongoDB, mongoEventStore, config);
     }
 }

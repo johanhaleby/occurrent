@@ -25,15 +25,17 @@ import org.occurrent.subscription.api.blocking.BlockingSubscription;
 import org.occurrent.subscription.api.blocking.BlockingSubscriptionPositionStorage;
 import org.occurrent.subscription.api.blocking.PositionAwareBlockingSubscription;
 import org.occurrent.subscription.api.blocking.Subscription;
-import org.occurrent.subscription.util.predicate.EveryN;
+import org.occurrent.subscription.util.blocking.catchup.subscription.CatchupPositionPersistenceConfig.PersistSubscriptionPositionDuringCatchupPhase;
 
 import javax.annotation.PreDestroy;
 import java.time.OffsetDateTime;
 import java.util.LinkedHashMap;
 import java.util.Map;
+import java.util.Optional;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ConcurrentMap;
 import java.util.function.Consumer;
+import java.util.function.Function;
 import java.util.function.Supplier;
 import java.util.stream.Stream;
 
@@ -67,21 +69,20 @@ public class CatchupSupportingBlockingSubscription implements BlockingSubscripti
 
     private final PositionAwareBlockingSubscription subscription;
     private final EventStoreQueries eventStoreQueries;
-    private final BlockingSubscriptionPositionStorage storage;
     private final CatchupSupportingBlockingSubscriptionConfig config;
     private final ConcurrentMap<String, Boolean> runningCatchupSubscriptions = new ConcurrentHashMap<>();
 
     /**
      * Create a new instance of {@link CatchupSupportingBlockingSubscription} the uses a default {@link CatchupSupportingBlockingSubscriptionConfig} with a cache size of
-     * {@value #DEFAULT_CACHE_SIZE} and that stores subscription position of every 10th event when in catch-up mode. After catch-up mode has completed, the {@link PositionAwareBlockingSubscription}
+     * {@value #DEFAULT_CACHE_SIZE} but store the subscription position during the <i>catch-up</i> phase (i.e. if the application crashes or is shutdown during the
+     * catch-up phase then the subscription will start from the beginning on application restart). After the catch-up phase has completed, the {@link PositionAwareBlockingSubscription}
      * will dictate how often the subscription position is stored.
      *
      * @param subscription      The subscription that'll be used to subscribe to new events <i>after</i> catch-up is completed.
      * @param eventStoreQueries The API that will be used for catch-up
-     * @param storage           The storage that will maintain the subscription position during catch-up mode.
      */
-    public CatchupSupportingBlockingSubscription(PositionAwareBlockingSubscription subscription, EventStoreQueries eventStoreQueries, BlockingSubscriptionPositionStorage storage) {
-        this(subscription, eventStoreQueries, storage, new CatchupSupportingBlockingSubscriptionConfig(DEFAULT_CACHE_SIZE, EveryN.every(10)));
+    public CatchupSupportingBlockingSubscription(PositionAwareBlockingSubscription subscription, EventStoreQueries eventStoreQueries) {
+        this(subscription, eventStoreQueries, new CatchupSupportingBlockingSubscriptionConfig(DEFAULT_CACHE_SIZE));
     }
 
     /**
@@ -90,13 +91,11 @@ public class CatchupSupportingBlockingSubscription implements BlockingSubscripti
      *
      * @param subscription      The subscription that'll be used to subscribe to new events <i>after</i> catch-up is completed.
      * @param eventStoreQueries The API that will be used for catch-up
-     * @param storage           The storage that will maintain the subscription position during catch-up mode.
+     * @param config            The configuration to use
      */
-    public CatchupSupportingBlockingSubscription(PositionAwareBlockingSubscription subscription, EventStoreQueries eventStoreQueries, BlockingSubscriptionPositionStorage storage,
-                                                 CatchupSupportingBlockingSubscriptionConfig config) {
+    public CatchupSupportingBlockingSubscription(PositionAwareBlockingSubscription subscription, EventStoreQueries eventStoreQueries, CatchupSupportingBlockingSubscriptionConfig config) {
         this.subscription = subscription;
         this.eventStoreQueries = eventStoreQueries;
-        this.storage = storage;
         this.config = config;
     }
 
@@ -146,8 +145,8 @@ public class CatchupSupportingBlockingSubscription implements BlockingSubscripti
         takeWhile(stream, __ -> runningCatchupSubscriptions.containsKey(subscriptionId))
                 .peek(action)
                 .peek(e -> cache.put(e.getId()))
-                .filter(config.persistCloudEventPositionPredicate)
-                .forEach(e -> storage.save(subscriptionId, TimeBasedSubscriptionPosition.from(e.getTime())));
+                .filter(returnIfPersistSubscriptionPositionDuringCatchupPhase(cfg -> cfg.persistCloudEventPositionPredicate).orElse(__ -> false))
+                .forEach(e -> doIfPersistSubscriptionPositionDuringCatchupPhase(cfg -> cfg.storage.save(subscriptionId, TimeBasedSubscriptionPosition.from(e.getTime()))));
 
         runningCatchupSubscriptions.remove(subscriptionId);
         // TODO Should we remove the position from storage?! For example if the wrapping subscription is not storing the position?
@@ -163,7 +162,7 @@ public class CatchupSupportingBlockingSubscription implements BlockingSubscripti
     public void cancelSubscription(String subscriptionId) {
         runningCatchupSubscriptions.remove(subscriptionId);
         subscription.cancelSubscription(subscriptionId);
-        storage.delete(subscriptionId);
+        doIfPersistSubscriptionPositionDuringCatchupPhase(cfg -> cfg.storage.delete(subscriptionId));
     }
 
     @Override
@@ -175,7 +174,7 @@ public class CatchupSupportingBlockingSubscription implements BlockingSubscripti
     @Override
     public Subscription subscribe(String subscriptionId, SubscriptionFilter filter, Consumer<CloudEvent> action) {
         return subscribe(subscriptionId, filter, () -> {
-            SubscriptionPosition subscriptionPosition = storage.read(subscriptionId);
+            SubscriptionPosition subscriptionPosition = returnIfPersistSubscriptionPositionDuringCatchupPhase(cfg -> cfg.storage.read(subscriptionId)).orElse(null);
             // We use null instead of StartAt.now() if subscriptionPosition doesn't exist so that the wrapping subscription can determine what to do
             return subscriptionPosition == null ? null : StartAt.subscriptionPosition(subscriptionPosition);
         }, action);
@@ -229,6 +228,19 @@ public class CatchupSupportingBlockingSubscription implements BlockingSubscripti
 
         public boolean isCached(String key) {
             return cacheContent.containsKey(key);
+        }
+    }
+
+    private <T> Optional<T> returnIfPersistSubscriptionPositionDuringCatchupPhase(Function<PersistSubscriptionPositionDuringCatchupPhase, T> fn) {
+        if (config.catchupPositionPersistenceConfig instanceof PersistSubscriptionPositionDuringCatchupPhase) {
+            return Optional.ofNullable(fn.apply((PersistSubscriptionPositionDuringCatchupPhase) config.catchupPositionPersistenceConfig));
+        }
+        return Optional.empty();
+    }
+
+    private <T> void doIfPersistSubscriptionPositionDuringCatchupPhase(Consumer<PersistSubscriptionPositionDuringCatchupPhase> consumer) {
+        if (config.catchupPositionPersistenceConfig instanceof PersistSubscriptionPositionDuringCatchupPhase) {
+            consumer.accept((PersistSubscriptionPositionDuringCatchupPhase) config.catchupPositionPersistenceConfig);
         }
     }
 }
