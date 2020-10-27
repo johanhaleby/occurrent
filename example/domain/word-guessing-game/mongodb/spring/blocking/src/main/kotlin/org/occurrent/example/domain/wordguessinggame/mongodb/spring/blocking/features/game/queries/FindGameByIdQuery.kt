@@ -12,7 +12,7 @@ import java.util.*
 class FindGameByIdQuery(private val domainEvents: DomainEventQueries) {
 
     fun execute(gameId: UUID): GameReadModel? =
-            domainEvents.query<DomainEvent>(subject(gameId.toString())) // We use subject to retrieve _all_ game events
+            domainEvents.query<DomainEvent>(subject(gameId.toString())) // We use subject to retrieve _all_ game events from different streams
                     .fold(AssembleGameReadModelFromDomainEvents(), AssembleGameReadModelFromDomainEvents::applyEvent)
                     .gameReadModel
 }

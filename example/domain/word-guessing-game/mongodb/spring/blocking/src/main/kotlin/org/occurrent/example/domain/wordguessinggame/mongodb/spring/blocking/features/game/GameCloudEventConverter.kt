@@ -14,7 +14,7 @@ import java.time.ZoneOffset
 import java.time.temporal.ChronoUnit
 import java.util.*
 
-class GameCloudEventConverter(private val objectMapper: ObjectMapper, private val gameSource: URI, private val wordHintSource: URI) : CloudEventConverter<DomainEvent> {
+class GameCloudEventConverter(private val objectMapper: ObjectMapper, private val gameSource: URI, private val wordHintSource: URI, private val pointsSource: URI) : CloudEventConverter<DomainEvent> {
 
     override fun toCloudEvent(domainEvent: DomainEvent): CloudEvent {
         val (source: URI, data: EventData?) = when (domainEvent) {
@@ -23,8 +23,8 @@ class GameCloudEventConverter(private val objectMapper: ObjectMapper, private va
             is CharacterInWordHintWasRevealed -> wordHintSource to domainEvent.run { CharacterInWordHintWasRevealedData(character, characterPositionInWord) }
             is NumberOfGuessesWasExhaustedForPlayer -> gameSource to NumberOfGuessesWasExhaustedForPlayerData(domainEvent.playerId)
             is PlayerGuessedTheRightWord -> gameSource to domainEvent.run { PlayerGuessedTheRightWordData(playerId, guessedWord) }
-            is PlayerWasAwardedPointsForGuessingTheRightWord -> gameSource to domainEvent.run { PlayerWasAwardedPointsForGuessingTheRightWordData(playerId, points) }
-            is PlayerWasNotAwardedAnyPointsForGuessingTheRightWord -> gameSource to domainEvent.run { PlayerWasNotAwardedAnyPointsForGuessingTheRightWordData(playerId, reason::class.simpleName!!) }
+            is PlayerWasAwardedPointsForGuessingTheRightWord -> pointsSource to domainEvent.run { PlayerWasAwardedPointsForGuessingTheRightWordData(playerId, points) }
+            is PlayerWasNotAwardedAnyPointsForGuessingTheRightWord -> pointsSource to domainEvent.run { PlayerWasNotAwardedAnyPointsForGuessingTheRightWordData(playerId, reason::class.simpleName!!) }
             is GameWasWon -> gameSource to GameWasWonData(domainEvent.winnerId)
             is GameWasLost -> gameSource to null
         }

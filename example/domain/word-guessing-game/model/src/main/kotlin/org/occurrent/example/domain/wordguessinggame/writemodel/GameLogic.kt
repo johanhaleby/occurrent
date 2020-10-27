@@ -34,7 +34,6 @@ fun guessWord(previousEvents: Sequence<DomainEvent>, timestamp: Timestamp, playe
         if (state.isRightGuess(guessedWord)) {
             events.add(PlayerGuessedTheRightWord(UUID.randomUUID(), timestamp, state.gameId, playerId, guessedWord.value))
             events.add(GameWasWon(UUID.randomUUID(), timestamp, state.gameId, playerId))
-            events.addAll(awardPointsToPlayerThatGuessedTheRightWord(playerId, timestamp, state))
         } else {
             events.add(PlayerGuessedTheWrongWord(UUID.randomUUID(), timestamp, state.gameId, playerId, guessedWord.value))
 
@@ -76,16 +75,4 @@ private fun Sequence<DomainEvent>.deriveGameState(): GameState = fold<DomainEven
         state is Ongoing && event is GameWasLost -> Ended
         else -> throw IllegalStateException("Event ${event.type} is not applicable in state ${state::class.simpleName!!}")
     }
-}
-
-// Helper functions
-private fun awardPointsToPlayerThatGuessedTheRightWord(winnerId: PlayerId, timestamp: Timestamp, state: Ongoing): List<DomainEvent> {
-    if (winnerId == state.startedBy) {
-        return listOf(PlayerWasNotAwardedAnyPointsForGuessingTheRightWord(UUID.randomUUID(), timestamp, state.gameId, winnerId, reason = PlayerCreatedListOfWords))
-    }
-
-    val numberOfWrongGuessesForPlayerInGame = state.guesses.count { it.playerId == winnerId }
-    val totalGuessesForPlayerInGame = numberOfWrongGuessesForPlayerInGame + 1
-    val points = PointCalculationLogic.calculatePointsToAwardPlayerAfterSuccessfullyGuessedTheRightWord(totalGuessesForPlayerInGame)
-    return listOf(PlayerWasAwardedPointsForGuessingTheRightWord(UUID.randomUUID(), timestamp, state.gameId, winnerId, points))
 }

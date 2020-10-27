@@ -14,12 +14,12 @@ object WordHintCharacterRevelation {
     private const val minimumNumberOfObfuscatedCharactersInWordHint = 2
 
     fun revealInitialCharactersInWordHintWhenGameWasStarted(wordHintData: WordHintData): Sequence<CharacterInWordHintWasRevealed> {
-        return wordHintData.wordToGuess.revealNewRandomCharacters(minimumNumberOfRevealedCharactersInWordHint).thenConvertToCharacterInWordHintWasRevealedEvents(wordHintData.gameId)
+        return wordHintData.wordToGuess.revealNewRandomCharacters(minimumNumberOfRevealedCharactersInWordHint).thenConvertToCharacterInWordHintWasRevealedEvents(Timestamp(), wordHintData.gameId)
     }
 
     fun revealCharacterInWordHintWhenPlayerGuessedTheWrongWord(wordHintData: WordHintData): Sequence<CharacterInWordHintWasRevealed> {
         val (gameId, wordToGuess, currentlyRevealedPositions) = wordHintData
-        return wordToGuess.revealNewRandomCharacters(1, currentlyRevealedPositions).thenConvertToCharacterInWordHintWasRevealedEvents(gameId)
+        return wordToGuess.revealNewRandomCharacters(1, currentlyRevealedPositions).thenConvertToCharacterInWordHintWasRevealedEvents(Timestamp(), gameId)
     }
 
     private fun String.revealNewRandomCharacters(maxNumberOfCharactersToReveal: Int, currentlyRevealedPositions: Set<Int> = emptySet()): List<RevealedCharacter> {
@@ -41,6 +41,6 @@ object WordHintCharacterRevelation {
     }
 }
 
-private fun List<RevealedCharacter>.thenConvertToCharacterInWordHintWasRevealedEvents(gameId: UUID): Sequence<CharacterInWordHintWasRevealed> {
-    return map { (character, characterPositionInWord) -> CharacterInWordHintWasRevealed(UUID.randomUUID(), Timestamp(), gameId, character, characterPositionInWord) }.asSequence()
+private fun List<RevealedCharacter>.thenConvertToCharacterInWordHintWasRevealedEvents(timestamp: Timestamp, gameId: UUID): Sequence<CharacterInWordHintWasRevealed> {
+    return map { (character, characterPositionInWord) -> CharacterInWordHintWasRevealed(UUID.randomUUID(), timestamp, gameId, character, characterPositionInWord) }.asSequence()
 }
