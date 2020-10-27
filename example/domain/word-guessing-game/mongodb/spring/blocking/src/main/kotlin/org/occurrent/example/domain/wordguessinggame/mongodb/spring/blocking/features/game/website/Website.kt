@@ -17,12 +17,13 @@ package org.occurrent.example.domain.wordguessinggame.mongodb.spring.blocking.fe
 
 import kotlinx.html.*
 import kotlinx.html.stream.appendHTML
+import org.occurrent.example.domain.wordguessinggame.mongodb.spring.blocking.features.game.GamePlayApplicationService
 import org.occurrent.example.domain.wordguessinggame.mongodb.spring.blocking.features.game.queries.FindGameByIdQuery
 import org.occurrent.example.domain.wordguessinggame.mongodb.spring.blocking.features.game.queries.OngoingGamesQuery
 import org.occurrent.example.domain.wordguessinggame.mongodb.spring.blocking.features.game.website.Website.Views.gameEndedView
 import org.occurrent.example.domain.wordguessinggame.mongodb.spring.blocking.features.game.website.Website.Views.makeGuessView
 import org.occurrent.example.domain.wordguessinggame.mongodb.spring.blocking.features.game.website.Website.Views.newGameView
-import org.occurrent.example.domain.wordguessinggame.mongodb.spring.blocking.features.game.GamePlayApplicationService
+import org.occurrent.example.domain.wordguessinggame.mongodb.spring.blocking.infrastructure.loggerFor
 import org.occurrent.example.domain.wordguessinggame.readmodel.GameEndedReadModel
 import org.occurrent.example.domain.wordguessinggame.readmodel.GameWasWonReadModel
 import org.occurrent.example.domain.wordguessinggame.readmodel.OngoingGameReadModel
@@ -41,6 +42,7 @@ import javax.servlet.http.HttpSession
 @RestController
 @RequestMapping(path = ["/games"], produces = [MediaType.TEXT_HTML_VALUE])
 class Website(private val applicationService: GamePlayApplicationService, private val findGameByIdQuery: FindGameByIdQuery, private val ongoingGamesQuery: OngoingGamesQuery) {
+    private val log = loggerFor<Website>()
 
     @GetMapping
     fun games(response: ServletResponse) {
@@ -111,6 +113,18 @@ class Website(private val applicationService: GamePlayApplicationService, privat
         val playerId = session.getOrGeneratePlayerId()
         applicationService.makeGuess(gameId, Timestamp(), playerId, Word(word))
         return ResponseEntity.status(HttpStatus.SEE_OTHER).header(HttpHeaders.LOCATION, gameLocation(gameId)).build<Any>()
+    }
+
+    @ExceptionHandler(RuntimeException::class)
+    @ResponseStatus(HttpStatus.BAD_REQUEST)
+    fun handleRuntimeException(e: IllegalArgumentException): String {
+        log.info("An error occurred: ${e::class.simpleName} - ${e.message}")
+        return StringBuilder().appendHTML().html {
+            body {
+                h1 { +"Something went wrong" }
+                div { +"${e.message}" }
+            }
+        }.toString()
     }
 
     private object Views {
