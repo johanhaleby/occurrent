@@ -16,6 +16,6 @@ object RandomValidWordProvider {
                     .filter { wordToGuess -> !wordToGuess.contains("  ") }
                     // Word start or end with whitespace
                     .map(String::trim)
-                    // Must be between 4 and 10 characters
-                    .filter { wordToGuess -> wordToGuess.length in 4..10 }
+                    // Must be between 3 and 15 characters
+                    .filter { wordToGuess -> wordToGuess.length in 3..15 }
 }
