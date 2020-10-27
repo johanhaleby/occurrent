@@ -13,9 +13,10 @@ import org.springframework.beans.factory.annotation.Autowired
 import org.springframework.context.annotation.Bean
 import org.springframework.context.annotation.Configuration
 import org.springframework.data.mongodb.core.MongoOperations
+import org.springframework.data.mongodb.core.query.Criteria.where
 import org.springframework.data.mongodb.core.query.Query.query
 import org.springframework.data.mongodb.core.query.isEqualTo
-import org.springframework.data.mongodb.core.query.where
+import org.springframework.data.mongodb.core.remove
 
 @Configuration
 class AsyncPolicyConfiguration {
@@ -49,6 +50,6 @@ class AsyncPolicyConfiguration {
             else -> throw IllegalStateException("Internal error")
         }
         log.info("Removing game $gameId from ongoing games view since ${e.type}")
-        mongo.remove(query(where(OngoingGameOverviewMongoDTO::gameId).isEqualTo(gameId)), "ongoingGames")
+        mongo.remove<OngoingGameOverviewMongoDTO>(query(where("_id").isEqualTo(gameId.toString())))
     }
 }
