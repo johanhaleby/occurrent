@@ -16,7 +16,7 @@
 
 package org.occurrent.subscription.util.blocking;
 
-import org.occurrent.subscription.CloudEventWithSubscriptionPosition;
+import io.cloudevents.CloudEvent;
 import org.occurrent.subscription.StartAt;
 import org.occurrent.subscription.SubscriptionFilter;
 import org.occurrent.subscription.SubscriptionPosition;
@@ -30,6 +30,7 @@ import java.util.function.Consumer;
 import java.util.function.Supplier;
 
 import static java.util.Objects.requireNonNull;
+import static org.occurrent.subscription.PositionAwareCloudEvent.getSubscriptionPositionOrThrowIAE;
 import static org.occurrent.subscription.util.predicate.EveryN.everyEvent;
 
 /**
@@ -61,7 +62,6 @@ public class BlockingSubscriptionWithAutomaticPositionPersistence implements Pos
     /**
      * Create a subscription that combines a {@link PositionAwareBlockingSubscription} with a {@link BlockingSubscriptionPositionStorage} to automatically
      * store the subscription when the predicate defined in {@link BlockingSubscriptionWithAutomaticPositionPersistenceConfig#persistCloudEventPositionPredicate} is fulfilled.
-
      *
      * @param subscription The subscription that will read events from the event store
      * @param storage      The {@link BlockingSubscriptionPositionStorage} that'll be used to persist the stream position
@@ -78,19 +78,20 @@ public class BlockingSubscriptionWithAutomaticPositionPersistence implements Pos
     }
 
     @Override
-    public Subscription subscribe(String subscriptionId, SubscriptionFilter filter, Supplier<StartAt> startAtSupplier, Consumer<CloudEventWithSubscriptionPosition> action) {
+    public Subscription subscribe(String subscriptionId, SubscriptionFilter filter, Supplier<StartAt> startAtSupplier, Consumer<CloudEvent> action) {
         return subscription.subscribe(subscriptionId,
-                filter, startAtSupplier, cloudEventWithStreamPosition -> {
-                    action.accept(cloudEventWithStreamPosition);
-                    if (config.persistCloudEventPositionPredicate.test(cloudEventWithStreamPosition)) {
-                        storage.save(subscriptionId, cloudEventWithStreamPosition.getSubscriptionPosition());
+                filter, startAtSupplier, cloudEvent -> {
+                    action.accept(cloudEvent);
+                    if (config.persistCloudEventPositionPredicate.test(cloudEvent)) {
+                        SubscriptionPosition subscriptionPosition = getSubscriptionPositionOrThrowIAE(cloudEvent);
+                        storage.save(subscriptionId, subscriptionPosition);
                     }
                 }
         );
     }
 
     @Override
-    public Subscription subscribe(String subscriptionId, Consumer<CloudEventWithSubscriptionPosition> action) {
+    public Subscription subscribe(String subscriptionId, Consumer<CloudEvent> action) {
         return subscribe(subscriptionId, (SubscriptionFilter) null, action);
     }
 
@@ -102,7 +103,7 @@ public class BlockingSubscriptionWithAutomaticPositionPersistence implements Pos
      * @param action         This action will be invoked for each cloud event that is stored in the EventStore that matches the supplied <code>filter</code>.
      */
     @Override
-    public Subscription subscribe(String subscriptionId, SubscriptionFilter filter, Consumer<CloudEventWithSubscriptionPosition> action) {
+    public Subscription subscribe(String subscriptionId, SubscriptionFilter filter, Consumer<CloudEvent> action) {
         Supplier<StartAt> startAtSupplier = () -> {
             // It's important that we find the document inside the supplier so that we lookup the latest resume token on retry
             SubscriptionPosition subscriptionPosition = storage.read(subscriptionId);

@@ -16,12 +16,13 @@
 
 package org.occurrent.subscription.mongodb.spring.reactor;
 
+import io.cloudevents.CloudEvent;
 import io.cloudevents.core.format.EventFormat;
 import io.cloudevents.core.provider.EventFormatProvider;
 import io.cloudevents.jackson.JsonFormat;
 import org.bson.Document;
 import org.occurrent.mongodb.timerepresentation.TimeRepresentation;
-import org.occurrent.subscription.CloudEventWithSubscriptionPosition;
+import org.occurrent.subscription.PositionAwareCloudEvent;
 import org.occurrent.subscription.StartAt;
 import org.occurrent.subscription.SubscriptionFilter;
 import org.occurrent.subscription.SubscriptionPosition;
@@ -44,7 +45,9 @@ import static java.util.Objects.requireNonNull;
  * This is a subscription that uses project reactor and Spring to listen to changes from an event store.
  * This Subscription doesn't maintain the subscription position, you need to store it yourself
  * (or use another pre-existing component in conjunction with this one) in order to continue the stream from where
- * it's left off on application restart/crash etc.
+ * it's left off on application restart/crash etc. It produces a {@link CloudEvent} implementation of type {@link PositionAwareCloudEvent}
+ * that includes the subscription position. Use {@link PositionAwareCloudEvent#getSubscriptionPositionOrThrowIAE(CloudEvent)}
+ * to get the subscription position.
  */
 public class SpringReactorSubscriptionForMongoDB implements PositionAwareReactorSubscription {
 
@@ -68,7 +71,7 @@ public class SpringReactorSubscriptionForMongoDB implements PositionAwareReactor
     }
 
     @Override
-    public Flux<CloudEventWithSubscriptionPosition> subscribe(SubscriptionFilter filter, StartAt startAt) {
+    public Flux<CloudEvent> subscribe(SubscriptionFilter filter, StartAt startAt) {
         // TODO We should change builder::resumeAt to builder::startAtOperationTime once Spring adds support for it (see https://jira.spring.io/browse/DATAMONGO-2607)
         ChangeStreamOptionsBuilder builder = MongoDBCommons.applyStartPosition(ChangeStreamOptions.builder(), ChangeStreamOptionsBuilder::startAfter, ChangeStreamOptionsBuilder::resumeAt, startAt);
         final ChangeStreamOptions changeStreamOptions = ApplyFilterToChangeStreamOptionsBuilder.applyFilter(timeRepresentation, filter, builder);
@@ -76,7 +79,7 @@ public class SpringReactorSubscriptionForMongoDB implements PositionAwareReactor
         return changeStream
                 .flatMap(changeEvent ->
                         MongoDBCloudEventsToJsonDeserializer.deserializeToCloudEvent(cloudEventSerializer, changeEvent.getRaw(), timeRepresentation)
-                                .map(cloudEvent -> new CloudEventWithSubscriptionPosition(cloudEvent, new MongoDBResumeTokenBasedSubscriptionPosition(requireNonNull(changeEvent.getResumeToken()).asDocument())))
+                                .map(cloudEvent -> new PositionAwareCloudEvent(cloudEvent, new MongoDBResumeTokenBasedSubscriptionPosition(requireNonNull(changeEvent.getResumeToken()).asDocument())))
                                 .map(Mono::just)
                                 .orElse(Mono.empty()));
     }

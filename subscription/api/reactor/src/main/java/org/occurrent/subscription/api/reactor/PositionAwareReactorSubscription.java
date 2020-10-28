@@ -17,16 +17,16 @@
 package org.occurrent.subscription.api.reactor;
 
 import io.cloudevents.CloudEvent;
-import org.occurrent.subscription.CloudEventWithSubscriptionPosition;
+import org.occurrent.subscription.PositionAwareCloudEvent;
 import org.occurrent.subscription.SubscriptionPosition;
 import reactor.core.publisher.Mono;
 
 /**
- * A {@link ReactorSubscription} that produces {@link CloudEventWithSubscriptionPosition} compatible {@link CloudEvent}'s.
+ * A {@link ReactorSubscription} that produces {@link PositionAwareCloudEvent} compatible {@link CloudEvent}'s.
  * This is useful for subscribers that want to persist the subscription position for a given subscription if the event store doesn't
  * maintain the position for subscriptions.
  */
-public interface PositionAwareReactorSubscription extends ReactorSubscription<CloudEventWithSubscriptionPosition> {
+public interface PositionAwareReactorSubscription extends ReactorSubscription {
 
     /**
      * The global subscription position might be e.g. the wall clock time of the server, vector clock, number of events consumed etc.

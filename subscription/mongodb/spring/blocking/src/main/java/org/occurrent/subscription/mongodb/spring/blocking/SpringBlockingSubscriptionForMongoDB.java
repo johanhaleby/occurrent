@@ -17,6 +17,7 @@
 package org.occurrent.subscription.mongodb.spring.blocking;
 
 import com.mongodb.client.model.changestream.ChangeStreamDocument;
+import io.cloudevents.CloudEvent;
 import io.cloudevents.core.format.EventFormat;
 import io.cloudevents.core.provider.EventFormatProvider;
 import io.cloudevents.jackson.JsonFormat;
@@ -24,7 +25,7 @@ import org.bson.BsonDocument;
 import org.bson.BsonTimestamp;
 import org.bson.Document;
 import org.occurrent.mongodb.timerepresentation.TimeRepresentation;
-import org.occurrent.subscription.CloudEventWithSubscriptionPosition;
+import org.occurrent.subscription.PositionAwareCloudEvent;
 import org.occurrent.subscription.StartAt;
 import org.occurrent.subscription.SubscriptionFilter;
 import org.occurrent.subscription.SubscriptionPosition;
@@ -92,7 +93,7 @@ public class SpringBlockingSubscriptionForMongoDB implements PositionAwareBlocki
     }
 
     @Override
-    public Subscription subscribe(String subscriptionId, SubscriptionFilter filter, Supplier<StartAt> startAtSupplier, Consumer<CloudEventWithSubscriptionPosition> action) {
+    public Subscription subscribe(String subscriptionId, SubscriptionFilter filter, Supplier<StartAt> startAtSupplier, Consumer<CloudEvent> action) {
         requireNonNull(subscriptionId, "subscriptionId cannot be null");
         requireNonNull(action, "Action cannot be null");
         requireNonNull(startAtSupplier, "StartAt cannot be null");
@@ -105,7 +106,7 @@ public class SpringBlockingSubscriptionForMongoDB implements PositionAwareBlocki
             ChangeStreamDocument<Document> raw = change.getRaw();
             BsonDocument resumeToken = requireNonNull(raw).getResumeToken();
             MongoDBCloudEventsToJsonDeserializer.deserializeToCloudEvent(requireNonNull(cloudEventSerializer), raw, timeRepresentation)
-                    .map(cloudEvent -> new CloudEventWithSubscriptionPosition(cloudEvent, new MongoDBResumeTokenBasedSubscriptionPosition(resumeToken)))
+                    .map(cloudEvent -> new PositionAwareCloudEvent(cloudEvent, new MongoDBResumeTokenBasedSubscriptionPosition(resumeToken)))
                     .ifPresent(action);
         };
 

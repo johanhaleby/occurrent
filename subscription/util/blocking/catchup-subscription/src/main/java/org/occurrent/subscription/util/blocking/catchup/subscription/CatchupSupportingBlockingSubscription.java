@@ -64,7 +64,7 @@ import static org.occurrent.time.internal.RFC3339.RFC_3339_DATE_TIME_FORMATTER;
  * how often this should happen in the {@link CatchupSupportingBlockingSubscriptionConfig}.
  * </p>
  */
-public class CatchupSupportingBlockingSubscription implements BlockingSubscription<CloudEvent> {
+public class CatchupSupportingBlockingSubscription implements BlockingSubscription {
 
     private static final int DEFAULT_CACHE_SIZE = 100;
 

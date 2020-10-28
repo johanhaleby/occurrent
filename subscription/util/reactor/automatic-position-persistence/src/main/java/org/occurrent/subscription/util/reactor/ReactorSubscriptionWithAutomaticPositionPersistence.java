@@ -30,6 +30,7 @@ import reactor.core.publisher.Mono;
 import java.util.function.Function;
 
 import static java.util.Objects.requireNonNull;
+import static org.occurrent.subscription.PositionAwareCloudEvent.getSubscriptionPositionOrThrowIAE;
 
 /**
  * Wraps a {@link PositionAwareReactorSubscription} and adds persistent subscription position support. It adds some convenience methods that stores the subscription position
@@ -114,7 +115,10 @@ public class ReactorSubscriptionWithAutomaticPositionPersistence {
                 .flatMapMany(startAt -> subscription.subscribe(filter, startAt))
                 .flatMap(cloudEventWithStreamPosition -> action.apply(cloudEventWithStreamPosition).thenReturn(cloudEventWithStreamPosition))
                 .filter(config.persistCloudEventPositionPredicate)
-                .flatMap(cloudEventWithStreamPosition -> storage.save(subscriptionId, cloudEventWithStreamPosition.getSubscriptionPosition()).thenReturn(cloudEventWithStreamPosition))
+                .flatMap(cloudEvent -> {
+                    SubscriptionPosition subscriptionPosition = getSubscriptionPositionOrThrowIAE(cloudEvent);
+                    return storage.save(subscriptionId, subscriptionPosition).thenReturn(cloudEvent);
+                })
                 .then();
     }
 

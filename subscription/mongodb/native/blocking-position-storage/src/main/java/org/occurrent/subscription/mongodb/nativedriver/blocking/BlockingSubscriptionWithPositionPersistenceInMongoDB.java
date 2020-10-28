@@ -29,6 +29,7 @@ import java.util.function.Consumer;
 import java.util.function.Supplier;
 
 import static java.util.Objects.requireNonNull;
+import static org.occurrent.subscription.PositionAwareCloudEvent.getSubscriptionPositionOrThrowIAE;
 
 /**
  * Wraps a {@link BlockingSubscriptionForMongoDB} and adds persistent subscription position support. It stores the subscription position
@@ -38,7 +39,7 @@ import static java.util.Objects.requireNonNull;
  * Note that this implementation stores the subscription position after _every_ action. If you have a lot of events and duplication is not
  * that much of a deal consider cloning/extending this class and add your own customizations.
  */
-public class BlockingSubscriptionWithPositionPersistenceInMongoDB implements BlockingSubscription<CloudEvent> {
+public class BlockingSubscriptionWithPositionPersistenceInMongoDB implements BlockingSubscription {
 
     private final PositionAwareBlockingSubscription subscription;
     private final BlockingSubscriptionPositionStorage storage;
@@ -61,7 +62,7 @@ public class BlockingSubscriptionWithPositionPersistenceInMongoDB implements Blo
         return subscription.subscribe(subscriptionId,
                 filter, startAtSupplier, cloudEventWithStreamPosition -> {
                     action.accept(cloudEventWithStreamPosition);
-                    storage.save(subscriptionId, cloudEventWithStreamPosition.getSubscriptionPosition());
+                    storage.save(subscriptionId, getSubscriptionPositionOrThrowIAE(cloudEventWithStreamPosition));
                 }
         );
     }

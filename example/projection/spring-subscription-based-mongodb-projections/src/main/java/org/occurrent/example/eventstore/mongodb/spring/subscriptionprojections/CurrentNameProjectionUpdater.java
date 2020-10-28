@@ -16,7 +16,6 @@
 
 package org.occurrent.example.eventstore.mongodb.spring.subscriptionprojections;
 
-import io.cloudevents.CloudEvent;
 import org.occurrent.domain.DomainEvent;
 import org.occurrent.domain.NameDefined;
 import org.occurrent.domain.NameWasChanged;
@@ -26,9 +25,7 @@ import org.springframework.stereotype.Component;
 import javax.annotation.PostConstruct;
 import java.time.Duration;
 
-import static io.vavr.API.$;
-import static io.vavr.API.Case;
-import static io.vavr.API.Match;
+import static io.vavr.API.*;
 import static io.vavr.Predicates.instanceOf;
 import static java.time.temporal.ChronoUnit.SECONDS;
 import static org.occurrent.cloudevents.OccurrentExtensionGetter.getStreamId;
@@ -36,11 +33,11 @@ import static org.occurrent.cloudevents.OccurrentExtensionGetter.getStreamId;
 @Component
 public class CurrentNameProjectionUpdater {
 
-    private final BlockingSubscription<CloudEvent> subscription;
+    private final BlockingSubscription subscription;
     private final CurrentNameProjection currentNameProjection;
     private final DeserializeCloudEventToDomainEvent deserializeCloudEventToDomainEvent;
 
-    public CurrentNameProjectionUpdater(BlockingSubscription<CloudEvent> subscription,
+    public CurrentNameProjectionUpdater(BlockingSubscription subscription,
                                         CurrentNameProjection currentNameProjection,
                                         DeserializeCloudEventToDomainEvent deserializeCloudEventToDomainEvent) {
         this.subscription = subscription;

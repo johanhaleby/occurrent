@@ -27,15 +27,18 @@ import java.util.Set;
 
 /**
  * A wrapper around a {@link CloudEvent} that also includes a {@link SubscriptionPosition} so that
- * it's possible to resume the stream from a particular state.
+ * it's possible to resume the stream from a particular state. You can treat this cloud event implementation
+ * as a regular cloud event.
  */
-public class CloudEventWithSubscriptionPosition implements CloudEvent {
+public final class PositionAwareCloudEvent implements CloudEvent {
     private final CloudEvent cloudEvent;
-    private final SubscriptionPosition changeStreamPosition;
+    private final SubscriptionPosition subscriptionPosition;
 
-    public CloudEventWithSubscriptionPosition(CloudEvent cloudEvent, SubscriptionPosition changeStreamPosition) {
+    public PositionAwareCloudEvent(CloudEvent cloudEvent, SubscriptionPosition subscriptionPosition) {
+        Objects.requireNonNull(cloudEvent, CloudEvent.class.getSimpleName() + "cannot be null");
+        Objects.requireNonNull(subscriptionPosition, SubscriptionPosition.class.getSimpleName() + "cannot be null");
         this.cloudEvent = cloudEvent;
-        this.changeStreamPosition = changeStreamPosition;
+        this.subscriptionPosition = subscriptionPosition;
     }
 
     @Nullable
@@ -98,28 +101,43 @@ public class CloudEventWithSubscriptionPosition implements CloudEvent {
     }
 
     public SubscriptionPosition getSubscriptionPosition() {
-        return changeStreamPosition;
+        return subscriptionPosition;
+    }
+
+    public CloudEvent getOriginalCloudEvent() {
+        return cloudEvent;
     }
 
     @Override
     public boolean equals(Object o) {
         if (this == o) return true;
-        if (!(o instanceof CloudEventWithSubscriptionPosition)) return false;
-        CloudEventWithSubscriptionPosition that = (CloudEventWithSubscriptionPosition) o;
+        if (!(o instanceof PositionAwareCloudEvent)) return false;
+        PositionAwareCloudEvent that = (PositionAwareCloudEvent) o;
         return Objects.equals(cloudEvent, that.cloudEvent) &&
-                Objects.equals(changeStreamPosition, that.changeStreamPosition);
+                Objects.equals(subscriptionPosition, that.subscriptionPosition);
     }
 
     @Override
     public int hashCode() {
-        return Objects.hash(cloudEvent, changeStreamPosition);
+        return Objects.hash(cloudEvent, subscriptionPosition);
     }
 
     @Override
     public String toString() {
-        return "CloudEventWithStreamPosition{" +
+        return "SubscriptionCloudEvent{" +
                 "cloudEvent=" + cloudEvent +
-                ", subscriptionPosition=" + changeStreamPosition +
+                ", changeStreamPosition=" + subscriptionPosition +
                 '}';
+    }
+
+    public static boolean hasSubscriptionPosition(CloudEvent cloudEvent) {
+        return cloudEvent instanceof PositionAwareCloudEvent;
+    }
+
+    public static SubscriptionPosition getSubscriptionPositionOrThrowIAE(CloudEvent cloudEvent) {
+        if (cloudEvent instanceof PositionAwareCloudEvent) {
+            return ((PositionAwareCloudEvent) cloudEvent).getSubscriptionPosition();
+        }
+        throw new IllegalArgumentException(CloudEvent.class.getSimpleName() + " doesn't contain a subscription position");
     }
 }

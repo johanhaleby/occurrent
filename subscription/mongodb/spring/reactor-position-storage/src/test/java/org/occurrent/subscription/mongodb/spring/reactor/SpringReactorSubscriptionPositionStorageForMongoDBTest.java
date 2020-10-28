@@ -32,6 +32,7 @@ import org.occurrent.eventstore.api.reactor.EventStore;
 import org.occurrent.eventstore.mongodb.spring.reactor.EventStoreConfig;
 import org.occurrent.eventstore.mongodb.spring.reactor.SpringReactorMongoEventStore;
 import org.occurrent.mongodb.timerepresentation.TimeRepresentation;
+import org.occurrent.subscription.PositionAwareCloudEvent;
 import org.occurrent.testsupport.mongodb.FlushMongoDBExtension;
 import org.springframework.data.mongodb.ReactiveMongoTransactionManager;
 import org.springframework.data.mongodb.core.ReactiveMongoTemplate;
@@ -106,7 +107,7 @@ public class SpringReactorSubscriptionPositionStorageForMongoDBTest {
         String subscriberId = UUID.randomUUID().toString();
         disposeAfterTest(subscription.subscribe().flatMap(ce -> {
             state.add(ce);
-            return storage.save(subscriberId, ce.getSubscriptionPosition());
+            return storage.save(subscriberId, PositionAwareCloudEvent.getSubscriptionPositionOrThrowIAE(ce));
         }).subscribe());
         Thread.sleep(200);
         NameDefined nameDefined1 = new NameDefined(UUID.randomUUID().toString(), now, "name1");

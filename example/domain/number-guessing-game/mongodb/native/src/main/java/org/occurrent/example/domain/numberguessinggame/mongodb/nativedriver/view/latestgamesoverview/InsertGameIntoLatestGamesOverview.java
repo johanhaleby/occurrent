@@ -36,7 +36,7 @@ import static java.time.temporal.ChronoUnit.MILLIS;
 
 public class InsertGameIntoLatestGamesOverview {
 
-    public static void insertGameIntoLatestGamesOverview(BlockingSubscription<CloudEvent> subscription,
+    public static void insertGameIntoLatestGamesOverview(BlockingSubscription subscription,
                                                          MongoCollection<Document> latestGamesOverviewCollection,
                                                          Function<CloudEvent, GameEvent> deserialize) {
         subscription.subscribe(InsertGameIntoLatestGamesOverview.class.getSimpleName(), insertGame(latestGamesOverviewCollection, deserialize));

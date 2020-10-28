@@ -117,8 +117,7 @@ public class Bootstrap {
     }
 
     private static void initializeNumberGuessingGameCompletedIntegrationEventPublisher(EventStoreQueries eventStoreQueries, Function<CloudEvent, GameEvent> deserialize,
-                                                                                       BlockingSubscription<CloudEvent> subscription, Channel rabbit,
-                                                                                       ObjectMapper objectMapper) {
+                                                                                       BlockingSubscription subscription, Channel rabbit, ObjectMapper objectMapper) {
         Consumer<CloudEvent> cloudEventConsumer = cloudEvent -> {
             String gameId = cloudEvent.getSubject();
             NumberGuessingGameCompleted numberGuessingGameCompleted = eventStoreQueries.query(subject(eq(gameId)))
@@ -207,7 +206,7 @@ public class Bootstrap {
         return new BlockingSubscriptionWithPositionPersistenceInMongoDB(blockingSubscriptionForMongoDB, storage);
     }
 
-    private static LatestGamesOverview initializeLatestGamesOverview(MongoClient mongoClient, Serialization serialization, BlockingSubscription<CloudEvent> subscription) {
+    private static LatestGamesOverview initializeLatestGamesOverview(MongoClient mongoClient, Serialization serialization, BlockingSubscription subscription) {
         MongoDatabase database = mongoClient.getDatabase(DATABASE_NAME);
         if (!collectionExists(database, LATEST_GAMES_OVERVIEW_COLLECTION_NAME)) {
             database.createCollection(LATEST_GAMES_OVERVIEW_COLLECTION_NAME);

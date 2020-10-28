@@ -68,6 +68,7 @@ import static org.awaitility.Durations.FIVE_SECONDS;
 import static org.occurrent.filter.Filter.type;
 import static org.occurrent.functional.CheckedFunction.unchecked;
 import static org.occurrent.subscription.OccurrentSubscriptionFilter.filter;
+import static org.occurrent.subscription.util.blocking.catchup.subscription.SubscriptionPositionStorageConfig.useSubscriptionPositionStorage;
 import static org.occurrent.time.TimeConversion.toLocalDateTime;
 
 @Testcontainers
@@ -100,7 +101,7 @@ public class CatchupSupportingBlockingSubscriptionTest {
         mongoEventStore = new MongoEventStore(mongoClient, connectionString.getDatabase(), connectionString.getCollection(), config);
         subscriptionExecutor = Executors.newCachedThreadPool();
         storage = new BlockingSubscriptionPositionStorageForMongoDB(database, "storage");
-        subscription = newCatchupSubscription(database, eventCollection, timeRepresentation, new CatchupSupportingBlockingSubscriptionConfig(100, new PersistSubscriptionPositionDuringCatchupPhase(storage, 1)));
+        subscription = newCatchupSubscription(database, eventCollection, timeRepresentation, new CatchupSupportingBlockingSubscriptionConfig(100, useSubscriptionPositionStorage(storage)));
         objectMapper = new ObjectMapper();
     }
 
@@ -247,7 +248,7 @@ public class CatchupSupportingBlockingSubscriptionTest {
         }).waitUntilStarted();
 
         awaitLatch(waitUntilSecondEventProcessed);
-        subscription = newCatchupSubscription(database, eventCollection, TimeRepresentation.DATE, new CatchupSupportingBlockingSubscriptionConfig(100, new PersistSubscriptionPositionDuringCatchupPhase(storage, 1)));
+        subscription = newCatchupSubscription(database, eventCollection, TimeRepresentation.DATE, new CatchupSupportingBlockingSubscriptionConfig(100, useSubscriptionPositionStorage(storage).andPersistSubscriptionPositionDuringCatchupPhaseForEveryNEvents(1)));
         subscription.subscribe(subscriptionId, state::add).waitUntilStarted();
 
         // Then
@@ -273,7 +274,7 @@ public class CatchupSupportingBlockingSubscriptionTest {
             }
         };
 
-        subscription = newCatchupSubscription(database, eventCollection, TimeRepresentation.DATE, new CatchupSupportingBlockingSubscriptionConfig(100, new PersistSubscriptionPositionDuringCatchupPhase(this.storage, 10)));
+        subscription = newCatchupSubscription(database, eventCollection, TimeRepresentation.DATE, new CatchupSupportingBlockingSubscriptionConfig(100, useSubscriptionPositionStorage(this.storage).andPersistSubscriptionPositionDuringCatchupPhaseForEveryNEvents(10)));
 
         CopyOnWriteArrayList<CloudEvent> state = new CopyOnWriteArrayList<>();
 
