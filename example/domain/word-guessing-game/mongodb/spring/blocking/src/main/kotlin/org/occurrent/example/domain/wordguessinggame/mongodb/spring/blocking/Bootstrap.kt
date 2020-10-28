@@ -19,17 +19,21 @@ import com.fasterxml.jackson.databind.ObjectMapper
 import com.fasterxml.jackson.module.kotlin.KotlinModule
 import org.occurrent.application.service.blocking.CloudEventConverter
 import org.occurrent.application.service.blocking.implementation.GenericApplicationService
+import org.occurrent.eventstore.api.blocking.EventStoreQueries
 import org.occurrent.eventstore.mongodb.spring.blocking.EventStoreConfig
 import org.occurrent.eventstore.mongodb.spring.blocking.SpringBlockingMongoEventStore
 import org.occurrent.example.domain.wordguessinggame.event.DomainEvent
 import org.occurrent.example.domain.wordguessinggame.mongodb.spring.blocking.features.game.GameCloudEventConverter
 import org.occurrent.example.domain.wordguessinggame.mongodb.spring.blocking.features.game.policy.SendEmailToWinnerPolicy
 import org.occurrent.mongodb.timerepresentation.TimeRepresentation
+import org.occurrent.subscription.api.blocking.BlockingSubscription
 import org.occurrent.subscription.api.blocking.BlockingSubscriptionPositionStorage
-import org.occurrent.subscription.api.blocking.PositionAwareBlockingSubscription
 import org.occurrent.subscription.mongodb.spring.blocking.SpringBlockingSubscriptionForMongoDB
 import org.occurrent.subscription.mongodb.spring.blocking.SpringBlockingSubscriptionPositionStorageForMongoDB
 import org.occurrent.subscription.util.blocking.BlockingSubscriptionWithAutomaticPositionPersistence
+import org.occurrent.subscription.util.blocking.catchup.subscription.CatchupSupportingBlockingSubscription
+import org.occurrent.subscription.util.blocking.catchup.subscription.CatchupSupportingBlockingSubscriptionConfig
+import org.occurrent.subscription.util.blocking.catchup.subscription.SubscriptionPositionStorageConfig.useSubscriptionPositionStorage
 import org.springframework.boot.autoconfigure.SpringBootApplication
 import org.springframework.boot.runApplication
 import org.springframework.context.annotation.Bean
@@ -62,16 +66,16 @@ class Bootstrap {
     }
 
     @Bean
-    fun subscriptionRegistry(mongoTemplate: MongoTemplate): PositionAwareBlockingSubscription =
-            SpringBlockingSubscriptionForMongoDB(mongoTemplate, EVENTS_COLLECTION_NAME, TimeRepresentation.DATE)
-
-    @Bean
     fun subscriptionStorage(mongoTemplate: MongoTemplate): BlockingSubscriptionPositionStorage =
             SpringBlockingSubscriptionPositionStorageForMongoDB(mongoTemplate, "subscriptions")
 
     @Bean
-    fun subscriptionWithAutomaticPersistence(subscription: PositionAwareBlockingSubscription, storage: BlockingSubscriptionPositionStorage) =
-            BlockingSubscriptionWithAutomaticPositionPersistence(subscription, storage)
+    fun subscriptionWithAutomaticPersistence(storage: BlockingSubscriptionPositionStorage, mongoTemplate: MongoTemplate, eventStoreQueries: EventStoreQueries): BlockingSubscription {
+        val subscription = SpringBlockingSubscriptionForMongoDB(mongoTemplate, EVENTS_COLLECTION_NAME, TimeRepresentation.DATE)
+        val subscriptionWithAutomaticPositionPersistence = BlockingSubscriptionWithAutomaticPositionPersistence(subscription, storage)
+        return CatchupSupportingBlockingSubscription(subscriptionWithAutomaticPositionPersistence, eventStoreQueries,
+                CatchupSupportingBlockingSubscriptionConfig(useSubscriptionPositionStorage(storage)))
+    }
 
     @Bean
     fun objectMapper() = ObjectMapper().apply { registerModule(KotlinModule()) }
