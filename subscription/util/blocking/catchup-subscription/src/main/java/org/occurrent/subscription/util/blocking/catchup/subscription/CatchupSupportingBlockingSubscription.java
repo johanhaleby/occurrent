@@ -109,7 +109,7 @@ public class CatchupSupportingBlockingSubscription implements BlockingSubscripti
         runningCatchupSubscriptions.put(subscriptionId, true);
 
         final StartAt startAt;
-        if (startAtSupplier == null) {
+        if (startAtSupplier == null || startAtSupplier.get() == null) {
             startAt = StartAt.subscriptionPosition(TimeBasedSubscriptionPosition.beginningOfTime());
         } else {
             startAt = startAtSupplier.get();
@@ -117,7 +117,7 @@ public class CatchupSupportingBlockingSubscription implements BlockingSubscripti
 
         // TODO!! We want to continue from the wrapping subscription if it has something stored in it's position storage!!!!
         if (!isTimeBasedSubscriptionPosition(startAt)) {
-            return subscription.subscribe(subscriptionId, filter, startAtSupplier, action::accept);
+            return subscription.subscribe(subscriptionId, filter, startAtSupplier, action);
         }
 
         SubscriptionPosition subscriptionPosition = ((StartAtSubscriptionPosition) startAt).subscriptionPosition;
