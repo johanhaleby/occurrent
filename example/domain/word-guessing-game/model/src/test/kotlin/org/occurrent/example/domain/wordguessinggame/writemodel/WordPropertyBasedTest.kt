@@ -21,5 +21,5 @@ internal class WordPropertyBasedTest {
     }
 
     @Provide
-    fun words(): Arbitrary<String> = RandomValidWordProvider.provideValidRandomWords()
+    fun words(): Arbitrary<String> = RandomValidWordProvider.provideValidRandomWords(allowWhitespace = false)
 }

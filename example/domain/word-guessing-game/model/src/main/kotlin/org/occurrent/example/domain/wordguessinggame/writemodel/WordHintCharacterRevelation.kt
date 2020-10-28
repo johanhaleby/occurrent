@@ -23,7 +23,7 @@ object WordHintCharacterRevelation {
     }
 
     private fun String.revealNewRandomCharacters(maxNumberOfCharactersToReveal: Int, currentlyRevealedPositions: Set<Int> = emptySet()): List<RevealedCharacter> {
-        val potentialIndicesToReveal = toCharArray().filterIndexed { index, char -> char != whitespace && !currentlyRevealedPositions.contains(index.inc()) }.toMutableList()
+        val potentialIndicesToReveal = indices.filter { index -> get(index) != whitespace && !currentlyRevealedPositions.contains(index.inc()) }.toMutableList()
 
         val actualNumberOfCharactersToReveal = min(maxNumberOfCharactersToReveal, potentialIndicesToReveal.size - minimumNumberOfObfuscatedCharactersInWordHint)
         if (actualNumberOfCharactersToReveal <= 0) {
@@ -32,10 +32,11 @@ object WordHintCharacterRevelation {
 
         @Suppress("UnnecessaryVariable")
         val revealCharacters = (0 until actualNumberOfCharactersToReveal).map {
-            val randomIndexOfCharacterToReveal = potentialIndicesToReveal.indices.random()
-            val characterToReveal = this[randomIndexOfCharacterToReveal]
-            potentialIndicesToReveal.removeAt(randomIndexOfCharacterToReveal)
-            RevealedCharacter(characterToReveal, randomIndexOfCharacterToReveal + 1)
+            val index = potentialIndicesToReveal.indices.random()
+            val indexOfCharacterToReveal = potentialIndicesToReveal[index]
+            val characterToReveal = this[indexOfCharacterToReveal]
+            potentialIndicesToReveal.removeAt(index)
+            RevealedCharacter(characterToReveal, indexOfCharacterToReveal + 1)
         }
         return revealCharacters
     }
