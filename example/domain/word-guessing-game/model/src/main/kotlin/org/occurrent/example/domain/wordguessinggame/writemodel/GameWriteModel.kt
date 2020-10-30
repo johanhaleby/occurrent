@@ -60,6 +60,15 @@ object MaxNumberOfGuessesTotal {
 
 data class WordsToChooseFrom(val category: WordCategory, val words: List<Word>) : Sequence<Word> {
     init {
+        val distinctWords = words.distinctBy { it.value.toUpperCase() }
+        if (distinctWords.size != words.size) {
+            val duplicateWords = words.groupBy { it.value.toUpperCase() }
+                    .filterValues { it.size > 1 }
+                    .values
+                    .joinToString { wordList -> wordList.map(Word::value).joinToString() }
+            throw IllegalArgumentException("Duplicate words in the same category is not allowed: $duplicateWords")
+        }
+
         require(words.size in 4..20) {
             "You need to supply between 4 to 20 words in the ${category.value} category, was ${words.size}."
         }

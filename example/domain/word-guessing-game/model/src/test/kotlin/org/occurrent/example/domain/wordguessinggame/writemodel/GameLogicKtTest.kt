@@ -5,6 +5,7 @@ import org.assertj.core.api.Assertions.catchThrowable
 import org.junit.jupiter.api.*
 import org.occurrent.example.domain.wordguessinggame.event.*
 import org.occurrent.example.domain.wordguessinggame.support.find
+import org.occurrent.example.domain.wordguessinggame.support.wordsOf
 import java.util.*
 
 @DisplayName("game specification")
@@ -374,5 +375,3 @@ class GameLogicKtTest {
         }
     }
 }
-
-private fun wordsOf(vararg words: String) = listOf(*words).map(::Word)
