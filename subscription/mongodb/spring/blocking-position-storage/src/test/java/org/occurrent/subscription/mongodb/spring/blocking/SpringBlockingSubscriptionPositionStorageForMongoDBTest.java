@@ -161,6 +161,11 @@ public class SpringBlockingSubscriptionPositionStorageForMongoDBTest {
             public void delete(String subscriptionId) {
 
             }
+
+            @Override
+            public boolean exists(String subscriptionId) {
+                return false;
+            }
         };
         subscription = new BlockingSubscriptionWithAutomaticPositionPersistence(positionAwareBlockingSubscription, storage);
         subscription.subscribe(UUID.randomUUID().toString(), state::add).waitUntilStarted(Duration.of(10, ChronoUnit.SECONDS));
@@ -203,6 +208,11 @@ public class SpringBlockingSubscriptionPositionStorageForMongoDBTest {
             @Override
             public void delete(String subscriptionId) {
 
+            }
+
+            @Override
+            public boolean exists(String subscriptionId) {
+                return false;
             }
         };
         subscription = new BlockingSubscriptionWithAutomaticPositionPersistence(positionAwareBlockingSubscription, storage, new BlockingSubscriptionWithAutomaticPositionPersistenceConfig(3));

@@ -88,6 +88,11 @@ public class BlockingSubscriptionPositionStorageForMongoDB implements BlockingSu
         subscriptionPositionCollection.deleteOne(eq(ID, subscriptionId));
     }
 
+    @Override
+    public boolean exists(String subscriptionId) {
+        return subscriptionPositionCollection.find(eq(ID, subscriptionId)).first() != null;
+    }
+
     private void persistResumeTokenStreamPosition(String subscriptionId, BsonValue resumeToken) {
         persistDocumentStreamPosition(subscriptionId, generateResumeTokenStreamPositionDocument(subscriptionId, resumeToken));
     }

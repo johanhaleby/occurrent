@@ -41,7 +41,7 @@ import org.occurrent.subscription.SubscriptionPosition;
 import org.occurrent.subscription.mongodb.nativedriver.blocking.BlockingSubscriptionForMongoDB;
 import org.occurrent.subscription.mongodb.nativedriver.blocking.BlockingSubscriptionPositionStorageForMongoDB;
 import org.occurrent.subscription.mongodb.nativedriver.blocking.RetryStrategy;
-import org.occurrent.subscription.util.blocking.catchup.subscription.SubscriptionPositionStorageConfig.PersistSubscriptionPositionDuringCatchupPhase;
+import org.occurrent.subscription.util.blocking.BlockingSubscriptionWithAutomaticPositionPersistence;
 import org.occurrent.testsupport.mongodb.FlushMongoDBExtension;
 import org.testcontainers.containers.MongoDBContainer;
 import org.testcontainers.junit.jupiter.Container;
@@ -56,6 +56,7 @@ import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.atomic.AtomicInteger;
+import java.util.function.Supplier;
 import java.util.stream.Stream;
 
 import static java.time.ZoneOffset.UTC;
@@ -208,7 +209,7 @@ public class CatchupSupportingBlockingSubscriptionTest {
     }
 
     @Test
-    void catchup_subscription_continues_where_it_left_off() {
+    void catchup_subscription_continues_where_it_left_off_when_not_using_filter() {
         // Given
         LocalDateTime now = LocalDateTime.now();
         NameDefined nameDefined1 = new NameDefined(UUID.randomUUID().toString(), now, "name1");
@@ -257,6 +258,112 @@ public class CatchupSupportingBlockingSubscriptionTest {
     }
 
     @Test
+    void catchup_subscription_continues_where_it_left_off_when_using_filter() {
+        // Given
+        LocalDateTime now = LocalDateTime.now();
+        NameDefined nameDefined1 = new NameDefined(UUID.randomUUID().toString(), now, "name1");
+        NameDefined nameDefined2 = new NameDefined(UUID.randomUUID().toString(), now.plusSeconds(2), "name2");
+        NameDefined nameDefined3 = new NameDefined(UUID.randomUUID().toString(), now.plusSeconds(6), "name5");
+        NameDefined nameDefined4 = new NameDefined(UUID.randomUUID().toString(), now.plusSeconds(10), "name3");
+
+        mongoEventStore.write("1", 0, serialize(nameDefined1));
+        mongoEventStore.write("2", 0, serialize(nameDefined2));
+        mongoEventStore.write("4", 0, serialize(nameDefined4));
+        mongoEventStore.write("3", 0, serialize(nameDefined3));
+
+        CountDownLatch cancelSubscriberLatch = new CountDownLatch(1);
+        CountDownLatch waitUntilCancelled = new CountDownLatch(1);
+        CountDownLatch waitUntilSecondEventProcessed = new CountDownLatch(1);
+        CopyOnWriteArrayList<CloudEvent> state = new CopyOnWriteArrayList<>();
+
+        String subscriptionId = UUID.randomUUID().toString();
+        new Thread(() -> {
+            awaitLatch(cancelSubscriberLatch);
+            subscription.shutdown();
+            waitUntilCancelled.countDown();
+        }).start();
+
+        // When
+
+        subscription.subscribe(subscriptionId, filter(type(NameDefined.class.getName())), e -> {
+            if (state.size() < 2) {
+                state.add(e);
+            }
+
+            if (state.size() == 2) {
+                cancelSubscriberLatch.countDown();
+                awaitLatch(waitUntilCancelled);
+                waitUntilSecondEventProcessed.countDown();
+            }
+        }).waitUntilStarted();
+
+        awaitLatch(waitUntilSecondEventProcessed);
+        subscription = newCatchupSubscription(database, eventCollection, TimeRepresentation.DATE, new CatchupSupportingBlockingSubscriptionConfig(100, useSubscriptionPositionStorage(storage).andPersistSubscriptionPositionDuringCatchupPhaseForEveryNEvents(1)));
+        subscription.subscribe(subscriptionId, filter(type(NameDefined.class.getName())), state::add).waitUntilStarted();
+
+        // Then
+        await().atMost(FIVE_SECONDS).with().pollInterval(Duration.of(100, MILLIS)).untilAsserted(() ->
+                assertThat(state).hasSize(4).extracting(this::deserialize).containsExactly(nameDefined1, nameDefined2, nameDefined3, nameDefined4));
+    }
+
+    @Test
+    void catchup_subscription_continues_where_it_left_off_after_all_historic_events_have_been_consumed() {
+        // Given
+        LocalDateTime now = LocalDateTime.now();
+        NameDefined nameDefined1 = new NameDefined(UUID.randomUUID().toString(), now, "name1");
+        NameDefined nameDefined2 = new NameDefined(UUID.randomUUID().toString(), now.plusSeconds(2), "name2");
+        NameDefined nameDefined3 = new NameDefined(UUID.randomUUID().toString(), now.plusSeconds(6), "name5");
+        NameDefined nameDefined4 = new NameDefined(UUID.randomUUID().toString(), now.plusSeconds(10), "name3");
+
+        mongoEventStore.write("1", 0, serialize(nameDefined1));
+        mongoEventStore.write("2", 0, serialize(nameDefined2));
+
+        CountDownLatch cancelSubscriberLatch = new CountDownLatch(1);
+        CountDownLatch waitUntilCancelled = new CountDownLatch(1);
+        CountDownLatch waitUntilSecondEventProcessed = new CountDownLatch(1);
+        CopyOnWriteArrayList<CloudEvent> state = new CopyOnWriteArrayList<>();
+
+        String subscriptionId = UUID.randomUUID().toString();
+        new Thread(() -> {
+            awaitLatch(cancelSubscriberLatch);
+            subscription.shutdown();
+            waitUntilCancelled.countDown();
+        }).start();
+
+        Supplier<CatchupSupportingBlockingSubscription> catchupSupportingBlockingSubscription = () -> {
+            BlockingSubscriptionForMongoDB blockingSubscriptionForMongoDB = new BlockingSubscriptionForMongoDB(database, eventCollection, TimeRepresentation.DATE, subscriptionExecutor, RetryStrategy.none());
+            BlockingSubscriptionWithAutomaticPositionPersistence blockingSubscriptionWithAutomaticPositionPersistence = new BlockingSubscriptionWithAutomaticPositionPersistence(blockingSubscriptionForMongoDB, storage);
+            return new CatchupSupportingBlockingSubscription(blockingSubscriptionWithAutomaticPositionPersistence, mongoEventStore, new CatchupSupportingBlockingSubscriptionConfig(100, useSubscriptionPositionStorage(storage)));
+        };
+
+        subscription = catchupSupportingBlockingSubscription.get();
+
+        // When
+        subscription.subscribe(subscriptionId, filter(type(NameDefined.class.getName())), e -> {
+            if (state.size() < 2) {
+                state.add(e);
+            }
+
+            if (state.size() == 2) {
+                cancelSubscriberLatch.countDown();
+                awaitLatch(waitUntilCancelled);
+                waitUntilSecondEventProcessed.countDown();
+            }
+        }).waitUntilStarted();
+
+        awaitLatch(waitUntilSecondEventProcessed);
+        subscription = catchupSupportingBlockingSubscription.get();
+        subscription.subscribe(subscriptionId, filter(type(NameDefined.class.getName())), state::add).waitUntilStarted();
+
+        mongoEventStore.write("4", 0, serialize(nameDefined4));
+        mongoEventStore.write("3", 0, serialize(nameDefined3));
+
+        // Then
+        await().atMost(FIVE_SECONDS).with().pollInterval(Duration.of(100, MILLIS)).untilAsserted(() ->
+                assertThat(state).hasSize(4).extracting(this::deserialize).containsExactly(nameDefined1, nameDefined2, nameDefined4, nameDefined3));
+    }
+
+    @Test
     void catchup_subscription_restarts_from_beginning_of_time_when_position_is_not_persisted_during_catch_up_and_catch_up_fails() {
         // Given
         LocalDateTime now = LocalDateTime.now();
@@ -283,7 +390,7 @@ public class CatchupSupportingBlockingSubscriptionTest {
         }).start();
 
         // When
-        subscription = newCatchupSubscription(database, eventCollection, TimeRepresentation.DATE, new CatchupSupportingBlockingSubscriptionConfig(100, useSubscriptionPositionStorage(storage)));
+        subscription = newCatchupSubscription(database, eventCollection, TimeRepresentation.DATE, new CatchupSupportingBlockingSubscriptionConfig(100));
         subscription.subscribe(subscriptionId, StartAt.subscriptionPosition(TimeBasedSubscriptionPosition.beginningOfTime()), e -> {
             if (state.size() < 2) {
                 state.add(e);
@@ -302,11 +409,12 @@ public class CatchupSupportingBlockingSubscriptionTest {
 
         // Then
         await().atMost(FIVE_SECONDS).with().pollInterval(Duration.of(100, MILLIS)).untilAsserted(() ->
+                // Note that it's correct behavior that we expect 6 events here since the first subscription is not configured to store subscription position during catch-up => duplicates
                 assertThat(state).hasSize(6).extracting(this::deserialize).containsExactly(nameDefined1, nameDefined2, nameDefined1, nameDefined2, nameDefined3, nameWasChanged1));
     }
 
     @Test
-    void catchup_subscription_can_be_configured_to_only_store_the_position_of_every_tenth_event() {
+    void catchup_subscription_can_be_configured_to_only_store_the_position_of_every_tenth_event_when_persisting_catchup_subscription() {
         // Given
         LocalDateTime now = LocalDateTime.now();
 
@@ -333,7 +441,7 @@ public class CatchupSupportingBlockingSubscriptionTest {
 
         // Then
         await().atMost(FIVE_SECONDS).with().pollInterval(Duration.of(20, MILLIS)).untilAsserted(() -> assertThat(state).hasSize(100));
-        assertThat(numberOfSavedPositions).hasValue(10); // Store every 10th position equals 10 for 100 events
+        assertThat(numberOfSavedPositions).hasValue(11); // Store every 10th position equals 10 for 100 events + 1 additional save for global subscription position before switching to continuous mode
         assertThat(storage.read(subscriptionId)).isNotNull();
     }
 

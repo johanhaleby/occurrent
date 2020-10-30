@@ -23,12 +23,12 @@ import org.occurrent.subscription.SubscriptionPosition;
 import org.occurrent.subscription.api.blocking.BlockingSubscriptionPositionStorage;
 import org.occurrent.subscription.mongodb.MongoDBOperationTimeBasedSubscriptionPosition;
 import org.occurrent.subscription.mongodb.MongoDBResumeTokenBasedSubscriptionPosition;
-import org.occurrent.subscription.mongodb.internal.MongoDBCloudEventsToJsonDeserializer;
 import org.occurrent.subscription.mongodb.internal.MongoDBCommons;
 import org.springframework.data.mongodb.core.MongoOperations;
 import org.springframework.data.mongodb.core.query.Update;
 
 import static java.util.Objects.requireNonNull;
+import static org.occurrent.subscription.mongodb.internal.MongoDBCloudEventsToJsonDeserializer.ID;
 import static org.springframework.data.mongodb.core.query.Criteria.where;
 import static org.springframework.data.mongodb.core.query.Query.query;
 
@@ -56,7 +56,7 @@ public class SpringBlockingSubscriptionPositionStorageForMongoDB implements Bloc
 
     @Override
     public SubscriptionPosition read(String subscriptionId) {
-        Document document = mongoOperations.findOne(query(where(MongoDBCloudEventsToJsonDeserializer.ID).is(subscriptionId)), Document.class, subscriptionPositionCollection);
+        Document document = mongoOperations.findOne(query(where(ID).is(subscriptionId)), Document.class, subscriptionPositionCollection);
         if (document == null) {
             return null;
         }
@@ -79,7 +79,12 @@ public class SpringBlockingSubscriptionPositionStorageForMongoDB implements Bloc
 
     @Override
     public void delete(String subscriptionId) {
-        mongoOperations.remove(query(where(MongoDBCloudEventsToJsonDeserializer.ID).is(subscriptionId)), subscriptionPositionCollection);
+        mongoOperations.remove(query(where(ID).is(subscriptionId)), subscriptionPositionCollection);
+    }
+
+    @Override
+    public boolean exists(String subscriptionId) {
+        return mongoOperations.exists(query(where(ID).is(subscriptionId)), subscriptionPositionCollection);
     }
 
     private void persistResumeTokenStreamPosition(String subscriptionId, BsonValue resumeToken) {
@@ -91,7 +96,7 @@ public class SpringBlockingSubscriptionPositionStorageForMongoDB implements Bloc
     }
 
     private void persistDocumentStreamPosition(String subscriptionId, Document document) {
-        mongoOperations.upsert(query(where(MongoDBCloudEventsToJsonDeserializer.ID).is(subscriptionId)),
+        mongoOperations.upsert(query(where(ID).is(subscriptionId)),
                 Update.fromDocument(document),
                 subscriptionPositionCollection);
     }

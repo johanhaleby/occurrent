@@ -132,7 +132,9 @@ public class SpringBlockingSubscriptionForMongoDB implements PositionAwareBlocki
 
     @Override
     public SubscriptionPosition globalSubscriptionPosition() {
-        BsonTimestamp currentOperationTime = MongoDBCommons.getServerOperationTime(mongoOperations.executeCommand(new Document("hostInfo", 1)));
+        // Note that we increase the "increment" by 1 in order to not clash with an existing event in the event store.
+        // This is so that we can avoid duplicates in certain rare cases when replaying events.
+        BsonTimestamp currentOperationTime = MongoDBCommons.getServerOperationTime(mongoOperations.executeCommand(new Document("hostInfo", 1)), 1);
         return new MongoDBOperationTimeBasedSubscriptionPosition(currentOperationTime);
     }
 }

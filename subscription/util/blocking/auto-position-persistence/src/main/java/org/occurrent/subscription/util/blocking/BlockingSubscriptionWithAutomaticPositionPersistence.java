@@ -79,8 +79,7 @@ public class BlockingSubscriptionWithAutomaticPositionPersistence implements Pos
 
     @Override
     public Subscription subscribe(String subscriptionId, SubscriptionFilter filter, Supplier<StartAt> startAtSupplier, Consumer<CloudEvent> action) {
-        return subscription.subscribe(subscriptionId,
-                filter, startAtSupplier, cloudEvent -> {
+        return subscription.subscribe(subscriptionId, filter, startAtSupplier, cloudEvent -> {
                     action.accept(cloudEvent);
                     if (config.persistCloudEventPositionPredicate.test(cloudEvent)) {
                         SubscriptionPosition subscriptionPosition = getSubscriptionPositionOrThrowIAE(cloudEvent);

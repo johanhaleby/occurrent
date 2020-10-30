@@ -61,4 +61,10 @@ public class SpringBlockingSubscriptionPositionStorageForRedis implements Blocki
     public void delete(String subscriptionId) {
         redis.delete(subscriptionId);
     }
+
+    @Override
+    public boolean exists(String subscriptionId) {
+        Boolean result = redis.hasKey(subscriptionId);
+        return result != null && result;
+    }
 }

@@ -57,7 +57,12 @@ public class MongoDBCommons {
     }
 
     public static BsonTimestamp getServerOperationTime(Document hostInfoDocument) {
-        return (BsonTimestamp) hostInfoDocument.get(OPERATION_TIME);
+        return getServerOperationTime(hostInfoDocument, 0);
+    }
+
+    public static BsonTimestamp getServerOperationTime(Document hostInfoDocument, int increaseIncrementBy) {
+        BsonTimestamp bsonTimestamp = (BsonTimestamp) hostInfoDocument.get(OPERATION_TIME);
+        return increaseIncrementBy > 0 ? new BsonTimestamp(bsonTimestamp.getTime(), bsonTimestamp.getInc() + increaseIncrementBy) : bsonTimestamp;
     }
 
     public static ResumeToken extractResumeTokenFromPersistedResumeTokenDocument(Document resumeTokenDocument) {

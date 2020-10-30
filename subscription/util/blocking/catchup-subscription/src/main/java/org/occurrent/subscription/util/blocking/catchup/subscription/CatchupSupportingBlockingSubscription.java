@@ -29,6 +29,7 @@ import org.occurrent.subscription.util.blocking.catchup.subscription.Subscriptio
 import org.occurrent.subscription.util.blocking.catchup.subscription.SubscriptionPositionStorageConfig.UseSubscriptionPositionInStorage;
 
 import javax.annotation.PreDestroy;
+import java.time.Duration;
 import java.time.OffsetDateTime;
 import java.util.LinkedHashMap;
 import java.util.Map;
@@ -72,6 +73,7 @@ public class CatchupSupportingBlockingSubscription implements BlockingSubscripti
     private final EventStoreQueries eventStoreQueries;
     private final CatchupSupportingBlockingSubscriptionConfig config;
     private final ConcurrentMap<String, Boolean> runningCatchupSubscriptions = new ConcurrentHashMap<>();
+    private volatile boolean shuttingDown = false;
 
     /**
      * Create a new instance of {@link CatchupSupportingBlockingSubscription} the uses a default {@link CatchupSupportingBlockingSubscriptionConfig} with a cache size of
@@ -115,7 +117,7 @@ public class CatchupSupportingBlockingSubscription implements BlockingSubscripti
             startAt = startAtSupplier.get();
         }
 
-        // TODO!! We want to continue from the wrapping subscription if it has something stored in it's position storage!!!!
+        // We want to continue from the wrapping subscription if it has something stored in it's position storage.
         if (!isTimeBasedSubscriptionPosition(startAt)) {
             return subscription.subscribe(subscriptionId, filter, startAtSupplier, action);
         }
@@ -133,7 +135,7 @@ public class CatchupSupportingBlockingSubscription implements BlockingSubscripti
         // Here's the reason why we're forcing the wrapping subscription to be a PositionAwareBlockingSubscription.
         // This is in order to be 100% safe since we need to take events that are published meanwhile the EventStoreQuery
         // is executed. Thus we need the global position of the subscription at the time of starting the query.
-        final StartAt wrappingSubscriptionStartPosition = StartAt.subscriptionPosition(subscription.globalSubscriptionPosition());
+        SubscriptionPosition globalSubscriptionPosition = subscription.globalSubscriptionPosition();
 
         FixedSizeCache cache = new FixedSizeCache(config.cacheSize);
         final Stream<CloudEvent> stream;
@@ -144,20 +146,64 @@ public class CatchupSupportingBlockingSubscription implements BlockingSubscripti
             stream = eventStoreQueries.query(timeFilter.and(userSuppliedFilter), TIME_ASC);
         }
 
-        takeWhile(stream, __ -> runningCatchupSubscriptions.containsKey(subscriptionId))
+        takeWhile(stream, __ -> !shuttingDown && runningCatchupSubscriptions.containsKey(subscriptionId))
                 .peek(action)
                 .peek(e -> cache.put(e.getId()))
                 .filter(returnIfSubscriptionPositionStorageConfigIs(PersistSubscriptionPositionDuringCatchupPhase.class, cfg -> cfg.persistCloudEventPositionPredicate).orElse(__ -> false))
                 .forEach(e -> doIfSubscriptionPositionStorageConfigIs(PersistSubscriptionPositionDuringCatchupPhase.class, cfg -> cfg.storage.save(subscriptionId, TimeBasedSubscriptionPosition.from(e.getTime()))));
 
-        runningCatchupSubscriptions.remove(subscriptionId);
+        final boolean subscriptionsWasCancelledOrShutdown;
+        if (!shuttingDown && runningCatchupSubscriptions.containsKey(subscriptionId)) {
+            subscriptionsWasCancelledOrShutdown = false;
+            runningCatchupSubscriptions.remove(subscriptionId);
+        } else {
+            // When runningCatchupSubscriptions doesn't contain the key at this stage it means that it has been explicitly cancelled.
+            subscriptionsWasCancelledOrShutdown = true;
+        }
+
         // TODO Should we remove the position from storage?! For example if the wrapping subscription is not storing the position?
+
         // Be careful since the wrapping subscription has not yet saved the global position here...
-        return subscription.subscribe(subscriptionId, filter, wrappingSubscriptionStartPosition, cloudEvent -> {
-            if (!cache.isCached(cloudEvent.getId())) {
-                action.accept(cloudEvent);
-            }
-        });
+        // We need a durable cache in order to be 100% safe.
+
+        // When the catch-up subscription is ready we store the global position in the position storage so that subscriptions
+        // that have not received _any_ new events during replay will start at the global position if the application is restarted.
+        // Otherwise nothing will be stored in the "storage" and replay of historic events will take place again on application restart
+        // which is not what we want! The reason for doing this with UseSubscriptionPositionInStorage (as opposed to just
+        // PersistSubscriptionPositionDuringCatchupPhase) is that if using a "storage" at all in the config, is to accommodate
+        // that the wrapping subscription continues from where we left off.
+        Supplier<StartAt> startAtSupplierToUse = this.<Supplier<StartAt>, UseSubscriptionPositionInStorage>returnIfSubscriptionPositionStorageConfigIs(UseSubscriptionPositionInStorage.class,
+                cfg -> () -> {
+                    // It's important that we find the document inside the supplier so that we lookup the latest resume token on retry
+                    SubscriptionPosition position = cfg.storage.read(subscriptionId);
+                    // If there is no position stored in storage, or if the stored position is time-based
+                    // (i.e. written by the catch-up subscription), we save the globalSubscriptionPosition.
+                    // The reason that we need to write the time-based subscription position in this case
+                    // is that the wrapped subscription might not support time-based subscriptions.
+                    if (position == null || isTimeBasedSubscriptionPosition(position)) {
+                        position = cfg.storage.save(subscriptionId, globalSubscriptionPosition);
+                    }
+                    return StartAt.subscriptionPosition(position);
+                }).orElse(() -> StartAt.subscriptionPosition(globalSubscriptionPosition));
+
+        final Subscription subscription;
+        if (subscriptionsWasCancelledOrShutdown) {
+            doIfSubscriptionPositionStorageConfigIs(UseSubscriptionPositionInStorage.class, cfg -> {
+                // Only store position if using storage and no position has been stored!
+                if (!cfg.storage.exists(subscriptionId)) {
+                    startAtSupplierToUse.get();
+                }
+            });
+            subscription = new CancelledSubscription(subscriptionId);
+        } else {
+            subscription = this.subscription.subscribe(subscriptionId, filter, startAtSupplierToUse, cloudEvent -> {
+                if (!cache.isCached(cloudEvent.getId())) {
+                    action.accept(cloudEvent);
+                }
+            });
+        }
+
+        return subscription;
     }
 
     @Override
@@ -185,6 +231,7 @@ public class CatchupSupportingBlockingSubscription implements BlockingSubscripti
     @PreDestroy
     @Override
     public void shutdown() {
+        shuttingDown = true;
         runningCatchupSubscriptions.clear();
         subscription.shutdown();
     }
@@ -195,6 +242,10 @@ public class CatchupSupportingBlockingSubscription implements BlockingSubscripti
         }
 
         SubscriptionPosition subscriptionPosition = ((StartAtSubscriptionPosition) startAt).subscriptionPosition;
+        return isTimeBasedSubscriptionPosition(subscriptionPosition);
+    }
+
+    public static boolean isTimeBasedSubscriptionPosition(SubscriptionPosition subscriptionPosition) {
         return subscriptionPosition instanceof TimeBasedSubscriptionPosition ||
                 (subscriptionPosition instanceof StringBasedSubscriptionPosition && isRfc3339Timestamp(subscriptionPosition.asString()));
     }
@@ -243,6 +294,29 @@ public class CatchupSupportingBlockingSubscription implements BlockingSubscripti
     private <T, C extends SubscriptionPositionStorageConfig> void doIfSubscriptionPositionStorageConfigIs(Class<C> cls, Consumer<C> consumer) {
         if (cls.isInstance(config.subscriptionStorageConfig)) {
             consumer.accept(cls.cast(config.subscriptionStorageConfig));
+        }
+    }
+
+    private static class CancelledSubscription implements Subscription {
+        private final String subscriptionId;
+
+        public CancelledSubscription(String subscriptionId) {
+            this.subscriptionId = subscriptionId;
+        }
+
+        @Override
+        public String id() {
+            return subscriptionId;
+        }
+
+        @Override
+        public void waitUntilStarted() {
+
+        }
+
+        @Override
+        public boolean waitUntilStarted(Duration timeout) {
+            return true;
         }
     }
 }

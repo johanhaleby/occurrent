@@ -53,11 +53,18 @@ public interface BlockingSubscriptionPositionStorage {
      */
     SubscriptionPosition save(String subscriptionId, SubscriptionPosition subscriptionPosition);
 
-
     /**
      * Delete the {@link SubscriptionPosition} for the supplied {@code subscriptionId}.
      *
      * @param subscriptionId The id of the subscription to delete the {@link SubscriptionPosition} for.
      */
     void delete(String subscriptionId);
+
+    /**
+     * Check if the subscription id has a stored subscription position in this storage.
+     *
+     * @param subscriptionId The id of the subscription to check.
+     * @return <code>true</code> if storage contains a subscription position for the stream id, <code>false</code> otherwise.
+     */
+    boolean exists(String subscriptionId);
 }
