@@ -1,4 +1,4 @@
-Changelog next version:
+Changelog 0.2.0 (2020-10-31)
 * Renamed method `CloudEventWithSubscriptionPosition.getStreamPosition()` to `CloudEventWithSubscriptionPosition.getSubscriptionPosition()` since this was a typo.
 * Added ability to provide a list of conditions when composing them with `and` and `or`.
 * Added special convenience (overloaded) method for creating "or" with "equal to" conditions. For example you can now do: `filter(type(or("x", "y"))`. 
