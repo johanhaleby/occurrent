@@ -1,5 +1,8 @@
 package org.occurrent.application.composition.command.partial;
 
+/**
+ * Just some definitions of functions that are used to create "partial functions".
+ */
 public class PartialApplicationFunctions {
     @FunctionalInterface
     public interface TriFunction<T, U, V> {

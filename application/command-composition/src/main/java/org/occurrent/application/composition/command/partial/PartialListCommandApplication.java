@@ -6,6 +6,27 @@ import java.util.List;
 import java.util.function.BiFunction;
 import java.util.function.Function;
 
+/**
+ * Utility for creating partial function applications for "list commands", ({@code Function<List<T>, List<T>>}).
+ * For example let's say you have a domain function defined like this in {@code MyClass}:
+ *
+ * <pre>
+ * public List&lt;DomainEvent&gt; someDomainFunction(List&lt;DomainEvent&gt;, int someValue, String someString) {
+ *     ...
+ * }
+ * </pre>
+ * and you want to pass this as a command to an application service. You could do like this:
+ *
+ * <pre>
+ * applicationService.execute("streamId", events -> MyClass.someDomainFunction(events, 2, "my string));
+ * </pre>
+ *
+ * Alternatively, you can use partial function application by using the {@code partial} methods in this class:
+ *
+ * <pre>
+ * applicationService.execute("streamId", partial(Class::someDomainFunction, 2, "my string));
+ * </pre>
+ */
 public class PartialListCommandApplication {
 
     public static <T, U> Function<List<T>, List<T>> partial(BiFunction<List<T>, U, List<T>> fn, U param) {
