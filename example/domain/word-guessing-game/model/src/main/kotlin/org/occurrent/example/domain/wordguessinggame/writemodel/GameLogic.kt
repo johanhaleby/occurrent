@@ -5,6 +5,9 @@ import org.occurrent.example.domain.wordguessinggame.event.ReasonForNotBeingAwar
 import org.occurrent.example.domain.wordguessinggame.support.add
 import java.util.*
 
+/**
+ * Start game
+ */
 fun startGame(previousEvents: Sequence<DomainEvent>, gameId: GameId, timestamp: Timestamp, playerId: PlayerId, wordsToChooseFrom: WordsToChooseFrom, maxNumberOfGuessesPerPlayer: MaxNumberOfGuessesPerPlayer,
               maxNumberOfGuessesTotal: MaxNumberOfGuessesTotal): Sequence<DomainEvent> {
     val state = previousEvents.deriveGameState()
