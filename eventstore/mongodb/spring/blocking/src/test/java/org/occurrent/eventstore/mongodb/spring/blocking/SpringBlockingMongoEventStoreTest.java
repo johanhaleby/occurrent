@@ -26,10 +26,7 @@ import com.mongodb.client.MongoClients;
 import io.cloudevents.CloudEvent;
 import io.cloudevents.core.builder.CloudEventBuilder;
 import io.github.artsok.RepeatedIfExceptionsTest;
-import org.junit.jupiter.api.BeforeEach;
-import org.junit.jupiter.api.DisplayName;
-import org.junit.jupiter.api.Nested;
-import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.*;
 import org.junit.jupiter.api.condition.EnabledForJreRange;
 import org.junit.jupiter.api.condition.EnabledOnJre;
 import org.junit.jupiter.api.extension.RegisterExtension;
@@ -1310,7 +1307,7 @@ public class SpringBlockingMongoEventStoreTest {
                 assertThat(deserialize(events)).containsExactly(nameDefined, nameWasChanged1); // nameWasChanged2 _should_ be included but it's not due to string comparison instead of date
             }
 
-            @RepeatedIfExceptionsTest(repeats = 3, suspend = 1000)
+            @Disabled
             @Test
             void query_filter_by_time_range_has_a_range_smaller_as_persisted_time_range_when_rfc_3339() {
                 // Given
