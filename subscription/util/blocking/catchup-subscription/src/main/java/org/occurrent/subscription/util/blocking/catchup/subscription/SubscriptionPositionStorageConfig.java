@@ -14,10 +14,33 @@ public abstract class SubscriptionPositionStorageConfig {
     private SubscriptionPositionStorageConfig() {
     }
 
+    /**
+     * Don't use a subscription position storage. The catch-up subscription will start from beginning of time each time it is started (for example
+     * each time the application is restarted).
+     *
+     * @return An instance of {@link DontUseSubscriptionPositionInStorage}.
+     */
     public static DontUseSubscriptionPositionInStorage dontSubscriptionPositionStorage() {
         return new DontUseSubscriptionPositionInStorage();
     }
 
+    /**
+     * Use a specific storage instance. The catch-up subscription will use this storage to check if a position has already been persisted,
+     * and if so the catch-up subscription, will continue from this position. The catch-up subscription will delegate to the wrapping subscription
+     * if the position belongs to it.
+     * <br><br>
+     * This is really useful if you want to start-off with a catch-up subscription but then automatically continue with from the wrapped subscription
+     * position once the events have caught up.
+     * <br><br>
+     * Note that if this setting is not combined with {@link UseSubscriptionPositionInStorage#andPersistSubscriptionPositionDuringCatchupPhaseForEveryNEvents(int)}
+     * or {@link UseSubscriptionPositionInStorage#andPersistSubscriptionPositionDuringCatchupPhaseWhen(Predicate)} the subscription position
+     * is will not be stored during the catch-up phase. This means that if the application crashes during catch-up it'll restart from the beginning
+     * when the application is restarted. Combine this settings with any of the two methods defined above to alleviate this, if deemed required.
+     *
+     * @param storage The storage to use. Must be the same instance as used by the wrapped subscription in order to allow continuing from the subscription position
+     *                on application restart.
+     * @return A {@link UseSubscriptionPositionInStorage} instance.
+     */
     public static UseSubscriptionPositionInStorage useSubscriptionPositionStorage(BlockingSubscriptionPositionStorage storage) {
         return new UseSubscriptionPositionInStorage(storage);
     }
@@ -35,6 +58,11 @@ public abstract class SubscriptionPositionStorageConfig {
         }
 
         /**
+         * Configure the catch-up subscription to periodically store store the event position in a storage in case
+         * the application is restarted during the catch-up phase. On restart the application will continue from the
+         * last stored position, instead of starting from the beginning. This is useful if you have lot's of events
+         * and don't want to risk starting from the beginning on failure!
+         *
          * @param persistCloudEventPositionPredicate A predicate that evaluates to <code>true</code> if the cloud event position should be persisted for the <i>catch-up</i> subscription.
          *                                           See {@link EveryN}. Supply a predicate that always returns {@code false} to never store the position.
          * @return An instance of {@link PersistSubscriptionPositionDuringCatchupPhase}
@@ -45,6 +73,11 @@ public abstract class SubscriptionPositionStorageConfig {
         }
 
         /**
+         * Configure the catch-up subscription to periodically store store the event position in a storage in case
+         * the application is restarted during the catch-up phase. On restart the application will continue from the
+         * last stored position, instead of starting from the beginning. This is useful if you have lot's of events
+         * and don't want to risk starting from the beginning on failure!
+         *
          * @param persistPositionForEveryNCloudEvent Persist the position of every N cloud event so that it's possible to avoid restarting from scratch when the <i>catch-up</i> subscription is restarted.
          * @return An instance of {@link PersistSubscriptionPositionDuringCatchupPhase}
          */
@@ -73,6 +106,10 @@ public abstract class SubscriptionPositionStorageConfig {
         }
     }
 
+    /**
+     * @see UseSubscriptionPositionInStorage#andPersistSubscriptionPositionDuringCatchupPhaseWhen(Predicate)
+     * @see UseSubscriptionPositionInStorage#andPersistSubscriptionPositionDuringCatchupPhaseForEveryNEvents(int)
+     */
     public static final class PersistSubscriptionPositionDuringCatchupPhase extends UseSubscriptionPositionInStorage {
         public final Predicate<CloudEvent> persistCloudEventPositionPredicate;
 
