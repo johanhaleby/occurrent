@@ -1310,6 +1310,7 @@ public class SpringBlockingMongoEventStoreTest {
                 assertThat(deserialize(events)).containsExactly(nameDefined, nameWasChanged1); // nameWasChanged2 _should_ be included but it's not due to string comparison instead of date
             }
 
+            @RepeatedIfExceptionsTest(repeats = 3)
             @Test
             void query_filter_by_time_range_has_a_range_smaller_as_persisted_time_range() {
                 // Given
