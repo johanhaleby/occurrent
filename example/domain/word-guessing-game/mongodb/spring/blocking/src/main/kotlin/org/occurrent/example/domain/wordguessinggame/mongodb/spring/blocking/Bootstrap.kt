@@ -17,7 +17,7 @@ package org.occurrent.example.domain.wordguessinggame.mongodb.spring.blocking
 
 import com.fasterxml.jackson.databind.ObjectMapper
 import com.fasterxml.jackson.module.kotlin.KotlinModule
-import org.occurrent.application.service.blocking.CloudEventConverter
+import org.occurrent.application.converter.CloudEventConverter
 import org.occurrent.application.service.blocking.implementation.GenericApplicationService
 import org.occurrent.eventstore.api.blocking.EventStoreQueries
 import org.occurrent.eventstore.mongodb.spring.blocking.EventStoreConfig

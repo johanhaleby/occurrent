@@ -4,7 +4,7 @@ import com.fasterxml.jackson.databind.ObjectMapper
 import com.fasterxml.jackson.module.kotlin.readValue
 import io.cloudevents.CloudEvent
 import io.cloudevents.core.builder.CloudEventBuilder
-import org.occurrent.application.service.blocking.CloudEventConverter
+import org.occurrent.application.converter.CloudEventConverter
 import org.occurrent.example.domain.wordguessinggame.event.*
 import org.occurrent.example.domain.wordguessinggame.event.ReasonForNotBeingAwardedPoints.PlayerCreatedListOfWords
 import org.occurrent.example.domain.wordguessinggame.writemodel.PlayerId

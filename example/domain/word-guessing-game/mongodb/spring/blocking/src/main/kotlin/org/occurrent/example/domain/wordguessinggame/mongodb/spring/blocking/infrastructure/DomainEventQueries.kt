@@ -1,6 +1,6 @@
 package org.occurrent.example.domain.wordguessinggame.mongodb.spring.blocking.infrastructure
 
-import org.occurrent.application.service.blocking.CloudEventConverter
+import org.occurrent.application.converter.CloudEventConverter
 import org.occurrent.eventstore.api.blocking.EventStoreQueries
 import org.occurrent.example.domain.wordguessinggame.event.DomainEvent
 import org.occurrent.filter.Filter
