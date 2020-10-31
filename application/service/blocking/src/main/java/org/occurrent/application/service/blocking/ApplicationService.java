@@ -18,7 +18,10 @@ import java.util.stream.Stream;
 public interface ApplicationService<T> {
 
     /**
-     * Execute a function that loads the events from the event store and apply them to the {@code functionThatCallsDomainModel}.
+     * Execute a function that loads the events from the event store and apply them to the {@code functionThatCallsDomainModel} and
+     * also execute side-effects that are executed synchronously <i>after</i> the events have been written to the event store.
+     * If the side-effects write data to the same datastore as the event store you can make use of transactions to write events
+     * and side-effects atomically.
      * <br>
      * <br>
      * <p>
@@ -31,9 +34,20 @@ public interface ApplicationService<T> {
      * @param streamId                     The id of the stream to load events from and also write the events returned from {@code functionThatCallsDomainModel} to.
      * @param functionThatCallsDomainModel A <i>pure</i> function that calls the domain model. Use partial application ({@code org.occurrent:command-composition:<version>})
      *                                     if required.
+     * @param sideEffect                   Side-effects that are executed <i>after</i> the events have been written to the event store.
      */
     void execute(String streamId, Function<Stream<T>, Stream<T>> functionThatCallsDomainModel, Consumer<Stream<T>> sideEffect);
 
+
+    /**
+     * Convenience function that lets you specify {@code streamId} as a {@code UUID} instead of a {@code String}. Simply delegates to {@link #execute(String, Function, Consumer)}.
+     *
+     * @param streamId                     The id of the stream to load events from and also write the events returned from {@code functionThatCallsDomainModel} to.
+     * @param functionThatCallsDomainModel A <i>pure</i> function that calls the domain model. Use partial application ({@code org.occurrent:command-composition:<version>})
+     *                                     if required.
+     * @param sideEffect                   Side-effects that are executed <i>after</i> the events have been written to the event store.
+     * @see #execute(String, Function, Consumer)
+     */
     default void execute(UUID streamId, Function<Stream<T>, Stream<T>> functionThatCallsDomainModel, Consumer<Stream<T>> sideEffect) {
         Objects.requireNonNull(streamId, "Stream id cannot be null");
         execute(streamId.toString(), functionThatCallsDomainModel, sideEffect);
