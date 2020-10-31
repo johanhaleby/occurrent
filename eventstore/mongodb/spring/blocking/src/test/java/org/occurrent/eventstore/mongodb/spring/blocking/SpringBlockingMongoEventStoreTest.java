@@ -1241,7 +1241,7 @@ public class SpringBlockingMongoEventStoreTest {
         class TimeRepresentedAsRfc3339String {
 
             @RepeatedIfExceptionsTest(repeats = 3)
-            void query_filter_by_time_but_is_using_slow_string_comparision() {
+            void query_filter_by_time_but_is_using_slow_string_comparison() {
                 // Given
                 LocalDateTime now = LocalDateTime.now();
                 NameDefined nameDefined = new NameDefined(UUID.randomUUID().toString(), now, "name");
@@ -1310,9 +1310,9 @@ public class SpringBlockingMongoEventStoreTest {
                 assertThat(deserialize(events)).containsExactly(nameDefined, nameWasChanged1); // nameWasChanged2 _should_ be included but it's not due to string comparison instead of date
             }
 
-            @RepeatedIfExceptionsTest(repeats = 3)
+            @RepeatedIfExceptionsTest(repeats = 3, suspend = 1000)
             @Test
-            void query_filter_by_time_range_has_a_range_smaller_as_persisted_time_range() {
+            void query_filter_by_time_range_has_a_range_smaller_as_persisted_time_range_when_rfc_3339() {
                 // Given
                 LocalDateTime now = LocalDateTime.now();
                 NameDefined nameDefined = new NameDefined(UUID.randomUUID().toString(), now, "name");
@@ -1391,7 +1391,7 @@ public class SpringBlockingMongoEventStoreTest {
             }
 
             @Test
-            void query_filter_by_time_range_has_a_range_smaller_as_persisted_time_range() {
+            void query_filter_by_time_range_has_a_range_smaller_as_persisted_time_range_when_date() {
                 // Given
                 LocalDateTime now = LocalDateTime.now();
                 NameDefined nameDefined = new NameDefined(UUID.randomUUID().toString(), now, "name");
