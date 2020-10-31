@@ -18,7 +18,18 @@ Changelog next version:
 * Fixed several corner-cases for the `CatchupSupportingBlockingSubscription`, it should now be safer to use and produce fewer duplicates when switching from catch-up to continuous subscription mode.
 * Added "exists" method to the `BlockingSubscriptionPositionStorage` interface (and implemented for all implementations of this interface).
 * The global position of `PositionAwareBlockingSubscription` for MongoDB increases the "increment" of the current `BsonTimestamp` by 1 in order to avoid 
-  duplicate potential duplication of events during replay. 
+  duplicate potential duplication of events during replay.
+* Added a generic application service implementation (and interfaces). You don't have to use it, it's ok to simply cut and paste and make custom changes. You 
+  can also write your own class. The implementation, `org.occurrent.application.service.blocking.implementation.GenericApplicationService`, quite 
+  simplistic but should cover most of the basic use cases. The application service uses a `org.occurrent.application.converter.CloudEventConverter` to
+  convert to and from cloud events and your custom domain events. This is why both `CloudEventConverter` and `ApplicationService` takes a generic type parameter, `T`, 
+  which is the type of your custom domain event. Note that the application service is not yet implemented for the reactive event store.
+  The application service also contains a way to execute side-effects after the events are written to the event store. This is useful for executing 
+  synchronous policies after the events are written to the event store. If policies write the the same database as your event store,  you start a transaction
+  and write both policies and events in the same transaction!         
+  There are also Kotlin extension functions for the application service and policies in the `org.occurrent:application-service-blocking` module.
+* Added utilities, `org.occurrent:command-composition` for to easier do command composition when calling an application service.
+  This module also contains utilities for doing partial application of functions which can be useful when composing functions.    
 
 Version 0.1.1 (2020-09-26):
 

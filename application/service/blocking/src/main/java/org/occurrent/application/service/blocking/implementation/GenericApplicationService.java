@@ -1,8 +1,8 @@
 package org.occurrent.application.service.blocking.implementation;
 
 import io.cloudevents.CloudEvent;
+import org.occurrent.application.converter.CloudEventConverter;
 import org.occurrent.application.service.blocking.ApplicationService;
-import org.occurrent.application.service.blocking.CloudEventConverter;
 import org.occurrent.eventstore.api.blocking.EventStore;
 import org.occurrent.eventstore.api.blocking.EventStream;
 

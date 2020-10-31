@@ -1,7 +1,7 @@
-package org.occurrent.application.service.blocking.implementation;
+package org.occurrent.application.converter.implementation;
 
 import io.cloudevents.CloudEvent;
-import org.occurrent.application.service.CloudEventConverter;
+import org.occurrent.application.converter.CloudEventConverter;
 
 import java.util.function.Function;
 

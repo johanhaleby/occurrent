@@ -1,4 +1,4 @@
-package org.occurrent.application.service.blocking;
+package org.occurrent.application.converter;
 
 import io.cloudevents.CloudEvent;
 
