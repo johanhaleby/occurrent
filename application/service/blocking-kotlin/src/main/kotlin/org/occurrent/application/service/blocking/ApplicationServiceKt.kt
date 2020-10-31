@@ -5,9 +5,15 @@ import java.util.stream.Stream
 import kotlin.streams.asSequence
 import kotlin.streams.asStream
 
+/**
+ * Extension function to [ApplicationService] that allows working with Kotlin sequences
+ */
 fun <T> ApplicationService<T>.execute(streamId: UUID, functionThatCallsDomainModel: (Sequence<T>) -> Sequence<T>) =
         execute(streamId, functionThatCallsDomainModel, null)
 
+/**
+ * Extension function to [ApplicationService] that allows working with Kotlin sequences
+ */
 fun <T> ApplicationService<T>.execute(streamId: String, functionThatCallsDomainModel: (Sequence<T>) -> Sequence<T>) =
         execute(streamId, functionThatCallsDomainModel, null)
 
@@ -17,7 +23,6 @@ fun <T> ApplicationService<T>.execute(streamId: String, functionThatCallsDomainM
 fun <T> ApplicationService<T>.execute(streamId: UUID, functionThatCallsDomainModel: (Sequence<T>) -> Sequence<T>,
                                       sideEffects: ((Sequence<T>) -> Unit)? = null) =
         execute(streamId.toString(), functionThatCallsDomainModel, sideEffects)
-
 
 /**
  * Extension function to [ApplicationService] that allows working with Kotlin sequences
