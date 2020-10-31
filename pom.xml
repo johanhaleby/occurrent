@@ -292,6 +292,15 @@
         </repository>
     </repositories>
 
+    <pluginRepositories>
+        <!-- Required by dokka -->
+        <pluginRepository>
+            <id>jcenter</id>
+            <name>JCenter</name>
+            <url>https://jcenter.bintray.com/</url>
+        </pluginRepository>
+    </pluginRepositories>
+
     <build>
         <pluginManagement><!-- lock down plugins versions to avoid using Maven defaults (may be moved to parent pom) -->
             <plugins>
@@ -338,7 +347,7 @@
                     <!-- See https://github.com/Kotlin/dokka#using-the-maven-plugin for more examples-->
                     <groupId>org.jetbrains.dokka</groupId>
                     <artifactId>dokka-maven-plugin</artifactId>
-                    <version>0.9.16</version>
+                    <version>1.4.10.2</version>
                     <executions>
                         <execution>
                             <phase>prepare-package</phase>
