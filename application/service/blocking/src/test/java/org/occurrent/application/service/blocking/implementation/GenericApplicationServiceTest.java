@@ -6,6 +6,7 @@ import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Nested;
 import org.junit.jupiter.api.Test;
 import org.occurrent.application.converter.CloudEventConverter;
+import org.occurrent.application.converter.implementation.GenericCloudEventConverter;
 import org.occurrent.application.service.blocking.ApplicationService;
 import org.occurrent.application.service.blocking.PolicySideEffect;
 import org.occurrent.application.service.blocking.implementation.support.CountNumberOfNamesDefinedPolicy;
