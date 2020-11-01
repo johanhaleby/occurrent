@@ -40,19 +40,23 @@ public class GenericApplicationService<T> implements ApplicationService<T> {
         Stream<T> eventsInStream = eventStream.events().map(cloudEventConverter::toDomainEvent);
 
         // Call a pure function from the domain model which returns a Stream of events
-        Stream<T> newDomainEvents = functionThatCallsDomainModel.apply(eventsInStream);
+        Stream<T> newDomainEvents = emptyStreamIfNull(functionThatCallsDomainModel.apply(eventsInStream));
 
         // We need to convert the new domain event stream into a list in order to be able to call side-effects with new events
         // if side effect is defined
         final List<T> newEventsAsList = sideEffect == null ? null : newDomainEvents.collect(Collectors.toList());
 
         // Convert to cloud events and write the new events to the event store
-        Stream<CloudEvent> newEvents = (newEventsAsList == null ? newDomainEvents : newEventsAsList.stream()).map(cloudEventConverter::toCloudEvent);
+        Stream<CloudEvent> newEvents = (sideEffect == null ? newDomainEvents : newEventsAsList.stream()).map(cloudEventConverter::toCloudEvent);
         eventStore.write(streamId, eventStream.version(), newEvents);
 
         // Invoke side-effect
         if (sideEffect != null) {
             sideEffect.accept(newEventsAsList.stream());
         }
+    }
+
+    private static <T> Stream<T> emptyStreamIfNull(Stream<T> stream) {
+        return stream == null ? Stream.empty() : stream;
     }
 }
