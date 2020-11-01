@@ -21,7 +21,7 @@ import org.occurrent.subscription.api.blocking.Subscription;
 
 import java.util.Objects;
 
-import static org.occurrent.subscription.util.blocking.catchup.subscription.SubscriptionPositionStorageConfig.dontSubscriptionPositionStorage;
+import static org.occurrent.subscription.util.blocking.catchup.subscription.SubscriptionPositionStorageConfig.dontUseSubscriptionPositionStorage;
 
 /**
  * Configuration for {@link CatchupSupportingBlockingSubscription}
@@ -36,7 +36,7 @@ public class CatchupSupportingBlockingSubscriptionConfig {
      *                  and "subscription" mode ({@link Subscription}). The cache is needed to reduce the number of duplicate events the occurs when switching.
      */
     public CatchupSupportingBlockingSubscriptionConfig(int cacheSize) {
-        this(cacheSize, dontSubscriptionPositionStorage());
+        this(cacheSize, dontUseSubscriptionPositionStorage());
     }
 
     /**

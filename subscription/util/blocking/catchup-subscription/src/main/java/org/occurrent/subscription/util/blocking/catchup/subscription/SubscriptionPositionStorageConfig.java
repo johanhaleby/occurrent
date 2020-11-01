@@ -20,7 +20,7 @@ public abstract class SubscriptionPositionStorageConfig {
      *
      * @return An instance of {@link DontUseSubscriptionPositionInStorage}.
      */
-    public static DontUseSubscriptionPositionInStorage dontSubscriptionPositionStorage() {
+    public static DontUseSubscriptionPositionInStorage dontUseSubscriptionPositionStorage() {
         return new DontUseSubscriptionPositionInStorage();
     }
 
