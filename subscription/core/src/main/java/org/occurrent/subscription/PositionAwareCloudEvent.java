@@ -23,6 +23,7 @@ import io.cloudevents.lang.Nullable;
 import java.net.URI;
 import java.time.OffsetDateTime;
 import java.util.Objects;
+import java.util.Optional;
 import java.util.Set;
 
 /**
@@ -135,9 +136,13 @@ public final class PositionAwareCloudEvent implements CloudEvent {
     }
 
     public static SubscriptionPosition getSubscriptionPositionOrThrowIAE(CloudEvent cloudEvent) {
+        return getSubscriptionPosition(cloudEvent).orElseThrow(() -> new IllegalArgumentException(CloudEvent.class.getSimpleName() + " doesn't contain a subscription position"));
+    }
+
+    public static Optional<SubscriptionPosition> getSubscriptionPosition(CloudEvent cloudEvent) {
         if (cloudEvent instanceof PositionAwareCloudEvent) {
-            return ((PositionAwareCloudEvent) cloudEvent).getSubscriptionPosition();
+            return Optional.ofNullable(((PositionAwareCloudEvent) cloudEvent).getSubscriptionPosition());
         }
-        throw new IllegalArgumentException(CloudEvent.class.getSimpleName() + " doesn't contain a subscription position");
+        return Optional.empty();
     }
 }
