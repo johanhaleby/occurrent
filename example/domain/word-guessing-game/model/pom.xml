@@ -40,33 +40,24 @@
         </dependency>
     </dependencies>
 
+
     <build>
         <sourceDirectory>src/main/kotlin</sourceDirectory>
         <testSourceDirectory>src/test/kotlin</testSourceDirectory>
-        <plugins>
-            <plugin>
-                <groupId>org.jetbrains.kotlin</groupId>
-                <artifactId>kotlin-maven-plugin</artifactId>
-            </plugin>
-            <plugin>
-                <!-- See https://github.com/Kotlin/dokka#using-the-maven-plugin for more examples-->
-                <groupId>org.jetbrains.dokka</groupId>
-                <artifactId>dokka-maven-plugin</artifactId>
-                <version>1.4.10.2</version>
-                <executions>
-                    <execution>
-                        <phase>prepare-package</phase>
-                        <goals>
-                            <goal>dokka</goal>
-                            <goal>javadoc</goal>
-                            <goal>javadocJar</goal>
-                        </goals>
-                    </execution>
-                </executions>
-                <configuration>
-                    <outputFormat>javadoc</outputFormat>
-                </configuration>
-            </plugin>
-        </plugins>
     </build>
+
+    <profiles>
+        <profile>
+            <id>release</id>
+            <build>
+                <plugins>
+                    <plugin>
+                        <groupId>org.jetbrains.dokka</groupId>
+                        <artifactId>dokka-maven-plugin</artifactId>
+                    </plugin>
+                </plugins>
+            </build>
+        </profile>
+    </profiles>
+
 </project>
