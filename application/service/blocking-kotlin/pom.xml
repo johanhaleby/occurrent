@@ -82,7 +82,7 @@
                         <!-- See https://github.com/Kotlin/dokka#using-the-maven-plugin for more examples-->
                         <groupId>org.jetbrains.dokka</groupId>
                         <artifactId>dokka-maven-plugin</artifactId>
-                        <version>1.4.10.2</version>
+                        <version>${dokka.version}</version>
                         <executions>
                             <execution>
                                 <phase>prepare-package</phase>
@@ -94,7 +94,13 @@
                             </execution>
                         </executions>
                         <configuration>
-                            <outputFormat>javadoc</outputFormat>
+                            <dokkaPlugins>
+                                <plugin>
+                                    <groupId>org.jetbrains.dokka</groupId>
+                                    <artifactId>kotlin-as-java-plugin</artifactId>
+                                    <version>${dokka.version}</version>
+                                </plugin>
+                            </dokkaPlugins>
                         </configuration>
                     </plugin>
                 </plugins>
