@@ -76,7 +76,6 @@
         <spring-boot.version>2.3.5.RELEASE</spring-boot.version>
         <mongo.version>4.0.4</mongo.version>
         <dokka.version>1.4.10.2</dokka.version>
-        <kotlin.version>1.4.0</kotlin.version>
     </properties>
 
 
