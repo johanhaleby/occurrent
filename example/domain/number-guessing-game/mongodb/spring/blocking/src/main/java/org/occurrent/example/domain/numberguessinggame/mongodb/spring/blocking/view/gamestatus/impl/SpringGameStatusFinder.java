@@ -23,6 +23,7 @@ import org.occurrent.example.domain.numberguessinggame.model.domainevents.Player
 import org.occurrent.example.domain.numberguessinggame.model.domainevents.PlayerGuessedTheRightNumber;
 import org.occurrent.example.domain.numberguessinggame.mongodb.spring.blocking.infrastructure.Serialization;
 import org.occurrent.example.domain.numberguessinggame.mongodb.spring.blocking.view.gamestatus.GameStatus;
+import org.occurrent.example.domain.numberguessinggame.mongodb.spring.blocking.view.gamestatus.GameStatus.GuessAndTime;
 import org.occurrent.example.domain.numberguessinggame.mongodb.spring.blocking.view.gamestatus.WhatIsTheStatusOfGame;
 import org.springframework.stereotype.Component;
 
@@ -56,13 +57,13 @@ class SpringGameStatusFinder implements WhatIsTheStatusOfGame {
                                 gameStatus.maxNumberOfGuesses = ((NumberGuessingGameWasStarted) event).maxNumberOfGuesses();
                             } else if (event instanceof PlayerGuessedANumberThatWasTooSmall) {
                                 PlayerGuessedANumberThatWasTooSmall e = (PlayerGuessedANumberThatWasTooSmall) event;
-                                gameStatus.guesses.add(new GameStatus.GuessAndTime(e.guessedNumber(), e.timestamp()));
+                                gameStatus.guesses.add(new GuessAndTime(e.guessedNumber(), e.timestamp()));
                             } else if (event instanceof PlayerGuessedANumberThatWasTooBig) {
                                 PlayerGuessedANumberThatWasTooBig e = (PlayerGuessedANumberThatWasTooBig) event;
-                                gameStatus.guesses.add(new GameStatus.GuessAndTime(e.guessedNumber(), e.timestamp()));
+                                gameStatus.guesses.add(new GuessAndTime(e.guessedNumber(), e.timestamp()));
                             } else if (event instanceof PlayerGuessedTheRightNumber) {
                                 PlayerGuessedTheRightNumber e = (PlayerGuessedTheRightNumber) event;
-                                gameStatus.guesses.add(new GameStatus.GuessAndTime(e.guessedNumber(), e.timestamp()));
+                                gameStatus.guesses.add(new GuessAndTime(e.guessedNumber(), e.timestamp()));
                             }
                         }, (gameStatus, gameStatus2) -> {
                         })
@@ -73,7 +74,7 @@ class SpringGameStatusFinder implements WhatIsTheStatusOfGame {
         public UUID gameId;
         public int maxNumberOfGuesses;
         public int secretNumber;
-        public List<GameStatus.GuessAndTime> guesses = new ArrayList<>();
+        public List<GuessAndTime> guesses = new ArrayList<>();
 
         private Optional<GameStatus> build() {
             return gameId == null ? Optional.empty() : Optional.of(new GameStatus(gameId, secretNumber, maxNumberOfGuesses, guesses));

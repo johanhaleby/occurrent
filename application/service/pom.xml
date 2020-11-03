@@ -14,7 +14,4 @@
         <module>blocking</module>
         <module>blocking-kotlin</module>
     </modules>
-
-    
-
 </project>

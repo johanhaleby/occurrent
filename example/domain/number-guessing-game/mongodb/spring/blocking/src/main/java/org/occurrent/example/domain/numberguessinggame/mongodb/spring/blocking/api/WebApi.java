@@ -26,6 +26,7 @@ import org.occurrent.example.domain.numberguessinggame.mongodb.spring.blocking.c
 import org.occurrent.example.domain.numberguessinggame.mongodb.spring.blocking.view.gamestatus.GameStatus;
 import org.occurrent.example.domain.numberguessinggame.mongodb.spring.blocking.view.gamestatus.WhatIsTheStatusOfGame;
 import org.occurrent.example.domain.numberguessinggame.mongodb.spring.blocking.view.latestgamesoverview.GameOverview;
+import org.occurrent.example.domain.numberguessinggame.mongodb.spring.blocking.view.latestgamesoverview.GameOverview.GameState.Ended;
 import org.occurrent.example.domain.numberguessinggame.mongodb.spring.blocking.view.latestgamesoverview.LatestGamesOverview;
 import org.springframework.http.HttpHeaders;
 import org.springframework.http.HttpStatus;
@@ -130,7 +131,7 @@ public class WebApi {
                     if (game.state instanceof GameOverview.GameState.Ongoing) {
                         text = "Attempts left: " + ((GameOverview.GameState.Ongoing) game.state).numberOfAttemptsLeft;
                     } else {
-                        GameOverview.GameState.Ended ended = (GameOverview.GameState.Ended) game.state;
+                        Ended ended = (Ended) game.state;
                         text = (ended.playerGuessedTheRightNumber ? "Won" : "Lost") + " at " + fmt(ended.endedAt);
                     }
 
