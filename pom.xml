@@ -73,7 +73,7 @@
         <reactor.version>3.3.7.RELEASE</reactor.version>
         <spring-data-mongodb.version>3.0.1.RELEASE</spring-data-mongodb.version>
         <spring-boot.version>2.3.5.RELEASE</spring-boot.version>
-        <mongo.version>4.0.4</mongo.version>
+        <mongo.version>4.1.1</mongo.version>
         <dokka.version>1.4.10.2</dokka.version>
     </properties>
 

@@ -1,3 +1,6 @@
+## Changelog next version
+* Upgraded Java Mongo driver from 4.0.4 to 4.1.1
+
 ## Changelog 0.2.1 (2020-11-03)
 * Fixed typo in `CatchupSupportingBlockingSubscriptionConfig`, renamed method `dontSubscriptionPositionStorage` to `dontUseSubscriptionPositionStorage`.
 * Added `getSubscriptionPosition()` to `PositionAwareCloudEvent` that returns `Optional<SubscriptionPosition>`.
