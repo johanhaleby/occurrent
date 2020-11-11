@@ -6,17 +6,14 @@ import io.cloudevents.SpecVersion;
 import io.cloudevents.core.impl.CloudEventUtils;
 import io.cloudevents.rw.*;
 import org.bson.Document;
-import org.occurrent.mongodb.timerepresentation.TimeRepresentation;
 
 import java.time.OffsetDateTime;
 
 public class DocumentCloudEventWriter implements CloudEventWriterFactory<DocumentCloudEventWriter, Document>, CloudEventWriter<Document> {
 
   private final Document document;
-  private final TimeRepresentation representation;
 
-  public DocumentCloudEventWriter(Document document, TimeRepresentation representation) {
-    this.representation = representation;
+  public DocumentCloudEventWriter(Document document) {
     this.document = document;
   }
 
@@ -34,7 +31,6 @@ public class DocumentCloudEventWriter implements CloudEventWriterFactory<Documen
 
   @Override
   public CloudEventAttributesWriter withAttribute(String name, OffsetDateTime value) throws CloudEventRWException {
-    // TODO do stuff with time representation
     document.append(name, value.toString());
     return this;
   }
@@ -72,8 +68,8 @@ public class DocumentCloudEventWriter implements CloudEventWriterFactory<Documen
   }
 
   // Example method for Event -> Document
-  public static Document toDocument(CloudEvent event, TimeRepresentation representation) {
-    DocumentCloudEventWriter writer = new DocumentCloudEventWriter(new Document(), representation);
+  public static Document toDocument(CloudEvent event) {
+    DocumentCloudEventWriter writer = new DocumentCloudEventWriter(new Document());
     try {
       return CloudEventUtils.toVisitable(event).read(writer);
     } catch (CloudEventRWException e) {
