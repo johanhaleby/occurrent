@@ -57,7 +57,7 @@ public class EventForwarder {
         Disposable disposable = subscriptionForMongoDB.subscribe(SUBSCRIBER_ID,
                 event -> Mono.just(event)
                         .map(cloudEvent -> Objects.requireNonNull(cloudEvent.getData()))
-                        .map(CheckedFunction.unchecked(eventJson -> objectMapper.readValue(eventJson, DomainEvent.class)))
+                        .map(CheckedFunction.unchecked(cloudEventData -> objectMapper.readValue(cloudEventData.toBytes(), DomainEvent.class)))
                         .doOnNext(eventPublisher::publishEvent)
                         .then())
                 .subscribe();

@@ -1,5 +1,17 @@
 ## Changelog next version
 * Upgraded Java Mongo driver from 4.0.4 to 4.1.1
+* Upgraded to cloud events 2.0.0-milestone4. This introduces a breaking change since the `CloudEvent` SDK no longer returns a `byte[]` as data but rather a `CloudEventData` interface.
+  You need to change your code from:
+  
+  ```java
+  byte[] data = cloudEvent.getData();
+  ```           
+  
+  to 
+  
+  ```java
+  byte[] data = cloudEvent.getData().toBytes();
+  ```
 
 ## Changelog 0.2.1 (2020-11-03)
 * Fixed typo in `CatchupSupportingBlockingSubscriptionConfig`, renamed method `dontSubscriptionPositionStorage` to `dontUseSubscriptionPositionStorage`.

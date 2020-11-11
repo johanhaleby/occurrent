@@ -32,8 +32,9 @@ public class DeserializeCloudEventToDomainEvent {
         this.objectMapper = objectMapper;
     }
 
+    @SuppressWarnings("ConstantConditions")
     public DomainEvent deserialize(CloudEvent cloudEvent) {
-        return unchecked((CloudEvent e) -> (DomainEvent) objectMapper.readValue(e.getData(), Class.forName(e.getType()))).apply(cloudEvent);
+        return unchecked((CloudEvent e) -> (DomainEvent) objectMapper.readValue(e.getData().toBytes(), Class.forName(e.getType()))).apply(cloudEvent);
     }
 
 }

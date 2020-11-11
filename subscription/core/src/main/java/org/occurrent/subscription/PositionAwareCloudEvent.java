@@ -17,6 +17,7 @@
 package org.occurrent.subscription;
 
 import io.cloudevents.CloudEvent;
+import io.cloudevents.CloudEventData;
 import io.cloudevents.SpecVersion;
 import io.cloudevents.lang.Nullable;
 
@@ -43,7 +44,7 @@ public final class PositionAwareCloudEvent implements CloudEvent {
     }
 
     @Nullable
-    public byte[] getData() {
+    public CloudEventData getData() {
         return cloudEvent.getData();
     }
 

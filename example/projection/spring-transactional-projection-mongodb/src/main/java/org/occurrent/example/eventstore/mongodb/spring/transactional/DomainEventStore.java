@@ -65,7 +65,8 @@ public class DomainEventStore {
                         .build());
     }
 
+    @SuppressWarnings("ConstantConditions")
     private DomainEvent deserialize(CloudEvent cloudEvent) {
-        return unchecked((byte[] json) -> objectMapper.readValue(json, DomainEvent.class)).apply(cloudEvent.getData());
+        return unchecked((byte[] json) -> objectMapper.readValue(json, DomainEvent.class)).apply(cloudEvent.getData().toBytes());
     }
 }

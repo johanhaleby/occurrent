@@ -30,7 +30,8 @@ public class DomainEventConverter {
                 .build();
     }
 
+    @SuppressWarnings("ConstantConditions")
     public DomainEvent convertToDomainEvent(CloudEvent cloudEvent) {
-        return unchecked((CloudEvent e) -> (DomainEvent) objectMapper.readValue(e.getData(), Class.forName(e.getType()))).apply(cloudEvent);
+        return unchecked((CloudEvent e) -> (DomainEvent) objectMapper.readValue(e.getData().toBytes(), Class.forName(e.getType()))).apply(cloudEvent);
     }
 }

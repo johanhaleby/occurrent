@@ -25,6 +25,7 @@ import com.mongodb.client.MongoClient;
 import com.mongodb.client.MongoClients;
 import io.cloudevents.CloudEvent;
 import io.cloudevents.core.builder.CloudEventBuilder;
+import io.cloudevents.jackson.JsonCloudEventData;
 import io.github.artsok.RepeatedIfExceptionsTest;
 import org.junit.jupiter.api.*;
 import org.junit.jupiter.api.condition.EnabledForJreRange;
@@ -48,6 +49,7 @@ import org.testcontainers.containers.MongoDBContainer;
 import org.testcontainers.junit.jupiter.Container;
 import org.testcontainers.junit.jupiter.Testcontainers;
 
+import java.io.IOException;
 import java.net.URI;
 import java.time.Instant;
 import java.time.LocalDateTime;
@@ -151,7 +153,7 @@ public class SpringBlockingMongoEventStoreTest {
     }
 
     @Test
-    void does_not_change_event_store_content_when_writing_an_empty_stream_of_eventsusing_spring_blocking_event_store() {
+    void does_not_change_event_store_content_when_writing_an_empty_stream_of_events_using_spring_blocking_event_store() {
         // When
         persist("name", Stream.empty());
 
@@ -1098,8 +1100,8 @@ public class SpringBlockingMongoEventStoreTest {
             assertThat(deserialize(events)).containsExactly(nameDefined);
         }
 
-        @Test
-        void query_filter_by_data_schema() {
+        @SuppressWarnings("ConstantConditions") @Test
+        void query_filter_by_data_schema() throws IOException {
             // Given
             LocalDateTime now = LocalDateTime.now();
             NameDefined nameDefined = new NameDefined(UUID.randomUUID().toString(), now, "name");
@@ -1124,11 +1126,12 @@ public class SpringBlockingMongoEventStoreTest {
 
             // Then
             Stream<CloudEvent> events = eventStore.query(dataSchema(URI.create("urn:myschema")));
-            assertThat(events).containsExactly(cloudEvent);
+            CloudEvent expectedCloudEvent = CloudEventBuilder.v1(cloudEvent).withData(new JsonCloudEventData(objectMapper.readTree(cloudEvent.getData().toBytes()))).build();
+            assertThat(events).containsExactly(expectedCloudEvent);
         }
 
-        @Test
-        void query_filter_by_data_content_type() {
+        @SuppressWarnings("ConstantConditions") @Test
+        void query_filter_by_data_content_type() throws IOException {
             // Given
             LocalDateTime now = LocalDateTime.now();
             NameDefined nameDefined = new NameDefined(UUID.randomUUID().toString(), now, "name");
@@ -1410,7 +1413,7 @@ public class SpringBlockingMongoEventStoreTest {
         return events
                 .map(CloudEvent::getData)
                 // @formatter:off
-                .map(CheckedFunction.unchecked(data -> objectMapper.readValue(data, new TypeReference<Map<String, Object>>() {})))
+                .map(CheckedFunction.unchecked(data -> objectMapper.readValue(data.toBytes(), new TypeReference<Map<String, Object>>() {})))
                 // @formatter:on
                 .map(event -> {
                     Instant instant = Instant.ofEpochMilli((long) event.get("time"));

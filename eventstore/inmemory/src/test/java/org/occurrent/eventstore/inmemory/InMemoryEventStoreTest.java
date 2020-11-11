@@ -56,6 +56,7 @@ import static org.occurrent.eventstore.api.WriteCondition.streamVersionEq;
 import static org.occurrent.functional.CheckedFunction.unchecked;
 import static org.occurrent.time.TimeConversion.toLocalDateTime;
 
+@SuppressWarnings("ConstantConditions")
 @ExtendWith(SoftAssertionsExtension.class)
 public class InMemoryEventStoreTest {
 
@@ -79,7 +80,7 @@ public class InMemoryEventStoreTest {
         unconditionallyPersist(inMemoryEventStore, "name", events);
 
         // Then
-        EventStream<NameDefined> eventStream = inMemoryEventStore.read("name").map(unchecked(cloudEvent -> objectMapper.readValue(cloudEvent.getData(), NameDefined.class)));
+        EventStream<NameDefined> eventStream = inMemoryEventStore.read("name").map(unchecked(cloudEvent -> objectMapper.readValue(cloudEvent.getData().toBytes(), NameDefined.class)));
         softly.assertThat(eventStream.version()).isEqualTo(events.size());
         softly.assertThat(eventStream.events()).hasSize(1);
         softly.assertThat(eventStream.events().collect(Collectors.toList())).containsExactly(new NameDefined(eventId, now, "John Doe"));
@@ -661,7 +662,7 @@ public class InMemoryEventStoreTest {
     private Function<CloudEvent, DomainEvent> deserialize(ObjectMapper objectMapper) {
         return cloudEvent -> {
             try {
-                return (DomainEvent) objectMapper.readValue(cloudEvent.getData(), Class.forName(cloudEvent.getType()));
+                return (DomainEvent) objectMapper.readValue(cloudEvent.getData().toBytes(), Class.forName(cloudEvent.getType()));
             } catch (Exception e) {
                 throw new RuntimeException(e);
             }

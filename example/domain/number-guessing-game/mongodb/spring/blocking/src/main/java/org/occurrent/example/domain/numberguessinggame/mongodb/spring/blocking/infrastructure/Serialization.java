@@ -82,9 +82,10 @@ public class Serialization {
         return event;
     }
 
+    @SuppressWarnings("ConstantConditions")
     private Map<String, Object> deserializeData(CloudEvent c) {
         try {
-            return objectMapper.readValue(c.getData(), new TypeReference<Map<String, Object>>() {
+            return objectMapper.readValue(c.getData().toBytes(), new TypeReference<Map<String, Object>>() {
             });
         } catch (Exception e) {
             throw new RuntimeException(e);

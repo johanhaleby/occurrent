@@ -86,7 +86,7 @@ class GameCloudEventConverter(private val objectMapper: ObjectMapper, private va
     }
 
     private fun EventData.toBytes() = objectMapper.writeValueAsBytes(this)
-    private inline fun <reified T : EventData> CloudEvent.data(): T = objectMapper.readValue(data!!)
+    private inline fun <reified T : EventData> CloudEvent.data(): T = objectMapper.readValue(data!!.toBytes())
 }
 
 private sealed class EventData

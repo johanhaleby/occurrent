@@ -68,9 +68,10 @@ public class DomainEventStore {
                         .build());
     }
 
+    @SuppressWarnings("ConstantConditions")
     private DomainEvent deserialize(CloudEvent cloudEvent) {
         try {
-            return (DomainEvent) objectMapper.readValue(cloudEvent.getData(), Class.forName(cloudEvent.getType()));
+            return (DomainEvent) objectMapper.readValue(cloudEvent.getData().toBytes(), Class.forName(cloudEvent.getType()));
         } catch (Exception e) {
             throw new RuntimeException(e);
         }

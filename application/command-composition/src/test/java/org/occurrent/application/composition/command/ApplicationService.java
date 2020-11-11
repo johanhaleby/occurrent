@@ -50,8 +50,9 @@ class ApplicationService {
         executeStreamCommand(streamId, CommandConversion.toStreamCommand(functionThatCallsDomainModel));
     }
 
+    @SuppressWarnings("ConstantConditions")
     public DomainEvent convertCloudEventToDomainEvent(CloudEvent cloudEvent) {
-        Map<String, Object> event = CheckedFunction.unchecked((byte[] data) -> objectMapper.readValue(data, new TypeReference<Map<String, Object>>() {})).apply(cloudEvent.getData());
+        Map<String, Object> event = CheckedFunction.unchecked((byte[] data) -> objectMapper.readValue(data, new TypeReference<Map<String, Object>>() {})).apply(cloudEvent.getData().toBytes());
 
 
         Instant instant = Instant.ofEpochMilli((long) event.get("time"));

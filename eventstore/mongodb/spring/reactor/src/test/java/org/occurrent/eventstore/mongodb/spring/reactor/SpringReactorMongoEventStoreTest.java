@@ -1455,10 +1455,10 @@ public class SpringReactorMongoEventStoreTest {
         return CheckedFunction.unchecked(this::deserialize);
     }
 
-    @SuppressWarnings("unchecked")
+    @SuppressWarnings({"unchecked", "ConstantConditions"})
     private <T extends DomainEvent> T deserialize(CloudEvent cloudEvent) {
         try {
-            return (T) objectMapper.readValue(cloudEvent.getData(), Class.forName(cloudEvent.getType()));
+            return (T) objectMapper.readValue(cloudEvent.getData().toBytes(), Class.forName(cloudEvent.getType()));
         } catch (Exception e) {
             throw new RuntimeException(e);
         }

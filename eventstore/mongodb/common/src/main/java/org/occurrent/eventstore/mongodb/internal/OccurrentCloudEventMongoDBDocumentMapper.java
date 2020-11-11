@@ -21,6 +21,7 @@ import io.cloudevents.core.builder.CloudEventBuilder;
 import io.cloudevents.core.format.EventFormat;
 import org.bson.Document;
 import org.occurrent.cloudevents.OccurrentCloudEventExtension;
+import org.occurrent.eventstore.mongodb.cloudevent.MongoDBCloudEventData;
 import org.occurrent.mongodb.timerepresentation.TimeRepresentation;
 
 import java.time.OffsetDateTime;
@@ -85,9 +86,8 @@ public class OccurrentCloudEventMongoDBDocumentMapper {
                 document.put("time", format);
             }
         }
-        String eventJsonString = document.toJson();
-        byte[] eventJsonBytes = eventJsonString.getBytes(UTF_8);
+        byte[] eventData = new MongoDBCloudEventData(document).toBytes();
         // When converting to JSON (document.toJson()) the stream version is interpreted as an int in Jackson, we convert it manually to long afterwards.
-        return CloudEventBuilder.v1(eventFormat.deserialize(eventJsonBytes)).withExtension(OccurrentCloudEventExtension.STREAM_VERSION, document.getLong(OccurrentCloudEventExtension.STREAM_VERSION)).build();
+        return CloudEventBuilder.v1(eventFormat.deserialize(eventData)).withExtension(OccurrentCloudEventExtension.STREAM_VERSION, document.getLong(OccurrentCloudEventExtension.STREAM_VERSION)).build();
     }
 }

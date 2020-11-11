@@ -27,6 +27,7 @@ import com.mongodb.client.MongoDatabase;
 import com.mongodb.client.model.Filters;
 import io.cloudevents.CloudEvent;
 import io.cloudevents.core.builder.CloudEventBuilder;
+import io.cloudevents.jackson.JsonCloudEventData;
 import io.github.artsok.RepeatedIfExceptionsTest;
 import org.junit.jupiter.api.*;
 import org.junit.jupiter.api.condition.EnabledForJreRange;
@@ -47,6 +48,7 @@ import org.testcontainers.containers.MongoDBContainer;
 import org.testcontainers.junit.jupiter.Container;
 import org.testcontainers.junit.jupiter.Testcontainers;
 
+import java.io.IOException;
 import java.net.URI;
 import java.time.Instant;
 import java.time.LocalDateTime;
@@ -880,6 +882,7 @@ class MongoEventStoreTest {
             }
         }
 
+        @SuppressWarnings("ConstantConditions")
         @Nested
         @DisplayName("queries")
         class QueriesTest {
@@ -1083,7 +1086,7 @@ class MongoEventStoreTest {
             }
 
             @Test
-            void query_filter_by_data_schema() {
+            void query_filter_by_data_schema() throws IOException {
                 // Given
                 LocalDateTime now = LocalDateTime.now();
                 NameDefined nameDefined = new NameDefined(UUID.randomUUID().toString(), now, "name");
@@ -1108,11 +1111,12 @@ class MongoEventStoreTest {
 
                 // Then
                 Stream<CloudEvent> events = eventStore.query(dataSchema(URI.create("urn:myschema")));
-                assertThat(events).containsExactly(cloudEvent);
+                CloudEvent expectedCloudEvent = CloudEventBuilder.v1(cloudEvent).withData(new JsonCloudEventData(objectMapper.readTree(cloudEvent.getData().toBytes()))).build();
+                assertThat(events).containsExactly(expectedCloudEvent);
             }
 
             @Test
-            void query_filter_by_data_content_type() {
+            void query_filter_by_data_content_type() throws IOException {
                 // Given
                 LocalDateTime now = LocalDateTime.now();
                 NameDefined nameDefined = new NameDefined(UUID.randomUUID().toString(), now, "name");
@@ -1137,7 +1141,8 @@ class MongoEventStoreTest {
 
                 // Then
                 Stream<CloudEvent> events = eventStore.query(dataContentType("text/plain"));
-                assertThat(events).containsExactly(cloudEvent);
+                CloudEvent expectedCloudEvent = CloudEventBuilder.v1(cloudEvent).withData(new JsonCloudEventData(objectMapper.readTree(cloudEvent.getData().toBytes()))).build();
+                assertThat(events).containsExactly(expectedCloudEvent);
             }
 
             @Nested
@@ -1393,7 +1398,7 @@ class MongoEventStoreTest {
         return events
                 .map(CloudEvent::getData)
                 // @formatter:off
-                .map(unchecked(data -> objectMapper.readValue(data, new TypeReference<Map<String, Object>>() {})))
+                .map(unchecked(data -> objectMapper.readValue(data.toBytes(), new TypeReference<Map<String, Object>>() {})))
                 // @formatter:on
                 .map(event -> {
                     Instant instant = Instant.ofEpochMilli((long) event.get("time"));

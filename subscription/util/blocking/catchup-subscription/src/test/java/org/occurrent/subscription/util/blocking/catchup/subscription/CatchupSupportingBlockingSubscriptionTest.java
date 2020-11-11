@@ -453,9 +453,10 @@ public class CatchupSupportingBlockingSubscriptionTest {
         }
     }
 
+    @SuppressWarnings("ConstantConditions")
     private DomainEvent deserialize(CloudEvent e) {
         try {
-            return (DomainEvent) objectMapper.readValue(e.getData(), Class.forName(e.getType()));
+            return (DomainEvent) objectMapper.readValue(e.getData().toBytes(), Class.forName(e.getType()));
         } catch (Exception exception) {
             throw new RuntimeException(exception);
         }

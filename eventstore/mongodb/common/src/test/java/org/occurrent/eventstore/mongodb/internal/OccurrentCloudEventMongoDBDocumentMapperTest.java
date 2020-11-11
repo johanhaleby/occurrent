@@ -16,10 +16,13 @@
 
 package org.occurrent.eventstore.mongodb.internal;
 
+import com.fasterxml.jackson.core.JsonProcessingException;
+import com.fasterxml.jackson.databind.ObjectMapper;
 import io.cloudevents.CloudEvent;
 import io.cloudevents.core.format.EventFormat;
 import io.cloudevents.core.provider.EventFormatProvider;
 import io.cloudevents.core.v1.CloudEventBuilder;
+import io.cloudevents.jackson.JsonCloudEventData;
 import io.cloudevents.jackson.JsonFormat;
 import org.bson.Document;
 import org.junit.jupiter.api.BeforeEach;
@@ -120,7 +123,7 @@ class OccurrentCloudEventMongoDBDocumentMapperTest {
 
 
         @Test
-        void converts_document_to_cloud_event_and_remove_mongo_id() {
+        void converts_document_to_cloud_event_and_remove_mongo_id() throws JsonProcessingException {
             // Given
             Document document = new Document(new HashMap<String, Object>() {{
                 put("subject", "subject");
@@ -142,13 +145,15 @@ class OccurrentCloudEventMongoDBDocumentMapperTest {
             CloudEvent actual = OccurrentCloudEventMongoDBDocumentMapper.convertToCloudEvent(eventFormat, RFC_3339_STRING, document);
 
             // Then
+            ObjectMapper objectMapper = new ObjectMapper();
             CloudEvent expected = new CloudEventBuilder()
                     .withSubject("subject")
                     .withType("type")
                     .withTime(OffsetDateTime.of(LocalDateTime.of(2020, 7, 26, 9, 13, 3), UTC))
                     .withSource(URI.create("urn:name"))
                     .withId("id")
-                    .withData("application/json", "{\"name\":\"hello\"}".getBytes(UTF_8))
+                    .withDataContentType("application/json")
+                    .withData(new JsonCloudEventData(objectMapper.readTree("{\"name\":\"hello\"}")))
                     .withExtension(new OccurrentCloudEventExtension("streamId", 2L))
                     .build();
 
@@ -311,7 +316,7 @@ class OccurrentCloudEventMongoDBDocumentMapperTest {
         }
 
         @Test
-        void converts_document_to_cloud_event_and_remove_mongo_id() {
+        void converts_document_to_cloud_event_and_remove_mongo_id() throws JsonProcessingException {
             // Given
             Document document = new Document(new HashMap<String, Object>() {{
                 put("subject", "subject");
@@ -333,13 +338,15 @@ class OccurrentCloudEventMongoDBDocumentMapperTest {
             CloudEvent actual = OccurrentCloudEventMongoDBDocumentMapper.convertToCloudEvent(eventFormat, DATE, document);
 
             // Then
+            ObjectMapper objectMapper = new ObjectMapper();
             CloudEvent expected = new CloudEventBuilder()
                     .withSubject("subject")
                     .withType("type")
                     .withTime(OffsetDateTime.of(LocalDateTime.of(2020, 7, 26, 9, 13, 3), UTC))
                     .withSource(URI.create("urn:name"))
                     .withId("id")
-                    .withData("application/json", "{\"name\":\"hello\"}".getBytes(UTF_8))
+                    .withDataContentType("application/json")
+                    .withData(new JsonCloudEventData(objectMapper.readTree("{\"name\":\"hello\"}")))
                     .withExtension(new OccurrentCloudEventExtension("streamId", 2L))
                     .build();
 
