@@ -23,6 +23,7 @@ import com.mongodb.reactivestreams.client.MongoClient;
 import com.mongodb.reactivestreams.client.MongoClients;
 import io.cloudevents.CloudEvent;
 import io.cloudevents.core.builder.CloudEventBuilder;
+import io.cloudevents.jackson.JsonCloudEventData;
 import org.awaitility.Awaitility;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
@@ -53,6 +54,7 @@ import org.testcontainers.junit.jupiter.Testcontainers;
 import reactor.core.publisher.Flux;
 import reactor.core.publisher.Mono;
 
+import java.io.IOException;
 import java.net.URI;
 import java.time.LocalDateTime;
 import java.time.OffsetDateTime;
@@ -1129,7 +1131,7 @@ public class SpringReactorMongoEventStoreTest {
         }
 
         @Test
-        void query_filter_by_data_schema() {
+        void query_filter_by_data_schema() throws IOException {
             // Given
             LocalDateTime now = LocalDateTime.now();
             NameDefined nameDefined = new NameDefined(UUID.randomUUID().toString(), now, "name");
@@ -1154,7 +1156,8 @@ public class SpringReactorMongoEventStoreTest {
 
             // Then
             Flux<CloudEvent> events = eventStore.query(dataSchema(URI.create("urn:myschema")));
-            assertThat(events.toStream()).containsExactly(cloudEvent);
+            CloudEvent expectedCloudEvent = CloudEventBuilder.v1(cloudEvent).withData(new JsonCloudEventData(objectMapper.readTree(cloudEvent.getData().toBytes()))).build();
+            assertThat(events.toStream()).containsExactly(expectedCloudEvent);
         }
 
         @Test
