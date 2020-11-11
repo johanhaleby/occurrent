@@ -1111,8 +1111,7 @@ class MongoEventStoreTest {
 
                 // Then
                 Stream<CloudEvent> events = eventStore.query(dataSchema(URI.create("urn:myschema")));
-                CloudEvent expectedCloudEvent = CloudEventBuilder.v1(cloudEvent).withData(new JsonCloudEventData(objectMapper.readTree(cloudEvent.getData().toBytes()))).build();
-                assertThat(events).containsExactly(expectedCloudEvent);
+                assertThat(events).containsExactly(cloudEvent);
             }
 
             @Test
