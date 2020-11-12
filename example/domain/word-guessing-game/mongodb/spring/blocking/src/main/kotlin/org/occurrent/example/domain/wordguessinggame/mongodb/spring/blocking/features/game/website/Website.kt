@@ -148,7 +148,7 @@ class Website(private val applicationService: GamePlayApplicationService, privat
 
     @ExceptionHandler(RuntimeException::class)
     @ResponseStatus(HttpStatus.BAD_REQUEST)
-    fun handleRuntimeException(e: IllegalArgumentException): String {
+    fun handleRuntimeException(e: RuntimeException): String {
         log.info("An error occurred: ${e::class.simpleName} - ${e.message}")
         return StringBuilder().appendHTML().html {
             body {
