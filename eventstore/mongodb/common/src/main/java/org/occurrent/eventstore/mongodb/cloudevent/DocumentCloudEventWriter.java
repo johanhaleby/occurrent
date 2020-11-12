@@ -43,13 +43,13 @@ public class DocumentCloudEventWriter implements CloudEventWriterFactory<Documen
 
   @Override
   public CloudEventExtensionsWriter withExtension(String name, Number value) throws CloudEventRWException {
-    document.append(name, value); // Document accept numbers, right?
+    document.append(name, value);
     return this;
   }
 
   @Override
   public CloudEventExtensionsWriter withExtension(String name, Boolean value) throws CloudEventRWException {
-    document.append(name, value); // Document accept booleans, right?
+    document.append(name, value);
     return this;
   }
 
@@ -57,8 +57,9 @@ public class DocumentCloudEventWriter implements CloudEventWriterFactory<Documen
   public Document end(CloudEventData cloudEventData) throws CloudEventRWException {
     if (cloudEventData instanceof MongoDBCloudEventData) {
       document.put("data", ((MongoDBCloudEventData) cloudEventData).document);
+    } else {
+      document.put("data", cloudEventData.toBytes());
     }
-    document.put("data", cloudEventData.toBytes());
     return document;
   }
 
@@ -73,8 +74,8 @@ public class DocumentCloudEventWriter implements CloudEventWriterFactory<Documen
     try {
       return CloudEventUtils.toVisitable(event).read(writer);
     } catch (CloudEventRWException e) {
-      // Something went wrong when serializing the event, deal with it
-      return null;
+      // TODO Something went wrong when serializing the event, deal with it
+      throw e;
     }
   }
 

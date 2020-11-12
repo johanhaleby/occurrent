@@ -20,7 +20,7 @@ public class DocumentCloudEventReader implements CloudEventReader {
 
   @Override
   public <V extends CloudEventWriter<R>, R> R read(CloudEventWriterFactory<V, R> cloudEventWriterFactory, CloudEventDataMapper mapper) throws CloudEventRWException {
-    SpecVersion specVersion = SpecVersion.parse(document.getString("specversion"));
+    SpecVersion specVersion = SpecVersion.parse((String)document.remove("specversion"));
 
     V writer = cloudEventWriterFactory.create(specVersion);
 
@@ -55,10 +55,14 @@ public class DocumentCloudEventReader implements CloudEventReader {
     if (data != null) {
       CloudEventData ceData;
       if (data instanceof Document) {
+        // Best case, it's a document
         ceData = new MongoDBCloudEventData((Document) data);
-      } else {
+      } else if (data instanceof byte[]) {
         // Worst case, convert to bytes
-        ceData = new BytesCloudEventData(data.toString().getBytes());
+        ceData = new BytesCloudEventData((byte[]) data);
+      } else {
+        //TODO next cloudevents-sdk version will add proper exception kind here
+        throw CloudEventRWException.newOther(new IllegalStateException("Data type is unknown: " + data.getClass().toString() + ". Only Document and byte[] accepted."));
       }
       writer.end(mapper != null ? mapper.map(ceData) : ceData);
     }
@@ -83,8 +87,8 @@ public class DocumentCloudEventReader implements CloudEventReader {
     try {
       return reader.read(CloudEventBuilder::fromSpecVersion);
     } catch (CloudEventRWException e) {
-      // Something went wrong when deserializing the event, deal with it
-      return null;
+      // TODO Something went wrong when deserializing the event, deal with it
+      throw e;
     }
   }
 }
