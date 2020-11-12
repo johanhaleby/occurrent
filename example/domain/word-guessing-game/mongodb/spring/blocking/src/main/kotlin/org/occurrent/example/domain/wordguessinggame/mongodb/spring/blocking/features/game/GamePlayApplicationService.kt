@@ -20,9 +20,9 @@ class GamePlayApplicationService constructor(private val applicationService: App
 
     @Transactional
     @Retryable(include = [WriteConditionNotFulfilledException::class], maxAttempts = 5, backoff = Backoff(delay = 100, multiplier = 2.0, maxDelay = 1000))
-    fun startGame(gameId: GameId, startTime: Timestamp, startedBy: PlayerId, wordsToChooseFrom: WordsToChooseFrom) {
+    fun startGame(gameId: GameId, startTime: Timestamp, startedBy: PlayerId, wordList: WordList) {
         applicationService.execute(gameId, { events ->
-            startGame(events, gameId, startTime, startedBy, wordsToChooseFrom, MaxNumberOfGuessesPerPlayer, MaxNumberOfGuessesTotal)
+            startGame(events, gameId, startTime, startedBy, wordList, MaxNumberOfGuessesPerPlayer, MaxNumberOfGuessesTotal)
         }, executePolicy(wordHintPolicies::whenGameWasStartedThenRevealInitialCharactersInWordHint))
     }
 

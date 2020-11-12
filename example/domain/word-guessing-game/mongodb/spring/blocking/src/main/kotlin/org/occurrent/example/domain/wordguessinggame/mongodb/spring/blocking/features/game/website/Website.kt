@@ -134,7 +134,7 @@ class Website(private val applicationService: GamePlayApplicationService, privat
                   @RequestParam("words") words: String, session: HttpSession): ResponseEntity<*> {
         val playerId = session.getOrGeneratePlayerId()
         val wordsInCategory = words.split('\n').map { it.split(',') }.flatten().map(String::trim).map(::Word)
-        val wordsToChooseFrom = WordsToChooseFrom(WordCategory(category.trim()), wordsInCategory)
+        val wordsToChooseFrom = WordList(WordCategory(category.trim()), wordsInCategory)
         applicationService.startGame(gameId, Timestamp(), playerId, wordsToChooseFrom)
         return ResponseEntity.status(HttpStatus.SEE_OTHER).header(HttpHeaders.LOCATION, gameLocation(gameId)).build<Any>()
     }

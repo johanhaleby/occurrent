@@ -27,7 +27,7 @@ class GameLogicKtTest {
                 val gameId = GameId.randomUUID()
                 val timestamp = Timestamp()
                 val playerId = PlayerId.randomUUID()
-                val wordsToChooseFrom = WordsToChooseFrom(WordCategory("Category"), wordsOf("word1", "word2", "word3", "word4", "word5"))
+                val wordsToChooseFrom = WordList(WordCategory("Category"), wordsOf("word1", "word2", "word3", "word4", "word5"))
 
                 // When
                 val newEvents = startGame(currentEvents, gameId, timestamp, playerId, wordsToChooseFrom, MaxNumberOfGuessesPerPlayer, MaxNumberOfGuessesTotal)
@@ -59,7 +59,7 @@ class GameLogicKtTest {
                 val gameId = GameId.randomUUID()
                 val currentEvents = sequenceOf(GameWasStarted(UUID.randomUUID(), Timestamp(), gameId, PlayerId.randomUUID(), "Category", "Word", 2, 4))
 
-                val wordsToChooseFrom = WordsToChooseFrom(WordCategory("Category"), wordsOf("word1", "word2", "word3", "word4", "word5"))
+                val wordsToChooseFrom = WordList(WordCategory("Category"), wordsOf("word1", "word2", "word3", "word4", "word5"))
 
                 // When
                 val throwable = catchThrowable {

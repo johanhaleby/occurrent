@@ -58,7 +58,7 @@ object MaxNumberOfGuessesTotal {
     const val value = 10
 }
 
-data class WordsToChooseFrom(val category: WordCategory, val words: List<Word>) : Sequence<Word> {
+data class WordList(val category: WordCategory, val words: List<Word>) : Sequence<Word> {
     init {
         val distinctWords = words.distinctBy { it.value.toUpperCase() }
         if (distinctWords.size != words.size) {

@@ -1,25 +1,24 @@
 package org.occurrent.example.domain.wordguessinggame.writemodel
 
 import org.occurrent.example.domain.wordguessinggame.event.*
-import org.occurrent.example.domain.wordguessinggame.event.ReasonForNotBeingAwardedPoints.PlayerCreatedListOfWords
 import org.occurrent.example.domain.wordguessinggame.support.add
 import java.util.*
 
 /**
  * Start game
  */
-fun startGame(previousEvents: Sequence<DomainEvent>, gameId: GameId, timestamp: Timestamp, playerId: PlayerId, wordsToChooseFrom: WordsToChooseFrom, maxNumberOfGuessesPerPlayer: MaxNumberOfGuessesPerPlayer,
-              maxNumberOfGuessesTotal: MaxNumberOfGuessesTotal): Sequence<DomainEvent> {
+fun startGame(previousEvents: Sequence<DomainEvent>, gameId: GameId, timestamp: Timestamp, playerId: PlayerId, wordList: WordList,
+              maxNumberOfGuessesPerPlayer: MaxNumberOfGuessesPerPlayer, maxNumberOfGuessesTotal: MaxNumberOfGuessesTotal): Sequence<DomainEvent> {
     val state = previousEvents.deriveGameState()
 
     if (state !is NotStarted) {
         throw IllegalStateException("Cannot start game $gameId since it has already been started")
     }
 
-    val wordToGuess = wordsToChooseFrom.words.random()
+    val wordToGuess = wordList.words.random()
 
-    val gameStarted = GameWasStarted(eventId = UUID.randomUUID(), timestamp = timestamp, gameId = gameId, startedBy = playerId, category = wordsToChooseFrom.category.value,
-            wordToGuess = wordToGuess.value, maxNumberOfGuessesPerPlayer = MaxNumberOfGuessesPerPlayer.value, maxNumberOfGuessesTotal = MaxNumberOfGuessesTotal.value)
+    val gameStarted = GameWasStarted(eventId = UUID.randomUUID(), timestamp = timestamp, gameId = gameId, startedBy = playerId, category = wordList.category.value,
+            wordToGuess = wordToGuess.value, maxNumberOfGuessesPerPlayer = maxNumberOfGuessesPerPlayer.value, maxNumberOfGuessesTotal = maxNumberOfGuessesTotal.value)
 
     return sequenceOf(gameStarted)
 }
