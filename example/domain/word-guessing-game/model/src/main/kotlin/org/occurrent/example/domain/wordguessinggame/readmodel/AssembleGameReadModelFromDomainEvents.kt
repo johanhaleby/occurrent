@@ -4,9 +4,10 @@ import org.occurrent.example.domain.wordguessinggame.event.*
 import org.occurrent.example.domain.wordguessinggame.readmodel.OngoingGameReadModel.Guess
 import org.occurrent.example.domain.wordguessinggame.support.add
 
-class AssembleGameReadModelFromDomainEvents internal constructor(val gameReadModel: GameReadModel?) {
 
-    constructor() : this(null)
+fun Sequence<DomainEvent>.rehydrateToGameReadModel(): GameReadModel? = fold(AssembleGameReadModelFromDomainEvents(), AssembleGameReadModelFromDomainEvents::applyEvent).gameReadModel
+
+internal class AssembleGameReadModelFromDomainEvents(val gameReadModel: GameReadModel? = null) {
 
     fun applyEvent(e: DomainEvent) = when (e) {
         is GameWasStarted -> applyEvent(e)
