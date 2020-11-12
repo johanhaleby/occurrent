@@ -1,6 +1,7 @@
 package org.occurrent.example.domain.wordguessinggame.writemodel
 
 import org.assertj.core.api.Assertions.assertThat
+import org.assertj.core.api.Assertions.catchThrowable
 import org.junit.jupiter.api.DisplayName
 import org.junit.jupiter.api.Nested
 import org.junit.jupiter.api.Test
@@ -49,15 +50,15 @@ internal class PointCalculationLogicTest {
         }
 
         @Test
-        fun `doesn't award any points when player guessed the right word on additional attempt`() {
+        fun `throws IllegalStateException when player guessed the right word after more than 3 attempts`() {
             // Given
             val totalNumberOfGuessesForPlayer = 4
 
             // When
-            val points = PointCalculationLogic.calculatePointsToAwardPlayerAfterSuccessfullyGuessedTheRightWord(totalNumberOfGuessesForPlayer)
+            val throwable = catchThrowable { PointCalculationLogic.calculatePointsToAwardPlayerAfterSuccessfullyGuessedTheRightWord(totalNumberOfGuessesForPlayer) }
 
             // Then
-            assertThat(points).isZero
+            assertThat(throwable).isExactlyInstanceOf(IllegalStateException::class.java).hasMessage("Internal error: Number of guesses required for player exceeded expected value. Was 4, max expected 3.")
         }
     }
 }

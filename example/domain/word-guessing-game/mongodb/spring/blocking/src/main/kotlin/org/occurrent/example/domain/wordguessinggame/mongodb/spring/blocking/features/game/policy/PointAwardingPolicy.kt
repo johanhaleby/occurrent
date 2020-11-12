@@ -21,8 +21,8 @@ class PointAwardingPolicy(private val applicationService: ApplicationService<Dom
         val playerId = playerGuessedTheRightWord.playerId
         val eventsInGame = domainEventQueries.query<DomainEvent>(streamId(gameId.toString())).toList()
         val gameWasStarted = eventsInGame.first<GameWasStarted>()
-        val totalNumberGuessesForPlayerInGame = eventsInGame.count { it is PlayerGuessedTheWrongWord } + 1
-        applicationService.execute("points:$gameId") { _  : Sequence<DomainEvent> ->
+        val totalNumberGuessesForPlayerInGame = eventsInGame.count { event -> event is PlayerGuessedTheWrongWord && event.playerId == playerGuessedTheRightWord.playerId } + 1
+        applicationService.execute("points:$gameId") { _: Sequence<DomainEvent> ->
             val basis = BasisForPointAwarding(gameId, gameWasStarted.startedBy, playerId, totalNumberGuessesForPlayerInGame)
             PointAwarding.awardPointsToPlayerThatGuessedTheRightWord(basis)
         }

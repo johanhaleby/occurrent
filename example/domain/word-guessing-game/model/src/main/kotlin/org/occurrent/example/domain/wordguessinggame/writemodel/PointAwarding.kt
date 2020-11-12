@@ -35,6 +35,6 @@ internal object PointCalculationLogic {
         1 -> NUMBER_OF_POINTS_FOR_FIRST_GUESS
         2 -> NUMBER_OF_POINTS_FOR_SECOND_GUESS
         MaxNumberOfGuessesPerPlayer.value -> NUMBER_OF_POINTS_FOR_LAST_GUESS
-        else -> 0
+        else -> throw IllegalStateException("Internal error: Number of guesses required for player exceeded expected value. Was $totalNumberOfGuessesForPlayer, max expected ${MaxNumberOfGuessesPerPlayer.value}.")
     }
 }
