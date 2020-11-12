@@ -23,7 +23,7 @@ fun startGame(previousEvents: Sequence<DomainEvent>, gameId: GameId, timestamp: 
     return sequenceOf(gameStarted)
 }
 
-fun guessWord(previousEvents: Sequence<DomainEvent>, timestamp: Timestamp, playerId: PlayerId, guessedWord: Word): Sequence<DomainEvent> = when (val state = previousEvents.deriveGameState()) {
+fun guessWord(previousEvents: Sequence<DomainEvent>, timestamp: Timestamp, playerId: PlayerId, word: Word): Sequence<DomainEvent> = when (val state = previousEvents.deriveGameState()) {
     NotStarted -> throw IllegalStateException("Cannot guess word for a game that is not started")
     is Ended -> throw IllegalStateException("Cannot guess word for a game that is already ended")
     is Ongoing -> {
@@ -33,11 +33,11 @@ fun guessWord(previousEvents: Sequence<DomainEvent>, timestamp: Timestamp, playe
 
         val events = mutableListOf<DomainEvent>()
 
-        if (state.isRightGuess(guessedWord)) {
-            events.add(PlayerGuessedTheRightWord(UUID.randomUUID(), timestamp, state.gameId, playerId, guessedWord.value))
+        if (state.isRightGuess(word)) {
+            events.add(PlayerGuessedTheRightWord(UUID.randomUUID(), timestamp, state.gameId, playerId, word.value))
             events.add(GameWasWon(UUID.randomUUID(), timestamp, state.gameId, playerId))
         } else {
-            events.add(PlayerGuessedTheWrongWord(UUID.randomUUID(), timestamp, state.gameId, playerId, guessedWord.value))
+            events.add(PlayerGuessedTheWrongWord(UUID.randomUUID(), timestamp, state.gameId, playerId, word.value))
 
             if (state.isLastGuessForPlayer(playerId)) {
                 events.add(NumberOfGuessesWasExhaustedForPlayer(UUID.randomUUID(), timestamp, state.gameId, playerId))
