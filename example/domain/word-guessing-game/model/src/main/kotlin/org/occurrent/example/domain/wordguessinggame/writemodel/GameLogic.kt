@@ -23,28 +23,28 @@ fun startGame(previousEvents: Sequence<DomainEvent>, gameId: GameId, timestamp: 
     return sequenceOf(gameStarted)
 }
 
-fun guessWord(previousEvents: Sequence<DomainEvent>, timestamp: Timestamp, playerId: PlayerId, word: Word): Sequence<DomainEvent> = when (val state = previousEvents.deriveGameState()) {
+fun guessWord(previousEvents: Sequence<DomainEvent>, timestamp: Timestamp, playerId: PlayerId, word: Word): Sequence<DomainEvent> = when (val game = previousEvents.deriveGameState()) {
     NotStarted -> throw IllegalStateException("Cannot guess word for a game that is not started")
     is Ended -> throw IllegalStateException("Cannot guess word for a game that is already ended")
     is Ongoing -> {
-        if (state.isMaxNumberOfGuessesExceededForPlayer(playerId)) {
+        if (game.isMaxNumberOfGuessesExceededForPlayer(playerId)) {
             throw IllegalArgumentException("Number of guessing attempts exhausted for player $playerId.")
         }
 
         val events = mutableListOf<DomainEvent>()
 
-        if (state.isRightGuess(word)) {
-            events.add(PlayerGuessedTheRightWord(UUID.randomUUID(), timestamp, state.gameId, playerId, word.value))
-            events.add(GameWasWon(UUID.randomUUID(), timestamp, state.gameId, playerId))
+        if (game.isRightGuess(word)) {
+            events.add(PlayerGuessedTheRightWord(UUID.randomUUID(), timestamp, game.gameId, playerId, word.value))
+            events.add(GameWasWon(UUID.randomUUID(), timestamp, game.gameId, playerId))
         } else {
-            events.add(PlayerGuessedTheWrongWord(UUID.randomUUID(), timestamp, state.gameId, playerId, word.value))
+            events.add(PlayerGuessedTheWrongWord(UUID.randomUUID(), timestamp, game.gameId, playerId, word.value))
 
-            if (state.isLastGuessForPlayer(playerId)) {
-                events.add(NumberOfGuessesWasExhaustedForPlayer(UUID.randomUUID(), timestamp, state.gameId, playerId))
+            if (game.isLastGuessForPlayer(playerId)) {
+                events.add(NumberOfGuessesWasExhaustedForPlayer(UUID.randomUUID(), timestamp, game.gameId, playerId))
             }
 
-            if (state.isLastGuessForGame()) {
-                events.add(GameWasLost(UUID.randomUUID(), timestamp, state.gameId))
+            if (game.isLastGuessForGame()) {
+                events.add(GameWasLost(UUID.randomUUID(), timestamp, game.gameId))
             }
         }
 
