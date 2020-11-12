@@ -22,8 +22,8 @@ class AssembleGameReadModelFromDomainEvents internal constructor(val gameReadMod
 
     private fun applyEvent(e: GameWasStarted): AssembleGameReadModelFromDomainEvents = e.run {
         val upperCaseWordToGuess = wordToGuess.toUpperCase()
-        val fullyObfuscatedWordHint = wordToGuess.indices.map { '_' }.joinToString("")
-        AssembleGameReadModelFromDomainEvents(OngoingGameReadModel(gameId, timestamp, category, maxNumberOfGuessesPerPlayer, maxNumberOfGuessesTotal, fullyObfuscatedWordHint, emptyList(), upperCaseWordToGuess))
+        val initialWordHint = wordToGuess.map { char -> if (char == ' ') char else '_' }.joinToString("")
+        AssembleGameReadModelFromDomainEvents(OngoingGameReadModel(gameId, timestamp, category, maxNumberOfGuessesPerPlayer, maxNumberOfGuessesTotal, initialWordHint, emptyList(), upperCaseWordToGuess))
     }
 
     private fun applyEvent(e: PlayerGuessedTheWrongWord): AssembleGameReadModelFromDomainEvents = e.run {
