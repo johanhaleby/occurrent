@@ -10,7 +10,6 @@ import java.util.*
 
 class AssembleGameReadModelFromDomainEventsTest {
 
-
     @Test
     fun `doesn't obfuscate spaces when game is started`() {
         // Given
