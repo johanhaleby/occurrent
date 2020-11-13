@@ -57,7 +57,7 @@ class OccurrentCloudEventMongoDBDocumentMapperTest {
 
             @SuppressWarnings("unchecked")
             @Test
-            void and_data_is_byte_array() {
+            void and_data_is_byte_array_that_is_represented_as_map() {
                 // Given
                 OffsetDateTime offsetDateTime = OffsetDateTime.of(LocalDateTime.of(2020, 7, 26, 9, 13, 3, 223_000000), UTC);
 
@@ -84,6 +84,27 @@ class OccurrentCloudEventMongoDBDocumentMapperTest {
                         () -> assertThat(document.getString("streamId")).isEqualTo("streamId"),
                         () -> assertThat(document.getLong("streamVersion")).isEqualTo(2L)
                 );
+            }
+
+            @Test
+            void and_data_is_byte_array_with_json_string() {
+                // Given
+                OffsetDateTime offsetDateTime = OffsetDateTime.of(LocalDateTime.of(2020, 7, 26, 9, 13, 3, 223_000000), UTC);
+
+                CloudEvent cloudEvent = new CloudEventBuilder()
+                        .withSubject("subject")
+                        .withType("type")
+                        .withTime(offsetDateTime)
+                        .withSource(URI.create("urn:name"))
+                        .withId("id")
+                        .withData("application/json", "name".getBytes(UTF_8))
+                        .build();
+
+                // When
+                Document document = OccurrentCloudEventMongoDBDocumentMapper.convertToDocument(DATE, "streamId", 2L, cloudEvent);
+
+                // Then
+                assertThat(document.getString("data")).isEqualTo("name");
             }
 
             @SuppressWarnings("unchecked")

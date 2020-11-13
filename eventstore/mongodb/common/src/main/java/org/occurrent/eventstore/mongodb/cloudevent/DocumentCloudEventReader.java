@@ -20,6 +20,7 @@ public class DocumentCloudEventReader implements CloudEventReader {
     private static final String CONTENT_TYPE_ATTRIBUTE_NAME = "datacontenttype";
     private static final String DATA_ATTRIBUTE_NAME = "data";
     private static final String SPEC_VERSION_ATTRIBUTE_NAME = "specversion";
+    private static final String JSON_OBJECT_PREFIX = "{";
 
     private final Document document;
 
@@ -77,12 +78,24 @@ public class DocumentCloudEventReader implements CloudEventReader {
                     // Best case, it's a document
                     ceData = new DocumentCloudEventData((Document) data);
                 } else if (data instanceof String) {
-                    ceData = new DocumentCloudEventData(Document.parse((String) data));
+                    String json = ((String) data);
+                    if (json.trim().startsWith(JSON_OBJECT_PREFIX)) {
+                        ceData = new DocumentCloudEventData(Document.parse((String) data));
+                    } else {
+                        ceData = new BytesCloudEventData(json.getBytes(UTF_8));
+                    }
                 } else if (data instanceof Map) {
                     ceData = new DocumentCloudEventData((Map<String, Object>) data);
                 } else if (data instanceof byte[]) {
-                    String json = new String((byte[]) data, UTF_8);
-                    ceData = new DocumentCloudEventData(Document.parse(json));
+                    byte[] byteArray = (byte[]) data;
+                    String json = new String(byteArray, UTF_8);
+                    if (json.trim().startsWith(JSON_OBJECT_PREFIX)) {
+                        ceData = new DocumentCloudEventData(Document.parse(json));
+                    } else {
+                        ceData = new DocumentCloudEventData(byteArray);
+                    }
+                } else if (data instanceof Binary) {
+                    ceData = new DocumentCloudEventData(((Binary) data).getData());
                 } else {
                     //TODO next cloudevents-sdk version will add proper exception kind here
                     throw CloudEventRWException.newOther(new IllegalArgumentException("Data type is unknown: " + data.getClass().toString() + ". Only " + Document.class.getName() + ", String, byte[], and Map are supported."));
