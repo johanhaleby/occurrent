@@ -12,6 +12,13 @@
   ```java
   byte[] data = cloudEvent.getData().toBytes();
   ```
+* Fixed so that not only JSON data can be used as cloud event data. Now the content-type of the event is taken into consideration, and you can store any kind of data.
+* Introduced `org.occurrent.eventstore.mongodb.cloudevent.DocumentCloudEventData`, cloud event data will be represented in this format with loading events from an event store.
+  This means that you could check if the `CloudEventData` returned by `cloudEvent.getData()` is instance of `DocumentCloudEventData` and if so extract the 
+  underluying `org.bson.Document` that represent the data in the database.      
+* Occurrent no longer needs to perform double encoding of the cloud event data if content type is json. Instead of serializing the content manually to a `byte[]` you can
+  use either the built-in `JsonCloudEventData` class from the `cloudevents-json-jackson` module, or 
+  use the `DocumentCloudEventData` provided by Occurrent to avoid this.    
 
 ## Changelog 0.2.1 (2020-11-03)
 * Fixed typo in `CatchupSupportingBlockingSubscriptionConfig`, renamed method `dontSubscriptionPositionStorage` to `dontUseSubscriptionPositionStorage`.

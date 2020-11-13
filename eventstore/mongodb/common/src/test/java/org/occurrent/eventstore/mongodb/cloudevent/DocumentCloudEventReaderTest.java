@@ -14,73 +14,71 @@ import java.time.OffsetDateTime;
 import static java.nio.charset.StandardCharsets.UTF_8;
 import static java.time.ZoneOffset.UTC;
 import static org.assertj.core.api.Assertions.assertThat;
-import static org.junit.jupiter.api.Assertions.*;
 
 class DocumentCloudEventReaderTest {
 
-  @Test
-  void toEventWithBytesData() {
-    // Given
-    OffsetDateTime offsetDateTime = OffsetDateTime.of(LocalDateTime.of(2020, 7, 26, 9, 13, 3, 223_000000), UTC);
+    @Test
+    void toEventWithBytesData() {
+        // Given
+        OffsetDateTime offsetDateTime = OffsetDateTime.of(LocalDateTime.of(2020, 7, 26, 9, 13, 3, 223_000000), UTC);
 
-    Document document = new Document()
-        .append("specversion", SpecVersion.V1.toString())
-        .append("subject", "subject")
-        .append("type", "type")
-        .append("time", Time.writeTime(offsetDateTime))
-        .append("source", "urn:name")
-        .append("id", "id")
-        .append("datacontenttype", "application/json")
-        .append("data", "{\"name\" : \"hello\"}".getBytes(UTF_8));
+        Document document = new Document()
+                .append("specversion", SpecVersion.V1.toString())
+                .append("subject", "subject")
+                .append("type", "type")
+                .append("time", Time.writeTime(offsetDateTime))
+                .append("source", "urn:name")
+                .append("id", "id")
+                .append("datacontenttype", "application/json")
+                .append("data", "{\"name\" : \"hello\"}".getBytes(UTF_8));
 
-    // When
-    CloudEvent have = DocumentCloudEventReader.toEvent(document);
+        // When
+        CloudEvent have = DocumentCloudEventReader.toCloudEvent(document);
 
-    // Then
-    CloudEvent want = new CloudEventBuilder()
-        .withSubject("subject")
-        .withType("type")
-        .withTime(offsetDateTime)
-        .withSource(URI.create("urn:name"))
-        .withId("id")
-        .withData("application/json", "{\"name\" : \"hello\"}".getBytes(UTF_8))
-        .build();
+        // Then
+        CloudEvent want = new CloudEventBuilder()
+                .withSubject("subject")
+                .withType("type")
+                .withTime(offsetDateTime)
+                .withSource(URI.create("urn:name"))
+                .withId("id")
+                .withDataContentType("application/json")
+                .withData(new DocumentCloudEventData("{\"name\" : \"hello\"}"))
+                .build();
 
-    assertThat(have)
-        .isEqualTo(want);
-  }
+        assertThat(have).isEqualTo(want);
+    }
 
-  @Test
-  void toEventWithDocumentData() {
-    // Given
-    OffsetDateTime offsetDateTime = OffsetDateTime.of(LocalDateTime.of(2020, 7, 26, 9, 13, 3, 223_000000), UTC);
+    @Test
+    void toEventWithDocumentData() {
+        // Given
+        OffsetDateTime offsetDateTime = OffsetDateTime.of(LocalDateTime.of(2020, 7, 26, 9, 13, 3, 223_000000), UTC);
 
-    Document data = new Document().append("name", "hello");
+        Document data = new Document().append("name", "hello");
 
-    Document document = new Document()
-        .append("specversion", SpecVersion.V1.toString())
-        .append("subject", "subject")
-        .append("type", "type")
-        .append("time", Time.writeTime(offsetDateTime))
-        .append("source", "urn:name")
-        .append("id", "id")
-        .append("datacontenttype", "application/json")
-        .append("data", data);
+        Document document = new Document()
+                .append("specversion", SpecVersion.V1.toString())
+                .append("subject", "subject")
+                .append("type", "type")
+                .append("time", Time.writeTime(offsetDateTime))
+                .append("source", "urn:name")
+                .append("id", "id")
+                .append("datacontenttype", "application/json")
+                .append("data", data);
 
-    // When
-    CloudEvent have = DocumentCloudEventReader.toEvent(document);
+        // When
+        CloudEvent have = DocumentCloudEventReader.toCloudEvent(document);
 
-    // Then
-    CloudEvent want = new CloudEventBuilder()
-        .withSubject("subject")
-        .withType("type")
-        .withTime(offsetDateTime)
-        .withSource(URI.create("urn:name"))
-        .withId("id")
-        .withData("application/json", new MongoDBCloudEventData(data))
-        .build();
+        // Then
+        CloudEvent want = new CloudEventBuilder()
+                .withSubject("subject")
+                .withType("type")
+                .withTime(offsetDateTime)
+                .withSource(URI.create("urn:name"))
+                .withId("id")
+                .withData("application/json", new DocumentCloudEventData(data))
+                .build();
 
-    assertThat(have)
-        .isEqualTo(want);
-  }
+        assertThat(have).isEqualTo(want);
+    }
 }

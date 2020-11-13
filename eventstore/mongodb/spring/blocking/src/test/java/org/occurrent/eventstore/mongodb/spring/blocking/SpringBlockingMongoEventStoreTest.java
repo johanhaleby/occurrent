@@ -25,7 +25,6 @@ import com.mongodb.client.MongoClient;
 import com.mongodb.client.MongoClients;
 import io.cloudevents.CloudEvent;
 import io.cloudevents.core.builder.CloudEventBuilder;
-import io.cloudevents.jackson.JsonCloudEventData;
 import io.github.artsok.RepeatedIfExceptionsTest;
 import org.junit.jupiter.api.*;
 import org.junit.jupiter.api.condition.EnabledForJreRange;
@@ -38,6 +37,7 @@ import org.occurrent.eventstore.api.WriteCondition;
 import org.occurrent.eventstore.api.WriteConditionNotFulfilledException;
 import org.occurrent.eventstore.api.blocking.EventStoreQueries;
 import org.occurrent.eventstore.api.blocking.EventStream;
+import org.occurrent.eventstore.mongodb.cloudevent.DocumentCloudEventData;
 import org.occurrent.functional.CheckedFunction;
 import org.occurrent.mongodb.timerepresentation.TimeRepresentation;
 import org.occurrent.testsupport.mongodb.FlushMongoDBExtension;
@@ -1126,7 +1126,7 @@ public class SpringBlockingMongoEventStoreTest {
 
             // Then
             Stream<CloudEvent> events = eventStore.query(dataSchema(URI.create("urn:myschema")));
-            CloudEvent expectedCloudEvent = CloudEventBuilder.v1(cloudEvent).withData(new JsonCloudEventData(objectMapper.readTree(cloudEvent.getData().toBytes()))).build();
+            CloudEvent expectedCloudEvent = CloudEventBuilder.v1(cloudEvent).withData(new DocumentCloudEventData(cloudEvent.getData().toBytes())).build();
             assertThat(events).containsExactly(expectedCloudEvent);
         }
 

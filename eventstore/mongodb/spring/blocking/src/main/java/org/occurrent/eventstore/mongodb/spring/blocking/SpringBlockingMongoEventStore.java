@@ -100,7 +100,7 @@ public class SpringBlockingMongoEventStore implements EventStore, EventStoreOper
     @Override
     public EventStream<CloudEvent> read(String streamId, int skip, int limit) {
         final EventStream<Document> eventStream = transactionTemplate.execute(transactionStatus -> readEventStream(streamId, skip, limit));
-        return requireNonNull(eventStream).map(document -> convertToCloudEvent(cloudEventSerializer, timeRepresentation, document));
+        return requireNonNull(eventStream).map(document -> convertToCloudEvent(timeRepresentation, document));
     }
 
     @Override
@@ -116,7 +116,7 @@ public class SpringBlockingMongoEventStore implements EventStore, EventStoreOper
                 throw new WriteConditionNotFulfilledException(streamId, currentStreamVersion, writeCondition, String.format("%s was not fulfilled. Expected version %s but was %s.", WriteCondition.class.getSimpleName(), writeCondition.toString(), currentStreamVersion));
             }
 
-            List<Document> cloudEventDocuments = mapWithIndex(events, currentStreamVersion, pair -> convertToDocument(cloudEventSerializer, timeRepresentation, streamId, pair.t1, pair.t2)).collect(Collectors.toList());
+            List<Document> cloudEventDocuments = mapWithIndex(events, currentStreamVersion, pair -> convertToDocument(timeRepresentation, streamId, pair.t1, pair.t2)).collect(Collectors.toList());
 
             if (!cloudEventDocuments.isEmpty()) {
                 insertAll(cloudEventDocuments);
@@ -160,14 +160,14 @@ public class SpringBlockingMongoEventStore implements EventStore, EventStoreOper
                 return Optional.empty();
             }
 
-            CloudEvent currentCloudEvent = convertToCloudEvent(cloudEventSerializer, timeRepresentation, document);
+            CloudEvent currentCloudEvent = convertToCloudEvent(timeRepresentation, document);
             CloudEvent updatedCloudEvent = fn.apply(currentCloudEvent);
             if (updatedCloudEvent == null) {
                 throw new IllegalArgumentException("Cloud event update function is not allowed to return null");
             } else if (!Objects.equals(updatedCloudEvent, currentCloudEvent)) {
                 String streamId = OccurrentExtensionGetter.getStreamId(currentCloudEvent);
                 long streamVersion = OccurrentExtensionGetter.getStreamVersion(currentCloudEvent);
-                Document updatedDocument = convertToDocument(cloudEventSerializer, timeRepresentation, streamId, streamVersion, updatedCloudEvent);
+                Document updatedDocument = convertToDocument(timeRepresentation, streamId, streamVersion, updatedCloudEvent);
                 updatedDocument.put(ID, document.get(ID)); // Insert the Mongo ObjectID
                 mongoTemplate.findAndReplace(cloudEventQuery, updatedDocument, eventStoreCollectionName);
             }
@@ -183,7 +183,7 @@ public class SpringBlockingMongoEventStore implements EventStore, EventStoreOper
         requireNonNull(filter, "Filter cannot be null");
         final Query query = FilterConverter.convertFilterToQuery(timeRepresentation, filter);
         return readCloudEvents(query, skip, limit, sortBy)
-                .map(document -> convertToCloudEvent(cloudEventSerializer, timeRepresentation, document));
+                .map(document -> convertToCloudEvent(timeRepresentation, document));
     }
 
     @Override

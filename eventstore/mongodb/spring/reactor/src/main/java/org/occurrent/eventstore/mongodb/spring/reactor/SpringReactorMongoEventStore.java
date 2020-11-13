@@ -120,7 +120,7 @@ public class SpringReactorMongoEventStore implements EventStore, EventStoreOpera
                                             .map(streamVersionAndEvent -> {
                                                 long streamVersion = streamVersionAndEvent.getT1();
                                                 CloudEvent event = streamVersionAndEvent.getT2();
-                                                return OccurrentCloudEventMongoDBDocumentMapper.convertToDocument(cloudEventSerializer, timeRepresentation, streamId, streamVersion, event);
+                                                return OccurrentCloudEventMongoDBDocumentMapper.convertToDocument(timeRepresentation, streamId, streamVersion, event);
                                             }));
                     return insertAll(documentFlux);
                 }
@@ -242,7 +242,7 @@ public class SpringReactorMongoEventStore implements EventStore, EventStoreOpera
     }
 
     private static CloudEvent convertToCloudEvent(EventFormat eventFormat, TimeRepresentation timeRepresentation, Document document) {
-        return OccurrentCloudEventMongoDBDocumentMapper.convertToCloudEvent(eventFormat, timeRepresentation, document);
+        return OccurrentCloudEventMongoDBDocumentMapper.convertToCloudEvent(timeRepresentation, document);
     }
 
     private static boolean isSkipOrLimitDefined(int skip, int limit) {
@@ -279,7 +279,7 @@ public class SpringReactorMongoEventStore implements EventStore, EventStoreOpera
                         } else if (!Objects.equals(updatedCloudEvent, currentCloudEvent)) {
                             String streamId = OccurrentExtensionGetter.getStreamId(currentCloudEvent);
                             long streamVersion = OccurrentExtensionGetter.getStreamVersion(currentCloudEvent);
-                            Document updatedDocument = OccurrentCloudEventMongoDBDocumentMapper.convertToDocument(cloudEventSerializer, timeRepresentation, streamId, streamVersion, updatedCloudEvent);
+                            Document updatedDocument = OccurrentCloudEventMongoDBDocumentMapper.convertToDocument(timeRepresentation, streamId, streamVersion, updatedCloudEvent);
                             updatedDocument.put(ID, document.get(ID)); // Insert the Mongo ObjectID
                             result = mongoTemplate.findAndReplace(cloudEventQuery, updatedDocument, eventStoreCollectionName).thenReturn(updatedCloudEvent);
                         } else {

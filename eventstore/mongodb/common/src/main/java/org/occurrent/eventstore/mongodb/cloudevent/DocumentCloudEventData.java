@@ -18,6 +18,7 @@ package org.occurrent.eventstore.mongodb.cloudevent;
 import io.cloudevents.CloudEventData;
 import org.bson.Document;
 
+import java.util.Map;
 import java.util.Objects;
 
 import static java.nio.charset.StandardCharsets.UTF_8;
@@ -26,11 +27,24 @@ import static java.nio.charset.StandardCharsets.UTF_8;
  * An implementation of {@link CloudEventData} that holds a {@link Document}. Use this class if you know you're writing to MongoDB to avoid double mapping from
  * JSON bytes into a {@code Document}.
  */
-public class MongoDBCloudEventData implements CloudEventData {
+public class DocumentCloudEventData implements CloudEventData {
 
     public final Document document;
 
-    public MongoDBCloudEventData(Document document) {
+    public DocumentCloudEventData(byte[] json) {
+        this(Document.parse(new String(json, UTF_8)));
+    }
+
+
+    public DocumentCloudEventData(String json) {
+        this(Document.parse(json));
+    }
+
+    public DocumentCloudEventData(Map<String, Object> map) {
+        this(new Document(map));
+    }
+
+    public DocumentCloudEventData(Document document) {
         Objects.requireNonNull(document, Document.class.getSimpleName() + " cannot be null");
         this.document = document;
     }
@@ -47,8 +61,8 @@ public class MongoDBCloudEventData implements CloudEventData {
     @Override
     public boolean equals(Object o) {
         if (this == o) return true;
-        if (!(o instanceof MongoDBCloudEventData)) return false;
-        MongoDBCloudEventData that = (MongoDBCloudEventData) o;
+        if (!(o instanceof DocumentCloudEventData)) return false;
+        DocumentCloudEventData that = (DocumentCloudEventData) o;
         return Objects.equals(document, that.document);
     }
 
@@ -59,8 +73,9 @@ public class MongoDBCloudEventData implements CloudEventData {
 
     @Override
     public String toString() {
-        return "MongoDBCloudEventData{" +
+        return "DocumentCloudEventData{" +
                 "document=" + document +
                 '}';
     }
+
 }

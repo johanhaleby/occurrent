@@ -121,7 +121,7 @@ public class MongoEventStore implements EventStore, EventStoreOperations, EventS
     @Override
     public EventStream<CloudEvent> read(String streamId, int skip, int limit) {
         EventStream<Document> eventStream = readEventStream(streamId, skip, limit, transactionOptions);
-        return eventStream.map(document -> convertToCloudEvent(cloudEventSerializer, timeRepresentation, document));
+        return eventStream.map(document -> convertToCloudEvent(timeRepresentation, document));
     }
 
     private EventStreamImpl<Document> readEventStream(String streamId, int skip, int limit, TransactionOptions transactionOptions) {
@@ -204,7 +204,7 @@ public class MongoEventStore implements EventStore, EventStoreOperations, EventS
                 }
 
                 List<Document> cloudEventDocuments = zip(LongStream.iterate(currentStreamVersion + 1, i -> i + 1).boxed(), events, Pair::new)
-                        .map(pair -> convertToDocument(cloudEventSerializer, timeRepresentation, streamId, pair.t1, pair.t2))
+                        .map(pair -> convertToDocument(timeRepresentation, streamId, pair.t1, pair.t2))
                         .collect(Collectors.toList());
 
                 if (!cloudEventDocuments.isEmpty()) {
@@ -266,14 +266,14 @@ public class MongoEventStore implements EventStore, EventStoreOperations, EventS
         if (document == null) {
             return Optional.empty();
         } else {
-            CloudEvent currentCloudEvent = convertToCloudEvent(cloudEventSerializer, timeRepresentation, document);
+            CloudEvent currentCloudEvent = convertToCloudEvent(timeRepresentation, document);
             CloudEvent updatedCloudEvent = fn.apply(currentCloudEvent);
             if (updatedCloudEvent == null) {
                 throw new IllegalArgumentException("Cloud event update function is not allowed to return null");
             } else if (!Objects.equals(updatedCloudEvent, currentCloudEvent)) {
                 String streamId = OccurrentExtensionGetter.getStreamId(currentCloudEvent);
                 long streamVersion = OccurrentExtensionGetter.getStreamVersion(currentCloudEvent);
-                Document updatedDocument = convertToDocument(cloudEventSerializer, timeRepresentation, streamId, streamVersion, updatedCloudEvent);
+                Document updatedDocument = convertToDocument(timeRepresentation, streamId, streamVersion, updatedCloudEvent);
                 updatedDocument.put(ID, document.get(ID)); // Insert the Mongo ObjectID
                 cloudEventUpdater.apply(updatedDocument);
             }
@@ -286,7 +286,7 @@ public class MongoEventStore implements EventStore, EventStoreOperations, EventS
         requireNonNull(filter, "Filter cannot be null");
         final Bson query = FilterToBsonFilterConverter.convertFilterToBsonFilter(timeRepresentation, filter);
         return readCloudEvents(query, skip, limit, sortBy, null)
-                .map(document -> convertToCloudEvent(cloudEventSerializer, timeRepresentation, document));
+                .map(document -> convertToCloudEvent(timeRepresentation, document));
     }
 
     @Override

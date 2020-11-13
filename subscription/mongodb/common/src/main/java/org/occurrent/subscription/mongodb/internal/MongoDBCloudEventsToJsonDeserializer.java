@@ -34,7 +34,7 @@ public class MongoDBCloudEventsToJsonDeserializer {
 
     public static Optional<CloudEvent> deserializeToCloudEvent(EventFormat cloudEventSerializer, ChangeStreamDocument<Document> changeStreamDocument, TimeRepresentation timeRepresentation) {
         return changeStreamDocumentToCloudEventAsJson(changeStreamDocument)
-                .map(document -> OccurrentCloudEventMongoDBDocumentMapper.convertToCloudEvent(cloudEventSerializer, timeRepresentation, document));
+                .map(document -> OccurrentCloudEventMongoDBDocumentMapper.convertToCloudEvent(timeRepresentation, document));
     }
 
     private static Optional<Document> changeStreamDocumentToCloudEventAsJson(ChangeStreamDocument<Document> changeStreamDocument) {

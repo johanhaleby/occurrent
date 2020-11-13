@@ -18,16 +18,15 @@ package org.occurrent.eventstore.mongodb.internal;
 
 import io.cloudevents.CloudEvent;
 import io.cloudevents.core.builder.CloudEventBuilder;
-import io.cloudevents.core.format.EventFormat;
 import org.bson.Document;
 import org.occurrent.cloudevents.OccurrentCloudEventExtension;
-import org.occurrent.eventstore.mongodb.cloudevent.MongoDBCloudEventData;
+import org.occurrent.eventstore.mongodb.cloudevent.DocumentCloudEventReader;
+import org.occurrent.eventstore.mongodb.cloudevent.DocumentCloudEventWriter;
 import org.occurrent.mongodb.timerepresentation.TimeRepresentation;
 
 import java.time.OffsetDateTime;
 import java.util.Date;
 
-import static java.nio.charset.StandardCharsets.UTF_8;
 import static java.time.ZoneOffset.UTC;
 import static java.time.temporal.ChronoUnit.MILLIS;
 import static org.occurrent.mongodb.timerepresentation.TimeRepresentation.DATE;
@@ -40,16 +39,10 @@ import static org.occurrent.time.internal.RFC3339.RFC_3339_DATE_TIME_FORMATTER;
  */
 public class OccurrentCloudEventMongoDBDocumentMapper {
 
-    public static Document convertToDocument(EventFormat eventFormat, TimeRepresentation timeRepresentation,
-                                             String streamId, long streamVersion, CloudEvent cloudEvent) {
-        byte[] bytes = eventFormat.serialize(cloudEvent);
-        String serializedAsString = new String(bytes, UTF_8);
-        Document cloudEventDocument = Document.parse(serializedAsString);
+    public static Document convertToDocument(TimeRepresentation timeRepresentation, String streamId, long streamVersion, CloudEvent cloudEvent) {
+        Document cloudEventDocument = DocumentCloudEventWriter.toDocument(cloudEvent);
         cloudEventDocument.put(OccurrentCloudEventExtension.STREAM_ID, streamId);
-        // TODO Remove once refactoring is complete
-        if (streamVersion != -1) {
-            cloudEventDocument.put(OccurrentCloudEventExtension.STREAM_VERSION, streamVersion);
-        }
+        cloudEventDocument.put(OccurrentCloudEventExtension.STREAM_VERSION, streamVersion);
 
         if (timeRepresentation == DATE && cloudEvent.getTime() != null) {
             OffsetDateTime time = cloudEvent.getTime();
@@ -73,7 +66,7 @@ public class OccurrentCloudEventMongoDBDocumentMapper {
         return cloudEventDocument;
     }
 
-    public static CloudEvent convertToCloudEvent(EventFormat eventFormat, TimeRepresentation timeRepresentation, Document cloudEventDocument) {
+    public static CloudEvent convertToCloudEvent(TimeRepresentation timeRepresentation, Document cloudEventDocument) {
         Document document = new Document(cloudEventDocument);
         document.remove("_id");
 
@@ -86,8 +79,9 @@ public class OccurrentCloudEventMongoDBDocumentMapper {
                 document.put("time", format);
             }
         }
-        byte[] eventData = new MongoDBCloudEventData(document).toBytes();
+
+        CloudEvent cloudEvent = DocumentCloudEventReader.toCloudEvent(document);
         // When converting to JSON (document.toJson()) the stream version is interpreted as an int in Jackson, we convert it manually to long afterwards.
-        return CloudEventBuilder.v1(eventFormat.deserialize(eventData)).withExtension(OccurrentCloudEventExtension.STREAM_VERSION, document.getLong(OccurrentCloudEventExtension.STREAM_VERSION)).build();
+        return CloudEventBuilder.v1(cloudEvent).withExtension(OccurrentCloudEventExtension.STREAM_VERSION, document.getLong(OccurrentCloudEventExtension.STREAM_VERSION)).build();
     }
 }

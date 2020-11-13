@@ -19,17 +19,16 @@ package org.occurrent.eventstore.mongodb.internal;
 import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import io.cloudevents.CloudEvent;
-import io.cloudevents.core.format.EventFormat;
-import io.cloudevents.core.provider.EventFormatProvider;
+import io.cloudevents.core.data.BytesCloudEventData;
 import io.cloudevents.core.v1.CloudEventBuilder;
 import io.cloudevents.jackson.JsonCloudEventData;
-import io.cloudevents.jackson.JsonFormat;
+import io.cloudevents.types.Time;
 import org.bson.Document;
-import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Nested;
 import org.junit.jupiter.api.Test;
 import org.occurrent.cloudevents.OccurrentCloudEventExtension;
+import org.occurrent.eventstore.mongodb.cloudevent.DocumentCloudEventData;
 
 import java.net.URI;
 import java.time.*;
@@ -48,11 +47,374 @@ import static org.occurrent.time.internal.RFC3339.RFC_3339_DATE_TIME_FORMATTER;
 
 class OccurrentCloudEventMongoDBDocumentMapperTest {
 
-    private EventFormat eventFormat;
+    @Nested
+    @DisplayName("converts cloud event to document")
+    class ConvertsCloudEventToDocument {
 
-    @BeforeEach
-    void initialization() {
-        eventFormat = EventFormatProvider.getInstance().resolveFormat(JsonFormat.CONTENT_TYPE);
+        @Nested
+        @DisplayName("when content-type is json")
+        class WhenContentTypeIsJson {
+
+            @SuppressWarnings("unchecked")
+            @Test
+            void and_data_is_byte_array() {
+                // Given
+                OffsetDateTime offsetDateTime = OffsetDateTime.of(LocalDateTime.of(2020, 7, 26, 9, 13, 3, 223_000000), UTC);
+
+                CloudEvent cloudEvent = new CloudEventBuilder()
+                        .withSubject("subject")
+                        .withType("type")
+                        .withTime(offsetDateTime)
+                        .withSource(URI.create("urn:name"))
+                        .withId("id")
+                        .withData("application/json", "{\"name\" : \"hello\"}".getBytes(UTF_8))
+                        .build();
+
+                // When
+                Document document = OccurrentCloudEventMongoDBDocumentMapper.convertToDocument(DATE, "streamId", 2L, cloudEvent);
+
+                // Then
+                assertAll(
+                        () -> assertThat(document.getString("subject")).isEqualTo("subject"),
+                        () -> assertThat(document.getString("type")).isEqualTo("type"),
+                        () -> assertThat(document.getDate("time")).isEqualTo(toDate(offsetDateTime)),
+                        () -> assertThat(document.getString("source")).isEqualTo("urn:name"),
+                        () -> assertThat(document.getString("id")).isEqualTo("id"),
+                        () -> assertThat(document.get("data", Map.class)).containsOnly(entry("name", "hello")),
+                        () -> assertThat(document.getString("streamId")).isEqualTo("streamId"),
+                        () -> assertThat(document.getLong("streamVersion")).isEqualTo(2L)
+                );
+            }
+
+            @SuppressWarnings("unchecked")
+            @Test
+            void and_data_is_document_cloud_event_data() {
+                // Given
+                OffsetDateTime offsetDateTime = OffsetDateTime.of(LocalDateTime.of(2020, 7, 26, 9, 13, 3, 223_000000), UTC);
+
+                CloudEvent cloudEvent = new CloudEventBuilder()
+                        .withSubject("subject")
+                        .withType("type")
+                        .withTime(offsetDateTime)
+                        .withSource(URI.create("urn:name"))
+                        .withId("id")
+                        .withDataContentType("application/json")
+                        .withData(new DocumentCloudEventData("{\"name\" : \"hello\"}"))
+                        .build();
+
+                // When
+                Document document = OccurrentCloudEventMongoDBDocumentMapper.convertToDocument(DATE, "streamId", 2L, cloudEvent);
+
+                // Then
+                assertAll(
+                        () -> assertThat(document.getString("subject")).isEqualTo("subject"),
+                        () -> assertThat(document.getString("type")).isEqualTo("type"),
+                        () -> assertThat(document.getDate("time")).isEqualTo(toDate(offsetDateTime)),
+                        () -> assertThat(document.getString("source")).isEqualTo("urn:name"),
+                        () -> assertThat(document.getString("id")).isEqualTo("id"),
+                        () -> assertThat(document.get("data", Map.class)).containsOnly(entry("name", "hello")),
+                        () -> assertThat(document.getString("streamId")).isEqualTo("streamId"),
+                        () -> assertThat(document.getLong("streamVersion")).isEqualTo(2L)
+                );
+            }
+
+            @SuppressWarnings("unchecked")
+            @Test
+            void and_data_is_json_cloud_event_data() throws JsonProcessingException {
+                // Given
+                OffsetDateTime offsetDateTime = OffsetDateTime.of(LocalDateTime.of(2020, 7, 26, 9, 13, 3, 223_000000), UTC);
+
+                ObjectMapper objectMapper = new ObjectMapper();
+                CloudEvent cloudEvent = new CloudEventBuilder()
+                        .withSubject("subject")
+                        .withType("type")
+                        .withTime(offsetDateTime)
+                        .withSource(URI.create("urn:name"))
+                        .withId("id")
+                        .withDataContentType("application/json")
+                        .withData(new JsonCloudEventData(objectMapper.readTree("{\"name\" : \"hello\"}")))
+                        .build();
+
+                // When
+                Document document = OccurrentCloudEventMongoDBDocumentMapper.convertToDocument(DATE, "streamId", 2L, cloudEvent);
+
+                // Then
+                assertAll(
+                        () -> assertThat(document.getString("subject")).isEqualTo("subject"),
+                        () -> assertThat(document.getString("type")).isEqualTo("type"),
+                        () -> assertThat(document.getDate("time")).isEqualTo(toDate(offsetDateTime)),
+                        () -> assertThat(document.getString("source")).isEqualTo("urn:name"),
+                        () -> assertThat(document.getString("id")).isEqualTo("id"),
+                        () -> assertThat(document.get("data", Map.class)).containsOnly(entry("name", "hello")),
+                        () -> assertThat(document.getString("streamId")).isEqualTo("streamId"),
+                        () -> assertThat(document.getLong("streamVersion")).isEqualTo(2L)
+                );
+            }
+        }
+
+        @Nested
+        @DisplayName("when content-type is not json")
+        class WhenContentTypeIsNotJson {
+
+            @Test
+            void and_data_is_byte_array() {
+                // Given
+                OffsetDateTime offsetDateTime = OffsetDateTime.of(LocalDateTime.of(2020, 7, 26, 9, 13, 3, 223_000000), UTC);
+
+                CloudEvent cloudEvent = new CloudEventBuilder()
+                        .withSubject("subject")
+                        .withType("type")
+                        .withTime(offsetDateTime)
+                        .withSource(URI.create("urn:name"))
+                        .withId("id")
+                        .withDataContentType("text/plain")
+                        .withData("hello".getBytes(UTF_8))
+                        .build();
+
+                // When
+                Document document = OccurrentCloudEventMongoDBDocumentMapper.convertToDocument(DATE, "streamId", 2L, cloudEvent);
+
+                // Then
+                assertAll(
+                        () -> assertThat(document.getString("subject")).isEqualTo("subject"),
+                        () -> assertThat(document.getString("type")).isEqualTo("type"),
+                        () -> assertThat(document.getDate("time")).isEqualTo(toDate(offsetDateTime)),
+                        () -> assertThat(document.getString("source")).isEqualTo("urn:name"),
+                        () -> assertThat(document.getString("id")).isEqualTo("id"),
+                        () -> assertThat(document.get("data", byte[].class)).isEqualTo("hello".getBytes(UTF_8)),
+                        () -> assertThat(document.getString("streamId")).isEqualTo("streamId"),
+                        () -> assertThat(document.getLong("streamVersion")).isEqualTo(2L)
+                );
+            }
+
+            @Test
+            void and_data_is_bytes_cloud_event_data() {
+                // Given
+                OffsetDateTime offsetDateTime = OffsetDateTime.of(LocalDateTime.of(2020, 7, 26, 9, 13, 3, 223_000000), UTC);
+
+                CloudEvent cloudEvent = new CloudEventBuilder()
+                        .withSubject("subject")
+                        .withType("type")
+                        .withTime(offsetDateTime)
+                        .withSource(URI.create("urn:name"))
+                        .withId("id")
+                        .withDataContentType("text/plain")
+                        .withData(new BytesCloudEventData("hello".getBytes(UTF_8)))
+                        .build();
+
+                // When
+                Document document = OccurrentCloudEventMongoDBDocumentMapper.convertToDocument(DATE, "streamId", 2L, cloudEvent);
+
+                // Then
+                assertAll(
+                        () -> assertThat(document.getString("subject")).isEqualTo("subject"),
+                        () -> assertThat(document.getString("type")).isEqualTo("type"),
+                        () -> assertThat(document.getDate("time")).isEqualTo(toDate(offsetDateTime)),
+                        () -> assertThat(document.getString("source")).isEqualTo("urn:name"),
+                        () -> assertThat(document.getString("id")).isEqualTo("id"),
+                        () -> assertThat(document.get("data", byte[].class)).isEqualTo("hello".getBytes(UTF_8)),
+                        () -> assertThat(document.getString("streamId")).isEqualTo("streamId"),
+                        () -> assertThat(document.getLong("streamVersion")).isEqualTo(2L)
+                );
+            }
+        }
+    }
+
+    @Nested
+    @DisplayName("converts document to cloud event")
+    class ConvertsDocumentToCloudEvent {
+
+        @Nested
+        @DisplayName("when content-type is json")
+        class WhenContentTypeIsJson {
+
+            @Test
+            void and_data_is_hash_map() {
+                // Given
+                Map<String, Object> data = new HashMap<String, Object>() {{
+                    put("name", "hello");
+                }};
+                Document document = new Document(new HashMap<String, Object>() {{
+                    put("subject", "subject");
+                    put("type", "type");
+                    put("time", Time.parseTime("2020-07-26T09:13:03Z"));
+                    put("source", "urn:name");
+                    put("id", "id");
+                    put("_id", "mongodb");
+                    put("data", data);
+                    put("datacontenttype", "application/json");
+                    put("specversion", "1.0");
+                    put("streamId", "streamId");
+                    put("streamVersion", 2L);
+                }});
+
+                // When
+                CloudEvent actual = OccurrentCloudEventMongoDBDocumentMapper.convertToCloudEvent(DATE, document);
+
+                // Then
+                CloudEvent expected = new CloudEventBuilder()
+                        .withSubject("subject")
+                        .withType("type")
+                        .withTime(OffsetDateTime.of(LocalDateTime.of(2020, 7, 26, 9, 13, 3), UTC))
+                        .withSource(URI.create("urn:name"))
+                        .withId("id")
+                        .withDataContentType("application/json")
+                        .withData(new DocumentCloudEventData(data))
+                        .withExtension(new OccurrentCloudEventExtension("streamId", 2L))
+                        .build();
+
+                assertThat(actual).isEqualTo(expected);
+            }
+
+            @Test
+            void and_data_is_string() {
+                // Given
+                String data = "{\"name\" : \"hello\"}";
+                Document document = new Document(new HashMap<String, Object>() {{
+                    put("subject", "subject");
+                    put("type", "type");
+                    put("time", Time.parseTime("2020-07-26T09:13:03Z"));
+                    put("source", "urn:name");
+                    put("id", "id");
+                    put("_id", "mongodb");
+                    put("data", data);
+                    put("datacontenttype", "application/json");
+                    put("specversion", "1.0");
+                    put("streamId", "streamId");
+                    put("streamVersion", 2L);
+                }});
+
+                // When
+                CloudEvent actual = OccurrentCloudEventMongoDBDocumentMapper.convertToCloudEvent(DATE, document);
+
+                // Then
+                CloudEvent expected = new CloudEventBuilder()
+                        .withSubject("subject")
+                        .withType("type")
+                        .withTime(OffsetDateTime.of(LocalDateTime.of(2020, 7, 26, 9, 13, 3), UTC))
+                        .withSource(URI.create("urn:name"))
+                        .withId("id")
+                        .withDataContentType("application/json")
+                        .withData(new DocumentCloudEventData(data))
+                        .withExtension(new OccurrentCloudEventExtension("streamId", 2L))
+                        .build();
+
+                assertThat(actual).isEqualTo(expected);
+            }
+
+            @Test
+            void and_data_is_byte_array() {
+                // Given
+                byte[] data = "{\"name\" : \"hello\"}".getBytes(UTF_8);
+                Document document = new Document(new HashMap<String, Object>() {{
+                    put("subject", "subject");
+                    put("type", "type");
+                    put("time", Time.parseTime("2020-07-26T09:13:03Z"));
+                    put("source", "urn:name");
+                    put("id", "id");
+                    put("_id", "mongodb");
+                    put("data", data);
+                    put("datacontenttype", "application/json");
+                    put("specversion", "1.0");
+                    put("streamId", "streamId");
+                    put("streamVersion", 2L);
+                }});
+
+                // When
+                CloudEvent actual = OccurrentCloudEventMongoDBDocumentMapper.convertToCloudEvent(DATE, document);
+
+                // Then
+                CloudEvent expected = new CloudEventBuilder()
+                        .withSubject("subject")
+                        .withType("type")
+                        .withTime(OffsetDateTime.of(LocalDateTime.of(2020, 7, 26, 9, 13, 3), UTC))
+                        .withSource(URI.create("urn:name"))
+                        .withId("id")
+                        .withDataContentType("application/json")
+                        .withData(new DocumentCloudEventData(data))
+                        .withExtension(new OccurrentCloudEventExtension("streamId", 2L))
+                        .build();
+
+                assertThat(actual).isEqualTo(expected);
+            }
+        }
+
+        @Nested
+        @DisplayName("when content-type is not json")
+        class WhenContentTypeIsNotJson {
+
+            @Test
+            void and_data_is_string() {
+                // Given
+                String data = "string";
+                Document document = new Document(new HashMap<String, Object>() {{
+                    put("subject", "subject");
+                    put("type", "type");
+                    put("time", Time.parseTime("2020-07-26T09:13:03Z"));
+                    put("source", "urn:name");
+                    put("id", "id");
+                    put("_id", "mongodb");
+                    put("data", data);
+                    put("datacontenttype", "text/plain");
+                    put("specversion", "1.0");
+                    put("streamId", "streamId");
+                    put("streamVersion", 2L);
+                }});
+
+                // When
+                CloudEvent actual = OccurrentCloudEventMongoDBDocumentMapper.convertToCloudEvent(DATE, document);
+
+                // Then
+                CloudEvent expected = new CloudEventBuilder()
+                        .withSubject("subject")
+                        .withType("type")
+                        .withTime(OffsetDateTime.of(LocalDateTime.of(2020, 7, 26, 9, 13, 3), UTC))
+                        .withSource(URI.create("urn:name"))
+                        .withId("id")
+                        .withDataContentType("text/plain")
+                        .withData(new BytesCloudEventData(data.getBytes(UTF_8)))
+                        .withExtension(new OccurrentCloudEventExtension("streamId", 2L))
+                        .build();
+
+                assertThat(actual).isEqualTo(expected);
+            }
+
+            @Test
+            void and_data_is_byte_array() {
+                // Given
+                byte[] data = "string".getBytes(UTF_8);
+                Document document = new Document(new HashMap<String, Object>() {{
+                    put("subject", "subject");
+                    put("type", "type");
+                    put("time", Time.parseTime("2020-07-26T09:13:03Z"));
+                    put("source", "urn:name");
+                    put("id", "id");
+                    put("_id", "mongodb");
+                    put("data", data);
+                    put("datacontenttype", "text/plain");
+                    put("specversion", "1.0");
+                    put("streamId", "streamId");
+                    put("streamVersion", 2L);
+                }});
+
+                // When
+                CloudEvent actual = OccurrentCloudEventMongoDBDocumentMapper.convertToCloudEvent(DATE, document);
+
+                // Then
+                CloudEvent expected = new CloudEventBuilder()
+                        .withSubject("subject")
+                        .withType("type")
+                        .withTime(OffsetDateTime.of(LocalDateTime.of(2020, 7, 26, 9, 13, 3), UTC))
+                        .withSource(URI.create("urn:name"))
+                        .withId("id")
+                        .withDataContentType("text/plain")
+                        .withData(new BytesCloudEventData(data))
+                        .withExtension(new OccurrentCloudEventExtension("streamId", 2L))
+                        .build();
+
+                assertThat(actual).isEqualTo(expected);
+            }
+        }
     }
 
     @Nested
@@ -75,7 +437,7 @@ class OccurrentCloudEventMongoDBDocumentMapperTest {
                     .build();
 
             // When
-            Document document = OccurrentCloudEventMongoDBDocumentMapper.convertToDocument(eventFormat, RFC_3339_STRING, "streamId", 2L, cloudEvent);
+            Document document = OccurrentCloudEventMongoDBDocumentMapper.convertToDocument(RFC_3339_STRING, "streamId", 2L, cloudEvent);
 
             // Then
             assertAll(
@@ -106,7 +468,7 @@ class OccurrentCloudEventMongoDBDocumentMapperTest {
                     .build();
 
             // When
-            Document document = OccurrentCloudEventMongoDBDocumentMapper.convertToDocument(eventFormat, RFC_3339_STRING, "streamId", 2L, cloudEvent);
+            Document document = OccurrentCloudEventMongoDBDocumentMapper.convertToDocument(RFC_3339_STRING, "streamId", 2L, cloudEvent);
 
             // Then
             assertAll(
@@ -123,8 +485,11 @@ class OccurrentCloudEventMongoDBDocumentMapperTest {
 
 
         @Test
-        void converts_document_to_cloud_event_and_remove_mongo_id() throws JsonProcessingException {
+        void converts_document_to_cloud_event_and_remove_mongo_id() {
             // Given
+            Map<String, Object> data = new HashMap<String, Object>() {{
+                put("name", "hello");
+            }};
             Document document = new Document(new HashMap<String, Object>() {{
                 put("subject", "subject");
                 put("type", "type");
@@ -132,9 +497,7 @@ class OccurrentCloudEventMongoDBDocumentMapperTest {
                 put("source", "urn:name");
                 put("id", "id");
                 put("_id", "mongodb");
-                put("data", new HashMap<String, Object>() {{
-                    put("name", "hello");
-                }});
+                put("data", data);
                 put("datacontenttype", "application/json");
                 put("specversion", "1.0");
                 put("streamId", "streamId");
@@ -142,10 +505,9 @@ class OccurrentCloudEventMongoDBDocumentMapperTest {
             }});
 
             // When
-            CloudEvent actual = OccurrentCloudEventMongoDBDocumentMapper.convertToCloudEvent(eventFormat, RFC_3339_STRING, document);
+            CloudEvent actual = OccurrentCloudEventMongoDBDocumentMapper.convertToCloudEvent(RFC_3339_STRING, document);
 
             // Then
-            ObjectMapper objectMapper = new ObjectMapper();
             CloudEvent expected = new CloudEventBuilder()
                     .withSubject("subject")
                     .withType("type")
@@ -153,7 +515,7 @@ class OccurrentCloudEventMongoDBDocumentMapperTest {
                     .withSource(URI.create("urn:name"))
                     .withId("id")
                     .withDataContentType("application/json")
-                    .withData(new JsonCloudEventData(objectMapper.readTree("{\"name\":\"hello\"}")))
+                    .withData(new DocumentCloudEventData(data))
                     .withExtension(new OccurrentCloudEventExtension("streamId", 2L))
                     .build();
 
@@ -179,7 +541,7 @@ class OccurrentCloudEventMongoDBDocumentMapperTest {
             }});
 
             // When
-            CloudEvent actual = OccurrentCloudEventMongoDBDocumentMapper.convertToCloudEvent(eventFormat, RFC_3339_STRING, document);
+            CloudEvent actual = OccurrentCloudEventMongoDBDocumentMapper.convertToCloudEvent(RFC_3339_STRING, document);
 
             // Then
             assertThat(actual.getTime()).isEqualTo(OffsetDateTime.of(LocalDateTime.of(2020, 7, 26, 9, 13, 3, 234_000000), UTC));
@@ -204,7 +566,7 @@ class OccurrentCloudEventMongoDBDocumentMapperTest {
             }});
 
             // When
-            CloudEvent actual = OccurrentCloudEventMongoDBDocumentMapper.convertToCloudEvent(eventFormat, RFC_3339_STRING, document);
+            CloudEvent actual = OccurrentCloudEventMongoDBDocumentMapper.convertToCloudEvent(RFC_3339_STRING, document);
 
             // Then
             assertThat(actual.getTime()).isEqualTo(offsetDateTimeFrom(LocalDateTime.of(2020, 7, 26, 9, 13, 3), ZoneId.of("CET")));
@@ -229,7 +591,7 @@ class OccurrentCloudEventMongoDBDocumentMapperTest {
             }});
 
             // When
-            CloudEvent actual = OccurrentCloudEventMongoDBDocumentMapper.convertToCloudEvent(eventFormat, RFC_3339_STRING, document);
+            CloudEvent actual = OccurrentCloudEventMongoDBDocumentMapper.convertToCloudEvent(RFC_3339_STRING, document);
 
             // Then
             assertThat(actual.getTime()).isEqualTo(OffsetDateTime.of(LocalDateTime.of(2020, 7, 26, 9, 13, 3), ZoneOffset.of("-02:00")));
@@ -256,7 +618,7 @@ class OccurrentCloudEventMongoDBDocumentMapperTest {
                     .build();
 
             // When
-            Document document = OccurrentCloudEventMongoDBDocumentMapper.convertToDocument(eventFormat, DATE, "streamId", 2L, cloudEvent);
+            Document document = OccurrentCloudEventMongoDBDocumentMapper.convertToDocument(DATE, "streamId", 2L, cloudEvent);
 
             // Then
             assertAll(
@@ -286,7 +648,7 @@ class OccurrentCloudEventMongoDBDocumentMapperTest {
                     .build();
 
             // When
-            Throwable throwable = catchThrowable(() -> OccurrentCloudEventMongoDBDocumentMapper.convertToDocument(eventFormat, DATE, "streamId", 2L, cloudEvent));
+            Throwable throwable = catchThrowable(() -> OccurrentCloudEventMongoDBDocumentMapper.convertToDocument(DATE, "streamId", 2L, cloudEvent));
 
             // Then
             assertThat(throwable).isExactlyInstanceOf(IllegalArgumentException.class)
@@ -308,7 +670,7 @@ class OccurrentCloudEventMongoDBDocumentMapperTest {
                     .build();
 
             // When
-            Throwable throwable = catchThrowable(() -> OccurrentCloudEventMongoDBDocumentMapper.convertToDocument(eventFormat, DATE, "streamId", 2L, cloudEvent));
+            Throwable throwable = catchThrowable(() -> OccurrentCloudEventMongoDBDocumentMapper.convertToDocument(DATE, "streamId", 2L, cloudEvent));
 
             // Then
             assertThat(throwable).isExactlyInstanceOf(IllegalArgumentException.class)
@@ -316,8 +678,11 @@ class OccurrentCloudEventMongoDBDocumentMapperTest {
         }
 
         @Test
-        void converts_document_to_cloud_event_and_remove_mongo_id() throws JsonProcessingException {
+        void converts_document_to_cloud_event_and_remove_mongo_id() {
             // Given
+            Map<String, Object> data = new HashMap<String, Object>() {{
+                put("name", "hello");
+            }};
             Document document = new Document(new HashMap<String, Object>() {{
                 put("subject", "subject");
                 put("type", "type");
@@ -325,9 +690,7 @@ class OccurrentCloudEventMongoDBDocumentMapperTest {
                 put("source", "urn:name");
                 put("id", "id");
                 put("_id", "mongodb");
-                put("data", new HashMap<String, Object>() {{
-                    put("name", "hello");
-                }});
+                put("data", data);
                 put("datacontenttype", "application/json");
                 put("specversion", "1.0");
                 put("streamId", "streamId");
@@ -335,10 +698,9 @@ class OccurrentCloudEventMongoDBDocumentMapperTest {
             }});
 
             // When
-            CloudEvent actual = OccurrentCloudEventMongoDBDocumentMapper.convertToCloudEvent(eventFormat, DATE, document);
+            CloudEvent actual = OccurrentCloudEventMongoDBDocumentMapper.convertToCloudEvent(DATE, document);
 
             // Then
-            ObjectMapper objectMapper = new ObjectMapper();
             CloudEvent expected = new CloudEventBuilder()
                     .withSubject("subject")
                     .withType("type")
@@ -346,7 +708,7 @@ class OccurrentCloudEventMongoDBDocumentMapperTest {
                     .withSource(URI.create("urn:name"))
                     .withId("id")
                     .withDataContentType("application/json")
-                    .withData(new JsonCloudEventData(objectMapper.readTree("{\"name\":\"hello\"}")))
+                    .withData(new DocumentCloudEventData(data))
                     .withExtension(new OccurrentCloudEventExtension("streamId", 2L))
                     .build();
 
@@ -372,7 +734,7 @@ class OccurrentCloudEventMongoDBDocumentMapperTest {
             }});
 
             // When
-            CloudEvent actual = OccurrentCloudEventMongoDBDocumentMapper.convertToCloudEvent(eventFormat, DATE, document);
+            CloudEvent actual = OccurrentCloudEventMongoDBDocumentMapper.convertToCloudEvent(DATE, document);
 
             // Then
             assertThat(actual.getTime()).isEqualTo(OffsetDateTime.of(LocalDateTime.of(2020, 7, 26, 9, 13, 3, 234_000000), UTC));
@@ -397,7 +759,7 @@ class OccurrentCloudEventMongoDBDocumentMapperTest {
             }});
 
             // When
-            CloudEvent actual = OccurrentCloudEventMongoDBDocumentMapper.convertToCloudEvent(eventFormat, DATE, document);
+            CloudEvent actual = OccurrentCloudEventMongoDBDocumentMapper.convertToCloudEvent(DATE, document);
 
             // Then
             assertThat(actual.getTime()).isEqualTo(offsetDateTimeFrom(LocalDateTime.of(2020, 7, 26, 9, 13, 3), ZoneId.of("CET")));
@@ -422,19 +784,20 @@ class OccurrentCloudEventMongoDBDocumentMapperTest {
             }});
 
             // When
-            CloudEvent actual = OccurrentCloudEventMongoDBDocumentMapper.convertToCloudEvent(eventFormat, DATE, document);
+            CloudEvent actual = OccurrentCloudEventMongoDBDocumentMapper.convertToCloudEvent(DATE, document);
 
             // Then
             assertThat(actual.getTime()).isEqualTo(OffsetDateTime.of(LocalDateTime.of(2020, 7, 26, 9, 13, 3), ZoneOffset.of("-02:00")));
         }
 
-        private Date toDate(OffsetDateTime offsetDateTime) {
-            return Date.from(offsetDateTime.toInstant());
-        }
+    }
 
-        private Date toDate(String rfc3339FormattedString) {
-            return toDate(OffsetDateTime.from(RFC_3339_DATE_TIME_FORMATTER.parse(rfc3339FormattedString)));
-        }
+    private Date toDate(OffsetDateTime offsetDateTime) {
+        return Date.from(offsetDateTime.toInstant());
+    }
+
+    private Date toDate(String rfc3339FormattedString) {
+        return toDate(OffsetDateTime.from(RFC_3339_DATE_TIME_FORMATTER.parse(rfc3339FormattedString)));
     }
 
     private static OffsetDateTime offsetDateTimeFrom(LocalDateTime ldf, ZoneId zoneId) {
