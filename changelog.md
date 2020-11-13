@@ -18,7 +18,8 @@
   underluying `org.bson.Document` that represent the data in the database.      
 * Occurrent no longer needs to perform double encoding of the cloud event data if content type is json. Instead of serializing the content manually to a `byte[]` you can
   use either the built-in `JsonCloudEventData` class from the `cloudevents-json-jackson` module, or 
-  use the `DocumentCloudEventData` provided by Occurrent to avoid this.    
+  use the `DocumentCloudEventData` provided by Occurrent to avoid this.
+* Upgrading to spring-data-mongodb 3.1.1
 
 ## Changelog 0.2.1 (2020-11-03)
 * Fixed typo in `CatchupSupportingBlockingSubscriptionConfig`, renamed method `dontSubscriptionPositionStorage` to `dontUseSubscriptionPositionStorage`.

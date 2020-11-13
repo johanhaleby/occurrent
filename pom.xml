@@ -71,8 +71,8 @@
         <jackson.version>2.11.1</jackson.version>
         <cloudevents.version>2.0.0-milestone4</cloudevents.version>
         <reactor.version>3.3.7.RELEASE</reactor.version>
-        <spring-data-mongodb.version>3.0.1.RELEASE</spring-data-mongodb.version>
-        <spring-boot.version>2.3.5.RELEASE</spring-boot.version>
+        <spring-data-mongodb.version>3.1.1</spring-data-mongodb.version>
+        <spring-boot.version>2.4.0</spring-boot.version>
         <mongo.version>4.1.1</mongo.version>
         <dokka.version>1.4.10.2</dokka.version>
     </properties>
