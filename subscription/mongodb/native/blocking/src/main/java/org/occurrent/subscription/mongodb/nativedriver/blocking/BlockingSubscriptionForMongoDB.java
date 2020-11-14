@@ -24,9 +24,6 @@ import com.mongodb.client.MongoCollection;
 import com.mongodb.client.MongoDatabase;
 import com.mongodb.client.model.changestream.ChangeStreamDocument;
 import io.cloudevents.CloudEvent;
-import io.cloudevents.core.format.EventFormat;
-import io.cloudevents.core.provider.EventFormatProvider;
-import io.cloudevents.jackson.JsonFormat;
 import org.bson.BsonDocument;
 import org.bson.BsonTimestamp;
 import org.bson.Document;
@@ -75,7 +72,6 @@ public class BlockingSubscriptionForMongoDB implements PositionAwareBlockingSubs
 
     private final MongoCollection<Document> eventCollection;
     private final ConcurrentMap<String, MongoChangeStreamCursor<ChangeStreamDocument<Document>>> subscriptions;
-    private final EventFormat cloudEventSerializer;
     private final TimeRepresentation timeRepresentation;
     private final Executor cloudEventDispatcher;
     private final RetryStrategy retryStrategy;
@@ -119,7 +115,6 @@ public class BlockingSubscriptionForMongoDB implements PositionAwareBlockingSubs
         this.timeRepresentation = timeRepresentation;
         this.eventCollection = eventCollection;
         this.subscriptions = new ConcurrentHashMap<>();
-        this.cloudEventSerializer = EventFormatProvider.getInstance().resolveFormat(JsonFormat.CONTENT_TYPE);
     }
 
     @Override
@@ -140,7 +135,7 @@ public class BlockingSubscriptionForMongoDB implements PositionAwareBlockingSubs
 
             subscriptionStartedLatch.countDown();
             try {
-                cursor.forEachRemaining(changeStreamDocument -> MongoDBCloudEventsToJsonDeserializer.deserializeToCloudEvent(cloudEventSerializer, changeStreamDocument, timeRepresentation)
+                cursor.forEachRemaining(changeStreamDocument -> MongoDBCloudEventsToJsonDeserializer.deserializeToCloudEvent(changeStreamDocument, timeRepresentation)
                         .map(cloudEvent -> new PositionAwareCloudEvent(cloudEvent, new MongoDBResumeTokenBasedSubscriptionPosition(changeStreamDocument.getResumeToken())))
                         .ifPresent(retry(action, __ -> true, convertToDelayStream(retryStrategy))));
             } catch (MongoException e) {

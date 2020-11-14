@@ -19,7 +19,6 @@ package org.occurrent.subscription.mongodb.internal;
 import com.mongodb.client.model.changestream.ChangeStreamDocument;
 import com.mongodb.client.model.changestream.OperationType;
 import io.cloudevents.CloudEvent;
-import io.cloudevents.core.format.EventFormat;
 import org.bson.Document;
 import org.occurrent.eventstore.mongodb.internal.OccurrentCloudEventMongoDBDocumentMapper;
 import org.occurrent.mongodb.timerepresentation.TimeRepresentation;
@@ -32,7 +31,7 @@ public class MongoDBCloudEventsToJsonDeserializer {
 
     public static final String ID = "_id";
 
-    public static Optional<CloudEvent> deserializeToCloudEvent(EventFormat cloudEventSerializer, ChangeStreamDocument<Document> changeStreamDocument, TimeRepresentation timeRepresentation) {
+    public static Optional<CloudEvent> deserializeToCloudEvent(ChangeStreamDocument<Document> changeStreamDocument, TimeRepresentation timeRepresentation) {
         return changeStreamDocumentToCloudEventAsJson(changeStreamDocument)
                 .map(document -> OccurrentCloudEventMongoDBDocumentMapper.convertToCloudEvent(timeRepresentation, document));
     }

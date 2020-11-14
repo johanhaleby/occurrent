@@ -22,6 +22,7 @@
 * Upgrading to spring-data-mongodb 3.1.1
 * Upgrading to reactor 3.4.0
 * The MongoDB event stores no longer needs to depend on the `cloudevents-json-jackson` module since Occurrent now ships with a custom event reader/writer. 
+* The MongoDB event subscriptions no longer needs to depend on the `cloudevents-json-jackson` module since Occurrent now ships with a custom event reader/writer. 
 
 ## Changelog 0.2.1 (2020-11-03)
 * Fixed typo in `CatchupSupportingBlockingSubscriptionConfig`, renamed method `dontSubscriptionPositionStorage` to `dontUseSubscriptionPositionStorage`.

@@ -17,9 +17,6 @@
 package org.occurrent.subscription.mongodb.spring.reactor;
 
 import io.cloudevents.CloudEvent;
-import io.cloudevents.core.format.EventFormat;
-import io.cloudevents.core.provider.EventFormatProvider;
-import io.cloudevents.jackson.JsonFormat;
 import org.bson.Document;
 import org.occurrent.mongodb.timerepresentation.TimeRepresentation;
 import org.occurrent.subscription.PositionAwareCloudEvent;
@@ -54,7 +51,6 @@ public class SpringReactorSubscriptionForMongoDB implements PositionAwareReactor
     private final ReactiveMongoOperations mongo;
     private final String eventCollection;
     private final TimeRepresentation timeRepresentation;
-    private final EventFormat cloudEventSerializer;
 
     /**
      * Create a blocking subscription using Spring
@@ -67,7 +63,6 @@ public class SpringReactorSubscriptionForMongoDB implements PositionAwareReactor
         this.mongo = mongo;
         this.eventCollection = eventCollection;
         this.timeRepresentation = timeRepresentation;
-        this.cloudEventSerializer = EventFormatProvider.getInstance().resolveFormat(JsonFormat.CONTENT_TYPE);
     }
 
     @Override
@@ -78,7 +73,7 @@ public class SpringReactorSubscriptionForMongoDB implements PositionAwareReactor
         Flux<ChangeStreamEvent<Document>> changeStream = mongo.changeStream(eventCollection, changeStreamOptions, Document.class);
         return changeStream
                 .flatMap(changeEvent ->
-                        MongoDBCloudEventsToJsonDeserializer.deserializeToCloudEvent(cloudEventSerializer, changeEvent.getRaw(), timeRepresentation)
+                        MongoDBCloudEventsToJsonDeserializer.deserializeToCloudEvent(changeEvent.getRaw(), timeRepresentation)
                                 .map(cloudEvent -> new PositionAwareCloudEvent(cloudEvent, new MongoDBResumeTokenBasedSubscriptionPosition(requireNonNull(changeEvent.getResumeToken()).asDocument())))
                                 .map(Mono::just)
                                 .orElse(Mono.empty()));
