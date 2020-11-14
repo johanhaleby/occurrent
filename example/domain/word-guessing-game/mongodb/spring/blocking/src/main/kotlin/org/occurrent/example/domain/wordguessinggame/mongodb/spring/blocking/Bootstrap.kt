@@ -42,6 +42,8 @@ import org.springframework.data.mongodb.MongoDatabaseFactory
 import org.springframework.data.mongodb.MongoTransactionManager
 import org.springframework.data.mongodb.core.MongoTemplate
 import org.springframework.retry.annotation.EnableRetry
+import org.springframework.web.servlet.config.annotation.ViewControllerRegistry
+import org.springframework.web.servlet.config.annotation.WebMvcConfigurer
 import java.net.URI
 import org.occurrent.application.service.blocking.ApplicationService as OccurrentApplicationService
 
@@ -51,9 +53,15 @@ import org.occurrent.application.service.blocking.ApplicationService as Occurren
 @SpringBootApplication
 @EnableRetry
 @Import(SendEmailToWinnerPolicy::class)
-class Bootstrap {
+class Bootstrap : WebMvcConfigurer {
     companion object {
         private const val EVENTS_COLLECTION_NAME = "events"
+    }
+
+
+    // Redirect to /games when navigating to /
+    override fun addViewControllers(registry: ViewControllerRegistry) {
+        registry.addRedirectViewController("/", "/games")
     }
 
     @Bean
