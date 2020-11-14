@@ -21,9 +21,6 @@ import com.mongodb.client.MongoCollection;
 import com.mongodb.client.model.IndexOptions;
 import com.mongodb.client.model.Indexes;
 import io.cloudevents.CloudEvent;
-import io.cloudevents.core.format.EventFormat;
-import io.cloudevents.core.provider.EventFormatProvider;
-import io.cloudevents.jackson.JsonFormat;
 import org.bson.Document;
 import org.occurrent.cloudevents.OccurrentExtensionGetter;
 import org.occurrent.condition.Condition;
@@ -76,7 +73,6 @@ public class SpringBlockingMongoEventStore implements EventStore, EventStoreOper
 
     private final MongoTemplate mongoTemplate;
     private final String eventStoreCollectionName;
-    private final EventFormat cloudEventSerializer;
     private final TimeRepresentation timeRepresentation;
     private final TransactionTemplate transactionTemplate;
 
@@ -93,7 +89,6 @@ public class SpringBlockingMongoEventStore implements EventStore, EventStoreOper
         this.eventStoreCollectionName = config.eventStoreCollectionName;
         this.transactionTemplate = config.transactionTemplate;
         this.timeRepresentation = config.timeRepresentation;
-        cloudEventSerializer = EventFormatProvider.getInstance().resolveFormat(JsonFormat.CONTENT_TYPE);
         initializeEventStore(eventStoreCollectionName, mongoTemplate);
     }
 

@@ -25,9 +25,6 @@ import com.mongodb.client.model.Projections;
 import com.mongodb.client.model.Sorts;
 import com.mongodb.client.result.UpdateResult;
 import io.cloudevents.CloudEvent;
-import io.cloudevents.core.format.EventFormat;
-import io.cloudevents.core.provider.EventFormatProvider;
-import io.cloudevents.jackson.JsonFormat;
 import org.bson.Document;
 import org.bson.conversions.Bson;
 import org.occurrent.cloudevents.OccurrentCloudEventExtension;
@@ -78,7 +75,6 @@ public class MongoEventStore implements EventStore, EventStoreOperations, EventS
     private static final String NATURAL = "$natural";
 
     private final MongoCollection<Document> eventCollection;
-    private final EventFormat cloudEventSerializer;
     private final MongoClient mongoClient;
     private final TimeRepresentation timeRepresentation;
     private final TransactionOptions transactionOptions;
@@ -110,7 +106,6 @@ public class MongoEventStore implements EventStore, EventStoreOperations, EventS
         requireNonNull(database, "Database must be defined");
         requireNonNull(eventCollection, "Event collection must be defined");
         requireNonNull(config, EventStoreConfig.class.getSimpleName() + " cannot be null");
-        cloudEventSerializer = EventFormatProvider.getInstance().resolveFormat(JsonFormat.CONTENT_TYPE);
         this.mongoClient = mongoClient;
         this.eventCollection = eventCollection;
         transactionOptions = config.transactionOptions;

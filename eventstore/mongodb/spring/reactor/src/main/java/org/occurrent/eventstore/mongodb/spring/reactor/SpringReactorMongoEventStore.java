@@ -21,9 +21,6 @@ import com.mongodb.client.model.IndexOptions;
 import com.mongodb.client.model.Indexes;
 import com.mongodb.reactivestreams.client.MongoCollection;
 import io.cloudevents.CloudEvent;
-import io.cloudevents.core.format.EventFormat;
-import io.cloudevents.core.provider.EventFormatProvider;
-import io.cloudevents.jackson.JsonFormat;
 import org.bson.Document;
 import org.bson.conversions.Bson;
 import org.occurrent.cloudevents.OccurrentCloudEventExtension;
@@ -71,7 +68,6 @@ public class SpringReactorMongoEventStore implements EventStore, EventStoreOpera
 
     private final ReactiveMongoTemplate mongoTemplate;
     private final String eventStoreCollectionName;
-    private final EventFormat cloudEventSerializer;
     private final TimeRepresentation timeRepresentation;
     private final TransactionalOperator transactionalOperator;
 
@@ -88,7 +84,6 @@ public class SpringReactorMongoEventStore implements EventStore, EventStoreOpera
         this.eventStoreCollectionName = config.eventStoreCollectionName;
         this.transactionalOperator = config.transactionalOperator;
         this.timeRepresentation = config.timeRepresentation;
-        cloudEventSerializer = EventFormatProvider.getInstance().resolveFormat(JsonFormat.CONTENT_TYPE);
         initializeEventStore(eventStoreCollectionName, mongoTemplate).block();
     }
 
@@ -143,7 +138,7 @@ public class SpringReactorMongoEventStore implements EventStore, EventStoreOpera
     @Override
     public Mono<EventStream<CloudEvent>> read(String streamId, int skip, int limit) {
         Mono<EventStreamImpl> eventStream = transactionalOperator.execute(transactionStatus -> readEventStream(streamId, skip, limit)).single();
-        return convertToCloudEvent(cloudEventSerializer, timeRepresentation, eventStream);
+        return convertToCloudEvent(timeRepresentation, eventStream);
     }
 
     // Read
@@ -237,11 +232,11 @@ public class SpringReactorMongoEventStore implements EventStore, EventStoreOpera
         return mongoTemplate.collectionExists(eventStoreCollectionName).flatMap(exists -> exists ? Mono.empty() : mongoTemplate.createCollection(eventStoreCollectionName));
     }
 
-    public static Mono<EventStream<CloudEvent>> convertToCloudEvent(EventFormat eventFormat, TimeRepresentation timeRepresentation, Mono<EventStreamImpl> eventStream) {
-        return eventStream.map(es -> es.map(document -> convertToCloudEvent(eventFormat, timeRepresentation, document)));
+    public static Mono<EventStream<CloudEvent>> convertToCloudEvent(TimeRepresentation timeRepresentation, Mono<EventStreamImpl> eventStream) {
+        return eventStream.map(es -> es.map(document -> convertToCloudEvent(timeRepresentation, document)));
     }
 
-    private static CloudEvent convertToCloudEvent(EventFormat eventFormat, TimeRepresentation timeRepresentation, Document document) {
+    private static CloudEvent convertToCloudEvent(TimeRepresentation timeRepresentation, Document document) {
         return OccurrentCloudEventMongoDBDocumentMapper.convertToCloudEvent(timeRepresentation, document);
     }
 
@@ -271,7 +266,7 @@ public class SpringReactorMongoEventStore implements EventStore, EventStoreOpera
             return mongoTemplate.findOne(cloudEventQuery, Document.class, eventStoreCollectionName)
                     .log()
                     .flatMap(document -> {
-                        CloudEvent currentCloudEvent = convertToCloudEvent(cloudEventSerializer, timeRepresentation, document);
+                        CloudEvent currentCloudEvent = convertToCloudEvent(timeRepresentation, document);
                         CloudEvent updatedCloudEvent = fn.apply(currentCloudEvent);
                         final Mono<CloudEvent> result;
                         if (updatedCloudEvent == null) {
@@ -297,7 +292,7 @@ public class SpringReactorMongoEventStore implements EventStore, EventStoreOpera
         requireNonNull(filter, "Filter cannot be null");
         final Query query = FilterConverter.convertFilterToQuery(timeRepresentation, filter);
         return readCloudEvents(query, skip, limit, sortBy)
-                .map(document -> convertToCloudEvent(cloudEventSerializer, timeRepresentation, document));
+                .map(document -> convertToCloudEvent(timeRepresentation, document));
     }
 
     @Override
