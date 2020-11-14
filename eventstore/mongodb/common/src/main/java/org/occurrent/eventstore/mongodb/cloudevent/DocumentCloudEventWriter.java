@@ -10,7 +10,8 @@ import org.bson.Document;
 import java.time.OffsetDateTime;
 
 import static java.nio.charset.StandardCharsets.UTF_8;
-import static org.occurrent.eventstore.mongodb.cloudevent.JsonContentType.isJson;
+import static org.occurrent.eventstore.mongodb.cloudevent.ContentType.isJson;
+import static org.occurrent.eventstore.mongodb.cloudevent.ContentType.isText;
 
 public class DocumentCloudEventWriter implements CloudEventWriterFactory<DocumentCloudEventWriter, Document>, CloudEventWriter<Document> {
 
@@ -60,16 +61,19 @@ public class DocumentCloudEventWriter implements CloudEventWriterFactory<Documen
 
     @Override
     public Document end(CloudEventData cloudEventData) throws CloudEventRWException {
+        Object contentType = document.get("datacontenttype");
         if (cloudEventData instanceof DocumentCloudEventData) {
             document.put("data", ((DocumentCloudEventData) cloudEventData).document);
-        } else if (isJson(document.get("datacontenttype"))) {
-            byte[] bytes = cloudEventData.toBytes();
-            String json = new String(bytes, UTF_8);
+        } else if (isJson(contentType)) {
+            String json = convertToString(cloudEventData);
             if (json.trim().startsWith("{")) {
                 document.put("data", Document.parse(json));
             } else {
                 document.put("data", json);
             }
+        } else if (isText(contentType)) {
+            String text = convertToString(cloudEventData);
+            document.put("data", text);
         } else {
             // Note that we cannot convert the data to DocumentCloudEventData even if content-type is json.
             // This is because json data can be an array (or just a string) and this thus
@@ -77,6 +81,11 @@ public class DocumentCloudEventWriter implements CloudEventWriterFactory<Documen
             document.put("data", cloudEventData.toBytes());
         }
         return document;
+    }
+
+    private static String convertToString(CloudEventData cloudEventData) {
+        byte[] bytes = cloudEventData.toBytes();
+        return new String(bytes, UTF_8);
     }
 
     @Override

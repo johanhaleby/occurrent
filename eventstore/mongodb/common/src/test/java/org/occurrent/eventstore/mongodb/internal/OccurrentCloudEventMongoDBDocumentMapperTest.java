@@ -57,7 +57,7 @@ class OccurrentCloudEventMongoDBDocumentMapperTest {
 
             @SuppressWarnings("unchecked")
             @Test
-            void and_data_is_byte_array_that_is_represented_as_map() {
+            void and_data_is_byte_array_that_is_representable_as_map() {
                 // Given
                 OffsetDateTime offsetDateTime = OffsetDateTime.of(LocalDateTime.of(2020, 7, 26, 9, 13, 3, 223_000000), UTC);
 
@@ -174,7 +174,42 @@ class OccurrentCloudEventMongoDBDocumentMapperTest {
         }
 
         @Nested
-        @DisplayName("when content-type is not json")
+        @DisplayName("when content-type is text")
+        class WhenContentTypeIsText {
+
+            @Test
+            void and_data_is_byte_array() {
+                // Given
+                OffsetDateTime offsetDateTime = OffsetDateTime.of(LocalDateTime.of(2020, 7, 26, 9, 13, 3, 223_000000), UTC);
+
+                CloudEvent cloudEvent = new CloudEventBuilder()
+                        .withSubject("subject")
+                        .withType("type")
+                        .withTime(offsetDateTime)
+                        .withSource(URI.create("urn:name"))
+                        .withId("id")
+                        .withData("text/plain", "text".getBytes(UTF_8))
+                        .build();
+
+                // When
+                Document document = OccurrentCloudEventMongoDBDocumentMapper.convertToDocument(DATE, "streamId", 2L, cloudEvent);
+
+                // Then
+                assertAll(
+                        () -> assertThat(document.getString("subject")).isEqualTo("subject"),
+                        () -> assertThat(document.getString("type")).isEqualTo("type"),
+                        () -> assertThat(document.getDate("time")).isEqualTo(toDate(offsetDateTime)),
+                        () -> assertThat(document.getString("source")).isEqualTo("urn:name"),
+                        () -> assertThat(document.getString("id")).isEqualTo("id"),
+                        () -> assertThat(document.getString("data")).isEqualTo("text"),
+                        () -> assertThat(document.getString("streamId")).isEqualTo("streamId"),
+                        () -> assertThat(document.getLong("streamVersion")).isEqualTo(2L)
+                );
+            }
+        }
+
+        @Nested
+        @DisplayName("when content-type is not json or text")
         class WhenContentTypeIsNotJson {
 
             @Test
@@ -188,7 +223,7 @@ class OccurrentCloudEventMongoDBDocumentMapperTest {
                         .withTime(offsetDateTime)
                         .withSource(URI.create("urn:name"))
                         .withId("id")
-                        .withDataContentType("text/plain")
+                        .withDataContentType("application/octet-stream")
                         .withData("hello".getBytes(UTF_8))
                         .build();
 
@@ -198,6 +233,7 @@ class OccurrentCloudEventMongoDBDocumentMapperTest {
                 // Then
                 assertAll(
                         () -> assertThat(document.getString("subject")).isEqualTo("subject"),
+                        () -> assertThat(document.getString("datacontenttype")).isEqualTo("application/octet-stream"),
                         () -> assertThat(document.getString("type")).isEqualTo("type"),
                         () -> assertThat(document.getDate("time")).isEqualTo(toDate(offsetDateTime)),
                         () -> assertThat(document.getString("source")).isEqualTo("urn:name"),
@@ -219,7 +255,7 @@ class OccurrentCloudEventMongoDBDocumentMapperTest {
                         .withTime(offsetDateTime)
                         .withSource(URI.create("urn:name"))
                         .withId("id")
-                        .withDataContentType("text/plain")
+                        .withDataContentType("application/octet-stream")
                         .withData(new BytesCloudEventData("hello".getBytes(UTF_8)))
                         .build();
 

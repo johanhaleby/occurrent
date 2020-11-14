@@ -14,7 +14,7 @@ import java.util.Objects;
 import java.util.Set;
 
 import static java.nio.charset.StandardCharsets.UTF_8;
-import static org.occurrent.eventstore.mongodb.cloudevent.JsonContentType.isJson;
+import static org.occurrent.eventstore.mongodb.cloudevent.ContentType.isJson;
 
 public class DocumentCloudEventReader implements CloudEventReader {
     private static final String CONTENT_TYPE_ATTRIBUTE_NAME = "datacontenttype";
@@ -28,7 +28,6 @@ public class DocumentCloudEventReader implements CloudEventReader {
         this.document = document;
     }
 
-    @SuppressWarnings("unchecked")
     @Override
     public <V extends CloudEventWriter<R>, R> R read(CloudEventWriterFactory<V, R> cloudEventWriterFactory, CloudEventDataMapper mapper) throws CloudEventRWException {
         SpecVersion specVersion = SpecVersion.parse((String) document.get(SPEC_VERSION_ATTRIBUTE_NAME));
@@ -74,32 +73,7 @@ public class DocumentCloudEventReader implements CloudEventReader {
             Object contentType = document.get(CONTENT_TYPE_ATTRIBUTE_NAME);
             final CloudEventData ceData;
             if (isJson(contentType)) {
-                if (data instanceof Document) {
-                    // Best case, it's a document
-                    ceData = new DocumentCloudEventData((Document) data);
-                } else if (data instanceof String) {
-                    String json = ((String) data);
-                    if (json.trim().startsWith(JSON_OBJECT_PREFIX)) {
-                        ceData = new DocumentCloudEventData(Document.parse((String) data));
-                    } else {
-                        ceData = new BytesCloudEventData(json.getBytes(UTF_8));
-                    }
-                } else if (data instanceof Map) {
-                    ceData = new DocumentCloudEventData((Map<String, Object>) data);
-                } else if (data instanceof byte[]) {
-                    byte[] byteArray = (byte[]) data;
-                    String json = new String(byteArray, UTF_8);
-                    if (json.trim().startsWith(JSON_OBJECT_PREFIX)) {
-                        ceData = new DocumentCloudEventData(Document.parse(json));
-                    } else {
-                        ceData = new DocumentCloudEventData(byteArray);
-                    }
-                } else if (data instanceof Binary) {
-                    ceData = new DocumentCloudEventData(((Binary) data).getData());
-                } else {
-                    //TODO next cloudevents-sdk version will add proper exception kind here
-                    throw CloudEventRWException.newOther(new IllegalArgumentException("Data type is unknown: " + data.getClass().toString() + ". Only " + Document.class.getName() + ", String, byte[], and Map are supported."));
-                }
+                ceData = convertJsonData(data);
             } else if (data instanceof byte[]) {
                 ceData = new BytesCloudEventData((byte[]) data);
             } else if (data instanceof String) {
@@ -114,6 +88,38 @@ public class DocumentCloudEventReader implements CloudEventReader {
             writer.end(mapper != null ? mapper.map(ceData) : ceData);
         }
         return writer.end();
+    }
+
+    @SuppressWarnings("unchecked")
+    private static CloudEventData convertJsonData(Object data) {
+        final CloudEventData ceData;
+        if (data instanceof Document) {
+            // Best case, it's a document
+            ceData = new DocumentCloudEventData((Document) data);
+        } else if (data instanceof String) {
+            String json = ((String) data);
+            if (json.trim().startsWith(JSON_OBJECT_PREFIX)) {
+                ceData = new DocumentCloudEventData(Document.parse((String) data));
+            } else {
+                ceData = new BytesCloudEventData(json.getBytes(UTF_8));
+            }
+        } else if (data instanceof Map) {
+            ceData = new DocumentCloudEventData((Map<String, Object>) data);
+        } else if (data instanceof byte[]) {
+            byte[] byteArray = (byte[]) data;
+            String json = new String(byteArray, UTF_8);
+            if (json.trim().startsWith(JSON_OBJECT_PREFIX)) {
+                ceData = new DocumentCloudEventData(Document.parse(json));
+            } else {
+                ceData = new DocumentCloudEventData(byteArray);
+            }
+        } else if (data instanceof Binary) {
+            ceData = new DocumentCloudEventData(((Binary) data).getData());
+        } else {
+            //TODO next cloudevents-sdk version will add proper exception kind here
+            throw CloudEventRWException.newOther(new IllegalArgumentException("Data type is unknown: " + data.getClass().toString() + ". Only " + Document.class.getName() + ", String, byte[], and Map are supported."));
+        }
+        return ceData;
     }
 
     @Override

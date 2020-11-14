@@ -4,12 +4,13 @@ import org.junit.jupiter.api.Test;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
-class JsonContentTypeTest {
+class ContentTypeJsonTest {
 
+    @SuppressWarnings("ConstantConditions")
     @Test
     void returns_true_when_content_type_is_null() {
         // When
-        boolean isJson = JsonContentType.isJson(null);
+        boolean isJson = ContentType.isJson(null);
 
         // Then
         assertThat(isJson).isTrue();
@@ -21,7 +22,7 @@ class JsonContentTypeTest {
         String contentType = "application/json";
 
         // When
-        boolean isJson = JsonContentType.isJson(contentType);
+        boolean isJson = ContentType.isJson(contentType);
 
         // Then
         assertThat(isJson).isTrue();
@@ -33,7 +34,7 @@ class JsonContentTypeTest {
         String contentType = "text/json";
 
         // When
-        boolean isJson = JsonContentType.isJson(contentType);
+        boolean isJson = ContentType.isJson(contentType);
 
         // Then
         assertThat(isJson).isTrue();
@@ -45,7 +46,7 @@ class JsonContentTypeTest {
         String contentType = "application/cloudevents+json";
 
         // When
-        boolean isJson = JsonContentType.isJson(contentType);
+        boolean isJson = ContentType.isJson(contentType);
 
         // Then
         assertThat(isJson).isTrue();
@@ -57,7 +58,7 @@ class JsonContentTypeTest {
         String contentType = "text/plain";
 
         // When
-        boolean isJson = JsonContentType.isJson(contentType);
+        boolean isJson = ContentType.isJson(contentType);
 
         // Then
         assertThat(isJson).isFalse();
@@ -69,7 +70,7 @@ class JsonContentTypeTest {
         byte[] contentType = new byte[0];
 
         // When
-        boolean isJson = JsonContentType.isJson(contentType);
+        boolean isJson = ContentType.isJson(contentType);
 
         // Then
         assertThat(isJson).isFalse();
