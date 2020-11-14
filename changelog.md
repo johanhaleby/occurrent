@@ -20,6 +20,7 @@
   use either the built-in `JsonCloudEventData` class from the `cloudevents-json-jackson` module, or 
   use the `DocumentCloudEventData` provided by Occurrent to avoid this.
 * Upgrading to spring-data-mongodb 3.1.1
+* Upgrading to reactor 3.4.0
 
 ## Changelog 0.2.1 (2020-11-03)
 * Fixed typo in `CatchupSupportingBlockingSubscriptionConfig`, renamed method `dontSubscriptionPositionStorage` to `dontUseSubscriptionPositionStorage`.
