@@ -24,7 +24,8 @@ import java.util.Objects;
 import static java.nio.charset.StandardCharsets.UTF_8;
 
 /**
- * An implementation of {@link CloudEventData} that holds a {@link Document}. Use this class if you know you're writing to MongoDB to avoid double mapping from
+ * An implementation of {@link CloudEventData} that holds a MongoDB {@link Document}.
+ * Use this class if you know you're writing to MongoDB to avoid double mapping from
  * JSON bytes into a {@code Document}.
  */
 public class DocumentCloudEventData implements CloudEventData {
