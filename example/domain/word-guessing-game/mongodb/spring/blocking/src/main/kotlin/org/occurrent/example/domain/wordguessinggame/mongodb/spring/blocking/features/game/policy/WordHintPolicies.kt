@@ -11,10 +11,10 @@ import org.occurrent.filter.Filter.type
 import org.springframework.stereotype.Component
 
 @Component
-class WordHintPolicies(private val applicationService: ApplicationService<DomainEvent>, private val domainEventQueries: DomainEventQueries) {
+class WordHintPolicies(private val applicationService: ApplicationService<GameEvent>, private val domainEventQueries: DomainEventQueries) {
 
     fun whenGameWasStartedThenRevealInitialCharactersInWordHint(gameWasStarted: GameWasStarted) {
-        applicationService.execute("wordhint:${gameWasStarted.gameId}") { events: Sequence<DomainEvent> ->
+        applicationService.execute("wordhint:${gameWasStarted.gameId}") { events: Sequence<GameEvent> ->
             if (events.toList().isEmpty()) {
                 WordHintCharacterRevelation.revealInitialCharactersInWordHintWhenGameWasStarted(WordHintData(gameWasStarted.gameId, gameWasStarted.wordToGuess))
             } else {
@@ -26,7 +26,7 @@ class WordHintPolicies(private val applicationService: ApplicationService<Domain
     fun whenPlayerGuessedTheWrongWordThenRevealCharacterInWordHint(playerGuessedTheWrongWord: PlayerGuessedTheWrongWord) {
         val gameId = playerGuessedTheWrongWord.gameId
         val gameWasStarted = domainEventQueries.queryOne<GameWasStarted>(streamId(gameId.toString()).and(type(GameWasStarted::class.eventType())))
-        applicationService.execute("wordhint:$gameId") { events: Sequence<DomainEvent> ->
+        applicationService.execute("wordhint:$gameId") { events: Sequence<GameEvent> ->
             val characterPositionsInWord = events.map { it as CharacterInWordHintWasRevealed }.map { it.characterPositionInWord }.toSet()
             val wordHintData = WordHintData(gameId, wordToGuess = gameWasStarted.wordToGuess, currentlyRevealedPositions = characterPositionsInWord)
             WordHintCharacterRevelation.revealCharacterInWordHintWhenPlayerGuessedTheWrongWord(wordHintData)

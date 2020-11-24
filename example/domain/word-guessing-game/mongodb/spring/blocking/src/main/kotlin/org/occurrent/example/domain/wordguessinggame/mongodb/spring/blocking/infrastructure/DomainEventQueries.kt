@@ -2,7 +2,7 @@ package org.occurrent.example.domain.wordguessinggame.mongodb.spring.blocking.in
 
 import org.occurrent.application.converter.CloudEventConverter
 import org.occurrent.eventstore.api.blocking.EventStoreQueries
-import org.occurrent.example.domain.wordguessinggame.event.DomainEvent
+import org.occurrent.example.domain.wordguessinggame.event.GameEvent
 import org.occurrent.filter.Filter
 import org.springframework.stereotype.Component
 import kotlin.streams.asSequence
@@ -12,16 +12,16 @@ import kotlin.streams.asSequence
  * Simple wrapper around [EventStoreQueries] that provides an interface that deals with domain events instead of cloud events
  */
 @Component
-class DomainEventQueries(private val eventStoreQueries: EventStoreQueries, private val cloudEventConverter: CloudEventConverter<DomainEvent>) {
+class DomainEventQueries(private val eventStoreQueries: EventStoreQueries, private val cloudEventConverter: CloudEventConverter<GameEvent>) {
 
     @Suppress("UNCHECKED_CAST")
-    fun <T : DomainEvent> query(filter: Filter): Sequence<T> {
+    fun <T : GameEvent> query(filter: Filter): Sequence<T> {
         return eventStoreQueries.query(filter).asSequence()
                 .map(cloudEventConverter::toDomainEvent)
                 .map { it as T }
     }
 
-    fun <T : DomainEvent> queryOne(filter: Filter): T {
+    fun <T : GameEvent> queryOne(filter: Filter): T {
         return query<T>(filter).first()
     }
 }

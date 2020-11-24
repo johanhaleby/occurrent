@@ -33,27 +33,27 @@ import java.time.ZoneOffset
 import java.time.temporal.ChronoUnit
 import java.util.*
 
-class GameCloudEventConverter(private val objectMapper: ObjectMapper, private val gameSource: URI, private val wordHintSource: URI, private val pointsSource: URI) : CloudEventConverter<DomainEvent> {
+class GameCloudEventConverter(private val objectMapper: ObjectMapper, private val gameSource: URI, private val wordHintSource: URI, private val pointsSource: URI) : CloudEventConverter<GameEvent> {
 
-    override fun toCloudEvent(domainEvent: DomainEvent): CloudEvent {
-        val (source: URI, data: EventData?) = when (domainEvent) {
-            is GameWasStarted -> gameSource to domainEvent.run { GameWasStartedData(startedBy, category, wordToGuess, maxNumberOfGuessesPerPlayer, maxNumberOfGuessesTotal) }
-            is PlayerGuessedTheWrongWord -> gameSource to domainEvent.run { PlayerGuessedTheWrongWordData(playerId, guessedWord) }
-            is CharacterInWordHintWasRevealed -> wordHintSource to domainEvent.run { CharacterInWordHintWasRevealedData(character, characterPositionInWord) }
-            is NumberOfGuessesWasExhaustedForPlayer -> gameSource to NumberOfGuessesWasExhaustedForPlayerData(domainEvent.playerId)
-            is PlayerGuessedTheRightWord -> gameSource to domainEvent.run { PlayerGuessedTheRightWordData(playerId, guessedWord) }
-            is PlayerWasAwardedPointsForGuessingTheRightWord -> pointsSource to domainEvent.run { PlayerWasAwardedPointsForGuessingTheRightWordData(playerId, points) }
-            is PlayerWasNotAwardedAnyPointsForGuessingTheRightWord -> pointsSource to domainEvent.run { PlayerWasNotAwardedAnyPointsForGuessingTheRightWordData(playerId, reason::class.simpleName!!) }
-            is GameWasWon -> gameSource to GameWasWonData(domainEvent.winnerId)
+    override fun toCloudEvent(gameEvent: GameEvent): CloudEvent {
+        val (source: URI, data: EventData?) = when (gameEvent) {
+            is GameWasStarted -> gameSource to gameEvent.run { GameWasStartedData(startedBy, category, wordToGuess, maxNumberOfGuessesPerPlayer, maxNumberOfGuessesTotal) }
+            is PlayerGuessedTheWrongWord -> gameSource to gameEvent.run { PlayerGuessedTheWrongWordData(playerId, guessedWord) }
+            is CharacterInWordHintWasRevealed -> wordHintSource to gameEvent.run { CharacterInWordHintWasRevealedData(character, characterPositionInWord) }
+            is NumberOfGuessesWasExhaustedForPlayer -> gameSource to NumberOfGuessesWasExhaustedForPlayerData(gameEvent.playerId)
+            is PlayerGuessedTheRightWord -> gameSource to gameEvent.run { PlayerGuessedTheRightWordData(playerId, guessedWord) }
+            is PlayerWasAwardedPointsForGuessingTheRightWord -> pointsSource to gameEvent.run { PlayerWasAwardedPointsForGuessingTheRightWordData(playerId, points) }
+            is PlayerWasNotAwardedAnyPointsForGuessingTheRightWord -> pointsSource to gameEvent.run { PlayerWasNotAwardedAnyPointsForGuessingTheRightWordData(playerId, reason::class.simpleName!!) }
+            is GameWasWon -> gameSource to GameWasWonData(gameEvent.winnerId)
             is GameWasLost -> gameSource to null
         }
 
         return CloudEventBuilder.v1()
-                .withId(domainEvent.eventId.toString())
-                .withSubject(domainEvent.gameId.toString())
+                .withId(gameEvent.eventId.toString())
+                .withSubject(gameEvent.gameId.toString())
                 .withSource(source)
-                .withType(domainEvent.type)
-                .withTime(domainEvent.timestamp.toInstant().atOffset(ZoneOffset.UTC).truncatedTo(ChronoUnit.MILLIS))
+                .withType(gameEvent.type)
+                .withTime(gameEvent.timestamp.toInstant().atOffset(ZoneOffset.UTC).truncatedTo(ChronoUnit.MILLIS))
                 .apply {
                     if (data != null) {
                         withDataContentType("application/json")
@@ -63,7 +63,7 @@ class GameCloudEventConverter(private val objectMapper: ObjectMapper, private va
                 .build()
     }
 
-    override fun toDomainEvent(cloudEvent: CloudEvent): DomainEvent {
+    override fun toDomainEvent(cloudEvent: CloudEvent): GameEvent {
         val eventId = UUID.fromString(cloudEvent.id)
         val gameId = UUID.fromString(cloudEvent.subject)
         val timestamp = Timestamp.from(cloudEvent.time!!.toInstant())

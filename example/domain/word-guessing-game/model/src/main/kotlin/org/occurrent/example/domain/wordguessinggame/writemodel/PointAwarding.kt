@@ -1,6 +1,6 @@
 package org.occurrent.example.domain.wordguessinggame.writemodel
 
-import org.occurrent.example.domain.wordguessinggame.event.DomainEvent
+import org.occurrent.example.domain.wordguessinggame.event.GameEvent
 import org.occurrent.example.domain.wordguessinggame.event.PlayerWasAwardedPointsForGuessingTheRightWord
 import org.occurrent.example.domain.wordguessinggame.event.PlayerWasNotAwardedAnyPointsForGuessingTheRightWord
 import org.occurrent.example.domain.wordguessinggame.event.ReasonForNotBeingAwardedPoints.PlayerCreatedListOfWords
@@ -13,7 +13,7 @@ data class BasisForPointAwarding(val gameId: GameId, val playerThatCreatedTheWor
 
 object PointAwarding {
 
-    fun awardPointsToPlayerThatGuessedTheRightWord(basisForPointAwarding: BasisForPointAwarding): Sequence<DomainEvent> {
+    fun awardPointsToPlayerThatGuessedTheRightWord(basisForPointAwarding: BasisForPointAwarding): Sequence<GameEvent> {
         val (gameId, playerThatCreatedTheWordList, playerThatGuessedTheRightWord, totalGuessesForPlayerInGameTotal) = basisForPointAwarding
         return if (playerThatCreatedTheWordList == playerThatGuessedTheRightWord) {
             sequenceOf(PlayerWasNotAwardedAnyPointsForGuessingTheRightWord(UUID.randomUUID(), Timestamp(), gameId, playerThatGuessedTheRightWord, reason = PlayerCreatedListOfWords))

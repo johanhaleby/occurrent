@@ -7,8 +7,8 @@ import java.util.*
 /**
  * Start game
  */
-fun startGame(previousEvents: Sequence<DomainEvent>, gameId: GameId, timestamp: Timestamp, playerId: PlayerId, wordList: WordList,
-              maxNumberOfGuessesPerPlayer: MaxNumberOfGuessesPerPlayer, maxNumberOfGuessesTotal: MaxNumberOfGuessesTotal): Sequence<DomainEvent> {
+fun startGame(previousEvents: Sequence<GameEvent>, gameId: GameId, timestamp: Timestamp, playerId: PlayerId, wordList: WordList,
+              maxNumberOfGuessesPerPlayer: MaxNumberOfGuessesPerPlayer, maxNumberOfGuessesTotal: MaxNumberOfGuessesTotal): Sequence<GameEvent> {
     val state = previousEvents.rehydrate()
 
     if (state !is NotStarted) {
@@ -23,7 +23,7 @@ fun startGame(previousEvents: Sequence<DomainEvent>, gameId: GameId, timestamp: 
     return sequenceOf(gameStarted)
 }
 
-fun guessWord(previousEvents: Sequence<DomainEvent>, timestamp: Timestamp, playerId: PlayerId, word: Word): Sequence<DomainEvent> = when (val game = previousEvents.rehydrate()) {
+fun guessWord(previousEvents: Sequence<GameEvent>, timestamp: Timestamp, playerId: PlayerId, word: Word): Sequence<GameEvent> = when (val game = previousEvents.rehydrate()) {
     NotStarted -> throw IllegalStateException("Cannot guess word for a game that is not started")
     is Ended -> throw IllegalStateException("Cannot guess word for a game that is already ended")
     is Ongoing -> {
@@ -31,7 +31,7 @@ fun guessWord(previousEvents: Sequence<DomainEvent>, timestamp: Timestamp, playe
             throw IllegalArgumentException("Number of guessing attempts exhausted for player $playerId.")
         }
 
-        val events = mutableListOf<DomainEvent>()
+        val events = mutableListOf<GameEvent>()
 
         if (game.isRightGuess(word)) {
             events.add(PlayerGuessedTheRightWord(UUID.randomUUID(), timestamp, game.gameId, playerId, word.value))
@@ -67,7 +67,7 @@ private data class Ongoing(val gameId: GameId, val wordToGuess: String, val maxN
 
 private object Ended : GameState()
 
-private fun Sequence<DomainEvent>.rehydrate(): GameState = fold<DomainEvent, GameState>(NotStarted) { state, event ->
+private fun Sequence<GameEvent>.rehydrate(): GameState = fold<GameEvent, GameState>(NotStarted) { state, event ->
     when {
         state is NotStarted && event is GameWasStarted -> Ongoing(event.gameId, event.wordToGuess, event.maxNumberOfGuessesPerPlayer, event.maxNumberOfGuessesTotal, event.startedBy)
         state is Ongoing && event is PlayerGuessedTheWrongWord -> state.copy(guesses = state.guesses.add(Guess(event.playerId, event.timestamp, event.guessedWord)))

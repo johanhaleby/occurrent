@@ -22,7 +22,7 @@ class GameLogicKtTest {
             @Test
             fun `then startGame returns GameWasStarted event`() {
                 // Given
-                val currentEvents = emptySequence<DomainEvent>()
+                val currentEvents = emptySequence<GameEvent>()
 
                 val gameId = GameId.randomUUID()
                 val timestamp = Timestamp()
@@ -89,7 +89,7 @@ class GameLogicKtTest {
         @DisplayName("and player guess the right word")
         inner class AndPlayerGuessTheRightWord {
 
-            private lateinit var currentEvents: Sequence<DomainEvent>
+            private lateinit var currentEvents: Sequence<GameEvent>
 
             @BeforeEach
             fun `game is started`() {
@@ -129,7 +129,7 @@ class GameLogicKtTest {
         @DisplayName("and player guess the right word with different case")
         inner class AndPlayerGuessTheRightWordWithDifferentCase {
 
-            private lateinit var currentEvents: Sequence<DomainEvent>
+            private lateinit var currentEvents: Sequence<GameEvent>
 
             @BeforeEach
             fun `game is started`() {
@@ -174,7 +174,7 @@ class GameLogicKtTest {
             @DisplayName("when player has more guesses left")
             inner class WhenPlayerHasMoreGuessesLeft {
 
-                private lateinit var currentEvents: Sequence<DomainEvent>
+                private lateinit var currentEvents: Sequence<GameEvent>
 
                 @BeforeEach
                 fun `game is started`() {
@@ -209,7 +209,7 @@ class GameLogicKtTest {
             @DisplayName("when last guess for player but more guesses remaining in game")
             inner class WhenLastGuessForPlayer {
 
-                private lateinit var currentEvents: Sequence<DomainEvent>
+                private lateinit var currentEvents: Sequence<GameEvent>
                 private lateinit var playerId: PlayerId
 
                 @BeforeEach
@@ -254,7 +254,7 @@ class GameLogicKtTest {
             @DisplayName("when player tries to guess but attempts are already exhausted")
             inner class WhenPlayerTriesToGuessButAttemptsAreAlreadyExhausted {
 
-                private lateinit var currentEvents: Sequence<DomainEvent>
+                private lateinit var currentEvents: Sequence<GameEvent>
                 private lateinit var playerId: PlayerId
 
                 @BeforeEach
@@ -284,7 +284,7 @@ class GameLogicKtTest {
             @DisplayName("when last guess for game")
             inner class WhenLastGuessForGame {
 
-                private lateinit var currentEvents: Sequence<DomainEvent>
+                private lateinit var currentEvents: Sequence<GameEvent>
                 private lateinit var playerId1: PlayerId
                 private lateinit var playerId2: PlayerId
 

@@ -22,7 +22,7 @@ import org.occurrent.application.service.blocking.implementation.GenericApplicat
 import org.occurrent.eventstore.api.blocking.EventStoreQueries
 import org.occurrent.eventstore.mongodb.spring.blocking.EventStoreConfig
 import org.occurrent.eventstore.mongodb.spring.blocking.SpringBlockingMongoEventStore
-import org.occurrent.example.domain.wordguessinggame.event.DomainEvent
+import org.occurrent.example.domain.wordguessinggame.event.GameEvent
 import org.occurrent.example.domain.wordguessinggame.mongodb.spring.blocking.features.game.GameCloudEventConverter
 import org.occurrent.example.domain.wordguessinggame.mongodb.spring.blocking.features.game.policy.SendEmailToWinnerPolicy
 import org.occurrent.mongodb.timerepresentation.TimeRepresentation
@@ -89,10 +89,10 @@ class Bootstrap : WebMvcConfigurer {
     fun objectMapper() = ObjectMapper().apply { registerModule(KotlinModule()) }
 
     @Bean
-    fun cloudEventConverter(objectMapper: ObjectMapper): CloudEventConverter<DomainEvent> = GameCloudEventConverter(objectMapper, URI.create("urn:occurrent:domain:wordguessinggame:game"), URI.create("urn:occurrent:domain:wordguessinggame:wordhint"), URI.create("urn:occurrent:domain:wordguessinggame:points"))
+    fun cloudEventConverter(objectMapper: ObjectMapper): CloudEventConverter<GameEvent> = GameCloudEventConverter(objectMapper, URI.create("urn:occurrent:domain:wordguessinggame:game"), URI.create("urn:occurrent:domain:wordguessinggame:wordhint"), URI.create("urn:occurrent:domain:wordguessinggame:points"))
 
     @Bean
-    fun occurrentApplicationService(eventStore: SpringBlockingMongoEventStore, eventConverter: CloudEventConverter<DomainEvent>): OccurrentApplicationService<DomainEvent> = GenericApplicationService(eventStore, eventConverter)
+    fun occurrentApplicationService(eventStore: SpringBlockingMongoEventStore, eventConverter: CloudEventConverter<GameEvent>): OccurrentApplicationService<GameEvent> = GenericApplicationService(eventStore, eventConverter)
 }
 
 fun main(args: Array<String>) {

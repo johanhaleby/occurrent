@@ -8,7 +8,7 @@ import org.occurrent.example.domain.wordguessinggame.writemodel.PlayerId
 import org.occurrent.example.domain.wordguessinggame.writemodel.Timestamp
 import java.util.*
 
-class AssembleGameReadModelFromDomainEventsTest {
+class AssembleGameReadModelFromGameEventsTest {
 
     @Test
     fun `doesn't obfuscate spaces when game is started`() {

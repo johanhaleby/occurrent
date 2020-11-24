@@ -5,7 +5,7 @@ import org.occurrent.application.service.blocking.execute
 import org.occurrent.application.service.blocking.executePolicies
 import org.occurrent.application.service.blocking.executePolicy
 import org.occurrent.eventstore.api.WriteConditionNotFulfilledException
-import org.occurrent.example.domain.wordguessinggame.event.DomainEvent
+import org.occurrent.example.domain.wordguessinggame.event.GameEvent
 import org.occurrent.example.domain.wordguessinggame.mongodb.spring.blocking.features.game.policy.PointAwardingPolicy
 import org.occurrent.example.domain.wordguessinggame.mongodb.spring.blocking.features.game.policy.WordHintPolicies
 import org.occurrent.example.domain.wordguessinggame.writemodel.*
@@ -15,7 +15,7 @@ import org.springframework.stereotype.Service
 import org.springframework.transaction.annotation.Transactional
 
 @Service
-class GamePlayApplicationService constructor(private val applicationService: ApplicationService<DomainEvent>,
+class GamePlayApplicationService constructor(private val applicationService: ApplicationService<GameEvent>,
                                              private val wordHintPolicies: WordHintPolicies, private val pointAwardingPolicy: PointAwardingPolicy) {
 
     @Transactional
