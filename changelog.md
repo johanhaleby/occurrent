@@ -1,4 +1,8 @@
 ## Changelog next version
+
+* Upgraded to Kotlin 1.4.20
+
+## Changelog 0.3.0 (2020-11-21)
 * Upgraded Java Mongo driver from 4.0.4 to 4.1.1
 * Upgraded to cloud events 2.0.0-milestone4. This introduces a breaking change since the `CloudEvent` SDK no longer returns a `byte[]` as data but rather a `CloudEventData` interface.
   You need to change your code from:
