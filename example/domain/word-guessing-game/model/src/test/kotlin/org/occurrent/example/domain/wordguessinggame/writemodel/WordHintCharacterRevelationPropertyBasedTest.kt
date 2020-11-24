@@ -20,6 +20,9 @@ import net.jqwik.api.Arbitrary
 import net.jqwik.api.ForAll
 import net.jqwik.api.Property
 import net.jqwik.api.Provide
+import net.jqwik.api.constraints.AlphaChars
+import net.jqwik.api.constraints.Chars
+import net.jqwik.api.constraints.StringLength
 import org.assertj.core.api.Assertions.assertThat
 import org.assertj.core.api.Assumptions.assumeThat
 import org.junit.jupiter.api.DisplayName
@@ -78,7 +81,7 @@ internal class WordHintCharacterRevelationPropertyBasedTest {
     }
 
     @Property
-    fun `reveal initial characters in word hint when game was started reveals one character when word has 4 characters where one is dash`(@ForAll("wordsHas4CharactersAndDash") wordToGuess: String) {
+    fun `reveal initial characters in word hint when game was started reveals one character when word has 4 characters where one is dash`(@ForAll @AlphaChars @Chars('-') @StringLength(min = 4, max = 4) wordToGuess: String) {
         // Given
         assumeThat(wordToGuess.count { char -> char == dash }).isEqualTo(1)
         val wordHintData = WordHintData(UUID.randomUUID(), wordToGuess)
@@ -99,7 +102,7 @@ internal class WordHintCharacterRevelationPropertyBasedTest {
     }
 
     @Property
-    fun `reveal initial characters in word hint when game was started doesn't reveal any character when word has 3 characters where one is dash`(@ForAll("wordsHas3CharsAndOneDash") wordToGuess: String) {
+    fun `reveal initial characters in word hint when game was started doesn't reveal any character when word has 3 characters where one is dash`(@ForAll @AlphaChars @Chars('-') @StringLength(min = 3, max = 3) wordToGuess: String) {
         // Given
         assumeThat(wordToGuess.count { char -> char == dash }).isEqualTo(1)
         val wordHintData = WordHintData(UUID.randomUUID(), wordToGuess)
@@ -113,12 +116,6 @@ internal class WordHintCharacterRevelationPropertyBasedTest {
 
     @Provide
     fun wordsLongerThan3CharactersAndNoDash(): Arbitrary<String> = RandomValidWordProvider.provideValidRandomWords(limitWordLength = 4..15, allowDash = false)
-
-    @Provide
-    fun wordsHas4CharactersAndDash(): Arbitrary<String> = RandomValidWordProvider.provideValidRandomWords(limitWordLength = 4..4, allowDash = true)
-
-    @Provide
-    fun wordsHas3CharsAndOneDash(): Arbitrary<String> = RandomValidWordProvider.provideValidRandomWords(limitWordLength = 3..3)
 
     @Provide
     fun wordsHas3CharsAndNoDash(): Arbitrary<String> = RandomValidWordProvider.provideValidRandomWords(limitWordLength = 3..3, allowDash = false)
