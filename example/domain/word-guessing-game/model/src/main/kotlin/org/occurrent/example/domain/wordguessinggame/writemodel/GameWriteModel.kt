@@ -1,3 +1,19 @@
+/*
+ * Copyright 2020 Johan Haleby
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ *        http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+
 package org.occurrent.example.domain.wordguessinggame.writemodel
 
 import java.util.*
@@ -9,7 +25,8 @@ typealias PlayerId = UUID
 class Word(value: String) {
 
     companion object {
-        const val VALID_WORD_REGEX = """^([A-Za-z]|\s)+\$"""
+        private const val DASH = '-'
+        const val VALID_WORD_REGEX = "^[A-Za-z]([A-Za-z]|$DASH)+[A-Za-z]$"
         const val MINIMUM_NUMBER_OF_CHARACTERS = 3
         const val MAXIMUM_NUMBER_OF_CHARACTERS = 15
     }
@@ -20,14 +37,13 @@ class Word(value: String) {
         require(value.length in MINIMUM_NUMBER_OF_CHARACTERS..MAXIMUM_NUMBER_OF_CHARACTERS) {
             "A word must be between $MINIMUM_NUMBER_OF_CHARACTERS and $MAXIMUM_NUMBER_OF_CHARACTERS characters long (\"$value\" doesn't fulfill this criteria)"
         }
-        require(value.trim() == value) {
-            "Word cannot start or end with whitespace (\"$value\")"
+
+        require(!value.contains("$DASH$DASH")) {
+            "Word cannot contain two consecutive dashes (\"$value\")"
         }
-        require(!value.contains("  ")) {
-            "Word cannot contain two consecutive whitespaces (\"$value\")"
-        }
-        require(!value.matches(Regex(VALID_WORD_REGEX))) {
-            "Word can only contain alphabetic characters and whitespace, was \"$value\"."
+
+        require(value.matches(Regex(VALID_WORD_REGEX))) {
+            "Word can only contain alphabetic characters and dash (and it cannot start or end with dash), was \"$value\"."
         }
         this.value = value
     }

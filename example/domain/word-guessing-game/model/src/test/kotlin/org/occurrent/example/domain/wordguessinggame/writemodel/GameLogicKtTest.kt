@@ -1,3 +1,19 @@
+/*
+ * Copyright 2020 Johan Haleby
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ *        http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+
 package org.occurrent.example.domain.wordguessinggame.writemodel
 
 import org.assertj.core.api.Assertions.assertThat
@@ -27,7 +43,7 @@ class GameLogicKtTest {
                 val gameId = GameId.randomUUID()
                 val timestamp = Timestamp()
                 val playerId = PlayerId.randomUUID()
-                val wordsToChooseFrom = WordList(WordCategory("Category"), wordsOf("word1", "word2", "word3", "word4", "word5"))
+                val wordsToChooseFrom = WordList(WordCategory("Category"), wordsOf("wordA", "wordB", "wordC", "wordD", "wordE"))
 
                 // When
                 val newEvents = startGame(currentEvents, gameId, timestamp, playerId, wordsToChooseFrom, MaxNumberOfGuessesPerPlayer, MaxNumberOfGuessesTotal)
@@ -43,7 +59,7 @@ class GameLogicKtTest {
                         { assertThat(event.category).isEqualTo("Category") },
                         { assertThat(event.maxNumberOfGuessesPerPlayer).isEqualTo(MaxNumberOfGuessesPerPlayer.value) },
                         { assertThat(event.maxNumberOfGuessesTotal).isEqualTo(MaxNumberOfGuessesTotal.value) },
-                        { assertThat(event.wordToGuess).isIn("word1", "word2", "word3", "word4", "word5") },
+                        { assertThat(event.wordToGuess).isIn("wordA", "wordB", "wordC", "wordD", "wordE") },
                 )
             }
         }
@@ -59,7 +75,7 @@ class GameLogicKtTest {
                 val gameId = GameId.randomUUID()
                 val currentEvents = sequenceOf(GameWasStarted(UUID.randomUUID(), Timestamp(), gameId, PlayerId.randomUUID(), "Category", "Word", 2, 4))
 
-                val wordsToChooseFrom = WordList(WordCategory("Category"), wordsOf("word1", "word2", "word3", "word4", "word5"))
+                val wordsToChooseFrom = WordList(WordCategory("Category"), wordsOf("wordA", "wordB", "wordC", "wordD", "wordE"))
 
                 // When
                 val throwable = catchThrowable {
@@ -188,7 +204,7 @@ class GameLogicKtTest {
                     val timestamp = Timestamp()
 
                     // When
-                    val events = guessWord(currentEvents, timestamp, playerId, Word("Wrong Word")).toList()
+                    val events = guessWord(currentEvents, timestamp, playerId, Word("Wrong-Word")).toList()
 
                     // Then
                     assertThat(events).hasSize(1)
@@ -199,7 +215,7 @@ class GameLogicKtTest {
                             { assertThat(playerGuessedTheWrongWord.gameId).isEqualTo(gameId) },
                             { assertThat(playerGuessedTheWrongWord.playerId).isEqualTo(playerId) },
                             { assertThat(playerGuessedTheWrongWord.timestamp).isEqualTo(timestamp) },
-                            { assertThat(playerGuessedTheWrongWord.guessedWord).isEqualTo("Wrong Word") },
+                            { assertThat(playerGuessedTheWrongWord.guessedWord).isEqualTo("Wrong-Word") },
                             { assertThat(playerGuessedTheWrongWord.type).isEqualTo(PlayerGuessedTheWrongWord::class.simpleName) },
                     )
                 }
@@ -227,7 +243,7 @@ class GameLogicKtTest {
                     val timestamp = Timestamp()
 
                     // When
-                    val events = guessWord(currentEvents, timestamp, playerId, Word("Wrong Word")).toList()
+                    val events = guessWord(currentEvents, timestamp, playerId, Word("Wrong-Word")).toList()
 
                     // Then
                     assertThat(events).hasSize(2)
@@ -239,7 +255,7 @@ class GameLogicKtTest {
                             { assertThat(playerGuessedTheWrongWord.gameId).isEqualTo(gameId) },
                             { assertThat(playerGuessedTheWrongWord.playerId).isEqualTo(playerId) },
                             { assertThat(playerGuessedTheWrongWord.timestamp).isEqualTo(timestamp) },
-                            { assertThat(playerGuessedTheWrongWord.guessedWord).isEqualTo("Wrong Word") },
+                            { assertThat(playerGuessedTheWrongWord.guessedWord).isEqualTo("Wrong-Word") },
                             { assertThat(playerGuessedTheWrongWord.type).isEqualTo(PlayerGuessedTheWrongWord::class.simpleName) },
                             // NumberOfGuessesWasExhaustedForPlayer
                             { assertThat(numberOfGuessesWasExhaustedForPlayer.gameId).isEqualTo(gameId) },
@@ -273,7 +289,7 @@ class GameLogicKtTest {
                     val timestamp = Timestamp()
 
                     // When
-                    val throwable = catchThrowable { guessWord(currentEvents, timestamp, playerId, Word("Wrong Word")) }
+                    val throwable = catchThrowable { guessWord(currentEvents, timestamp, playerId, Word("Wrong-Word")) }
 
                     // Then
                     assertThat(throwable).isExactlyInstanceOf(IllegalArgumentException::class.java).hasMessage("Number of guessing attempts exhausted for player $playerId.")
@@ -305,7 +321,7 @@ class GameLogicKtTest {
                     val timestamp = Timestamp()
 
                     // When
-                    val events = guessWord(currentEvents, timestamp, playerId2, Word("Wrong Word")).toList()
+                    val events = guessWord(currentEvents, timestamp, playerId2, Word("Wrong-Word")).toList()
 
                     // Then
                     assertThat(events).hasSize(2)
@@ -317,7 +333,7 @@ class GameLogicKtTest {
                             { assertThat(playerGuessedTheWrongWord.gameId).isEqualTo(gameId) },
                             { assertThat(playerGuessedTheWrongWord.playerId).isEqualTo(playerId2) },
                             { assertThat(playerGuessedTheWrongWord.timestamp).isEqualTo(timestamp) },
-                            { assertThat(playerGuessedTheWrongWord.guessedWord).isEqualTo("Wrong Word") },
+                            { assertThat(playerGuessedTheWrongWord.guessedWord).isEqualTo("Wrong-Word") },
                             { assertThat(playerGuessedTheWrongWord.type).isEqualTo(PlayerGuessedTheWrongWord::class.simpleName) },
                             // GameWasLost
                             { assertThat(gameWasLost.gameId).isEqualTo(gameId) },

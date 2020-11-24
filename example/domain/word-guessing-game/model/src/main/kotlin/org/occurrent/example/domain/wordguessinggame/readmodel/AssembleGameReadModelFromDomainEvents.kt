@@ -1,3 +1,19 @@
+/*
+ * Copyright 2020 Johan Haleby
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ *        http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+
 package org.occurrent.example.domain.wordguessinggame.readmodel
 
 import org.occurrent.example.domain.wordguessinggame.event.*
@@ -23,7 +39,7 @@ internal class AssembleGameReadModelFromDomainEvents(val gameReadModel: GameRead
 
     private fun applyEvent(e: GameWasStarted): AssembleGameReadModelFromDomainEvents = e.run {
         val upperCaseWordToGuess = wordToGuess.toUpperCase()
-        val initialWordHint = wordToGuess.map { char -> if (char.isWhitespace()) char else '_' }.joinToString("")
+        val initialWordHint = wordToGuess.map { char -> if (char.isDash()) char else '_' }.joinToString("")
         AssembleGameReadModelFromDomainEvents(OngoingGameReadModel(gameId, timestamp, category, maxNumberOfGuessesPerPlayer, maxNumberOfGuessesTotal, initialWordHint, emptyList(), upperCaseWordToGuess))
     }
 
@@ -80,3 +96,5 @@ internal class AssembleGameReadModelFromDomainEvents(val gameReadModel: GameRead
         return b.toString()
     }
 }
+
+private fun Char.isDash(): Boolean = this == '-'
