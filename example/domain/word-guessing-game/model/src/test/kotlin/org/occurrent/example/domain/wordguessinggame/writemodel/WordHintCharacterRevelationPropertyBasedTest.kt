@@ -20,11 +20,7 @@ import net.jqwik.api.Arbitrary
 import net.jqwik.api.ForAll
 import net.jqwik.api.Property
 import net.jqwik.api.Provide
-import net.jqwik.api.constraints.AlphaChars
-import net.jqwik.api.constraints.Chars
-import net.jqwik.api.constraints.StringLength
 import org.assertj.core.api.Assertions.assertThat
-import org.assertj.core.api.Assumptions.assumeThat
 import org.junit.jupiter.api.DisplayName
 import org.junit.jupiter.api.assertAll
 import org.occurrent.example.domain.wordguessinggame.RandomValidWordProvider
@@ -78,40 +74,6 @@ internal class WordHintCharacterRevelationPropertyBasedTest {
                 { assertThat(e1.character).isNotEqualTo(dash) },
                 { assertThat(e1.characterPositionInWord - 1).isIn(wordHintData.wordToGuess.indices) },
         )
-    }
-
-    @Property
-    fun `reveal initial characters in word hint when game was started reveals one character when word has 4 characters where one is dash`(@ForAll @AlphaChars @Chars('-') @StringLength(min = 4, max = 4) wordToGuess: String) {
-        // Given
-        assumeThat(wordToGuess.count { char -> char == dash }).isEqualTo(1)
-        val wordHintData = WordHintData(UUID.randomUUID(), wordToGuess)
-
-        // When
-        val events = WordHintCharacterRevelation.revealInitialCharactersInWordHintWhenGameWasStarted(wordHintData).toList()
-
-        // Then
-        val e1 = events[0]
-        assertAll(
-                { assertThat(events).hasSize(1) },
-
-                { assertThat(e1.character).isIn(wordHintData.wordToGuess.toCharArray().asIterable()) },
-                { assertThat(e1.character).isNotEqualTo(dash) },
-                { assertThat(e1.characterPositionInWord - 1).isIn(wordHintData.wordToGuess.indices) },
-        )
-
-    }
-
-    @Property
-    fun `reveal initial characters in word hint when game was started doesn't reveal any character when word has 3 characters where one is dash`(@ForAll @AlphaChars @Chars('-') @StringLength(min = 3, max = 3) wordToGuess: String) {
-        // Given
-        assumeThat(wordToGuess.count { char -> char == dash }).isEqualTo(1)
-        val wordHintData = WordHintData(UUID.randomUUID(), wordToGuess)
-
-        // When
-        val events = WordHintCharacterRevelation.revealInitialCharactersInWordHintWhenGameWasStarted(wordHintData).toList()
-
-        // Then
-        assertThat(events).isEmpty()
     }
 
     @Provide
