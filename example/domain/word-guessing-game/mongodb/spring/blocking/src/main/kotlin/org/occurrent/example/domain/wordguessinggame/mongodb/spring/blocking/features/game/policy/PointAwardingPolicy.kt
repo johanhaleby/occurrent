@@ -22,23 +22,21 @@ import org.occurrent.example.domain.wordguessinggame.event.GameEvent
 import org.occurrent.example.domain.wordguessinggame.event.GameWasStarted
 import org.occurrent.example.domain.wordguessinggame.event.PlayerGuessedTheRightWord
 import org.occurrent.example.domain.wordguessinggame.event.PlayerGuessedTheWrongWord
-import org.occurrent.example.domain.wordguessinggame.mongodb.spring.blocking.infrastructure.GameEventQueries
 import org.occurrent.example.domain.wordguessinggame.mongodb.spring.blocking.infrastructure.first
 import org.occurrent.example.domain.wordguessinggame.writemodel.BasisForPointAwarding
 import org.occurrent.example.domain.wordguessinggame.writemodel.PointAwarding
-import org.occurrent.filter.Filter.streamId
 import org.springframework.stereotype.Component
 
 @Component
-class PointAwardingPolicy(private val applicationService: ApplicationService<GameEvent>, private val gameEventQueries: GameEventQueries) {
+class PointAwardingPolicy(private val applicationService: ApplicationService<GameEvent>) {
 
     fun whenPlayerGuessedTheRightWordThenAwardPointsToPlayerThatGuessedTheRightWord(playerGuessedTheRightWord: PlayerGuessedTheRightWord) {
         val gameId = playerGuessedTheRightWord.gameId
         val playerId = playerGuessedTheRightWord.playerId
-        val eventsInGame = gameEventQueries.query<GameEvent>(streamId(gameId.toString())).toList()
-        val gameWasStarted = eventsInGame.first<GameWasStarted>()
-        val totalNumberGuessesForPlayerInGame = eventsInGame.count { event -> event is PlayerGuessedTheWrongWord && event.playerId == playerGuessedTheRightWord.playerId } + 1
-        applicationService.execute("points:$gameId") { _: Sequence<GameEvent> ->
+        applicationService.execute("points:$gameId") { events: Sequence<GameEvent> ->
+            val eventList = events.toList()
+            val gameWasStarted = eventList.first<GameWasStarted>()
+            val totalNumberGuessesForPlayerInGame = eventList.count { event -> event is PlayerGuessedTheWrongWord && event.playerId == playerGuessedTheRightWord.playerId } + 1
             val basis = BasisForPointAwarding(gameId, gameWasStarted.startedBy, playerId, totalNumberGuessesForPlayerInGame)
             PointAwarding.awardPointsToPlayerThatGuessedTheRightWord(basis)
         }
