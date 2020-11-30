@@ -50,6 +50,9 @@ private fun generateCardDescription(card: Card): String {
 class ProgressTracker {
     private val turnCountPerGame = ConcurrentHashMap<UUID, Int>()
 
+    /**
+     * Track game progress by a supplying a higher-order function
+     */
     fun trackProgress(fn: (String) -> Unit, event: Event) {
         val description = when (event) {
             is GameStarted -> {

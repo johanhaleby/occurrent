@@ -165,7 +165,7 @@ class UnoTest {
                 // Given
                 val gameId = GameId.randomUUID()
                 val timestamp = Timestamp.now()
-                val previousEvents = sequenceOf(GameStarted(gameId, timestamp, firstPlayerId = 0, playerCount = 3, firstCard = DigitCard(digit = Four, color = Yellow)))
+                val previousEvents = sequenceOf(GameStarted(EventId.randomUUID(), gameId, timestamp, firstPlayerId = 0, playerCount = 3, firstCard = DigitCard(digit = Four, color = Yellow)))
 
                 // When
                 val events = Uno.play(previousEvents, timestamp.plusSeconds(1), playerId = 1, card = DigitCard(digit = Six, color = Yellow))
@@ -184,7 +184,7 @@ class UnoTest {
                 // Given
                 val gameId = GameId.randomUUID()
                 val timestamp = Timestamp.now()
-                val previousEvents = sequenceOf(GameStarted(gameId, timestamp, firstPlayerId = 0, playerCount = 3, firstCard = DigitCard(digit = Four, color = Yellow)))
+                val previousEvents = sequenceOf(GameStarted(EventId.randomUUID(), gameId, timestamp, firstPlayerId = 0, playerCount = 3, firstCard = DigitCard(digit = Four, color = Yellow)))
 
                 // When
                 val events = Uno.play(previousEvents, timestamp.plusSeconds(1), playerId = 0, card = DigitCard(digit = Six, color = Red))
@@ -208,7 +208,7 @@ class UnoTest {
                 // Given
                 val gameId = GameId.randomUUID()
                 val timestamp = Timestamp.now()
-                val previousEvents = sequenceOf(GameStarted(gameId, timestamp, firstPlayerId = 0, playerCount = 3, firstCard = DigitCard(digit = Four, color = Yellow)))
+                val previousEvents = sequenceOf(GameStarted(EventId.randomUUID(), gameId, timestamp, firstPlayerId = 0, playerCount = 3, firstCard = DigitCard(digit = Four, color = Yellow)))
 
                 // When
                 val events = Uno.play(previousEvents, timestamp.plusSeconds(1), playerId = 0, card = Skip(color = Yellow))
@@ -229,7 +229,7 @@ class UnoTest {
                 // Given
                 val gameId = GameId.randomUUID()
                 val timestamp = Timestamp.now()
-                val previousEvents = sequenceOf(GameStarted(gameId, timestamp, firstPlayerId = 0, playerCount = 3, firstCard = DigitCard(digit = Four, color = Yellow)))
+                val previousEvents = sequenceOf(GameStarted(EventId.randomUUID(), gameId, timestamp, firstPlayerId = 0, playerCount = 3, firstCard = DigitCard(digit = Four, color = Yellow)))
 
                 // When
                 val events = Uno.play(previousEvents, timestamp.plusSeconds(1), playerId = 0, card = DigitCard(digit = Five, color = Yellow))
@@ -250,7 +250,7 @@ class UnoTest {
                 // Given
                 val gameId = GameId.randomUUID()
                 val timestamp = Timestamp.now()
-                val previousEvents = sequenceOf(GameStarted(gameId, timestamp, firstPlayerId = 0, playerCount = 3, firstCard = DigitCard(digit = Four, color = Yellow)))
+                val previousEvents = sequenceOf(GameStarted(EventId.randomUUID(), gameId, timestamp, firstPlayerId = 0, playerCount = 3, firstCard = DigitCard(digit = Four, color = Yellow)))
 
                 // When
                 val events = Uno.play(previousEvents, timestamp.plusSeconds(1), playerId = 0, card = KickBack(color = Yellow)).toList()
@@ -277,7 +277,7 @@ class UnoTest {
                 // Given
                 val gameId = GameId.randomUUID()
                 val timestamp = Timestamp.now()
-                val previousEvents = sequenceOf(GameStarted(gameId, timestamp, firstPlayerId = 0, playerCount = 3, firstCard = DigitCard(digit = Four, color = Yellow)))
+                val previousEvents = sequenceOf(GameStarted(EventId.randomUUID(), gameId, timestamp, firstPlayerId = 0, playerCount = 3, firstCard = DigitCard(digit = Four, color = Yellow)))
 
                 // When
                 val events = Uno.play(previousEvents, timestamp.plusSeconds(1), playerId = 0, card = DigitCard(digit = Four, color = Blue))
@@ -303,7 +303,7 @@ class UnoTest {
                 // Given
                 val gameId = GameId.randomUUID()
                 val timestamp = Timestamp.now()
-                val previousEvents = sequenceOf(GameStarted(gameId, timestamp, firstPlayerId = 0, playerCount = 3, firstCard = DigitCard(digit = Four, color = Yellow)))
+                val previousEvents = sequenceOf(GameStarted(EventId.randomUUID(), gameId, timestamp, firstPlayerId = 0, playerCount = 3, firstCard = DigitCard(digit = Four, color = Yellow)))
 
                 // When
                 val exception = catchThrowable { Uno.start(previousEvents, gameId, timestamp.plusSeconds(1), playerCount = 5, firstCard = DigitCard(digit = Eight, color = Yellow)) }

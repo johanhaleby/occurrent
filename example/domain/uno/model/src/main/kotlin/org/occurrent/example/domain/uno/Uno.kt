@@ -22,6 +22,7 @@ import org.occurrent.example.domain.uno.Direction.CounterClockwise
 import java.time.LocalDateTime
 import java.util.*
 
+typealias EventId = UUID
 typealias GameId = UUID
 typealias PlayerId = Int
 typealias PlayerCount = Int
@@ -37,8 +38,8 @@ object Uno {
         return when (events.evolve()) {
             NotStarted -> {
                 val firstPlayerId = if (firstCard is Skip) 1 else 0
-                val gameStarted = GameStarted(gameId, timestamp, firstPlayerId, playerCount, firstCard)
-                val directionChanged = if (firstCard is KickBack) DirectionChanged(gameId, timestamp, direction = CounterClockwise) else null
+                val gameStarted = GameStarted(EventId.randomUUID(), gameId, timestamp, firstPlayerId, playerCount, firstCard)
+                val directionChanged = if (firstCard is KickBack) DirectionChanged(EventId.randomUUID(), gameId, timestamp, direction = CounterClockwise) else null
                 sequenceOf(gameStarted, directionChanged).filterNotNull()
             }
             is Started -> throw IllegalStateException("The game cannot be started more than once")
@@ -51,19 +52,19 @@ object Uno {
             val (gameId, turn, topCard) = state
             val expectedPlayerId = turn.playerId
             when {
-                expectedPlayerId != playerId -> sequenceOf(PlayerPlayedAtWrongTurn(gameId, timestamp, playerId, card))
+                expectedPlayerId != playerId -> sequenceOf(PlayerPlayedAtWrongTurn(EventId.randomUUID(), gameId, timestamp, playerId, card))
                 card.hasSameColorAs(topCard) || card.hasSameValueAs(topCard) -> {
-                    fun cardPlayed(nextPlayerId: PlayerId) = CardPlayed(gameId, timestamp, playerId, card, nextPlayerId)
+                    fun cardPlayed(nextPlayerId: PlayerId) = CardPlayed(EventId.randomUUID(), gameId, timestamp, playerId, card, nextPlayerId)
                     when (card) {
                         is DigitCard -> sequenceOf(cardPlayed(turn.next().playerId))
                         is KickBack -> {
                             val nextTurn = turn.reverse().next()
-                            sequenceOf(cardPlayed(nextTurn.playerId), DirectionChanged(gameId, timestamp, nextTurn.direction))
+                            sequenceOf(cardPlayed(nextTurn.playerId), DirectionChanged(EventId.randomUUID(), gameId, timestamp, nextTurn.direction))
                         }
                         is Skip -> sequenceOf(cardPlayed(turn.skip().playerId))
                     }
                 }
-                else -> sequenceOf(PlayerPlayedWrongCard(gameId, timestamp, playerId, card))
+                else -> sequenceOf(PlayerPlayedWrongCard(EventId.randomUUID(), gameId, timestamp, playerId, card))
             }
         }
     }

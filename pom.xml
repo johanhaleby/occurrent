@@ -75,6 +75,7 @@
         <spring-boot.version>2.4.0</spring-boot.version>
         <mongo.version>4.1.1</mongo.version>
         <dokka.version>1.4.10.2</dokka.version>
+        <awaitility.version>4.0.3</awaitility.version>
     </properties>
 
 
@@ -294,7 +295,12 @@
             <dependency>
                 <groupId>org.awaitility</groupId>
                 <artifactId>awaitility</artifactId>
-                <version>4.0.3</version>
+                <version>${awaitility.version}</version>
+            </dependency>
+            <dependency>
+                <groupId>org.awaitility</groupId>
+                <artifactId>awaitility-kotlin</artifactId>
+                <version>${awaitility.version}</version>
             </dependency>
             <dependency>
                 <groupId>net.jqwik</groupId>

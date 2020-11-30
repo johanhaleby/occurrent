@@ -18,16 +18,17 @@ package org.occurrent.example.domain.uno
 
 
 sealed class Event {
+    abstract val eventId: EventId
     abstract val gameId: GameId
     abstract val timestamp: Timestamp
 }
 
-data class GameStarted(override val gameId: GameId, override val timestamp: Timestamp, val firstPlayerId: PlayerId, val playerCount: PlayerCount, val firstCard: Card) : Event()
+data class GameStarted(override val eventId: EventId, override val gameId: GameId, override val timestamp: Timestamp, val firstPlayerId: PlayerId, val playerCount: PlayerCount, val firstCard: Card) : Event()
 
-data class CardPlayed(override val gameId: GameId, override val timestamp: Timestamp, val playerId: PlayerId, val card: Card, val nextPlayerId: PlayerId) : Event()
+data class CardPlayed(override val eventId: EventId, override val gameId: GameId, override val timestamp: Timestamp, val playerId: PlayerId, val card: Card, val nextPlayerId: PlayerId) : Event()
 
-data class PlayerPlayedAtWrongTurn(override val gameId: GameId, override val timestamp: Timestamp, val playerId: PlayerId, val card: Card) : Event()
+data class PlayerPlayedAtWrongTurn(override val eventId: EventId, override val gameId: GameId, override val timestamp: Timestamp, val playerId: PlayerId, val card: Card) : Event()
 
-data class PlayerPlayedWrongCard(override val gameId: GameId, override val timestamp: Timestamp, val playerId: PlayerId, val card: Card) : Event()
+data class PlayerPlayedWrongCard(override val eventId: EventId, override val gameId: GameId, override val timestamp: Timestamp, val playerId: PlayerId, val card: Card) : Event()
 
-data class DirectionChanged(override val gameId: GameId, override val timestamp: Timestamp, val direction: Direction) : Event()
+data class DirectionChanged(override val eventId: EventId, override val gameId: GameId, override val timestamp: Timestamp, val direction: Direction) : Event()
