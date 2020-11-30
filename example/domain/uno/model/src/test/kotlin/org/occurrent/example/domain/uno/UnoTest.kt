@@ -26,8 +26,7 @@ import org.junit.jupiter.params.ParameterizedTest
 import org.junit.jupiter.params.ParameterizedTest.ARGUMENTS_WITH_NAMES_PLACEHOLDER
 import org.junit.jupiter.params.provider.ValueSource
 import org.occurrent.example.domain.uno.Card.*
-import org.occurrent.example.domain.uno.Color.Red
-import org.occurrent.example.domain.uno.Color.Yellow
+import org.occurrent.example.domain.uno.Color.*
 import org.occurrent.example.domain.uno.Digit.*
 import org.occurrent.example.domain.uno.Direction.CounterClockwise
 import org.occurrent.example.domain.uno.extensions.find
@@ -270,6 +269,27 @@ class UnoTest {
                         { assertThat(directionChanged.gameId).isEqualTo(gameId) },
                         { assertThat(directionChanged.timestamp).isEqualTo(timestamp.plusSeconds(1)) },
                         { assertThat(directionChanged.direction).isEqualTo(CounterClockwise) },
+                )
+            }
+
+            @Test
+            fun `by playing a digit card with the a different color as the top card but with same digit will give turn to next player`() {
+                // Given
+                val gameId = GameId.randomUUID()
+                val timestamp = Timestamp.now()
+                val previousEvents = sequenceOf(GameStarted(gameId, timestamp, firstPlayerId = 0, playerCount = 3, firstCard = DigitCard(digit = Four, color = Yellow)))
+
+                // When
+                val events = Uno.play(previousEvents, timestamp.plusSeconds(1), playerId = 0, card = DigitCard(digit = Four, color = Blue))
+
+                // Then
+                val cardPlayed = events.find<CardPlayed>()
+                assertAll(
+                        { assertThat(cardPlayed.gameId).isEqualTo(gameId) },
+                        { assertThat(cardPlayed.timestamp).isEqualTo(timestamp.plusSeconds(1)) },
+                        { assertThat(cardPlayed.playerId).isEqualTo(0) },
+                        { assertThat(cardPlayed.card).isEqualTo(DigitCard(digit = Four, color = Blue)) },
+                        { assertThat(cardPlayed.nextPlayerId).isEqualTo(1) },
                 )
             }
         }
