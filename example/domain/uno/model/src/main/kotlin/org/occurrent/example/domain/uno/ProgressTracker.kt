@@ -31,7 +31,7 @@ private object ConsoleColor {
     const val BLUE = "\u001b[0;34m"
 }
 
-fun consoleColor(color: Color): String = when (color) {
+private fun consoleColor(color: Color): String = when (color) {
     Red -> ConsoleColor.RED
     Green -> ConsoleColor.GREEN
     Blue -> ConsoleColor.BLUE
