@@ -20,6 +20,7 @@ import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import io.cloudevents.CloudEvent;
 import io.cloudevents.core.data.BytesCloudEventData;
+import io.cloudevents.core.data.PojoCloudEventData;
 import io.cloudevents.core.v1.CloudEventBuilder;
 import io.cloudevents.jackson.JsonCloudEventData;
 import io.cloudevents.types.Time;
@@ -121,6 +122,74 @@ class OccurrentCloudEventMongoDBDocumentMapperTest {
                         .withId("id")
                         .withDataContentType("application/json")
                         .withData(new DocumentCloudEventData("{\"name\" : \"hello\"}"))
+                        .build();
+
+                // When
+                Document document = OccurrentCloudEventMongoDBDocumentMapper.convertToDocument(DATE, "streamid", 2L, cloudEvent);
+
+                // Then
+                assertAll(
+                        () -> assertThat(document.getString("subject")).isEqualTo("subject"),
+                        () -> assertThat(document.getString("type")).isEqualTo("type"),
+                        () -> assertThat(document.getDate("time")).isEqualTo(toDate(offsetDateTime)),
+                        () -> assertThat(document.getString("source")).isEqualTo("urn:name"),
+                        () -> assertThat(document.getString("id")).isEqualTo("id"),
+                        () -> assertThat(document.get("data", Map.class)).containsOnly(entry("name", "hello")),
+                        () -> assertThat(document.getString("streamid")).isEqualTo("streamid"),
+                        () -> assertThat(document.getLong("streamversion")).isEqualTo(2L)
+                );
+            }
+
+            @SuppressWarnings("unchecked")
+            @Test
+            void and_data_is_pojo_cloud_event_data_with_map() {
+                // Given
+                OffsetDateTime offsetDateTime = OffsetDateTime.of(LocalDateTime.of(2020, 7, 26, 9, 13, 3, 223_000000), UTC);
+
+                Map<String, Object> map = new HashMap<String, Object>();
+                map.put("name", "hello");
+
+                CloudEvent cloudEvent = new CloudEventBuilder()
+                        .withSubject("subject")
+                        .withType("type")
+                        .withTime(offsetDateTime)
+                        .withSource(URI.create("urn:name"))
+                        .withId("id")
+                        .withDataContentType("application/json")
+                        .withData(PojoCloudEventData.wrap(map, __ -> "!!!invalid!!!".getBytes(UTF_8)))
+                        .build();
+
+                // When
+                Document document = OccurrentCloudEventMongoDBDocumentMapper.convertToDocument(DATE, "streamid", 2L, cloudEvent);
+
+                // Then
+                assertAll(
+                        () -> assertThat(document.getString("subject")).isEqualTo("subject"),
+                        () -> assertThat(document.getString("type")).isEqualTo("type"),
+                        () -> assertThat(document.getDate("time")).isEqualTo(toDate(offsetDateTime)),
+                        () -> assertThat(document.getString("source")).isEqualTo("urn:name"),
+                        () -> assertThat(document.getString("id")).isEqualTo("id"),
+                        () -> assertThat(document.get("data", Map.class)).containsOnly(entry("name", "hello")),
+                        () -> assertThat(document.getString("streamid")).isEqualTo("streamid"),
+                        () -> assertThat(document.getLong("streamversion")).isEqualTo(2L)
+                );
+            }
+
+            @SuppressWarnings("unchecked")
+            @Test
+            void and_data_is_pojo_cloud_event_data_with_string() {
+                // Given
+                OffsetDateTime offsetDateTime = OffsetDateTime.of(LocalDateTime.of(2020, 7, 26, 9, 13, 3, 223_000000), UTC);
+
+
+                CloudEvent cloudEvent = new CloudEventBuilder()
+                        .withSubject("subject")
+                        .withType("type")
+                        .withTime(offsetDateTime)
+                        .withSource(URI.create("urn:name"))
+                        .withId("id")
+                        .withDataContentType("application/json")
+                        .withData(PojoCloudEventData.wrap("{\"name\" : \"hello\"}", __ -> "!!!invalid!!!".getBytes(UTF_8)))
                         .build();
 
                 // When

@@ -20,10 +20,12 @@ import io.cloudevents.CloudEvent;
 import io.cloudevents.CloudEventData;
 import io.cloudevents.SpecVersion;
 import io.cloudevents.core.CloudEventUtils;
+import io.cloudevents.core.data.PojoCloudEventData;
 import io.cloudevents.rw.*;
 import org.bson.Document;
 
 import java.time.OffsetDateTime;
+import java.util.Map;
 
 import static java.nio.charset.StandardCharsets.UTF_8;
 import static org.occurrent.eventstore.mongodb.cloudevent.ContentType.isJson;
@@ -75,17 +77,21 @@ public class DocumentCloudEventWriter implements CloudEventWriterFactory<Documen
         return this;
     }
 
+    @SuppressWarnings({"rawtypes", "unchecked"})
     @Override
     public Document end(CloudEventData cloudEventData) throws CloudEventRWException {
         Object contentType = document.get("datacontenttype");
         if (cloudEventData instanceof DocumentCloudEventData) {
             document.put("data", ((DocumentCloudEventData) cloudEventData).document);
         } else if (isJson(contentType)) {
-            String json = convertToString(cloudEventData);
-            if (json.trim().startsWith("{")) {
-                document.put("data", Document.parse(json));
+            if (cloudEventData instanceof PojoCloudEventData && ((PojoCloudEventData) cloudEventData).getValue() instanceof Map) {
+                Map<String, Object> data = (Map<String, Object>) ((PojoCloudEventData) cloudEventData).getValue();
+                document.put("data", new Document(data));
+            } else if (cloudEventData instanceof PojoCloudEventData && ((PojoCloudEventData) cloudEventData).getValue() instanceof String) {
+                addJsonData(document, (String) ((PojoCloudEventData) cloudEventData).getValue());
             } else {
-                document.put("data", json);
+                String json = convertToString(cloudEventData);
+                addJsonData(document, json);
             }
         } else if (isText(contentType)) {
             String text = convertToString(cloudEventData);
@@ -97,6 +103,14 @@ public class DocumentCloudEventWriter implements CloudEventWriterFactory<Documen
             document.put("data", cloudEventData.toBytes());
         }
         return document;
+    }
+
+    private static void addJsonData(Document document, String json) {
+        if (json.trim().startsWith("{")) {
+            document.put("data", Document.parse(json));
+        } else {
+            document.put("data", json);
+        }
     }
 
     private static String convertToString(CloudEventData cloudEventData) {
