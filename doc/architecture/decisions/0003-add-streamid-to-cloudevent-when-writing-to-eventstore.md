@@ -8,14 +8,14 @@ Accepted
 
 ## Context
 
-Previously my thoughts regarding a "streamId" in the `CloudEvent` has been that since it's not visible to the user.
-The "streamId" extension property was added on write and removed on read to avoid surprises to the user. 
+Previously my thoughts regarding a "streamid" in the `CloudEvent` has been that since it's not visible to the user.
+The "streamid" extension property was added on write and removed on read to avoid surprises to the user. 
 However this leads to problems implementing snapshotting and sagas since then it's highly likely that we want to use the streamId 
 in these cases (and the user probably wants to know the stream id in a saga).
 
 ## Decision
 
-For this reason the implementors of the `WriteEventStream` api will _add_ a "streamId" to each `CloudEvent`.   
+For this reason the implementors of the `WriteEventStream` api will _add_ a "streamid" to each `CloudEvent`.   
 
 ## Consequences
 

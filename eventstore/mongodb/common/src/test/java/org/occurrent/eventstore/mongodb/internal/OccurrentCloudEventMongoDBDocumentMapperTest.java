@@ -71,7 +71,7 @@ class OccurrentCloudEventMongoDBDocumentMapperTest {
                         .build();
 
                 // When
-                Document document = OccurrentCloudEventMongoDBDocumentMapper.convertToDocument(DATE, "streamId", 2L, cloudEvent);
+                Document document = OccurrentCloudEventMongoDBDocumentMapper.convertToDocument(DATE, "streamid", 2L, cloudEvent);
 
                 // Then
                 assertAll(
@@ -81,8 +81,8 @@ class OccurrentCloudEventMongoDBDocumentMapperTest {
                         () -> assertThat(document.getString("source")).isEqualTo("urn:name"),
                         () -> assertThat(document.getString("id")).isEqualTo("id"),
                         () -> assertThat(document.get("data", Map.class)).containsOnly(entry("name", "hello")),
-                        () -> assertThat(document.getString("streamId")).isEqualTo("streamId"),
-                        () -> assertThat(document.getLong("streamVersion")).isEqualTo(2L)
+                        () -> assertThat(document.getString("streamid")).isEqualTo("streamid"),
+                        () -> assertThat(document.getLong("streamversion")).isEqualTo(2L)
                 );
             }
 
@@ -101,7 +101,7 @@ class OccurrentCloudEventMongoDBDocumentMapperTest {
                         .build();
 
                 // When
-                Document document = OccurrentCloudEventMongoDBDocumentMapper.convertToDocument(DATE, "streamId", 2L, cloudEvent);
+                Document document = OccurrentCloudEventMongoDBDocumentMapper.convertToDocument(DATE, "streamid", 2L, cloudEvent);
 
                 // Then
                 assertThat(document.getString("data")).isEqualTo("name");
@@ -124,7 +124,7 @@ class OccurrentCloudEventMongoDBDocumentMapperTest {
                         .build();
 
                 // When
-                Document document = OccurrentCloudEventMongoDBDocumentMapper.convertToDocument(DATE, "streamId", 2L, cloudEvent);
+                Document document = OccurrentCloudEventMongoDBDocumentMapper.convertToDocument(DATE, "streamid", 2L, cloudEvent);
 
                 // Then
                 assertAll(
@@ -134,8 +134,8 @@ class OccurrentCloudEventMongoDBDocumentMapperTest {
                         () -> assertThat(document.getString("source")).isEqualTo("urn:name"),
                         () -> assertThat(document.getString("id")).isEqualTo("id"),
                         () -> assertThat(document.get("data", Map.class)).containsOnly(entry("name", "hello")),
-                        () -> assertThat(document.getString("streamId")).isEqualTo("streamId"),
-                        () -> assertThat(document.getLong("streamVersion")).isEqualTo(2L)
+                        () -> assertThat(document.getString("streamid")).isEqualTo("streamid"),
+                        () -> assertThat(document.getLong("streamversion")).isEqualTo(2L)
                 );
             }
 
@@ -157,7 +157,7 @@ class OccurrentCloudEventMongoDBDocumentMapperTest {
                         .build();
 
                 // When
-                Document document = OccurrentCloudEventMongoDBDocumentMapper.convertToDocument(DATE, "streamId", 2L, cloudEvent);
+                Document document = OccurrentCloudEventMongoDBDocumentMapper.convertToDocument(DATE, "streamid", 2L, cloudEvent);
 
                 // Then
                 assertAll(
@@ -167,8 +167,8 @@ class OccurrentCloudEventMongoDBDocumentMapperTest {
                         () -> assertThat(document.getString("source")).isEqualTo("urn:name"),
                         () -> assertThat(document.getString("id")).isEqualTo("id"),
                         () -> assertThat(document.get("data", Map.class)).containsOnly(entry("name", "hello")),
-                        () -> assertThat(document.getString("streamId")).isEqualTo("streamId"),
-                        () -> assertThat(document.getLong("streamVersion")).isEqualTo(2L)
+                        () -> assertThat(document.getString("streamid")).isEqualTo("streamid"),
+                        () -> assertThat(document.getLong("streamversion")).isEqualTo(2L)
                 );
             }
         }
@@ -192,7 +192,7 @@ class OccurrentCloudEventMongoDBDocumentMapperTest {
                         .build();
 
                 // When
-                Document document = OccurrentCloudEventMongoDBDocumentMapper.convertToDocument(DATE, "streamId", 2L, cloudEvent);
+                Document document = OccurrentCloudEventMongoDBDocumentMapper.convertToDocument(DATE, "streamid", 2L, cloudEvent);
 
                 // Then
                 assertAll(
@@ -202,8 +202,8 @@ class OccurrentCloudEventMongoDBDocumentMapperTest {
                         () -> assertThat(document.getString("source")).isEqualTo("urn:name"),
                         () -> assertThat(document.getString("id")).isEqualTo("id"),
                         () -> assertThat(document.getString("data")).isEqualTo("text"),
-                        () -> assertThat(document.getString("streamId")).isEqualTo("streamId"),
-                        () -> assertThat(document.getLong("streamVersion")).isEqualTo(2L)
+                        () -> assertThat(document.getString("streamid")).isEqualTo("streamid"),
+                        () -> assertThat(document.getLong("streamversion")).isEqualTo(2L)
                 );
             }
         }
@@ -228,7 +228,7 @@ class OccurrentCloudEventMongoDBDocumentMapperTest {
                         .build();
 
                 // When
-                Document document = OccurrentCloudEventMongoDBDocumentMapper.convertToDocument(DATE, "streamId", 2L, cloudEvent);
+                Document document = OccurrentCloudEventMongoDBDocumentMapper.convertToDocument(DATE, "streamid", 2L, cloudEvent);
 
                 // Then
                 assertAll(
@@ -239,8 +239,8 @@ class OccurrentCloudEventMongoDBDocumentMapperTest {
                         () -> assertThat(document.getString("source")).isEqualTo("urn:name"),
                         () -> assertThat(document.getString("id")).isEqualTo("id"),
                         () -> assertThat(document.get("data", byte[].class)).isEqualTo("hello".getBytes(UTF_8)),
-                        () -> assertThat(document.getString("streamId")).isEqualTo("streamId"),
-                        () -> assertThat(document.getLong("streamVersion")).isEqualTo(2L)
+                        () -> assertThat(document.getString("streamid")).isEqualTo("streamid"),
+                        () -> assertThat(document.getLong("streamversion")).isEqualTo(2L)
                 );
             }
 
@@ -260,7 +260,7 @@ class OccurrentCloudEventMongoDBDocumentMapperTest {
                         .build();
 
                 // When
-                Document document = OccurrentCloudEventMongoDBDocumentMapper.convertToDocument(DATE, "streamId", 2L, cloudEvent);
+                Document document = OccurrentCloudEventMongoDBDocumentMapper.convertToDocument(DATE, "streamid", 2L, cloudEvent);
 
                 // Then
                 assertAll(
@@ -270,8 +270,8 @@ class OccurrentCloudEventMongoDBDocumentMapperTest {
                         () -> assertThat(document.getString("source")).isEqualTo("urn:name"),
                         () -> assertThat(document.getString("id")).isEqualTo("id"),
                         () -> assertThat(document.get("data", byte[].class)).isEqualTo("hello".getBytes(UTF_8)),
-                        () -> assertThat(document.getString("streamId")).isEqualTo("streamId"),
-                        () -> assertThat(document.getLong("streamVersion")).isEqualTo(2L)
+                        () -> assertThat(document.getString("streamid")).isEqualTo("streamid"),
+                        () -> assertThat(document.getLong("streamversion")).isEqualTo(2L)
                 );
             }
         }
@@ -301,8 +301,8 @@ class OccurrentCloudEventMongoDBDocumentMapperTest {
                     put("data", data);
                     put("datacontenttype", "application/json");
                     put("specversion", "1.0");
-                    put("streamId", "streamId");
-                    put("streamVersion", 2L);
+                    put("streamid", "streamid");
+                    put("streamversion", 2L);
                 }});
 
                 // When
@@ -317,7 +317,7 @@ class OccurrentCloudEventMongoDBDocumentMapperTest {
                         .withId("id")
                         .withDataContentType("application/json")
                         .withData(new DocumentCloudEventData(data))
-                        .withExtension(new OccurrentCloudEventExtension("streamId", 2L))
+                        .withExtension(new OccurrentCloudEventExtension("streamid", 2L))
                         .build();
 
                 assertThat(actual).isEqualTo(expected);
@@ -337,8 +337,8 @@ class OccurrentCloudEventMongoDBDocumentMapperTest {
                     put("data", data);
                     put("datacontenttype", "application/json");
                     put("specversion", "1.0");
-                    put("streamId", "streamId");
-                    put("streamVersion", 2L);
+                    put("streamid", "streamid");
+                    put("streamversion", 2L);
                 }});
 
                 // When
@@ -353,7 +353,7 @@ class OccurrentCloudEventMongoDBDocumentMapperTest {
                         .withId("id")
                         .withDataContentType("application/json")
                         .withData(new DocumentCloudEventData(data))
-                        .withExtension(new OccurrentCloudEventExtension("streamId", 2L))
+                        .withExtension(new OccurrentCloudEventExtension("streamid", 2L))
                         .build();
 
                 assertThat(actual).isEqualTo(expected);
@@ -373,8 +373,8 @@ class OccurrentCloudEventMongoDBDocumentMapperTest {
                     put("data", data);
                     put("datacontenttype", "application/json");
                     put("specversion", "1.0");
-                    put("streamId", "streamId");
-                    put("streamVersion", 2L);
+                    put("streamid", "streamid");
+                    put("streamversion", 2L);
                 }});
 
                 // When
@@ -389,7 +389,7 @@ class OccurrentCloudEventMongoDBDocumentMapperTest {
                         .withId("id")
                         .withDataContentType("application/json")
                         .withData(new DocumentCloudEventData(data))
-                        .withExtension(new OccurrentCloudEventExtension("streamId", 2L))
+                        .withExtension(new OccurrentCloudEventExtension("streamid", 2L))
                         .build();
 
                 assertThat(actual).isEqualTo(expected);
@@ -414,8 +414,8 @@ class OccurrentCloudEventMongoDBDocumentMapperTest {
                     put("data", data);
                     put("datacontenttype", "text/plain");
                     put("specversion", "1.0");
-                    put("streamId", "streamId");
-                    put("streamVersion", 2L);
+                    put("streamid", "streamid");
+                    put("streamversion", 2L);
                 }});
 
                 // When
@@ -430,7 +430,7 @@ class OccurrentCloudEventMongoDBDocumentMapperTest {
                         .withId("id")
                         .withDataContentType("text/plain")
                         .withData(new BytesCloudEventData(data.getBytes(UTF_8)))
-                        .withExtension(new OccurrentCloudEventExtension("streamId", 2L))
+                        .withExtension(new OccurrentCloudEventExtension("streamid", 2L))
                         .build();
 
                 assertThat(actual).isEqualTo(expected);
@@ -450,8 +450,8 @@ class OccurrentCloudEventMongoDBDocumentMapperTest {
                     put("data", data);
                     put("datacontenttype", "text/plain");
                     put("specversion", "1.0");
-                    put("streamId", "streamId");
-                    put("streamVersion", 2L);
+                    put("streamid", "streamid");
+                    put("streamversion", 2L);
                 }});
 
                 // When
@@ -466,7 +466,7 @@ class OccurrentCloudEventMongoDBDocumentMapperTest {
                         .withId("id")
                         .withDataContentType("text/plain")
                         .withData(new BytesCloudEventData(data))
-                        .withExtension(new OccurrentCloudEventExtension("streamId", 2L))
+                        .withExtension(new OccurrentCloudEventExtension("streamid", 2L))
                         .build();
 
                 assertThat(actual).isEqualTo(expected);
@@ -494,7 +494,7 @@ class OccurrentCloudEventMongoDBDocumentMapperTest {
                     .build();
 
             // When
-            Document document = OccurrentCloudEventMongoDBDocumentMapper.convertToDocument(RFC_3339_STRING, "streamId", 2L, cloudEvent);
+            Document document = OccurrentCloudEventMongoDBDocumentMapper.convertToDocument(RFC_3339_STRING, "streamid", 2L, cloudEvent);
 
             // Then
             assertAll(
@@ -504,8 +504,8 @@ class OccurrentCloudEventMongoDBDocumentMapperTest {
                     () -> assertThat(document.getString("source")).isEqualTo("urn:name"),
                     () -> assertThat(document.getString("id")).isEqualTo("id"),
                     () -> assertThat(document.get("data", Map.class)).containsOnly(entry("name", "hello")),
-                    () -> assertThat(document.getString("streamId")).isEqualTo("streamId"),
-                    () -> assertThat(document.getLong("streamVersion")).isEqualTo(2L)
+                    () -> assertThat(document.getString("streamid")).isEqualTo("streamid"),
+                    () -> assertThat(document.getLong("streamversion")).isEqualTo(2L)
             );
         }
 
@@ -525,7 +525,7 @@ class OccurrentCloudEventMongoDBDocumentMapperTest {
                     .build();
 
             // When
-            Document document = OccurrentCloudEventMongoDBDocumentMapper.convertToDocument(RFC_3339_STRING, "streamId", 2L, cloudEvent);
+            Document document = OccurrentCloudEventMongoDBDocumentMapper.convertToDocument(RFC_3339_STRING, "streamid", 2L, cloudEvent);
 
             // Then
             assertAll(
@@ -535,8 +535,8 @@ class OccurrentCloudEventMongoDBDocumentMapperTest {
                     () -> assertThat(document.getString("source")).isEqualTo("urn:name"),
                     () -> assertThat(document.getString("id")).isEqualTo("id"),
                     () -> assertThat(document.get("data", Map.class)).containsOnly(entry("name", "hello")),
-                    () -> assertThat(document.getString("streamId")).isEqualTo("streamId"),
-                    () -> assertThat(document.getLong("streamVersion")).isEqualTo(2L)
+                    () -> assertThat(document.getString("streamid")).isEqualTo("streamid"),
+                    () -> assertThat(document.getLong("streamversion")).isEqualTo(2L)
             );
         }
 
@@ -557,8 +557,8 @@ class OccurrentCloudEventMongoDBDocumentMapperTest {
                 put("data", data);
                 put("datacontenttype", "application/json");
                 put("specversion", "1.0");
-                put("streamId", "streamId");
-                put("streamVersion", 2L);
+                put("streamid", "streamid");
+                put("streamversion", 2L);
             }});
 
             // When
@@ -573,7 +573,7 @@ class OccurrentCloudEventMongoDBDocumentMapperTest {
                     .withId("id")
                     .withDataContentType("application/json")
                     .withData(new DocumentCloudEventData(data))
-                    .withExtension(new OccurrentCloudEventExtension("streamId", 2L))
+                    .withExtension(new OccurrentCloudEventExtension("streamid", 2L))
                     .build();
 
             assertThat(actual).isEqualTo(expected);
@@ -594,7 +594,7 @@ class OccurrentCloudEventMongoDBDocumentMapperTest {
                 }});
                 put("datacontenttype", "application/json");
                 put("specversion", "1.0");
-                put("streamId", "streamId");
+                put("streamid", "streamid");
             }});
 
             // When
@@ -619,7 +619,7 @@ class OccurrentCloudEventMongoDBDocumentMapperTest {
                 }});
                 put("datacontenttype", "application/json");
                 put("specversion", "1.0");
-                put("streamId", "streamId");
+                put("streamid", "streamid");
             }});
 
             // When
@@ -644,7 +644,7 @@ class OccurrentCloudEventMongoDBDocumentMapperTest {
                 }});
                 put("datacontenttype", "application/json");
                 put("specversion", "1.0");
-                put("streamId", "streamId");
+                put("streamid", "streamid");
             }});
 
             // When
@@ -675,7 +675,7 @@ class OccurrentCloudEventMongoDBDocumentMapperTest {
                     .build();
 
             // When
-            Document document = OccurrentCloudEventMongoDBDocumentMapper.convertToDocument(DATE, "streamId", 2L, cloudEvent);
+            Document document = OccurrentCloudEventMongoDBDocumentMapper.convertToDocument(DATE, "streamid", 2L, cloudEvent);
 
             // Then
             assertAll(
@@ -685,8 +685,8 @@ class OccurrentCloudEventMongoDBDocumentMapperTest {
                     () -> assertThat(document.getString("source")).isEqualTo("urn:name"),
                     () -> assertThat(document.getString("id")).isEqualTo("id"),
                     () -> assertThat(document.get("data", Map.class)).containsOnly(entry("name", "hello")),
-                    () -> assertThat(document.getString("streamId")).isEqualTo("streamId"),
-                    () -> assertThat(document.getLong("streamVersion")).isEqualTo(2L)
+                    () -> assertThat(document.getString("streamid")).isEqualTo("streamid"),
+                    () -> assertThat(document.getLong("streamversion")).isEqualTo(2L)
             );
         }
 
@@ -705,7 +705,7 @@ class OccurrentCloudEventMongoDBDocumentMapperTest {
                     .build();
 
             // When
-            Throwable throwable = catchThrowable(() -> OccurrentCloudEventMongoDBDocumentMapper.convertToDocument(DATE, "streamId", 2L, cloudEvent));
+            Throwable throwable = catchThrowable(() -> OccurrentCloudEventMongoDBDocumentMapper.convertToDocument(DATE, "streamid", 2L, cloudEvent));
 
             // Then
             assertThat(throwable).isExactlyInstanceOf(IllegalArgumentException.class)
@@ -727,7 +727,7 @@ class OccurrentCloudEventMongoDBDocumentMapperTest {
                     .build();
 
             // When
-            Throwable throwable = catchThrowable(() -> OccurrentCloudEventMongoDBDocumentMapper.convertToDocument(DATE, "streamId", 2L, cloudEvent));
+            Throwable throwable = catchThrowable(() -> OccurrentCloudEventMongoDBDocumentMapper.convertToDocument(DATE, "streamid", 2L, cloudEvent));
 
             // Then
             assertThat(throwable).isExactlyInstanceOf(IllegalArgumentException.class)
@@ -750,8 +750,8 @@ class OccurrentCloudEventMongoDBDocumentMapperTest {
                 put("data", data);
                 put("datacontenttype", "application/json");
                 put("specversion", "1.0");
-                put("streamId", "streamId");
-                put("streamVersion", 2L);
+                put("streamid", "streamid");
+                put("streamversion", 2L);
             }});
 
             // When
@@ -766,7 +766,7 @@ class OccurrentCloudEventMongoDBDocumentMapperTest {
                     .withId("id")
                     .withDataContentType("application/json")
                     .withData(new DocumentCloudEventData(data))
-                    .withExtension(new OccurrentCloudEventExtension("streamId", 2L))
+                    .withExtension(new OccurrentCloudEventExtension("streamid", 2L))
                     .build();
 
             assertThat(actual).isEqualTo(expected);
@@ -787,7 +787,7 @@ class OccurrentCloudEventMongoDBDocumentMapperTest {
                 }});
                 put("datacontenttype", "application/json");
                 put("specversion", "1.0");
-                put("streamId", "streamId");
+                put("streamid", "streamid");
             }});
 
             // When
@@ -812,7 +812,7 @@ class OccurrentCloudEventMongoDBDocumentMapperTest {
                 }});
                 put("datacontenttype", "application/json");
                 put("specversion", "1.0");
-                put("streamId", "streamId");
+                put("streamid", "streamid");
             }});
 
             // When
@@ -837,7 +837,7 @@ class OccurrentCloudEventMongoDBDocumentMapperTest {
                 }});
                 put("datacontenttype", "application/json");
                 put("specversion", "1.0");
-                put("streamId", "streamId");
+                put("streamid", "streamid");
             }});
 
             // When

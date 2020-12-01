@@ -25,5 +25,5 @@ both the implementation, user configuration (no need for "StreamConsistency") an
 
 ## Consequences
 
-This means that a "streamVersion" extension must be written to each CloudEvent. However, this is probably an OK trade-off 
+This means that a "streamversion" extension must be written to each CloudEvent. However, this is probably an OK trade-off 
 since you can make good use of this as a user. 

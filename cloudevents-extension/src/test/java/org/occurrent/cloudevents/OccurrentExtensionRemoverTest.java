@@ -43,7 +43,7 @@ class OccurrentExtensionRemoverTest {
                 .build();
 
         CloudEvent occurrentCloudEvent = new CloudEventBuilder(originalCloudEvent)
-                .withExtension(new OccurrentCloudEventExtension("streamId", 1))
+                .withExtension(new OccurrentCloudEventExtension("streamid", 1))
                 .build();
 
         // When

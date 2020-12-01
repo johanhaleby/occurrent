@@ -26,8 +26,6 @@ import org.bson.Document;
 import java.time.OffsetDateTime;
 
 import static java.nio.charset.StandardCharsets.UTF_8;
-import static org.occurrent.eventstore.mongodb.cloudevent.ContentType.isJson;
-import static org.occurrent.eventstore.mongodb.cloudevent.ContentType.isText;
 
 public class DocumentCloudEventWriter implements CloudEventWriterFactory<DocumentCloudEventWriter, Document>, CloudEventWriter<Document> {
 
@@ -80,6 +78,7 @@ public class DocumentCloudEventWriter implements CloudEventWriterFactory<Documen
         Object contentType = document.get("datacontenttype");
         if (cloudEventData instanceof DocumentCloudEventData) {
             document.put("data", ((DocumentCloudEventData) cloudEventData).document);
+        }
         } else if (isJson(contentType)) {
             String json = convertToString(cloudEventData);
             if (json.trim().startsWith("{")) {

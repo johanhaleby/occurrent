@@ -31,8 +31,8 @@ import java.util.*;
  * </table>
  */
 public class OccurrentCloudEventExtension implements Extension {
-    public static final String STREAM_ID = "streamId";
-    public static final String STREAM_VERSION = "streamVersion";
+    public static final String STREAM_ID = "streamid";
+    public static final String STREAM_VERSION = "streamversion";
 
     static final Set<String> KEYS = Collections.unmodifiableSet(new HashSet<>(Arrays.asList(STREAM_ID, STREAM_VERSION)));
     private String streamId;

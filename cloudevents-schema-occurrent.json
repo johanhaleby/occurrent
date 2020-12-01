@@ -79,14 +79,14 @@
         "Zm9vYg=="
       ]
     },
-    "streamId": {
+    "streamid": {
       "description": "The id of an event stream (added by the Occurrent CloudEvent Extension).",
       "$ref": "#/definitions/streamiddef",
       "examples": [
         "f79f35a6-912f-4915-b057-56ef04f96379"
       ]
     },
-    "streamVersion": {
+    "streamversion": {
       "description": "The version of an event (added by the Occurrent CloudEvent Extension).",
       "$ref": "#/definitions/streamversiondef",
       "examples": [
@@ -99,8 +99,8 @@
     "source",
     "specversion",
     "type",
-    "streamId",
-    "streamVersion"
+    "streamid",
+    "streamversion"
   ],
   "definitions": {
     "iddef": {

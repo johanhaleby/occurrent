@@ -28,17 +28,17 @@ The [CloudEvents](https://cloudevents.io/) are persisted like this in the "event
     "timestamp": 1594392503272,
     "name": "name1"
   },
-  "streamId" : "streamId"
+  "streamid" : "streamid"
 }
 ```
 
-Note that "streamId" is added as an extension by the MongoDB event stores in order to read all events for a particular stream.
+Note that "streamid" is added as an extension by the MongoDB event stores in order to read all events for a particular stream.
 
 If stream consistency is enabled then another collection, the "stream consistency" collection is also written to the database (2):
 
 ```json
 {
-  "_id" : "streamId",
+  "_id" : "streamid",
   "version" : 1
 }
 ```
@@ -51,7 +51,7 @@ Another previous approach was instead to store the events like this:
 
 ```json
 {
-  "_id": "streamId",
+  "_id": "streamid",
   "version" : 1,
   "events": [{
     "specversion": "1.0",
