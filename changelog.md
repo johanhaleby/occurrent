@@ -1,6 +1,6 @@
 ## Changelog next version
 
-* Upgraded examples to use Kotlin 1.4.20
+* Upgraded to Kotlin 1.4.20
 * Upgraded to cloud events 2.0.0.RC1
 * Breaking change! The attributes added by the Occurrent cloud event extension has been renamed from "streamId" and "streamVersion" to "streamid" and "streamversion" to comply with the [specification](https://github.com/cloudevents/spec/blob/master/spec.md#attribute-naming-convention).
 * Added optimized support for `io.cloudevents.core.data.PojoCloudEventData`. Occurrent can convert `PojoCloudEventData` that contains `Map<String, Object>` and `String` efficiently.
