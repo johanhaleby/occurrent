@@ -44,7 +44,7 @@
         </dependency>
         <dependency>
             <groupId>org.occurrent</groupId>
-            <artifactId>application-service-blocking-kotlin</artifactId>
+            <artifactId>application-service-blocking</artifactId>
             <version>0.3.1-SNAPSHOT</version>
         </dependency>
         <dependency>
