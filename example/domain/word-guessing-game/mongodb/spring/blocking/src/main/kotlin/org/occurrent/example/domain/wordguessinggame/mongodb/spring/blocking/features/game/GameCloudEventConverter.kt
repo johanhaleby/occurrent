@@ -22,8 +22,8 @@ import com.fasterxml.jackson.module.kotlin.readValue
 import io.cloudevents.CloudEvent
 import io.cloudevents.CloudEventData
 import io.cloudevents.core.builder.CloudEventBuilder
+import io.cloudevents.core.data.PojoCloudEventData
 import org.occurrent.application.converter.CloudEventConverter
-import org.occurrent.eventstore.mongodb.cloudevent.DocumentCloudEventData
 import org.occurrent.example.domain.wordguessinggame.event.*
 import org.occurrent.example.domain.wordguessinggame.event.ReasonForNotBeingAwardedPoints.PlayerCreatedListOfWords
 import org.occurrent.example.domain.wordguessinggame.writemodel.PlayerId
@@ -104,10 +104,10 @@ class GameCloudEventConverter(private val objectMapper: ObjectMapper, private va
         }
     }
 
-    private fun EventData.toCloudEventData(): CloudEventData = DocumentCloudEventData(objectMapper.convertValue<Map<String, Any>>(this))
+    private fun EventData.toCloudEventData(): CloudEventData = PojoCloudEventData.wrap(objectMapper.convertValue<Map<String, Any>>(this), objectMapper::writeValueAsBytes)
     private inline fun <reified T : EventData> CloudEvent.data(): T =
-            if (data is DocumentCloudEventData) {
-                objectMapper.convertValue((data as DocumentCloudEventData).document)
+            if (data is PojoCloudEventData<*>) {
+                objectMapper.convertValue((data as PojoCloudEventData<*>).value)
             } else {
                 objectMapper.readValue(data!!.toBytes())
             }

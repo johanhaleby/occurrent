@@ -23,7 +23,9 @@ import com.mongodb.reactivestreams.client.MongoClient;
 import com.mongodb.reactivestreams.client.MongoClients;
 import io.cloudevents.CloudEvent;
 import io.cloudevents.core.builder.CloudEventBuilder;
+import io.cloudevents.core.data.PojoCloudEventData;
 import org.awaitility.Awaitility;
+import org.bson.Document;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Nested;
@@ -39,7 +41,6 @@ import org.occurrent.eventstore.api.WriteCondition;
 import org.occurrent.eventstore.api.WriteConditionNotFulfilledException;
 import org.occurrent.eventstore.api.reactor.EventStoreQueries;
 import org.occurrent.eventstore.api.reactor.EventStream;
-import org.occurrent.eventstore.mongodb.cloudevent.DocumentCloudEventData;
 import org.occurrent.functional.CheckedFunction;
 import org.occurrent.mongodb.timerepresentation.TimeRepresentation;
 import org.occurrent.testsupport.mongodb.FlushMongoDBExtension;
@@ -1156,7 +1157,7 @@ public class SpringReactorMongoEventStoreTest {
 
             // Then
             Flux<CloudEvent> events = eventStore.query(dataSchema(URI.create("urn:myschema")));
-            CloudEvent expectedCloudEvent = CloudEventBuilder.v1(cloudEvent).withData(new DocumentCloudEventData(requireNonNull(cloudEvent.getData()).toBytes())).build();
+            CloudEvent expectedCloudEvent = CloudEventBuilder.v1(cloudEvent).withData(PojoCloudEventData.wrap(Document.parse(new String(requireNonNull(cloudEvent.getData()).toBytes(), UTF_8)), document -> document.toJson().getBytes(UTF_8))).build();
             assertThat(events.toStream()).containsExactly(expectedCloudEvent);
         }
 

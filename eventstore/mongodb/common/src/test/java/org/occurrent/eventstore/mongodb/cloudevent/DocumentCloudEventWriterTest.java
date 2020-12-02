@@ -80,7 +80,7 @@ class DocumentCloudEventWriterTest {
                 .withTime(offsetDateTime)
                 .withSource(URI.create("urn:name"))
                 .withId("id")
-                .withData("application/json", new DocumentCloudEventData(data))
+                .withData("application/json", PojoCloudEventData.wrap(data, document1 -> document1.toJson().getBytes(UTF_8)))
                 .build();
 
         // When

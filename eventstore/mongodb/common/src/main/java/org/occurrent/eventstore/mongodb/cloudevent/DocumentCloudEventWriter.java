@@ -81,13 +81,14 @@ public class DocumentCloudEventWriter implements CloudEventWriterFactory<Documen
     @Override
     public Document end(CloudEventData cloudEventData) throws CloudEventRWException {
         Object contentType = document.get("datacontenttype");
-        if (cloudEventData instanceof DocumentCloudEventData) {
-            document.put("data", ((DocumentCloudEventData) cloudEventData).document);
+        if (isPojoCloudEventDataWrapping(cloudEventData, Document.class)) {
+            Document document = (Document) ((PojoCloudEventData) cloudEventData).getValue();
+            this.document.put("data", document);
         } else if (isJson(contentType)) {
-            if (cloudEventData instanceof PojoCloudEventData && ((PojoCloudEventData) cloudEventData).getValue() instanceof Map) {
+            if (isPojoCloudEventDataWrapping(cloudEventData, Map.class)) {
                 Map<String, Object> data = (Map<String, Object>) ((PojoCloudEventData) cloudEventData).getValue();
                 document.put("data", new Document(data));
-            } else if (cloudEventData instanceof PojoCloudEventData && ((PojoCloudEventData) cloudEventData).getValue() instanceof String) {
+            } else if (isPojoCloudEventDataWrapping(cloudEventData, String.class)) {
                 addJsonData(document, (String) ((PojoCloudEventData) cloudEventData).getValue());
             } else {
                 String json = convertToString(cloudEventData);
@@ -129,4 +130,13 @@ public class DocumentCloudEventWriter implements CloudEventWriterFactory<Documen
         return CloudEventUtils.toReader(event).read(writer);
     }
 
+    @SuppressWarnings("rawtypes")
+    private static boolean isPojoCloudEventDataWrapping(CloudEventData cloudEventData, Class<?> wrappedType) {
+        if (!(cloudEventData instanceof PojoCloudEventData)) {
+            return false;
+        }
+
+        Object value = ((PojoCloudEventData) cloudEventData).getValue();
+        return wrappedType.isAssignableFrom(value.getClass());
+    }
 }

@@ -21,6 +21,7 @@ import io.cloudevents.CloudEventData;
 import io.cloudevents.SpecVersion;
 import io.cloudevents.core.builder.CloudEventBuilder;
 import io.cloudevents.core.data.BytesCloudEventData;
+import io.cloudevents.core.data.PojoCloudEventData;
 import io.cloudevents.rw.*;
 import org.bson.Document;
 import org.bson.types.Binary;
@@ -110,28 +111,29 @@ public class DocumentCloudEventReader implements CloudEventReader {
         final CloudEventData ceData;
         if (data instanceof Document) {
             // Best case, it's a document
-            ceData = new DocumentCloudEventData((Document) data);
+            Document document = (Document) data;
+            ceData = PojoCloudEventData.wrap(document, DocumentCloudEventReader::convertDocumentToBytes);
         } else if (data instanceof String) {
             String json = ((String) data);
             if (json.trim().startsWith(JSON_OBJECT_PREFIX)) {
-                ceData = new DocumentCloudEventData(Document.parse((String) data));
+                ceData = PojoCloudEventData.wrap(Document.parse((String) data), DocumentCloudEventReader::convertDocumentToBytes);
             } else {
                 ceData = BytesCloudEventData.wrap(json.getBytes(UTF_8));
             }
         } else if (data instanceof Map) {
-            ceData = new DocumentCloudEventData((Map<String, Object>) data);
+            ceData = PojoCloudEventData.wrap(new Document((Map<String, Object>) data), DocumentCloudEventReader::convertDocumentToBytes);
         } else if (data instanceof byte[]) {
             byte[] byteArray = (byte[]) data;
             String json = new String(byteArray, UTF_8);
             if (json.trim().startsWith(JSON_OBJECT_PREFIX)) {
-                ceData = new DocumentCloudEventData(Document.parse(json));
+                ceData = PojoCloudEventData.wrap(Document.parse(json), DocumentCloudEventReader::convertDocumentToBytes);
             } else {
-                ceData = new DocumentCloudEventData(byteArray);
+                ceData = BytesCloudEventData.wrap(json.getBytes(UTF_8));
             }
         } else if (data instanceof Binary) {
-            ceData = new DocumentCloudEventData(((Binary) data).getData());
+            ceData = BytesCloudEventData.wrap(((Binary) data).getData());
         } else {
-            throw CloudEventRWException.newInvalidDataType(data.getClass().getName(), String.class.getName(), byte[].class.getName(), Map.class.getName(), DocumentCloudEventData.class.getName(), Binary.class.getName());
+            throw CloudEventRWException.newInvalidDataType(data.getClass().getName(), String.class.getName(), byte[].class.getName(), Map.class.getName(), Binary.class.getName());
         }
         return ceData;
     }
@@ -139,5 +141,9 @@ public class DocumentCloudEventReader implements CloudEventReader {
     public static CloudEvent toCloudEvent(Document document) {
         DocumentCloudEventReader reader = new DocumentCloudEventReader(document);
         return reader.read(CloudEventBuilder::fromSpecVersion);
+    }
+
+    private static byte[] convertDocumentToBytes(Document document) {
+        return document.toJson().getBytes(UTF_8);
     }
 }
