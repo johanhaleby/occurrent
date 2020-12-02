@@ -18,14 +18,18 @@ package org.occurrent.example.domain.uno.es
 
 import com.fasterxml.jackson.module.kotlin.jacksonObjectMapper
 import com.mongodb.client.MongoClients
+import org.occurrent.application.composition.command.partial
 import org.occurrent.application.service.blocking.execute
 import org.occurrent.application.service.blocking.implementation.GenericApplicationService
 import org.occurrent.eventstore.mongodb.nativedriver.EventStoreConfig
 import org.occurrent.eventstore.mongodb.nativedriver.MongoEventStore
-import org.occurrent.example.domain.uno.*
 import org.occurrent.example.domain.uno.Card.DigitCard
 import org.occurrent.example.domain.uno.Color.*
 import org.occurrent.example.domain.uno.Digit.*
+import org.occurrent.example.domain.uno.GameId
+import org.occurrent.example.domain.uno.ProgressTracker
+import org.occurrent.example.domain.uno.Timestamp
+import org.occurrent.example.domain.uno.Uno
 import org.occurrent.mongodb.timerepresentation.TimeRepresentation
 import org.occurrent.subscription.mongodb.nativedriver.blocking.BlockingSubscriptionForMongoDB
 import org.occurrent.subscription.mongodb.nativedriver.blocking.RetryStrategy
@@ -67,13 +71,13 @@ fun main() {
     // Simulate playing Uno
     val gameId = GameId.randomUUID()
 
-    // TODO Add partial application
-    val commands = listOf<Function1<Sequence<Event>, Sequence<Event>>>(
-            { events -> Uno.start(events, gameId, Timestamp.now(), playerCount = 4, firstCard = DigitCard(Three, Red)) },
-            { events -> Uno.play(events, Timestamp.now(), playerId = 0, card = DigitCard(Three, Blue)) },
-            { events -> Uno.play(events, Timestamp.now(), playerId = 1, card = DigitCard(Eight, Blue)) },
-            { events -> Uno.play(events, Timestamp.now(), playerId = 2, card = DigitCard(Eight, Yellow)) },
-            { events -> Uno.play(events, Timestamp.now(), playerId = 0, card = DigitCard(Four, Green)) }
+
+    val commands = listOf(
+            Uno::start.partial(gameId, Timestamp.now(), 4, DigitCard(Three, Red)),
+            Uno::play.partial(Timestamp.now(), 0, DigitCard(Three, Blue)),
+            Uno::play.partial(Timestamp.now(), 1, DigitCard(Eight, Blue)),
+            Uno::play.partial(Timestamp.now(), 2, DigitCard(Eight, Yellow)),
+            Uno::play.partial(Timestamp.now(), 0, DigitCard(Four, Green))
     )
     commands.forEach { command ->
         applicationService.execute(gameId, command)
