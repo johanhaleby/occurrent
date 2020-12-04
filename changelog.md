@@ -48,6 +48,14 @@
     )
     ```
 * Added Kotlin extension functions to the blocking event store. They make it easier to write, read and query the event store with Kotlin `Sequence`'s. Import extension functions from package `org.occurrent.eventstore.api.blocking`.
+* Added support for deleting events from event store using a `org.occurrent.filter.Filter`. For example:
+
+    ```java
+    eventStoreOperations.delete(streamId("myStream").and(streamVersion(lte(19L)));
+    ```
+    
+    This will delete all events in stream "myStream" that has a version less than or equal to 19. This is useful if you implement "closing the books" or certain types of snapshots, and don't need the old events anymore.
+    This has been implemented for all MongoDB event stores (both blocking and reactive) but not for the InMemory event store.
 
 ## Changelog 0.3.0 (2020-11-21)
 * Upgraded Java Mongo driver from 4.0.4 to 4.1.1
