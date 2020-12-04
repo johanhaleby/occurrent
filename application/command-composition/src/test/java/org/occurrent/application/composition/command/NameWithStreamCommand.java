@@ -44,7 +44,7 @@ class NameWithStreamCommand {
         if (Objects.equals(currentName, "John Doe")) {
             throw new IllegalArgumentException("Cannot change name from John Doe since this is the ultimate name");
         } else if (currentName.isEmpty()) {
-            throw new IllegalArgumentException("Cannot change name this it is currently undefined");
+            throw new IllegalArgumentException("Cannot change name since it is currently undefined");
         }
         return Stream.of(new NameWasChanged(eventId, TimeConversion.toDate(time), newName));
     }

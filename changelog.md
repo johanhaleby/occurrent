@@ -6,7 +6,7 @@
 * Added optimized support for `io.cloudevents.core.data.PojoCloudEventData`. Occurrent can convert `PojoCloudEventData` that contains `Map<String, Object>` and `String` efficiently.
 * Breaking change! Removed `org.occurrent.eventstore.mongodb.cloudevent.DocumentCloudEventData` since it's no longer needed after the CloudEvent SDK has introduced `PojoCloudEventData`. Use `PojoCloudEventData` and pass the document or preferably, map, to it.
 * Removed the `org.occurrent:application-service-blocking-kotlin` module, use `org.occurrent:application-service-blocking` instead. The Kotlin extension functions are provided with that module instead.
-* Added partial application support for Kotlin. Depend on module `org.occurrent:command-composition` and import extension functions from `org.occurrent.application.composition.command.partial`. This means that instead of doing:
+* Added partial function application support for Kotlin. Depend on module `org.occurrent:command-composition` and import extension functions from `org.occurrent.application.composition.command.partial`. This means that instead of doing:
     
   ```kotlin                                                
   val playerId = ...
@@ -21,6 +21,32 @@
   val playerId = ...
   applicationService.execute(gameId, Uno::play.partial(Timestamp.now(), playerId, DigitCard(Three, Blue))) 
   ```
+* Added command composition support for Kotlin. Depend on module `org.occurrent:command-composition` and import extension functions from `org.occurrent.application.composition.command.*`. This means that you 
+  can compose two functions like this using the `andThen` (infix) function:
+
+    ```kotlin
+    val numberOfPlayers = 4
+    val timestamp = Timestamp.now()
+    applicationService.execute(gameId, 
+        Uno::start.partial(gameId, timestamp, numberOfPlayers) 
+                andThen Uno::play.partial(timestamp, player1, DigitCard(Three, Blue)))
+    ```  
+
+    In the example above, `start` and `play` will be composed together into a single "command" that will be executed atomically.
+
+    If you have more than two commands, it could be easier to use the `composeCommand` function instead of repeating `andThen`:
+                                  
+    ```kotlin
+    val numberOfPlayers = 4
+    val timestamp = Timestamp.now()
+    applicationService.execute(gameId, 
+        composeCommands(
+            Uno::start.partial(gameId, timestamp, numberOfPlayers), 
+            Uno::play.partial(timestamp, player1, DigitCard(Three, Blue)),
+            Uno::play.partial(timestamp, player2, DigitCard(Four, Blue))
+        )
+    )
+    ```
 
 ## Changelog 0.3.0 (2020-11-21)
 * Upgraded Java Mongo driver from 4.0.4 to 4.1.1
