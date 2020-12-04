@@ -34,9 +34,23 @@ public class FlushMongoDBExtension implements BeforeEachCallback {
 
     @Override
     public void beforeEach(ExtensionContext extensionContext) {
+        try {
+            flushDb(0);
+        } catch (InterruptedException e) {
+            throw new RuntimeException(e);
+        }
+    }
+
+    private void flushDb(int attempt) throws InterruptedException {
         String databaseName = requireNonNull(connectionString.getDatabase(), "Database cannot be null in MongoDB connection string");
         try (MongoClient mongoClient = MongoClients.create(connectionString)) {
             mongoClient.getDatabase(databaseName).drop();
+        } catch (Throwable t) {
+            System.out.println("Failed to flush database:" + t);
+            Thread.sleep(100);
+            if (attempt < 10) {
+                flushDb(attempt + 1);
+            }
         }
     }
 }
