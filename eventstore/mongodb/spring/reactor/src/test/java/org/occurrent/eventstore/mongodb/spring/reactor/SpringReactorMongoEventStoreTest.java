@@ -24,6 +24,7 @@ import com.mongodb.reactivestreams.client.MongoClients;
 import io.cloudevents.CloudEvent;
 import io.cloudevents.core.builder.CloudEventBuilder;
 import io.cloudevents.core.data.PojoCloudEventData;
+import io.github.artsok.RepeatedIfExceptionsTest;
 import org.awaitility.Awaitility;
 import org.bson.Document;
 import org.junit.jupiter.api.BeforeEach;
@@ -55,7 +56,6 @@ import org.testcontainers.junit.jupiter.Testcontainers;
 import reactor.core.publisher.Flux;
 import reactor.core.publisher.Mono;
 
-import java.io.IOException;
 import java.net.URI;
 import java.time.LocalDateTime;
 import java.time.OffsetDateTime;
@@ -1155,7 +1155,7 @@ public class SpringReactorMongoEventStoreTest {
         }
 
         @Test
-        void query_filter_by_data_schema() throws IOException {
+        void query_filter_by_data_schema() {
             // Given
             LocalDateTime now = LocalDateTime.now();
             NameDefined nameDefined = new NameDefined(UUID.randomUUID().toString(), now, "name");
@@ -1294,7 +1294,7 @@ public class SpringReactorMongoEventStoreTest {
         @DisplayName("when time is represented as rfc 3339 string")
         class TimeRepresentedAsRfc3339String {
 
-            @Test
+            @RepeatedIfExceptionsTest(repeats = 3, suspend = 500)
             void query_filter_by_time_but_is_using_slow_string_comparison() {
                 // Given
                 LocalDateTime now = LocalDateTime.now();
@@ -1311,7 +1311,7 @@ public class SpringReactorMongoEventStoreTest {
                 assertThat(deserialize(events)).containsExactly(nameDefined, nameWasChanged1);
             }
 
-            @Test
+            @RepeatedIfExceptionsTest(repeats = 3, suspend = 500)
             void query_filter_by_time_range_is_wider_than_persisted_time_range() {
                 // Given
                 LocalDateTime now = LocalDateTime.now();
@@ -1364,7 +1364,7 @@ public class SpringReactorMongoEventStoreTest {
                 assertThat(deserialize(events)).containsExactly(nameDefined, nameWasChanged1); // nameWasChanged2 _should_ be included but it's not due to string comparison instead of date
             }
 
-            @Test
+            @RepeatedIfExceptionsTest(repeats = 3, suspend = 500)
             void query_filter_by_time_range_has_a_range_smaller_as_persisted_time_range() {
                 // Given
                 LocalDateTime now = LocalDateTime.now();

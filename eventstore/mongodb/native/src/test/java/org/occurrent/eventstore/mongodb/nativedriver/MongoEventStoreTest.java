@@ -1250,7 +1250,7 @@ class MongoEventStoreTest {
             @DisplayName("when time is represented as rfc 3339 string")
             class TimeRepresentedAsRfc3339String {
 
-                @RepeatedIfExceptionsTest(repeats = 3)
+                @RepeatedIfExceptionsTest(repeats = 3, suspend = 500)
                 void query_filter_by_time_but_is_using_slow_string_comparision() {
                     // Given
                     LocalDateTime now = LocalDateTime.now();
@@ -1267,7 +1267,7 @@ class MongoEventStoreTest {
                     assertThat(deserialize(events)).containsExactly(nameDefined, nameWasChanged1);
                 }
 
-                @Test
+                @RepeatedIfExceptionsTest(repeats = 3, suspend = 500)
                 void query_filter_by_time_range_is_wider_than_persisted_time_range() {
                     // Given
                     LocalDateTime now = LocalDateTime.now();
@@ -1320,7 +1320,7 @@ class MongoEventStoreTest {
                     assertThat(deserialize(events)).containsExactly(nameDefined, nameWasChanged1); // nameWasChanged2 _should_ be included but it's not due to string comparison instead of date
                 }
 
-                @Test
+                @RepeatedIfExceptionsTest(repeats = 3, suspend = 500)
                 void query_filter_by_time_range_has_a_range_smaller_as_persisted_time_range() {
                     // Given
                     LocalDateTime now = LocalDateTime.now();

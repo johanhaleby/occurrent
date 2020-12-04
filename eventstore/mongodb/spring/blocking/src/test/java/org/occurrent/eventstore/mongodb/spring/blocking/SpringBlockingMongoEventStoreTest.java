@@ -1264,7 +1264,7 @@ public class SpringBlockingMongoEventStoreTest {
         @DisplayName("when time is represented as rfc 3339 string")
         class TimeRepresentedAsRfc3339String {
 
-            @RepeatedIfExceptionsTest(repeats = 3)
+            @RepeatedIfExceptionsTest(repeats = 3, suspend = 500)
             void query_filter_by_time_but_is_using_slow_string_comparison() {
                 // Given
                 LocalDateTime now = LocalDateTime.now();
@@ -1281,7 +1281,7 @@ public class SpringBlockingMongoEventStoreTest {
                 assertThat(deserialize(events)).containsExactly(nameDefined, nameWasChanged1);
             }
 
-            @Test
+            @RepeatedIfExceptionsTest(repeats = 3, suspend = 500)
             void query_filter_by_time_range_is_wider_than_persisted_time_range() {
                 // Given
                 LocalDateTime now = LocalDateTime.now();
