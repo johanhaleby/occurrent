@@ -18,10 +18,10 @@ package org.occurrent.example.domain.wordguessinggame.mongodb.spring.blocking.in
 
 import org.occurrent.application.converter.CloudEventConverter
 import org.occurrent.eventstore.api.blocking.EventStoreQueries
+import org.occurrent.eventstore.api.blocking.queryForSequence
 import org.occurrent.example.domain.wordguessinggame.event.GameEvent
 import org.occurrent.filter.Filter
 import org.springframework.stereotype.Component
-import kotlin.streams.asSequence
 
 
 /**
@@ -31,13 +31,10 @@ import kotlin.streams.asSequence
 class GameEventQueries(private val eventStoreQueries: EventStoreQueries, private val cloudEventConverter: CloudEventConverter<GameEvent>) {
 
     @Suppress("UNCHECKED_CAST")
-    fun <T : GameEvent> query(filter: Filter): Sequence<T> {
-        return eventStoreQueries.query(filter).asSequence()
-                .map(cloudEventConverter::toDomainEvent)
-                .map { it as T }
-    }
+    fun <T : GameEvent> query(filter: Filter): Sequence<T> =
+        eventStoreQueries.queryForSequence(filter)
+            .map(cloudEventConverter::toDomainEvent)
+            .map { it as T }
 
-    fun <T : GameEvent> queryOne(filter: Filter): T {
-        return query<T>(filter).first()
-    }
+    fun <T : GameEvent> queryOne(filter: Filter): T = query<T>(filter).first()
 }

@@ -47,6 +47,7 @@
         )
     )
     ```
+* Added Kotlin extension functions to the blocking event store. They make it easier to write, read and query the event store with Kotlin `Sequence`'s. Import extension functions from package `org.occurrent.eventstore.api.blocking`.
 
 ## Changelog 0.3.0 (2020-11-21)
 * Upgraded Java Mongo driver from 4.0.4 to 4.1.1

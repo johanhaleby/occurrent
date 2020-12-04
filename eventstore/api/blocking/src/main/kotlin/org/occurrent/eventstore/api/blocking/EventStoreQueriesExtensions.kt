@@ -14,21 +14,20 @@
  * limitations under the License.
  */
 
-package org.occurrent.eventstore.api.blocking;
+package org.occurrent.eventstore.api.blocking
 
-import io.cloudevents.CloudEvent;
-
-import java.util.stream.Stream;
+import io.cloudevents.CloudEvent
+import org.occurrent.eventstore.api.blocking.EventStoreQueries.SortBy
+import org.occurrent.filter.Filter
+import kotlin.streams.asSequence
 
 /**
- * An interface that should be implemented by event streams that supports writing events to a stream without specifying a write condition.
+ * Query that returns a [Sequence] instead of a [java.util.stream.Stream].
+ * @see EventStoreQueries.query
  */
-public interface UnconditionallyWriteToEventStream {
-    /**
-     * Write {@code events} to a stream
-     *
-     * @param streamId The stream id of the stream to write to
-     * @param events   The events to write
-     */
-    void write(String streamId, Stream<CloudEvent> events);
-}
+fun EventStoreQueries.queryForSequence(
+    filter: Filter = Filter.all(),
+    skip: Int = 0,
+    limit: Int = Int.MAX_VALUE,
+    sortBy: SortBy = SortBy.NATURAL_ASC
+): Sequence<CloudEvent> = query(filter, skip, limit, sortBy).asSequence()
