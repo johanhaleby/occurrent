@@ -17,6 +17,7 @@
 package org.occurrent.eventstore.api.reactor;
 
 import io.cloudevents.CloudEvent;
+import org.occurrent.filter.Filter;
 import reactor.core.publisher.Mono;
 
 import java.net.URI;
@@ -42,6 +43,18 @@ public interface EventStoreOperations {
      * @param cloudEventSource The source of the cloud event (see {@link CloudEvent#getSource()})
      */
     Mono<Void> deleteEvent(String cloudEventId, URI cloudEventSource);
+
+    /**
+     * The most advanced version of delete which takes an arbitrary {@code Filter} to delete events from the event store.
+     * For example:
+     *
+     * <pre>
+     * eventStoreOperations.delete(streamId("myStream").and(streamVersion(lte(19L)));
+     * </pre>
+     * <p>
+     * This will delete all events in stream "myStream" that has a version less than or equal to 19.
+     */
+    Mono<Void> delete(Filter filter);
 
     /**
      * Update a unique cloud event. This is mainly useful as a strategy for complying with e.g. GDPR if you need to
