@@ -1,4 +1,4 @@
-## Changelog next version
+## Changelog 0.4.0 (2020-12-04)
 
 * Upgraded to Kotlin 1.4.20
 * Upgraded to cloud events 2.0.0.RC1
