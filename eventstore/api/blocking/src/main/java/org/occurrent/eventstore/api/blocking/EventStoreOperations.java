@@ -17,6 +17,7 @@
 package org.occurrent.eventstore.api.blocking;
 
 import io.cloudevents.CloudEvent;
+import org.occurrent.filter.Filter;
 
 import java.net.URI;
 import java.util.Optional;
@@ -44,6 +45,18 @@ public interface EventStoreOperations {
     void deleteEvent(String cloudEventId, URI cloudEventSource);
 
     /**
+     * The most advanced version of delete which takes an arbitrary {@code Filter} to delete events from the event store.
+     * For example:
+     *
+     * <pre>
+     * eventStoreOperations.delete(streamId("myStream").and(streamVersion(lte(19L)));
+     * </pre>
+     * <p>
+     * This will delete all events in stream "myStream" that has a version less than or equal to 19.
+     */
+    void delete(Filter filter);
+
+    /**
      * Update a unique cloud event. This is mainly useful as a strategy for complying with e.g. GDPR if you need to
      * remove some attributes that are sensitive.
      *
@@ -56,5 +69,4 @@ public interface EventStoreOperations {
      * @return The updated cloud event or an empty <code>Optional</code> if no cloud event was found matching the <code>cloudEventId</code> and <code>cloudEventSource</code>.
      */
     Optional<CloudEvent> updateEvent(String cloudEventId, URI cloudEventSource, Function<CloudEvent, CloudEvent> updateFunction);
-    // TODO Implement generic delete method with a Condition
 }

@@ -43,6 +43,7 @@ import org.occurrent.eventstore.api.WriteCondition;
 import org.occurrent.eventstore.api.WriteConditionNotFulfilledException;
 import org.occurrent.eventstore.api.blocking.EventStoreQueries;
 import org.occurrent.eventstore.api.blocking.EventStream;
+import org.occurrent.filter.Filter;
 import org.occurrent.mongodb.timerepresentation.TimeRepresentation;
 import org.occurrent.testsupport.mongodb.FlushMongoDBExtension;
 import org.testcontainers.containers.MongoDBContainer;
@@ -367,6 +368,29 @@ class MongoEventStoreTest {
                     () -> assertThat(readEvents).containsExactly(nameDefined),
                     () -> assertThat(eventStore.exists("name")).isTrue(),
                     () -> assertThat(database.getCollection("events").countDocuments(Filters.eq(STREAM_ID, "name"))).isNotZero()
+            );
+        }
+
+        @Test
+        void delete_deletes_events_according_to_the_filter() {
+            // Given
+            LocalDateTime now = LocalDateTime.now();
+            NameDefined nameDefined = new NameDefined(UUID.randomUUID().toString(), now, "name");
+            NameWasChanged nameWasChanged1 = new NameWasChanged(UUID.randomUUID().toString(), now.plusHours(1), "name2");
+            persist("name", Stream.of(nameDefined, nameWasChanged1));
+
+            NameDefined nameDefined2 = new NameDefined(UUID.randomUUID().toString(), now, "name2");
+            persist("name2", nameDefined2);
+
+            // When
+            eventStore.delete(streamId("name").and(time(lte(now.atOffset(UTC).plusMinutes(1)))));
+
+            // Then
+            List<DomainEvent> stream1 = deserialize(eventStore.read("name").events());
+            List<DomainEvent> stream2 = deserialize(eventStore.read("name2").events());
+            assertAll(
+                    () -> assertThat(stream1).containsExactly(nameWasChanged1),
+                    () -> assertThat(stream2).containsExactly(nameDefined2)
             );
         }
     }

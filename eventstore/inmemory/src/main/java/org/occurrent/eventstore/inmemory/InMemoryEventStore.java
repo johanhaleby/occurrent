@@ -27,6 +27,7 @@ import org.occurrent.eventstore.api.WriteConditionNotFulfilledException;
 import org.occurrent.eventstore.api.blocking.EventStore;
 import org.occurrent.eventstore.api.blocking.EventStoreOperations;
 import org.occurrent.eventstore.api.blocking.EventStream;
+import org.occurrent.filter.Filter;
 import org.occurrent.functionalsupport.internal.FunctionalSupport.Pair;
 
 import java.net.URI;
@@ -133,6 +134,12 @@ public class InMemoryEventStore implements EventStore, EventStoreOperations {
             }
             return newEvents;
         });
+    }
+
+    @Override
+    public void delete(Filter filter) {
+        // TODO How to make this better?
+        throw new IllegalArgumentException("Not implemented yet");
     }
 
     @Override

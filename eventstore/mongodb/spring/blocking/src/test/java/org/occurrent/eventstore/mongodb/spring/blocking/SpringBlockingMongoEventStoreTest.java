@@ -391,6 +391,29 @@ public class SpringBlockingMongoEventStoreTest {
                     () -> assertThat(mongoTemplate.count(query(where(OccurrentCloudEventExtension.STREAM_ID).is("name")), "events")).isEqualTo(1)
             );
         }
+
+        @Test
+        void delete_deletes_events_according_to_the_filter() {
+            // Given
+            LocalDateTime now = LocalDateTime.now();
+            NameDefined nameDefined = new NameDefined(UUID.randomUUID().toString(), now, "name");
+            NameWasChanged nameWasChanged1 = new NameWasChanged(UUID.randomUUID().toString(), now.plusHours(1), "name2");
+            persist("name", Stream.of(nameDefined, nameWasChanged1));
+
+            NameDefined nameDefined2 = new NameDefined(UUID.randomUUID().toString(), now, "name2");
+            persist("name2", nameDefined2);
+
+            // When
+            eventStore.delete(streamId("name").and(time(lte(now.atOffset(UTC).plusMinutes(1)))));
+
+            // Then
+            List<DomainEvent> stream1 = deserialize(eventStore.read("name").events());
+            List<DomainEvent> stream2 = deserialize(eventStore.read("name2").events());
+            assertAll(
+                    () -> assertThat(stream1).containsExactly(nameWasChanged1),
+                    () -> assertThat(stream2).containsExactly(nameDefined2)
+            );
+        }
     }
 
     @Nested

@@ -243,6 +243,13 @@ public class MongoEventStore implements EventStore, EventStoreOperations, EventS
     }
 
     @Override
+    public void delete(Filter filter) {
+        requireNonNull(filter, "Filter cannot be null");
+        final Bson bson = FilterToBsonFilterConverter.convertFilterToBsonFilter(timeRepresentation, filter);
+        eventCollection.deleteMany(bson);
+    }
+
+    @Override
     public Optional<CloudEvent> updateEvent(String cloudEventId, URI cloudEventSource, Function<CloudEvent, CloudEvent> updateFunction) {
         requireNonNull(updateFunction, "Update function cannot be null");
 

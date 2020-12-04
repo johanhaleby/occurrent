@@ -147,6 +147,13 @@ public class SpringBlockingMongoEventStore implements EventStore, EventStoreOper
     }
 
     @Override
+    public void delete(Filter filter) {
+        requireNonNull(filter, "Filter cannot be null");
+        final Query query = FilterConverter.convertFilterToQuery(timeRepresentation, filter);
+        mongoTemplate.remove(query, eventStoreCollectionName);
+    }
+
+    @Override
     public Optional<CloudEvent> updateEvent(String cloudEventId, URI cloudEventSource, Function<CloudEvent, CloudEvent> updateFunction) {
         Function<Function<CloudEvent, CloudEvent>, Optional<CloudEvent>> logic = (fn) -> {
             Query cloudEventQuery = cloudEventIdEqualTo(cloudEventId, cloudEventSource);
@@ -199,7 +206,8 @@ public class SpringBlockingMongoEventStore implements EventStore, EventStoreOper
         private long version;
         private Stream<T> events;
 
-        @SuppressWarnings("unused") EventStreamImpl() {
+        @SuppressWarnings("unused")
+        EventStreamImpl() {
         }
 
         EventStreamImpl(String _id, long version, Stream<T> events) {
