@@ -13,18 +13,19 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-package org.occurrent.example.domain.wordguessinggame.mongodb.spring.blocking.features.game.website
+package org.occurrent.example.domain.wordguessinggame.mongodb.spring.blocking.features.gameplay.website
 
 import kotlinx.html.*
 import kotlinx.html.stream.appendHTML
-import org.occurrent.example.domain.wordguessinggame.mongodb.spring.blocking.features.game.GamePlayApplicationService
-import org.occurrent.example.domain.wordguessinggame.mongodb.spring.blocking.features.game.queries.EndedGamesQuery
-import org.occurrent.example.domain.wordguessinggame.mongodb.spring.blocking.features.game.queries.FindGameByIdQuery
-import org.occurrent.example.domain.wordguessinggame.mongodb.spring.blocking.features.game.queries.OngoingGamesQuery
-import org.occurrent.example.domain.wordguessinggame.mongodb.spring.blocking.features.game.website.Website.Views.gameEndedView
-import org.occurrent.example.domain.wordguessinggame.mongodb.spring.blocking.features.game.website.Website.Views.makeGuessView
-import org.occurrent.example.domain.wordguessinggame.mongodb.spring.blocking.features.game.website.Website.Views.newGameView
-import org.occurrent.example.domain.wordguessinggame.mongodb.spring.blocking.infrastructure.loggerFor
+import org.occurrent.example.domain.wordguessinggame.mongodb.spring.blocking.features.gameplay.usecases.MakeGuess
+import org.occurrent.example.domain.wordguessinggame.mongodb.spring.blocking.features.gameplay.usecases.StartGame
+import org.occurrent.example.domain.wordguessinggame.mongodb.spring.blocking.features.gameplay.views.endedgamesoverview.EndedGamesOverviewQuery
+import org.occurrent.example.domain.wordguessinggame.mongodb.spring.blocking.features.gameplay.views.game.FindGameByIdQuery
+import org.occurrent.example.domain.wordguessinggame.mongodb.spring.blocking.features.gameplay.views.ongoinggamesoverview.OngoingGamesQuery
+import org.occurrent.example.domain.wordguessinggame.mongodb.spring.blocking.features.gameplay.website.Website.Views.gameEndedView
+import org.occurrent.example.domain.wordguessinggame.mongodb.spring.blocking.features.gameplay.website.Website.Views.makeGuessView
+import org.occurrent.example.domain.wordguessinggame.mongodb.spring.blocking.features.gameplay.website.Website.Views.newGameView
+import org.occurrent.example.domain.wordguessinggame.mongodb.spring.blocking.support.loggerFor
 import org.occurrent.example.domain.wordguessinggame.readmodel.GameEndedReadModel
 import org.occurrent.example.domain.wordguessinggame.readmodel.GameWasWonReadModel
 import org.occurrent.example.domain.wordguessinggame.readmodel.OngoingGameReadModel
@@ -43,14 +44,18 @@ import javax.servlet.http.HttpSession
 
 @RestController
 @RequestMapping(path = ["/games"], produces = [MediaType.TEXT_HTML_VALUE])
-class Website(private val applicationService: GamePlayApplicationService, private val findGameByIdQuery: FindGameByIdQuery,
-              private val ongoingGamesQuery: OngoingGamesQuery, private val endedGamesQuery: EndedGamesQuery) {
+class Website(
+    private val startGame: StartGame, private val makeGuess: MakeGuess,
+    private val findGameByIdQuery: FindGameByIdQuery,
+    private val ongoingGamesQuery: OngoingGamesQuery, private val endedGamesOverviewQuery: EndedGamesOverviewQuery,
+
+    ) {
     private val log = loggerFor<Website>()
 
     @GetMapping
     fun games(response: ServletResponse) {
         val ongoingGames = ongoingGamesQuery.execute(10).toList()
-        val endedGames = endedGamesQuery.execute(10).toList()
+        val endedGames = endedGamesOverviewQuery.execute(10).toList()
 
         response.writer.appendHTML().html {
             body {
@@ -130,19 +135,21 @@ class Website(private val applicationService: GamePlayApplicationService, privat
     }
 
     @PostMapping
-    fun startGame(@RequestParam("gameId") gameId: UUID, @RequestParam("category") category: String,
-                  @RequestParam("words") words: String, session: HttpSession): ResponseEntity<*> {
+    fun startGame(
+        @RequestParam("gameId") gameId: UUID, @RequestParam("category") category: String,
+        @RequestParam("words") words: String, session: HttpSession
+    ): ResponseEntity<*> {
         val playerId = session.getOrGeneratePlayerId()
         val wordsInCategory = words.split('\n').map { it.split(',') }.flatten().map(String::trim).map(::Word)
         val wordsToChooseFrom = WordList(WordCategory(category.trim()), wordsInCategory)
-        applicationService.startGame(gameId, Timestamp(), playerId, wordsToChooseFrom)
+        startGame(gameId, Timestamp(), playerId, wordsToChooseFrom)
         return ResponseEntity.status(HttpStatus.SEE_OTHER).header(HttpHeaders.LOCATION, gameLocation(gameId)).build<Any>()
     }
 
     @PostMapping("/{gameId}")
     fun makeGuess(@PathVariable("gameId") gameId: UUID, @RequestParam("word") word: String, session: HttpSession): ResponseEntity<*> {
         val playerId = session.getOrGeneratePlayerId()
-        applicationService.makeGuess(gameId, Timestamp(), playerId, Word(word))
+        makeGuess(gameId, Timestamp(), playerId, Word(word))
         return ResponseEntity.status(HttpStatus.SEE_OTHER).header(HttpHeaders.LOCATION, gameLocation(gameId)).build<Any>()
     }
 
@@ -250,11 +257,11 @@ class Website(private val applicationService: GamePlayApplicationService, privat
     }
 
     private fun HttpSession.getOrGeneratePlayerId(): PlayerId =
-            if (hasAttribute(PLAYER_ID)) {
-                attribute(PLAYER_ID)
-            } else {
-                PlayerId.randomUUID().also { playerId -> setAttribute(PLAYER_ID, playerId) }
-            }
+        if (hasAttribute(PLAYER_ID)) {
+            attribute(PLAYER_ID)
+        } else {
+            PlayerId.randomUUID().also { playerId -> setAttribute(PLAYER_ID, playerId) }
+        }
 }
 
 private inline fun <reified T> HttpSession.attribute(name: String) = getAttribute(name) as T

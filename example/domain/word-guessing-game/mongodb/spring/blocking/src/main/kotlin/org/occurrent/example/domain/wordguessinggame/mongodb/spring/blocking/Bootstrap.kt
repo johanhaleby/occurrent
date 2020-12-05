@@ -23,8 +23,8 @@ import org.occurrent.eventstore.api.blocking.EventStoreQueries
 import org.occurrent.eventstore.mongodb.spring.blocking.EventStoreConfig
 import org.occurrent.eventstore.mongodb.spring.blocking.SpringBlockingMongoEventStore
 import org.occurrent.example.domain.wordguessinggame.event.GameEvent
+import org.occurrent.example.domain.wordguessinggame.mongodb.spring.blocking.features.emailwinner.SendEmailToWinner
 import org.occurrent.example.domain.wordguessinggame.mongodb.spring.blocking.features.game.GameCloudEventConverter
-import org.occurrent.example.domain.wordguessinggame.mongodb.spring.blocking.features.game.policy.SendEmailToWinnerPolicy
 import org.occurrent.mongodb.timerepresentation.TimeRepresentation
 import org.occurrent.subscription.api.blocking.BlockingSubscription
 import org.occurrent.subscription.api.blocking.BlockingSubscriptionPositionStorage
@@ -52,12 +52,11 @@ import org.occurrent.application.service.blocking.ApplicationService as Occurren
  */
 @SpringBootApplication
 @EnableRetry
-@Import(SendEmailToWinnerPolicy::class)
+@Import(SendEmailToWinner::class)
 class Bootstrap : WebMvcConfigurer {
     companion object {
         private const val EVENTS_COLLECTION_NAME = "events"
     }
-
 
     // Redirect to /games when navigating to /
     override fun addViewControllers(registry: ViewControllerRegistry) {

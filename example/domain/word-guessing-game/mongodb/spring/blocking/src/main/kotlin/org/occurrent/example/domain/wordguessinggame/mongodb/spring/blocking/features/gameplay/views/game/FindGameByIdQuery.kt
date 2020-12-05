@@ -14,10 +14,10 @@
  * limitations under the License.
  */
 
-package org.occurrent.example.domain.wordguessinggame.mongodb.spring.blocking.features.game.queries
+package org.occurrent.example.domain.wordguessinggame.mongodb.spring.blocking.features.gameplay.views.game
 
 import org.occurrent.example.domain.wordguessinggame.event.GameEvent
-import org.occurrent.example.domain.wordguessinggame.mongodb.spring.blocking.infrastructure.GameEventQueries
+import org.occurrent.example.domain.wordguessinggame.mongodb.spring.blocking.features.GameEventQueries
 import org.occurrent.example.domain.wordguessinggame.readmodel.GameReadModel
 import org.occurrent.example.domain.wordguessinggame.readmodel.rehydrateToGameReadModel
 import org.occurrent.filter.Filter.subject

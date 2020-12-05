@@ -14,7 +14,7 @@
  * limitations under the License.
  */
 
-package org.occurrent.example.domain.wordguessinggame.mongodb.spring.blocking.infrastructure
+package org.occurrent.example.domain.wordguessinggame.mongodb.spring.blocking.features
 
 import org.occurrent.application.converter.CloudEventConverter
 import org.occurrent.eventstore.api.blocking.EventStoreQueries

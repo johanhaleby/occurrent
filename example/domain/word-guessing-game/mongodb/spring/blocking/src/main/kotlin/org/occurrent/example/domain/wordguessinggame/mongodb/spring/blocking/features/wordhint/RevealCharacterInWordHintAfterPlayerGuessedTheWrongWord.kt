@@ -14,34 +14,27 @@
  * limitations under the License.
  */
 
-package org.occurrent.example.domain.wordguessinggame.mongodb.spring.blocking.features.game.policy
+package org.occurrent.example.domain.wordguessinggame.mongodb.spring.blocking.features.wordhint
 
 import org.occurrent.application.service.blocking.ApplicationService
 import org.occurrent.application.service.blocking.execute
 import org.occurrent.example.domain.wordguessinggame.event.*
-import org.occurrent.example.domain.wordguessinggame.mongodb.spring.blocking.infrastructure.GameEventQueries
+import org.occurrent.example.domain.wordguessinggame.mongodb.spring.blocking.features.GameEventQueries
 import org.occurrent.example.domain.wordguessinggame.writemodel.WordHintCharacterRevelation
 import org.occurrent.example.domain.wordguessinggame.writemodel.WordHintData
-import org.occurrent.filter.Filter.streamId
-import org.occurrent.filter.Filter.type
+import org.occurrent.filter.Filter
 import org.springframework.stereotype.Component
 
+
 @Component
-class WordHintPolicies(private val applicationService: ApplicationService<GameEvent>, private val gameEventQueries: GameEventQueries) {
+class RevealCharacterInWordHintAfterPlayerGuessedTheWrongWord(
+    private val applicationService: ApplicationService<GameEvent>,
+    private val gameEventQueries: GameEventQueries
+) {
 
-    fun whenGameWasStartedThenRevealInitialCharactersInWordHint(gameWasStarted: GameWasStarted) {
-        applicationService.execute("wordhint:${gameWasStarted.gameId}") { events: Sequence<GameEvent> ->
-            if (events.toList().isEmpty()) {
-                WordHintCharacterRevelation.revealInitialCharactersInWordHintWhenGameWasStarted(WordHintData(gameWasStarted.gameId, gameWasStarted.wordToGuess))
-            } else {
-                emptySequence()
-            }
-        }
-    }
-
-    fun whenPlayerGuessedTheWrongWordThenRevealCharacterInWordHint(playerGuessedTheWrongWord: PlayerGuessedTheWrongWord) {
+    operator fun invoke(playerGuessedTheWrongWord: PlayerGuessedTheWrongWord) {
         val gameId = playerGuessedTheWrongWord.gameId
-        val gameWasStarted = gameEventQueries.queryOne<GameWasStarted>(streamId(gameId.toString()).and(type(GameWasStarted::class.eventType())))
+        val gameWasStarted = gameEventQueries.queryOne<GameWasStarted>(Filter.streamId(gameId.toString()).and(Filter.type(GameWasStarted::class.eventType())))
         applicationService.execute("wordhint:$gameId") { events: Sequence<GameEvent> ->
             val characterPositionsInWord = events.map { it as CharacterInWordHintWasRevealed }.map { it.characterPositionInWord }.toSet()
             val wordHintData = WordHintData(gameId, wordToGuess = gameWasStarted.wordToGuess, currentlyRevealedPositions = characterPositionsInWord)
