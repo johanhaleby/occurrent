@@ -24,6 +24,8 @@ import org.occurrent.example.domain.wordguessinggame.writemodel.BasisForPointAwa
 import org.occurrent.example.domain.wordguessinggame.writemodel.PointAwarding
 import org.occurrent.filter.Filter.streamId
 import org.occurrent.filter.Filter.type
+import org.springframework.retry.annotation.Backoff
+import org.springframework.retry.annotation.Retryable
 import org.springframework.stereotype.Component
 
 @Component
@@ -32,6 +34,7 @@ class AwardPointsToPlayerThatGuessedTheRightWord(
     private val gameEventQueries: GameEventQueries
 ) {
 
+    @Retryable(backoff = Backoff(delay = 100, multiplier = 2.0, maxDelay = 1000))
     operator fun invoke(playerGuessedTheRightWord: PlayerGuessedTheRightWord) {
         val gameId = playerGuessedTheRightWord.gameId
         val playerId = playerGuessedTheRightWord.playerId

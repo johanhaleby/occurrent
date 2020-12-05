@@ -22,12 +22,15 @@ import org.occurrent.example.domain.wordguessinggame.event.GameEvent
 import org.occurrent.example.domain.wordguessinggame.event.GameWasStarted
 import org.occurrent.example.domain.wordguessinggame.writemodel.WordHintCharacterRevelation
 import org.occurrent.example.domain.wordguessinggame.writemodel.WordHintData
+import org.springframework.retry.annotation.Backoff
+import org.springframework.retry.annotation.Retryable
 import org.springframework.stereotype.Component
 
 
 @Component
 class RevealInitialCharactersInWordHintAfterGameIsStarted(private val applicationService: ApplicationService<GameEvent>) {
 
+    @Retryable(backoff = Backoff(delay = 100, multiplier = 2.0, maxDelay = 1000))
     operator fun invoke(gameWasStarted: GameWasStarted) {
         applicationService.execute("wordhint:${gameWasStarted.gameId}") { events: Sequence<GameEvent> ->
             if (events.toList().isEmpty()) {

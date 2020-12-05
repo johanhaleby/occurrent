@@ -23,6 +23,8 @@ import org.occurrent.example.domain.wordguessinggame.mongodb.spring.blocking.fea
 import org.occurrent.example.domain.wordguessinggame.writemodel.WordHintCharacterRevelation
 import org.occurrent.example.domain.wordguessinggame.writemodel.WordHintData
 import org.occurrent.filter.Filter
+import org.springframework.retry.annotation.Backoff
+import org.springframework.retry.annotation.Retryable
 import org.springframework.stereotype.Component
 
 
@@ -32,6 +34,7 @@ class RevealCharacterInWordHintAfterPlayerGuessedTheWrongWord(
     private val gameEventQueries: GameEventQueries
 ) {
 
+    @Retryable(backoff = Backoff(delay = 100, multiplier = 2.0, maxDelay = 1000))
     operator fun invoke(playerGuessedTheWrongWord: PlayerGuessedTheWrongWord) {
         val gameId = playerGuessedTheWrongWord.gameId
         val gameWasStarted = gameEventQueries.queryOne<GameWasStarted>(Filter.streamId(gameId.toString()).and(Filter.type(GameWasStarted::class.eventType())))
