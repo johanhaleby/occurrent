@@ -32,6 +32,9 @@ import kotlin.reflect.KClass
 
 private typealias CardDTO = Map<String, String>
 
+/**
+ * Convert event to cloud events for the UNO game
+ */
 class UnoCloudEventConverter(private val objectMapper: ObjectMapper) : CloudEventConverter<Event> {
 
     override fun toCloudEvent(event: Event): CloudEvent {
@@ -44,14 +47,14 @@ class UnoCloudEventConverter(private val objectMapper: ObjectMapper) : CloudEven
         }.toJson()
 
         return CloudEventBuilder.v1()
-                .withId(event.eventId.toString())
-                .withSource(URI.create("urn:occurrent:example:uno"))
-                .withType(event.type)
-                .withTime(event.timestamp.atOffset(ZoneOffset.UTC).truncatedTo(MILLIS))
-                .withSubject(event.gameId.toString())
-                .withDataContentType("application/json")
-                .withData(data)
-                .build()
+            .withId(event.eventId.toString())
+            .withSource(URI.create("urn:occurrent:example:uno"))
+            .withType(event.type)
+            .withTime(event.timestamp.atOffset(ZoneOffset.UTC).truncatedTo(MILLIS))
+            .withSubject(event.gameId.toString())
+            .withDataContentType("application/json")
+            .withData(data)
+            .build()
     }
 
     override fun toDomainEvent(cloudEvent: CloudEvent): Event {
@@ -124,8 +127,8 @@ private fun String.toDigit(): Digit = when (this) {
     else -> throw IllegalStateException("Invalid color in database: $this")
 }
 
-private val KClass<out Event>.type: String
+val KClass<out Event>.type: String
     get() = simpleName!!
 
-private val Event.type: String
+val Event.type: String
     get() = this::class.type

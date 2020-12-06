@@ -18,9 +18,8 @@ package org.occurrent.example.domain.uno
 
 import org.occurrent.example.domain.uno.Card.*
 import org.occurrent.example.domain.uno.Color.*
-import java.util.*
-import java.util.concurrent.ConcurrentHashMap
 
+typealias TurnCount = Int
 
 private object ConsoleColor {
     private const val DEFAULT = "\u001b[0m" // Text Reset
@@ -47,27 +46,21 @@ private fun generateCardDescription(card: Card): String {
     }
 }
 
-class ProgressTracker {
-    private val turnCountPerGame = ConcurrentHashMap<UUID, Int>()
-
+object ProgressTracker {
     /**
      * Track game progress by a supplying a higher-order function
      */
-    fun trackProgress(fn: (String) -> Unit, event: Event) {
+    fun trackProgress(fn: (String) -> Unit, event: Event, turnCountForGame: TurnCount) {
         val description = when (event) {
             is GameStarted -> {
-                turnCountPerGame[event.gameId] = 0
-                """Game ${event.gameId} started with ${event.firstPlayerId} players
+                """Game ${event.gameId} started with ${event.playerCount} players
                 |${consoleColor(event.firstCard.color)}First card: ${generateCardDescription(event.firstCard)}"""
             }
             is CardPlayed -> {
-                val turnCountForGame = turnCountPerGame.compute(event.gameId) { _, turnCount ->
-                    turnCount!!.inc()
-                }
                 "${consoleColor(event.card.color)}[$turnCountForGame] Player ${event.playerId} played ${generateCardDescription(event.card)}"
             }
-            is PlayerPlayedAtWrongTurn -> "${consoleColor(Red)}[${turnCountPerGame[event.gameId]}] Player ${event.playerId} played at wrong turn a ${generateCardDescription(event.card)}"
-            is PlayerPlayedWrongCard -> "${consoleColor(Red)}[${turnCountPerGame[event.gameId]}] Player ${event.playerId} played a ${generateCardDescription(event.card)}: Wrong color wrong value"
+            is PlayerPlayedAtWrongTurn -> "${consoleColor(Red)}[$turnCountForGame] Player ${event.playerId} played at wrong turn a ${generateCardDescription(event.card)}"
+            is PlayerPlayedWrongCard -> "${consoleColor(Red)}[$turnCountForGame] Player ${event.playerId} played a ${generateCardDescription(event.card)}: Wrong color wrong value"
             is DirectionChanged -> "Direction changed. Now playing ${event.direction::class.simpleName}."
         }.trimMargin()
 

@@ -23,13 +23,13 @@ import org.occurrent.application.service.blocking.execute
 import org.occurrent.application.service.blocking.implementation.GenericApplicationService
 import org.occurrent.eventstore.mongodb.nativedriver.EventStoreConfig
 import org.occurrent.eventstore.mongodb.nativedriver.MongoEventStore
+import org.occurrent.example.domain.uno.*
 import org.occurrent.example.domain.uno.Card.DigitCard
 import org.occurrent.example.domain.uno.Color.*
 import org.occurrent.example.domain.uno.Digit.*
-import org.occurrent.example.domain.uno.GameId
-import org.occurrent.example.domain.uno.ProgressTracker
-import org.occurrent.example.domain.uno.Timestamp
-import org.occurrent.example.domain.uno.Uno
+import org.occurrent.filter.Filter
+import org.occurrent.filter.Filter.streamId
+import org.occurrent.filter.Filter.type
 import org.occurrent.mongodb.timerepresentation.TimeRepresentation
 import org.occurrent.subscription.mongodb.nativedriver.blocking.BlockingSubscriptionForMongoDB
 import org.occurrent.subscription.mongodb.nativedriver.blocking.RetryStrategy
@@ -55,11 +55,10 @@ fun main() {
     val cloudEventConverter = UnoCloudEventConverter(objectMapper)
     val applicationService = GenericApplicationService(eventStore, cloudEventConverter)
 
-    val unoProgressTracker = ProgressTracker()
-
     subscription.subscribe("progress-tracker") { cloudEvent ->
         val domainEvent = cloudEventConverter.toDomainEvent(cloudEvent)
-        unoProgressTracker.trackProgress(log::info, domainEvent)
+        val turnCount = eventStore.count(streamId(domainEvent.gameId.toString()).and(type(CardPlayed::class.type))).toInt()
+        ProgressTracker.trackProgress(log::info, domainEvent, turnCount)
     }.waitUntilStarted()
 
     Runtime.getRuntime().addShutdownHook(Thread {

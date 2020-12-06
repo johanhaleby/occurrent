@@ -40,6 +40,7 @@ class Policies(val subscriptions: BlockingSubscription, val cloudEventConverter:
      */
     final inline fun <reified T : GameEvent> newPolicy(policyId: String, crossinline fn: (T) -> Unit): Subscription = subscriptions.subscribe(policyId, filter(type(T::class.eventType()))) { cloudEvent ->
         val event = cloudEventConverter.toDomainEvent(cloudEvent) as T
+        
         fn(event)
     }.apply {
         waitUntilStarted()
