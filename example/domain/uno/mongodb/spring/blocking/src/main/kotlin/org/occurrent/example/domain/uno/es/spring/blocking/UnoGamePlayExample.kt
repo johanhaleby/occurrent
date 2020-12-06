@@ -18,10 +18,10 @@ package org.occurrent.example.domain.uno.es.spring.blocking
 
 import org.occurrent.application.composition.command.partial
 import org.occurrent.example.domain.uno.*
+import org.occurrent.example.domain.uno.Card.DigitCard
 import org.springframework.boot.context.event.ApplicationReadyEvent
 import org.springframework.context.event.EventListener
 import org.springframework.stereotype.Component
-import javax.annotation.PostConstruct
 
 
 @Component
@@ -35,11 +35,11 @@ class UnoGamePlayExample(private val applicationService: UnoApplicationService) 
         val gameId = GameId.randomUUID()
 
         val commands = listOf(
-            Uno::start.partial(gameId, Timestamp.now(), 4, Card.DigitCard(Digit.Three, Color.Red)),
-            Uno::play.partial(Timestamp.now(), 0, Card.DigitCard(Digit.Three, Color.Blue)),
-            Uno::play.partial(Timestamp.now(), 1, Card.DigitCard(Digit.Eight, Color.Blue)),
-            Uno::play.partial(Timestamp.now(), 2, Card.DigitCard(Digit.Eight, Color.Yellow)),
-            Uno::play.partial(Timestamp.now(), 0, Card.DigitCard(Digit.Four, Color.Green))
+            Uno::start.partial(gameId, Timestamp.now(), 4, DigitCard(Digit.Three, Color.Red)),
+            Uno::play.partial(Timestamp.now(), 0, DigitCard(Digit.Three, Color.Blue)),
+            Uno::play.partial(Timestamp.now(), 1, DigitCard(Digit.Eight, Color.Blue)),
+            Uno::play.partial(Timestamp.now(), 2, DigitCard(Digit.Eight, Color.Yellow)),
+            Uno::play.partial(Timestamp.now(), 0, DigitCard(Digit.Four, Color.Green))
         )
 
         commands.forEach { command ->
