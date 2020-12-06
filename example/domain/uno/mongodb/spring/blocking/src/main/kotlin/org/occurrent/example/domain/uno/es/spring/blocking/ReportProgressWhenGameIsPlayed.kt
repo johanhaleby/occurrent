@@ -47,7 +47,7 @@ class ReportProgressWhenGameIsPlayed(
     }
 
     // Note that we don't need a Redis transaction here since the method is both idempotent and order independent.
-    // Order independence is actually not required either since the subscription guarantees the ordering of event already.
+    // Order independence is actually not required either since the subscription guarantees the ordering of events already.
     private fun incrementAndGetTurnCountForGame(gameId: GameId, eventId: EventId): Int = retryOperations.execute<Int, Throwable> {
         redis.opsForSet().add(gameId.toString(), eventId.toString())
         getTurnCountForGame(gameId)

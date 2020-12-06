@@ -26,7 +26,6 @@
     <modules>
         <module>native</module>
         <module>spring</module>
-        <module>common</module>
     </modules>
 
     <artifactId>example-number-guessing-game-es-mongodb</artifactId>
