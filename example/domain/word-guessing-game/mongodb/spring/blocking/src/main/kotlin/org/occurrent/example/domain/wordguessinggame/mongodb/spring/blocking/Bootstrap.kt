@@ -16,7 +16,7 @@
 package org.occurrent.example.domain.wordguessinggame.mongodb.spring.blocking
 
 import com.fasterxml.jackson.databind.ObjectMapper
-import com.fasterxml.jackson.module.kotlin.KotlinModule
+import com.fasterxml.jackson.module.kotlin.jacksonObjectMapper
 import org.occurrent.application.converter.CloudEventConverter
 import org.occurrent.application.service.blocking.implementation.GenericApplicationService
 import org.occurrent.eventstore.api.blocking.EventStoreQueries
@@ -85,7 +85,7 @@ class Bootstrap : WebMvcConfigurer {
     }
 
     @Bean
-    fun objectMapper() = ObjectMapper().apply { registerModule(KotlinModule()) }
+    fun objectMapper() = jacksonObjectMapper()
 
     @Bean
     fun cloudEventConverter(objectMapper: ObjectMapper): CloudEventConverter<GameEvent> = GameCloudEventConverter(objectMapper, URI.create("urn:occurrent:domain:wordguessinggame:game"), URI.create("urn:occurrent:domain:wordguessinggame:wordhint"), URI.create("urn:occurrent:domain:wordguessinggame:points"))
