@@ -14,7 +14,7 @@
  * limitations under the License.
  */
 
-package org.occurrent.example.domain.wordguessinggame.mongodb.spring.blocking.features.game
+package org.occurrent.example.domain.wordguessinggame.mongodb.spring.blocking.features
 
 import com.fasterxml.jackson.databind.ObjectMapper
 import com.fasterxml.jackson.module.kotlin.convertValue
