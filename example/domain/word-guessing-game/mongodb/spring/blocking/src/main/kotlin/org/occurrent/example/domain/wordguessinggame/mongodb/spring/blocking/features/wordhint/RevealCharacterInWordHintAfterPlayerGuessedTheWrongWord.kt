@@ -22,7 +22,8 @@ import org.occurrent.example.domain.wordguessinggame.event.*
 import org.occurrent.example.domain.wordguessinggame.mongodb.spring.blocking.features.GameEventQueries
 import org.occurrent.example.domain.wordguessinggame.writemodel.WordHintCharacterRevelation
 import org.occurrent.example.domain.wordguessinggame.writemodel.WordHintData
-import org.occurrent.filter.Filter
+import org.occurrent.filter.Filter.streamId
+import org.occurrent.filter.Filter.type
 import org.springframework.retry.annotation.Backoff
 import org.springframework.retry.annotation.Retryable
 import org.springframework.stereotype.Component
@@ -37,7 +38,7 @@ class RevealCharacterInWordHintAfterPlayerGuessedTheWrongWord(
     @Retryable(backoff = Backoff(delay = 100, multiplier = 2.0, maxDelay = 1000))
     operator fun invoke(playerGuessedTheWrongWord: PlayerGuessedTheWrongWord) {
         val gameId = playerGuessedTheWrongWord.gameId
-        val gameWasStarted = gameEventQueries.queryOne<GameWasStarted>(Filter.streamId(gameId.toString()).and(Filter.type(GameWasStarted::class.eventType())))
+        val gameWasStarted = gameEventQueries.queryOne<GameWasStarted>(streamId(gameId.toString()).and(type(GameWasStarted::class.eventType())))
         applicationService.execute("wordhint:$gameId") { events: Sequence<GameEvent> ->
             val characterPositionsInWord = events.map { it as CharacterInWordHintWasRevealed }.map { it.characterPositionInWord }.toSet()
             val wordHintData = WordHintData(gameId, wordToGuess = gameWasStarted.wordToGuess, currentlyRevealedPositions = characterPositionsInWord)
