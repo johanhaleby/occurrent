@@ -32,6 +32,7 @@ class SendEmailToWinner {
 
     @Bean
     fun whenGameWasWonThenSendEmailToWinner() = policies.newPolicy<GameWasWon>("WhenGameWasWonThenSendEmailToWinnerPolicy") { gameWasWon ->
+        // We log instead of sending the e-mail for simplicity :)
         log.info("Sending email to player ${gameWasWon.winnerId} since he/she was a winner of game ${gameWasWon.gameId}")
     }
 }
