@@ -1,3 +1,7 @@
+## Changelog next version
+
+* Upgraded to Kotlin 1.4.21
+
 ## Changelog 0.4.0 (2020-12-04)
 
 * Upgraded to Kotlin 1.4.20
