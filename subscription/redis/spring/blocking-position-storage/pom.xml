@@ -19,7 +19,7 @@
     <parent>
         <artifactId>subscription-redis-spring</artifactId>
         <groupId>org.occurrent</groupId>
-        <version>0.4.1-SNAPSHOT</version>
+        <version>0.4.1</version>
     </parent>
     <modelVersion>4.0.0</modelVersion>
 
@@ -33,12 +33,12 @@
         <dependency>
             <groupId>org.occurrent</groupId>
             <artifactId>subscription-core</artifactId>
-            <version>0.4.1-SNAPSHOT</version>
+            <version>0.4.1</version>
         </dependency>
         <dependency>
             <groupId>org.occurrent</groupId>
             <artifactId>subscription-api-blocking</artifactId>
-            <version>0.4.1-SNAPSHOT</version>
+            <version>0.4.1</version>
         </dependency>
         <dependency> <!-- Required for @PreDestroy -->
             <groupId>jakarta.annotation</groupId>
@@ -54,19 +54,19 @@
         <dependency>
             <groupId>org.occurrent</groupId>
             <artifactId>subscription-mongodb-spring-blocking</artifactId>
-            <version>0.4.1-SNAPSHOT</version>
+            <version>0.4.1</version>
             <scope>test</scope>
         </dependency>
         <dependency>
             <groupId>org.occurrent</groupId>
             <artifactId>eventstore-mongodb-spring-blocking</artifactId>
-            <version>0.4.1-SNAPSHOT</version>
+            <version>0.4.1</version>
             <scope>test</scope>
         </dependency>
         <dependency>
             <groupId>org.occurrent</groupId>
             <artifactId>subscription-util-blocking-automatic-position-persistence</artifactId>
-            <version>0.4.1-SNAPSHOT</version>
+            <version>0.4.1</version>
             <scope>test</scope>
         </dependency>
         <dependency>
@@ -112,7 +112,7 @@
         <dependency>
             <groupId>org.occurrent</groupId>
             <artifactId>test-support</artifactId>
-            <version>0.4.1-SNAPSHOT</version>
+            <version>0.4.1</version>
             <scope>test</scope>
         </dependency>
         <dependency>
