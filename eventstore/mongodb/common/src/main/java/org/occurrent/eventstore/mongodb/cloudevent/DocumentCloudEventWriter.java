@@ -21,7 +21,10 @@ import io.cloudevents.CloudEventData;
 import io.cloudevents.SpecVersion;
 import io.cloudevents.core.CloudEventUtils;
 import io.cloudevents.core.data.PojoCloudEventData;
-import io.cloudevents.rw.*;
+import io.cloudevents.rw.CloudEventContextWriter;
+import io.cloudevents.rw.CloudEventRWException;
+import io.cloudevents.rw.CloudEventWriter;
+import io.cloudevents.rw.CloudEventWriterFactory;
 import org.bson.Document;
 
 import java.time.OffsetDateTime;
@@ -46,13 +49,13 @@ public class DocumentCloudEventWriter implements CloudEventWriterFactory<Documen
     }
 
     @Override
-    public CloudEventAttributesWriter withAttribute(String s, String s1) throws CloudEventRWException {
+    public CloudEventContextWriter withContextAttribute(String s, String s1) throws CloudEventRWException {
         document.append(s, s1);
         return this;
     }
 
     @Override
-    public CloudEventAttributesWriter withAttribute(String name, OffsetDateTime value) throws CloudEventRWException {
+    public CloudEventContextWriter withContextAttribute(String name, OffsetDateTime value) throws CloudEventRWException {
         if (value != null) {
             document.append(name, value.toString());
         }
@@ -60,19 +63,13 @@ public class DocumentCloudEventWriter implements CloudEventWriterFactory<Documen
     }
 
     @Override
-    public CloudEventExtensionsWriter withExtension(String s, String s1) throws CloudEventRWException {
-        document.append(s, s1);
-        return this;
-    }
-
-    @Override
-    public CloudEventExtensionsWriter withExtension(String name, Number value) throws CloudEventRWException {
+    public CloudEventContextWriter withContextAttribute(String name, Number value) throws CloudEventRWException {
         document.append(name, value);
         return this;
     }
 
     @Override
-    public CloudEventExtensionsWriter withExtension(String name, Boolean value) throws CloudEventRWException {
+    public CloudEventContextWriter withContextAttribute(String name, Boolean value) throws CloudEventRWException {
         document.append(name, value);
         return this;
     }

@@ -221,7 +221,7 @@ class OccurrentCloudEventMongoDBDocumentMapperTest {
                         .withSource(URI.create("urn:name"))
                         .withId("id")
                         .withDataContentType("application/json")
-                        .withData(new JsonCloudEventData(objectMapper.readTree("{\"name\" : \"hello\"}")))
+                        .withData(JsonCloudEventData.wrap(objectMapper.readTree("{\"name\" : \"hello\"}")))
                         .build();
 
                 // When

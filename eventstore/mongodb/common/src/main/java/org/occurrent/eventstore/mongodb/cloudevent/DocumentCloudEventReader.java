@@ -60,7 +60,7 @@ public class DocumentCloudEventReader implements CloudEventReader {
             Object attributeValue = document.get(attributeName);
 
             if (attributeValue != null) {
-                writer.withAttribute(attributeName, attributeValue.toString());
+                writer.withContextAttribute(attributeName, attributeValue.toString());
             }
         }
 
@@ -76,11 +76,11 @@ public class DocumentCloudEventReader implements CloudEventReader {
 
             // Switch on types document support
             if (extension.getValue() instanceof Number) {
-                writer.withExtension(extension.getKey(), (Number) extension.getValue());
+                writer.withContextAttribute(extension.getKey(), (Number) extension.getValue());
             } else if (extension.getValue() instanceof Boolean) {
-                writer.withExtension(extension.getKey(), (Boolean) extension.getValue());
+                writer.withContextAttribute(extension.getKey(), (Boolean) extension.getValue());
             } else {
-                writer.withExtension(extension.getKey(), extension.getValue().toString());
+                writer.withContextAttribute(extension.getKey(), extension.getValue().toString());
             }
         }
 
