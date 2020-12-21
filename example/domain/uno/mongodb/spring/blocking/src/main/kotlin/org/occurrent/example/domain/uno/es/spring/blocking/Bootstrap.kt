@@ -28,11 +28,11 @@ import org.occurrent.example.domain.uno.Event
 import org.occurrent.example.domain.uno.GameId
 import org.occurrent.example.domain.uno.es.UnoCloudEventConverter
 import org.occurrent.mongodb.timerepresentation.TimeRepresentation
-import org.occurrent.subscription.api.blocking.BlockingSubscription
-import org.occurrent.subscription.api.blocking.BlockingSubscriptionPositionStorage
-import org.occurrent.subscription.mongodb.spring.blocking.SpringBlockingSubscriptionForMongoDB
-import org.occurrent.subscription.redis.spring.blocking.SpringBlockingSubscriptionPositionStorageForRedis
-import org.occurrent.subscription.util.blocking.BlockingSubscriptionWithAutomaticPositionPersistence
+import org.occurrent.subscription.api.blocking.SubscriptionModel
+import org.occurrent.subscription.api.blocking.SubscriptionPositionStorage
+import org.occurrent.subscription.mongodb.spring.blocking.SpringMongoDBSubscriptionModel
+import org.occurrent.subscription.redis.spring.blocking.SpringSubscriptionPositionStorageForRedis
+import org.occurrent.subscription.util.blocking.AutoPersistingSubscriptionModel
 import org.slf4j.Logger
 import org.slf4j.LoggerFactory
 import org.springframework.boot.autoconfigure.SpringBootApplication
@@ -77,12 +77,13 @@ class Bootstrap {
     }
 
     @Bean
-    fun subscriptionStorage(redisOps: RedisOperations<String, String>): BlockingSubscriptionPositionStorage = SpringBlockingSubscriptionPositionStorageForRedis(redisOps)
+    fun subscriptionStorage(redisOps: RedisOperations<String, String>): SubscriptionPositionStorage =
+        SpringSubscriptionPositionStorageForRedis(redisOps)
 
     @Bean
-    fun subscriptionWithAutomaticPersistence(storage: BlockingSubscriptionPositionStorage, mongoTemplate: MongoTemplate, eventStoreQueries: EventStoreQueries): BlockingSubscription {
-        val subscription = SpringBlockingSubscriptionForMongoDB(mongoTemplate, EVENTS_COLLECTION_NAME, TimeRepresentation.DATE)
-        return BlockingSubscriptionWithAutomaticPositionPersistence(subscription, storage)
+    fun autoPersistingSubscriptionModel(storage: SubscriptionPositionStorage, mongoTemplate: MongoTemplate, eventStoreQueries: EventStoreQueries): SubscriptionModel {
+        val subscriptionModel = SpringMongoDBSubscriptionModel(mongoTemplate, EVENTS_COLLECTION_NAME, TimeRepresentation.DATE)
+        return AutoPersistingSubscriptionModel(subscriptionModel, storage)
     }
 
     @Bean

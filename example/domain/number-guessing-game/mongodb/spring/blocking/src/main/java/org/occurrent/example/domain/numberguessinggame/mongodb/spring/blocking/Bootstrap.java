@@ -21,11 +21,11 @@ import org.occurrent.eventstore.mongodb.spring.blocking.EventStoreConfig;
 import org.occurrent.eventstore.mongodb.spring.blocking.SpringBlockingMongoEventStore;
 import org.occurrent.example.domain.numberguessinggame.mongodb.spring.blocking.infrastructure.Serialization;
 import org.occurrent.mongodb.timerepresentation.TimeRepresentation;
-import org.occurrent.subscription.api.blocking.BlockingSubscriptionPositionStorage;
-import org.occurrent.subscription.api.blocking.PositionAwareBlockingSubscription;
-import org.occurrent.subscription.mongodb.spring.blocking.SpringBlockingSubscriptionForMongoDB;
-import org.occurrent.subscription.mongodb.spring.blocking.SpringBlockingSubscriptionPositionStorageForMongoDB;
-import org.occurrent.subscription.util.blocking.BlockingSubscriptionWithAutomaticPositionPersistence;
+import org.occurrent.subscription.api.blocking.PositionAwareSubscriptionModel;
+import org.occurrent.subscription.api.blocking.SubscriptionPositionStorage;
+import org.occurrent.subscription.mongodb.spring.blocking.SpringMongoDBSubscriptionModel;
+import org.occurrent.subscription.mongodb.spring.blocking.SpringMongoDBSubscriptionPositionStorage;
+import org.occurrent.subscription.util.blocking.AutoPersistingSubscriptionModel;
 import org.springframework.amqp.core.TopicExchange;
 import org.springframework.amqp.rabbit.annotation.EnableRabbit;
 import org.springframework.amqp.support.converter.Jackson2JsonMessageConverter;
@@ -68,18 +68,18 @@ public class Bootstrap {
     }
 
     @Bean
-    public PositionAwareBlockingSubscription subscription(MongoTemplate mongoTemplate) {
-        return new SpringBlockingSubscriptionForMongoDB(mongoTemplate, EVENTS_COLLECTION_NAME, TimeRepresentation.DATE);
+    public PositionAwareSubscriptionModel positionAwareSubscriptionModel(MongoTemplate mongoTemplate) {
+        return new SpringMongoDBSubscriptionModel(mongoTemplate, EVENTS_COLLECTION_NAME, TimeRepresentation.DATE);
     }
 
     @Bean
-    public BlockingSubscriptionPositionStorage storage(MongoTemplate mongoTemplate) {
-        return new SpringBlockingSubscriptionPositionStorageForMongoDB(mongoTemplate, "subscriptions");
+    public SubscriptionPositionStorage storage(MongoTemplate mongoTemplate) {
+        return new SpringMongoDBSubscriptionPositionStorage(mongoTemplate, "subscriptions");
     }
 
     @Bean
-    public BlockingSubscriptionWithAutomaticPositionPersistence subscriptionWithAutomaticPersistence(PositionAwareBlockingSubscription subscription, BlockingSubscriptionPositionStorage storage) {
-        return new BlockingSubscriptionWithAutomaticPositionPersistence(subscription, storage);
+    public AutoPersistingSubscriptionModel subscriptionWithAutomaticPersistence(PositionAwareSubscriptionModel subscription, SubscriptionPositionStorage storage) {
+        return new AutoPersistingSubscriptionModel(subscription, storage);
     }
 
     @Bean

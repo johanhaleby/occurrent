@@ -23,8 +23,8 @@ import org.occurrent.example.domain.wordguessinggame.event.GameEvent
 import org.occurrent.example.domain.wordguessinggame.event.eventType
 import org.occurrent.filter.Filter.type
 import org.occurrent.subscription.OccurrentSubscriptionFilter.filter
-import org.occurrent.subscription.api.blocking.BlockingSubscription
 import org.occurrent.subscription.api.blocking.Subscription
+import org.occurrent.subscription.api.blocking.SubscriptionModel
 import org.springframework.stereotype.Component
 import kotlin.reflect.KClass
 
@@ -33,12 +33,12 @@ import kotlin.reflect.KClass
  * Just a convenience utility that makes it easier, and more consistent, to create policies.
  */
 @Component
-class Policies(val subscriptions: BlockingSubscription, val cloudEventConverter: CloudEventConverter<GameEvent>) {
+class Policies(val subscriptionModel: SubscriptionModel, val cloudEventConverter: CloudEventConverter<GameEvent>) {
 
     /**
      * Create a new policy that is invoked after a specific domain event is written to the event store
      */
-    final inline fun <reified T : GameEvent> newPolicy(policyId: String, crossinline fn: (T) -> Unit): Subscription = subscriptions.subscribe(policyId, filter(type(T::class.eventType()))) { cloudEvent ->
+    final inline fun <reified T : GameEvent> newPolicy(policyId: String, crossinline fn: (T) -> Unit): Subscription = subscriptionModel.subscribe(policyId, filter(type(T::class.eventType()))) { cloudEvent ->
         val event = cloudEventConverter.toDomainEvent(cloudEvent) as T
         
         fn(event)
@@ -48,7 +48,7 @@ class Policies(val subscriptions: BlockingSubscription, val cloudEventConverter:
 
     fun newPolicy(policyId: String, vararg gameEventTypes: KClass<out GameEvent>, fn: (GameEvent) -> Unit): Subscription {
         val filter = filter(type(or(gameEventTypes.map { e -> eq(e.eventType()) })))
-        val subscription = subscriptions.subscribe(policyId, filter) { cloudEvent ->
+        val subscription = subscriptionModel.subscribe(policyId, filter) { cloudEvent ->
             val event = cloudEventConverter.toDomainEvent(cloudEvent)
             fn(event)
         }

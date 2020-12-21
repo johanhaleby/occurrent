@@ -19,7 +19,7 @@ package org.occurrent.example.springevent;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import org.occurrent.domain.DomainEvent;
 import org.occurrent.functional.CheckedFunction;
-import org.occurrent.subscription.util.reactor.ReactorSubscriptionWithAutomaticPositionPersistence;
+import org.occurrent.subscription.util.reactor.AutoPersistingSubscriptionModel;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.context.ApplicationEventPublisher;
@@ -37,15 +37,15 @@ public class EventForwarder {
     private static final Logger log = LoggerFactory.getLogger(EventForwarder.class);
 
     private static final String SUBSCRIBER_ID = "test-app";
-    private final ReactorSubscriptionWithAutomaticPositionPersistence subscriptionForMongoDB;
+    private final AutoPersistingSubscriptionModel subscriptionModel;
     private final ObjectMapper objectMapper;
     private final ApplicationEventPublisher eventPublisher;
     private final AtomicReference<Disposable> subscription;
 
-    public EventForwarder(ReactorSubscriptionWithAutomaticPositionPersistence subscription,
+    public EventForwarder(AutoPersistingSubscriptionModel subscriptionModel,
                           ObjectMapper objectMapper,
                           ApplicationEventPublisher eventPublisher) {
-        this.subscriptionForMongoDB = subscription;
+        this.subscriptionModel = subscriptionModel;
         this.objectMapper = objectMapper;
         this.eventPublisher = eventPublisher;
         this.subscription = new AtomicReference<>();
@@ -54,7 +54,7 @@ public class EventForwarder {
     @PostConstruct
     void startEventStreaming() {
         log.info("Subscribing with id {}", SUBSCRIBER_ID);
-        Disposable disposable = subscriptionForMongoDB.subscribe(SUBSCRIBER_ID,
+        Disposable disposable = subscriptionModel.subscribe(SUBSCRIBER_ID,
                 event -> Mono.just(event)
                         .map(cloudEvent -> Objects.requireNonNull(cloudEvent.getData()))
                         .map(CheckedFunction.unchecked(cloudEventData -> objectMapper.readValue(cloudEventData.toBytes(), DomainEvent.class)))

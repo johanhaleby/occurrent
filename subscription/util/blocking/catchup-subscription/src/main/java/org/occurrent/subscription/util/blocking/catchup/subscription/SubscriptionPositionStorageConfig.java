@@ -1,7 +1,23 @@
+/*
+ * Copyright 2020 Johan Haleby
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ *        http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+
 package org.occurrent.subscription.util.blocking.catchup.subscription;
 
 import io.cloudevents.CloudEvent;
-import org.occurrent.subscription.api.blocking.BlockingSubscriptionPositionStorage;
+import org.occurrent.subscription.api.blocking.SubscriptionPositionStorage;
 import org.occurrent.subscription.util.predicate.EveryN;
 
 import java.util.Objects;
@@ -41,19 +57,18 @@ public abstract class SubscriptionPositionStorageConfig {
      *                on application restart.
      * @return A {@link UseSubscriptionPositionInStorage} instance.
      */
-    public static UseSubscriptionPositionInStorage useSubscriptionPositionStorage(BlockingSubscriptionPositionStorage storage) {
+    public static UseSubscriptionPositionInStorage useSubscriptionPositionStorage(SubscriptionPositionStorage storage) {
         return new UseSubscriptionPositionInStorage(storage);
     }
 
     static final class DontUseSubscriptionPositionInStorage extends SubscriptionPositionStorageConfig {
     }
 
-
     public static class UseSubscriptionPositionInStorage extends SubscriptionPositionStorageConfig {
-        public final BlockingSubscriptionPositionStorage storage;
+        public final SubscriptionPositionStorage storage;
 
-        UseSubscriptionPositionInStorage(BlockingSubscriptionPositionStorage storage) {
-            Objects.requireNonNull(storage, BlockingSubscriptionPositionStorage.class.getSimpleName() + " cannot be null");
+        UseSubscriptionPositionInStorage(SubscriptionPositionStorage storage) {
+            Objects.requireNonNull(storage, SubscriptionPositionStorage.class.getSimpleName() + " cannot be null");
             this.storage = storage;
         }
 
@@ -118,7 +133,7 @@ public abstract class SubscriptionPositionStorageConfig {
          * @param persistCloudEventPositionPredicate A predicate that evaluates to <code>true</code> if the cloud event position should be persisted. See {@link EveryN}.
          *                                           Supply a predicate that always returns {@code false} to never store the position.
          */
-        PersistSubscriptionPositionDuringCatchupPhase(BlockingSubscriptionPositionStorage storage, Predicate<CloudEvent> persistCloudEventPositionPredicate) {
+        PersistSubscriptionPositionDuringCatchupPhase(SubscriptionPositionStorage storage, Predicate<CloudEvent> persistCloudEventPositionPredicate) {
             super(storage);
             Objects.requireNonNull(persistCloudEventPositionPredicate, "persistCloudEventPositionPredicate cannot be null");
             this.persistCloudEventPositionPredicate = persistCloudEventPositionPredicate;

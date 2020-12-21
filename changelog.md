@@ -1,3 +1,25 @@
+## Changelog Next Version
+* Renamed `org.occurrent.subscription.api.blocking.BlockingSubscription` to `org.occurrent.subscription.api.blocking.SubscriptionModel`. The reason for this is that it was previously
+  very confusing to differentiate between a `org.occurrent.subscription.api.blocking.BlockingSubscription` (where you start/cancel subscriptions) and a `org.occurrent.subscription.api.blocking.Subscription` 
+  (the actual subscription instance). The same thinking has been applied to the reactor counterparts as well (`org.occurrent.subscription.api.reactor.ReactorSubscription` has now been renamed to `org.occurrent.subscription.api.reactor.SubscriptionModel`).
+* Derivatives of `org.occurrent.subscription.api.blocking.BlockingSubscription` such as `PositionAwareBlockingSubscription` has been renamed to `org.occurrent.subscription.api.blockking.PositionAwareSubscriptionModel`.
+* Derivatives of the reactor counterpart, `org.occurrent.subscription.api.reactor.PositionAwareReactorSubscription` has been renamed `to`, such as has been renamed to `org.occurrent.subscription.api.reactor.PositionAwareSubscriptionModel`.
+* `org.occurrent.subscription.util.blocking.catchup.subscription.CatchupSubscriptionModelConfig` has been renamed to `CatchupSubscriptionModelConfig`. 
+* `org.occurrent.subscription.util.blocking.catchup.subscription.CatchupSubscriptionModel` has been renamed to `CatchupSubscriptionModel`.
+* `org.occurrent.subscription.util.blocking.AutoPersistingSubscriptionModelConfig` has been renamed to `AutoPersistingSubscriptionModelConfig`.
+* `org.occurrent.subscription.util.blocking.BlockingSubscriptionWithAutomaticPositionPersistence` has been renamed to `AutoPersistingSubscriptionModel`.
+* `org.occurrent.subscription.mongodb.nativedriver.blocking.BlockingSubscriptionForMongoDB` has been renamed to `NativeMongoDBSubscriptionModel`.
+* `org.occurrent.subscription.mongodb.nativedriver.blocking.BlockingSubscriptionPositionStorageForMongoDB` has been renamed to `NativeMongoDBSubscriptionPositionStorage`.
+* Removed `org.occurrent.subscription.mongodb.nativedriver.blocking.BlockingSubscriptionWithPositionPersistenceInMongoDB`. Use an `org.occurrent.subscription.util.blocking.AutoPersistingSubscriptionModel` from module `org.occurrent:subscription-util-blocking-automatic-position-persistence` instead.
+* `org.occurrent.subscription.mongodb.spring.blocking.MongoDBSpringSubscription` has been renamed to `SpringMongoDBSubscription`.
+* `org.occurrent.subscription.mongodb.spring.blocking.SpringBlockingSubscriptionForMongoDB` has been renamed to `SpringMongoDBSubscription`.
+* `org.occurrent.subscription.mongodb.spring.blocking.SpringMongoDBSubscriptionPositionStorage` has been renamed to `SpringMongoDBSubscriptionPositionStorage`.
+* `org.occurrent.subscription.mongodb.spring.reactor.SpringReactorSubscriptionForMongoDB` has been renamed to `SpringMongoDBSubscription`.
+* `org.occurrent.subscription.mongodb.spring.reactor.SpringReactorSubscriptionPositionStorageForMongoDB` has been renamed to `SpringMongoDBSubscriptionPositionStorage`.
+* `org.occurrent.subscription.util.reactor.ReactorSubscriptionWithAutomaticPositionPersistence` has been renamed to `AutoPersistingSubscriptionModel`.
+* `org.occurrent.subscription.util.reactor.ReactorSubscriptionWithAutomaticPositionPersistenceConfig` has been renamed to `AutoPersistingSubscriptionModelConfig`.
+
+
 ## Changelog 0.4.1 (2020-12-14)
 
 * Upgraded to Kotlin 1.4.21
@@ -105,7 +127,7 @@
 * Non-backward compatible change: `CatchupSupportingBlockingSubscription` no longer requires a subscription position storage during the catch-up phase. 
   Instead, you pass the storage implementation to `CatchupSupportingBlockingSubscriptionConfig` along with the position persistence predicate.
 * `BlockingSubscriptionWithAutomaticPositionPersistence` now implements the `PositionAwareBlockingSubscription` interface
-* Removed the generic type T from the `org.occurrent.subscription.api.blocking.BlockingSubscription` and `org.occurrent.subscription.api.reactor.ReactorSubscription`.
+* Removed the generic type T from the `org.occurrent.subscription.api.blocking.SubscriptionModel` and `org.occurrent.subscription.api.reactor.SubscriptionModel`.
   The reason for this was the implementation returning different kinds of CloudEvent implementations where not compatible. For example if you created a Spring Bean
   with a `T` of `CloudEventWithSubscriptionPosition` then such a subscription couldn't be assigned to a field expecting a subscription with just `CloudEvent`.
   To avoid having users to know which cloud event implementation to expect, we change the API so that it always deals with pure `CloudEvent`'s. 

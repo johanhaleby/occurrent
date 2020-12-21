@@ -23,9 +23,9 @@ import java.util.Objects;
 import java.util.function.Predicate;
 
 /**
- * Config class for {@link BlockingSubscriptionWithAutomaticPositionPersistence}.
+ * Config class for {@link AutoPersistingSubscriptionModel}.
  */
-public class BlockingSubscriptionWithAutomaticPositionPersistenceConfig {
+public class AutoPersistingSubscriptionModelConfig {
 
     public final Predicate<CloudEvent> persistCloudEventPositionPredicate;
 
@@ -33,7 +33,7 @@ public class BlockingSubscriptionWithAutomaticPositionPersistenceConfig {
      * @param persistCloudEventPositionPredicate A predicate that evaluates to <code>true</code> if the cloud event position should be persisted. See {@link EveryN}.
      *                                           Supply a predicate that always returns {@code false} to never store the position.
      */
-    public BlockingSubscriptionWithAutomaticPositionPersistenceConfig(Predicate<CloudEvent> persistCloudEventPositionPredicate) {
+    public AutoPersistingSubscriptionModelConfig(Predicate<CloudEvent> persistCloudEventPositionPredicate) {
         Objects.requireNonNull(persistCloudEventPositionPredicate, "persistCloudEventPositionPredicate cannot be null");
         this.persistCloudEventPositionPredicate = persistCloudEventPositionPredicate;
     }
@@ -41,15 +41,15 @@ public class BlockingSubscriptionWithAutomaticPositionPersistenceConfig {
     /**
      * @param persistPositionForEveryNCloudEvent Store the cloud event position for every {@code n} cloud event.
      */
-    public BlockingSubscriptionWithAutomaticPositionPersistenceConfig(int persistPositionForEveryNCloudEvent) {
+    public AutoPersistingSubscriptionModelConfig(int persistPositionForEveryNCloudEvent) {
         this(new EveryN(persistPositionForEveryNCloudEvent));
     }
 
     @Override
     public boolean equals(Object o) {
         if (this == o) return true;
-        if (!(o instanceof BlockingSubscriptionWithAutomaticPositionPersistenceConfig)) return false;
-        BlockingSubscriptionWithAutomaticPositionPersistenceConfig that = (BlockingSubscriptionWithAutomaticPositionPersistenceConfig) o;
+        if (!(o instanceof AutoPersistingSubscriptionModelConfig)) return false;
+        AutoPersistingSubscriptionModelConfig that = (AutoPersistingSubscriptionModelConfig) o;
         return Objects.equals(persistCloudEventPositionPredicate, that.persistCloudEventPositionPredicate);
     }
 

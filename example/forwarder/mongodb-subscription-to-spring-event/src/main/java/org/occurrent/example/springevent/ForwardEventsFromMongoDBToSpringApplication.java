@@ -25,11 +25,11 @@ import org.occurrent.eventstore.api.blocking.EventStore;
 import org.occurrent.eventstore.mongodb.nativedriver.EventStoreConfig;
 import org.occurrent.eventstore.mongodb.nativedriver.MongoEventStore;
 import org.occurrent.mongodb.timerepresentation.TimeRepresentation;
-import org.occurrent.subscription.api.reactor.PositionAwareReactorSubscription;
-import org.occurrent.subscription.api.reactor.ReactorSubscriptionPositionStorage;
-import org.occurrent.subscription.mongodb.spring.reactor.SpringReactorSubscriptionForMongoDB;
-import org.occurrent.subscription.mongodb.spring.reactor.SpringReactorSubscriptionPositionStorageForMongoDB;
-import org.occurrent.subscription.util.reactor.ReactorSubscriptionWithAutomaticPositionPersistence;
+import org.occurrent.subscription.api.reactor.PositionAwareSubscriptionModel;
+import org.occurrent.subscription.api.reactor.SubscriptionPositionStorage;
+import org.occurrent.subscription.mongodb.spring.reactor.SpringMongoDBSubscription;
+import org.occurrent.subscription.mongodb.spring.reactor.SpringMongoDBSubscriptionPositionStorage;
+import org.occurrent.subscription.util.reactor.AutoPersistingSubscriptionModel;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.boot.autoconfigure.SpringBootApplication;
 import org.springframework.context.annotation.Bean;
@@ -61,18 +61,18 @@ public class ForwardEventsFromMongoDBToSpringApplication {
     }
 
     @Bean
-    public ReactorSubscriptionPositionStorage reactorSubscriptionPositionStorage(ReactiveMongoOperations mongoOperations) {
-        return new SpringReactorSubscriptionPositionStorageForMongoDB(mongoOperations, "subscriptions");
+    public SubscriptionPositionStorage reactorSubscriptionPositionStorage(ReactiveMongoOperations mongoOperations) {
+        return new SpringMongoDBSubscriptionPositionStorage(mongoOperations, "subscriptions");
     }
 
     @Bean
-    public PositionAwareReactorSubscription subscription(ReactiveMongoOperations mongoOperations) {
-        return new SpringReactorSubscriptionForMongoDB(mongoOperations, "events", TimeRepresentation.RFC_3339_STRING);
+    public PositionAwareSubscriptionModel subscriptionModel(ReactiveMongoOperations mongoOperations) {
+        return new SpringMongoDBSubscription(mongoOperations, "events", TimeRepresentation.RFC_3339_STRING);
     }
 
     @Bean
-    public ReactorSubscriptionWithAutomaticPositionPersistence autoPersistingSubscription(PositionAwareReactorSubscription subscription, ReactorSubscriptionPositionStorage storage) {
-        return new ReactorSubscriptionWithAutomaticPositionPersistence(subscription, storage);
+    public AutoPersistingSubscriptionModel autoPersistingSubscription(PositionAwareSubscriptionModel subscription, SubscriptionPositionStorage storage) {
+        return new AutoPersistingSubscriptionModel(subscription, storage);
     }
 
     @Bean

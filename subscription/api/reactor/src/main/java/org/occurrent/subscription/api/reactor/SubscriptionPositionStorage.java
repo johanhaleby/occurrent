@@ -24,15 +24,15 @@ import reactor.core.publisher.Mono;
 /**
  * A {@code ReactorSubscriptionPositionStorage} provides means to read and write the subscription position to storage.
  * This subscriptions can continue where they left off by passing the {@link SubscriptionPosition} provided by {@link #read(String)}
- * to a {@link PositionAwareReactorSubscription} when the application is restarted etc.
+ * to a {@link PositionAwareSubscriptionModel} when the application is restarted etc.
  */
-public interface ReactorSubscriptionPositionStorage {
+public interface SubscriptionPositionStorage {
 
     /**
      * Read the raw subscription position for a given subscription.
      * <p>
      * Note that when starting a new subscription you typically want to create {@link StartAt} from the global subscription position
-     * (using {@link PositionAwareReactorSubscription#globalSubscriptionPosition()}) if no {@code SubscriptionPosition} is found for the given subscription.
+     * (using {@link PositionAwareSubscriptionModel#globalSubscriptionPosition()}) if no {@code SubscriptionPosition} is found for the given subscription.
      * </p>
      * For example:
      * <pre>

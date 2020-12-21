@@ -24,12 +24,15 @@ import java.util.function.Consumer;
 import java.util.function.Supplier;
 
 /**
- * Common interface for blocking subscriptions. The purpose of a subscription is to read events from an event store
- * and react to these events. Typically a subscription will forward the event to another piece of infrastructure such as
- * a message bus or to create views from the events (such as projections, sagas, snapshots etc).
- *
+ * Common interface for blocking subscription models. The purpose of a subscription is to read events from an event store
+ * and react to these events.
+ * <p>
+ * A subscription may be used to create read models (such as views, projections, sagas, snapshots etc) or
+ * forward the event to another piece of infrastructure such as a message bus or other eventing infrastructure.
+ * <p>
+ * A blocking subscription model also you to create and manage subscriptions that'll use blocking IO.
  */
-public interface BlockingSubscription {
+public interface SubscriptionModel {
 
     /**
      * Start listening to cloud events persisted to the event store using the supplied start position and <code>filter</code>.

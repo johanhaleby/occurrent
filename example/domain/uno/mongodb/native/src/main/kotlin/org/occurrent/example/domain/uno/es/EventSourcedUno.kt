@@ -27,11 +27,10 @@ import org.occurrent.example.domain.uno.*
 import org.occurrent.example.domain.uno.Card.DigitCard
 import org.occurrent.example.domain.uno.Color.*
 import org.occurrent.example.domain.uno.Digit.*
-import org.occurrent.filter.Filter
 import org.occurrent.filter.Filter.streamId
 import org.occurrent.filter.Filter.type
 import org.occurrent.mongodb.timerepresentation.TimeRepresentation
-import org.occurrent.subscription.mongodb.nativedriver.blocking.BlockingSubscriptionForMongoDB
+import org.occurrent.subscription.mongodb.nativedriver.blocking.NativeMongoDBSubscriptionModel
 import org.occurrent.subscription.mongodb.nativedriver.blocking.RetryStrategy
 import org.slf4j.LoggerFactory
 import java.lang.Thread.sleep
@@ -49,13 +48,19 @@ fun main() {
     val database = mongoClient.getDatabase("test")
 
     val eventStore = MongoEventStore(mongoClient, database, database.getCollection("events"), EventStoreConfig(TimeRepresentation.DATE))
-    val subscription = BlockingSubscriptionForMongoDB(database, "events", TimeRepresentation.DATE, Executors.newCachedThreadPool(), RetryStrategy.fixed(200))
+    val subscriptionModel = NativeMongoDBSubscriptionModel(
+        database,
+        "events",
+        TimeRepresentation.DATE,
+        Executors.newCachedThreadPool(),
+        RetryStrategy.fixed(200)
+    )
 
     val objectMapper = jacksonObjectMapper()
     val cloudEventConverter = UnoCloudEventConverter(objectMapper)
     val applicationService = GenericApplicationService(eventStore, cloudEventConverter)
 
-    subscription.subscribe("progress-tracker") { cloudEvent ->
+    subscriptionModel.subscribe("progress-tracker") { cloudEvent ->
         val domainEvent = cloudEventConverter.toDomainEvent(cloudEvent)
         val turnCount = eventStore.count(streamId(domainEvent.gameId.toString()).and(type(CardPlayed::class.type))).toInt()
         ProgressTracker.trackProgress(log::info, domainEvent, turnCount)
@@ -63,13 +68,12 @@ fun main() {
 
     Runtime.getRuntime().addShutdownHook(Thread {
         log.info("Shutting down")
-        subscription.shutdown()
+        subscriptionModel.shutdown()
         mongoClient.close()
     })
 
     // Simulate playing Uno
     val gameId = GameId.randomUUID()
-
 
     val commands = listOf(
             Uno::start.partial(gameId, Timestamp.now(), 4, DigitCard(Three, Red)),

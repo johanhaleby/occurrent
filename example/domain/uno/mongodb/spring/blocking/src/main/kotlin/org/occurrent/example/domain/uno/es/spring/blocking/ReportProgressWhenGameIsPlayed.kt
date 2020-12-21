@@ -18,8 +18,8 @@ package org.occurrent.example.domain.uno.es.spring.blocking
 
 import org.occurrent.application.converter.CloudEventConverter
 import org.occurrent.example.domain.uno.*
-import org.occurrent.subscription.api.blocking.BlockingSubscription
 import org.occurrent.subscription.api.blocking.Subscription
+import org.occurrent.subscription.api.blocking.SubscriptionModel
 import org.springframework.context.annotation.Bean
 import org.springframework.context.annotation.Configuration
 import org.springframework.data.redis.core.RedisOperations
@@ -28,14 +28,14 @@ import org.springframework.retry.RetryOperations
 
 @Configuration
 class ReportProgressWhenGameIsPlayed(
-    private val subscriptions: BlockingSubscription, val cloudEventConverter: CloudEventConverter<Event>,
+    private val subscriptionModel: SubscriptionModel, val cloudEventConverter: CloudEventConverter<Event>,
     private val redis: RedisOperations<String, String>, private val retryOperations: RetryOperations
 ) {
     private val log = loggerFor<ReportProgressWhenGameIsPlayed>()
 
     @Bean
     fun reportGameProgressDuringGamePlaySubscription(): Subscription {
-        return subscriptions.subscribe("reportGameProgressDuringGamePlay",
+        return subscriptionModel.subscribe("reportGameProgressDuringGamePlay",
             cloudEventConverter::toDomainEvent andThen { e: Event ->
                 val turnCountForGame = if (e is CardPlayed) {
                     incrementAndGetTurnCountForGame(e.gameId, e.eventId)

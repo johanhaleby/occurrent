@@ -23,7 +23,7 @@ import org.occurrent.subscription.PositionAwareCloudEvent;
 import org.occurrent.subscription.StartAt;
 import org.occurrent.subscription.SubscriptionFilter;
 import org.occurrent.subscription.SubscriptionPosition;
-import org.occurrent.subscription.api.reactor.PositionAwareReactorSubscription;
+import org.occurrent.subscription.api.reactor.PositionAwareSubscriptionModel;
 import org.occurrent.subscription.mongodb.MongoDBOperationTimeBasedSubscriptionPosition;
 import org.occurrent.subscription.mongodb.MongoDBResumeTokenBasedSubscriptionPosition;
 import org.occurrent.subscription.mongodb.internal.MongoDBCloudEventsToJsonDeserializer;
@@ -46,7 +46,7 @@ import static java.util.Objects.requireNonNull;
  * that includes the subscription position. Use {@link PositionAwareCloudEvent#getSubscriptionPositionOrThrowIAE(CloudEvent)}
  * to get the subscription position.
  */
-public class SpringReactorSubscriptionForMongoDB implements PositionAwareReactorSubscription {
+public class SpringMongoDBSubscription implements PositionAwareSubscriptionModel {
 
     private final ReactiveMongoOperations mongo;
     private final String eventCollection;
@@ -59,7 +59,7 @@ public class SpringReactorSubscriptionForMongoDB implements PositionAwareReactor
      * @param eventCollection    The collection that contains the events
      * @param timeRepresentation How time is represented in the database, must be the same as what's specified for the EventStore that stores the events.
      */
-    public SpringReactorSubscriptionForMongoDB(ReactiveMongoOperations mongo, String eventCollection, TimeRepresentation timeRepresentation) {
+    public SpringMongoDBSubscription(ReactiveMongoOperations mongo, String eventCollection, TimeRepresentation timeRepresentation) {
         this.mongo = mongo;
         this.eventCollection = eventCollection;
         this.timeRepresentation = timeRepresentation;

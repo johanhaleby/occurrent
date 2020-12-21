@@ -24,9 +24,9 @@ import java.util.Objects;
 import static org.occurrent.subscription.util.blocking.catchup.subscription.SubscriptionPositionStorageConfig.dontUseSubscriptionPositionStorage;
 
 /**
- * Configuration for {@link CatchupSupportingBlockingSubscription}
+ * Configuration for {@link CatchupSubscriptionModel}
  */
-public class CatchupSupportingBlockingSubscriptionConfig {
+public class CatchupSubscriptionModelConfig {
 
     public final int cacheSize;
     public final SubscriptionPositionStorageConfig subscriptionStorageConfig;
@@ -35,14 +35,14 @@ public class CatchupSupportingBlockingSubscriptionConfig {
      * @param cacheSize The number of cloud events id's to store in-memory when switching from "catch-up" mode (i.e. querying the {@link EventStoreQueries} API)
      *                  and "subscription" mode ({@link Subscription}). The cache is needed to reduce the number of duplicate events the occurs when switching.
      */
-    public CatchupSupportingBlockingSubscriptionConfig(int cacheSize) {
+    public CatchupSubscriptionModelConfig(int cacheSize) {
         this(cacheSize, dontUseSubscriptionPositionStorage());
     }
 
     /**
      * @param subscriptionStorageConfig Configures if and how subscription position persistence should be handled during the catch-up phase.
      */
-    public CatchupSupportingBlockingSubscriptionConfig(SubscriptionPositionStorageConfig subscriptionStorageConfig) {
+    public CatchupSubscriptionModelConfig(SubscriptionPositionStorageConfig subscriptionStorageConfig) {
         this(100, subscriptionStorageConfig);
     }
 
@@ -51,7 +51,7 @@ public class CatchupSupportingBlockingSubscriptionConfig {
      *                                  and "subscription" mode ({@link Subscription}). The cache is needed to reduce the number of duplicate events the occurs when switching.
      * @param subscriptionStorageConfig Configures if and how subscription position persistence should be handled during the catch-up phase.
      */
-    public CatchupSupportingBlockingSubscriptionConfig(int cacheSize, SubscriptionPositionStorageConfig subscriptionStorageConfig) {
+    public CatchupSubscriptionModelConfig(int cacheSize, SubscriptionPositionStorageConfig subscriptionStorageConfig) {
         if (cacheSize < 1) {
             throw new IllegalArgumentException("Cache size must be greater than or equal to 1");
         }
@@ -64,8 +64,8 @@ public class CatchupSupportingBlockingSubscriptionConfig {
     @Override
     public boolean equals(Object o) {
         if (this == o) return true;
-        if (!(o instanceof CatchupSupportingBlockingSubscriptionConfig)) return false;
-        CatchupSupportingBlockingSubscriptionConfig that = (CatchupSupportingBlockingSubscriptionConfig) o;
+        if (!(o instanceof CatchupSubscriptionModelConfig)) return false;
+        CatchupSubscriptionModelConfig that = (CatchupSubscriptionModelConfig) o;
         return cacheSize == that.cacheSize &&
                 Objects.equals(subscriptionStorageConfig, that.subscriptionStorageConfig);
     }

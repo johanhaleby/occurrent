@@ -20,8 +20,8 @@ import io.cloudevents.CloudEvent;
 import org.occurrent.subscription.StartAt;
 import org.occurrent.subscription.SubscriptionFilter;
 import org.occurrent.subscription.SubscriptionPosition;
-import org.occurrent.subscription.api.reactor.PositionAwareReactorSubscription;
-import org.occurrent.subscription.api.reactor.ReactorSubscriptionPositionStorage;
+import org.occurrent.subscription.api.reactor.PositionAwareSubscriptionModel;
+import org.occurrent.subscription.api.reactor.SubscriptionPositionStorage;
 import org.occurrent.subscription.util.predicate.EveryN;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -33,43 +33,43 @@ import static java.util.Objects.requireNonNull;
 import static org.occurrent.subscription.PositionAwareCloudEvent.getSubscriptionPositionOrThrowIAE;
 
 /**
- * Wraps a {@link PositionAwareReactorSubscription} and adds persistent subscription position support. It adds some convenience methods that stores the subscription position
- * after an "action" (the "function" in this method {@link ReactorSubscriptionWithAutomaticPositionPersistence#subscribe(String, Function)}) has completed successfully.
- * It stores the subscription position in a {@link ReactorSubscriptionPositionStorage} implementation.
+ * Wraps a {@link PositionAwareSubscriptionModel} and adds persistent subscription position support. It adds some convenience methods that stores the subscription position
+ * after an "action" (the "function" in this method {@link AutoPersistingSubscriptionModel#subscribe(String, Function)}) has completed successfully.
+ * It stores the subscription position in a {@link SubscriptionPositionStorage} implementation.
  * <p>
  * Note that this implementation stores the subscription position after _every_ action. If you have a lot of events and duplication is not
- * that much of a deal consider cloning/extending this class and add your own customizations. Use the methods provided by a {@link ReactorSubscriptionPositionStorage}
+ * that much of a deal consider cloning/extending this class and add your own customizations. Use the methods provided by a {@link SubscriptionPositionStorage}
  * implementation.
  */
-public class ReactorSubscriptionWithAutomaticPositionPersistence {
-    private static final Logger log = LoggerFactory.getLogger(ReactorSubscriptionWithAutomaticPositionPersistence.class);
-    private final PositionAwareReactorSubscription subscription;
-    private final ReactorSubscriptionPositionStorage storage;
-    private final ReactorSubscriptionWithAutomaticPositionPersistenceConfig config;
+public class AutoPersistingSubscriptionModel {
+    private static final Logger log = LoggerFactory.getLogger(AutoPersistingSubscriptionModel.class);
+    private final PositionAwareSubscriptionModel subscription;
+    private final SubscriptionPositionStorage storage;
+    private final AutoPersistingSubscriptionModelConfig config;
 
     /**
-     * Create a subscription that combines a {@link ReactorSubscriptionWithAutomaticPositionPersistence} with a {@link ReactorSubscriptionWithAutomaticPositionPersistence} to automatically
+     * Create a subscription that combines a {@link AutoPersistingSubscriptionModel} with a {@link AutoPersistingSubscriptionModel} to automatically
      * store the subscription after each successful call to <code>action</code> (The "consumer" in {@link #subscribe(String, Function)}).
      *
      * @param subscription The subscription that will read events from the event store
-     * @param storage      The {@link ReactorSubscriptionWithAutomaticPositionPersistence} that'll be used to persist the stream position
+     * @param storage      The {@link AutoPersistingSubscriptionModel} that'll be used to persist the stream position
      */
-    public ReactorSubscriptionWithAutomaticPositionPersistence(PositionAwareReactorSubscription subscription, ReactorSubscriptionPositionStorage storage) {
-        this(subscription, storage, new ReactorSubscriptionWithAutomaticPositionPersistenceConfig(EveryN.everyEvent()));
+    public AutoPersistingSubscriptionModel(PositionAwareSubscriptionModel subscription, SubscriptionPositionStorage storage) {
+        this(subscription, storage, new AutoPersistingSubscriptionModelConfig(EveryN.everyEvent()));
     }
 
     /**
-     * Create a subscription that combines a {@link ReactorSubscriptionWithAutomaticPositionPersistence} with a {@link ReactorSubscriptionWithAutomaticPositionPersistence} to automatically
-     * store the subscription when the predicate defined in {@link ReactorSubscriptionWithAutomaticPositionPersistenceConfig#persistCloudEventPositionPredicate} is fulfilled.
+     * Create a subscription that combines a {@link AutoPersistingSubscriptionModel} with a {@link AutoPersistingSubscriptionModel} to automatically
+     * store the subscription when the predicate defined in {@link AutoPersistingSubscriptionModelConfig#persistCloudEventPositionPredicate} is fulfilled.
      *
      * @param subscription The subscription that will read events from the event store
-     * @param storage      The {@link ReactorSubscriptionWithAutomaticPositionPersistence} that'll be used to persist the stream position
+     * @param storage      The {@link AutoPersistingSubscriptionModel} that'll be used to persist the stream position
      */
-    public ReactorSubscriptionWithAutomaticPositionPersistence(PositionAwareReactorSubscription subscription, ReactorSubscriptionPositionStorage storage,
-                                                               ReactorSubscriptionWithAutomaticPositionPersistenceConfig config) {
-        requireNonNull(subscription, PositionAwareReactorSubscription.class.getSimpleName() + " cannot be null");
-        requireNonNull(storage, ReactorSubscriptionPositionStorage.class.getSimpleName() + " cannot be null");
-        requireNonNull(config, ReactorSubscriptionWithAutomaticPositionPersistenceConfig.class.getSimpleName() + " cannot be null");
+    public AutoPersistingSubscriptionModel(PositionAwareSubscriptionModel subscription, SubscriptionPositionStorage storage,
+                                           AutoPersistingSubscriptionModelConfig config) {
+        requireNonNull(subscription, PositionAwareSubscriptionModel.class.getSimpleName() + " cannot be null");
+        requireNonNull(storage, SubscriptionPositionStorage.class.getSimpleName() + " cannot be null");
+        requireNonNull(config, AutoPersistingSubscriptionModelConfig.class.getSimpleName() + " cannot be null");
         this.subscription = subscription;
         this.storage = storage;
         this.config = config;
@@ -78,7 +78,7 @@ public class ReactorSubscriptionWithAutomaticPositionPersistence {
     /**
      * A convenience function that automatically starts from the latest persisted subscription position and saves the new position after each call to {@code action}
      * has completed successfully. If you don't want to save the position after every event then don't use this method and instead save the position yourself by calling
-     * {@link ReactorSubscriptionPositionStorage#save(String, SubscriptionPosition)} when appropriate.
+     * {@link SubscriptionPositionStorage#save(String, SubscriptionPosition)} when appropriate.
      * <p>
      * It's VERY important that side-effects take place within the <code>action</code> function
      * because if you perform side-effects on the returned <code>Mono<Void></code> stream then the subscription position
@@ -96,7 +96,7 @@ public class ReactorSubscriptionWithAutomaticPositionPersistence {
     /**
      * A convenience function that automatically starts from the latest persisted subscription position and saves the new position after each call to {@code action}
      * has completed successfully. If you don't want to save the position after every event then don't use this method and instead save the position yourself by calling
-     * {@link ReactorSubscriptionPositionStorage#save(String, SubscriptionPosition)} when appropriate.
+     * {@link SubscriptionPositionStorage#save(String, SubscriptionPosition)} when appropriate.
      *
      * <p>
      * It's VERY important that side-effects take place within the <code>action</code> function
@@ -124,7 +124,7 @@ public class ReactorSubscriptionWithAutomaticPositionPersistence {
 
     /**
      * Find the calculate the current {@link StartAt} value for the {@code subscriptionId}. It creates the {@link StartAt} instance from the
-     * global subscription position (from {@link PositionAwareReactorSubscription#globalSubscriptionPosition()}) if no
+     * global subscription position (from {@link PositionAwareSubscriptionModel#globalSubscriptionPosition()}) if no
      * {@code SubscriptionPosition} is found for the given subscription.
      *
      * @param subscriptionId The id of the subscription whose position to find

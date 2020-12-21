@@ -36,10 +36,10 @@ import org.occurrent.eventstore.mongodb.spring.blocking.EventStoreConfig;
 import org.occurrent.eventstore.mongodb.spring.blocking.SpringBlockingMongoEventStore;
 import org.occurrent.mongodb.timerepresentation.TimeRepresentation;
 import org.occurrent.subscription.SubscriptionPosition;
-import org.occurrent.subscription.api.blocking.BlockingSubscriptionPositionStorage;
+import org.occurrent.subscription.api.blocking.SubscriptionPositionStorage;
 import org.occurrent.subscription.mongodb.MongoDBFilterSpecification.JsonMongoDBFilterSpecification;
-import org.occurrent.subscription.util.blocking.BlockingSubscriptionWithAutomaticPositionPersistence;
-import org.occurrent.subscription.util.blocking.BlockingSubscriptionWithAutomaticPositionPersistenceConfig;
+import org.occurrent.subscription.util.blocking.AutoPersistingSubscriptionModel;
+import org.occurrent.subscription.util.blocking.AutoPersistingSubscriptionModelConfig;
 import org.occurrent.testsupport.mongodb.FlushMongoDBExtension;
 import org.springframework.data.mongodb.MongoTransactionManager;
 import org.springframework.data.mongodb.core.MongoTemplate;
@@ -78,7 +78,7 @@ import static org.occurrent.subscription.mongodb.MongoDBFilterSpecification.FULL
 import static org.occurrent.time.TimeConversion.toLocalDateTime;
 
 @Testcontainers
-public class SpringBlockingSubscriptionPositionStorageForMongoDBTest {
+public class SpringSubscriptionModelPositionStorageForMongoDBTest {
 
     @Container
     private static final MongoDBContainer mongoDBContainer = new MongoDBContainer("mongo:4.2.8");
@@ -88,11 +88,11 @@ public class SpringBlockingSubscriptionPositionStorageForMongoDBTest {
     FlushMongoDBExtension flushMongoDBExtension = new FlushMongoDBExtension(new ConnectionString(mongoDBContainer.getReplicaSetUrl()));
 
     private EventStore mongoEventStore;
-    private BlockingSubscriptionWithAutomaticPositionPersistence subscription;
+    private AutoPersistingSubscriptionModel subscription;
     private ObjectMapper objectMapper;
     private MongoTemplate mongoTemplate;
     private MongoClient mongoClient;
-    private SpringBlockingSubscriptionForMongoDB positionAwareBlockingSubscription;
+    private SpringMongoDBSubscriptionModel positionAwareBlockingSubscription;
 
     @BeforeEach
     void create_mongo_event_store() {
@@ -103,9 +103,9 @@ public class SpringBlockingSubscriptionPositionStorageForMongoDBTest {
         TimeRepresentation timeRepresentation = RFC_3339_STRING;
         EventStoreConfig eventStoreConfig = new EventStoreConfig.Builder().eventStoreCollectionName(connectionString.getCollection()).transactionConfig(mongoTransactionManager).timeRepresentation(timeRepresentation).build();
         mongoEventStore = new SpringBlockingMongoEventStore(mongoTemplate, eventStoreConfig);
-        positionAwareBlockingSubscription = new SpringBlockingSubscriptionForMongoDB(mongoTemplate, connectionString.getCollection(), timeRepresentation);
-        SpringBlockingSubscriptionPositionStorageForMongoDB storage = new SpringBlockingSubscriptionPositionStorageForMongoDB(mongoTemplate, RESUME_TOKEN_COLLECTION);
-        this.subscription = new BlockingSubscriptionWithAutomaticPositionPersistence(positionAwareBlockingSubscription, storage);
+        positionAwareBlockingSubscription = new SpringMongoDBSubscriptionModel(mongoTemplate, connectionString.getCollection(), timeRepresentation);
+        SpringMongoDBSubscriptionPositionStorage storage = new SpringMongoDBSubscriptionPositionStorage(mongoTemplate, RESUME_TOKEN_COLLECTION);
+        this.subscription = new AutoPersistingSubscriptionModel(positionAwareBlockingSubscription, storage);
         objectMapper = new ObjectMapper();
     }
 
@@ -144,7 +144,7 @@ public class SpringBlockingSubscriptionPositionStorageForMongoDBTest {
         NameWasChanged nameWasChanged1 = new NameWasChanged(UUID.randomUUID().toString(), now.plusSeconds(10), "name3");
 
         AtomicInteger numberOfWritesToBlockingSubscriptionStorage = new AtomicInteger(0);
-        BlockingSubscriptionPositionStorage storage = new BlockingSubscriptionPositionStorage() {
+        SubscriptionPositionStorage storage = new SubscriptionPositionStorage() {
 
             @Override
             public SubscriptionPosition read(String subscriptionId) {
@@ -167,7 +167,7 @@ public class SpringBlockingSubscriptionPositionStorageForMongoDBTest {
                 return false;
             }
         };
-        subscription = new BlockingSubscriptionWithAutomaticPositionPersistence(positionAwareBlockingSubscription, storage);
+        subscription = new AutoPersistingSubscriptionModel(positionAwareBlockingSubscription, storage);
         subscription.subscribe(UUID.randomUUID().toString(), state::add).waitUntilStarted(Duration.of(10, ChronoUnit.SECONDS));
 
         // When
@@ -192,7 +192,7 @@ public class SpringBlockingSubscriptionPositionStorageForMongoDBTest {
         NameWasChanged nameWasChanged1 = new NameWasChanged(UUID.randomUUID().toString(), now.plusSeconds(10), "name3");
 
         AtomicInteger numberOfWritesToBlockingSubscriptionStorage = new AtomicInteger(0);
-        BlockingSubscriptionPositionStorage storage = new BlockingSubscriptionPositionStorage() {
+        SubscriptionPositionStorage storage = new SubscriptionPositionStorage() {
 
             @Override
             public SubscriptionPosition read(String subscriptionId) {
@@ -215,7 +215,7 @@ public class SpringBlockingSubscriptionPositionStorageForMongoDBTest {
                 return false;
             }
         };
-        subscription = new BlockingSubscriptionWithAutomaticPositionPersistence(positionAwareBlockingSubscription, storage, new BlockingSubscriptionWithAutomaticPositionPersistenceConfig(3));
+        subscription = new AutoPersistingSubscriptionModel(positionAwareBlockingSubscription, storage, new AutoPersistingSubscriptionModelConfig(3));
         subscription.subscribe(UUID.randomUUID().toString(), state::add).waitUntilStarted(Duration.of(10, ChronoUnit.SECONDS));
 
         // When

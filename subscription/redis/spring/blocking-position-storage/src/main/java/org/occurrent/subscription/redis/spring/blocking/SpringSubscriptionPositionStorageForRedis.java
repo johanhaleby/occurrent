@@ -18,24 +18,24 @@ package org.occurrent.subscription.redis.spring.blocking;
 
 import org.occurrent.subscription.StringBasedSubscriptionPosition;
 import org.occurrent.subscription.SubscriptionPosition;
-import org.occurrent.subscription.api.blocking.BlockingSubscriptionPositionStorage;
+import org.occurrent.subscription.api.blocking.SubscriptionPositionStorage;
 import org.springframework.data.redis.core.RedisOperations;
 
 import static java.util.Objects.requireNonNull;
 
 /**
- * A Spring implementation of {@link BlockingSubscriptionPositionStorage} that stores {@link SubscriptionPosition} in Redis.
+ * A Spring implementation of {@link SubscriptionPositionStorage} that stores {@link SubscriptionPosition} in Redis.
  */
-public class SpringBlockingSubscriptionPositionStorageForRedis implements BlockingSubscriptionPositionStorage {
+public class SpringSubscriptionPositionStorageForRedis implements SubscriptionPositionStorage {
 
     private final RedisOperations<String, String> redis;
 
     /**
-     * Create a {@link BlockingSubscriptionPositionStorage} that uses the Native sync Java MongoDB driver to persists the subscription position in Redis.
+     * Create a {@link SubscriptionPositionStorage} that uses the Native sync Java MongoDB driver to persists the subscription position in Redis.
      *
      * @param redis The {@link RedisOperations} that'll be used to store the subscription position
      */
-    public SpringBlockingSubscriptionPositionStorageForRedis(RedisOperations<String, String> redis) {
+    public SpringSubscriptionPositionStorageForRedis(RedisOperations<String, String> redis) {
         requireNonNull(redis, "Redis operations cannot be null");
         this.redis = redis;
     }

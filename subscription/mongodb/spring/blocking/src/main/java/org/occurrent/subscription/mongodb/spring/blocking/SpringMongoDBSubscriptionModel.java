@@ -26,7 +26,7 @@ import org.occurrent.subscription.PositionAwareCloudEvent;
 import org.occurrent.subscription.StartAt;
 import org.occurrent.subscription.SubscriptionFilter;
 import org.occurrent.subscription.SubscriptionPosition;
-import org.occurrent.subscription.api.blocking.PositionAwareBlockingSubscription;
+import org.occurrent.subscription.api.blocking.PositionAwareSubscriptionModel;
 import org.occurrent.subscription.api.blocking.Subscription;
 import org.occurrent.subscription.mongodb.MongoDBOperationTimeBasedSubscriptionPosition;
 import org.occurrent.subscription.mongodb.MongoDBResumeTokenBasedSubscriptionPosition;
@@ -59,7 +59,7 @@ import static java.util.Objects.requireNonNull;
  * Note that this subscription doesn't provide retries if an exception is thrown when handling a {@link io.cloudevents.CloudEvent} (<code>action</code>).
  * This reason for this is that Spring provides retry capabilities (such as spring-retry) that you can easily hook into your <code>action</code>.
  */
-public class SpringBlockingSubscriptionForMongoDB implements PositionAwareBlockingSubscription {
+public class SpringMongoDBSubscriptionModel implements PositionAwareSubscriptionModel {
 
     private final String eventCollection;
     private final MessageListenerContainer messageListenerContainer;
@@ -74,7 +74,7 @@ public class SpringBlockingSubscriptionForMongoDB implements PositionAwareBlocki
      * @param eventCollection    The collection that contains the events
      * @param timeRepresentation How time is represented in the database, must be the same as what's specified for the EventStore that stores the events.
      */
-    public SpringBlockingSubscriptionForMongoDB(MongoTemplate mongoTemplate, String eventCollection, TimeRepresentation timeRepresentation) {
+    public SpringMongoDBSubscriptionModel(MongoTemplate mongoTemplate, String eventCollection, TimeRepresentation timeRepresentation) {
         requireNonNull(mongoTemplate, MongoOperations.class.getSimpleName() + " cannot be null");
         requireNonNull(eventCollection, "eventCollection cannot be null");
         requireNonNull(timeRepresentation, TimeRepresentation.class.getSimpleName() + " cannot be null");
@@ -108,7 +108,7 @@ public class SpringBlockingSubscriptionForMongoDB implements PositionAwareBlocki
         ChangeStreamRequestOptions options = new ChangeStreamRequestOptions(null, eventCollection, changeStreamOptions);
         final org.springframework.data.mongodb.core.messaging.Subscription subscription = messageListenerContainer.register(new ChangeStreamRequest<>(listener, options), Document.class);
         subscriptions.put(subscriptionId, subscription);
-        return new MongoDBSpringSubscription(subscriptionId, subscription);
+        return new SpringMongoDBSubscription(subscriptionId, subscription);
     }
 
     public void cancelSubscription(String subscriptionId) {

@@ -38,10 +38,10 @@ import org.occurrent.eventstore.mongodb.nativedriver.MongoEventStore;
 import org.occurrent.mongodb.timerepresentation.TimeRepresentation;
 import org.occurrent.subscription.StartAt;
 import org.occurrent.subscription.SubscriptionPosition;
-import org.occurrent.subscription.mongodb.nativedriver.blocking.BlockingSubscriptionForMongoDB;
-import org.occurrent.subscription.mongodb.nativedriver.blocking.BlockingSubscriptionPositionStorageForMongoDB;
+import org.occurrent.subscription.mongodb.nativedriver.blocking.NativeMongoDBSubscriptionModel;
+import org.occurrent.subscription.mongodb.nativedriver.blocking.NativeMongoDBSubscriptionPositionStorage;
 import org.occurrent.subscription.mongodb.nativedriver.blocking.RetryStrategy;
-import org.occurrent.subscription.util.blocking.BlockingSubscriptionWithAutomaticPositionPersistence;
+import org.occurrent.subscription.util.blocking.AutoPersistingSubscriptionModel;
 import org.occurrent.testsupport.mongodb.FlushMongoDBExtension;
 import org.testcontainers.containers.MongoDBContainer;
 import org.testcontainers.junit.jupiter.Container;
@@ -74,7 +74,7 @@ import static org.occurrent.time.TimeConversion.toLocalDateTime;
 
 @Testcontainers
 @Timeout(15000)
-public class CatchupSupportingBlockingSubscriptionTest {
+public class CatchupSubscriptionModelTest {
 
     @Container
     private static final MongoDBContainer mongoDBContainer = new MongoDBContainer("mongo:4.2.8");
@@ -83,13 +83,13 @@ public class CatchupSupportingBlockingSubscriptionTest {
     FlushMongoDBExtension flushMongoDBExtension = new FlushMongoDBExtension(new ConnectionString(mongoDBContainer.getReplicaSetUrl()));
 
     private MongoEventStore mongoEventStore;
-    private CatchupSupportingBlockingSubscription subscription;
+    private CatchupSubscriptionModel subscription;
     private ObjectMapper objectMapper;
     private MongoClient mongoClient;
     private ExecutorService subscriptionExecutor;
     private MongoDatabase database;
     private MongoCollection<Document> eventCollection;
-    private BlockingSubscriptionPositionStorageForMongoDB storage;
+    private NativeMongoDBSubscriptionPositionStorage storage;
 
     @BeforeEach
     void create_mongo_event_store() {
@@ -101,8 +101,8 @@ public class CatchupSupportingBlockingSubscriptionTest {
         eventCollection = database.getCollection(requireNonNull(connectionString.getCollection()));
         mongoEventStore = new MongoEventStore(mongoClient, connectionString.getDatabase(), connectionString.getCollection(), config);
         subscriptionExecutor = Executors.newCachedThreadPool();
-        storage = new BlockingSubscriptionPositionStorageForMongoDB(database, "storage");
-        subscription = newCatchupSubscription(database, eventCollection, timeRepresentation, new CatchupSupportingBlockingSubscriptionConfig(100, useSubscriptionPositionStorage(storage).andPersistSubscriptionPositionDuringCatchupPhaseForEveryNEvents(1)));
+        storage = new NativeMongoDBSubscriptionPositionStorage(database, "storage");
+        subscription = newCatchupSubscription(database, eventCollection, timeRepresentation, new CatchupSubscriptionModelConfig(100, useSubscriptionPositionStorage(storage).andPersistSubscriptionPositionDuringCatchupPhaseForEveryNEvents(1)));
         objectMapper = new ObjectMapper();
     }
 
@@ -249,7 +249,7 @@ public class CatchupSupportingBlockingSubscriptionTest {
         }).waitUntilStarted();
 
         awaitLatch(waitUntilSecondEventProcessed);
-        subscription = newCatchupSubscription(database, eventCollection, TimeRepresentation.DATE, new CatchupSupportingBlockingSubscriptionConfig(100, useSubscriptionPositionStorage(storage).andPersistSubscriptionPositionDuringCatchupPhaseForEveryNEvents(1)));
+        subscription = newCatchupSubscription(database, eventCollection, TimeRepresentation.DATE, new CatchupSubscriptionModelConfig(100, useSubscriptionPositionStorage(storage).andPersistSubscriptionPositionDuringCatchupPhaseForEveryNEvents(1)));
         subscription.subscribe(subscriptionId, state::add).waitUntilStarted();
 
         // Then
@@ -298,7 +298,7 @@ public class CatchupSupportingBlockingSubscriptionTest {
         }).waitUntilStarted();
 
         awaitLatch(waitUntilSecondEventProcessed);
-        subscription = newCatchupSubscription(database, eventCollection, TimeRepresentation.DATE, new CatchupSupportingBlockingSubscriptionConfig(100, useSubscriptionPositionStorage(storage).andPersistSubscriptionPositionDuringCatchupPhaseForEveryNEvents(1)));
+        subscription = newCatchupSubscription(database, eventCollection, TimeRepresentation.DATE, new CatchupSubscriptionModelConfig(100, useSubscriptionPositionStorage(storage).andPersistSubscriptionPositionDuringCatchupPhaseForEveryNEvents(1)));
         subscription.subscribe(subscriptionId, filter(type(NameDefined.class.getName())), state::add).waitUntilStarted();
 
         // Then
@@ -330,10 +330,10 @@ public class CatchupSupportingBlockingSubscriptionTest {
             waitUntilCancelled.countDown();
         }).start();
 
-        Supplier<CatchupSupportingBlockingSubscription> catchupSupportingBlockingSubscription = () -> {
-            BlockingSubscriptionForMongoDB blockingSubscriptionForMongoDB = new BlockingSubscriptionForMongoDB(database, eventCollection, TimeRepresentation.DATE, subscriptionExecutor, RetryStrategy.none());
-            BlockingSubscriptionWithAutomaticPositionPersistence blockingSubscriptionWithAutomaticPositionPersistence = new BlockingSubscriptionWithAutomaticPositionPersistence(blockingSubscriptionForMongoDB, storage);
-            return new CatchupSupportingBlockingSubscription(blockingSubscriptionWithAutomaticPositionPersistence, mongoEventStore, new CatchupSupportingBlockingSubscriptionConfig(100, useSubscriptionPositionStorage(storage)));
+        Supplier<CatchupSubscriptionModel> catchupSupportingBlockingSubscription = () -> {
+            NativeMongoDBSubscriptionModel blockingSubscriptionForMongoDB = new NativeMongoDBSubscriptionModel(database, eventCollection, TimeRepresentation.DATE, subscriptionExecutor, RetryStrategy.none());
+            AutoPersistingSubscriptionModel blockingSubscriptionWithAutomaticPositionPersistence = new AutoPersistingSubscriptionModel(blockingSubscriptionForMongoDB, storage);
+            return new CatchupSubscriptionModel(blockingSubscriptionWithAutomaticPositionPersistence, mongoEventStore, new CatchupSubscriptionModelConfig(100, useSubscriptionPositionStorage(storage)));
         };
 
         subscription = catchupSupportingBlockingSubscription.get();
@@ -390,7 +390,7 @@ public class CatchupSupportingBlockingSubscriptionTest {
         }).start();
 
         // When
-        subscription = newCatchupSubscription(database, eventCollection, TimeRepresentation.DATE, new CatchupSupportingBlockingSubscriptionConfig(100));
+        subscription = newCatchupSubscription(database, eventCollection, TimeRepresentation.DATE, new CatchupSubscriptionModelConfig(100));
         subscription.subscribe(subscriptionId, StartAt.subscriptionPosition(TimeBasedSubscriptionPosition.beginningOfTime()), e -> {
             if (state.size() < 2) {
                 state.add(e);
@@ -404,7 +404,7 @@ public class CatchupSupportingBlockingSubscriptionTest {
         }).waitUntilStarted();
 
         awaitLatch(waitUntilSecondEventProcessed);
-        subscription = newCatchupSubscription(database, eventCollection, TimeRepresentation.DATE, new CatchupSupportingBlockingSubscriptionConfig(100, useSubscriptionPositionStorage(storage).andPersistSubscriptionPositionDuringCatchupPhaseForEveryNEvents(1)));
+        subscription = newCatchupSubscription(database, eventCollection, TimeRepresentation.DATE, new CatchupSubscriptionModelConfig(100, useSubscriptionPositionStorage(storage).andPersistSubscriptionPositionDuringCatchupPhaseForEveryNEvents(1)));
         subscription.subscribe(subscriptionId, state::add).waitUntilStarted();
 
         // Then
@@ -423,7 +423,7 @@ public class CatchupSupportingBlockingSubscriptionTest {
         }
 
         AtomicInteger numberOfSavedPositions = new AtomicInteger();
-        storage = new BlockingSubscriptionPositionStorageForMongoDB(database, "storage") {
+        storage = new NativeMongoDBSubscriptionPositionStorage(database, "storage") {
             @Override
             public SubscriptionPosition save(String subscriptionId, SubscriptionPosition subscriptionPosition) {
                 numberOfSavedPositions.incrementAndGet();
@@ -431,7 +431,7 @@ public class CatchupSupportingBlockingSubscriptionTest {
             }
         };
 
-        subscription = newCatchupSubscription(database, eventCollection, TimeRepresentation.DATE, new CatchupSupportingBlockingSubscriptionConfig(100, useSubscriptionPositionStorage(this.storage).andPersistSubscriptionPositionDuringCatchupPhaseForEveryNEvents(10)));
+        subscription = newCatchupSubscription(database, eventCollection, TimeRepresentation.DATE, new CatchupSubscriptionModelConfig(100, useSubscriptionPositionStorage(this.storage).andPersistSubscriptionPositionDuringCatchupPhaseForEveryNEvents(10)));
 
         CopyOnWriteArrayList<CloudEvent> state = new CopyOnWriteArrayList<>();
 
@@ -474,8 +474,8 @@ public class CatchupSupportingBlockingSubscriptionTest {
                 .build());
     }
 
-    private CatchupSupportingBlockingSubscription newCatchupSubscription(MongoDatabase database, MongoCollection<Document> eventCollection, TimeRepresentation timeRepresentation, CatchupSupportingBlockingSubscriptionConfig config) {
-        BlockingSubscriptionForMongoDB blockingSubscriptionForMongoDB = new BlockingSubscriptionForMongoDB(database, eventCollection, timeRepresentation, subscriptionExecutor, RetryStrategy.none());
-        return new CatchupSupportingBlockingSubscription(blockingSubscriptionForMongoDB, mongoEventStore, config);
+    private CatchupSubscriptionModel newCatchupSubscription(MongoDatabase database, MongoCollection<Document> eventCollection, TimeRepresentation timeRepresentation, CatchupSubscriptionModelConfig config) {
+        NativeMongoDBSubscriptionModel blockingSubscriptionForMongoDB = new NativeMongoDBSubscriptionModel(database, eventCollection, timeRepresentation, subscriptionExecutor, RetryStrategy.none());
+        return new CatchupSubscriptionModel(blockingSubscriptionForMongoDB, mongoEventStore, config);
     }
 }

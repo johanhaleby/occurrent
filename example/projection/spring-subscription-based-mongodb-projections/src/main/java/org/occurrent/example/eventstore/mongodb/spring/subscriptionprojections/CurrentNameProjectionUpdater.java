@@ -19,7 +19,7 @@ package org.occurrent.example.eventstore.mongodb.spring.subscriptionprojections;
 import org.occurrent.domain.DomainEvent;
 import org.occurrent.domain.NameDefined;
 import org.occurrent.domain.NameWasChanged;
-import org.occurrent.subscription.api.blocking.BlockingSubscription;
+import org.occurrent.subscription.api.blocking.SubscriptionModel;
 import org.springframework.stereotype.Component;
 
 import javax.annotation.PostConstruct;
@@ -33,11 +33,11 @@ import static org.occurrent.cloudevents.OccurrentExtensionGetter.getStreamId;
 @Component
 public class CurrentNameProjectionUpdater {
 
-    private final BlockingSubscription subscription;
+    private final SubscriptionModel subscription;
     private final CurrentNameProjection currentNameProjection;
     private final DeserializeCloudEventToDomainEvent deserializeCloudEventToDomainEvent;
 
-    public CurrentNameProjectionUpdater(BlockingSubscription subscription,
+    public CurrentNameProjectionUpdater(SubscriptionModel subscription,
                                         CurrentNameProjection currentNameProjection,
                                         DeserializeCloudEventToDomainEvent deserializeCloudEventToDomainEvent) {
         this.subscription = subscription;

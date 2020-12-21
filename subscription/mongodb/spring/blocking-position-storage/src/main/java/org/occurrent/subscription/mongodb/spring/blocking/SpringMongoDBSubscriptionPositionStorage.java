@@ -20,7 +20,7 @@ import org.bson.BsonTimestamp;
 import org.bson.BsonValue;
 import org.bson.Document;
 import org.occurrent.subscription.SubscriptionPosition;
-import org.occurrent.subscription.api.blocking.BlockingSubscriptionPositionStorage;
+import org.occurrent.subscription.api.blocking.SubscriptionPositionStorage;
 import org.occurrent.subscription.mongodb.MongoDBOperationTimeBasedSubscriptionPosition;
 import org.occurrent.subscription.mongodb.MongoDBResumeTokenBasedSubscriptionPosition;
 import org.occurrent.subscription.mongodb.internal.MongoDBCommons;
@@ -33,20 +33,20 @@ import static org.springframework.data.mongodb.core.query.Criteria.where;
 import static org.springframework.data.mongodb.core.query.Query.query;
 
 /**
- * A Spring implementation of {@link BlockingSubscriptionPositionStorage} that stores {@link SubscriptionPosition} in MongoDB.
+ * A Spring implementation of {@link SubscriptionPositionStorage} that stores {@link SubscriptionPosition} in MongoDB.
  */
-public class SpringBlockingSubscriptionPositionStorageForMongoDB implements BlockingSubscriptionPositionStorage {
+public class SpringMongoDBSubscriptionPositionStorage implements SubscriptionPositionStorage {
 
     private final MongoOperations mongoOperations;
     private final String subscriptionPositionCollection;
 
     /**
-     * Create a {@link BlockingSubscriptionPositionStorage} that uses the Spring's {@link MongoOperations} to persist subscription positions in MongoDB.
+     * Create a {@link SubscriptionPositionStorage} that uses the Spring's {@link MongoOperations} to persist subscription positions in MongoDB.
      *
      * @param mongoOperations                The {@link MongoOperations} that'll be used to store the subscription position
      * @param subscriptionPositionCollection The collection into which subscription positions will be stored
      */
-    public SpringBlockingSubscriptionPositionStorageForMongoDB(MongoOperations mongoOperations, String subscriptionPositionCollection) {
+    public SpringMongoDBSubscriptionPositionStorage(MongoOperations mongoOperations, String subscriptionPositionCollection) {
         requireNonNull(mongoOperations, "Mongo operations cannot be null");
         requireNonNull(subscriptionPositionCollection, "subscriptionPositionCollection cannot be null");
 

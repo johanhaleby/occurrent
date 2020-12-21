@@ -14,18 +14,19 @@
  * limitations under the License.
  */
 
-package org.occurrent.subscription.api.blocking;
+package org.occurrent.subscription.api.reactor;
 
 import io.cloudevents.CloudEvent;
 import org.occurrent.subscription.PositionAwareCloudEvent;
 import org.occurrent.subscription.SubscriptionPosition;
+import reactor.core.publisher.Mono;
 
 /**
- * A {@link BlockingSubscription} that produces {@link PositionAwareCloudEvent} compatible {@link CloudEvent}'s.
- * This is useful for subscribers that want to persist the subscription position for a given subscription if the event store doesn't
- * maintain the position for subscriptions.
+ * A {@link SubscriptionModel} that produces {@link PositionAwareCloudEvent} compatible {@link CloudEvent}'s.
+ * This is useful for subscriptions that want to persist the position for a given event if the event store doesn't
+ * maintain the position for subscriptions automatically.
  */
-public interface PositionAwareBlockingSubscription extends BlockingSubscription {
+public interface PositionAwareSubscriptionModel extends SubscriptionModel {
 
     /**
      * The global subscription position might be e.g. the wall clock time of the server, vector clock, number of events consumed etc.
@@ -35,5 +36,5 @@ public interface PositionAwareBlockingSubscription extends BlockingSubscription 
      *
      * @return The global subscription position for the database.
      */
-    SubscriptionPosition globalSubscriptionPosition();
+    Mono<SubscriptionPosition> globalSubscriptionPosition();
 }

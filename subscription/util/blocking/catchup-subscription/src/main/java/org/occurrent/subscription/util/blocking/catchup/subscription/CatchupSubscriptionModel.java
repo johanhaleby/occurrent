@@ -21,10 +21,10 @@ import org.occurrent.eventstore.api.blocking.EventStoreQueries;
 import org.occurrent.filter.Filter;
 import org.occurrent.subscription.*;
 import org.occurrent.subscription.StartAt.StartAtSubscriptionPosition;
-import org.occurrent.subscription.api.blocking.BlockingSubscription;
-import org.occurrent.subscription.api.blocking.BlockingSubscriptionPositionStorage;
-import org.occurrent.subscription.api.blocking.PositionAwareBlockingSubscription;
+import org.occurrent.subscription.api.blocking.PositionAwareSubscriptionModel;
 import org.occurrent.subscription.api.blocking.Subscription;
+import org.occurrent.subscription.api.blocking.SubscriptionModel;
+import org.occurrent.subscription.api.blocking.SubscriptionPositionStorage;
 import org.occurrent.subscription.util.blocking.catchup.subscription.SubscriptionPositionStorageConfig.PersistSubscriptionPositionDuringCatchupPhase;
 import org.occurrent.subscription.util.blocking.catchup.subscription.SubscriptionPositionStorageConfig.UseSubscriptionPositionInStorage;
 
@@ -48,55 +48,55 @@ import static org.occurrent.functionalsupport.internal.FunctionalSupport.takeWhi
 import static org.occurrent.time.internal.RFC3339.RFC_3339_DATE_TIME_FORMATTER;
 
 /**
- * A {@link BlockingSubscription} that reads historic cloud events from the all event streams (see {@link EventStoreQueries#all()}) until caught up with the
- * {@link PositionAwareBlockingSubscription#globalSubscriptionPosition()} of the {@code subscription} (you probably want to narrow the historic set events of events
+ * A {@link SubscriptionModel} that reads historic cloud events from the all event streams (see {@link EventStoreQueries#all()}) until caught up with the
+ * {@link PositionAwareSubscriptionModel#globalSubscriptionPosition()} of the {@code subscription} (you probably want to narrow the historic set events of events
  * by using a {@link Filter} when subscribing). It'll automatically switch over to the supplied {@code subscription} when all history events are read and the subscription has caught-up.
  * <br>
  * <br>
  * <p>
- * Note that the implementation uses an in-memory cache (default size is {@value #DEFAULT_CACHE_SIZE} but this can be configured using a {@link CatchupSupportingBlockingSubscriptionConfig})
+ * Note that the implementation uses an in-memory cache (default size is {@value #DEFAULT_CACHE_SIZE} but this can be configured using a {@link CatchupSubscriptionModelConfig})
  * to reduce the number of duplicate event when switching from historic events to the current cloud event position. It's highly recommended that the application logic is idempotent if the
  * cache size doesn't cover all duplicate events.
  * </p>
  * <br>
  * <p>
  * Also note that the if a the subscription crashes during catch-up mode it'll continue where it left-off on restart, given the no specific `StartAt` position is supplied.
- * For this to work, the subscription must store the subscription position in a {@link BlockingSubscriptionPositionStorage} implementation periodically. It's possible to configure
- * how often this should happen in the {@link CatchupSupportingBlockingSubscriptionConfig}.
+ * For this to work, the subscription must store the subscription position in a {@link SubscriptionPositionStorage} implementation periodically. It's possible to configure
+ * how often this should happen in the {@link CatchupSubscriptionModelConfig}.
  * </p>
  */
-public class CatchupSupportingBlockingSubscription implements BlockingSubscription {
+public class CatchupSubscriptionModel implements SubscriptionModel {
 
     private static final int DEFAULT_CACHE_SIZE = 100;
 
-    private final PositionAwareBlockingSubscription subscription;
+    private final PositionAwareSubscriptionModel subscription;
     private final EventStoreQueries eventStoreQueries;
-    private final CatchupSupportingBlockingSubscriptionConfig config;
+    private final CatchupSubscriptionModelConfig config;
     private final ConcurrentMap<String, Boolean> runningCatchupSubscriptions = new ConcurrentHashMap<>();
     private volatile boolean shuttingDown = false;
 
     /**
-     * Create a new instance of {@link CatchupSupportingBlockingSubscription} the uses a default {@link CatchupSupportingBlockingSubscriptionConfig} with a cache size of
+     * Create a new instance of {@link CatchupSubscriptionModel} the uses a default {@link CatchupSubscriptionModelConfig} with a cache size of
      * {@value #DEFAULT_CACHE_SIZE} but store the subscription position during the <i>catch-up</i> phase (i.e. if the application crashes or is shutdown during the
-     * catch-up phase then the subscription will start from the beginning on application restart). After the catch-up phase has completed, the {@link PositionAwareBlockingSubscription}
+     * catch-up phase then the subscription will start from the beginning on application restart). After the catch-up phase has completed, the {@link PositionAwareSubscriptionModel}
      * will dictate how often the subscription position is stored.
      *
      * @param subscription      The subscription that'll be used to subscribe to new events <i>after</i> catch-up is completed.
      * @param eventStoreQueries The API that will be used for catch-up
      */
-    public CatchupSupportingBlockingSubscription(PositionAwareBlockingSubscription subscription, EventStoreQueries eventStoreQueries) {
-        this(subscription, eventStoreQueries, new CatchupSupportingBlockingSubscriptionConfig(DEFAULT_CACHE_SIZE));
+    public CatchupSubscriptionModel(PositionAwareSubscriptionModel subscription, EventStoreQueries eventStoreQueries) {
+        this(subscription, eventStoreQueries, new CatchupSubscriptionModelConfig(DEFAULT_CACHE_SIZE));
     }
 
     /**
-     * Create a new instance of {@link CatchupSupportingBlockingSubscription} the uses the supplied {@link CatchupSupportingBlockingSubscriptionConfig}.
-     * After catch-up mode has completed, the {@link PositionAwareBlockingSubscription} will dictate how often the subscription position is stored.
+     * Create a new instance of {@link CatchupSubscriptionModel} the uses the supplied {@link CatchupSubscriptionModelConfig}.
+     * After catch-up mode has completed, the {@link PositionAwareSubscriptionModel} will dictate how often the subscription position is stored.
      *
      * @param subscription      The subscription that'll be used to subscribe to new events <i>after</i> catch-up is completed.
      * @param eventStoreQueries The API that will be used for catch-up
      * @param config            The configuration to use
      */
-    public CatchupSupportingBlockingSubscription(PositionAwareBlockingSubscription subscription, EventStoreQueries eventStoreQueries, CatchupSupportingBlockingSubscriptionConfig config) {
+    public CatchupSubscriptionModel(PositionAwareSubscriptionModel subscription, EventStoreQueries eventStoreQueries, CatchupSubscriptionModelConfig config) {
         this.subscription = subscription;
         this.eventStoreQueries = eventStoreQueries;
         this.config = config;

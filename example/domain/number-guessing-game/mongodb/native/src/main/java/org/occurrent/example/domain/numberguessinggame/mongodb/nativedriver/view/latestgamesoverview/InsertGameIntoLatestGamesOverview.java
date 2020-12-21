@@ -23,7 +23,7 @@ import org.bson.Document;
 import org.bson.conversions.Bson;
 import org.jetbrains.annotations.NotNull;
 import org.occurrent.example.domain.numberguessinggame.model.domainevents.*;
-import org.occurrent.subscription.api.blocking.BlockingSubscription;
+import org.occurrent.subscription.api.blocking.SubscriptionModel;
 
 import java.time.LocalDateTime;
 import java.util.Date;
@@ -36,7 +36,7 @@ import static java.time.temporal.ChronoUnit.MILLIS;
 
 public class InsertGameIntoLatestGamesOverview {
 
-    public static void insertGameIntoLatestGamesOverview(BlockingSubscription subscription,
+    public static void insertGameIntoLatestGamesOverview(SubscriptionModel subscription,
                                                          MongoCollection<Document> latestGamesOverviewCollection,
                                                          Function<CloudEvent, GameEvent> deserialize) {
         subscription.subscribe(InsertGameIntoLatestGamesOverview.class.getSimpleName(), insertGame(latestGamesOverviewCollection, deserialize));

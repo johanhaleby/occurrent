@@ -27,7 +27,7 @@ import reactor.core.publisher.Flux;
  * and react to these events. Typically a subscription will forward the event to another piece of infrastructure such as
  * a message bus or to create views from the events (such as projections, sagas, snapshots etc).
  */
-public interface ReactorSubscription {
+public interface SubscriptionModel {
 
     /**
      * Stream events from the event store as they arrive and provide a function which allows to configure the

@@ -21,7 +21,7 @@ import org.bson.BsonDocument;
 import org.bson.BsonTimestamp;
 import org.bson.Document;
 import org.occurrent.subscription.SubscriptionPosition;
-import org.occurrent.subscription.api.reactor.ReactorSubscriptionPositionStorage;
+import org.occurrent.subscription.api.reactor.SubscriptionPositionStorage;
 import org.occurrent.subscription.mongodb.MongoDBOperationTimeBasedSubscriptionPosition;
 import org.occurrent.subscription.mongodb.MongoDBResumeTokenBasedSubscriptionPosition;
 import org.occurrent.subscription.mongodb.internal.MongoDBCommons;
@@ -37,20 +37,20 @@ import static org.springframework.data.mongodb.core.query.Criteria.where;
 import static org.springframework.data.mongodb.core.query.Query.query;
 
 /**
- * A Spring implementation of {@link ReactorSubscriptionPositionStorage} that stores {@link SubscriptionPosition} in MongoDB.
+ * A Spring implementation of {@link SubscriptionPositionStorage} that stores {@link SubscriptionPosition} in MongoDB.
  */
-public class SpringReactorSubscriptionPositionStorageForMongoDB implements ReactorSubscriptionPositionStorage {
+public class SpringMongoDBSubscriptionPositionStorage implements SubscriptionPositionStorage {
 
     private final ReactiveMongoOperations mongo;
     private final String subscriptionPositionCollection;
 
     /**
-     * Create a new instance of {@link SpringReactorSubscriptionPositionStorageForMongoDB}
+     * Create a new instance of {@link SpringMongoDBSubscriptionPositionStorage}
      *
      * @param mongo                    The {@link ReactiveMongoOperations} implementation to use persisting subscription positions to MongoDB.
      * @param subscriptionPositionCollection The collection that will contain the subscription position for each subscriber.
      */
-    public SpringReactorSubscriptionPositionStorageForMongoDB(ReactiveMongoOperations mongo, String subscriptionPositionCollection) {
+    public SpringMongoDBSubscriptionPositionStorage(ReactiveMongoOperations mongo, String subscriptionPositionCollection) {
         requireNonNull(mongo, ReactiveMongoOperations.class.getSimpleName() + " cannot be null");
         requireNonNull(subscriptionPositionCollection, "subscriptionPositionCollection cannot be null");
         this.mongo = mongo;

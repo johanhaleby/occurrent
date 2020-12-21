@@ -32,7 +32,7 @@ import org.occurrent.filter.Filter;
 import org.occurrent.mongodb.spring.filterbsonfilterconversion.internal.FilterToBsonFilterConverter;
 import org.occurrent.mongodb.timerepresentation.TimeRepresentation;
 import org.occurrent.subscription.*;
-import org.occurrent.subscription.api.blocking.PositionAwareBlockingSubscription;
+import org.occurrent.subscription.api.blocking.PositionAwareSubscriptionModel;
 import org.occurrent.subscription.api.blocking.Subscription;
 import org.occurrent.subscription.mongodb.MongoDBFilterSpecification;
 import org.occurrent.subscription.mongodb.MongoDBOperationTimeBasedSubscriptionPosition;
@@ -67,8 +67,8 @@ import static java.util.Objects.requireNonNull;
  * or use the {@code BlockingSubscriptionWithAutomaticPositionPersistence} utility from the {@code org.occurrent:subscription-util-blocking-automatic-position-persistence}
  * module.
  */
-public class BlockingSubscriptionForMongoDB implements PositionAwareBlockingSubscription {
-    private static final Logger log = LoggerFactory.getLogger(BlockingSubscriptionForMongoDB.class);
+public class NativeMongoDBSubscriptionModel implements PositionAwareSubscriptionModel {
+    private static final Logger log = LoggerFactory.getLogger(NativeMongoDBSubscriptionModel.class);
 
     private final MongoCollection<Document> eventCollection;
     private final ConcurrentMap<String, MongoChangeStreamCursor<ChangeStreamDocument<Document>>> subscriptions;
@@ -88,7 +88,7 @@ public class BlockingSubscriptionForMongoDB implements PositionAwareBlockingSubs
      * @param subscriptionExecutor The executor that will be used for the subscription. Typically a dedicated thread will be required per subscription.
      * @param retryStrategy        Configure how retries should be handled
      */
-    public BlockingSubscriptionForMongoDB(MongoDatabase database, String eventCollectionName, TimeRepresentation timeRepresentation,
+    public NativeMongoDBSubscriptionModel(MongoDatabase database, String eventCollectionName, TimeRepresentation timeRepresentation,
                                           Executor subscriptionExecutor, RetryStrategy retryStrategy) {
         this(database, database.getCollection(requireNonNull(eventCollectionName, "Event collection cannot be null")), timeRepresentation, subscriptionExecutor, retryStrategy);
     }
@@ -102,7 +102,7 @@ public class BlockingSubscriptionForMongoDB implements PositionAwareBlockingSubs
      * @param subscriptionExecutor The executor that will be used for the subscription. Typically a dedicated thread will be required per subscription.
      * @param retryStrategy        Configure how retries should be handled
      */
-    public BlockingSubscriptionForMongoDB(MongoDatabase database, MongoCollection<Document> eventCollection, TimeRepresentation timeRepresentation,
+    public NativeMongoDBSubscriptionModel(MongoDatabase database, MongoCollection<Document> eventCollection, TimeRepresentation timeRepresentation,
                                           Executor subscriptionExecutor, RetryStrategy retryStrategy) {
         requireNonNull(database, MongoDatabase.class.getSimpleName() + " cannot be null");
         requireNonNull(eventCollection, "Event collection cannot be null");

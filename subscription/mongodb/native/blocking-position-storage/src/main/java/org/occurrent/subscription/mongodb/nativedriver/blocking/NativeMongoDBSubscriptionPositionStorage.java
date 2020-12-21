@@ -23,7 +23,7 @@ import org.bson.BsonTimestamp;
 import org.bson.BsonValue;
 import org.bson.Document;
 import org.occurrent.subscription.SubscriptionPosition;
-import org.occurrent.subscription.api.blocking.BlockingSubscriptionPositionStorage;
+import org.occurrent.subscription.api.blocking.SubscriptionPositionStorage;
 import org.occurrent.subscription.mongodb.MongoDBOperationTimeBasedSubscriptionPosition;
 import org.occurrent.subscription.mongodb.MongoDBResumeTokenBasedSubscriptionPosition;
 
@@ -33,9 +33,9 @@ import static org.occurrent.subscription.mongodb.internal.MongoDBCloudEventsToJs
 import static org.occurrent.subscription.mongodb.internal.MongoDBCommons.*;
 
 /**
- * A native sync Java MongoDB implementation of {@link BlockingSubscriptionPositionStorage} that stores {@link SubscriptionPosition} in MongoDB.
+ * A native sync Java MongoDB implementation of {@link SubscriptionPositionStorage} that stores {@link SubscriptionPosition} in MongoDB.
  */
-public class BlockingSubscriptionPositionStorageForMongoDB implements BlockingSubscriptionPositionStorage {
+public class NativeMongoDBSubscriptionPositionStorage implements SubscriptionPositionStorage {
 
     private final MongoCollection<Document> subscriptionPositionCollection;
 
@@ -44,7 +44,7 @@ public class BlockingSubscriptionPositionStorageForMongoDB implements BlockingSu
      *
      * @param subscriptionPositionCollection The collection into which subscription positions will be stored
      */
-    public BlockingSubscriptionPositionStorageForMongoDB(MongoDatabase database, String subscriptionPositionCollection) {
+    public NativeMongoDBSubscriptionPositionStorage(MongoDatabase database, String subscriptionPositionCollection) {
         this(requireNonNull(database, "Database cannot be null").getCollection(subscriptionPositionCollection));
     }
 
@@ -53,7 +53,7 @@ public class BlockingSubscriptionPositionStorageForMongoDB implements BlockingSu
      *
      * @param subscriptionPositionCollection The collection into which subscription positions will be stored
      */
-    public BlockingSubscriptionPositionStorageForMongoDB(MongoCollection<Document> subscriptionPositionCollection) {
+    public NativeMongoDBSubscriptionPositionStorage(MongoCollection<Document> subscriptionPositionCollection) {
         requireNonNull(subscriptionPositionCollection, "subscriptionPositionCollection cannot be null");
         this.subscriptionPositionCollection = subscriptionPositionCollection;
     }

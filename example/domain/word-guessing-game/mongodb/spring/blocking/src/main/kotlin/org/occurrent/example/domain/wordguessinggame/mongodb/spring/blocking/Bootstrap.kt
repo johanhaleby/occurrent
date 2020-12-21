@@ -26,13 +26,13 @@ import org.occurrent.example.domain.wordguessinggame.event.GameEvent
 import org.occurrent.example.domain.wordguessinggame.mongodb.spring.blocking.features.GameCloudEventConverter
 import org.occurrent.example.domain.wordguessinggame.mongodb.spring.blocking.features.emailwinner.SendEmailToWinner
 import org.occurrent.mongodb.timerepresentation.TimeRepresentation
-import org.occurrent.subscription.api.blocking.BlockingSubscription
-import org.occurrent.subscription.api.blocking.BlockingSubscriptionPositionStorage
-import org.occurrent.subscription.mongodb.spring.blocking.SpringBlockingSubscriptionForMongoDB
-import org.occurrent.subscription.mongodb.spring.blocking.SpringBlockingSubscriptionPositionStorageForMongoDB
-import org.occurrent.subscription.util.blocking.BlockingSubscriptionWithAutomaticPositionPersistence
-import org.occurrent.subscription.util.blocking.catchup.subscription.CatchupSupportingBlockingSubscription
-import org.occurrent.subscription.util.blocking.catchup.subscription.CatchupSupportingBlockingSubscriptionConfig
+import org.occurrent.subscription.api.blocking.SubscriptionModel
+import org.occurrent.subscription.api.blocking.SubscriptionPositionStorage
+import org.occurrent.subscription.mongodb.spring.blocking.SpringMongoDBSubscriptionModel
+import org.occurrent.subscription.mongodb.spring.blocking.SpringMongoDBSubscriptionPositionStorage
+import org.occurrent.subscription.util.blocking.AutoPersistingSubscriptionModel
+import org.occurrent.subscription.util.blocking.catchup.subscription.CatchupSubscriptionModel
+import org.occurrent.subscription.util.blocking.catchup.subscription.CatchupSubscriptionModelConfig
 import org.occurrent.subscription.util.blocking.catchup.subscription.SubscriptionPositionStorageConfig.useSubscriptionPositionStorage
 import org.springframework.boot.autoconfigure.SpringBootApplication
 import org.springframework.boot.runApplication
@@ -73,22 +73,29 @@ class Bootstrap : WebMvcConfigurer {
     }
 
     @Bean
-    fun subscriptionStorage(mongoTemplate: MongoTemplate): BlockingSubscriptionPositionStorage =
-            SpringBlockingSubscriptionPositionStorageForMongoDB(mongoTemplate, "subscriptions")
+    fun subscriptionPositionStorage(mongoTemplate: MongoTemplate): SubscriptionPositionStorage =
+        SpringMongoDBSubscriptionPositionStorage(mongoTemplate, "subscriptions")
 
     @Bean
-    fun subscriptionWithAutomaticPersistence(storage: BlockingSubscriptionPositionStorage, mongoTemplate: MongoTemplate, eventStoreQueries: EventStoreQueries): BlockingSubscription {
-        val subscription = SpringBlockingSubscriptionForMongoDB(mongoTemplate, EVENTS_COLLECTION_NAME, TimeRepresentation.DATE)
-        val subscriptionWithAutomaticPositionPersistence = BlockingSubscriptionWithAutomaticPositionPersistence(subscription, storage)
-        return CatchupSupportingBlockingSubscription(subscriptionWithAutomaticPositionPersistence, eventStoreQueries,
-                CatchupSupportingBlockingSubscriptionConfig(useSubscriptionPositionStorage(storage)))
+    fun catchupSubscriptionModel(storage: SubscriptionPositionStorage, mongoTemplate: MongoTemplate, eventStoreQueries: EventStoreQueries): SubscriptionModel {
+        val subscription = SpringMongoDBSubscriptionModel(mongoTemplate, EVENTS_COLLECTION_NAME, TimeRepresentation.DATE)
+        val subscriptionWithAutomaticPositionPersistence = AutoPersistingSubscriptionModel(subscription, storage)
+        return CatchupSubscriptionModel(
+            subscriptionWithAutomaticPositionPersistence, eventStoreQueries,
+            CatchupSubscriptionModelConfig(useSubscriptionPositionStorage(storage))
+        )
     }
 
     @Bean
     fun objectMapper() = jacksonObjectMapper()
 
     @Bean
-    fun cloudEventConverter(objectMapper: ObjectMapper): CloudEventConverter<GameEvent> = GameCloudEventConverter(objectMapper, URI.create("urn:occurrent:domain:wordguessinggame:game"), URI.create("urn:occurrent:domain:wordguessinggame:wordhint"), URI.create("urn:occurrent:domain:wordguessinggame:points"))
+    fun cloudEventConverter(objectMapper: ObjectMapper): CloudEventConverter<GameEvent> = GameCloudEventConverter(
+        objectMapper,
+        gameSource = URI.create("urn:occurrent:domain:wordguessinggame:game"),
+        wordHintSource = URI.create("urn:occurrent:domain:wordguessinggame:wordhint"),
+        pointsSource = URI.create("urn:occurrent:domain:wordguessinggame:points")
+    )
 
     @Bean
     fun occurrentApplicationService(eventStore: SpringBlockingMongoEventStore, eventConverter: CloudEventConverter<GameEvent>): OccurrentApplicationService<GameEvent> = GenericApplicationService(eventStore, eventConverter)
