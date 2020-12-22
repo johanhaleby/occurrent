@@ -61,7 +61,7 @@ import static org.springframework.data.mongodb.core.query.Criteria.where;
  * Spring's {@link ReactiveMongoTemplate} that is based on <a href="https://projectreactor.io/">project reactor</a>.
  * It also supports the {@link EventStoreOperations} and {@link EventStoreQueries} contracts.
  */
-public class SpringReactorMongoEventStore implements EventStore, EventStoreOperations, EventStoreQueries {
+public class ReactorMongoEventStore implements EventStore, EventStoreOperations, EventStoreQueries {
 
     private static final String ID = "_id";
     private static final String NATURAL = "$natural";
@@ -77,7 +77,7 @@ public class SpringReactorMongoEventStore implements EventStore, EventStoreOpera
      * @param mongoTemplate The {@link ReactiveMongoTemplate} that the {@code SpringReactorMongoEventStore} will use
      * @param config        The {@link EventStoreConfig} that will be used
      */
-    public SpringReactorMongoEventStore(ReactiveMongoTemplate mongoTemplate, EventStoreConfig config) {
+    public ReactorMongoEventStore(ReactiveMongoTemplate mongoTemplate, EventStoreConfig config) {
         requireNonNull(mongoTemplate, ReactiveMongoTemplate.class.getSimpleName() + " cannot be null");
         requireNonNull(config, EventStoreConfig.class.getSimpleName() + " cannot be null");
         this.mongoTemplate = mongoTemplate;

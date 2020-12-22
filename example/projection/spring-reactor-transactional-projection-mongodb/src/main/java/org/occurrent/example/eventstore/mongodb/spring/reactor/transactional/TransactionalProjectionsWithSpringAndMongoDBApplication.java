@@ -19,7 +19,7 @@ package org.occurrent.example.eventstore.mongodb.spring.reactor.transactional;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import org.occurrent.eventstore.api.reactor.EventStore;
 import org.occurrent.eventstore.mongodb.spring.reactor.EventStoreConfig;
-import org.occurrent.eventstore.mongodb.spring.reactor.SpringReactorMongoEventStore;
+import org.occurrent.eventstore.mongodb.spring.reactor.ReactorMongoEventStore;
 import org.occurrent.mongodb.timerepresentation.TimeRepresentation;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.autoconfigure.SpringBootApplication;
@@ -50,7 +50,7 @@ public class TransactionalProjectionsWithSpringAndMongoDBApplication {
     @Bean
     public EventStore eventStore(ReactiveMongoTemplate mongoTemplate, ReactiveMongoTransactionManager reactiveMongoTransactionManager) {
         EventStoreConfig eventStoreConfig = new EventStoreConfig.Builder().eventStoreCollectionName("events").transactionConfig(reactiveMongoTransactionManager).timeRepresentation(TimeRepresentation.RFC_3339_STRING).build();
-        return new SpringReactorMongoEventStore(mongoTemplate, eventStoreConfig);
+        return new ReactorMongoEventStore(mongoTemplate, eventStoreConfig);
     }
 
     @Bean

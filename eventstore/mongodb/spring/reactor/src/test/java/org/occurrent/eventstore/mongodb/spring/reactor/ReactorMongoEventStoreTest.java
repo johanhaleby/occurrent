@@ -88,7 +88,7 @@ import static org.springframework.data.mongodb.core.query.Query.query;
 
 @SuppressWarnings("SameParameterValue")
 @Testcontainers
-public class SpringReactorMongoEventStoreTest {
+public class ReactorMongoEventStoreTest {
 
     @Container
     private static final MongoDBContainer mongoDBContainer;
@@ -101,7 +101,7 @@ public class SpringReactorMongoEventStoreTest {
         mongoDBContainer.setPortBindings(ports);
     }
 
-    private SpringReactorMongoEventStore eventStore;
+    private ReactorMongoEventStore eventStore;
 
     @RegisterExtension
     FlushMongoDBExtension flushMongoDBExtension = new FlushMongoDBExtension(new ConnectionString(mongoDBContainer.getReplicaSetUrl() + ".events"));
@@ -119,7 +119,7 @@ public class SpringReactorMongoEventStoreTest {
         objectMapper = new ObjectMapper();
         reactiveMongoTransactionManager = new ReactiveMongoTransactionManager(new SimpleReactiveMongoDatabaseFactory(mongoClient, requireNonNull(connectionString.getDatabase())));
         EventStoreConfig eventStoreConfig = new EventStoreConfig.Builder().eventStoreCollectionName(connectionString.getCollection()).transactionConfig(reactiveMongoTransactionManager).timeRepresentation(RFC_3339_STRING).build();
-        eventStore = new SpringReactorMongoEventStore(mongoTemplate, eventStoreConfig);
+        eventStore = new ReactorMongoEventStore(mongoTemplate, eventStoreConfig);
     }
 
     @Test
@@ -1388,7 +1388,7 @@ public class SpringReactorMongoEventStoreTest {
 
             @BeforeEach
             void event_store_is_configured_to_using_date_as_time_representation() {
-                eventStore = new SpringReactorMongoEventStore(mongoTemplate, new EventStoreConfig(connectionString.getCollection(), TransactionalOperator.create(reactiveMongoTransactionManager), TimeRepresentation.DATE));
+                eventStore = new ReactorMongoEventStore(mongoTemplate, new EventStoreConfig(connectionString.getCollection(), TransactionalOperator.create(reactiveMongoTransactionManager), TimeRepresentation.DATE));
             }
 
             @Test

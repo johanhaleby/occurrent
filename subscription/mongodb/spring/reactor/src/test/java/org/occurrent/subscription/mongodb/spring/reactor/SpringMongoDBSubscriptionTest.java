@@ -29,7 +29,7 @@ import org.occurrent.domain.DomainEvent;
 import org.occurrent.domain.NameDefined;
 import org.occurrent.domain.NameWasChanged;
 import org.occurrent.eventstore.mongodb.spring.reactor.EventStoreConfig;
-import org.occurrent.eventstore.mongodb.spring.reactor.SpringReactorMongoEventStore;
+import org.occurrent.eventstore.mongodb.spring.reactor.ReactorMongoEventStore;
 import org.occurrent.filter.Filter;
 import org.occurrent.mongodb.timerepresentation.TimeRepresentation;
 import org.occurrent.subscription.OccurrentSubscriptionFilter;
@@ -74,7 +74,7 @@ public class SpringMongoDBSubscriptionTest {
     @Container
     private static final MongoDBContainer mongoDBContainer = new MongoDBContainer("mongo:4.2.8");
 
-    private SpringReactorMongoEventStore mongoEventStore;
+    private ReactorMongoEventStore mongoEventStore;
     private SpringMongoDBSubscription subscription;
     private ObjectMapper objectMapper;
     private CopyOnWriteArrayList<Disposable> disposables;
@@ -91,7 +91,7 @@ public class SpringMongoDBSubscriptionTest {
         subscription = new SpringMongoDBSubscription(reactiveMongoTemplate, "events", TimeRepresentation.RFC_3339_STRING);
         ReactiveTransactionManager reactiveMongoTransactionManager = new ReactiveMongoTransactionManager(new SimpleReactiveMongoDatabaseFactory(mongoClient, requireNonNull(connectionString.getDatabase())));
         EventStoreConfig eventStoreConfig = new EventStoreConfig.Builder().eventStoreCollectionName("events").transactionConfig(reactiveMongoTransactionManager).timeRepresentation(TimeRepresentation.RFC_3339_STRING).build();
-        mongoEventStore = new SpringReactorMongoEventStore(reactiveMongoTemplate, eventStoreConfig);
+        mongoEventStore = new ReactorMongoEventStore(reactiveMongoTemplate, eventStoreConfig);
         objectMapper = new ObjectMapper();
         disposables = new CopyOnWriteArrayList<>();
     }

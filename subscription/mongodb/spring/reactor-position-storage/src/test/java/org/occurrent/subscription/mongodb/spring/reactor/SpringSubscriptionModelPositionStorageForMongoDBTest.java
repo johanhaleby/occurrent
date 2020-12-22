@@ -30,7 +30,7 @@ import org.occurrent.domain.DomainEvent;
 import org.occurrent.domain.NameDefined;
 import org.occurrent.eventstore.api.reactor.EventStore;
 import org.occurrent.eventstore.mongodb.spring.reactor.EventStoreConfig;
-import org.occurrent.eventstore.mongodb.spring.reactor.SpringReactorMongoEventStore;
+import org.occurrent.eventstore.mongodb.spring.reactor.ReactorMongoEventStore;
 import org.occurrent.mongodb.timerepresentation.TimeRepresentation;
 import org.occurrent.subscription.PositionAwareCloudEvent;
 import org.occurrent.testsupport.mongodb.FlushMongoDBExtension;
@@ -86,7 +86,7 @@ public class SpringSubscriptionModelPositionStorageForMongoDBTest {
         reactiveMongoTemplate = new ReactiveMongoTemplate(MongoClients.create(connectionString), Objects.requireNonNull(connectionString.getDatabase()));
         ReactiveTransactionManager reactiveMongoTransactionManager = new ReactiveMongoTransactionManager(new SimpleReactiveMongoDatabaseFactory(mongoClient, requireNonNull(connectionString.getDatabase())));
         EventStoreConfig eventStoreConfig = new EventStoreConfig.Builder().eventStoreCollectionName("events").transactionConfig(reactiveMongoTransactionManager).timeRepresentation(TimeRepresentation.RFC_3339_STRING).build();
-        mongoEventStore = new SpringReactorMongoEventStore(reactiveMongoTemplate, eventStoreConfig);
+        mongoEventStore = new ReactorMongoEventStore(reactiveMongoTemplate, eventStoreConfig);
         storage = new SpringMongoDBSubscriptionPositionStorage(reactiveMongoTemplate, RESUME_TOKEN_COLLECTION);
         subscription = new SpringMongoDBSubscription(reactiveMongoTemplate, "events", timeRepresentation);
         objectMapper = new ObjectMapper();

@@ -18,7 +18,7 @@
 * `org.occurrent.subscription.mongodb.spring.reactor.SpringReactorSubscriptionPositionStorageForMongoDB` has been renamed to `SpringMongoDBSubscriptionPositionStorage`.
 * `org.occurrent.subscription.util.reactor.ReactorSubscriptionWithAutomaticPositionPersistence` has been renamed to `AutoPersistingSubscriptionModel`.
 * `org.occurrent.subscription.util.reactor.ReactorSubscriptionWithAutomaticPositionPersistenceConfig` has been renamed to `AutoPersistingSubscriptionModelConfig`.
-
+* `org.occurrent.eventstore.mongodb.spring.reactor.SpringReactorMongoEventStore` has been renamed to `ReactorMongoEventStore` since "Spring" is implicit.
 
 ## Changelog 0.4.1 (2020-12-14)
 
