@@ -68,7 +68,7 @@
         </dependency>
         <dependency>
             <groupId>org.occurrent</groupId>
-            <artifactId>subscription-util-blocking-automatic-position-persistence</artifactId>
+            <artifactId>auto-position-persistence-subscription</artifactId>
             <version>0.4.2-SNAPSHOT</version>
         </dependency>
         <dependency>
