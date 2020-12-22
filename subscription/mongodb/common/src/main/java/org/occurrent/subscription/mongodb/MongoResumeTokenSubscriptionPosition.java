@@ -16,50 +16,51 @@
 
 package org.occurrent.subscription.mongodb;
 
-import org.bson.BsonTimestamp;
+import org.bson.BsonDocument;
 import org.bson.BsonValue;
 import org.bson.Document;
 import org.occurrent.subscription.SubscriptionPosition;
 
 import java.util.Objects;
+import java.util.StringJoiner;
 
 /**
- * A {@link SubscriptionPosition} implementation for MongoDB that provides the operation time
+ * A {@link SubscriptionPosition} implementation for MongoDB that provides a resumeToken
  * that consumers may decide which to use when continuing the stream.
  */
-public class MongoDBOperationTimeBasedSubscriptionPosition implements SubscriptionPosition {
-    public final BsonTimestamp operationTime;
+public class MongoResumeTokenSubscriptionPosition implements SubscriptionPosition {
+    public final BsonDocument resumeToken;
 
-    public MongoDBOperationTimeBasedSubscriptionPosition(BsonTimestamp operationTime) {
-        this.operationTime = operationTime;
+    public MongoResumeTokenSubscriptionPosition(BsonDocument resumeToken) {
+        this.resumeToken = resumeToken;
     }
 
-    public BsonValue getOperationTime() {
-        return operationTime;
+    public BsonValue getResumeToken() {
+        return resumeToken;
     }
 
     @Override
     public boolean equals(Object o) {
         if (this == o) return true;
-        if (!(o instanceof MongoDBOperationTimeBasedSubscriptionPosition)) return false;
-        MongoDBOperationTimeBasedSubscriptionPosition that = (MongoDBOperationTimeBasedSubscriptionPosition) o;
-        return Objects.equals(operationTime, that.operationTime);
+        if (!(o instanceof MongoResumeTokenSubscriptionPosition)) return false;
+        MongoResumeTokenSubscriptionPosition that = (MongoResumeTokenSubscriptionPosition) o;
+        return Objects.equals(resumeToken, that.resumeToken);
     }
 
     @Override
     public int hashCode() {
-        return Objects.hash(operationTime);
+        return Objects.hash(resumeToken);
     }
 
     @Override
     public String toString() {
-        return "MongoDBOperationTimeBasedStreamPosition{" +
-                "operationTime=" + operationTime +
-                '}';
+        return new StringJoiner(", ", MongoResumeTokenSubscriptionPosition.class.getSimpleName() + "[", "]")
+                .add("resumeToken=" + resumeToken)
+                .toString();
     }
 
     @Override
     public String asString() {
-        return new Document("operationTime", operationTime).toJson();
+        return new Document("resumeToken", resumeToken).toJson();
     }
 }

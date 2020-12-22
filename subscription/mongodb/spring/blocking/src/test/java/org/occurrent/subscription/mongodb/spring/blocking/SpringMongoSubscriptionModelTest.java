@@ -30,13 +30,13 @@ import org.occurrent.domain.NameDefined;
 import org.occurrent.domain.NameWasChanged;
 import org.occurrent.eventstore.api.blocking.EventStore;
 import org.occurrent.eventstore.mongodb.spring.blocking.EventStoreConfig;
-import org.occurrent.eventstore.mongodb.spring.blocking.SpringBlockingMongoEventStore;
+import org.occurrent.eventstore.mongodb.spring.blocking.SpringMongoEventStore;
 import org.occurrent.filter.Filter;
 import org.occurrent.functional.CheckedFunction;
 import org.occurrent.functional.Not;
 import org.occurrent.mongodb.timerepresentation.TimeRepresentation;
 import org.occurrent.subscription.OccurrentSubscriptionFilter;
-import org.occurrent.subscription.mongodb.MongoDBFilterSpecification;
+import org.occurrent.subscription.mongodb.MongoFilterSpecification;
 import org.occurrent.testsupport.mongodb.FlushMongoDBExtension;
 import org.occurrent.time.TimeConversion;
 import org.springframework.data.mongodb.MongoTransactionManager;
@@ -67,10 +67,10 @@ import static org.awaitility.Awaitility.await;
 import static org.awaitility.Durations.FIVE_SECONDS;
 import static org.awaitility.Durations.ONE_SECOND;
 import static org.hamcrest.Matchers.is;
-import static org.occurrent.subscription.mongodb.MongoDBFilterSpecification.BsonMongoDBFilterSpecification.filter;
+import static org.occurrent.subscription.mongodb.MongoFilterSpecification.MongoBsonFilterSpecification.filter;
 
 @Testcontainers
-public class SpringMongoDBSubscriptionModelTest {
+public class SpringMongoSubscriptionModelTest {
 
     @Container
     private static final MongoDBContainer mongoDBContainer = new MongoDBContainer("mongo:4.2.8");
@@ -80,7 +80,7 @@ public class SpringMongoDBSubscriptionModelTest {
     FlushMongoDBExtension flushMongoDBExtension = new FlushMongoDBExtension(new ConnectionString(mongoDBContainer.getReplicaSetUrl()));
 
     private EventStore mongoEventStore;
-    private SpringMongoDBSubscriptionModel subscription;
+    private SpringMongoSubscriptionModel subscription;
     private ObjectMapper objectMapper;
     private MongoTemplate mongoTemplate;
 
@@ -92,8 +92,8 @@ public class SpringMongoDBSubscriptionModelTest {
         MongoTransactionManager mongoTransactionManager = new MongoTransactionManager(new SimpleMongoClientDatabaseFactory(mongoClient, requireNonNull(connectionString.getDatabase())));
         TimeRepresentation timeRepresentation = TimeRepresentation.RFC_3339_STRING;
         EventStoreConfig eventStoreConfig = new EventStoreConfig.Builder().eventStoreCollectionName(connectionString.getCollection()).transactionConfig(mongoTransactionManager).timeRepresentation(timeRepresentation).build();
-        mongoEventStore = new SpringBlockingMongoEventStore(mongoTemplate, eventStoreConfig);
-        subscription = new SpringMongoDBSubscriptionModel(mongoTemplate, connectionString.getCollection(), timeRepresentation);
+        mongoEventStore = new SpringMongoEventStore(mongoTemplate, eventStoreConfig);
+        subscription = new SpringMongoSubscriptionModel(mongoTemplate, connectionString.getCollection(), timeRepresentation);
         objectMapper = new ObjectMapper();
     }
 
@@ -142,7 +142,7 @@ public class SpringMongoDBSubscriptionModelTest {
 
     @Nested
     @DisplayName("SubscriptionFilter for BsonMongoDBFilterSpecification")
-    class BsonMongoDBFilterSpecificationTest {
+    class MongoBsonFilterSpecificationTest {
         @Test
         void using_bson_query_for_type() {
             // Given
@@ -222,14 +222,14 @@ public class SpringMongoDBSubscriptionModelTest {
 
     @Nested
     @DisplayName("SubscriptionFilter for JsonMongoDBFilterSpecification")
-    class JsonMongoDBFilterSpecificationTest {
+    class MongoJsonFilterSpecificationTest {
         @Test
         void using_json_query_for_type() {
             // Given
             LocalDateTime now = LocalDateTime.now();
             CopyOnWriteArrayList<CloudEvent> state = new CopyOnWriteArrayList<>();
             String subscriberId = UUID.randomUUID().toString();
-            subscription.subscribe(subscriberId, MongoDBFilterSpecification.JsonMongoDBFilterSpecification.filter("{ $match : { \"" + MongoDBFilterSpecification.FULL_DOCUMENT + ".type\" : \"" + NameDefined.class.getName() + "\" } }"), state::add)
+            subscription.subscribe(subscriberId, MongoFilterSpecification.MongoJsonFilterSpecification.filter("{ $match : { \"" + MongoFilterSpecification.FULL_DOCUMENT + ".type\" : \"" + NameDefined.class.getName() + "\" } }"), state::add)
                     .waitUntilStarted(Duration.of(10, ChronoUnit.SECONDS));
             NameDefined nameDefined1 = new NameDefined(UUID.randomUUID().toString(), now, "name1");
             NameDefined nameDefined2 = new NameDefined(UUID.randomUUID().toString(), now.plusSeconds(2), "name2");

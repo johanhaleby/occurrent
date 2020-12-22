@@ -45,7 +45,7 @@ import static org.occurrent.mongodb.timerepresentation.TimeRepresentation.DATE;
 import static org.occurrent.mongodb.timerepresentation.TimeRepresentation.RFC_3339_STRING;
 import static org.occurrent.time.internal.RFC3339.RFC_3339_DATE_TIME_FORMATTER;
 
-class OccurrentCloudEventMongoDBDocumentMapperTest {
+class OccurrentCloudEventMongoDocumentMapperTest {
 
     @Nested
     @DisplayName("converts cloud event to document")
@@ -71,7 +71,7 @@ class OccurrentCloudEventMongoDBDocumentMapperTest {
                         .build();
 
                 // When
-                Document document = OccurrentCloudEventMongoDBDocumentMapper.convertToDocument(DATE, "streamid", 2L, cloudEvent);
+                Document document = OccurrentCloudEventMongoDocumentMapper.convertToDocument(DATE, "streamid", 2L, cloudEvent);
 
                 // Then
                 assertAll(
@@ -101,7 +101,7 @@ class OccurrentCloudEventMongoDBDocumentMapperTest {
                         .build();
 
                 // When
-                Document document = OccurrentCloudEventMongoDBDocumentMapper.convertToDocument(DATE, "streamid", 2L, cloudEvent);
+                Document document = OccurrentCloudEventMongoDocumentMapper.convertToDocument(DATE, "streamid", 2L, cloudEvent);
 
                 // Then
                 assertThat(document.getString("data")).isEqualTo("name");
@@ -120,11 +120,11 @@ class OccurrentCloudEventMongoDBDocumentMapperTest {
                         .withSource(URI.create("urn:name"))
                         .withId("id")
                         .withDataContentType("application/json")
-                        .withData(PojoCloudEventData.wrap(Document.parse("{\"name\" : \"hello\"}"), OccurrentCloudEventMongoDBDocumentMapperTest::convertDocumentToBytes))
+                        .withData(PojoCloudEventData.wrap(Document.parse("{\"name\" : \"hello\"}"), OccurrentCloudEventMongoDocumentMapperTest::convertDocumentToBytes))
                         .build();
 
                 // When
-                Document document = OccurrentCloudEventMongoDBDocumentMapper.convertToDocument(DATE, "streamid", 2L, cloudEvent);
+                Document document = OccurrentCloudEventMongoDocumentMapper.convertToDocument(DATE, "streamid", 2L, cloudEvent);
 
                 // Then
                 assertAll(
@@ -159,7 +159,7 @@ class OccurrentCloudEventMongoDBDocumentMapperTest {
                         .build();
 
                 // When
-                Document document = OccurrentCloudEventMongoDBDocumentMapper.convertToDocument(DATE, "streamid", 2L, cloudEvent);
+                Document document = OccurrentCloudEventMongoDocumentMapper.convertToDocument(DATE, "streamid", 2L, cloudEvent);
 
                 // Then
                 assertAll(
@@ -192,7 +192,7 @@ class OccurrentCloudEventMongoDBDocumentMapperTest {
                         .build();
 
                 // When
-                Document document = OccurrentCloudEventMongoDBDocumentMapper.convertToDocument(DATE, "streamid", 2L, cloudEvent);
+                Document document = OccurrentCloudEventMongoDocumentMapper.convertToDocument(DATE, "streamid", 2L, cloudEvent);
 
                 // Then
                 assertAll(
@@ -225,7 +225,7 @@ class OccurrentCloudEventMongoDBDocumentMapperTest {
                         .build();
 
                 // When
-                Document document = OccurrentCloudEventMongoDBDocumentMapper.convertToDocument(DATE, "streamid", 2L, cloudEvent);
+                Document document = OccurrentCloudEventMongoDocumentMapper.convertToDocument(DATE, "streamid", 2L, cloudEvent);
 
                 // Then
                 assertAll(
@@ -260,7 +260,7 @@ class OccurrentCloudEventMongoDBDocumentMapperTest {
                         .build();
 
                 // When
-                Document document = OccurrentCloudEventMongoDBDocumentMapper.convertToDocument(DATE, "streamid", 2L, cloudEvent);
+                Document document = OccurrentCloudEventMongoDocumentMapper.convertToDocument(DATE, "streamid", 2L, cloudEvent);
 
                 // Then
                 assertAll(
@@ -296,7 +296,7 @@ class OccurrentCloudEventMongoDBDocumentMapperTest {
                         .build();
 
                 // When
-                Document document = OccurrentCloudEventMongoDBDocumentMapper.convertToDocument(DATE, "streamid", 2L, cloudEvent);
+                Document document = OccurrentCloudEventMongoDocumentMapper.convertToDocument(DATE, "streamid", 2L, cloudEvent);
 
                 // Then
                 assertAll(
@@ -328,7 +328,7 @@ class OccurrentCloudEventMongoDBDocumentMapperTest {
                         .build();
 
                 // When
-                Document document = OccurrentCloudEventMongoDBDocumentMapper.convertToDocument(DATE, "streamid", 2L, cloudEvent);
+                Document document = OccurrentCloudEventMongoDocumentMapper.convertToDocument(DATE, "streamid", 2L, cloudEvent);
 
                 // Then
                 assertAll(
@@ -374,7 +374,7 @@ class OccurrentCloudEventMongoDBDocumentMapperTest {
                 }});
 
                 // When
-                CloudEvent actual = OccurrentCloudEventMongoDBDocumentMapper.convertToCloudEvent(DATE, document);
+                CloudEvent actual = OccurrentCloudEventMongoDocumentMapper.convertToCloudEvent(DATE, document);
 
                 // Then
                 CloudEvent expected = new CloudEventBuilder()
@@ -384,7 +384,7 @@ class OccurrentCloudEventMongoDBDocumentMapperTest {
                         .withSource(URI.create("urn:name"))
                         .withId("id")
                         .withDataContentType("application/json")
-                        .withData(PojoCloudEventData.wrap(new Document(data), OccurrentCloudEventMongoDBDocumentMapperTest::convertDocumentToBytes))
+                        .withData(PojoCloudEventData.wrap(new Document(data), OccurrentCloudEventMongoDocumentMapperTest::convertDocumentToBytes))
                         .withExtension(new OccurrentCloudEventExtension("streamid", 2L))
                         .build();
 
@@ -410,7 +410,7 @@ class OccurrentCloudEventMongoDBDocumentMapperTest {
                 }});
 
                 // When
-                CloudEvent actual = OccurrentCloudEventMongoDBDocumentMapper.convertToCloudEvent(DATE, document);
+                CloudEvent actual = OccurrentCloudEventMongoDocumentMapper.convertToCloudEvent(DATE, document);
 
                 // Then
                 CloudEvent expected = new CloudEventBuilder()
@@ -420,7 +420,7 @@ class OccurrentCloudEventMongoDBDocumentMapperTest {
                         .withSource(URI.create("urn:name"))
                         .withId("id")
                         .withDataContentType("application/json")
-                        .withData(PojoCloudEventData.wrap(Document.parse(data), OccurrentCloudEventMongoDBDocumentMapperTest::convertDocumentToBytes))
+                        .withData(PojoCloudEventData.wrap(Document.parse(data), OccurrentCloudEventMongoDocumentMapperTest::convertDocumentToBytes))
                         .withExtension(new OccurrentCloudEventExtension("streamid", 2L))
                         .build();
 
@@ -451,7 +451,7 @@ class OccurrentCloudEventMongoDBDocumentMapperTest {
                 }});
 
                 // When
-                CloudEvent actual = OccurrentCloudEventMongoDBDocumentMapper.convertToCloudEvent(DATE, document);
+                CloudEvent actual = OccurrentCloudEventMongoDocumentMapper.convertToCloudEvent(DATE, document);
 
                 // Then
                 CloudEvent expected = new CloudEventBuilder()
@@ -487,7 +487,7 @@ class OccurrentCloudEventMongoDBDocumentMapperTest {
                 }});
 
                 // When
-                CloudEvent actual = OccurrentCloudEventMongoDBDocumentMapper.convertToCloudEvent(DATE, document);
+                CloudEvent actual = OccurrentCloudEventMongoDocumentMapper.convertToCloudEvent(DATE, document);
 
                 // Then
                 CloudEvent expected = new CloudEventBuilder()
@@ -526,7 +526,7 @@ class OccurrentCloudEventMongoDBDocumentMapperTest {
                     .build();
 
             // When
-            Document document = OccurrentCloudEventMongoDBDocumentMapper.convertToDocument(RFC_3339_STRING, "streamid", 2L, cloudEvent);
+            Document document = OccurrentCloudEventMongoDocumentMapper.convertToDocument(RFC_3339_STRING, "streamid", 2L, cloudEvent);
 
             // Then
             assertAll(
@@ -557,7 +557,7 @@ class OccurrentCloudEventMongoDBDocumentMapperTest {
                     .build();
 
             // When
-            Document document = OccurrentCloudEventMongoDBDocumentMapper.convertToDocument(RFC_3339_STRING, "streamid", 2L, cloudEvent);
+            Document document = OccurrentCloudEventMongoDocumentMapper.convertToDocument(RFC_3339_STRING, "streamid", 2L, cloudEvent);
 
             // Then
             assertAll(
@@ -594,7 +594,7 @@ class OccurrentCloudEventMongoDBDocumentMapperTest {
             }});
 
             // When
-            CloudEvent actual = OccurrentCloudEventMongoDBDocumentMapper.convertToCloudEvent(RFC_3339_STRING, document);
+            CloudEvent actual = OccurrentCloudEventMongoDocumentMapper.convertToCloudEvent(RFC_3339_STRING, document);
 
             // Then
             CloudEvent expected = new CloudEventBuilder()
@@ -604,7 +604,7 @@ class OccurrentCloudEventMongoDBDocumentMapperTest {
                     .withSource(URI.create("urn:name"))
                     .withId("id")
                     .withDataContentType("application/json")
-                    .withData(PojoCloudEventData.wrap(new Document(data), OccurrentCloudEventMongoDBDocumentMapperTest::convertDocumentToBytes))
+                    .withData(PojoCloudEventData.wrap(new Document(data), OccurrentCloudEventMongoDocumentMapperTest::convertDocumentToBytes))
                     .withExtension(new OccurrentCloudEventExtension("streamid", 2L))
                     .build();
 
@@ -630,7 +630,7 @@ class OccurrentCloudEventMongoDBDocumentMapperTest {
             }});
 
             // When
-            CloudEvent actual = OccurrentCloudEventMongoDBDocumentMapper.convertToCloudEvent(RFC_3339_STRING, document);
+            CloudEvent actual = OccurrentCloudEventMongoDocumentMapper.convertToCloudEvent(RFC_3339_STRING, document);
 
             // Then
             assertThat(actual.getTime()).isEqualTo(OffsetDateTime.of(LocalDateTime.of(2020, 7, 26, 9, 13, 3, 234_000000), UTC));
@@ -655,7 +655,7 @@ class OccurrentCloudEventMongoDBDocumentMapperTest {
             }});
 
             // When
-            CloudEvent actual = OccurrentCloudEventMongoDBDocumentMapper.convertToCloudEvent(RFC_3339_STRING, document);
+            CloudEvent actual = OccurrentCloudEventMongoDocumentMapper.convertToCloudEvent(RFC_3339_STRING, document);
 
             // Then
             assertThat(actual.getTime()).isEqualTo(offsetDateTimeFrom(LocalDateTime.of(2020, 7, 26, 9, 13, 3), ZoneId.of("CET")));
@@ -680,7 +680,7 @@ class OccurrentCloudEventMongoDBDocumentMapperTest {
             }});
 
             // When
-            CloudEvent actual = OccurrentCloudEventMongoDBDocumentMapper.convertToCloudEvent(RFC_3339_STRING, document);
+            CloudEvent actual = OccurrentCloudEventMongoDocumentMapper.convertToCloudEvent(RFC_3339_STRING, document);
 
             // Then
             assertThat(actual.getTime()).isEqualTo(OffsetDateTime.of(LocalDateTime.of(2020, 7, 26, 9, 13, 3), ZoneOffset.of("-02:00")));
@@ -707,7 +707,7 @@ class OccurrentCloudEventMongoDBDocumentMapperTest {
                     .build();
 
             // When
-            Document document = OccurrentCloudEventMongoDBDocumentMapper.convertToDocument(DATE, "streamid", 2L, cloudEvent);
+            Document document = OccurrentCloudEventMongoDocumentMapper.convertToDocument(DATE, "streamid", 2L, cloudEvent);
 
             // Then
             assertAll(
@@ -737,7 +737,7 @@ class OccurrentCloudEventMongoDBDocumentMapperTest {
                     .build();
 
             // When
-            Throwable throwable = catchThrowable(() -> OccurrentCloudEventMongoDBDocumentMapper.convertToDocument(DATE, "streamid", 2L, cloudEvent));
+            Throwable throwable = catchThrowable(() -> OccurrentCloudEventMongoDocumentMapper.convertToDocument(DATE, "streamid", 2L, cloudEvent));
 
             // Then
             assertThat(throwable).isExactlyInstanceOf(IllegalArgumentException.class)
@@ -759,7 +759,7 @@ class OccurrentCloudEventMongoDBDocumentMapperTest {
                     .build();
 
             // When
-            Throwable throwable = catchThrowable(() -> OccurrentCloudEventMongoDBDocumentMapper.convertToDocument(DATE, "streamid", 2L, cloudEvent));
+            Throwable throwable = catchThrowable(() -> OccurrentCloudEventMongoDocumentMapper.convertToDocument(DATE, "streamid", 2L, cloudEvent));
 
             // Then
             assertThat(throwable).isExactlyInstanceOf(IllegalArgumentException.class)
@@ -787,7 +787,7 @@ class OccurrentCloudEventMongoDBDocumentMapperTest {
             }});
 
             // When
-            CloudEvent actual = OccurrentCloudEventMongoDBDocumentMapper.convertToCloudEvent(DATE, document);
+            CloudEvent actual = OccurrentCloudEventMongoDocumentMapper.convertToCloudEvent(DATE, document);
 
             // Then
             CloudEvent expected = new CloudEventBuilder()
@@ -797,7 +797,7 @@ class OccurrentCloudEventMongoDBDocumentMapperTest {
                     .withSource(URI.create("urn:name"))
                     .withId("id")
                     .withDataContentType("application/json")
-                    .withData(PojoCloudEventData.wrap(new Document(data), OccurrentCloudEventMongoDBDocumentMapperTest::convertDocumentToBytes))
+                    .withData(PojoCloudEventData.wrap(new Document(data), OccurrentCloudEventMongoDocumentMapperTest::convertDocumentToBytes))
                     .withExtension(new OccurrentCloudEventExtension("streamid", 2L))
                     .build();
 
@@ -823,7 +823,7 @@ class OccurrentCloudEventMongoDBDocumentMapperTest {
             }});
 
             // When
-            CloudEvent actual = OccurrentCloudEventMongoDBDocumentMapper.convertToCloudEvent(DATE, document);
+            CloudEvent actual = OccurrentCloudEventMongoDocumentMapper.convertToCloudEvent(DATE, document);
 
             // Then
             assertThat(actual.getTime()).isEqualTo(OffsetDateTime.of(LocalDateTime.of(2020, 7, 26, 9, 13, 3, 234_000000), UTC));
@@ -848,7 +848,7 @@ class OccurrentCloudEventMongoDBDocumentMapperTest {
             }});
 
             // When
-            CloudEvent actual = OccurrentCloudEventMongoDBDocumentMapper.convertToCloudEvent(DATE, document);
+            CloudEvent actual = OccurrentCloudEventMongoDocumentMapper.convertToCloudEvent(DATE, document);
 
             // Then
             assertThat(actual.getTime()).isEqualTo(offsetDateTimeFrom(LocalDateTime.of(2020, 7, 26, 9, 13, 3), ZoneId.of("CET")));
@@ -873,7 +873,7 @@ class OccurrentCloudEventMongoDBDocumentMapperTest {
             }});
 
             // When
-            CloudEvent actual = OccurrentCloudEventMongoDBDocumentMapper.convertToCloudEvent(DATE, document);
+            CloudEvent actual = OccurrentCloudEventMongoDocumentMapper.convertToCloudEvent(DATE, document);
 
             // Then
             assertThat(actual.getTime()).isEqualTo(OffsetDateTime.of(LocalDateTime.of(2020, 7, 26, 9, 13, 3), ZoneOffset.of("-02:00")));

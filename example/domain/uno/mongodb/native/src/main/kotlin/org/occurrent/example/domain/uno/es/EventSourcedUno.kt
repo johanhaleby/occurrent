@@ -30,7 +30,7 @@ import org.occurrent.example.domain.uno.Digit.*
 import org.occurrent.filter.Filter.streamId
 import org.occurrent.filter.Filter.type
 import org.occurrent.mongodb.timerepresentation.TimeRepresentation
-import org.occurrent.subscription.mongodb.nativedriver.blocking.NativeMongoDBSubscriptionModel
+import org.occurrent.subscription.mongodb.nativedriver.blocking.NativeMongoSubscriptionModel
 import org.occurrent.subscription.mongodb.nativedriver.blocking.RetryStrategy
 import org.slf4j.LoggerFactory
 import java.lang.Thread.sleep
@@ -48,7 +48,7 @@ fun main() {
     val database = mongoClient.getDatabase("test")
 
     val eventStore = MongoEventStore(mongoClient, database, database.getCollection("events"), EventStoreConfig(TimeRepresentation.DATE))
-    val subscriptionModel = NativeMongoDBSubscriptionModel(
+    val subscriptionModel = NativeMongoSubscriptionModel(
         database,
         "events",
         TimeRepresentation.DATE,

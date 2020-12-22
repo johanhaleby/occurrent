@@ -22,12 +22,12 @@ import java.time.Duration;
 import java.time.temporal.ChronoUnit;
 import java.util.Objects;
 
-public class SpringMongoDBSubscription implements Subscription {
+public class SpringMongoSubscription implements Subscription {
 
     private final String subscriptionId;
     private final org.springframework.data.mongodb.core.messaging.Subscription subscription;
 
-    public SpringMongoDBSubscription(String subscriptionId, org.springframework.data.mongodb.core.messaging.Subscription subscription) {
+    public SpringMongoSubscription(String subscriptionId, org.springframework.data.mongodb.core.messaging.Subscription subscription) {
         this.subscriptionId = subscriptionId;
         this.subscription = subscription;
     }
@@ -58,8 +58,8 @@ public class SpringMongoDBSubscription implements Subscription {
     @Override
     public boolean equals(Object o) {
         if (this == o) return true;
-        if (!(o instanceof SpringMongoDBSubscription)) return false;
-        SpringMongoDBSubscription that = (SpringMongoDBSubscription) o;
+        if (!(o instanceof SpringMongoSubscription)) return false;
+        SpringMongoSubscription that = (SpringMongoSubscription) o;
         return Objects.equals(subscriptionId, that.subscriptionId) &&
                 Objects.equals(subscription, that.subscription);
     }

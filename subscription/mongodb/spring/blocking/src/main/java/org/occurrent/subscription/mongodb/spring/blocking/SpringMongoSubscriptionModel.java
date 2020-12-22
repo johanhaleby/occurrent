@@ -28,10 +28,10 @@ import org.occurrent.subscription.SubscriptionFilter;
 import org.occurrent.subscription.SubscriptionPosition;
 import org.occurrent.subscription.api.blocking.PositionAwareSubscriptionModel;
 import org.occurrent.subscription.api.blocking.Subscription;
-import org.occurrent.subscription.mongodb.MongoDBOperationTimeBasedSubscriptionPosition;
-import org.occurrent.subscription.mongodb.MongoDBResumeTokenBasedSubscriptionPosition;
-import org.occurrent.subscription.mongodb.internal.MongoDBCloudEventsToJsonDeserializer;
-import org.occurrent.subscription.mongodb.internal.MongoDBCommons;
+import org.occurrent.subscription.mongodb.MongoOperationTimeSubscriptionPosition;
+import org.occurrent.subscription.mongodb.MongoResumeTokenSubscriptionPosition;
+import org.occurrent.subscription.mongodb.internal.MongoCloudEventsToJsonDeserializer;
+import org.occurrent.subscription.mongodb.internal.MongoCommons;
 import org.occurrent.subscription.mongodb.spring.internal.ApplyFilterToChangeStreamOptionsBuilder;
 import org.springframework.data.mongodb.core.ChangeStreamOptions;
 import org.springframework.data.mongodb.core.ChangeStreamOptions.ChangeStreamOptionsBuilder;
@@ -59,7 +59,7 @@ import static java.util.Objects.requireNonNull;
  * Note that this subscription doesn't provide retries if an exception is thrown when handling a {@link io.cloudevents.CloudEvent} (<code>action</code>).
  * This reason for this is that Spring provides retry capabilities (such as spring-retry) that you can easily hook into your <code>action</code>.
  */
-public class SpringMongoDBSubscriptionModel implements PositionAwareSubscriptionModel {
+public class SpringMongoSubscriptionModel implements PositionAwareSubscriptionModel {
 
     private final String eventCollection;
     private final MessageListenerContainer messageListenerContainer;
@@ -74,7 +74,7 @@ public class SpringMongoDBSubscriptionModel implements PositionAwareSubscription
      * @param eventCollection    The collection that contains the events
      * @param timeRepresentation How time is represented in the database, must be the same as what's specified for the EventStore that stores the events.
      */
-    public SpringMongoDBSubscriptionModel(MongoTemplate mongoTemplate, String eventCollection, TimeRepresentation timeRepresentation) {
+    public SpringMongoSubscriptionModel(MongoTemplate mongoTemplate, String eventCollection, TimeRepresentation timeRepresentation) {
         requireNonNull(mongoTemplate, MongoOperations.class.getSimpleName() + " cannot be null");
         requireNonNull(eventCollection, "eventCollection cannot be null");
         requireNonNull(timeRepresentation, TimeRepresentation.class.getSimpleName() + " cannot be null");
@@ -94,21 +94,21 @@ public class SpringMongoDBSubscriptionModel implements PositionAwareSubscription
         requireNonNull(startAtSupplier, "StartAt cannot be null");
 
         // TODO We should change builder::resumeAt to builder::startAtOperationTime once Spring adds support for it (see https://jira.spring.io/browse/DATAMONGO-2607)
-        ChangeStreamOptionsBuilder builder = MongoDBCommons.applyStartPosition(ChangeStreamOptions.builder(), ChangeStreamOptionsBuilder::startAfter, ChangeStreamOptionsBuilder::resumeAt, startAtSupplier.get());
+        ChangeStreamOptionsBuilder builder = MongoCommons.applyStartPosition(ChangeStreamOptions.builder(), ChangeStreamOptionsBuilder::startAfter, ChangeStreamOptionsBuilder::resumeAt, startAtSupplier.get());
         final ChangeStreamOptions changeStreamOptions = ApplyFilterToChangeStreamOptionsBuilder.applyFilter(timeRepresentation, filter, builder);
 
         MessageListener<ChangeStreamDocument<Document>, Document> listener = change -> {
             ChangeStreamDocument<Document> raw = change.getRaw();
             BsonDocument resumeToken = requireNonNull(raw).getResumeToken();
-            MongoDBCloudEventsToJsonDeserializer.deserializeToCloudEvent(raw, timeRepresentation)
-                    .map(cloudEvent -> new PositionAwareCloudEvent(cloudEvent, new MongoDBResumeTokenBasedSubscriptionPosition(resumeToken)))
+            MongoCloudEventsToJsonDeserializer.deserializeToCloudEvent(raw, timeRepresentation)
+                    .map(cloudEvent -> new PositionAwareCloudEvent(cloudEvent, new MongoResumeTokenSubscriptionPosition(resumeToken)))
                     .ifPresent(action);
         };
 
         ChangeStreamRequestOptions options = new ChangeStreamRequestOptions(null, eventCollection, changeStreamOptions);
         final org.springframework.data.mongodb.core.messaging.Subscription subscription = messageListenerContainer.register(new ChangeStreamRequest<>(listener, options), Document.class);
         subscriptions.put(subscriptionId, subscription);
-        return new SpringMongoDBSubscription(subscriptionId, subscription);
+        return new SpringMongoSubscription(subscriptionId, subscription);
     }
 
     public void cancelSubscription(String subscriptionId) {
@@ -129,7 +129,7 @@ public class SpringMongoDBSubscriptionModel implements PositionAwareSubscription
     public SubscriptionPosition globalSubscriptionPosition() {
         // Note that we increase the "increment" by 1 in order to not clash with an existing event in the event store.
         // This is so that we can avoid duplicates in certain rare cases when replaying events.
-        BsonTimestamp currentOperationTime = MongoDBCommons.getServerOperationTime(mongoOperations.executeCommand(new Document("hostInfo", 1)), 1);
-        return new MongoDBOperationTimeBasedSubscriptionPosition(currentOperationTime);
+        BsonTimestamp currentOperationTime = MongoCommons.getServerOperationTime(mongoOperations.executeCommand(new Document("hostInfo", 1)), 1);
+        return new MongoOperationTimeSubscriptionPosition(currentOperationTime);
     }
 }

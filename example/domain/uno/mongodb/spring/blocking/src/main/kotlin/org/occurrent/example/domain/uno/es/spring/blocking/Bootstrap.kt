@@ -23,14 +23,14 @@ import org.occurrent.application.service.blocking.implementation.GenericApplicat
 import org.occurrent.eventstore.api.WriteConditionNotFulfilledException
 import org.occurrent.eventstore.api.blocking.EventStoreQueries
 import org.occurrent.eventstore.mongodb.spring.blocking.EventStoreConfig
-import org.occurrent.eventstore.mongodb.spring.blocking.SpringBlockingMongoEventStore
+import org.occurrent.eventstore.mongodb.spring.blocking.SpringMongoEventStore
 import org.occurrent.example.domain.uno.Event
 import org.occurrent.example.domain.uno.GameId
 import org.occurrent.example.domain.uno.es.UnoCloudEventConverter
 import org.occurrent.mongodb.timerepresentation.TimeRepresentation
 import org.occurrent.subscription.api.blocking.SubscriptionModel
 import org.occurrent.subscription.api.blocking.SubscriptionPositionStorage
-import org.occurrent.subscription.mongodb.spring.blocking.SpringMongoDBSubscriptionModel
+import org.occurrent.subscription.mongodb.spring.blocking.SpringMongoSubscriptionModel
 import org.occurrent.subscription.redis.spring.blocking.SpringSubscriptionPositionStorageForRedis
 import org.occurrent.subscription.util.blocking.AutoPersistingSubscriptionModel
 import org.slf4j.Logger
@@ -70,10 +70,10 @@ class Bootstrap {
     fun transactionManager(dbFactory: MongoDatabaseFactory) = MongoTransactionManager(dbFactory)
 
     @Bean
-    fun eventStore(template: MongoTemplate, transactionManager: MongoTransactionManager): SpringBlockingMongoEventStore {
+    fun eventStore(template: MongoTemplate, transactionManager: MongoTransactionManager): SpringMongoEventStore {
         val eventStoreConfig = EventStoreConfig.Builder().eventStoreCollectionName(EVENTS_COLLECTION_NAME).transactionConfig(transactionManager)
             .timeRepresentation(TimeRepresentation.DATE).build()
-        return SpringBlockingMongoEventStore(template, eventStoreConfig)
+        return SpringMongoEventStore(template, eventStoreConfig)
     }
 
     @Bean
@@ -82,7 +82,7 @@ class Bootstrap {
 
     @Bean
     fun autoPersistingSubscriptionModel(storage: SubscriptionPositionStorage, mongoTemplate: MongoTemplate, eventStoreQueries: EventStoreQueries): SubscriptionModel {
-        val subscriptionModel = SpringMongoDBSubscriptionModel(mongoTemplate, EVENTS_COLLECTION_NAME, TimeRepresentation.DATE)
+        val subscriptionModel = SpringMongoSubscriptionModel(mongoTemplate, EVENTS_COLLECTION_NAME, TimeRepresentation.DATE)
         return AutoPersistingSubscriptionModel(subscriptionModel, storage)
     }
 
@@ -93,7 +93,7 @@ class Bootstrap {
     fun cloudEventConverter(objectMapper: ObjectMapper): CloudEventConverter<Event> = UnoCloudEventConverter(objectMapper)
 
     @Bean
-    fun genericApplicationService(eventStore: SpringBlockingMongoEventStore, eventConverter: CloudEventConverter<Event>): OccurrentApplicationService<Event> =
+    fun genericApplicationService(eventStore: SpringMongoEventStore, eventConverter: CloudEventConverter<Event>): OccurrentApplicationService<Event> =
         GenericApplicationService(eventStore, eventConverter)
 
     @Bean

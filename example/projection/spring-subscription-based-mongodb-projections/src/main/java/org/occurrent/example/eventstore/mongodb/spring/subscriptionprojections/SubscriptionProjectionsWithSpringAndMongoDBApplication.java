@@ -19,12 +19,12 @@ package org.occurrent.example.eventstore.mongodb.spring.subscriptionprojections;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import org.occurrent.eventstore.api.blocking.EventStore;
 import org.occurrent.eventstore.mongodb.spring.blocking.EventStoreConfig;
-import org.occurrent.eventstore.mongodb.spring.blocking.SpringBlockingMongoEventStore;
+import org.occurrent.eventstore.mongodb.spring.blocking.SpringMongoEventStore;
 import org.occurrent.mongodb.timerepresentation.TimeRepresentation;
 import org.occurrent.subscription.api.blocking.PositionAwareSubscriptionModel;
 import org.occurrent.subscription.api.blocking.SubscriptionPositionStorage;
-import org.occurrent.subscription.mongodb.spring.blocking.SpringMongoDBSubscriptionModel;
-import org.occurrent.subscription.mongodb.spring.blocking.SpringMongoDBSubscriptionPositionStorage;
+import org.occurrent.subscription.mongodb.spring.blocking.SpringMongoSubscriptionModel;
+import org.occurrent.subscription.mongodb.spring.blocking.SpringMongoSubscriptionPositionStorage;
 import org.occurrent.subscription.util.blocking.AutoPersistingSubscriptionModel;
 import org.springframework.boot.autoconfigure.SpringBootApplication;
 import org.springframework.context.annotation.Bean;
@@ -51,17 +51,17 @@ public class SubscriptionProjectionsWithSpringAndMongoDBApplication {
     @Bean
     public EventStore eventStore(MongoTemplate mongoTemplate, MongoTransactionManager transactionManager) {
         EventStoreConfig eventStoreConfig = new EventStoreConfig.Builder().eventStoreCollectionName(EVENTS_COLLECTION).transactionConfig(transactionManager).timeRepresentation(TimeRepresentation.RFC_3339_STRING).build();
-        return new SpringBlockingMongoEventStore(mongoTemplate, eventStoreConfig);
+        return new SpringMongoEventStore(mongoTemplate, eventStoreConfig);
     }
 
     @Bean
     public PositionAwareSubscriptionModel positionAwareSubscriptionModel(MongoTemplate mongoTemplate) {
-        return new SpringMongoDBSubscriptionModel(mongoTemplate, EVENTS_COLLECTION, TimeRepresentation.RFC_3339_STRING);
+        return new SpringMongoSubscriptionModel(mongoTemplate, EVENTS_COLLECTION, TimeRepresentation.RFC_3339_STRING);
     }
 
     @Bean
     public SubscriptionPositionStorage storage(MongoTemplate mongoTemplate) {
-        return new SpringMongoDBSubscriptionPositionStorage(mongoTemplate, "subscriptions");
+        return new SpringMongoSubscriptionPositionStorage(mongoTemplate, "subscriptions");
     }
 
     @Primary

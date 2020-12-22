@@ -24,8 +24,8 @@ import org.occurrent.filter.Filter;
 import org.occurrent.mongodb.timerepresentation.TimeRepresentation;
 import org.occurrent.subscription.OccurrentSubscriptionFilter;
 import org.occurrent.subscription.SubscriptionFilter;
-import org.occurrent.subscription.mongodb.MongoDBFilterSpecification.BsonMongoDBFilterSpecification;
-import org.occurrent.subscription.mongodb.MongoDBFilterSpecification.JsonMongoDBFilterSpecification;
+import org.occurrent.subscription.mongodb.MongoFilterSpecification;
+import org.occurrent.subscription.mongodb.MongoFilterSpecification.MongoJsonFilterSpecification;
 import org.occurrent.subscription.mongodb.internal.DocumentAdapter;
 import org.springframework.data.mongodb.core.ChangeStreamOptions;
 import org.springframework.data.mongodb.core.ChangeStreamOptions.ChangeStreamOptionsBuilder;
@@ -34,7 +34,7 @@ import org.springframework.data.mongodb.core.query.Criteria;
 import java.util.stream.Stream;
 
 import static org.occurrent.mongodb.spring.filterqueryconversion.internal.FilterConverter.convertFilterToCriteria;
-import static org.occurrent.subscription.mongodb.MongoDBFilterSpecification.FULL_DOCUMENT;
+import static org.occurrent.subscription.mongodb.MongoFilterSpecification.FULL_DOCUMENT;
 import static org.springframework.data.mongodb.core.aggregation.Aggregation.match;
 import static org.springframework.data.mongodb.core.aggregation.Aggregation.newAggregation;
 
@@ -48,10 +48,10 @@ public class ApplyFilterToChangeStreamOptionsBuilder {
             Filter occurrentFilter = ((OccurrentSubscriptionFilter) filter).filter;
             Criteria criteria = convertFilterToCriteria(FULL_DOCUMENT, timeRepresentation, occurrentFilter);
             changeStreamOptions = changeStreamOptionsBuilder.filter(newAggregation(match(criteria))).build();
-        } else if (filter instanceof JsonMongoDBFilterSpecification) {
-            changeStreamOptions = changeStreamOptionsBuilder.filter(Document.parse(((JsonMongoDBFilterSpecification) filter).getJson())).build();
-        } else if (filter instanceof BsonMongoDBFilterSpecification) {
-            Bson[] aggregationStages = ((BsonMongoDBFilterSpecification) filter).getAggregationStages();
+        } else if (filter instanceof MongoJsonFilterSpecification) {
+            changeStreamOptions = changeStreamOptionsBuilder.filter(Document.parse(((MongoJsonFilterSpecification) filter).getJson())).build();
+        } else if (filter instanceof MongoFilterSpecification.MongoBsonFilterSpecification) {
+            Bson[] aggregationStages = ((MongoFilterSpecification.MongoBsonFilterSpecification) filter).getAggregationStages();
             DocumentAdapter documentAdapter = new DocumentAdapter(MongoClientSettings.getDefaultCodecRegistry());
             Document[] documents = Stream.of(aggregationStages).map(aggregationStage -> {
                 final Document result;

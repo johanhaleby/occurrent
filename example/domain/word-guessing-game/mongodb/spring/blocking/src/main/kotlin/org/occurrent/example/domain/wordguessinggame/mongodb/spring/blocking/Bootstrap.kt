@@ -21,15 +21,15 @@ import org.occurrent.application.converter.CloudEventConverter
 import org.occurrent.application.service.blocking.implementation.GenericApplicationService
 import org.occurrent.eventstore.api.blocking.EventStoreQueries
 import org.occurrent.eventstore.mongodb.spring.blocking.EventStoreConfig
-import org.occurrent.eventstore.mongodb.spring.blocking.SpringBlockingMongoEventStore
+import org.occurrent.eventstore.mongodb.spring.blocking.SpringMongoEventStore
 import org.occurrent.example.domain.wordguessinggame.event.GameEvent
 import org.occurrent.example.domain.wordguessinggame.mongodb.spring.blocking.features.GameCloudEventConverter
 import org.occurrent.example.domain.wordguessinggame.mongodb.spring.blocking.features.emailwinner.SendEmailToWinner
 import org.occurrent.mongodb.timerepresentation.TimeRepresentation
 import org.occurrent.subscription.api.blocking.SubscriptionModel
 import org.occurrent.subscription.api.blocking.SubscriptionPositionStorage
-import org.occurrent.subscription.mongodb.spring.blocking.SpringMongoDBSubscriptionModel
-import org.occurrent.subscription.mongodb.spring.blocking.SpringMongoDBSubscriptionPositionStorage
+import org.occurrent.subscription.mongodb.spring.blocking.SpringMongoSubscriptionModel
+import org.occurrent.subscription.mongodb.spring.blocking.SpringMongoSubscriptionPositionStorage
 import org.occurrent.subscription.util.blocking.AutoPersistingSubscriptionModel
 import org.occurrent.subscription.util.blocking.catchup.subscription.CatchupSubscriptionModel
 import org.occurrent.subscription.util.blocking.catchup.subscription.CatchupSubscriptionModelConfig
@@ -67,18 +67,18 @@ class Bootstrap : WebMvcConfigurer {
     fun transactionManager(dbFactory: MongoDatabaseFactory) = MongoTransactionManager(dbFactory)
 
     @Bean
-    fun eventStore(template: MongoTemplate, transactionManager: MongoTransactionManager): SpringBlockingMongoEventStore {
+    fun eventStore(template: MongoTemplate, transactionManager: MongoTransactionManager): SpringMongoEventStore {
         val eventStoreConfig = EventStoreConfig.Builder().eventStoreCollectionName(EVENTS_COLLECTION_NAME).transactionConfig(transactionManager).timeRepresentation(TimeRepresentation.DATE).build()
-        return SpringBlockingMongoEventStore(template, eventStoreConfig)
+        return SpringMongoEventStore(template, eventStoreConfig)
     }
 
     @Bean
     fun subscriptionPositionStorage(mongoTemplate: MongoTemplate): SubscriptionPositionStorage =
-        SpringMongoDBSubscriptionPositionStorage(mongoTemplate, "subscriptions")
+        SpringMongoSubscriptionPositionStorage(mongoTemplate, "subscriptions")
 
     @Bean
     fun catchupSubscriptionModel(storage: SubscriptionPositionStorage, mongoTemplate: MongoTemplate, eventStoreQueries: EventStoreQueries): SubscriptionModel {
-        val subscription = SpringMongoDBSubscriptionModel(mongoTemplate, EVENTS_COLLECTION_NAME, TimeRepresentation.DATE)
+        val subscription = SpringMongoSubscriptionModel(mongoTemplate, EVENTS_COLLECTION_NAME, TimeRepresentation.DATE)
         val subscriptionWithAutomaticPositionPersistence = AutoPersistingSubscriptionModel(subscription, storage)
         return CatchupSubscriptionModel(
             subscriptionWithAutomaticPositionPersistence, eventStoreQueries,
@@ -98,7 +98,7 @@ class Bootstrap : WebMvcConfigurer {
     )
 
     @Bean
-    fun occurrentApplicationService(eventStore: SpringBlockingMongoEventStore, eventConverter: CloudEventConverter<GameEvent>): OccurrentApplicationService<GameEvent> = GenericApplicationService(eventStore, eventConverter)
+    fun occurrentApplicationService(eventStore: SpringMongoEventStore, eventConverter: CloudEventConverter<GameEvent>): OccurrentApplicationService<GameEvent> = GenericApplicationService(eventStore, eventConverter)
 }
 
 fun main(args: Array<String>) {

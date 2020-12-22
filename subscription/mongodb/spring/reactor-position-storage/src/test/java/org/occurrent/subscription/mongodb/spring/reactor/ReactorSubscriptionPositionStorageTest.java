@@ -61,7 +61,7 @@ import static org.occurrent.functional.Not.not;
 import static org.occurrent.time.TimeConversion.toLocalDateTime;
 
 @Testcontainers
-public class SpringSubscriptionModelPositionStorageForMongoDBTest {
+public class ReactorSubscriptionPositionStorageTest {
 
     @RegisterExtension
     FlushMongoDBExtension flushMongoDBExtension = new FlushMongoDBExtension(new ConnectionString(mongoDBContainer.getReplicaSetUrl()));
@@ -71,12 +71,12 @@ public class SpringSubscriptionModelPositionStorageForMongoDBTest {
     private static final String RESUME_TOKEN_COLLECTION = "ack";
 
     private EventStore mongoEventStore;
-    private SpringMongoDBSubscription subscription;
+    private ReactorMongoSubscription subscription;
     private ObjectMapper objectMapper;
     private ReactiveMongoTemplate reactiveMongoTemplate;
     private CopyOnWriteArrayList<Disposable> disposables;
     private MongoClient mongoClient;
-    private SpringMongoDBSubscriptionPositionStorage storage;
+    private ReactorSubscriptionPositionStorage storage;
 
     @BeforeEach
     void create_mongo_event_store() {
@@ -87,8 +87,8 @@ public class SpringSubscriptionModelPositionStorageForMongoDBTest {
         ReactiveTransactionManager reactiveMongoTransactionManager = new ReactiveMongoTransactionManager(new SimpleReactiveMongoDatabaseFactory(mongoClient, requireNonNull(connectionString.getDatabase())));
         EventStoreConfig eventStoreConfig = new EventStoreConfig.Builder().eventStoreCollectionName("events").transactionConfig(reactiveMongoTransactionManager).timeRepresentation(TimeRepresentation.RFC_3339_STRING).build();
         mongoEventStore = new ReactorMongoEventStore(reactiveMongoTemplate, eventStoreConfig);
-        storage = new SpringMongoDBSubscriptionPositionStorage(reactiveMongoTemplate, RESUME_TOKEN_COLLECTION);
-        subscription = new SpringMongoDBSubscription(reactiveMongoTemplate, "events", timeRepresentation);
+        storage = new ReactorSubscriptionPositionStorage(reactiveMongoTemplate, RESUME_TOKEN_COLLECTION);
+        subscription = new ReactorMongoSubscription(reactiveMongoTemplate, "events", timeRepresentation);
         objectMapper = new ObjectMapper();
         disposables = new CopyOnWriteArrayList<>();
     }

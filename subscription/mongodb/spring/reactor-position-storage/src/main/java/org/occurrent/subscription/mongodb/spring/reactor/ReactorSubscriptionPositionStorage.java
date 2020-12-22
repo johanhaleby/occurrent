@@ -22,35 +22,35 @@ import org.bson.BsonTimestamp;
 import org.bson.Document;
 import org.occurrent.subscription.SubscriptionPosition;
 import org.occurrent.subscription.api.reactor.SubscriptionPositionStorage;
-import org.occurrent.subscription.mongodb.MongoDBOperationTimeBasedSubscriptionPosition;
-import org.occurrent.subscription.mongodb.MongoDBResumeTokenBasedSubscriptionPosition;
-import org.occurrent.subscription.mongodb.internal.MongoDBCommons;
+import org.occurrent.subscription.mongodb.MongoOperationTimeSubscriptionPosition;
+import org.occurrent.subscription.mongodb.MongoResumeTokenSubscriptionPosition;
+import org.occurrent.subscription.mongodb.internal.MongoCommons;
 import org.springframework.data.mongodb.core.ReactiveMongoOperations;
 import org.springframework.data.mongodb.core.query.Update;
 import reactor.core.publisher.Mono;
 
 import static java.util.Objects.requireNonNull;
-import static org.occurrent.subscription.mongodb.internal.MongoDBCloudEventsToJsonDeserializer.ID;
-import static org.occurrent.subscription.mongodb.internal.MongoDBCommons.generateOperationTimeStreamPositionDocument;
-import static org.occurrent.subscription.mongodb.internal.MongoDBCommons.generateResumeTokenStreamPositionDocument;
+import static org.occurrent.subscription.mongodb.internal.MongoCloudEventsToJsonDeserializer.ID;
+import static org.occurrent.subscription.mongodb.internal.MongoCommons.generateOperationTimeStreamPositionDocument;
+import static org.occurrent.subscription.mongodb.internal.MongoCommons.generateResumeTokenStreamPositionDocument;
 import static org.springframework.data.mongodb.core.query.Criteria.where;
 import static org.springframework.data.mongodb.core.query.Query.query;
 
 /**
  * A Spring implementation of {@link SubscriptionPositionStorage} that stores {@link SubscriptionPosition} in MongoDB.
  */
-public class SpringMongoDBSubscriptionPositionStorage implements SubscriptionPositionStorage {
+public class ReactorSubscriptionPositionStorage implements SubscriptionPositionStorage {
 
     private final ReactiveMongoOperations mongo;
     private final String subscriptionPositionCollection;
 
     /**
-     * Create a new instance of {@link SpringMongoDBSubscriptionPositionStorage}
+     * Create a new instance of {@link ReactorSubscriptionPositionStorage}
      *
      * @param mongo                    The {@link ReactiveMongoOperations} implementation to use persisting subscription positions to MongoDB.
      * @param subscriptionPositionCollection The collection that will contain the subscription position for each subscriber.
      */
-    public SpringMongoDBSubscriptionPositionStorage(ReactiveMongoOperations mongo, String subscriptionPositionCollection) {
+    public ReactorSubscriptionPositionStorage(ReactiveMongoOperations mongo, String subscriptionPositionCollection) {
         requireNonNull(mongo, ReactiveMongoOperations.class.getSimpleName() + " cannot be null");
         requireNonNull(subscriptionPositionCollection, "subscriptionPositionCollection cannot be null");
         this.mongo = mongo;
@@ -60,13 +60,13 @@ public class SpringMongoDBSubscriptionPositionStorage implements SubscriptionPos
     @Override
     public Mono<SubscriptionPosition> save(String subscriptionId, SubscriptionPosition changeStreamPosition) {
         Mono<?> result;
-        if (changeStreamPosition instanceof MongoDBResumeTokenBasedSubscriptionPosition) {
-            result = persistResumeTokenStreamPosition(subscriptionId, ((MongoDBResumeTokenBasedSubscriptionPosition) changeStreamPosition).resumeToken);
-        } else if (changeStreamPosition instanceof MongoDBOperationTimeBasedSubscriptionPosition) {
-            result = persistOperationTimeStreamPosition(subscriptionId, ((MongoDBOperationTimeBasedSubscriptionPosition) changeStreamPosition).operationTime);
+        if (changeStreamPosition instanceof MongoResumeTokenSubscriptionPosition) {
+            result = persistResumeTokenStreamPosition(subscriptionId, ((MongoResumeTokenSubscriptionPosition) changeStreamPosition).resumeToken);
+        } else if (changeStreamPosition instanceof MongoOperationTimeSubscriptionPosition) {
+            result = persistOperationTimeStreamPosition(subscriptionId, ((MongoOperationTimeSubscriptionPosition) changeStreamPosition).operationTime);
         } else {
             String subscriptionPositionString = changeStreamPosition.asString();
-            Document document = MongoDBCommons.generateGenericStreamPositionDocument(subscriptionId, subscriptionPositionString);
+            Document document = MongoCommons.generateGenericStreamPositionDocument(subscriptionId, subscriptionPositionString);
             result = persistDocumentStreamPosition(subscriptionId, document);
         }
         return result.thenReturn(changeStreamPosition);
@@ -96,6 +96,6 @@ public class SpringMongoDBSubscriptionPositionStorage implements SubscriptionPos
     @Override
     public Mono<SubscriptionPosition> read(String subscriptionId) {
         return mongo.findOne(query(where(ID).is(subscriptionId)), Document.class, subscriptionPositionCollection)
-                .map(MongoDBCommons::calculateSubscriptionPositionFromMongoStreamPositionDocument);
+                .map(MongoCommons::calculateSubscriptionPositionFromMongoStreamPositionDocument);
     }
 }

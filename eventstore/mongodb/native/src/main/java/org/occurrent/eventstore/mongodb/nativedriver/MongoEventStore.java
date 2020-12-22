@@ -61,8 +61,8 @@ import static java.util.Objects.requireNonNull;
 import static org.occurrent.eventstore.api.WriteCondition.StreamVersionWriteCondition;
 import static org.occurrent.eventstore.api.WriteCondition.anyStreamVersion;
 import static org.occurrent.eventstore.mongodb.internal.MongoBulkWriteExceptionToDuplicateCloudEventExceptionTranslator.translateToDuplicateCloudEventException;
-import static org.occurrent.eventstore.mongodb.internal.OccurrentCloudEventMongoDBDocumentMapper.convertToCloudEvent;
-import static org.occurrent.eventstore.mongodb.internal.OccurrentCloudEventMongoDBDocumentMapper.convertToDocument;
+import static org.occurrent.eventstore.mongodb.internal.OccurrentCloudEventMongoDocumentMapper.convertToCloudEvent;
+import static org.occurrent.eventstore.mongodb.internal.OccurrentCloudEventMongoDocumentMapper.convertToDocument;
 import static org.occurrent.filter.Filter.TIME;
 import static org.occurrent.functionalsupport.internal.FunctionalSupport.zip;
 

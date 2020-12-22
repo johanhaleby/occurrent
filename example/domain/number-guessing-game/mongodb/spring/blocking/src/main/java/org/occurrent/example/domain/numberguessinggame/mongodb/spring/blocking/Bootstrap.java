@@ -18,13 +18,13 @@ package org.occurrent.example.domain.numberguessinggame.mongodb.spring.blocking;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
 import org.occurrent.eventstore.mongodb.spring.blocking.EventStoreConfig;
-import org.occurrent.eventstore.mongodb.spring.blocking.SpringBlockingMongoEventStore;
+import org.occurrent.eventstore.mongodb.spring.blocking.SpringMongoEventStore;
 import org.occurrent.example.domain.numberguessinggame.mongodb.spring.blocking.infrastructure.Serialization;
 import org.occurrent.mongodb.timerepresentation.TimeRepresentation;
 import org.occurrent.subscription.api.blocking.PositionAwareSubscriptionModel;
 import org.occurrent.subscription.api.blocking.SubscriptionPositionStorage;
-import org.occurrent.subscription.mongodb.spring.blocking.SpringMongoDBSubscriptionModel;
-import org.occurrent.subscription.mongodb.spring.blocking.SpringMongoDBSubscriptionPositionStorage;
+import org.occurrent.subscription.mongodb.spring.blocking.SpringMongoSubscriptionModel;
+import org.occurrent.subscription.mongodb.spring.blocking.SpringMongoSubscriptionPositionStorage;
 import org.occurrent.subscription.util.blocking.AutoPersistingSubscriptionModel;
 import org.springframework.amqp.core.TopicExchange;
 import org.springframework.amqp.rabbit.annotation.EnableRabbit;
@@ -62,19 +62,19 @@ public class Bootstrap {
     }
 
     @Bean
-    public SpringBlockingMongoEventStore eventStore(MongoTemplate template, MongoTransactionManager transactionManager) {
+    public SpringMongoEventStore eventStore(MongoTemplate template, MongoTransactionManager transactionManager) {
         EventStoreConfig eventStoreConfig = new EventStoreConfig.Builder().eventStoreCollectionName(EVENTS_COLLECTION_NAME).transactionConfig(transactionManager).timeRepresentation(TimeRepresentation.DATE).build();
-        return new SpringBlockingMongoEventStore(template, eventStoreConfig);
+        return new SpringMongoEventStore(template, eventStoreConfig);
     }
 
     @Bean
     public PositionAwareSubscriptionModel positionAwareSubscriptionModel(MongoTemplate mongoTemplate) {
-        return new SpringMongoDBSubscriptionModel(mongoTemplate, EVENTS_COLLECTION_NAME, TimeRepresentation.DATE);
+        return new SpringMongoSubscriptionModel(mongoTemplate, EVENTS_COLLECTION_NAME, TimeRepresentation.DATE);
     }
 
     @Bean
     public SubscriptionPositionStorage storage(MongoTemplate mongoTemplate) {
-        return new SpringMongoDBSubscriptionPositionStorage(mongoTemplate, "subscriptions");
+        return new SpringMongoSubscriptionPositionStorage(mongoTemplate, "subscriptions");
     }
 
     @Bean

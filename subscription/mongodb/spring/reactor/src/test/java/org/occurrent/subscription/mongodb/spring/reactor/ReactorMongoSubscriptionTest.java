@@ -33,7 +33,7 @@ import org.occurrent.eventstore.mongodb.spring.reactor.ReactorMongoEventStore;
 import org.occurrent.filter.Filter;
 import org.occurrent.mongodb.timerepresentation.TimeRepresentation;
 import org.occurrent.subscription.OccurrentSubscriptionFilter;
-import org.occurrent.subscription.mongodb.MongoDBFilterSpecification;
+import org.occurrent.subscription.mongodb.MongoFilterSpecification;
 import org.occurrent.testsupport.mongodb.FlushMongoDBExtension;
 import org.springframework.data.mongodb.ReactiveMongoTransactionManager;
 import org.springframework.data.mongodb.core.ReactiveMongoTemplate;
@@ -69,13 +69,13 @@ import static org.occurrent.functional.CheckedFunction.unchecked;
 import static org.occurrent.time.TimeConversion.toLocalDateTime;
 
 @Testcontainers
-public class SpringMongoDBSubscriptionTest {
+public class ReactorMongoSubscriptionTest {
 
     @Container
     private static final MongoDBContainer mongoDBContainer = new MongoDBContainer("mongo:4.2.8");
 
     private ReactorMongoEventStore mongoEventStore;
-    private SpringMongoDBSubscription subscription;
+    private ReactorMongoSubscription subscription;
     private ObjectMapper objectMapper;
     private CopyOnWriteArrayList<Disposable> disposables;
 
@@ -88,7 +88,7 @@ public class SpringMongoDBSubscriptionTest {
         ConnectionString connectionString = new ConnectionString(mongoDBContainer.getReplicaSetUrl() + ".events");
         mongoClient = MongoClients.create(connectionString);
         ReactiveMongoTemplate reactiveMongoTemplate = new ReactiveMongoTemplate(mongoClient, Objects.requireNonNull(connectionString.getDatabase()));
-        subscription = new SpringMongoDBSubscription(reactiveMongoTemplate, "events", TimeRepresentation.RFC_3339_STRING);
+        subscription = new ReactorMongoSubscription(reactiveMongoTemplate, "events", TimeRepresentation.RFC_3339_STRING);
         ReactiveTransactionManager reactiveMongoTransactionManager = new ReactiveMongoTransactionManager(new SimpleReactiveMongoDatabaseFactory(mongoClient, requireNonNull(connectionString.getDatabase())));
         EventStoreConfig eventStoreConfig = new EventStoreConfig.Builder().eventStoreCollectionName("events").transactionConfig(reactiveMongoTransactionManager).timeRepresentation(TimeRepresentation.RFC_3339_STRING).build();
         mongoEventStore = new ReactorMongoEventStore(reactiveMongoTemplate, eventStoreConfig);
@@ -124,13 +124,13 @@ public class SpringMongoDBSubscriptionTest {
 
     @Nested
     @DisplayName("SubscriptionFilter for BsonMongoDBFilterSpecification")
-    class BsonMongoDBFilterSpecificationTest {
+    class MongoBsonFilterSpecificationTest {
         @Test
         void using_bson_query_for_type_with_reactive_spring_subscription() throws InterruptedException {
             // Given
             LocalDateTime now = LocalDateTime.now();
             CopyOnWriteArrayList<CloudEvent> state = new CopyOnWriteArrayList<>();
-            subscription.subscribe(MongoDBFilterSpecification.BsonMongoDBFilterSpecification.filter().type(Filters::eq, NameDefined.class.getSimpleName()))
+            subscription.subscribe(MongoFilterSpecification.MongoBsonFilterSpecification.filter().type(Filters::eq, NameDefined.class.getSimpleName()))
                     .flatMap(cloudEvent -> Mono.fromRunnable(() -> state.add(cloudEvent)))
                     .subscribe();
             Thread.sleep(200);
@@ -160,7 +160,7 @@ public class SpringMongoDBSubscriptionTest {
             NameWasChanged nameWasChanged1 = new NameWasChanged(UUID.randomUUID().toString(), now.plusSeconds(3), "name3");
             NameWasChanged nameWasChanged2 = new NameWasChanged(UUID.randomUUID().toString(), now.plusSeconds(4), "name4");
 
-            subscription.subscribe(MongoDBFilterSpecification.BsonMongoDBFilterSpecification.filter().id(Filters::eq, nameDefined2.getEventId()).and().type(Filters::eq, NameDefined.class.getSimpleName()))
+            subscription.subscribe(MongoFilterSpecification.MongoBsonFilterSpecification.filter().id(Filters::eq, nameDefined2.getEventId()).and().type(Filters::eq, NameDefined.class.getSimpleName()))
                     .flatMap(cloudEvent -> Mono.fromRunnable(() -> state.add(cloudEvent)))
                     .subscribe();
 
@@ -187,7 +187,7 @@ public class SpringMongoDBSubscriptionTest {
             NameWasChanged nameWasChanged1 = new NameWasChanged(UUID.randomUUID().toString(), now.plusSeconds(3), "name3");
             NameWasChanged nameWasChanged2 = new NameWasChanged(UUID.randomUUID().toString(), now.plusSeconds(4), "name4");
 
-            subscription.subscribe(MongoDBFilterSpecification.BsonMongoDBFilterSpecification.filter(match(and(eq("fullDocument.id", nameDefined2.getEventId()), eq("fullDocument.type", NameDefined.class.getSimpleName())))))
+            subscription.subscribe(MongoFilterSpecification.MongoBsonFilterSpecification.filter(match(and(eq("fullDocument.id", nameDefined2.getEventId()), eq("fullDocument.type", NameDefined.class.getSimpleName())))))
                     .flatMap(cloudEvent -> Mono.fromRunnable(() -> state.add(cloudEvent)))
                     .subscribe();
 
@@ -207,13 +207,13 @@ public class SpringMongoDBSubscriptionTest {
 
     @Nested
     @DisplayName("SubscriptionFilter for JsonMongoDBFilterSpecification")
-    class JsonMongoDBFilterSpecificationTest {
+    class MongoJsonFilterSpecificationTest {
         @Test
         void using_json_query_for_type_with_reactive_spring_subscription() throws InterruptedException {
             // Given
             LocalDateTime now = LocalDateTime.now();
             CopyOnWriteArrayList<CloudEvent> state = new CopyOnWriteArrayList<>();
-            subscription.subscribe(MongoDBFilterSpecification.JsonMongoDBFilterSpecification.filter("{ $match : { \"" + MongoDBFilterSpecification.FULL_DOCUMENT + ".type\" : \"" + NameDefined.class.getSimpleName() + "\" } }"))
+            subscription.subscribe(MongoFilterSpecification.MongoJsonFilterSpecification.filter("{ $match : { \"" + MongoFilterSpecification.FULL_DOCUMENT + ".type\" : \"" + NameDefined.class.getSimpleName() + "\" } }"))
                     .flatMap(cloudEvent -> Mono.fromRunnable(() -> state.add(cloudEvent)))
                     .subscribe();
             NameDefined nameDefined1 = new NameDefined(UUID.randomUUID().toString(), now, "name1");

@@ -23,11 +23,11 @@ import java.util.Objects;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
 
-public class NativeMongoDBSubscription implements Subscription {
+public class NativeMongoSubscription implements Subscription {
     public final String subscriptionId;
     final CountDownLatch subscriptionStartedLatch;
 
-    NativeMongoDBSubscription(String subscriptionId, CountDownLatch subscriptionStartedLatch) {
+    NativeMongoSubscription(String subscriptionId, CountDownLatch subscriptionStartedLatch) {
         this.subscriptionId = subscriptionId;
         this.subscriptionStartedLatch = subscriptionStartedLatch;
     }
@@ -35,8 +35,8 @@ public class NativeMongoDBSubscription implements Subscription {
     @Override
     public boolean equals(Object o) {
         if (this == o) return true;
-        if (!(o instanceof NativeMongoDBSubscription)) return false;
-        NativeMongoDBSubscription that = (NativeMongoDBSubscription) o;
+        if (!(o instanceof NativeMongoSubscription)) return false;
+        NativeMongoSubscription that = (NativeMongoSubscription) o;
         return Objects.equals(subscriptionId, that.subscriptionId) &&
                 Objects.equals(subscriptionStartedLatch, that.subscriptionStartedLatch);
     }

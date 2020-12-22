@@ -50,7 +50,7 @@ import static org.awaitility.Awaitility.await;
 
 @SpringBootTest(classes = ForwardEventsFromMongoDBToSpringApplication.class)
 @Testcontainers
-public class SubscriptionFromMongoDBToSpringEventTest {
+public class MongoSubscriptionToSpringEventTest {
 
     @Container
     private static final MongoDBContainer mongoDBContainer;

@@ -24,18 +24,18 @@ import org.bson.BsonValue;
 import org.bson.Document;
 import org.occurrent.subscription.SubscriptionPosition;
 import org.occurrent.subscription.api.blocking.SubscriptionPositionStorage;
-import org.occurrent.subscription.mongodb.MongoDBOperationTimeBasedSubscriptionPosition;
-import org.occurrent.subscription.mongodb.MongoDBResumeTokenBasedSubscriptionPosition;
+import org.occurrent.subscription.mongodb.MongoOperationTimeSubscriptionPosition;
+import org.occurrent.subscription.mongodb.MongoResumeTokenSubscriptionPosition;
 
 import static com.mongodb.client.model.Filters.eq;
 import static java.util.Objects.requireNonNull;
-import static org.occurrent.subscription.mongodb.internal.MongoDBCloudEventsToJsonDeserializer.ID;
-import static org.occurrent.subscription.mongodb.internal.MongoDBCommons.*;
+import static org.occurrent.subscription.mongodb.internal.MongoCloudEventsToJsonDeserializer.ID;
+import static org.occurrent.subscription.mongodb.internal.MongoCommons.*;
 
 /**
  * A native sync Java MongoDB implementation of {@link SubscriptionPositionStorage} that stores {@link SubscriptionPosition} in MongoDB.
  */
-public class NativeMongoDBSubscriptionPositionStorage implements SubscriptionPositionStorage {
+public class NativeMongoSubscriptionPositionStorage implements SubscriptionPositionStorage {
 
     private final MongoCollection<Document> subscriptionPositionCollection;
 
@@ -44,7 +44,7 @@ public class NativeMongoDBSubscriptionPositionStorage implements SubscriptionPos
      *
      * @param subscriptionPositionCollection The collection into which subscription positions will be stored
      */
-    public NativeMongoDBSubscriptionPositionStorage(MongoDatabase database, String subscriptionPositionCollection) {
+    public NativeMongoSubscriptionPositionStorage(MongoDatabase database, String subscriptionPositionCollection) {
         this(requireNonNull(database, "Database cannot be null").getCollection(subscriptionPositionCollection));
     }
 
@@ -53,7 +53,7 @@ public class NativeMongoDBSubscriptionPositionStorage implements SubscriptionPos
      *
      * @param subscriptionPositionCollection The collection into which subscription positions will be stored
      */
-    public NativeMongoDBSubscriptionPositionStorage(MongoCollection<Document> subscriptionPositionCollection) {
+    public NativeMongoSubscriptionPositionStorage(MongoCollection<Document> subscriptionPositionCollection) {
         requireNonNull(subscriptionPositionCollection, "subscriptionPositionCollection cannot be null");
         this.subscriptionPositionCollection = subscriptionPositionCollection;
     }
@@ -71,10 +71,10 @@ public class NativeMongoDBSubscriptionPositionStorage implements SubscriptionPos
 
     @Override
     public SubscriptionPosition save(String subscriptionId, SubscriptionPosition subscriptionPosition) {
-        if (subscriptionPosition instanceof MongoDBResumeTokenBasedSubscriptionPosition) {
-            persistResumeTokenStreamPosition(subscriptionId, ((MongoDBResumeTokenBasedSubscriptionPosition) subscriptionPosition).resumeToken);
-        } else if (subscriptionPosition instanceof MongoDBOperationTimeBasedSubscriptionPosition) {
-            persistOperationTimeStreamPosition(subscriptionId, ((MongoDBOperationTimeBasedSubscriptionPosition) subscriptionPosition).operationTime);
+        if (subscriptionPosition instanceof MongoResumeTokenSubscriptionPosition) {
+            persistResumeTokenStreamPosition(subscriptionId, ((MongoResumeTokenSubscriptionPosition) subscriptionPosition).resumeToken);
+        } else if (subscriptionPosition instanceof MongoOperationTimeSubscriptionPosition) {
+            persistOperationTimeStreamPosition(subscriptionId, ((MongoOperationTimeSubscriptionPosition) subscriptionPosition).operationTime);
         } else {
             String subscriptionPositionString = subscriptionPosition.asString();
             Document document = generateGenericStreamPositionDocument(subscriptionId, subscriptionPositionString);

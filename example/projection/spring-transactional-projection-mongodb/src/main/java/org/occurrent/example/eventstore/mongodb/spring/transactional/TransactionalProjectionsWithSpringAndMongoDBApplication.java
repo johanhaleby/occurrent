@@ -20,7 +20,7 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.jsontype.impl.LaissezFaireSubTypeValidator;
 import org.occurrent.eventstore.api.blocking.EventStore;
 import org.occurrent.eventstore.mongodb.spring.blocking.EventStoreConfig;
-import org.occurrent.eventstore.mongodb.spring.blocking.SpringBlockingMongoEventStore;
+import org.occurrent.eventstore.mongodb.spring.blocking.SpringMongoEventStore;
 import org.occurrent.mongodb.timerepresentation.TimeRepresentation;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.autoconfigure.SpringBootApplication;
@@ -53,7 +53,7 @@ public class TransactionalProjectionsWithSpringAndMongoDBApplication {
     @Bean
     public EventStore eventStore(MongoTemplate mongoTemplate, MongoTransactionManager mongoTransactionManager) {
         EventStoreConfig eventStoreConfig = new EventStoreConfig.Builder().eventStoreCollectionName("events").transactionConfig(mongoTransactionManager).timeRepresentation(TimeRepresentation.RFC_3339_STRING).build();
-        return new SpringBlockingMongoEventStore(mongoTemplate, eventStoreConfig);
+        return new SpringMongoEventStore(mongoTemplate, eventStoreConfig);
     }
 
     @Bean

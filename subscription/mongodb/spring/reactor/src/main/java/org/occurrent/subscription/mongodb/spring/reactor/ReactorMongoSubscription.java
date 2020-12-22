@@ -24,10 +24,10 @@ import org.occurrent.subscription.StartAt;
 import org.occurrent.subscription.SubscriptionFilter;
 import org.occurrent.subscription.SubscriptionPosition;
 import org.occurrent.subscription.api.reactor.PositionAwareSubscriptionModel;
-import org.occurrent.subscription.mongodb.MongoDBOperationTimeBasedSubscriptionPosition;
-import org.occurrent.subscription.mongodb.MongoDBResumeTokenBasedSubscriptionPosition;
-import org.occurrent.subscription.mongodb.internal.MongoDBCloudEventsToJsonDeserializer;
-import org.occurrent.subscription.mongodb.internal.MongoDBCommons;
+import org.occurrent.subscription.mongodb.MongoOperationTimeSubscriptionPosition;
+import org.occurrent.subscription.mongodb.MongoResumeTokenSubscriptionPosition;
+import org.occurrent.subscription.mongodb.internal.MongoCloudEventsToJsonDeserializer;
+import org.occurrent.subscription.mongodb.internal.MongoCommons;
 import org.occurrent.subscription.mongodb.spring.internal.ApplyFilterToChangeStreamOptionsBuilder;
 import org.springframework.data.mongodb.core.ChangeStreamEvent;
 import org.springframework.data.mongodb.core.ChangeStreamOptions;
@@ -46,7 +46,7 @@ import static java.util.Objects.requireNonNull;
  * that includes the subscription position. Use {@link PositionAwareCloudEvent#getSubscriptionPositionOrThrowIAE(CloudEvent)}
  * to get the subscription position.
  */
-public class SpringMongoDBSubscription implements PositionAwareSubscriptionModel {
+public class ReactorMongoSubscription implements PositionAwareSubscriptionModel {
 
     private final ReactiveMongoOperations mongo;
     private final String eventCollection;
@@ -59,7 +59,7 @@ public class SpringMongoDBSubscription implements PositionAwareSubscriptionModel
      * @param eventCollection    The collection that contains the events
      * @param timeRepresentation How time is represented in the database, must be the same as what's specified for the EventStore that stores the events.
      */
-    public SpringMongoDBSubscription(ReactiveMongoOperations mongo, String eventCollection, TimeRepresentation timeRepresentation) {
+    public ReactorMongoSubscription(ReactiveMongoOperations mongo, String eventCollection, TimeRepresentation timeRepresentation) {
         this.mongo = mongo;
         this.eventCollection = eventCollection;
         this.timeRepresentation = timeRepresentation;
@@ -68,13 +68,13 @@ public class SpringMongoDBSubscription implements PositionAwareSubscriptionModel
     @Override
     public Flux<CloudEvent> subscribe(SubscriptionFilter filter, StartAt startAt) {
         // TODO We should change builder::resumeAt to builder::startAtOperationTime once Spring adds support for it (see https://jira.spring.io/browse/DATAMONGO-2607)
-        ChangeStreamOptionsBuilder builder = MongoDBCommons.applyStartPosition(ChangeStreamOptions.builder(), ChangeStreamOptionsBuilder::startAfter, ChangeStreamOptionsBuilder::resumeAt, startAt);
+        ChangeStreamOptionsBuilder builder = MongoCommons.applyStartPosition(ChangeStreamOptions.builder(), ChangeStreamOptionsBuilder::startAfter, ChangeStreamOptionsBuilder::resumeAt, startAt);
         final ChangeStreamOptions changeStreamOptions = ApplyFilterToChangeStreamOptionsBuilder.applyFilter(timeRepresentation, filter, builder);
         Flux<ChangeStreamEvent<Document>> changeStream = mongo.changeStream(eventCollection, changeStreamOptions, Document.class);
         return changeStream
                 .flatMap(changeEvent ->
-                        MongoDBCloudEventsToJsonDeserializer.deserializeToCloudEvent(changeEvent.getRaw(), timeRepresentation)
-                                .map(cloudEvent -> new PositionAwareCloudEvent(cloudEvent, new MongoDBResumeTokenBasedSubscriptionPosition(requireNonNull(changeEvent.getResumeToken()).asDocument())))
+                        MongoCloudEventsToJsonDeserializer.deserializeToCloudEvent(changeEvent.getRaw(), timeRepresentation)
+                                .map(cloudEvent -> new PositionAwareCloudEvent(cloudEvent, new MongoResumeTokenSubscriptionPosition(requireNonNull(changeEvent.getResumeToken()).asDocument())))
                                 .map(Mono::just)
                                 .orElse(Mono.empty()));
     }
@@ -82,7 +82,7 @@ public class SpringMongoDBSubscription implements PositionAwareSubscriptionModel
     @Override
     public Mono<SubscriptionPosition> globalSubscriptionPosition() {
         return mongo.executeCommand(new Document("hostInfo", 1))
-                .map(MongoDBCommons::getServerOperationTime)
-                .map(MongoDBOperationTimeBasedSubscriptionPosition::new);
+                .map(MongoCommons::getServerOperationTime)
+                .map(MongoOperationTimeSubscriptionPosition::new);
     }
 }

@@ -37,7 +37,7 @@ import org.occurrent.eventstore.mongodb.nativedriver.MongoEventStore;
 import org.occurrent.filter.Filter;
 import org.occurrent.mongodb.timerepresentation.TimeRepresentation;
 import org.occurrent.subscription.OccurrentSubscriptionFilter;
-import org.occurrent.subscription.mongodb.MongoDBFilterSpecification.JsonMongoDBFilterSpecification;
+import org.occurrent.subscription.mongodb.MongoFilterSpecification.MongoJsonFilterSpecification;
 import org.occurrent.testsupport.mongodb.FlushMongoDBExtension;
 import org.testcontainers.containers.MongoDBContainer;
 import org.testcontainers.junit.jupiter.Container;
@@ -69,13 +69,13 @@ import static org.occurrent.filter.Filter.data;
 import static org.occurrent.filter.Filter.type;
 import static org.occurrent.functional.CheckedFunction.unchecked;
 import static org.occurrent.functional.Not.not;
-import static org.occurrent.subscription.mongodb.MongoDBFilterSpecification.BsonMongoDBFilterSpecification.filter;
-import static org.occurrent.subscription.mongodb.MongoDBFilterSpecification.FULL_DOCUMENT;
+import static org.occurrent.subscription.mongodb.MongoFilterSpecification.FULL_DOCUMENT;
+import static org.occurrent.subscription.mongodb.MongoFilterSpecification.MongoBsonFilterSpecification.filter;
 import static org.occurrent.time.TimeConversion.toLocalDateTime;
 
 @Testcontainers
 @Timeout(15000)
-public class NativeMongoDBSubscriptionModelTest {
+public class NativeMongoSubscriptionModelTest {
 
     @Container
     private static final MongoDBContainer mongoDBContainer = new MongoDBContainer("mongo:4.2.8");
@@ -84,7 +84,7 @@ public class NativeMongoDBSubscriptionModelTest {
     FlushMongoDBExtension flushMongoDBExtension = new FlushMongoDBExtension(new ConnectionString(mongoDBContainer.getReplicaSetUrl()));
 
     private MongoEventStore mongoEventStore;
-    private NativeMongoDBSubscriptionModel subscription;
+    private NativeMongoSubscriptionModel subscription;
     private ObjectMapper objectMapper;
     private MongoClient mongoClient;
     private ExecutorService subscriptionExecutor;
@@ -99,7 +99,7 @@ public class NativeMongoDBSubscriptionModelTest {
         MongoCollection<Document> eventCollection = database.getCollection(requireNonNull(connectionString.getCollection()));
         mongoEventStore = new MongoEventStore(mongoClient, connectionString.getDatabase(), connectionString.getCollection(), config);
         subscriptionExecutor = Executors.newFixedThreadPool(1);
-        subscription = new NativeMongoDBSubscriptionModel(database, eventCollection, timeRepresentation, subscriptionExecutor, RetryStrategy.backoff(Duration.of(100, MILLIS), Duration.of(500, MILLIS), 2));
+        subscription = new NativeMongoSubscriptionModel(database, eventCollection, timeRepresentation, subscriptionExecutor, RetryStrategy.backoff(Duration.of(100, MILLIS), Duration.of(500, MILLIS), 2));
         objectMapper = new ObjectMapper();
     }
 
@@ -182,7 +182,7 @@ public class NativeMongoDBSubscriptionModelTest {
 
     @Nested
     @DisplayName("SubscriptionFilter using BsonMongoDBFilterSpecification")
-    class BsonMongoDBFilterSpecificationTest {
+    class MongoBsonFilterSpecificationTest {
 
         @Test
         void using_bson_query_for_type() {
@@ -259,7 +259,7 @@ public class NativeMongoDBSubscriptionModelTest {
 
     @Nested
     @DisplayName("SubscriptionFilter using JsonMongoDBFilterSpecification")
-    class JsonMongoDBFilterSpecificationTest {
+    class MongoJsonFilterSpecificationTest {
 
         @Test
         void using_json_query_for_type() {
@@ -267,7 +267,7 @@ public class NativeMongoDBSubscriptionModelTest {
             LocalDateTime now = LocalDateTime.now();
             CopyOnWriteArrayList<CloudEvent> state = new CopyOnWriteArrayList<>();
             String subscriberId = UUID.randomUUID().toString();
-            subscription.subscribe(subscriberId, JsonMongoDBFilterSpecification.filter("{ $match : { \"" + FULL_DOCUMENT + ".type\" : \"" + NameDefined.class.getName() + "\" } }"), state::add).waitUntilStarted();
+            subscription.subscribe(subscriberId, MongoJsonFilterSpecification.filter("{ $match : { \"" + FULL_DOCUMENT + ".type\" : \"" + NameDefined.class.getName() + "\" } }"), state::add).waitUntilStarted();
             NameDefined nameDefined1 = new NameDefined(UUID.randomUUID().toString(), now, "name1");
             NameDefined nameDefined2 = new NameDefined(UUID.randomUUID().toString(), now.plusSeconds(2), "name2");
             NameWasChanged nameWasChanged1 = new NameWasChanged(UUID.randomUUID().toString(), now.plusSeconds(3), "name3");

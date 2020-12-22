@@ -53,8 +53,8 @@ import static java.util.Objects.requireNonNull;
 import static org.occurrent.cloudevents.OccurrentCloudEventExtension.STREAM_ID;
 import static org.occurrent.cloudevents.OccurrentCloudEventExtension.STREAM_VERSION;
 import static org.occurrent.eventstore.mongodb.internal.MongoBulkWriteExceptionToDuplicateCloudEventExceptionTranslator.translateToDuplicateCloudEventException;
-import static org.occurrent.eventstore.mongodb.internal.OccurrentCloudEventMongoDBDocumentMapper.convertToCloudEvent;
-import static org.occurrent.eventstore.mongodb.internal.OccurrentCloudEventMongoDBDocumentMapper.convertToDocument;
+import static org.occurrent.eventstore.mongodb.internal.OccurrentCloudEventMongoDocumentMapper.convertToCloudEvent;
+import static org.occurrent.eventstore.mongodb.internal.OccurrentCloudEventMongoDocumentMapper.convertToDocument;
 import static org.occurrent.filter.Filter.TIME;
 import static org.occurrent.functionalsupport.internal.FunctionalSupport.mapWithIndex;
 import static org.springframework.data.domain.Sort.Direction.ASC;
@@ -66,7 +66,7 @@ import static org.springframework.data.mongodb.core.query.Criteria.where;
  * This is an {@link EventStore} that stores events in MongoDB using Spring's {@link MongoTemplate}.
  * It also supports the {@link EventStoreOperations} and {@link EventStoreQueries} contracts.
  */
-public class SpringBlockingMongoEventStore implements EventStore, EventStoreOperations, EventStoreQueries {
+public class SpringMongoEventStore implements EventStore, EventStoreOperations, EventStoreQueries {
 
     private static final String ID = "_id";
     private static final String NATURAL = "$natural";
@@ -82,7 +82,7 @@ public class SpringBlockingMongoEventStore implements EventStore, EventStoreOper
      * @param mongoTemplate The {@link MongoTemplate} that the {@code SpringBlockingMongoEventStore} will use
      * @param config        The {@link EventStoreConfig} that will be used
      */
-    public SpringBlockingMongoEventStore(MongoTemplate mongoTemplate, EventStoreConfig config) {
+    public SpringMongoEventStore(MongoTemplate mongoTemplate, EventStoreConfig config) {
         requireNonNull(mongoTemplate, MongoTemplate.class.getSimpleName() + " cannot be null");
         requireNonNull(mongoTemplate, EventStoreConfig.class.getSimpleName() + " cannot be null");
         this.mongoTemplate = mongoTemplate;

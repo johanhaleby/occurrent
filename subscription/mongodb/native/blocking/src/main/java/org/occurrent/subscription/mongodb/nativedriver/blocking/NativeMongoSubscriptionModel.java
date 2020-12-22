@@ -34,12 +34,12 @@ import org.occurrent.mongodb.timerepresentation.TimeRepresentation;
 import org.occurrent.subscription.*;
 import org.occurrent.subscription.api.blocking.PositionAwareSubscriptionModel;
 import org.occurrent.subscription.api.blocking.Subscription;
-import org.occurrent.subscription.mongodb.MongoDBFilterSpecification;
-import org.occurrent.subscription.mongodb.MongoDBOperationTimeBasedSubscriptionPosition;
-import org.occurrent.subscription.mongodb.MongoDBResumeTokenBasedSubscriptionPosition;
+import org.occurrent.subscription.mongodb.MongoFilterSpecification;
+import org.occurrent.subscription.mongodb.MongoOperationTimeSubscriptionPosition;
+import org.occurrent.subscription.mongodb.MongoResumeTokenSubscriptionPosition;
 import org.occurrent.subscription.mongodb.internal.DocumentAdapter;
-import org.occurrent.subscription.mongodb.internal.MongoDBCloudEventsToJsonDeserializer;
-import org.occurrent.subscription.mongodb.internal.MongoDBCommons;
+import org.occurrent.subscription.mongodb.internal.MongoCloudEventsToJsonDeserializer;
+import org.occurrent.subscription.mongodb.internal.MongoCommons;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -67,8 +67,8 @@ import static java.util.Objects.requireNonNull;
  * or use the {@code BlockingSubscriptionWithAutomaticPositionPersistence} utility from the {@code org.occurrent:subscription-util-blocking-automatic-position-persistence}
  * module.
  */
-public class NativeMongoDBSubscriptionModel implements PositionAwareSubscriptionModel {
-    private static final Logger log = LoggerFactory.getLogger(NativeMongoDBSubscriptionModel.class);
+public class NativeMongoSubscriptionModel implements PositionAwareSubscriptionModel {
+    private static final Logger log = LoggerFactory.getLogger(NativeMongoSubscriptionModel.class);
 
     private final MongoCollection<Document> eventCollection;
     private final ConcurrentMap<String, MongoChangeStreamCursor<ChangeStreamDocument<Document>>> subscriptions;
@@ -88,8 +88,8 @@ public class NativeMongoDBSubscriptionModel implements PositionAwareSubscription
      * @param subscriptionExecutor The executor that will be used for the subscription. Typically a dedicated thread will be required per subscription.
      * @param retryStrategy        Configure how retries should be handled
      */
-    public NativeMongoDBSubscriptionModel(MongoDatabase database, String eventCollectionName, TimeRepresentation timeRepresentation,
-                                          Executor subscriptionExecutor, RetryStrategy retryStrategy) {
+    public NativeMongoSubscriptionModel(MongoDatabase database, String eventCollectionName, TimeRepresentation timeRepresentation,
+                                        Executor subscriptionExecutor, RetryStrategy retryStrategy) {
         this(database, database.getCollection(requireNonNull(eventCollectionName, "Event collection cannot be null")), timeRepresentation, subscriptionExecutor, retryStrategy);
     }
 
@@ -102,8 +102,8 @@ public class NativeMongoDBSubscriptionModel implements PositionAwareSubscription
      * @param subscriptionExecutor The executor that will be used for the subscription. Typically a dedicated thread will be required per subscription.
      * @param retryStrategy        Configure how retries should be handled
      */
-    public NativeMongoDBSubscriptionModel(MongoDatabase database, MongoCollection<Document> eventCollection, TimeRepresentation timeRepresentation,
-                                          Executor subscriptionExecutor, RetryStrategy retryStrategy) {
+    public NativeMongoSubscriptionModel(MongoDatabase database, MongoCollection<Document> eventCollection, TimeRepresentation timeRepresentation,
+                                        Executor subscriptionExecutor, RetryStrategy retryStrategy) {
         requireNonNull(database, MongoDatabase.class.getSimpleName() + " cannot be null");
         requireNonNull(eventCollection, "Event collection cannot be null");
         requireNonNull(timeRepresentation, "Time representation cannot be null");
@@ -128,15 +128,15 @@ public class NativeMongoDBSubscriptionModel implements PositionAwareSubscription
 
         Runnable runnable = () -> {
             ChangeStreamIterable<Document> changeStreamDocuments = eventCollection.watch(pipeline, Document.class);
-            ChangeStreamIterable<Document> changeStreamDocumentsAtPosition = MongoDBCommons.applyStartPosition(changeStreamDocuments, ChangeStreamIterable::startAfter, ChangeStreamIterable::startAtOperationTime, startAtSupplier.get());
+            ChangeStreamIterable<Document> changeStreamDocumentsAtPosition = MongoCommons.applyStartPosition(changeStreamDocuments, ChangeStreamIterable::startAfter, ChangeStreamIterable::startAtOperationTime, startAtSupplier.get());
             MongoChangeStreamCursor<ChangeStreamDocument<Document>> cursor = changeStreamDocumentsAtPosition.cursor();
 
             subscriptions.put(subscriptionId, cursor);
 
             subscriptionStartedLatch.countDown();
             try {
-                cursor.forEachRemaining(changeStreamDocument -> MongoDBCloudEventsToJsonDeserializer.deserializeToCloudEvent(changeStreamDocument, timeRepresentation)
-                        .map(cloudEvent -> new PositionAwareCloudEvent(cloudEvent, new MongoDBResumeTokenBasedSubscriptionPosition(changeStreamDocument.getResumeToken())))
+                cursor.forEachRemaining(changeStreamDocument -> MongoCloudEventsToJsonDeserializer.deserializeToCloudEvent(changeStreamDocument, timeRepresentation)
+                        .map(cloudEvent -> new PositionAwareCloudEvent(cloudEvent, new MongoResumeTokenSubscriptionPosition(changeStreamDocument.getResumeToken())))
                         .ifPresent(retry(action, __ -> true, convertToDelayStream(retryStrategy))));
             } catch (MongoException e) {
                 log.debug("Caught {} (code={}, message={}), this might happen when cursor is shutdown.", e.getClass().getName(), e.getCode(), e.getMessage(), e);
@@ -146,7 +146,7 @@ public class NativeMongoDBSubscriptionModel implements PositionAwareSubscription
         };
 
         cloudEventDispatcher.execute(retry(runnable, __ -> !shuttingDown, convertToDelayStream(retryStrategy)));
-        return new NativeMongoDBSubscription(subscriptionId, subscriptionStartedLatch);
+        return new NativeMongoSubscription(subscriptionId, subscriptionStartedLatch);
     }
 
     private static List<Bson> createPipeline(TimeRepresentation timeRepresentation, SubscriptionFilter filter) {
@@ -155,12 +155,12 @@ public class NativeMongoDBSubscriptionModel implements PositionAwareSubscription
             pipeline = Collections.emptyList();
         } else if (filter instanceof OccurrentSubscriptionFilter) {
             Filter occurrentFilter = ((OccurrentSubscriptionFilter) filter).filter;
-            Bson bson = FilterToBsonFilterConverter.convertFilterToBsonFilter(MongoDBFilterSpecification.FULL_DOCUMENT, timeRepresentation, occurrentFilter);
+            Bson bson = FilterToBsonFilterConverter.convertFilterToBsonFilter(MongoFilterSpecification.FULL_DOCUMENT, timeRepresentation, occurrentFilter);
             pipeline = Collections.singletonList(match(bson));
-        } else if (filter instanceof MongoDBFilterSpecification.JsonMongoDBFilterSpecification) {
-            pipeline = Collections.singletonList(Document.parse(((MongoDBFilterSpecification.JsonMongoDBFilterSpecification) filter).getJson()));
-        } else if (filter instanceof MongoDBFilterSpecification.BsonMongoDBFilterSpecification) {
-            Bson[] aggregationStages = ((MongoDBFilterSpecification.BsonMongoDBFilterSpecification) filter).getAggregationStages();
+        } else if (filter instanceof MongoFilterSpecification.MongoJsonFilterSpecification) {
+            pipeline = Collections.singletonList(Document.parse(((MongoFilterSpecification.MongoJsonFilterSpecification) filter).getJson()));
+        } else if (filter instanceof MongoFilterSpecification.MongoBsonFilterSpecification) {
+            Bson[] aggregationStages = ((MongoFilterSpecification.MongoBsonFilterSpecification) filter).getAggregationStages();
             DocumentAdapter documentAdapter = new DocumentAdapter(MongoClientSettings.getDefaultCodecRegistry());
             pipeline = Stream.of(aggregationStages).map(aggregationStage -> {
                 final Document result;
@@ -203,8 +203,8 @@ public class NativeMongoDBSubscriptionModel implements PositionAwareSubscription
     public SubscriptionPosition globalSubscriptionPosition() {
         // Note that we increase the "increment" by 1 in order to not clash with an existing event in the event store.
         // This is so that we can avoid duplicates in certain rare cases when replaying events.
-        BsonTimestamp currentOperationTime = MongoDBCommons.getServerOperationTime(database.runCommand(new Document("hostInfo", 1)), 1);
-        return new MongoDBOperationTimeBasedSubscriptionPosition(currentOperationTime);
+        BsonTimestamp currentOperationTime = MongoCommons.getServerOperationTime(database.runCommand(new Document("hostInfo", 1)), 1);
+        return new MongoOperationTimeSubscriptionPosition(currentOperationTime);
     }
 
     private static Runnable retry(Runnable runnable, Predicate<Exception> retryPredicate, Iterator<Long> delay) {

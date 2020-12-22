@@ -37,7 +37,7 @@ import static org.occurrent.time.internal.RFC3339.RFC_3339_DATE_TIME_FORMATTER;
  * Class responsible for converting a {@link CloudEvent} (that contains the Occurrent extensions)
  * into a MongoDB {@link Document} and vice versa.
  */
-public class OccurrentCloudEventMongoDBDocumentMapper {
+public class OccurrentCloudEventMongoDocumentMapper {
 
     public static Document convertToDocument(TimeRepresentation timeRepresentation, String streamId, long streamVersion, CloudEvent cloudEvent) {
         Document cloudEventDocument = DocumentCloudEventWriter.toDocument(cloudEvent);

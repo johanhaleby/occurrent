@@ -19,7 +19,7 @@ package org.occurrent.example.eventstore.mongodb.spring.projections.adhoc;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import org.occurrent.eventstore.api.blocking.EventStore;
 import org.occurrent.eventstore.mongodb.spring.blocking.EventStoreConfig;
-import org.occurrent.eventstore.mongodb.spring.blocking.SpringBlockingMongoEventStore;
+import org.occurrent.eventstore.mongodb.spring.blocking.SpringMongoEventStore;
 import org.occurrent.mongodb.timerepresentation.TimeRepresentation;
 import org.springframework.boot.autoconfigure.SpringBootApplication;
 import org.springframework.context.annotation.Bean;
@@ -45,7 +45,7 @@ public class SpringAdhocProjectionApplication {
     @Bean
     public EventStore eventStore(MongoTemplate mongoTemplate, TransactionTemplate transactionTemplate) {
         EventStoreConfig eventStoreConfig = new EventStoreConfig.Builder().eventStoreCollectionName("events").transactionConfig(transactionTemplate).timeRepresentation(TimeRepresentation.RFC_3339_STRING).build();
-        return new SpringBlockingMongoEventStore(mongoTemplate, eventStoreConfig);
+        return new SpringMongoEventStore(mongoTemplate, eventStoreConfig);
     }
 
     @Bean

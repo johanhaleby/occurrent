@@ -8,17 +8,26 @@
 * `org.occurrent.subscription.util.blocking.catchup.subscription.CatchupSubscriptionModel` has been renamed to `CatchupSubscriptionModel`.
 * `org.occurrent.subscription.util.blocking.AutoPersistingSubscriptionModelConfig` has been renamed to `AutoPersistingSubscriptionModelConfig`.
 * `org.occurrent.subscription.util.blocking.BlockingSubscriptionWithAutomaticPositionPersistence` has been renamed to `AutoPersistingSubscriptionModel`.
-* `org.occurrent.subscription.mongodb.nativedriver.blocking.BlockingSubscriptionForMongoDB` has been renamed to `NativeMongoDBSubscriptionModel`.
-* `org.occurrent.subscription.mongodb.nativedriver.blocking.BlockingSubscriptionPositionStorageForMongoDB` has been renamed to `NativeMongoDBSubscriptionPositionStorage`.
+* `org.occurrent.subscription.mongodb.nativedriver.blocking.BlockingSubscriptionForMongoDB` has been renamed to `NativeMongoSubscriptionModel`.
+* `org.occurrent.subscription.mongodb.nativedriver.blocking.BlockingSubscriptionPositionStorageForMongoDB` has been renamed to `NativeMongoSubscriptionPositionStorage`.
 * Removed `org.occurrent.subscription.mongodb.nativedriver.blocking.BlockingSubscriptionWithPositionPersistenceInMongoDB`. Use an `org.occurrent.subscription.util.blocking.AutoPersistingSubscriptionModel` from module `org.occurrent:subscription-util-blocking-automatic-position-persistence` instead.
-* `org.occurrent.subscription.mongodb.spring.blocking.MongoDBSpringSubscription` has been renamed to `SpringMongoDBSubscription`.
-* `org.occurrent.subscription.mongodb.spring.blocking.SpringBlockingSubscriptionForMongoDB` has been renamed to `SpringMongoDBSubscription`.
-* `org.occurrent.subscription.mongodb.spring.blocking.SpringMongoDBSubscriptionPositionStorage` has been renamed to `SpringMongoDBSubscriptionPositionStorage`.
-* `org.occurrent.subscription.mongodb.spring.reactor.SpringReactorSubscriptionForMongoDB` has been renamed to `SpringMongoDBSubscription`.
-* `org.occurrent.subscription.mongodb.spring.reactor.SpringReactorSubscriptionPositionStorageForMongoDB` has been renamed to `SpringMongoDBSubscriptionPositionStorage`.
+* `org.occurrent.subscription.mongodb.spring.blocking.MongoDBSpringSubscription` has been renamed to `SpringMongoSubscription`.
+* `org.occurrent.subscription.mongodb.spring.blocking.SpringBlockingSubscriptionForMongoDB` has been renamed to `SpringMongoSubscription`.
+* `org.occurrent.subscription.mongodb.spring.blocking.SpringMongoDBSubscriptionPositionStorage` has been renamed to `SpringMongoSubscriptionPositionStorage`.
+* `org.occurrent.subscription.mongodb.spring.reactor.SpringReactorSubscriptionForMongoDB` has been renamed to `ReactorMongoSubscription`.
+* `org.occurrent.subscription.mongodb.spring.reactor.SpringReactorSubscriptionPositionStorageForMongoDB` has been renamed to `ReactorSubscriptionPositionStorage`.
 * `org.occurrent.subscription.util.reactor.ReactorSubscriptionWithAutomaticPositionPersistence` has been renamed to `AutoPersistingSubscriptionModel`.
 * `org.occurrent.subscription.util.reactor.ReactorSubscriptionWithAutomaticPositionPersistenceConfig` has been renamed to `AutoPersistingSubscriptionModelConfig`.
 * `org.occurrent.eventstore.mongodb.spring.reactor.SpringReactorMongoEventStore` has been renamed to `ReactorMongoEventStore` since "Spring" is implicit.
+* `org.occurrent.subscription.mongodb.MongoDBFilterSpecification` has been renamed to `MongoFilterSpecification`.
+* `org.occurrent.subscription.mongodb.MongoDBFilterSpecification.JsonMongoDBFilterSpecification` has been renamed to `MongoJsonFilterSpecification`.
+* `org.occurrent.subscription.mongodb.MongoDBFilterSpecification.BsonMongoDBFilterSpecification` has been renamed to `MongoBsonFilterSpecification`.
+* `org.occurrent.subscription.mongodb.internal.MongoDBCloudEventsToJsonDeserializer` has been renamed to `MongoCloudEventsToJsonDeserializer`.
+* `org.occurrent.subscription.mongodb.internal.MongoDBCommons` has been renamed to `MongoCommons`.
+* `org.occurrent.subscription.mongodb.MongoDBOperationTimeBasedSubscriptionPosition` has been renamed to `MongoOperationTimeSubscriptionPosition`.
+* `org.occurrent.subscription.mongodb.MongoDBResumeTokenBasedSubscriptionPosition` has been renamed to `MongoResumeTokenSubscriptionPosition`.
+* `org.occurrent.eventstore.mongodb.internal.OccurrentCloudEventMongoDBDocumentMapper` has been renamed to `OccurrentCloudEventMongoDocumentMapper`.
+* `org.occurrent.eventstore.mongodb.spring.blocking.SpringBlockingMongoEventStore` has been renamed to `SpringMongoEventStore`.
 
 ## Changelog 0.4.1 (2020-12-14)
 

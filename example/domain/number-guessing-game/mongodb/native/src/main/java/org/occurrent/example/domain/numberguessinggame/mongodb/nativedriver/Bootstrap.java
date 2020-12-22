@@ -43,9 +43,9 @@ import org.occurrent.example.domain.numberguessinggame.mongodb.nativedriver.view
 import org.occurrent.mongodb.timerepresentation.TimeRepresentation;
 import org.occurrent.subscription.api.blocking.SubscriptionModel;
 import org.occurrent.subscription.api.blocking.SubscriptionPositionStorage;
-import org.occurrent.subscription.mongodb.MongoDBFilterSpecification.BsonMongoDBFilterSpecification;
-import org.occurrent.subscription.mongodb.nativedriver.blocking.NativeMongoDBSubscriptionModel;
-import org.occurrent.subscription.mongodb.nativedriver.blocking.NativeMongoDBSubscriptionPositionStorage;
+import org.occurrent.subscription.mongodb.MongoFilterSpecification.MongoBsonFilterSpecification;
+import org.occurrent.subscription.mongodb.nativedriver.blocking.NativeMongoSubscriptionModel;
+import org.occurrent.subscription.mongodb.nativedriver.blocking.NativeMongoSubscriptionPositionStorage;
 import org.occurrent.subscription.mongodb.nativedriver.blocking.RetryStrategy;
 import org.occurrent.subscription.util.blocking.AutoPersistingSubscriptionModel;
 import org.slf4j.Logger;
@@ -159,7 +159,7 @@ public class Bootstrap {
         };
 
         // We're only interested in events of type NumberGuessingGameEnded since then we know that we should publish the integration event
-        subscriptionModel.subscribe("NumberGuessingGameCompletedIntegrationEventPublisher", BsonMongoDBFilterSpecification.filter().type(Filters::eq, NumberGuessingGameEnded.class.getSimpleName()), cloudEventConsumer);
+        subscriptionModel.subscribe("NumberGuessingGameCompletedIntegrationEventPublisher", MongoBsonFilterSpecification.filter().type(Filters::eq, NumberGuessingGameEnded.class.getSimpleName()), cloudEventConsumer);
     }
 
     private static RabbitMQConnectionAndChannel initializeRabbitMQConnection(String uri) {
@@ -201,8 +201,8 @@ public class Bootstrap {
 
     private static SubscriptionModel initializeSubscription(MongoClient mongoClient) {
         MongoDatabase database = mongoClient.getDatabase(DATABASE_NAME);
-        NativeMongoDBSubscriptionModel blockingSubscriptionForMongoDB = new NativeMongoDBSubscriptionModel(database, EVENTS_COLLECTION_NAME, TimeRepresentation.DATE, Executors.newCachedThreadPool(), RetryStrategy.fixed(200));
-        SubscriptionPositionStorage storage = new NativeMongoDBSubscriptionPositionStorage(database, SUBSCRIPTION_POSITIONS_COLLECTION_NAME);
+        NativeMongoSubscriptionModel blockingSubscriptionForMongoDB = new NativeMongoSubscriptionModel(database, EVENTS_COLLECTION_NAME, TimeRepresentation.DATE, Executors.newCachedThreadPool(), RetryStrategy.fixed(200));
+        SubscriptionPositionStorage storage = new NativeMongoSubscriptionPositionStorage(database, SUBSCRIPTION_POSITIONS_COLLECTION_NAME);
         return new AutoPersistingSubscriptionModel(blockingSubscriptionForMongoDB, storage);
     }
 

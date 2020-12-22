@@ -20,20 +20,20 @@ import com.mongodb.client.model.changestream.ChangeStreamDocument;
 import com.mongodb.client.model.changestream.OperationType;
 import io.cloudevents.CloudEvent;
 import org.bson.Document;
-import org.occurrent.eventstore.mongodb.internal.OccurrentCloudEventMongoDBDocumentMapper;
+import org.occurrent.eventstore.mongodb.internal.OccurrentCloudEventMongoDocumentMapper;
 import org.occurrent.mongodb.timerepresentation.TimeRepresentation;
 
 import java.util.Optional;
 
 import static com.mongodb.client.model.changestream.OperationType.INSERT;
 
-public class MongoDBCloudEventsToJsonDeserializer {
+public class MongoCloudEventsToJsonDeserializer {
 
     public static final String ID = "_id";
 
     public static Optional<CloudEvent> deserializeToCloudEvent(ChangeStreamDocument<Document> changeStreamDocument, TimeRepresentation timeRepresentation) {
         return changeStreamDocumentToCloudEventAsJson(changeStreamDocument)
-                .map(document -> OccurrentCloudEventMongoDBDocumentMapper.convertToCloudEvent(timeRepresentation, document));
+                .map(document -> OccurrentCloudEventMongoDocumentMapper.convertToCloudEvent(timeRepresentation, document));
     }
 
     private static Optional<Document> changeStreamDocumentToCloudEventAsJson(ChangeStreamDocument<Document> changeStreamDocument) {

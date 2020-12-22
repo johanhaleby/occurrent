@@ -81,7 +81,7 @@ import static org.springframework.data.mongodb.core.query.Query.query;
 
 @SuppressWarnings("SameParameterValue")
 @Testcontainers
-public class SpringBlockingMongoEventStoreTest {
+public class SpringMongoEventStoreTest {
 
     @Container
     private static final MongoDBContainer mongoDBContainer;
@@ -94,7 +94,7 @@ public class SpringBlockingMongoEventStoreTest {
         mongoDBContainer.setPortBindings(ports);
     }
 
-    private SpringBlockingMongoEventStore eventStore;
+    private SpringMongoEventStore eventStore;
 
     @RegisterExtension
     FlushMongoDBExtension flushMongoDBExtension = new FlushMongoDBExtension(new ConnectionString(mongoDBContainer.getReplicaSetUrl() + ".events"));
@@ -112,7 +112,7 @@ public class SpringBlockingMongoEventStoreTest {
         objectMapper = new ObjectMapper();
         mongoTransactionManager = new MongoTransactionManager(new SimpleMongoClientDatabaseFactory(mongoClient, requireNonNull(connectionString.getDatabase())));
         EventStoreConfig eventStoreConfig = new EventStoreConfig.Builder().eventStoreCollectionName(connectionString.getCollection()).transactionConfig(mongoTransactionManager).timeRepresentation(TimeRepresentation.RFC_3339_STRING).build();
-        eventStore = new SpringBlockingMongoEventStore(mongoTemplate, eventStoreConfig);
+        eventStore = new SpringMongoEventStore(mongoTemplate, eventStoreConfig);
     }
 
     @Test
@@ -485,7 +485,7 @@ public class SpringBlockingMongoEventStoreTest {
                 NameWasChanged e = deserialize(cloudEvent);
                 NameWasChanged correctedName = new NameWasChanged(e.getEventId(), e.getTimestamp(), "name3");
                 return CloudEventBuilder.v1(cloudEvent).withData(serializeEvent(correctedName)).build();
-            }).map(SpringBlockingMongoEventStoreTest.this::deserialize);
+            }).map(SpringMongoEventStoreTest.this::deserialize);
 
             // Then
             assertThat(updatedCloudEvent).contains(new NameWasChanged(eventId2, now.plusHours(1), "name3"));
@@ -1360,7 +1360,7 @@ public class SpringBlockingMongoEventStoreTest {
             @BeforeEach
             void event_store_is_configured_to_using_date_as_time_representation() {
                 EventStoreConfig eventStoreConfig = new EventStoreConfig.Builder().eventStoreCollectionName(connectionString.getCollection()).transactionConfig(mongoTransactionManager).timeRepresentation(TimeRepresentation.DATE).build();
-                eventStore = new SpringBlockingMongoEventStore(mongoTemplate, eventStoreConfig);
+                eventStore = new SpringMongoEventStore(mongoTemplate, eventStoreConfig);
             }
 
             @Test

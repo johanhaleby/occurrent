@@ -33,7 +33,7 @@ import org.occurrent.eventstore.api.reactor.EventStoreOperations;
 import org.occurrent.eventstore.api.reactor.EventStoreQueries;
 import org.occurrent.eventstore.api.reactor.EventStream;
 import org.occurrent.eventstore.mongodb.internal.MongoBulkWriteExceptionToDuplicateCloudEventExceptionTranslator;
-import org.occurrent.eventstore.mongodb.internal.OccurrentCloudEventMongoDBDocumentMapper;
+import org.occurrent.eventstore.mongodb.internal.OccurrentCloudEventMongoDocumentMapper;
 import org.occurrent.filter.Filter;
 import org.occurrent.mongodb.spring.filterqueryconversion.internal.FilterConverter;
 import org.occurrent.mongodb.timerepresentation.TimeRepresentation;
@@ -115,7 +115,7 @@ public class ReactorMongoEventStore implements EventStore, EventStoreOperations,
                                             .map(streamVersionAndEvent -> {
                                                 long streamVersion = streamVersionAndEvent.getT1();
                                                 CloudEvent event = streamVersionAndEvent.getT2();
-                                                return OccurrentCloudEventMongoDBDocumentMapper.convertToDocument(timeRepresentation, streamId, streamVersion, event);
+                                                return OccurrentCloudEventMongoDocumentMapper.convertToDocument(timeRepresentation, streamId, streamVersion, event);
                                             }));
                     return insertAll(documentFlux);
                 }
@@ -237,7 +237,7 @@ public class ReactorMongoEventStore implements EventStore, EventStoreOperations,
     }
 
     private static CloudEvent convertToCloudEvent(TimeRepresentation timeRepresentation, Document document) {
-        return OccurrentCloudEventMongoDBDocumentMapper.convertToCloudEvent(timeRepresentation, document);
+        return OccurrentCloudEventMongoDocumentMapper.convertToCloudEvent(timeRepresentation, document);
     }
 
     private static boolean isSkipOrLimitDefined(int skip, int limit) {
@@ -281,7 +281,7 @@ public class ReactorMongoEventStore implements EventStore, EventStoreOperations,
                         } else if (!Objects.equals(updatedCloudEvent, currentCloudEvent)) {
                             String streamId = OccurrentExtensionGetter.getStreamId(currentCloudEvent);
                             long streamVersion = OccurrentExtensionGetter.getStreamVersion(currentCloudEvent);
-                            Document updatedDocument = OccurrentCloudEventMongoDBDocumentMapper.convertToDocument(timeRepresentation, streamId, streamVersion, updatedCloudEvent);
+                            Document updatedDocument = OccurrentCloudEventMongoDocumentMapper.convertToDocument(timeRepresentation, streamId, streamVersion, updatedCloudEvent);
                             updatedDocument.put(ID, document.get(ID)); // Insert the Mongo ObjectID
                             result = mongoTemplate.findAndReplace(cloudEventQuery, updatedDocument, eventStoreCollectionName).thenReturn(updatedCloudEvent);
                         } else {
