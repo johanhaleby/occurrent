@@ -82,7 +82,7 @@
         </dependency>
         <dependency>
             <groupId>org.occurrent</groupId>
-            <artifactId>subscription-util-blocking-catchup-subscription</artifactId>
+            <artifactId>catchup-subscription</artifactId>
             <version>0.4.2-SNAPSHOT</version>
         </dependency>
         <dependency>
