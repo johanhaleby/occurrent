@@ -30,6 +30,7 @@
 * `org.occurrent.eventstore.mongodb.spring.blocking.SpringBlockingMongoEventStore` has been renamed to `SpringMongoEventStore`.
 * Renamed module `org.occurrent:subscription-util-blocking-catchup-subscription` to `org.occurrent:catchup-subscription`.
 * Renamed module `org.occurrent:subscription-util-blocking-automatic-position-persistence` to `org.occurrent:auto-position-persistence-subscription`.
+* Renamed module `org.occurrent:subscription-util-reactor-automatic-position-persistence` to `org.occurrent:reactor-auto-position-persistence-subscription`.
 
 ## Changelog 0.4.1 (2020-12-14)
 

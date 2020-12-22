@@ -23,7 +23,7 @@
     </parent>
     <modelVersion>4.0.0</modelVersion>
 
-    <artifactId>subscription-util-reactor-automatic-position-persistence</artifactId>
+    <artifactId>reactor-auto-position-persistence-subscription</artifactId>
 
     <dependencies>
         <dependency>
