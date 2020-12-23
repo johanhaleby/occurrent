@@ -31,7 +31,6 @@
         <module>api</module>
         <module>redis</module>
         <module>util</module>
-        <module>util/blocking</module>
     </modules>
 
 </project>

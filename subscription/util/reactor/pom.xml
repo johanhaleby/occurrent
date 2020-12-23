@@ -25,7 +25,7 @@
 
     <packaging>pom</packaging>
     <modules>
-        <module>automatic-position-persistence</module>
+        <module>durable-subscription</module>
     </modules>
     <artifactId>subscription-util-reactor</artifactId>
 
