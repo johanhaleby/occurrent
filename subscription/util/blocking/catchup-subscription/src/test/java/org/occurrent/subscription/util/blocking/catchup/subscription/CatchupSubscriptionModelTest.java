@@ -41,7 +41,7 @@ import org.occurrent.subscription.SubscriptionPosition;
 import org.occurrent.subscription.mongodb.nativedriver.blocking.NativeMongoSubscriptionModel;
 import org.occurrent.subscription.mongodb.nativedriver.blocking.NativeMongoSubscriptionPositionStorage;
 import org.occurrent.subscription.mongodb.nativedriver.blocking.RetryStrategy;
-import org.occurrent.subscription.util.blocking.AutoPersistingSubscriptionModel;
+import org.occurrent.subscription.util.blocking.DurableSubscriptionModel;
 import org.occurrent.testsupport.mongodb.FlushMongoDBExtension;
 import org.testcontainers.containers.MongoDBContainer;
 import org.testcontainers.junit.jupiter.Container;
@@ -332,7 +332,7 @@ public class CatchupSubscriptionModelTest {
 
         Supplier<CatchupSubscriptionModel> catchupSupportingBlockingSubscription = () -> {
             NativeMongoSubscriptionModel blockingSubscriptionForMongoDB = new NativeMongoSubscriptionModel(database, eventCollection, TimeRepresentation.DATE, subscriptionExecutor, RetryStrategy.none());
-            AutoPersistingSubscriptionModel blockingSubscriptionWithAutomaticPositionPersistence = new AutoPersistingSubscriptionModel(blockingSubscriptionForMongoDB, storage);
+            DurableSubscriptionModel blockingSubscriptionWithAutomaticPositionPersistence = new DurableSubscriptionModel(blockingSubscriptionForMongoDB, storage);
             return new CatchupSubscriptionModel(blockingSubscriptionWithAutomaticPositionPersistence, mongoEventStore, new CatchupSubscriptionModelConfig(100, useSubscriptionPositionStorage(storage)));
         };
 

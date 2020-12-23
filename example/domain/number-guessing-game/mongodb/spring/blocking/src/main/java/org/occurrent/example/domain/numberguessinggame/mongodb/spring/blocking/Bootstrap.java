@@ -25,7 +25,7 @@ import org.occurrent.subscription.api.blocking.PositionAwareSubscriptionModel;
 import org.occurrent.subscription.api.blocking.SubscriptionPositionStorage;
 import org.occurrent.subscription.mongodb.spring.blocking.SpringMongoSubscriptionModel;
 import org.occurrent.subscription.mongodb.spring.blocking.SpringMongoSubscriptionPositionStorage;
-import org.occurrent.subscription.util.blocking.AutoPersistingSubscriptionModel;
+import org.occurrent.subscription.util.blocking.DurableSubscriptionModel;
 import org.springframework.amqp.core.TopicExchange;
 import org.springframework.amqp.rabbit.annotation.EnableRabbit;
 import org.springframework.amqp.support.converter.Jackson2JsonMessageConverter;
@@ -78,8 +78,8 @@ public class Bootstrap {
     }
 
     @Bean
-    public AutoPersistingSubscriptionModel subscriptionWithAutomaticPersistence(PositionAwareSubscriptionModel subscription, SubscriptionPositionStorage storage) {
-        return new AutoPersistingSubscriptionModel(subscription, storage);
+    public DurableSubscriptionModel durableSubscriptionModel(PositionAwareSubscriptionModel subscription, SubscriptionPositionStorage storage) {
+        return new DurableSubscriptionModel(subscription, storage);
     }
 
     @Bean

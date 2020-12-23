@@ -37,7 +37,7 @@ import org.occurrent.functional.Not;
 import org.occurrent.mongodb.timerepresentation.TimeRepresentation;
 import org.occurrent.subscription.api.blocking.SubscriptionPositionStorage;
 import org.occurrent.subscription.mongodb.spring.blocking.SpringMongoSubscriptionModel;
-import org.occurrent.subscription.util.blocking.AutoPersistingSubscriptionModel;
+import org.occurrent.subscription.util.blocking.DurableSubscriptionModel;
 import org.occurrent.testsupport.mongodb.FlushMongoDBExtension;
 import org.occurrent.time.TimeConversion;
 import org.springframework.data.mongodb.MongoTransactionManager;
@@ -88,7 +88,7 @@ class SpringSubscriptionModelPositionStorageForRedisTest {
     private ObjectMapper objectMapper;
     private SpringMongoSubscriptionModel springBlockingSubscriptionForMongoDB;
     private LettuceConnectionFactory lettuceConnectionFactory;
-    private AutoPersistingSubscriptionModel redisSubscription;
+    private DurableSubscriptionModel redisSubscription;
     private RedisOperations<String, String> redisTemplate;
 
     @BeforeEach
@@ -103,7 +103,7 @@ class SpringSubscriptionModelPositionStorageForRedisTest {
         lettuceConnectionFactory = new LettuceConnectionFactory(redisContainer.getHost(), redisContainer.getFirstMappedPort());
         redisTemplate = createRedisTemplate(lettuceConnectionFactory);
         SubscriptionPositionStorage storage = new SpringSubscriptionPositionStorageForRedis(redisTemplate);
-        redisSubscription = new AutoPersistingSubscriptionModel(springBlockingSubscriptionForMongoDB, storage);
+        redisSubscription = new DurableSubscriptionModel(springBlockingSubscriptionForMongoDB, storage);
         objectMapper = new ObjectMapper();
     }
 

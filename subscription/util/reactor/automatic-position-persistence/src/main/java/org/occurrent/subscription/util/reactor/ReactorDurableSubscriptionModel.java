@@ -34,42 +34,41 @@ import static org.occurrent.subscription.PositionAwareCloudEvent.getSubscription
 
 /**
  * Wraps a {@link PositionAwareSubscriptionModel} and adds persistent subscription position support. It adds some convenience methods that stores the subscription position
- * after an "action" (the "function" in this method {@link AutoPersistingSubscriptionModel#subscribe(String, Function)}) has completed successfully.
+ * after an "action" (the "function" in this method {@link ReactorDurableSubscriptionModel#subscribe(String, Function)}) has completed successfully.
  * It stores the subscription position in a {@link SubscriptionPositionStorage} implementation.
  * <p>
  * Note that this implementation stores the subscription position after _every_ action. If you have a lot of events and duplication is not
- * that much of a deal consider cloning/extending this class and add your own customizations. Use the methods provided by a {@link SubscriptionPositionStorage}
- * implementation.
+ * that much of a deal, consider changing this behavior by supplying an instance of {@link ReactorDurableSubscriptionModelConfig}.
  */
-public class AutoPersistingSubscriptionModel {
-    private static final Logger log = LoggerFactory.getLogger(AutoPersistingSubscriptionModel.class);
+public class ReactorDurableSubscriptionModel {
+    private static final Logger log = LoggerFactory.getLogger(ReactorDurableSubscriptionModel.class);
     private final PositionAwareSubscriptionModel subscription;
     private final SubscriptionPositionStorage storage;
-    private final AutoPersistingSubscriptionModelConfig config;
+    private final ReactorDurableSubscriptionModelConfig config;
 
     /**
-     * Create a subscription that combines a {@link AutoPersistingSubscriptionModel} with a {@link AutoPersistingSubscriptionModel} to automatically
+     * Create a subscription that combines a {@link ReactorDurableSubscriptionModel} with a {@link ReactorDurableSubscriptionModel} to automatically
      * store the subscription after each successful call to <code>action</code> (The "consumer" in {@link #subscribe(String, Function)}).
      *
      * @param subscription The subscription that will read events from the event store
-     * @param storage      The {@link AutoPersistingSubscriptionModel} that'll be used to persist the stream position
+     * @param storage      The {@link ReactorDurableSubscriptionModel} that'll be used to persist the stream position
      */
-    public AutoPersistingSubscriptionModel(PositionAwareSubscriptionModel subscription, SubscriptionPositionStorage storage) {
-        this(subscription, storage, new AutoPersistingSubscriptionModelConfig(EveryN.everyEvent()));
+    public ReactorDurableSubscriptionModel(PositionAwareSubscriptionModel subscription, SubscriptionPositionStorage storage) {
+        this(subscription, storage, new ReactorDurableSubscriptionModelConfig(EveryN.everyEvent()));
     }
 
     /**
-     * Create a subscription that combines a {@link AutoPersistingSubscriptionModel} with a {@link AutoPersistingSubscriptionModel} to automatically
-     * store the subscription when the predicate defined in {@link AutoPersistingSubscriptionModelConfig#persistCloudEventPositionPredicate} is fulfilled.
+     * Create a subscription that combines a {@link ReactorDurableSubscriptionModel} with a {@link ReactorDurableSubscriptionModel} to automatically
+     * store the subscription when the predicate defined in {@link ReactorDurableSubscriptionModelConfig#persistCloudEventPositionPredicate} is fulfilled.
      *
      * @param subscription The subscription that will read events from the event store
-     * @param storage      The {@link AutoPersistingSubscriptionModel} that'll be used to persist the stream position
+     * @param storage      The {@link ReactorDurableSubscriptionModel} that'll be used to persist the stream position
      */
-    public AutoPersistingSubscriptionModel(PositionAwareSubscriptionModel subscription, SubscriptionPositionStorage storage,
-                                           AutoPersistingSubscriptionModelConfig config) {
+    public ReactorDurableSubscriptionModel(PositionAwareSubscriptionModel subscription, SubscriptionPositionStorage storage,
+                                           ReactorDurableSubscriptionModelConfig config) {
         requireNonNull(subscription, PositionAwareSubscriptionModel.class.getSimpleName() + " cannot be null");
         requireNonNull(storage, SubscriptionPositionStorage.class.getSimpleName() + " cannot be null");
-        requireNonNull(config, AutoPersistingSubscriptionModelConfig.class.getSimpleName() + " cannot be null");
+        requireNonNull(config, ReactorDurableSubscriptionModelConfig.class.getSimpleName() + " cannot be null");
         this.subscription = subscription;
         this.storage = storage;
         this.config = config;

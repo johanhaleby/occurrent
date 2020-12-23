@@ -47,7 +47,7 @@ import org.occurrent.subscription.mongodb.MongoFilterSpecification.MongoBsonFilt
 import org.occurrent.subscription.mongodb.nativedriver.blocking.NativeMongoSubscriptionModel;
 import org.occurrent.subscription.mongodb.nativedriver.blocking.NativeMongoSubscriptionPositionStorage;
 import org.occurrent.subscription.mongodb.nativedriver.blocking.RetryStrategy;
-import org.occurrent.subscription.util.blocking.AutoPersistingSubscriptionModel;
+import org.occurrent.subscription.util.blocking.DurableSubscriptionModel;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -203,7 +203,7 @@ public class Bootstrap {
         MongoDatabase database = mongoClient.getDatabase(DATABASE_NAME);
         NativeMongoSubscriptionModel blockingSubscriptionForMongoDB = new NativeMongoSubscriptionModel(database, EVENTS_COLLECTION_NAME, TimeRepresentation.DATE, Executors.newCachedThreadPool(), RetryStrategy.fixed(200));
         SubscriptionPositionStorage storage = new NativeMongoSubscriptionPositionStorage(database, SUBSCRIPTION_POSITIONS_COLLECTION_NAME);
-        return new AutoPersistingSubscriptionModel(blockingSubscriptionForMongoDB, storage);
+        return new DurableSubscriptionModel(blockingSubscriptionForMongoDB, storage);
     }
 
     private static LatestGamesOverview initializeLatestGamesOverview(MongoClient mongoClient, Serialization serialization, SubscriptionModel subscription) {

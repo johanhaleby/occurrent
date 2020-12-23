@@ -64,7 +64,7 @@ import static java.util.Objects.requireNonNull;
  * This Subscription doesn't maintain the subscription position, you need to store it in order to continue the stream
  * from where it's left off on application restart/crash etc. You can do this yourself or use a
  * <a href="https://occurrent.org/documentation#blocking-subscription-position-storage">subscription position storage implementation</a>
- * or use the {@code AutoPersistingSubscriptionModel} utility from the {@code org.occurrent:auto-position-persistence-subscription}
+ * or use the {@code DurableSubscriptionModel} utility from the {@code org.occurrent:durable-subscription}
  * module.
  */
 public class NativeMongoSubscriptionModel implements PositionAwareSubscriptionModel {

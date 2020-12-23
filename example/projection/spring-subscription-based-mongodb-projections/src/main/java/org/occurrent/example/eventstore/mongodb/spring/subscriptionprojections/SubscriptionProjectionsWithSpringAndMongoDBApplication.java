@@ -25,7 +25,7 @@ import org.occurrent.subscription.api.blocking.PositionAwareSubscriptionModel;
 import org.occurrent.subscription.api.blocking.SubscriptionPositionStorage;
 import org.occurrent.subscription.mongodb.spring.blocking.SpringMongoSubscriptionModel;
 import org.occurrent.subscription.mongodb.spring.blocking.SpringMongoSubscriptionPositionStorage;
-import org.occurrent.subscription.util.blocking.AutoPersistingSubscriptionModel;
+import org.occurrent.subscription.util.blocking.DurableSubscriptionModel;
 import org.springframework.boot.autoconfigure.SpringBootApplication;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Primary;
@@ -67,7 +67,7 @@ public class SubscriptionProjectionsWithSpringAndMongoDBApplication {
     @Primary
     @Bean
     public PositionAwareSubscriptionModel autoPersistingSubscriptionModel(PositionAwareSubscriptionModel subscription, SubscriptionPositionStorage storage) {
-        return new AutoPersistingSubscriptionModel(subscription, storage);
+        return new DurableSubscriptionModel(subscription, storage);
     }
 
     @Bean

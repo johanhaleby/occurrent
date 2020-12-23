@@ -38,7 +38,7 @@ import org.occurrent.mongodb.timerepresentation.TimeRepresentation;
 import org.occurrent.subscription.api.blocking.PositionAwareSubscriptionModel;
 import org.occurrent.subscription.api.blocking.SubscriptionPositionStorage;
 import org.occurrent.subscription.mongodb.MongoFilterSpecification.MongoJsonFilterSpecification;
-import org.occurrent.subscription.util.blocking.AutoPersistingSubscriptionModel;
+import org.occurrent.subscription.util.blocking.DurableSubscriptionModel;
 import org.occurrent.testsupport.mongodb.FlushMongoDBExtension;
 import org.testcontainers.containers.MongoDBContainer;
 import org.testcontainers.junit.jupiter.Container;
@@ -85,7 +85,7 @@ public class NativeMongoSubscriptionPositionStorageTest {
     FlushMongoDBExtension flushMongoDBExtension = new FlushMongoDBExtension(new ConnectionString(mongoDBContainer.getReplicaSetUrl()));
 
     private EventStore mongoEventStore;
-    private AutoPersistingSubscriptionModel subscriptionModel;
+    private DurableSubscriptionModel subscriptionModel;
     private ObjectMapper objectMapper;
     private ExecutorService subscriptionExecutor;
     private MongoClient mongoClient;
@@ -324,9 +324,9 @@ public class NativeMongoSubscriptionPositionStorageTest {
                 .build());
     }
 
-    private AutoPersistingSubscriptionModel newPersistentSubscription(String eventCollectionName, TimeRepresentation timeRepresentation, RetryStrategy retryStrategy) {
+    private DurableSubscriptionModel newPersistentSubscription(String eventCollectionName, TimeRepresentation timeRepresentation, RetryStrategy retryStrategy) {
         PositionAwareSubscriptionModel blockingSubscriptionForMongoDB = new NativeMongoSubscriptionModel(database, eventCollectionName, timeRepresentation, subscriptionExecutor, retryStrategy);
         SubscriptionPositionStorage storage = new NativeMongoSubscriptionPositionStorage(database.getCollection(TIMESTAMP_TOKEN_COLLECTION));
-        return new AutoPersistingSubscriptionModel(blockingSubscriptionForMongoDB, storage);
+        return new DurableSubscriptionModel(blockingSubscriptionForMongoDB, storage);
     }
 }

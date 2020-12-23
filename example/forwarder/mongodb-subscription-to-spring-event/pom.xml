@@ -43,7 +43,7 @@
         </dependency>
         <dependency>
             <groupId>org.occurrent</groupId>
-            <artifactId>reactor-auto-position-persistence-subscription</artifactId>
+            <artifactId>reactor-durable-subscription</artifactId>
             <version>0.4.2-SNAPSHOT</version>
         </dependency>
         <dependency>

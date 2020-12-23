@@ -36,17 +36,18 @@ import static org.occurrent.subscription.util.predicate.EveryN.everyEvent;
 /**
  * Combines  a {@link SubscriptionModel} and with a {@link SubscriptionPositionStorage} to automatically persist
  * the subscription position after each successful call to the "action" method
- * (i.e. when the consumer in this method {@link AutoPersistingSubscriptionModel#subscribe(String, Consumer)} has completed successfully).
+ * (i.e. when the consumer in this method {@link DurableSubscriptionModel#subscribe(String, Consumer)} has completed successfully),
+ * thus making the subscription durable.
  *
  * <p>
  * Note that this implementation stores the subscription position after _every_ action. If you have a lot of events and duplication is not
- * that much of a deal consider cloning/extending this class and add your own customizations.
+ * that much of a deal, consider changing this behavior by supplying an instance of {@link DurableSubscriptionModelConfig}.
  */
-public class AutoPersistingSubscriptionModel implements PositionAwareSubscriptionModel {
+public class DurableSubscriptionModel implements PositionAwareSubscriptionModel {
 
     private final PositionAwareSubscriptionModel subscription;
     private final SubscriptionPositionStorage storage;
-    private final AutoPersistingSubscriptionModelConfig config;
+    private final DurableSubscriptionModelConfig config;
 
     /**
      * Create a subscription that combines a {@link PositionAwareSubscriptionModel} with a {@link SubscriptionPositionStorage} to automatically
@@ -55,22 +56,22 @@ public class AutoPersistingSubscriptionModel implements PositionAwareSubscriptio
      * @param subscription The subscription that will read events from the event store
      * @param storage      The {@link SubscriptionPositionStorage} that'll be used to persist the stream position
      */
-    public AutoPersistingSubscriptionModel(PositionAwareSubscriptionModel subscription, SubscriptionPositionStorage storage) {
-        this(subscription, storage, new AutoPersistingSubscriptionModelConfig(everyEvent()));
+    public DurableSubscriptionModel(PositionAwareSubscriptionModel subscription, SubscriptionPositionStorage storage) {
+        this(subscription, storage, new DurableSubscriptionModelConfig(everyEvent()));
     }
 
     /**
      * Create a subscription that combines a {@link PositionAwareSubscriptionModel} with a {@link SubscriptionPositionStorage} to automatically
-     * store the subscription when the predicate defined in {@link AutoPersistingSubscriptionModelConfig#persistCloudEventPositionPredicate} is fulfilled.
+     * store the subscription when the predicate defined in {@link DurableSubscriptionModelConfig#persistCloudEventPositionPredicate} is fulfilled.
      *
      * @param subscription The subscription that will read events from the event store
      * @param storage      The {@link SubscriptionPositionStorage} that'll be used to persist the stream position
      */
-    public AutoPersistingSubscriptionModel(PositionAwareSubscriptionModel subscription, SubscriptionPositionStorage storage,
-                                           AutoPersistingSubscriptionModelConfig config) {
+    public DurableSubscriptionModel(PositionAwareSubscriptionModel subscription, SubscriptionPositionStorage storage,
+                                    DurableSubscriptionModelConfig config) {
         requireNonNull(subscription, "subscription cannot be null");
         requireNonNull(storage, SubscriptionPositionStorage.class.getSimpleName() + " cannot be null");
-        requireNonNull(config, AutoPersistingSubscriptionModelConfig.class.getSimpleName() + " cannot be null");
+        requireNonNull(config, DurableSubscriptionModelConfig.class.getSimpleName() + " cannot be null");
 
         this.storage = storage;
         this.subscription = subscription;

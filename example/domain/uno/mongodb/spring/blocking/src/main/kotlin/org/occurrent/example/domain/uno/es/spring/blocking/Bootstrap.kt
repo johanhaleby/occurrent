@@ -32,7 +32,7 @@ import org.occurrent.subscription.api.blocking.SubscriptionModel
 import org.occurrent.subscription.api.blocking.SubscriptionPositionStorage
 import org.occurrent.subscription.mongodb.spring.blocking.SpringMongoSubscriptionModel
 import org.occurrent.subscription.redis.spring.blocking.SpringSubscriptionPositionStorageForRedis
-import org.occurrent.subscription.util.blocking.AutoPersistingSubscriptionModel
+import org.occurrent.subscription.util.blocking.DurableSubscriptionModel
 import org.slf4j.Logger
 import org.slf4j.LoggerFactory
 import org.springframework.boot.autoconfigure.SpringBootApplication
@@ -83,7 +83,7 @@ class Bootstrap {
     @Bean
     fun autoPersistingSubscriptionModel(storage: SubscriptionPositionStorage, mongoTemplate: MongoTemplate, eventStoreQueries: EventStoreQueries): SubscriptionModel {
         val subscriptionModel = SpringMongoSubscriptionModel(mongoTemplate, EVENTS_COLLECTION_NAME, TimeRepresentation.DATE)
-        return AutoPersistingSubscriptionModel(subscriptionModel, storage)
+        return DurableSubscriptionModel(subscriptionModel, storage)
     }
 
     @Bean

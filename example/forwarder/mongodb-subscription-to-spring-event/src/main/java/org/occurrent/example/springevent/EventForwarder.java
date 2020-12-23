@@ -19,7 +19,7 @@ package org.occurrent.example.springevent;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import org.occurrent.domain.DomainEvent;
 import org.occurrent.functional.CheckedFunction;
-import org.occurrent.subscription.util.reactor.AutoPersistingSubscriptionModel;
+import org.occurrent.subscription.util.reactor.ReactorDurableSubscriptionModel;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.context.ApplicationEventPublisher;
@@ -37,12 +37,12 @@ public class EventForwarder {
     private static final Logger log = LoggerFactory.getLogger(EventForwarder.class);
 
     private static final String SUBSCRIBER_ID = "test-app";
-    private final AutoPersistingSubscriptionModel subscriptionModel;
+    private final ReactorDurableSubscriptionModel subscriptionModel;
     private final ObjectMapper objectMapper;
     private final ApplicationEventPublisher eventPublisher;
     private final AtomicReference<Disposable> subscription;
 
-    public EventForwarder(AutoPersistingSubscriptionModel subscriptionModel,
+    public EventForwarder(ReactorDurableSubscriptionModel subscriptionModel,
                           ObjectMapper objectMapper,
                           ApplicationEventPublisher eventPublisher) {
         this.subscriptionModel = subscriptionModel;

@@ -14,18 +14,19 @@
  * limitations under the License.
  */
 
-package org.occurrent.subscription.util.blocking;
+package org.occurrent.subscription.util.reactor;
 
 import io.cloudevents.CloudEvent;
 import org.occurrent.subscription.util.predicate.EveryN;
 
 import java.util.Objects;
+import java.util.StringJoiner;
 import java.util.function.Predicate;
 
 /**
- * Config class for {@link AutoPersistingSubscriptionModel}.
+ * Config class for {@link ReactorDurableSubscriptionModelConfig}.
  */
-public class AutoPersistingSubscriptionModelConfig {
+public class ReactorDurableSubscriptionModelConfig {
 
     public final Predicate<CloudEvent> persistCloudEventPositionPredicate;
 
@@ -33,7 +34,7 @@ public class AutoPersistingSubscriptionModelConfig {
      * @param persistCloudEventPositionPredicate A predicate that evaluates to <code>true</code> if the cloud event position should be persisted. See {@link EveryN}.
      *                                           Supply a predicate that always returns {@code false} to never store the position.
      */
-    public AutoPersistingSubscriptionModelConfig(Predicate<CloudEvent> persistCloudEventPositionPredicate) {
+    public ReactorDurableSubscriptionModelConfig(Predicate<CloudEvent> persistCloudEventPositionPredicate) {
         Objects.requireNonNull(persistCloudEventPositionPredicate, "persistCloudEventPositionPredicate cannot be null");
         this.persistCloudEventPositionPredicate = persistCloudEventPositionPredicate;
     }
@@ -41,15 +42,15 @@ public class AutoPersistingSubscriptionModelConfig {
     /**
      * @param persistPositionForEveryNCloudEvent Store the cloud event position for every {@code n} cloud event.
      */
-    public AutoPersistingSubscriptionModelConfig(int persistPositionForEveryNCloudEvent) {
+    public ReactorDurableSubscriptionModelConfig(int persistPositionForEveryNCloudEvent) {
         this(new EveryN(persistPositionForEveryNCloudEvent));
     }
 
     @Override
     public boolean equals(Object o) {
         if (this == o) return true;
-        if (!(o instanceof AutoPersistingSubscriptionModelConfig)) return false;
-        AutoPersistingSubscriptionModelConfig that = (AutoPersistingSubscriptionModelConfig) o;
+        if (!(o instanceof ReactorDurableSubscriptionModelConfig)) return false;
+        ReactorDurableSubscriptionModelConfig that = (ReactorDurableSubscriptionModelConfig) o;
         return Objects.equals(persistCloudEventPositionPredicate, that.persistCloudEventPositionPredicate);
     }
 
@@ -60,8 +61,8 @@ public class AutoPersistingSubscriptionModelConfig {
 
     @Override
     public String toString() {
-        return "BlockingSubscriptionWithAutomaticPositionPersistenceConfig{" +
-                "persistCloudEventPositionPredicate=" + persistCloudEventPositionPredicate +
-                '}';
+        return new StringJoiner(", ", ReactorDurableSubscriptionModelConfig.class.getSimpleName() + "[", "]")
+                .add("persistCloudEventPositionPredicate=" + persistCloudEventPositionPredicate)
+                .toString();
     }
 }

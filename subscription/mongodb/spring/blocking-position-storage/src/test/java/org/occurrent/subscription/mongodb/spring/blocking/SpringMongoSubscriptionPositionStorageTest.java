@@ -38,8 +38,8 @@ import org.occurrent.mongodb.timerepresentation.TimeRepresentation;
 import org.occurrent.subscription.SubscriptionPosition;
 import org.occurrent.subscription.api.blocking.SubscriptionPositionStorage;
 import org.occurrent.subscription.mongodb.MongoFilterSpecification.MongoJsonFilterSpecification;
-import org.occurrent.subscription.util.blocking.AutoPersistingSubscriptionModel;
-import org.occurrent.subscription.util.blocking.AutoPersistingSubscriptionModelConfig;
+import org.occurrent.subscription.util.blocking.DurableSubscriptionModel;
+import org.occurrent.subscription.util.blocking.DurableSubscriptionModelConfig;
 import org.occurrent.testsupport.mongodb.FlushMongoDBExtension;
 import org.springframework.data.mongodb.MongoTransactionManager;
 import org.springframework.data.mongodb.core.MongoTemplate;
@@ -88,7 +88,7 @@ public class SpringMongoSubscriptionPositionStorageTest {
     FlushMongoDBExtension flushMongoDBExtension = new FlushMongoDBExtension(new ConnectionString(mongoDBContainer.getReplicaSetUrl()));
 
     private EventStore mongoEventStore;
-    private AutoPersistingSubscriptionModel subscription;
+    private DurableSubscriptionModel subscription;
     private ObjectMapper objectMapper;
     private MongoTemplate mongoTemplate;
     private MongoClient mongoClient;
@@ -105,7 +105,7 @@ public class SpringMongoSubscriptionPositionStorageTest {
         mongoEventStore = new SpringMongoEventStore(mongoTemplate, eventStoreConfig);
         positionAwareBlockingSubscription = new SpringMongoSubscriptionModel(mongoTemplate, connectionString.getCollection(), timeRepresentation);
         SpringMongoSubscriptionPositionStorage storage = new SpringMongoSubscriptionPositionStorage(mongoTemplate, RESUME_TOKEN_COLLECTION);
-        this.subscription = new AutoPersistingSubscriptionModel(positionAwareBlockingSubscription, storage);
+        this.subscription = new DurableSubscriptionModel(positionAwareBlockingSubscription, storage);
         objectMapper = new ObjectMapper();
     }
 
@@ -167,7 +167,7 @@ public class SpringMongoSubscriptionPositionStorageTest {
                 return false;
             }
         };
-        subscription = new AutoPersistingSubscriptionModel(positionAwareBlockingSubscription, storage);
+        subscription = new DurableSubscriptionModel(positionAwareBlockingSubscription, storage);
         subscription.subscribe(UUID.randomUUID().toString(), state::add).waitUntilStarted(Duration.of(10, ChronoUnit.SECONDS));
 
         // When
@@ -215,7 +215,7 @@ public class SpringMongoSubscriptionPositionStorageTest {
                 return false;
             }
         };
-        subscription = new AutoPersistingSubscriptionModel(positionAwareBlockingSubscription, storage, new AutoPersistingSubscriptionModelConfig(3));
+        subscription = new DurableSubscriptionModel(positionAwareBlockingSubscription, storage, new DurableSubscriptionModelConfig(3));
         subscription.subscribe(UUID.randomUUID().toString(), state::add).waitUntilStarted(Duration.of(10, ChronoUnit.SECONDS));
 
         // When

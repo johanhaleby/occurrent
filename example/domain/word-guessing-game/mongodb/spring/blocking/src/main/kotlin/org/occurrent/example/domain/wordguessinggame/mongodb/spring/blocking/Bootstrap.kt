@@ -30,7 +30,7 @@ import org.occurrent.subscription.api.blocking.SubscriptionModel
 import org.occurrent.subscription.api.blocking.SubscriptionPositionStorage
 import org.occurrent.subscription.mongodb.spring.blocking.SpringMongoSubscriptionModel
 import org.occurrent.subscription.mongodb.spring.blocking.SpringMongoSubscriptionPositionStorage
-import org.occurrent.subscription.util.blocking.AutoPersistingSubscriptionModel
+import org.occurrent.subscription.util.blocking.DurableSubscriptionModel
 import org.occurrent.subscription.util.blocking.catchup.subscription.CatchupSubscriptionModel
 import org.occurrent.subscription.util.blocking.catchup.subscription.CatchupSubscriptionModelConfig
 import org.occurrent.subscription.util.blocking.catchup.subscription.SubscriptionPositionStorageConfig.useSubscriptionPositionStorage
@@ -78,10 +78,10 @@ class Bootstrap : WebMvcConfigurer {
 
     @Bean
     fun catchupSubscriptionModel(storage: SubscriptionPositionStorage, mongoTemplate: MongoTemplate, eventStoreQueries: EventStoreQueries): SubscriptionModel {
-        val subscription = SpringMongoSubscriptionModel(mongoTemplate, EVENTS_COLLECTION_NAME, TimeRepresentation.DATE)
-        val subscriptionWithAutomaticPositionPersistence = AutoPersistingSubscriptionModel(subscription, storage)
+        val mongoSubscriptionModel = SpringMongoSubscriptionModel(mongoTemplate, EVENTS_COLLECTION_NAME, TimeRepresentation.DATE)
+        val durableSubscriptionModel = DurableSubscriptionModel(mongoSubscriptionModel, storage)
         return CatchupSubscriptionModel(
-            subscriptionWithAutomaticPositionPersistence, eventStoreQueries,
+            durableSubscriptionModel, eventStoreQueries,
             CatchupSubscriptionModelConfig(useSubscriptionPositionStorage(storage))
         )
     }

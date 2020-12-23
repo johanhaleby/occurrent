@@ -78,7 +78,7 @@ public class SubscriptionModelWithAutomaticPositionPersistenceTest {
     private static final String RESUME_TOKEN_COLLECTION = "ack";
 
     private EventStore mongoEventStore;
-    private AutoPersistingSubscriptionModel subscription;
+    private ReactorDurableSubscriptionModel subscription;
     private ObjectMapper objectMapper;
     private ReactiveMongoTemplate reactiveMongoTemplate;
     private CopyOnWriteArrayList<Disposable> disposables;
@@ -99,7 +99,7 @@ public class SubscriptionModelWithAutomaticPositionPersistenceTest {
         mongoEventStore = new ReactorMongoEventStore(reactiveMongoTemplate, eventStoreConfig);
         springReactorSubscriptionForMongoDB = new ReactorMongoSubscription(reactiveMongoTemplate, "events", timeRepresentation);
         SubscriptionPositionStorage storage = new ReactorSubscriptionPositionStorage(reactiveMongoTemplate, RESUME_TOKEN_COLLECTION);
-        subscription = new AutoPersistingSubscriptionModel(springReactorSubscriptionForMongoDB, storage);
+        subscription = new ReactorDurableSubscriptionModel(springReactorSubscriptionForMongoDB, storage);
         objectMapper = new ObjectMapper();
         disposables = new CopyOnWriteArrayList<>();
     }
@@ -158,7 +158,7 @@ public class SubscriptionModelWithAutomaticPositionPersistenceTest {
                 return Mono.empty();
             }
         };
-        subscription = new AutoPersistingSubscriptionModel(springReactorSubscriptionForMongoDB, subscriptionPositionStorage);
+        subscription = new ReactorDurableSubscriptionModel(springReactorSubscriptionForMongoDB, subscriptionPositionStorage);
         disposeAfterTest(subscription.subscribe(UUID.randomUUID().toString(), e -> Mono.fromRunnable(() -> state.add(e))).subscribe());
 
         // When
@@ -198,7 +198,7 @@ public class SubscriptionModelWithAutomaticPositionPersistenceTest {
                 return Mono.empty();
             }
         };
-        subscription = new AutoPersistingSubscriptionModel(springReactorSubscriptionForMongoDB, subscriptionPositionStorage, new AutoPersistingSubscriptionModelConfig(3));
+        subscription = new ReactorDurableSubscriptionModel(springReactorSubscriptionForMongoDB, subscriptionPositionStorage, new ReactorDurableSubscriptionModelConfig(3));
         disposeAfterTest(subscription.subscribe(UUID.randomUUID().toString(), e -> Mono.fromRunnable(() -> state.add(e))).subscribe());
 
         // When

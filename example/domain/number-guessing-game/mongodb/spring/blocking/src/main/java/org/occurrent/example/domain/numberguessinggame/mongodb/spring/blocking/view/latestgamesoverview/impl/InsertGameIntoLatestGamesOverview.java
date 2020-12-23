@@ -20,7 +20,7 @@ import io.cloudevents.CloudEvent;
 import org.bson.Document;
 import org.occurrent.example.domain.numberguessinggame.model.domainevents.*;
 import org.occurrent.example.domain.numberguessinggame.mongodb.spring.blocking.infrastructure.Serialization;
-import org.occurrent.subscription.util.blocking.AutoPersistingSubscriptionModel;
+import org.occurrent.subscription.util.blocking.DurableSubscriptionModel;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.dao.DuplicateKeyException;
@@ -45,11 +45,11 @@ import static org.springframework.data.mongodb.core.query.Query.query;
 class InsertGameIntoLatestGamesOverview {
     private static final Logger log = LoggerFactory.getLogger(InsertGameIntoLatestGamesOverview.class);
 
-    private final AutoPersistingSubscriptionModel subscription;
+    private final DurableSubscriptionModel subscription;
     private final Serialization serialization;
     private final MongoOperations mongoOperations;
 
-    InsertGameIntoLatestGamesOverview(AutoPersistingSubscriptionModel subscription,
+    InsertGameIntoLatestGamesOverview(DurableSubscriptionModel subscription,
                                       Serialization serialization, MongoOperations mongoOperations) {
         this.subscription = subscription;
         this.serialization = serialization;
