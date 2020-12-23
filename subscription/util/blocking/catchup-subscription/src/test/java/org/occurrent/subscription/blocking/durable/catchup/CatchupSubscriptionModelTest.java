@@ -14,7 +14,7 @@
  * limitations under the License.
  */
 
-package org.occurrent.subscription.util.blocking.catchup.subscription;
+package org.occurrent.subscription.blocking.durable.catchup;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.mongodb.ConnectionString;
@@ -38,10 +38,10 @@ import org.occurrent.eventstore.mongodb.nativedriver.MongoEventStore;
 import org.occurrent.mongodb.timerepresentation.TimeRepresentation;
 import org.occurrent.subscription.StartAt;
 import org.occurrent.subscription.SubscriptionPosition;
+import org.occurrent.subscription.blocking.durable.DurableSubscriptionModel;
 import org.occurrent.subscription.mongodb.nativedriver.blocking.NativeMongoSubscriptionModel;
 import org.occurrent.subscription.mongodb.nativedriver.blocking.NativeMongoSubscriptionPositionStorage;
 import org.occurrent.subscription.mongodb.nativedriver.blocking.RetryStrategy;
-import org.occurrent.subscription.util.blocking.DurableSubscriptionModel;
 import org.occurrent.testsupport.mongodb.FlushMongoDBExtension;
 import org.testcontainers.containers.MongoDBContainer;
 import org.testcontainers.junit.jupiter.Container;
@@ -69,7 +69,7 @@ import static org.awaitility.Durations.FIVE_SECONDS;
 import static org.occurrent.filter.Filter.type;
 import static org.occurrent.functional.CheckedFunction.unchecked;
 import static org.occurrent.subscription.OccurrentSubscriptionFilter.filter;
-import static org.occurrent.subscription.util.blocking.catchup.subscription.SubscriptionPositionStorageConfig.useSubscriptionPositionStorage;
+import static org.occurrent.subscription.blocking.durable.catchup.SubscriptionPositionStorageConfig.useSubscriptionPositionStorage;
 import static org.occurrent.time.TimeConversion.toLocalDateTime;
 
 @Testcontainers

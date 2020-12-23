@@ -22,7 +22,7 @@ import org.occurrent.eventstore.api.blocking.EventStoreQueries;
 import org.occurrent.example.domain.numberguessinggame.model.domainevents.*;
 import org.occurrent.example.domain.numberguessinggame.mongodb.spring.blocking.infrastructure.Serialization;
 import org.occurrent.example.domain.numberguessinggame.mongodb.spring.blocking.policy.NumberGuessingGameCompleted.GuessedNumber;
-import org.occurrent.subscription.util.blocking.DurableSubscriptionModel;
+import org.occurrent.subscription.blocking.durable.DurableSubscriptionModel;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.amqp.core.TopicExchange;

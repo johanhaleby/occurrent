@@ -30,9 +30,9 @@ import org.occurrent.example.domain.uno.es.UnoCloudEventConverter
 import org.occurrent.mongodb.timerepresentation.TimeRepresentation
 import org.occurrent.subscription.api.blocking.SubscriptionModel
 import org.occurrent.subscription.api.blocking.SubscriptionPositionStorage
+import org.occurrent.subscription.blocking.durable.DurableSubscriptionModel
 import org.occurrent.subscription.mongodb.spring.blocking.SpringMongoSubscriptionModel
 import org.occurrent.subscription.redis.spring.blocking.SpringSubscriptionPositionStorageForRedis
-import org.occurrent.subscription.util.blocking.DurableSubscriptionModel
 import org.slf4j.Logger
 import org.slf4j.LoggerFactory
 import org.springframework.boot.autoconfigure.SpringBootApplication

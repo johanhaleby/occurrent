@@ -28,12 +28,12 @@ import org.occurrent.example.domain.wordguessinggame.mongodb.spring.blocking.fea
 import org.occurrent.mongodb.timerepresentation.TimeRepresentation
 import org.occurrent.subscription.api.blocking.SubscriptionModel
 import org.occurrent.subscription.api.blocking.SubscriptionPositionStorage
+import org.occurrent.subscription.blocking.durable.DurableSubscriptionModel
+import org.occurrent.subscription.blocking.durable.catchup.CatchupSubscriptionModel
+import org.occurrent.subscription.blocking.durable.catchup.CatchupSubscriptionModelConfig
+import org.occurrent.subscription.blocking.durable.catchup.SubscriptionPositionStorageConfig.useSubscriptionPositionStorage
 import org.occurrent.subscription.mongodb.spring.blocking.SpringMongoSubscriptionModel
 import org.occurrent.subscription.mongodb.spring.blocking.SpringMongoSubscriptionPositionStorage
-import org.occurrent.subscription.util.blocking.DurableSubscriptionModel
-import org.occurrent.subscription.util.blocking.catchup.subscription.CatchupSubscriptionModel
-import org.occurrent.subscription.util.blocking.catchup.subscription.CatchupSubscriptionModelConfig
-import org.occurrent.subscription.util.blocking.catchup.subscription.SubscriptionPositionStorageConfig.useSubscriptionPositionStorage
 import org.springframework.boot.autoconfigure.SpringBootApplication
 import org.springframework.boot.runApplication
 import org.springframework.context.annotation.Bean

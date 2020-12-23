@@ -14,7 +14,7 @@
  * limitations under the License.
  */
 
-package org.occurrent.subscription.util.blocking.catchup.subscription;
+package org.occurrent.subscription.blocking.durable.catchup;
 
 import org.occurrent.subscription.SubscriptionPosition;
 

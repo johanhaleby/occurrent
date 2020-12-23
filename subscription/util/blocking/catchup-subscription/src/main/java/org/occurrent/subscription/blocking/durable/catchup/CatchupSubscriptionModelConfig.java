@@ -14,14 +14,12 @@
  * limitations under the License.
  */
 
-package org.occurrent.subscription.util.blocking.catchup.subscription;
+package org.occurrent.subscription.blocking.durable.catchup;
 
 import org.occurrent.eventstore.api.blocking.EventStoreQueries;
 import org.occurrent.subscription.api.blocking.Subscription;
 
 import java.util.Objects;
-
-import static org.occurrent.subscription.util.blocking.catchup.subscription.SubscriptionPositionStorageConfig.dontUseSubscriptionPositionStorage;
 
 /**
  * Configuration for {@link CatchupSubscriptionModel}
@@ -36,7 +34,7 @@ public class CatchupSubscriptionModelConfig {
      *                  and "subscription" mode ({@link Subscription}). The cache is needed to reduce the number of duplicate events the occurs when switching.
      */
     public CatchupSubscriptionModelConfig(int cacheSize) {
-        this(cacheSize, dontUseSubscriptionPositionStorage());
+        this(cacheSize, SubscriptionPositionStorageConfig.dontUseSubscriptionPositionStorage());
     }
 
     /**

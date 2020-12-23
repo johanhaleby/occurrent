@@ -14,7 +14,7 @@
  * limitations under the License.
  */
 
-package org.occurrent.subscription.util.blocking.catchup.subscription;
+package org.occurrent.subscription.blocking.durable.catchup;
 
 import io.cloudevents.CloudEvent;
 import org.occurrent.eventstore.api.blocking.EventStoreQueries;
@@ -25,8 +25,6 @@ import org.occurrent.subscription.api.blocking.PositionAwareSubscriptionModel;
 import org.occurrent.subscription.api.blocking.Subscription;
 import org.occurrent.subscription.api.blocking.SubscriptionModel;
 import org.occurrent.subscription.api.blocking.SubscriptionPositionStorage;
-import org.occurrent.subscription.util.blocking.catchup.subscription.SubscriptionPositionStorageConfig.PersistSubscriptionPositionDuringCatchupPhase;
-import org.occurrent.subscription.util.blocking.catchup.subscription.SubscriptionPositionStorageConfig.UseSubscriptionPositionInStorage;
 
 import javax.annotation.PreDestroy;
 import java.time.Duration;
@@ -149,8 +147,8 @@ public class CatchupSubscriptionModel implements SubscriptionModel {
         takeWhile(stream, __ -> !shuttingDown && runningCatchupSubscriptions.containsKey(subscriptionId))
                 .peek(action)
                 .peek(e -> cache.put(e.getId()))
-                .filter(returnIfSubscriptionPositionStorageConfigIs(PersistSubscriptionPositionDuringCatchupPhase.class, cfg -> cfg.persistCloudEventPositionPredicate).orElse(__ -> false))
-                .forEach(e -> doIfSubscriptionPositionStorageConfigIs(PersistSubscriptionPositionDuringCatchupPhase.class, cfg -> cfg.storage.save(subscriptionId, TimeBasedSubscriptionPosition.from(e.getTime()))));
+                .filter(returnIfSubscriptionPositionStorageConfigIs(SubscriptionPositionStorageConfig.PersistSubscriptionPositionDuringCatchupPhase.class, cfg -> cfg.persistCloudEventPositionPredicate).orElse(__ -> false))
+                .forEach(e -> doIfSubscriptionPositionStorageConfigIs(SubscriptionPositionStorageConfig.PersistSubscriptionPositionDuringCatchupPhase.class, cfg -> cfg.storage.save(subscriptionId, TimeBasedSubscriptionPosition.from(e.getTime()))));
 
         final boolean subscriptionsWasCancelledOrShutdown;
         if (!shuttingDown && runningCatchupSubscriptions.containsKey(subscriptionId)) {
@@ -172,7 +170,7 @@ public class CatchupSubscriptionModel implements SubscriptionModel {
         // which is not what we want! The reason for doing this with UseSubscriptionPositionInStorage (as opposed to just
         // PersistSubscriptionPositionDuringCatchupPhase) is that if using a "storage" at all in the config, is to accommodate
         // that the wrapping subscription continues from where we left off.
-        Supplier<StartAt> startAtSupplierToUse = this.<Supplier<StartAt>, UseSubscriptionPositionInStorage>returnIfSubscriptionPositionStorageConfigIs(UseSubscriptionPositionInStorage.class,
+        Supplier<StartAt> startAtSupplierToUse = this.<Supplier<StartAt>, SubscriptionPositionStorageConfig.UseSubscriptionPositionInStorage>returnIfSubscriptionPositionStorageConfigIs(SubscriptionPositionStorageConfig.UseSubscriptionPositionInStorage.class,
                 cfg -> () -> {
                     // It's important that we find the document inside the supplier so that we lookup the latest resume token on retry
                     SubscriptionPosition position = cfg.storage.read(subscriptionId);
@@ -188,7 +186,7 @@ public class CatchupSubscriptionModel implements SubscriptionModel {
 
         final Subscription subscription;
         if (subscriptionsWasCancelledOrShutdown) {
-            doIfSubscriptionPositionStorageConfigIs(UseSubscriptionPositionInStorage.class, cfg -> {
+            doIfSubscriptionPositionStorageConfigIs(SubscriptionPositionStorageConfig.UseSubscriptionPositionInStorage.class, cfg -> {
                 // Only store position if using storage and no position has been stored!
                 if (!cfg.storage.exists(subscriptionId)) {
                     startAtSupplierToUse.get();
@@ -210,7 +208,7 @@ public class CatchupSubscriptionModel implements SubscriptionModel {
     public void cancelSubscription(String subscriptionId) {
         runningCatchupSubscriptions.remove(subscriptionId);
         subscription.cancelSubscription(subscriptionId);
-        doIfSubscriptionPositionStorageConfigIs(UseSubscriptionPositionInStorage.class, cfg -> cfg.storage.delete(subscriptionId));
+        doIfSubscriptionPositionStorageConfigIs(SubscriptionPositionStorageConfig.UseSubscriptionPositionInStorage.class, cfg -> cfg.storage.delete(subscriptionId));
     }
 
     @Override
@@ -222,7 +220,7 @@ public class CatchupSubscriptionModel implements SubscriptionModel {
     @Override
     public Subscription subscribe(String subscriptionId, SubscriptionFilter filter, Consumer<CloudEvent> action) {
         return subscribe(subscriptionId, filter, () -> {
-            SubscriptionPosition subscriptionPosition = returnIfSubscriptionPositionStorageConfigIs(UseSubscriptionPositionInStorage.class, cfg -> cfg.storage.read(subscriptionId)).orElse(null);
+            SubscriptionPosition subscriptionPosition = returnIfSubscriptionPositionStorageConfigIs(SubscriptionPositionStorageConfig.UseSubscriptionPositionInStorage.class, cfg -> cfg.storage.read(subscriptionId)).orElse(null);
             // We use null instead of StartAt.now() if subscriptionPosition doesn't exist so that the wrapping subscription can determine what to do
             return subscriptionPosition == null ? null : StartAt.subscriptionPosition(subscriptionPosition);
         }, action);

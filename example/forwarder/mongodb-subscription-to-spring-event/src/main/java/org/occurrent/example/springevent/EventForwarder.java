@@ -19,7 +19,7 @@ package org.occurrent.example.springevent;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import org.occurrent.domain.DomainEvent;
 import org.occurrent.functional.CheckedFunction;
-import org.occurrent.subscription.util.reactor.ReactorDurableSubscriptionModel;
+import org.occurrent.subscription.reactor.durable.ReactorDurableSubscriptionModel;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.context.ApplicationEventPublisher;

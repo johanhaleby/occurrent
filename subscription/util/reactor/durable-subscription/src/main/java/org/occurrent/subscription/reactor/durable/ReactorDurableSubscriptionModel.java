@@ -14,7 +14,7 @@
  * limitations under the License.
  */
 
-package org.occurrent.subscription.util.reactor;
+package org.occurrent.subscription.reactor.durable;
 
 import io.cloudevents.CloudEvent;
 import org.occurrent.subscription.StartAt;

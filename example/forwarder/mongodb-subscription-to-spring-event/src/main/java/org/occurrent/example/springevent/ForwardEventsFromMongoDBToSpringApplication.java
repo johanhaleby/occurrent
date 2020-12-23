@@ -29,7 +29,7 @@ import org.occurrent.subscription.api.reactor.PositionAwareSubscriptionModel;
 import org.occurrent.subscription.api.reactor.SubscriptionPositionStorage;
 import org.occurrent.subscription.mongodb.spring.reactor.ReactorMongoSubscription;
 import org.occurrent.subscription.mongodb.spring.reactor.ReactorSubscriptionPositionStorage;
-import org.occurrent.subscription.util.reactor.ReactorDurableSubscriptionModel;
+import org.occurrent.subscription.reactor.durable.ReactorDurableSubscriptionModel;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.boot.autoconfigure.SpringBootApplication;
 import org.springframework.context.annotation.Bean;

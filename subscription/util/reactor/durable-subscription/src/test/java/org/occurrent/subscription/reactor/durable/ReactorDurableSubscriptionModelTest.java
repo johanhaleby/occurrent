@@ -14,7 +14,7 @@
  * limitations under the License.
  */
 
-package org.occurrent.subscription.util.reactor;
+package org.occurrent.subscription.reactor.durable;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.mongodb.ConnectionString;
@@ -71,7 +71,7 @@ import static org.occurrent.functional.Not.not;
 import static org.occurrent.time.TimeConversion.toLocalDateTime;
 
 @Testcontainers
-public class SubscriptionModelWithAutomaticPositionPersistenceTest {
+public class ReactorDurableSubscriptionModelTest {
 
     @Container
     private static final MongoDBContainer mongoDBContainer = new MongoDBContainer("mongo:4.2.8");

@@ -14,7 +14,7 @@
  * limitations under the License.
  */
 
-package org.occurrent.subscription.util.blocking;
+package org.occurrent.subscription.blocking.durable;
 
 import io.cloudevents.CloudEvent;
 import org.occurrent.subscription.StartAt;
