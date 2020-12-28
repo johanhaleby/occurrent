@@ -20,7 +20,7 @@ import com.fasterxml.jackson.module.kotlin.jacksonObjectMapper
 import com.mongodb.client.MongoClients
 import org.occurrent.application.composition.command.partial
 import org.occurrent.application.service.blocking.execute
-import org.occurrent.application.service.blocking.implementation.GenericApplicationService
+import org.occurrent.application.service.blocking.generic.GenericApplicationService
 import org.occurrent.eventstore.mongodb.nativedriver.EventStoreConfig
 import org.occurrent.eventstore.mongodb.nativedriver.MongoEventStore
 import org.occurrent.example.domain.uno.*

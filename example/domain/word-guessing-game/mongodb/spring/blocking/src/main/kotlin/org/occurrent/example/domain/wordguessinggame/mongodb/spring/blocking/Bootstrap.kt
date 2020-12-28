@@ -18,11 +18,13 @@ package org.occurrent.example.domain.wordguessinggame.mongodb.spring.blocking
 import com.fasterxml.jackson.databind.ObjectMapper
 import com.fasterxml.jackson.module.kotlin.jacksonObjectMapper
 import org.occurrent.application.converter.CloudEventConverter
-import org.occurrent.application.service.blocking.implementation.GenericApplicationService
+import org.occurrent.application.service.blocking.generic.GenericApplicationService
+import org.occurrent.application.subscription.dsl.blocking.Subscriptions
 import org.occurrent.eventstore.api.blocking.EventStoreQueries
 import org.occurrent.eventstore.mongodb.spring.blocking.EventStoreConfig
 import org.occurrent.eventstore.mongodb.spring.blocking.SpringMongoEventStore
 import org.occurrent.example.domain.wordguessinggame.event.GameEvent
+import org.occurrent.example.domain.wordguessinggame.event.eventType
 import org.occurrent.example.domain.wordguessinggame.mongodb.spring.blocking.features.GameCloudEventConverter
 import org.occurrent.example.domain.wordguessinggame.mongodb.spring.blocking.features.emailwinner.SendEmailToWinner
 import org.occurrent.mongodb.timerepresentation.TimeRepresentation
@@ -68,7 +70,8 @@ class Bootstrap : WebMvcConfigurer {
 
     @Bean
     fun eventStore(template: MongoTemplate, transactionManager: MongoTransactionManager): SpringMongoEventStore {
-        val eventStoreConfig = EventStoreConfig.Builder().eventStoreCollectionName(EVENTS_COLLECTION_NAME).transactionConfig(transactionManager).timeRepresentation(TimeRepresentation.DATE).build()
+        val eventStoreConfig =
+            EventStoreConfig.Builder().eventStoreCollectionName(EVENTS_COLLECTION_NAME).transactionConfig(transactionManager).timeRepresentation(TimeRepresentation.DATE).build()
         return SpringMongoEventStore(template, eventStoreConfig)
     }
 
@@ -87,6 +90,10 @@ class Bootstrap : WebMvcConfigurer {
     }
 
     @Bean
+    fun subscriptionDsl(subscriptionModel: SubscriptionModel, converter: CloudEventConverter<GameEvent>) =
+        Subscriptions(subscriptionModel, converter) { e -> e.eventType() }
+
+    @Bean
     fun objectMapper() = jacksonObjectMapper()
 
     @Bean
@@ -98,7 +105,8 @@ class Bootstrap : WebMvcConfigurer {
     )
 
     @Bean
-    fun occurrentApplicationService(eventStore: SpringMongoEventStore, eventConverter: CloudEventConverter<GameEvent>): OccurrentApplicationService<GameEvent> = GenericApplicationService(eventStore, eventConverter)
+    fun occurrentApplicationService(eventStore: SpringMongoEventStore, eventConverter: CloudEventConverter<GameEvent>): OccurrentApplicationService<GameEvent> =
+        GenericApplicationService(eventStore, eventConverter)
 }
 
 fun main(args: Array<String>) {

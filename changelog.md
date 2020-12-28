@@ -31,7 +31,26 @@
 * `org.occurrent.eventstore.mongodb.spring.blocking.SpringBlockingMongoEventStore` has been renamed to `SpringMongoEventStore`.
 * Renamed module `org.occurrent:subscription-util-blocking-catchup-subscription` to `org.occurrent:catchup-subscription`.
 * Renamed module `org.occurrent:subscription-util-blocking-automatic-position-persistence` to `org.occurrent:durable-subscription`.
-* Renamed module `org.occurrent:subscription-util-reactor-automatic-position-persistence` to `org.occurrent:reactor-durable-subscription`. 
+* Renamed module `org.occurrent:subscription-util-reactor-automatic-position-persistence` to `org.occurrent:reactor-durable-subscription`.
+* Moved `org.occurrent.application.converter.implementation.GenericCloudEventConverter` to `org.occurrent.application.converter.generic.GenericCloudEventConverter`.
+* Moved `org.occurrent.application.service.blocking.implementation.GenericApplicationService` to `org.occurrent.application.service.blocking.generic.GenericApplicationService`.
+* Added a new "Subscription DSL" module that adds a domain event specific abstraction on-top of the existing subscription model api's. This DSL makes it easier to create subscriptions that are using
+  domain events instead of cloud events. The module is called `org.occurrent:subscription-dsl`. For example:
+  
+  ```kotlin
+  val subscriptionModel = SpringMongoSubscriptionModel(..)
+  val cloudEventConverter = GenericCloudEventConverter<DomainEvent>(..)
+  
+  // Subscription DSL
+  subscriptions(subscriptionModel, cloudEventConverter) {
+    subscribe<GameStarted>("id1") { gameStarted ->
+        log.info("Game was started $gameStarted")
+    }
+    subscribe<GameWon, GameLost>("id2") { domainEvent ->
+        log.info("Game was either won or lost: $domainEvent")
+    }
+  } 
+  ```
 
 ## Changelog 0.4.1 (2020-12-14)
 

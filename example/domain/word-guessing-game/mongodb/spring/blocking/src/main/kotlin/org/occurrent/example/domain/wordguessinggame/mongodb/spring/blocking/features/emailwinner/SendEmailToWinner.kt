@@ -16,8 +16,9 @@
 
 package org.occurrent.example.domain.wordguessinggame.mongodb.spring.blocking.features.emailwinner
 
+import org.occurrent.application.subscription.dsl.blocking.Subscriptions
+import org.occurrent.example.domain.wordguessinggame.event.GameEvent
 import org.occurrent.example.domain.wordguessinggame.event.GameWasWon
-import org.occurrent.example.domain.wordguessinggame.mongodb.spring.blocking.support.Policies
 import org.occurrent.example.domain.wordguessinggame.mongodb.spring.blocking.support.loggerFor
 import org.springframework.beans.factory.annotation.Autowired
 import org.springframework.context.annotation.Bean
@@ -28,10 +29,10 @@ class SendEmailToWinner {
     private val log = loggerFor<SendEmailToWinner>()
 
     @Autowired
-    lateinit var policies: Policies
+    lateinit var subscriptions: Subscriptions<GameEvent>
 
     @Bean
-    fun whenGameWasWonThenSendEmailToWinner() = policies.newPolicy<GameWasWon>("WhenGameWasWonThenSendEmailToWinnerPolicy") { gameWasWon ->
+    fun whenGameWasWonThenSendEmailToWinner() = subscriptions.subscribe<GameWasWon>("WhenGameWasWonThenSendEmailToWinnerPolicy") { gameWasWon ->
         // We log instead of sending the e-mail for simplicity :)
         log.info("Sending email to player ${gameWasWon.winnerId} since he/she was a winner of game ${gameWasWon.gameId}")
     }

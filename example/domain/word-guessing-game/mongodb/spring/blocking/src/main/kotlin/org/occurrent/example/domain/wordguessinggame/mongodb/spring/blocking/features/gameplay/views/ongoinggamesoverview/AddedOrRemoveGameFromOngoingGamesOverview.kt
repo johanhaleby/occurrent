@@ -16,10 +16,11 @@
 
 package org.occurrent.example.domain.wordguessinggame.mongodb.spring.blocking.features.gameplay.views.ongoinggamesoverview
 
+import org.occurrent.application.subscription.dsl.blocking.Subscriptions
+import org.occurrent.example.domain.wordguessinggame.event.GameEvent
 import org.occurrent.example.domain.wordguessinggame.event.GameWasLost
 import org.occurrent.example.domain.wordguessinggame.event.GameWasStarted
 import org.occurrent.example.domain.wordguessinggame.event.GameWasWon
-import org.occurrent.example.domain.wordguessinggame.mongodb.spring.blocking.support.Policies
 import org.occurrent.example.domain.wordguessinggame.mongodb.spring.blocking.support.loggerFor
 import org.occurrent.example.domain.wordguessinggame.readmodel.OngoingGameOverview
 import org.springframework.beans.factory.annotation.Autowired
@@ -36,14 +37,14 @@ class AddedOrRemoveGameFromOngoingGamesOverview {
     private val log = loggerFor<AddedOrRemoveGameFromOngoingGamesOverview>()
 
     @Autowired
-    lateinit var policies: Policies
+    lateinit var subscriptions: Subscriptions<GameEvent>
 
     @Autowired
     lateinit var mongo: MongoOperations
 
     @Bean
     fun whenGameWasStartedThenAddGameToOngoingGamesOverview() =
-        policies.newPolicy<GameWasStarted>("WhenGameWasStartedThenAddGameToOngoingGamesOverview") { gameWasStarted ->
+        subscriptions.subscribe<GameWasStarted>("WhenGameWasStartedThenAddGameToOngoingGamesOverview") { gameWasStarted ->
             log.info("Adding game ${gameWasStarted.gameId} to ongoing games view")
             val ongoingGameOverview = gameWasStarted.run {
                 OngoingGameOverview(gameId, category, startedBy, timestamp).toDTO()
@@ -53,7 +54,7 @@ class AddedOrRemoveGameFromOngoingGamesOverview {
 
     @Bean
     fun whenGameIsEndedThenRemoveGameFromOngoingGamesOverview() =
-        policies.newPolicy("WhenGameIsEndedThenRemoveGameFromOngoingGamesOverview", GameWasWon::class, GameWasLost::class) { e ->
+        subscriptions.subscribe<GameWasWon, GameWasLost>("WhenGameIsEndedThenRemoveGameFromOngoingGamesOverview") { e ->
             val gameId = when (e) {
                 is GameWasWon -> e.gameId
                 is GameWasLost -> e.gameId

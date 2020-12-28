@@ -15,24 +15,20 @@
   ~ limitations under the License.
   -->
 
-<project xmlns="http://maven.apache.org/POM/4.0.0" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 http://maven.apache.org/xsd/maven-4.0.0.xsd">
+<project xmlns="http://maven.apache.org/POM/4.0.0"
+         xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+         xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 http://maven.apache.org/xsd/maven-4.0.0.xsd">
     <parent>
-        <artifactId>occurrent</artifactId>
+        <artifactId>application</artifactId>
         <groupId>org.occurrent</groupId>
         <version>0.4.2-SNAPSHOT</version>
     </parent>
-    <packaging>pom</packaging>
-    <modules>
-        <module>service</module>
-        <module>command-composition</module>
-        <module>subscription-dsl</module>
-        <module>cloudevent-converter</module>
-    </modules>
     <modelVersion>4.0.0</modelVersion>
+    <packaging>pom</packaging>
 
-    <artifactId>application</artifactId>
+    <artifactId>subscription-dsl</artifactId>
 
-    <description>Contains application specific support libraries</description>
-
-
+    <modules>
+        <module>blocking</module>
+    </modules>
 </project>
