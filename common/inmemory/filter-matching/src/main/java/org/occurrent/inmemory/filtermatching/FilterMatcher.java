@@ -14,7 +14,7 @@
  * limitations under the License.
  */
 
-package org.occurrent.eventstore.inmemory;
+package org.occurrent.inmemory.filtermatching;
 
 import io.cloudevents.CloudEvent;
 import org.occurrent.filter.Filter;

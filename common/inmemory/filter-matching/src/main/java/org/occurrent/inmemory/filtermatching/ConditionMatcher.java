@@ -14,7 +14,7 @@
  * limitations under the License.
  */
 
-package org.occurrent.eventstore.inmemory;
+package org.occurrent.inmemory.filtermatching;
 
 import io.cloudevents.CloudEvent;
 import org.occurrent.condition.Condition;
@@ -75,7 +75,7 @@ public class ConditionMatcher {
             } else {
                 Comparable<Object> expectedComparable = toComparable(expected, "Expected value must implement " + Comparable.class.getName() + " in order to be used in Filter's");
                 Comparable<Object> actualComparable = toComparable(actual, "Value in CloudEvent must implement " + Comparable.class.getName() + " in order to be used in Filter's");
-                int comparisonResult = expectedComparable.compareTo(actualComparable);
+                int comparisonResult = actualComparable.compareTo(expectedComparable);
                 switch (singleOperandConditionName) {
                     case LT:
                         matches = comparisonResult < 0;

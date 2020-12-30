@@ -43,9 +43,9 @@ import java.util.stream.Stream;
 
 import static java.util.Objects.requireNonNull;
 import static org.occurrent.cloudevents.OccurrentCloudEventExtension.STREAM_VERSION;
-import static org.occurrent.eventstore.inmemory.FilterMatcher.matchesFilter;
 import static org.occurrent.functionalsupport.internal.FunctionalSupport.not;
 import static org.occurrent.functionalsupport.internal.FunctionalSupport.zip;
+import static org.occurrent.inmemory.filtermatching.FilterMatcher.matchesFilter;
 
 /**
  * This is an {@link EventStore} that stores events in-memory. This is mainly useful for testing

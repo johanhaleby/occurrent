@@ -48,11 +48,13 @@ import static java.nio.charset.StandardCharsets.UTF_8;
 import static java.time.ZoneOffset.UTC;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.catchThrowable;
+import static org.junit.jupiter.api.Assertions.assertAll;
 import static org.occurrent.cloudevents.OccurrentCloudEventExtension.STREAM_ID;
 import static org.occurrent.cloudevents.OccurrentCloudEventExtension.STREAM_VERSION;
 import static org.occurrent.condition.Condition.*;
 import static org.occurrent.eventstore.api.WriteCondition.streamVersion;
 import static org.occurrent.eventstore.api.WriteCondition.streamVersionEq;
+import static org.occurrent.filter.Filter.*;
 import static org.occurrent.functional.CheckedFunction.unchecked;
 import static org.occurrent.time.TimeConversion.toLocalDateTime;
 
@@ -188,6 +190,56 @@ public class InMemoryEventStoreTest {
             softly.assertThat(eventStream.version()).isEqualTo(1);
             softly.assertThat(eventStream.events().map(deserialize(objectMapper))).containsOnly(event1);
             softly.assertThat(inMemoryEventStore.exists(streamId)).isTrue();
+        }
+
+        @Test
+        void delete_deletes_events_according_to_the_filter() {
+            // Given
+            InMemoryEventStore inMemoryEventStore = new InMemoryEventStore();
+            LocalDateTime now = LocalDateTime.now();
+
+            DomainEvent event1 = new NameDefined(UUID.randomUUID().toString(), now, "John Doe");
+            DomainEvent event2 = new NameWasChanged(UUID.randomUUID().toString(), now.plusHours(1), "Jan Doe");
+            unconditionallyPersist(inMemoryEventStore, "name", Stream.of(event1, event2));
+
+            DomainEvent event3 = new NameDefined(UUID.randomUUID().toString(), now, "Jane Doe");
+            unconditionallyPersist(inMemoryEventStore, "name2", Stream.of(event3));
+            
+            // When
+            inMemoryEventStore.delete(streamId("name").and(time(lte(now.atOffset(UTC).plusMinutes(1)))));
+
+            // Then
+            List<DomainEvent> stream1 = inMemoryEventStore.read("name").events().map(deserialize(objectMapper)).collect(Collectors.toList());
+            List<DomainEvent> stream2 = inMemoryEventStore.read("name2").events().map(deserialize(objectMapper)).collect(Collectors.toList());
+            assertAll(
+                    () -> assertThat(stream1).containsExactly(event2),
+                    () -> assertThat(stream2).containsExactly(event3)
+            );
+        }
+
+        @Test
+        void delete_deletes_events_according_to_the_filter_from_all_matching_streams() {
+            // Given
+            InMemoryEventStore inMemoryEventStore = new InMemoryEventStore();
+            LocalDateTime now = LocalDateTime.now();
+
+            DomainEvent event1 = new NameDefined(UUID.randomUUID().toString(), now, "John Doe");
+            DomainEvent event2 = new NameWasChanged(UUID.randomUUID().toString(), now.plusHours(1), "Jan Doe");
+            unconditionallyPersist(inMemoryEventStore, "name", Stream.of(event1, event2));
+
+            DomainEvent event3 = new NameDefined(UUID.randomUUID().toString(), now, "Jane Doe");
+            unconditionallyPersist(inMemoryEventStore, "name2", Stream.of(event3));
+
+            // When
+            inMemoryEventStore.delete(type(NameDefined.class.getName()));
+
+            // Then
+            List<DomainEvent> stream1 = inMemoryEventStore.read("name").events().map(deserialize(objectMapper)).collect(Collectors.toList());
+            List<DomainEvent> stream2 = inMemoryEventStore.read("name2").events().map(deserialize(objectMapper)).collect(Collectors.toList());
+            assertAll(
+                    () -> assertThat(stream1).containsExactly(event2),
+                    () -> assertThat(stream2).isEmpty()
+            );
         }
     }
 
