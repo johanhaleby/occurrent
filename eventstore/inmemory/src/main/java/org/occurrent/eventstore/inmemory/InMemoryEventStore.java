@@ -35,6 +35,8 @@ import java.util.*;
 import java.util.Map.Entry;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ConcurrentMap;
+import java.util.concurrent.atomic.AtomicReference;
+import java.util.function.Consumer;
 import java.util.function.Function;
 import java.util.function.Predicate;
 import java.util.stream.Collectors;
@@ -55,6 +57,32 @@ public class InMemoryEventStore implements EventStore, EventStoreOperations {
 
     private final ConcurrentMap<String, List<CloudEvent>> state = new ConcurrentHashMap<>();
 
+    private final Consumer<Stream<CloudEvent>> listener;
+
+    /**
+     * Create an instance of {@link InMemoryEventStore}
+     */
+    public InMemoryEventStore() {
+        // @formatter:off
+        this(__ -> {});
+        // @formatter:on
+    }
+
+    /**
+     * Create an instance of {@link InMemoryEventStore} that has a <code>listener</code> that will be invoked
+     * after events have been written to the event store. This is typically not something you should implement
+     * yourself, it's mainly here to allow the in-memory repository to work with "subscriptions". See the
+     * in-memory subscription model implementation.
+     *
+     * @param listener A listener that will be invoked after events have been written to the datastore (synchronously!)
+     */
+    public InMemoryEventStore(Consumer<Stream<CloudEvent>> listener) {
+        if (listener == null) {
+            throw new IllegalArgumentException("listener cannot be null");
+        }
+        this.listener = listener;
+    }
+
     @Override
     public EventStream<CloudEvent> read(String streamId, int skip, int limit) {
         List<CloudEvent> events = state.get(streamId);
@@ -71,19 +99,29 @@ public class InMemoryEventStore implements EventStore, EventStoreOperations {
         requireTrue(writeCondition != null, WriteCondition.class.getSimpleName() + " cannot be null");
         Stream<CloudEvent> cloudEventStream = events.peek(e -> requireTrue(e.getSpecVersion() == SpecVersion.V1, "Spec version needs to be " + SpecVersion.V1));
 
+        final AtomicReference<List<CloudEvent>> newCloudEvents = new AtomicReference<>();
         state.compute(streamId, (__, currentEvents) -> {
             long currentStreamVersion = calculateStreamVersion(currentEvents);
 
             if (currentEvents == null && isConditionFulfilledBy(writeCondition, 0)) {
-                return applyOccurrentCloudEventExtension(cloudEventStream, streamId, 0);
+                List<CloudEvent> cloudEvents = applyOccurrentCloudEventExtension(cloudEventStream, streamId, 0);
+                newCloudEvents.set(cloudEvents);
+                return cloudEvents;
             } else if (currentEvents != null && isConditionFulfilledBy(writeCondition, currentStreamVersion)) {
-                List<CloudEvent> newEvents = new ArrayList<>(currentEvents);
-                newEvents.addAll(applyOccurrentCloudEventExtension(cloudEventStream, streamId, currentStreamVersion));
-                return newEvents;
+                List<CloudEvent> eventList = new ArrayList<>(currentEvents);
+                List<CloudEvent> newEvents = applyOccurrentCloudEventExtension(cloudEventStream, streamId, currentStreamVersion);
+                newCloudEvents.set(newEvents);
+                eventList.addAll(newEvents);
+                return eventList;
             } else {
                 throw new WriteConditionNotFulfilledException(streamId, currentStreamVersion, writeCondition, String.format("%s was not fulfilled. Expected version %s but was %s.", WriteCondition.class.getSimpleName(), writeCondition.toString(), currentStreamVersion));
             }
         });
+
+        List<CloudEvent> addedEvents = newCloudEvents.get();
+        if (addedEvents != null && !addedEvents.isEmpty()) {
+            listener.accept(addedEvents.stream());
+        }
     }
 
     private static List<CloudEvent> applyOccurrentCloudEventExtension(Stream<CloudEvent> events, String streamId, long streamVersion) {

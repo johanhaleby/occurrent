@@ -51,6 +51,10 @@
     }
   } 
   ```
+* Implemented ability to delete cloud events by a filter in the in-memory event store.
+* Added "listener" support to the in-memory event store. This means that you can supply a "listener" (a consumer) to the `InMemoryEventStore` constructor that
+  will be invoked (synchronously) after new events have been written. This is mainly useful to allow in-memory subscription models. 
+
 
 ## Changelog 0.4.1 (2020-12-14)
 

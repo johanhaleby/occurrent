@@ -40,6 +40,7 @@ import java.time.LocalDateTime;
 import java.util.List;
 import java.util.Optional;
 import java.util.UUID;
+import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.function.Function;
 import java.util.stream.Collectors;
 import java.util.stream.Stream;
@@ -143,6 +144,66 @@ public class InMemoryEventStoreTest {
         void returns_false_when_stream_does_not_exists() {
             InMemoryEventStore inMemoryEventStore = new InMemoryEventStore();
             assertThat(inMemoryEventStore.exists("name")).isFalse();
+        }
+    }
+
+    @Nested
+    @DisplayName("listener")
+    class Listener {
+
+        @Test
+        void listener_is_does_not_get_called_with_any_events_when_writing_empty_set_of_events() {
+            // Given
+            CopyOnWriteArrayList<DomainEvent> events = new CopyOnWriteArrayList<>();
+
+            InMemoryEventStore inMemoryEventStore = new InMemoryEventStore(stream -> events.addAll(stream.map(deserialize(objectMapper)).collect(Collectors.toList())));
+        
+            // When
+            unconditionallyPersist(inMemoryEventStore, "name", Stream.empty());
+
+            // Then
+            assertThat(events).isEmpty();
+        }
+
+        @Test
+        void listener_is_invoked_synchronously_when_the_first_events_are_written_to_a_stream() {
+            // Given
+            CopyOnWriteArrayList<DomainEvent> events = new CopyOnWriteArrayList<>();
+
+            InMemoryEventStore inMemoryEventStore = new InMemoryEventStore(stream -> events.addAll(stream.map(deserialize(objectMapper)).collect(Collectors.toList())));
+            LocalDateTime now = LocalDateTime.now();
+
+            DomainEvent event1 = new NameDefined(UUID.randomUUID().toString(), now, "John Doe");
+            DomainEvent event2 = new NameWasChanged(UUID.randomUUID().toString(), now.plusHours(1), "Jan Doe");
+
+            // When
+            unconditionallyPersist(inMemoryEventStore, "name", Stream.of(event1, event2));
+
+            // Then
+            assertThat(events).containsExactly(event1, event2);
+        }
+
+        @Test
+        void listener_is_invoked_synchronously_when_the_additional_events_are_written_to_a_stream() {
+            // Given
+            CopyOnWriteArrayList<DomainEvent> events = new CopyOnWriteArrayList<>();
+
+            InMemoryEventStore inMemoryEventStore = new InMemoryEventStore(stream -> events.addAll(stream.map(deserialize(objectMapper)).collect(Collectors.toList())));
+            LocalDateTime now = LocalDateTime.now();
+
+            DomainEvent event1 = new NameDefined(UUID.randomUUID().toString(), now, "John Doe");
+            DomainEvent event2 = new NameWasChanged(UUID.randomUUID().toString(), now.plusHours(1), "Jan Doe");
+
+            unconditionallyPersist(inMemoryEventStore, "name", Stream.of(event1, event2));
+
+            DomainEvent event3 = new NameWasChanged(UUID.randomUUID().toString(), now.plusHours(2), "Jan Doe1");
+            DomainEvent event4 = new NameWasChanged(UUID.randomUUID().toString(), now.plusHours(3), "Jan Doe2");
+
+            // When
+            unconditionallyPersist(inMemoryEventStore, "name", Stream.of(event3, event4));
+
+            // Then
+            assertThat(events).containsExactly(event1, event2, event3, event4);
         }
     }
 

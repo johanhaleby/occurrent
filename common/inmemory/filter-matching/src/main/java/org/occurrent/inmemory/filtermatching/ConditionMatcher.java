@@ -33,6 +33,9 @@ import static org.occurrent.condition.Condition.SingleOperandConditionName.EQ;
 import static org.occurrent.condition.Condition.SingleOperandConditionName.NE;
 import static org.occurrent.filter.Filter.*;
 
+/**
+ * Check if a condition matches a certain cloud event
+ */
 public class ConditionMatcher {
 
     private static final Set<String> ATTRIBUTE_NAMES = new HashSet<String>() {{

@@ -25,6 +25,9 @@ import java.util.function.Predicate;
 import static org.occurrent.filter.Filter.All;
 import static org.occurrent.filter.Filter.SingleConditionFilter;
 
+/**
+ * Check if a cloud event matching a given filter
+ */
 public class FilterMatcher {
 
     public static boolean matchesFilter(CloudEvent cloudEvent, Filter filter) {
