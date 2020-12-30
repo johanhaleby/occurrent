@@ -17,6 +17,7 @@
 package org.occurrent.filter;
 
 import io.cloudevents.SpecVersion;
+import io.cloudevents.core.v1.CloudEventV1;
 import org.occurrent.cloudevents.OccurrentCloudEventExtension;
 import org.occurrent.condition.Condition;
 

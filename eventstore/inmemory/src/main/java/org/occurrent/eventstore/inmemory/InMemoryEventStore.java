@@ -43,6 +43,8 @@ import java.util.stream.Stream;
 
 import static java.util.Objects.requireNonNull;
 import static org.occurrent.cloudevents.OccurrentCloudEventExtension.STREAM_VERSION;
+import static org.occurrent.eventstore.inmemory.FilterMatcher.matchesFilter;
+import static org.occurrent.functionalsupport.internal.FunctionalSupport.not;
 import static org.occurrent.functionalsupport.internal.FunctionalSupport.zip;
 
 /**
@@ -138,8 +140,7 @@ public class InMemoryEventStore implements EventStore, EventStoreOperations {
 
     @Override
     public void delete(Filter filter) {
-        // TODO How to make this better?
-        throw new IllegalArgumentException("Not implemented yet");
+        state.replaceAll((streamId, cloudEvents) -> cloudEvents.stream().filter(not(cloudEvent -> matchesFilter(cloudEvent, filter))).collect(Collectors.toList()));
     }
 
     @Override
