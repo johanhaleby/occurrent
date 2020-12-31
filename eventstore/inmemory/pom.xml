@@ -23,7 +23,6 @@
     </parent>
     <modelVersion>4.0.0</modelVersion>
 
-    <groupId>org.occurrent.inmemory</groupId>
     <artifactId>eventstore-inmemory</artifactId>
 
     <dependencies>
