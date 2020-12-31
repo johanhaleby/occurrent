@@ -81,7 +81,7 @@ class Bootstrap {
         SpringSubscriptionPositionStorageForRedis(redisOps)
 
     @Bean
-    fun autoPersistingSubscriptionModel(storage: SubscriptionPositionStorage, mongoTemplate: MongoTemplate, eventStoreQueries: EventStoreQueries): SubscriptionModel {
+    fun durableSubscriptionModel(storage: SubscriptionPositionStorage, mongoTemplate: MongoTemplate, eventStoreQueries: EventStoreQueries): SubscriptionModel {
         val subscriptionModel = SpringMongoSubscriptionModel(mongoTemplate, EVENTS_COLLECTION_NAME, TimeRepresentation.DATE)
         return DurableSubscriptionModel(subscriptionModel, storage)
     }
