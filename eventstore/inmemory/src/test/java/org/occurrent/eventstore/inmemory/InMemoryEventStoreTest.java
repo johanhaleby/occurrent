@@ -1112,8 +1112,8 @@ public class InMemoryEventStoreTest {
                 unconditionallyPersist(inMemoryEventStore, "name2", nameWasChanged2);
 
                 // Then
-                Stream<CloudEvent> events = inMemoryEventStore.query(time(lt(OffsetDateTime.of(now.plusHours(2), UTC))));
-                assertThat(events.map(deserialize(objectMapper))).containsExactly(nameDefined, nameWasChanged1, nameWasChanged2);
+                Stream<CloudEvent> events = inMemoryEventStore.query(time(lt(OffsetDateTime.of(now.plusHours(2), UTC).truncatedTo(MILLIS))));
+                assertThat(events.map(deserialize(objectMapper))).containsExactly(nameDefined, nameWasChanged1);
             }
 
             @Test
