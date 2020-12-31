@@ -25,6 +25,8 @@ import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Nested;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.condition.EnabledForJreRange;
+import org.junit.jupiter.api.condition.EnabledOnJre;
 import org.junit.jupiter.api.extension.ExtendWith;
 import org.occurrent.domain.DomainEvent;
 import org.occurrent.domain.Name;
@@ -33,10 +35,13 @@ import org.occurrent.domain.NameWasChanged;
 import org.occurrent.eventstore.api.WriteCondition;
 import org.occurrent.eventstore.api.WriteConditionNotFulfilledException;
 import org.occurrent.eventstore.api.blocking.EventStore;
+import org.occurrent.eventstore.api.blocking.EventStoreQueries;
 import org.occurrent.eventstore.api.blocking.EventStream;
 
 import java.net.URI;
 import java.time.LocalDateTime;
+import java.time.OffsetDateTime;
+import java.time.ZoneId;
 import java.util.List;
 import java.util.Optional;
 import java.util.UUID;
@@ -47,16 +52,19 @@ import java.util.stream.Stream;
 
 import static java.nio.charset.StandardCharsets.UTF_8;
 import static java.time.ZoneOffset.UTC;
+import static java.time.temporal.ChronoUnit.MILLIS;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.catchThrowable;
 import static org.junit.jupiter.api.Assertions.assertAll;
-import static org.occurrent.cloudevents.OccurrentCloudEventExtension.STREAM_ID;
-import static org.occurrent.cloudevents.OccurrentCloudEventExtension.STREAM_VERSION;
+import static org.junit.jupiter.api.condition.JRE.JAVA_11;
+import static org.junit.jupiter.api.condition.JRE.JAVA_8;
+import static org.occurrent.cloudevents.OccurrentCloudEventExtension.*;
 import static org.occurrent.condition.Condition.*;
 import static org.occurrent.eventstore.api.WriteCondition.streamVersion;
 import static org.occurrent.eventstore.api.WriteCondition.streamVersionEq;
 import static org.occurrent.filter.Filter.*;
 import static org.occurrent.functional.CheckedFunction.unchecked;
+import static org.occurrent.time.TimeConversion.offsetDateTimeFrom;
 import static org.occurrent.time.TimeConversion.toLocalDateTime;
 
 @SuppressWarnings("ConstantConditions")
@@ -157,7 +165,7 @@ public class InMemoryEventStoreTest {
             CopyOnWriteArrayList<DomainEvent> events = new CopyOnWriteArrayList<>();
 
             InMemoryEventStore inMemoryEventStore = new InMemoryEventStore(stream -> events.addAll(stream.map(deserialize(objectMapper)).collect(Collectors.toList())));
-        
+
             // When
             unconditionallyPersist(inMemoryEventStore, "name", Stream.empty());
 
@@ -265,7 +273,7 @@ public class InMemoryEventStoreTest {
 
             DomainEvent event3 = new NameDefined(UUID.randomUUID().toString(), now, "Jane Doe");
             unconditionallyPersist(inMemoryEventStore, "name2", Stream.of(event3));
-            
+
             // When
             inMemoryEventStore.delete(streamId("name").and(time(lte(now.atOffset(UTC).plusMinutes(1)))));
 
@@ -747,6 +755,485 @@ public class InMemoryEventStoreTest {
             // Then
             assertThat(updatedEvent).isEmpty();
         }
+    }
+
+    @Nested
+    @DisplayName("queries")
+    class QueriesTest {
+        private InMemoryEventStore inMemoryEventStore;
+
+        @BeforeEach
+        void create_event_store() {
+            inMemoryEventStore = new InMemoryEventStore();
+        }
+
+        @Test
+        void all_without_skip_and_limit_returns_all_events() {
+            // Given
+            LocalDateTime now = LocalDateTime.now();
+            NameDefined nameDefined = new NameDefined(UUID.randomUUID().toString(), now, "name");
+            NameWasChanged nameWasChanged1 = new NameWasChanged(UUID.randomUUID().toString(), now.plusHours(1), "name2");
+            NameWasChanged nameWasChanged2 = new NameWasChanged(UUID.randomUUID().toString(), now.plusHours(2), "name3");
+
+            // When
+            unconditionallyPersist(inMemoryEventStore, "name2", nameWasChanged1);
+            unconditionallyPersist(inMemoryEventStore, "name1", nameDefined);
+            unconditionallyPersist(inMemoryEventStore, "name3", nameWasChanged2);
+
+            // Then
+            Stream<CloudEvent> events = inMemoryEventStore.all();
+            assertThat(events.map(deserialize(objectMapper))).containsExactly(nameDefined, nameWasChanged1, nameWasChanged2);
+        }
+
+        @Test
+        void all_with_skip_and_limit_returns_all_events_within_skip_and_limit() {
+            // Given
+            LocalDateTime now = LocalDateTime.now();
+            NameDefined nameDefined = new NameDefined(UUID.randomUUID().toString(), now, "name");
+            NameWasChanged nameWasChanged1 = new NameWasChanged(UUID.randomUUID().toString(), now.plusHours(1), "name2");
+            NameWasChanged nameWasChanged2 = new NameWasChanged(UUID.randomUUID().toString(), now.plusHours(2), "name3");
+
+            // When
+            unconditionallyPersist(inMemoryEventStore, "name1", Stream.of(nameDefined, nameWasChanged1));
+            unconditionallyPersist(inMemoryEventStore, "name2", Stream.of(nameWasChanged2));
+
+            // Then
+            Stream<CloudEvent> events = inMemoryEventStore.all(1, 2);
+            assertThat(events.map(deserialize(objectMapper))).containsExactly(nameWasChanged1, nameWasChanged2);
+        }
+
+        @Test
+        void query_with_single_filter_without_skip_and_limit() {
+            // Given
+            LocalDateTime now = LocalDateTime.now();
+            NameDefined nameDefined = new NameDefined(UUID.randomUUID().toString(), now, "name");
+            NameWasChanged nameWasChanged1 = new NameWasChanged(UUID.randomUUID().toString(), now.plusHours(1), "name2");
+            NameWasChanged nameWasChanged2 = new NameWasChanged(UUID.randomUUID().toString(), now.plusHours(2), "name3");
+
+            // When
+            unconditionallyPersist(inMemoryEventStore, "name1", Stream.of(nameDefined, nameWasChanged1));
+            unconditionallyPersist(inMemoryEventStore, "name2", nameWasChanged2);
+            inMemoryEventStore.write("something", Stream.of(CloudEventBuilder.v1()
+                    .withId(UUID.randomUUID().toString())
+                    .withSource(URI.create("http://something"))
+                    .withType("something")
+                    .withTime(LocalDateTime.now().atOffset(UTC))
+                    .withSubject("subject")
+                    .withDataContentType("application/json")
+                    .withData("{\"hello\":\"world\"}".getBytes(UTF_8))
+                    .build()
+            ));
+
+            // Then
+            Stream<CloudEvent> events = inMemoryEventStore.query(source(NAME_SOURCE));
+            assertThat(events.map(deserialize(objectMapper))).containsExactly(nameDefined, nameWasChanged1, nameWasChanged2);
+        }
+
+        @Test
+        void query_with_single_filter_with_skip_and_limit() {
+            // Given
+            LocalDateTime now = LocalDateTime.now();
+            NameDefined nameDefined = new NameDefined(UUID.randomUUID().toString(), now, "name");
+            NameWasChanged nameWasChanged1 = new NameWasChanged(UUID.randomUUID().toString(), now.plusHours(1), "name2");
+            NameWasChanged nameWasChanged2 = new NameWasChanged(UUID.randomUUID().toString(), now.plusHours(2), "name3");
+
+            // When
+            unconditionallyPersist(inMemoryEventStore, "name1", Stream.of(nameDefined, nameWasChanged1));
+            unconditionallyPersist(inMemoryEventStore, "name2", nameWasChanged2);
+            inMemoryEventStore.write("something", Stream.of(CloudEventBuilder.v1()
+                    .withId(UUID.randomUUID().toString())
+                    .withSource(URI.create("http://something"))
+                    .withType("something")
+                    .withTime(LocalDateTime.now().atOffset(UTC))
+                    .withSubject("subject")
+                    .withDataContentType("application/json")
+                    .withData("{\"hello\":\"world\"}".getBytes(UTF_8))
+                    .build()
+            ));
+
+            // Then
+            Stream<CloudEvent> events = inMemoryEventStore.query(source(NAME_SOURCE), 1, 1);
+            assertThat(events.map(deserialize(objectMapper))).containsExactly(nameWasChanged1);
+        }
+
+        @Test
+        void compose_filters_using_and() {
+            // Given
+            LocalDateTime now = LocalDateTime.now();
+            UUID uuid = UUID.randomUUID();
+            NameDefined nameDefined = new NameDefined(uuid.toString(), now, "name");
+            NameWasChanged nameWasChanged1 = new NameWasChanged(UUID.randomUUID().toString(), now.plusHours(1), "name2");
+            NameWasChanged nameWasChanged2 = new NameWasChanged(UUID.randomUUID().toString(), now.plusHours(2), "name3");
+
+            // When
+            unconditionallyPersist(inMemoryEventStore, "name1", Stream.of(nameDefined, nameWasChanged1));
+            unconditionallyPersist(inMemoryEventStore, "name2", nameWasChanged2);
+
+            // Then
+            Stream<CloudEvent> events = inMemoryEventStore.query(time(lt(OffsetDateTime.of(now.plusHours(2), UTC))).and(id(uuid.toString())));
+            assertThat(events.map(deserialize(objectMapper))).containsExactly(nameDefined);
+        }
+
+        @Test
+        void compose_filters_using_or() {
+            // Given
+            LocalDateTime now = LocalDateTime.now();
+            NameDefined nameDefined = new NameDefined(UUID.randomUUID().toString(), now, "name");
+            NameWasChanged nameWasChanged1 = new NameWasChanged(UUID.randomUUID().toString(), now.plusHours(1), "name2");
+            NameWasChanged nameWasChanged2 = new NameWasChanged(UUID.randomUUID().toString(), now.plusHours(2), "name3");
+
+            // When
+            unconditionallyPersist(inMemoryEventStore, "name1", Stream.of(nameDefined, nameWasChanged1));
+            unconditionallyPersist(inMemoryEventStore, "name2", nameWasChanged2);
+
+            // Then
+            Stream<CloudEvent> events = inMemoryEventStore.query(time(OffsetDateTime.of(now.plusHours(2), UTC)).or(source(NAME_SOURCE)));
+            assertThat(events.map(deserialize(objectMapper))).containsExactly(nameDefined, nameWasChanged1, nameWasChanged2);
+        }
+
+        @Test
+        void query_filter_by_data() {
+            // Given
+            LocalDateTime now = LocalDateTime.now();
+            NameDefined nameDefined = new NameDefined(UUID.randomUUID().toString(), now, "name");
+            NameWasChanged nameWasChanged1 = new NameWasChanged(UUID.randomUUID().toString(), now.plusHours(1), "name2");
+            NameWasChanged nameWasChanged2 = new NameWasChanged(UUID.randomUUID().toString(), now.plusHours(2), "name3");
+
+            // When
+            unconditionallyPersist(inMemoryEventStore, "name1", Stream.of(nameDefined, nameWasChanged1));
+            unconditionallyPersist(inMemoryEventStore, "name2", nameWasChanged2);
+
+            // Then
+            Throwable throwable = catchThrowable(() -> inMemoryEventStore.query(data("name", eq("name2"))).forEach(__ -> {}));
+            assertThat(throwable).isExactlyInstanceOf(IllegalArgumentException.class).hasMessage("Currently, it's not possible to query the data field from in-memory event stores/subscriptions. " +
+                    "The good thing is that Occurrent is open-source, so feel free to contribute :) (https://github.com/johanhaleby/occurrent/issues/58).");
+        }
+
+        @Test
+        void query_filter_by_subject() {
+            // Given
+            LocalDateTime now = LocalDateTime.now();
+            NameDefined nameDefined = new NameDefined(UUID.randomUUID().toString(), now, "name");
+            NameWasChanged nameWasChanged1 = new NameWasChanged(UUID.randomUUID().toString(), now.plusHours(1), "name2");
+            NameWasChanged nameWasChanged2 = new NameWasChanged(UUID.randomUUID().toString(), now.plusHours(2), "name3");
+
+            // When
+            unconditionallyPersist(inMemoryEventStore, "name1", Stream.of(nameDefined, nameWasChanged1));
+            unconditionallyPersist(inMemoryEventStore, "name2", nameWasChanged2);
+
+            // Then
+            Stream<CloudEvent> events = inMemoryEventStore.query(subject(nameWasChanged1.getName()));
+            assertThat(events.map(deserialize(objectMapper))).containsExactly(nameWasChanged1);
+        }
+
+        @Test
+        void query_filter_by_cloud_event() {
+            // Given
+            LocalDateTime now = LocalDateTime.now();
+            NameDefined nameDefined = new NameDefined(UUID.randomUUID().toString(), now, "name");
+            String eventId = UUID.randomUUID().toString();
+            NameWasChanged nameWasChanged1 = new NameWasChanged(eventId, now.plusHours(1), "name2");
+            NameWasChanged nameWasChanged2 = new NameWasChanged(UUID.randomUUID().toString(), now.plusHours(2), "name3");
+
+            // When
+            unconditionallyPersist(inMemoryEventStore, "name1", Stream.of(nameDefined, nameWasChanged1));
+            unconditionallyPersist(inMemoryEventStore, "name2", nameWasChanged2);
+
+            // Then
+            Stream<CloudEvent> events = inMemoryEventStore.query(cloudEvent(eventId, NAME_SOURCE));
+            assertThat(events.map(deserialize(objectMapper))).containsExactly(nameWasChanged1);
+        }
+
+        @Test
+        void query_filter_by_type() {
+            // Given
+            LocalDateTime now = LocalDateTime.now();
+            NameDefined nameDefined = new NameDefined(UUID.randomUUID().toString(), now, "name");
+            NameWasChanged nameWasChanged1 = new NameWasChanged(UUID.randomUUID().toString(), now.plusHours(1), "name2");
+            NameWasChanged nameWasChanged2 = new NameWasChanged(UUID.randomUUID().toString(), now.plusHours(2), "name3");
+
+            // When
+            unconditionallyPersist(inMemoryEventStore, "name1", Stream.of(nameDefined, nameWasChanged1));
+            unconditionallyPersist(inMemoryEventStore, "name2", nameWasChanged2);
+
+            // Then
+            Stream<CloudEvent> events = inMemoryEventStore.query(type(NameDefined.class.getName()));
+            assertThat(events.map(deserialize(objectMapper))).containsExactly(nameDefined);
+        }
+
+        @Test
+        void query_filter_by_data_schema() {
+            // Given
+            LocalDateTime now = LocalDateTime.now();
+            NameDefined nameDefined = new NameDefined(UUID.randomUUID().toString(), now, "name");
+            NameWasChanged nameWasChanged1 = new NameWasChanged(UUID.randomUUID().toString(), now.plusHours(1), "name2");
+            NameWasChanged nameWasChanged2 = new NameWasChanged(UUID.randomUUID().toString(), now.plusHours(2), "name3");
+
+            // When
+            unconditionallyPersist(inMemoryEventStore, "name1", Stream.of(nameDefined, nameWasChanged1));
+            unconditionallyPersist(inMemoryEventStore, "name2", nameWasChanged2);
+            CloudEvent cloudEvent = CloudEventBuilder.v1()
+                    .withId(UUID.randomUUID().toString())
+                    .withSource(URI.create("http://something"))
+                    .withType("something")
+                    .withTime(LocalDateTime.now().atOffset(UTC))
+                    .withSubject("subject")
+                    .withDataSchema(URI.create("urn:myschema"))
+                    .withDataContentType("application/json")
+                    .withData("{\"hello\":\"world\"}".getBytes(UTF_8))
+                    .withExtension(occurrent("something", 1L))
+                    .build();
+            inMemoryEventStore.write("something", Stream.of(cloudEvent));
+
+            // Then
+            Stream<CloudEvent> events = inMemoryEventStore.query(dataSchema(URI.create("urn:myschema")));
+            assertThat(events).containsExactly(cloudEvent);
+        }
+
+        @Test
+        void query_filter_by_data_content_type() {
+            // Given
+            LocalDateTime now = LocalDateTime.now();
+            NameDefined nameDefined = new NameDefined(UUID.randomUUID().toString(), now, "name");
+            NameWasChanged nameWasChanged1 = new NameWasChanged(UUID.randomUUID().toString(), now.plusHours(1), "name2");
+            NameWasChanged nameWasChanged2 = new NameWasChanged(UUID.randomUUID().toString(), now.plusHours(2), "name3");
+
+            // When
+            unconditionallyPersist(inMemoryEventStore, "name1", Stream.of(nameDefined, nameWasChanged1));
+            unconditionallyPersist(inMemoryEventStore, "name2", nameWasChanged2);
+            CloudEvent cloudEvent = CloudEventBuilder.v1()
+                    .withId(UUID.randomUUID().toString())
+                    .withSource(URI.create("http://something"))
+                    .withType("something")
+                    .withTime(offsetDateTimeFrom(LocalDateTime.now(), ZoneId.of("Europe/Stockholm")))
+                    .withSubject("subject")
+                    .withDataSchema(URI.create("urn:myschema"))
+                    .withDataContentType("text/plain")
+                    .withData("text".getBytes(UTF_8))
+                    .withExtension(occurrent("something", 1L))
+                    .build();
+            inMemoryEventStore.write("something", Stream.of(cloudEvent));
+
+            // Then
+            Stream<CloudEvent> events = inMemoryEventStore.query(dataContentType("text/plain"));
+            assertThat(events).containsExactly(cloudEvent);
+        }
+
+        @Nested
+        @DisplayName("sort")
+        class SortTest {
+
+            @Test
+            void sort_by_natural_asc_sorts_by_time_asc() {
+                // Given
+                LocalDateTime now = LocalDateTime.now();
+                NameDefined nameDefined = new NameDefined(UUID.randomUUID().toString(), now, "name");
+                NameWasChanged nameWasChanged2 = new NameWasChanged(UUID.randomUUID().toString(), now.plusHours(1), "name3");
+                NameWasChanged nameWasChanged1 = new NameWasChanged(UUID.randomUUID().toString(), now.minusHours(2), "name2");
+
+                // When
+                unconditionallyPersist(inMemoryEventStore, "name3", nameWasChanged1);
+                unconditionallyPersist(inMemoryEventStore, "name2", nameWasChanged2);
+                unconditionallyPersist(inMemoryEventStore, "name1", nameDefined);
+
+                // Then
+                Stream<CloudEvent> events = inMemoryEventStore.all(EventStoreQueries.SortBy.NATURAL_ASC);
+                assertThat(events.map(deserialize(objectMapper))).containsExactly(nameWasChanged1, nameDefined, nameWasChanged2);
+            }
+
+            @Test
+            void sort_by_natural_desc_sorts_by_time_desc() {
+                // Given
+                LocalDateTime now = LocalDateTime.now();
+                NameDefined nameDefined = new NameDefined(UUID.randomUUID().toString(), now, "name");
+                NameWasChanged nameWasChanged2 = new NameWasChanged(UUID.randomUUID().toString(), now.plusHours(1), "name3");
+                NameWasChanged nameWasChanged1 = new NameWasChanged(UUID.randomUUID().toString(), now.minusHours(2), "name2");
+
+                // When
+                unconditionallyPersist(inMemoryEventStore, "name3", nameWasChanged1);
+                unconditionallyPersist(inMemoryEventStore, "name2", nameWasChanged2);
+                unconditionallyPersist(inMemoryEventStore, "name1", nameDefined);
+
+                // Then
+                Stream<CloudEvent> events = inMemoryEventStore.all(EventStoreQueries.SortBy.NATURAL_DESC);
+                assertThat(events.map(deserialize(objectMapper))).containsExactly(nameWasChanged2, nameDefined, nameWasChanged1);
+            }
+
+            @Test
+            void sort_by_time_asc() {
+                // Given
+                LocalDateTime now = LocalDateTime.now();
+                NameDefined nameDefined = new NameDefined(UUID.randomUUID().toString(), now, "name");
+                NameWasChanged nameWasChanged1 = new NameWasChanged(UUID.randomUUID().toString(), now.minusHours(2), "name2");
+                NameWasChanged nameWasChanged2 = new NameWasChanged(UUID.randomUUID().toString(), now.plusHours(1), "name3");
+
+                // When
+                unconditionallyPersist(inMemoryEventStore, "name3", nameWasChanged1);
+                unconditionallyPersist(inMemoryEventStore, "name2", nameWasChanged2);
+                unconditionallyPersist(inMemoryEventStore, "name1", nameDefined);
+
+                // Then
+                Stream<CloudEvent> events = inMemoryEventStore.all(EventStoreQueries.SortBy.TIME_ASC);
+                assertThat(events.map(deserialize(objectMapper))).containsExactly(nameWasChanged1, nameDefined, nameWasChanged2);
+            }
+
+            @Test
+            void sort_by_time_desc() {
+                // Given
+                LocalDateTime now = LocalDateTime.now();
+                NameDefined nameDefined = new NameDefined(UUID.randomUUID().toString(), now.plusHours(3), "name");
+                NameWasChanged nameWasChanged1 = new NameWasChanged(UUID.randomUUID().toString(), now.minusHours(2), "name2");
+                NameWasChanged nameWasChanged2 = new NameWasChanged(UUID.randomUUID().toString(), now.plusHours(1), "name3");
+
+                // When
+                unconditionallyPersist(inMemoryEventStore, "name3", nameWasChanged1);
+                unconditionallyPersist(inMemoryEventStore, "name2", nameWasChanged2);
+                unconditionallyPersist(inMemoryEventStore, "name1", nameDefined);
+
+                // Then
+                Stream<CloudEvent> events = inMemoryEventStore.all(EventStoreQueries.SortBy.TIME_DESC);
+                assertThat(events.map(deserialize(objectMapper))).containsExactly(nameDefined, nameWasChanged2, nameWasChanged1);
+            }
+        }
+
+        @Nested
+        @DisplayName("time")
+        class QueryForTime {
+            @Test
+            void query_filter_by_time() {
+                // Given
+                LocalDateTime now = LocalDateTime.now();
+                NameDefined nameDefined = new NameDefined(UUID.randomUUID().toString(), now, "name");
+                NameWasChanged nameWasChanged1 = new NameWasChanged(UUID.randomUUID().toString(), now.plusHours(1), "name2");
+                NameWasChanged nameWasChanged2 = new NameWasChanged(UUID.randomUUID().toString(), now.plusHours(2), "name3");
+
+                // When
+                unconditionallyPersist(inMemoryEventStore, "name1", Stream.of(nameDefined, nameWasChanged1));
+                unconditionallyPersist(inMemoryEventStore, "name2", nameWasChanged2);
+
+                // Then
+                Stream<CloudEvent> events = inMemoryEventStore.query(time(lt(OffsetDateTime.of(now.plusHours(2), UTC))));
+                assertThat(events.map(deserialize(objectMapper))).containsExactly(nameDefined, nameWasChanged1, nameWasChanged2);
+            }
+
+            @Test
+            void query_filter_by_time_range_is_wider_than_persisted_time_range() {
+                // Given
+                LocalDateTime now = LocalDateTime.now();
+                NameDefined nameDefined = new NameDefined(UUID.randomUUID().toString(), now, "name");
+                NameWasChanged nameWasChanged1 = new NameWasChanged(UUID.randomUUID().toString(), now.plusHours(1), "name2");
+                NameWasChanged nameWasChanged2 = new NameWasChanged(UUID.randomUUID().toString(), now.plusHours(2), "name3");
+
+                // When
+                unconditionallyPersist(inMemoryEventStore, "name1", Stream.of(nameDefined, nameWasChanged1));
+                unconditionallyPersist(inMemoryEventStore, "name2", nameWasChanged2);
+
+                // Then
+                Stream<CloudEvent> events = inMemoryEventStore.query(time(and(gte(OffsetDateTime.of(now.plusMinutes(35), UTC)), lte(OffsetDateTime.of(now.plusHours(4), UTC)))));
+                assertThat(events.map(deserialize(objectMapper))).containsExactly(nameWasChanged1, nameWasChanged2);
+            }
+
+            @EnabledOnJre(JAVA_8)
+            @Test
+            void query_filter_by_time_range_has_exactly_the_same_range_as_persisted_time_range_when_using_java_8() {
+                // Given
+                LocalDateTime now = LocalDateTime.now();
+                NameDefined nameDefined = new NameDefined(UUID.randomUUID().toString(), now, "name");
+                NameWasChanged nameWasChanged1 = new NameWasChanged(UUID.randomUUID().toString(), now.plusHours(1), "name2");
+                NameWasChanged nameWasChanged2 = new NameWasChanged(UUID.randomUUID().toString(), now.plusHours(2), "name3");
+
+                // When
+                unconditionallyPersist(inMemoryEventStore, "name1", Stream.of(nameDefined, nameWasChanged1));
+                unconditionallyPersist(inMemoryEventStore, "name2", nameWasChanged2);
+
+                // Then
+                Stream<CloudEvent> events = inMemoryEventStore.query(time(and(gte(OffsetDateTime.of(now, UTC)), lte(OffsetDateTime.of(now.plusHours(2), UTC)))));
+                assertThat(events.map(deserialize(objectMapper))).isNotEmpty();
+            }
+
+            @EnabledForJreRange(min = JAVA_11)
+            @Test
+            void query_filter_by_time_range_has_exactly_the_same_range_as_persisted_time_range_when_using_java_11_and_above() {
+                // Given
+                LocalDateTime now = LocalDateTime.now(UTC);
+                NameDefined nameDefined = new NameDefined(UUID.randomUUID().toString(), now, "name");
+                NameWasChanged nameWasChanged1 = new NameWasChanged(UUID.randomUUID().toString(), now.plusHours(1), "name2");
+                NameWasChanged nameWasChanged2 = new NameWasChanged(UUID.randomUUID().toString(), now.plusHours(2), "name3");
+
+                // When
+                unconditionallyPersist(inMemoryEventStore, "name1", Stream.of(nameDefined, nameWasChanged1));
+                unconditionallyPersist(inMemoryEventStore, "name2", nameWasChanged2);
+
+                // Then
+                Stream<CloudEvent> events = inMemoryEventStore.query(time(and(gte(OffsetDateTime.of(now, UTC).truncatedTo(MILLIS)), lte(OffsetDateTime.of(now.plusHours(2), UTC).truncatedTo(MILLIS)))));
+                assertThat(events.map(deserialize(objectMapper))).containsExactly(nameDefined, nameWasChanged1, nameWasChanged2);
+            }
+
+            @Test
+            void query_filter_by_time_range_has_a_range_smaller_as_persisted_time_range() {
+                // Given
+                LocalDateTime now = LocalDateTime.now();
+                NameDefined nameDefined = new NameDefined(UUID.randomUUID().toString(), now, "name");
+                NameWasChanged nameWasChanged1 = new NameWasChanged(UUID.randomUUID().toString(), now.plusHours(1), "name2");
+                NameWasChanged nameWasChanged2 = new NameWasChanged(UUID.randomUUID().toString(), now.plusHours(2), "name3");
+
+                // When
+                unconditionallyPersist(inMemoryEventStore, "name1", Stream.of(nameDefined, nameWasChanged1));
+                unconditionallyPersist(inMemoryEventStore, "name2", nameWasChanged2);
+
+                // Then
+                Stream<CloudEvent> events = inMemoryEventStore.query(time(and(gt(OffsetDateTime.of(now.plusMinutes(50), UTC)), lt(OffsetDateTime.of(now.plusMinutes(110), UTC)))));
+                assertThat(events.map(deserialize(objectMapper))).containsExactly(nameWasChanged1);
+            }
+        }
+    }
+
+    @Nested
+    @DisplayName("count")
+    class CountTest {
+
+        private InMemoryEventStore inMemoryEventStore;
+
+        @BeforeEach
+        void create_event_store() {
+            inMemoryEventStore = new InMemoryEventStore();
+        }
+
+        @Test
+        void count_without_any_filter_returns_all_the_count_of_all_events_in_the_event_store() {
+            // Given
+            LocalDateTime now = LocalDateTime.now();
+            DomainEvent event1 = new NameDefined(UUID.randomUUID().toString(), now, "John Doe");
+            DomainEvent event2 = new NameWasChanged(UUID.randomUUID().toString(), now, "Jan Doe");
+            DomainEvent event3 = new NameDefined(UUID.randomUUID().toString(), now, "Hello Doe");
+            unconditionallyPersist(inMemoryEventStore, "name", Stream.of(event1, event2, event3));
+
+            // When
+            long count = inMemoryEventStore.count();
+
+            // Then
+            assertThat(count).isEqualTo(3);
+        }
+
+        @Test
+        void count_with_filter_returns_only_events_that_matches_the_filter() {
+            // Given
+            LocalDateTime now = LocalDateTime.now();
+            DomainEvent event1 = new NameDefined(UUID.randomUUID().toString(), now, "John Doe");
+            DomainEvent event2 = new NameWasChanged(UUID.randomUUID().toString(), now, "Jan Doe");
+            DomainEvent event3 = new NameDefined(UUID.randomUUID().toString(), now, "Hello Doe");
+            unconditionallyPersist(inMemoryEventStore, "name", Stream.of(event1, event2, event3));
+
+            // When
+            long count = inMemoryEventStore.count(type(NameDefined.class.getName()));
+
+            // Then
+            assertThat(count).isEqualTo(2);
+        }
+    }
+
+    private void unconditionallyPersist(EventStore inMemoryEventStore, String eventStreamId, DomainEvent event) {
+        unconditionallyPersist(inMemoryEventStore, eventStreamId, Stream.of(event));
     }
 
     private void unconditionallyPersist(EventStore inMemoryEventStore, String eventStreamId, List<DomainEvent> events) {

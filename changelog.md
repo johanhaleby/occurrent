@@ -63,6 +63,7 @@
   inMemorySubscriptionModel.subscribe("subscription1", System.out::println);
   ```
 * Renamed groupId `org.occurrent.inmemory` to `org.occurrent` for consistency. This means that you should depend on module `org.occurrent:eventstore-inmemory` instead of `org.occurrent.inmemory:eventstore-inmemory` when using the in-memory event store.
+* Added support for querying the in-memory event store (all fields expect the "data" field works)
 
 ## Changelog 0.4.1 (2020-12-14)
 

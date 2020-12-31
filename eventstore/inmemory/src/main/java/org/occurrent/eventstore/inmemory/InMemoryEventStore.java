@@ -26,6 +26,7 @@ import org.occurrent.eventstore.api.WriteCondition.StreamVersionWriteCondition;
 import org.occurrent.eventstore.api.WriteConditionNotFulfilledException;
 import org.occurrent.eventstore.api.blocking.EventStore;
 import org.occurrent.eventstore.api.blocking.EventStoreOperations;
+import org.occurrent.eventstore.api.blocking.EventStoreQueries;
 import org.occurrent.eventstore.api.blocking.EventStream;
 import org.occurrent.filter.Filter;
 import org.occurrent.functionalsupport.internal.FunctionalSupport.Pair;
@@ -43,6 +44,7 @@ import java.util.stream.Collectors;
 import java.util.stream.LongStream;
 import java.util.stream.Stream;
 
+import static java.util.Comparator.comparing;
 import static java.util.Objects.requireNonNull;
 import static org.occurrent.cloudevents.OccurrentCloudEventExtension.STREAM_VERSION;
 import static org.occurrent.functionalsupport.internal.FunctionalSupport.not;
@@ -53,7 +55,7 @@ import static org.occurrent.inmemory.filtermatching.FilterMatcher.matchesFilter;
  * This is an {@link EventStore} that stores events in-memory. This is mainly useful for testing
  * and/or demo purposes. It also supports the {@link EventStoreOperations} contract.
  */
-public class InMemoryEventStore implements EventStore, EventStoreOperations {
+public class InMemoryEventStore implements EventStore, EventStoreOperations, EventStoreQueries {
 
     private final ConcurrentMap<String, List<CloudEvent>> state = new ConcurrentHashMap<>();
 
@@ -155,6 +157,7 @@ public class InMemoryEventStore implements EventStore, EventStoreOperations {
 
     @Override
     public void deleteEventStream(String streamId) {
+        requireNonNull(streamId, "StreamId cannot be null");
         state.remove(streamId);
     }
 
@@ -178,6 +181,7 @@ public class InMemoryEventStore implements EventStore, EventStoreOperations {
 
     @Override
     public void delete(Filter filter) {
+        requireNonNull(filter, "Filter cannot be null");
         state.replaceAll((streamId, cloudEvents) -> cloudEvents.stream().filter(not(cloudEvent -> matchesFilter(cloudEvent, filter))).collect(Collectors.toList()));
     }
 
@@ -200,6 +204,30 @@ public class InMemoryEventStore implements EventStore, EventStoreOperations {
                             }
                         }).collect(Collectors.toList())))
                 .flatMap(events -> events.stream().filter(cloudEventPredicate).findFirst());
+    }
+
+    @Override
+    public Stream<CloudEvent> query(Filter filter, int skip, int limit, SortBy sortBy) {
+        Stream<CloudEvent> stream = state.values().stream().flatMap(List::stream).filter(cloudEvent -> matchesFilter(cloudEvent, filter));
+        final Stream<CloudEvent> sorted;
+        switch (sortBy) {
+            case NATURAL_ASC:
+            case TIME_ASC:
+                sorted = stream.sorted(comparing(cloudEvent -> requireNonNull(cloudEvent.getTime())));
+                break;
+            case NATURAL_DESC:
+            case TIME_DESC:
+                sorted = stream.sorted(comparing((CloudEvent cloudEvent) -> requireNonNull(cloudEvent.getTime())).reversed());
+                break;
+            default:
+                throw new IllegalStateException("Unexpected value: " + sortBy);
+        }
+        return sorted.skip(skip).limit(limit);
+    }
+
+    @Override
+    public long count(Filter filter) {
+        return state.values().stream().mapToLong(cloudEvents -> cloudEvents.stream().filter(cloudEvent -> matchesFilter(cloudEvent, filter)).count()).reduce(0, Long::sum);
     }
 
     private static class EventStreamImpl implements EventStream<CloudEvent> {

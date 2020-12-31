@@ -22,6 +22,7 @@ import org.occurrent.condition.Condition.MultiOperandCondition;
 import org.occurrent.condition.Condition.SingleOperandCondition;
 import org.occurrent.condition.Condition.SingleOperandConditionName;
 
+import java.net.URI;
 import java.util.HashSet;
 import java.util.List;
 import java.util.Objects;
@@ -112,6 +113,14 @@ public class ConditionMatcher {
 
     private static Object extractValue(CloudEvent cloudEvent, String fieldName) {
         // TODO data if content-type is json
-        return ATTRIBUTE_NAMES.contains(fieldName) ? cloudEvent.getAttribute(fieldName) : cloudEvent.getExtension(fieldName);
+        if (fieldName != null && fieldName.startsWith(DATA + ".")) {
+            throw new IllegalArgumentException("Currently, it's not possible to query the data field from in-memory event stores/subscriptions. The good thing is that Occurrent is open-source, so feel free to contribute :) (https://github.com/johanhaleby/occurrent/issues/58).");
+        }
+
+        Object object = ATTRIBUTE_NAMES.contains(fieldName) ? cloudEvent.getAttribute(fieldName) : cloudEvent.getExtension(fieldName);
+        if (object instanceof URI) {
+            return object.toString();
+        }
+        return object;
     }
 }
