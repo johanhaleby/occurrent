@@ -29,6 +29,7 @@
         <module>time</module>
         <module>functional-support</module>
         <module>inmemory</module>
+        <module>retry</module>
     </modules>
 
     <artifactId>common</artifactId>

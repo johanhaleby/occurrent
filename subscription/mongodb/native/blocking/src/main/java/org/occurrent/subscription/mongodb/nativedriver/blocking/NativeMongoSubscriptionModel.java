@@ -31,6 +31,7 @@ import org.bson.conversions.Bson;
 import org.occurrent.filter.Filter;
 import org.occurrent.mongodb.spring.filterbsonfilterconversion.internal.FilterToBsonFilterConverter;
 import org.occurrent.mongodb.timerepresentation.TimeRepresentation;
+import org.occurrent.retry.RetryStrategy;
 import org.occurrent.subscription.*;
 import org.occurrent.subscription.api.blocking.PositionAwareSubscriptionModel;
 import org.occurrent.subscription.api.blocking.Subscription;
@@ -44,20 +45,20 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import java.util.Collections;
-import java.util.Iterator;
 import java.util.List;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ConcurrentMap;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.Executor;
 import java.util.function.Consumer;
-import java.util.function.Predicate;
 import java.util.function.Supplier;
 import java.util.stream.Collectors;
 import java.util.stream.Stream;
 
 import static com.mongodb.client.model.Aggregates.match;
 import static java.util.Objects.requireNonNull;
+import static org.occurrent.retry.internal.RetryExecution.convertToDelayStream;
+import static org.occurrent.retry.internal.RetryExecution.executeWithRetry;
 
 /**
  * This is a subscription that uses the "native" MongoDB Java driver (sync) to listen to changes from the event store.
@@ -137,7 +138,7 @@ public class NativeMongoSubscriptionModel implements PositionAwareSubscriptionMo
             try {
                 cursor.forEachRemaining(changeStreamDocument -> MongoCloudEventsToJsonDeserializer.deserializeToCloudEvent(changeStreamDocument, timeRepresentation)
                         .map(cloudEvent -> new PositionAwareCloudEvent(cloudEvent, new MongoResumeTokenSubscriptionPosition(changeStreamDocument.getResumeToken())))
-                        .ifPresent(retry(action, __ -> true, convertToDelayStream(retryStrategy))));
+                        .ifPresent(executeWithRetry(action, __ -> true, convertToDelayStream(retryStrategy))));
             } catch (MongoException e) {
                 log.debug("Caught {} (code={}, message={}), this might happen when cursor is shutdown.", e.getClass().getName(), e.getCode(), e.getMessage(), e);
             } catch (IllegalStateException e) {
@@ -145,7 +146,7 @@ public class NativeMongoSubscriptionModel implements PositionAwareSubscriptionMo
             }
         };
 
-        cloudEventDispatcher.execute(retry(runnable, __ -> !shuttingDown, convertToDelayStream(retryStrategy)));
+        cloudEventDispatcher.execute(executeWithRetry(runnable, __ -> !shuttingDown, convertToDelayStream(retryStrategy)));
         return new NativeMongoSubscription(subscriptionId, subscriptionStartedLatch);
     }
 
@@ -207,48 +208,5 @@ public class NativeMongoSubscriptionModel implements PositionAwareSubscriptionMo
         return new MongoOperationTimeSubscriptionPosition(currentOperationTime);
     }
 
-    private static Runnable retry(Runnable runnable, Predicate<Exception> retryPredicate, Iterator<Long> delay) {
-        Consumer<Void> runnableConsumer = __ -> runnable.run();
-        return () -> retry(runnableConsumer, retryPredicate, delay).accept(null);
-    }
 
-    private static <T1> Consumer<T1> retry(Consumer<T1> fn, Predicate<Exception> retryPredicate, Iterator<Long> delay) {
-        return t1 -> {
-            try {
-                fn.accept(t1);
-            } catch (Exception e) {
-                if (retryPredicate.test(e) && delay != null) {
-                    Long retryAfterMillis = delay.next();
-                    log.error("Caught {} with message \"{}\", will retry in {} milliseconds.", e.getClass().getName(), e.getMessage(), retryAfterMillis, e);
-                    try {
-                        Thread.sleep(retryAfterMillis);
-                    } catch (InterruptedException interruptedException) {
-                        throw new RuntimeException(e);
-                    }
-                    retry(fn, retryPredicate, delay).accept(t1);
-                } else {
-                    throw e;
-                }
-            }
-        };
-    }
-
-    private static Iterator<Long> convertToDelayStream(RetryStrategy retryStrategy) {
-        final Stream<Long> delay;
-        if (retryStrategy instanceof RetryStrategy.None) {
-            delay = null;
-        } else if (retryStrategy instanceof RetryStrategy.Fixed) {
-            long millis = ((RetryStrategy.Fixed) retryStrategy).millis;
-            delay = Stream.iterate(millis, __ -> millis);
-        } else if (retryStrategy instanceof RetryStrategy.Backoff) {
-            RetryStrategy.Backoff strategy = (RetryStrategy.Backoff) retryStrategy;
-            long initialMillis = strategy.initial.toMillis();
-            long maxMillis = strategy.max.toMillis();
-            double multiplier = strategy.multiplier;
-            delay = Stream.iterate(initialMillis, current -> Math.min(maxMillis, Math.round(current * multiplier)));
-        } else {
-            throw new IllegalStateException("Invalid retry strategy: " + retryStrategy.getClass().getName());
-        }
-        return delay == null ? null : delay.iterator();
-    }
 }

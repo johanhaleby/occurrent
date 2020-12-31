@@ -14,7 +14,7 @@
  * limitations under the License.
  */
 
-package org.occurrent.subscription.mongodb.nativedriver.blocking;
+package org.occurrent.retry;
 
 import java.time.Duration;
 import java.util.Objects;
@@ -57,12 +57,12 @@ public abstract class RetryStrategy {
     }
 
 
-    final static class None extends RetryStrategy {
+    public final static class None extends RetryStrategy {
         private None() {
         }
     }
 
-    final static class Fixed extends RetryStrategy {
+    public final static class Fixed extends RetryStrategy {
         public final long millis;
 
         private Fixed(long millis) {
@@ -73,7 +73,7 @@ public abstract class RetryStrategy {
         }
     }
 
-    final static class Backoff extends RetryStrategy {
+    public final static class Backoff extends RetryStrategy {
         public final Duration initial;
         public final Duration max;
         public final double multiplier;

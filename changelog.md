@@ -53,8 +53,15 @@
   ```
 * Implemented ability to delete cloud events by a filter in the in-memory event store.
 * Added "listener" support to the in-memory event store. This means that you can supply a "listener" (a consumer) to the `InMemoryEventStore` constructor that
-  will be invoked (synchronously) after new events have been written. This is mainly useful to allow in-memory subscription models. 
+  will be invoked (synchronously) after new events have been written. This is mainly useful to allow in-memory subscription models.
+* Added an in-memory subscription model that can be used to subscribe to events from the in-memory event store. Add module `org.occurrent:subscription-inmemory` and then instantiate it using:
 
+  ```java
+  InMemorySubscriptionModel inMemorySubscriptionModel = new InMemorySubscriptionModel();
+  InMemoryEventStore inMemoryEventStore = new InMemoryEventStore(inMemorySubscriptionModel);
+  
+  inMemorySubscriptionModel.subscribe("subscription1", System.out::println);
+  ```
 
 ## Changelog 0.4.1 (2020-12-14)
 

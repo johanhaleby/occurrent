@@ -30,8 +30,8 @@ import org.occurrent.example.domain.uno.Digit.*
 import org.occurrent.filter.Filter.streamId
 import org.occurrent.filter.Filter.type
 import org.occurrent.mongodb.timerepresentation.TimeRepresentation
+import org.occurrent.retry.RetryStrategy
 import org.occurrent.subscription.mongodb.nativedriver.blocking.NativeMongoSubscriptionModel
-import org.occurrent.subscription.mongodb.nativedriver.blocking.RetryStrategy
 import org.slf4j.LoggerFactory
 import java.lang.Thread.sleep
 import java.util.concurrent.Executors
