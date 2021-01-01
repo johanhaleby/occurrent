@@ -1,5 +1,5 @@
 /*
- * Copyright 2020 Johan Haleby
+ * Copyright 2021 Johan Haleby
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -16,15 +16,22 @@
 
 package org.occurrent.domain;
 
+import org.occurrent.command.ChangeName;
+import org.occurrent.command.DefineName;
 import org.occurrent.time.TimeConversion;
 
 import java.time.LocalDateTime;
 import java.util.Collections;
 import java.util.List;
 import java.util.Objects;
+import java.util.UUID;
 import java.util.function.Predicate;
 
 public class Name {
+
+    public static List<DomainEvent> defineName(List<DomainEvent> events, DefineName defineName) {
+        return defineName(events, UUID.randomUUID().toString(), defineName.getTime(), defineName.getName());
+    }
 
     public static List<DomainEvent> defineName(List<DomainEvent> events, String eventId, LocalDateTime time, String name) {
         if (!events.isEmpty()) {
@@ -35,6 +42,10 @@ public class Name {
 
     public static List<DomainEvent> defineName(String eventId, LocalDateTime time, String name) {
         return Collections.singletonList(new NameDefined(eventId, TimeConversion.toDate(time), name));
+    }
+
+    public static List<DomainEvent> changeName(List<DomainEvent> events, ChangeName changeName) {
+        return changeName(events, UUID.randomUUID().toString(), changeName.getTime(), changeName.getNewName());
     }
 
     public static List<DomainEvent> changeName(List<DomainEvent> events, String eventId, LocalDateTime time, String newName) {

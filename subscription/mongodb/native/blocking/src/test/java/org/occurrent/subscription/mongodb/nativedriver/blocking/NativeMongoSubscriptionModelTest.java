@@ -1,5 +1,5 @@
 /*
- * Copyright 2020 Johan Haleby
+ * Copyright 2021 Johan Haleby
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -108,7 +108,10 @@ public class NativeMongoSubscriptionModelTest {
     void shutdown() throws InterruptedException {
         subscription.shutdown();
         subscriptionExecutor.shutdown();
-        subscriptionExecutor.awaitTermination(10, SECONDS);
+        boolean terminated = subscriptionExecutor.awaitTermination(10, SECONDS);
+        if (!terminated) {
+            subscriptionExecutor.shutdownNow();
+        }
         mongoClient.close();
     }
 

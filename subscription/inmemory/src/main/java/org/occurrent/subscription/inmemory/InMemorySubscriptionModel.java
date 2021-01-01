@@ -1,5 +1,5 @@
 /*
- * Copyright 2020 Johan Haleby
+ * Copyright 2021 Johan Haleby
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -27,26 +27,19 @@ import org.occurrent.subscription.api.blocking.SubscriptionModel;
 
 import javax.annotation.PreDestroy;
 import java.util.List;
-import java.util.concurrent.ConcurrentHashMap;
-import java.util.concurrent.ConcurrentMap;
-import java.util.concurrent.Executor;
-import java.util.concurrent.Executors;
+import java.util.concurrent.*;
 import java.util.function.Consumer;
 import java.util.function.Supplier;
 import java.util.stream.Collectors;
 import java.util.stream.Stream;
-
-import static org.occurrent.inmemory.filtermatching.FilterMatcher.matchesFilter;
-import static org.occurrent.retry.internal.RetryExecution.convertToDelayStream;
-import static org.occurrent.retry.internal.RetryExecution.executeWithRetry;
 
 /**
  * An in-memory subscription model
  */
 public class InMemorySubscriptionModel implements SubscriptionModel, Consumer<Stream<CloudEvent>> {
 
-    private final ConcurrentMap<String, Consumer<CloudEvent>> subscriptions;
-    private final Executor cloudEventDispatcher;
+    private final ConcurrentMap<String, InMemorySubscription> subscriptions;
+    private final ExecutorService cloudEventDispatcher;
     private final RetryStrategy retryStrategy;
 
     private volatile boolean shuttingDown = false;
@@ -69,10 +62,10 @@ public class InMemorySubscriptionModel implements SubscriptionModel, Consumer<St
     /**
      * Create an instance of {@link InMemorySubscriptionModel} with the given parameters
      *
-     * @param cloudEventDispatcher The {@link Executor} that will be used when dispatching cloud events to subscribers
+     * @param cloudEventDispatcher The {@link ExecutorService} that will be used when dispatching cloud events to subscribers
      * @param retryStrategy        The retry strategy
      */
-    public InMemorySubscriptionModel(Executor cloudEventDispatcher, RetryStrategy retryStrategy) {
+    public InMemorySubscriptionModel(ExecutorService cloudEventDispatcher, RetryStrategy retryStrategy) {
         if (cloudEventDispatcher == null) {
             throw new IllegalArgumentException("cloudEventDispatcher cannot be null");
         } else if (retryStrategy == null) {
@@ -102,13 +95,11 @@ public class InMemorySubscriptionModel implements SubscriptionModel, Consumer<St
         }
 
         final Filter f = getFilter(filter);
-        subscriptions.put(subscriptionId, cloudEvent -> {
-            if (matchesFilter(cloudEvent, f)) {
-                action.accept(cloudEvent);
-            }
-        });
 
-        return new InMemorySubscription(subscriptionId);
+        InMemorySubscription subscription = new InMemorySubscription(subscriptionId, new LinkedBlockingQueue<>(), action, f, retryStrategy);
+        subscriptions.put(subscriptionId, subscription);
+        cloudEventDispatcher.execute(subscription);
+        return subscription;
     }
 
     @Override
@@ -120,14 +111,25 @@ public class InMemorySubscriptionModel implements SubscriptionModel, Consumer<St
     public void accept(Stream<CloudEvent> cloudEventStream) {
         List<CloudEvent> cloudEvents = cloudEventStream.collect(Collectors.toList());
         subscriptions.values().forEach(subscription -> {
-            Runnable runnable = () -> cloudEvents.forEach(subscription);
-            cloudEventDispatcher.execute(executeWithRetry(runnable, __ -> !shuttingDown, convertToDelayStream(retryStrategy)));
+            cloudEvents.stream()
+                    .filter(subscription::matches)
+                    .forEach(subscription::eventAvailable);
         });
     }
 
     @PreDestroy
     public void shutdown() {
         shuttingDown = true;
+        subscriptions.values().forEach(InMemorySubscription::shutdown);
+        cloudEventDispatcher.shutdown();
+        try {
+            boolean terminated = cloudEventDispatcher.awaitTermination(5, TimeUnit.SECONDS);
+            if (!terminated) {
+                cloudEventDispatcher.shutdownNow();
+            }
+        } catch (InterruptedException e) {
+            cloudEventDispatcher.shutdownNow();
+        }
     }
 
     private static Filter getFilter(SubscriptionFilter filter) {
@@ -141,4 +143,6 @@ public class InMemorySubscriptionModel implements SubscriptionModel, Consumer<St
         }
         return f;
     }
+
+
 }

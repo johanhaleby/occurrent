@@ -1,5 +1,5 @@
 /*
- * Copyright 2020 Johan Haleby
+ * Copyright 2021 Johan Haleby
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -19,6 +19,7 @@ package org.occurrent.subscription.inmemory;
 
 import io.cloudevents.CloudEvent;
 import io.cloudevents.core.v1.CloudEventBuilder;
+import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.occurrent.eventstore.inmemory.InMemoryEventStore;
@@ -39,7 +40,7 @@ import static org.awaitility.Awaitility.await;
 import static org.hamcrest.Matchers.is;
 import static org.junit.jupiter.api.Assertions.assertAll;
 
-public class InMemorySubscriptionTest {
+public class InMemorySubscriptionModelTest {
 
     private InMemoryEventStore inMemoryEventStore;
     private InMemorySubscriptionModel inMemorySubscriptionModel;
@@ -50,6 +51,11 @@ public class InMemorySubscriptionTest {
         inMemoryEventStore = new InMemoryEventStore(inMemorySubscriptionModel);
     }
 
+    @AfterEach
+    void shutdown() {
+        inMemorySubscriptionModel.shutdown();
+    }
+    
     @Test
     void events_written_to_event_store_are_propagated_to_all_subscribers() {
         // Given
