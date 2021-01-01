@@ -41,14 +41,22 @@ class Subscriptions<T : Any> @JvmOverloads constructor(
 ) {
 
     /**
-     * Create a new policy that is invoked after a specific domain event is written to the event store
+     * Create a new subscription that is invoked after a specific domain event is written to the event store
+     */
+    @JvmName("subscribeAll")
+    fun subscribe(subscriptionId: String, startAt: StartAt? = null, fn: (T) -> Unit): Subscription {
+        return subscribe(subscriptionId, *emptyArray(), startAt = startAt) { e -> fn(e) }
+    }
+
+    /**
+     * Create a new subscription that is invoked after a specific domain event is written to the event store
      */
     inline fun <reified E : T> subscribe(subscriptionId: String, startAt: StartAt? = null, crossinline fn: (E) -> Unit): Subscription {
         return subscribe(subscriptionId, E::class, startAt = startAt) { e -> fn(e as E) }
     }
 
 
-    @JvmName("subscription2")
+    @JvmName("subscribeAnyOf")
     inline fun <reified E1 : T, reified E2 : T> subscribe(subscriptionId: String, startAt: StartAt? = null, crossinline fn: (T) -> Unit): Subscription {
         return subscribe(subscriptionId, E1::class, E2::class, startAt = startAt) { e -> fn(e) }
     }
@@ -67,16 +75,18 @@ class Subscriptions<T : Any> @JvmOverloads constructor(
     }
 
     fun subscribe(subscriptionId: String, vararg eventTypes: KClass<out T>, startAt: StartAt? = null, fn: (T) -> Unit): Subscription {
-        require(eventTypes.isNotEmpty()) {
-            "Event types cannot be empty"
+        val condition = when {
+            eventTypes.isEmpty() -> {
+                null
+            }
+            eventTypes.size == 1 -> {
+                Condition.eq(eventNameFromType(eventTypes[0]))
+            }
+            else -> {
+                Condition.or(eventTypes.map { e -> Condition.eq(eventNameFromType(e)) })
+            }
         }
-
-        val condition = if (eventTypes.size == 1) {
-            Condition.eq(eventNameFromType(eventTypes[0]))
-        } else {
-            Condition.or(eventTypes.map { e -> Condition.eq(eventNameFromType(e)) })
-        }
-        val filter = OccurrentSubscriptionFilter.filter(Filter.type(condition))
+        val filter = OccurrentSubscriptionFilter.filter(if (condition == null) Filter.all() else Filter.type(condition))
         return subscribe(subscriptionId, filter, startAt, fn)
     }
 
