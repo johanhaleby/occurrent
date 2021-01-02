@@ -49,6 +49,9 @@
     subscribe<GameWon, GameLost>("id2") { domainEvent ->
         log.info("Game was either won or lost: $domainEvent")
     }
+   subscribe("everything") { domainEvent ->
+        log.info("I subscribe to every event: $domainEvent")
+    }
   } 
   ```
 * Implemented ability to delete cloud events by a filter in the in-memory event store.
