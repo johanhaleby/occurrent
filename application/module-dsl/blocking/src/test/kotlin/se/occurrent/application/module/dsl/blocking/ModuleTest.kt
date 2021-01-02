@@ -21,8 +21,6 @@ import org.assertj.core.api.Assertions.assertThat
 import org.junit.jupiter.api.Test
 import org.junit.jupiter.api.assertAll
 import org.occurrent.application.converter.generic.GenericCloudEventConverter
-import org.occurrent.blockurrent.command
-import org.occurrent.blockurrent.module
 import org.occurrent.command.ChangeName
 import org.occurrent.command.Command
 import org.occurrent.command.DefineName
