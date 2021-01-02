@@ -17,11 +17,7 @@
 package se.occurrent.application.module.dsl.blocking
 
 import org.occurrent.application.converter.CloudEventConverter
-import org.occurrent.application.service.blocking.ApplicationService
-import org.occurrent.application.service.blocking.execute
-import org.occurrent.application.service.blocking.generic.GenericApplicationService
 import org.occurrent.application.subscription.dsl.blocking.Subscriptions
-import org.occurrent.eventstore.api.blocking.EventStore
 import org.occurrent.subscription.api.blocking.SubscriptionModel
 import kotlin.reflect.KClass
 
@@ -32,25 +28,26 @@ import kotlin.reflect.KClass
 @Target(AnnotationTarget.TYPE, AnnotationTarget.CLASS)
 internal annotation class ModuleDSL
 
-fun <C : Any, E : Any> module(cloudEventConverter: CloudEventConverter<E>, es: EventStore, eventNameFromType: (KClass<out E>) -> String = { e -> e.simpleName!! }, b: (@ModuleDSL ModuleBuilder<C, E>).() -> Unit): Module<C> {
-    val commandDispatcher = Commands<C, E>(GenericApplicationService(es, cloudEventConverter))
-    ModuleBuilder(cloudEventConverter, commandDispatcher, eventNameFromType).apply(b)
+fun <C : Any, E : Any> module(cloudEventConverter: CloudEventConverter<E>, eventNameFromType: (KClass<out E>) -> String = { e -> e.simpleName!! },
+                              b: (@ModuleDSL ModuleBuilder<C, E>).() -> Unit): Module<C> {
+    val module = ModuleBuilder<C, E>(cloudEventConverter, eventNameFromType).apply(b)
 
     return object : Module<C> {
         override fun dispatch(vararg commands: C) {
             commands.forEach { command ->
-                val function = commandDispatcher.dispatchers[command::class] ?: throw IllegalArgumentException("No command dispatcher registered for ${command::class.qualifiedName}")
-                function(command)
+                module.commandDispatcher.dispatch(command)
             }
         }
     }
 }
 
 @ModuleDSL
-class ModuleBuilder<C : Any, E : Any> internal constructor(private val cloudEventConverter: CloudEventConverter<E>, private val commandBuilder: Commands<C, E>,
-                                                           private val eventNameFromType: (KClass<out E>) -> String) {
-    fun commands(commands: (@ModuleDSL Commands<C, E>).() -> Unit) {
-        commandBuilder.apply(commands)
+class ModuleBuilder<C : Any, E : Any> internal constructor(private val cloudEventConverter: CloudEventConverter<E>, private val eventNameFromType: (KClass<out E>) -> String) {
+    internal lateinit var commandDispatcher: CommandDispatcher<C, out Any>
+
+    fun <B : Any> commands(commandDispatcher: CommandDispatcher<C, B>, commands: (@ModuleDSL B).() -> Unit) {
+        this.commandDispatcher = commandDispatcher
+        commandDispatcher.builder().apply(commands)
     }
 
     fun subscriptions(subscriptionModel: SubscriptionModel, subscriptions: (@ModuleDSL Subscriptions<E>).() -> Unit) {
@@ -58,34 +55,6 @@ class ModuleBuilder<C : Any, E : Any> internal constructor(private val cloudEven
     }
 }
 
-@ModuleDSL
-class Commands<C : Any, E> internal constructor(val applicationService: ApplicationService<E>) {
-    val dispatchers = mutableMapOf<KClass<out C>, (C) -> Unit>()
-
-    inline fun <reified CMD : C> command(crossinline commandHandler: (CMD) -> Unit) {
-        dispatchers[CMD::class] = { cmd -> commandHandler(cmd as CMD) }
-    }
-
-    inline fun <reified CMD : C> command(crossinline streamIdGetter: (CMD) -> String, crossinline commandHandler: (Sequence<E>, CMD) -> Sequence<E>) {
-        val dispatcherFn: (CMD) -> Unit = { command ->
-            val streamId = streamIdGetter(command)
-            applicationService.execute(streamId) { e: Sequence<E> ->
-                commandHandler(e, command)
-            }
-        }
-
-        dispatchers[CMD::class] = { cmd -> dispatcherFn(cmd as CMD) }
-    }
-}
-
 interface Module<C : Any> {
     fun dispatch(vararg commands: C)
-}
-
-
-@JvmName("listCommand")
-inline fun <C : Any, E : Any, reified CMD : C> Commands<C, E>.command(crossinline streamIdGetter: (CMD) -> String, crossinline commandHandler: (List<E>, CMD) -> List<E>) {
-    command(streamIdGetter) { eventSeq, cmd ->
-        commandHandler(eventSeq.toList(), cmd).asSequence()
-    }
 }

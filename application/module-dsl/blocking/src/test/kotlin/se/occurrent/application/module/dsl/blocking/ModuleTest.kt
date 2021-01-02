@@ -21,6 +21,7 @@ import org.assertj.core.api.Assertions.assertThat
 import org.junit.jupiter.api.Test
 import org.junit.jupiter.api.assertAll
 import org.occurrent.application.converter.generic.GenericCloudEventConverter
+import org.occurrent.application.service.blocking.generic.GenericApplicationService
 import org.occurrent.command.ChangeName
 import org.occurrent.command.Command
 import org.occurrent.command.DefineName
@@ -29,6 +30,7 @@ import org.occurrent.eventstore.inmemory.InMemoryEventStore
 import org.occurrent.subscription.inmemory.InMemorySubscriptionModel
 import org.slf4j.Logger
 import org.slf4j.LoggerFactory
+import se.occurrent.application.module.dsl.blocking.ApplicationServiceCommandDispatcher.Companion.applicationService
 import java.time.LocalDateTime
 import java.util.concurrent.CopyOnWriteArrayList
 
@@ -45,12 +47,13 @@ class ModuleTest {
         val cloudEventConverter = GenericCloudEventConverter(domainEventConverter::convertToDomainEvent, domainEventConverter::convertToCloudEvent)
         val subscriptionModel = InMemorySubscriptionModel()
         val eventStore = InMemoryEventStore(subscriptionModel)
+        val applicationService = GenericApplicationService(eventStore, cloudEventConverter)
 
         val allEvents = CopyOnWriteArrayList<DomainEvent>()
 
         // Module Configuration
-        val module = module<Command, DomainEvent>(cloudEventConverter, eventStore, { e -> e.qualifiedName!! }) {
-            commands {
+        val module = module<Command, DomainEvent>(cloudEventConverter, { e -> e.qualifiedName!! }) {
+            commands(applicationService(applicationService)) {
                 command(DefineName::getId, Name::defineName)
                 command(ChangeName::getId, Name::changeName)
             }
