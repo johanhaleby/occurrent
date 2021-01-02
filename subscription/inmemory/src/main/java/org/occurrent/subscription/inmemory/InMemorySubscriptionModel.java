@@ -143,6 +143,4 @@ public class InMemorySubscriptionModel implements SubscriptionModel, Consumer<St
         }
         return f;
     }
-
-
 }
