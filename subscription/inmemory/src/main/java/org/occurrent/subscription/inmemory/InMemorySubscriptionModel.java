@@ -119,8 +119,10 @@ public class InMemorySubscriptionModel implements SubscriptionModel, Consumer<St
 
     @PreDestroy
     public void shutdown() {
-        shuttingDown = true;
-        subscriptions.values().forEach(InMemorySubscription::shutdown);
+        synchronized (subscriptions) {
+            shuttingDown = true;
+            subscriptions.values().forEach(InMemorySubscription::shutdown);
+        }
         cloudEventDispatcher.shutdown();
         try {
             boolean terminated = cloudEventDispatcher.awaitTermination(5, TimeUnit.SECONDS);

@@ -1,5 +1,5 @@
 /*
- * Copyright 2020 Johan Haleby
+ * Copyright 2021 Johan Haleby
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -44,12 +44,13 @@ import org.occurrent.subscription.mongodb.internal.MongoCommons;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
+import javax.annotation.PreDestroy;
 import java.util.Collections;
 import java.util.List;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ConcurrentMap;
 import java.util.concurrent.CountDownLatch;
-import java.util.concurrent.Executor;
+import java.util.concurrent.ExecutorService;
 import java.util.function.Consumer;
 import java.util.function.Supplier;
 import java.util.stream.Collectors;
@@ -57,6 +58,7 @@ import java.util.stream.Stream;
 
 import static com.mongodb.client.model.Aggregates.match;
 import static java.util.Objects.requireNonNull;
+import static java.util.concurrent.TimeUnit.SECONDS;
 import static org.occurrent.retry.internal.RetryExecution.convertToDelayStream;
 import static org.occurrent.retry.internal.RetryExecution.executeWithRetry;
 
@@ -74,7 +76,7 @@ public class NativeMongoSubscriptionModel implements PositionAwareSubscriptionMo
     private final MongoCollection<Document> eventCollection;
     private final ConcurrentMap<String, MongoChangeStreamCursor<ChangeStreamDocument<Document>>> subscriptions;
     private final TimeRepresentation timeRepresentation;
-    private final Executor cloudEventDispatcher;
+    private final ExecutorService cloudEventDispatcher;
     private final RetryStrategy retryStrategy;
     private final MongoDatabase database;
 
@@ -90,7 +92,7 @@ public class NativeMongoSubscriptionModel implements PositionAwareSubscriptionMo
      * @param retryStrategy        Configure how retries should be handled
      */
     public NativeMongoSubscriptionModel(MongoDatabase database, String eventCollectionName, TimeRepresentation timeRepresentation,
-                                        Executor subscriptionExecutor, RetryStrategy retryStrategy) {
+                                        ExecutorService subscriptionExecutor, RetryStrategy retryStrategy) {
         this(database, database.getCollection(requireNonNull(eventCollectionName, "Event collection cannot be null")), timeRepresentation, subscriptionExecutor, retryStrategy);
     }
 
@@ -104,7 +106,7 @@ public class NativeMongoSubscriptionModel implements PositionAwareSubscriptionMo
      * @param retryStrategy        Configure how retries should be handled
      */
     public NativeMongoSubscriptionModel(MongoDatabase database, MongoCollection<Document> eventCollection, TimeRepresentation timeRepresentation,
-                                        Executor subscriptionExecutor, RetryStrategy retryStrategy) {
+                                        ExecutorService subscriptionExecutor, RetryStrategy retryStrategy) {
         requireNonNull(database, MongoDatabase.class.getSimpleName() + " cannot be null");
         requireNonNull(eventCollection, "Event collection cannot be null");
         requireNonNull(timeRepresentation, "Time representation cannot be null");
@@ -193,10 +195,19 @@ public class NativeMongoSubscriptionModel implements PositionAwareSubscriptionMo
         }
     }
 
+    @PreDestroy
     public void shutdown() {
         synchronized (subscriptions) {
             shuttingDown = true;
             subscriptions.keySet().forEach(this::cancelSubscription);
+        }
+        cloudEventDispatcher.shutdown();
+        try {
+            if (!cloudEventDispatcher.awaitTermination(5, SECONDS)) {
+                cloudEventDispatcher.shutdownNow();
+            }
+        } catch (InterruptedException e) {
+            cloudEventDispatcher.shutdownNow();
         }
     }
 
