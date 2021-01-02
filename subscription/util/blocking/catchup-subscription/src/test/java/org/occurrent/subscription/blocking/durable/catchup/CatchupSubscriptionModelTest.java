@@ -1,5 +1,5 @@
 /*
- * Copyright 2020 Johan Haleby
+ * Copyright 2021 Johan Haleby
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -100,7 +100,6 @@ public class CatchupSubscriptionModelTest {
         database = mongoClient.getDatabase(requireNonNull(connectionString.getDatabase()));
         eventCollection = database.getCollection(requireNonNull(connectionString.getCollection()));
         mongoEventStore = new MongoEventStore(mongoClient, connectionString.getDatabase(), connectionString.getCollection(), config);
-        subscriptionExecutor = Executors.newCachedThreadPool();
         storage = new NativeMongoSubscriptionPositionStorage(database, "storage");
         subscription = newCatchupSubscription(database, eventCollection, timeRepresentation, new CatchupSubscriptionModelConfig(100, useSubscriptionPositionStorage(storage).andPersistSubscriptionPositionDuringCatchupPhaseForEveryNEvents(1)));
         objectMapper = new ObjectMapper();
@@ -110,8 +109,12 @@ public class CatchupSubscriptionModelTest {
     @AfterEach
     void shutdown() throws InterruptedException {
         subscription.shutdown();
-        subscriptionExecutor.shutdown();
-        subscriptionExecutor.awaitTermination(10, SECONDS);
+        if (!subscriptionExecutor.isShutdown() && !subscriptionExecutor.isTerminated()) {
+            subscriptionExecutor.shutdown();
+            if (!subscriptionExecutor.awaitTermination(5, SECONDS)) {
+                subscriptionExecutor.shutdownNow();
+            }
+        }
         mongoClient.close();
     }
 
@@ -209,7 +212,7 @@ public class CatchupSubscriptionModelTest {
     }
 
     @Test
-    void catchup_subscription_continues_where_it_left_off_when_not_using_filter() {
+    void catchup_subscription_continues_where_it_left_off_when_not_using_filter() throws InterruptedException {
         // Given
         LocalDateTime now = LocalDateTime.now();
         NameDefined nameDefined1 = new NameDefined(UUID.randomUUID().toString(), now, "name1");
@@ -475,6 +478,7 @@ public class CatchupSubscriptionModelTest {
     }
 
     private CatchupSubscriptionModel newCatchupSubscription(MongoDatabase database, MongoCollection<Document> eventCollection, TimeRepresentation timeRepresentation, CatchupSubscriptionModelConfig config) {
+        subscriptionExecutor = Executors.newCachedThreadPool();
         NativeMongoSubscriptionModel blockingSubscriptionForMongoDB = new NativeMongoSubscriptionModel(database, eventCollection, timeRepresentation, subscriptionExecutor, RetryStrategy.none());
         return new CatchupSubscriptionModel(blockingSubscriptionForMongoDB, mongoEventStore, config);
     }

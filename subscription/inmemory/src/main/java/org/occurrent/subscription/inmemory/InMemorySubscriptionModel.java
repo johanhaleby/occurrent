@@ -123,14 +123,16 @@ public class InMemorySubscriptionModel implements SubscriptionModel, Consumer<St
             shuttingDown = true;
             subscriptions.values().forEach(InMemorySubscription::shutdown);
         }
-        cloudEventDispatcher.shutdown();
-        try {
-            boolean terminated = cloudEventDispatcher.awaitTermination(5, TimeUnit.SECONDS);
-            if (!terminated) {
+        if (!cloudEventDispatcher.isShutdown() && !cloudEventDispatcher.isTerminated()) {
+            cloudEventDispatcher.shutdown();
+            try {
+                boolean terminated = cloudEventDispatcher.awaitTermination(5, TimeUnit.SECONDS);
+                if (!terminated) {
+                    cloudEventDispatcher.shutdownNow();
+                }
+            } catch (InterruptedException e) {
                 cloudEventDispatcher.shutdownNow();
             }
-        } catch (InterruptedException e) {
-            cloudEventDispatcher.shutdownNow();
         }
     }
 

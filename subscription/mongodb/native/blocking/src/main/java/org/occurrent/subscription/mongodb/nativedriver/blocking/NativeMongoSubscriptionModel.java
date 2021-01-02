@@ -148,6 +148,9 @@ public class NativeMongoSubscriptionModel implements PositionAwareSubscriptionMo
             }
         };
 
+        if (shuttingDown || cloudEventDispatcher.isShutdown() || cloudEventDispatcher.isTerminated()) {
+            throw new IllegalStateException("Cannot start subscription because the executor is shutdown or terminated.");
+        }
         cloudEventDispatcher.execute(executeWithRetry(runnable, __ -> !shuttingDown, convertToDelayStream(retryStrategy)));
         return new NativeMongoSubscription(subscriptionId, subscriptionStartedLatch);
     }
@@ -201,13 +204,15 @@ public class NativeMongoSubscriptionModel implements PositionAwareSubscriptionMo
             shuttingDown = true;
             subscriptions.keySet().forEach(this::cancelSubscription);
         }
-        cloudEventDispatcher.shutdown();
-        try {
-            if (!cloudEventDispatcher.awaitTermination(5, SECONDS)) {
+        if (!cloudEventDispatcher.isShutdown() && !cloudEventDispatcher.isTerminated()) {
+            cloudEventDispatcher.shutdown();
+            try {
+                if (!cloudEventDispatcher.awaitTermination(5, SECONDS)) {
+                    cloudEventDispatcher.shutdownNow();
+                }
+            } catch (InterruptedException e) {
                 cloudEventDispatcher.shutdownNow();
             }
-        } catch (InterruptedException e) {
-            cloudEventDispatcher.shutdownNow();
         }
     }
 
