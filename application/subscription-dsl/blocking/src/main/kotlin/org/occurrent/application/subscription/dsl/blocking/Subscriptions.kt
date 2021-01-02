@@ -76,15 +76,9 @@ class Subscriptions<T : Any> @JvmOverloads constructor(
 
     fun subscribe(subscriptionId: String, vararg eventTypes: KClass<out T>, startAt: StartAt? = null, fn: (T) -> Unit): Subscription {
         val condition = when {
-            eventTypes.isEmpty() -> {
-                null
-            }
-            eventTypes.size == 1 -> {
-                Condition.eq(eventNameFromType(eventTypes[0]))
-            }
-            else -> {
-                Condition.or(eventTypes.map { e -> Condition.eq(eventNameFromType(e)) })
-            }
+            eventTypes.isEmpty() -> null
+            eventTypes.size == 1 -> Condition.eq(eventNameFromType(eventTypes[0]))
+            else -> Condition.or(eventTypes.map { e -> Condition.eq(eventNameFromType(e)) })
         }
         val filter = OccurrentSubscriptionFilter.filter(if (condition == null) Filter.all() else Filter.type(condition))
         return subscribe(subscriptionId, filter, startAt, fn)
