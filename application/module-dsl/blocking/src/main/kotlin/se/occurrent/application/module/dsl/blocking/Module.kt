@@ -28,8 +28,10 @@ import kotlin.reflect.KClass
 @Target(AnnotationTarget.TYPE, AnnotationTarget.CLASS)
 internal annotation class ModuleDSL
 
-fun <C : Any, E : Any> module(cloudEventConverter: CloudEventConverter<E>, eventNameFromType: (KClass<out E>) -> String = { e -> e.simpleName!! },
-                              b: (@ModuleDSL ModuleBuilder<C, E>).() -> Unit): Module<C> {
+fun <C : Any, E : Any> module(
+    cloudEventConverter: CloudEventConverter<E>, eventNameFromType: (KClass<out E>) -> String = { e -> e.simpleName!! },
+    b: (@ModuleDSL ModuleBuilder<C, E>).() -> Unit
+): Module<C> {
     val module = ModuleBuilder<C, E>(cloudEventConverter, eventNameFromType).apply(b)
 
     return object : Module<C> {
@@ -48,6 +50,10 @@ class ModuleBuilder<C : Any, E : Any> internal constructor(private val cloudEven
     fun <B : Any> commands(commandDispatcher: CommandDispatcher<C, B>, commands: (@ModuleDSL B).() -> Unit) {
         this.commandDispatcher = commandDispatcher
         commandDispatcher.builder().apply(commands)
+    }
+
+    fun commands(commandDispatcher:  (@ModuleDSL C) -> Unit) {
+        this.commandDispatcher = BasicCommandDispatcher(commandDispatcher)
     }
 
     fun subscriptions(subscriptionModel: SubscriptionModel, subscriptions: (@ModuleDSL Subscriptions<E>).() -> Unit) {
