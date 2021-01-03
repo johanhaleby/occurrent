@@ -37,7 +37,7 @@ fun <C : Any, E : Any> module(
     return object : Module<C> {
         override fun dispatch(vararg commands: C) {
             commands.forEach { command ->
-                module.commandDispatcher.dispatch(command)
+                module.commandDispatchers.takeWhile { dispatcher -> !dispatcher.dispatch(command) }
             }
         }
     }
@@ -45,15 +45,15 @@ fun <C : Any, E : Any> module(
 
 @ModuleDSL
 class ModuleBuilder<C : Any, E : Any> internal constructor(private val cloudEventConverter: CloudEventConverter<E>, private val eventNameFromType: (KClass<out E>) -> String) {
-    internal lateinit var commandDispatcher: CommandDispatcher<C, out Any>
+    internal val commandDispatchers = mutableListOf<CommandDispatcher<C, out Any>>()
 
     fun <B : Any> commands(commandDispatcher: CommandDispatcher<C, B>, commands: (@ModuleDSL B).() -> Unit) {
-        this.commandDispatcher = commandDispatcher
+        this.commandDispatchers.add(commandDispatcher)
         commandDispatcher.builder().apply(commands)
     }
 
-    fun commands(commandDispatcher:  (@ModuleDSL C) -> Unit) {
-        this.commandDispatcher = BasicCommandDispatcher(commandDispatcher)
+    fun commands(commandDispatcher: (@ModuleDSL C) -> Unit) {
+        this.commandDispatchers.add(BasicCommandDispatcher(commandDispatcher))
     }
 
     fun subscriptions(subscriptionModel: SubscriptionModel, subscriptions: (@ModuleDSL Subscriptions<E>).() -> Unit) {

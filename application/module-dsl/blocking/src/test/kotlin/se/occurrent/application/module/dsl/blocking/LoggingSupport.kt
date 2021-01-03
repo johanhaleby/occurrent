@@ -16,9 +16,7 @@
 
 package se.occurrent.application.module.dsl.blocking
 
+import org.slf4j.Logger
+import org.slf4j.LoggerFactory
 
-interface CommandDispatcher<C, B> {
-    fun dispatch(command: C): Boolean
-
-    fun builder(): B
-}
+inline fun <reified T : Any> loggerFor(): Logger = LoggerFactory.getLogger(T::class.java)

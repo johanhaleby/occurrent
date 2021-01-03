@@ -18,8 +18,9 @@ package se.occurrent.application.module.dsl.blocking
 
 
 internal class BasicCommandDispatcher<C : Any>(private val dispatchFunction: (C) -> Unit) : CommandDispatcher<C, Unit> {
-    override fun dispatch(command: C) {
+    override fun dispatch(command: C): Boolean {
         dispatchFunction(command)
+        return true
     }
 
     override fun builder() {

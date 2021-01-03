@@ -18,9 +18,13 @@ package se.occurrent.application.module.dsl.blocking
 
 import com.fasterxml.jackson.databind.ObjectMapper
 import org.assertj.core.api.Assertions.assertThat
+import org.awaitility.kotlin.await
+import org.awaitility.kotlin.untilAsserted
+import org.awaitility.kotlin.withPollInterval
 import org.junit.jupiter.api.Test
-import org.junit.jupiter.api.assertAll
+import org.occurrent.application.composition.command.partial
 import org.occurrent.application.converter.generic.GenericCloudEventConverter
+import org.occurrent.application.service.blocking.execute
 import org.occurrent.application.service.blocking.generic.GenericApplicationService
 import org.occurrent.command.ChangeName
 import org.occurrent.command.Command
@@ -28,20 +32,18 @@ import org.occurrent.command.DefineName
 import org.occurrent.domain.*
 import org.occurrent.eventstore.inmemory.InMemoryEventStore
 import org.occurrent.subscription.inmemory.InMemorySubscriptionModel
-import org.slf4j.Logger
-import org.slf4j.LoggerFactory
 import se.occurrent.application.module.dsl.blocking.ApplicationServiceCommandDispatcher.Companion.applicationService
+import java.time.Duration
 import java.time.LocalDateTime
+import java.time.temporal.ChronoUnit.MILLIS
 import java.util.concurrent.CopyOnWriteArrayList
 
-inline fun <reified T : Any> loggerFor(): Logger = LoggerFactory.getLogger(T::class.java)
+class MultipleCommandDispatchersTest {
 
-class ModuleTest {
-
-    private val log = loggerFor<ModuleTest>()
+    private val log = loggerFor<ModuleConfigurationTest>()
 
     @Test
-    fun `module configuration`() {
+    fun `multiple command dispatchers`() {
         // Given
         val domainEventConverter = DomainEventConverter(ObjectMapper())
         val cloudEventConverter = GenericCloudEventConverter(domainEventConverter::convertToDomainEvent, domainEventConverter::convertToCloudEvent)
@@ -55,7 +57,11 @@ class ModuleTest {
         val module = module<Command, DomainEvent>(cloudEventConverter, eventNameFromType = { e -> e.qualifiedName!! }) {
             commands(applicationService(applicationService)) {
                 command(DefineName::getId, Name::defineName)
-                command(ChangeName::getId, Name::changeName)
+            }
+            commands { cmd ->
+                when (cmd) {
+                    is ChangeName -> applicationService.execute(cmd.id, Name::changeNameFromCommand.partial(cmd))
+                }
             }
             subscriptions(subscriptionModel) {
                 subscribe<NameDefined>("nameDefined") { e ->
@@ -80,9 +86,9 @@ class ModuleTest {
         }
 
         // Then
-        assertAll(
-            { assertThat(allEvents).hasSize(20) },
-            { assertThat(allEvents.map { e -> e.name.substringAfter(":").toInt() }).isSubsetOf(0 until 10) }
-        )
+        await withPollInterval Duration.of(10, MILLIS) untilAsserted {
+            assertThat(allEvents).hasSize(20)
+        }
+        assertThat(allEvents.map { e -> e.name.substringAfter(":").toInt() }).isSubsetOf(0 until 10)
     }
 }

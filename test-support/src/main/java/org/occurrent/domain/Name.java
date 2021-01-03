@@ -44,7 +44,7 @@ public class Name {
         return Collections.singletonList(new NameDefined(eventId, TimeConversion.toDate(time), name));
     }
 
-    public static List<DomainEvent> changeName(List<DomainEvent> events, ChangeName changeName) {
+    public static List<DomainEvent> changeNameFromCommand(List<DomainEvent> events, ChangeName changeName) {
         return changeName(events, UUID.randomUUID().toString(), changeName.getTime(), changeName.getNewName());
     }
 

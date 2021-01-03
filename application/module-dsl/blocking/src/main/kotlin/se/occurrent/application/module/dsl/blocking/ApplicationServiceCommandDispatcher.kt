@@ -28,9 +28,14 @@ class ApplicationServiceCommandDispatcher<C : Any, E>(private val applicationSer
         fun <C : Any, E> applicationService(applicationService: ApplicationService<E>): ApplicationServiceCommandDispatcher<C, E> = ApplicationServiceCommandDispatcher(applicationService)
     }
 
-    override fun dispatch(command: C) {
-        val function = builder.dispatchers[command::class] ?: throw IllegalArgumentException("No command dispatcher registered for ${command::class.qualifiedName}")
-        function(command)
+    override fun dispatch(command: C): Boolean {
+        val function = builder.dispatchers[command::class]
+        return if (function == null) {
+            false
+        } else {
+            function(command)
+            true
+        }
     }
 
     override fun builder(): ApplicationServiceCommandBuilder<C, E> = builder
@@ -56,7 +61,10 @@ class ApplicationServiceCommandBuilder<C : Any, E>(val applicationService: Appli
 }
 
 @JvmName("listCommand")
-inline fun <C : Any, E : Any, reified CMD : C> ApplicationServiceCommandBuilder<C, E>.command(crossinline streamIdGetter: (CMD) -> String, crossinline commandHandler: (List<E>, CMD) -> List<E>) {
+inline fun <C : Any, E : Any, reified CMD : C> ApplicationServiceCommandBuilder<C, E>.command(
+    crossinline streamIdGetter: (CMD) -> String,
+    crossinline commandHandler: (List<E>, CMD) -> List<E>
+) {
     command(streamIdGetter) { eventSeq, cmd ->
         commandHandler(eventSeq.toList(), cmd).asSequence()
     }
