@@ -1,5 +1,5 @@
 /*
- * Copyright 2020 Johan Haleby
+ * Copyright 2021 Johan Haleby
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -17,6 +17,7 @@
 package org.occurrent.application.service.blocking
 
 import java.util.*
+import java.util.function.Function
 import java.util.stream.Stream
 import kotlin.streams.asSequence
 import kotlin.streams.asStream
@@ -25,30 +26,44 @@ import kotlin.streams.asStream
  * Extension function to [ApplicationService] that allows working with Kotlin sequences
  */
 fun <T> ApplicationService<T>.execute(streamId: UUID, functionThatCallsDomainModel: (Sequence<T>) -> Sequence<T>) =
-        execute(streamId, functionThatCallsDomainModel, null)
+    execute(streamId, functionThatCallsDomainModel, null)
 
 /**
  * Extension function to [ApplicationService] that allows working with Kotlin sequences
  */
 fun <T> ApplicationService<T>.execute(streamId: String, functionThatCallsDomainModel: (Sequence<T>) -> Sequence<T>) =
-        execute(streamId, functionThatCallsDomainModel, null)
+    execute(streamId, functionThatCallsDomainModel, null)
 
 /**
  * Extension function to [ApplicationService] that allows working with Kotlin sequences
  */
-fun <T> ApplicationService<T>.execute(streamId: UUID, functionThatCallsDomainModel: (Sequence<T>) -> Sequence<T>,
-                                      sideEffects: ((Sequence<T>) -> Unit)? = null) =
-        execute(streamId.toString(), functionThatCallsDomainModel, sideEffects)
+fun <T> ApplicationService<T>.execute(
+    streamId: UUID, functionThatCallsDomainModel: (Sequence<T>) -> Sequence<T>,
+    sideEffects: ((Sequence<T>) -> Unit)? = null
+) =
+    execute(streamId.toString(), functionThatCallsDomainModel, sideEffects)
 
 /**
  * Extension function to [ApplicationService] that allows working with Kotlin sequences
  */
-fun <T> ApplicationService<T>.execute(streamId: String, functionThatCallsDomainModel: (Sequence<T>) -> Sequence<T>,
-                                      sideEffects: ((Sequence<T>) -> Unit)? = null) =
-        execute(streamId, { streamOfEvents ->
-            functionThatCallsDomainModel(streamOfEvents.asSequence()).asStream()
-        }, sideEffects?.toStreamSideEffect())
+fun <T> ApplicationService<T>.execute(streamId: String, functionThatCallsDomainModel: (Sequence<T>) -> Sequence<T>, sideEffects: ((Sequence<T>) -> Unit)? = null) =
+    execute(streamId, { streamOfEvents ->
+        functionThatCallsDomainModel(streamOfEvents.asSequence()).asStream()
+    }, sideEffects?.toStreamSideEffect())
 
+
+/**
+ * Extension function to [ApplicationService] that allows working with [List]
+ */
+@JvmName("executeList")
+fun <T> ApplicationService<T>.execute(streamId: String, functionThatCallsDomainModel: (List<T>) -> List<T>) {
+    val f = Function<Stream<T>, Stream<T>> { eventStream: Stream<T> ->
+        val list: List<T> = eventStream.asSequence().toList()
+        val s: Stream<T> = functionThatCallsDomainModel.invoke(list).stream()
+        s
+    }
+    execute(streamId, f)
+}
 
 private fun <T> ((Sequence<T>) -> Unit).toStreamSideEffect(): (Stream<T>) -> Unit {
     return { streamOfEvents -> this(streamOfEvents.asSequence()) }

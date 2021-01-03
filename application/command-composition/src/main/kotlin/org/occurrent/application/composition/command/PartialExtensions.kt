@@ -1,5 +1,5 @@
 /*
- * Copyright 2020 Johan Haleby
+ * Copyright 2021 Johan Haleby
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -71,5 +71,75 @@ fun <EVENT, A, B, C, D, E, F, G, H, I, J, K, L, M> ((Sequence<EVENT>, A, B, C, D
 }
 
 fun <EVENT, A, B, C, D, E, F, G, H, I, J, K, L, M, N> ((Sequence<EVENT>, A, B, C, D, E, F, G, H, I, J, K, L, M, N) -> Sequence<EVENT>).partial(a: A, b: B, c: C, d: D, e: E, f: F, g: G, h: H, i: I, j: J, k: K, l: L, m: M, n: N): (Sequence<EVENT>) -> Sequence<EVENT> = { events ->
+    this(events, a, b, c, d, e, f, g, h, i, j, k, l, m, n)
+}
+
+
+@JvmName("partialList")
+fun <EVENT, A> ((List<EVENT>, A) -> List<EVENT>).partial(a: A): (List<EVENT>) -> List<EVENT> = { events ->
+    this(events, a)
+}
+
+@JvmName("partialList")
+fun <EVENT, A, B> ((List<EVENT>, A, B) -> List<EVENT>).partial(a: A, b: B): (List<EVENT>) -> List<EVENT> = { events ->
+    this(events, a, b)
+}
+
+@JvmName("partialList")
+fun <EVENT, A, B, C> ((List<EVENT>, A, B, C) -> List<EVENT>).partial(a: A, b: B, c: C): (List<EVENT>) -> List<EVENT> = { events ->
+    this(events, a, b, c)
+}
+
+@JvmName("partialList")
+fun <EVENT, A, B, C, D> ((List<EVENT>, A, B, C, D) -> List<EVENT>).partial(a: A, b: B, c: C, d: D): (List<EVENT>) -> List<EVENT> = { events ->
+    this(events, a, b, c, d)
+}
+
+@JvmName("partialList")
+fun <EVENT, A, B, C, D, E> ((List<EVENT>, A, B, C, D, E) -> List<EVENT>).partial(a: A, b: B, c: C, d: D, e: E): (List<EVENT>) -> List<EVENT> = { events ->
+    this(events, a, b, c, d, e)
+}
+
+@JvmName("partialList")
+fun <EVENT, A, B, C, D, E, F> ((List<EVENT>, A, B, C, D, E, F) -> List<EVENT>).partial(a: A, b: B, c: C, d: D, e: E, f: F): (List<EVENT>) -> List<EVENT> = { events ->
+    this(events, a, b, c, d, e, f)
+}
+
+@JvmName("partialList")
+fun <EVENT, A, B, C, D, E, F, G> ((List<EVENT>, A, B, C, D, E, F, G) -> List<EVENT>).partial(a: A, b: B, c: C, d: D, e: E, f: F, g: G): (List<EVENT>) -> List<EVENT> = { events ->
+    this(events, a, b, c, d, e, f, g)
+}
+
+@JvmName("partialList")
+fun <EVENT, A, B, C, D, E, F, G, H> ((List<EVENT>, A, B, C, D, E, F, G, H) -> List<EVENT>).partial(a: A, b: B, c: C, d: D, e: E, f: F, g: G, h: H): (List<EVENT>) -> List<EVENT> = { events ->
+    this(events, a, b, c, d, e, f, g, h)
+}
+@JvmName("partialList")
+fun <EVENT, A, B, C, D, E, F, G, H, I> ((List<EVENT>, A, B, C, D, E, F, G, H, I) -> List<EVENT>).partial(a: A, b: B, c: C, d: D, e: E, f: F, g: G, h: H, i: I): (List<EVENT>) -> List<EVENT> = { events ->
+    this(events, a, b, c, d, e, f, g, h, i)
+}
+
+@JvmName("partialList")
+fun <EVENT, A, B, C, D, E, F, G, H, I, J> ((List<EVENT>, A, B, C, D, E, F, G, H, I, J) -> List<EVENT>).partial(a: A, b: B, c: C, d: D, e: E, f: F, g: G, h: H, i: I, j: J): (List<EVENT>) -> List<EVENT> = { events ->
+    this(events, a, b, c, d, e, f, g, h, i, j)
+}
+
+@JvmName("partialList")
+fun <EVENT, A, B, C, D, E, F, G, H, I, J, K> ((List<EVENT>, A, B, C, D, E, F, G, H, I, J, K) -> List<EVENT>).partial(a: A, b: B, c: C, d: D, e: E, f: F, g: G, h: H, i: I, j: J, k: K): (List<EVENT>) -> List<EVENT> = { events ->
+    this(events, a, b, c, d, e, f, g, h, i, j, k)
+}
+
+@JvmName("partialList")
+fun <EVENT, A, B, C, D, E, F, G, H, I, J, K, L> ((List<EVENT>, A, B, C, D, E, F, G, H, I, J, K, L) -> List<EVENT>).partial(a: A, b: B, c: C, d: D, e: E, f: F, g: G, h: H, i: I, j: J, k: K, l: L): (List<EVENT>) -> List<EVENT> = { events ->
+    this(events, a, b, c, d, e, f, g, h, i, j, k, l)
+}
+
+@JvmName("partialList")
+fun <EVENT, A, B, C, D, E, F, G, H, I, J, K, L, M> ((List<EVENT>, A, B, C, D, E, F, G, H, I, J, K, L, M) -> List<EVENT>).partial(a: A, b: B, c: C, d: D, e: E, f: F, g: G, h: H, i: I, j: J, k: K, l: L, m: M): (List<EVENT>) -> List<EVENT> = { events ->
+    this(events, a, b, c, d, e, f, g, h, i, j, k, l, m)
+}
+
+@JvmName("partialList")
+fun <EVENT, A, B, C, D, E, F, G, H, I, J, K, L, M, N> ((List<EVENT>, A, B, C, D, E, F, G, H, I, J, K, L, M, N) -> List<EVENT>).partial(a: A, b: B, c: C, d: D, e: E, f: F, g: G, h: H, i: I, j: J, k: K, l: L, m: M, n: N): (List<EVENT>) -> List<EVENT> = { events ->
     this(events, a, b, c, d, e, f, g, h, i, j, k, l, m, n)
 }

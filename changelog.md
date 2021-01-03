@@ -69,6 +69,7 @@
 * Added support for querying the in-memory event store (all fields expect the "data" field works)
 * Changed from `Executor` to `ExecutorService` in `NativeMongoSubscriptionModel` in the `org.occurrent:subscription-mongodb-native-blocking` module.
 * Added a `@PreDestroy` annotation to the `shutdown` method in the `NativeMongoSubscriptionModel` implementation so that, if you're frameworks such as Spring Boot, you don't need to explicitly call the `shutdown` method when stopping.
+* Added partial extension functions for `List<DomainEvent>`, import from the `partial` method from `org.occurrent.application.composition.command`. 
 
 ## Changelog 0.4.1 (2020-12-14)
 
