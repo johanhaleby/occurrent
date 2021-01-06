@@ -21,7 +21,7 @@ import org.occurrent.application.service.blocking.execute
 import kotlin.reflect.KClass
 
 
-class ApplicationServiceCommandDispatcher<C : Any, E>(private val applicationService: ApplicationService<E>) : CommandDispatcher<C, ApplicationServiceCommandBuilder<C, E>> {
+class ApplicationServiceCommandDispatcher<C : Any, E>(applicationService: ApplicationService<E>) : CommandDispatcher<C, ApplicationServiceCommandBuilder<C, E>> {
     private val builder = ApplicationServiceCommandBuilder<C, E>(applicationService)
 
     companion object {
