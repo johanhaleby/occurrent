@@ -31,6 +31,7 @@
         <module>cloudevents-extension</module>
         <module>common</module>
         <module>application</module>
+        <module>dsl</module>
     </modules>
 
     <name>Occurrent</name>

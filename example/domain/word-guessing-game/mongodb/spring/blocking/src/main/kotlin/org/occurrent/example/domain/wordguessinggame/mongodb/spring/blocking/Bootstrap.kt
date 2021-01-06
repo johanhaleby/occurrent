@@ -19,7 +19,7 @@ import com.fasterxml.jackson.databind.ObjectMapper
 import com.fasterxml.jackson.module.kotlin.jacksonObjectMapper
 import org.occurrent.application.converter.CloudEventConverter
 import org.occurrent.application.service.blocking.generic.GenericApplicationService
-import org.occurrent.application.subscription.dsl.blocking.Subscriptions
+import org.occurrent.dsl.subscription.blocking.Subscriptions
 import org.occurrent.eventstore.api.blocking.EventStoreQueries
 import org.occurrent.eventstore.mongodb.spring.blocking.EventStoreConfig
 import org.occurrent.eventstore.mongodb.spring.blocking.SpringMongoEventStore

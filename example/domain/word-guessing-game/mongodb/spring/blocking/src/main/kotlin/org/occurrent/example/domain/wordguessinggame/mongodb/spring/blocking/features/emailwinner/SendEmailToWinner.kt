@@ -16,7 +16,7 @@
 
 package org.occurrent.example.domain.wordguessinggame.mongodb.spring.blocking.features.emailwinner
 
-import org.occurrent.application.subscription.dsl.blocking.Subscriptions
+import org.occurrent.dsl.subscription.blocking.Subscriptions
 import org.occurrent.example.domain.wordguessinggame.event.GameEvent
 import org.occurrent.example.domain.wordguessinggame.event.GameWasWon
 import org.occurrent.example.domain.wordguessinggame.mongodb.spring.blocking.support.loggerFor

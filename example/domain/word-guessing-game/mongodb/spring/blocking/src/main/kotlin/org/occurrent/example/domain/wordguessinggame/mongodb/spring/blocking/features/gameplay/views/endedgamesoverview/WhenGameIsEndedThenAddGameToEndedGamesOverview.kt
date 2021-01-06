@@ -16,7 +16,7 @@
 
 package org.occurrent.example.domain.wordguessinggame.mongodb.spring.blocking.features.gameplay.views.endedgamesoverview
 
-import org.occurrent.application.subscription.dsl.blocking.Subscriptions
+import org.occurrent.dsl.subscription.blocking.Subscriptions
 import org.occurrent.example.domain.wordguessinggame.event.*
 import org.occurrent.example.domain.wordguessinggame.mongodb.spring.blocking.features.GameEventQueries
 import org.occurrent.example.domain.wordguessinggame.mongodb.spring.blocking.support.loggerFor
