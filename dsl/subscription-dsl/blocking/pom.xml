@@ -19,7 +19,7 @@
     <parent>
         <artifactId>subscription-dsl</artifactId>
         <groupId>org.occurrent</groupId>
-        <version>0.5.0</version>
+        <version>0.5.1-SNAPSHOT</version>
     </parent>
     <modelVersion>4.0.0</modelVersion>
 
@@ -29,12 +29,12 @@
         <dependency>
             <groupId>org.occurrent</groupId>
             <artifactId>cloudevent-converter</artifactId>
-            <version>0.5.0</version>
+            <version>0.5.1-SNAPSHOT</version>
         </dependency>
         <dependency>
             <groupId>org.occurrent</groupId>
             <artifactId>subscription-api-blocking</artifactId>
-            <version>0.5.0</version>
+            <version>0.5.1-SNAPSHOT</version>
         </dependency>
         <dependency>
             <groupId>org.jetbrains.kotlin</groupId>
