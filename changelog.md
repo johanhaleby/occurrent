@@ -1,4 +1,7 @@
 ## Changelog Next Version
+* Renamed `org.occurrent.subscription.redis.spring.blocking.SpringSubscriptionPositionStorageForRedis` to `SpringRedisSubscriptionPositionStorage`.
+
+## Changelog 0.5.0 (2021-01-06)
 
 * Renamed `org.occurrent.subscription.api.blocking.BlockingSubscription` to `org.occurrent.subscription.api.blocking.SubscriptionModel`. The reason for this is that it was previously
   very confusing to differentiate between a `org.occurrent.subscription.api.blocking.BlockingSubscription` (where you start/cancel subscriptions) and a `org.occurrent.subscription.api.blocking.Subscription` 

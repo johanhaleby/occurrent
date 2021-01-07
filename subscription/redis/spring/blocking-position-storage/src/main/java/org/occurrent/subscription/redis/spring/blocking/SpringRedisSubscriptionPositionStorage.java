@@ -1,5 +1,5 @@
 /*
- * Copyright 2020 Johan Haleby
+ * Copyright 2021 Johan Haleby
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -26,7 +26,7 @@ import static java.util.Objects.requireNonNull;
 /**
  * A Spring implementation of {@link SubscriptionPositionStorage} that stores {@link SubscriptionPosition} in Redis.
  */
-public class SpringSubscriptionPositionStorageForRedis implements SubscriptionPositionStorage {
+public class SpringRedisSubscriptionPositionStorage implements SubscriptionPositionStorage {
 
     private final RedisOperations<String, String> redis;
 
@@ -35,7 +35,7 @@ public class SpringSubscriptionPositionStorageForRedis implements SubscriptionPo
      *
      * @param redis The {@link RedisOperations} that'll be used to store the subscription position
      */
-    public SpringSubscriptionPositionStorageForRedis(RedisOperations<String, String> redis) {
+    public SpringRedisSubscriptionPositionStorage(RedisOperations<String, String> redis) {
         requireNonNull(redis, "Redis operations cannot be null");
         this.redis = redis;
     }

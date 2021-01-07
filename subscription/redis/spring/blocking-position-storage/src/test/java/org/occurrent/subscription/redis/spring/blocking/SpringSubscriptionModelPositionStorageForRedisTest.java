@@ -1,5 +1,5 @@
 /*
- * Copyright 2020 Johan Haleby
+ * Copyright 2021 Johan Haleby
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -102,7 +102,7 @@ class SpringSubscriptionModelPositionStorageForRedisTest {
         springBlockingSubscriptionForMongoDB = new SpringMongoSubscriptionModel(mongoTemplate, connectionString.getCollection(), TimeRepresentation.RFC_3339_STRING);
         lettuceConnectionFactory = new LettuceConnectionFactory(redisContainer.getHost(), redisContainer.getFirstMappedPort());
         redisTemplate = createRedisTemplate(lettuceConnectionFactory);
-        SubscriptionPositionStorage storage = new SpringSubscriptionPositionStorageForRedis(redisTemplate);
+        SubscriptionPositionStorage storage = new SpringRedisSubscriptionPositionStorage(redisTemplate);
         redisSubscription = new DurableSubscriptionModel(springBlockingSubscriptionForMongoDB, storage);
         objectMapper = new ObjectMapper();
     }

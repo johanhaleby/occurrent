@@ -1,5 +1,5 @@
 /*
- * Copyright 2020 Johan Haleby
+ * Copyright 2021 Johan Haleby
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -32,7 +32,7 @@ import org.occurrent.subscription.api.blocking.SubscriptionModel
 import org.occurrent.subscription.api.blocking.SubscriptionPositionStorage
 import org.occurrent.subscription.blocking.durable.DurableSubscriptionModel
 import org.occurrent.subscription.mongodb.spring.blocking.SpringMongoSubscriptionModel
-import org.occurrent.subscription.redis.spring.blocking.SpringSubscriptionPositionStorageForRedis
+import org.occurrent.subscription.redis.spring.blocking.SpringRedisSubscriptionPositionStorage
 import org.slf4j.Logger
 import org.slf4j.LoggerFactory
 import org.springframework.boot.autoconfigure.SpringBootApplication
@@ -78,7 +78,7 @@ class Bootstrap {
 
     @Bean
     fun subscriptionStorage(redisOps: RedisOperations<String, String>): SubscriptionPositionStorage =
-        SpringSubscriptionPositionStorageForRedis(redisOps)
+        SpringRedisSubscriptionPositionStorage(redisOps)
 
     @Bean
     fun durableSubscriptionModel(storage: SubscriptionPositionStorage, mongoTemplate: MongoTemplate, eventStoreQueries: EventStoreQueries): SubscriptionModel {
