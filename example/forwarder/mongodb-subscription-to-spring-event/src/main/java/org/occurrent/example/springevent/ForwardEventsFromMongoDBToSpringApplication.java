@@ -1,5 +1,5 @@
 /*
- * Copyright 2020 Johan Haleby
+ * Copyright 2021 Johan Haleby
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -27,7 +27,7 @@ import org.occurrent.eventstore.mongodb.nativedriver.MongoEventStore;
 import org.occurrent.mongodb.timerepresentation.TimeRepresentation;
 import org.occurrent.subscription.api.reactor.PositionAwareSubscriptionModel;
 import org.occurrent.subscription.api.reactor.SubscriptionPositionStorage;
-import org.occurrent.subscription.mongodb.spring.reactor.ReactorMongoSubscription;
+import org.occurrent.subscription.mongodb.spring.reactor.ReactorMongoSubscriptionModel;
 import org.occurrent.subscription.mongodb.spring.reactor.ReactorSubscriptionPositionStorage;
 import org.occurrent.subscription.reactor.durable.ReactorDurableSubscriptionModel;
 import org.springframework.beans.factory.annotation.Value;
@@ -67,7 +67,7 @@ public class ForwardEventsFromMongoDBToSpringApplication {
 
     @Bean
     public PositionAwareSubscriptionModel subscriptionModel(ReactiveMongoOperations mongoOperations) {
-        return new ReactorMongoSubscription(mongoOperations, "events", TimeRepresentation.RFC_3339_STRING);
+        return new ReactorMongoSubscriptionModel(mongoOperations, "events", TimeRepresentation.RFC_3339_STRING);
     }
 
     @Bean

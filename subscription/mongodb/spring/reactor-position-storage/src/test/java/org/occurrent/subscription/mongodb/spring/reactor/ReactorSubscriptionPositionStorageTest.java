@@ -1,5 +1,5 @@
 /*
- * Copyright 2020 Johan Haleby
+ * Copyright 2021 Johan Haleby
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -71,7 +71,7 @@ public class ReactorSubscriptionPositionStorageTest {
     private static final String RESUME_TOKEN_COLLECTION = "ack";
 
     private EventStore mongoEventStore;
-    private ReactorMongoSubscription subscription;
+    private ReactorMongoSubscriptionModel subscription;
     private ObjectMapper objectMapper;
     private ReactiveMongoTemplate reactiveMongoTemplate;
     private CopyOnWriteArrayList<Disposable> disposables;
@@ -88,7 +88,7 @@ public class ReactorSubscriptionPositionStorageTest {
         EventStoreConfig eventStoreConfig = new EventStoreConfig.Builder().eventStoreCollectionName("events").transactionConfig(reactiveMongoTransactionManager).timeRepresentation(TimeRepresentation.RFC_3339_STRING).build();
         mongoEventStore = new ReactorMongoEventStore(reactiveMongoTemplate, eventStoreConfig);
         storage = new ReactorSubscriptionPositionStorage(reactiveMongoTemplate, RESUME_TOKEN_COLLECTION);
-        subscription = new ReactorMongoSubscription(reactiveMongoTemplate, "events", timeRepresentation);
+        subscription = new ReactorMongoSubscriptionModel(reactiveMongoTemplate, "events", timeRepresentation);
         objectMapper = new ObjectMapper();
         disposables = new CopyOnWriteArrayList<>();
     }

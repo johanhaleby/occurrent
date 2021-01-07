@@ -1,5 +1,5 @@
 /*
- * Copyright 2020 Johan Haleby
+ * Copyright 2021 Johan Haleby
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -46,7 +46,7 @@ import static java.util.Objects.requireNonNull;
  * that includes the subscription position. Use {@link PositionAwareCloudEvent#getSubscriptionPositionOrThrowIAE(CloudEvent)}
  * to get the subscription position.
  */
-public class ReactorMongoSubscription implements PositionAwareSubscriptionModel {
+public class ReactorMongoSubscriptionModel implements PositionAwareSubscriptionModel {
 
     private final ReactiveMongoOperations mongo;
     private final String eventCollection;
@@ -59,7 +59,7 @@ public class ReactorMongoSubscription implements PositionAwareSubscriptionModel 
      * @param eventCollection    The collection that contains the events
      * @param timeRepresentation How time is represented in the database, must be the same as what's specified for the EventStore that stores the events.
      */
-    public ReactorMongoSubscription(ReactiveMongoOperations mongo, String eventCollection, TimeRepresentation timeRepresentation) {
+    public ReactorMongoSubscriptionModel(ReactiveMongoOperations mongo, String eventCollection, TimeRepresentation timeRepresentation) {
         this.mongo = mongo;
         this.eventCollection = eventCollection;
         this.timeRepresentation = timeRepresentation;

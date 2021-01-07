@@ -1,5 +1,5 @@
 /*
- * Copyright 2020 Johan Haleby
+ * Copyright 2021 Johan Haleby
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -36,7 +36,7 @@ import org.occurrent.eventstore.mongodb.spring.reactor.ReactorMongoEventStore;
 import org.occurrent.mongodb.timerepresentation.TimeRepresentation;
 import org.occurrent.subscription.SubscriptionPosition;
 import org.occurrent.subscription.api.reactor.SubscriptionPositionStorage;
-import org.occurrent.subscription.mongodb.spring.reactor.ReactorMongoSubscription;
+import org.occurrent.subscription.mongodb.spring.reactor.ReactorMongoSubscriptionModel;
 import org.occurrent.subscription.mongodb.spring.reactor.ReactorSubscriptionPositionStorage;
 import org.occurrent.testsupport.mongodb.FlushMongoDBExtension;
 import org.springframework.data.mongodb.ReactiveMongoTransactionManager;
@@ -86,7 +86,7 @@ public class ReactorDurableSubscriptionModelTest {
     @RegisterExtension
     FlushMongoDBExtension flushMongoDBExtension = new FlushMongoDBExtension(new ConnectionString(mongoDBContainer.getReplicaSetUrl()));
     private MongoClient mongoClient;
-    private ReactorMongoSubscription springReactorSubscriptionForMongoDB;
+    private ReactorMongoSubscriptionModel springReactorSubscriptionForMongoDB;
 
     @BeforeEach
     void create_mongo_event_store() {
@@ -97,7 +97,7 @@ public class ReactorDurableSubscriptionModelTest {
         ReactiveTransactionManager reactiveMongoTransactionManager = new ReactiveMongoTransactionManager(new SimpleReactiveMongoDatabaseFactory(mongoClient, requireNonNull(connectionString.getDatabase())));
         EventStoreConfig eventStoreConfig = new EventStoreConfig.Builder().eventStoreCollectionName("events").transactionConfig(reactiveMongoTransactionManager).timeRepresentation(TimeRepresentation.RFC_3339_STRING).build();
         mongoEventStore = new ReactorMongoEventStore(reactiveMongoTemplate, eventStoreConfig);
-        springReactorSubscriptionForMongoDB = new ReactorMongoSubscription(reactiveMongoTemplate, "events", timeRepresentation);
+        springReactorSubscriptionForMongoDB = new ReactorMongoSubscriptionModel(reactiveMongoTemplate, "events", timeRepresentation);
         SubscriptionPositionStorage storage = new ReactorSubscriptionPositionStorage(reactiveMongoTemplate, RESUME_TOKEN_COLLECTION);
         subscription = new ReactorDurableSubscriptionModel(springReactorSubscriptionForMongoDB, storage);
         objectMapper = new ObjectMapper();
