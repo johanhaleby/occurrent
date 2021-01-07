@@ -70,7 +70,7 @@ import static org.awaitility.Durations.ONE_SECOND;
 import static org.hamcrest.Matchers.equalTo;
 
 @Testcontainers
-class SpringSubscriptionModelPositionStorageForRedisTest {
+class SpringRedisSubscriptionPositionStorageTest {
 
     @Container
     private static final MongoDBContainer mongoDBContainer = new MongoDBContainer("mongo:4.2.8");
