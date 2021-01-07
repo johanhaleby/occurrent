@@ -1,4 +1,4 @@
-## Changelog Next Version
+## Changelog 0.5.1 (2021-01-07)
 * Renamed `org.occurrent.subscription.redis.spring.blocking.SpringSubscriptionPositionStorageForRedis` to `SpringRedisSubscriptionPositionStorage`.
 * Renamed `org.occurrent.subscription.mongodb.spring.reactor.ReactorMongoSubscription` to `ReactorMongoSubscriptionModel`.
 
