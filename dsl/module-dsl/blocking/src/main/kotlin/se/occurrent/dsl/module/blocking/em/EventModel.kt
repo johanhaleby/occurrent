@@ -27,9 +27,9 @@ import se.occurrent.dsl.module.blocking.BasicCommandDispatcher
 import se.occurrent.dsl.module.blocking.CommandDispatcher
 import se.occurrent.dsl.module.blocking.Module
 import se.occurrent.dsl.module.blocking.ModuleDSL
+import se.occurrent.dsl.module.blocking.em.EventModelSlice.SliceDefinition
 import se.occurrent.dsl.module.blocking.em.EventModelSlice.ViewDefinition.Mode.Async
 import se.occurrent.dsl.module.blocking.em.EventModelSlice.ViewDefinition.Mode.Sync
-import se.occurrent.dsl.module.blocking.em.EventModelSlice.SliceDefinition
 import kotlin.reflect.KClass
 
 
@@ -57,8 +57,8 @@ class EventModelSpecification<C : Any, E : Any> internal constructor(
 ) {
     internal val commandDispatchers = mutableListOf<CommandDispatcher<C, out Any>>()
 
-    fun slice(name: String? = null, slice: SliceDefinition<C, E>.() -> Unit) {
-        SliceDefinition<C, E>(GenericApplicationService<E>(eventStore, cloudEventConverter)).apply(slice)
+    fun swimlane(name: String, swimelane : SwimlaneDefinition<C, E>.() -> Unit) {
+        SwimlaneDefinition<C, E>(eventStore, cloudEventConverter).apply(swimelane)
     }
 
     fun <B : Any> commands(commandDispatcher: CommandDispatcher<C, B>, commands: (@ModuleDSL B).() -> Unit) {
@@ -72,6 +72,14 @@ class EventModelSpecification<C : Any, E : Any> internal constructor(
 
     fun subscriptions(subscriptionModel: SubscriptionModel, subscriptions: (@ModuleDSL Subscriptions<E>).() -> Unit) {
         Subscriptions(subscriptionModel, cloudEventConverter, eventNameFromType).apply(subscriptions)
+    }
+}
+
+class SwimlaneDefinition<C : Any, E : Any> internal constructor(eventStore: EventStore, cloudEventConverter: CloudEventConverter<E>) {
+    private val applicationService = GenericApplicationService(eventStore, cloudEventConverter)
+
+    fun slice(actor : String, name: String? = null, slice: SliceDefinition<C, E>.() -> Unit) {
+        SliceDefinition<C, E>(applicationService).apply(slice)
     }
 }
 
@@ -116,7 +124,7 @@ sealed class EventModelSlice<C, E> {
             Sync, Async
         }
 
-        fun updateView(viewName : String, mode: Mode = Async, fn: (E) -> Unit) : Unit = when(mode) {
+        fun updateView(viewName: String, mode: Mode = Async, fn: (E) -> Unit): Unit = when (mode) {
             Sync -> TODO()
             Async -> TODO()
         }

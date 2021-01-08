@@ -18,41 +18,37 @@ package se.occurrent.dsl.module.blocking
 
 import com.fasterxml.jackson.databind.ObjectMapper
 import org.junit.jupiter.api.Test
+import org.occurrent.application.converter.CloudEventConverter
 import org.occurrent.application.converter.generic.GenericCloudEventConverter
-import org.occurrent.application.service.blocking.generic.GenericApplicationService
-import org.occurrent.command.ChangeName
-import org.occurrent.command.Command
-import org.occurrent.domain.DomainEvent
 import org.occurrent.domain.DomainEventConverter
-import org.occurrent.domain.Name
-import org.occurrent.domain.NameDefined
 import org.occurrent.eventstore.inmemory.InMemoryEventStore
 import org.occurrent.subscription.inmemory.InMemorySubscriptionModel
 import se.occurrent.dsl.module.blocking.em.eventModel
+import se.occurrent.dsl.module.blocking.hotel.*
+import se.occurrent.dsl.module.blocking.hotel.InventoryCommand.AddRoom
+import se.occurrent.dsl.module.blocking.hotel.InventoryEvent.RoomAdded
 import java.util.concurrent.CopyOnWriteArrayList
 
 
 class EventModelTest {
 
-    private val log = loggerFor<EventModelTest>()
-
-    @Test
     fun `event model example`() {
         // Given
-        val domainEventConverter = DomainEventConverter(ObjectMapper())
-        val cloudEventConverter = GenericCloudEventConverter(domainEventConverter::convertToDomainEvent, domainEventConverter::convertToCloudEvent)
+        val cloudEventConverter : CloudEventConverter<HotelEvent> = GenericCloudEventConverter({ e -> TODO()}, { e -> TODO()})
         val subscriptionModel = InMemorySubscriptionModel()
         val eventStore = InMemoryEventStore(subscriptionModel)
 
-        val allNames = CopyOnWriteArrayList<String>()
+        val roomAvailability = CopyOnWriteArrayList<String>()
 
-        eventModel<Command, DomainEvent>(eventStore, cloudEventConverter) {
-            slice("name") {
-                wireframe("some ui").
-                command(ChangeName::getId, Name::defineName).
-                event<NameDefined>().
-                updateView("AllNames") { nameDefined ->
-                    allNames.add(nameDefined.name)
+        eventModel<HotelCommand, HotelEvent>(eventStore, cloudEventConverter) {
+            swimlane("Inventory") {
+                slice(actor = "Manager", name = "Add Room") {
+                    wireframe("some ui").
+                    command(AddRoom::hotelId, Inventory::addRoom).
+                    event<RoomAdded>().
+                    updateView("Room Availability") { roomAdded ->
+                        roomAvailability.add(roomAdded.roomName)
+                    }
                 }
             }
         }
