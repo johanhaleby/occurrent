@@ -61,10 +61,7 @@ class ApplicationServiceCommandBuilder<C : Any, E>(val applicationService: Appli
 }
 
 @JvmName("listCommand")
-inline fun <C : Any, E : Any, reified CMD : C> ApplicationServiceCommandBuilder<C, E>.command(
-    crossinline streamIdGetter: (CMD) -> String,
-    crossinline commandHandler: (List<E>, CMD) -> List<E>
-) {
+inline fun <C : Any, E : Any, reified CMD : C> ApplicationServiceCommandBuilder<C, E>.command(crossinline streamIdGetter: (CMD) -> String, crossinline commandHandler: (List<E>, CMD) -> List<E>) {
     command(streamIdGetter) { eventSeq, cmd ->
         commandHandler(eventSeq.toList(), cmd).asSequence()
     }
