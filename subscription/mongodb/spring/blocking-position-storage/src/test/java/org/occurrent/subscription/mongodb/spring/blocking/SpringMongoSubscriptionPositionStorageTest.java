@@ -1,5 +1,5 @@
 /*
- * Copyright 2020 Johan Haleby
+ * Copyright 2021 Johan Haleby
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -111,7 +111,7 @@ public class SpringMongoSubscriptionPositionStorageTest {
 
     @AfterEach
     void shutdown() {
-        subscription.shutdownSubscribers();
+        subscription.shutdown();
         mongoClient.close();
     }
 

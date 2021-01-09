@@ -1,5 +1,5 @@
 /*
- * Copyright 2020 Johan Haleby
+ * Copyright 2021 Johan Haleby
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -45,7 +45,7 @@ import static org.occurrent.subscription.util.predicate.EveryN.everyEvent;
  */
 public class DurableSubscriptionModel implements PositionAwareSubscriptionModel {
 
-    private final PositionAwareSubscriptionModel subscription;
+    private final PositionAwareSubscriptionModel subscriptionModel;
     private final SubscriptionPositionStorage storage;
     private final DurableSubscriptionModelConfig config;
 
@@ -53,34 +53,34 @@ public class DurableSubscriptionModel implements PositionAwareSubscriptionModel 
      * Create a subscription that combines a {@link PositionAwareSubscriptionModel} with a {@link SubscriptionPositionStorage} to automatically
      * store the subscription after each successful call to <code>action</code> (The "consumer" in {@link #subscribe(String, Consumer)}).
      *
-     * @param subscription The subscription that will read events from the event store
+     * @param subscriptionModel The subscription that will read events from the event store
      * @param storage      The {@link SubscriptionPositionStorage} that'll be used to persist the stream position
      */
-    public DurableSubscriptionModel(PositionAwareSubscriptionModel subscription, SubscriptionPositionStorage storage) {
-        this(subscription, storage, new DurableSubscriptionModelConfig(everyEvent()));
+    public DurableSubscriptionModel(PositionAwareSubscriptionModel subscriptionModel, SubscriptionPositionStorage storage) {
+        this(subscriptionModel, storage, new DurableSubscriptionModelConfig(everyEvent()));
     }
 
     /**
      * Create a subscription that combines a {@link PositionAwareSubscriptionModel} with a {@link SubscriptionPositionStorage} to automatically
      * store the subscription when the predicate defined in {@link DurableSubscriptionModelConfig#persistCloudEventPositionPredicate} is fulfilled.
      *
-     * @param subscription The subscription that will read events from the event store
+     * @param subscriptionModel The subscription that will read events from the event store
      * @param storage      The {@link SubscriptionPositionStorage} that'll be used to persist the stream position
      */
-    public DurableSubscriptionModel(PositionAwareSubscriptionModel subscription, SubscriptionPositionStorage storage,
+    public DurableSubscriptionModel(PositionAwareSubscriptionModel subscriptionModel, SubscriptionPositionStorage storage,
                                     DurableSubscriptionModelConfig config) {
-        requireNonNull(subscription, "subscription cannot be null");
+        requireNonNull(subscriptionModel, "subscription cannot be null");
         requireNonNull(storage, SubscriptionPositionStorage.class.getSimpleName() + " cannot be null");
         requireNonNull(config, DurableSubscriptionModelConfig.class.getSimpleName() + " cannot be null");
 
         this.storage = storage;
-        this.subscription = subscription;
+        this.subscriptionModel = subscriptionModel;
         this.config = config;
     }
 
     @Override
     public Subscription subscribe(String subscriptionId, SubscriptionFilter filter, Supplier<StartAt> startAtSupplier, Consumer<CloudEvent> action) {
-        return subscription.subscribe(subscriptionId, filter, startAtSupplier, cloudEvent -> {
+        return subscriptionModel.subscribe(subscriptionId, filter, startAtSupplier, cloudEvent -> {
                     action.accept(cloudEvent);
                     if (config.persistCloudEventPositionPredicate.test(cloudEvent)) {
                         SubscriptionPosition subscriptionPosition = getSubscriptionPositionOrThrowIAE(cloudEvent);
@@ -108,7 +108,7 @@ public class DurableSubscriptionModel implements PositionAwareSubscriptionModel 
             // It's important that we find the document inside the supplier so that we lookup the latest resume token on retry
             SubscriptionPosition subscriptionPosition = storage.read(subscriptionId);
             if (subscriptionPosition == null) {
-                subscriptionPosition = storage.save(subscriptionId, subscription.globalSubscriptionPosition());
+                subscriptionPosition = storage.save(subscriptionId, subscriptionModel.globalSubscriptionPosition());
             }
             return StartAt.subscriptionPosition(subscriptionPosition);
         };
@@ -121,7 +121,7 @@ public class DurableSubscriptionModel implements PositionAwareSubscriptionModel 
      * @param subscriptionId The id of the subscription to pause
      */
     public void pauseSubscription(String subscriptionId) {
-        subscription.cancelSubscription(subscriptionId);
+        subscriptionModel.cancelSubscription(subscriptionId);
     }
 
     /**
@@ -135,13 +135,14 @@ public class DurableSubscriptionModel implements PositionAwareSubscriptionModel 
         storage.delete(subscriptionId);
     }
 
+    @Override
     @PreDestroy
-    public void shutdownSubscribers() {
-        subscription.shutdown();
+    public void shutdown() {
+        subscriptionModel.shutdown();
     }
 
     @Override
     public SubscriptionPosition globalSubscriptionPosition() {
-        return subscription.globalSubscriptionPosition();
+        return subscriptionModel.globalSubscriptionPosition();
     }
 }
