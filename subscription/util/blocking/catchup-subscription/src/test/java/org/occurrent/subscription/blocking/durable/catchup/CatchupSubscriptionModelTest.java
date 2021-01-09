@@ -334,6 +334,7 @@ public class CatchupSubscriptionModelTest {
         }).start();
 
         Supplier<CatchupSubscriptionModel> catchupSupportingBlockingSubscription = () -> {
+            subscriptionExecutor = Executors.newCachedThreadPool();
             NativeMongoSubscriptionModel blockingSubscriptionForMongoDB = new NativeMongoSubscriptionModel(database, eventCollection, TimeRepresentation.DATE, subscriptionExecutor, RetryStrategy.none());
             DurableSubscriptionModel blockingSubscriptionWithAutomaticPositionPersistence = new DurableSubscriptionModel(blockingSubscriptionForMongoDB, storage);
             return new CatchupSubscriptionModel(blockingSubscriptionWithAutomaticPositionPersistence, mongoEventStore, new CatchupSubscriptionModelConfig(100, useSubscriptionPositionStorage(storage)));
