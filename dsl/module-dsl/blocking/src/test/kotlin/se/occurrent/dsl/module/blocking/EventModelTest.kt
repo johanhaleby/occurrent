@@ -41,14 +41,20 @@ class EventModelTest {
         val roomAvailability = CopyOnWriteArrayList<String>()
 
         eventModel<HotelCommand, HotelEvent>(eventStore, cloudEventConverter) {
+            // Two different slices:
+            // ui->command->event (in the event store)
+            // event (from ES) -> handler - RM - UI
             swimlane("Inventory") {
                 slice(actor = "Manager", name = "Add Room") {
                     wireframe("some ui").
-                    command(AddRoom::hotelId, Inventory::addRoom).
-                    event<RoomAdded>().
-                    updateView("Room Availability") { roomAdded ->
-                        roomAvailability.add(roomAdded.roomName)
-                    }
+                    command(AddRoom::hotelId, Inventory::addRoom)
+                }
+                slice(actor ="Manager", name= "Update Room Availability") {
+//                    whenever<RoomAdded>().
+//                    updateReadModel("Room Availability") { roomAdded ->
+//                        roomAvailability.add(roomAdded.roomName)
+//                    }.
+//                    usedBy(wireframe="fkds")
                 }
             }
         }
