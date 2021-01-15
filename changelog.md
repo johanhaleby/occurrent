@@ -1,6 +1,17 @@
 ## Changelog next version
 
-* Renamed method `shutdownSubscribers` in `DurableSubscriptonModel` to `shutdown`.  
+* Renamed method `shutdownSubscribers` in `DurableSubscriptonModel` to `shutdown`.
+* Added default subscription name to subscription DSL. You can now do:
+
+    ```kotlin
+    subscriptions(subscriptionModel) {
+        subscribe<NameDefined> { e ->
+            log.info("Hello ${e.name}")
+        }
+    }
+    ```
+    
+    The id of the subscription will be "NameDefine" (the unqualified name of the `NameDefined` class).
 
 ## Changelog 0.5.1 (2021-01-07)
 

@@ -59,10 +59,10 @@ class ModuleConfigurationTest {
                 command(ChangeName::getId, Name::changeNameFromCommand)
             }
             subscriptions(subscriptionModel) {
-                subscribe<NameDefined>("nameDefined") { e ->
+                subscribe<NameDefined> { e ->
                     log.info("Hello ${e.name}")
                 }
-                subscribe<NameWasChanged>("nameChanged") { e ->
+                subscribe<NameWasChanged> { e ->
                     log.info("Changed name to ${e.name}")
                 }
                 subscribe("everything") { e ->

@@ -51,7 +51,7 @@ class Subscriptions<T : Any> @JvmOverloads constructor(
     /**
      * Create a new subscription that is invoked after a specific domain event is written to the event store
      */
-    inline fun <reified E : T> subscribe(subscriptionId: String, startAt: StartAt? = null, crossinline fn: (E) -> Unit): Subscription {
+    inline fun <reified E : T> subscribe(subscriptionId: String = E::class.simpleName!!, startAt: StartAt? = null, crossinline fn: (E) -> Unit): Subscription {
         return subscribe(subscriptionId, E::class, startAt = startAt) { e -> fn(e as E) }
     }
 
