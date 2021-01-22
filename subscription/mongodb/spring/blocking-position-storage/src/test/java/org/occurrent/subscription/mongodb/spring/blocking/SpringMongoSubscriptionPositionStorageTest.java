@@ -36,8 +36,10 @@ import org.occurrent.eventstore.api.blocking.EventStore;
 import org.occurrent.eventstore.mongodb.spring.blocking.EventStoreConfig;
 import org.occurrent.eventstore.mongodb.spring.blocking.SpringMongoEventStore;
 import org.occurrent.mongodb.timerepresentation.TimeRepresentation;
+import org.occurrent.retry.RetryStrategy;
 import org.occurrent.subscription.StringBasedSubscriptionPosition;
 import org.occurrent.subscription.SubscriptionPosition;
+import org.occurrent.subscription.api.blocking.SubscriptionModel;
 import org.occurrent.subscription.api.blocking.SubscriptionPositionStorage;
 import org.occurrent.subscription.blocking.durable.DurableSubscriptionModel;
 import org.occurrent.subscription.blocking.durable.DurableSubscriptionModelConfig;
@@ -57,6 +59,8 @@ import java.time.temporal.ChronoUnit;
 import java.util.UUID;
 import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.atomic.AtomicInteger;
+import java.util.function.Consumer;
+import java.util.function.Supplier;
 import java.util.stream.Stream;
 
 import static com.mongodb.client.model.Aggregates.match;
@@ -94,7 +98,7 @@ public class SpringMongoSubscriptionPositionStorageTest {
     private ObjectMapper objectMapper;
     private MongoTemplate mongoTemplate;
     private MongoClient mongoClient;
-    private SpringMongoSubscriptionModel positionAwareBlockingSubscription;
+    private SpringMongoSubscriptionModel springMongoSubscriptionModel;
 
     @BeforeEach
     void create_mongo_event_store() {
@@ -105,9 +109,9 @@ public class SpringMongoSubscriptionPositionStorageTest {
         TimeRepresentation timeRepresentation = RFC_3339_STRING;
         EventStoreConfig eventStoreConfig = new EventStoreConfig.Builder().eventStoreCollectionName(connectionString.getCollection()).transactionConfig(mongoTransactionManager).timeRepresentation(timeRepresentation).build();
         mongoEventStore = new SpringMongoEventStore(mongoTemplate, eventStoreConfig);
-        positionAwareBlockingSubscription = new SpringMongoSubscriptionModel(mongoTemplate, connectionString.getCollection(), timeRepresentation);
+        springMongoSubscriptionModel = new SpringMongoSubscriptionModel(mongoTemplate, connectionString.getCollection(), timeRepresentation);
         SpringMongoSubscriptionPositionStorage storage = new SpringMongoSubscriptionPositionStorage(mongoTemplate, RESUME_TOKEN_COLLECTION);
-        this.subscription = new DurableSubscriptionModel(positionAwareBlockingSubscription, storage);
+        this.subscription = new DurableSubscriptionModel(springMongoSubscriptionModel, storage);
         objectMapper = new ObjectMapper();
     }
 
@@ -195,7 +199,7 @@ public class SpringMongoSubscriptionPositionStorageTest {
                 return false;
             }
         };
-        subscription = new DurableSubscriptionModel(positionAwareBlockingSubscription, storage);
+        subscription = new DurableSubscriptionModel(springMongoSubscriptionModel, storage);
         subscription.subscribe(UUID.randomUUID().toString(), state::add).waitUntilStarted(Duration.of(10, ChronoUnit.SECONDS));
 
         // When
@@ -243,7 +247,7 @@ public class SpringMongoSubscriptionPositionStorageTest {
                 return false;
             }
         };
-        subscription = new DurableSubscriptionModel(positionAwareBlockingSubscription, storage, new DurableSubscriptionModelConfig(3));
+        subscription = new DurableSubscriptionModel(springMongoSubscriptionModel, storage, new DurableSubscriptionModelConfig(3));
         subscription.subscribe(UUID.randomUUID().toString(), state::add).waitUntilStarted(Duration.of(10, ChronoUnit.SECONDS));
 
         // When
@@ -290,7 +294,16 @@ public class SpringMongoSubscriptionPositionStorageTest {
         AtomicInteger counter = new AtomicInteger();
         CopyOnWriteArrayList<CloudEvent> state = new CopyOnWriteArrayList<>();
         String subscriberId = UUID.randomUUID().toString();
-        Runnable stream = () -> subscription.subscribe(subscriberId, cloudEvent -> {
+
+        // We recreate the subscription model with a retry strategy of "none" so that we can fail and not retry when exceptions are thrown
+        Supplier<DurableSubscriptionModel> createSubscriptionModelWithoutRetry = () -> {
+            SpringMongoSubscriptionModel springMongoSubscriptionModel = new SpringMongoSubscriptionModel(mongoTemplate, "events", RFC_3339_STRING, RetryStrategy.none());
+            SpringMongoSubscriptionPositionStorage storage = new SpringMongoSubscriptionPositionStorage(mongoTemplate, RESUME_TOKEN_COLLECTION);
+            return new DurableSubscriptionModel(springMongoSubscriptionModel, storage);
+        };
+
+        subscription = createSubscriptionModelWithoutRetry.get();
+        Consumer<SubscriptionModel> stream = subscriptionModel -> subscriptionModel.subscribe(subscriberId, cloudEvent -> {
             if (counter.incrementAndGet() == 1) {
                 // We simulate error on first event
                 throw new IllegalArgumentException("Expected");
@@ -298,7 +311,8 @@ public class SpringMongoSubscriptionPositionStorageTest {
                 state.add(cloudEvent);
             }
         }).waitUntilStarted();
-        stream.run();
+
+        stream.accept(subscription);
         NameDefined nameDefined1 = new NameDefined(UUID.randomUUID().toString(), now, "name1");
         NameDefined nameDefined2 = new NameDefined(UUID.randomUUID().toString(), now.plusSeconds(2), "name2");
         NameWasChanged nameWasChanged1 = new NameWasChanged(UUID.randomUUID().toString(), now.plusSeconds(10), "name3");
@@ -307,8 +321,10 @@ public class SpringMongoSubscriptionPositionStorageTest {
         mongoEventStore.write("1", 0, serialize(nameDefined1));
         // The subscription is async so we need to wait for it
         await().atMost(ONE_SECOND).and().dontCatchUncaughtExceptions().untilAtomic(counter, equalTo(1));
-        // Since an exception occurred we need to run the stream again
-        stream.run();
+        // Since an exception occurred we need to run the stream again, but first we need to close the old subscription
+        subscription.shutdown();
+        subscription = createSubscriptionModelWithoutRetry.get();
+        stream.accept(subscription);
         mongoEventStore.write("2", 0, serialize(nameDefined2));
         mongoEventStore.write("1", 1, serialize(nameWasChanged1));
 
