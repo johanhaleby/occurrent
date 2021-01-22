@@ -25,7 +25,7 @@ class ApplicationServiceCommandDispatcher<C : Any, E>(applicationService: Applic
     private val builder = ApplicationServiceCommandBuilder<C, E>(applicationService)
 
     companion object {
-        fun <C : Any, E> applicationService(applicationService: ApplicationService<E>): ApplicationServiceCommandDispatcher<C, E> = ApplicationServiceCommandDispatcher(applicationService)
+        fun <C : Any, E> dispatchTo(applicationService: ApplicationService<E>): ApplicationServiceCommandDispatcher<C, E> = ApplicationServiceCommandDispatcher(applicationService)
     }
 
     override fun dispatch(command: C): Boolean {

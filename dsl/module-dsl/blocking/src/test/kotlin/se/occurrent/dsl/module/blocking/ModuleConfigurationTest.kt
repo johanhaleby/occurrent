@@ -30,7 +30,7 @@ import org.occurrent.command.DefineName
 import org.occurrent.domain.*
 import org.occurrent.eventstore.inmemory.InMemoryEventStore
 import org.occurrent.subscription.inmemory.InMemorySubscriptionModel
-import se.occurrent.dsl.module.blocking.ApplicationServiceCommandDispatcher.Companion.applicationService
+import se.occurrent.dsl.module.blocking.ApplicationServiceCommandDispatcher.Companion.dispatchTo
 import java.time.Duration
 import java.time.LocalDateTime
 import java.time.temporal.ChronoUnit.MILLIS
@@ -54,7 +54,7 @@ class ModuleConfigurationTest {
 
         // Module Configuration
         val module = module<Command, DomainEvent>(cloudEventConverter, eventNameFromType = { e -> e.qualifiedName!! }) {
-            commands(applicationService(applicationService)) {
+            commands(dispatchTo(applicationService)) {
                 command(DefineName::getId, Name::defineName)
                 command(ChangeName::getId, Name::changeNameFromCommand)
             }
