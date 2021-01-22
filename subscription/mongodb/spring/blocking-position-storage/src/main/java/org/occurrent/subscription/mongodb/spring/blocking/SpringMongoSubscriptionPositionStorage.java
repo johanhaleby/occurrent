@@ -100,7 +100,7 @@ public class SpringMongoSubscriptionPositionStorage implements SubscriptionPosit
                 persistOperationTimeStreamPosition(subscriptionId, ((MongoOperationTimeSubscriptionPosition) subscriptionPosition).operationTime);
             } else {
                 String subscriptionPositionString = subscriptionPosition.asString();
-                Document document = MongoCommons.generateGenericStreamPositionDocument(subscriptionId, subscriptionPositionString);
+                Document document = MongoCommons.generateGenericSubscriptionPositionDocument(subscriptionId, subscriptionPositionString);
                 persistDocumentStreamPosition(subscriptionId, document);
             }
             return subscriptionPosition;

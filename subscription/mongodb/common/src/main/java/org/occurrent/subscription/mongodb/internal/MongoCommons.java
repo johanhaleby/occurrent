@@ -1,5 +1,5 @@
 /*
- * Copyright 2020 Johan Haleby
+ * Copyright 2021 Johan Haleby
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -49,7 +49,7 @@ public class MongoCommons {
         return new Document(data);
     }
 
-    public static Document generateGenericStreamPositionDocument(String subscriptionId, String subscriptionPositionAsString) {
+    public static Document generateGenericSubscriptionPositionDocument(String subscriptionId, String subscriptionPositionAsString) {
         Map<String, Object> data = new HashMap<>();
         data.put(MongoCloudEventsToJsonDeserializer.ID, subscriptionId);
         data.put(GENERIC_SUBSCRIPTION_POSITION, subscriptionPositionAsString);

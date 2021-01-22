@@ -1,5 +1,5 @@
 /*
- * Copyright 2020 Johan Haleby
+ * Copyright 2021 Johan Haleby
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -66,7 +66,7 @@ public class ReactorSubscriptionPositionStorage implements SubscriptionPositionS
             result = persistOperationTimeStreamPosition(subscriptionId, ((MongoOperationTimeSubscriptionPosition) changeStreamPosition).operationTime);
         } else {
             String subscriptionPositionString = changeStreamPosition.asString();
-            Document document = MongoCommons.generateGenericStreamPositionDocument(subscriptionId, subscriptionPositionString);
+            Document document = MongoCommons.generateGenericSubscriptionPositionDocument(subscriptionId, subscriptionPositionString);
             result = persistDocumentStreamPosition(subscriptionId, document);
         }
         return result.thenReturn(changeStreamPosition);

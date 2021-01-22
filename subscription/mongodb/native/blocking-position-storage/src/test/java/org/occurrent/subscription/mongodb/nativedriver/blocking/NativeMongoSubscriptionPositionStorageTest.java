@@ -1,5 +1,5 @@
 /*
- * Copyright 2020 Johan Haleby
+ * Copyright 2021 Johan Haleby
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -24,6 +24,7 @@ import com.mongodb.client.MongoDatabase;
 import com.mongodb.client.model.Filters;
 import io.cloudevents.CloudEvent;
 import io.cloudevents.core.builder.CloudEventBuilder;
+import org.bson.Document;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -36,6 +37,8 @@ import org.occurrent.eventstore.mongodb.nativedriver.EventStoreConfig;
 import org.occurrent.eventstore.mongodb.nativedriver.MongoEventStore;
 import org.occurrent.mongodb.timerepresentation.TimeRepresentation;
 import org.occurrent.retry.RetryStrategy;
+import org.occurrent.subscription.StringBasedSubscriptionPosition;
+import org.occurrent.subscription.SubscriptionPosition;
 import org.occurrent.subscription.api.blocking.PositionAwareSubscriptionModel;
 import org.occurrent.subscription.api.blocking.SubscriptionPositionStorage;
 import org.occurrent.subscription.blocking.durable.DurableSubscriptionModel;
@@ -133,6 +136,31 @@ public class NativeMongoSubscriptionPositionStorageTest {
 
         // Then
         await().atMost(2, SECONDS).with().pollInterval(Duration.of(20, MILLIS)).untilAsserted(() -> assertThat(state).hasSize(3));
+    }
+    @Test
+    void retries_failed_writes() {
+        // Given
+        AtomicInteger counter = new AtomicInteger();
+
+        NativeMongoSubscriptionPositionStorage storage = new NativeMongoSubscriptionPositionStorage(database.getCollection(TIMESTAMP_TOKEN_COLLECTION)) {
+
+            @Override
+            void persistDocumentSubscriptionPosition(String subscriptionId, Document document) {
+                if (counter.getAndIncrement() == 0) {
+                    throw new IllegalStateException("expected");
+                }
+                super.persistDocumentSubscriptionPosition(subscriptionId, document);
+            }
+        };
+
+        StringBasedSubscriptionPosition expectedPosition = new StringBasedSubscriptionPosition("hello");
+  
+        // When
+        storage.save("subscriptionId", expectedPosition);
+
+        // Then
+        SubscriptionPosition actualPosition = storage.read("subscriptionId");
+        assertThat(actualPosition).isEqualTo(expectedPosition);
     }
 
     @Test
