@@ -12,6 +12,11 @@
     ```
     
     The id of the subscription will be "NameDefine" (the unqualified name of the `NameDefined` class).
+* Added `exists` method to `EventStoreQueries` API (both blocking and reactive). This means that you can easily check if events exists, for example:
+
+    ```kotlin
+    val doesSomeTypeExists = eventStoreQueries.exists(type("sometype"))
+    ``` 
 
 ## Changelog 0.5.1 (2021-01-07)
 
