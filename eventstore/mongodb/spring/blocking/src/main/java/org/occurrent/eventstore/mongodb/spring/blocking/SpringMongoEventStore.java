@@ -200,6 +200,17 @@ public class SpringMongoEventStore implements EventStore, EventStoreOperations, 
         }
     }
 
+    @Override
+    public boolean exists(Filter filter) {
+        requireNonNull(filter, "Filter cannot be null");
+        if (filter instanceof Filter.All) {
+            return count() > 0;
+        } else {
+            final Query query = FilterConverter.convertFilterToQuery(timeRepresentation, filter);
+            return mongoTemplate.exists(query, eventStoreCollectionName);
+        }
+    }
+
     // Data structures etc
     private static class EventStreamImpl<T> implements EventStream<T> {
         private String _id;

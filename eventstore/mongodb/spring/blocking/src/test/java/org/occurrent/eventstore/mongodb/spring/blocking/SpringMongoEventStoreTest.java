@@ -39,6 +39,7 @@ import org.occurrent.eventstore.api.WriteCondition;
 import org.occurrent.eventstore.api.WriteConditionNotFulfilledException;
 import org.occurrent.eventstore.api.blocking.EventStoreQueries;
 import org.occurrent.eventstore.api.blocking.EventStream;
+import org.occurrent.filter.Filter;
 import org.occurrent.functional.CheckedFunction;
 import org.occurrent.mongodb.timerepresentation.TimeRepresentation;
 import org.occurrent.testsupport.mongodb.FlushMongoDBExtension;
@@ -293,6 +294,76 @@ public class SpringMongoEventStoreTest {
     }
 
     @Nested
+    @DisplayName("exists")
+    class ExistsTest {
+
+        @Test
+        void returns_false_when_there_are_no_events_in_the_event_store_and_filter_is_all() {
+            // When
+            boolean exists = eventStore.exists(Filter.all());
+
+            // Then
+            assertThat(exists).isFalse();
+        }
+
+        @Test
+        void returns_true_when_there_are_events_in_the_event_store_and_filter_is_all() {
+            // Given
+            LocalDateTime now = LocalDateTime.now();
+            DomainEvent event1 = new NameDefined(UUID.randomUUID().toString(), now, "John Doe");
+            DomainEvent event2 = new NameWasChanged(UUID.randomUUID().toString(), now, "Jan Doe");
+            DomainEvent event3 = new NameDefined(UUID.randomUUID().toString(), now, "Hello Doe");
+            persist("name", Stream.of(event1, event2, event3).collect(Collectors.toList()));
+
+            // When
+            boolean exists = eventStore.exists(Filter.all());
+
+            // Then
+            assertThat(exists).isTrue();
+        }
+
+        @Test
+        void returns_false_when_there_are_no_events_in_the_event_store_and_filter_is_not_all() {
+            // When
+            boolean exists = eventStore.exists(type(NameDefined.class.getSimpleName()));
+
+            // Then
+            assertThat(exists).isFalse();
+        }
+
+        @Test
+        void returns_true_when_there_are_matching_events_in_the_event_store_and_filter_not_all() {
+            // Given
+            LocalDateTime now = LocalDateTime.now();
+            DomainEvent event1 = new NameDefined(UUID.randomUUID().toString(), now, "John Doe");
+            DomainEvent event2 = new NameWasChanged(UUID.randomUUID().toString(), now, "Jan Doe");
+            DomainEvent event3 = new NameDefined(UUID.randomUUID().toString(), now, "Hello Doe");
+            persist("name", Stream.of(event1, event2, event3).collect(Collectors.toList()));
+
+            // When
+            boolean exists = eventStore.exists(type(NameDefined.class.getSimpleName()));
+
+            // Then
+            assertThat(exists).isTrue();
+        }
+
+        @Test
+        void returns_false_when_there_events_in_the_event_store_that_doesnt_match_filter() {
+            // Given
+            LocalDateTime now = LocalDateTime.now();
+            DomainEvent event1 = new NameDefined(UUID.randomUUID().toString(), now, "John Doe");
+            DomainEvent event2 = new NameDefined(UUID.randomUUID().toString(), now, "Hello Doe");
+            persist("name", Stream.of(event1, event2).collect(Collectors.toList()));
+
+            // When
+            boolean exists = eventStore.exists(type(NameWasChanged.class.getSimpleName()));
+
+            // Then
+            assertThat(exists).isFalse();
+        }
+    }
+
+    @Nested
     @DisplayName("and there are duplicate events")
     class DuplicatesTest {
 
@@ -421,7 +492,7 @@ public class SpringMongoEventStoreTest {
     class Exists {
 
         @Test
-        void returns_true_when_stream_exists_and_contains_events() {
+        void returns_true_when_stream_and_contains_events() {
             // Given
             LocalDateTime now = LocalDateTime.now();
             NameDefined nameDefined = new NameDefined(UUID.randomUUID().toString(), now, "name");
