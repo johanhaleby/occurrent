@@ -55,7 +55,7 @@ public class InMemorySubscriptionModelTest {
     void shutdown() {
         inMemorySubscriptionModel.shutdown();
     }
-    
+
     @Test
     void events_written_to_event_store_are_propagated_to_all_subscribers() {
         // Given
@@ -116,6 +116,19 @@ public class InMemorySubscriptionModelTest {
         await().untilAsserted(() -> {
             assertThat(receivedEvents).extracting(CloudEvent::getId).containsOnly(cloudEvent.getId());
         });
+    }
+
+    @Test
+    void inmemory_subscription_model_throws_iae_when_subscription_already_exists() {
+        // Given
+        String subscriptionId = UUID.randomUUID().toString();
+        inMemorySubscriptionModel.subscribe(subscriptionId, __ -> System.out.println("hello")).waitUntilStarted();
+
+        // When
+        Throwable throwable = catchThrowable(() -> inMemorySubscriptionModel.subscribe(subscriptionId, __ -> System.out.println("hello")).waitUntilStarted());
+
+        // Then
+        assertThat(throwable).isExactlyInstanceOf(IllegalArgumentException.class).hasMessage("Subscription " + subscriptionId + " is already defined.");
     }
 
     @Test

@@ -121,10 +121,14 @@ public class NativeMongoSubscriptionModel implements PositionAwareSubscriptionMo
     }
 
     @Override
-    public Subscription subscribe(String subscriptionId, SubscriptionFilter filter, Supplier<StartAt> startAtSupplier, Consumer<CloudEvent> action) {
+    public synchronized Subscription subscribe(String subscriptionId, SubscriptionFilter filter, Supplier<StartAt> startAtSupplier, Consumer<CloudEvent> action) {
         requireNonNull(subscriptionId, "subscriptionId cannot be null");
         requireNonNull(action, "Action cannot be null");
         requireNonNull(startAtSupplier, "Start at cannot be null");
+
+        if (subscriptions.containsKey(subscriptionId)) {
+            throw new IllegalArgumentException("Subscription " + subscriptionId + " is already defined.");
+        }
 
         List<Bson> pipeline = createPipeline(timeRepresentation, filter);
         CountDownLatch subscriptionStartedLatch = new CountDownLatch(1);

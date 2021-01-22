@@ -63,6 +63,7 @@ import static java.time.temporal.ChronoUnit.MILLIS;
 import static java.util.Objects.requireNonNull;
 import static java.util.concurrent.TimeUnit.SECONDS;
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.catchThrowable;
 import static org.assertj.core.groups.Tuple.tuple;
 import static org.awaitility.Awaitility.await;
 import static org.awaitility.Durations.FIVE_SECONDS;
@@ -120,6 +121,19 @@ public class SpringMongoSubscriptionModelTest {
 
         // Then
         await().atMost(2, SECONDS).with().pollInterval(Duration.of(20, MILLIS)).untilAsserted(() -> assertThat(state).hasSize(3));
+    }
+
+    @Test
+    void blocking_spring_subscription_throws_iae_when_subscription_already_exists() {
+        // Given
+        String subscriptionId = UUID.randomUUID().toString();
+        subscription.subscribe(subscriptionId, __ -> System.out.println("hello")).waitUntilStarted();
+    
+        // When
+        Throwable throwable = catchThrowable(() -> subscription.subscribe(subscriptionId, __ -> System.out.println("hello")).waitUntilStarted());
+
+        // Then
+        assertThat(throwable).isExactlyInstanceOf(IllegalArgumentException.class).hasMessage("Subscription " + subscriptionId + " is already defined.");
     }
 
     @Test

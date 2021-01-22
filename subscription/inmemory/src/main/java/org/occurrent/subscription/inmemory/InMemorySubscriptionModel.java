@@ -78,13 +78,15 @@ public class InMemorySubscriptionModel implements SubscriptionModel, Consumer<St
 
 
     @Override
-    public Subscription subscribe(String subscriptionId, SubscriptionFilter filter, Supplier<StartAt> startAtSupplier, Consumer<CloudEvent> action) {
+    public synchronized Subscription subscribe(String subscriptionId, SubscriptionFilter filter, Supplier<StartAt> startAtSupplier, Consumer<CloudEvent> action) {
         if (shuttingDown) {
             throw new IllegalStateException("Cannot subscribe when shutdown");
         } else if (subscriptionId == null) {
             throw new IllegalArgumentException("subscriptionId cannot be null");
         } else if (action == null) {
             throw new IllegalArgumentException("action cannot be null");
+        } else if (subscriptions.containsKey(subscriptionId)) {
+            throw new IllegalArgumentException("Subscription " + subscriptionId + " is already defined.");
         }
 
         if (startAtSupplier != null) {
