@@ -230,6 +230,11 @@ public class InMemoryEventStore implements EventStore, EventStoreOperations, Eve
         return state.values().stream().mapToLong(cloudEvents -> cloudEvents.stream().filter(cloudEvent -> matchesFilter(cloudEvent, filter)).count()).reduce(0, Long::sum);
     }
 
+    @Override
+    public boolean exists(Filter filter) {
+        return count(filter) > 0;
+    }
+
     private static class EventStreamImpl implements EventStream<CloudEvent> {
         private final String streamId;
         private final long version;

@@ -37,6 +37,7 @@ import org.occurrent.eventstore.api.WriteConditionNotFulfilledException;
 import org.occurrent.eventstore.api.blocking.EventStore;
 import org.occurrent.eventstore.api.blocking.EventStoreQueries;
 import org.occurrent.eventstore.api.blocking.EventStream;
+import org.occurrent.filter.Filter;
 
 import java.net.URI;
 import java.time.LocalDateTime;
@@ -904,7 +905,8 @@ public class InMemoryEventStoreTest {
             unconditionallyPersist(inMemoryEventStore, "name2", nameWasChanged2);
 
             // Then
-            Throwable throwable = catchThrowable(() -> inMemoryEventStore.query(data("name", eq("name2"))).forEach(__ -> {}));
+            Throwable throwable = catchThrowable(() -> inMemoryEventStore.query(data("name", eq("name2"))).forEach(__ -> {
+            }));
             assertThat(throwable).isExactlyInstanceOf(IllegalArgumentException.class).hasMessage("Currently, it's not possible to query the data field from in-memory event stores/subscriptions. " +
                     "The good thing is that Occurrent is open-source, so feel free to contribute :) (https://github.com/johanhaleby/occurrent/issues/58).");
         }
@@ -1231,6 +1233,83 @@ public class InMemoryEventStoreTest {
             assertThat(count).isEqualTo(2);
         }
     }
+
+    @Nested
+    @DisplayName("exists")
+    class ExistsTest {
+        private InMemoryEventStore inMemoryEventStore;
+
+        @BeforeEach
+        void create_event_store() {
+            inMemoryEventStore = new InMemoryEventStore();
+        }
+
+        @Test
+        void returns_false_when_there_are_no_events_in_the_event_store_and_filter_is_all() {
+            // When
+            boolean exists = inMemoryEventStore.exists(Filter.all());
+
+            // Then
+            assertThat(exists).isFalse();
+        }
+
+        @Test
+        void returns_true_when_there_are_events_in_the_event_store_and_filter_is_all() {
+            // Given
+            LocalDateTime now = LocalDateTime.now();
+            DomainEvent event1 = new NameDefined(UUID.randomUUID().toString(), now, "John Doe");
+            DomainEvent event2 = new NameWasChanged(UUID.randomUUID().toString(), now, "Jan Doe");
+            DomainEvent event3 = new NameDefined(UUID.randomUUID().toString(), now, "Hello Doe");
+            unconditionallyPersist(inMemoryEventStore, "name", Stream.of(event1, event2, event3));
+
+            // When
+            boolean exists = inMemoryEventStore.exists(Filter.all());
+
+            // Then
+            assertThat(exists).isTrue();
+        }
+
+        @Test
+        void returns_false_when_there_are_no_events_in_the_event_store_and_filter_is_not_all() {
+            // When
+            boolean exists = inMemoryEventStore.exists(type(NameDefined.class.getName()));
+
+            // Then
+            assertThat(exists).isFalse();
+        }
+
+        @Test
+        void returns_true_when_there_are_matching_events_in_the_event_store_and_filter_not_all() {
+            // Given
+            LocalDateTime now = LocalDateTime.now();
+            DomainEvent event1 = new NameDefined(UUID.randomUUID().toString(), now, "John Doe");
+            DomainEvent event2 = new NameWasChanged(UUID.randomUUID().toString(), now, "Jan Doe");
+            DomainEvent event3 = new NameDefined(UUID.randomUUID().toString(), now, "Hello Doe");
+            unconditionallyPersist(inMemoryEventStore, "name", Stream.of(event1, event2, event3));
+
+            // When
+            boolean exists = inMemoryEventStore.exists(type(NameDefined.class.getName()));
+
+            // Then
+            assertThat(exists).isTrue();
+        }
+
+        @Test
+        void returns_false_when_there_events_in_the_event_store_that_doesnt_match_filter() {
+            // Given
+            LocalDateTime now = LocalDateTime.now();
+            DomainEvent event1 = new NameDefined(UUID.randomUUID().toString(), now, "John Doe");
+            DomainEvent event2 = new NameDefined(UUID.randomUUID().toString(), now, "Hello Doe");
+            unconditionallyPersist(inMemoryEventStore, "name", Stream.of(event1, event2));
+
+            // When
+            boolean exists = inMemoryEventStore.exists(type(NameWasChanged.class.getName()));
+
+            // Then
+            assertThat(exists).isFalse();
+        }
+    }
+
 
     private void unconditionallyPersist(EventStore inMemoryEventStore, String eventStreamId, DomainEvent event) {
         unconditionallyPersist(inMemoryEventStore, eventStreamId, Stream.of(event));
