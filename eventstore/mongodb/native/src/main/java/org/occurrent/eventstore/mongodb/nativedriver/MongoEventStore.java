@@ -302,6 +302,12 @@ public class MongoEventStore implements EventStore, EventStoreOperations, EventS
         }
     }
 
+    @Override
+    public boolean exists(Filter filter) {
+        requireNonNull(filter, "Filter cannot be null");
+        return count(filter) > 0;
+    }
+
     private static class EventStreamImpl<T> implements EventStream<T> {
         private final String id;
         private final long version;

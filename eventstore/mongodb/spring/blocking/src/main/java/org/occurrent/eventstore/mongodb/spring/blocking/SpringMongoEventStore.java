@@ -130,6 +130,17 @@ public class SpringMongoEventStore implements EventStore, EventStoreOperations, 
     }
 
     @Override
+    public boolean exists(Filter filter) {
+        requireNonNull(filter, "Filter cannot be null");
+        if (filter instanceof Filter.All) {
+            return count() > 0;
+        } else {
+            final Query query = FilterConverter.convertFilterToQuery(timeRepresentation, filter);
+            return mongoTemplate.exists(query, eventStoreCollectionName);
+        }
+    }
+
+    @Override
     public void deleteEventStream(String streamId) {
         requireNonNull(streamId, "Stream id cannot be null");
 
@@ -197,17 +208,6 @@ public class SpringMongoEventStore implements EventStore, EventStoreOperations, 
         } else {
             final Query query = FilterConverter.convertFilterToQuery(timeRepresentation, filter);
             return mongoTemplate.count(query, eventStoreCollectionName);
-        }
-    }
-
-    @Override
-    public boolean exists(Filter filter) {
-        requireNonNull(filter, "Filter cannot be null");
-        if (filter instanceof Filter.All) {
-            return count() > 0;
-        } else {
-            final Query query = FilterConverter.convertFilterToQuery(timeRepresentation, filter);
-            return mongoTemplate.exists(query, eventStoreCollectionName);
         }
     }
 
