@@ -141,7 +141,7 @@ public class SpringMongoSubscriptionPositionStorageTest {
     }
 
     @Test
-    void retries_failed_writes() {
+    void blocking_spring_subscription_retries_failed_writes() {
         // Given
         AtomicInteger counter = new AtomicInteger();
 
