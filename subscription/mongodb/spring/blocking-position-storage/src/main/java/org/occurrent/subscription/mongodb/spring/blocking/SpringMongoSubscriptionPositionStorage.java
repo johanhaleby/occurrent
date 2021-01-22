@@ -1,5 +1,5 @@
 /*
- * Copyright 2020 Johan Haleby
+ * Copyright 2021 Johan Haleby
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -19,6 +19,7 @@ package org.occurrent.subscription.mongodb.spring.blocking;
 import org.bson.BsonTimestamp;
 import org.bson.BsonValue;
 import org.bson.Document;
+import org.occurrent.retry.RetryStrategy;
 import org.occurrent.subscription.SubscriptionPosition;
 import org.occurrent.subscription.api.blocking.SubscriptionPositionStorage;
 import org.occurrent.subscription.mongodb.MongoOperationTimeSubscriptionPosition;
@@ -27,7 +28,13 @@ import org.occurrent.subscription.mongodb.internal.MongoCommons;
 import org.springframework.data.mongodb.core.MongoOperations;
 import org.springframework.data.mongodb.core.query.Update;
 
+import javax.annotation.PreDestroy;
+import java.time.Duration;
+import java.util.function.Supplier;
+
 import static java.util.Objects.requireNonNull;
+import static org.occurrent.retry.internal.RetryExecution.convertToDelayStream;
+import static org.occurrent.retry.internal.RetryExecution.executeWithRetry;
 import static org.occurrent.subscription.mongodb.internal.MongoCloudEventsToJsonDeserializer.ID;
 import static org.springframework.data.mongodb.core.query.Criteria.where;
 import static org.springframework.data.mongodb.core.query.Query.query;
@@ -39,52 +46,79 @@ public class SpringMongoSubscriptionPositionStorage implements SubscriptionPosit
 
     private final MongoOperations mongoOperations;
     private final String subscriptionPositionCollection;
+    private final RetryStrategy retryStrategy;
+
+    private volatile boolean shutdown = false;
+
+    /**
+     * Create a {@link SubscriptionPositionStorage} that uses the Spring's {@link MongoOperations} to persist subscription positions in MongoDB.
+     * It will by default use a {@link RetryStrategy} for retries, with exponential backoff starting with 100 ms and progressively go up to max 2 seconds wait time between
+     * each retry when reading/saving/deleting the subscription position.
+     *
+     * @param mongoOperations                The {@link MongoOperations} that'll be used to store the subscription position
+     * @param subscriptionPositionCollection The collection into which subscription positions will be stored
+     */
+    public SpringMongoSubscriptionPositionStorage(MongoOperations mongoOperations, String subscriptionPositionCollection) {
+        this(mongoOperations, subscriptionPositionCollection, RetryStrategy.backoff(Duration.ofMillis(100), Duration.ofSeconds(2), 2.0f));
+    }
 
     /**
      * Create a {@link SubscriptionPositionStorage} that uses the Spring's {@link MongoOperations} to persist subscription positions in MongoDB.
      *
      * @param mongoOperations                The {@link MongoOperations} that'll be used to store the subscription position
      * @param subscriptionPositionCollection The collection into which subscription positions will be stored
+     * @param retryStrategy                  A custom retry strategy to use if there's a problem reading/saving/deleting the position to the MongoDB storage.
      */
-    public SpringMongoSubscriptionPositionStorage(MongoOperations mongoOperations, String subscriptionPositionCollection) {
+    public SpringMongoSubscriptionPositionStorage(MongoOperations mongoOperations, String subscriptionPositionCollection, RetryStrategy retryStrategy) {
         requireNonNull(mongoOperations, "Mongo operations cannot be null");
         requireNonNull(subscriptionPositionCollection, "subscriptionPositionCollection cannot be null");
-
+        requireNonNull(retryStrategy, RetryStrategy.class.getSimpleName() + " cannot be null");
         this.mongoOperations = mongoOperations;
         this.subscriptionPositionCollection = subscriptionPositionCollection;
+        this.retryStrategy = retryStrategy;
     }
 
     @Override
     public SubscriptionPosition read(String subscriptionId) {
-        Document document = mongoOperations.findOne(query(where(ID).is(subscriptionId)), Document.class, subscriptionPositionCollection);
-        if (document == null) {
-            return null;
-        }
-        return MongoCommons.calculateSubscriptionPositionFromMongoStreamPositionDocument(document);
+        Supplier<SubscriptionPosition> read = () -> {
+            Document document = mongoOperations.findOne(query(where(ID).is(subscriptionId)), Document.class, subscriptionPositionCollection);
+            if (document == null) {
+                return null;
+            }
+            return MongoCommons.calculateSubscriptionPositionFromMongoStreamPositionDocument(document);
+        };
+
+        return executeWithRetry(read, __ -> !shutdown, convertToDelayStream(retryStrategy)).get();
     }
 
     @Override
     public SubscriptionPosition save(String subscriptionId, SubscriptionPosition subscriptionPosition) {
-        if (subscriptionPosition instanceof MongoResumeTokenSubscriptionPosition) {
-            persistResumeTokenStreamPosition(subscriptionId, ((MongoResumeTokenSubscriptionPosition) subscriptionPosition).resumeToken);
-        } else if (subscriptionPosition instanceof MongoOperationTimeSubscriptionPosition) {
-            persistOperationTimeStreamPosition(subscriptionId, ((MongoOperationTimeSubscriptionPosition) subscriptionPosition).operationTime);
-        } else {
-            String subscriptionPositionString = subscriptionPosition.asString();
-            Document document = MongoCommons.generateGenericStreamPositionDocument(subscriptionId, subscriptionPositionString);
-            persistDocumentStreamPosition(subscriptionId, document);
-        }
-        return subscriptionPosition;
+        Supplier<SubscriptionPosition> save = () -> {
+            if (subscriptionPosition instanceof MongoResumeTokenSubscriptionPosition) {
+                persistResumeTokenStreamPosition(subscriptionId, ((MongoResumeTokenSubscriptionPosition) subscriptionPosition).resumeToken);
+            } else if (subscriptionPosition instanceof MongoOperationTimeSubscriptionPosition) {
+                persistOperationTimeStreamPosition(subscriptionId, ((MongoOperationTimeSubscriptionPosition) subscriptionPosition).operationTime);
+            } else {
+                String subscriptionPositionString = subscriptionPosition.asString();
+                Document document = MongoCommons.generateGenericStreamPositionDocument(subscriptionId, subscriptionPositionString);
+                persistDocumentStreamPosition(subscriptionId, document);
+            }
+            return subscriptionPosition;
+        };
+
+        return executeWithRetry(save, __ -> !shutdown, convertToDelayStream(retryStrategy)).get();
     }
 
     @Override
     public void delete(String subscriptionId) {
-        mongoOperations.remove(query(where(ID).is(subscriptionId)), subscriptionPositionCollection);
+        Runnable delete = () -> mongoOperations.remove(query(where(ID).is(subscriptionId)), subscriptionPositionCollection);
+        executeWithRetry(delete, __ -> !shutdown, convertToDelayStream(retryStrategy)).run();
     }
 
     @Override
     public boolean exists(String subscriptionId) {
-        return mongoOperations.exists(query(where(ID).is(subscriptionId)), subscriptionPositionCollection);
+        Supplier<Boolean> exists = () -> mongoOperations.exists(query(where(ID).is(subscriptionId)), subscriptionPositionCollection);
+        return executeWithRetry(exists, __ -> !shutdown, convertToDelayStream(retryStrategy)).get();
     }
 
     private void persistResumeTokenStreamPosition(String subscriptionId, BsonValue resumeToken) {
@@ -95,9 +129,14 @@ public class SpringMongoSubscriptionPositionStorage implements SubscriptionPosit
         persistDocumentStreamPosition(subscriptionId, MongoCommons.generateOperationTimeStreamPositionDocument(subscriptionId, operationTime));
     }
 
-    private void persistDocumentStreamPosition(String subscriptionId, Document document) {
+    void persistDocumentStreamPosition(String subscriptionId, Document document) {
         mongoOperations.upsert(query(where(ID).is(subscriptionId)),
                 Update.fromDocument(document),
                 subscriptionPositionCollection);
+    }
+
+    @PreDestroy
+    void shutdown() {
+        shutdown = true;
     }
 }

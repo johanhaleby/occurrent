@@ -24,6 +24,7 @@ import com.mongodb.client.model.Filters;
 import io.cloudevents.CloudEvent;
 import io.cloudevents.core.builder.CloudEventBuilder;
 import io.github.artsok.RepeatedIfExceptionsTest;
+import org.bson.Document;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -35,6 +36,7 @@ import org.occurrent.eventstore.api.blocking.EventStore;
 import org.occurrent.eventstore.mongodb.spring.blocking.EventStoreConfig;
 import org.occurrent.eventstore.mongodb.spring.blocking.SpringMongoEventStore;
 import org.occurrent.mongodb.timerepresentation.TimeRepresentation;
+import org.occurrent.subscription.StringBasedSubscriptionPosition;
 import org.occurrent.subscription.SubscriptionPosition;
 import org.occurrent.subscription.api.blocking.SubscriptionPositionStorage;
 import org.occurrent.subscription.blocking.durable.DurableSubscriptionModel;
@@ -132,6 +134,32 @@ public class SpringMongoSubscriptionPositionStorageTest {
 
         // Then
         await().atMost(2, SECONDS).with().pollInterval(Duration.of(20, MILLIS)).untilAsserted(() -> assertThat(state).hasSize(3));
+    }
+
+    @Test
+    void retries_failed_writes() {
+        // Given
+        AtomicInteger counter = new AtomicInteger();
+
+        SpringMongoSubscriptionPositionStorage storage = new SpringMongoSubscriptionPositionStorage(mongoTemplate, RESUME_TOKEN_COLLECTION) {
+
+            @Override
+            void persistDocumentStreamPosition(String subscriptionId, Document document) {
+                if (counter.getAndIncrement() == 0) {
+                    throw new IllegalStateException("expected");
+                }
+                super.persistDocumentStreamPosition(subscriptionId, document);
+            }
+        };
+
+        StringBasedSubscriptionPosition expectedPosition = new StringBasedSubscriptionPosition("hello");
+
+        // When
+        storage.save("subscriptionId", expectedPosition);
+
+        // Then
+        SubscriptionPosition actualPosition = storage.read("subscriptionId");
+        assertThat(actualPosition).isEqualTo(expectedPosition);
     }
 
     @Test

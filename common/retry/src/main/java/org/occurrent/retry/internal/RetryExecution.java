@@ -1,5 +1,5 @@
 /*
- * Copyright 2020 Johan Haleby
+ * Copyright 2021 Johan Haleby
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -23,6 +23,7 @@ import org.slf4j.LoggerFactory;
 import java.util.Iterator;
 import java.util.function.Consumer;
 import java.util.function.Predicate;
+import java.util.function.Supplier;
 import java.util.stream.Stream;
 
 /**
@@ -32,12 +33,12 @@ public class RetryExecution {
 
     private static final Logger log = LoggerFactory.getLogger(RetryExecution.class);
 
-    public static Runnable executeWithRetry(Runnable runnable, Predicate<Exception> retryPredicate, Iterator<Long> delay) {
+    public static Runnable executeWithRetry(Runnable runnable, Predicate<Throwable> retryPredicate, Iterator<Long> delay) {
         Consumer<Void> runnableConsumer = __ -> runnable.run();
         return () -> executeWithRetry(runnableConsumer, retryPredicate, delay).accept(null);
     }
 
-    public static <T1> Consumer<T1> executeWithRetry(Consumer<T1> fn, Predicate<Exception> retryPredicate, Iterator<Long> delay) {
+    public static <T1> Consumer<T1> executeWithRetry(Consumer<T1> fn, Predicate<Throwable> retryPredicate, Iterator<Long> delay) {
         return t1 -> {
             try {
                 fn.accept(t1);
@@ -51,6 +52,27 @@ public class RetryExecution {
                         throw new RuntimeException(e);
                     }
                     executeWithRetry(fn, retryPredicate, delay).accept(t1);
+                } else {
+                    throw e;
+                }
+            }
+        };
+    }
+
+    public static <T1> Supplier<T1> executeWithRetry(Supplier<T1> supplier, Predicate<Throwable> retryPredicate, Iterator<Long> delay) {
+        return () -> {
+            try {
+                return supplier.get();
+            } catch (Exception e) {
+                if (retryPredicate.test(e) && delay != null) {
+                    Long retryAfterMillis = delay.next();
+                    log.error("Caught {} with message \"{}\", will retry in {} milliseconds.", e.getClass().getName(), e.getMessage(), retryAfterMillis, e);
+                    try {
+                        Thread.sleep(retryAfterMillis);
+                    } catch (InterruptedException interruptedException) {
+                        throw new RuntimeException(e);
+                    }
+                    return executeWithRetry(supplier, retryPredicate, delay).get();
                 } else {
                     throw e;
                 }

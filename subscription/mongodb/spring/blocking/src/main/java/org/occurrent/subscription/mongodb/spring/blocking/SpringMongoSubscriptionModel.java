@@ -1,5 +1,5 @@
 /*
- * Copyright 2020 Johan Haleby
+ * Copyright 2021 Johan Haleby
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -111,6 +111,7 @@ public class SpringMongoSubscriptionModel implements PositionAwareSubscriptionMo
         return new SpringMongoSubscription(subscriptionId, subscription);
     }
 
+    @Override
     public void cancelSubscription(String subscriptionId) {
         org.springframework.data.mongodb.core.messaging.Subscription subscription = subscriptions.remove(subscriptionId);
         if (subscription != null) {

@@ -16,7 +16,10 @@
 
     ```kotlin
     val doesSomeTypeExists = eventStoreQueries.exists(type("sometype"))
-    ``` 
+    ```
+* Added retry strategy support to SpringMongoSubscriptionPositionStorage. You can define your own by passing an instance of `RetryStrategy` to the constructor. By default
+  it'll add a retry strategy with exponential backoff starting with 100 ms and progressively go up to max 2 seconds wait time between 
+  each retry when reading/saving/deleting the subscription position.
 
 ## Changelog 0.5.1 (2021-01-07)
 

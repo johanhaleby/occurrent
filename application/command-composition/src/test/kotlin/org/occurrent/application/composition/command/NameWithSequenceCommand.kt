@@ -1,5 +1,5 @@
 /*
- * Copyright 2020 Johan Haleby
+ * Copyright 2021 Johan Haleby
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -24,7 +24,7 @@ import java.time.LocalDateTime
 
 object NameWithSequenceCommand {
 
-    fun defineName(events: Sequence<DomainEvent>, eventId: String, time: LocalDateTime, name: String): Sequence<DomainEvent> =
+    fun defineName(@Suppress("UNUSED_PARAMETER") events: Sequence<DomainEvent>, eventId: String, time: LocalDateTime, name: String): Sequence<DomainEvent> =
         sequenceOf(NameDefined(eventId, time, name))
 
     fun changeName(events: Sequence<DomainEvent>, eventId: String, time: LocalDateTime, newName: String): Sequence<DomainEvent> {
