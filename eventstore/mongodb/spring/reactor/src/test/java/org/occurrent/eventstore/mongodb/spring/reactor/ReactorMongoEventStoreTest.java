@@ -42,6 +42,7 @@ import org.occurrent.eventstore.api.WriteCondition;
 import org.occurrent.eventstore.api.WriteConditionNotFulfilledException;
 import org.occurrent.eventstore.api.reactor.EventStoreQueries;
 import org.occurrent.eventstore.api.reactor.EventStream;
+import org.occurrent.filter.Filter;
 import org.occurrent.functional.CheckedFunction;
 import org.occurrent.mongodb.timerepresentation.TimeRepresentation;
 import org.occurrent.testsupport.mongodb.FlushMongoDBExtension;
@@ -372,6 +373,77 @@ public class ReactorMongoEventStoreTest {
 
             // Then
             assertThat(count).isEqualTo(2);
+        }
+    }
+
+    @SuppressWarnings("ConstantConditions")
+    @Nested
+    @DisplayName("exists")
+    class ExistsTest {
+
+        @Test
+        void returns_false_when_there_are_no_events_in_the_event_store_and_filter_is_all() {
+            // When
+            boolean exists = eventStore.exists(Filter.all()).block();
+
+            // Then
+            assertThat(exists).isFalse();
+        }
+
+        @Test
+        void returns_true_when_there_are_events_in_the_event_store_and_filter_is_all() {
+            // Given
+            LocalDateTime now = LocalDateTime.now();
+            DomainEvent event1 = new NameDefined(UUID.randomUUID().toString(), now, "John Doe");
+            DomainEvent event2 = new NameWasChanged(UUID.randomUUID().toString(), now, "Jan Doe");
+            DomainEvent event3 = new NameDefined(UUID.randomUUID().toString(), now, "Hello Doe");
+            persist("name", Stream.of(event1, event2, event3).collect(Collectors.toList())).block();
+
+            // When
+            boolean exists = eventStore.exists(Filter.all()).block();
+
+            // Then
+            assertThat(exists).isTrue();
+        }
+
+        @Test
+        void returns_false_when_there_are_no_events_in_the_event_store_and_filter_is_not_all() {
+            // When
+            boolean exists = eventStore.exists(type(NameDefined.class.getName())).block();
+
+            // Then
+            assertThat(exists).isFalse();
+        }
+
+        @Test
+        void returns_true_when_there_are_matching_events_in_the_event_store_and_filter_not_all() {
+            // Given
+            LocalDateTime now = LocalDateTime.now();
+            DomainEvent event1 = new NameDefined(UUID.randomUUID().toString(), now, "John Doe");
+            DomainEvent event2 = new NameWasChanged(UUID.randomUUID().toString(), now, "Jan Doe");
+            DomainEvent event3 = new NameDefined(UUID.randomUUID().toString(), now, "Hello Doe");
+            persist("name", Stream.of(event1, event2, event3).collect(Collectors.toList())).block();
+
+            // When
+            boolean exists = eventStore.exists(type(NameDefined.class.getName())).block();
+
+            // Then
+            assertThat(exists).isTrue();
+        }
+
+        @Test
+        void returns_false_when_there_events_in_the_event_store_that_doesnt_match_filter() {
+            // Given
+            LocalDateTime now = LocalDateTime.now();
+            DomainEvent event1 = new NameDefined(UUID.randomUUID().toString(), now, "John Doe");
+            DomainEvent event2 = new NameDefined(UUID.randomUUID().toString(), now, "Hello Doe");
+            persist("name", Stream.of(event1, event2).collect(Collectors.toList())).block();
+
+            // When
+            boolean exists = eventStore.exists(type(NameWasChanged.class.getName())).block();
+
+            // Then
+            assertThat(exists).isFalse();
         }
     }
 

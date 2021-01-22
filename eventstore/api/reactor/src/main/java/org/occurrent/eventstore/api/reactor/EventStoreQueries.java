@@ -54,6 +54,13 @@ public interface EventStoreQueries {
     }
 
     /**
+     * Check if any events exists that matches the given {@code filter}.
+     *
+     * @return <code>true</code> if any events exists that are matching the {@code filter}, <code>fase</code> otherwise.
+     */
+    Mono<Boolean> exists(Filter filter);
+
+    /**
      * @return All cloud events matching the specified filter sorted by <code>sortBy</code>.
      */
     default Flux<CloudEvent> query(Filter filter, SortBy sortBy) {

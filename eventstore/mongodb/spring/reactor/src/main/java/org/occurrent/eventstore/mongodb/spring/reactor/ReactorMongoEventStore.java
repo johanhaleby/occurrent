@@ -314,6 +314,17 @@ public class ReactorMongoEventStore implements EventStore, EventStoreOperations,
         }
     }
 
+    @Override
+    public Mono<Boolean> exists(Filter filter) {
+        requireNonNull(filter, "Filter cannot be null");
+        if (filter instanceof Filter.All) {
+            return count().map(cnt -> cnt > 0);
+        } else {
+            final Query query = FilterConverter.convertFilterToQuery(timeRepresentation, filter);
+            return mongoTemplate.exists(query, eventStoreCollectionName);
+        }
+    }
+
     private static class EventStreamImpl implements EventStream<Document> {
         private String id;
         private long version;
