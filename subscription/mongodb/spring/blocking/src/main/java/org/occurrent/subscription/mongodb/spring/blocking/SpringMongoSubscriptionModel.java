@@ -22,6 +22,7 @@ import org.bson.BsonDocument;
 import org.bson.BsonTimestamp;
 import org.bson.Document;
 import org.occurrent.mongodb.timerepresentation.TimeRepresentation;
+import org.occurrent.retry.RetryStrategy;
 import org.occurrent.subscription.PositionAwareCloudEvent;
 import org.occurrent.subscription.StartAt;
 import org.occurrent.subscription.SubscriptionFilter;
@@ -44,12 +45,15 @@ import org.springframework.data.mongodb.core.messaging.MessageListener;
 import org.springframework.data.mongodb.core.messaging.MessageListenerContainer;
 
 import javax.annotation.PreDestroy;
+import java.time.Duration;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ConcurrentMap;
 import java.util.function.Consumer;
 import java.util.function.Supplier;
 
 import static java.util.Objects.requireNonNull;
+import static org.occurrent.retry.internal.RetryExecution.convertToDelayStream;
+import static org.occurrent.retry.internal.RetryExecution.executeWithRetry;
 
 /**
  * This is a subscription that uses Spring and its {@link MessageListenerContainer} for MongoDB to listen to changes from an event store.
@@ -66,6 +70,21 @@ public class SpringMongoSubscriptionModel implements PositionAwareSubscriptionMo
     private final ConcurrentMap<String, org.springframework.data.mongodb.core.messaging.Subscription> subscriptions;
     private final TimeRepresentation timeRepresentation;
     private final MongoOperations mongoOperations;
+    private final RetryStrategy retryStrategy;
+
+    private volatile boolean shutdown = false;
+
+    /**
+     * Create a blocking subscription using Spring. It will by default use a {@link RetryStrategy} for retries, with exponential backoff starting with 100 ms and progressively
+     * go up to max 2 seconds wait time between each retry when reading/saving/deleting the subscription position.
+     *
+     * @param mongoTemplate      The mongo template to use
+     * @param eventCollection    The collection that contains the events
+     * @param timeRepresentation How time is represented in the database, must be the same as what's specified for the EventStore that stores the events.
+     */
+    public SpringMongoSubscriptionModel(MongoTemplate mongoTemplate, String eventCollection, TimeRepresentation timeRepresentation) {
+        this(mongoTemplate, eventCollection, timeRepresentation, RetryStrategy.backoff(Duration.ofMillis(100), Duration.ofSeconds(2), 2.0f));
+    }
 
     /**
      * Create a blocking subscription using Spring
@@ -73,16 +92,19 @@ public class SpringMongoSubscriptionModel implements PositionAwareSubscriptionMo
      * @param mongoTemplate      The mongo template to use
      * @param eventCollection    The collection that contains the events
      * @param timeRepresentation How time is represented in the database, must be the same as what's specified for the EventStore that stores the events.
+     * @param retryStrategy      A custom retry strategy to use if the {@code action} supplied to the subscription throws an exception.
      */
-    public SpringMongoSubscriptionModel(MongoTemplate mongoTemplate, String eventCollection, TimeRepresentation timeRepresentation) {
+    public SpringMongoSubscriptionModel(MongoTemplate mongoTemplate, String eventCollection, TimeRepresentation timeRepresentation, RetryStrategy retryStrategy) {
         requireNonNull(mongoTemplate, MongoOperations.class.getSimpleName() + " cannot be null");
         requireNonNull(eventCollection, "eventCollection cannot be null");
         requireNonNull(timeRepresentation, TimeRepresentation.class.getSimpleName() + " cannot be null");
+        requireNonNull(retryStrategy, RetryStrategy.class.getSimpleName() + " cannot be null");
 
         this.mongoOperations = mongoTemplate;
         this.timeRepresentation = timeRepresentation;
         this.eventCollection = eventCollection;
         this.subscriptions = new ConcurrentHashMap<>();
+        this.retryStrategy = retryStrategy;
         this.messageListenerContainer = new DefaultMessageListenerContainer(mongoTemplate);
         this.messageListenerContainer.start();
     }
@@ -102,7 +124,7 @@ public class SpringMongoSubscriptionModel implements PositionAwareSubscriptionMo
             BsonDocument resumeToken = requireNonNull(raw).getResumeToken();
             MongoCloudEventsToJsonDeserializer.deserializeToCloudEvent(raw, timeRepresentation)
                     .map(cloudEvent -> new PositionAwareCloudEvent(cloudEvent, new MongoResumeTokenSubscriptionPosition(resumeToken)))
-                    .ifPresent(action);
+                    .ifPresent(executeWithRetry(action, __ -> !shutdown, convertToDelayStream(retryStrategy)));
         };
 
         ChangeStreamRequestOptions options = new ChangeStreamRequestOptions(null, eventCollection, changeStreamOptions);
@@ -122,6 +144,7 @@ public class SpringMongoSubscriptionModel implements PositionAwareSubscriptionMo
     @PreDestroy
     @Override
     public void shutdown() {
+        shutdown = true;
         subscriptions.clear();
         messageListenerContainer.stop();
     }
