@@ -28,7 +28,7 @@
   each retry when reading/saving/deleting the subscription position.
 * Added retry strategy support to SpringMongoSubscriptionModel. You can define your own by passing an instance of `RetryStrategy` to the constructor. By default
   it'll add a retry strategy with exponential backoff starting with 100 ms and progressively go up to max 2 seconds wait time between 
-  each retry when reading/saving/deleting the subscription position.
+  each retry when exceptions are thrown from the `action` callback (the callback that you implement to handle a `CloudEvent` instance from a subscription).
 * All blocking subscription models will throw an `IllegalArgumentException` if a subscription is registered more than once.
 
 ## Changelog 0.5.1 (2021-01-07)
