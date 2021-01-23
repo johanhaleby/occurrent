@@ -35,6 +35,7 @@ import org.occurrent.eventstore.mongodb.spring.blocking.SpringMongoEventStore;
 import org.occurrent.functional.CheckedFunction;
 import org.occurrent.functional.Not;
 import org.occurrent.mongodb.timerepresentation.TimeRepresentation;
+import org.occurrent.retry.RetryStrategy;
 import org.occurrent.subscription.api.blocking.SubscriptionPositionStorage;
 import org.occurrent.subscription.blocking.durable.DurableSubscriptionModel;
 import org.occurrent.subscription.mongodb.spring.blocking.SpringMongoSubscriptionModel;
@@ -86,30 +87,30 @@ class SpringRedisSubscriptionPositionStorageTest {
     private MongoClient mongoClient;
     private SpringMongoEventStore mongoEventStore;
     private ObjectMapper objectMapper;
-    private SpringMongoSubscriptionModel springBlockingSubscriptionForMongoDB;
     private LettuceConnectionFactory lettuceConnectionFactory;
     private DurableSubscriptionModel redisSubscription;
     private RedisOperations<String, String> redisTemplate;
+    private ConnectionString connectionString;
 
     @BeforeEach
     void initialize() {
-        ConnectionString connectionString = new ConnectionString(mongoDBContainer.getReplicaSetUrl() + ".events");
+        connectionString = new ConnectionString(mongoDBContainer.getReplicaSetUrl() + ".events");
         mongoClient = MongoClients.create(connectionString);
         MongoTemplate mongoTemplate = new MongoTemplate(mongoClient, requireNonNull(connectionString.getDatabase()));
         MongoTransactionManager mongoTransactionManager = new MongoTransactionManager(new SimpleMongoClientDatabaseFactory(mongoClient, requireNonNull(connectionString.getDatabase())));
         EventStoreConfig eventStoreConfig = new EventStoreConfig.Builder().eventStoreCollectionName(connectionString.getCollection()).transactionConfig(mongoTransactionManager).timeRepresentation(TimeRepresentation.RFC_3339_STRING).build();
         mongoEventStore = new SpringMongoEventStore(mongoTemplate, eventStoreConfig);
-        springBlockingSubscriptionForMongoDB = new SpringMongoSubscriptionModel(mongoTemplate, connectionString.getCollection(), TimeRepresentation.RFC_3339_STRING);
+        SpringMongoSubscriptionModel subscriptionModel = new SpringMongoSubscriptionModel(mongoTemplate, connectionString.getCollection(), TimeRepresentation.RFC_3339_STRING);
         lettuceConnectionFactory = new LettuceConnectionFactory(redisContainer.getHost(), redisContainer.getFirstMappedPort());
         redisTemplate = createRedisTemplate(lettuceConnectionFactory);
         SubscriptionPositionStorage storage = new SpringRedisSubscriptionPositionStorage(redisTemplate);
-        redisSubscription = new DurableSubscriptionModel(springBlockingSubscriptionForMongoDB, storage);
+        redisSubscription = new DurableSubscriptionModel(subscriptionModel, storage);
         objectMapper = new ObjectMapper();
     }
 
     @AfterEach
     void dispose() {
-        springBlockingSubscriptionForMongoDB.shutdown();
+        redisSubscription.shutdown();
         mongoClient.close();
         lettuceConnectionFactory.destroy();
     }
@@ -165,14 +166,21 @@ class SpringRedisSubscriptionPositionStorageTest {
         AtomicInteger counter = new AtomicInteger();
         CopyOnWriteArrayList<CloudEvent> state = new CopyOnWriteArrayList<>();
         String subscriberId = UUID.randomUUID().toString();
-        Runnable stream = () -> redisSubscription.subscribe(subscriberId, cloudEvent -> {
-            if (counter.incrementAndGet() == 1) {
-                // We simulate error on first event
-                throw new IllegalArgumentException("Expected");
-            } else {
-                state.add(cloudEvent);
-            }
-        }).waitUntilStarted();
+
+        Runnable stream = () -> {
+            MongoTemplate mongoTemplate = new MongoTemplate(mongoClient, requireNonNull(connectionString.getDatabase()));
+            SpringMongoSubscriptionModel subscriptionModel = new SpringMongoSubscriptionModel(mongoTemplate, connectionString.getCollection(), TimeRepresentation.RFC_3339_STRING, RetryStrategy.none());
+            SubscriptionPositionStorage storage = new SpringRedisSubscriptionPositionStorage(redisTemplate, RetryStrategy.none());
+            redisSubscription = new DurableSubscriptionModel(subscriptionModel, storage);
+            redisSubscription.subscribe(subscriberId, cloudEvent -> {
+                if (counter.incrementAndGet() == 1) {
+                    // We simulate error on first event
+                    throw new IllegalArgumentException("Expected");
+                } else {
+                    state.add(cloudEvent);
+                }
+            }).waitUntilStarted();
+        };
         stream.run();
         NameDefined nameDefined1 = new NameDefined(UUID.randomUUID().toString(), now, "name1");
         NameDefined nameDefined2 = new NameDefined(UUID.randomUUID().toString(), now.plusSeconds(2), "name2");
@@ -183,6 +191,7 @@ class SpringRedisSubscriptionPositionStorageTest {
         // The subscription is async so we need to wait for it
         await().atMost(ONE_SECOND).and().dontCatchUncaughtExceptions().untilAtomic(counter, equalTo(1));
         // Since an exception occurred we need to run the stream again
+        redisSubscription.shutdown();
         stream.run();
         mongoEventStore.write("2", 0, serialize(nameDefined2));
         mongoEventStore.write("1", 1, serialize(nameWasChanged1));
