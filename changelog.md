@@ -1,4 +1,4 @@
-## Changelog next version
+## Changelog 0.6.0 (2021-01-23)
 
 * Renamed method `shutdownSubscribers` in `DurableSubscriptonModel` to `shutdown`.
 * Added default subscription name to subscription DSL. You can now do:
