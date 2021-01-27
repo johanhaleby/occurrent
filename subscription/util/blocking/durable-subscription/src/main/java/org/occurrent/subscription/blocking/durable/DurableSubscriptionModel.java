@@ -145,4 +145,15 @@ public class DurableSubscriptionModel implements PositionAwareSubscriptionModel 
     public SubscriptionPosition globalSubscriptionPosition() {
         return subscriptionModel.globalSubscriptionPosition();
     }
+
+    /**
+     * Get the subscription model that this {@code DurableSubscriptionModel} delegates to.
+     * This is useful for testing purposes if one needs to access the underlying subscription
+     * model to e.g. start/stop subscriptions.
+     *
+     * @return The subscription models that this {@code DurableSubscriptionModel} instance delegates to
+     */
+    public PositionAwareSubscriptionModel getDelegatedSubscriptionModel() {
+        return subscriptionModel;
+    }
 }

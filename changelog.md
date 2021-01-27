@@ -5,7 +5,10 @@
   to the event store without triggering all subscriptions.
 * The `SpringMongoSubscriptionModel` now implements `org.springframework.context.SmartLifecycle`, which means that if you
   define it as a bean, it allows controlling it as a regular Spring life-cycle bean.
-
+* Added `getDelegatedSubscriptionModel` method to `DurableSubscriptionModel` so that it's possible to get the 
+  subscription model that is wrapped by the `DurableSubscriptionModel` instance. This is useful for testing
+  purposes, if the underlying subscription model needs to stopped/started etc.  
+  
 ## Changelog 0.6.0 (2021-01-23)
 
 * Renamed method `shutdownSubscribers` in `DurableSubscriptonModel` to `shutdown`.
