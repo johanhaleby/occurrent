@@ -23,7 +23,6 @@ import com.mongodb.client.MongoClients;
 import com.mongodb.client.model.Filters;
 import io.cloudevents.CloudEvent;
 import io.cloudevents.core.builder.CloudEventBuilder;
-import io.github.artsok.RepeatedIfExceptionsTest;
 import org.junit.jupiter.api.*;
 import org.junit.jupiter.api.extension.RegisterExtension;
 import org.occurrent.domain.DomainEvent;
@@ -281,7 +280,7 @@ public class SpringMongoSubscriptionModelTest {
             assertThat(paused).isTrue();
         }
 
-        @RepeatedIfExceptionsTest(repeats = 10, suspend = 500)
+        @Test
         void blocking_spring_subscription_allows_stopping_and_starting_all_subscriptions() {
             // Given
             LocalDateTime now = LocalDateTime.now();
@@ -294,9 +293,7 @@ public class SpringMongoSubscriptionModelTest {
 
             AtomicBoolean stopped = new AtomicBoolean(false);
             // When
-            subscriptionModel.stop(() -> {
-                stopped.set(true);
-            });
+            subscriptionModel.stop(() -> stopped.set(true));
 
             await("stopped").atMost(2, SECONDS).with().pollInterval(Duration.of(20, MILLIS)).untilTrue(stopped);
             

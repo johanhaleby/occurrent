@@ -194,17 +194,19 @@ public class SpringMongoSubscriptionModel implements PositionAwareSubscriptionMo
      * @param subscriptionId The id of the subscription to pause.
      * @throws IllegalArgumentException If subscription is not paused
      */
-    public synchronized void resumeSubscription(String subscriptionId) {
+    public synchronized Subscription resumeSubscription(String subscriptionId) {
         InternalSubscription internalSubscription = pausedSubscriptions.remove(subscriptionId);
         if (internalSubscription == null) {
             throw new IllegalArgumentException("Subscription " + subscriptionId + " isn't paused.");
         }
-        org.springframework.data.mongodb.core.messaging.Subscription newSubscription = messageListenerContainer.register(internalSubscription.request, Document.class);
-        runningSubscriptions.put(subscriptionId, internalSubscription.changeSpringSubscriptionTo(newSubscription));
 
         if (!messageListenerContainer.isRunning()) {
             messageListenerContainer.start();
         }
+
+        org.springframework.data.mongodb.core.messaging.Subscription newSubscription = messageListenerContainer.register(internalSubscription.request, Document.class);
+        runningSubscriptions.put(subscriptionId, internalSubscription.changeSpringSubscriptionTo(newSubscription));
+        return new SpringMongoSubscription(subscriptionId, newSubscription);
     }
 
     /**
@@ -233,7 +235,7 @@ public class SpringMongoSubscriptionModel implements PositionAwareSubscriptionMo
     public synchronized void start() {
         if (!shutdown) {
             messageListenerContainer.start();
-            pausedSubscriptions.forEach((subscriptionId, __) -> resumeSubscription(subscriptionId));
+            pausedSubscriptions.forEach((subscriptionId, __) -> resumeSubscription(subscriptionId).waitUntilStarted());
         }
     }
 
