@@ -1,3 +1,11 @@
+## Changelog next verison
+
+* Added more life-cycle methods to `SpringMongoSubscriptionModel`. It's now possible to pause/resume individual subscriptions
+  as well as starting/stopping _all_ subscriptions. This is useful for testing purposes when you want to write events 
+  to the event store without triggering all subscriptions.
+* The `SpringMongoSubscriptionModel` now implements `org.springframework.context.SmartLifecycle`, which means that if you
+  define it as a bean, it allows controlling it as a regular Spring life-cycle bean.
+
 ## Changelog 0.6.0 (2021-01-23)
 
 * Renamed method `shutdownSubscribers` in `DurableSubscriptonModel` to `shutdown`.

@@ -34,6 +34,7 @@ import org.occurrent.subscription.mongodb.MongoResumeTokenSubscriptionPosition;
 import org.occurrent.subscription.mongodb.internal.MongoCloudEventsToJsonDeserializer;
 import org.occurrent.subscription.mongodb.internal.MongoCommons;
 import org.occurrent.subscription.mongodb.spring.internal.ApplyFilterToChangeStreamOptionsBuilder;
+import org.springframework.context.SmartLifecycle;
 import org.springframework.data.mongodb.core.ChangeStreamOptions;
 import org.springframework.data.mongodb.core.ChangeStreamOptions.ChangeStreamOptionsBuilder;
 import org.springframework.data.mongodb.core.MongoOperations;
@@ -46,6 +47,7 @@ import org.springframework.data.mongodb.core.messaging.MessageListenerContainer;
 
 import javax.annotation.PreDestroy;
 import java.time.Duration;
+import java.util.Objects;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ConcurrentMap;
 import java.util.function.Consumer;
@@ -63,11 +65,12 @@ import static org.occurrent.retry.internal.RetryExecution.executeWithRetry;
  * Note that this subscription doesn't provide retries if an exception is thrown when handling a {@link io.cloudevents.CloudEvent} (<code>action</code>).
  * This reason for this is that Spring provides retry capabilities (such as spring-retry) that you can easily hook into your <code>action</code>.
  */
-public class SpringMongoSubscriptionModel implements PositionAwareSubscriptionModel {
+public class SpringMongoSubscriptionModel implements PositionAwareSubscriptionModel, SmartLifecycle {
 
     private final String eventCollection;
     private final MessageListenerContainer messageListenerContainer;
-    private final ConcurrentMap<String, org.springframework.data.mongodb.core.messaging.Subscription> subscriptions;
+    private final ConcurrentMap<String, InternalSubscription> runningSubscriptions;
+    private final ConcurrentMap<String, InternalSubscription> pausedSubscriptions;
     private final TimeRepresentation timeRepresentation;
     private final MongoOperations mongoOperations;
     private final RetryStrategy retryStrategy;
@@ -103,7 +106,8 @@ public class SpringMongoSubscriptionModel implements PositionAwareSubscriptionMo
         this.mongoOperations = mongoTemplate;
         this.timeRepresentation = timeRepresentation;
         this.eventCollection = eventCollection;
-        this.subscriptions = new ConcurrentHashMap<>();
+        this.runningSubscriptions = new ConcurrentHashMap<>();
+        this.pausedSubscriptions = new ConcurrentHashMap<>();
         this.retryStrategy = retryStrategy;
         this.messageListenerContainer = new DefaultMessageListenerContainer(mongoTemplate);
         this.messageListenerContainer.start();
@@ -115,7 +119,7 @@ public class SpringMongoSubscriptionModel implements PositionAwareSubscriptionMo
         requireNonNull(action, "Action cannot be null");
         requireNonNull(startAtSupplier, "StartAt cannot be null");
 
-        if (subscriptions.containsKey(subscriptionId)) {
+        if (runningSubscriptions.containsKey(subscriptionId)) {
             throw new IllegalArgumentException("Subscription " + subscriptionId + " is already defined.");
         }
 
@@ -132,16 +136,17 @@ public class SpringMongoSubscriptionModel implements PositionAwareSubscriptionMo
         };
 
         ChangeStreamRequestOptions options = new ChangeStreamRequestOptions(null, eventCollection, changeStreamOptions);
-        final org.springframework.data.mongodb.core.messaging.Subscription subscription = messageListenerContainer.register(new ChangeStreamRequest<>(listener, options), Document.class);
-        subscriptions.put(subscriptionId, subscription);
+        ChangeStreamRequest<Document> request = new ChangeStreamRequest<>(listener, options);
+        final org.springframework.data.mongodb.core.messaging.Subscription subscription = messageListenerContainer.register(request, Document.class);
+        runningSubscriptions.put(subscriptionId, new InternalSubscription(subscription, request));
         return new SpringMongoSubscription(subscriptionId, subscription);
     }
 
     @Override
     public void cancelSubscription(String subscriptionId) {
-        org.springframework.data.mongodb.core.messaging.Subscription subscription = subscriptions.remove(subscriptionId);
+        InternalSubscription subscription = runningSubscriptions.remove(subscriptionId);
         if (subscription != null) {
-            messageListenerContainer.remove(subscription);
+            messageListenerContainer.remove(subscription.springSubscription);
         }
     }
 
@@ -149,7 +154,8 @@ public class SpringMongoSubscriptionModel implements PositionAwareSubscriptionMo
     @Override
     public void shutdown() {
         shutdown = true;
-        subscriptions.clear();
+        runningSubscriptions.clear();
+        pausedSubscriptions.clear();
         messageListenerContainer.stop();
     }
 
@@ -159,5 +165,122 @@ public class SpringMongoSubscriptionModel implements PositionAwareSubscriptionMo
         // This is so that we can avoid duplicates in certain rare cases when replaying events.
         BsonTimestamp currentOperationTime = MongoCommons.getServerOperationTime(mongoOperations.executeCommand(new Document("hostInfo", 1)), 1);
         return new MongoOperationTimeSubscriptionPosition(currentOperationTime);
+    }
+
+    // Pause and Resume
+
+    /**
+     * Pause an individual subscription. It'll be paused <i>temporarily</i>, which means that it can be
+     * resumed later ({@link #resumeSubscription(String)}). This is useful for testing purposes when you want
+     * to write events to an event store without triggering this particular subscription.
+     *
+     * @param subscriptionId The id of the subscription to pause.
+     * @throws IllegalArgumentException If subscription is not running
+     */
+    public synchronized void pauseSubscription(String subscriptionId) {
+        InternalSubscription internalSubscription = runningSubscriptions.remove(subscriptionId);
+        if (internalSubscription == null) {
+            throw new IllegalArgumentException("Subscription " + subscriptionId + " isn't running.");
+        }
+        messageListenerContainer.remove(internalSubscription.springSubscription);
+        pausedSubscriptions.put(subscriptionId, internalSubscription);
+    }
+
+    /**
+     * Resume a paused ({@link #pauseSubscription(String)}) subscription. This is useful for testing purposes when you want
+     * to write events to an event store and you want a particular subscription to receive these events (but you may have paused
+     * others).
+     *
+     * @param subscriptionId The id of the subscription to pause.
+     * @throws IllegalArgumentException If subscription is not paused
+     */
+    public synchronized void resumeSubscription(String subscriptionId) {
+        InternalSubscription internalSubscription = pausedSubscriptions.remove(subscriptionId);
+        if (internalSubscription == null) {
+            throw new IllegalArgumentException("Subscription " + subscriptionId + " isn't paused.");
+        }
+        org.springframework.data.mongodb.core.messaging.Subscription newSubscription = messageListenerContainer.register(internalSubscription.request, Document.class);
+        runningSubscriptions.put(subscriptionId, internalSubscription.changeSpringSubscriptionTo(newSubscription));
+
+        if (!messageListenerContainer.isRunning()) {
+            messageListenerContainer.start();
+        }
+    }
+
+    /**
+     * Check if a particular subscription is running.
+     *
+     * @param subscriptionId The id of the  subscription to check whether it's running or not
+     * @return {@code true} if the subscription is running, {@code false} otherwise.
+     */
+    public boolean isRunning(String subscriptionId) {
+        return !shutdown && runningSubscriptions.containsKey(subscriptionId);
+    }
+
+    /**
+     * Check if a particular subscription is paused.
+     *
+     * @param subscriptionId The id of the  subscription to check whether it's paused or not
+     * @return {@code true} if the subscription is paused, {@code false} otherwise.
+     */
+    public boolean isPaused(String subscriptionId) {
+        return !shutdown && pausedSubscriptions.containsKey(subscriptionId);
+    }
+
+    // SmartLifecycle
+
+    @Override
+    public synchronized void start() {
+        if (!shutdown) {
+            messageListenerContainer.start();
+            pausedSubscriptions.forEach((subscriptionId, __) -> resumeSubscription(subscriptionId));
+        }
+    }
+
+    @Override
+    public synchronized void stop() {
+        if (!shutdown) {
+            runningSubscriptions.forEach((subscriptionId, __) -> pauseSubscription(subscriptionId));
+            messageListenerContainer.stop();
+        }
+    }
+
+    @Override
+    public boolean isRunning() {
+        return !shutdown && messageListenerContainer.isRunning();
+    }
+
+    @Override
+    public boolean isAutoStartup() {
+        return messageListenerContainer.isAutoStartup();
+    }
+
+    // Model that hold both the spring subscription and the change stream request so that we can pause the subscription
+    // (by removing it and starting it again)
+    private static class InternalSubscription {
+        private final org.springframework.data.mongodb.core.messaging.Subscription springSubscription;
+        private final ChangeStreamRequest<Document> request;
+
+        private InternalSubscription(org.springframework.data.mongodb.core.messaging.Subscription subscription, ChangeStreamRequest<Document> request) {
+            this.springSubscription = subscription;
+            this.request = request;
+        }
+
+        InternalSubscription changeSpringSubscriptionTo(org.springframework.data.mongodb.core.messaging.Subscription springSubscription) {
+            return new InternalSubscription(springSubscription, request);
+        }
+
+        @Override
+        public boolean equals(Object o) {
+            if (this == o) return true;
+            if (!(o instanceof InternalSubscription)) return false;
+            InternalSubscription that = (InternalSubscription) o;
+            return Objects.equals(springSubscription, that.springSubscription) && Objects.equals(request, that.request);
+        }
+
+        @Override
+        public int hashCode() {
+            return Objects.hash(springSubscription, request);
+        }
     }
 }
