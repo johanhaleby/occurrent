@@ -69,6 +69,7 @@ import static org.awaitility.Awaitility.await;
 import static org.awaitility.Durations.FIVE_SECONDS;
 import static org.awaitility.Durations.ONE_SECOND;
 import static org.hamcrest.Matchers.is;
+import static org.junit.jupiter.api.Assertions.assertAll;
 import static org.occurrent.filter.Filter.all;
 import static org.occurrent.subscription.mongodb.MongoFilterSpecification.MongoBsonFilterSpecification.filter;
 
@@ -152,7 +153,7 @@ public class SpringMongoSubscriptionModelTest {
     }
 
     @Test
-    void blocking_spring_subscription_throws_iae_when_subscription_already_exists() {
+    void blocking_spring_subscription_throws_iae_when_subscription_already_exists_and_subscription_model_is_started() {
         // Given
         String subscriptionId = UUID.randomUUID().toString();
         subscriptionModel.subscribe(subscriptionId, __ -> System.out.println("hello")).waitUntilStarted();
@@ -161,7 +162,29 @@ public class SpringMongoSubscriptionModelTest {
         Throwable throwable = catchThrowable(() -> subscriptionModel.subscribe(subscriptionId, __ -> System.out.println("hello")).waitUntilStarted());
 
         // Then
-        assertThat(throwable).isExactlyInstanceOf(IllegalArgumentException.class).hasMessage("Subscription " + subscriptionId + " is already defined.");
+        assertAll(
+                () -> assertThat(throwable).isExactlyInstanceOf(IllegalArgumentException.class).hasMessage("Subscription " + subscriptionId + " is already defined."),
+                () -> assertThat(subscriptionModel.isRunning(subscriptionId)).describedAs("is running").isTrue(),
+                () -> assertThat(subscriptionModel.isPaused(subscriptionId)).describedAs("is paused").isFalse()
+        );
+    }
+
+    @Test
+    void blocking_spring_subscription_throws_iae_when_subscription_already_exists_and_subscription_model_is_stopped() {
+        // Given
+        String subscriptionId = UUID.randomUUID().toString();
+        subscriptionModel.subscribe(subscriptionId, __ -> System.out.println("hello")).waitUntilStarted();
+        subscriptionModel.stop();
+
+        // When
+        Throwable throwable = catchThrowable(() -> subscriptionModel.subscribe(subscriptionId, __ -> System.out.println("hello")).waitUntilStarted());
+
+        // Then
+        assertAll(
+                () -> assertThat(throwable).isExactlyInstanceOf(IllegalArgumentException.class).hasMessage("Subscription " + subscriptionId + " is already defined."),
+                () -> assertThat(subscriptionModel.isRunning(subscriptionId)).describedAs("is running").isFalse(),
+                () -> assertThat(subscriptionModel.isPaused(subscriptionId)).describedAs("is paused").isTrue()
+        );
     }
 
     @Test

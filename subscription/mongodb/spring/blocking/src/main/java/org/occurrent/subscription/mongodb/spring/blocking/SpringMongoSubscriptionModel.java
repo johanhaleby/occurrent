@@ -119,7 +119,7 @@ public class SpringMongoSubscriptionModel implements PositionAwareSubscriptionMo
         requireNonNull(action, "Action cannot be null");
         requireNonNull(startAtSupplier, "StartAt cannot be null");
 
-        if (runningSubscriptions.containsKey(subscriptionId)) {
+        if (runningSubscriptions.containsKey(subscriptionId) || pausedSubscriptions.containsKey(subscriptionId)) {
             throw new IllegalArgumentException("Subscription " + subscriptionId + " is already defined.");
         }
 
@@ -138,7 +138,12 @@ public class SpringMongoSubscriptionModel implements PositionAwareSubscriptionMo
         ChangeStreamRequestOptions options = new ChangeStreamRequestOptions(null, eventCollection, changeStreamOptions);
         ChangeStreamRequest<Document> request = new ChangeStreamRequest<>(listener, options);
         final org.springframework.data.mongodb.core.messaging.Subscription subscription = messageListenerContainer.register(request, Document.class);
-        runningSubscriptions.put(subscriptionId, new InternalSubscription(subscription, request));
+
+        if (messageListenerContainer.isRunning()) {
+            runningSubscriptions.put(subscriptionId, new InternalSubscription(subscription, request));
+        } else {
+            pausedSubscriptions.put(subscriptionId, new InternalSubscription(subscription, request));
+        }
         return new SpringMongoSubscription(subscriptionId, subscription);
     }
 
