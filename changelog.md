@@ -1,4 +1,4 @@
-## Changelog next verison
+## Changelog next version
 
 * Added more life-cycle methods to `SpringMongoSubscriptionModel`. It's now possible to pause/resume individual subscriptions
   as well as starting/stopping _all_ subscriptions. This is useful for testing purposes when you want to write events 
