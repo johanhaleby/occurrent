@@ -9,6 +9,7 @@
   subscription model that is wrapped by the `DurableSubscriptionModel` instance. This is useful for testing
   purposes, if the underlying subscription model needs to stopped/started etc.
 * Fixed a bug with command composition that accidentally included the "previous events" when invoking the generated composition function.
+* Added more command composition extension functions for Kotlin. You can now compose lists of functions and not only sequences.
   
 ## Changelog 0.6.0 (2021-01-23)
 
