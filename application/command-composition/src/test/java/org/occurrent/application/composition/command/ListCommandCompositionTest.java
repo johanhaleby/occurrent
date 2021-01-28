@@ -73,4 +73,30 @@ public class ListCommandCompositionTest {
         assertThat(domainEvents).hasSize(2);
         assertThat(domainEvents).extracting(DomainEvent::getEventId).containsExactly("eventId1", "eventId2");
     }
+
+    @Test
+    void previous_events_are_passed_to_each_function_that_is_involved_in_the_composition() {
+        // Given
+        List<Function<List<DomainEvent>, List<DomainEvent>>> fns = Arrays.asList(e -> {
+            if (e.size() == 2) {
+                return Collections.singletonList(new NameDefined("eventId1", new Date(), "name1"));
+            } else {
+                return Collections.emptyList();
+            }
+        }, e -> {
+            if (e.size() == 3) {
+                return Collections.singletonList(new NameWasChanged("eventId2", new Date(), "name2"));
+            } else {
+                return Collections.emptyList();
+            }
+        });
+
+        // When
+        Function<List<DomainEvent>, List<DomainEvent>> composedCommand = ListCommandComposition.composeCommands(fns);
+
+        // Then
+        List<DomainEvent> domainEvents = composedCommand.apply(Arrays.asList(new NameDefined("eventId3", new Date(), "name3"), new NameDefined("eventId4", new Date(), "name4")));
+        assertThat(domainEvents).hasSize(2);
+        assertThat(domainEvents).extracting(DomainEvent::getEventId).containsExactly("eventId1", "eventId2");
+    }
 }

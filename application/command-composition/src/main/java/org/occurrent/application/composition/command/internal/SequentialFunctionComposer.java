@@ -17,6 +17,7 @@
 package org.occurrent.application.composition.command.internal;
 
 import java.util.ArrayList;
+import java.util.Collections;
 import java.util.List;
 import java.util.function.Function;
 
@@ -30,25 +31,33 @@ public class SequentialFunctionComposer<T> {
 
     public Function<List<T>, List<T>> compose() {
         return initialEvents -> {
-            SequentialFunctionComposer.State<T> resultingState = functions.stream().collect(() -> new State<>(new ArrayList<>()),
+            SequentialFunctionComposer.State<T> resultingState = functions.stream().collect(() -> new State<>(initialEvents),
                     (state, fn) -> {
-                        List<T> newEvents = fn.apply(state.events);
+                        List<T> newEvents = fn.apply(state.allEvents());
                         state.addAll(newEvents);
                     }, (state1, state2) -> {
                     });
-            return resultingState.events;
+            return resultingState.accumulatedEvents;
         };
     }
 
     private static class State<T> {
-        private final List<T> events;
+        private final List<T> initialEvents;
+        private final List<T> accumulatedEvents;
 
-        private State(List<T> events) {
-            this.events = new ArrayList<>(events);
+        private State(List<T> initialEvents) {
+            this.initialEvents = initialEvents;
+            this.accumulatedEvents = new ArrayList<>();
         }
 
         private void addAll(List<T> events) {
-            this.events.addAll(events);
+            this.accumulatedEvents.addAll(events);
+        }
+
+        private List<T> allEvents() {
+            List<T> eventList = new ArrayList<>(initialEvents);
+            eventList.addAll(accumulatedEvents);
+            return Collections.unmodifiableList(eventList);
         }
     }
 }
