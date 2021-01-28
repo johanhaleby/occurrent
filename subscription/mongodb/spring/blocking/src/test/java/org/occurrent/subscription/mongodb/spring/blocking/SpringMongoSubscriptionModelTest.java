@@ -360,7 +360,7 @@ public class SpringMongoSubscriptionModelTest {
             assertThat(subscription1State).isEmpty();
 
             // Then
-            subscriptionModel.resumeSubscription(subscriptionId);
+            subscriptionModel.resumeSubscription(subscriptionId).waitUntilStarted();
 
             mongoEventStore.write("2", 0, serialize(nameDefined2));
             mongoEventStore.write("1", 1, serialize(nameWasChanged1));
