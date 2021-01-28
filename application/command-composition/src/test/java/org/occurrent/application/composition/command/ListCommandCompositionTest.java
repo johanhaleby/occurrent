@@ -1,3 +1,19 @@
+/*
+ * Copyright 2021 Johan Haleby
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ *        http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+
 package org.occurrent.application.composition.command;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
@@ -11,13 +27,11 @@ import org.occurrent.domain.NameWasChanged;
 import org.occurrent.eventstore.inmemory.InMemoryEventStore;
 
 import java.time.LocalDateTime;
-import java.util.List;
-import java.util.UUID;
+import java.util.*;
+import java.util.function.Function;
 import java.util.stream.Collectors;
 
 import static org.assertj.core.api.Assertions.assertThat;
-import static org.occurrent.application.composition.command.ListCommandComposition.composeCommands;
-import static org.occurrent.application.composition.command.partial.PartialListCommandApplication.partial;
 
 public class ListCommandCompositionTest {
 
@@ -44,5 +58,19 @@ public class ListCommandCompositionTest {
         List<DomainEvent> domainEvents = eventStore.read("name1").events().map(applicationService::convertCloudEventToDomainEvent).collect(Collectors.toList());
         assertThat(domainEvents.stream().map(event -> event.getClass().getSimpleName())).containsExactly(NameDefined.class.getSimpleName(), NameWasChanged.class.getSimpleName());
         assertThat(domainEvents.stream().map(DomainEvent::getName)).containsExactly("My name", "My name 2");
+    }
+
+    @Test
+    void compose_list_commands_with_partial_application_does_not_return_previous_events() {
+        // Given
+        List<Function<List<DomainEvent>, List<DomainEvent>>> fns = Arrays.asList(e -> Collections.singletonList(new NameDefined("eventId1", new Date(), "name1")), e -> Collections.singletonList(new NameWasChanged("eventId2", new Date(), "name2")));
+
+        // When
+        Function<List<DomainEvent>, List<DomainEvent>> composedCommand = ListCommandComposition.composeCommands(fns);
+
+        // Then
+        List<DomainEvent> domainEvents = composedCommand.apply(Arrays.asList(new NameDefined("eventId3", new Date(), "name3"), new NameDefined("eventId4", new Date(), "name4")));
+        assertThat(domainEvents).hasSize(2);
+        assertThat(domainEvents).extracting(DomainEvent::getEventId).containsExactly("eventId1", "eventId2");
     }
 }

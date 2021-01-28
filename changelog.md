@@ -7,7 +7,8 @@
   define it as a bean, it allows controlling it as a regular Spring life-cycle bean.
 * Added `getDelegatedSubscriptionModel` method to `DurableSubscriptionModel` so that it's possible to get the 
   subscription model that is wrapped by the `DurableSubscriptionModel` instance. This is useful for testing
-  purposes, if the underlying subscription model needs to stopped/started etc.  
+  purposes, if the underlying subscription model needs to stopped/started etc.
+* Fixed a bug with command composition that accidentally included the "previous events" when invoking the generated composition function.
   
 ## Changelog 0.6.0 (2021-01-23)
 
