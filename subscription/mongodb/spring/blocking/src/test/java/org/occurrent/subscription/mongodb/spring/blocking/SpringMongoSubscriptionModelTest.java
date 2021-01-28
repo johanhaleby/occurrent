@@ -51,7 +51,7 @@ import java.time.LocalDateTime;
 import java.time.temporal.ChronoUnit;
 import java.util.UUID;
 import java.util.concurrent.CopyOnWriteArrayList;
-import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.stream.Stream;
 
@@ -157,7 +157,7 @@ public class SpringMongoSubscriptionModelTest {
         // Given
         String subscriptionId = UUID.randomUUID().toString();
         subscriptionModel.subscribe(subscriptionId, __ -> System.out.println("hello")).waitUntilStarted();
-    
+
         // When
         Throwable throwable = catchThrowable(() -> subscriptionModel.subscribe(subscriptionId, __ -> System.out.println("hello")).waitUntilStarted());
 
@@ -214,7 +214,7 @@ public class SpringMongoSubscriptionModelTest {
 
     @Nested
     @DisplayName("Lifecycle")
-    class LifeCycleTest  {
+    class LifeCycleTest {
 
         @Test
         void blocking_spring_subscription_allows_cancelling_a_subscription() {
@@ -246,7 +246,8 @@ public class SpringMongoSubscriptionModelTest {
         void blocking_spring_subscription_is_running_returns_false_when_subscription_is_paused() {
             // Given
             String subscriptionId = UUID.randomUUID().toString();
-            subscriptionModel.subscribe(subscriptionId, __ -> {});
+            subscriptionModel.subscribe(subscriptionId, __ -> {
+            });
             subscriptionModel.pauseSubscription(subscriptionId);
 
             // When
@@ -260,7 +261,8 @@ public class SpringMongoSubscriptionModelTest {
         void blocking_spring_subscription_is_running_returns_true_when_subscription_is_running() {
             // Given
             String subscriptionId = UUID.randomUUID().toString();
-            subscriptionModel.subscribe(subscriptionId, __ -> {});
+            subscriptionModel.subscribe(subscriptionId, __ -> {
+            });
 
             // When
             boolean running = subscriptionModel.isRunning(subscriptionId);
@@ -280,7 +282,8 @@ public class SpringMongoSubscriptionModelTest {
         void blocking_spring_subscription_is_paused_returns_false_when_subscription_is_running() {
             // Given
             String subscriptionId = UUID.randomUUID().toString();
-            subscriptionModel.subscribe(subscriptionId, __ -> {});
+            subscriptionModel.subscribe(subscriptionId, __ -> {
+            });
 
             // When
             boolean paused = subscriptionModel.isPaused(subscriptionId);
@@ -293,7 +296,8 @@ public class SpringMongoSubscriptionModelTest {
         void blocking_spring_subscription_is_paused_returns_true_when_subscription_is_paused() {
             // Given
             String subscriptionId = UUID.randomUUID().toString();
-            subscriptionModel.subscribe(subscriptionId, __ -> {});
+            subscriptionModel.subscribe(subscriptionId, __ -> {
+            });
             subscriptionModel.pauseSubscription(subscriptionId);
 
             // When
@@ -304,7 +308,7 @@ public class SpringMongoSubscriptionModelTest {
         }
 
         @Test
-        void blocking_spring_subscription_allows_stopping_and_starting_all_subscriptions() {
+        void blocking_spring_subscription_allows_stopping_and_starting_all_subscriptions() throws InterruptedException {
             // Given
             LocalDateTime now = LocalDateTime.now();
             CopyOnWriteArrayList<CloudEvent> state = new CopyOnWriteArrayList<>();
@@ -314,12 +318,14 @@ public class SpringMongoSubscriptionModelTest {
             NameDefined nameDefined2 = new NameDefined(UUID.randomUUID().toString(), now.plusSeconds(2), "name2");
             NameWasChanged nameWasChanged1 = new NameWasChanged(UUID.randomUUID().toString(), now.plusSeconds(10), "name3");
 
-            AtomicBoolean stopped = new AtomicBoolean(false);
+            CountDownLatch waitUntilStopped = new CountDownLatch(1);
             // When
-            subscriptionModel.stop(() -> stopped.set(true));
+            subscriptionModel.stop(waitUntilStopped::countDown);
 
-            await("stopped").atMost(2, SECONDS).with().pollInterval(Duration.of(20, MILLIS)).untilTrue(stopped);
-            
+            if (!waitUntilStopped.await(10, SECONDS)) {
+                throw new IllegalStateException("Failed to stop subscription model");
+            }
+
             // Then
             subscriptionModel.start();
 
@@ -359,8 +365,10 @@ public class SpringMongoSubscriptionModelTest {
             mongoEventStore.write("2", 0, serialize(nameDefined2));
             mongoEventStore.write("1", 1, serialize(nameWasChanged1));
 
-            await("subscription1 received all events").atMost(2, SECONDS).with().pollInterval(Duration.of(20, MILLIS)).untilAsserted(() -> assertThat(subscription2State).hasSize(3));
-            await("subscription2 received all events").atMost(2, SECONDS).with().pollInterval(Duration.of(20, MILLIS)).untilAsserted(() -> assertThat(subscription2State).hasSize(3));
+            await("subscription1 received all events").atMost(2, SECONDS).with().pollInterval(Duration.of(20, MILLIS)).untilAsserted(() ->
+                    assertThat(subscription1State).extracting(CloudEvent::getId).containsExactly(nameDefined2.getEventId(), nameWasChanged1.getEventId()));
+            await("subscription2 received all events").atMost(2, SECONDS).with().pollInterval(Duration.of(20, MILLIS)).untilAsserted(() ->
+                    assertThat(subscription2State).extracting(CloudEvent::getId).containsExactly(nameDefined1.getEventId(), nameDefined2.getEventId(), nameWasChanged1.getEventId()));
         }
     }
 
