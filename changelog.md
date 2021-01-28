@@ -10,6 +10,7 @@
   purposes, if the underlying subscription model needs to stopped/started etc.
 * Fixed a bug with command composition that accidentally included the "previous events" when invoking the generated composition function.
 * Added more command composition extension functions for Kotlin. You can now compose lists of functions and not only sequences.
+* The `SpringMongoSubscriptionModel` now evaluates the "start at" supplier passed to the `subscribe` method each time a subscription is resumed. 
   
 ## Changelog 0.6.0 (2021-01-23)
 

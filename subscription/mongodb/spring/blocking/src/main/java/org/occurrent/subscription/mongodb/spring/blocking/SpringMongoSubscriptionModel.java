@@ -123,9 +123,18 @@ public class SpringMongoSubscriptionModel implements PositionAwareSubscriptionMo
             throw new IllegalArgumentException("Subscription " + subscriptionId + " is already defined.");
         }
 
-        // TODO We should change builder::resumeAt to builder::startAtOperationTime once Spring adds support for it (see https://jira.spring.io/browse/DATAMONGO-2607)
-        ChangeStreamOptionsBuilder builder = MongoCommons.applyStartPosition(ChangeStreamOptions.builder(), ChangeStreamOptionsBuilder::startAfter, ChangeStreamOptionsBuilder::resumeAt, startAtSupplier.get());
-        final ChangeStreamOptions changeStreamOptions = ApplyFilterToChangeStreamOptionsBuilder.applyFilter(timeRepresentation, filter, builder);
+        // We wrap the creation of ChangeStreamRequestOptions in a supplier since since otherwise the "startAtSupplier"
+        // would be supplied only once, here, during initialization. When using a supplier here, the "startAtSupplier"
+        // is called again when pausing and resuming a subscription. Take the case when a subscription is started with "StartAt.now()".
+        // If we hadn't used a supplier and a subscription is paused and later resumed, it'll be resumed from the _initial_ "StartAt.now()" position,
+        // and not the position the "StartAt.now()" position of when the subscription was resumed. This will lead to historic events being
+        // replayed which is (most likely) not what the user expects.
+        Supplier<ChangeStreamRequestOptions> requestOptionsSupplier = () -> {
+            // TODO We should change builder::resumeAt to builder::startAtOperationTime once Spring adds support for it (see https://jira.spring.io/browse/DATAMONGO-2607)
+            ChangeStreamOptionsBuilder builder = MongoCommons.applyStartPosition(ChangeStreamOptions.builder(), ChangeStreamOptionsBuilder::startAfter, ChangeStreamOptionsBuilder::resumeAt, startAtSupplier.get());
+            final ChangeStreamOptions changeStreamOptions = ApplyFilterToChangeStreamOptionsBuilder.applyFilter(timeRepresentation, filter, builder);
+            return new ChangeStreamRequestOptions(null, eventCollection, changeStreamOptions);
+        };
 
         MessageListener<ChangeStreamDocument<Document>, Document> listener = change -> {
             ChangeStreamDocument<Document> raw = change.getRaw();
@@ -135,14 +144,13 @@ public class SpringMongoSubscriptionModel implements PositionAwareSubscriptionMo
                     .ifPresent(executeWithRetry(action, __ -> !shutdown, convertToDelayStream(retryStrategy)));
         };
 
-        ChangeStreamRequestOptions options = new ChangeStreamRequestOptions(null, eventCollection, changeStreamOptions);
-        ChangeStreamRequest<Document> request = new ChangeStreamRequest<>(listener, options);
-        final org.springframework.data.mongodb.core.messaging.Subscription subscription = messageListenerContainer.register(request, Document.class);
+        Supplier<ChangeStreamRequest<Document>> requestSupplier = () -> new ChangeStreamRequest<>(listener, requestOptionsSupplier.get());
+        final org.springframework.data.mongodb.core.messaging.Subscription subscription = messageListenerContainer.register(requestSupplier.get(), Document.class);
 
         if (messageListenerContainer.isRunning()) {
-            runningSubscriptions.put(subscriptionId, new InternalSubscription(subscription, request));
+            runningSubscriptions.put(subscriptionId, new InternalSubscription(subscription, requestSupplier));
         } else {
-            pausedSubscriptions.put(subscriptionId, new InternalSubscription(subscription, request));
+            pausedSubscriptions.put(subscriptionId, new InternalSubscription(subscription, requestSupplier));
         }
         return new SpringMongoSubscription(subscriptionId, subscription);
     }
@@ -209,7 +217,7 @@ public class SpringMongoSubscriptionModel implements PositionAwareSubscriptionMo
             messageListenerContainer.start();
         }
 
-        org.springframework.data.mongodb.core.messaging.Subscription newSubscription = messageListenerContainer.register(internalSubscription.request, Document.class);
+        org.springframework.data.mongodb.core.messaging.Subscription newSubscription = messageListenerContainer.register(internalSubscription.newChangeStreamRequest(), Document.class);
         runningSubscriptions.put(subscriptionId, internalSubscription.changeSpringSubscriptionTo(newSubscription));
         return new SpringMongoSubscription(subscriptionId, newSubscription);
     }
@@ -266,15 +274,19 @@ public class SpringMongoSubscriptionModel implements PositionAwareSubscriptionMo
     // (by removing it and starting it again)
     private static class InternalSubscription {
         private final org.springframework.data.mongodb.core.messaging.Subscription springSubscription;
-        private final ChangeStreamRequest<Document> request;
+        private final Supplier<ChangeStreamRequest<Document>> requestSupplier;
 
-        private InternalSubscription(org.springframework.data.mongodb.core.messaging.Subscription subscription, ChangeStreamRequest<Document> request) {
+        private InternalSubscription(org.springframework.data.mongodb.core.messaging.Subscription subscription, Supplier<ChangeStreamRequest<Document>> requestSupplier) {
             this.springSubscription = subscription;
-            this.request = request;
+            this.requestSupplier = requestSupplier;
         }
 
         InternalSubscription changeSpringSubscriptionTo(org.springframework.data.mongodb.core.messaging.Subscription springSubscription) {
-            return new InternalSubscription(springSubscription, request);
+            return new InternalSubscription(springSubscription, requestSupplier);
+        }
+
+        ChangeStreamRequest<Document> newChangeStreamRequest() {
+            return requestSupplier.get();
         }
 
         @Override
@@ -282,12 +294,12 @@ public class SpringMongoSubscriptionModel implements PositionAwareSubscriptionMo
             if (this == o) return true;
             if (!(o instanceof InternalSubscription)) return false;
             InternalSubscription that = (InternalSubscription) o;
-            return Objects.equals(springSubscription, that.springSubscription) && Objects.equals(request, that.request);
+            return Objects.equals(springSubscription, that.springSubscription) && Objects.equals(requestSupplier, that.requestSupplier);
         }
 
         @Override
         public int hashCode() {
-            return Objects.hash(springSubscription, request);
+            return Objects.hash(springSubscription, requestSupplier);
         }
     }
 }
