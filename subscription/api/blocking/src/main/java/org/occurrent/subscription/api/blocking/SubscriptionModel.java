@@ -93,12 +93,13 @@ public interface SubscriptionModel {
     }
 
     /**
-     * Cancel the subscription
+     * Cancel a subscription, this will remove the position from position storage (if used),
+     * and you cannot restart it from its current position again.
      */
     void cancelSubscription(String subscriptionId);
 
     /**
-     * Shutdown the subscription and close all subscriptions (they can be resumed later if you start from a persisted subscription position).
+     * Shutdown the subscription model and close all subscriptions (they can be resumed later if you start from a durable subscription position).
      */
     default void shutdown() {
     }
