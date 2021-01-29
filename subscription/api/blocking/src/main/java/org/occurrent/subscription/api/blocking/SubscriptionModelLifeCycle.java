@@ -3,7 +3,7 @@ package org.occurrent.subscription.api.blocking;
 /**
  * Defines life-cycle methods for subscription models and subscriptions.
  */
-public interface SubscriptionModelLifeCycle extends SubscriptionModelShutdown, SubscriptionModelCancelSubscription {
+public interface SubscriptionModelLifeCycle extends SubscriptionModelCancelSubscription {
 
     /**
      * Temporary stop the subscription model so that none of its subscriptions will receive any events.

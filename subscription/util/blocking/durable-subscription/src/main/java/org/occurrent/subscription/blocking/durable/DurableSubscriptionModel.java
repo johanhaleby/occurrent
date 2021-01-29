@@ -40,7 +40,7 @@ import static org.occurrent.subscription.util.predicate.EveryN.everyEvent;
  * Note that this implementation stores the subscription position after _every_ action. If you have a lot of events and duplication is not
  * that much of a deal, consider changing this behavior by supplying an instance of {@link DurableSubscriptionModelConfig}.
  */
-public class DurableSubscriptionModel implements PositionAwareSubscriptionModel, DelegatingSubscriptionModel, SubscriptionModelShutdown, SubscriptionModelCancelSubscription {
+public class DurableSubscriptionModel implements PositionAwareSubscriptionModel, DelegatingSubscriptionModel, SubscriptionModelCancelSubscription {
 
     private final PositionAwareSubscriptionModel subscriptionModel;
     private final SubscriptionPositionStorage storage;
@@ -129,9 +129,7 @@ public class DurableSubscriptionModel implements PositionAwareSubscriptionModel,
     @Override
     @PreDestroy
     public void shutdown() {
-        if (subscriptionModel instanceof SubscriptionModelShutdown) {
-            ((SubscriptionModelShutdown) subscriptionModel).shutdown();
-        }
+        subscriptionModel.shutdown();
     }
 
     @Override

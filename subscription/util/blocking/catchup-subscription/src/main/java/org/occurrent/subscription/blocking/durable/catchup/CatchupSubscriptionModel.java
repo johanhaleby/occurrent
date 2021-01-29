@@ -60,7 +60,7 @@ import static org.occurrent.time.internal.RFC3339.RFC_3339_DATE_TIME_FORMATTER;
  * how often this should happen in the {@link CatchupSubscriptionModelConfig}.
  * </p>
  */
-public class CatchupSubscriptionModel implements SubscriptionModel, DelegatingSubscriptionModel, SubscriptionModelShutdown, SubscriptionModelCancelSubscription {
+public class CatchupSubscriptionModel implements SubscriptionModel, DelegatingSubscriptionModel, SubscriptionModelCancelSubscription {
 
     private static final int DEFAULT_CACHE_SIZE = 100;
 
@@ -230,9 +230,7 @@ public class CatchupSubscriptionModel implements SubscriptionModel, DelegatingSu
     public void shutdown() {
         shuttingDown = true;
         runningCatchupSubscriptions.clear();
-        if (subscriptionModel instanceof SubscriptionModelShutdown) {
-            ((SubscriptionModelShutdown) subscriptionModel).shutdown();
-        }
+        subscriptionModel.shutdown();
     }
 
     public static boolean isTimeBasedSubscriptionPosition(StartAt startAt) {

@@ -39,7 +39,9 @@ import org.occurrent.mongodb.timerepresentation.TimeRepresentation;
 import org.occurrent.retry.RetryStrategy;
 import org.occurrent.subscription.StringBasedSubscriptionPosition;
 import org.occurrent.subscription.SubscriptionPosition;
+import org.occurrent.subscription.api.blocking.DelegatingSubscriptionModel;
 import org.occurrent.subscription.api.blocking.SubscriptionModel;
+import org.occurrent.subscription.api.blocking.SubscriptionModelLifeCycle;
 import org.occurrent.subscription.api.blocking.SubscriptionPositionStorage;
 import org.occurrent.subscription.blocking.durable.DurableSubscriptionModel;
 import org.occurrent.subscription.blocking.durable.DurableSubscriptionModelConfig;
@@ -275,7 +277,7 @@ public class SpringMongoSubscriptionPositionStorageTest {
 
         // When
         mongoEventStore.write("1", 0, serialize(nameDefined1));
-        subscription.pauseSubscription(subscriberId);
+        pauseSubscription(subscription, subscriberId);
         // The subscription is async so we need to wait for it
         await().atMost(ONE_SECOND).until(not(state::isEmpty));
         mongoEventStore.write("2", 0, serialize(nameDefined2));
@@ -461,5 +463,14 @@ public class SpringMongoSubscriptionPositionStorageTest {
                 .withDataContentType("application/json")
                 .withData(unchecked(objectMapper::writeValueAsBytes).apply(e))
                 .build());
+    }
+
+    private static void pauseSubscription(DelegatingSubscriptionModel subscriptionModel, String subscriberId) {
+        SubscriptionModel sm = subscriptionModel.getDelegatedSubscriptionModelRecursively();
+        if (sm instanceof SubscriptionModelLifeCycle) {
+            ((SubscriptionModelLifeCycle) sm).pauseSubscription(subscriberId);
+        } else {
+            throw new IllegalArgumentException("Cannot pause " + subscriberId);
+        }
     }
 }

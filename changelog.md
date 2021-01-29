@@ -16,6 +16,9 @@
 * The `SpringMongoSubscriptionModel` now evaluates the "start at" supplier passed to the `subscribe` method each time a subscription is resumed.
 * Fixed a bug in `InMemorySubscription` where the `waitUntilStarted(Duration)` method always returned `false`.
 * `InMemorySubscription` now really waits for the subscription to start when calling `waitUntilStarted(Duration)` and `waitUntilStarted`.
+* Moved the `cancelSubscription` method from the `org.occurrent.subscription.api.blocking.SubscriptionModel` to the 
+  `org.occurrent.subscription.api.blocking.SubscriptionModelCancelSubscription` interface. This interface is also extended by
+  `org.occurrent.subscription.api.blocking.SubscriptionModelLifeCycle`.
   
 ## Changelog 0.6.0 (2021-01-23)
 

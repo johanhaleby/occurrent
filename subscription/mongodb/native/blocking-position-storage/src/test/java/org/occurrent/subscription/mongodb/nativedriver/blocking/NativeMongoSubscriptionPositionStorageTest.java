@@ -39,8 +39,7 @@ import org.occurrent.mongodb.timerepresentation.TimeRepresentation;
 import org.occurrent.retry.RetryStrategy;
 import org.occurrent.subscription.StringBasedSubscriptionPosition;
 import org.occurrent.subscription.SubscriptionPosition;
-import org.occurrent.subscription.api.blocking.PositionAwareSubscriptionModel;
-import org.occurrent.subscription.api.blocking.SubscriptionPositionStorage;
+import org.occurrent.subscription.api.blocking.*;
 import org.occurrent.subscription.blocking.durable.DurableSubscriptionModel;
 import org.occurrent.subscription.mongodb.MongoFilterSpecification.MongoJsonFilterSpecification;
 import org.occurrent.testsupport.mongodb.FlushMongoDBExtension;
@@ -103,7 +102,7 @@ public class NativeMongoSubscriptionPositionStorageTest {
         database = mongoClient.getDatabase(databaseName);
         TimeRepresentation timeRepresentation = RFC_3339_STRING;
         mongoEventStore = new MongoEventStore(mongoClient, databaseName, eventCollectionName, new EventStoreConfig(timeRepresentation));
-        subscriptionModel = newPersistentSubscription(eventCollectionName, timeRepresentation, RetryStrategy.fixed(200));
+        subscriptionModel = newDurableSubscription(eventCollectionName, timeRepresentation, RetryStrategy.fixed(200));
         objectMapper = new ObjectMapper();
     }
 
@@ -131,7 +130,7 @@ public class NativeMongoSubscriptionPositionStorageTest {
         // Then
         await().atMost(2, SECONDS).with().pollInterval(Duration.of(20, MILLIS)).untilAsserted(() -> assertThat(state).hasSize(3));
     }
-    
+
     @Test
     void retries_failed_writes() {
         // Given
@@ -149,7 +148,7 @@ public class NativeMongoSubscriptionPositionStorageTest {
         };
 
         StringBasedSubscriptionPosition expectedPosition = new StringBasedSubscriptionPosition("hello");
-  
+
         // When
         storage.save("subscriptionId", expectedPosition);
 
@@ -173,7 +172,7 @@ public class NativeMongoSubscriptionPositionStorageTest {
         mongoEventStore.write("1", 0, serialize(nameDefined1));
         // The subscription is async so we need to wait for it
         await().atMost(ONE_SECOND).until(not(state::isEmpty));
-        subscriptionModel.pauseSubscription(subscriberId);
+        pauseSubscription(subscriptionModel, subscriberId);
         mongoEventStore.write("2", 0, serialize(nameDefined2));
         mongoEventStore.write("1", 1, serialize(nameWasChanged1));
         subscriptionModel.subscribe(subscriberId, state::add);
@@ -188,7 +187,7 @@ public class NativeMongoSubscriptionPositionStorageTest {
         LocalDateTime now = LocalDateTime.now();
 
         // Disable retry
-        subscriptionModel = newPersistentSubscription("events", RFC_3339_STRING, RetryStrategy.none());
+        subscriptionModel = newDurableSubscription("events", RFC_3339_STRING, RetryStrategy.none());
 
         AtomicInteger counter = new AtomicInteger();
         CopyOnWriteArrayList<CloudEvent> state = new CopyOnWriteArrayList<>();
@@ -212,7 +211,7 @@ public class NativeMongoSubscriptionPositionStorageTest {
         await().atMost(ONE_SECOND).and().dontCatchUncaughtExceptions().untilAtomic(counter, equalTo(1));
         // Since an exception occurred we need to run the stream again
         subscriptionModel.shutdown();
-        subscriptionModel = newPersistentSubscription("events", RFC_3339_STRING, RetryStrategy.none());
+        subscriptionModel = newDurableSubscription("events", RFC_3339_STRING, RetryStrategy.none());
         stream.run();
         mongoEventStore.write("2", 0, serialize(nameDefined2));
         mongoEventStore.write("1", 1, serialize(nameWasChanged1));
@@ -350,10 +349,19 @@ public class NativeMongoSubscriptionPositionStorageTest {
                 .build());
     }
 
-    private DurableSubscriptionModel newPersistentSubscription(String eventCollectionName, TimeRepresentation timeRepresentation, RetryStrategy retryStrategy) {
+    private DurableSubscriptionModel newDurableSubscription(String eventCollectionName, TimeRepresentation timeRepresentation, RetryStrategy retryStrategy) {
         ExecutorService executor = Executors.newSingleThreadExecutor();
         PositionAwareSubscriptionModel blockingSubscriptionForMongoDB = new NativeMongoSubscriptionModel(database, eventCollectionName, timeRepresentation, executor, retryStrategy);
         SubscriptionPositionStorage storage = new NativeMongoSubscriptionPositionStorage(database.getCollection(TIMESTAMP_TOKEN_COLLECTION));
         return new DurableSubscriptionModel(blockingSubscriptionForMongoDB, storage);
+    }
+
+    private static void pauseSubscription(DelegatingSubscriptionModel subscriptionModel, String subscriberId) {
+        SubscriptionModel sm = subscriptionModel.getDelegatedSubscriptionModelRecursively();
+        if (sm instanceof SubscriptionModelLifeCycle) {
+            ((SubscriptionModelLifeCycle) sm).pauseSubscription(subscriberId);
+        } else {
+            throw new IllegalArgumentException("Cannot pause " + subscriberId);
+        }
     }
 }
