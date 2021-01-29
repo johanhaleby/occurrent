@@ -20,10 +20,7 @@ import io.cloudevents.CloudEvent;
 import org.occurrent.subscription.StartAt;
 import org.occurrent.subscription.SubscriptionFilter;
 import org.occurrent.subscription.SubscriptionPosition;
-import org.occurrent.subscription.api.blocking.PositionAwareSubscriptionModel;
-import org.occurrent.subscription.api.blocking.Subscription;
-import org.occurrent.subscription.api.blocking.SubscriptionModel;
-import org.occurrent.subscription.api.blocking.SubscriptionPositionStorage;
+import org.occurrent.subscription.api.blocking.*;
 
 import javax.annotation.PreDestroy;
 import java.util.function.Consumer;
@@ -43,7 +40,7 @@ import static org.occurrent.subscription.util.predicate.EveryN.everyEvent;
  * Note that this implementation stores the subscription position after _every_ action. If you have a lot of events and duplication is not
  * that much of a deal, consider changing this behavior by supplying an instance of {@link DurableSubscriptionModelConfig}.
  */
-public class DurableSubscriptionModel implements PositionAwareSubscriptionModel {
+public class DurableSubscriptionModel implements PositionAwareSubscriptionModel, DelegatingSubscriptionModel, SubscriptionModelShutdown, SubscriptionModelCancelSubscription {
 
     private final PositionAwareSubscriptionModel subscriptionModel;
     private final SubscriptionPositionStorage storage;
@@ -54,7 +51,7 @@ public class DurableSubscriptionModel implements PositionAwareSubscriptionModel 
      * store the subscription after each successful call to <code>action</code> (The "consumer" in {@link #subscribe(String, Consumer)}).
      *
      * @param subscriptionModel The subscription that will read events from the event store
-     * @param storage      The {@link SubscriptionPositionStorage} that'll be used to persist the stream position
+     * @param storage           The {@link SubscriptionPositionStorage} that'll be used to persist the stream position
      */
     public DurableSubscriptionModel(PositionAwareSubscriptionModel subscriptionModel, SubscriptionPositionStorage storage) {
         this(subscriptionModel, storage, new DurableSubscriptionModelConfig(everyEvent()));
@@ -65,7 +62,7 @@ public class DurableSubscriptionModel implements PositionAwareSubscriptionModel 
      * store the subscription when the predicate defined in {@link DurableSubscriptionModelConfig#persistCloudEventPositionPredicate} is fulfilled.
      *
      * @param subscriptionModel The subscription that will read events from the event store
-     * @param storage      The {@link SubscriptionPositionStorage} that'll be used to persist the stream position
+     * @param storage           The {@link SubscriptionPositionStorage} that'll be used to persist the stream position
      */
     public DurableSubscriptionModel(PositionAwareSubscriptionModel subscriptionModel, SubscriptionPositionStorage storage,
                                     DurableSubscriptionModelConfig config) {
@@ -116,29 +113,25 @@ public class DurableSubscriptionModel implements PositionAwareSubscriptionModel 
     }
 
     /**
-     * Pause a subscription temporarily without deleting the subscription position from the {@link SubscriptionPositionStorage}.
-     *
-     * @param subscriptionId The id of the subscription to pause
-     */
-    public void pauseSubscription(String subscriptionId) {
-        subscriptionModel.cancelSubscription(subscriptionId);
-    }
-
-    /**
      * Cancel a subscription. This means that it'll no longer receive events as they are persisted to the event store.
      * The subscription position that is persisted in the {@link SubscriptionPositionStorage} will also be removed.
      *
      * @param subscriptionId The subscription id to cancel
      */
+    @Override
     public void cancelSubscription(String subscriptionId) {
-        pauseSubscription(subscriptionId);
+        if ((subscriptionModel instanceof SubscriptionModelCancelSubscription)) {
+            ((SubscriptionModelCancelSubscription) subscriptionModel).cancelSubscription(subscriptionId);
+        }
         storage.delete(subscriptionId);
     }
 
     @Override
     @PreDestroy
     public void shutdown() {
-        subscriptionModel.shutdown();
+        if (subscriptionModel instanceof SubscriptionModelShutdown) {
+            ((SubscriptionModelShutdown) subscriptionModel).shutdown();
+        }
     }
 
     @Override
@@ -146,13 +139,7 @@ public class DurableSubscriptionModel implements PositionAwareSubscriptionModel 
         return subscriptionModel.globalSubscriptionPosition();
     }
 
-    /**
-     * Get the subscription model that this {@code DurableSubscriptionModel} delegates to.
-     * This is useful for testing purposes if one needs to access the underlying subscription
-     * model to e.g. start/stop subscriptions.
-     *
-     * @return The subscription models that this {@code DurableSubscriptionModel} instance delegates to
-     */
+    @Override
     public PositionAwareSubscriptionModel getDelegatedSubscriptionModel() {
         return subscriptionModel;
     }

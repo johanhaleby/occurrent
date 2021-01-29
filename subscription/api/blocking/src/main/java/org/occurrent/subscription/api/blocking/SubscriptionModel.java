@@ -91,16 +91,4 @@ public interface SubscriptionModel {
     default Subscription subscribe(String subscriptionId, Consumer<CloudEvent> action) {
         return subscribe(subscriptionId, null, StartAt.now(), action);
     }
-
-    /**
-     * Cancel a subscription, this will remove the position from position storage (if used),
-     * and you cannot restart it from its current position again.
-     */
-    void cancelSubscription(String subscriptionId);
-
-    /**
-     * Shutdown the subscription model and close all subscriptions (they can be resumed later if you start from a durable subscription position).
-     */
-    default void shutdown() {
-    }
 }

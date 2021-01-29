@@ -29,6 +29,7 @@ import org.occurrent.subscription.SubscriptionFilter;
 import org.occurrent.subscription.SubscriptionPosition;
 import org.occurrent.subscription.api.blocking.PositionAwareSubscriptionModel;
 import org.occurrent.subscription.api.blocking.Subscription;
+import org.occurrent.subscription.api.blocking.SubscriptionModelLifeCycle;
 import org.occurrent.subscription.mongodb.MongoOperationTimeSubscriptionPosition;
 import org.occurrent.subscription.mongodb.MongoResumeTokenSubscriptionPosition;
 import org.occurrent.subscription.mongodb.internal.MongoCloudEventsToJsonDeserializer;
@@ -65,7 +66,7 @@ import static org.occurrent.retry.internal.RetryExecution.executeWithRetry;
  * Note that this subscription doesn't provide retries if an exception is thrown when handling a {@link io.cloudevents.CloudEvent} (<code>action</code>).
  * This reason for this is that Spring provides retry capabilities (such as spring-retry) that you can easily hook into your <code>action</code>.
  */
-public class SpringMongoSubscriptionModel implements PositionAwareSubscriptionModel, SmartLifecycle {
+public class SpringMongoSubscriptionModel implements PositionAwareSubscriptionModel, SubscriptionModelLifeCycle, SmartLifecycle {
 
     private final String eventCollection;
     private final MessageListenerContainer messageListenerContainer;
@@ -180,16 +181,9 @@ public class SpringMongoSubscriptionModel implements PositionAwareSubscriptionMo
         return new MongoOperationTimeSubscriptionPosition(currentOperationTime);
     }
 
-    // Pause and Resume
+    // Life-cycle implementation
 
-    /**
-     * Pause an individual subscription. It'll be paused <i>temporarily</i>, which means that it can be
-     * resumed later ({@link #resumeSubscription(String)}). This is useful for testing purposes when you want
-     * to write events to an event store without triggering this particular subscription.
-     *
-     * @param subscriptionId The id of the subscription to pause.
-     * @throws IllegalArgumentException If subscription is not running
-     */
+    @Override
     public synchronized void pauseSubscription(String subscriptionId) {
         InternalSubscription internalSubscription = runningSubscriptions.remove(subscriptionId);
         if (internalSubscription == null) {
@@ -199,14 +193,7 @@ public class SpringMongoSubscriptionModel implements PositionAwareSubscriptionMo
         pausedSubscriptions.put(subscriptionId, internalSubscription);
     }
 
-    /**
-     * Resume a paused ({@link #pauseSubscription(String)}) subscription. This is useful for testing purposes when you want
-     * to write events to an event store and you want a particular subscription to receive these events (but you may have paused
-     * others).
-     *
-     * @param subscriptionId The id of the subscription to pause.
-     * @throws IllegalArgumentException If subscription is not paused
-     */
+    @Override
     public synchronized Subscription resumeSubscription(String subscriptionId) {
         InternalSubscription internalSubscription = pausedSubscriptions.remove(subscriptionId);
         if (internalSubscription == null) {
@@ -222,22 +209,12 @@ public class SpringMongoSubscriptionModel implements PositionAwareSubscriptionMo
         return new SpringMongoSubscription(subscriptionId, newSubscription);
     }
 
-    /**
-     * Check if a particular subscription is running.
-     *
-     * @param subscriptionId The id of the  subscription to check whether it's running or not
-     * @return {@code true} if the subscription is running, {@code false} otherwise.
-     */
+    @Override
     public boolean isRunning(String subscriptionId) {
         return !shutdown && runningSubscriptions.containsKey(subscriptionId);
     }
 
-    /**
-     * Check if a particular subscription is paused.
-     *
-     * @param subscriptionId The id of the  subscription to check whether it's paused or not
-     * @return {@code true} if the subscription is paused, {@code false} otherwise.
-     */
+    @Override
     public boolean isPaused(String subscriptionId) {
         return !shutdown && pausedSubscriptions.containsKey(subscriptionId);
     }

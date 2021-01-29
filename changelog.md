@@ -1,16 +1,21 @@
 ## Changelog next version
-
-* Added more life-cycle methods to `SpringMongoSubscriptionModel`. It's now possible to pause/resume individual subscriptions
+                                 
+* Introduced many more life-cycle methods to blocking subscription models. It's now possible to pause/resume individual subscriptions
   as well as starting/stopping _all_ subscriptions. This is useful for testing purposes when you want to write events 
-  to the event store without triggering all subscriptions.
+  to the event store without triggering all subscriptions. The subscription models that supports since 
+  implements the new `org.occurrent.subscription.api.blocking.SubscriptionModelLifeCycle` interface.
+  Supported subscription models are: `InMemorySubscriptionModel`, `NativeMongoSubscriptionModel` and `SpringMongoSubscriptionModel`. 
 * The `SpringMongoSubscriptionModel` now implements `org.springframework.context.SmartLifecycle`, which means that if you
   define it as a bean, it allows controlling it as a regular Spring life-cycle bean.
-* Added `getDelegatedSubscriptionModel` method to `DurableSubscriptionModel` so that it's possible to get the 
-  subscription model that is wrapped by the `DurableSubscriptionModel` instance. This is useful for testing
+* Introduced the `org.occurrent.subscription.api.blocking.DelegatingSubscriptionModel` interface. Subscription models
+  that wraps other subscription models and delegates subscriptions to them implements this interface. 
+  It contains methods for getting the wrapped subscription model. This is useful for testing
   purposes, if the underlying subscription model needs to stopped/started etc.
 * Fixed a bug with command composition that accidentally included the "previous events" when invoking the generated composition function.
 * Added more command composition extension functions for Kotlin. You can now compose lists of functions and not only sequences.
-* The `SpringMongoSubscriptionModel` now evaluates the "start at" supplier passed to the `subscribe` method each time a subscription is resumed. 
+* The `SpringMongoSubscriptionModel` now evaluates the "start at" supplier passed to the `subscribe` method each time a subscription is resumed.
+* Fixed a bug in `InMemorySubscription` where the `waitUntilStarted(Duration)` method always returned `false`.
+* `InMemorySubscription` now really waits for the subscription to start when calling `waitUntilStarted(Duration)` and `waitUntilStarted`.
   
 ## Changelog 0.6.0 (2021-01-23)
 

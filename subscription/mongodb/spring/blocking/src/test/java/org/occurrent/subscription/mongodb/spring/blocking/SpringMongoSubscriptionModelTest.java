@@ -246,8 +246,7 @@ public class SpringMongoSubscriptionModelTest {
         void blocking_spring_subscription_is_running_returns_false_when_subscription_is_paused() {
             // Given
             String subscriptionId = UUID.randomUUID().toString();
-            subscriptionModel.subscribe(subscriptionId, __ -> {
-            });
+            subscriptionModel.subscribe(subscriptionId, __ -> {}).waitUntilStarted(Duration.ofSeconds(5));;
             subscriptionModel.pauseSubscription(subscriptionId);
 
             // When
@@ -261,8 +260,7 @@ public class SpringMongoSubscriptionModelTest {
         void blocking_spring_subscription_is_running_returns_true_when_subscription_is_running() {
             // Given
             String subscriptionId = UUID.randomUUID().toString();
-            subscriptionModel.subscribe(subscriptionId, __ -> {
-            });
+            subscriptionModel.subscribe(subscriptionId, __ -> {}).waitUntilStarted(Duration.ofSeconds(5));;
 
             // When
             boolean running = subscriptionModel.isRunning(subscriptionId);
@@ -282,8 +280,7 @@ public class SpringMongoSubscriptionModelTest {
         void blocking_spring_subscription_is_paused_returns_false_when_subscription_is_running() {
             // Given
             String subscriptionId = UUID.randomUUID().toString();
-            subscriptionModel.subscribe(subscriptionId, __ -> {
-            });
+            subscriptionModel.subscribe(subscriptionId, __ -> {}).waitUntilStarted(Duration.ofSeconds(5));;
 
             // When
             boolean paused = subscriptionModel.isPaused(subscriptionId);
@@ -296,8 +293,7 @@ public class SpringMongoSubscriptionModelTest {
         void blocking_spring_subscription_is_paused_returns_true_when_subscription_is_paused() {
             // Given
             String subscriptionId = UUID.randomUUID().toString();
-            subscriptionModel.subscribe(subscriptionId, __ -> {
-            });
+            subscriptionModel.subscribe(subscriptionId, __ -> {}).waitUntilStarted(Duration.ofSeconds(5));;
             subscriptionModel.pauseSubscription(subscriptionId);
 
             // When
@@ -410,8 +406,7 @@ public class SpringMongoSubscriptionModelTest {
             NameWasChanged nameWasChanged1 = new NameWasChanged(UUID.randomUUID().toString(), now.plusSeconds(3), "name3");
             NameWasChanged nameWasChanged2 = new NameWasChanged(UUID.randomUUID().toString(), now.plusSeconds(4), "name4");
 
-            subscriptionModel.subscribe(subscriberId, filter().id(Filters::eq, nameDefined2.getEventId()).type(Filters::eq, NameDefined.class.getName()), state::add
-            )
+            subscriptionModel.subscribe(subscriberId, filter().id(Filters::eq, nameDefined2.getEventId()).type(Filters::eq, NameDefined.class.getName()), state::add)
                     .waitUntilStarted(Duration.of(10, ChronoUnit.SECONDS));
 
             // When

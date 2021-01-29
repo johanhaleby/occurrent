@@ -21,10 +21,7 @@ import org.occurrent.eventstore.api.blocking.EventStoreQueries;
 import org.occurrent.filter.Filter;
 import org.occurrent.subscription.*;
 import org.occurrent.subscription.StartAt.StartAtSubscriptionPosition;
-import org.occurrent.subscription.api.blocking.PositionAwareSubscriptionModel;
-import org.occurrent.subscription.api.blocking.Subscription;
-import org.occurrent.subscription.api.blocking.SubscriptionModel;
-import org.occurrent.subscription.api.blocking.SubscriptionPositionStorage;
+import org.occurrent.subscription.api.blocking.*;
 
 import javax.annotation.PreDestroy;
 import java.time.Duration;
@@ -63,11 +60,11 @@ import static org.occurrent.time.internal.RFC3339.RFC_3339_DATE_TIME_FORMATTER;
  * how often this should happen in the {@link CatchupSubscriptionModelConfig}.
  * </p>
  */
-public class CatchupSubscriptionModel implements SubscriptionModel {
+public class CatchupSubscriptionModel implements SubscriptionModel, DelegatingSubscriptionModel, SubscriptionModelShutdown, SubscriptionModelCancelSubscription {
 
     private static final int DEFAULT_CACHE_SIZE = 100;
 
-    private final PositionAwareSubscriptionModel subscription;
+    private final PositionAwareSubscriptionModel subscriptionModel;
     private final EventStoreQueries eventStoreQueries;
     private final CatchupSubscriptionModelConfig config;
     private final ConcurrentMap<String, Boolean> runningCatchupSubscriptions = new ConcurrentHashMap<>();
@@ -79,23 +76,23 @@ public class CatchupSubscriptionModel implements SubscriptionModel {
      * catch-up phase then the subscription will start from the beginning on application restart). After the catch-up phase has completed, the {@link PositionAwareSubscriptionModel}
      * will dictate how often the subscription position is stored.
      *
-     * @param subscription      The subscription that'll be used to subscribe to new events <i>after</i> catch-up is completed.
+     * @param subscriptionModel The subscription that'll be used to subscribe to new events <i>after</i> catch-up is completed.
      * @param eventStoreQueries The API that will be used for catch-up
      */
-    public CatchupSubscriptionModel(PositionAwareSubscriptionModel subscription, EventStoreQueries eventStoreQueries) {
-        this(subscription, eventStoreQueries, new CatchupSubscriptionModelConfig(DEFAULT_CACHE_SIZE));
+    public CatchupSubscriptionModel(PositionAwareSubscriptionModel subscriptionModel, EventStoreQueries eventStoreQueries) {
+        this(subscriptionModel, eventStoreQueries, new CatchupSubscriptionModelConfig(DEFAULT_CACHE_SIZE));
     }
 
     /**
      * Create a new instance of {@link CatchupSubscriptionModel} the uses the supplied {@link CatchupSubscriptionModelConfig}.
      * After catch-up mode has completed, the {@link PositionAwareSubscriptionModel} will dictate how often the subscription position is stored.
      *
-     * @param subscription      The subscription that'll be used to subscribe to new events <i>after</i> catch-up is completed.
+     * @param subscriptionModel The subscription that'll be used to subscribe to new events <i>after</i> catch-up is completed.
      * @param eventStoreQueries The API that will be used for catch-up
      * @param config            The configuration to use
      */
-    public CatchupSubscriptionModel(PositionAwareSubscriptionModel subscription, EventStoreQueries eventStoreQueries, CatchupSubscriptionModelConfig config) {
-        this.subscription = subscription;
+    public CatchupSubscriptionModel(PositionAwareSubscriptionModel subscriptionModel, EventStoreQueries eventStoreQueries, CatchupSubscriptionModelConfig config) {
+        this.subscriptionModel = subscriptionModel;
         this.eventStoreQueries = eventStoreQueries;
         this.config = config;
     }
@@ -117,7 +114,7 @@ public class CatchupSubscriptionModel implements SubscriptionModel {
 
         // We want to continue from the wrapping subscription if it has something stored in it's position storage.
         if (!isTimeBasedSubscriptionPosition(startAt)) {
-            return subscription.subscribe(subscriptionId, filter, startAtSupplier, action);
+            return subscriptionModel.subscribe(subscriptionId, filter, startAtSupplier, action);
         }
 
         SubscriptionPosition subscriptionPosition = ((StartAtSubscriptionPosition) startAt).subscriptionPosition;
@@ -133,7 +130,7 @@ public class CatchupSubscriptionModel implements SubscriptionModel {
         // Here's the reason why we're forcing the wrapping subscription to be a PositionAwareBlockingSubscription.
         // This is in order to be 100% safe since we need to take events that are published meanwhile the EventStoreQuery
         // is executed. Thus we need the global position of the subscription at the time of starting the query.
-        SubscriptionPosition globalSubscriptionPosition = subscription.globalSubscriptionPosition();
+        SubscriptionPosition globalSubscriptionPosition = subscriptionModel.globalSubscriptionPosition();
 
         FixedSizeCache cache = new FixedSizeCache(config.cacheSize);
         final Stream<CloudEvent> stream;
@@ -194,7 +191,7 @@ public class CatchupSubscriptionModel implements SubscriptionModel {
             });
             subscription = new CancelledSubscription(subscriptionId);
         } else {
-            subscription = this.subscription.subscribe(subscriptionId, filter, startAtSupplierToUse, cloudEvent -> {
+            subscription = this.subscriptionModel.subscribe(subscriptionId, filter, startAtSupplierToUse, cloudEvent -> {
                 if (!cache.isCached(cloudEvent.getId())) {
                     action.accept(cloudEvent);
                 }
@@ -207,7 +204,9 @@ public class CatchupSubscriptionModel implements SubscriptionModel {
     @Override
     public void cancelSubscription(String subscriptionId) {
         runningCatchupSubscriptions.remove(subscriptionId);
-        subscription.cancelSubscription(subscriptionId);
+        if (subscriptionModel instanceof SubscriptionModelCancelSubscription) {
+            ((SubscriptionModelCancelSubscription) subscriptionModel).cancelSubscription(subscriptionId);
+        }
         doIfSubscriptionPositionStorageConfigIs(SubscriptionPositionStorageConfig.UseSubscriptionPositionInStorage.class, cfg -> cfg.storage.delete(subscriptionId));
     }
 
@@ -231,7 +230,9 @@ public class CatchupSubscriptionModel implements SubscriptionModel {
     public void shutdown() {
         shuttingDown = true;
         runningCatchupSubscriptions.clear();
-        subscription.shutdown();
+        if (subscriptionModel instanceof SubscriptionModelShutdown) {
+            ((SubscriptionModelShutdown) subscriptionModel).shutdown();
+        }
     }
 
     public static boolean isTimeBasedSubscriptionPosition(StartAt startAt) {
@@ -259,6 +260,11 @@ public class CatchupSubscriptionModel implements SubscriptionModel {
 
     private static boolean isBeginningOfTime(SubscriptionPosition subscriptionPosition) {
         return subscriptionPosition instanceof TimeBasedSubscriptionPosition && ((TimeBasedSubscriptionPosition) subscriptionPosition).isBeginningOfTime();
+    }
+
+    @Override
+    public SubscriptionModel getDelegatedSubscriptionModel() {
+        return subscriptionModel;
     }
 
     private static class FixedSizeCache {

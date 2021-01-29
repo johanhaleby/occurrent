@@ -35,6 +35,7 @@ import org.occurrent.domain.NameWasChanged;
 import org.occurrent.eventstore.mongodb.nativedriver.EventStoreConfig;
 import org.occurrent.eventstore.mongodb.nativedriver.MongoEventStore;
 import org.occurrent.filter.Filter;
+import org.occurrent.functional.Not;
 import org.occurrent.mongodb.timerepresentation.TimeRepresentation;
 import org.occurrent.retry.RetryStrategy;
 import org.occurrent.subscription.OccurrentSubscriptionFilter;
@@ -47,8 +48,10 @@ import org.testcontainers.junit.jupiter.Testcontainers;
 import java.net.URI;
 import java.time.Duration;
 import java.time.LocalDateTime;
+import java.time.temporal.ChronoUnit;
 import java.util.UUID;
 import java.util.concurrent.CopyOnWriteArrayList;
+import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.atomic.AtomicInteger;
@@ -66,7 +69,9 @@ import static org.assertj.core.api.Assertions.catchThrowable;
 import static org.assertj.core.groups.Tuple.tuple;
 import static org.awaitility.Awaitility.await;
 import static org.awaitility.Durations.FIVE_SECONDS;
+import static org.awaitility.Durations.ONE_SECOND;
 import static org.hamcrest.Matchers.is;
+import static org.junit.jupiter.api.Assertions.assertAll;
 import static org.occurrent.filter.Filter.data;
 import static org.occurrent.filter.Filter.type;
 import static org.occurrent.functional.CheckedFunction.unchecked;
@@ -86,7 +91,7 @@ public class NativeMongoSubscriptionModelTest {
     FlushMongoDBExtension flushMongoDBExtension = new FlushMongoDBExtension(new ConnectionString(mongoDBContainer.getReplicaSetUrl()));
 
     private MongoEventStore mongoEventStore;
-    private NativeMongoSubscriptionModel subscription;
+    private NativeMongoSubscriptionModel subscriptionModel;
     private ObjectMapper objectMapper;
     private MongoClient mongoClient;
     private ExecutorService subscriptionExecutor;
@@ -100,14 +105,14 @@ public class NativeMongoSubscriptionModelTest {
         MongoDatabase database = mongoClient.getDatabase(requireNonNull(connectionString.getDatabase()));
         MongoCollection<Document> eventCollection = database.getCollection(requireNonNull(connectionString.getCollection()));
         mongoEventStore = new MongoEventStore(mongoClient, connectionString.getDatabase(), connectionString.getCollection(), config);
-        subscriptionExecutor = Executors.newFixedThreadPool(1);
-        subscription = new NativeMongoSubscriptionModel(database, eventCollection, timeRepresentation, subscriptionExecutor, RetryStrategy.backoff(Duration.of(100, MILLIS), Duration.of(500, MILLIS), 2));
+        subscriptionExecutor = Executors.newCachedThreadPool();
+        subscriptionModel = new NativeMongoSubscriptionModel(database, eventCollection, timeRepresentation, subscriptionExecutor, RetryStrategy.backoff(Duration.of(100, MILLIS), Duration.of(500, MILLIS), 2));
         objectMapper = new ObjectMapper();
     }
 
     @AfterEach
     void shutdown() throws InterruptedException {
-        subscription.shutdown();
+        subscriptionModel.shutdown();
         subscriptionExecutor.shutdown();
         boolean terminated = subscriptionExecutor.awaitTermination(10, SECONDS);
         if (!terminated) {
@@ -120,10 +125,10 @@ public class NativeMongoSubscriptionModelTest {
     void blocking_native_mongodb_subscription_throws_iae_when_subscription_already_exists() {
         // Given
         String subscriptionId = UUID.randomUUID().toString();
-        subscription.subscribe(subscriptionId, __ -> System.out.println("hello")).waitUntilStarted();
+        subscriptionModel.subscribe(subscriptionId, __ -> System.out.println("hello")).waitUntilStarted();
 
         // When
-        Throwable throwable = catchThrowable(() -> subscription.subscribe(subscriptionId, __ -> System.out.println("hello")).waitUntilStarted());
+        Throwable throwable = catchThrowable(() -> subscriptionModel.subscribe(subscriptionId, __ -> System.out.println("hello")).waitUntilStarted());
         
         // Then
         assertThat(throwable).isExactlyInstanceOf(IllegalArgumentException.class).hasMessage("Subscription " + subscriptionId + " is already defined.");
@@ -134,7 +139,7 @@ public class NativeMongoSubscriptionModelTest {
         // Given
         LocalDateTime now = LocalDateTime.now();
         CopyOnWriteArrayList<CloudEvent> state = new CopyOnWriteArrayList<>();
-        subscription.subscribe(UUID.randomUUID().toString(), state::add).waitUntilStarted();
+        subscriptionModel.subscribe(UUID.randomUUID().toString(), state::add).waitUntilStarted();
         NameDefined nameDefined1 = new NameDefined(UUID.randomUUID().toString(), now, "name1");
         NameDefined nameDefined2 = new NameDefined(UUID.randomUUID().toString(), now.plusSeconds(2), "name2");
         NameWasChanged nameWasChanged1 = new NameWasChanged(UUID.randomUUID().toString(), now.plusSeconds(10), "name3");
@@ -154,7 +159,7 @@ public class NativeMongoSubscriptionModelTest {
         LocalDateTime now = LocalDateTime.now();
         final AtomicInteger counter = new AtomicInteger(0);
         final CopyOnWriteArrayList<CloudEvent> state = new CopyOnWriteArrayList<>();
-        subscription.subscribe(UUID.randomUUID().toString(), cloudEvent -> {
+        subscriptionModel.subscribe(UUID.randomUUID().toString(), cloudEvent -> {
             int value = counter.incrementAndGet();
             if (value <= 4) {
                 throw new IllegalArgumentException("expected");
@@ -180,7 +185,7 @@ public class NativeMongoSubscriptionModelTest {
         LocalDateTime now = LocalDateTime.now();
         CopyOnWriteArrayList<CloudEvent> state = new CopyOnWriteArrayList<>();
         String subscriberId = UUID.randomUUID().toString();
-        subscription.subscribe(subscriberId, state::add).waitUntilStarted();
+        subscriptionModel.subscribe(subscriberId, state::add).waitUntilStarted();
         NameDefined nameDefined = new NameDefined(UUID.randomUUID().toString(), now, "name1");
         NameWasChanged nameWasChanged = new NameWasChanged(UUID.randomUUID().toString(), now, "name2");
 
@@ -188,7 +193,7 @@ public class NativeMongoSubscriptionModelTest {
         mongoEventStore.write("1", 0, serialize(nameDefined));
         // The subscription is async so we need to wait for it
         await().atMost(FIVE_SECONDS).until(not(state::isEmpty));
-        subscription.cancelSubscription(subscriberId);
+        subscriptionModel.cancelSubscription(subscriberId);
 
         // Then
         mongoEventStore.write("1", 1, serialize(nameWasChanged));
@@ -208,7 +213,7 @@ public class NativeMongoSubscriptionModelTest {
             LocalDateTime now = LocalDateTime.now();
             CopyOnWriteArrayList<CloudEvent> state = new CopyOnWriteArrayList<>();
             String subscriberId = UUID.randomUUID().toString();
-            subscription.subscribe(subscriberId, filter().type(Filters::eq, NameDefined.class.getName()), state::add).waitUntilStarted();
+            subscriptionModel.subscribe(subscriberId, filter().type(Filters::eq, NameDefined.class.getName()), state::add).waitUntilStarted();
             NameDefined nameDefined1 = new NameDefined(UUID.randomUUID().toString(), now, "name1");
             NameDefined nameDefined2 = new NameDefined(UUID.randomUUID().toString(), now.plusSeconds(2), "name2");
             NameWasChanged nameWasChanged1 = new NameWasChanged(UUID.randomUUID().toString(), now.plusSeconds(3), "name3");
@@ -236,7 +241,7 @@ public class NativeMongoSubscriptionModelTest {
             NameWasChanged nameWasChanged1 = new NameWasChanged(UUID.randomUUID().toString(), now.plusSeconds(3), "name3");
             NameWasChanged nameWasChanged2 = new NameWasChanged(UUID.randomUUID().toString(), now.plusSeconds(4), "name4");
 
-            subscription.subscribe(subscriberId, filter().id(Filters::eq, nameDefined2.getEventId()).type(Filters::eq, NameDefined.class.getName()), state::add
+            subscriptionModel.subscribe(subscriberId, filter().id(Filters::eq, nameDefined2.getEventId()).type(Filters::eq, NameDefined.class.getName()), state::add
             ).waitUntilStarted();
 
             // When
@@ -261,7 +266,7 @@ public class NativeMongoSubscriptionModelTest {
             NameWasChanged nameWasChanged1 = new NameWasChanged(UUID.randomUUID().toString(), now.plusSeconds(3), "name3");
             NameWasChanged nameWasChanged2 = new NameWasChanged(UUID.randomUUID().toString(), now.plusSeconds(4), "name4");
 
-            subscription.subscribe(subscriberId, filter(match(and(eq("fullDocument.id", nameDefined2.getEventId()), eq("fullDocument.type", NameDefined.class.getName())))), state::add).waitUntilStarted();
+            subscriptionModel.subscribe(subscriberId, filter(match(and(eq("fullDocument.id", nameDefined2.getEventId()), eq("fullDocument.type", NameDefined.class.getName())))), state::add).waitUntilStarted();
 
             // When
             mongoEventStore.write("1", 0, serialize(nameDefined1));
@@ -272,6 +277,161 @@ public class NativeMongoSubscriptionModelTest {
             // Then
             await().atMost(FIVE_SECONDS).until(state::size, is(1));
             assertThat(state).extracting(CloudEvent::getId, CloudEvent::getType).containsOnly(tuple(nameDefined2.getEventId(), NameDefined.class.getName()));
+        }
+    }
+    
+    @Nested
+    @DisplayName("Lifecycle")
+    class LifeCycleTest {
+
+        @Test
+        void native_mongodb_subscription_model_allows_cancelling_a_subscription() {
+            // Given
+            LocalDateTime now = LocalDateTime.now();
+            CopyOnWriteArrayList<CloudEvent> state = new CopyOnWriteArrayList<>();
+            String subscriptionId = UUID.randomUUID().toString();
+            subscriptionModel.subscribe(subscriptionId, state::add).waitUntilStarted(Duration.of(10, ChronoUnit.SECONDS));
+            NameDefined nameDefined1 = new NameDefined(UUID.randomUUID().toString(), now, "name1");
+
+            // When
+            mongoEventStore.write("1", 0, serialize(nameDefined1));
+            // The subscription is async so we need to wait for it
+            await().atMost(ONE_SECOND).until(not(state::isEmpty));
+            subscriptionModel.cancelSubscription(subscriptionId);
+
+            // Then
+            assertAll(
+                    () -> assertThat(subscriptionModel.isRunning(subscriptionId)).isFalse(),
+                    () -> assertThat(subscriptionModel.isPaused(subscriptionId)).isFalse(),
+                    () -> assertThat(subscriptionModel.isRunning()).isTrue()
+            );
+        }
+
+        @Test
+        void native_mongodb_subscription_model_is_running_returns_false_when_subscription_is_not_started() {
+            boolean running = subscriptionModel.isRunning(UUID.randomUUID().toString());
+
+            assertThat(running).isFalse();
+        }
+
+        @Test
+        void native_mongodb_subscription_model_is_running_returns_false_when_subscription_is_paused() {
+            // Given
+            String subscriptionId = UUID.randomUUID().toString();
+            subscriptionModel.subscribe(subscriptionId, __ -> {}).waitUntilStarted(Duration.ofSeconds(5));;
+            subscriptionModel.pauseSubscription(subscriptionId);
+
+            // When
+            boolean running = subscriptionModel.isRunning(subscriptionId);
+
+            // Then
+            assertThat(running).isFalse();
+        }
+
+        @Test
+        void native_mongodb_subscription_model_is_running_returns_true_when_subscription_is_running() {
+            // Given
+            String subscriptionId = UUID.randomUUID().toString();
+            subscriptionModel.subscribe(subscriptionId, __ -> {}).waitUntilStarted(Duration.ofSeconds(5));
+
+            // When
+            boolean running = subscriptionModel.isRunning(subscriptionId);
+
+            // Then
+            assertThat(running).isTrue();
+        }
+
+        @Test
+        void native_mongodb_subscription_model_is_paused_returns_false_when_subscription_is_not_started() {
+            boolean running = subscriptionModel.isPaused(UUID.randomUUID().toString());
+
+            assertThat(running).isFalse();
+        }
+
+        @Test
+        void native_mongodb_subscription_model_is_paused_returns_false_when_subscription_is_running() {
+            // Given
+            String subscriptionId = UUID.randomUUID().toString();
+            subscriptionModel.subscribe(subscriptionId, __ -> {}).waitUntilStarted(Duration.ofSeconds(5));
+
+            // When
+            boolean paused = subscriptionModel.isPaused(subscriptionId);
+
+            // Then
+            assertThat(paused).isFalse();
+        }
+
+        @Test
+        void native_mongodb_subscription_model_is_paused_returns_true_when_subscription_is_paused() {
+            // Given
+            String subscriptionId = UUID.randomUUID().toString();
+            subscriptionModel.subscribe(subscriptionId, __ -> {}).waitUntilStarted(Duration.ofSeconds(5));
+            subscriptionModel.pauseSubscription(subscriptionId);
+
+            // When
+            boolean paused = subscriptionModel.isPaused(subscriptionId);
+
+            // Then
+            assertThat(paused).isTrue();
+        }
+
+        @Test
+        void native_mongodb_subscription_model_allows_stopping_and_starting_all_subscriptions() {
+            // Given
+            LocalDateTime now = LocalDateTime.now();
+            CopyOnWriteArrayList<CloudEvent> state = new CopyOnWriteArrayList<>();
+            subscriptionModel.subscribe(UUID.randomUUID().toString(), state::add).waitUntilStarted(Duration.of(10, ChronoUnit.SECONDS));
+
+            NameDefined nameDefined1 = new NameDefined(UUID.randomUUID().toString(), now, "name1");
+            NameDefined nameDefined2 = new NameDefined(UUID.randomUUID().toString(), now.plusSeconds(2), "name2");
+            NameWasChanged nameWasChanged1 = new NameWasChanged(UUID.randomUUID().toString(), now.plusSeconds(10), "name3");
+
+            // When
+            subscriptionModel.stop();
+
+            // Then
+            subscriptionModel.start();
+
+            mongoEventStore.write("1", 0, serialize(nameDefined1));
+            mongoEventStore.write("2", 0, serialize(nameDefined2));
+            mongoEventStore.write("1", 1, serialize(nameWasChanged1));
+
+            await("state").atMost(2, SECONDS).with().pollInterval(Duration.of(20, MILLIS)).untilAsserted(() -> assertThat(state).hasSize(3));
+        }
+
+        @Test
+        void native_mongodb_subscription_model_allows_pausing_and_resuming_individual_subscriptions() throws InterruptedException {
+            // Given
+            LocalDateTime now = LocalDateTime.now();
+            CopyOnWriteArrayList<CloudEvent> subscription1State = new CopyOnWriteArrayList<>();
+            CopyOnWriteArrayList<CloudEvent> subscription2State = new CopyOnWriteArrayList<>();
+            String subscriptionId = UUID.randomUUID().toString();
+            subscriptionModel.subscribe(subscriptionId, subscription1State::add).waitUntilStarted(Duration.of(10, ChronoUnit.SECONDS));
+            subscriptionModel.subscribe(UUID.randomUUID().toString(), subscription2State::add).waitUntilStarted(Duration.of(10, ChronoUnit.SECONDS));
+
+            NameDefined nameDefined1 = new NameDefined(UUID.randomUUID().toString(), now, "name1");
+            NameDefined nameDefined2 = new NameDefined(UUID.randomUUID().toString(), now.plusSeconds(2), "name2");
+            NameWasChanged nameWasChanged1 = new NameWasChanged(UUID.randomUUID().toString(), now.plusSeconds(10), "name3");
+
+            // When
+            subscriptionModel.pauseSubscription(subscriptionId);
+
+            mongoEventStore.write("1", 0, serialize(nameDefined1));
+
+            await("subscription2 received event").atMost(2, SECONDS).with().pollInterval(Duration.of(20, MILLIS)).untilAsserted(() -> assertThat(subscription2State).hasSize(1));
+            Thread.sleep(200); // We wait a little bit longer to give subscription some time to receive the event (even though it shouldn't!)
+            assertThat(subscription1State).isEmpty();
+
+            // Then
+            subscriptionModel.resumeSubscription(subscriptionId).waitUntilStarted(Duration.ofSeconds(10));
+
+            mongoEventStore.write("2", 0, serialize(nameDefined2));
+            mongoEventStore.write("1", 1, serialize(nameWasChanged1));
+
+            await("subscription1 received all events").atMost(2, SECONDS).with().pollInterval(Duration.of(20, MILLIS)).untilAsserted(() ->
+                    assertThat(subscription1State).extracting(CloudEvent::getId).containsExactly(nameDefined2.getEventId(), nameWasChanged1.getEventId()));
+            await("subscription2 received all events").atMost(2, SECONDS).with().pollInterval(Duration.of(20, MILLIS)).untilAsserted(() ->
+                    assertThat(subscription2State).extracting(CloudEvent::getId).containsExactly(nameDefined1.getEventId(), nameDefined2.getEventId(), nameWasChanged1.getEventId()));
         }
     }
 
@@ -285,7 +445,7 @@ public class NativeMongoSubscriptionModelTest {
             LocalDateTime now = LocalDateTime.now();
             CopyOnWriteArrayList<CloudEvent> state = new CopyOnWriteArrayList<>();
             String subscriberId = UUID.randomUUID().toString();
-            subscription.subscribe(subscriberId, MongoJsonFilterSpecification.filter("{ $match : { \"" + FULL_DOCUMENT + ".type\" : \"" + NameDefined.class.getName() + "\" } }"), state::add).waitUntilStarted();
+            subscriptionModel.subscribe(subscriberId, MongoJsonFilterSpecification.filter("{ $match : { \"" + FULL_DOCUMENT + ".type\" : \"" + NameDefined.class.getName() + "\" } }"), state::add).waitUntilStarted();
             NameDefined nameDefined1 = new NameDefined(UUID.randomUUID().toString(), now, "name1");
             NameDefined nameDefined2 = new NameDefined(UUID.randomUUID().toString(), now.plusSeconds(2), "name2");
             NameWasChanged nameWasChanged1 = new NameWasChanged(UUID.randomUUID().toString(), now.plusSeconds(3), "name3");
@@ -313,7 +473,7 @@ public class NativeMongoSubscriptionModelTest {
             LocalDateTime now = LocalDateTime.now();
             CopyOnWriteArrayList<CloudEvent> state = new CopyOnWriteArrayList<>();
             String subscriberId = UUID.randomUUID().toString();
-            subscription.subscribe(subscriberId, OccurrentSubscriptionFilter.filter(type(NameDefined.class.getName())), state::add).waitUntilStarted();
+            subscriptionModel.subscribe(subscriberId, OccurrentSubscriptionFilter.filter(type(NameDefined.class.getName())), state::add).waitUntilStarted();
             NameDefined nameDefined1 = new NameDefined(UUID.randomUUID().toString(), now, "name1");
             NameDefined nameDefined2 = new NameDefined(UUID.randomUUID().toString(), now.plusSeconds(2), "name2");
             NameWasChanged nameWasChanged1 = new NameWasChanged(UUID.randomUUID().toString(), now.plusSeconds(3), "name3");
@@ -336,7 +496,7 @@ public class NativeMongoSubscriptionModelTest {
             LocalDateTime now = LocalDateTime.now();
             CopyOnWriteArrayList<CloudEvent> state = new CopyOnWriteArrayList<>();
             String subscriberId = UUID.randomUUID().toString();
-            subscription.subscribe(subscriberId, OccurrentSubscriptionFilter.filter(data("name", Condition.eq("name3"))), state::add).waitUntilStarted();
+            subscriptionModel.subscribe(subscriberId, OccurrentSubscriptionFilter.filter(data("name", Condition.eq("name3"))), state::add).waitUntilStarted();
             NameDefined nameDefined1 = new NameDefined(UUID.randomUUID().toString(), now, "name1");
             NameDefined nameDefined2 = new NameDefined(UUID.randomUUID().toString(), now.plusSeconds(2), "name2");
             NameWasChanged nameWasChanged1 = new NameWasChanged(UUID.randomUUID().toString(), now.plusSeconds(3), "name3");
@@ -365,7 +525,7 @@ public class NativeMongoSubscriptionModelTest {
             NameWasChanged nameWasChanged2 = new NameWasChanged(UUID.randomUUID().toString(), now.plusSeconds(4), "name4");
 
             Filter filter = Filter.id(nameDefined2.getEventId()).and(type(NameDefined.class.getName()));
-            subscription.subscribe(subscriberId, OccurrentSubscriptionFilter.filter(filter), state::add).waitUntilStarted();
+            subscriptionModel.subscribe(subscriberId, OccurrentSubscriptionFilter.filter(filter), state::add).waitUntilStarted();
 
             // When
             mongoEventStore.write("1", 0, serialize(nameDefined1));

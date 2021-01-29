@@ -25,6 +25,7 @@ import java.time.Duration;
 import java.util.Objects;
 import java.util.StringJoiner;
 import java.util.concurrent.BlockingQueue;
+import java.util.concurrent.CountDownLatch;
 import java.util.function.Consumer;
 
 import static java.util.concurrent.TimeUnit.MILLISECONDS;
@@ -44,6 +45,8 @@ public class InMemorySubscription implements Subscription, Runnable {
 
     private volatile boolean shutdown;
 
+    private final CountDownLatch started = new CountDownLatch(1);
+
     InMemorySubscription(String id, BlockingQueue<CloudEvent> queue, Consumer<CloudEvent> consumer, Filter filter, RetryStrategy retryStrategy) {
         this.id = id;
         this.queue = queue;
@@ -60,12 +63,20 @@ public class InMemorySubscription implements Subscription, Runnable {
 
     @Override
     public void waitUntilStarted() {
-
+        try {
+            started.await();
+        } catch (InterruptedException e) {
+            throw new RuntimeException(e);
+        }
     }
 
     @Override
     public boolean waitUntilStarted(Duration timeout) {
-        return false;
+        try {
+            return started.await(timeout.toMillis(), MILLISECONDS);
+        } catch (InterruptedException e) {
+            throw new RuntimeException(e);
+        }
     }
 
     @Override
@@ -107,6 +118,7 @@ public class InMemorySubscription implements Subscription, Runnable {
 
     @Override
     public void run() {
+        started.countDown();
         while (!shutdown) {
             CloudEvent cloudEvent;
             try {

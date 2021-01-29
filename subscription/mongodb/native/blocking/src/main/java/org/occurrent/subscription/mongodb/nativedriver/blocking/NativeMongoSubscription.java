@@ -71,7 +71,7 @@ public class NativeMongoSubscription implements Subscription {
     @Override
     public boolean waitUntilStarted(Duration timeout) {
         try {
-            return subscriptionStartedLatch.await(timeout.toNanos(), TimeUnit.NANOSECONDS);
+            return subscriptionStartedLatch.await(timeout.toMillis(), TimeUnit.MILLISECONDS);
         } catch (InterruptedException e) {
             throw new RuntimeException(e);
         }

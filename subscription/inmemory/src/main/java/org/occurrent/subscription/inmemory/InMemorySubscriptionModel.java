@@ -24,6 +24,7 @@ import org.occurrent.subscription.StartAt;
 import org.occurrent.subscription.SubscriptionFilter;
 import org.occurrent.subscription.api.blocking.Subscription;
 import org.occurrent.subscription.api.blocking.SubscriptionModel;
+import org.occurrent.subscription.api.blocking.SubscriptionModelLifeCycle;
 
 import javax.annotation.PreDestroy;
 import java.util.List;
@@ -36,13 +37,16 @@ import java.util.stream.Stream;
 /**
  * An in-memory subscription model
  */
-public class InMemorySubscriptionModel implements SubscriptionModel, Consumer<Stream<CloudEvent>> {
+public class InMemorySubscriptionModel implements SubscriptionModel, SubscriptionModelLifeCycle, Consumer<Stream<CloudEvent>> {
 
     private final ConcurrentMap<String, InMemorySubscription> subscriptions;
+    private final ConcurrentMap<String, Boolean> pausedSubscriptions;
     private final ExecutorService cloudEventDispatcher;
     private final RetryStrategy retryStrategy;
 
-    private volatile boolean shuttingDown = false;
+    private volatile boolean shutdown = false;
+    private volatile boolean running = true;
+
 
     /**
      * Create a new {@link InMemorySubscriptionModel} with an unbounded cached thread pool and retry strategy with
@@ -74,18 +78,19 @@ public class InMemorySubscriptionModel implements SubscriptionModel, Consumer<St
         this.cloudEventDispatcher = cloudEventDispatcher;
         this.retryStrategy = retryStrategy;
         this.subscriptions = new ConcurrentHashMap<>();
+        this.pausedSubscriptions = new ConcurrentHashMap<>();
     }
 
 
     @Override
     public synchronized Subscription subscribe(String subscriptionId, SubscriptionFilter filter, Supplier<StartAt> startAtSupplier, Consumer<CloudEvent> action) {
-        if (shuttingDown) {
+        if (shutdown) {
             throw new IllegalStateException("Cannot subscribe when shutdown");
         } else if (subscriptionId == null) {
             throw new IllegalArgumentException("subscriptionId cannot be null");
         } else if (action == null) {
             throw new IllegalArgumentException("action cannot be null");
-        } else if (subscriptions.containsKey(subscriptionId)) {
+        } else if (subscriptions.containsKey(subscriptionId) || pausedSubscriptions.containsKey(subscriptionId)) {
             throw new IllegalArgumentException("Subscription " + subscriptionId + " is already defined.");
         }
 
@@ -100,6 +105,10 @@ public class InMemorySubscriptionModel implements SubscriptionModel, Consumer<St
 
         InMemorySubscription subscription = new InMemorySubscription(subscriptionId, new LinkedBlockingQueue<>(), action, f, retryStrategy);
         subscriptions.put(subscriptionId, subscription);
+
+        if (!running) {
+            pausedSubscriptions.put(subscriptionId, true);
+        }
         cloudEventDispatcher.execute(subscription);
         return subscription;
     }
@@ -107,24 +116,33 @@ public class InMemorySubscriptionModel implements SubscriptionModel, Consumer<St
     @Override
     public void cancelSubscription(String subscriptionId) {
         subscriptions.remove(subscriptionId);
+        pausedSubscriptions.remove(subscriptionId);
     }
 
     @Override
     public void accept(Stream<CloudEvent> cloudEventStream) {
+        if (!running) {
+            return;
+        }
         List<CloudEvent> cloudEvents = cloudEventStream.collect(Collectors.toList());
         subscriptions.values().forEach(subscription -> {
-            cloudEvents.stream()
-                    .filter(subscription::matches)
-                    .forEach(subscription::eventAvailable);
+            if (isRunning(subscription.id())) {
+                cloudEvents.stream()
+                        .filter(subscription::matches)
+                        .forEach(subscription::eventAvailable);
+            }
         });
     }
 
     @PreDestroy
+    @Override
     public void shutdown() {
         synchronized (subscriptions) {
-            shuttingDown = true;
+            shutdown = true;
             subscriptions.values().forEach(InMemorySubscription::shutdown);
+            subscriptions.clear();
         }
+        pausedSubscriptions.clear();
         if (!cloudEventDispatcher.isShutdown() && !cloudEventDispatcher.isTerminated()) {
             cloudEventDispatcher.shutdown();
             try {
@@ -148,5 +166,50 @@ public class InMemorySubscriptionModel implements SubscriptionModel, Consumer<St
             throw new IllegalArgumentException(InMemorySubscriptionModel.class.getSimpleName() + " only support filters of type " + OccurrentSubscriptionFilter.class.getName());
         }
         return f;
+    }
+
+    @Override
+    public void stop() {
+        running = false;
+        subscriptions.values().forEach(subscription -> pausedSubscriptions.put(subscription.id(), true));
+    }
+
+    @Override
+    public void start() {
+        running = true;
+        pausedSubscriptions.clear();
+    }
+
+    @Override
+    public boolean isRunning() {
+        return running;
+    }
+
+    @Override
+    public boolean isRunning(String subscriptionId) {
+        return running && subscriptions.containsKey(subscriptionId) && !pausedSubscriptions.containsKey(subscriptionId);
+    }
+
+    @Override
+    public boolean isPaused(String subscriptionId) {
+        return pausedSubscriptions.containsKey(subscriptionId);
+    }
+
+    @Override
+    public Subscription resumeSubscription(String subscriptionId) {
+        if (!isPaused(subscriptionId)) {
+            throw new IllegalArgumentException("Subscription " + subscriptionId + " is not paused");
+        }
+        running = true;
+        pausedSubscriptions.remove(subscriptionId);
+        return subscriptions.get(subscriptionId);
+    }
+
+    @Override
+    public void pauseSubscription(String subscriptionId) {
+        if (!isRunning(subscriptionId)) {
+            throw new IllegalArgumentException("Subscription " + subscriptionId + " is not running");
+        }
+        pausedSubscriptions.put(subscriptionId, true);
     }
 }

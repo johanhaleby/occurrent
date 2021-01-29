@@ -35,6 +35,8 @@ import org.occurrent.retry.RetryStrategy;
 import org.occurrent.subscription.*;
 import org.occurrent.subscription.api.blocking.PositionAwareSubscriptionModel;
 import org.occurrent.subscription.api.blocking.Subscription;
+import org.occurrent.subscription.api.blocking.SubscriptionModel;
+import org.occurrent.subscription.api.blocking.SubscriptionModelLifeCycle;
 import org.occurrent.subscription.mongodb.MongoFilterSpecification;
 import org.occurrent.subscription.mongodb.MongoOperationTimeSubscriptionPosition;
 import org.occurrent.subscription.mongodb.MongoResumeTokenSubscriptionPosition;
@@ -45,8 +47,10 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import javax.annotation.PreDestroy;
+import java.time.Duration;
 import java.util.Collections;
 import java.util.List;
+import java.util.Objects;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ConcurrentMap;
 import java.util.concurrent.CountDownLatch;
@@ -58,6 +62,7 @@ import java.util.stream.Stream;
 
 import static com.mongodb.client.model.Aggregates.match;
 import static java.util.Objects.requireNonNull;
+import static java.util.concurrent.TimeUnit.MILLISECONDS;
 import static java.util.concurrent.TimeUnit.SECONDS;
 import static org.occurrent.retry.internal.RetryExecution.convertToDelayStream;
 import static org.occurrent.retry.internal.RetryExecution.executeWithRetry;
@@ -70,17 +75,19 @@ import static org.occurrent.retry.internal.RetryExecution.executeWithRetry;
  * or use the {@code DurableSubscriptionModel} utility from the {@code org.occurrent:durable-subscription}
  * module.
  */
-public class NativeMongoSubscriptionModel implements PositionAwareSubscriptionModel {
+public class NativeMongoSubscriptionModel implements PositionAwareSubscriptionModel, SubscriptionModelLifeCycle {
     private static final Logger log = LoggerFactory.getLogger(NativeMongoSubscriptionModel.class);
 
     private final MongoCollection<Document> eventCollection;
-    private final ConcurrentMap<String, MongoChangeStreamCursor<ChangeStreamDocument<Document>>> subscriptions;
+    private final ConcurrentMap<String, InternalSubscription> runningSubscriptions;
+    private final ConcurrentMap<String, InternalSubscription> pausedSubscriptions;
     private final TimeRepresentation timeRepresentation;
     private final ExecutorService cloudEventDispatcher;
     private final RetryStrategy retryStrategy;
     private final MongoDatabase database;
 
-    private volatile boolean shuttingDown = false;
+    private volatile boolean shutdown = false;
+    private volatile boolean running = true;
 
     /**
      * Create a subscription using the native MongoDB sync driver.
@@ -117,7 +124,8 @@ public class NativeMongoSubscriptionModel implements PositionAwareSubscriptionMo
         this.cloudEventDispatcher = subscriptionExecutor;
         this.timeRepresentation = timeRepresentation;
         this.eventCollection = eventCollection;
-        this.subscriptions = new ConcurrentHashMap<>();
+        this.runningSubscriptions = new ConcurrentHashMap<>();
+        this.pausedSubscriptions = new ConcurrentHashMap<>();
     }
 
     @Override
@@ -126,37 +134,52 @@ public class NativeMongoSubscriptionModel implements PositionAwareSubscriptionMo
         requireNonNull(action, "Action cannot be null");
         requireNonNull(startAtSupplier, "Start at cannot be null");
 
-        if (subscriptions.containsKey(subscriptionId)) {
+        if (runningSubscriptions.containsKey(subscriptionId) || pausedSubscriptions.containsKey(subscriptionId)) {
             throw new IllegalArgumentException("Subscription " + subscriptionId + " is already defined.");
         }
 
-        List<Bson> pipeline = createPipeline(timeRepresentation, filter);
         CountDownLatch subscriptionStartedLatch = new CountDownLatch(1);
 
-        Runnable runnable = () -> {
-            ChangeStreamIterable<Document> changeStreamDocuments = eventCollection.watch(pipeline, Document.class);
-            ChangeStreamIterable<Document> changeStreamDocumentsAtPosition = MongoCommons.applyStartPosition(changeStreamDocuments, ChangeStreamIterable::startAfter, ChangeStreamIterable::startAtOperationTime, startAtSupplier.get());
-            MongoChangeStreamCursor<ChangeStreamDocument<Document>> cursor = changeStreamDocumentsAtPosition.cursor();
+        Runnable internalSubscription = () -> newInternalSubscription(subscriptionId, filter, startAtSupplier, action, subscriptionStartedLatch);
 
-            subscriptions.put(subscriptionId, cursor);
-
-            subscriptionStartedLatch.countDown();
-            try {
-                cursor.forEachRemaining(changeStreamDocument -> MongoCloudEventsToJsonDeserializer.deserializeToCloudEvent(changeStreamDocument, timeRepresentation)
-                        .map(cloudEvent -> new PositionAwareCloudEvent(cloudEvent, new MongoResumeTokenSubscriptionPosition(changeStreamDocument.getResumeToken())))
-                        .ifPresent(executeWithRetry(action, __ -> true, convertToDelayStream(retryStrategy))));
-            } catch (MongoException e) {
-                log.debug("Caught {} (code={}, message={}), this might happen when cursor is shutdown.", e.getClass().getName(), e.getCode(), e.getMessage(), e);
-            } catch (IllegalStateException e) {
-                log.debug("Caught {} (message={}), this might happen when cursor is shutdown.", e.getClass().getName(), e.getMessage(), e);
-            }
-        };
-
-        if (shuttingDown || cloudEventDispatcher.isShutdown() || cloudEventDispatcher.isTerminated()) {
+        if (shutdown || cloudEventDispatcher.isShutdown() || cloudEventDispatcher.isTerminated()) {
             throw new IllegalStateException("Cannot start subscription because the executor is shutdown or terminated.");
         }
-        cloudEventDispatcher.execute(executeWithRetry(runnable, __ -> !shuttingDown, convertToDelayStream(retryStrategy)));
+        startSubscription(internalSubscription);
         return new NativeMongoSubscription(subscriptionId, subscriptionStartedLatch);
+    }
+
+    private void startSubscription(Runnable internalSubscription) {
+        cloudEventDispatcher.execute(executeWithRetry(internalSubscription, __ -> !shutdown, convertToDelayStream(retryStrategy)));
+    }
+
+    private void newInternalSubscription(String subscriptionId, SubscriptionFilter filter, Supplier<StartAt> startAtSupplier, Consumer<CloudEvent> action, CountDownLatch subscriptionStartedLatch) {
+        List<Bson> pipeline = createPipeline(timeRepresentation, filter);
+        ChangeStreamIterable<Document> changeStreamDocuments = eventCollection.watch(pipeline, Document.class);
+        ChangeStreamIterable<Document> changeStreamDocumentsAtPosition = MongoCommons.applyStartPosition(changeStreamDocuments, ChangeStreamIterable::startAfter, ChangeStreamIterable::startAtOperationTime, startAtSupplier.get());
+        MongoChangeStreamCursor<ChangeStreamDocument<Document>> cursor = changeStreamDocumentsAtPosition.cursor();
+
+        InternalSubscription internalSubscription = new InternalSubscription(cursor, startAtSupplier, action, filter, subscriptionStartedLatch);
+
+        if (running) {
+            runningSubscriptions.put(subscriptionId, internalSubscription);
+        } else {
+            pausedSubscriptions.put(subscriptionId, internalSubscription);
+        }
+
+        internalSubscription.started();
+
+        try {
+            cursor.forEachRemaining(changeStreamDocument -> MongoCloudEventsToJsonDeserializer.deserializeToCloudEvent(changeStreamDocument, timeRepresentation)
+                    .map(cloudEvent -> new PositionAwareCloudEvent(cloudEvent, new MongoResumeTokenSubscriptionPosition(changeStreamDocument.getResumeToken())))
+                    .ifPresent(executeWithRetry(action, __ -> true, convertToDelayStream(retryStrategy))));
+        } catch (MongoException e) {
+            log.debug("Caught {} (code={}, message={}), this might happen when cursor is shutdown.", e.getClass().getName(), e.getCode(), e.getMessage(), e);
+        } catch (IllegalStateException e) {
+            log.debug("Caught {} (message={}), this might happen when cursor is shutdown.", e.getClass().getName(), e.getMessage(), e);
+        } finally {
+            internalSubscription.stopped();
+        }
     }
 
     private static List<Bson> createPipeline(TimeRepresentation timeRepresentation, SubscriptionFilter filter) {
@@ -191,23 +214,21 @@ public class NativeMongoSubscriptionModel implements PositionAwareSubscriptionMo
     }
 
     @Override
-    public void cancelSubscription(String subscriptionId) {
-        MongoChangeStreamCursor<ChangeStreamDocument<Document>> cursor = subscriptions.remove(subscriptionId);
-        if (cursor != null) {
-            try {
-                cursor.close();
-            } catch (Exception e) {
-                log.error("Failed to cancel subscription, this might happen if Mongo connection has been shutdown", e);
-            }
+    public synchronized void cancelSubscription(String subscriptionId) {
+        InternalSubscription internalSubscription = runningSubscriptions.remove(subscriptionId);
+        if (internalSubscription != null) {
+            internalSubscription.close();
         }
+        pausedSubscriptions.remove(subscriptionId);
     }
 
     @PreDestroy
-    public void shutdown() {
-        synchronized (subscriptions) {
-            shuttingDown = true;
-            subscriptions.keySet().forEach(this::cancelSubscription);
-        }
+    public synchronized void shutdown() {
+        shutdown = true;
+        running = false;
+        runningSubscriptions.keySet().forEach(this::cancelSubscription);
+        runningSubscriptions.clear();
+        pausedSubscriptions.clear();
         if (!cloudEventDispatcher.isShutdown() && !cloudEventDispatcher.isTerminated()) {
             cloudEventDispatcher.shutdown();
             try {
@@ -229,4 +250,132 @@ public class NativeMongoSubscriptionModel implements PositionAwareSubscriptionMo
     }
 
 
+    @Override
+    public synchronized void stop() {
+        if (!shutdown) {
+            running = false;
+            runningSubscriptions.forEach((subscriptionId, __) -> pauseSubscription(subscriptionId));
+        }
+    }
+
+    @Override
+    public synchronized void start() {
+        if (!shutdown) {
+            running = true;
+            pausedSubscriptions.forEach((subscriptionId, internalSubscription) -> resumeSubscription(subscriptionId).waitUntilStarted());
+        }
+    }
+
+    @Override
+    public boolean isRunning() {
+        return running;
+    }
+
+    @Override
+    public boolean isRunning(String subscriptionId) {
+        return !shutdown && runningSubscriptions.containsKey(subscriptionId);
+    }
+
+    @Override
+    public boolean isPaused(String subscriptionId) {
+        return !shutdown && pausedSubscriptions.containsKey(subscriptionId);
+    }
+
+    @Override
+    public synchronized Subscription resumeSubscription(String subscriptionId) {
+        if (shutdown) {
+            throw new IllegalStateException(SubscriptionModel.class.getSimpleName() + " is shutdown");
+        } else if (isRunning(subscriptionId)) {
+            throw new IllegalArgumentException("Subscription " + subscriptionId + " is already running");
+        }
+
+        InternalSubscription internalSubscription = pausedSubscriptions.remove(subscriptionId);
+        if (internalSubscription == null) {
+            throw new IllegalArgumentException("Subscription " + subscriptionId + " isn't paused.");
+        }
+
+        running = true;
+
+        CountDownLatch startedLatch = new CountDownLatch(1);
+        Runnable newSubscription = () -> newInternalSubscription(subscriptionId, internalSubscription.filter,
+                internalSubscription.startAtSupplier, internalSubscription.action, startedLatch);
+        startSubscription(newSubscription);
+
+        return new NativeMongoSubscription(subscriptionId, startedLatch);
+    }
+
+    @Override
+    public synchronized void pauseSubscription(String subscriptionId) {
+        if (shutdown) {
+            throw new IllegalStateException(SubscriptionModel.class.getSimpleName() + " is shutdown");
+        } else if (isPaused(subscriptionId)) {
+            throw new IllegalArgumentException("Subscription " + subscriptionId + " is already paused");
+        } else if (!isRunning(subscriptionId)) {
+            throw new IllegalArgumentException("Subscription " + subscriptionId + " is not running");
+        }
+
+        InternalSubscription internalSubscription = runningSubscriptions.remove(subscriptionId);
+        if (internalSubscription != null) {
+            internalSubscription.close();
+            if (!internalSubscription.waitUntilStopped(Duration.ofSeconds(1))) {
+                log.debug("Failed to stop internal subscription after 1 second");
+            }
+            pausedSubscriptions.put(subscriptionId, internalSubscription);
+        }
+    }
+
+    private static class InternalSubscription {
+        private final SubscriptionFilter filter;
+        final CountDownLatch startedLatch;
+        final CountDownLatch stoppedLatch;
+        final MongoChangeStreamCursor<ChangeStreamDocument<Document>> cursor;
+        final Supplier<StartAt> startAtSupplier;
+        final Consumer<CloudEvent> action;
+
+        private InternalSubscription(MongoChangeStreamCursor<ChangeStreamDocument<Document>> cursor, Supplier<StartAt> startAtSupplier, Consumer<CloudEvent> action, SubscriptionFilter filter, CountDownLatch startedLatch) {
+            this.filter = filter;
+            this.startedLatch = startedLatch;
+            this.cursor = cursor;
+            this.startAtSupplier = startAtSupplier;
+            this.action = action;
+            this.stoppedLatch = new CountDownLatch(1);
+        }
+
+        @Override
+        public boolean equals(Object o) {
+            if (this == o) return true;
+            if (!(o instanceof InternalSubscription)) return false;
+            InternalSubscription that = (InternalSubscription) o;
+            return Objects.equals(filter, that.filter) && Objects.equals(startedLatch, that.startedLatch) && Objects.equals(stoppedLatch, that.stoppedLatch) && Objects.equals(cursor, that.cursor) && Objects.equals(startAtSupplier, that.startAtSupplier) && Objects.equals(action, that.action);
+        }
+
+        @Override
+        public int hashCode() {
+            return Objects.hash(filter, startedLatch, stoppedLatch, cursor, startAtSupplier, action);
+        }
+
+        void started() {
+            startedLatch.countDown();
+        }
+
+        void stopped() {
+            stoppedLatch.countDown();
+        }
+
+        public boolean waitUntilStopped(Duration duration) {
+            try {
+                return stoppedLatch.await(duration.toMillis(), MILLISECONDS);
+            } catch (InterruptedException e) {
+                throw new RuntimeException(e);
+            }
+        }
+
+        public void close() {
+            try {
+                cursor.close();
+            } catch (Exception e) {
+                log.error("Failed to cancel subscription, this might happen if Mongo connection has been shutdown", e);
+            }
+        }
+    }
 }
