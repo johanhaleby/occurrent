@@ -39,10 +39,7 @@ import org.occurrent.mongodb.timerepresentation.TimeRepresentation;
 import org.occurrent.retry.RetryStrategy;
 import org.occurrent.subscription.StringBasedSubscriptionPosition;
 import org.occurrent.subscription.SubscriptionPosition;
-import org.occurrent.subscription.api.blocking.DelegatingSubscriptionModel;
-import org.occurrent.subscription.api.blocking.SubscriptionModel;
-import org.occurrent.subscription.api.blocking.SubscriptionModelLifeCycle;
-import org.occurrent.subscription.api.blocking.SubscriptionPositionStorage;
+import org.occurrent.subscription.api.blocking.*;
 import org.occurrent.subscription.blocking.durable.DurableSubscriptionModel;
 import org.occurrent.subscription.blocking.durable.DurableSubscriptionModelConfig;
 import org.occurrent.subscription.mongodb.MongoFilterSpecification.MongoJsonFilterSpecification;
@@ -96,7 +93,7 @@ public class SpringMongoSubscriptionPositionStorageTest {
     FlushMongoDBExtension flushMongoDBExtension = new FlushMongoDBExtension(new ConnectionString(mongoDBContainer.getReplicaSetUrl()));
 
     private EventStore mongoEventStore;
-    private DurableSubscriptionModel subscription;
+    private DurableSubscriptionModel subscriptionModel;
     private ObjectMapper objectMapper;
     private MongoTemplate mongoTemplate;
     private MongoClient mongoClient;
@@ -113,13 +110,13 @@ public class SpringMongoSubscriptionPositionStorageTest {
         mongoEventStore = new SpringMongoEventStore(mongoTemplate, eventStoreConfig);
         springMongoSubscriptionModel = new SpringMongoSubscriptionModel(mongoTemplate, connectionString.getCollection(), timeRepresentation);
         SpringMongoSubscriptionPositionStorage storage = new SpringMongoSubscriptionPositionStorage(mongoTemplate, RESUME_TOKEN_COLLECTION);
-        this.subscription = new DurableSubscriptionModel(springMongoSubscriptionModel, storage);
+        this.subscriptionModel = new DurableSubscriptionModel(springMongoSubscriptionModel, storage);
         objectMapper = new ObjectMapper();
     }
 
     @AfterEach
     void shutdown() {
-        subscription.shutdown();
+        subscriptionModel.shutdown();
         mongoClient.close();
     }
 
@@ -128,7 +125,7 @@ public class SpringMongoSubscriptionPositionStorageTest {
         // Given
         LocalDateTime now = LocalDateTime.now();
         CopyOnWriteArrayList<CloudEvent> state = new CopyOnWriteArrayList<>();
-        subscription.subscribe(UUID.randomUUID().toString(), state::add).waitUntilStarted(Duration.of(10, ChronoUnit.SECONDS));
+        subscriptionModel.subscribe(UUID.randomUUID().toString(), state::add).waitUntilStarted(Duration.of(10, ChronoUnit.SECONDS));
         NameDefined nameDefined1 = new NameDefined(UUID.randomUUID().toString(), now, "name1");
         NameDefined nameDefined2 = new NameDefined(UUID.randomUUID().toString(), now.plusSeconds(2), "name2");
         NameWasChanged nameWasChanged1 = new NameWasChanged(UUID.randomUUID().toString(), now.plusSeconds(10), "name3");
@@ -201,8 +198,8 @@ public class SpringMongoSubscriptionPositionStorageTest {
                 return false;
             }
         };
-        subscription = new DurableSubscriptionModel(springMongoSubscriptionModel, storage);
-        subscription.subscribe(UUID.randomUUID().toString(), state::add).waitUntilStarted(Duration.of(10, ChronoUnit.SECONDS));
+        subscriptionModel = new DurableSubscriptionModel(springMongoSubscriptionModel, storage);
+        subscriptionModel.subscribe(UUID.randomUUID().toString(), state::add).waitUntilStarted(Duration.of(10, ChronoUnit.SECONDS));
 
         // When
         mongoEventStore.write("1", 0, serialize(nameDefined1));
@@ -249,8 +246,8 @@ public class SpringMongoSubscriptionPositionStorageTest {
                 return false;
             }
         };
-        subscription = new DurableSubscriptionModel(springMongoSubscriptionModel, storage, new DurableSubscriptionModelConfig(3));
-        subscription.subscribe(UUID.randomUUID().toString(), state::add).waitUntilStarted(Duration.of(10, ChronoUnit.SECONDS));
+        subscriptionModel = new DurableSubscriptionModel(springMongoSubscriptionModel, storage, new DurableSubscriptionModelConfig(3));
+        subscriptionModel.subscribe(UUID.randomUUID().toString(), state::add).waitUntilStarted(Duration.of(10, ChronoUnit.SECONDS));
 
         // When
         mongoEventStore.write("1", 0, serialize(nameDefined1));
@@ -270,19 +267,19 @@ public class SpringMongoSubscriptionPositionStorageTest {
         LocalDateTime now = LocalDateTime.now();
         CopyOnWriteArrayList<CloudEvent> state = new CopyOnWriteArrayList<>();
         String subscriberId = UUID.randomUUID().toString();
-        subscription.subscribe(subscriberId, state::add).waitUntilStarted(Duration.of(10, ChronoUnit.SECONDS));
+        subscriptionModel.subscribe(subscriberId, state::add).waitUntilStarted(Duration.of(10, ChronoUnit.SECONDS));
         NameDefined nameDefined1 = new NameDefined(UUID.randomUUID().toString(), now, "name1");
         NameDefined nameDefined2 = new NameDefined(UUID.randomUUID().toString(), now.plusSeconds(2), "name2");
         NameWasChanged nameWasChanged1 = new NameWasChanged(UUID.randomUUID().toString(), now.plusSeconds(10), "name3");
 
         // When
         mongoEventStore.write("1", 0, serialize(nameDefined1));
-        pauseSubscription(subscription, subscriberId);
+        cancelSubscription(subscriptionModel, subscriberId);
         // The subscription is async so we need to wait for it
         await().atMost(ONE_SECOND).until(not(state::isEmpty));
         mongoEventStore.write("2", 0, serialize(nameDefined2));
         mongoEventStore.write("1", 1, serialize(nameWasChanged1));
-        subscription.subscribe(subscriberId, state::add);
+        subscriptionModel.subscribe(subscriberId, state::add);
 
         // Then
         await().atMost(2, SECONDS).with().pollInterval(Duration.of(20, MILLIS)).untilAsserted(() -> assertThat(state).hasSize(3));
@@ -304,7 +301,7 @@ public class SpringMongoSubscriptionPositionStorageTest {
             return new DurableSubscriptionModel(springMongoSubscriptionModel, storage);
         };
 
-        subscription = createSubscriptionModelWithoutRetry.get();
+        subscriptionModel = createSubscriptionModelWithoutRetry.get();
         Consumer<SubscriptionModel> stream = subscriptionModel -> subscriptionModel.subscribe(subscriberId, cloudEvent -> {
             if (counter.incrementAndGet() == 1) {
                 // We simulate error on first event
@@ -314,7 +311,7 @@ public class SpringMongoSubscriptionPositionStorageTest {
             }
         }).waitUntilStarted();
 
-        stream.accept(subscription);
+        stream.accept(subscriptionModel);
         NameDefined nameDefined1 = new NameDefined(UUID.randomUUID().toString(), now, "name1");
         NameDefined nameDefined2 = new NameDefined(UUID.randomUUID().toString(), now.plusSeconds(2), "name2");
         NameWasChanged nameWasChanged1 = new NameWasChanged(UUID.randomUUID().toString(), now.plusSeconds(10), "name3");
@@ -324,9 +321,9 @@ public class SpringMongoSubscriptionPositionStorageTest {
         // The subscription is async so we need to wait for it
         await().atMost(ONE_SECOND).and().dontCatchUncaughtExceptions().untilAtomic(counter, equalTo(1));
         // Since an exception occurred we need to run the stream again, but first we need to close the old subscription
-        subscription.shutdown();
-        subscription = createSubscriptionModelWithoutRetry.get();
-        stream.accept(subscription);
+        subscriptionModel.shutdown();
+        subscriptionModel = createSubscriptionModelWithoutRetry.get();
+        stream.accept(subscriptionModel);
         mongoEventStore.write("2", 0, serialize(nameDefined2));
         mongoEventStore.write("1", 1, serialize(nameWasChanged1));
 
@@ -340,14 +337,14 @@ public class SpringMongoSubscriptionPositionStorageTest {
         LocalDateTime now = LocalDateTime.now();
         CopyOnWriteArrayList<CloudEvent> state = new CopyOnWriteArrayList<>();
         String subscriberId = UUID.randomUUID().toString();
-        subscription.subscribe(subscriberId, state::add).waitUntilStarted(Duration.of(10, ChronoUnit.SECONDS));
+        subscriptionModel.subscribe(subscriberId, state::add).waitUntilStarted(Duration.of(10, ChronoUnit.SECONDS));
         NameDefined nameDefined1 = new NameDefined(UUID.randomUUID().toString(), now, "name1");
 
         // When
         mongoEventStore.write("1", 0, serialize(nameDefined1));
         // The subscription is async so we need to wait for it
         await().atMost(ONE_SECOND).until(not(state::isEmpty));
-        subscription.cancelSubscription(subscriberId);
+        subscriptionModel.cancelSubscription(subscriberId);
 
         // Then
         assertThat(mongoTemplate.getCollection(RESUME_TOKEN_COLLECTION).countDocuments()).isZero();
@@ -359,7 +356,7 @@ public class SpringMongoSubscriptionPositionStorageTest {
         LocalDateTime now = LocalDateTime.now();
         CopyOnWriteArrayList<CloudEvent> state = new CopyOnWriteArrayList<>();
         String subscriberId = UUID.randomUUID().toString();
-        subscription.subscribe(subscriberId, filter().type(Filters::eq, NameDefined.class.getName()), state::add)
+        subscriptionModel.subscribe(subscriberId, filter().type(Filters::eq, NameDefined.class.getName()), state::add)
                 .waitUntilStarted(Duration.of(10, ChronoUnit.SECONDS));
         NameDefined nameDefined1 = new NameDefined(UUID.randomUUID().toString(), now, "name1");
         NameDefined nameDefined2 = new NameDefined(UUID.randomUUID().toString(), now.plusSeconds(2), "name2");
@@ -388,7 +385,7 @@ public class SpringMongoSubscriptionPositionStorageTest {
         NameWasChanged nameWasChanged1 = new NameWasChanged(UUID.randomUUID().toString(), now.plusSeconds(3), "name3");
         NameWasChanged nameWasChanged2 = new NameWasChanged(UUID.randomUUID().toString(), now.plusSeconds(4), "name4");
 
-        subscription.subscribe(subscriberId, filter().id(Filters::eq, nameDefined2.getEventId()).type(Filters::eq, NameDefined.class.getName()), state::add
+        subscriptionModel.subscribe(subscriberId, filter().id(Filters::eq, nameDefined2.getEventId()).type(Filters::eq, NameDefined.class.getName()), state::add
         )
                 .waitUntilStarted(Duration.of(10, ChronoUnit.SECONDS));
 
@@ -414,7 +411,7 @@ public class SpringMongoSubscriptionPositionStorageTest {
         NameWasChanged nameWasChanged1 = new NameWasChanged(UUID.randomUUID().toString(), now.plusSeconds(3), "name3");
         NameWasChanged nameWasChanged2 = new NameWasChanged(UUID.randomUUID().toString(), now.plusSeconds(4), "name4");
 
-        subscription.subscribe(subscriberId, filter(match(and(eq("fullDocument.id", nameDefined2.getEventId()), eq("fullDocument.type", NameDefined.class.getName())))), state::add
+        subscriptionModel.subscribe(subscriberId, filter(match(and(eq("fullDocument.id", nameDefined2.getEventId()), eq("fullDocument.type", NameDefined.class.getName())))), state::add
         )
                 .waitUntilStarted(Duration.of(10, ChronoUnit.SECONDS));
 
@@ -435,7 +432,7 @@ public class SpringMongoSubscriptionPositionStorageTest {
         LocalDateTime now = LocalDateTime.now();
         CopyOnWriteArrayList<CloudEvent> state = new CopyOnWriteArrayList<>();
         String subscriberId = UUID.randomUUID().toString();
-        subscription.subscribe(subscriberId, MongoJsonFilterSpecification.filter("{ $match : { \"" + FULL_DOCUMENT + ".type\" : \"" + NameDefined.class.getName() + "\" } }"), state::add)
+        subscriptionModel.subscribe(subscriberId, MongoJsonFilterSpecification.filter("{ $match : { \"" + FULL_DOCUMENT + ".type\" : \"" + NameDefined.class.getName() + "\" } }"), state::add)
                 .waitUntilStarted(Duration.of(10, ChronoUnit.SECONDS));
         NameDefined nameDefined1 = new NameDefined(UUID.randomUUID().toString(), now, "name1");
         NameDefined nameDefined2 = new NameDefined(UUID.randomUUID().toString(), now.plusSeconds(2), "name2");
@@ -465,12 +462,12 @@ public class SpringMongoSubscriptionPositionStorageTest {
                 .build());
     }
 
-    private static void pauseSubscription(DelegatingSubscriptionModel subscriptionModel, String subscriberId) {
+    private static void cancelSubscription(DelegatingSubscriptionModel subscriptionModel, String subscriberId) {
         SubscriptionModel sm = subscriptionModel.getDelegatedSubscriptionModelRecursively();
-        if (sm instanceof SubscriptionModelLifeCycle) {
-            ((SubscriptionModelLifeCycle) sm).pauseSubscription(subscriberId);
+        if (sm instanceof SubscriptionModelCancelSubscription) {
+            ((SubscriptionModelLifeCycle) sm).cancelSubscription(subscriberId);
         } else {
-            throw new IllegalArgumentException("Cannot pause " + subscriberId);
+            throw new IllegalArgumentException("Cannot cancel " + subscriberId);
         }
     }
 }

@@ -36,10 +36,7 @@ import org.occurrent.functional.CheckedFunction;
 import org.occurrent.functional.Not;
 import org.occurrent.mongodb.timerepresentation.TimeRepresentation;
 import org.occurrent.retry.RetryStrategy;
-import org.occurrent.subscription.api.blocking.DelegatingSubscriptionModel;
-import org.occurrent.subscription.api.blocking.SubscriptionModel;
-import org.occurrent.subscription.api.blocking.SubscriptionModelLifeCycle;
-import org.occurrent.subscription.api.blocking.SubscriptionPositionStorage;
+import org.occurrent.subscription.api.blocking.*;
 import org.occurrent.subscription.blocking.durable.DurableSubscriptionModel;
 import org.occurrent.subscription.mongodb.spring.blocking.SpringMongoSubscriptionModel;
 import org.occurrent.testsupport.mongodb.FlushMongoDBExtension;
@@ -150,7 +147,7 @@ class SpringRedisSubscriptionPositionStorageTest {
 
         // When
         mongoEventStore.write("1", 0, serialize(nameDefined1));
-        pauseSubscription(redisSubscription, subscriberId);
+        cancelSubscription(redisSubscription, subscriberId);
         // The subscription is async so we need to wait for it
         await().atMost(ONE_SECOND).until(Not.not(state::isEmpty));
         mongoEventStore.write("2", 0, serialize(nameDefined2));
@@ -242,12 +239,12 @@ class SpringRedisSubscriptionPositionStorageTest {
         return redisTemplate;
     }
 
-    private static void pauseSubscription(DelegatingSubscriptionModel subscriptionModel, String subscriberId) {
+    private static void cancelSubscription(DelegatingSubscriptionModel subscriptionModel, String subscriberId) {
         SubscriptionModel sm = subscriptionModel.getDelegatedSubscriptionModelRecursively();
-        if (sm instanceof SubscriptionModelLifeCycle) {
-            ((SubscriptionModelLifeCycle) sm).pauseSubscription(subscriberId);
+        if (sm instanceof SubscriptionModelCancelSubscription) {
+            ((SubscriptionModelLifeCycle) sm).cancelSubscription(subscriberId);
         } else {
-            throw new IllegalArgumentException("Cannot pause " + subscriberId);
+            throw new IllegalArgumentException("Cannot cancel " + subscriberId);
         }
     }
 }

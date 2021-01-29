@@ -172,7 +172,7 @@ public class NativeMongoSubscriptionPositionStorageTest {
         mongoEventStore.write("1", 0, serialize(nameDefined1));
         // The subscription is async so we need to wait for it
         await().atMost(ONE_SECOND).until(not(state::isEmpty));
-        pauseSubscription(subscriptionModel, subscriberId);
+        cancelSubscription(subscriptionModel, subscriberId);
         mongoEventStore.write("2", 0, serialize(nameDefined2));
         mongoEventStore.write("1", 1, serialize(nameWasChanged1));
         subscriptionModel.subscribe(subscriberId, state::add);
@@ -356,12 +356,12 @@ public class NativeMongoSubscriptionPositionStorageTest {
         return new DurableSubscriptionModel(blockingSubscriptionForMongoDB, storage);
     }
 
-    private static void pauseSubscription(DelegatingSubscriptionModel subscriptionModel, String subscriberId) {
+    private static void cancelSubscription(DelegatingSubscriptionModel subscriptionModel, String subscriberId) {
         SubscriptionModel sm = subscriptionModel.getDelegatedSubscriptionModelRecursively();
-        if (sm instanceof SubscriptionModelLifeCycle) {
-            ((SubscriptionModelLifeCycle) sm).pauseSubscription(subscriberId);
+        if (sm instanceof SubscriptionModelCancelSubscription) {
+            ((SubscriptionModelLifeCycle) sm).cancelSubscription(subscriberId);
         } else {
-            throw new IllegalArgumentException("Cannot pause " + subscriberId);
+            throw new IllegalArgumentException("Cannot cancel " + subscriberId);
         }
     }
 }
