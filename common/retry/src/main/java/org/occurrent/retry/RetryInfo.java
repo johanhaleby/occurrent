@@ -3,17 +3,19 @@ package org.occurrent.retry;
 import java.time.Duration;
 
 public interface RetryInfo {
-    int getRetryAttempt();
+    int getRetryCount();
 
-    int getMaxRetryAttempts();
+    int getNumberOfAttempts();
 
-    int getRetryAttemptsLeft();
+    int getMaxAttempts();
+
+    int getAttemptsLeft();
 
     boolean isInfiniteRetriesLeft();
 
     Duration getBackoff();
 
-    boolean isLastRetryAttempt();
+    boolean isLastAttempt();
 
-    boolean isFirstRetryAttempt();
+    boolean isFirstAttempt();
 }

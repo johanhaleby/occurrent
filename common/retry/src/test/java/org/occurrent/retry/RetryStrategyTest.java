@@ -280,6 +280,105 @@ public class RetryStrategyTest {
                     () -> assertThat(throwables).extracting(Throwable::getClass, Throwable::getMessage).containsOnly(tuple(IllegalArgumentException.class, "expected"))
             );
         }
+
+        @Test
+        void error_listener_retry_info_data_is_correct_when_max_attempts_and_exponential_backoff_is_specified() {
+            // Given
+            CopyOnWriteArrayList<RetryInfo> retryInfos = new CopyOnWriteArrayList<>();
+            Retry retryStrategy = RetryStrategy
+                    .exponentialBackoff(Duration.ofMillis(1), Duration.ofMillis(10), 2.0)
+                    .maxAttempts(40)
+                    .errorListener((info, __) -> retryInfos.add(info));
+
+            AtomicInteger counter = new AtomicInteger(0);
+
+            // When
+            retryStrategy.execute(() -> {
+                if (counter.incrementAndGet() <= 3) {
+                    throw new IllegalArgumentException("expected");
+                }
+            });
+
+            // Then
+            assertAll(
+                    () -> assertThat(counter).hasValue(4),
+                    () -> assertThat(retryInfos).hasSize(3),
+                    () -> assertThat(retryInfos).extracting(RetryInfo::getRetryCount).containsExactly(0, 1, 2),
+                    () -> assertThat(retryInfos).extracting(RetryInfo::getNumberOfAttempts).containsExactly(1, 2, 3),
+                    () -> assertThat(retryInfos).extracting(RetryInfo::getBackoff).containsExactly(Duration.ofMillis(1), Duration.ofMillis(2), Duration.ofMillis(4)),
+                    () -> assertThat(retryInfos).extracting(RetryInfo::getMaxAttempts).containsExactly(40, 40, 40),
+                    () -> assertThat(retryInfos).extracting(RetryInfo::getAttemptsLeft).containsExactly(39, 38, 37),
+                    () -> assertThat(retryInfos).extracting(RetryInfo::isFirstAttempt).containsExactly(true, false, false),
+                    () -> assertThat(retryInfos).extracting(RetryInfo::isLastAttempt).containsExactly(false, false, false),
+                    () -> assertThat(retryInfos).extracting(RetryInfo::isInfiniteRetriesLeft).containsExactly(false, false, false)
+            );
+        }
+
+        @Test
+        void error_listener_retry_info_data_is_correct_when_infinite_max_attempts_and_fixed_backoff_is_specified() {
+            // Given
+            CopyOnWriteArrayList<RetryInfo> retryInfos = new CopyOnWriteArrayList<>();
+            Retry retryStrategy = RetryStrategy
+                    .fixed(10)
+                    .infiniteAttempts()
+                    .errorListener((info, __) -> retryInfos.add(info));
+
+            AtomicInteger counter = new AtomicInteger(0);
+
+            // When
+            retryStrategy.execute(() -> {
+                if (counter.incrementAndGet() <= 3) {
+                    throw new IllegalArgumentException("expected");
+                }
+            });
+
+            // Then
+            assertAll(
+                    () -> assertThat(counter).hasValue(4),
+                    () -> assertThat(retryInfos).hasSize(3),
+                    () -> assertThat(retryInfos).extracting(RetryInfo::getRetryCount).containsExactly(0, 1, 2),
+                    () -> assertThat(retryInfos).extracting(RetryInfo::getNumberOfAttempts).containsExactly(1, 2, 3),
+                    () -> assertThat(retryInfos).extracting(RetryInfo::getBackoff).containsExactly(Duration.ofMillis(10), Duration.ofMillis(10), Duration.ofMillis(10)),
+                    () -> assertThat(retryInfos).extracting(RetryInfo::getMaxAttempts).containsExactly(Integer.MAX_VALUE, Integer.MAX_VALUE, Integer.MAX_VALUE),
+                    () -> assertThat(retryInfos).extracting(RetryInfo::getAttemptsLeft).containsExactly(Integer.MAX_VALUE, Integer.MAX_VALUE, Integer.MAX_VALUE),
+                    () -> assertThat(retryInfos).extracting(RetryInfo::isFirstAttempt).containsExactly(true, false, false),
+                    () -> assertThat(retryInfos).extracting(RetryInfo::isLastAttempt).containsExactly(false, false, false),
+                    () -> assertThat(retryInfos).extracting(RetryInfo::isInfiniteRetriesLeft).containsExactly(true, true, true)
+            );
+        }
+
+        @Timeout(2000)
+        @Test
+        void error_listener_retry_info_data_is_correct_when_finite_max_attempts_are_exceeded() {
+            // Given
+            CopyOnWriteArrayList<RetryInfo> retryInfos = new CopyOnWriteArrayList<>();
+            Retry retryStrategy = RetryStrategy.retry()
+                    .maxAttempts(4)
+                    .errorListener((info, __) -> retryInfos.add(info));
+
+            AtomicInteger counter = new AtomicInteger(0);
+
+            // When
+            Throwable throwable = catchThrowable(() -> retryStrategy.execute(() -> {
+                counter.incrementAndGet();
+                throw new IllegalArgumentException("expected");
+            }));
+
+            // Then
+            assertAll(
+                    () -> assertThat(throwable).isExactlyInstanceOf(IllegalArgumentException.class).hasMessage("expected"),
+                    () -> assertThat(counter).hasValue(4),
+                    () -> assertThat(retryInfos).hasSize(3),
+                    () -> assertThat(retryInfos).extracting(RetryInfo::getRetryCount).containsExactly(0, 1, 2),
+                    () -> assertThat(retryInfos).extracting(RetryInfo::getNumberOfAttempts).containsExactly(1, 2, 3),
+                    () -> assertThat(retryInfos).extracting(RetryInfo::getBackoff).containsExactly(Duration.ofMillis(0), Duration.ofMillis(0), Duration.ofMillis(0)),
+                    () -> assertThat(retryInfos).extracting(RetryInfo::getMaxAttempts).containsExactly(4, 4, 4),
+                    () -> assertThat(retryInfos).extracting(RetryInfo::getAttemptsLeft).containsExactly(3, 2, 1),
+                    () -> assertThat(retryInfos).extracting(RetryInfo::isFirstAttempt).containsExactly(true, false, false),
+                    () -> assertThat(retryInfos).extracting(RetryInfo::isLastAttempt).containsExactly(false, false, true),
+                    () -> assertThat(retryInfos).extracting(RetryInfo::isInfiniteRetriesLeft).containsExactly(false, false, false)
+            );
+        }
     }
 
     @Nested
