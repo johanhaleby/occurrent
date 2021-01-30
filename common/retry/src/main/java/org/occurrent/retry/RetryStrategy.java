@@ -24,6 +24,7 @@ import java.util.function.Consumer;
 import java.util.function.Predicate;
 import java.util.function.Supplier;
 
+import static org.occurrent.retry.MaxAttempts.Infinite.infinite;
 import static org.occurrent.retry.internal.RetryExecution.executeWithRetry;
 
 /**
@@ -110,15 +111,15 @@ public abstract class RetryStrategy {
         }
 
         private Retry() {
-            this(Backoff.none(), new MaxAttempts.Infinite(), ALWAYS_RETRY, NOOP_ERROR_LISTENER);
+            this(Backoff.none(), infinite(), ALWAYS_RETRY, NOOP_ERROR_LISTENER);
         }
 
         public Retry backoff(Backoff backoff) {
             return new Retry(backoff, maxAttempts, retryPredicate, errorListener);
         }
 
-        public Retry maxAttempts(MaxAttempts maxAttempts) {
-            return new Retry(backoff, maxAttempts, retryPredicate, errorListener);
+        public Retry infiniteAttempts() {
+            return new Retry(backoff, infinite(), retryPredicate, errorListener);
         }
 
         public Retry maxAttempts(int maxAttempts) {

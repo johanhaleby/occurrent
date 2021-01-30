@@ -65,6 +65,9 @@ public class RetryExecution {
     }
 
     private static Runnable executeWithRetry(Runnable runnable, Retry retry, Iterator<Long> delay) {
+        if (runnable instanceof DontRetry) {
+            return runnable;
+        }
         Consumer<Void> runnableConsumer = __ -> runnable.run();
         return () -> executeWithRetry(runnableConsumer, retry, delay, 1).accept(null);
     }
@@ -120,7 +123,7 @@ public class RetryExecution {
         if (maxAttempts instanceof MaxAttempts.Infinite) {
             return false;
         }
-        return retryAttempt > ((MaxAttempts.Limit) maxAttempts).limit;
+        return retryAttempt >= ((MaxAttempts.Limit) maxAttempts).limit;
     }
 
     private static Iterator<Long> convertToDelayStream(Backoff backoff) {
