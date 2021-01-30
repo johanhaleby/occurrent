@@ -1,4 +1,19 @@
 package org.occurrent.retry;
 
-public class RetryInfo {
+import java.time.Duration;
+
+public interface RetryInfo {
+    int getRetryAttempt();
+
+    int getMaxRetryAttempts();
+
+    int getRetryAttemptsLeft();
+
+    boolean isInfiniteRetriesLeft();
+
+    Duration getBackoff();
+
+    boolean isLastRetryAttempt();
+
+    boolean isFirstRetryAttempt();
 }
