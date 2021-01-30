@@ -30,7 +30,6 @@ import java.util.function.Consumer;
 
 import static java.util.concurrent.TimeUnit.MILLISECONDS;
 import static org.occurrent.inmemory.filtermatching.FilterMatcher.matchesFilter;
-import static org.occurrent.retry.internal.RetryExecution.convertToDelayStream;
 import static org.occurrent.retry.internal.RetryExecution.executeWithRetry;
 
 /**
@@ -126,7 +125,7 @@ public class InMemorySubscription implements Subscription, Runnable {
             } catch (InterruptedException e) {
                 continue;
             }
-            executeWithRetry(consumer, __ -> !shutdown, convertToDelayStream(retryStrategy)).accept(cloudEvent);
+            executeWithRetry(consumer, __ -> !shutdown, retryStrategy).accept(cloudEvent);
         }
     }
 }

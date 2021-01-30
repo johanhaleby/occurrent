@@ -33,7 +33,7 @@ import java.time.Duration;
 import java.util.function.Supplier;
 
 import static java.util.Objects.requireNonNull;
-import static org.occurrent.retry.internal.RetryExecution.convertToDelayStream;
+import static org.occurrent.retry.Backoff.exponential;
 import static org.occurrent.retry.internal.RetryExecution.executeWithRetry;
 import static org.occurrent.subscription.mongodb.internal.MongoCloudEventsToJsonDeserializer.ID;
 import static org.springframework.data.mongodb.core.query.Criteria.where;
@@ -59,7 +59,7 @@ public class SpringMongoSubscriptionPositionStorage implements SubscriptionPosit
      * @param subscriptionPositionCollection The collection into which subscription positions will be stored
      */
     public SpringMongoSubscriptionPositionStorage(MongoOperations mongoOperations, String subscriptionPositionCollection) {
-        this(mongoOperations, subscriptionPositionCollection, RetryStrategy.backoff(Duration.ofMillis(100), Duration.ofSeconds(2), 2.0f));
+        this(mongoOperations, subscriptionPositionCollection, RetryStrategy.exponentialBackoff(Duration.ofMillis(100), Duration.ofSeconds(2), 2.0f));
     }
 
     /**
@@ -88,7 +88,7 @@ public class SpringMongoSubscriptionPositionStorage implements SubscriptionPosit
             return MongoCommons.calculateSubscriptionPositionFromMongoStreamPositionDocument(document);
         };
 
-        return executeWithRetry(read, __ -> !shutdown, convertToDelayStream(retryStrategy)).get();
+        return executeWithRetry(read, __ -> !shutdown, retryStrategy).get();
     }
 
     @Override
@@ -106,19 +106,19 @@ public class SpringMongoSubscriptionPositionStorage implements SubscriptionPosit
             return subscriptionPosition;
         };
 
-        return executeWithRetry(save, __ -> !shutdown, convertToDelayStream(retryStrategy)).get();
+        return executeWithRetry(save, __ -> !shutdown, retryStrategy).get();
     }
 
     @Override
     public void delete(String subscriptionId) {
         Runnable delete = () -> mongoOperations.remove(query(where(ID).is(subscriptionId)), subscriptionPositionCollection);
-        executeWithRetry(delete, __ -> !shutdown, convertToDelayStream(retryStrategy)).run();
+        executeWithRetry(delete, __ -> !shutdown, retryStrategy).run();
     }
 
     @Override
     public boolean exists(String subscriptionId) {
         Supplier<Boolean> exists = () -> mongoOperations.exists(query(where(ID).is(subscriptionId)), subscriptionPositionCollection);
-        return executeWithRetry(exists, __ -> !shutdown, convertToDelayStream(retryStrategy)).get();
+        return executeWithRetry(exists, __ -> !shutdown, retryStrategy).get();
     }
 
     private void persistResumeTokenStreamPosition(String subscriptionId, BsonValue resumeToken) {

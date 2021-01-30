@@ -106,7 +106,7 @@ public class NativeMongoSubscriptionModelTest {
         MongoCollection<Document> eventCollection = database.getCollection(requireNonNull(connectionString.getCollection()));
         mongoEventStore = new MongoEventStore(mongoClient, connectionString.getDatabase(), connectionString.getCollection(), config);
         subscriptionExecutor = Executors.newCachedThreadPool();
-        subscriptionModel = new NativeMongoSubscriptionModel(database, eventCollection, timeRepresentation, subscriptionExecutor, RetryStrategy.backoff(Duration.of(100, MILLIS), Duration.of(500, MILLIS), 2));
+        subscriptionModel = new NativeMongoSubscriptionModel(database, eventCollection, timeRepresentation, subscriptionExecutor, RetryStrategy.exponentialBackoff(Duration.of(100, MILLIS), Duration.of(500, MILLIS), 2));
         objectMapper = new ObjectMapper();
     }
 

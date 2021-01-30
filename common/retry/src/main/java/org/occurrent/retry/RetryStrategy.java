@@ -18,75 +18,146 @@ package org.occurrent.retry;
 
 import java.time.Duration;
 import java.util.Objects;
+import java.util.StringJoiner;
+import java.util.function.BiConsumer;
+import java.util.function.Consumer;
+import java.util.function.Predicate;
+import java.util.function.Supplier;
+
+import static org.occurrent.retry.internal.RetryExecution.executeWithRetry;
 
 /**
  * Retry strategy to use if the action throws an exception.
+ * <p>
+ * A {@code RetryStrategy} is thread-safe and immutable, so you can change the settings at any time without impacting the original instance.
+ * For example this is perfectly valid:
+ * <p>
+ * <pre>
+ * RetryStrategy retryStrategy = RetryStrategy.fixed(200).maxAttempts(5);
+ * // 200 ms fixed delay
+ * retryStrategy.execute(() -> Something.something());
+ * // 600 ms fixed delay
+ * retryStrategy.backoff(fixed(600)).execute(() -> SomethingElse.somethingElse());
+ * // 200 ms fixed delay
+ * retryStrategy.execute(() -> Thing.thing());
+ * </pre>
+ * </p>
  */
 public abstract class RetryStrategy {
 
     private RetryStrategy() {
     }
 
-    /**
-     * @return Don't retry and re-throw an exception thrown when action is invoked.
-     */
-    public static RetryStrategy none() {
-        return new None();
+    private static final Predicate<Throwable> ALWAYS_RETRY = __ -> true;
+
+    public static Retry retry() {
+        return new Retry();
     }
 
-    /**
-     * @return Retry after a fixed number of millis if an action throws an exception.
-     */
-    public static RetryStrategy fixed(long millis) {
-        return new Fixed(millis);
+    public static DontRetry none() {
+        return DontRetry.INSTANCE;
     }
 
-    /**
-     * @return Retry after a fixed duration if an action throws an exception.
-     */
-    public static RetryStrategy fixed(Duration duration) {
-        Objects.requireNonNull(duration, "Duration cannot be null");
-        return new Fixed(duration.toMillis());
+    public static Retry exponentialBackoff(Duration initial, Duration max, double multiplier) {
+        return RetryStrategy.retry().backoff(Backoff.exponential(initial, max, multiplier));
     }
 
-    /**
-     * @return Retry after with exponential backoff if an action throws an exception.
-     */
-    public static RetryStrategy backoff(Duration initial, Duration max, double multiplier) {
-        return new Backoff(initial, max, multiplier);
+    public static Retry fixed(Duration duration) {
+        return RetryStrategy.retry().backoff(Backoff.fixed(duration));
     }
 
+    public static Retry fixed(long millis) {
+        return RetryStrategy.retry().backoff(Backoff.fixed(millis));
+    }
 
-    public final static class None extends RetryStrategy {
-        private None() {
+    public <T> T execute(Supplier<T> supplier) {
+        return executeWithRetry(supplier, ALWAYS_RETRY, this).get();
+    }
+
+    public void execute(Runnable runnable) {
+        executeWithRetry(runnable, ALWAYS_RETRY, this).run();
+    }
+
+    public static class DontRetry extends RetryStrategy {
+        private static final DontRetry INSTANCE = new DontRetry();
+
+        private DontRetry() {
+        }
+
+        @Override
+        public String toString() {
+            return DontRetry.class.getSimpleName();
         }
     }
 
-    public final static class Fixed extends RetryStrategy {
-        public final long millis;
+    public static class Retry extends RetryStrategy {
+        private static final BiConsumer<RetryInfo, Throwable> NOOP_ERROR_LISTENER = (__, ___) -> {
+        };
 
-        private Fixed(long millis) {
-            if (millis <= 0) {
-                throw new IllegalArgumentException("Millis cannot be less than zero");
-            }
-            this.millis = millis;
+        public final Backoff backoff;
+        public final MaxAttempts maxAttempts;
+        public final Predicate<Throwable> retryPredicate;
+        public final BiConsumer<RetryInfo, Throwable> errorListener;
+
+        private Retry(Backoff backoff, MaxAttempts maxAttempts, Predicate<Throwable> retryPredicate, BiConsumer<RetryInfo, Throwable> errorListener) {
+            Objects.requireNonNull(backoff, Backoff.class.getSimpleName() + " cannot be null");
+            Objects.requireNonNull(maxAttempts, MaxAttempts.class.getSimpleName() + " cannot be null");
+            Objects.requireNonNull(retryPredicate, "Retry predicate cannot be null");
+            this.backoff = backoff;
+            this.maxAttempts = maxAttempts;
+            this.retryPredicate = retryPredicate;
+            this.errorListener = errorListener == null ? NOOP_ERROR_LISTENER : errorListener;
         }
-    }
 
-    public final static class Backoff extends RetryStrategy {
-        public final Duration initial;
-        public final Duration max;
-        public final double multiplier;
+        private Retry() {
+            this(Backoff.none(), new MaxAttempts.Infinite(), ALWAYS_RETRY, NOOP_ERROR_LISTENER);
+        }
 
-        private Backoff(Duration initial, Duration max, double multiplier) {
-            Objects.requireNonNull(initial, "Initial duration cannot be null");
-            Objects.requireNonNull(max, "Max duration cannot be null");
-            if (multiplier <= 0) {
-                throw new IllegalArgumentException("multiplier cannot be less than zero");
-            }
-            this.initial = initial;
-            this.max = max;
-            this.multiplier = multiplier;
+        public Retry backoff(Backoff backoff) {
+            return new Retry(backoff, maxAttempts, retryPredicate, errorListener);
+        }
+
+        public Retry maxAttempts(MaxAttempts maxAttempts) {
+            return new Retry(backoff, maxAttempts, retryPredicate, errorListener);
+        }
+
+        public Retry maxAttempts(int maxAttempts) {
+            return new Retry(backoff, new MaxAttempts.Limit(maxAttempts), retryPredicate, errorListener);
+        }
+
+        public Retry retryIf(Predicate<Throwable> retryPredicate) {
+            return new Retry(backoff, maxAttempts, retryPredicate, errorListener);
+        }
+
+        public Retry errorListener(BiConsumer<RetryInfo, Throwable> errorListener) {
+            return new Retry(backoff, maxAttempts, retryPredicate, errorListener);
+        }
+
+        public Retry errorListener(Consumer<Throwable> errorListener) {
+            return errorListener((__, throwable) -> errorListener.accept(throwable));
+        }
+
+        @Override
+        public boolean equals(Object o) {
+            if (this == o) return true;
+            if (!(o instanceof Retry)) return false;
+            Retry retry = (Retry) o;
+            return Objects.equals(backoff, retry.backoff) && Objects.equals(maxAttempts, retry.maxAttempts) && Objects.equals(retryPredicate, retry.retryPredicate) && Objects.equals(errorListener, retry.errorListener);
+        }
+
+        @Override
+        public int hashCode() {
+            return Objects.hash(backoff, maxAttempts, retryPredicate, errorListener);
+        }
+
+        @Override
+        public String toString() {
+            return new StringJoiner(", ", Retry.class.getSimpleName() + "[", "]")
+                    .add("backoff=" + backoff)
+                    .add("maxAttempts=" + maxAttempts)
+                    .add("retryPredicate=" + retryPredicate)
+                    .add("errorListener=" + errorListener)
+                    .toString();
         }
     }
 }

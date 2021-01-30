@@ -55,7 +55,6 @@ import java.util.function.Consumer;
 import java.util.function.Supplier;
 
 import static java.util.Objects.requireNonNull;
-import static org.occurrent.retry.internal.RetryExecution.convertToDelayStream;
 import static org.occurrent.retry.internal.RetryExecution.executeWithRetry;
 
 /**
@@ -67,6 +66,7 @@ import static org.occurrent.retry.internal.RetryExecution.executeWithRetry;
  * This reason for this is that Spring provides retry capabilities (such as spring-retry) that you can easily hook into your <code>action</code>.
  */
 public class SpringMongoSubscriptionModel implements PositionAwareSubscriptionModel, SubscriptionModelLifeCycle, SmartLifecycle {
+
 
     private final String eventCollection;
     private final MessageListenerContainer messageListenerContainer;
@@ -87,7 +87,7 @@ public class SpringMongoSubscriptionModel implements PositionAwareSubscriptionMo
      * @param timeRepresentation How time is represented in the database, must be the same as what's specified for the EventStore that stores the events.
      */
     public SpringMongoSubscriptionModel(MongoTemplate mongoTemplate, String eventCollection, TimeRepresentation timeRepresentation) {
-        this(mongoTemplate, eventCollection, timeRepresentation, RetryStrategy.backoff(Duration.ofMillis(100), Duration.ofSeconds(2), 2.0f));
+        this(mongoTemplate, eventCollection, timeRepresentation, RetryStrategy.exponentialBackoff(Duration.ofMillis(100), Duration.ofSeconds(2), 2.0f));
     }
 
     /**
@@ -96,7 +96,7 @@ public class SpringMongoSubscriptionModel implements PositionAwareSubscriptionMo
      * @param mongoTemplate      The mongo template to use
      * @param eventCollection    The collection that contains the events
      * @param timeRepresentation How time is represented in the database, must be the same as what's specified for the EventStore that stores the events.
-     * @param retryStrategy      A custom retry strategy to use if the {@code action} supplied to the subscription throws an exception.
+     * @param retryStrategy      A custom retry strategy to use if the {@code action} supplied to the subscription throws an exception
      */
     public SpringMongoSubscriptionModel(MongoTemplate mongoTemplate, String eventCollection, TimeRepresentation timeRepresentation, RetryStrategy retryStrategy) {
         requireNonNull(mongoTemplate, MongoOperations.class.getSimpleName() + " cannot be null");
@@ -142,7 +142,7 @@ public class SpringMongoSubscriptionModel implements PositionAwareSubscriptionMo
             BsonDocument resumeToken = requireNonNull(raw).getResumeToken();
             MongoCloudEventsToJsonDeserializer.deserializeToCloudEvent(raw, timeRepresentation)
                     .map(cloudEvent -> new PositionAwareCloudEvent(cloudEvent, new MongoResumeTokenSubscriptionPosition(resumeToken)))
-                    .ifPresent(executeWithRetry(action, __ -> !shutdown, convertToDelayStream(retryStrategy)));
+                    .ifPresent(executeWithRetry(action, __ -> !shutdown, retryStrategy));
         };
 
         Supplier<ChangeStreamRequest<Document>> requestSupplier = () -> new ChangeStreamRequest<>(listener, requestOptionsSupplier.get());

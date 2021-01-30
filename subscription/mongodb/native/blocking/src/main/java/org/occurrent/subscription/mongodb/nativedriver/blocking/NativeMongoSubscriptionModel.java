@@ -56,6 +56,7 @@ import java.util.concurrent.ConcurrentMap;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.ExecutorService;
 import java.util.function.Consumer;
+import java.util.function.Predicate;
 import java.util.function.Supplier;
 import java.util.stream.Collectors;
 import java.util.stream.Stream;
@@ -64,7 +65,8 @@ import static com.mongodb.client.model.Aggregates.match;
 import static java.util.Objects.requireNonNull;
 import static java.util.concurrent.TimeUnit.MILLISECONDS;
 import static java.util.concurrent.TimeUnit.SECONDS;
-import static org.occurrent.retry.internal.RetryExecution.convertToDelayStream;
+import static org.occurrent.retry.Backoff.exponential;
+import static org.occurrent.retry.RetryStrategy.retry;
 import static org.occurrent.retry.internal.RetryExecution.executeWithRetry;
 
 /**
@@ -88,6 +90,22 @@ public class NativeMongoSubscriptionModel implements PositionAwareSubscriptionMo
 
     private volatile boolean shutdown = false;
     private volatile boolean running = true;
+
+    private final Predicate<Throwable> NOT_SHUTDOWN = __ -> !shutdown;
+
+    /**
+     * Create a subscription using the native MongoDB sync driver. It will by default use a {@link RetryStrategy} for retries,
+     * with exponential backoff starting with 100 ms and progressively go up to max 2 seconds wait time between each retry when reading/saving/deleting the subscription position.
+     *
+     * @param database             The MongoDB database to use
+     * @param eventCollectionName  The name of the collection that contains the events
+     * @param timeRepresentation   How time is represented in the database, must be the same as what's specified for the EventStore that stores the events.
+     * @param subscriptionExecutor The executor that will be used for the subscription. Typically a dedicated thread will be required per subscription.
+     */
+    public NativeMongoSubscriptionModel(MongoDatabase database, String eventCollectionName, TimeRepresentation timeRepresentation, ExecutorService subscriptionExecutor) {
+        this(database, database.getCollection(requireNonNull(eventCollectionName, "Event collection cannot be null")), timeRepresentation, subscriptionExecutor,
+                RetryStrategy.exponentialBackoff(Duration.ofMillis(100), Duration.ofSeconds(2), 2.0f));
+    }
 
     /**
      * Create a subscription using the native MongoDB sync driver.
@@ -150,7 +168,7 @@ public class NativeMongoSubscriptionModel implements PositionAwareSubscriptionMo
     }
 
     private void startSubscription(Runnable internalSubscription) {
-        cloudEventDispatcher.execute(executeWithRetry(internalSubscription, __ -> !shutdown, convertToDelayStream(retryStrategy)));
+        cloudEventDispatcher.execute(executeWithRetry(internalSubscription, NOT_SHUTDOWN, retryStrategy));
     }
 
     private void newInternalSubscription(String subscriptionId, SubscriptionFilter filter, Supplier<StartAt> startAtSupplier, Consumer<CloudEvent> action, CountDownLatch subscriptionStartedLatch) {
@@ -172,7 +190,7 @@ public class NativeMongoSubscriptionModel implements PositionAwareSubscriptionMo
         try {
             cursor.forEachRemaining(changeStreamDocument -> MongoCloudEventsToJsonDeserializer.deserializeToCloudEvent(changeStreamDocument, timeRepresentation)
                     .map(cloudEvent -> new PositionAwareCloudEvent(cloudEvent, new MongoResumeTokenSubscriptionPosition(changeStreamDocument.getResumeToken())))
-                    .ifPresent(executeWithRetry(action, __ -> true, convertToDelayStream(retryStrategy))));
+                    .ifPresent(executeWithRetry(action, NOT_SHUTDOWN, retryStrategy)));
         } catch (MongoException e) {
             log.debug("Caught {} (code={}, message={}), this might happen when cursor is shutdown.", e.getClass().getName(), e.getCode(), e.getMessage(), e);
         } catch (IllegalStateException e) {

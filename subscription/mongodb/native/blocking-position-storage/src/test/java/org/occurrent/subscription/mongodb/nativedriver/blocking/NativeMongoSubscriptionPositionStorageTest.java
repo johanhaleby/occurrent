@@ -72,6 +72,8 @@ import static org.hamcrest.Matchers.is;
 import static org.occurrent.functional.CheckedFunction.unchecked;
 import static org.occurrent.functional.Not.not;
 import static org.occurrent.mongodb.timerepresentation.TimeRepresentation.RFC_3339_STRING;
+import static org.occurrent.retry.Backoff.fixed;
+import static org.occurrent.retry.RetryStrategy.retry;
 import static org.occurrent.subscription.mongodb.MongoFilterSpecification.FULL_DOCUMENT;
 import static org.occurrent.subscription.mongodb.MongoFilterSpecification.MongoBsonFilterSpecification.filter;
 import static org.occurrent.time.TimeConversion.toLocalDateTime;
@@ -102,7 +104,7 @@ public class NativeMongoSubscriptionPositionStorageTest {
         database = mongoClient.getDatabase(databaseName);
         TimeRepresentation timeRepresentation = RFC_3339_STRING;
         mongoEventStore = new MongoEventStore(mongoClient, databaseName, eventCollectionName, new EventStoreConfig(timeRepresentation));
-        subscriptionModel = newDurableSubscription(eventCollectionName, timeRepresentation, RetryStrategy.fixed(200));
+        subscriptionModel = newDurableSubscription(eventCollectionName, timeRepresentation, retry().backoff(fixed(200)));
         objectMapper = new ObjectMapper();
     }
 

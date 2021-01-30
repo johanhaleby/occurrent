@@ -27,7 +27,6 @@ import java.time.Duration;
 import java.util.function.Supplier;
 
 import static java.util.Objects.requireNonNull;
-import static org.occurrent.retry.internal.RetryExecution.convertToDelayStream;
 import static org.occurrent.retry.internal.RetryExecution.executeWithRetry;
 
 /**
@@ -48,7 +47,7 @@ public class SpringRedisSubscriptionPositionStorage implements SubscriptionPosit
      * @param redis The {@link RedisOperations} that'll be used to store the subscription position
      */
     public SpringRedisSubscriptionPositionStorage(RedisOperations<String, String> redis) {
-        this(redis, RetryStrategy.backoff(Duration.ofMillis(100), Duration.ofSeconds(2), 2.0f));
+        this(redis, RetryStrategy.exponentialBackoff(Duration.ofMillis(100), Duration.ofSeconds(2), 2.0f));
     }
 
     /**
@@ -74,7 +73,7 @@ public class SpringRedisSubscriptionPositionStorage implements SubscriptionPosit
             return new StringBasedSubscriptionPosition(subscriptionPosition);
         };
 
-        return executeWithRetry(read, __ -> !shutdown, convertToDelayStream(retryStrategy)).get();
+        return executeWithRetry(read, __ -> !shutdown, retryStrategy).get();
     }
 
     @Override
@@ -88,12 +87,12 @@ public class SpringRedisSubscriptionPositionStorage implements SubscriptionPosit
             return subscriptionPosition;
         };
 
-        return executeWithRetry(save, __ -> !shutdown, convertToDelayStream(retryStrategy)).get();
+        return executeWithRetry(save, __ -> !shutdown, retryStrategy).get();
     }
 
     @Override
     public void delete(String subscriptionId) {
-        executeWithRetry(() -> redis.delete(subscriptionId), __ -> !shutdown, convertToDelayStream(retryStrategy)).get();
+        executeWithRetry(() -> redis.delete(subscriptionId), __ -> !shutdown, retryStrategy).get();
     }
 
     @Override
@@ -102,7 +101,7 @@ public class SpringRedisSubscriptionPositionStorage implements SubscriptionPosit
             Boolean result = redis.hasKey(subscriptionId);
             return result != null && result;
         };
-        return executeWithRetry(exists, __ -> !shutdown, convertToDelayStream(retryStrategy)).get();
+        return executeWithRetry(exists, __ -> !shutdown, retryStrategy).get();
     }
 
     @PreDestroy

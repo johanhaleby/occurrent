@@ -34,7 +34,6 @@ import java.util.function.Supplier;
 
 import static com.mongodb.client.model.Filters.eq;
 import static java.util.Objects.requireNonNull;
-import static org.occurrent.retry.internal.RetryExecution.convertToDelayStream;
 import static org.occurrent.retry.internal.RetryExecution.executeWithRetry;
 import static org.occurrent.subscription.mongodb.internal.MongoCloudEventsToJsonDeserializer.ID;
 import static org.occurrent.subscription.mongodb.internal.MongoCommons.*;
@@ -104,7 +103,7 @@ public class NativeMongoSubscriptionPositionStorage implements SubscriptionPosit
 
             return calculateSubscriptionPositionFromMongoStreamPositionDocument(document);
         };
-        return executeWithRetry(read, __ -> !shutdown, convertToDelayStream(retryStrategy)).get();
+        return executeWithRetry(read, __ -> !shutdown, retryStrategy).get();
     }
 
     @Override
@@ -122,19 +121,19 @@ public class NativeMongoSubscriptionPositionStorage implements SubscriptionPosit
             return subscriptionPosition;
         };
 
-        return executeWithRetry(save, __ -> !shutdown, convertToDelayStream(retryStrategy)).get();
+        return executeWithRetry(save, __ -> !shutdown, retryStrategy).get();
     }
 
     @Override
     public void delete(String subscriptionId) {
         Runnable delete = () -> subscriptionPositionCollection.deleteOne(eq(ID, subscriptionId));
-        executeWithRetry(delete, __ -> !shutdown, convertToDelayStream(retryStrategy)).run();
+        executeWithRetry(delete, __ -> !shutdown, retryStrategy).run();
     }
 
     @Override
     public boolean exists(String subscriptionId) {
         Supplier<Boolean> exists = () -> subscriptionPositionCollection.find(eq(ID, subscriptionId)).first() != null;
-        return executeWithRetry(exists, __ -> !shutdown, convertToDelayStream(retryStrategy)).get();
+        return executeWithRetry(exists, __ -> !shutdown, retryStrategy).get();
     }
 
     private void persistResumeTokenSubscriptionPosition(String subscriptionId, BsonValue resumeToken) {
@@ -150,7 +149,7 @@ public class NativeMongoSubscriptionPositionStorage implements SubscriptionPosit
     }
 
     private static RetryStrategy defaultRetryStrategy() {
-        return RetryStrategy.backoff(Duration.ofMillis(100), Duration.ofSeconds(2), 2.0f);
+        return RetryStrategy.exponentialBackoff(Duration.ofMillis(100), Duration.ofSeconds(2), 2.0f);
     }
 
     @PreDestroy

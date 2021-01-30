@@ -16,7 +16,10 @@
 
 package org.occurrent.retry.internal;
 
+import org.occurrent.retry.Backoff;
 import org.occurrent.retry.RetryStrategy;
+import org.occurrent.retry.RetryStrategy.DontRetry;
+import org.occurrent.retry.RetryStrategy.Retry;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -33,12 +36,36 @@ public class RetryExecution {
 
     private static final Logger log = LoggerFactory.getLogger(RetryExecution.class);
 
-    public static Runnable executeWithRetry(Runnable runnable, Predicate<Throwable> retryPredicate, Iterator<Long> delay) {
+    public static <T1> Supplier<T1> executeWithRetry(Supplier<T1> supplier, Predicate<Throwable> shutdownPredicate, RetryStrategy retryStrategy) {
+        if (retryStrategy instanceof DontRetry) {
+            return supplier;
+        }
+        Retry retry = (Retry) retryStrategy;
+        return executeWithRetry(supplier, shutdownPredicate.and(retry.retryPredicate), convertToDelayStream(retry.backoff));
+    }
+
+    public static Runnable executeWithRetry(Runnable runnable, Predicate<Throwable> shutdownPredicate, RetryStrategy retryStrategy) {
+        if (retryStrategy instanceof DontRetry) {
+            return runnable;
+        }
+        Retry retry = (Retry) retryStrategy;
+        return executeWithRetry(runnable, shutdownPredicate.and(retry.retryPredicate), convertToDelayStream(retry.backoff));
+    }
+
+    public static <T1> Consumer<T1> executeWithRetry(Consumer<T1> fn, Predicate<Throwable> shutdownPredicate, RetryStrategy retryStrategy) {
+        if (retryStrategy instanceof DontRetry) {
+            return fn;
+        }
+        Retry retry = (Retry) retryStrategy;
+        return executeWithRetry(fn, shutdownPredicate.and(retry.retryPredicate), convertToDelayStream(retry.backoff));
+    }
+
+    private static Runnable executeWithRetry(Runnable runnable, Predicate<Throwable> retryPredicate, Iterator<Long> delay) {
         Consumer<Void> runnableConsumer = __ -> runnable.run();
         return () -> executeWithRetry(runnableConsumer, retryPredicate, delay).accept(null);
     }
 
-    public static <T1> Consumer<T1> executeWithRetry(Consumer<T1> fn, Predicate<Throwable> retryPredicate, Iterator<Long> delay) {
+    private static <T1> Consumer<T1> executeWithRetry(Consumer<T1> fn, Predicate<Throwable> retryPredicate, Iterator<Long> delay) {
         return t1 -> {
             try {
                 fn.accept(t1);
@@ -59,7 +86,7 @@ public class RetryExecution {
         };
     }
 
-    public static <T1> Supplier<T1> executeWithRetry(Supplier<T1> supplier, Predicate<Throwable> retryPredicate, Iterator<Long> delay) {
+    private static <T1> Supplier<T1> executeWithRetry(Supplier<T1> supplier, Predicate<Throwable> retryPredicate, Iterator<Long> delay) {
         return () -> {
             try {
                 return supplier.get();
@@ -80,21 +107,21 @@ public class RetryExecution {
         };
     }
 
-    public static Iterator<Long> convertToDelayStream(RetryStrategy retryStrategy) {
+    private static Iterator<Long> convertToDelayStream(Backoff backoff) {
         final Stream<Long> delay;
-        if (retryStrategy instanceof RetryStrategy.None) {
+        if (backoff instanceof Backoff.None) {
             delay = null;
-        } else if (retryStrategy instanceof RetryStrategy.Fixed) {
-            long millis = ((RetryStrategy.Fixed) retryStrategy).millis;
+        } else if (backoff instanceof Backoff.Fixed) {
+            long millis = ((Backoff.Fixed) backoff).millis;
             delay = Stream.iterate(millis, __ -> millis);
-        } else if (retryStrategy instanceof RetryStrategy.Backoff) {
-            RetryStrategy.Backoff strategy = (RetryStrategy.Backoff) retryStrategy;
+        } else if (backoff instanceof Backoff.Exponential) {
+            Backoff.Exponential strategy = (Backoff.Exponential) backoff;
             long initialMillis = strategy.initial.toMillis();
             long maxMillis = strategy.max.toMillis();
             double multiplier = strategy.multiplier;
             delay = Stream.iterate(initialMillis, current -> Math.min(maxMillis, Math.round(current * multiplier)));
         } else {
-            throw new IllegalStateException("Invalid retry strategy: " + retryStrategy.getClass().getName());
+            throw new IllegalStateException("Invalid retry strategy: " + backoff.getClass().getName());
         }
         return delay == null ? null : delay.iterator();
     }
