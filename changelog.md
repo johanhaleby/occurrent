@@ -19,6 +19,29 @@
 * Moved the `cancelSubscription` method from the `org.occurrent.subscription.api.blocking.SubscriptionModel` to the 
   `org.occurrent.subscription.api.blocking.SubscriptionModelCancelSubscription` interface. This interface is also extended by
   `org.occurrent.subscription.api.blocking.SubscriptionModelLifeCycle`.
+* Introduced a much improved `RetryStrategy`. You can no configure max attempts, a retry predicate, error listener as well as the backoff strategy.
+  Retry is provided in its own module, `org.occurrent:retry`, but many modules already depend on this module transitively. Here's an example:
+  
+  ```java
+  Retry retryStrategy = RetryStrategy.exponentialBackoff(Duration.ofMillis(50), Duration.ofMillis(200), 2.0)
+                                     .retryIf(throwable -> throwable instanceof OptimisticLockingException)
+                                     .maxAttempts(5)
+                                     .onError((info, throwable) -> log.warn("Caught exception {}, will retry in {} millis")), throwable.class.getSimpleName(), info.getDuration().toMillis()));
+  
+  retry.execute(Something::somethingThing);  
+  ```
+  
+  `RetryStrategy` is immutable, which means that you can safely do things like this:
+
+  ```java
+  RetryStrategy retryStrategy = RetryStrategy.fixed(200).maxAttempts(5);
+  // Uses default 200 ms fixed delay
+  retryStrategy.execute(() -> Something.something());
+  // Use 600 ms fixed delay
+  retryStrategy.backoff(fixed(600)).execute(() -> SomethingElse.somethingElse());
+  // 200 ms fixed delay again
+  retryStrategy.execute(() -> Thing.thing());
+  ```
   
 ## Changelog 0.6.0 (2021-01-23)
 
