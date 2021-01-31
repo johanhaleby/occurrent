@@ -23,12 +23,12 @@
   Retry is provided in its own module, `org.occurrent:retry`, but many modules already depend on this module transitively. Here's an example:
   
   ```java
-  Retry retryStrategy = RetryStrategy.exponentialBackoff(Duration.ofMillis(50), Duration.ofMillis(200), 2.0)
+  RetryStrategy retryStrategy = RetryStrategy.exponentialBackoff(Duration.ofMillis(50), Duration.ofMillis(200), 2.0)
                                      .retryIf(throwable -> throwable instanceof OptimisticLockingException)
                                      .maxAttempts(5)
                                      .onError((info, throwable) -> log.warn("Caught exception {}, will retry in {} millis")), throwable.class.getSimpleName(), info.getDuration().toMillis()));
   
-  retry.execute(Something::somethingThing);  
+  retryStrategy.execute(Something::somethingThing);  
   ```
   
   `RetryStrategy` is immutable, which means that you can safely do things like this:
