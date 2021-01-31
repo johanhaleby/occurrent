@@ -30,21 +30,21 @@ public abstract class Backoff {
     /**
      * @return Don't retry and re-throw an exception thrown when action is invoked.
      */
-    public static org.occurrent.retry.Backoff none() {
+    public static Backoff none() {
         return new None();
     }
 
     /**
      * @return Retry after a fixed number of millis if an action throws an exception.
      */
-    public static org.occurrent.retry.Backoff fixed(long millis) {
+    public static Backoff fixed(long millis) {
         return new Fixed(millis);
     }
 
     /**
      * @return Retry after a fixed duration if an action throws an exception.
      */
-    public static org.occurrent.retry.Backoff fixed(Duration duration) {
+    public static Backoff fixed(Duration duration) {
         Objects.requireNonNull(duration, "Duration cannot be null");
         return new Fixed(duration.toMillis());
     }
@@ -52,17 +52,17 @@ public abstract class Backoff {
     /**
      * @return Retry after with exponential backoff if an action throws an exception.
      */
-    public static org.occurrent.retry.Backoff exponential(Duration initial, Duration max, double multiplier) {
+    public static Backoff exponential(Duration initial, Duration max, double multiplier) {
         return new Exponential(initial, max, multiplier);
     }
 
 
-    public final static class None extends org.occurrent.retry.Backoff {
+    public final static class None extends Backoff {
         private None() {
         }
     }
 
-    public final static class Fixed extends org.occurrent.retry.Backoff {
+    public final static class Fixed extends Backoff {
         public final long millis;
 
         private Fixed(long millis) {

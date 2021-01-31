@@ -12,7 +12,7 @@ public abstract class MaxAttempts {
 
         Limit(int limit) {
             if (limit < 1) {
-                throw new IllegalArgumentException("Max attempts must be greater than zero");
+                throw new IllegalArgumentException("Max attempts must be greater than 1");
             }
             this.limit = limit;
         }
