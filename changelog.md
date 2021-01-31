@@ -2,7 +2,7 @@
                                  
 * Introduced many more life-cycle methods to blocking subscription models. It's now possible to pause/resume individual subscriptions
   as well as starting/stopping _all_ subscriptions. This is useful for testing purposes when you want to write events 
-  to the event store without triggering all subscriptions. The subscription models that supports since 
+  to the event store without triggering all subscriptions. The subscription models that supports this 
   implements the new `org.occurrent.subscription.api.blocking.SubscriptionModelLifeCycle` interface.
   Supported subscription models are: `InMemorySubscriptionModel`, `NativeMongoSubscriptionModel` and `SpringMongoSubscriptionModel`. 
 * The `SpringMongoSubscriptionModel` now implements `org.springframework.context.SmartLifecycle`, which means that if you
