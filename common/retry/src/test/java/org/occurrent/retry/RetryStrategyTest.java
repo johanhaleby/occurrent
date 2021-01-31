@@ -234,7 +234,7 @@ public class RetryStrategyTest {
         void error_listener_is_invoked_when_defined_as_a_consumer() {
             // Given
             CopyOnWriteArrayList<Throwable> throwables = new CopyOnWriteArrayList<>();
-            Retry retryStrategy = RetryStrategy.retry().errorListener((Consumer<Throwable>) throwables::add);
+            Retry retryStrategy = RetryStrategy.retry().onError((Consumer<Throwable>) throwables::add);
 
             AtomicInteger counter = new AtomicInteger(0);
 
@@ -258,7 +258,7 @@ public class RetryStrategyTest {
             // Given
             CopyOnWriteArrayList<Throwable> throwables = new CopyOnWriteArrayList<>();
             CopyOnWriteArrayList<RetryInfo> retryInfos = new CopyOnWriteArrayList<>();
-            Retry retryStrategy = RetryStrategy.retry().errorListener((info, throwable) -> {
+            Retry retryStrategy = RetryStrategy.retry().onError((info, throwable) -> {
                 retryInfos.add(info);
                 throwables.add(throwable);
             });
@@ -288,7 +288,7 @@ public class RetryStrategyTest {
             Retry retryStrategy = RetryStrategy
                     .exponentialBackoff(Duration.ofMillis(1), Duration.ofMillis(10), 2.0)
                     .maxAttempts(40)
-                    .errorListener((info, __) -> retryInfos.add(info));
+                    .onError((info, __) -> retryInfos.add(info));
 
             AtomicInteger counter = new AtomicInteger(0);
 
@@ -321,7 +321,7 @@ public class RetryStrategyTest {
             Retry retryStrategy = RetryStrategy
                     .fixed(10)
                     .infiniteAttempts()
-                    .errorListener((info, __) -> retryInfos.add(info));
+                    .onError((info, __) -> retryInfos.add(info));
 
             AtomicInteger counter = new AtomicInteger(0);
 
@@ -354,7 +354,7 @@ public class RetryStrategyTest {
             CopyOnWriteArrayList<RetryInfo> retryInfos = new CopyOnWriteArrayList<>();
             Retry retryStrategy = RetryStrategy.retry()
                     .maxAttempts(4)
-                    .errorListener((info, __) -> retryInfos.add(info));
+                    .onError((info, __) -> retryInfos.add(info));
 
             AtomicInteger counter = new AtomicInteger(0);
 
@@ -390,7 +390,7 @@ public class RetryStrategyTest {
             // Given
             CopyOnWriteArrayList<Throwable> throwables = new CopyOnWriteArrayList<>();
             int millis = 150;
-            Retry retryStrategy = RetryStrategy.fixed(millis).errorListener((Consumer<Throwable>) throwables::add).maxAttempts(5);
+            Retry retryStrategy = RetryStrategy.fixed(millis).onError((Consumer<Throwable>) throwables::add).maxAttempts(5);
 
             AtomicInteger counter = new AtomicInteger(0);
 
@@ -418,7 +418,7 @@ public class RetryStrategyTest {
             CopyOnWriteArrayList<Throwable> throwables = new CopyOnWriteArrayList<>();
             AtomicInteger counter = new AtomicInteger(0);
             int millis = 150;
-            Retry retryStrategy = RetryStrategy.fixed(millis).errorListener((Consumer<Throwable>) throwables::add).retryIf(__ -> counter.get() < 5);
+            Retry retryStrategy = RetryStrategy.fixed(millis).onError((Consumer<Throwable>) throwables::add).retryIf(__ -> counter.get() < 5);
 
 
             // When

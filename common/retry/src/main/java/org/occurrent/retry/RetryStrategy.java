@@ -130,12 +130,12 @@ public abstract class RetryStrategy {
             return new Retry(backoff, maxAttempts, retryPredicate, errorListener);
         }
 
-        public Retry errorListener(BiConsumer<RetryInfo, Throwable> errorListener) {
+        public Retry onError(BiConsumer<RetryInfo, Throwable> errorListener) {
             return new Retry(backoff, maxAttempts, retryPredicate, errorListener);
         }
 
-        public Retry errorListener(Consumer<Throwable> errorListener) {
-            return errorListener((__, throwable) -> errorListener.accept(throwable));
+        public Retry onError(Consumer<Throwable> errorListener) {
+            return onError((__, throwable) -> errorListener.accept(throwable));
         }
 
         @Override
