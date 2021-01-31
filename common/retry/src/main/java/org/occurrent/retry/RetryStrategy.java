@@ -34,7 +34,7 @@ import static org.occurrent.retry.internal.RetryExecution.executeWithRetry;
  * For example this is perfectly valid:
  * <p>
  * <pre>
- * RetryStrategy retryStrategy = RetryStrategy.fixed(200).maxAttempts(5);
+ * RetryStrategy retryStrategy = RetryStrategy.retry().fixed(200).maxAttempts(5);
  * // 200 ms fixed delay
  * retryStrategy.execute(() -> Something.something());
  * // 600 ms fixed delay
