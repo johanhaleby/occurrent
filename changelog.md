@@ -19,7 +19,7 @@
 * Moved the `cancelSubscription` method from the `org.occurrent.subscription.api.blocking.SubscriptionModel` to the 
   `org.occurrent.subscription.api.blocking.SubscriptionModelCancelSubscription` interface. This interface is also extended by
   `org.occurrent.subscription.api.blocking.SubscriptionModelLifeCycle`.
-* Introduced a much improved `RetryStrategy`. You can no configure max attempts, a retry predicate, error listener as well as the backoff strategy.
+* Introduced a much improved `RetryStrategy`. You can now configure max attempts, a retry predicate, error listener as well as the backoff strategy.
   Retry is provided in its own module, `org.occurrent:retry`, but many modules already depend on this module transitively. Here's an example:
   
   ```java
