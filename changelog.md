@@ -1,4 +1,4 @@
-## Changelog next version
+## Changelog 0.7.0 (2021-01-31)
                                  
 * Introduced many more life-cycle methods to blocking subscription models. It's now possible to pause/resume individual subscriptions
   as well as starting/stopping _all_ subscriptions. This is useful for testing purposes when you want to write events 
