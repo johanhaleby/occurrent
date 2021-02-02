@@ -53,6 +53,7 @@
             <groupId>org.occurrent</groupId>
             <artifactId>eventstore-inmemory</artifactId>
             <version>0.7.1-SNAPSHOT</version>
+            <scope>test</scope>
         </dependency>
         <dependency>
             <groupId>com.fasterxml.jackson.core</groupId>

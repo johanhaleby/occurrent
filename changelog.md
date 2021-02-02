@@ -1,3 +1,7 @@
+## Changelog next version
+
+* Removed `org.occurrent:eventstore-inmemory` as dependency to `org.occurrent:application-service-blocking` (it should have been a test dependency) 
+
 ## Changelog 0.7.0 (2021-01-31)
                                  
 * Introduced many more life-cycle methods to blocking subscription models. It's now possible to pause/resume individual subscriptions
