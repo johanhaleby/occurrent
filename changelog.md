@@ -1,6 +1,8 @@
 ## Changelog next version
-
+                                                                                                                                                   
 * Removed `org.occurrent:eventstore-inmemory` as dependency to `org.occurrent:application-service-blocking` (it should have been a test dependency) 
+* Including a "details" message in `DuplicateCloudEventException` that adds more details on why this happens (which index etc). This is especially useful
+  if you're creating custom, unique, indexes over the events and a write fail due to a duplicate cloud event.
 
 ## Changelog 0.7.0 (2021-01-31)
                                  

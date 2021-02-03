@@ -49,9 +49,9 @@ public class MongoBulkWriteExceptionToDuplicateCloudEventExceptionTranslator {
                     int sourceValueEndIndex = errorMessage.indexOf("\" }", sourceValueStartIndex);
                     String source = errorMessage.substring(sourceValueStartIndex, sourceValueEndIndex);
 
-                    return new DuplicateCloudEventException(id, URI.create(source), e);
+                    return new DuplicateCloudEventException(id, URI.create(source), e.getMessage().trim(), e);
                 })
                 .findFirst()
-                .orElse(new DuplicateCloudEventException(null, null, e));
+                .orElse(new DuplicateCloudEventException(null, null, e.getMessage().trim(), e));
     }
 }

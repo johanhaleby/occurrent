@@ -23,8 +23,11 @@ import com.mongodb.ConnectionString;
 import com.mongodb.MongoBulkWriteException;
 import com.mongodb.client.MongoClient;
 import com.mongodb.client.MongoClients;
+import com.mongodb.client.MongoCollection;
 import com.mongodb.client.MongoDatabase;
 import com.mongodb.client.model.Filters;
+import com.mongodb.client.model.IndexOptions;
+import com.mongodb.client.model.Indexes;
 import io.cloudevents.CloudEvent;
 import io.cloudevents.core.builder.CloudEventBuilder;
 import io.cloudevents.core.data.PojoCloudEventData;
@@ -306,12 +309,45 @@ class MongoEventStoreTest {
         EventStream<CloudEvent> eventStream = eventStore.read("name");
         List<DomainEvent> readEvents = deserialize(eventStream.events());
 
+        assertThat(throwable).isExactlyInstanceOf(DuplicateCloudEventException.class).hasCauseExactlyInstanceOf(MongoBulkWriteException.class);
+        DuplicateCloudEventException duplicateCloudEventException = (DuplicateCloudEventException) throwable;
         assertAll(
-                () -> assertThat(throwable).isExactlyInstanceOf(DuplicateCloudEventException.class).hasCauseExactlyInstanceOf(MongoBulkWriteException.class),
+                () -> assertThat(duplicateCloudEventException.getId()).isEqualTo(nameWasChanged1.getEventId()),
+                () -> assertThat(duplicateCloudEventException.getSource()).isEqualTo(NAME_SOURCE),
+                () -> assertThat(duplicateCloudEventException.getDetails()).endsWith("Write errors: [BulkWriteError{index=1, code=11000, message='E11000 duplicate key error collection: test.events index: id_1_source_1 dup key: { id: \"" + nameWasChanged1.getEventId() + "\", source: \"http://name\" }', details={}}]."),
                 () -> assertThat(throwable).hasMessageNotContaining("unknown"),
                 () -> assertThat(eventStream.version()).isEqualTo(2),
                 () -> assertThat(readEvents).containsExactly(nameDefined, nameWasChanged1)
         );
+    }
+
+    @Test
+    void no_events_are_inserted_when_batch_contains_event_that_has_already_been_persisted_with_manual_unique_index() {
+        LocalDateTime now = LocalDateTime.now();
+        String databaseName = new ConnectionString(mongoDBContainer.getReplicaSetUrl()).getDatabase();
+        MongoCollection<Document> collection = mongoClient.getDatabase(Objects.requireNonNull(databaseName)).getCollection("events");
+        String index = collection.createIndex(Indexes.ascending("type"), new IndexOptions().unique(true));
+
+        try {
+            NameWasChanged nameWasChanged1 = new NameWasChanged(UUID.randomUUID().toString(), now.plusHours(1), "name2");
+            String eventId2 = UUID.randomUUID().toString();
+            NameWasChanged nameWasChanged2 = new NameWasChanged(eventId2, now.plusHours(2), "name4");
+
+            // When
+            Throwable throwable = catchThrowable(() -> persist("name", Stream.of(nameWasChanged1, nameWasChanged2)));
+
+            // Then
+            assertThat(throwable).isExactlyInstanceOf(DuplicateCloudEventException.class).hasCauseExactlyInstanceOf(MongoBulkWriteException.class);
+            DuplicateCloudEventException duplicateCloudEventException = (DuplicateCloudEventException) throwable;
+            assertAll(
+                    () -> assertThat(duplicateCloudEventException.getId()).isNull(),
+                    () -> assertThat(duplicateCloudEventException.getSource()).isNull(),
+                    () -> assertThat(duplicateCloudEventException.getDetails()).endsWith("Write errors: [BulkWriteError{index=1, code=11000, message='E11000 duplicate key error collection: test.events index: type_1 dup key: { type: \"NameWasChanged\" }', details={}}]."),
+                    () -> assertThat(eventStore.count()).isZero()
+            );
+        } finally {
+            collection.dropIndex(index);
+        }
     }
 
     @SuppressWarnings("ConstantConditions")
