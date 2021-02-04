@@ -5,6 +5,8 @@
   if you're creating custom, unique, indexes over the events and a write fail due to a duplicate cloud event.
 * Upgraded to Kotlin 1.3.40
 * Upgraded project-reactor to 3.4.2 (previously 3.4.0 was used)
+* When running MongoDB subscriptions on services like Atlas, it's not possible to get the current time (global subscription position) when starting a new subscription since access is denied. 
+  If this happens then the local time of the client is used instead.
 
 ## Changelog 0.7.0 (2021-01-31)
                                  

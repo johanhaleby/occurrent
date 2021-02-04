@@ -16,6 +16,7 @@
 
 package org.occurrent.subscription.mongodb.spring.reactor;
 
+import com.mongodb.MongoCommandException;
 import io.cloudevents.CloudEvent;
 import org.bson.Document;
 import org.occurrent.mongodb.timerepresentation.TimeRepresentation;
@@ -29,6 +30,7 @@ import org.occurrent.subscription.mongodb.MongoResumeTokenSubscriptionPosition;
 import org.occurrent.subscription.mongodb.internal.MongoCloudEventsToJsonDeserializer;
 import org.occurrent.subscription.mongodb.internal.MongoCommons;
 import org.occurrent.subscription.mongodb.spring.internal.ApplyFilterToChangeStreamOptionsBuilder;
+import org.springframework.data.mongodb.UncategorizedMongoDbException;
 import org.springframework.data.mongodb.core.ChangeStreamEvent;
 import org.springframework.data.mongodb.core.ChangeStreamOptions;
 import org.springframework.data.mongodb.core.ChangeStreamOptions.ChangeStreamOptionsBuilder;
@@ -37,6 +39,7 @@ import reactor.core.publisher.Flux;
 import reactor.core.publisher.Mono;
 
 import static java.util.Objects.requireNonNull;
+import static org.occurrent.subscription.mongodb.internal.MongoCommons.bsonTimestampNow;
 
 /**
  * This is a subscription that uses project reactor and Spring to listen to changes from an event store.
@@ -83,6 +86,15 @@ public class ReactorMongoSubscriptionModel implements PositionAwareSubscriptionM
     public Mono<SubscriptionPosition> globalSubscriptionPosition() {
         return mongo.executeCommand(new Document("hostInfo", 1))
                 .map(MongoCommons::getServerOperationTime)
+                .onErrorResume(UncategorizedMongoDbException.class, throwable -> {
+                    if (throwable.getCause() instanceof MongoCommandException) {
+                        // This can if the server doesn't allow to get the operation time since "db.adminCommand( { "hostInfo" : 1 } )" is prohibited.
+                        // This is the case on for example shared Atlas clusters. If this happens we return the current time of the client instead.
+                        return Mono.just(bsonTimestampNow());
+                    } else {
+                        return Mono.error(throwable);
+                    }
+                })
                 .map(MongoOperationTimeSubscriptionPosition::new);
     }
 }

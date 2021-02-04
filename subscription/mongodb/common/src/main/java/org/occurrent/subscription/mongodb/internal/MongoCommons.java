@@ -24,6 +24,7 @@ import org.occurrent.subscription.SubscriptionPosition;
 import org.occurrent.subscription.mongodb.MongoOperationTimeSubscriptionPosition;
 import org.occurrent.subscription.mongodb.MongoResumeTokenSubscriptionPosition;
 
+import java.util.Date;
 import java.util.HashMap;
 import java.util.Map;
 import java.util.function.BiFunction;
@@ -69,6 +70,10 @@ public class MongoCommons {
         Document resumeTokenAsDocument = resumeTokenDocument.get(RESUME_TOKEN, Document.class);
         BsonDocument resumeToken = new BsonDocument(RESUME_TOKEN_DATA, new BsonString(resumeTokenAsDocument.getString(RESUME_TOKEN_DATA)));
         return new ResumeToken(resumeToken);
+    }
+
+    public static BsonTimestamp bsonTimestampNow() {
+        return new BsonTimestamp(new Date().getTime());
     }
 
     public static BsonTimestamp extractOperationTimeFromPersistedPositionDocument(Document subscriptionPositionDocument) {

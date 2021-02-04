@@ -16,6 +16,7 @@
 
 package org.occurrent.subscription.mongodb.spring.blocking;
 
+import com.mongodb.MongoCommandException;
 import com.mongodb.client.model.changestream.ChangeStreamDocument;
 import io.cloudevents.CloudEvent;
 import org.bson.BsonDocument;
@@ -36,6 +37,7 @@ import org.occurrent.subscription.mongodb.internal.MongoCloudEventsToJsonDeseria
 import org.occurrent.subscription.mongodb.internal.MongoCommons;
 import org.occurrent.subscription.mongodb.spring.internal.ApplyFilterToChangeStreamOptionsBuilder;
 import org.springframework.context.SmartLifecycle;
+import org.springframework.data.mongodb.UncategorizedMongoDbException;
 import org.springframework.data.mongodb.core.ChangeStreamOptions;
 import org.springframework.data.mongodb.core.ChangeStreamOptions.ChangeStreamOptionsBuilder;
 import org.springframework.data.mongodb.core.MongoOperations;
@@ -56,6 +58,7 @@ import java.util.function.Supplier;
 
 import static java.util.Objects.requireNonNull;
 import static org.occurrent.retry.internal.RetryExecution.executeWithRetry;
+import static org.occurrent.subscription.mongodb.internal.MongoCommons.bsonTimestampNow;
 
 /**
  * This is a subscription that uses Spring and its {@link MessageListenerContainer} for MongoDB to listen to changes from an event store.
@@ -177,7 +180,18 @@ public class SpringMongoSubscriptionModel implements PositionAwareSubscriptionMo
     public SubscriptionPosition globalSubscriptionPosition() {
         // Note that we increase the "increment" by 1 in order to not clash with an existing event in the event store.
         // This is so that we can avoid duplicates in certain rare cases when replaying events.
-        BsonTimestamp currentOperationTime = MongoCommons.getServerOperationTime(mongoOperations.executeCommand(new Document("hostInfo", 1)), 1);
+        BsonTimestamp currentOperationTime;
+        try {
+            currentOperationTime = MongoCommons.getServerOperationTime(mongoOperations.executeCommand(new Document("hostInfo", 1)), 1);
+        } catch (UncategorizedMongoDbException e) {
+            if (e.getCause() instanceof MongoCommandException) {
+                // This can if the server doesn't allow to get the operation time since "db.adminCommand( { "hostInfo" : 1 } )" is prohibited.
+                // This is the case on for example shared Atlas clusters. If this happens we return the current time of the client instead.
+                currentOperationTime = bsonTimestampNow();
+            } else {
+                throw e;
+            }
+        }
         return new MongoOperationTimeSubscriptionPosition(currentOperationTime);
     }
 
