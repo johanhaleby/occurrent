@@ -30,6 +30,8 @@ import org.occurrent.subscription.mongodb.MongoResumeTokenSubscriptionPosition;
 import org.occurrent.subscription.mongodb.internal.MongoCloudEventsToJsonDeserializer;
 import org.occurrent.subscription.mongodb.internal.MongoCommons;
 import org.occurrent.subscription.mongodb.spring.internal.ApplyFilterToChangeStreamOptionsBuilder;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.data.mongodb.UncategorizedMongoDbException;
 import org.springframework.data.mongodb.core.ChangeStreamEvent;
 import org.springframework.data.mongodb.core.ChangeStreamOptions;
@@ -39,7 +41,7 @@ import reactor.core.publisher.Flux;
 import reactor.core.publisher.Mono;
 
 import static java.util.Objects.requireNonNull;
-import static org.occurrent.subscription.mongodb.internal.MongoCommons.bsonTimestampNow;
+import static org.occurrent.subscription.mongodb.internal.MongoCommons.cannotFindGlobalSubscriptionPositionErrorMessage;
 
 /**
  * This is a subscription that uses project reactor and Spring to listen to changes from an event store.
@@ -50,6 +52,7 @@ import static org.occurrent.subscription.mongodb.internal.MongoCommons.bsonTimes
  * to get the subscription position.
  */
 public class ReactorMongoSubscriptionModel implements PositionAwareSubscriptionModel {
+    private static final Logger log = LoggerFactory.getLogger(ReactorMongoSubscriptionModel.class);
 
     private final ReactiveMongoOperations mongo;
     private final String eventCollection;
@@ -90,7 +93,8 @@ public class ReactorMongoSubscriptionModel implements PositionAwareSubscriptionM
                     if (throwable.getCause() instanceof MongoCommandException) {
                         // This can if the server doesn't allow to get the operation time since "db.adminCommand( { "hostInfo" : 1 } )" is prohibited.
                         // This is the case on for example shared Atlas clusters. If this happens we return the current time of the client instead.
-                        return Mono.just(bsonTimestampNow());
+                        log.warn(cannotFindGlobalSubscriptionPositionErrorMessage(throwable.getCause()));
+                        return Mono.empty();
                     } else {
                         return Mono.error(throwable);
                     }

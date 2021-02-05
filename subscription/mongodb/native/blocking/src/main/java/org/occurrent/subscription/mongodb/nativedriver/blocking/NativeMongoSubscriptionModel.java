@@ -50,7 +50,6 @@ import org.slf4j.LoggerFactory;
 import javax.annotation.PreDestroy;
 import java.time.Duration;
 import java.util.Collections;
-import java.util.Date;
 import java.util.List;
 import java.util.Objects;
 import java.util.concurrent.ConcurrentHashMap;
@@ -68,7 +67,7 @@ import static java.util.Objects.requireNonNull;
 import static java.util.concurrent.TimeUnit.MILLISECONDS;
 import static java.util.concurrent.TimeUnit.SECONDS;
 import static org.occurrent.retry.internal.RetryExecution.executeWithRetry;
-import static org.occurrent.subscription.mongodb.internal.MongoCommons.bsonTimestampNow;
+import static org.occurrent.subscription.mongodb.internal.MongoCommons.cannotFindGlobalSubscriptionPositionErrorMessage;
 
 /**
  * This is a subscription that uses the "native" MongoDB Java driver (sync) to listen to changes from the event store.
@@ -264,13 +263,14 @@ public class NativeMongoSubscriptionModel implements PositionAwareSubscriptionMo
     public SubscriptionPosition globalSubscriptionPosition() {
         // Note that we increase the "increment" by 1 in order to not clash with an existing event in the event store.
         // This is so that we can avoid duplicates in certain rare cases when replaying events.
-        BsonTimestamp currentOperationTime = null;
+        BsonTimestamp currentOperationTime;
         try {
-             currentOperationTime = MongoCommons.getServerOperationTime(database.runCommand(new Document("hostInfo", 1)), 1);
+            currentOperationTime = MongoCommons.getServerOperationTime(database.runCommand(new Document("hostInfo", 1)), 1);
         } catch (MongoCommandException e) {
+            log.warn(cannotFindGlobalSubscriptionPositionErrorMessage(e));
             // This can if the server doesn't allow to get the operation time since "db.adminCommand( { "hostInfo" : 1 } )" is prohibited.
             // This is the case on for example shared Atlas clusters. If this happens we return the current time of the client instead.
-            currentOperationTime = bsonTimestampNow();
+            return null;
         }
         return new MongoOperationTimeSubscriptionPosition(currentOperationTime);
     }

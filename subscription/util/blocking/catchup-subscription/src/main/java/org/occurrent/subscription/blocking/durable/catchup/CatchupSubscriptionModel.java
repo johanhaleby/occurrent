@@ -175,11 +175,11 @@ public class CatchupSubscriptionModel implements SubscriptionModel, DelegatingSu
                     // (i.e. written by the catch-up subscription), we save the globalSubscriptionPosition.
                     // The reason that we need to write the time-based subscription position in this case
                     // is that the wrapped subscription might not support time-based subscriptions.
-                    if (position == null || isTimeBasedSubscriptionPosition(position)) {
+                    if ((position == null || isTimeBasedSubscriptionPosition(position)) && globalSubscriptionPosition != null) {
                         position = cfg.storage.save(subscriptionId, globalSubscriptionPosition);
                     }
                     return StartAt.subscriptionPosition(position);
-                }).orElse(() -> StartAt.subscriptionPosition(globalSubscriptionPosition));
+                }).orElse(() -> globalSubscriptionPosition == null ? StartAt.now() : StartAt.subscriptionPosition(globalSubscriptionPosition));
 
         final Subscription subscription;
         if (subscriptionsWasCancelledOrShutdown) {

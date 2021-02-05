@@ -105,9 +105,12 @@ public class DurableSubscriptionModel implements PositionAwareSubscriptionModel,
             // It's important that we find the document inside the supplier so that we lookup the latest resume token on retry
             SubscriptionPosition subscriptionPosition = storage.read(subscriptionId);
             if (subscriptionPosition == null) {
-                subscriptionPosition = storage.save(subscriptionId, subscriptionModel.globalSubscriptionPosition());
+                SubscriptionPosition globalSubscriptionPosition = subscriptionModel.globalSubscriptionPosition();
+                if (globalSubscriptionPosition != null) {
+                    subscriptionPosition = storage.save(subscriptionId, globalSubscriptionPosition);
+                }
             }
-            return StartAt.subscriptionPosition(subscriptionPosition);
+            return subscriptionPosition == null ? StartAt.now() : StartAt.subscriptionPosition(subscriptionPosition);
         };
         return subscribe(subscriptionId, filter, startAtSupplier, action);
     }

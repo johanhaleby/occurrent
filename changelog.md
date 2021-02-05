@@ -1,3 +1,9 @@
+## Changelog 0.7.2 (2021-02-03)
+
+* When running MongoDB subscriptions on services like Atlas, it's not possible to get the current time (global subscription position) when starting a new subscription since access is denied. 
+  If this happens then the subscription will start at the "current time" instead (`StartAt.now()`). There's a catch however! If processing the very first event fails _and_ the application is restarted,
+  then the event cannot be retried. If this is major concern, consider upgrading your MongoDB server to a non-shared environment.
+
 ## Changelog 0.7.1 (2021-02-04)
                                                                                                                                                    
 * Removed `org.occurrent:eventstore-inmemory` as dependency to `org.occurrent:application-service-blocking` (it should have been a test dependency) 

@@ -24,7 +24,6 @@ import org.occurrent.subscription.SubscriptionPosition;
 import org.occurrent.subscription.mongodb.MongoOperationTimeSubscriptionPosition;
 import org.occurrent.subscription.mongodb.MongoResumeTokenSubscriptionPosition;
 
-import java.util.Date;
 import java.util.HashMap;
 import java.util.Map;
 import java.util.function.BiFunction;
@@ -72,8 +71,10 @@ public class MongoCommons {
         return new ResumeToken(resumeToken);
     }
 
-    public static BsonTimestamp bsonTimestampNow() {
-        return new BsonTimestamp(new Date().getTime());
+    public static String cannotFindGlobalSubscriptionPositionErrorMessage(Throwable throwable) {
+        return "Failed to get global subscription position from MongoDB, probably because the server doesn't allow to execute the \"hostinfo\" command. " +
+                "This only affects the very first event received by the subscription. If the processing of this event fails _and_ the application is restarted " +
+                "the event cannot be retried. If this is major concern, consider upgrading your MongoDB server to a non-shared environment that supports the \"hostinfo\" command. Error is:\n" + throwable.getMessage();
     }
 
     public static BsonTimestamp extractOperationTimeFromPersistedPositionDocument(Document subscriptionPositionDocument) {

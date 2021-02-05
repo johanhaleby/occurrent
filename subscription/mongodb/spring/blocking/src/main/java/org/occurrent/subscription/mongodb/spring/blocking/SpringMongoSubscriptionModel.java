@@ -36,6 +36,8 @@ import org.occurrent.subscription.mongodb.MongoResumeTokenSubscriptionPosition;
 import org.occurrent.subscription.mongodb.internal.MongoCloudEventsToJsonDeserializer;
 import org.occurrent.subscription.mongodb.internal.MongoCommons;
 import org.occurrent.subscription.mongodb.spring.internal.ApplyFilterToChangeStreamOptionsBuilder;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.context.SmartLifecycle;
 import org.springframework.data.mongodb.UncategorizedMongoDbException;
 import org.springframework.data.mongodb.core.ChangeStreamOptions;
@@ -58,7 +60,7 @@ import java.util.function.Supplier;
 
 import static java.util.Objects.requireNonNull;
 import static org.occurrent.retry.internal.RetryExecution.executeWithRetry;
-import static org.occurrent.subscription.mongodb.internal.MongoCommons.bsonTimestampNow;
+import static org.occurrent.subscription.mongodb.internal.MongoCommons.cannotFindGlobalSubscriptionPositionErrorMessage;
 
 /**
  * This is a subscription that uses Spring and its {@link MessageListenerContainer} for MongoDB to listen to changes from an event store.
@@ -69,6 +71,7 @@ import static org.occurrent.subscription.mongodb.internal.MongoCommons.bsonTimes
  * This reason for this is that Spring provides retry capabilities (such as spring-retry) that you can easily hook into your <code>action</code>.
  */
 public class SpringMongoSubscriptionModel implements PositionAwareSubscriptionModel, SubscriptionModelLifeCycle, SmartLifecycle {
+    private static final Logger log = LoggerFactory.getLogger(SpringMongoSubscriptionModel.class);
 
 
     private final String eventCollection;
@@ -185,9 +188,10 @@ public class SpringMongoSubscriptionModel implements PositionAwareSubscriptionMo
             currentOperationTime = MongoCommons.getServerOperationTime(mongoOperations.executeCommand(new Document("hostInfo", 1)), 1);
         } catch (UncategorizedMongoDbException e) {
             if (e.getCause() instanceof MongoCommandException) {
+                log.warn(cannotFindGlobalSubscriptionPositionErrorMessage(e.getCause()));
                 // This can if the server doesn't allow to get the operation time since "db.adminCommand( { "hostInfo" : 1 } )" is prohibited.
                 // This is the case on for example shared Atlas clusters. If this happens we return the current time of the client instead.
-                currentOperationTime = bsonTimestampNow();
+                return null;
             } else {
                 throw e;
             }

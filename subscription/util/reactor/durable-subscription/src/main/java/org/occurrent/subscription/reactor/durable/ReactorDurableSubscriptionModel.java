@@ -138,6 +138,7 @@ public class ReactorDurableSubscriptionModel {
                     return subscription.globalSubscriptionPosition()
                             .flatMap(subscriptionPosition -> storage.save(subscriptionId, subscriptionPosition));
                 }))
-                .map(StartAt::subscriptionPosition);
+                .map(StartAt::subscriptionPosition)
+                .switchIfEmpty(Mono.defer(() -> Mono.just(StartAt.now())));
     }
 }
