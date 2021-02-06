@@ -23,7 +23,6 @@ import com.mongodb.reactivestreams.client.MongoCollection;
 import io.cloudevents.CloudEvent;
 import org.bson.Document;
 import org.bson.conversions.Bson;
-import org.occurrent.cloudevents.OccurrentCloudEventExtension;
 import org.occurrent.cloudevents.OccurrentExtensionGetter;
 import org.occurrent.eventstore.api.LongConditionEvaluator;
 import org.occurrent.eventstore.api.WriteCondition;
@@ -50,6 +49,8 @@ import java.util.Objects;
 import java.util.function.Function;
 
 import static java.util.Objects.requireNonNull;
+import static org.occurrent.cloudevents.OccurrentCloudEventExtension.STREAM_ID;
+import static org.occurrent.cloudevents.OccurrentCloudEventExtension.STREAM_VERSION;
 import static org.occurrent.filter.Filter.TIME;
 import static org.springframework.data.domain.Sort.Direction.ASC;
 import static org.springframework.data.domain.Sort.Direction.DESC;
@@ -177,10 +178,10 @@ public class ReactorMongoEventStore implements EventStore, EventStoreOperations,
     }
 
     private Mono<Long> currentStreamVersion(String streamId) {
-        Query query = Query.query(where(OccurrentCloudEventExtension.STREAM_ID).is(streamId));
-        query.fields().include(OccurrentCloudEventExtension.STREAM_VERSION);
-        return mongoTemplate.findOne(query.with(Sort.by(DESC, OccurrentCloudEventExtension.STREAM_VERSION)).limit(1), Document.class, eventStoreCollectionName)
-                .map(documentWithLatestStreamVersion -> documentWithLatestStreamVersion.getLong(OccurrentCloudEventExtension.STREAM_VERSION))
+        Query query = Query.query(where(STREAM_ID).is(streamId));
+        query.fields().include(STREAM_VERSION);
+        return mongoTemplate.findOne(query.with(Sort.by(DESC, STREAM_VERSION)).limit(1), Document.class, eventStoreCollectionName)
+                .map(documentWithLatestStreamVersion -> documentWithLatestStreamVersion.getLong(STREAM_VERSION))
                 .switchIfEmpty(Mono.just(0L));
     }
 
@@ -208,20 +209,17 @@ public class ReactorMongoEventStore implements EventStore, EventStoreOperations,
     private static Mono<Void> initializeEventStore(String eventStoreCollectionName, ReactiveMongoTemplate mongoTemplate) {
         Mono<MongoCollection<Document>> createEventStoreCollection = createCollection(eventStoreCollectionName, mongoTemplate);
 
-        // Stream id
-        Mono<String> indexStreamId = createIndex(eventStoreCollectionName, mongoTemplate, Indexes.ascending(OccurrentCloudEventExtension.STREAM_ID), new IndexOptions());
-
         // Cloud spec defines id + source must be unique!
         Mono<String> indexIdAndSource = createIndex(eventStoreCollectionName, mongoTemplate, Indexes.compoundIndex(Indexes.ascending("id"), Indexes.ascending("source")), new IndexOptions().unique(true));
 
-        // Create a streamId + streamVersion index
-        Mono<String> indexStreamIdAndStreamVersion = createIndex(eventStoreCollectionName, mongoTemplate, Indexes.compoundIndex(Indexes.ascending(OccurrentCloudEventExtension.STREAM_ID), Indexes.descending(OccurrentCloudEventExtension.STREAM_VERSION)), new IndexOptions().unique(true));
+        // Create a streamId + streamVersion index (note that we don't need to index stream id separately since it's covered by this compound index)
+        Mono<String> indexStreamIdAndStreamVersion = createIndex(eventStoreCollectionName, mongoTemplate, Indexes.compoundIndex(Indexes.ascending(STREAM_ID), Indexes.descending(STREAM_VERSION)), new IndexOptions().unique(true));
 
         // SessionSynchronization need to be "ALWAYS" in order for TransactionTemplate to work with mongo template!
         // See https://docs.spring.io/spring-data/mongodb/docs/current/reference/html/#mongo.transactions.transaction-template
         mongoTemplate.setSessionSynchronization(ALWAYS);
 
-        return createEventStoreCollection.then(indexStreamId).then(indexIdAndSource).then(indexStreamIdAndStreamVersion).then();
+        return createEventStoreCollection.then(indexIdAndSource).then(indexStreamIdAndStreamVersion).then();
     }
 
     private static Mono<String> createIndex(String eventStoreCollectionName, ReactiveMongoTemplate mongoTemplate, Bson index, IndexOptions indexOptions) {
@@ -357,7 +355,7 @@ public class ReactorMongoEventStore implements EventStore, EventStoreOperations,
     }
 
     private static Query streamIdEqualTo(String streamId) {
-        return Query.query(where(OccurrentCloudEventExtension.STREAM_ID).is(streamId));
+        return Query.query(where(STREAM_ID).is(streamId));
     }
 
     private static Query cloudEventIdIs(String cloudEventId, URI cloudEventSource) {

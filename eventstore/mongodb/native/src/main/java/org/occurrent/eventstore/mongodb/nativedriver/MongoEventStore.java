@@ -27,7 +27,6 @@ import com.mongodb.client.result.UpdateResult;
 import io.cloudevents.CloudEvent;
 import org.bson.Document;
 import org.bson.conversions.Bson;
-import org.occurrent.cloudevents.OccurrentCloudEventExtension;
 import org.occurrent.cloudevents.OccurrentExtensionGetter;
 import org.occurrent.condition.Condition;
 import org.occurrent.eventstore.api.LongConditionEvaluator;
@@ -58,6 +57,8 @@ import static com.mongodb.client.model.Filters.eq;
 import static com.mongodb.client.model.Sorts.ascending;
 import static com.mongodb.client.model.Sorts.descending;
 import static java.util.Objects.requireNonNull;
+import static org.occurrent.cloudevents.OccurrentCloudEventExtension.STREAM_ID;
+import static org.occurrent.cloudevents.OccurrentCloudEventExtension.STREAM_VERSION;
 import static org.occurrent.eventstore.api.WriteCondition.StreamVersionWriteCondition;
 import static org.occurrent.eventstore.api.WriteCondition.anyStreamVersion;
 import static org.occurrent.eventstore.mongodb.internal.MongoBulkWriteExceptionToDuplicateCloudEventExceptionTranslator.translateToDuplicateCloudEventException;
@@ -134,12 +135,12 @@ public class MongoEventStore implements EventStore, EventStoreOperations, EventS
     }
 
     private long currentStreamVersion(String streamId) {
-        Document documentWithLatestStreamVersion = eventCollection.find(streamIdEqualTo(streamId)).sort(Sorts.descending(OccurrentCloudEventExtension.STREAM_VERSION)).limit(1).projection(Projections.include(OccurrentCloudEventExtension.STREAM_VERSION)).first();
+        Document documentWithLatestStreamVersion = eventCollection.find(streamIdEqualTo(streamId)).sort(Sorts.descending(STREAM_VERSION)).limit(1).projection(Projections.include(STREAM_VERSION)).first();
         final long currentStreamVersion;
         if (documentWithLatestStreamVersion == null) {
             currentStreamVersion = 0;
         } else {
-            currentStreamVersion = documentWithLatestStreamVersion.getLong(OccurrentCloudEventExtension.STREAM_VERSION);
+            currentStreamVersion = documentWithLatestStreamVersion.getLong(STREAM_VERSION);
         }
         return currentStreamVersion;
     }
@@ -229,12 +230,12 @@ public class MongoEventStore implements EventStore, EventStoreOperations, EventS
 
     @Override
     public boolean exists(String streamId) {
-        return eventCollection.countDocuments(eq(OccurrentCloudEventExtension.STREAM_ID, streamId)) > 0;
+        return eventCollection.countDocuments(eq(STREAM_ID, streamId)) > 0;
     }
 
     @Override
     public void deleteEventStream(String streamId) {
-        eventCollection.deleteMany(eq(OccurrentCloudEventExtension.STREAM_ID, streamId));
+        eventCollection.deleteMany(eq(STREAM_ID, streamId));
     }
 
     @Override
@@ -341,12 +342,10 @@ public class MongoEventStore implements EventStore, EventStoreOperations, EventS
         if (!collectionExists(mongoDatabase, eventStoreCollectionName)) {
             mongoDatabase.createCollection(eventStoreCollectionName);
         }
-        // Create a streamId index
-        eventStoreCollection.createIndex(Indexes.ascending(OccurrentCloudEventExtension.STREAM_ID));
         // Cloud spec defines id + source must be unique!
         eventStoreCollection.createIndex(Indexes.compoundIndex(Indexes.ascending("id"), Indexes.ascending("source")), new IndexOptions().unique(true));
-        // Create a streamId + streamVersion index
-        eventStoreCollection.createIndex(Indexes.compoundIndex(Indexes.ascending(OccurrentCloudEventExtension.STREAM_ID), Indexes.descending(OccurrentCloudEventExtension.STREAM_VERSION)), new IndexOptions().unique(true));
+        // Create a streamId + streamVersion index (note that we don't need to index stream id separately since it's covered by this compound index)
+        eventStoreCollection.createIndex(Indexes.compoundIndex(Indexes.ascending(STREAM_ID), Indexes.descending(STREAM_VERSION)), new IndexOptions().unique(true));
     }
 
     private static boolean collectionExists(MongoDatabase mongoDatabase, String collectionName) {
@@ -359,7 +358,7 @@ public class MongoEventStore implements EventStore, EventStoreOperations, EventS
     }
 
     private static Bson streamIdEqualTo(String streamId) {
-        return eq(OccurrentCloudEventExtension.STREAM_ID, streamId);
+        return eq(STREAM_ID, streamId);
     }
 
     private static Bson uniqueCloudEvent(String cloudEventId, URI cloudEventSource) {

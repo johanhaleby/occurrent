@@ -1,3 +1,8 @@
+## Changelog next version
+
+* Removed the automatic creation of the "streamId" index in all MongoDB event stores. The reason is that it's not needed since there's another (compound) index that (streamId+version) and 
+  queries for "streamId" will be covered by that index.
+
 ## Changelog 0.7.2 (2021-02-05)
 
 * When running MongoDB subscriptions on services like Atlas, it's not possible to get the current time (global subscription position) when starting a new subscription since access is denied. 
