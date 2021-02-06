@@ -1,7 +1,7 @@
 ## Changelog next version
 
-* Removed the automatic creation of the "streamId" index in all MongoDB event stores. The reason is that it's not needed since there's another (compound) index (streamId+version) and 
-  queries for "streamId" will be covered by that index.
+* Removed the automatic creation of the "streamid" index in all MongoDB event stores. The reason is that it's not needed since there's another (compound) index (streamid+version) and 
+  queries for "streamid" will be covered by that index.
 
 ## Changelog 0.7.2 (2021-02-05)
 
