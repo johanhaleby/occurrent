@@ -8,8 +8,8 @@ Accepted
 
 ## Context
 
-When doing a code review with [Per Ökvist](https://github.com/perokvist) he pointed out that it stream consistency 
-was not implemented the way it normally seem to be in most event stores. Typically each event would contain a version. 
+When doing a code review with [Per Ökvist](https://github.com/perokvist) he pointed out that the stream consistency 
+was not implemented the way it normally seems to be in most event stores. Typically, each event would contain a version. 
 While this is probably not crucial for persisting the event (and maintaining consistency) a unique version or sequence number per 
 event can be really beneficial when doing projections. For example if you want to create an integration event when event X is 
 received then you may way to read all events less than the version number of X. This also allows for different strategies 
