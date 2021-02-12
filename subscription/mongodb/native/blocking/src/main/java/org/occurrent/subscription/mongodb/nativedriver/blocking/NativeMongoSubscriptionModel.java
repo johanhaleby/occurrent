@@ -261,10 +261,10 @@ public class NativeMongoSubscriptionModel implements PositionAwareSubscriptionMo
 
     @Override
     public SubscriptionPosition globalSubscriptionPosition() {
-        // Note that we increase the "increment" by 1 in order to not clash with an existing event in the event store.
-        // This is so that we can avoid duplicates in certain rare cases when replaying events.
         BsonTimestamp currentOperationTime;
         try {
+            // Note that we increase the "increment" by 1 in order to not clash with an existing event in the event store.
+            // This is so that we can avoid duplicates in certain rare cases when replaying events.
             currentOperationTime = MongoCommons.getServerOperationTime(database.runCommand(new Document("hostInfo", 1)), 1);
         } catch (MongoCommandException e) {
             log.warn(cannotFindGlobalSubscriptionPositionErrorMessage(e));

@@ -34,6 +34,7 @@ public class MongoCommons {
     public static final String OPERATION_TIME = "operationTime";
     public static final String GENERIC_SUBSCRIPTION_POSITION = "subscriptionPosition";
     static final String RESUME_TOKEN_DATA = "_data";
+    public static final int CHANGE_STREAM_HISTORY_LOST_ERROR_CODE = 286;
 
     public static Document generateResumeTokenStreamPositionDocument(String subscriptionId, BsonValue resumeToken) {
         Map<String, Object> data = new HashMap<>();

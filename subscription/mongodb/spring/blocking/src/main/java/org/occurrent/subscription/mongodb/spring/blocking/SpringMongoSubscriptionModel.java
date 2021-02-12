@@ -60,6 +60,7 @@ import java.util.function.Supplier;
 
 import static java.util.Objects.requireNonNull;
 import static org.occurrent.retry.internal.RetryExecution.executeWithRetry;
+import static org.occurrent.subscription.mongodb.internal.MongoCommons.CHANGE_STREAM_HISTORY_LOST_ERROR_CODE;
 import static org.occurrent.subscription.mongodb.internal.MongoCommons.cannotFindGlobalSubscriptionPositionErrorMessage;
 
 /**
@@ -72,7 +73,6 @@ import static org.occurrent.subscription.mongodb.internal.MongoCommons.cannotFin
  */
 public class SpringMongoSubscriptionModel implements PositionAwareSubscriptionModel, SubscriptionModelLifeCycle, SmartLifecycle {
     private static final Logger log = LoggerFactory.getLogger(SpringMongoSubscriptionModel.class);
-
 
     private final String eventCollection;
     private final MessageListenerContainer messageListenerContainer;
@@ -152,7 +152,7 @@ public class SpringMongoSubscriptionModel implements PositionAwareSubscriptionMo
         };
 
         Supplier<ChangeStreamRequest<Document>> requestSupplier = () -> new ChangeStreamRequest<>(listener, requestOptionsSupplier.get());
-        final org.springframework.data.mongodb.core.messaging.Subscription subscription = messageListenerContainer.register(requestSupplier.get(), Document.class);
+        final org.springframework.data.mongodb.core.messaging.Subscription subscription = registerNewSpringSubscription(subscriptionId, requestSupplier.get());
 
         if (messageListenerContainer.isRunning()) {
             runningSubscriptions.put(subscriptionId, new InternalSubscription(subscription, requestSupplier));
@@ -222,7 +222,7 @@ public class SpringMongoSubscriptionModel implements PositionAwareSubscriptionMo
             messageListenerContainer.start();
         }
 
-        org.springframework.data.mongodb.core.messaging.Subscription newSubscription = messageListenerContainer.register(internalSubscription.newChangeStreamRequest(), Document.class);
+        org.springframework.data.mongodb.core.messaging.Subscription newSubscription = registerNewSpringSubscription(subscriptionId, internalSubscription.newChangeStreamRequest());
         runningSubscriptions.put(subscriptionId, internalSubscription.changeSpringSubscriptionTo(newSubscription));
         return new SpringMongoSubscription(subscriptionId, newSubscription);
     }
@@ -263,6 +263,19 @@ public class SpringMongoSubscriptionModel implements PositionAwareSubscriptionMo
     @Override
     public boolean isAutoStartup() {
         return messageListenerContainer.isAutoStartup();
+    }
+
+    private org.springframework.data.mongodb.core.messaging.Subscription registerNewSpringSubscription(String subscriptionId, ChangeStreamRequest<Document> documentChangeStreamRequest) {
+        return messageListenerContainer.register(documentChangeStreamRequest, Document.class, throwable -> {
+            if (throwable instanceof UncategorizedMongoDbException) {
+                MongoCommandException e = (MongoCommandException) throwable.getCause();
+                if (e.getErrorCode() == CHANGE_STREAM_HISTORY_LOST_ERROR_CODE) {
+                    log.error("There was not enough oplog to resume subscription {}", subscriptionId, throwable);
+                }
+            } else {
+                log.error("An error occurred for subscription {}", subscriptionId, throwable);
+            }
+        });
     }
 
     // Model that hold both the spring subscription and the change stream request so that we can pause the subscription

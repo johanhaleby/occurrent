@@ -1,3 +1,7 @@
+## Changelog next version
+
+* Added better logging to `SpringMongoSubscriptionModel`, it'll now include the subscription id if an error occurs.
+
 ## Changelog 0.7.3 (2021-02-11)
 
 * Removed the automatic creation of the "streamid" index in all MongoDB event stores. The reason is that it's not needed since there's another (compound) index (streamid+version) and 
