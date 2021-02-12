@@ -235,7 +235,7 @@ public class SpringMongoSubscriptionModel implements PositionAwareSubscriptionMo
         }
 
         org.springframework.data.mongodb.core.messaging.Subscription newSubscription = registerNewSpringSubscription(subscriptionId, internalSubscription.newChangeStreamRequest());
-        runningSubscriptions.put(subscriptionId, internalSubscription.changeSpringSubscriptionTo(newSubscription));
+        runningSubscriptions.put(subscriptionId, internalSubscription.copy(newSubscription));
         return new SpringMongoSubscription(subscriptionId, newSubscription);
     }
 
@@ -293,7 +293,7 @@ public class SpringMongoSubscriptionModel implements PositionAwareSubscriptionMo
                                 org.springframework.data.mongodb.core.messaging.Subscription oldSpringSubscription = internalSubscription.getSpringSubscription();
                                 ChangeStreamRequest<Document> newChangeStreamRequestFromNow = internalSubscription.newChangeStreamRequest(StartAt.now());
                                 org.springframework.data.mongodb.core.messaging.Subscription newSpringSubscription = registerNewSpringSubscription(subscriptionId, newChangeStreamRequestFromNow);
-                                runningSubscriptions.put(subscriptionId, internalSubscription.changeSpringSubscriptionTo(newSpringSubscription));
+                                internalSubscription.occurrentSubscription.changeSubscription(newSpringSubscription);
                                 messageListenerContainer.remove(oldSpringSubscription);
                                 log.info("Subscription {} successfully restarted", subscriptionId);
                             }).start();
@@ -309,16 +309,16 @@ public class SpringMongoSubscriptionModel implements PositionAwareSubscriptionMo
     // Model that hold both the spring subscription and the change stream request so that we can pause the subscription
     // (by removing it and starting it again)
     private static class InternalSubscription {
-        private final SpringMongoSubscription springMongoSubscription;
+        private final SpringMongoSubscription occurrentSubscription;
         private final Function<StartAt, ChangeStreamRequest<Document>> changeStreamRequestBuilder;
 
         private InternalSubscription(SpringMongoSubscription subscription, Function<StartAt, ChangeStreamRequest<Document>> changeStreamRequestBuilder) {
-            this.springMongoSubscription = subscription;
+            this.occurrentSubscription = subscription;
             this.changeStreamRequestBuilder = changeStreamRequestBuilder;
         }
 
-        InternalSubscription changeSpringSubscriptionTo(org.springframework.data.mongodb.core.messaging.Subscription springSubscription) {
-            return new InternalSubscription(new SpringMongoSubscription(springMongoSubscription.id(), springSubscription), changeStreamRequestBuilder);
+        InternalSubscription copy(org.springframework.data.mongodb.core.messaging.Subscription springSubscription) {
+            return new InternalSubscription(new SpringMongoSubscription(occurrentSubscription.id(), springSubscription), changeStreamRequestBuilder);
         }
 
         ChangeStreamRequest<Document> newChangeStreamRequest() {
@@ -334,20 +334,20 @@ public class SpringMongoSubscriptionModel implements PositionAwareSubscriptionMo
             if (this == o) return true;
             if (!(o instanceof InternalSubscription)) return false;
             InternalSubscription that = (InternalSubscription) o;
-            return Objects.equals(springMongoSubscription, that.springMongoSubscription) && Objects.equals(changeStreamRequestBuilder, that.changeStreamRequestBuilder);
+            return Objects.equals(occurrentSubscription, that.occurrentSubscription) && Objects.equals(changeStreamRequestBuilder, that.changeStreamRequestBuilder);
         }
 
         org.springframework.data.mongodb.core.messaging.Subscription getSpringSubscription() {
-            return springMongoSubscription.getSubscriptionReference().get();
+            return occurrentSubscription.getSubscriptionReference().get();
         }
 
         void shutdown() {
-            springMongoSubscription.shutdown();
+            occurrentSubscription.shutdown();
         }
 
         @Override
         public int hashCode() {
-            return Objects.hash(springMongoSubscription, changeStreamRequestBuilder);
+            return Objects.hash(occurrentSubscription, changeStreamRequestBuilder);
         }
     }
 }
