@@ -153,20 +153,20 @@ public class SpringMongoSubscriptionModel implements PositionAwareSubscriptionMo
 
         Supplier<ChangeStreamRequest<Document>> requestSupplier = () -> new ChangeStreamRequest<>(listener, requestOptionsSupplier.get());
         final org.springframework.data.mongodb.core.messaging.Subscription subscription = registerNewSpringSubscription(subscriptionId, requestSupplier.get());
-
+        SpringMongoSubscription springMongoSubscription = new SpringMongoSubscription(subscriptionId, subscription);
         if (messageListenerContainer.isRunning()) {
-            runningSubscriptions.put(subscriptionId, new InternalSubscription(subscription, requestSupplier));
+            runningSubscriptions.put(subscriptionId, new InternalSubscription(springMongoSubscription, requestSupplier));
         } else {
-            pausedSubscriptions.put(subscriptionId, new InternalSubscription(subscription, requestSupplier));
+            pausedSubscriptions.put(subscriptionId, new InternalSubscription(springMongoSubscription, requestSupplier));
         }
-        return new SpringMongoSubscription(subscriptionId, subscription);
+        return springMongoSubscription;
     }
 
     @Override
     public void cancelSubscription(String subscriptionId) {
         InternalSubscription subscription = runningSubscriptions.remove(subscriptionId);
         if (subscription != null) {
-            messageListenerContainer.remove(subscription.springSubscription);
+            messageListenerContainer.remove(subscription.getSpringSubscription());
         }
     }
 
@@ -174,7 +174,9 @@ public class SpringMongoSubscriptionModel implements PositionAwareSubscriptionMo
     @Override
     public void shutdown() {
         shutdown = true;
+        runningSubscriptions.forEach((__, internalSubscription) -> internalSubscription.shutdown());
         runningSubscriptions.clear();
+        pausedSubscriptions.forEach((__, internalSubscription) -> internalSubscription.shutdown());
         pausedSubscriptions.clear();
         messageListenerContainer.stop();
     }
@@ -207,7 +209,7 @@ public class SpringMongoSubscriptionModel implements PositionAwareSubscriptionMo
         if (internalSubscription == null) {
             throw new IllegalArgumentException("Subscription " + subscriptionId + " isn't running.");
         }
-        messageListenerContainer.remove(internalSubscription.springSubscription);
+        messageListenerContainer.remove(internalSubscription.getSpringSubscription());
         pausedSubscriptions.put(subscriptionId, internalSubscription);
     }
 
@@ -281,16 +283,16 @@ public class SpringMongoSubscriptionModel implements PositionAwareSubscriptionMo
     // Model that hold both the spring subscription and the change stream request so that we can pause the subscription
     // (by removing it and starting it again)
     private static class InternalSubscription {
-        private final org.springframework.data.mongodb.core.messaging.Subscription springSubscription;
+        private final SpringMongoSubscription springMongoSubscription;
         private final Supplier<ChangeStreamRequest<Document>> requestSupplier;
 
-        private InternalSubscription(org.springframework.data.mongodb.core.messaging.Subscription subscription, Supplier<ChangeStreamRequest<Document>> requestSupplier) {
-            this.springSubscription = subscription;
+        private InternalSubscription(SpringMongoSubscription subscription, Supplier<ChangeStreamRequest<Document>> requestSupplier) {
+            this.springMongoSubscription = subscription;
             this.requestSupplier = requestSupplier;
         }
 
         InternalSubscription changeSpringSubscriptionTo(org.springframework.data.mongodb.core.messaging.Subscription springSubscription) {
-            return new InternalSubscription(springSubscription, requestSupplier);
+            return new InternalSubscription(new SpringMongoSubscription(springMongoSubscription.id(), springSubscription), requestSupplier);
         }
 
         ChangeStreamRequest<Document> newChangeStreamRequest() {
@@ -302,12 +304,20 @@ public class SpringMongoSubscriptionModel implements PositionAwareSubscriptionMo
             if (this == o) return true;
             if (!(o instanceof InternalSubscription)) return false;
             InternalSubscription that = (InternalSubscription) o;
-            return Objects.equals(springSubscription, that.springSubscription) && Objects.equals(requestSupplier, that.requestSupplier);
+            return Objects.equals(springMongoSubscription, that.springMongoSubscription) && Objects.equals(requestSupplier, that.requestSupplier);
+        }
+
+        org.springframework.data.mongodb.core.messaging.Subscription getSpringSubscription() {
+            return springMongoSubscription.getSubscriptionReference().get();
+        }
+
+        void shutdown() {
+            springMongoSubscription.shutdown();
         }
 
         @Override
         public int hashCode() {
-            return Objects.hash(springSubscription, requestSupplier);
+            return Objects.hash(springMongoSubscription, requestSupplier);
         }
     }
 }

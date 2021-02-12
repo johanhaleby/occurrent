@@ -21,15 +21,18 @@ import org.occurrent.subscription.api.blocking.Subscription;
 import java.time.Duration;
 import java.time.temporal.ChronoUnit;
 import java.util.Objects;
+import java.util.StringJoiner;
+import java.util.concurrent.atomic.AtomicReference;
 
 public class SpringMongoSubscription implements Subscription {
 
     private final String subscriptionId;
-    private final org.springframework.data.mongodb.core.messaging.Subscription subscription;
+    private final AtomicReference<org.springframework.data.mongodb.core.messaging.Subscription> subscriptionReference;
+    private volatile boolean shutdown = false;
 
-    public SpringMongoSubscription(String subscriptionId, org.springframework.data.mongodb.core.messaging.Subscription subscription) {
+    SpringMongoSubscription(String subscriptionId, org.springframework.data.mongodb.core.messaging.Subscription subscriptionReference) {
         this.subscriptionId = subscriptionId;
-        this.subscription = subscription;
+        this.subscriptionReference = new AtomicReference<>(subscriptionReference);
     }
 
     @Override
@@ -39,20 +42,37 @@ public class SpringMongoSubscription implements Subscription {
 
     @Override
     public void waitUntilStarted() {
-        try {
-            subscription.await(Duration.of(100000, ChronoUnit.DAYS)); // "Forever" :)
-        } catch (InterruptedException e) {
-            throw new RuntimeException(e);
-        }
+        waitUntilStarted(Duration.of(100000, ChronoUnit.DAYS)); // "Forever" :)
     }
 
     @Override
     public boolean waitUntilStarted(Duration timeout) {
-        try {
-            return subscription.await(timeout);
-        } catch (InterruptedException e) {
-            throw new RuntimeException(e);
+        boolean continueWaiting = true;
+        final long startTime = System.currentTimeMillis();
+        while (!shutdown && continueWaiting) {
+            final long currentTime = System.currentTimeMillis();
+            if ((currentTime - startTime) >= timeout.toMillis()) {
+                return false;
+            }
+            try {
+                continueWaiting = !subscriptionReference.get().await(Duration.ofMillis(100));
+            } catch (InterruptedException e) {
+                throw new RuntimeException(e);
+            }
         }
+        return !continueWaiting;
+    }
+
+    AtomicReference<org.springframework.data.mongodb.core.messaging.Subscription> getSubscriptionReference() {
+        return subscriptionReference;
+    }
+
+    void changeSubscription(org.springframework.data.mongodb.core.messaging.Subscription subscription) {
+        subscriptionReference.set(subscription);
+    }
+
+    void shutdown() {
+        shutdown = true;
     }
 
     @Override
@@ -60,20 +80,20 @@ public class SpringMongoSubscription implements Subscription {
         if (this == o) return true;
         if (!(o instanceof SpringMongoSubscription)) return false;
         SpringMongoSubscription that = (SpringMongoSubscription) o;
-        return Objects.equals(subscriptionId, that.subscriptionId) &&
-                Objects.equals(subscription, that.subscription);
+        return shutdown == that.shutdown && Objects.equals(subscriptionId, that.subscriptionId) && Objects.equals(subscriptionReference, that.subscriptionReference);
     }
 
     @Override
     public int hashCode() {
-        return Objects.hash(subscriptionId, subscription);
+        return Objects.hash(subscriptionId, subscriptionReference, shutdown);
     }
 
     @Override
     public String toString() {
-        return "MongoDBSpringSubscription{" +
-                "subscriptionId='" + subscriptionId + '\'' +
-                ", subscription=" + subscription +
-                '}';
+        return new StringJoiner(", ", SpringMongoSubscription.class.getSimpleName() + "[", "]")
+                .add("subscriptionId='" + subscriptionId + "'")
+                .add("subscriptionReference=" + subscriptionReference)
+                .add("shutdown=" + shutdown)
+                .toString();
     }
 }
