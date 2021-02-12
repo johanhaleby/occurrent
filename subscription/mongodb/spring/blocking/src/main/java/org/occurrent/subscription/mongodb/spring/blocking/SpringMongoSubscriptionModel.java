@@ -51,17 +51,18 @@ import org.springframework.data.mongodb.core.messaging.MessageListener;
 import org.springframework.data.mongodb.core.messaging.MessageListenerContainer;
 
 import javax.annotation.PreDestroy;
-import java.time.Duration;
 import java.util.Objects;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ConcurrentMap;
 import java.util.function.Consumer;
+import java.util.function.Function;
 import java.util.function.Supplier;
 
 import static java.util.Objects.requireNonNull;
 import static org.occurrent.retry.internal.RetryExecution.executeWithRetry;
 import static org.occurrent.subscription.mongodb.internal.MongoCommons.CHANGE_STREAM_HISTORY_LOST_ERROR_CODE;
 import static org.occurrent.subscription.mongodb.internal.MongoCommons.cannotFindGlobalSubscriptionPositionErrorMessage;
+import static org.occurrent.subscription.mongodb.spring.blocking.SpringSubscriptionModelConfig.withConfig;
 
 /**
  * This is a subscription that uses Spring and its {@link MessageListenerContainer} for MongoDB to listen to changes from an event store.
@@ -83,6 +84,7 @@ public class SpringMongoSubscriptionModel implements PositionAwareSubscriptionMo
     private final RetryStrategy retryStrategy;
 
     private volatile boolean shutdown = false;
+    private final boolean restartSubscriptionsOnChangeStreamHistoryLost;
 
     /**
      * Create a blocking subscription using Spring. It will by default use a {@link RetryStrategy} for retries, with exponential backoff starting with 100 ms and progressively
@@ -93,7 +95,7 @@ public class SpringMongoSubscriptionModel implements PositionAwareSubscriptionMo
      * @param timeRepresentation How time is represented in the database, must be the same as what's specified for the EventStore that stores the events.
      */
     public SpringMongoSubscriptionModel(MongoTemplate mongoTemplate, String eventCollection, TimeRepresentation timeRepresentation) {
-        this(mongoTemplate, eventCollection, timeRepresentation, RetryStrategy.exponentialBackoff(Duration.ofMillis(100), Duration.ofSeconds(2), 2.0f));
+        this(mongoTemplate, withConfig(eventCollection, timeRepresentation));
     }
 
     /**
@@ -105,17 +107,25 @@ public class SpringMongoSubscriptionModel implements PositionAwareSubscriptionMo
      * @param retryStrategy      A custom retry strategy to use if the {@code action} supplied to the subscription throws an exception
      */
     public SpringMongoSubscriptionModel(MongoTemplate mongoTemplate, String eventCollection, TimeRepresentation timeRepresentation, RetryStrategy retryStrategy) {
-        requireNonNull(mongoTemplate, MongoOperations.class.getSimpleName() + " cannot be null");
-        requireNonNull(eventCollection, "eventCollection cannot be null");
-        requireNonNull(timeRepresentation, TimeRepresentation.class.getSimpleName() + " cannot be null");
-        requireNonNull(retryStrategy, RetryStrategy.class.getSimpleName() + " cannot be null");
+        this(mongoTemplate, withConfig(eventCollection, timeRepresentation).retryStrategy(retryStrategy));
+    }
 
+    /**
+     * Create a blocking subscription using Spring
+     *
+     * @param mongoTemplate The mongo template to use
+     * @param config        The configuration to use
+     */
+    public SpringMongoSubscriptionModel(MongoTemplate mongoTemplate, SpringSubscriptionModelConfig config) {
+        requireNonNull(mongoTemplate, MongoOperations.class.getSimpleName() + " cannot be null");
+        requireNonNull(config, SpringSubscriptionModelConfig.class.getSimpleName() + " cannot be null");
         this.mongoOperations = mongoTemplate;
-        this.timeRepresentation = timeRepresentation;
-        this.eventCollection = eventCollection;
+        this.timeRepresentation = config.timeRepresentation;
+        this.eventCollection = config.eventCollection;
         this.runningSubscriptions = new ConcurrentHashMap<>();
         this.pausedSubscriptions = new ConcurrentHashMap<>();
-        this.retryStrategy = retryStrategy;
+        this.retryStrategy = config.retryStrategy;
+        this.restartSubscriptionsOnChangeStreamHistoryLost = config.restartSubscriptionsOnChangeStreamHistoryLost;
         this.messageListenerContainer = new DefaultMessageListenerContainer(mongoTemplate);
         this.messageListenerContainer.start();
     }
@@ -136,9 +146,9 @@ public class SpringMongoSubscriptionModel implements PositionAwareSubscriptionMo
         // If we hadn't used a supplier and a subscription is paused and later resumed, it'll be resumed from the _initial_ "StartAt.now()" position,
         // and not the position the "StartAt.now()" position of when the subscription was resumed. This will lead to historic events being
         // replayed which is (most likely) not what the user expects.
-        Supplier<ChangeStreamRequestOptions> requestOptionsSupplier = () -> {
+        Function<StartAt, ChangeStreamRequestOptions> requestOptionsFunction = startAt -> {
             // TODO We should change builder::resumeAt to builder::startAtOperationTime once Spring adds support for it (see https://jira.spring.io/browse/DATAMONGO-2607)
-            ChangeStreamOptionsBuilder builder = MongoCommons.applyStartPosition(ChangeStreamOptions.builder(), ChangeStreamOptionsBuilder::startAfter, ChangeStreamOptionsBuilder::resumeAt, startAtSupplier.get());
+            ChangeStreamOptionsBuilder builder = MongoCommons.applyStartPosition(ChangeStreamOptions.builder(), ChangeStreamOptionsBuilder::startAfter, ChangeStreamOptionsBuilder::resumeAt, startAt == null ? startAtSupplier.get() : startAt);
             final ChangeStreamOptions changeStreamOptions = ApplyFilterToChangeStreamOptionsBuilder.applyFilter(timeRepresentation, filter, builder);
             return new ChangeStreamRequestOptions(null, eventCollection, changeStreamOptions);
         };
@@ -151,13 +161,13 @@ public class SpringMongoSubscriptionModel implements PositionAwareSubscriptionMo
                     .ifPresent(executeWithRetry(action, __ -> !shutdown, retryStrategy));
         };
 
-        Supplier<ChangeStreamRequest<Document>> requestSupplier = () -> new ChangeStreamRequest<>(listener, requestOptionsSupplier.get());
-        final org.springframework.data.mongodb.core.messaging.Subscription subscription = registerNewSpringSubscription(subscriptionId, requestSupplier.get());
+        Function<StartAt, ChangeStreamRequest<Document>> requestBuilder = startAt -> new ChangeStreamRequest<>(listener, requestOptionsFunction.apply(startAt));
+        final org.springframework.data.mongodb.core.messaging.Subscription subscription = registerNewSpringSubscription(subscriptionId, requestBuilder.apply(null));
         SpringMongoSubscription springMongoSubscription = new SpringMongoSubscription(subscriptionId, subscription);
         if (messageListenerContainer.isRunning()) {
-            runningSubscriptions.put(subscriptionId, new InternalSubscription(springMongoSubscription, requestSupplier));
+            runningSubscriptions.put(subscriptionId, new InternalSubscription(springMongoSubscription, requestBuilder));
         } else {
-            pausedSubscriptions.put(subscriptionId, new InternalSubscription(springMongoSubscription, requestSupplier));
+            pausedSubscriptions.put(subscriptionId, new InternalSubscription(springMongoSubscription, requestBuilder));
         }
         return springMongoSubscription;
     }
@@ -272,7 +282,23 @@ public class SpringMongoSubscriptionModel implements PositionAwareSubscriptionMo
             if (throwable instanceof UncategorizedMongoDbException) {
                 MongoCommandException e = (MongoCommandException) throwable.getCause();
                 if (e.getErrorCode() == CHANGE_STREAM_HISTORY_LOST_ERROR_CODE) {
-                    log.error("There was not enough oplog to resume subscription {}", subscriptionId, throwable);
+                    String restartMessage = restartSubscriptionsOnChangeStreamHistoryLost ? "will restart subscription from current time." :
+                            "will not restart subscription! Consider remove the subscription from the durable storage or use a catch-up subscription to get up to speed if needed.";
+                    log.error("There was not enough oplog to resume subscription {}, {}", subscriptionId, restartMessage, throwable);
+                    if (restartSubscriptionsOnChangeStreamHistoryLost) {
+                        InternalSubscription internalSubscription = runningSubscriptions.get(subscriptionId);
+                        if (internalSubscription != null) {
+                            new Thread(() -> {
+                                // We restart from now!!
+                                org.springframework.data.mongodb.core.messaging.Subscription oldSpringSubscription = internalSubscription.getSpringSubscription();
+                                ChangeStreamRequest<Document> newChangeStreamRequestFromNow = internalSubscription.newChangeStreamRequest(StartAt.now());
+                                org.springframework.data.mongodb.core.messaging.Subscription newSpringSubscription = registerNewSpringSubscription(subscriptionId, newChangeStreamRequestFromNow);
+                                runningSubscriptions.put(subscriptionId, internalSubscription.changeSpringSubscriptionTo(newSpringSubscription));
+                                messageListenerContainer.remove(oldSpringSubscription);
+                                log.info("Subscription {} successfully restarted", subscriptionId);
+                            }).start();
+                        }
+                    }
                 }
             } else {
                 log.error("An error occurred for subscription {}", subscriptionId, throwable);
@@ -284,19 +310,23 @@ public class SpringMongoSubscriptionModel implements PositionAwareSubscriptionMo
     // (by removing it and starting it again)
     private static class InternalSubscription {
         private final SpringMongoSubscription springMongoSubscription;
-        private final Supplier<ChangeStreamRequest<Document>> requestSupplier;
+        private final Function<StartAt, ChangeStreamRequest<Document>> changeStreamRequestBuilder;
 
-        private InternalSubscription(SpringMongoSubscription subscription, Supplier<ChangeStreamRequest<Document>> requestSupplier) {
+        private InternalSubscription(SpringMongoSubscription subscription, Function<StartAt, ChangeStreamRequest<Document>> changeStreamRequestBuilder) {
             this.springMongoSubscription = subscription;
-            this.requestSupplier = requestSupplier;
+            this.changeStreamRequestBuilder = changeStreamRequestBuilder;
         }
 
         InternalSubscription changeSpringSubscriptionTo(org.springframework.data.mongodb.core.messaging.Subscription springSubscription) {
-            return new InternalSubscription(new SpringMongoSubscription(springMongoSubscription.id(), springSubscription), requestSupplier);
+            return new InternalSubscription(new SpringMongoSubscription(springMongoSubscription.id(), springSubscription), changeStreamRequestBuilder);
         }
 
         ChangeStreamRequest<Document> newChangeStreamRequest() {
-            return requestSupplier.get();
+            return changeStreamRequestBuilder.apply(null);
+        }
+
+        ChangeStreamRequest<Document> newChangeStreamRequest(StartAt startAt) {
+            return changeStreamRequestBuilder.apply(startAt);
         }
 
         @Override
@@ -304,7 +334,7 @@ public class SpringMongoSubscriptionModel implements PositionAwareSubscriptionMo
             if (this == o) return true;
             if (!(o instanceof InternalSubscription)) return false;
             InternalSubscription that = (InternalSubscription) o;
-            return Objects.equals(springMongoSubscription, that.springMongoSubscription) && Objects.equals(requestSupplier, that.requestSupplier);
+            return Objects.equals(springMongoSubscription, that.springMongoSubscription) && Objects.equals(changeStreamRequestBuilder, that.changeStreamRequestBuilder);
         }
 
         org.springframework.data.mongodb.core.messaging.Subscription getSpringSubscription() {
@@ -317,7 +347,7 @@ public class SpringMongoSubscriptionModel implements PositionAwareSubscriptionMo
 
         @Override
         public int hashCode() {
-            return Objects.hash(springMongoSubscription, requestSupplier);
+            return Objects.hash(springMongoSubscription, changeStreamRequestBuilder);
         }
     }
 }
