@@ -25,6 +25,7 @@ import org.occurrent.subscription.SubscriptionFilter;
 import org.occurrent.subscription.api.blocking.Subscription;
 import org.occurrent.subscription.api.blocking.SubscriptionModel;
 import org.occurrent.subscription.api.blocking.SubscriptionModelLifeCycle;
+import org.occurrent.subscription.internal.ExecutorShutdown;
 
 import javax.annotation.PreDestroy;
 import java.util.List;
@@ -142,18 +143,9 @@ public class InMemorySubscriptionModel implements SubscriptionModel, Subscriptio
             subscriptions.values().forEach(InMemorySubscription::shutdown);
             subscriptions.clear();
         }
+
         pausedSubscriptions.clear();
-        if (!cloudEventDispatcher.isShutdown() && !cloudEventDispatcher.isTerminated()) {
-            cloudEventDispatcher.shutdown();
-            try {
-                boolean terminated = cloudEventDispatcher.awaitTermination(5, TimeUnit.SECONDS);
-                if (!terminated) {
-                    cloudEventDispatcher.shutdownNow();
-                }
-            } catch (InterruptedException e) {
-                cloudEventDispatcher.shutdownNow();
-            }
-        }
+        ExecutorShutdown.shutdownSafely(cloudEventDispatcher, 5, TimeUnit.SECONDS);
     }
 
     private static Filter getFilter(SubscriptionFilter filter) {

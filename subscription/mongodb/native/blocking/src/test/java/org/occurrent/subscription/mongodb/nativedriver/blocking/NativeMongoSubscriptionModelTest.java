@@ -35,10 +35,10 @@ import org.occurrent.domain.NameWasChanged;
 import org.occurrent.eventstore.mongodb.nativedriver.EventStoreConfig;
 import org.occurrent.eventstore.mongodb.nativedriver.MongoEventStore;
 import org.occurrent.filter.Filter;
-import org.occurrent.functional.Not;
 import org.occurrent.mongodb.timerepresentation.TimeRepresentation;
 import org.occurrent.retry.RetryStrategy;
 import org.occurrent.subscription.OccurrentSubscriptionFilter;
+import org.occurrent.subscription.internal.ExecutorShutdown;
 import org.occurrent.subscription.mongodb.MongoFilterSpecification.MongoJsonFilterSpecification;
 import org.occurrent.testsupport.mongodb.FlushMongoDBExtension;
 import org.testcontainers.containers.MongoDBContainer;
@@ -51,9 +51,9 @@ import java.time.LocalDateTime;
 import java.time.temporal.ChronoUnit;
 import java.util.UUID;
 import java.util.concurrent.CopyOnWriteArrayList;
-import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
+import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.stream.Stream;
 
@@ -111,13 +111,10 @@ public class NativeMongoSubscriptionModelTest {
     }
 
     @AfterEach
-    void shutdown() throws InterruptedException {
+    void shutdown() {
         subscriptionModel.shutdown();
         subscriptionExecutor.shutdown();
-        boolean terminated = subscriptionExecutor.awaitTermination(10, SECONDS);
-        if (!terminated) {
-            subscriptionExecutor.shutdownNow();
-        }
+        ExecutorShutdown.shutdownSafely(subscriptionExecutor, 10, TimeUnit.SECONDS);
         mongoClient.close();
     }
 

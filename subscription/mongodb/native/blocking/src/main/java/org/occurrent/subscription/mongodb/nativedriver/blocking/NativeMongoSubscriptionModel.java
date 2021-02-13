@@ -38,6 +38,7 @@ import org.occurrent.subscription.api.blocking.PositionAwareSubscriptionModel;
 import org.occurrent.subscription.api.blocking.Subscription;
 import org.occurrent.subscription.api.blocking.SubscriptionModel;
 import org.occurrent.subscription.api.blocking.SubscriptionModelLifeCycle;
+import org.occurrent.subscription.internal.ExecutorShutdown;
 import org.occurrent.subscription.mongodb.MongoFilterSpecification;
 import org.occurrent.subscription.mongodb.MongoOperationTimeSubscriptionPosition;
 import org.occurrent.subscription.mongodb.MongoResumeTokenSubscriptionPosition;
@@ -52,10 +53,7 @@ import java.time.Duration;
 import java.util.Collections;
 import java.util.List;
 import java.util.Objects;
-import java.util.concurrent.ConcurrentHashMap;
-import java.util.concurrent.ConcurrentMap;
-import java.util.concurrent.CountDownLatch;
-import java.util.concurrent.ExecutorService;
+import java.util.concurrent.*;
 import java.util.function.Consumer;
 import java.util.function.Predicate;
 import java.util.function.Supplier;
@@ -65,7 +63,6 @@ import java.util.stream.Stream;
 import static com.mongodb.client.model.Aggregates.match;
 import static java.util.Objects.requireNonNull;
 import static java.util.concurrent.TimeUnit.MILLISECONDS;
-import static java.util.concurrent.TimeUnit.SECONDS;
 import static org.occurrent.retry.internal.RetryExecution.executeWithRetry;
 import static org.occurrent.subscription.mongodb.internal.MongoCommons.cannotFindGlobalSubscriptionPositionErrorMessage;
 
@@ -247,16 +244,7 @@ public class NativeMongoSubscriptionModel implements PositionAwareSubscriptionMo
         runningSubscriptions.keySet().forEach(this::cancelSubscription);
         runningSubscriptions.clear();
         pausedSubscriptions.clear();
-        if (!cloudEventDispatcher.isShutdown() && !cloudEventDispatcher.isTerminated()) {
-            cloudEventDispatcher.shutdown();
-            try {
-                if (!cloudEventDispatcher.awaitTermination(5, SECONDS)) {
-                    cloudEventDispatcher.shutdownNow();
-                }
-            } catch (InterruptedException e) {
-                cloudEventDispatcher.shutdownNow();
-            }
-        }
+        ExecutorShutdown.shutdownSafely(cloudEventDispatcher, 5, TimeUnit.SECONDS);
     }
 
     @Override

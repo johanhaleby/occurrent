@@ -40,6 +40,7 @@ import org.occurrent.retry.RetryStrategy;
 import org.occurrent.subscription.StartAt;
 import org.occurrent.subscription.SubscriptionPosition;
 import org.occurrent.subscription.blocking.durable.DurableSubscriptionModel;
+import org.occurrent.subscription.internal.ExecutorShutdown;
 import org.occurrent.subscription.mongodb.nativedriver.blocking.NativeMongoSubscriptionModel;
 import org.occurrent.subscription.mongodb.nativedriver.blocking.NativeMongoSubscriptionPositionStorage;
 import org.occurrent.testsupport.mongodb.FlushMongoDBExtension;
@@ -51,10 +52,7 @@ import java.net.URI;
 import java.time.Duration;
 import java.time.LocalDateTime;
 import java.util.UUID;
-import java.util.concurrent.CopyOnWriteArrayList;
-import java.util.concurrent.CountDownLatch;
-import java.util.concurrent.ExecutorService;
-import java.util.concurrent.Executors;
+import java.util.concurrent.*;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.function.Supplier;
 import java.util.stream.Stream;
@@ -62,7 +60,6 @@ import java.util.stream.Stream;
 import static java.time.ZoneOffset.UTC;
 import static java.time.temporal.ChronoUnit.MILLIS;
 import static java.util.Objects.requireNonNull;
-import static java.util.concurrent.TimeUnit.SECONDS;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.awaitility.Awaitility.await;
 import static org.awaitility.Durations.FIVE_SECONDS;
@@ -107,14 +104,9 @@ public class CatchupSubscriptionModelTest {
 
 
     @AfterEach
-    void shutdown() throws InterruptedException {
+    void shutdown() {
         subscription.shutdown();
-        if (!subscriptionExecutor.isShutdown() && !subscriptionExecutor.isTerminated()) {
-            subscriptionExecutor.shutdown();
-            if (!subscriptionExecutor.awaitTermination(5, SECONDS)) {
-                subscriptionExecutor.shutdownNow();
-            }
-        }
+        ExecutorShutdown.shutdownSafely(subscriptionExecutor, 5, TimeUnit.SECONDS);
         mongoClient.close();
     }
 

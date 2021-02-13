@@ -12,6 +12,7 @@
   ```
   
   An alternative approach to restarting automatically is to use a catch-up subscription and restart the subscription from an earlier date.
+* Better shutdown handling of all executor services used by subscription models.
 
 ## Changelog 0.7.3 (2021-02-11)
 
