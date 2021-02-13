@@ -13,6 +13,7 @@
   
   An alternative approach to restarting automatically is to use a catch-up subscription and restart the subscription from an earlier date.
 * Better shutdown handling of all executor services used by subscription models.
+* Don't to error when a `SpringMongoSubscriptionModel` subscription is paused right after it was created, leading to a race condition. This is not an error. It's now logged in "debug" mode instead.
 
 ## Changelog 0.7.3 (2021-02-11)
 

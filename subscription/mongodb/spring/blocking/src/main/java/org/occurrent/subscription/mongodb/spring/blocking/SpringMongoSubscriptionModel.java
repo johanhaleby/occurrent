@@ -300,10 +300,18 @@ public class SpringMongoSubscriptionModel implements PositionAwareSubscriptionMo
                         }
                     }
                 }
+            } else if (isCursorNoLongerOpen(throwable)) {
+                if (log.isDebugEnabled()) {
+                    log.debug("Cursor is not longer open for subscription {}, this may happen if you pause a subscription very soon after subscribing.", subscriptionId, throwable);
+                }
             } else {
                 log.error("An error occurred for subscription {}", subscriptionId, throwable);
             }
         });
+    }
+
+    private static boolean isCursorNoLongerOpen(Throwable throwable) {
+        return throwable instanceof IllegalStateException && throwable.getMessage().startsWith("Cursor") && throwable.getMessage().endsWith("is not longer open.");
     }
 
     // Model that hold both the spring subscription and the change stream request so that we can pause the subscription
