@@ -40,6 +40,9 @@ import org.occurrent.functional.CheckedFunction;
 import org.occurrent.functional.Not;
 import org.occurrent.mongodb.timerepresentation.TimeRepresentation;
 import org.occurrent.subscription.OccurrentSubscriptionFilter;
+import org.occurrent.subscription.PositionAwareCloudEvent;
+import org.occurrent.subscription.StartAt;
+import org.occurrent.subscription.SubscriptionPosition;
 import org.occurrent.subscription.mongodb.MongoFilterSpecification;
 import org.occurrent.testsupport.mongodb.FlushMongoDBExtension;
 import org.occurrent.time.TimeConversion;
@@ -81,6 +84,7 @@ import static org.junit.jupiter.api.Assertions.assertAll;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.Mockito.*;
 import static org.occurrent.filter.Filter.all;
+import static org.occurrent.filter.Filter.id;
 import static org.occurrent.subscription.mongodb.MongoFilterSpecification.MongoBsonFilterSpecification.filter;
 import static org.occurrent.subscription.mongodb.spring.blocking.SpringSubscriptionModelConfig.withConfig;
 
@@ -161,6 +165,42 @@ public class SpringMongoSubscriptionModelTest {
 
         // Then
         await().atMost(2, SECONDS).with().pollInterval(Duration.of(20, MILLIS)).untilAsserted(() -> assertThat(state).hasSize(5));
+    }
+
+    @Test
+    void resumes_stream_after_deletion_of_event_that_subscription_has_not_received_yet() {
+        // Given
+        LocalDateTime now = LocalDateTime.now();
+        CopyOnWriteArrayList<CloudEvent> state = new CopyOnWriteArrayList<>();
+        String subscriptionId = UUID.randomUUID().toString();
+        subscriptionModel.subscribe(subscriptionId, state::add).waitUntilStarted(Duration.of(10, ChronoUnit.SECONDS));
+
+        String eventId1 = UUID.randomUUID().toString();
+        String eventId2 = UUID.randomUUID().toString();
+        NameDefined nameDefined1 = new NameDefined(eventId1, now, "name1");
+        NameDefined nameDefined2 = new NameDefined(eventId2, now.plusSeconds(2), "name3");
+
+        mongoEventStore.write("1", 0, serialize(nameDefined1));
+
+        await("first event").atMost(2, SECONDS).with().pollInterval(Duration.of(20, MILLIS)).untilAsserted(() -> assertThat(state).hasSize(1));
+        SubscriptionPosition subscriptionPosition = PositionAwareCloudEvent.getSubscriptionPositionOrThrowIAE(state.get(0));
+
+        subscriptionModel.cancelSubscription(subscriptionId);
+
+        // When
+        mongoEventStore.delete(id(eventId1)); // Delete event that subscription hasn't received yet
+        assertThat(mongoEventStore.count()).isZero();
+
+        // Write a new event and the resume subscription
+        mongoEventStore.write("2", 0, serialize(nameDefined2));
+        subscriptionModel.subscribe(subscriptionId, StartAt.subscriptionPosition(subscriptionPosition), state::add).waitUntilStarted(Duration.of(10, ChronoUnit.SECONDS));
+
+        // Then
+        await().atMost(2, SECONDS).with().pollInterval(Duration.of(20, MILLIS)).untilAsserted(() -> {
+                    assertThat(state).hasSize(2);
+                    assertThat(state.get(1).getId()).isEqualTo(eventId2);
+                }
+        );
     }
 
     @Test
