@@ -1,4 +1,4 @@
-## Changelog next version
+## Changelog 0.7.4 (2012-02-13)
 
 * Added better logging to `SpringMongoSubscriptionModel`, it'll now include the subscription id if an error occurs.
 * If there's not enough history available in the mongodb oplog to resume a subscription created from a `SpringMongoSubscriptionModel`, this subscription model now supports restarting the subscription from the current 
