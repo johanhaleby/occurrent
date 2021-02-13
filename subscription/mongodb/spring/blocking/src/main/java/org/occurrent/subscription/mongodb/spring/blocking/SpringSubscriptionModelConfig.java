@@ -7,6 +7,9 @@ import java.time.Duration;
 
 import static java.util.Objects.requireNonNull;
 
+/**
+ * Configuration for the {@code SpringSubscriptionModel}.
+ */
 public class SpringSubscriptionModelConfig {
 
     final String eventCollection;
@@ -15,6 +18,9 @@ public class SpringSubscriptionModelConfig {
     final boolean restartSubscriptionsOnChangeStreamHistoryLost;
 
     /**
+     * Create a new instance of {@link SpringSubscriptionModelConfig} with the given settings.
+     * It will by default use a {@link RetryStrategy} for retries, with exponential backoff starting with 100 ms and progressively go up to max 2 seconds wait time between each retry when reading/saving/deleting the subscription position.
+     *
      * @param eventCollection    The collection that contains the events
      * @param timeRepresentation How time is represented in the database, must be the same as what's specified for the EventStore that stores the events.
      */
@@ -33,8 +39,12 @@ public class SpringSubscriptionModelConfig {
     }
 
     /**
+     * Create a new SpringSubscriptionModelConfig by using this static method instead of calling the {@link #SpringSubscriptionModelConfig(String, TimeRepresentation)} constructor.
+     * Behaves the same as calling the constructor so this is just syntactic sugar.
+     *
      * @param eventCollection    The collection that contains the events
      * @param timeRepresentation How time is represented in the database, must be the same as what's specified for the EventStore that stores the events.
+     * @return A new instance of {@code SpringSubscriptionModelConfig}
      */
     public static SpringSubscriptionModelConfig withConfig(String eventCollection, TimeRepresentation timeRepresentation) {
         return new SpringSubscriptionModelConfig(eventCollection, timeRepresentation);
@@ -44,6 +54,12 @@ public class SpringSubscriptionModelConfig {
         return new SpringSubscriptionModelConfig(eventCollection, timeRepresentation, retryStrategy, restartSubscriptionsOnChangeStreamHistoryLost);
     }
 
+    /**
+     * Specify the retry strategy to use.
+     *
+     * @param retryStrategy A custom retry strategy to use if the {@code action} supplied to the subscription throws an exception
+     * @return A new instance of {@code SpringSubscriptionModelConfig}
+     */
     public SpringSubscriptionModelConfig retryStrategy(RetryStrategy retryStrategy) {
         return new SpringSubscriptionModelConfig(eventCollection, timeRepresentation, retryStrategy, restartSubscriptionsOnChangeStreamHistoryLost);
     }
