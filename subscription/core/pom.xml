@@ -19,7 +19,7 @@
     <parent>
         <artifactId>subscription</artifactId>
         <groupId>org.occurrent</groupId>
-        <version>0.7.4</version>
+        <version>0.7.5-SNAPSHOT</version>
     </parent>
     <modelVersion>4.0.0</modelVersion>
 
@@ -33,7 +33,7 @@
         <dependency>
             <groupId>org.occurrent</groupId>
             <artifactId>filter</artifactId>
-            <version>0.7.4</version>
+            <version>0.7.5-SNAPSHOT</version>
         </dependency>
     </dependencies>
 
