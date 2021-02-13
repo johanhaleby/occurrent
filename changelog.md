@@ -2,10 +2,10 @@
 
 * Added better logging to `SpringMongoSubscriptionModel`, it'll now include the subscription id if an error occurs.
 * If there's not enough history available in the mongodb oplog to resume a subscription created from a `SpringMongoSubscriptionModel`, this subscription model now supports restarting the subscription from the current 
-  time automatically. This is only a concern when an application is restarted and the subscriptions are configured to start from a old position in the oplog. It's disabled by default since it might not 
-  be 100% safe (meaning that you can miss some events when the subscription is restarted). It's not 100% safe you run subscriptions in a different process than the evnet store and you have lot's of 
+  time automatically. This is only of concern when an application is restarted, and the subscriptions are configured to start from a position in the oplog that is no longer available. It's disabled by default since it might not 
+  be 100% safe (meaning that you can miss some events when the subscription is restarted). It's not 100% safe if you run subscriptions in a different process than the event store _and_ you have lot's of 
   writes happening to the event store. It's safe if you run the subscription in the same process as the writes to the event store _if_ you make sure that the
-  subscription is started _before_ you accept writes to the eventstore on startup. To enable automatic restart you can do like this:
+  subscription is started _before_ you accept writes to the event store on startup. To enable automatic restart, you can do like this:
   
   ```java
   var subscriptionModel = new SpringMongoSubscriptionModel(mongoTemplate, SpringSubscriptionModelConfig.withConfig("events", TimeRepresentation.RFC_3339_STRING).restartSubscriptionsOnChangeStreamHistoryLost(true));
