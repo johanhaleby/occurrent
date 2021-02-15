@@ -1,3 +1,7 @@
+## Changelog next version
+
+* Only log with "warn" when subscription is restarted due to "ChangeStreamHistoryLost".
+
 ## Changelog 0.7.4 (2012-02-13)
 
 * Added better logging to `SpringMongoSubscriptionModel`, it'll now include the subscription id if an error occurs.
