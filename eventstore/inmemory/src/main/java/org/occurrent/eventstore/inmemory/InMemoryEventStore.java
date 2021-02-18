@@ -20,7 +20,12 @@ import io.cloudevents.CloudEvent;
 import io.cloudevents.SpecVersion;
 import io.cloudevents.core.builder.CloudEventBuilder;
 import org.occurrent.cloudevents.OccurrentCloudEventExtension;
+import org.occurrent.cloudevents.OccurrentExtensionGetter;
 import org.occurrent.eventstore.api.LongConditionEvaluator;
+import org.occurrent.eventstore.api.SortBy;
+import org.occurrent.eventstore.api.SortBy.MultipleSortSteps;
+import org.occurrent.eventstore.api.SortBy.Natural;
+import org.occurrent.eventstore.api.SortBy.SingleField;
 import org.occurrent.eventstore.api.WriteCondition;
 import org.occurrent.eventstore.api.WriteCondition.StreamVersionWriteCondition;
 import org.occurrent.eventstore.api.WriteConditionNotFulfilledException;
@@ -44,9 +49,12 @@ import java.util.stream.Collectors;
 import java.util.stream.LongStream;
 import java.util.stream.Stream;
 
+import static io.cloudevents.core.v1.CloudEventV1.*;
 import static java.util.Comparator.comparing;
 import static java.util.Objects.requireNonNull;
+import static org.occurrent.cloudevents.OccurrentCloudEventExtension.STREAM_ID;
 import static org.occurrent.cloudevents.OccurrentCloudEventExtension.STREAM_VERSION;
+import static org.occurrent.eventstore.api.SortBy.SortOrder.ASCENDING;
 import static org.occurrent.functionalsupport.internal.FunctionalSupport.not;
 import static org.occurrent.functionalsupport.internal.FunctionalSupport.zip;
 import static org.occurrent.inmemory.filtermatching.FilterMatcher.matchesFilter;
@@ -208,21 +216,19 @@ public class InMemoryEventStore implements EventStore, EventStoreOperations, Eve
 
     @Override
     public Stream<CloudEvent> query(Filter filter, int skip, int limit, SortBy sortBy) {
+        Objects.requireNonNull(filter, Filter.class.getSimpleName() + " cannot be null");
+        Objects.requireNonNull(sortBy, SortBy.class.getSimpleName() + " cannot be null");
         Stream<CloudEvent> stream = state.values().stream().flatMap(List::stream).filter(cloudEvent -> matchesFilter(cloudEvent, filter));
-        final Stream<CloudEvent> sorted;
-        switch (sortBy) {
-            case NATURAL_ASC:
-            case TIME_ASC:
-                sorted = stream.sorted(comparing(cloudEvent -> requireNonNull(cloudEvent.getTime())));
-                break;
-            case NATURAL_DESC:
-            case TIME_DESC:
-                sorted = stream.sorted(comparing((CloudEvent cloudEvent) -> requireNonNull(cloudEvent.getTime())).reversed());
-                break;
-            default:
-                throw new IllegalStateException("Unexpected value: " + sortBy);
+
+        Comparator<CloudEvent> comparator = toComparator(sortBy);
+        final Stream<CloudEvent> streamToUse;
+        if (comparator == null) {
+            streamToUse = stream;
+        } else {
+            streamToUse = stream.sorted(comparator);
         }
-        return sorted.skip(skip).limit(limit);
+
+        return streamToUse.skip(skip).limit(limit);
     }
 
     @Override
@@ -315,5 +321,67 @@ public class InMemoryEventStore implements EventStore, EventStoreOperations, Eve
             return 0;
         }
         return (long) events.get(events.size() - 1).getExtension(STREAM_VERSION);
+    }
+
+    private static Comparator<CloudEvent> toComparator(SortBy sortBy) {
+        final Comparator<CloudEvent> comparator;
+        if (sortBy instanceof Natural) {
+            comparator = null;
+        } else if (sortBy instanceof SingleField) {
+            comparator = toComparator((SingleField) sortBy);
+        } else if (sortBy instanceof MultipleSortSteps) {
+            comparator = ((MultipleSortSteps) sortBy).steps.stream()
+                    .map(InMemoryEventStore::toComparator)
+                    .reduce(Comparator::thenComparing)
+                    .orElseThrow(() -> new IllegalStateException("Internal error: Expecting at least one element in " + MultipleSortSteps.class.getSimpleName()));
+        } else {
+            throw new IllegalStateException("Internal error: Unrecognized \"sort by\" " + sortBy);
+        }
+        return comparator;
+    }
+
+    private static Comparator<CloudEvent> toComparator(SingleField singleField) {
+        String fieldName = singleField.fieldName;
+        final Comparator<CloudEvent> comparator;
+        switch (fieldName) {
+            case TIME:
+                comparator = comparing(CloudEvent::getTime);
+                break;
+            case STREAM_VERSION:
+                comparator = comparing(OccurrentExtensionGetter::getStreamVersion);
+                break;
+            case STREAM_ID:
+                comparator = comparing(OccurrentExtensionGetter::getStreamId);
+                break;
+            case ID:
+                comparator = comparing(CloudEvent::getId);
+                break;
+            case SOURCE:
+                comparator = comparing(CloudEvent::getSource);
+                break;
+            case SUBJECT:
+                comparator = comparing(CloudEvent::getSubject);
+                break;
+            case TYPE:
+                comparator = comparing(CloudEvent::getType);
+                break;
+            case SPECVERSION:
+                comparator = comparing(CloudEvent::getSpecVersion);
+                break;
+            case DATACONTENTTYPE:
+                comparator = comparing(CloudEvent::getDataContentType);
+                break;
+            case DATASCHEMA:
+                comparator = comparing(CloudEvent::getDataSchema);
+                break;
+            default:
+                throw new IllegalStateException("Unexpected value: " + fieldName);
+        }
+
+        if (singleField.order == ASCENDING) {
+            return comparator;
+        } else {
+            return comparator.reversed();
+        }
     }
 }

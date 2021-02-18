@@ -17,11 +17,13 @@
 package org.occurrent.eventstore.api.blocking;
 
 import io.cloudevents.CloudEvent;
+import org.occurrent.eventstore.api.SortBy;
 import org.occurrent.filter.Filter;
 
 import java.util.stream.Stream;
 
 import static java.util.Objects.requireNonNull;
+import static org.occurrent.eventstore.api.SortBy.SortOrder.ASCENDING;
 
 /**
  * Additional querying capabilities that may be supported by an {@link EventStore} implementation that is not typically part of a
@@ -71,7 +73,7 @@ public interface EventStoreQueries {
      * @return All cloud events matching the specified filter
      */
     default Stream<CloudEvent> query(Filter filter, int skip, int limit) {
-        return query(filter, skip, limit, SortBy.NATURAL_ASC);
+        return query(filter, skip, limit, SortBy.natural(ASCENDING));
     }
 
     /**
@@ -110,9 +112,5 @@ public interface EventStoreQueries {
     default Stream<CloudEvent> query(Filter filter) {
         requireNonNull(filter, "Filter cannot be null");
         return query(filter, 0, Integer.MAX_VALUE);
-    }
-
-    enum SortBy {
-        TIME_ASC, TIME_DESC, NATURAL_ASC, NATURAL_DESC
     }
 }
