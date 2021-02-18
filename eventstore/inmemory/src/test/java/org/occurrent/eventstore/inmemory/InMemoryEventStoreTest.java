@@ -32,6 +32,7 @@ import org.occurrent.domain.DomainEvent;
 import org.occurrent.domain.Name;
 import org.occurrent.domain.NameDefined;
 import org.occurrent.domain.NameWasChanged;
+import org.occurrent.eventstore.api.SortBy;
 import org.occurrent.eventstore.api.WriteCondition;
 import org.occurrent.eventstore.api.WriteConditionNotFulfilledException;
 import org.occurrent.eventstore.api.blocking.EventStore;
@@ -61,6 +62,8 @@ import static org.junit.jupiter.api.condition.JRE.JAVA_11;
 import static org.junit.jupiter.api.condition.JRE.JAVA_8;
 import static org.occurrent.cloudevents.OccurrentCloudEventExtension.*;
 import static org.occurrent.condition.Condition.*;
+import static org.occurrent.eventstore.api.SortBy.SortOrder.ASCENDING;
+import static org.occurrent.eventstore.api.SortBy.SortOrder.DESCENDING;
 import static org.occurrent.eventstore.api.WriteCondition.streamVersion;
 import static org.occurrent.eventstore.api.WriteCondition.streamVersionEq;
 import static org.occurrent.filter.Filter.*;
@@ -783,7 +786,7 @@ public class InMemoryEventStoreTest {
 
             // Then
             Stream<CloudEvent> events = inMemoryEventStore.all();
-            assertThat(events.map(deserialize(objectMapper))).containsExactly(nameDefined, nameWasChanged1, nameWasChanged2);
+            assertThat(events.map(deserialize(objectMapper))).containsExactly(nameWasChanged1, nameDefined, nameWasChanged2);
         }
 
         @Test
@@ -1026,7 +1029,7 @@ public class InMemoryEventStoreTest {
         class SortTest {
 
             @Test
-            void sort_by_natural_asc_sorts_by_time_asc() {
+            void sort_by_natural_asc_sorts_by_insertion_order() {
                 // Given
                 LocalDateTime now = LocalDateTime.now();
                 NameDefined nameDefined = new NameDefined(UUID.randomUUID().toString(), now, "name");
@@ -1039,12 +1042,12 @@ public class InMemoryEventStoreTest {
                 unconditionallyPersist(inMemoryEventStore, "name1", nameDefined);
 
                 // Then
-                Stream<CloudEvent> events = inMemoryEventStore.all(EventStoreQueries.SortBy.NATURAL_ASC);
-                assertThat(events.map(deserialize(objectMapper))).containsExactly(nameWasChanged1, nameDefined, nameWasChanged2);
+                Stream<CloudEvent> events = inMemoryEventStore.all(SortBy.natural(ASCENDING));
+                assertThat(events.map(deserialize(objectMapper))).containsExactly(nameWasChanged1, nameWasChanged2, nameDefined);
             }
 
             @Test
-            void sort_by_natural_desc_sorts_by_time_desc() {
+            void sort_by_natural_desc_sorts_by_reversed_insertion_order() {
                 // Given
                 LocalDateTime now = LocalDateTime.now();
                 NameDefined nameDefined = new NameDefined(UUID.randomUUID().toString(), now, "name");
@@ -1057,8 +1060,8 @@ public class InMemoryEventStoreTest {
                 unconditionallyPersist(inMemoryEventStore, "name1", nameDefined);
 
                 // Then
-                Stream<CloudEvent> events = inMemoryEventStore.all(EventStoreQueries.SortBy.NATURAL_DESC);
-                assertThat(events.map(deserialize(objectMapper))).containsExactly(nameWasChanged2, nameDefined, nameWasChanged1);
+                Stream<CloudEvent> events = inMemoryEventStore.all(SortBy.natural(DESCENDING));
+                assertThat(events.map(deserialize(objectMapper))).containsExactly(nameDefined, nameWasChanged2, nameWasChanged1);
             }
 
             @Test
@@ -1075,7 +1078,7 @@ public class InMemoryEventStoreTest {
                 unconditionallyPersist(inMemoryEventStore, "name1", nameDefined);
 
                 // Then
-                Stream<CloudEvent> events = inMemoryEventStore.all(EventStoreQueries.SortBy.TIME_ASC);
+                Stream<CloudEvent> events = inMemoryEventStore.all(SortBy.time(ASCENDING));
                 assertThat(events.map(deserialize(objectMapper))).containsExactly(nameWasChanged1, nameDefined, nameWasChanged2);
             }
 
@@ -1093,8 +1096,44 @@ public class InMemoryEventStoreTest {
                 unconditionallyPersist(inMemoryEventStore, "name1", nameDefined);
 
                 // Then
-                Stream<CloudEvent> events = inMemoryEventStore.all(EventStoreQueries.SortBy.TIME_DESC);
+                Stream<CloudEvent> events = inMemoryEventStore.all(SortBy.time(DESCENDING));
                 assertThat(events.map(deserialize(objectMapper))).containsExactly(nameDefined, nameWasChanged2, nameWasChanged1);
+            }
+
+            @Test
+            void sort_by_time_desc_and_natural_descending() {
+                // Given
+                LocalDateTime now = LocalDateTime.now();
+                NameDefined nameDefined = new NameDefined(UUID.randomUUID().toString(), now, "name");
+                NameWasChanged nameWasChanged1 = new NameWasChanged(UUID.randomUUID().toString(), now, "name2");
+                NameWasChanged nameWasChanged2 = new NameWasChanged(UUID.randomUUID().toString(), now.plusHours(1), "name3");
+
+                // When
+                unconditionallyPersist(inMemoryEventStore, "name1", nameDefined);
+                unconditionallyPersist(inMemoryEventStore, "name3", nameWasChanged1);
+                unconditionallyPersist(inMemoryEventStore, "name2", nameWasChanged2);
+
+                // Then
+                Stream<CloudEvent> events = inMemoryEventStore.all(SortBy.time(DESCENDING).thenNatural(DESCENDING));
+                assertThat(events.map(deserialize(objectMapper))).containsExactly(nameWasChanged2, nameWasChanged1, nameDefined);
+            }
+
+            @Test
+            void sort_by_time_desc_and_natural_ascending() {
+                // Given
+                LocalDateTime now = LocalDateTime.now();
+                NameDefined nameDefined = new NameDefined(UUID.randomUUID().toString(), now, "name");
+                NameWasChanged nameWasChanged1 = new NameWasChanged(UUID.randomUUID().toString(), now, "name2");
+                NameWasChanged nameWasChanged2 = new NameWasChanged(UUID.randomUUID().toString(), now.plusHours(1), "name3");
+
+                // When
+                unconditionallyPersist(inMemoryEventStore, "name1", nameDefined);
+                unconditionallyPersist(inMemoryEventStore, "name3", nameWasChanged1);
+                unconditionallyPersist(inMemoryEventStore, "name2", nameWasChanged2);
+
+                // Then
+                Stream<CloudEvent> events = inMemoryEventStore.all(SortBy.time(DESCENDING).thenNatural(ASCENDING));
+                assertThat(events.map(deserialize(objectMapper))).containsExactly(nameWasChanged2, nameDefined, nameWasChanged1);
             }
         }
 

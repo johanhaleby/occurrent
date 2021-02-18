@@ -128,7 +128,7 @@ public class MongoEventStore implements EventStore, EventStoreOperations, EventS
                     return new EventStreamImpl<>(streamId, 0, Stream.empty());
                 }
 
-                Stream<Document> stream = readCloudEvents(streamIdEqualTo(streamId), skip, limit, SortBy.NATURAL_ASC, clientSession);
+                Stream<Document> stream = readCloudEvents(streamIdEqualTo(streamId), skip, limit, SortBy.natural(ASCENDING), clientSession);
                 return new EventStreamImpl<>(streamId, currentStreamVersion, stream);
             }, transactionOptions);
         }

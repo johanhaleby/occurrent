@@ -287,7 +287,7 @@ public class SpringMongoEventStore implements EventStore, EventStoreOperations, 
             return new EventStreamImpl<>(streamId, 0, Stream.empty());
         }
 
-        Stream<Document> stream = readCloudEvents(streamIdEqualTo(streamId), skip, limit, SortBy.NATURAL_ASC);
+        Stream<Document> stream = readCloudEvents(streamIdEqualTo(streamId), skip, limit, SortBy.natural(ASCENDING));
         return new EventStreamImpl<>(streamId, currentStreamVersion, stream);
     }
 

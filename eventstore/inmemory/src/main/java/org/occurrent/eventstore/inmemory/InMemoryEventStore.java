@@ -26,6 +26,7 @@ import org.occurrent.eventstore.api.SortBy;
 import org.occurrent.eventstore.api.SortBy.MultipleSortSteps;
 import org.occurrent.eventstore.api.SortBy.Natural;
 import org.occurrent.eventstore.api.SortBy.SingleField;
+import org.occurrent.eventstore.api.SortBy.SortOrder;
 import org.occurrent.eventstore.api.WriteCondition;
 import org.occurrent.eventstore.api.WriteCondition.StreamVersionWriteCondition;
 import org.occurrent.eventstore.api.WriteConditionNotFulfilledException;
@@ -39,8 +40,6 @@ import org.occurrent.functionalsupport.internal.FunctionalSupport.Pair;
 import java.net.URI;
 import java.util.*;
 import java.util.Map.Entry;
-import java.util.concurrent.ConcurrentHashMap;
-import java.util.concurrent.ConcurrentMap;
 import java.util.concurrent.atomic.AtomicReference;
 import java.util.function.Consumer;
 import java.util.function.Function;
@@ -48,13 +47,16 @@ import java.util.function.Predicate;
 import java.util.stream.Collectors;
 import java.util.stream.LongStream;
 import java.util.stream.Stream;
+import java.util.stream.StreamSupport;
 
 import static io.cloudevents.core.v1.CloudEventV1.*;
 import static java.util.Comparator.comparing;
 import static java.util.Objects.requireNonNull;
+import static java.util.Spliterators.spliteratorUnknownSize;
 import static org.occurrent.cloudevents.OccurrentCloudEventExtension.STREAM_ID;
 import static org.occurrent.cloudevents.OccurrentCloudEventExtension.STREAM_VERSION;
 import static org.occurrent.eventstore.api.SortBy.SortOrder.ASCENDING;
+import static org.occurrent.eventstore.api.SortBy.SortOrder.DESCENDING;
 import static org.occurrent.functionalsupport.internal.FunctionalSupport.not;
 import static org.occurrent.functionalsupport.internal.FunctionalSupport.zip;
 import static org.occurrent.inmemory.filtermatching.FilterMatcher.matchesFilter;
@@ -65,7 +67,8 @@ import static org.occurrent.inmemory.filtermatching.FilterMatcher.matchesFilter;
  */
 public class InMemoryEventStore implements EventStore, EventStoreOperations, EventStoreQueries {
 
-    private final ConcurrentMap<String, List<CloudEvent>> state = new ConcurrentHashMap<>();
+    // We cannot use ConcurrentMap since it doesn't maintain insertion order
+    private final Map<String, List<CloudEvent>> state = Collections.synchronizedMap(new LinkedHashMap<>());
 
     private final Consumer<Stream<CloudEvent>> listener;
 
@@ -218,22 +221,53 @@ public class InMemoryEventStore implements EventStore, EventStoreOperations, Eve
     public Stream<CloudEvent> query(Filter filter, int skip, int limit, SortBy sortBy) {
         Objects.requireNonNull(filter, Filter.class.getSimpleName() + " cannot be null");
         Objects.requireNonNull(sortBy, SortBy.class.getSimpleName() + " cannot be null");
-        Stream<CloudEvent> stream = state.values().stream().flatMap(List::stream).filter(cloudEvent -> matchesFilter(cloudEvent, filter));
 
-        Comparator<CloudEvent> comparator = toComparator(sortBy);
+        Stream<CloudEvent> stream;
+        synchronized (state) {
+            stream = state.values().stream().flatMap(List::stream).filter(cloudEvent -> matchesFilter(cloudEvent, filter));
+        }
+
+        final Stream<CloudEvent> streamToSort;
+        final Map<CloudEvent, Integer> cloudEventPositionCache;
+        if (sortBy instanceof Natural) {
+            SortOrder order = ((Natural) sortBy).order;
+            if (order == ASCENDING) {
+                return stream.skip(skip).limit(limit);
+            } else {
+                Iterator<CloudEvent> cloudEventIterator = stream.collect(Collectors.toCollection(LinkedList::new)).descendingIterator();
+                return StreamSupport.stream(spliteratorUnknownSize(cloudEventIterator, Spliterator.ORDERED), false).skip(skip).limit(limit);
+            }
+        } else if (isMultipleSortStepsContainingNaturalOrder(sortBy)) {
+            cloudEventPositionCache = stream.collect(LinkedHashMap::new, (cache, event) -> cache.put(event, cache.size()), LinkedHashMap::putAll);
+            streamToSort = cloudEventPositionCache.keySet().stream();
+        } else {
+            streamToSort = stream;
+            cloudEventPositionCache = Collections.emptyMap();
+        }
+
+        Comparator<CloudEvent> comparator = toComparator(cloudEventPositionCache, sortBy);
         final Stream<CloudEvent> streamToUse;
         if (comparator == null) {
-            streamToUse = stream;
+            streamToUse = streamToSort;
         } else {
-            streamToUse = stream.sorted(comparator);
+            streamToUse = streamToSort.sorted(comparator);
         }
 
         return streamToUse.skip(skip).limit(limit);
     }
 
+    private static boolean isMultipleSortStepsContainingNaturalOrder(SortBy sortBy) {
+        if (sortBy instanceof MultipleSortSteps) {
+            return ((MultipleSortSteps) sortBy).steps.stream().anyMatch(Natural.class::isInstance);
+        }
+        return false;
+    }
+
     @Override
     public long count(Filter filter) {
-        return state.values().stream().mapToLong(cloudEvents -> cloudEvents.stream().filter(cloudEvent -> matchesFilter(cloudEvent, filter)).count()).reduce(0, Long::sum);
+        synchronized (state) {
+            return state.values().stream().mapToLong(cloudEvents -> cloudEvents.stream().filter(cloudEvent -> matchesFilter(cloudEvent, filter)).count()).reduce(0, Long::sum);
+        }
     }
 
     @Override
@@ -323,17 +357,23 @@ public class InMemoryEventStore implements EventStore, EventStoreOperations, Eve
         return (long) events.get(events.size() - 1).getExtension(STREAM_VERSION);
     }
 
-    private static Comparator<CloudEvent> toComparator(SortBy sortBy) {
+    private static Comparator<CloudEvent> toComparator(Map<CloudEvent, Integer> cloudEventPositionCache, SortBy sortBy) {
         final Comparator<CloudEvent> comparator;
         if (sortBy instanceof Natural) {
-            comparator = null;
+            Comparator<CloudEvent> temp = Comparator.comparingInt(cloudEventPositionCache::get);
+            if (((Natural) sortBy).order == DESCENDING) {
+                comparator = temp.reversed();
+            } else {
+                comparator = temp;
+            }
         } else if (sortBy instanceof SingleField) {
             comparator = toComparator((SingleField) sortBy);
         } else if (sortBy instanceof MultipleSortSteps) {
             comparator = ((MultipleSortSteps) sortBy).steps.stream()
-                    .map(InMemoryEventStore::toComparator)
+                    .map(step -> toComparator(cloudEventPositionCache, step))
+                    .filter(Objects::nonNull)
                     .reduce(Comparator::thenComparing)
-                    .orElseThrow(() -> new IllegalStateException("Internal error: Expecting at least one element in " + MultipleSortSteps.class.getSimpleName()));
+                    .orElse(null);
         } else {
             throw new IllegalStateException("Internal error: Unrecognized \"sort by\" " + sortBy);
         }

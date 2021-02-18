@@ -146,7 +146,7 @@ public class ReactorMongoEventStore implements EventStore, EventStoreOperations,
     private Mono<EventStreamImpl> readEventStream(String streamId, int skip, int limit) {
         return currentStreamVersion(streamId)
                 .flatMap(currentStreamVersion -> {
-                    Flux<Document> cloudEventDocuments = readCloudEvents(streamIdEqualTo(streamId), skip, limit, SortBy.NATURAL_ASC);
+                    Flux<Document> cloudEventDocuments = readCloudEvents(streamIdEqualTo(streamId), skip, limit, SortBy.natural(ASCENDING));
                     return Mono.just(new EventStreamImpl(streamId, currentStreamVersion, cloudEventDocuments));
                 })
                 .switchIfEmpty(Mono.fromSupplier(() -> new EventStreamImpl(streamId, 0, Flux.empty())));

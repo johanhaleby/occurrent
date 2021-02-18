@@ -1303,7 +1303,7 @@ public class ReactorMongoEventStoreTest {
                 persist("name1", nameDefined).block();
 
                 // Then
-                Flux<CloudEvent> events = eventStore.all(EventStoreQueries.SortBy.NATURAL_ASC);
+                Flux<CloudEvent> events = eventStore.all(SortBy.natural(ASCENDING));
                 assertThat(deserialize(events)).containsExactly(nameWasChanged1, nameWasChanged2, nameDefined);
             }
 
@@ -1321,7 +1321,7 @@ public class ReactorMongoEventStoreTest {
                 persist("name1", nameDefined).block();
 
                 // Then
-                Flux<CloudEvent> events = eventStore.all(EventStoreQueries.SortBy.NATURAL_DESC);
+                Flux<CloudEvent> events = eventStore.all(SortBy.natural(DESCENDING));
                 assertThat(deserialize(events)).containsExactly(nameDefined, nameWasChanged2, nameWasChanged1);
             }
 
@@ -1339,7 +1339,7 @@ public class ReactorMongoEventStoreTest {
                 persist("name1", nameDefined).block();
 
                 // Then
-                Flux<CloudEvent> events = eventStore.all(EventStoreQueries.SortBy.TIME_ASC);
+                Flux<CloudEvent> events = eventStore.all(SortBy.time(ASCENDING));
                 assertThat(deserialize(events)).containsExactly(nameWasChanged1, nameDefined, nameWasChanged2);
             }
 
@@ -1357,7 +1357,7 @@ public class ReactorMongoEventStoreTest {
                 persist("name1", nameDefined).block();
 
                 // Then
-                Flux<CloudEvent> events = eventStore.all(EventStoreQueries.SortBy.TIME_DESC);
+                Flux<CloudEvent> events = eventStore.all(SortBy.time(DESCENDING));
                 assertThat(deserialize(events)).containsExactly(nameDefined, nameWasChanged2, nameWasChanged1);
             }
         }

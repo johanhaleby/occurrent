@@ -1294,7 +1294,7 @@ class MongoEventStoreTest {
                     persist("name1", nameDefined);
 
                     // Then
-                    Stream<CloudEvent> events = eventStore.all(EventStoreQueries.SortBy.NATURAL_ASC);
+                    Stream<CloudEvent> events = eventStore.all(SortBy.natural(ASCENDING));
                     assertThat(deserialize(events)).containsExactly(nameWasChanged1, nameWasChanged2, nameDefined);
                 }
 
@@ -1312,7 +1312,7 @@ class MongoEventStoreTest {
                     persist("name1", nameDefined);
 
                     // Then
-                    Stream<CloudEvent> events = eventStore.all(EventStoreQueries.SortBy.NATURAL_DESC);
+                    Stream<CloudEvent> events = eventStore.all(SortBy.natural(DESCENDING));
                     assertThat(deserialize(events)).containsExactly(nameDefined, nameWasChanged2, nameWasChanged1);
                 }
 
@@ -1330,7 +1330,7 @@ class MongoEventStoreTest {
                     persist("name1", nameDefined);
 
                     // Then
-                    Stream<CloudEvent> events = eventStore.all(EventStoreQueries.SortBy.TIME_ASC);
+                    Stream<CloudEvent> events = eventStore.all(SortBy.time(ASCENDING));
                     assertThat(deserialize(events)).containsExactly(nameWasChanged1, nameDefined, nameWasChanged2);
                 }
 
@@ -1348,7 +1348,7 @@ class MongoEventStoreTest {
                     persist("name1", nameDefined);
 
                     // Then
-                    Stream<CloudEvent> events = eventStore.all(EventStoreQueries.SortBy.TIME_DESC);
+                    Stream<CloudEvent> events = eventStore.all(SortBy.time(DESCENDING));
                     assertThat(deserialize(events)).containsExactly(nameDefined, nameWasChanged2, nameWasChanged1);
                 }
             }

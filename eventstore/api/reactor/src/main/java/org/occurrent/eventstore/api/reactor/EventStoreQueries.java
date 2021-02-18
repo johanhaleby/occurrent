@@ -71,7 +71,7 @@ public interface EventStoreQueries {
      * @return All cloud events matching the specified filter
      */
     default Flux<CloudEvent> query(Filter filter, int skip, int limit) {
-        return query(filter, skip, limit, SortBy.NATURAL_ASC);
+        return query(filter, skip, limit, SortBy.natural(ASCENDING));
     }
 
     /**
