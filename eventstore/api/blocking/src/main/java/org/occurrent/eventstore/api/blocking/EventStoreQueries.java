@@ -32,8 +32,7 @@ import static org.occurrent.eventstore.api.SortBy.SortDirection.ASCENDING;
 public interface EventStoreQueries {
 
     /**
-     * Note that it's recommended to create an index on the "time" field in the event store in order to make
-     * {@link SortBy#TIME_ASC} and {@link SortBy#TIME_DESC} efficient.
+     * Note that it's recommended to create an index the fields you're sorting on in order to make them efficient.
      *
      * @return All cloud events matching the specified filter, skip, limit and sort by <code>sortBy</code>.
      */

@@ -3,6 +3,8 @@
 * Only log with "warn" when subscription is restarted due to "ChangeStreamHistoryLost".
 * `InMemoryEventStore` now sorts queries by insertion order by default (before "time" was used) 
 * `SpringMongoEventStore` now sorts queries by "_id" (insertion order) by default (before `$natural` was used, but this won't use indexes!) 
+* `ReactorMongoEventStore` now sorts queries by "_id" (insertion order) by default (before `$natural` was used, but this won't use indexes!) 
+* `MongoEventStore` now sorts queries by "_id" (insertion order) by default (before `$natural` was used, but this won't use indexes!) 
 
 ## Changelog 0.7.4 (2012-02-13)
 
