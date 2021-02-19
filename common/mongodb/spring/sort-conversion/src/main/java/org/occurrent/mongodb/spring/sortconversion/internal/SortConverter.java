@@ -21,16 +21,16 @@ public class SortConverter {
      */
     public static Sort convertToSpringSort(SortBy sortBy) {
         final Sort sort;
-        if (sortBy instanceof SortBy.Natural) {
-            sort = Sort.by(toDirection(((SortBy.Natural) sortBy).direction), ID);
-        } else if (sortBy instanceof SortBy.SingleField) {
-            SortBy.SingleField singleField = (SortBy.SingleField) sortBy;
+        if (sortBy instanceof SortBy.NaturalImpl) {
+            sort = Sort.by(toDirection(((SortBy.NaturalImpl) sortBy).direction), ID);
+        } else if (sortBy instanceof SortBy.SingleFieldImpl) {
+            SortBy.SingleFieldImpl singleField = (SortBy.SingleFieldImpl) sortBy;
             sort = Sort.by(toDirection(singleField.direction), singleField.fieldName);
-        } else if (sortBy instanceof SortBy.MultipleSortSteps) {
-            sort = ((SortBy.MultipleSortSteps) sortBy).steps.stream()
+        } else if (sortBy instanceof SortBy.MultipleSortStepsImpl) {
+            sort = ((SortBy.MultipleSortStepsImpl) sortBy).steps.stream()
                     .map(SortConverter::convertToSpringSort)
                     .reduce(Sort::and)
-                    .orElseThrow(() -> new IllegalStateException("Internal error: Expecting " + SortBy.MultipleSortSteps.class.getSimpleName() + " to have at least one step"));
+                    .orElseThrow(() -> new IllegalStateException("Internal error: Expecting " + SortBy.MultipleSortStepsImpl.class.getSimpleName() + " to have at least one step"));
         } else {
             throw new IllegalArgumentException("Internal error: Unrecognized " + SortBy.class.getSimpleName() + " instance: " + sortBy.getClass().getSimpleName());
         }

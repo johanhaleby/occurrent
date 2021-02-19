@@ -355,16 +355,16 @@ public class MongoEventStore implements EventStore, EventStoreOperations, EventS
 
     private static Bson convertToMongoDBSort(SortBy sortBy) {
         final Bson sort;
-        if (sortBy instanceof Natural) {
-            sort = ((Natural) sortBy).direction == ASCENDING ? ascending(ID) : descending(ID);
-        } else if (sortBy instanceof SingleField) {
-            SingleField singleField = (SingleField) sortBy;
+        if (sortBy instanceof NaturalImpl) {
+            sort = ((NaturalImpl) sortBy).direction == ASCENDING ? ascending(ID) : descending(ID);
+        } else if (sortBy instanceof SingleFieldImpl) {
+            SingleFieldImpl singleField = (SingleFieldImpl) sortBy;
             sort = singleField.direction == ASCENDING ? ascending(singleField.fieldName) : descending(singleField.fieldName);
-        } else if (sortBy instanceof MultipleSortSteps) {
-            sort = ((MultipleSortSteps) sortBy).steps.stream()
+        } else if (sortBy instanceof MultipleSortStepsImpl) {
+            sort = ((MultipleSortStepsImpl) sortBy).steps.stream()
                     .map(MongoEventStore::convertToMongoDBSort)
                     .reduce(Sorts::orderBy)
-                    .orElseThrow(() -> new IllegalStateException("Internal error: Expecting " + MultipleSortSteps.class.getSimpleName() + " to have at least one step"));
+                    .orElseThrow(() -> new IllegalStateException("Internal error: Expecting " + MultipleSortStepsImpl.class.getSimpleName() + " to have at least one step"));
         } else {
             throw new IllegalArgumentException("Internal error: Unrecognized " + SortBy.class.getSimpleName() + " instance: " + sortBy.getClass().getSimpleName());
         }

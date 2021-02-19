@@ -27,7 +27,7 @@ public abstract class SortBy {
      * @return A new instance of {@link SortBy}.
      */
     public static Natural natural(SortDirection direction) {
-        return new Natural(direction);
+        return new NaturalImpl(direction);
     }
 
     /**
@@ -57,13 +57,18 @@ public abstract class SortBy {
      * @return A new instance of {@link SortBy}.
      */
     public static SingleField field(String fieldName, SortDirection direction) {
-        return new SingleField(fieldName, direction);
+        return new SingleFieldImpl(fieldName, direction);
     }
 
-    public static final class Natural extends SortBy {
+    public static abstract class Natural extends SortBy {
+        private Natural() {
+        }
+    }
+
+    public static final class NaturalImpl extends Natural {
         public final SortDirection direction;
 
-        private Natural(SortDirection direction) {
+        private NaturalImpl(SortDirection direction) {
             Objects.requireNonNull(direction, SortDirection.class.getSimpleName() + " cannot be null");
             this.direction = direction;
         }
@@ -71,8 +76,8 @@ public abstract class SortBy {
         @Override
         public boolean equals(Object o) {
             if (this == o) return true;
-            if (!(o instanceof Natural)) return false;
-            Natural natural = (Natural) o;
+            if (!(o instanceof NaturalImpl)) return false;
+            NaturalImpl natural = (NaturalImpl) o;
             return direction == natural.direction;
         }
 
@@ -83,23 +88,14 @@ public abstract class SortBy {
 
         @Override
         public String toString() {
-            return new StringJoiner(", ", Natural.class.getSimpleName() + "[", "]")
+            return new StringJoiner(", ", NaturalImpl.class.getSimpleName() + "[", "]")
                     .add("direction=" + direction)
                     .toString();
         }
-
-
     }
 
-    public static final class SingleField extends ComposableSortStep {
-        public final String fieldName;
-        public final SortDirection direction;
-
-        private SingleField(String fieldName, SortDirection direction) {
-            Objects.requireNonNull(fieldName, "Field name cannot be null");
-            Objects.requireNonNull(direction, SortDirection.class.getSimpleName() + " cannot be null");
-            this.fieldName = fieldName;
-            this.direction = direction;
+    public static abstract class SingleField extends ComposableSortStep {
+        private SingleField() {
         }
 
         /**
@@ -109,14 +105,37 @@ public abstract class SortBy {
          * @return A new instance of {@link SortBy}.
          */
         public SortBy thenNatural(SortDirection direction) {
-            return then(new Natural(direction));
+            return then(new NaturalImpl(direction));
+        }
+
+        @Override
+        public MultipleSortStepsImpl then(ComposableSortStep next) {
+            return then((SortBy) next);
+        }
+
+        private MultipleSortStepsImpl then(SortBy other) {
+            List<SortBy> list = Arrays.asList(this, other);
+            return new MultipleSortStepsImpl(list);
+        }
+    }
+
+
+    public static final class SingleFieldImpl extends SingleField {
+        public final String fieldName;
+        public final SortDirection direction;
+
+        private SingleFieldImpl(String fieldName, SortDirection direction) {
+            Objects.requireNonNull(fieldName, "Field name cannot be null");
+            Objects.requireNonNull(direction, SortDirection.class.getSimpleName() + " cannot be null");
+            this.fieldName = fieldName;
+            this.direction = direction;
         }
 
         @Override
         public boolean equals(Object o) {
             if (this == o) return true;
-            if (!(o instanceof SingleField)) return false;
-            SingleField that = (SingleField) o;
+            if (!(o instanceof SingleFieldImpl)) return false;
+            SingleFieldImpl that = (SingleFieldImpl) o;
             return Objects.equals(fieldName, that.fieldName) && direction == that.direction;
         }
 
@@ -127,32 +146,15 @@ public abstract class SortBy {
 
         @Override
         public String toString() {
-            return new StringJoiner(", ", SingleField.class.getSimpleName() + "[", "]")
+            return new StringJoiner(", ", SingleFieldImpl.class.getSimpleName() + "[", "]")
                     .add("fieldName='" + fieldName + "'")
                     .add("direction=" + direction)
                     .toString();
         }
-
-        @Override
-        public MultipleSortSteps then(ComposableSortStep next) {
-            return then((SortBy) next);
-        }
-
-        private MultipleSortSteps then(SortBy other) {
-            List<SortBy> list = Arrays.asList(this, other);
-            return new MultipleSortSteps(list);
-        }
     }
 
-    public static final class MultipleSortSteps extends ComposableSortStep {
-        public List<SortBy> steps;
-
-        public MultipleSortSteps(List<SortBy> steps) {
-            Objects.requireNonNull(steps, "Steps cannot be null");
-            if (steps.stream().anyMatch(Objects::isNull)) {
-                throw new IllegalArgumentException("Steps cannot contain null step");
-            }
-            this.steps = Collections.unmodifiableList(steps);
+    public static abstract class MultipleSortSteps extends ComposableSortStep {
+        private MultipleSortSteps() {
         }
 
         /**
@@ -162,30 +164,45 @@ public abstract class SortBy {
          * @return A new instance of {@link SortBy}.
          */
         public SortBy thenNatural(SortDirection direction) {
-            return then(new Natural(direction));
+            return thenMerge(new NaturalImpl(direction));
         }
 
         @Override
         public MultipleSortSteps then(ComposableSortStep next) {
-            return then((SortBy) next);
+            return thenMerge(next);
         }
 
-        private MultipleSortSteps then(SortBy next) {
+        protected abstract MultipleSortSteps thenMerge(SortBy next);
+    }
+
+    public static final class MultipleSortStepsImpl extends MultipleSortSteps {
+        public List<SortBy> steps;
+
+        private MultipleSortStepsImpl(List<SortBy> steps) {
+            Objects.requireNonNull(steps, "Steps cannot be null");
+            if (steps.stream().anyMatch(Objects::isNull)) {
+                throw new IllegalArgumentException("Steps cannot contain null step");
+            }
+            this.steps = Collections.unmodifiableList(steps);
+        }
+
+        @Override
+        protected MultipleSortSteps thenMerge(SortBy next) {
             Objects.requireNonNull(next, ComposableSortStep.class.getSimpleName() + " cannot be null");
             List<SortBy> newSteps = new ArrayList<>(steps);
-            if (next instanceof MultipleSortSteps) {
-                newSteps.addAll(((MultipleSortSteps) next).steps);
+            if (next instanceof MultipleSortStepsImpl) {
+                newSteps.addAll(((MultipleSortStepsImpl) next).steps);
             } else {
                 newSteps.add(next);
             }
-            return new MultipleSortSteps(newSteps);
+            return new MultipleSortStepsImpl(newSteps);
         }
 
         @Override
         public boolean equals(Object o) {
             if (this == o) return true;
-            if (!(o instanceof MultipleSortSteps)) return false;
-            MultipleSortSteps that = (MultipleSortSteps) o;
+            if (!(o instanceof MultipleSortStepsImpl)) return false;
+            MultipleSortStepsImpl that = (MultipleSortStepsImpl) o;
             return Objects.equals(steps, that.steps);
         }
 
@@ -196,7 +213,7 @@ public abstract class SortBy {
 
         @Override
         public String toString() {
-            return new StringJoiner(", ", MultipleSortSteps.class.getSimpleName() + "[", "]")
+            return new StringJoiner(", ", MultipleSortStepsImpl.class.getSimpleName() + "[", "]")
                     .add("steps=" + steps)
                     .toString();
         }

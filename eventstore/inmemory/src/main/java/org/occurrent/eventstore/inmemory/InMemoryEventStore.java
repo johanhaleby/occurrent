@@ -23,9 +23,9 @@ import org.occurrent.cloudevents.OccurrentCloudEventExtension;
 import org.occurrent.cloudevents.OccurrentExtensionGetter;
 import org.occurrent.eventstore.api.LongConditionEvaluator;
 import org.occurrent.eventstore.api.SortBy;
-import org.occurrent.eventstore.api.SortBy.MultipleSortSteps;
-import org.occurrent.eventstore.api.SortBy.Natural;
-import org.occurrent.eventstore.api.SortBy.SingleField;
+import org.occurrent.eventstore.api.SortBy.MultipleSortStepsImpl;
+import org.occurrent.eventstore.api.SortBy.NaturalImpl;
+import org.occurrent.eventstore.api.SortBy.SingleFieldImpl;
 import org.occurrent.eventstore.api.SortBy.SortDirection;
 import org.occurrent.eventstore.api.WriteCondition;
 import org.occurrent.eventstore.api.WriteCondition.StreamVersionWriteCondition;
@@ -229,8 +229,8 @@ public class InMemoryEventStore implements EventStore, EventStoreOperations, Eve
 
         final Stream<CloudEvent> streamToSort;
         final Map<CloudEvent, Integer> cloudEventPositionCache;
-        if (sortBy instanceof Natural) {
-            SortDirection order = ((Natural) sortBy).direction;
+        if (sortBy instanceof NaturalImpl) {
+            SortDirection order = ((NaturalImpl) sortBy).direction;
             if (order == ASCENDING) {
                 return stream.skip(skip).limit(limit);
             } else {
@@ -257,8 +257,8 @@ public class InMemoryEventStore implements EventStore, EventStoreOperations, Eve
     }
 
     private static boolean isMultipleSortStepsContainingNaturalOrder(SortBy sortBy) {
-        if (sortBy instanceof MultipleSortSteps) {
-            return ((MultipleSortSteps) sortBy).steps.stream().anyMatch(Natural.class::isInstance);
+        if (sortBy instanceof MultipleSortStepsImpl) {
+            return ((MultipleSortStepsImpl) sortBy).steps.stream().anyMatch(NaturalImpl.class::isInstance);
         }
         return false;
     }
@@ -359,17 +359,17 @@ public class InMemoryEventStore implements EventStore, EventStoreOperations, Eve
 
     private static Comparator<CloudEvent> toComparator(Map<CloudEvent, Integer> cloudEventPositionCache, SortBy sortBy) {
         final Comparator<CloudEvent> comparator;
-        if (sortBy instanceof Natural) {
+        if (sortBy instanceof NaturalImpl) {
             Comparator<CloudEvent> temp = Comparator.comparingInt(cloudEventPositionCache::get);
-            if (((Natural) sortBy).direction == DESCENDING) {
+            if (((NaturalImpl) sortBy).direction == DESCENDING) {
                 comparator = temp.reversed();
             } else {
                 comparator = temp;
             }
-        } else if (sortBy instanceof SingleField) {
-            comparator = toComparator((SingleField) sortBy);
-        } else if (sortBy instanceof MultipleSortSteps) {
-            comparator = ((MultipleSortSteps) sortBy).steps.stream()
+        } else if (sortBy instanceof SingleFieldImpl) {
+            comparator = toComparator((SingleFieldImpl) sortBy);
+        } else if (sortBy instanceof MultipleSortStepsImpl) {
+            comparator = ((MultipleSortStepsImpl) sortBy).steps.stream()
                     .map(step -> toComparator(cloudEventPositionCache, step))
                     .filter(Objects::nonNull)
                     .reduce(Comparator::thenComparing)
@@ -380,7 +380,7 @@ public class InMemoryEventStore implements EventStore, EventStoreOperations, Eve
         return comparator;
     }
 
-    private static Comparator<CloudEvent> toComparator(SingleField singleField) {
+    private static Comparator<CloudEvent> toComparator(SingleFieldImpl singleField) {
         String fieldName = singleField.fieldName;
         final Comparator<CloudEvent> comparator;
         switch (fieldName) {
