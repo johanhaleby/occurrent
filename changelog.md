@@ -6,6 +6,20 @@
 * `ReactorMongoEventStore` now sorts queries by "_id" (insertion order) by default (before `$natural` was used, but this won't use indexes!) 
 * `MongoEventStore` now sorts queries by "_id" (insertion order) by default (before `$natural` was used, but this won't use indexes!)
 * `CatchupSubscriptionModel` now sorts by time and natural order to allow for a consistent read order (see [MongoDB documentation](https://docs.mongodb.com/manual/reference/method/cursor.sort/#sort-consistency))
+* Major change in how you can sort the result from queries. Before you only had four options, "natural" (ascending/descending) and "time" (ascending/descending), now you can specify any support CloudEvent 
+  field. This means that e.g. `SortBy.TIME_ASC` has been removed. It has been replaced with the `SortBy` API (`org.occurrent.eventstore.api.SortBy`), that allows you to do e.g.
+  
+  ```java
+  SortBy.time(ASCENDING)
+  ```
+  
+  Sorting can now be composed, e.g.
+
+  ```java
+  SortBy.time(ASCENDING).natural(DESCENDING)  
+  ```
+  
+  This has been implemented for all event stores.
 
 ## Changelog 0.7.4 (2012-02-13)
 
