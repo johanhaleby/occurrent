@@ -25,6 +25,11 @@ import org.bson.Document;
 import org.occurrent.cloudevents.OccurrentExtensionGetter;
 import org.occurrent.condition.Condition;
 import org.occurrent.eventstore.api.LongConditionEvaluator;
+import org.occurrent.eventstore.api.SortBy;
+import org.occurrent.eventstore.api.SortBy.MultipleSortSteps;
+import org.occurrent.eventstore.api.SortBy.Natural;
+import org.occurrent.eventstore.api.SortBy.SingleField;
+import org.occurrent.eventstore.api.SortBy.SortOrder;
 import org.occurrent.eventstore.api.WriteCondition;
 import org.occurrent.eventstore.api.WriteCondition.StreamVersionWriteCondition;
 import org.occurrent.eventstore.api.WriteConditionNotFulfilledException;
@@ -52,10 +57,10 @@ import java.util.stream.Stream;
 import static java.util.Objects.requireNonNull;
 import static org.occurrent.cloudevents.OccurrentCloudEventExtension.STREAM_ID;
 import static org.occurrent.cloudevents.OccurrentCloudEventExtension.STREAM_VERSION;
+import static org.occurrent.eventstore.api.SortBy.SortOrder.ASCENDING;
 import static org.occurrent.eventstore.mongodb.internal.MongoBulkWriteExceptionToDuplicateCloudEventExceptionTranslator.translateToDuplicateCloudEventException;
 import static org.occurrent.eventstore.mongodb.internal.OccurrentCloudEventMongoDocumentMapper.convertToCloudEvent;
 import static org.occurrent.eventstore.mongodb.internal.OccurrentCloudEventMongoDocumentMapper.convertToDocument;
-import static org.occurrent.filter.Filter.TIME;
 import static org.occurrent.functionalsupport.internal.FunctionalSupport.mapWithIndex;
 import static org.springframework.data.domain.Sort.Direction.ASC;
 import static org.springframework.data.domain.Sort.Direction.DESC;
@@ -69,7 +74,6 @@ import static org.springframework.data.mongodb.core.query.Criteria.where;
 public class SpringMongoEventStore implements EventStore, EventStoreOperations, EventStoreQueries {
 
     private static final String ID = "_id";
-    private static final String NATURAL = "$natural";
 
     private final MongoTemplate mongoTemplate;
     private final String eventStoreCollectionName;
@@ -193,7 +197,8 @@ public class SpringMongoEventStore implements EventStore, EventStoreOperations, 
     // Queries
     @Override
     public Stream<CloudEvent> query(Filter filter, int skip, int limit, SortBy sortBy) {
-        requireNonNull(filter, "Filter cannot be null");
+        requireNonNull(filter, Filter.class.getSimpleName() + " cannot be null");
+        requireNonNull(sortBy, SortBy.class.getSimpleName() + " cannot be null");
         final Query query = FilterConverter.convertFilterToQuery(timeRepresentation, filter);
         return readCloudEvents(query, skip, limit, sortBy)
                 .map(document -> convertToCloudEvent(timeRepresentation, document));
@@ -309,24 +314,30 @@ public class SpringMongoEventStore implements EventStore, EventStoreOperations, 
             query.skip(skip).limit(limit);
         }
 
-        switch (sortBy) {
-            case TIME_ASC:
-                query.with(Sort.by(ASC, TIME));
-                break;
-            case TIME_DESC:
-                query.with(Sort.by(DESC, TIME));
-                break;
-            case NATURAL_ASC:
-                query.with(Sort.by(ASC, NATURAL));
-                break;
-            case NATURAL_DESC:
-                query.with(Sort.by(DESC, NATURAL));
-                break;
-            default:
-                throw new IllegalStateException("Unexpected value: " + sortBy);
-        }
+        Sort sort = convertToSpringSort(sortBy);
+        return StreamUtils.createStreamFromIterator(mongoTemplate.stream(query.with(sort), Document.class, eventStoreCollectionName));
+    }
 
-        return StreamUtils.createStreamFromIterator(mongoTemplate.stream(query, Document.class, eventStoreCollectionName));
+    private static Sort convertToSpringSort(SortBy sortBy) {
+        final Sort sort;
+        if (sortBy instanceof Natural) {
+            sort = Sort.by(toDirection(((Natural) sortBy).order), ID);
+        } else if (sortBy instanceof SingleField) {
+            SingleField singleField = (SingleField) sortBy;
+            sort = Sort.by(toDirection(singleField.order), singleField.fieldName);
+        } else if (sortBy instanceof MultipleSortSteps) {
+            sort = ((MultipleSortSteps) sortBy).steps.stream()
+                    .map(SpringMongoEventStore::convertToSpringSort)
+                    .reduce(Sort::and)
+                    .orElseThrow(() -> new IllegalStateException("Internal error: Expecting " + MultipleSortSteps.class.getSimpleName() + " to have at least one step"));
+        } else {
+            throw new IllegalArgumentException("Internal error: Unrecognized " + SortBy.class.getSimpleName() + " instance: " + sortBy.getClass().getSimpleName());
+        }
+        return sort;
+    }
+
+    private static Sort.Direction toDirection(SortOrder sortOrder) {
+        return sortOrder == ASCENDING ? ASC : DESC;
     }
 
     // Initialization

@@ -32,6 +32,28 @@ public abstract class SortBy {
             Objects.requireNonNull(order, SortOrder.class.getSimpleName() + " cannot be null");
             this.order = order;
         }
+
+        @Override
+        public boolean equals(Object o) {
+            if (this == o) return true;
+            if (!(o instanceof Natural)) return false;
+            Natural natural = (Natural) o;
+            return order == natural.order;
+        }
+
+        @Override
+        public int hashCode() {
+            return Objects.hash(order);
+        }
+
+        @Override
+        public String toString() {
+            return new StringJoiner(", ", Natural.class.getSimpleName() + "[", "]")
+                    .add("order=" + order)
+                    .toString();
+        }
+
+
     }
 
     public static final class SingleField extends ComposableSortStep {
@@ -97,19 +119,6 @@ public abstract class SortBy {
         }
 
         @Override
-        public boolean equals(Object o) {
-            if (this == o) return true;
-            if (!(o instanceof MultipleSortSteps)) return false;
-            MultipleSortSteps that = (MultipleSortSteps) o;
-            return Objects.equals(steps, that.steps);
-        }
-
-        @Override
-        public int hashCode() {
-            return Objects.hash(steps);
-        }
-
-        @Override
         public MultipleSortSteps then(ComposableSortStep next) {
             return then((SortBy) next);
         }
@@ -123,6 +132,26 @@ public abstract class SortBy {
                 newSteps.add(next);
             }
             return new MultipleSortSteps(newSteps);
+        }
+
+        @Override
+        public boolean equals(Object o) {
+            if (this == o) return true;
+            if (!(o instanceof MultipleSortSteps)) return false;
+            MultipleSortSteps that = (MultipleSortSteps) o;
+            return Objects.equals(steps, that.steps);
+        }
+
+        @Override
+        public int hashCode() {
+            return Objects.hash(steps);
+        }
+
+        @Override
+        public String toString() {
+            return new StringJoiner(", ", MultipleSortSteps.class.getSimpleName() + "[", "]")
+                    .add("steps=" + steps)
+                    .toString();
         }
     }
 
