@@ -45,7 +45,6 @@ import org.occurrent.eventstore.api.DuplicateCloudEventException;
 import org.occurrent.eventstore.api.SortBy;
 import org.occurrent.eventstore.api.WriteCondition;
 import org.occurrent.eventstore.api.WriteConditionNotFulfilledException;
-import org.occurrent.eventstore.api.blocking.EventStoreQueries;
 import org.occurrent.eventstore.api.blocking.EventStream;
 import org.occurrent.filter.Filter;
 import org.occurrent.mongodb.timerepresentation.TimeRepresentation;
@@ -1387,7 +1386,8 @@ class MongoEventStoreTest {
 
                     // Then
                     Stream<CloudEvent> events = eventStore.all(SortBy.time(DESCENDING).thenNatural(ASCENDING));
-                    assertThat(deserialize(events)).containsExactly(nameWasChanged2, nameDefined, nameWasChanged1);
+                    // Natural ignores indexes!
+                    assertThat(deserialize(events)).containsExactly(nameDefined, nameWasChanged1, nameWasChanged2);
                 }
 
                 @Test
@@ -1421,7 +1421,7 @@ class MongoEventStoreTest {
                     persist("name2", nameWasChanged2);
 
                     // Then
-                    Stream<CloudEvent> events = eventStore.all(SortBy.time(DESCENDING).then(STREAM_VERSION, ASCENDING));
+                    Stream<CloudEvent> events = eventStore.all(SortBy.time(DESCENDING).thenStreamVersion(ASCENDING));
                     assertThat(deserialize(events)).containsExactly(nameWasChanged2, nameDefined, nameWasChanged1);
                 }
 

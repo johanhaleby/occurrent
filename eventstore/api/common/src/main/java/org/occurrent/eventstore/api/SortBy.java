@@ -4,9 +4,12 @@ import io.cloudevents.core.v1.CloudEventV1;
 import org.occurrent.cloudevents.OccurrentCloudEventExtension;
 
 import java.util.*;
+import java.util.stream.Stream;
 
 import static io.cloudevents.core.v1.CloudEventV1.TIME;
 import static org.occurrent.cloudevents.OccurrentCloudEventExtension.STREAM_VERSION;
+import static org.occurrent.eventstore.api.SortBy.SortDirection.ASCENDING;
+import static org.occurrent.eventstore.api.SortBy.SortDirection.DESCENDING;
 
 /**
  * A fluent API for specifying sort order for queries. For example:
@@ -38,6 +41,24 @@ public abstract class SortBy {
      */
     public static SingleField time(SortDirection direction) {
         return field(TIME, direction);
+    }
+
+    /**
+     * Combines multiple fields in ascending order.
+     *
+     * @return A new instance of {@link SortBy}.
+     */
+    public static ComposableSortStep ascending(String field1, String field2, String... fields) {
+        return combine(field1, field2, ASCENDING, fields);
+    }
+
+    /**
+     * Combines multiple fields in descending order.
+     *
+     * @return A new instance of {@link SortBy}.
+     */
+    public static ComposableSortStep descending(String field1, String field2, String... fields) {
+        return combine(field1, field2, DESCENDING, fields);
     }
 
     /**
@@ -239,11 +260,49 @@ public abstract class SortBy {
         }
 
         /**
+         * Combines this field and the stream version field such that the latter is applied only when the former considered values equal.
+         *
+         * @param direction The direction
+         * @return CompositeSortSteps
+         */
+        public MultipleSortSteps thenStreamVersion(SortDirection direction) {
+            return then(field(STREAM_VERSION, direction));
+        }
+
+        /**
+         * Combines this field and the time version field such that the latter is applied only when the former considered values equal.
+         *
+         * @param direction The direction
+         * @return CompositeSortSteps
+         */
+        public MultipleSortSteps thenTime(SortDirection direction) {
+            return then(field(STREAM_VERSION, direction));
+        }
+
+        /**
          * Combines this sorting step and with another step such that the latter is applied only when the former considered values equal.
          *
          * @param next The next step.
          * @return A new instance of {@link SortBy}.
          */
         public abstract MultipleSortSteps then(ComposableSortStep next);
+    }
+
+    private static MultipleSortSteps combine(String field1, String field2, SortDirection direction, String[] fields) {
+        Objects.requireNonNull(field1, "field1 cannot be null");
+        Objects.requireNonNull(field2, "field2 cannot be null");
+        MultipleSortSteps initialSortSteps = new MultipleSortStepsImpl(Arrays.asList(SortBy.field(field1, direction), SortBy.field(field2, direction)));
+        final MultipleSortSteps stepsToUse;
+        if (fields != null && fields.length >= 1) {
+            stepsToUse = Stream.of(fields).map(f -> SortBy.field(f, direction))
+                    .map(ComposableSortStep.class::cast)
+                    .reduce(ComposableSortStep::then)
+                    .map(initialSortSteps::thenMerge)
+                    .orElseThrow(() -> new IllegalArgumentException("Internal error: Failed to "));
+        } else {
+            stepsToUse = initialSortSteps;
+        }
+
+        return stepsToUse;
     }
 }

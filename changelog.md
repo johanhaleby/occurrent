@@ -1,11 +1,12 @@
 ## Changelog next version
 
 * Only log with "warn" when subscription is restarted due to "ChangeStreamHistoryLost".
-* `InMemoryEventStore` now sorts queries by insertion order by default (before "time" was used) 
-* `SpringMongoEventStore` now sorts queries by "_id" (insertion order) by default (before `$natural` was used, but this won't use indexes!) 
-* `ReactorMongoEventStore` now sorts queries by "_id" (insertion order) by default (before `$natural` was used, but this won't use indexes!) 
-* `MongoEventStore` now sorts queries by "_id" (insertion order) by default (before `$natural` was used, but this won't use indexes!)
-* `CatchupSubscriptionModel` now sorts by time and natural order to allow for a consistent read order (see [MongoDB documentation](https://docs.mongodb.com/manual/reference/method/cursor.sort/#sort-consistency))
+* `InMemoryEventStore` now sorts queries by insertion order by default (before "time" was used)
+* Added a new default compound index to MongoDB event stores, `{ streamid : 1, streamversion : 1}`. The reason for this is to get the events back in order when reading a stream from the event store _and_ 
+  to make this efficient. Previous `$natural` order was used but this would skip the index, making reads slower if you have lots of data.
+* All MongoDB EventStore's now loads the events for a stream by leveraging the new `{ streamid : 1, streamversion : 1}` index.
+* `CatchupSubscriptionModel` now sorts by time and then by stream version to allow for a consistent read order (see [MongoDB documentation](https://docs.mongodb.com/manual/reference/method/cursor.sort/#sort-consistency)).
+  Note that the above is only true _if_ you supply a `TimeBasedSubscriptionPosition` that is _not_ equal to ``TimeBasedSubscriptionPosition.beginningOfTime()` (which is default if no filter is supplied).
 * Major change in how you can sort the result from queries. Before you only had four options, "natural" (ascending/descending) and "time" (ascending/descending), now you can specify any support CloudEvent 
   field. This means that e.g. `SortBy.TIME_ASC` has been removed. It has been replaced with the `SortBy` API (`org.occurrent.eventstore.api.SortBy`), that allows you to do e.g.
   

@@ -288,7 +288,7 @@ public class SpringMongoEventStore implements EventStore, EventStoreOperations, 
             return new EventStreamImpl<>(streamId, 0, Stream.empty());
         }
 
-        Stream<Document> stream = readCloudEvents(streamIdEqualTo(streamId), skip, limit, SortBy.natural(ASCENDING));
+        Stream<Document> stream = readCloudEvents(streamIdEqualTo(streamId), skip, limit, SortBy.streamVersion(ASCENDING));
         return new EventStreamImpl<>(streamId, currentStreamVersion, stream);
     }
 
@@ -322,7 +322,9 @@ public class SpringMongoEventStore implements EventStore, EventStoreOperations, 
         MongoCollection<Document> eventStoreCollection = mongoTemplate.getCollection(eventStoreCollectionName);
         // Cloud spec defines id + source must be unique!
         eventStoreCollection.createIndex(Indexes.compoundIndex(Indexes.ascending("id"), Indexes.ascending("source")), new IndexOptions().unique(true));
-        // Create a streamId + streamVersion index (note that we don't need to index stream id separately since it's covered by this compound index)
+        // Create a streamId + streamVersion ascending index (note that we don't need to index stream id separately since it's covered by this compound index)
+        eventStoreCollection.createIndex(Indexes.compoundIndex(Indexes.ascending(STREAM_ID), Indexes.ascending(STREAM_VERSION)), new IndexOptions().unique(true));
+        // Create a streamId + streamVersion descending index
         eventStoreCollection.createIndex(Indexes.compoundIndex(Indexes.ascending(STREAM_ID), Indexes.descending(STREAM_VERSION)), new IndexOptions().unique(true));
 
         // SessionSynchronization need to be "ALWAYS" in order for TransactionTemplate to work with mongo template!

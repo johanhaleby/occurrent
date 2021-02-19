@@ -11,7 +11,7 @@ import static org.springframework.data.domain.Sort.Direction.DESC;
  * Convert Occurrent sort types to Spring sort types
  */
 public class SortConverter {
-    private static final String ID = "_id";
+    private static final String NATURAL = "$natural";
 
     /**
      * Convert {@link SortBy} to {@link Sort}
@@ -22,7 +22,7 @@ public class SortConverter {
     public static Sort convertToSpringSort(SortBy sortBy) {
         final Sort sort;
         if (sortBy instanceof SortBy.NaturalImpl) {
-            sort = Sort.by(toDirection(((SortBy.NaturalImpl) sortBy).direction), ID);
+            sort = Sort.by(toDirection(((SortBy.NaturalImpl) sortBy).direction), NATURAL);
         } else if (sortBy instanceof SortBy.SingleFieldImpl) {
             SortBy.SingleFieldImpl singleField = (SortBy.SingleFieldImpl) sortBy;
             sort = Sort.by(toDirection(singleField.direction), singleField.fieldName);

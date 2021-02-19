@@ -53,9 +53,7 @@ import static java.util.Objects.requireNonNull;
 import static org.occurrent.cloudevents.OccurrentCloudEventExtension.STREAM_ID;
 import static org.occurrent.cloudevents.OccurrentCloudEventExtension.STREAM_VERSION;
 import static org.occurrent.eventstore.api.SortBy.SortDirection.ASCENDING;
-import static org.occurrent.filter.Filter.TIME;
 import static org.occurrent.mongodb.spring.sortconversion.internal.SortConverter.convertToSpringSort;
-import static org.springframework.data.domain.Sort.Direction.ASC;
 import static org.springframework.data.domain.Sort.Direction.DESC;
 import static org.springframework.data.mongodb.SessionSynchronization.ALWAYS;
 import static org.springframework.data.mongodb.core.query.Criteria.where;
@@ -148,7 +146,7 @@ public class ReactorMongoEventStore implements EventStore, EventStoreOperations,
     private Mono<EventStreamImpl> readEventStream(String streamId, int skip, int limit) {
         return currentStreamVersion(streamId)
                 .flatMap(currentStreamVersion -> {
-                    Flux<Document> cloudEventDocuments = readCloudEvents(streamIdEqualTo(streamId), skip, limit, SortBy.natural(ASCENDING));
+                    Flux<Document> cloudEventDocuments = readCloudEvents(streamIdEqualTo(streamId), skip, limit, SortBy.streamVersion(ASCENDING));
                     return Mono.just(new EventStreamImpl(streamId, currentStreamVersion, cloudEventDocuments));
                 })
                 .switchIfEmpty(Mono.fromSupplier(() -> new EventStreamImpl(streamId, 0, Flux.empty())));
@@ -199,13 +197,16 @@ public class ReactorMongoEventStore implements EventStore, EventStoreOperations,
         Mono<String> indexIdAndSource = createIndex(eventStoreCollectionName, mongoTemplate, Indexes.compoundIndex(Indexes.ascending("id"), Indexes.ascending("source")), new IndexOptions().unique(true));
 
         // Create a streamId + streamVersion index (note that we don't need to index stream id separately since it's covered by this compound index)
-        Mono<String> indexStreamIdAndStreamVersion = createIndex(eventStoreCollectionName, mongoTemplate, Indexes.compoundIndex(Indexes.ascending(STREAM_ID), Indexes.descending(STREAM_VERSION)), new IndexOptions().unique(true));
+        Mono<String> indexStreamIdAndAscendingStreamVersion = createIndex(eventStoreCollectionName, mongoTemplate, Indexes.compoundIndex(Indexes.ascending(STREAM_ID), Indexes.ascending(STREAM_VERSION)), new IndexOptions().unique(true));
+
+        // Create a streamId + streamVersion descending index
+        Mono<String> indexStreamIdAndDescendingStreamVersion = createIndex(eventStoreCollectionName, mongoTemplate, Indexes.compoundIndex(Indexes.ascending(STREAM_ID), Indexes.descending(STREAM_VERSION)), new IndexOptions().unique(true));
 
         // SessionSynchronization need to be "ALWAYS" in order for TransactionTemplate to work with mongo template!
         // See https://docs.spring.io/spring-data/mongodb/docs/current/reference/html/#mongo.transactions.transaction-template
         mongoTemplate.setSessionSynchronization(ALWAYS);
 
-        return createEventStoreCollection.then(indexIdAndSource).then(indexStreamIdAndStreamVersion).then();
+        return createEventStoreCollection.then(indexIdAndSource).then(indexStreamIdAndAscendingStreamVersion).then(indexStreamIdAndDescendingStreamVersion).then();
     }
 
     private static Mono<String> createIndex(String eventStoreCollectionName, ReactiveMongoTemplate mongoTemplate, Bson index, IndexOptions indexOptions) {

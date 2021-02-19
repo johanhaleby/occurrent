@@ -75,6 +75,7 @@ import static org.occurrent.functionalsupport.internal.FunctionalSupport.zip;
  */
 public class MongoEventStore implements EventStore, EventStoreOperations, EventStoreQueries {
     private static final String ID = "_id";
+    private static final String NATURAL = "$natural";
 
     private final MongoCollection<Document> eventCollection;
     private final MongoClient mongoClient;
@@ -129,7 +130,7 @@ public class MongoEventStore implements EventStore, EventStoreOperations, EventS
                     return new EventStreamImpl<>(streamId, 0, Stream.empty());
                 }
 
-                Stream<Document> stream = readCloudEvents(streamIdEqualTo(streamId), skip, limit, natural(ASCENDING), clientSession);
+                Stream<Document> stream = readCloudEvents(streamIdEqualTo(streamId), skip, limit, SortBy.streamVersion(ASCENDING), clientSession);
                 return new EventStreamImpl<>(streamId, currentStreamVersion, stream);
             }, transactionOptions);
         }
@@ -330,7 +331,9 @@ public class MongoEventStore implements EventStore, EventStoreOperations, EventS
         }
         // Cloud spec defines id + source must be unique!
         eventStoreCollection.createIndex(Indexes.compoundIndex(Indexes.ascending("id"), Indexes.ascending("source")), new IndexOptions().unique(true));
-        // Create a streamId + streamVersion index (note that we don't need to index stream id separately since it's covered by this compound index)
+        // Create a streamId + streamVersion ascending index (note that we don't need to index stream id separately since it's covered by this compound index)
+        eventStoreCollection.createIndex(Indexes.compoundIndex(Indexes.ascending(STREAM_ID), Indexes.ascending(STREAM_VERSION)), new IndexOptions().unique(true));
+        // Create a streamId + streamVersion descending index
         eventStoreCollection.createIndex(Indexes.compoundIndex(Indexes.ascending(STREAM_ID), Indexes.descending(STREAM_VERSION)), new IndexOptions().unique(true));
     }
 
@@ -356,7 +359,7 @@ public class MongoEventStore implements EventStore, EventStoreOperations, EventS
     private static Bson convertToMongoDBSort(SortBy sortBy) {
         final Bson sort;
         if (sortBy instanceof NaturalImpl) {
-            sort = ((NaturalImpl) sortBy).direction == ASCENDING ? ascending(ID) : descending(ID);
+            sort = ((NaturalImpl) sortBy).direction == ASCENDING ? ascending(NATURAL) : descending(NATURAL);
         } else if (sortBy instanceof SingleFieldImpl) {
             SingleFieldImpl singleField = (SingleFieldImpl) sortBy;
             sort = singleField.direction == ASCENDING ? ascending(singleField.fieldName) : descending(singleField.fieldName);
