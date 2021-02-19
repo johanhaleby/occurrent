@@ -17,6 +17,7 @@
 package org.occurrent.subscription.blocking.durable.catchup;
 
 import io.cloudevents.CloudEvent;
+import org.occurrent.eventstore.api.SortBy;
 import org.occurrent.eventstore.api.blocking.EventStoreQueries;
 import org.occurrent.filter.Filter;
 import org.occurrent.subscription.*;
@@ -37,7 +38,7 @@ import java.util.function.Supplier;
 import java.util.stream.Stream;
 
 import static org.occurrent.condition.Condition.gt;
-import static org.occurrent.eventstore.api.blocking.SortBy.time(ASCENDING);
+import static org.occurrent.eventstore.api.SortBy.SortDirection.ASCENDING;
 import static org.occurrent.filter.Filter.time;
 import static org.occurrent.functionalsupport.internal.FunctionalSupport.takeWhile;
 import static org.occurrent.time.internal.RFC3339.RFC_3339_DATE_TIME_FORMATTER;
@@ -134,11 +135,12 @@ public class CatchupSubscriptionModel implements SubscriptionModel, DelegatingSu
 
         FixedSizeCache cache = new FixedSizeCache(config.cacheSize);
         final Stream<CloudEvent> stream;
+        SortBy sort = SortBy.time(ASCENDING).thenNatural(ASCENDING);
         if (filter == null) {
-            stream = eventStoreQueries.query(timeFilter, TIME_ASC);
+            stream = eventStoreQueries.query(timeFilter, sort);
         } else {
             Filter userSuppliedFilter = ((OccurrentSubscriptionFilter) filter).filter;
-            stream = eventStoreQueries.query(timeFilter.and(userSuppliedFilter), TIME_ASC);
+            stream = eventStoreQueries.query(timeFilter.and(userSuppliedFilter), sort);
         }
 
         takeWhile(stream, __ -> !shuttingDown && runningCatchupSubscriptions.containsKey(subscriptionId))
