@@ -17,11 +17,13 @@
 package org.occurrent.eventstore.api.reactor;
 
 import io.cloudevents.CloudEvent;
+import org.occurrent.eventstore.api.SortBy;
 import org.occurrent.filter.Filter;
 import reactor.core.publisher.Flux;
 import reactor.core.publisher.Mono;
 
 import static java.util.Objects.requireNonNull;
+import static org.occurrent.eventstore.api.SortBy.SortDirection.ASCENDING;
 
 /**
  * Additional querying capabilities that may be supported by an {@link EventStore} implementation that is not typically part of a
@@ -110,9 +112,5 @@ public interface EventStoreQueries {
     default Flux<CloudEvent> query(Filter filter) {
         requireNonNull(filter, "Filter cannot be null");
         return query(filter, 0, Integer.MAX_VALUE);
-    }
-
-    enum SortBy {
-        TIME_ASC, TIME_DESC, NATURAL_ASC, NATURAL_DESC
     }
 }

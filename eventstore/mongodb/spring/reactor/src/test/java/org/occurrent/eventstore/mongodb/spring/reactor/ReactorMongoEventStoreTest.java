@@ -38,6 +38,7 @@ import org.occurrent.cloudevents.OccurrentCloudEventExtension;
 import org.occurrent.condition.Condition;
 import org.occurrent.domain.*;
 import org.occurrent.eventstore.api.DuplicateCloudEventException;
+import org.occurrent.eventstore.api.SortBy;
 import org.occurrent.eventstore.api.WriteCondition;
 import org.occurrent.eventstore.api.WriteConditionNotFulfilledException;
 import org.occurrent.eventstore.api.reactor.EventStoreQueries;
@@ -80,7 +81,10 @@ import static org.hamcrest.Matchers.nullValue;
 import static org.junit.jupiter.api.Assertions.assertAll;
 import static org.junit.jupiter.api.condition.JRE.JAVA_11;
 import static org.junit.jupiter.api.condition.JRE.JAVA_8;
+import static org.occurrent.cloudevents.OccurrentCloudEventExtension.STREAM_VERSION;
 import static org.occurrent.condition.Condition.*;
+import static org.occurrent.eventstore.api.SortBy.SortDirection.ASCENDING;
+import static org.occurrent.eventstore.api.SortBy.SortDirection.DESCENDING;
 import static org.occurrent.filter.Filter.*;
 import static org.occurrent.mongodb.timerepresentation.TimeRepresentation.RFC_3339_STRING;
 import static org.occurrent.time.TimeConversion.offsetDateTimeFrom;
@@ -1359,6 +1363,76 @@ public class ReactorMongoEventStoreTest {
                 // Then
                 Flux<CloudEvent> events = eventStore.all(SortBy.time(DESCENDING));
                 assertThat(deserialize(events)).containsExactly(nameDefined, nameWasChanged2, nameWasChanged1);
+            }
+
+            @Test
+            void sort_by_time_desc_and_natural_descending() {
+                LocalDateTime now = LocalDateTime.now();
+                NameDefined nameDefined = new NameDefined(UUID.randomUUID().toString(), now, "name");
+                NameWasChanged nameWasChanged1 = new NameWasChanged(UUID.randomUUID().toString(), now, "name2");
+                NameWasChanged nameWasChanged2 = new NameWasChanged(UUID.randomUUID().toString(), now.plusHours(1), "name3");
+
+                // When
+                persist("name1", nameDefined).block();
+                persist("name3", nameWasChanged1).block();
+                persist("name2", nameWasChanged2).block();
+
+                // Then
+                Flux<CloudEvent> events = eventStore.all(SortBy.time(DESCENDING).thenNatural(DESCENDING));
+                assertThat(deserialize(events)).containsExactly(nameWasChanged2, nameWasChanged1, nameDefined);
+            }
+
+            @Test
+            void sort_by_time_desc_and_natural_ascending() {
+                // Given
+                LocalDateTime now = LocalDateTime.now();
+                NameDefined nameDefined = new NameDefined(UUID.randomUUID().toString(), now, "name");
+                NameWasChanged nameWasChanged1 = new NameWasChanged(UUID.randomUUID().toString(), now, "name2");
+                NameWasChanged nameWasChanged2 = new NameWasChanged(UUID.randomUUID().toString(), now.plusHours(1), "name3");
+
+                // When
+                persist("name", nameDefined).block();
+                persist("name", nameWasChanged1).block();
+                persist("name", nameWasChanged2).block();
+
+                // Then
+                Flux<CloudEvent> events = eventStore.all(SortBy.time(DESCENDING).thenNatural(ASCENDING));
+                assertThat(deserialize(events)).containsExactly(nameWasChanged2, nameDefined, nameWasChanged1);
+            }
+
+            @Test
+            void sort_by_time_desc_and_other_field_descending() {
+                LocalDateTime now = LocalDateTime.now();
+                NameDefined nameDefined = new NameDefined(UUID.randomUUID().toString(), now, "name");
+                NameWasChanged nameWasChanged1 = new NameWasChanged(UUID.randomUUID().toString(), now, "name2");
+                NameWasChanged nameWasChanged2 = new NameWasChanged(UUID.randomUUID().toString(), now.plusHours(1), "name3");
+
+                // When
+                persist("name", nameDefined).block();
+                persist("name", nameWasChanged1).block();
+                persist("name", nameWasChanged2).block();
+
+                // Then
+                Flux<CloudEvent> events = eventStore.all(SortBy.time(DESCENDING).then(STREAM_VERSION, DESCENDING));
+                assertThat(deserialize(events)).containsExactly(nameWasChanged2, nameWasChanged1, nameDefined);
+            }
+
+            @Test
+            void sort_by_time_desc_and_other_field_ascending() {
+                // Given
+                LocalDateTime now = LocalDateTime.now();
+                NameDefined nameDefined = new NameDefined(UUID.randomUUID().toString(), now, "name");
+                NameWasChanged nameWasChanged1 = new NameWasChanged(UUID.randomUUID().toString(), now, "name2");
+                NameWasChanged nameWasChanged2 = new NameWasChanged(UUID.randomUUID().toString(), now.plusHours(1), "name3");
+
+                // When
+                persist("name1", nameDefined).block();
+                persist("name3", nameWasChanged1).block();
+                persist("name2", nameWasChanged2).block();
+
+                // Then
+                Flux<CloudEvent> events = eventStore.all(SortBy.time(DESCENDING).then(STREAM_VERSION, ASCENDING));
+                assertThat(deserialize(events)).containsExactly(nameWasChanged2, nameDefined, nameWasChanged1);
             }
         }
 

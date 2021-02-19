@@ -18,7 +18,7 @@ package org.occurrent.eventstore.api.blocking
 
 import io.cloudevents.CloudEvent
 import org.occurrent.eventstore.api.SortBy
-import org.occurrent.eventstore.api.SortBy.SortOrder.ASCENDING
+import org.occurrent.eventstore.api.SortBy.SortDirection.ASCENDING
 import org.occurrent.filter.Filter
 import kotlin.streams.asSequence
 

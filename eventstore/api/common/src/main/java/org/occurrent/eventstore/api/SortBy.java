@@ -9,28 +9,28 @@ public abstract class SortBy {
     private SortBy() {
     }
 
-    public static Natural natural(SortOrder order) {
-        return new Natural(order);
+    public static Natural natural(SortDirection direction) {
+        return new Natural(direction);
     }
 
-    public static SingleField time(SortOrder order) {
-        return field(TIME, order);
+    public static SingleField time(SortDirection direction) {
+        return field(TIME, direction);
     }
 
-    public static SingleField streamVersion(SortOrder order) {
-        return field(STREAM_VERSION, order);
+    public static SingleField streamVersion(SortDirection direction) {
+        return field(STREAM_VERSION, direction);
     }
 
-    public static SingleField field(String fieldName, SortOrder order) {
-        return new SingleField(fieldName, order);
+    public static SingleField field(String fieldName, SortDirection direction) {
+        return new SingleField(fieldName, direction);
     }
 
     public static final class Natural extends SortBy {
-        public final SortOrder order;
+        public final SortDirection direction;
 
-        private Natural(SortOrder order) {
-            Objects.requireNonNull(order, SortOrder.class.getSimpleName() + " cannot be null");
-            this.order = order;
+        private Natural(SortDirection direction) {
+            Objects.requireNonNull(direction, SortDirection.class.getSimpleName() + " cannot be null");
+            this.direction = direction;
         }
 
         @Override
@@ -38,18 +38,18 @@ public abstract class SortBy {
             if (this == o) return true;
             if (!(o instanceof Natural)) return false;
             Natural natural = (Natural) o;
-            return order == natural.order;
+            return direction == natural.direction;
         }
 
         @Override
         public int hashCode() {
-            return Objects.hash(order);
+            return Objects.hash(direction);
         }
 
         @Override
         public String toString() {
             return new StringJoiner(", ", Natural.class.getSimpleName() + "[", "]")
-                    .add("order=" + order)
+                    .add("direction=" + direction)
                     .toString();
         }
 
@@ -58,17 +58,17 @@ public abstract class SortBy {
 
     public static final class SingleField extends ComposableSortStep {
         public final String fieldName;
-        public final SortOrder order;
+        public final SortDirection direction;
 
-        private SingleField(String fieldName, SortOrder order) {
+        private SingleField(String fieldName, SortDirection direction) {
             Objects.requireNonNull(fieldName, "Field name cannot be null");
-            Objects.requireNonNull(order, SortOrder.class.getSimpleName() + " cannot be null");
+            Objects.requireNonNull(direction, SortDirection.class.getSimpleName() + " cannot be null");
             this.fieldName = fieldName;
-            this.order = order;
+            this.direction = direction;
         }
 
-        public SortBy thenNatural(SortOrder order) {
-            return then(new Natural(order));
+        public SortBy thenNatural(SortDirection direction) {
+            return then(new Natural(direction));
         }
 
         @Override
@@ -76,19 +76,19 @@ public abstract class SortBy {
             if (this == o) return true;
             if (!(o instanceof SingleField)) return false;
             SingleField that = (SingleField) o;
-            return Objects.equals(fieldName, that.fieldName) && order == that.order;
+            return Objects.equals(fieldName, that.fieldName) && direction == that.direction;
         }
 
         @Override
         public int hashCode() {
-            return Objects.hash(fieldName, order);
+            return Objects.hash(fieldName, direction);
         }
 
         @Override
         public String toString() {
             return new StringJoiner(", ", SingleField.class.getSimpleName() + "[", "]")
                     .add("fieldName='" + fieldName + "'")
-                    .add("order=" + order)
+                    .add("direction=" + direction)
                     .toString();
         }
 
@@ -114,8 +114,8 @@ public abstract class SortBy {
             this.steps = Collections.unmodifiableList(steps);
         }
 
-        public SortBy thenNatural(SortOrder order) {
-            return then(new Natural(order));
+        public SortBy thenNatural(SortDirection direction) {
+            return then(new Natural(direction));
         }
 
         @Override
@@ -155,7 +155,7 @@ public abstract class SortBy {
         }
     }
 
-    public enum SortOrder {
+    public enum SortDirection {
         ASCENDING, DESCENDING
     }
 
@@ -167,11 +167,11 @@ public abstract class SortBy {
          * Combines this field and the given field such that the latter is applied only when the former considered values equal.
          *
          * @param fieldName The other field name to sort
-         * @param order     The order
+         * @param direction The direction
          * @return CompositeSortSteps
          */
-        public MultipleSortSteps then(String fieldName, SortOrder order) {
-            return then(field(fieldName, order));
+        public MultipleSortSteps then(String fieldName, SortDirection direction) {
+            return then(field(fieldName, direction));
         }
 
         public abstract MultipleSortSteps then(ComposableSortStep next);

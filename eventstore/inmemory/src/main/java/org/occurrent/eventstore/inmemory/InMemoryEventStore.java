@@ -26,7 +26,7 @@ import org.occurrent.eventstore.api.SortBy;
 import org.occurrent.eventstore.api.SortBy.MultipleSortSteps;
 import org.occurrent.eventstore.api.SortBy.Natural;
 import org.occurrent.eventstore.api.SortBy.SingleField;
-import org.occurrent.eventstore.api.SortBy.SortOrder;
+import org.occurrent.eventstore.api.SortBy.SortDirection;
 import org.occurrent.eventstore.api.WriteCondition;
 import org.occurrent.eventstore.api.WriteCondition.StreamVersionWriteCondition;
 import org.occurrent.eventstore.api.WriteConditionNotFulfilledException;
@@ -55,8 +55,8 @@ import static java.util.Objects.requireNonNull;
 import static java.util.Spliterators.spliteratorUnknownSize;
 import static org.occurrent.cloudevents.OccurrentCloudEventExtension.STREAM_ID;
 import static org.occurrent.cloudevents.OccurrentCloudEventExtension.STREAM_VERSION;
-import static org.occurrent.eventstore.api.SortBy.SortOrder.ASCENDING;
-import static org.occurrent.eventstore.api.SortBy.SortOrder.DESCENDING;
+import static org.occurrent.eventstore.api.SortBy.SortDirection.ASCENDING;
+import static org.occurrent.eventstore.api.SortBy.SortDirection.DESCENDING;
 import static org.occurrent.functionalsupport.internal.FunctionalSupport.not;
 import static org.occurrent.functionalsupport.internal.FunctionalSupport.zip;
 import static org.occurrent.inmemory.filtermatching.FilterMatcher.matchesFilter;
@@ -230,7 +230,7 @@ public class InMemoryEventStore implements EventStore, EventStoreOperations, Eve
         final Stream<CloudEvent> streamToSort;
         final Map<CloudEvent, Integer> cloudEventPositionCache;
         if (sortBy instanceof Natural) {
-            SortOrder order = ((Natural) sortBy).order;
+            SortDirection order = ((Natural) sortBy).direction;
             if (order == ASCENDING) {
                 return stream.skip(skip).limit(limit);
             } else {
@@ -361,7 +361,7 @@ public class InMemoryEventStore implements EventStore, EventStoreOperations, Eve
         final Comparator<CloudEvent> comparator;
         if (sortBy instanceof Natural) {
             Comparator<CloudEvent> temp = Comparator.comparingInt(cloudEventPositionCache::get);
-            if (((Natural) sortBy).order == DESCENDING) {
+            if (((Natural) sortBy).direction == DESCENDING) {
                 comparator = temp.reversed();
             } else {
                 comparator = temp;
@@ -418,7 +418,7 @@ public class InMemoryEventStore implements EventStore, EventStoreOperations, Eve
                 throw new IllegalStateException("Unexpected value: " + fieldName);
         }
 
-        if (singleField.order == ASCENDING) {
+        if (singleField.direction == ASCENDING) {
             return comparator;
         } else {
             return comparator.reversed();

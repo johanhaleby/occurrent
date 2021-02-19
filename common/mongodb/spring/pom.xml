@@ -26,6 +26,7 @@
     <packaging>pom</packaging>
     <modules>
         <module>filter-query-conversion</module>
+        <module>sort-conversion</module>
     </modules>
     <artifactId>mongodb-spring</artifactId>
 

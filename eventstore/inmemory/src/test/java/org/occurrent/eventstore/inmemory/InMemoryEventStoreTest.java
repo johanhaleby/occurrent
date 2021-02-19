@@ -36,7 +36,6 @@ import org.occurrent.eventstore.api.SortBy;
 import org.occurrent.eventstore.api.WriteCondition;
 import org.occurrent.eventstore.api.WriteConditionNotFulfilledException;
 import org.occurrent.eventstore.api.blocking.EventStore;
-import org.occurrent.eventstore.api.blocking.EventStoreQueries;
 import org.occurrent.eventstore.api.blocking.EventStream;
 import org.occurrent.filter.Filter;
 
@@ -62,8 +61,8 @@ import static org.junit.jupiter.api.condition.JRE.JAVA_11;
 import static org.junit.jupiter.api.condition.JRE.JAVA_8;
 import static org.occurrent.cloudevents.OccurrentCloudEventExtension.*;
 import static org.occurrent.condition.Condition.*;
-import static org.occurrent.eventstore.api.SortBy.SortOrder.ASCENDING;
-import static org.occurrent.eventstore.api.SortBy.SortOrder.DESCENDING;
+import static org.occurrent.eventstore.api.SortBy.SortDirection.ASCENDING;
+import static org.occurrent.eventstore.api.SortBy.SortDirection.DESCENDING;
 import static org.occurrent.eventstore.api.WriteCondition.streamVersion;
 import static org.occurrent.eventstore.api.WriteCondition.streamVersionEq;
 import static org.occurrent.filter.Filter.*;

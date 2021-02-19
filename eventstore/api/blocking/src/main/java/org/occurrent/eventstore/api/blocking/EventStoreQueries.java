@@ -23,7 +23,7 @@ import org.occurrent.filter.Filter;
 import java.util.stream.Stream;
 
 import static java.util.Objects.requireNonNull;
-import static org.occurrent.eventstore.api.SortBy.SortOrder.ASCENDING;
+import static org.occurrent.eventstore.api.SortBy.SortDirection.ASCENDING;
 
 /**
  * Additional querying capabilities that may be supported by an {@link EventStore} implementation that is not typically part of a

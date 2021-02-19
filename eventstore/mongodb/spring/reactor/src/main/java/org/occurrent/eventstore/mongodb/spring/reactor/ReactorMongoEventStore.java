@@ -25,6 +25,7 @@ import org.bson.Document;
 import org.bson.conversions.Bson;
 import org.occurrent.cloudevents.OccurrentExtensionGetter;
 import org.occurrent.eventstore.api.LongConditionEvaluator;
+import org.occurrent.eventstore.api.SortBy;
 import org.occurrent.eventstore.api.WriteCondition;
 import org.occurrent.eventstore.api.WriteConditionNotFulfilledException;
 import org.occurrent.eventstore.api.reactor.EventStore;
@@ -51,7 +52,9 @@ import java.util.function.Function;
 import static java.util.Objects.requireNonNull;
 import static org.occurrent.cloudevents.OccurrentCloudEventExtension.STREAM_ID;
 import static org.occurrent.cloudevents.OccurrentCloudEventExtension.STREAM_VERSION;
+import static org.occurrent.eventstore.api.SortBy.SortDirection.ASCENDING;
 import static org.occurrent.filter.Filter.TIME;
+import static org.occurrent.mongodb.spring.sortconversion.internal.SortConverter.convertToSpringSort;
 import static org.springframework.data.domain.Sort.Direction.ASC;
 import static org.springframework.data.domain.Sort.Direction.DESC;
 import static org.springframework.data.mongodb.SessionSynchronization.ALWAYS;
@@ -65,7 +68,6 @@ import static org.springframework.data.mongodb.core.query.Criteria.where;
 public class ReactorMongoEventStore implements EventStore, EventStoreOperations, EventStoreQueries {
 
     private static final String ID = "_id";
-    private static final String NATURAL = "$natural";
 
     private final ReactiveMongoTemplate mongoTemplate;
     private final String eventStoreCollectionName;
@@ -157,24 +159,8 @@ public class ReactorMongoEventStore implements EventStore, EventStoreOperations,
             query.skip(skip).limit(limit);
         }
 
-        switch (sortBy) {
-            case TIME_ASC:
-                query.with(Sort.by(ASC, TIME));
-                break;
-            case TIME_DESC:
-                query.with(Sort.by(DESC, TIME));
-                break;
-            case NATURAL_ASC:
-                query.with(Sort.by(ASC, NATURAL));
-                break;
-            case NATURAL_DESC:
-                query.with(Sort.by(DESC, NATURAL));
-                break;
-            default:
-                throw new IllegalStateException("Unexpected value: " + sortBy);
-        }
-
-        return mongoTemplate.find(query, Document.class, eventStoreCollectionName);
+        Sort sort = convertToSpringSort(sortBy);
+        return mongoTemplate.find(query.with(sort), Document.class, eventStoreCollectionName);
     }
 
     private Mono<Long> currentStreamVersion(String streamId) {
