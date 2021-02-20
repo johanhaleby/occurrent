@@ -1,6 +1,6 @@
 <img src="https://raw.githubusercontent.com/johanhaleby/occurrent/master/occurrent-logo-196x196.png" width="128" height="128"></img>
 <br>
-[![Build Status](https://travis-ci.com/johanhaleby/occurrent.svg?branch=master)](https://travis-ci.com/johanhaleby/occurrent)
+[![Build Status](https://github.com/johanhaleby/occurrent/actions/workflows/maven.yml/badge.svg)](https://github.com/johanhaleby/occurrent/actions/workflows/maven.yml)
 
 Occurrent is a set of Event Sourcing utilities based on the [cloud events](https://cloudevents.io/) specification. 
 
