@@ -18,7 +18,7 @@
   Sorting can now be composed, e.g.
 
   ```java
-  SortBy.time(ASCENDING).natural(DESCENDING)  
+  SortBy.time(ASCENDING).thenNatural(DESCENDING)  
   ```
   
   This has been implemented for all event stores.
