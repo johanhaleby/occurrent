@@ -4,6 +4,7 @@
 * `InMemoryEventStore` now sorts queries by insertion order by default (before "time" was used)
 * Added a new default compound index to MongoDB event stores, `{ streamid : 1, streamversion : 1}`. The reason for this is to get the events back in order when reading a stream from the event store _and_ 
   to make this efficient. Previous `$natural` order was used but this would skip the index, making reads slower if you have lots of data.
+* Removed the index, `{ streamid : 1, streamversion : -1 }`, from all MongoDB EventStore's. It's no longer needed now that we have `{ streamid : 1, streamversion : 1}`.
 * All MongoDB EventStore's now loads the events for a stream by leveraging the new `{ streamid : 1, streamversion : 1}` index.
 * `CatchupSubscriptionModel` now sorts by time and then by stream version to allow for a consistent read order (see [MongoDB documentation](https://docs.mongodb.com/manual/reference/method/cursor.sort/#sort-consistency)).
   Note that the above is only true _if_ you supply a `TimeBasedSubscriptionPosition` that is _not_ equal to ``TimeBasedSubscriptionPosition.beginningOfTime()` (which is default if no filter is supplied).

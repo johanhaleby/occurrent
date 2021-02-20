@@ -323,9 +323,8 @@ public class SpringMongoEventStore implements EventStore, EventStoreOperations, 
         // Cloud spec defines id + source must be unique!
         eventStoreCollection.createIndex(Indexes.compoundIndex(Indexes.ascending("id"), Indexes.ascending("source")), new IndexOptions().unique(true));
         // Create a streamId + streamVersion ascending index (note that we don't need to index stream id separately since it's covered by this compound index)
+        // Note also that this index supports when sorting both ascending and descending since MongoDB can traverse an index in both directions.
         eventStoreCollection.createIndex(Indexes.compoundIndex(Indexes.ascending(STREAM_ID), Indexes.ascending(STREAM_VERSION)), new IndexOptions().unique(true));
-        // Create a streamId + streamVersion descending index
-        eventStoreCollection.createIndex(Indexes.compoundIndex(Indexes.ascending(STREAM_ID), Indexes.descending(STREAM_VERSION)), new IndexOptions().unique(true));
 
         // SessionSynchronization need to be "ALWAYS" in order for TransactionTemplate to work with mongo template!
         // See https://docs.spring.io/spring-data/mongodb/docs/current/reference/html/#mongo.transactions.transaction-template

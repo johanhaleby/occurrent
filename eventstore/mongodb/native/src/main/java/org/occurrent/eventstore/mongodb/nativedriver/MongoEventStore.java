@@ -332,9 +332,8 @@ public class MongoEventStore implements EventStore, EventStoreOperations, EventS
         // Cloud spec defines id + source must be unique!
         eventStoreCollection.createIndex(Indexes.compoundIndex(Indexes.ascending("id"), Indexes.ascending("source")), new IndexOptions().unique(true));
         // Create a streamId + streamVersion ascending index (note that we don't need to index stream id separately since it's covered by this compound index)
+        // Note also that this index supports when sorting both ascending and descending since MongoDB can traverse an index in both directions.
         eventStoreCollection.createIndex(Indexes.compoundIndex(Indexes.ascending(STREAM_ID), Indexes.ascending(STREAM_VERSION)), new IndexOptions().unique(true));
-        // Create a streamId + streamVersion descending index
-        eventStoreCollection.createIndex(Indexes.compoundIndex(Indexes.ascending(STREAM_ID), Indexes.descending(STREAM_VERSION)), new IndexOptions().unique(true));
     }
 
     private static boolean collectionExists(MongoDatabase mongoDatabase, String collectionName) {
