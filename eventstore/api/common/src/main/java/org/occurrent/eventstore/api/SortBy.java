@@ -48,8 +48,8 @@ public abstract class SortBy {
      *
      * @return A new instance of {@link SortBy}.
      */
-    public static ComposableSortStep ascending(String field1, String field2, String... fields) {
-        return combine(field1, field2, ASCENDING, fields);
+    public static ComposableSortStep ascending(String field1, String... fields) {
+        return combine(field1, ASCENDING, fields);
     }
 
     /**
@@ -57,8 +57,8 @@ public abstract class SortBy {
      *
      * @return A new instance of {@link SortBy}.
      */
-    public static ComposableSortStep descending(String field1, String field2, String... fields) {
-        return combine(field1, field2, DESCENDING, fields);
+    public static ComposableSortStep descending(String field1, String... fields) {
+        return combine(field1, DESCENDING, fields);
     }
 
     /**
@@ -288,10 +288,9 @@ public abstract class SortBy {
         public abstract MultipleSortSteps then(ComposableSortStep next);
     }
 
-    private static MultipleSortSteps combine(String field1, String field2, SortDirection direction, String[] fields) {
+    private static MultipleSortSteps combine(String field1, SortDirection direction, String[] fields) {
         Objects.requireNonNull(field1, "field1 cannot be null");
-        Objects.requireNonNull(field2, "field2 cannot be null");
-        MultipleSortSteps initialSortSteps = new MultipleSortStepsImpl(Arrays.asList(SortBy.field(field1, direction), SortBy.field(field2, direction)));
+        MultipleSortSteps initialSortSteps = new MultipleSortStepsImpl(Collections.singletonList(SortBy.field(field1, direction)));
         final MultipleSortSteps stepsToUse;
         if (fields != null && fields.length >= 1) {
             stepsToUse = Stream.of(fields).map(f -> SortBy.field(f, direction))

@@ -22,6 +22,16 @@
   ```
   
   This has been implemented for all event stores.
+* It's now possible to change how `CatchupSubscriptionModel` sorts events read from the event store during catch-up phase. For example:
+  
+  ```java
+  var subscriptionModel = ...
+  var eventStore = ..
+  var cfg = new CatchupSubscriptionModelConfig(100).catchupPhaseSortBy(SortBy.descending(TIME));
+  var catchupSubscriptionModel = CatchupSubscriptionModel(subscriptionModel, eventStore, cfg);  
+  ```
+
+  By default, events are sorted by time and then stream version (if two or more events have the same time).
 
 ## Changelog 0.7.4 (2012-02-13)
 

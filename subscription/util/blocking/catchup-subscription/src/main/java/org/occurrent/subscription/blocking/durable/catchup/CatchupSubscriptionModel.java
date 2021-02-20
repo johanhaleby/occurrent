@@ -17,7 +17,6 @@
 package org.occurrent.subscription.blocking.durable.catchup;
 
 import io.cloudevents.CloudEvent;
-import org.occurrent.eventstore.api.SortBy;
 import org.occurrent.eventstore.api.blocking.EventStoreQueries;
 import org.occurrent.filter.Filter;
 import org.occurrent.subscription.*;
@@ -37,9 +36,7 @@ import java.util.function.Function;
 import java.util.function.Supplier;
 import java.util.stream.Stream;
 
-import static org.occurrent.cloudevents.OccurrentCloudEventExtension.STREAM_VERSION;
 import static org.occurrent.condition.Condition.gt;
-import static org.occurrent.filter.Filter.TIME;
 import static org.occurrent.filter.Filter.time;
 import static org.occurrent.functionalsupport.internal.FunctionalSupport.takeWhile;
 import static org.occurrent.time.internal.RFC3339.RFC_3339_DATE_TIME_FORMATTER;
@@ -136,19 +133,11 @@ public class CatchupSubscriptionModel implements SubscriptionModel, DelegatingSu
 
         FixedSizeCache cache = new FixedSizeCache(config.cacheSize);
         final Stream<CloudEvent> stream;
-        // We sort by time but fallback to stream version if time is the same for two events.
-        // While this is will _not_ sort the entire in database in insertion order, it at least guarantees
-        // order within a stream. Note that we can't do SortBy.time(ASCENDING).thenNatural(ASCENDING)
-        // since for certain databases (MongoDB) this will prevent sorting from using a "time index" for queries
-        // (see https://docs.mongodb.com/manual/reference/method/cursor.sort/#return-natural-order).
-        // For MongoDB, doing SortBy.time(ASCENDING).then("_id", ASCENDING) would be better,
-        // but "_id" is unique to MongoDB so we cannot use it here.
-        SortBy sort = SortBy.ascending(TIME, STREAM_VERSION);
         if (filter == null) {
-            stream = eventStoreQueries.query(timeFilter, sort);
+            stream = eventStoreQueries.query(timeFilter, config.catchupPhaseSortBy);
         } else {
             Filter userSuppliedFilter = ((OccurrentSubscriptionFilter) filter).filter;
-            stream = eventStoreQueries.query(timeFilter.and(userSuppliedFilter), sort);
+            stream = eventStoreQueries.query(timeFilter.and(userSuppliedFilter), config.catchupPhaseSortBy);
         }
 
         takeWhile(stream, __ -> !shuttingDown && runningCatchupSubscriptions.containsKey(subscriptionId))
