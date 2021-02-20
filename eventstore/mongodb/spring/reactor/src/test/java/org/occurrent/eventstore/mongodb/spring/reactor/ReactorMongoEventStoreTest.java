@@ -1397,7 +1397,8 @@ public class ReactorMongoEventStoreTest {
 
                 // Then
                 Flux<CloudEvent> events = eventStore.all(SortBy.time(DESCENDING).thenNatural(ASCENDING));
-                assertThat(deserialize(events)).containsExactly(nameWasChanged2, nameDefined, nameWasChanged1);
+                // Natural ignores other sort parameters!!
+                assertThat(deserialize(events)).containsExactly(nameDefined, nameWasChanged1, nameWasChanged2);
             }
 
             @Test
