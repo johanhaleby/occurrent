@@ -1,4 +1,4 @@
-## Changelog next version
+## Changelog 0.8.0 (2021-02-20)
 
 * Only log with "warn" when subscription is restarted due to "ChangeStreamHistoryLost".
 * `InMemoryEventStore` now sorts queries by insertion order by default (before "time" was used)
@@ -33,7 +33,7 @@
 
   By default, events are sorted by time and then stream version (if two or more events have the same time).
 
-## Changelog 0.7.4 (2012-02-13)
+## Changelog 0.7.4 (2021-02-13)
 
 * Added better logging to `SpringMongoSubscriptionModel`, it'll now include the subscription id if an error occurs.
 * If there's not enough history available in the mongodb oplog to resume a subscription created from a `SpringMongoSubscriptionModel`, this subscription model now supports restarting the subscription from the current 
