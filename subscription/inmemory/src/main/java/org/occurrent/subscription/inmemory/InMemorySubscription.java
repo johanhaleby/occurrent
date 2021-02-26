@@ -125,7 +125,10 @@ public class InMemorySubscription implements Subscription, Runnable {
             } catch (InterruptedException e) {
                 continue;
             }
-            executeWithRetry(consumer, __ -> !shutdown, retryStrategy).accept(cloudEvent);
+
+            if (cloudEvent != null) {
+                executeWithRetry(consumer, __ -> !shutdown, retryStrategy).accept(cloudEvent);
+            }
         }
     }
 }
