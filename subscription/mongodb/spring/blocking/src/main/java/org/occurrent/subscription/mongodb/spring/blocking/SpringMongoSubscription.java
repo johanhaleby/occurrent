@@ -30,7 +30,7 @@ public class SpringMongoSubscription implements Subscription {
     private final AtomicReference<org.springframework.data.mongodb.core.messaging.Subscription> subscriptionReference;
     private volatile boolean shutdown = false;
 
-    SpringMongoSubscription(String subscriptionId, org.springframework.data.mongodb.core.messaging.Subscription subscriptionReference) {
+    protected SpringMongoSubscription(String subscriptionId, org.springframework.data.mongodb.core.messaging.Subscription subscriptionReference) {
         this.subscriptionId = subscriptionId;
         this.subscriptionReference = new AtomicReference<>(subscriptionReference);
     }

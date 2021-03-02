@@ -86,7 +86,7 @@ import static org.mockito.Mockito.*;
 import static org.occurrent.filter.Filter.all;
 import static org.occurrent.filter.Filter.id;
 import static org.occurrent.subscription.mongodb.MongoFilterSpecification.MongoBsonFilterSpecification.filter;
-import static org.occurrent.subscription.mongodb.spring.blocking.SpringSubscriptionModelConfig.withConfig;
+import static org.occurrent.subscription.mongodb.spring.blocking.SpringMongoSubscriptionModelConfig.withConfig;
 
 @Testcontainers
 public class SpringMongoSubscriptionModelTest {

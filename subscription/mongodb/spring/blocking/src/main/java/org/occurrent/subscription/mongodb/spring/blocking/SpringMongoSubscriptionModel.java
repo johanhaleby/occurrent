@@ -51,18 +51,19 @@ import org.springframework.data.mongodb.core.messaging.MessageListener;
 import org.springframework.data.mongodb.core.messaging.MessageListenerContainer;
 
 import javax.annotation.PreDestroy;
-import java.util.Objects;
+import java.util.*;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ConcurrentMap;
 import java.util.function.Consumer;
 import java.util.function.Function;
 import java.util.function.Supplier;
+import java.util.stream.Collectors;
 
 import static java.util.Objects.requireNonNull;
 import static org.occurrent.retry.internal.RetryExecution.executeWithRetry;
 import static org.occurrent.subscription.mongodb.internal.MongoCommons.CHANGE_STREAM_HISTORY_LOST_ERROR_CODE;
 import static org.occurrent.subscription.mongodb.internal.MongoCommons.cannotFindGlobalSubscriptionPositionErrorMessage;
-import static org.occurrent.subscription.mongodb.spring.blocking.SpringSubscriptionModelConfig.withConfig;
+import static org.occurrent.subscription.mongodb.spring.blocking.SpringMongoSubscriptionModelConfig.withConfig;
 
 /**
  * This is a subscription that uses Spring and its {@link MessageListenerContainer} for MongoDB to listen to changes from an event store.
@@ -82,9 +83,9 @@ public class SpringMongoSubscriptionModel implements PositionAwareSubscriptionMo
     private final TimeRepresentation timeRepresentation;
     private final MongoOperations mongoOperations;
     private final RetryStrategy retryStrategy;
+    private final boolean restartSubscriptionsOnChangeStreamHistoryLost;
 
     private volatile boolean shutdown = false;
-    private final boolean restartSubscriptionsOnChangeStreamHistoryLost;
 
     /**
      * Create a blocking subscription using Spring. It will by default use a {@link RetryStrategy} for retries, with exponential backoff starting with 100 ms and progressively
@@ -116,9 +117,9 @@ public class SpringMongoSubscriptionModel implements PositionAwareSubscriptionMo
      * @param mongoTemplate The mongo template to use
      * @param config        The configuration to use
      */
-    public SpringMongoSubscriptionModel(MongoTemplate mongoTemplate, SpringSubscriptionModelConfig config) {
+    public SpringMongoSubscriptionModel(MongoTemplate mongoTemplate, SpringMongoSubscriptionModelConfig config) {
         requireNonNull(mongoTemplate, MongoOperations.class.getSimpleName() + " cannot be null");
-        requireNonNull(config, SpringSubscriptionModelConfig.class.getSimpleName() + " cannot be null");
+        requireNonNull(config, SpringMongoSubscriptionModelConfig.class.getSimpleName() + " cannot be null");
         this.mongoOperations = mongoTemplate;
         this.timeRepresentation = config.timeRepresentation;
         this.eventCollection = config.eventCollection;
@@ -224,6 +225,25 @@ public class SpringMongoSubscriptionModel implements PositionAwareSubscriptionMo
     }
 
     @Override
+    public synchronized Optional<Subscription> getSubscription(String subscriptionId) {
+        InternalSubscription internalSubscription = runningSubscriptions.get(subscriptionId);
+        if (internalSubscription == null) {
+            internalSubscription = pausedSubscriptions.get(subscriptionId);
+        }
+
+        return Optional.ofNullable(internalSubscription).map(InternalSubscription::getOccurrentSubscription);
+    }
+
+    @Override
+    public synchronized List<Subscription> getSubscriptions() {
+        Collection<InternalSubscription> running = runningSubscriptions.values();
+        Collection<InternalSubscription> paused = runningSubscriptions.values();
+        List<InternalSubscription> internalSubscriptions = new ArrayList<>(running);
+        internalSubscriptions.addAll(paused);
+        return internalSubscriptions.stream().map(InternalSubscription::getOccurrentSubscription).collect(Collectors.toList());
+    }
+
+    @Override
     public synchronized Subscription resumeSubscription(String subscriptionId) {
         InternalSubscription internalSubscription = pausedSubscriptions.remove(subscriptionId);
         if (internalSubscription == null) {
@@ -235,7 +255,8 @@ public class SpringMongoSubscriptionModel implements PositionAwareSubscriptionMo
         }
 
         org.springframework.data.mongodb.core.messaging.Subscription newSubscription = registerNewSpringSubscription(subscriptionId, internalSubscription.newChangeStreamRequest());
-        runningSubscriptions.put(subscriptionId, internalSubscription.copy(newSubscription));
+        InternalSubscription newInternalSubscription = internalSubscription.copy(newSubscription);
+        runningSubscriptions.put(subscriptionId, newInternalSubscription);
         return new SpringMongoSubscription(subscriptionId, newSubscription);
     }
 
@@ -349,6 +370,10 @@ public class SpringMongoSubscriptionModel implements PositionAwareSubscriptionMo
 
         org.springframework.data.mongodb.core.messaging.Subscription getSpringSubscription() {
             return occurrentSubscription.getSubscriptionReference().get();
+        }
+
+        SpringMongoSubscription getOccurrentSubscription() {
+            return occurrentSubscription;
         }
 
         void shutdown() {

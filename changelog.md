@@ -1,3 +1,9 @@
+## Changelog next version
+                                                                                                                                                                                        
+* Fixed a bug in `InMemorySubscription` that accidentally pushed `null` values to subscriptions every 500 millis unless an actual event was received.
+* Renamed `org.occurrent.subscription.mongodb.spring.blocking.SpringSubscriptionModelConfig` to `org.occurrent.subscription.mongodb.spring.blocking.SpringMongoSubscriptionModelConfig`.
+* Upgraded to Kotlin 1.4.31
+
 ## Changelog 0.8.0 (2021-02-20)
 
 * Only log with "warn" when subscription is restarted due to "ChangeStreamHistoryLost".

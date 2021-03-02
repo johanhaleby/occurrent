@@ -28,6 +28,7 @@
     <modules>
         <module>durable-subscription</module>
         <module>catchup-subscription</module>
+        <module>competing-consumer-subscription</module>
     </modules>
 
 

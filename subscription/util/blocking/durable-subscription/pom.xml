@@ -25,7 +25,6 @@
 
     <artifactId>durable-subscription</artifactId>
 
-
     <dependencies>
         <dependency>
             <groupId>org.occurrent</groupId>
