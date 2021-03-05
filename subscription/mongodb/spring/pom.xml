@@ -33,7 +33,7 @@
         <module>blocking</module>
         <module>blocking-position-storage</module>
         <module>common</module>
-        <module>blocking-competing-consumer</module>
+        <module>blocking-competing-consumer-strategy</module>
     </modules>
 
 

@@ -9,7 +9,7 @@
     </parent>
     <modelVersion>4.0.0</modelVersion>
 
-    <artifactId>subscription-mongodb-spring-blocking-competing-consumer</artifactId>
+    <artifactId>subscription-mongodb-spring-blocking-competing-consumer-strategy</artifactId>
 
     <dependencies>
         <dependency>

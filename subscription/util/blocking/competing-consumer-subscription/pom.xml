@@ -48,10 +48,11 @@
         </dependency>
         <dependency>
             <groupId>org.occurrent</groupId>
-            <artifactId>subscription-mongodb-spring-blocking-competing-consumer</artifactId>
+            <artifactId>subscription-mongodb-spring-blocking-competing-consumer-strategy</artifactId>
             <version>0.8.1-SNAPSHOT</version>
             <scope>test</scope>
         </dependency>
+
         <dependency>
             <groupId>org.assertj</groupId>
             <artifactId>assertj-core</artifactId>
