@@ -122,7 +122,7 @@ public class CompetingConsumerSubscriptionModel implements DelegatingSubscriptio
         return findFirstCompetingConsumerMatching(competingConsumer -> competingConsumer.isPausedFor(subscriptionId))
                 .flatMap(competingConsumer -> {
                     final Subscription subscription;
-                    if (isRegisteredCompetingConsumer(subscriptionId, subscriptionId) || registerCompetingConsumer(subscriptionId, subscriptionId)) {
+                    if (hasLock(subscriptionId, subscriptionId) || registerCompetingConsumer(subscriptionId, subscriptionId)) {
                         competingConsumers.put(competingConsumer.subscriptionIdAndSubscriberId, competingConsumer.registerRunning());
                         // This works because method is synchronized and we've checked that it's already paused earlier
                         subscription = delegate.resumeSubscription(subscriptionId);
@@ -358,8 +358,8 @@ public class CompetingConsumerSubscriptionModel implements DelegatingSubscriptio
         return competingConsumersStrategy.registerCompetingConsumer(subscriptionId, subscriberId);
     }
 
-    private boolean isRegisteredCompetingConsumer(String subscriptionId, String subscriberId) {
-        return competingConsumersStrategy.isRegisteredCompetingConsumer(subscriptionId, subscriberId);
+    private boolean hasLock(String subscriptionId, String subscriberId) {
+        return competingConsumersStrategy.hasLock(subscriptionId, subscriberId);
     }
 
     private Optional<CompetingConsumer> findFirstCompetingConsumerMatching(Predicate<CompetingConsumer> predicate) {

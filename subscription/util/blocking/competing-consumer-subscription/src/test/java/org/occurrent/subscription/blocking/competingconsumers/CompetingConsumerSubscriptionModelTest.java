@@ -182,6 +182,11 @@ class CompetingConsumerSubscriptionModelTest {
         }
 
         @Override
+        public boolean hasLock(String subscriptionId, String subscriberId) {
+            return false;
+        }
+
+        @Override
         public void addListener(CompetingConsumerListener listener) {
             listeners.add(listener);
         }

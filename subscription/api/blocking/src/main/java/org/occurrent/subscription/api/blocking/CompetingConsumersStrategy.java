@@ -7,9 +7,14 @@ public interface CompetingConsumersStrategy {
 
     boolean isRegisteredCompetingConsumer(String subscriptionId, String subscriberId);
 
+    boolean hasLock(String subscriptionId, String subscriberId);
+
     void addListener(CompetingConsumerListener listenerConsumer);
 
     void removeListener(CompetingConsumerListener listenerConsumer);
+
+    default void shutdown() {
+    }
 
     interface CompetingConsumerListener {
         default void onConsumeGranted(String subscriptionId, String subscriberId) {

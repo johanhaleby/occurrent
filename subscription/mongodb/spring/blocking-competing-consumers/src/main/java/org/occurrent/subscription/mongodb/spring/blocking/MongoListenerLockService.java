@@ -99,7 +99,7 @@ class MongoListenerLockService {
         return collection.deleteOne(eq("_id", subscriptionId));
     }
 
-    static void commit(MongoCollection<BsonDocument> collection, Clock clock, Duration leaseTime, String subscriptionId, String subscriberId) throws LostLockException {
+    static boolean commit(MongoCollection<BsonDocument> collection, Clock clock, Duration leaseTime, String subscriptionId, String subscriberId) throws LostLockException {
         UpdateResult result = collection
                 .withWriteConcern(WriteConcern.MAJORITY)
                 .updateOne(
@@ -109,10 +109,11 @@ class MongoListenerLockService {
                         set("expiresAt", clock.instant().plus(leaseTime)));
 
         if (result.getMatchedCount() == 0) {
-            throw new LostLockException(subscriptionId, subscriberId);
+            return false;
         }
 
         log.debug("Updated lock expiration date for lock. subscriptionId={} subscriberId={}", subscriptionId, subscriberId);
+        return true;
     }
 
     private static Bson lockIsExpired(Clock clock) {
