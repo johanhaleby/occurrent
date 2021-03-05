@@ -22,6 +22,8 @@ import org.slf4j.LoggerFactory;
 
 import java.time.Clock;
 import java.time.Duration;
+import java.time.Instant;
+import java.time.LocalDateTime;
 import java.util.HashMap;
 import java.util.Map;
 import java.util.Optional;
@@ -84,7 +86,7 @@ class MongoListenerLockService {
             final ErrorCategory errorCategory = ErrorCategory.fromErrorCode(e.getErrorCode());
 
             if (errorCategory.equals(DUPLICATE_KEY)) {
-                log.debug("Lock owned by another subscriber. subscriptionId={} myListenerId={}", subscriptionId, subscriberId);
+                log.debug("Lock owned by another subscriber. subscriptionId={} subscriberId={}", subscriptionId, subscriberId);
                 return Optional.empty();
             }
 
@@ -100,19 +102,23 @@ class MongoListenerLockService {
     }
 
     static boolean commit(MongoCollection<BsonDocument> collection, Clock clock, Duration leaseTime, String subscriptionId, String subscriberId) throws LostLockException {
+        Instant newLeaseTime = clock.instant().plus(leaseTime);
         UpdateResult result = collection
                 .withWriteConcern(WriteConcern.MAJORITY)
                 .updateOne(
                         and(
                                 eq("_id", subscriptionId),
                                 eq("subscriberId", subscriberId)),
-                        set("expiresAt", clock.instant().plus(leaseTime)));
+                        set("expiresAt", newLeaseTime));
 
         if (result.getMatchedCount() == 0) {
             return false;
         }
 
-        log.debug("Updated lock expiration date for lock. subscriptionId={} subscriberId={}", subscriptionId, subscriberId);
+        if (log.isDebugEnabled()) {
+            LocalDateTime localDateTime = LocalDateTime.ofInstant(newLeaseTime, clock.getZone());
+            log.debug("Updated lock expiration date for lock to {}. subscriptionId={} subscriberId={}", localDateTime, subscriptionId, subscriberId);
+        }
         return true;
     }
 

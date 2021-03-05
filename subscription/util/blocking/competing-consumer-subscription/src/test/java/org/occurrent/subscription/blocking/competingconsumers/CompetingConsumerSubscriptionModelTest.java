@@ -1,6 +1,9 @@
 package org.occurrent.subscription.blocking.competingconsumers;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.mongodb.ConnectionString;
+import com.mongodb.client.MongoClient;
+import com.mongodb.client.MongoClients;
 import io.cloudevents.CloudEvent;
 import io.cloudevents.core.builder.CloudEventBuilder;
 import org.junit.jupiter.api.AfterEach;
@@ -8,68 +11,95 @@ import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayNameGeneration;
 import org.junit.jupiter.api.DisplayNameGenerator.ReplaceUnderscores;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.extension.RegisterExtension;
 import org.occurrent.domain.DomainEvent;
 import org.occurrent.domain.NameDefined;
-import org.occurrent.eventstore.inmemory.InMemoryEventStore;
-import org.occurrent.retry.RetryStrategy;
-import org.occurrent.subscription.StartAt;
-import org.occurrent.subscription.SubscriptionFilter;
+import org.occurrent.domain.NameWasChanged;
+import org.occurrent.eventstore.api.blocking.EventStore;
+import org.occurrent.eventstore.mongodb.spring.blocking.EventStoreConfig;
+import org.occurrent.eventstore.mongodb.spring.blocking.SpringMongoEventStore;
+import org.occurrent.mongodb.timerepresentation.TimeRepresentation;
 import org.occurrent.subscription.api.blocking.CompetingConsumerStrategy;
-import org.occurrent.subscription.api.blocking.Subscription;
-import org.occurrent.subscription.api.blocking.SubscriptionModel;
-import org.occurrent.subscription.api.blocking.SubscriptionModelLifeCycle;
-import org.occurrent.subscription.inmemory.InMemorySubscriptionModel;
+import org.occurrent.subscription.mongodb.spring.blocking.MongoLeaseCompetingConsumerStrategy;
+import org.occurrent.subscription.mongodb.spring.blocking.SpringMongoSubscriptionModel;
+import org.occurrent.testsupport.mongodb.FlushMongoDBExtension;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+import org.springframework.data.mongodb.MongoTransactionManager;
+import org.springframework.data.mongodb.core.MongoTemplate;
+import org.springframework.data.mongodb.core.SimpleMongoClientDatabaseFactory;
+import org.testcontainers.containers.MongoDBContainer;
+import org.testcontainers.junit.jupiter.Container;
+import org.testcontainers.junit.jupiter.Testcontainers;
 
 import java.net.URI;
+import java.time.Duration;
 import java.time.LocalDateTime;
-import java.util.Collections;
-import java.util.Objects;
-import java.util.Set;
 import java.util.UUID;
-import java.util.concurrent.*;
-import java.util.function.Consumer;
-import java.util.function.Supplier;
+import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.stream.Stream;
 
 import static java.time.ZoneOffset.UTC;
+import static java.util.Objects.requireNonNull;
+import static java.util.concurrent.TimeUnit.SECONDS;
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.awaitility.Awaitility.await;
 import static org.occurrent.functional.CheckedFunction.unchecked;
 import static org.occurrent.time.TimeConversion.toLocalDateTime;
 
+@Testcontainers
 @DisplayNameGeneration(ReplaceUnderscores.class)
 class CompetingConsumerSubscriptionModelTest {
+    private static final Logger log = LoggerFactory.getLogger(CompetingConsumerSubscriptionModelTest.class);
 
-    private InMemoryEventStore eventStore;
-    private CompetingConsumerSubscriptionModel tested;
-    private InMemorySubscriptionModel inMemorySubscriptionModel;
+    @Container
+    private static final MongoDBContainer mongoDBContainer = new MongoDBContainer("mongo:4.2.8");
+
+    @RegisterExtension
+    FlushMongoDBExtension flushMongoDBExtension = new FlushMongoDBExtension(new ConnectionString(mongoDBContainer.getReplicaSetUrl()));
+
+    private EventStore eventStore;
+    private CompetingConsumerSubscriptionModel competingConsumerSubscriptionModel1;
+    private CompetingConsumerSubscriptionModel competingConsumerSubscriptionModel2;
+    private SpringMongoSubscriptionModel springSubscriptionModel1;
+    private SpringMongoSubscriptionModel springSubscriptionModel2;
     private ObjectMapper objectMapper;
+    private MongoTemplate mongoTemplate;
 
     @BeforeEach
-    void start() {
-        BlockingQueue<CloudEvent> queue = new LinkedBlockingQueue<>();
-
-        inMemorySubscriptionModel = new InMemorySubscriptionModel(Executors.newCachedThreadPool(), RetryStrategy.none(), () -> queue);
-        InMemoryCompetingConsumerStrategy inMemoryCompetingConsumerStrategy = new InMemoryCompetingConsumerStrategy(queue);
-        tested = new CompetingConsumerSubscriptionModel(inMemorySubscriptionModel, inMemoryCompetingConsumerStrategy);
-
-        eventStore = new InMemoryEventStore(inMemoryCompetingConsumerStrategy);
-
+    void create_mongo_event_store() {
+        ConnectionString connectionString = new ConnectionString(mongoDBContainer.getReplicaSetUrl() + ".events");
+        log.info("Connecting to MongoDB at {}", connectionString);
+        MongoClient mongoClient = MongoClients.create(connectionString);
+        mongoTemplate = new MongoTemplate(mongoClient, requireNonNull(connectionString.getDatabase()));
+        MongoTransactionManager mongoTransactionManager = new MongoTransactionManager(new SimpleMongoClientDatabaseFactory(mongoClient, requireNonNull(connectionString.getDatabase())));
+        TimeRepresentation timeRepresentation = TimeRepresentation.RFC_3339_STRING;
+        EventStoreConfig eventStoreConfig = new EventStoreConfig.Builder().eventStoreCollectionName(connectionString.getCollection()).transactionConfig(mongoTransactionManager).timeRepresentation(timeRepresentation).build();
+        eventStore = new SpringMongoEventStore(mongoTemplate, eventStoreConfig);
+        springSubscriptionModel1 = new SpringMongoSubscriptionModel(mongoTemplate, connectionString.getCollection(), timeRepresentation);
+        springSubscriptionModel2 = new SpringMongoSubscriptionModel(mongoTemplate, connectionString.getCollection(), timeRepresentation);
         objectMapper = new ObjectMapper();
     }
 
     @AfterEach
     void shutdown() {
-        inMemorySubscriptionModel.shutdown();
+        competingConsumerSubscriptionModel1.shutdown();
+        competingConsumerSubscriptionModel2.shutdown();
+        springSubscriptionModel1.shutdown();
+        springSubscriptionModel2.shutdown();
     }
 
     @Test
-    void kk() throws InterruptedException {
+    void only_one_consumer_receives_event_when_starting() throws InterruptedException {
         // Given
         CopyOnWriteArrayList<CloudEvent> cloudEvents = new CopyOnWriteArrayList<>();
 
+        competingConsumerSubscriptionModel1 = new CompetingConsumerSubscriptionModel(springSubscriptionModel1, loggingStrategy("1", mongoTemplate));
+        competingConsumerSubscriptionModel2 = new CompetingConsumerSubscriptionModel(springSubscriptionModel2, loggingStrategy("2", mongoTemplate));
+
         String subscriptionId = UUID.randomUUID().toString();
-        tested.subscribe(subscriptionId, cloudEvents::add).waitUntilStarted();
-        tested.subscribe(subscriptionId, cloudEvents::add).waitUntilStarted();
+        competingConsumerSubscriptionModel1.subscribe(subscriptionId, cloudEvents::add).waitUntilStarted();
+        competingConsumerSubscriptionModel2.subscribe(subscriptionId, cloudEvents::add).waitUntilStarted();
 
         NameDefined nameDefined = new NameDefined("eventId", LocalDateTime.of(2021, 2, 26, 14, 15, 16), "my name");
 
@@ -79,6 +109,33 @@ class CompetingConsumerSubscriptionModelTest {
         // Then
         Thread.sleep(1000);
         assertThat(cloudEvents).hasSize(1);
+    }
+
+    @Test
+    void another_consumer_takes_over_when_subscription_is_cancelled_for_first_subscription_model() throws InterruptedException {
+        // Given
+        CopyOnWriteArrayList<CloudEvent> cloudEvents = new CopyOnWriteArrayList<>();
+
+        competingConsumerSubscriptionModel1 = new CompetingConsumerSubscriptionModel(springSubscriptionModel1, loggingStrategy("1", new MongoLeaseCompetingConsumerStrategy.Builder(mongoTemplate).leaseTime(Duration.ofSeconds(1)).build()));
+        competingConsumerSubscriptionModel2 = new CompetingConsumerSubscriptionModel(springSubscriptionModel2, loggingStrategy("2", new MongoLeaseCompetingConsumerStrategy.Builder(mongoTemplate).leaseTime(Duration.ofSeconds(1)).build()));
+
+        String subscriptionId = UUID.randomUUID().toString();
+        competingConsumerSubscriptionModel1.subscribe(subscriptionId, cloudEvents::add).waitUntilStarted();
+        competingConsumerSubscriptionModel2.subscribe(subscriptionId, cloudEvents::add).waitUntilStarted();
+
+        NameDefined nameDefined = new NameDefined("eventId1", LocalDateTime.of(2021, 2, 26, 14, 15, 16), "my name");
+        NameWasChanged nameWasChanged = new NameWasChanged("eventId2", LocalDateTime.of(2021, 2, 26, 14, 15, 16), "my name");
+
+        // When
+        eventStore.write("streamId", serialize(nameDefined));
+        await("waiting for first event").atMost(2, SECONDS).untilAsserted(() -> assertThat(cloudEvents).hasSize(1));
+
+        competingConsumerSubscriptionModel1.pauseSubscription(subscriptionId);
+
+        eventStore.write("streamId", serialize(nameWasChanged));
+
+        // Then
+        await("waiting for second event").atMost(5, SECONDS).untilAsserted(() -> assertThat(cloudEvents).hasSize(2));
     }
 
 
@@ -103,125 +160,22 @@ class CompetingConsumerSubscriptionModelTest {
                 .build());
     }
 
-
-    private class InMemoryQueueSubscriptionModel implements SubscriptionModel, SubscriptionModelLifeCycle {
-
-        @Override
-        public Subscription subscribe(String subscriptionId, SubscriptionFilter filter, Supplier<StartAt> startAtSupplier, Consumer<CloudEvent> action) {
-            return null;
-        }
-
-        @Override
-        public void cancelSubscription(String subscriptionId) {
-
-        }
-
-        @Override
-        public void stop() {
-
-        }
-
-        @Override
-        public void start() {
-
-        }
-
-        @Override
-        public boolean isRunning() {
-            return false;
-        }
-
-        @Override
-        public boolean isRunning(String subscriptionId) {
-            return false;
-        }
-
-        @Override
-        public boolean isPaused(String subscriptionId) {
-            return false;
-        }
-
-        @Override
-        public Subscription resumeSubscription(String subscriptionId) {
-            return null;
-        }
-
-        @Override
-        public void pauseSubscription(String subscriptionId) {
-
-        }
+    private static MongoLeaseCompetingConsumerStrategy loggingStrategy(String name, MongoTemplate mongoTemplate) {
+        return loggingStrategy(name, MongoLeaseCompetingConsumerStrategy.withDefaults(mongoTemplate));
     }
 
-    private static class InMemoryCompetingConsumerStrategy implements CompetingConsumerStrategy, Consumer<Stream<CloudEvent>> {
-        private final Set<Consumer> consumers;
-        private final CopyOnWriteArrayList<CompetingConsumerListener> listeners;
-        private final BlockingQueue<CloudEvent> queue;
-
-        private InMemoryCompetingConsumerStrategy(BlockingQueue<CloudEvent> queue) {
-            this.queue = queue;
-            this.consumers = Collections.newSetFromMap(new ConcurrentHashMap<>());
-            this.listeners = new CopyOnWriteArrayList<>();
-        }
-
-        @Override
-        public boolean registerCompetingConsumer(String subscriptionId, String subscriberId) {
-            consumers.add(new Consumer(subscriptionId, subscriberId));
-            listeners.forEach(cc -> cc.onConsumeGranted(subscriptionId, subscriberId));
-            return true;
-        }
-
-        @Override
-        public void unregisterCompetingConsumer(String subscriptionId, String subscriberId) {
-            consumers.remove(new Consumer(subscriptionId, subscriberId));
-            listeners.forEach(cc -> cc.onConsumeProhibited(subscriptionId, subscriberId));
-        }
-
-        @Override
-        public boolean isRegisteredCompetingConsumer(String subscriptionId, String subscriberId) {
-            return consumers.contains(new Consumer(subscriptionId, subscriberId));
-        }
-
-        @Override
-        public boolean hasLock(String subscriptionId, String subscriberId) {
-            return false;
-        }
-
-        @Override
-        public void addListener(CompetingConsumerListener listener) {
-            listeners.add(listener);
-        }
-
-        @Override
-        public void removeListener(CompetingConsumerListener listenerConsumer) {
-
-        }
-
-        @Override
-        public void accept(Stream<CloudEvent> cloudEventStream) {
-            cloudEventStream.forEach(queue::offer);
-        }
-
-        private static class Consumer {
-            private final String subscriptionId;
-            private final String subscriberId;
-
-            Consumer(String subscriptionId, String subscriberId) {
-                this.subscriptionId = subscriptionId;
-                this.subscriberId = subscriberId;
+    private static MongoLeaseCompetingConsumerStrategy loggingStrategy(String name, MongoLeaseCompetingConsumerStrategy strategy) {
+        strategy.addListener(new CompetingConsumerStrategy.CompetingConsumerListener() {
+            @Override
+            public void onConsumeGranted(String subscriptionId, String subscriberId) {
+                log.info("[{}] Consuming granted for subscription {} (subscriber={})", name, subscriptionId, subscriberId);
             }
 
             @Override
-            public boolean equals(Object o) {
-                if (this == o) return true;
-                if (!(o instanceof Consumer)) return false;
-                Consumer consumer = (Consumer) o;
-                return Objects.equals(subscriptionId, consumer.subscriptionId) && Objects.equals(subscriberId, consumer.subscriberId);
+            public void onConsumeProhibited(String subscriptionId, String subscriberId) {
+                log.info("[{}] Consuming prohibited for subscription {} (subscriber={})", name, subscriptionId, subscriberId);
             }
-
-            @Override
-            public int hashCode() {
-                return Objects.hash(subscriptionId, subscriberId);
-            }
-        }
+        });
+        return strategy;
     }
 }
