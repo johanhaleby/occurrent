@@ -20,8 +20,10 @@ import org.occurrent.eventstore.mongodb.spring.blocking.EventStoreConfig;
 import org.occurrent.eventstore.mongodb.spring.blocking.SpringMongoEventStore;
 import org.occurrent.mongodb.timerepresentation.TimeRepresentation;
 import org.occurrent.subscription.api.blocking.CompetingConsumerStrategy;
+import org.occurrent.subscription.blocking.durable.DurableSubscriptionModel;
 import org.occurrent.subscription.mongodb.spring.blocking.MongoLeaseCompetingConsumerStrategy;
 import org.occurrent.subscription.mongodb.spring.blocking.SpringMongoSubscriptionModel;
+import org.occurrent.subscription.mongodb.spring.blocking.SpringMongoSubscriptionPositionStorage;
 import org.occurrent.testsupport.mongodb.FlushMongoDBExtension;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -61,8 +63,8 @@ class CompetingConsumerSubscriptionModelTest {
     private EventStore eventStore;
     private CompetingConsumerSubscriptionModel competingConsumerSubscriptionModel1;
     private CompetingConsumerSubscriptionModel competingConsumerSubscriptionModel2;
-    private SpringMongoSubscriptionModel springSubscriptionModel1;
-    private SpringMongoSubscriptionModel springSubscriptionModel2;
+    private DurableSubscriptionModel springSubscriptionModel1;
+    private DurableSubscriptionModel springSubscriptionModel2;
     private ObjectMapper objectMapper;
     private MongoTemplate mongoTemplate;
 
@@ -76,8 +78,9 @@ class CompetingConsumerSubscriptionModelTest {
         TimeRepresentation timeRepresentation = TimeRepresentation.RFC_3339_STRING;
         EventStoreConfig eventStoreConfig = new EventStoreConfig.Builder().eventStoreCollectionName(connectionString.getCollection()).transactionConfig(mongoTransactionManager).timeRepresentation(timeRepresentation).build();
         eventStore = new SpringMongoEventStore(mongoTemplate, eventStoreConfig);
-        springSubscriptionModel1 = new SpringMongoSubscriptionModel(mongoTemplate, connectionString.getCollection(), timeRepresentation);
-        springSubscriptionModel2 = new SpringMongoSubscriptionModel(mongoTemplate, connectionString.getCollection(), timeRepresentation);
+        SpringMongoSubscriptionPositionStorage positionStorage = new SpringMongoSubscriptionPositionStorage(mongoTemplate, "positions");
+        springSubscriptionModel1 = new DurableSubscriptionModel(new SpringMongoSubscriptionModel(mongoTemplate, connectionString.getCollection(), timeRepresentation), positionStorage);
+        springSubscriptionModel2 = new DurableSubscriptionModel(new SpringMongoSubscriptionModel(mongoTemplate, connectionString.getCollection(), timeRepresentation), positionStorage);
         objectMapper = new ObjectMapper();
     }
 

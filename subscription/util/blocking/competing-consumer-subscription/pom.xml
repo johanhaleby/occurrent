@@ -26,7 +26,7 @@
             <groupId>jakarta.annotation</groupId>
             <artifactId>jakarta.annotation-api</artifactId>
         </dependency>
-     
+
         <!-- Test -->
         <dependency>
             <groupId>org.occurrent</groupId>
@@ -52,7 +52,18 @@
             <version>0.8.1-SNAPSHOT</version>
             <scope>test</scope>
         </dependency>
-
+        <dependency>
+            <groupId>org.occurrent</groupId>
+            <artifactId>durable-subscription</artifactId>
+            <version>0.8.1-SNAPSHOT</version>
+            <scope>test</scope>
+        </dependency>
+        <dependency>
+            <groupId>org.occurrent</groupId>
+            <artifactId>subscription-mongodb-spring-blocking-position-storage</artifactId>
+            <version>0.8.1-SNAPSHOT</version>
+            <scope>test</scope>
+        </dependency>
         <dependency>
             <groupId>org.assertj</groupId>
             <artifactId>assertj-core</artifactId>
