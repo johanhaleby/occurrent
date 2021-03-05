@@ -9,7 +9,7 @@
     </parent>
     <modelVersion>4.0.0</modelVersion>
 
-    <artifactId>competing-consumers-subscription</artifactId>
+    <artifactId>competing-consumer-subscription</artifactId>
 
     <dependencies>
         <dependency>
