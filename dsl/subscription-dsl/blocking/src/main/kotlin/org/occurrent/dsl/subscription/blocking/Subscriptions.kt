@@ -22,21 +22,20 @@ import org.occurrent.condition.Condition
 import org.occurrent.filter.Filter
 import org.occurrent.subscription.OccurrentSubscriptionFilter
 import org.occurrent.subscription.StartAt
+import org.occurrent.subscription.api.blocking.Subscribable
 import org.occurrent.subscription.api.blocking.Subscription
-import org.occurrent.subscription.api.blocking.SubscriptionModel
 import java.util.function.Consumer
 import kotlin.reflect.KClass
-
 
 /**
  * Subscription DSL
  */
-fun <T : Any> subscriptions(subscriptionModel: SubscriptionModel, cloudEventConverter: CloudEventConverter<T>, subscriptions: Subscriptions<T>.() -> Unit) {
+fun <T : Any> subscriptions(subscriptionModel: Subscribable, cloudEventConverter: CloudEventConverter<T>, subscriptions: Subscriptions<T>.() -> Unit) {
     Subscriptions(subscriptionModel, cloudEventConverter).apply(subscriptions)
 }
 
 class Subscriptions<T : Any> @JvmOverloads constructor(
-    private val subscriptionModel: SubscriptionModel, private val cloudEventConverter: CloudEventConverter<T>,
+    private val subscriptionModel: Subscribable, private val cloudEventConverter: CloudEventConverter<T>,
     private val eventNameFromType: (KClass<out T>) -> String = { e -> e.simpleName!! }
 ) {
 

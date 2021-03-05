@@ -39,7 +39,9 @@ import org.occurrent.mongodb.timerepresentation.TimeRepresentation;
 import org.occurrent.retry.RetryStrategy;
 import org.occurrent.subscription.StringBasedSubscriptionPosition;
 import org.occurrent.subscription.SubscriptionPosition;
-import org.occurrent.subscription.api.blocking.*;
+import org.occurrent.subscription.api.blocking.DelegatingSubscriptionModel;
+import org.occurrent.subscription.api.blocking.SubscriptionModel;
+import org.occurrent.subscription.api.blocking.SubscriptionPositionStorage;
 import org.occurrent.subscription.blocking.durable.DurableSubscriptionModel;
 import org.occurrent.subscription.blocking.durable.DurableSubscriptionModelConfig;
 import org.occurrent.subscription.mongodb.MongoFilterSpecification.MongoJsonFilterSpecification;
@@ -463,11 +465,6 @@ public class SpringMongoSubscriptionPositionStorageTest {
     }
 
     private static void cancelSubscription(DelegatingSubscriptionModel subscriptionModel, String subscriberId) {
-        SubscriptionModel sm = subscriptionModel.getDelegatedSubscriptionModelRecursively();
-        if (sm instanceof SubscriptionModelCancelSubscription) {
-            ((SubscriptionModelLifeCycle) sm).cancelSubscription(subscriberId);
-        } else {
-            throw new IllegalArgumentException("Cannot cancel " + subscriberId);
-        }
+        subscriptionModel.getDelegatedSubscriptionModelRecursively().cancelSubscription(subscriberId);
     }
 }

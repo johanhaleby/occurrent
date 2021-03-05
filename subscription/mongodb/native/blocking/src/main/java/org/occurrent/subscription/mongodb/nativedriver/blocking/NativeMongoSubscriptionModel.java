@@ -37,7 +37,6 @@ import org.occurrent.subscription.*;
 import org.occurrent.subscription.api.blocking.PositionAwareSubscriptionModel;
 import org.occurrent.subscription.api.blocking.Subscription;
 import org.occurrent.subscription.api.blocking.SubscriptionModel;
-import org.occurrent.subscription.api.blocking.SubscriptionModelLifeCycle;
 import org.occurrent.subscription.internal.ExecutorShutdown;
 import org.occurrent.subscription.mongodb.MongoFilterSpecification;
 import org.occurrent.subscription.mongodb.MongoOperationTimeSubscriptionPosition;
@@ -74,7 +73,7 @@ import static org.occurrent.subscription.mongodb.internal.MongoCommons.cannotFin
  * or use the {@code DurableSubscriptionModel} utility from the {@code org.occurrent:durable-subscription}
  * module.
  */
-public class NativeMongoSubscriptionModel implements PositionAwareSubscriptionModel, SubscriptionModelLifeCycle {
+public class NativeMongoSubscriptionModel implements PositionAwareSubscriptionModel {
     private static final Logger log = LoggerFactory.getLogger(NativeMongoSubscriptionModel.class);
 
     private final MongoCollection<Document> eventCollection;

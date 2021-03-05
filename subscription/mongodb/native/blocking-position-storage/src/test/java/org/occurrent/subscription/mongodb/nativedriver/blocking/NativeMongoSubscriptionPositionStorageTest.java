@@ -359,11 +359,6 @@ public class NativeMongoSubscriptionPositionStorageTest {
     }
 
     private static void cancelSubscription(DelegatingSubscriptionModel subscriptionModel, String subscriberId) {
-        SubscriptionModel sm = subscriptionModel.getDelegatedSubscriptionModelRecursively();
-        if (sm instanceof SubscriptionModelCancelSubscription) {
-            ((SubscriptionModelLifeCycle) sm).cancelSubscription(subscriberId);
-        } else {
-            throw new IllegalArgumentException("Cannot cancel " + subscriberId);
-        }
+        subscriptionModel.getDelegatedSubscriptionModelRecursively().cancelSubscription(subscriberId);
     }
 }

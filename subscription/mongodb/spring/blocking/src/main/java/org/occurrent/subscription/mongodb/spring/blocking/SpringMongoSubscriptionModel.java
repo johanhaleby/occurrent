@@ -30,7 +30,6 @@ import org.occurrent.subscription.SubscriptionFilter;
 import org.occurrent.subscription.SubscriptionPosition;
 import org.occurrent.subscription.api.blocking.PositionAwareSubscriptionModel;
 import org.occurrent.subscription.api.blocking.Subscription;
-import org.occurrent.subscription.api.blocking.SubscriptionModelLifeCycle;
 import org.occurrent.subscription.mongodb.MongoOperationTimeSubscriptionPosition;
 import org.occurrent.subscription.mongodb.MongoResumeTokenSubscriptionPosition;
 import org.occurrent.subscription.mongodb.internal.MongoCloudEventsToJsonDeserializer;
@@ -72,7 +71,7 @@ import static org.occurrent.subscription.mongodb.spring.blocking.SpringMongoSubs
  * Note that this subscription doesn't provide retries if an exception is thrown when handling a {@link io.cloudevents.CloudEvent} (<code>action</code>).
  * This reason for this is that Spring provides retry capabilities (such as spring-retry) that you can easily hook into your <code>action</code>.
  */
-public class SpringMongoSubscriptionModel implements PositionAwareSubscriptionModel, SubscriptionModelLifeCycle, SmartLifecycle {
+public class SpringMongoSubscriptionModel implements PositionAwareSubscriptionModel, SmartLifecycle {
     private static final Logger log = LoggerFactory.getLogger(SpringMongoSubscriptionModel.class);
 
     private final String eventCollection;

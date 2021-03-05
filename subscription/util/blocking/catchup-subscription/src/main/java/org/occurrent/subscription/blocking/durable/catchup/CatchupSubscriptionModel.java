@@ -59,7 +59,7 @@ import static org.occurrent.time.internal.RFC3339.RFC_3339_DATE_TIME_FORMATTER;
  * how often this should happen in the {@link CatchupSubscriptionModelConfig}.
  * </p>
  */
-public class CatchupSubscriptionModel implements SubscriptionModel, DelegatingSubscriptionModel, SubscriptionModelCancelSubscription {
+public class CatchupSubscriptionModel implements SubscriptionModel, DelegatingSubscriptionModel {
 
     private static final int DEFAULT_CACHE_SIZE = 100;
 
@@ -201,11 +201,44 @@ public class CatchupSubscriptionModel implements SubscriptionModel, DelegatingSu
     }
 
     @Override
+    public void stop() {
+        getDelegatedSubscriptionModel().stop();
+    }
+
+    @Override
+    public void start() {
+        getDelegatedSubscriptionModel().start();
+    }
+
+    @Override
+    public boolean isRunning() {
+        return getDelegatedSubscriptionModel().isRunning();
+    }
+
+    @Override
+    public boolean isRunning(String subscriptionId) {
+        return getDelegatedSubscriptionModel().isRunning();
+    }
+
+    @Override
+    public boolean isPaused(String subscriptionId) {
+        return getDelegatedSubscriptionModel().isPaused(subscriptionId);
+    }
+
+    @Override
+    public Subscription resumeSubscription(String subscriptionId) {
+        return getDelegatedSubscriptionModel().resumeSubscription(subscriptionId);
+    }
+
+    @Override
+    public void pauseSubscription(String subscriptionId) {
+        getDelegatedSubscriptionModel().pauseSubscription(subscriptionId);
+    }
+
+    @Override
     public void cancelSubscription(String subscriptionId) {
         runningCatchupSubscriptions.remove(subscriptionId);
-        if (subscriptionModel instanceof SubscriptionModelCancelSubscription) {
-            ((SubscriptionModelCancelSubscription) subscriptionModel).cancelSubscription(subscriptionId);
-        }
+        subscriptionModel.cancelSubscription(subscriptionId);
         doIfSubscriptionPositionStorageConfigIs(SubscriptionPositionStorageConfig.UseSubscriptionPositionInStorage.class, cfg -> cfg.storage.delete(subscriptionId));
     }
 

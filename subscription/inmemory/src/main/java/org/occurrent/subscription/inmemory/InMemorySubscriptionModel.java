@@ -24,7 +24,6 @@ import org.occurrent.subscription.StartAt;
 import org.occurrent.subscription.SubscriptionFilter;
 import org.occurrent.subscription.api.blocking.Subscription;
 import org.occurrent.subscription.api.blocking.SubscriptionModel;
-import org.occurrent.subscription.api.blocking.SubscriptionModelLifeCycle;
 import org.occurrent.subscription.internal.ExecutorShutdown;
 
 import javax.annotation.PreDestroy;
@@ -38,7 +37,7 @@ import java.util.stream.Stream;
 /**
  * An in-memory subscription model
  */
-public class InMemorySubscriptionModel implements SubscriptionModel, SubscriptionModelLifeCycle, Consumer<Stream<CloudEvent>> {
+public class InMemorySubscriptionModel implements SubscriptionModel, Consumer<Stream<CloudEvent>> {
 
     private final ConcurrentMap<String, InMemorySubscription> subscriptions;
     private final ConcurrentMap<String, Boolean> pausedSubscriptions;

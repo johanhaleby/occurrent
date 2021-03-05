@@ -40,7 +40,7 @@ import static org.occurrent.subscription.util.predicate.EveryN.everyEvent;
  * Note that this implementation stores the subscription position after _every_ action. If you have a lot of events and duplication is not
  * that much of a deal, consider changing this behavior by supplying an instance of {@link DurableSubscriptionModelConfig}.
  */
-public class DurableSubscriptionModel implements PositionAwareSubscriptionModel, DelegatingSubscriptionModel, SubscriptionModelCancelSubscription {
+public class DurableSubscriptionModel implements PositionAwareSubscriptionModel, DelegatingSubscriptionModel {
 
     private final PositionAwareSubscriptionModel subscriptionModel;
     private final SubscriptionPositionStorage storage;
@@ -115,6 +115,41 @@ public class DurableSubscriptionModel implements PositionAwareSubscriptionModel,
         return subscribe(subscriptionId, filter, startAtSupplier, action);
     }
 
+    @Override
+    public void stop() {
+        getDelegatedSubscriptionModel().stop();
+    }
+
+    @Override
+    public void start() {
+        getDelegatedSubscriptionModel().start();
+    }
+
+    @Override
+    public boolean isRunning() {
+        return getDelegatedSubscriptionModel().isRunning();
+    }
+
+    @Override
+    public boolean isRunning(String subscriptionId) {
+        return getDelegatedSubscriptionModel().isRunning(subscriptionId);
+    }
+
+    @Override
+    public boolean isPaused(String subscriptionId) {
+        return getDelegatedSubscriptionModel().isPaused(subscriptionId);
+    }
+
+    @Override
+    public Subscription resumeSubscription(String subscriptionId) {
+        return getDelegatedSubscriptionModel().resumeSubscription(subscriptionId);
+    }
+
+    @Override
+    public void pauseSubscription(String subscriptionId) {
+        getDelegatedSubscriptionModel().pauseSubscription(subscriptionId);
+    }
+
     /**
      * Cancel a subscription. This means that it'll no longer receive events as they are persisted to the event store.
      * The subscription position that is persisted in the {@link SubscriptionPositionStorage} will also be removed.
@@ -123,9 +158,7 @@ public class DurableSubscriptionModel implements PositionAwareSubscriptionModel,
      */
     @Override
     public void cancelSubscription(String subscriptionId) {
-        if ((subscriptionModel instanceof SubscriptionModelCancelSubscription)) {
-            ((SubscriptionModelCancelSubscription) subscriptionModel).cancelSubscription(subscriptionId);
-        }
+        subscriptionModel.cancelSubscription(subscriptionId);
         storage.delete(subscriptionId);
     }
 

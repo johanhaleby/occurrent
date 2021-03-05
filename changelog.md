@@ -3,6 +3,8 @@
 * Fixed a bug in `InMemorySubscription` that accidentally pushed `null` values to subscriptions every 500 millis unless an actual event was received.
 * Renamed `org.occurrent.subscription.mongodb.spring.blocking.SpringSubscriptionModelConfig` to `org.occurrent.subscription.mongodb.spring.blocking.SpringMongoSubscriptionModelConfig`.
 * Upgraded to Kotlin 1.4.31
+* All blocking subscriptions now implements the life cycle methods defined in the `org.occurrent.subscription.api.blocking.SubscriptionModelLifeCycle` interface. A new interface, `org.occurrent.subscription.api.blocking.Subscribable`
+  has been defined, that contains all "subscribe" methods. You can use this interface in your application if all you want to do is start subscriptions.
 
 ## Changelog 0.8.0 (2021-02-20)
 
