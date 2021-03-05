@@ -115,7 +115,7 @@ class CompetingConsumerSubscriptionModelTest {
     }
 
     @Test
-    void another_consumer_takes_over_when_subscription_is_cancelled_for_first_subscription_model() throws InterruptedException {
+    void another_consumer_takes_over_when_subscription_is_cancelled_for_first_subscription_model() {
         // Given
         CopyOnWriteArrayList<CloudEvent> cloudEvents = new CopyOnWriteArrayList<>();
 
@@ -135,6 +135,7 @@ class CompetingConsumerSubscriptionModelTest {
 
         competingConsumerSubscriptionModel1.pauseSubscription(subscriptionId);
 
+        System.out.println("### WRITING EVENT 2");
         eventStore.write("streamId", serialize(nameWasChanged));
 
         // Then

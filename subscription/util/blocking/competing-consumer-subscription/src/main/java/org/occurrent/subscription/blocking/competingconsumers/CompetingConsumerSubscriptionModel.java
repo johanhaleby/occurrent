@@ -32,7 +32,7 @@ public class CompetingConsumerSubscriptionModel implements DelegatingSubscriptio
 
     private final ConcurrentMap<SubscriptionIdAndSubscriberId, CompetingConsumer> competingConsumers = new ConcurrentHashMap<>();
 
-    public <T extends SubscriptionModel & SubscriptionModelLifeCycle> CompetingConsumerSubscriptionModel(T subscriptionModel, CompetingConsumerStrategy strategy) {
+    public CompetingConsumerSubscriptionModel(SubscriptionModel subscriptionModel, CompetingConsumerStrategy strategy) {
         requireNonNull(subscriptionModel, "Subscription model cannot be null");
         requireNonNull(subscriptionModel, CompetingConsumerStrategy.class.getSimpleName() + " cannot be null");
         this.delegate = subscriptionModel;
@@ -64,7 +64,7 @@ public class CompetingConsumerSubscriptionModel implements DelegatingSubscriptio
 
     @Override
     public void cancelSubscription(String subscriptionId) {
-        ((SubscriptionModelLifeCycle) delegate).cancelSubscription(subscriptionId);
+        delegate.cancelSubscription(subscriptionId);
         competingConsumerStrategy.unregisterCompetingConsumer(subscriptionId, subscriptionId);
     }
 
@@ -74,7 +74,7 @@ public class CompetingConsumerSubscriptionModel implements DelegatingSubscriptio
             return;
         }
 
-        ((SubscriptionModelLifeCycle) delegate).stop();
+        delegate.stop();
         unregisterAllCompetingConsumers();
     }
 
@@ -99,17 +99,17 @@ public class CompetingConsumerSubscriptionModel implements DelegatingSubscriptio
 
     @Override
     public boolean isRunning() {
-        return ((SubscriptionModelLifeCycle) delegate).isRunning();
+        return delegate.isRunning();
     }
 
     @Override
     public boolean isRunning(String subscriptionId) {
-        return ((SubscriptionModelLifeCycle) delegate).isRunning(subscriptionId);
+        return delegate.isRunning(subscriptionId);
     }
 
     @Override
     public boolean isPaused(String subscriptionId) {
-        return ((SubscriptionModelLifeCycle) delegate).isPaused(subscriptionId);
+        return delegate.isPaused(subscriptionId);
     }
 
     @Override
@@ -120,7 +120,7 @@ public class CompetingConsumerSubscriptionModel implements DelegatingSubscriptio
             throw new IllegalArgumentException("Subscription " + subscriptionId + " is not found");
         }
 
-        SubscriptionModelLifeCycle delegate = (SubscriptionModelLifeCycle) this.delegate;
+        SubscriptionModelLifeCycle delegate = this.delegate;
         return findFirstCompetingConsumerMatching(competingConsumer -> competingConsumer.isPausedFor(subscriptionId))
                 .flatMap(competingConsumer -> {
                     final Subscription subscription;
@@ -147,7 +147,7 @@ public class CompetingConsumerSubscriptionModel implements DelegatingSubscriptio
         findFirstCompetingConsumerMatching(competingConsumer -> competingConsumer.hasSubscriptionId(subscriptionId) && competingConsumer.isRunning())
                 .ifPresent(competingConsumer -> {
                     System.out.println("### BEFORE PAUSINGING DELEGAT");
-                    ((SubscriptionModelLifeCycle) delegate).pauseSubscription(subscriptionId);
+                    delegate.pauseSubscription(subscriptionId);
                     System.out.println("### AFTER PAUSINGING DELEGAT");
                     unregisterCompetingConsumer(subscriptionId, competingConsumer.getSubscriberId());
                 });
@@ -174,9 +174,14 @@ public class CompetingConsumerSubscriptionModel implements DelegatingSubscriptio
         }
 
         if (competingConsumer.isWaiting()) {
+            System.out.println("### Starting competing consumer " + subscriberId);
             startWaitingConsumer(competingConsumer);
         } else if (competingConsumer.isPaused()) {
-            resumeSubscription(subscriptionId);
+            Paused state = (Paused) competingConsumer.state;
+            System.out.println("### Competing consumer " + subscriberId + " + is paused, will start: " + state.hasPermissionToConsume);
+            if (state.hasPermissionToConsume) {
+                resumeSubscription(subscriptionId);
+            }
         }
     }
 
@@ -369,7 +374,9 @@ public class CompetingConsumerSubscriptionModel implements DelegatingSubscriptio
 
     private void unregisterCompetingConsumer(CompetingConsumer cc) {
         competingConsumers.put(cc.subscriptionIdAndSubscriberId, cc.registerPaused());
+        System.out.println("### BEFORE UNREGISTER");
         competingConsumerStrategy.unregisterCompetingConsumer(cc.getSubscriptionId(), cc.getSubscriberId());
+        System.out.println("### AFTER UNREGISTER");
     }
 
     private boolean registerCompetingConsumer(String subscriptionId, String subscriberId) {
