@@ -13,10 +13,10 @@ import java.util.StringJoiner;
 import java.util.UUID;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ConcurrentMap;
-import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.function.Consumer;
 import java.util.function.Predicate;
 import java.util.function.Supplier;
+import java.util.stream.Stream;
 
 import static java.util.Objects.requireNonNull;
 import static org.occurrent.functionalsupport.internal.FunctionalSupport.not;
@@ -47,9 +47,9 @@ public class CompetingConsumerSubscriptionModel implements DelegatingSubscriptio
         if (competingConsumersStrategy.registerCompetingConsumer(subscriptionId, subscriberId)) {
             Subscription subscription = delegate.subscribe(subscriptionId, filter, startAtSupplier, action);
             competingConsumerSubscription = new CompetingConsumerSubscription(subscriptionId, subscriberId, subscription);
-            competingConsumers.put(subscriptionIdAndSubscriberId, new CompetingConsumer(subscriptionIdAndSubscriberId, RUNNING));
+            competingConsumers.put(subscriptionIdAndSubscriberId, new CompetingConsumer(subscriptionIdAndSubscriberId, new Running()));
         } else {
-            competingConsumers.put(subscriptionIdAndSubscriberId, new CompetingConsumer(subscriptionIdAndSubscriberId, WAITING, () -> delegate.subscribe(subscriptionId, filter, startAtSupplier, action)));
+            competingConsumers.put(subscriptionIdAndSubscriberId, new CompetingConsumer(subscriptionIdAndSubscriberId, new Waiting(() -> delegate.subscribe(subscriptionId, filter, startAtSupplier, action))));
             competingConsumerSubscription = new CompetingConsumerSubscription(subscriptionId, subscriberId);
         }
         return competingConsumerSubscription;
@@ -68,14 +68,31 @@ public class CompetingConsumerSubscriptionModel implements DelegatingSubscriptio
 
     @Override
     public void stop() {
-        unregisterAllCompetingConsumers();
+        if (!isRunning()) {
+            return;
+        }
+
         ((SubscriptionModelLifeCycle) delegate).stop();
+        unregisterAllCompetingConsumers();
     }
 
     @Override
     public void start() {
-        registerAllCompetingConsumers();
-        ((SubscriptionModelLifeCycle) delegate).start();
+        if (isRunning()) {
+            throw new IllegalStateException(CompetingConsumerSubscriptionModel.class.getSimpleName() + " is already started");
+        }
+
+        competingConsumers.values().stream()
+                .filter(not(CompetingConsumer::isRunning))
+                .forEach(cc -> {
+                            // Only change state if we have permission to consume
+                            if (cc.isWaiting() && competingConsumersStrategy.registerCompetingConsumer(cc.getSubscriptionId(), cc.getSubscriberId())) {
+                                startWaitingConsumer(cc);
+                            } else if (cc.isPaused()) {
+                                resumeSubscription(cc.getSubscriptionId());
+                            }
+                        }
+                );
     }
 
     @Override
@@ -102,18 +119,19 @@ public class CompetingConsumerSubscriptionModel implements DelegatingSubscriptio
         }
 
         SubscriptionModelLifeCycle delegate = (SubscriptionModelLifeCycle) this.delegate;
-        findCompetingConsumerMatching(competingConsumer -> competingConsumer.isWaitingFor(subscriptionId))
-                .map(competingConsumer -> {
-                    // This works because method is synchronized and we've checked that it's already paused earlier
-                    Subscription subscription = delegate.resumeSubscription(subscriptionId);
-                    if (registerCompetingConsumer(subscriptionId, subscriptionId)) {
-                        competingConsumers.put(competingConsumer.subscriptionIdAndSubscriberId, competingConsumer.registerRunning(() -> pauseSubscription(subscriptionId)));
+        return findFirstCompetingConsumerMatching(competingConsumer -> competingConsumer.isPausedFor(subscriptionId))
+                .flatMap(competingConsumer -> {
+                    final Subscription subscription;
+                    if (isRegisteredCompetingConsumer(subscriptionId, subscriptionId) || registerCompetingConsumer(subscriptionId, subscriptionId)) {
+                        competingConsumers.put(competingConsumer.subscriptionIdAndSubscriberId, competingConsumer.registerRunning());
+                        // This works because method is synchronized and we've checked that it's already paused earlier
+                        subscription = delegate.resumeSubscription(subscriptionId);
+                    } else {
+                        subscription = null;
                     }
-                    return subscription;
+                    return Optional.ofNullable(subscription);
                 })
                 .orElseThrow(() -> new IllegalStateException("Cannot resume subscription " + subscriptionId + " since another consumer currently subscribes to it."));
-
-        return delegate.resumeSubscription(subscriptionId);
     }
 
     @Override
@@ -124,14 +142,11 @@ public class CompetingConsumerSubscriptionModel implements DelegatingSubscriptio
             throw new IllegalArgumentException("Subscription " + subscriptionId + " is not found");
         }
 
-        findCompetingConsumerMatching(competingConsumer -> competingConsumer.hasSubscriptionId(subscriptionId) && competingConsumer.isRunning())
+        findFirstCompetingConsumerMatching(competingConsumer -> competingConsumer.hasSubscriptionId(subscriptionId) && competingConsumer.isRunning())
                 .ifPresent(competingConsumer -> {
                     ((SubscriptionModelLifeCycle) delegate).pauseSubscription(subscriptionId);
                     unregisterCompetingConsumer(subscriptionId, subscriptionId);
-                    // Register running action as "empty" since we don't want the subscription to be automatically resumed even if
-                    // the subscriber is granted consumer status again (since it has been paused explicitly).
-                    competingConsumers.put(competingConsumer.subscriptionIdAndSubscriberId, competingConsumer.registerWaiting(() -> {
-                    }));
+                    competingConsumers.put(competingConsumer.subscriptionIdAndSubscriberId, competingConsumer.registerPaused());
                 });
     }
 
@@ -144,6 +159,7 @@ public class CompetingConsumerSubscriptionModel implements DelegatingSubscriptio
     @Override
     public void shutdown() {
         unregisterAllCompetingConsumers();
+        competingConsumersStrategy.removeListener(this);
         delegate.shutdown();
     }
 
@@ -154,35 +170,37 @@ public class CompetingConsumerSubscriptionModel implements DelegatingSubscriptio
             return;
         }
 
-        final CompetingConsumer updated;
         if (competingConsumer.isWaiting()) {
-            competingConsumer.nextAction.run();
-            updated = competingConsumer.registerRunning(() -> ((SubscriptionModelLifeCycle) delegate).pauseSubscription(subscriptionId));
+            startWaitingConsumer(competingConsumer);
         } else if (competingConsumer.isPaused()) {
-            updated = competingConsumer.registerPaused(true);
-        } else {
-            updated = competingConsumer;
+            resumeSubscription(subscriptionId);
         }
-        competingConsumers.put(competingConsumer.subscriptionIdAndSubscriberId, updated);
     }
 
     @Override
     public synchronized void onConsumeProhibited(String subscriptionId, String subscriberId) {
-        CompetingConsumer competingConsumer = competingConsumers.get(SubscriptionIdAndSubscriberId.from(subscriptionId, subscriberId));
+        SubscriptionIdAndSubscriberId subscriptionIdAndSubscriberId = SubscriptionIdAndSubscriberId.from(subscriptionId, subscriberId);
+        CompetingConsumer competingConsumer = competingConsumers.get(subscriptionIdAndSubscriberId);
         if (competingConsumer == null) {
             return;
         }
 
-        final CompetingConsumer updated;
         if (competingConsumer.isRunning()) {
-            competingConsumer.nextAction.run();
-            updated = competingConsumer.registerWaiting(() -> ((SubscriptionModelLifeCycle) delegate).resumeSubscription(subscriptionId));
+            pauseSubscription(subscriptionId);
+            pauseConsumer(competingConsumer, false);
         } else if (competingConsumer.isPaused()) {
-            updated = competingConsumer.registerPaused(false);
-        } else {
-            updated = competingConsumer;
+            pauseConsumer(competingConsumer, false);
         }
-        competingConsumers.put(SubscriptionIdAndSubscriberId.from(subscriptionId, subscriberId), updated);
+    }
+
+    private void startWaitingConsumer(CompetingConsumer cc) {
+        ((Waiting) cc.state).startSubscription();
+        competingConsumers.put(SubscriptionIdAndSubscriberId.from(cc.getSubscriptionId(), cc.getSubscriberId()), cc.registerRunning());
+    }
+
+    private void pauseConsumer(CompetingConsumer cc, boolean hasPermissionToConsume) {
+        SubscriptionIdAndSubscriberId subscriptionIdAndSubscriberId = SubscriptionIdAndSubscriberId.from(cc.getSubscriptionId(), cc.getSubscriberId());
+        competingConsumers.put(subscriptionIdAndSubscriberId, cc.registerPaused(hasPermissionToConsume));
     }
 
     private static class SubscriptionIdAndSubscriberId {
@@ -225,19 +243,11 @@ public class CompetingConsumerSubscriptionModel implements DelegatingSubscriptio
 
         final SubscriptionIdAndSubscriberId subscriptionIdAndSubscriberId;
         final CompetingConsumerState state;
-        final Runnable nextAction;
-        final boolean hasPermissionToConsume;
 
-        CompetingConsumer(SubscriptionIdAndSubscriberId subscriptionIdAndSubscriberId, CompetingConsumerState state, boolean hasPermissionToConsume) {
-            this(subscriptionIdAndSubscriberId, state, hasPermissionToConsume, () -> {
-            });
-        }
 
-        CompetingConsumer(SubscriptionIdAndSubscriberId subscriptionIdAndSubscriberId, CompetingConsumerState state, boolean hasPermissionToConsume, Runnable nextAction) {
+        CompetingConsumer(SubscriptionIdAndSubscriberId subscriptionIdAndSubscriberId, CompetingConsumerState state) {
             this.subscriptionIdAndSubscriberId = subscriptionIdAndSubscriberId;
             this.state = state;
-            this.hasPermissionToConsume = hasPermissionToConsume;
-            this.nextAction = nextAction;
         }
 
         boolean hasId(String subscriptionId, String subscriberId) {
@@ -249,23 +259,19 @@ public class CompetingConsumerSubscriptionModel implements DelegatingSubscriptio
         }
 
         boolean isPaused() {
-            return state == CompetingConsumerState.PAUSED;
+            return state instanceof Paused;
         }
 
         boolean isRunning() {
-            return state == RUNNING;
-        }
-
-        boolean isRunningFor(String subscriptionId) {
-            return isRunning() && hasSubscriptionId(subscriptionId);
+            return state instanceof Running;
         }
 
         boolean isWaiting() {
-            return state == WAITING;
+            return state instanceof Waiting;
         }
 
-        boolean isWaitingFor(String subscriptionId) {
-            return isWaiting() && hasSubscriptionId(subscriptionId);
+        boolean isPausedFor(String subscriptionId) {
+            return isPaused() && hasSubscriptionId(subscriptionId);
         }
 
         String getSubscriptionId() {
@@ -276,45 +282,61 @@ public class CompetingConsumerSubscriptionModel implements DelegatingSubscriptio
             return subscriptionIdAndSubscriberId.subscriberId;
         }
 
-        @Override
-        public boolean equals(Object o) {
-            if (this == o) return true;
-            if (!(o instanceof CompetingConsumer)) return false;
-            CompetingConsumer that = (CompetingConsumer) o;
-            return hasPermissionToConsume == that.hasPermissionToConsume && Objects.equals(subscriptionIdAndSubscriberId, that.subscriptionIdAndSubscriberId) && state == that.state && Objects.equals(nextAction, that.nextAction);
+        CompetingConsumer registerRunning() {
+            return new CompetingConsumer(subscriptionIdAndSubscriberId, new Running());
         }
 
-        @Override
-        public int hashCode() {
-            return Objects.hash(subscriptionIdAndSubscriberId, state, nextAction, hasPermissionToConsume);
-        }
-
-        @Override
-        public String toString() {
-            return new StringJoiner(", ", CompetingConsumer.class.getSimpleName() + "[", "]")
-                    .add("subscriptionIdAndSubscriberId=" + subscriptionIdAndSubscriberId)
-                    .add("state=" + state)
-                    .add("nextAction=" + nextAction)
-                    .add("hasPermissionToConsume=" + hasPermissionToConsume)
-                    .toString();
-        }
-
-        CompetingConsumer registerRunning(Runnable nextAction) {
-            return new CompetingConsumer(subscriptionIdAndSubscriberId, RUNNING, true, nextAction);
-        }
-
-        CompetingConsumer registerWaiting(Runnable nextAction) {
-            return new CompetingConsumer(subscriptionIdAndSubscriberId, WAITING, false, nextAction);
+        CompetingConsumer registerPaused() {
+            return registerPaused(state.hasPermissionToConsume());
         }
 
         CompetingConsumer registerPaused(boolean hasPermissionToConsume) {
-            return new CompetingConsumer(subscriptionIdAndSubscriberId, PAUSED, hasPermissionToConsume, () -> {
-            });
+            return new CompetingConsumer(subscriptionIdAndSubscriberId, new Paused(hasPermissionToConsume));
         }
     }
 
-    enum CompetingConsumerState {
-        RUNNING, WAITING, PAUSED
+    static abstract class CompetingConsumerState {
+        private CompetingConsumerState() {
+        }
+
+        abstract boolean hasPermissionToConsume();
+
+        static class Running extends CompetingConsumerState {
+            @Override
+            boolean hasPermissionToConsume() {
+                return true;
+            }
+        }
+
+        static class Waiting extends CompetingConsumerState {
+            private final Supplier<Subscription> supplier;
+
+            Waiting(Supplier<Subscription> supplier) {
+                this.supplier = supplier;
+            }
+
+            @Override
+            boolean hasPermissionToConsume() {
+                return false;
+            }
+
+            private void startSubscription() {
+                supplier.get();
+            }
+        }
+
+        static class Paused extends CompetingConsumerState {
+            private final boolean hasPermissionToConsume;
+
+            Paused(boolean hasPermissionToConsume) {
+                this.hasPermissionToConsume = hasPermissionToConsume;
+            }
+
+            @Override
+            boolean hasPermissionToConsume() {
+                return hasPermissionToConsume;
+            }
+        }
     }
 
     private void unregisterAllCompetingConsumers() {
@@ -326,31 +348,48 @@ public class CompetingConsumerSubscriptionModel implements DelegatingSubscriptio
     }
 
     private void unregisterCompetingConsumersMatching(Predicate<CompetingConsumer> predicate) {
-        competingConsumers.values().stream().filter(predicate).forEach(s -> competingConsumersStrategy.unregisterCompetingConsumer(s.getSubscriptionId(), s.getSubscriberId()));
-    }
-
-    private boolean registerAllCompetingConsumers() {
-        return registerCompetingConsumerMatching(not(CompetingConsumer::isRunning));
+        competingConsumers.values().stream().filter(predicate).forEach(cc -> {
+            competingConsumersStrategy.unregisterCompetingConsumer(cc.getSubscriptionId(), cc.getSubscriberId());
+            competingConsumers.put(cc.subscriptionIdAndSubscriberId, cc.registerPaused());
+        });
     }
 
     private boolean registerCompetingConsumer(String subscriptionId, String subscriberId) {
-        return registerCompetingConsumerMatching(c -> c.hasId(subscriptionId, subscriberId));
+        return competingConsumersStrategy.registerCompetingConsumer(subscriptionId, subscriberId);
     }
 
-    private Optional<CompetingConsumer> findCompetingConsumerMatching(Predicate<CompetingConsumer> predicate) {
-        return competingConsumers.values().stream().filter(predicate).findFirst();
+    private boolean isRegisteredCompetingConsumer(String subscriptionId, String subscriberId) {
+        return competingConsumersStrategy.isRegisteredCompetingConsumer(subscriptionId, subscriberId);
     }
 
-    private boolean registerCompetingConsumerMatching(Predicate<CompetingConsumer> predicate) {
-        return competingConsumers.values().stream()
-                .filter(predicate)
-                .collect(() -> new AtomicBoolean(false),
-                        (matching, s) -> {
-                            if (competingConsumersStrategy.registerCompetingConsumer(s.getSubscriptionId(), s.getSubscriberId())) {
-                                matching.set(true);
-                            }
-                        },
-                        (aBoolean, aBoolean2) -> aBoolean.set(aBoolean.get()))
-                .get();
+    private Optional<CompetingConsumer> findFirstCompetingConsumerMatching(Predicate<CompetingConsumer> predicate) {
+        return findCompetingConsumersMatching(predicate).findFirst();
+    }
+
+    private Stream<CompetingConsumer> findCompetingConsumersMatching(Predicate<CompetingConsumer> predicate) {
+        return competingConsumers.values().stream().filter(predicate);
+    }
+
+
+    @Override
+    public boolean equals(Object o) {
+        if (this == o) return true;
+        if (!(o instanceof CompetingConsumerSubscriptionModel)) return false;
+        CompetingConsumerSubscriptionModel that = (CompetingConsumerSubscriptionModel) o;
+        return Objects.equals(delegate, that.delegate) && Objects.equals(competingConsumersStrategy, that.competingConsumersStrategy) && Objects.equals(competingConsumers, that.competingConsumers);
+    }
+
+    @Override
+    public int hashCode() {
+        return Objects.hash(delegate, competingConsumersStrategy, competingConsumers);
+    }
+
+    @Override
+    public String toString() {
+        return new StringJoiner(", ", CompetingConsumerSubscriptionModel.class.getSimpleName() + "[", "]")
+                .add("delegate=" + delegate)
+                .add("competingConsumersStrategy=" + competingConsumersStrategy)
+                .add("competingConsumers=" + competingConsumers)
+                .toString();
     }
 }

@@ -16,18 +16,19 @@ import org.occurrent.subscription.StartAt;
 import org.occurrent.subscription.SubscriptionFilter;
 import org.occurrent.subscription.api.blocking.CompetingConsumersStrategy;
 import org.occurrent.subscription.api.blocking.Subscription;
+import org.occurrent.subscription.api.blocking.SubscriptionModel;
+import org.occurrent.subscription.api.blocking.SubscriptionModelLifeCycle;
 import org.occurrent.subscription.inmemory.InMemorySubscriptionModel;
 
 import java.net.URI;
 import java.time.LocalDateTime;
-import java.util.List;
+import java.util.Collections;
+import java.util.Objects;
+import java.util.Set;
 import java.util.UUID;
-import java.util.concurrent.CopyOnWriteArrayList;
-import java.util.concurrent.locks.Lock;
-import java.util.concurrent.locks.ReentrantLock;
+import java.util.concurrent.*;
 import java.util.function.Consumer;
 import java.util.function.Supplier;
-import java.util.stream.Collectors;
 import java.util.stream.Stream;
 
 import static java.time.ZoneOffset.UTC;
@@ -40,41 +41,25 @@ class CompetingConsumerSubscriptionModelTest {
 
     private InMemoryEventStore eventStore;
     private CompetingConsumerSubscriptionModel tested;
-    private Lock lock;
-    private InMemorySubscriptionModel inMemorySubscriptionModel1;
-    private InMemorySubscriptionModel inMemorySubscriptionModel2;
+    private InMemorySubscriptionModel inMemorySubscriptionModel;
     private ObjectMapper objectMapper;
 
     @BeforeEach
     void start() {
-        inMemorySubscriptionModel1 = new InMemorySubscriptionModel(RetryStrategy.none());
-        inMemorySubscriptionModel2 = new InMemorySubscriptionModel(RetryStrategy.none());
+        BlockingQueue<CloudEvent> queue = new LinkedBlockingQueue<>();
 
-        InMemorySubscriptionModel composite = new InMemorySubscriptionModel(RetryStrategy.none()) {
-            @Override
-            public Subscription subscribe(String subscriptionId, SubscriptionFilter filter, Supplier<StartAt> startAtSupplier, Consumer<CloudEvent> action) {
-                Subscription subscription1 = inMemorySubscriptionModel1.subscribe(subscriptionId, filter, startAtSupplier, action);
-                Subscription subscription2 = inMemorySubscriptionModel2.subscribe(subscriptionId, filter, startAtSupplier, action);
-                return subscription1;
-            }
-        };
+        inMemorySubscriptionModel = new InMemorySubscriptionModel(Executors.newCachedThreadPool(), RetryStrategy.none(), () -> queue);
+        InMemoryCompetingConsumerStrategy inMemoryCompetingConsumerStrategy = new InMemoryCompetingConsumerStrategy(queue);
+        tested = new CompetingConsumerSubscriptionModel(inMemorySubscriptionModel, inMemoryCompetingConsumerStrategy);
 
-        eventStore = new InMemoryEventStore(e -> {
-            List<CloudEvent> cloudEvents = e.collect(Collectors.toList());
-            inMemorySubscriptionModel1.accept(cloudEvents.stream());
-            inMemorySubscriptionModel2.accept(cloudEvents.stream());
-        });
+        eventStore = new InMemoryEventStore(inMemoryCompetingConsumerStrategy);
 
-        lock = new ReentrantLock();
-        tested = new CompetingConsumerSubscriptionModel(composite, new InMemoryLockCompetingConsumerStrategy(lock));
         objectMapper = new ObjectMapper();
     }
 
     @AfterEach
     void shutdown() {
-        lock.unlock();
-        inMemorySubscriptionModel1.shutdown();
-        inMemorySubscriptionModel2.shutdown();
+        inMemorySubscriptionModel.shutdown();
     }
 
     @Test
@@ -83,6 +68,7 @@ class CompetingConsumerSubscriptionModelTest {
         CopyOnWriteArrayList<CloudEvent> cloudEvents = new CopyOnWriteArrayList<>();
 
         String subscriptionId = UUID.randomUUID().toString();
+        tested.subscribe(subscriptionId, cloudEvents::add).waitUntilStarted();
         tested.subscribe(subscriptionId, cloudEvents::add).waitUntilStarted();
 
         NameDefined nameDefined = new NameDefined("eventId", LocalDateTime.of(2021, 2, 26, 14, 15, 16), "my name");
@@ -118,22 +104,119 @@ class CompetingConsumerSubscriptionModelTest {
     }
 
 
-    private static class InMemoryLockCompetingConsumerStrategy implements CompetingConsumersStrategy {
-        private final Lock lock;
-
-        InMemoryLockCompetingConsumerStrategy(Lock lock) {
-            this.lock = lock;
-        }
-
+    private class InMemoryQueueSubscriptionModel implements SubscriptionModel, SubscriptionModelLifeCycle {
 
         @Override
-        public void registerCompetingConsumer(String subscriptionId, String subscriberId) {
-            new Thread(lock::lock).start();
+        public Subscription subscribe(String subscriptionId, SubscriptionFilter filter, Supplier<StartAt> startAtSupplier, Consumer<CloudEvent> action) {
+            return null;
+        }
+
+        @Override
+        public void cancelSubscription(String subscriptionId) {
+
+        }
+
+        @Override
+        public void stop() {
+
+        }
+
+        @Override
+        public void start() {
+
+        }
+
+        @Override
+        public boolean isRunning() {
+            return false;
+        }
+
+        @Override
+        public boolean isRunning(String subscriptionId) {
+            return false;
+        }
+
+        @Override
+        public boolean isPaused(String subscriptionId) {
+            return false;
+        }
+
+        @Override
+        public Subscription resumeSubscription(String subscriptionId) {
+            return null;
+        }
+
+        @Override
+        public void pauseSubscription(String subscriptionId) {
+
+        }
+    }
+
+    private static class InMemoryCompetingConsumerStrategy implements CompetingConsumersStrategy, Consumer<Stream<CloudEvent>> {
+        private final Set<Consumer> consumers;
+        private final CopyOnWriteArrayList<CompetingConsumerListener> listeners;
+        private final BlockingQueue<CloudEvent> queue;
+
+        private InMemoryCompetingConsumerStrategy(BlockingQueue<CloudEvent> queue) {
+            this.queue = queue;
+            this.consumers = Collections.newSetFromMap(new ConcurrentHashMap<>());
+            this.listeners = new CopyOnWriteArrayList<>();
+        }
+
+        @Override
+        public boolean registerCompetingConsumer(String subscriptionId, String subscriberId) {
+            consumers.add(new Consumer(subscriptionId, subscriberId));
+            listeners.forEach(cc -> cc.onConsumeGranted(subscriptionId, subscriberId));
+            return true;
         }
 
         @Override
         public void unregisterCompetingConsumer(String subscriptionId, String subscriberId) {
-            new Thread(lock::unlock).start();
+            consumers.remove(new Consumer(subscriptionId, subscriberId));
+            listeners.forEach(cc -> cc.onConsumeProhibited(subscriptionId, subscriberId));
+        }
+
+        @Override
+        public boolean isRegisteredCompetingConsumer(String subscriptionId, String subscriberId) {
+            return consumers.contains(new Consumer(subscriptionId, subscriberId));
+        }
+
+        @Override
+        public void addListener(CompetingConsumerListener listener) {
+            listeners.add(listener);
+        }
+
+        @Override
+        public void removeListener(CompetingConsumerListener listenerConsumer) {
+
+        }
+
+        @Override
+        public void accept(Stream<CloudEvent> cloudEventStream) {
+            cloudEventStream.forEach(queue::offer);
+        }
+
+        private static class Consumer {
+            private final String subscriptionId;
+            private final String subscriberId;
+
+            Consumer(String subscriptionId, String subscriberId) {
+                this.subscriptionId = subscriptionId;
+                this.subscriberId = subscriberId;
+            }
+
+            @Override
+            public boolean equals(Object o) {
+                if (this == o) return true;
+                if (!(o instanceof Consumer)) return false;
+                Consumer consumer = (Consumer) o;
+                return Objects.equals(subscriptionId, consumer.subscriptionId) && Objects.equals(subscriberId, consumer.subscriberId);
+            }
+
+            @Override
+            public int hashCode() {
+                return Objects.hash(subscriptionId, subscriberId);
+            }
         }
     }
 }

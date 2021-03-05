@@ -44,6 +44,7 @@ public class InMemorySubscriptionModel implements SubscriptionModel, Subscriptio
     private final ConcurrentMap<String, Boolean> pausedSubscriptions;
     private final ExecutorService cloudEventDispatcher;
     private final RetryStrategy retryStrategy;
+    private final Supplier<BlockingQueue<CloudEvent>> queueSupplier;
 
     private volatile boolean shutdown = false;
     private volatile boolean running = true;
@@ -71,17 +72,30 @@ public class InMemorySubscriptionModel implements SubscriptionModel, Subscriptio
      * @param retryStrategy        The retry strategy
      */
     public InMemorySubscriptionModel(ExecutorService cloudEventDispatcher, RetryStrategy retryStrategy) {
+        this(cloudEventDispatcher, retryStrategy, LinkedBlockingQueue::new);
+    }
+
+    /**
+     * Create an instance of {@link InMemorySubscriptionModel} with the given parameters
+     *
+     * @param cloudEventDispatcher The {@link ExecutorService} that will be used when dispatching cloud events to subscribers
+     * @param retryStrategy        The retry strategy
+     * @param queue                The blocking queue to use for this instance.
+     */
+    public InMemorySubscriptionModel(ExecutorService cloudEventDispatcher, RetryStrategy retryStrategy, Supplier<BlockingQueue<CloudEvent>> queue) {
         if (cloudEventDispatcher == null) {
             throw new IllegalArgumentException("cloudEventDispatcher cannot be null");
         } else if (retryStrategy == null) {
             throw new IllegalArgumentException(RetryStrategy.class.getSimpleName() + " cannot be null");
+        } else if (queue == null) {
+            throw new IllegalArgumentException(BlockingQueue.class.getSimpleName() + " cannot be null");
         }
+        this.queueSupplier = queue;
         this.cloudEventDispatcher = cloudEventDispatcher;
         this.retryStrategy = retryStrategy;
         this.subscriptions = new ConcurrentHashMap<>();
         this.pausedSubscriptions = new ConcurrentHashMap<>();
     }
-
 
     @Override
     public synchronized Subscription subscribe(String subscriptionId, SubscriptionFilter filter, Supplier<StartAt> startAtSupplier, Consumer<CloudEvent> action) {
@@ -104,7 +118,7 @@ public class InMemorySubscriptionModel implements SubscriptionModel, Subscriptio
 
         final Filter f = getFilter(filter);
 
-        InMemorySubscription subscription = new InMemorySubscription(subscriptionId, new LinkedBlockingQueue<>(), action, f, retryStrategy);
+        InMemorySubscription subscription = new InMemorySubscription(subscriptionId, queueSupplier.get(), action, f, retryStrategy);
         subscriptions.put(subscriptionId, subscription);
 
         if (!running) {

@@ -1,8 +1,5 @@
 package org.occurrent.subscription.api.blocking;
 
-import java.util.List;
-import java.util.Optional;
-
 /**
  * Defines life-cycle methods for subscription models and subscriptions.
  */

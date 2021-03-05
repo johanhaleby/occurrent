@@ -51,13 +51,12 @@ import org.springframework.data.mongodb.core.messaging.MessageListener;
 import org.springframework.data.mongodb.core.messaging.MessageListenerContainer;
 
 import javax.annotation.PreDestroy;
-import java.util.*;
+import java.util.Objects;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ConcurrentMap;
 import java.util.function.Consumer;
 import java.util.function.Function;
 import java.util.function.Supplier;
-import java.util.stream.Collectors;
 
 import static java.util.Objects.requireNonNull;
 import static org.occurrent.retry.internal.RetryExecution.executeWithRetry;
@@ -225,25 +224,6 @@ public class SpringMongoSubscriptionModel implements PositionAwareSubscriptionMo
     }
 
     @Override
-    public synchronized Optional<Subscription> getSubscription(String subscriptionId) {
-        InternalSubscription internalSubscription = runningSubscriptions.get(subscriptionId);
-        if (internalSubscription == null) {
-            internalSubscription = pausedSubscriptions.get(subscriptionId);
-        }
-
-        return Optional.ofNullable(internalSubscription).map(InternalSubscription::getOccurrentSubscription);
-    }
-
-    @Override
-    public synchronized List<Subscription> getSubscriptions() {
-        Collection<InternalSubscription> running = runningSubscriptions.values();
-        Collection<InternalSubscription> paused = runningSubscriptions.values();
-        List<InternalSubscription> internalSubscriptions = new ArrayList<>(running);
-        internalSubscriptions.addAll(paused);
-        return internalSubscriptions.stream().map(InternalSubscription::getOccurrentSubscription).collect(Collectors.toList());
-    }
-
-    @Override
     public synchronized Subscription resumeSubscription(String subscriptionId) {
         InternalSubscription internalSubscription = pausedSubscriptions.remove(subscriptionId);
         if (internalSubscription == null) {
@@ -370,10 +350,6 @@ public class SpringMongoSubscriptionModel implements PositionAwareSubscriptionMo
 
         org.springframework.data.mongodb.core.messaging.Subscription getSpringSubscription() {
             return occurrentSubscription.getSubscriptionReference().get();
-        }
-
-        SpringMongoSubscription getOccurrentSubscription() {
-            return occurrentSubscription;
         }
 
         void shutdown() {

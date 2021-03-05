@@ -12,6 +12,7 @@ import com.mongodb.WriteConcern;
 import com.mongodb.client.MongoCollection;
 import com.mongodb.client.model.FindOneAndUpdateOptions;
 import com.mongodb.client.model.ReturnDocument;
+import com.mongodb.client.result.DeleteResult;
 import com.mongodb.client.result.UpdateResult;
 import org.bson.BsonDocument;
 import org.bson.Document;
@@ -92,6 +93,10 @@ class MongoListenerLockService {
 
             throw e;
         }
+    }
+
+    static DeleteResult remove(MongoCollection<BsonDocument> collection, String subscriptionId) {
+        return collection.deleteOne(eq("_id", subscriptionId));
     }
 
     static void commit(MongoCollection<BsonDocument> collection, Clock clock, Duration leaseTime, String subscriptionId, String subscriberId) throws LostLockException {

@@ -5,24 +5,11 @@ public interface CompetingConsumersStrategy {
 
     void unregisterCompetingConsumer(String subscriptionId, String subscriberId);
 
+    boolean isRegisteredCompetingConsumer(String subscriptionId, String subscriberId);
+
     void addListener(CompetingConsumerListener listenerConsumer);
 
-    class NoopCompetingConsumerStrategy implements CompetingConsumersStrategy {
-        @Override
-        public boolean registerCompetingConsumer(String subscriptionId, String subscriberId) {
-            return true;
-        }
-
-        @Override
-        public void unregisterCompetingConsumer(String subscriptionId, String subscriberId) {
-
-        }
-
-        @Override
-        public void addListener(CompetingConsumerListener listenerConsumer) {
-
-        }
-    }
+    void removeListener(CompetingConsumerListener listenerConsumer);
 
     interface CompetingConsumerListener {
         default void onConsumeGranted(String subscriptionId, String subscriberId) {
