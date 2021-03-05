@@ -14,7 +14,7 @@ import org.occurrent.eventstore.inmemory.InMemoryEventStore;
 import org.occurrent.retry.RetryStrategy;
 import org.occurrent.subscription.StartAt;
 import org.occurrent.subscription.SubscriptionFilter;
-import org.occurrent.subscription.api.blocking.CompetingConsumersStrategy;
+import org.occurrent.subscription.api.blocking.CompetingConsumerStrategy;
 import org.occurrent.subscription.api.blocking.Subscription;
 import org.occurrent.subscription.api.blocking.SubscriptionModel;
 import org.occurrent.subscription.api.blocking.SubscriptionModelLifeCycle;
@@ -152,7 +152,7 @@ class CompetingConsumerSubscriptionModelTest {
         }
     }
 
-    private static class InMemoryCompetingConsumerStrategy implements CompetingConsumersStrategy, Consumer<Stream<CloudEvent>> {
+    private static class InMemoryCompetingConsumerStrategy implements CompetingConsumerStrategy, Consumer<Stream<CloudEvent>> {
         private final Set<Consumer> consumers;
         private final CopyOnWriteArrayList<CompetingConsumerListener> listeners;
         private final BlockingQueue<CloudEvent> queue;

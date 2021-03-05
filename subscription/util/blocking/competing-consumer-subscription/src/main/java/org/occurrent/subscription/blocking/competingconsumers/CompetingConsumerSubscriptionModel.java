@@ -4,7 +4,7 @@ import io.cloudevents.CloudEvent;
 import org.occurrent.subscription.StartAt;
 import org.occurrent.subscription.SubscriptionFilter;
 import org.occurrent.subscription.api.blocking.*;
-import org.occurrent.subscription.api.blocking.CompetingConsumersStrategy.CompetingConsumerListener;
+import org.occurrent.subscription.api.blocking.CompetingConsumerStrategy.CompetingConsumerListener;
 
 import javax.annotation.PreDestroy;
 import java.util.Objects;
@@ -26,16 +26,16 @@ import static org.occurrent.subscription.blocking.competingconsumers.CompetingCo
 public class CompetingConsumerSubscriptionModel implements DelegatingSubscriptionModel, SubscriptionModel, SubscriptionModelLifeCycle, CompetingConsumerListener {
 
     private final SubscriptionModel delegate;
-    private final CompetingConsumersStrategy competingConsumersStrategy;
+    private final CompetingConsumerStrategy competingConsumerStrategy;
 
     private final ConcurrentMap<SubscriptionIdAndSubscriberId, CompetingConsumer> competingConsumers = new ConcurrentHashMap<>();
 
-    public <T extends SubscriptionModel & SubscriptionModelLifeCycle> CompetingConsumerSubscriptionModel(T subscriptionModel, CompetingConsumersStrategy strategy) {
+    public <T extends SubscriptionModel & SubscriptionModelLifeCycle> CompetingConsumerSubscriptionModel(T subscriptionModel, CompetingConsumerStrategy strategy) {
         requireNonNull(subscriptionModel, "Subscription model cannot be null");
-        requireNonNull(subscriptionModel, CompetingConsumersStrategy.class.getSimpleName() + " cannot be null");
+        requireNonNull(subscriptionModel, CompetingConsumerStrategy.class.getSimpleName() + " cannot be null");
         this.delegate = subscriptionModel;
-        this.competingConsumersStrategy = strategy;
-        this.competingConsumersStrategy.addListener(this);
+        this.competingConsumerStrategy = strategy;
+        this.competingConsumerStrategy.addListener(this);
     }
 
     public Subscription subscribe(String subscriberId, String subscriptionId, SubscriptionFilter filter, Supplier<StartAt> startAtSupplier, Consumer<CloudEvent> action) {
@@ -44,7 +44,7 @@ public class CompetingConsumerSubscriptionModel implements DelegatingSubscriptio
 
         SubscriptionIdAndSubscriberId subscriptionIdAndSubscriberId = SubscriptionIdAndSubscriberId.from(subscriptionId, subscriberId);
         final CompetingConsumerSubscription competingConsumerSubscription;
-        if (competingConsumersStrategy.registerCompetingConsumer(subscriptionId, subscriberId)) {
+        if (competingConsumerStrategy.registerCompetingConsumer(subscriptionId, subscriberId)) {
             Subscription subscription = delegate.subscribe(subscriptionId, filter, startAtSupplier, action);
             competingConsumerSubscription = new CompetingConsumerSubscription(subscriptionId, subscriberId, subscription);
             competingConsumers.put(subscriptionIdAndSubscriberId, new CompetingConsumer(subscriptionIdAndSubscriberId, new Running()));
@@ -62,7 +62,7 @@ public class CompetingConsumerSubscriptionModel implements DelegatingSubscriptio
 
     @Override
     public void cancelSubscription(String subscriptionId) {
-        competingConsumersStrategy.unregisterCompetingConsumer(subscriptionId, subscriptionId);
+        competingConsumerStrategy.unregisterCompetingConsumer(subscriptionId, subscriptionId);
         ((SubscriptionModelLifeCycle) delegate).cancelSubscription(subscriptionId);
     }
 
@@ -86,7 +86,7 @@ public class CompetingConsumerSubscriptionModel implements DelegatingSubscriptio
                 .filter(not(CompetingConsumer::isRunning))
                 .forEach(cc -> {
                             // Only change state if we have permission to consume
-                            if (cc.isWaiting() && competingConsumersStrategy.registerCompetingConsumer(cc.getSubscriptionId(), cc.getSubscriberId())) {
+                            if (cc.isWaiting() && competingConsumerStrategy.registerCompetingConsumer(cc.getSubscriptionId(), cc.getSubscriberId())) {
                                 startWaitingConsumer(cc);
                             } else if (cc.isPaused()) {
                                 resumeSubscription(cc.getSubscriptionId());
@@ -159,7 +159,7 @@ public class CompetingConsumerSubscriptionModel implements DelegatingSubscriptio
     @Override
     public void shutdown() {
         unregisterAllCompetingConsumers();
-        competingConsumersStrategy.removeListener(this);
+        competingConsumerStrategy.removeListener(this);
         delegate.shutdown();
     }
 
@@ -349,17 +349,17 @@ public class CompetingConsumerSubscriptionModel implements DelegatingSubscriptio
 
     private void unregisterCompetingConsumersMatching(Predicate<CompetingConsumer> predicate) {
         competingConsumers.values().stream().filter(predicate).forEach(cc -> {
-            competingConsumersStrategy.unregisterCompetingConsumer(cc.getSubscriptionId(), cc.getSubscriberId());
+            competingConsumerStrategy.unregisterCompetingConsumer(cc.getSubscriptionId(), cc.getSubscriberId());
             competingConsumers.put(cc.subscriptionIdAndSubscriberId, cc.registerPaused());
         });
     }
 
     private boolean registerCompetingConsumer(String subscriptionId, String subscriberId) {
-        return competingConsumersStrategy.registerCompetingConsumer(subscriptionId, subscriberId);
+        return competingConsumerStrategy.registerCompetingConsumer(subscriptionId, subscriberId);
     }
 
     private boolean hasLock(String subscriptionId, String subscriberId) {
-        return competingConsumersStrategy.hasLock(subscriptionId, subscriberId);
+        return competingConsumerStrategy.hasLock(subscriptionId, subscriberId);
     }
 
     private Optional<CompetingConsumer> findFirstCompetingConsumerMatching(Predicate<CompetingConsumer> predicate) {
@@ -376,19 +376,19 @@ public class CompetingConsumerSubscriptionModel implements DelegatingSubscriptio
         if (this == o) return true;
         if (!(o instanceof CompetingConsumerSubscriptionModel)) return false;
         CompetingConsumerSubscriptionModel that = (CompetingConsumerSubscriptionModel) o;
-        return Objects.equals(delegate, that.delegate) && Objects.equals(competingConsumersStrategy, that.competingConsumersStrategy) && Objects.equals(competingConsumers, that.competingConsumers);
+        return Objects.equals(delegate, that.delegate) && Objects.equals(competingConsumerStrategy, that.competingConsumerStrategy) && Objects.equals(competingConsumers, that.competingConsumers);
     }
 
     @Override
     public int hashCode() {
-        return Objects.hash(delegate, competingConsumersStrategy, competingConsumers);
+        return Objects.hash(delegate, competingConsumerStrategy, competingConsumers);
     }
 
     @Override
     public String toString() {
         return new StringJoiner(", ", CompetingConsumerSubscriptionModel.class.getSimpleName() + "[", "]")
                 .add("delegate=" + delegate)
-                .add("competingConsumersStrategy=" + competingConsumersStrategy)
+                .add("competingConsumersStrategy=" + competingConsumerStrategy)
                 .add("competingConsumers=" + competingConsumers)
                 .toString();
     }

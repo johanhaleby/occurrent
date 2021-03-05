@@ -2,7 +2,7 @@ package org.occurrent.subscription.mongodb.spring.blocking;
 
 import com.mongodb.client.MongoCollection;
 import org.bson.BsonDocument;
-import org.occurrent.subscription.api.blocking.CompetingConsumersStrategy;
+import org.occurrent.subscription.api.blocking.CompetingConsumerStrategy;
 import org.springframework.data.mongodb.core.MongoOperations;
 
 import javax.annotation.PreDestroy;
@@ -15,7 +15,7 @@ import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.function.Function;
 
-public class MongoLeaseCompetingConsumersStrategy implements CompetingConsumersStrategy {
+public class MongoLeaseCompetingConsumerStrategy implements CompetingConsumerStrategy {
 
     public static final String DEFAULT_COMPETING_CONSUMER_LOCKS_COLLECTION = "competing-consumer-locks";
 
@@ -27,19 +27,19 @@ public class MongoLeaseCompetingConsumersStrategy implements CompetingConsumersS
     private final Map<CompetingConsumer, Status> competingConsumers;
     private final Set<CompetingConsumerListener> competingConsumerListeners;
 
-    public MongoLeaseCompetingConsumersStrategy(MongoOperations mongoOperations) {
+    public MongoLeaseCompetingConsumerStrategy(MongoOperations mongoOperations) {
         this(mongoOperations, Duration.ofSeconds(20), DEFAULT_COMPETING_CONSUMER_LOCKS_COLLECTION);
     }
 
-    public MongoLeaseCompetingConsumersStrategy(MongoOperations mongoOperations, Duration leaseTime, String collectionName) {
+    public MongoLeaseCompetingConsumerStrategy(MongoOperations mongoOperations, Duration leaseTime, String collectionName) {
         this(mongoOperations, leaseTime, collectionName, Clock.systemUTC());
     }
 
-    public MongoLeaseCompetingConsumersStrategy(MongoOperations mongoOperations, Duration leaseTime, String collectionName, Clock clock) {
+    public MongoLeaseCompetingConsumerStrategy(MongoOperations mongoOperations, Duration leaseTime, String collectionName, Clock clock) {
         this(mongoOperations, leaseTime, collectionName, clock, ScheduledRefresh.auto());
     }
 
-    private MongoLeaseCompetingConsumersStrategy(MongoOperations mongoOperations, Duration leaseTime, String collectionName, Clock clock, ScheduledRefresh scheduledRefresh) {
+    private MongoLeaseCompetingConsumerStrategy(MongoOperations mongoOperations, Duration leaseTime, String collectionName, Clock clock, ScheduledRefresh scheduledRefresh) {
         Objects.requireNonNull(mongoOperations, MongoOperations.class.getSimpleName() + " cannot be null");
         Objects.requireNonNull(clock, Clock.class.getSimpleName() + " cannot be null");
         Objects.requireNonNull(leaseTime, "Lease time cannot be null");

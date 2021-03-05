@@ -1,6 +1,6 @@
 package org.occurrent.subscription.api.blocking;
 
-public interface CompetingConsumersStrategy {
+public interface CompetingConsumerStrategy {
     boolean registerCompetingConsumer(String subscriptionId, String subscriberId);
 
     void unregisterCompetingConsumer(String subscriptionId, String subscriberId);

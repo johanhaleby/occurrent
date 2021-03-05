@@ -30,19 +30,25 @@
         <!-- Test -->
         <dependency>
             <groupId>org.occurrent</groupId>
-            <artifactId>subscription-inmemory</artifactId>
+            <artifactId>subscription-mongodb-spring-blocking</artifactId>
             <version>0.8.1-SNAPSHOT</version>
             <scope>test</scope>
         </dependency>
         <dependency>
             <groupId>org.occurrent</groupId>
-            <artifactId>eventstore-inmemory</artifactId>
+            <artifactId>eventstore-mongodb-spring-blocking</artifactId>
             <version>0.8.1-SNAPSHOT</version>
             <scope>test</scope>
         </dependency>
         <dependency>
             <groupId>org.occurrent</groupId>
             <artifactId>test-support</artifactId>
+            <version>0.8.1-SNAPSHOT</version>
+            <scope>test</scope>
+        </dependency>
+        <dependency>
+            <groupId>org.occurrent</groupId>
+            <artifactId>subscription-mongodb-spring-blocking-competing-consumer</artifactId>
             <version>0.8.1-SNAPSHOT</version>
             <scope>test</scope>
         </dependency>
