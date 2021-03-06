@@ -5,6 +5,10 @@
 * Upgraded to Kotlin 1.4.31
 * All blocking subscriptions now implements the life cycle methods defined in the `org.occurrent.subscription.api.blocking.SubscriptionModelLifeCycle` interface. A new interface, `org.occurrent.subscription.api.blocking.Subscribable`
   has been defined, that contains all "subscribe" methods. You can use this interface in your application if all you want to do is start subscriptions.
+* Introduced a new default "StartAt" implementation called "default" (`StartAt.subscriptionModelDefault()`). This is different to `StartAt.now()` in that it will allow the subscription model 
+  to choose where to start automatically if you don't want to start at an earlier position.
+* Removed the ability to pass a supplier returning `StartAt` to the subscribe methods in `org.occurrent.subscription.api.blocking.Subscribable` interface. Instead, use `StartAt.dynamic(supplier)` instead 
+  to achieve the same results.
 
 ## Changelog 0.8.0 (2021-02-20)
 

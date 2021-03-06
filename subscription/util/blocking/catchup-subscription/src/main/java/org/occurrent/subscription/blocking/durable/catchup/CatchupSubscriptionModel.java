@@ -22,12 +22,14 @@ import org.occurrent.filter.Filter;
 import org.occurrent.subscription.*;
 import org.occurrent.subscription.StartAt.StartAtSubscriptionPosition;
 import org.occurrent.subscription.api.blocking.*;
+import org.occurrent.subscription.blocking.durable.catchup.SubscriptionPositionStorageConfig.UseSubscriptionPositionInStorage;
 
 import javax.annotation.PreDestroy;
 import java.time.Duration;
 import java.time.OffsetDateTime;
 import java.util.LinkedHashMap;
 import java.util.Map;
+import java.util.Objects;
 import java.util.Optional;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ConcurrentMap;
@@ -97,26 +99,30 @@ public class CatchupSubscriptionModel implements SubscriptionModel, DelegatingSu
     }
 
     @Override
-    public Subscription subscribe(String subscriptionId, SubscriptionFilter filter, Supplier<StartAt> startAtSupplier, Consumer<CloudEvent> action) {
+    public Subscription subscribe(String subscriptionId, SubscriptionFilter filter, StartAt startAt, Consumer<CloudEvent> action) {
+        Objects.requireNonNull(startAt, "Start at supplier cannot be null");
         if (filter != null && !(filter instanceof OccurrentSubscriptionFilter)) {
             throw new IllegalArgumentException("Unsupported!");
         }
 
         runningCatchupSubscriptions.put(subscriptionId, true);
 
-        final StartAt startAt;
-        if (startAtSupplier == null || startAtSupplier.get() == null) {
-            startAt = StartAt.subscriptionPosition(TimeBasedSubscriptionPosition.beginningOfTime());
+        final StartAt firstStartAt;
+        if (startAt.isDefault()) {
+            firstStartAt = StartAt.dynamic(() -> {
+                SubscriptionPosition subscriptionPosition = returnIfSubscriptionPositionStorageConfigIs(UseSubscriptionPositionInStorage.class, cfg -> cfg.storage.read(subscriptionId)).orElse(null);
+                return subscriptionPosition == null ? StartAt.subscriptionPosition(TimeBasedSubscriptionPosition.beginningOfTime()) : StartAt.subscriptionPosition(subscriptionPosition);
+            });
         } else {
-            startAt = startAtSupplier.get();
+            firstStartAt = startAt;
         }
 
         // We want to continue from the wrapping subscription if it has something stored in it's position storage.
-        if (!isTimeBasedSubscriptionPosition(startAt)) {
-            return subscriptionModel.subscribe(subscriptionId, filter, startAtSupplier, action);
+        if (!isTimeBasedSubscriptionPosition(firstStartAt)) {
+            return subscriptionModel.subscribe(subscriptionId, filter, firstStartAt, action);
         }
 
-        SubscriptionPosition subscriptionPosition = ((StartAtSubscriptionPosition) startAt).subscriptionPosition;
+        SubscriptionPosition subscriptionPosition = ((StartAtSubscriptionPosition) firstStartAt).subscriptionPosition;
 
         final Filter timeFilter;
         if (isBeginningOfTime(subscriptionPosition)) {
@@ -166,7 +172,7 @@ public class CatchupSubscriptionModel implements SubscriptionModel, DelegatingSu
         // which is not what we want! The reason for doing this with UseSubscriptionPositionInStorage (as opposed to just
         // PersistSubscriptionPositionDuringCatchupPhase) is that if using a "storage" at all in the config, is to accommodate
         // that the wrapping subscription continues from where we left off.
-        Supplier<StartAt> startAtSupplierToUse = this.<Supplier<StartAt>, SubscriptionPositionStorageConfig.UseSubscriptionPositionInStorage>returnIfSubscriptionPositionStorageConfigIs(SubscriptionPositionStorageConfig.UseSubscriptionPositionInStorage.class,
+        StartAt startAtSupplierToUse = StartAt.dynamic(this.<Supplier<StartAt>, UseSubscriptionPositionInStorage>returnIfSubscriptionPositionStorageConfigIs(UseSubscriptionPositionInStorage.class,
                 cfg -> () -> {
                     // It's important that we find the document inside the supplier so that we lookup the latest resume token on retry
                     SubscriptionPosition position = cfg.storage.read(subscriptionId);
@@ -178,11 +184,11 @@ public class CatchupSubscriptionModel implements SubscriptionModel, DelegatingSu
                         position = cfg.storage.save(subscriptionId, globalSubscriptionPosition);
                     }
                     return StartAt.subscriptionPosition(position);
-                }).orElse(() -> globalSubscriptionPosition == null ? StartAt.now() : StartAt.subscriptionPosition(globalSubscriptionPosition));
+                }).orElse(() -> globalSubscriptionPosition == null ? StartAt.now() : StartAt.subscriptionPosition(globalSubscriptionPosition)));
 
         final Subscription subscription;
         if (subscriptionsWasCancelledOrShutdown) {
-            doIfSubscriptionPositionStorageConfigIs(SubscriptionPositionStorageConfig.UseSubscriptionPositionInStorage.class, cfg -> {
+            doIfSubscriptionPositionStorageConfigIs(UseSubscriptionPositionInStorage.class, cfg -> {
                 // Only store position if using storage and no position has been stored!
                 if (!cfg.storage.exists(subscriptionId)) {
                     startAtSupplierToUse.get();
@@ -239,22 +245,7 @@ public class CatchupSubscriptionModel implements SubscriptionModel, DelegatingSu
     public void cancelSubscription(String subscriptionId) {
         runningCatchupSubscriptions.remove(subscriptionId);
         subscriptionModel.cancelSubscription(subscriptionId);
-        doIfSubscriptionPositionStorageConfigIs(SubscriptionPositionStorageConfig.UseSubscriptionPositionInStorage.class, cfg -> cfg.storage.delete(subscriptionId));
-    }
-
-    @Override
-    public Subscription subscribe(String subscriptionId, Consumer<CloudEvent> action) {
-        return subscribe(subscriptionId, (SubscriptionFilter) null, action);
-    }
-
-
-    @Override
-    public Subscription subscribe(String subscriptionId, SubscriptionFilter filter, Consumer<CloudEvent> action) {
-        return subscribe(subscriptionId, filter, () -> {
-            SubscriptionPosition subscriptionPosition = returnIfSubscriptionPositionStorageConfigIs(SubscriptionPositionStorageConfig.UseSubscriptionPositionInStorage.class, cfg -> cfg.storage.read(subscriptionId)).orElse(null);
-            // We use null instead of StartAt.now() if subscriptionPosition doesn't exist so that the wrapping subscription can determine what to do
-            return subscriptionPosition == null ? null : StartAt.subscriptionPosition(subscriptionPosition);
-        }, action);
+        doIfSubscriptionPositionStorageConfigIs(UseSubscriptionPositionInStorage.class, cfg -> cfg.storage.delete(subscriptionId));
     }
 
     @PreDestroy
@@ -266,11 +257,12 @@ public class CatchupSubscriptionModel implements SubscriptionModel, DelegatingSu
     }
 
     public static boolean isTimeBasedSubscriptionPosition(StartAt startAt) {
-        if (!(startAt instanceof StartAtSubscriptionPosition)) {
+        StartAt start = startAt.get();
+        if (!(start instanceof StartAtSubscriptionPosition)) {
             return false;
         }
 
-        SubscriptionPosition subscriptionPosition = ((StartAtSubscriptionPosition) startAt).subscriptionPosition;
+        SubscriptionPosition subscriptionPosition = ((StartAtSubscriptionPosition) start).subscriptionPosition;
         return isTimeBasedSubscriptionPosition(subscriptionPosition);
     }
 

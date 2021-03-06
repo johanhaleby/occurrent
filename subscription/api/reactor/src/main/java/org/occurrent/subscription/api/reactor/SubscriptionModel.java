@@ -44,7 +44,7 @@ public interface SubscriptionModel {
      * @return A {@link Flux} with cloud events which also includes the {@link SubscriptionPosition} that can be used to resume the stream from the current position.
      */
     default Flux<CloudEvent> subscribe(SubscriptionFilter filter) {
-        return subscribe(filter, StartAt.now());
+        return subscribe(filter, StartAt.subscriptionModelDefault());
     }
 
 
@@ -63,6 +63,6 @@ public interface SubscriptionModel {
      * @return A {@link Flux} with cloud events which also includes the {@link SubscriptionPosition} that can be used to resume the stream from the current position.
      */
     default Flux<CloudEvent> subscribe() {
-        return subscribe(null, StartAt.now());
+        return subscribe(null, StartAt.subscriptionModelDefault());
     }
 }

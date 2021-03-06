@@ -97,7 +97,7 @@ public class InMemorySubscriptionModel implements SubscriptionModel, Consumer<St
     }
 
     @Override
-    public synchronized Subscription subscribe(String subscriptionId, SubscriptionFilter filter, Supplier<StartAt> startAtSupplier, Consumer<CloudEvent> action) {
+    public synchronized Subscription subscribe(String subscriptionId, SubscriptionFilter filter, StartAt startAt, Consumer<CloudEvent> action) {
         if (shutdown) {
             throw new IllegalStateException("Cannot subscribe when shutdown");
         } else if (subscriptionId == null) {
@@ -106,13 +106,13 @@ public class InMemorySubscriptionModel implements SubscriptionModel, Consumer<St
             throw new IllegalArgumentException("action cannot be null");
         } else if (subscriptions.containsKey(subscriptionId) || pausedSubscriptions.containsKey(subscriptionId)) {
             throw new IllegalArgumentException("Subscription " + subscriptionId + " is already defined.");
+        } else if (startAt == null) {
+            throw new IllegalArgumentException(StartAt.class.getSimpleName() + " cannot be null");
         }
 
-        if (startAtSupplier != null) {
-            StartAt startAt = startAtSupplier.get();
-            if (!startAt.isNow()) {
-                throw new IllegalArgumentException(InMemorySubscriptionModel.class.getSimpleName() + " only supports starting from 'now' (StartAt.now())");
-            }
+        StartAt startAtToUse = startAt.get();
+        if (!startAtToUse.isNow() && !startAtToUse.isDefault()) {
+            throw new IllegalArgumentException(InMemorySubscriptionModel.class.getSimpleName() + " only supports starting from 'now' and 'default' (StartAt.now() or StartAt.subscriptionModelDefault())");
         }
 
         final Filter f = getFilter(filter);

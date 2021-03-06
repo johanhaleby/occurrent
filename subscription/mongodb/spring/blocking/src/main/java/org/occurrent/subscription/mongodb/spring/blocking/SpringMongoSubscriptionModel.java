@@ -55,7 +55,6 @@ import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ConcurrentMap;
 import java.util.function.Consumer;
 import java.util.function.Function;
-import java.util.function.Supplier;
 
 import static java.util.Objects.requireNonNull;
 import static org.occurrent.retry.internal.RetryExecution.executeWithRetry;
@@ -130,10 +129,10 @@ public class SpringMongoSubscriptionModel implements PositionAwareSubscriptionMo
     }
 
     @Override
-    public synchronized Subscription subscribe(String subscriptionId, SubscriptionFilter filter, Supplier<StartAt> startAtSupplier, Consumer<CloudEvent> action) {
+    public synchronized Subscription subscribe(String subscriptionId, SubscriptionFilter filter, StartAt startAt, Consumer<CloudEvent> action) {
         requireNonNull(subscriptionId, "subscriptionId cannot be null");
         requireNonNull(action, "Action cannot be null");
-        requireNonNull(startAtSupplier, "StartAt cannot be null");
+        requireNonNull(startAt, "StartAt cannot be null");
 
         if (runningSubscriptions.containsKey(subscriptionId) || pausedSubscriptions.containsKey(subscriptionId)) {
             throw new IllegalArgumentException("Subscription " + subscriptionId + " is already defined.");
@@ -145,9 +144,9 @@ public class SpringMongoSubscriptionModel implements PositionAwareSubscriptionMo
         // If we hadn't used a supplier and a subscription is paused and later resumed, it'll be resumed from the _initial_ "StartAt.now()" position,
         // and not the position the "StartAt.now()" position of when the subscription was resumed. This will lead to historic events being
         // replayed which is (most likely) not what the user expects.
-        Function<StartAt, ChangeStreamRequestOptions> requestOptionsFunction = startAt -> {
+        Function<StartAt, ChangeStreamRequestOptions> requestOptionsFunction = overridingStartAt -> {
             // TODO We should change builder::resumeAt to builder::startAtOperationTime once Spring adds support for it (see https://jira.spring.io/browse/DATAMONGO-2607)
-            ChangeStreamOptionsBuilder builder = MongoCommons.applyStartPosition(ChangeStreamOptions.builder(), ChangeStreamOptionsBuilder::startAfter, ChangeStreamOptionsBuilder::resumeAt, startAt == null ? startAtSupplier.get() : startAt);
+            ChangeStreamOptionsBuilder builder = MongoCommons.applyStartPosition(ChangeStreamOptions.builder(), ChangeStreamOptionsBuilder::startAfter, ChangeStreamOptionsBuilder::resumeAt, overridingStartAt == null ? startAt : overridingStartAt);
             final ChangeStreamOptions changeStreamOptions = ApplyFilterToChangeStreamOptionsBuilder.applyFilter(timeRepresentation, filter, builder);
             return new ChangeStreamRequestOptions(null, eventCollection, changeStreamOptions);
         };
@@ -160,7 +159,7 @@ public class SpringMongoSubscriptionModel implements PositionAwareSubscriptionMo
                     .ifPresent(executeWithRetry(action, __ -> !shutdown, retryStrategy));
         };
 
-        Function<StartAt, ChangeStreamRequest<Document>> requestBuilder = startAt -> new ChangeStreamRequest<>(listener, requestOptionsFunction.apply(startAt));
+        Function<StartAt, ChangeStreamRequest<Document>> requestBuilder = sa -> new ChangeStreamRequest<>(listener, requestOptionsFunction.apply(sa));
         final org.springframework.data.mongodb.core.messaging.Subscription subscription = registerNewSpringSubscription(subscriptionId, requestBuilder.apply(null));
         SpringMongoSubscription springMongoSubscription = new SpringMongoSubscription(subscriptionId, subscription);
         if (messageListenerContainer.isRunning()) {

@@ -40,7 +40,7 @@ public class CompetingConsumerSubscriptionModel implements DelegatingSubscriptio
         this.competingConsumerStrategy.addListener(this);
     }
 
-    public Subscription subscribe(String subscriberId, String subscriptionId, SubscriptionFilter filter, Supplier<StartAt> startAtSupplier, Consumer<CloudEvent> action) {
+    public Subscription subscribe(String subscriberId, String subscriptionId, SubscriptionFilter filter, StartAt startAtSupplier, Consumer<CloudEvent> action) {
         Objects.requireNonNull(subscriberId, "SubscriberId cannot be null");
         Objects.requireNonNull(subscriptionId, "SubscriptionId cannot be null");
 
@@ -58,8 +58,8 @@ public class CompetingConsumerSubscriptionModel implements DelegatingSubscriptio
     }
 
     @Override
-    public Subscription subscribe(String subscriptionId, SubscriptionFilter filter, Supplier<StartAt> startAtSupplier, Consumer<CloudEvent> action) {
-        return subscribe(UUID.randomUUID().toString(), subscriptionId, filter, startAtSupplier, action);
+    public Subscription subscribe(String subscriptionId, SubscriptionFilter filter, StartAt startAt, Consumer<CloudEvent> action) {
+        return subscribe(UUID.randomUUID().toString(), subscriptionId, filter, startAt, action);
     }
 
     @Override

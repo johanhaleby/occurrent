@@ -83,12 +83,15 @@ public class MongoCommons {
     }
 
     public static <T> T applyStartPosition(T t, BiFunction<T, BsonDocument, T> applyResumeToken, BiFunction<T, BsonTimestamp, T> applyOperationTime, StartAt startAt) {
-        if (startAt.isNow()) {
+        StartAt startAtValue = startAt.get();
+        if (startAtValue.isNow() || startAtValue.isDefault()) {
             return t;
+        } else if (!(startAtValue instanceof StartAtSubscriptionPosition)) {
+            throw new IllegalArgumentException("Unrecognized " + StartAt.class.getSimpleName() + " implementation: " + startAtValue.getClass().getName());
         }
 
         final T withStartPositionApplied;
-        StartAtSubscriptionPosition position = (StartAtSubscriptionPosition) startAt;
+        StartAtSubscriptionPosition position = (StartAtSubscriptionPosition) startAtValue;
         SubscriptionPosition changeStreamPosition = position.subscriptionPosition;
         if (changeStreamPosition instanceof MongoResumeTokenSubscriptionPosition) {
             BsonDocument resumeToken = ((MongoResumeTokenSubscriptionPosition) changeStreamPosition).resumeToken;

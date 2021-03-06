@@ -55,7 +55,6 @@ import java.util.Objects;
 import java.util.concurrent.*;
 import java.util.function.Consumer;
 import java.util.function.Predicate;
-import java.util.function.Supplier;
 import java.util.stream.Collectors;
 import java.util.stream.Stream;
 
@@ -143,10 +142,10 @@ public class NativeMongoSubscriptionModel implements PositionAwareSubscriptionMo
     }
 
     @Override
-    public synchronized Subscription subscribe(String subscriptionId, SubscriptionFilter filter, Supplier<StartAt> startAtSupplier, Consumer<CloudEvent> action) {
+    public synchronized Subscription subscribe(String subscriptionId, SubscriptionFilter filter, StartAt startAt, Consumer<CloudEvent> action) {
         requireNonNull(subscriptionId, "subscriptionId cannot be null");
         requireNonNull(action, "Action cannot be null");
-        requireNonNull(startAtSupplier, "Start at cannot be null");
+        requireNonNull(startAt, StartAt.class.getSimpleName() + " cannot be null");
 
         if (runningSubscriptions.containsKey(subscriptionId) || pausedSubscriptions.containsKey(subscriptionId)) {
             throw new IllegalArgumentException("Subscription " + subscriptionId + " is already defined.");
@@ -154,7 +153,7 @@ public class NativeMongoSubscriptionModel implements PositionAwareSubscriptionMo
 
         CountDownLatch subscriptionStartedLatch = new CountDownLatch(1);
 
-        Runnable internalSubscription = () -> newInternalSubscription(subscriptionId, filter, startAtSupplier, action, subscriptionStartedLatch);
+        Runnable internalSubscription = () -> newInternalSubscription(subscriptionId, filter, startAt, action, subscriptionStartedLatch);
 
         if (shutdown || cloudEventDispatcher.isShutdown() || cloudEventDispatcher.isTerminated()) {
             throw new IllegalStateException("Cannot start subscription because the executor is shutdown or terminated.");
@@ -167,13 +166,13 @@ public class NativeMongoSubscriptionModel implements PositionAwareSubscriptionMo
         cloudEventDispatcher.execute(executeWithRetry(internalSubscription, NOT_SHUTDOWN, retryStrategy));
     }
 
-    private void newInternalSubscription(String subscriptionId, SubscriptionFilter filter, Supplier<StartAt> startAtSupplier, Consumer<CloudEvent> action, CountDownLatch subscriptionStartedLatch) {
+    private void newInternalSubscription(String subscriptionId, SubscriptionFilter filter, StartAt startAt, Consumer<CloudEvent> action, CountDownLatch subscriptionStartedLatch) {
         List<Bson> pipeline = createPipeline(timeRepresentation, filter);
         ChangeStreamIterable<Document> changeStreamDocuments = eventCollection.watch(pipeline, Document.class);
-        ChangeStreamIterable<Document> changeStreamDocumentsAtPosition = MongoCommons.applyStartPosition(changeStreamDocuments, ChangeStreamIterable::startAfter, ChangeStreamIterable::startAtOperationTime, startAtSupplier.get());
+        ChangeStreamIterable<Document> changeStreamDocumentsAtPosition = MongoCommons.applyStartPosition(changeStreamDocuments, ChangeStreamIterable::startAfter, ChangeStreamIterable::startAtOperationTime, startAt.get());
         MongoChangeStreamCursor<ChangeStreamDocument<Document>> cursor = changeStreamDocumentsAtPosition.cursor();
 
-        InternalSubscription internalSubscription = new InternalSubscription(cursor, startAtSupplier, action, filter, subscriptionStartedLatch);
+        InternalSubscription internalSubscription = new InternalSubscription(cursor, startAt, action, filter, subscriptionStartedLatch);
 
         if (running) {
             runningSubscriptions.put(subscriptionId, internalSubscription);
@@ -311,7 +310,7 @@ public class NativeMongoSubscriptionModel implements PositionAwareSubscriptionMo
 
         CountDownLatch startedLatch = new CountDownLatch(1);
         Runnable newSubscription = () -> newInternalSubscription(subscriptionId, internalSubscription.filter,
-                internalSubscription.startAtSupplier, internalSubscription.action, startedLatch);
+                internalSubscription.startAt, internalSubscription.action, startedLatch);
         startSubscription(newSubscription);
 
         return new NativeMongoSubscription(subscriptionId, startedLatch);
@@ -342,14 +341,14 @@ public class NativeMongoSubscriptionModel implements PositionAwareSubscriptionMo
         final CountDownLatch startedLatch;
         final CountDownLatch stoppedLatch;
         final MongoChangeStreamCursor<ChangeStreamDocument<Document>> cursor;
-        final Supplier<StartAt> startAtSupplier;
+        final StartAt startAt;
         final Consumer<CloudEvent> action;
 
-        private InternalSubscription(MongoChangeStreamCursor<ChangeStreamDocument<Document>> cursor, Supplier<StartAt> startAtSupplier, Consumer<CloudEvent> action, SubscriptionFilter filter, CountDownLatch startedLatch) {
+        private InternalSubscription(MongoChangeStreamCursor<ChangeStreamDocument<Document>> cursor, StartAt startAtSupplier, Consumer<CloudEvent> action, SubscriptionFilter filter, CountDownLatch startedLatch) {
             this.filter = filter;
             this.startedLatch = startedLatch;
             this.cursor = cursor;
-            this.startAtSupplier = startAtSupplier;
+            this.startAt = startAtSupplier;
             this.action = action;
             this.stoppedLatch = new CountDownLatch(1);
         }
@@ -359,12 +358,12 @@ public class NativeMongoSubscriptionModel implements PositionAwareSubscriptionMo
             if (this == o) return true;
             if (!(o instanceof InternalSubscription)) return false;
             InternalSubscription that = (InternalSubscription) o;
-            return Objects.equals(filter, that.filter) && Objects.equals(startedLatch, that.startedLatch) && Objects.equals(stoppedLatch, that.stoppedLatch) && Objects.equals(cursor, that.cursor) && Objects.equals(startAtSupplier, that.startAtSupplier) && Objects.equals(action, that.action);
+            return Objects.equals(filter, that.filter) && Objects.equals(startedLatch, that.startedLatch) && Objects.equals(stoppedLatch, that.stoppedLatch) && Objects.equals(cursor, that.cursor) && Objects.equals(startAt, that.startAt) && Objects.equals(action, that.action);
         }
 
         @Override
         public int hashCode() {
-            return Objects.hash(filter, startedLatch, stoppedLatch, cursor, startAtSupplier, action);
+            return Objects.hash(filter, startedLatch, stoppedLatch, cursor, startAt, action);
         }
 
         void started() {
