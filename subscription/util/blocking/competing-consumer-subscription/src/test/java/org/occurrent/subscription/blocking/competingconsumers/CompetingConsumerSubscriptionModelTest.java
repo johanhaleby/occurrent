@@ -18,7 +18,10 @@ import org.occurrent.domain.NameWasChanged;
 import org.occurrent.eventstore.api.blocking.EventStore;
 import org.occurrent.eventstore.mongodb.spring.blocking.EventStoreConfig;
 import org.occurrent.eventstore.mongodb.spring.blocking.SpringMongoEventStore;
+import org.occurrent.filter.Filter;
 import org.occurrent.mongodb.timerepresentation.TimeRepresentation;
+import org.occurrent.subscription.StartAt;
+import org.occurrent.subscription.SubscriptionFilter;
 import org.occurrent.subscription.api.blocking.CompetingConsumerStrategy;
 import org.occurrent.subscription.blocking.durable.DurableSubscriptionModel;
 import org.occurrent.subscription.mongodb.spring.blocking.MongoLeaseCompetingConsumerStrategy;
@@ -115,7 +118,7 @@ class CompetingConsumerSubscriptionModelTest {
     }
 
     @Test
-    void another_consumer_takes_over_when_subscription_is_cancelled_for_first_subscription_model() {
+    void another_consumer_takes_over_when_first_subscription_is_paused() {
         // Given
         CopyOnWriteArrayList<CloudEvent> cloudEvents = new CopyOnWriteArrayList<>();
 
@@ -136,6 +139,67 @@ class CompetingConsumerSubscriptionModelTest {
         competingConsumerSubscriptionModel1.pauseSubscription(subscriptionId);
 
         System.out.println("### WRITING EVENT 2");
+        eventStore.write("streamId", serialize(nameWasChanged));
+
+        // Then
+        await("waiting for second event").atMost(5, SECONDS).untilAsserted(() -> assertThat(cloudEvents).hasSize(2));
+    }
+
+    @Test
+    void another_consumer_takes_over_when_first_subscription_is_canceled() {
+        // Given
+        CopyOnWriteArrayList<CloudEvent> cloudEvents = new CopyOnWriteArrayList<>();
+
+        competingConsumerSubscriptionModel1 = new CompetingConsumerSubscriptionModel(springSubscriptionModel1, loggingStrategy("1", new MongoLeaseCompetingConsumerStrategy.Builder(mongoTemplate).leaseTime(Duration.ofSeconds(1)).build()));
+        MongoLeaseCompetingConsumerStrategy mongoLeaseCompetingConsumerStrategy2 = new MongoLeaseCompetingConsumerStrategy.Builder(mongoTemplate).leaseTime(Duration.ofSeconds(1)).build();
+        competingConsumerSubscriptionModel2 = new CompetingConsumerSubscriptionModel(springSubscriptionModel2, loggingStrategy("2", mongoLeaseCompetingConsumerStrategy2));
+
+        String subscriptionId = UUID.randomUUID().toString();
+        competingConsumerSubscriptionModel1.subscribe("subscriber1", subscriptionId, null, StartAt.subscriptionModelDefault(), cloudEvents::add).waitUntilStarted();
+        competingConsumerSubscriptionModel2.subscribe("subscriber2", subscriptionId, null, StartAt.subscriptionModelDefault(), cloudEvents::add).waitUntilStarted();
+
+        NameDefined nameDefined = new NameDefined("eventId1", LocalDateTime.of(2021, 2, 26, 14, 15, 16), "my name");
+        NameWasChanged nameWasChanged1 = new NameWasChanged("eventId2", LocalDateTime.of(2021, 2, 26, 14, 15, 17), "my name1");
+        NameWasChanged nameWasChanged2 = new NameWasChanged("eventId3", LocalDateTime.of(2021, 2, 26, 14, 15, 18), "my name2");
+
+        // When
+        eventStore.write("streamId", serialize(nameDefined));
+        await("waiting for first event").atMost(2, SECONDS).untilAsserted(() -> assertThat(cloudEvents).hasSize(1));
+
+        competingConsumerSubscriptionModel1.cancelSubscription(subscriptionId);
+
+        // Cancelling a subscription also removes the subscription position from storage, thus this event will be lost!
+        eventStore.write("streamId", serialize(nameWasChanged1));
+
+        await().atMost(2, SECONDS).untilAsserted(() -> assertThat(mongoLeaseCompetingConsumerStrategy2.hasLock(subscriptionId, "subscriber2")).isTrue());
+
+        eventStore.write("streamId", serialize(nameWasChanged2));
+
+        // Then
+        await("waiting for third event").atMost(5, SECONDS).untilAsserted(() -> assertThat(cloudEvents).extracting(CloudEvent::getId).containsExactly("eventId1", "eventId3"));
+    }
+    
+    @Test
+    void another_consumer_takes_over_when_first_subscription_model_is_stopped() {
+        // Given
+        CopyOnWriteArrayList<CloudEvent> cloudEvents = new CopyOnWriteArrayList<>();
+
+        competingConsumerSubscriptionModel1 = new CompetingConsumerSubscriptionModel(springSubscriptionModel1, loggingStrategy("1", new MongoLeaseCompetingConsumerStrategy.Builder(mongoTemplate).leaseTime(Duration.ofSeconds(1)).build()));
+        competingConsumerSubscriptionModel2 = new CompetingConsumerSubscriptionModel(springSubscriptionModel2, loggingStrategy("2", new MongoLeaseCompetingConsumerStrategy.Builder(mongoTemplate).leaseTime(Duration.ofSeconds(1)).build()));
+
+        String subscriptionId = UUID.randomUUID().toString();
+        competingConsumerSubscriptionModel1.subscribe(subscriptionId, cloudEvents::add).waitUntilStarted();
+        competingConsumerSubscriptionModel2.subscribe(subscriptionId, cloudEvents::add).waitUntilStarted();
+
+        NameDefined nameDefined = new NameDefined("eventId1", LocalDateTime.of(2021, 2, 26, 14, 15, 16), "my name");
+        NameWasChanged nameWasChanged = new NameWasChanged("eventId2", LocalDateTime.of(2021, 2, 26, 14, 15, 16), "my name");
+
+        // When
+        eventStore.write("streamId", serialize(nameDefined));
+        await("waiting for first event").atMost(2, SECONDS).untilAsserted(() -> assertThat(cloudEvents).hasSize(1));
+
+        competingConsumerSubscriptionModel1.stop();
+
         eventStore.write("streamId", serialize(nameWasChanged));
 
         // Then
