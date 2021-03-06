@@ -206,14 +206,72 @@ class CompetingConsumerSubscriptionModelTest {
         await("waiting for second event").atMost(5, SECONDS).untilAsserted(() -> assertThat(cloudEvents).hasSize(2));
     }
 
+    @Test
+    void stopping_and_starting_both_competing_subscription_models_when_sm_2_is_started_before_sm1() {
+        // Given
+        CopyOnWriteArrayList<CloudEvent> cloudEvents = new CopyOnWriteArrayList<>();
 
-    @SuppressWarnings("ConstantConditions")
-    private DomainEvent deserialize(CloudEvent e) {
-        try {
-            return (DomainEvent) objectMapper.readValue(e.getData().toBytes(), Class.forName(e.getType()));
-        } catch (Exception exception) {
-            throw new RuntimeException(exception);
-        }
+        competingConsumerSubscriptionModel1 = new CompetingConsumerSubscriptionModel(springSubscriptionModel1, loggingStrategy("1", new MongoLeaseCompetingConsumerStrategy.Builder(mongoTemplate).leaseTime(Duration.ofSeconds(1)).build()));
+        competingConsumerSubscriptionModel2 = new CompetingConsumerSubscriptionModel(springSubscriptionModel2, loggingStrategy("2", new MongoLeaseCompetingConsumerStrategy.Builder(mongoTemplate).leaseTime(Duration.ofSeconds(1)).build()));
+
+        String subscriptionId = UUID.randomUUID().toString();
+        competingConsumerSubscriptionModel1.subscribe(subscriptionId, cloudEvents::add).waitUntilStarted();
+        competingConsumerSubscriptionModel2.subscribe(subscriptionId, cloudEvents::add).waitUntilStarted();
+
+        NameDefined nameDefined = new NameDefined("1", LocalDateTime.of(2021, 2, 26, 14, 15, 16), "my name");
+        NameWasChanged nameWasChanged1 = new NameWasChanged("2", LocalDateTime.of(2021, 2, 26, 14, 15, 17), "my name2");
+        NameWasChanged nameWasChanged2 = new NameWasChanged("3", LocalDateTime.of(2021, 2, 26, 14, 15, 18), "my name3");
+
+        // When
+        eventStore.write("streamId", serialize(nameDefined));
+        await("waiting for first event").atMost(2, SECONDS).untilAsserted(() -> assertThat(cloudEvents).hasSize(1));
+
+        competingConsumerSubscriptionModel1.stop();
+        competingConsumerSubscriptionModel2.stop();
+
+        eventStore.write("streamId", serialize(nameWasChanged1));
+
+        competingConsumerSubscriptionModel2.start();
+        competingConsumerSubscriptionModel1.start();
+
+        eventStore.write("streamId", serialize(nameWasChanged2));
+
+        // Then
+        await("waiting for second event").atMost(5, SECONDS).untilAsserted(() -> assertThat(cloudEvents).extracting(CloudEvent::getId).containsExactly("1", "2", "3"));
+    }
+
+    @Test
+    void stopping_and_starting_both_competing_subscription_models_when_sm_1_is_started_before_sm2() {
+        // Given
+        CopyOnWriteArrayList<CloudEvent> cloudEvents = new CopyOnWriteArrayList<>();
+
+        competingConsumerSubscriptionModel1 = new CompetingConsumerSubscriptionModel(springSubscriptionModel1, loggingStrategy("1", new MongoLeaseCompetingConsumerStrategy.Builder(mongoTemplate).leaseTime(Duration.ofSeconds(1)).build()));
+        competingConsumerSubscriptionModel2 = new CompetingConsumerSubscriptionModel(springSubscriptionModel2, loggingStrategy("2", new MongoLeaseCompetingConsumerStrategy.Builder(mongoTemplate).leaseTime(Duration.ofSeconds(1)).build()));
+
+        String subscriptionId = UUID.randomUUID().toString();
+        competingConsumerSubscriptionModel1.subscribe(subscriptionId, cloudEvents::add).waitUntilStarted();
+        competingConsumerSubscriptionModel2.subscribe(subscriptionId, cloudEvents::add).waitUntilStarted();
+
+        NameDefined nameDefined = new NameDefined("1", LocalDateTime.of(2021, 2, 26, 14, 15, 16), "my name");
+        NameWasChanged nameWasChanged1 = new NameWasChanged("2", LocalDateTime.of(2021, 2, 26, 14, 15, 17), "my name2");
+        NameWasChanged nameWasChanged2 = new NameWasChanged("3", LocalDateTime.of(2021, 2, 26, 14, 15, 18), "my name3");
+
+        // When
+        eventStore.write("streamId", serialize(nameDefined));
+        await("waiting for first event").atMost(2, SECONDS).untilAsserted(() -> assertThat(cloudEvents).hasSize(1));
+
+        competingConsumerSubscriptionModel1.stop();
+        competingConsumerSubscriptionModel2.stop();
+
+        eventStore.write("streamId", serialize(nameWasChanged1));
+
+        competingConsumerSubscriptionModel1.start();
+        competingConsumerSubscriptionModel2.start();
+
+        eventStore.write("streamId", serialize(nameWasChanged2));
+
+        // Then
+        await("waiting for second event").atMost(5, SECONDS).untilAsserted(() -> assertThat(cloudEvents).extracting(CloudEvent::getId).containsExactly("1", "2", "3"));
     }
 
     private Stream<CloudEvent> serialize(DomainEvent e) {

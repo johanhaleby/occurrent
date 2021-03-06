@@ -64,7 +64,7 @@ public class CompetingConsumerSubscriptionModel implements DelegatingSubscriptio
     public synchronized void cancelSubscription(String subscriptionId) {
         delegate.cancelSubscription(subscriptionId);
         findFirstCompetingConsumerMatching(cc -> cc.hasSubscriptionId(subscriptionId))
-                .ifPresent(this::removeCompetingConsumer);
+                .ifPresent(cc -> unregisterCompetingConsumer(cc, __ -> competingConsumers.remove(cc.subscriptionIdAndSubscriberId)));
     }
 
     @Override
@@ -74,7 +74,7 @@ public class CompetingConsumerSubscriptionModel implements DelegatingSubscriptio
         }
 
         delegate.stop();
-        removeAllCompetingConsumers();
+        unregisterAllCompetingConsumers(cc -> competingConsumers.put(cc.subscriptionIdAndSubscriberId, cc.registerPaused()));
     }
 
     @Override
@@ -161,7 +161,7 @@ public class CompetingConsumerSubscriptionModel implements DelegatingSubscriptio
     @PreDestroy
     @Override
     public synchronized void shutdown() {
-        removeAllCompetingConsumers();
+        unregisterAllCompetingConsumers(cc -> competingConsumers.remove(cc.subscriptionIdAndSubscriberId));
         competingConsumerStrategy.removeListener(this);
         delegate.shutdown();
     }
@@ -360,17 +360,17 @@ public class CompetingConsumerSubscriptionModel implements DelegatingSubscriptio
         }
     }
 
-    private void removeAllCompetingConsumers() {
-        removeCompetingConsumersMatching(CompetingConsumer::isRunning);
+    private void unregisterAllCompetingConsumers(Consumer<CompetingConsumer> andDo) {
+        unregisterCompetingConsumersMatching(CompetingConsumer::isRunning, andDo);
     }
 
-    private void removeCompetingConsumersMatching(Predicate<CompetingConsumer> predicate) {
-        competingConsumers.values().stream().filter(predicate).forEach(this::removeCompetingConsumer);
+    private void unregisterCompetingConsumersMatching(Predicate<CompetingConsumer> predicate, Consumer<CompetingConsumer> and) {
+        competingConsumers.values().stream().filter(predicate).forEach(cc -> unregisterCompetingConsumer(cc, and));
     }
 
-    private synchronized void removeCompetingConsumer(CompetingConsumer cc) {
+    private synchronized void unregisterCompetingConsumer(CompetingConsumer cc, Consumer<CompetingConsumer> and) {
         System.out.println("### BEFORE UNREGISTER");
-        competingConsumers.remove(cc.subscriptionIdAndSubscriberId);
+        and.accept(cc);
         competingConsumerStrategy.unregisterCompetingConsumer(cc.getSubscriptionId(), cc.getSubscriberId());
         System.out.println("### AFTER UNREGISTER");
     }
