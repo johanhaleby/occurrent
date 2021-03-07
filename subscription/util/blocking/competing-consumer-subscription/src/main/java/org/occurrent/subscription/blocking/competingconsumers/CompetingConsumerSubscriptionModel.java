@@ -119,18 +119,19 @@ public class CompetingConsumerSubscriptionModel implements DelegatingSubscriptio
             throw new IllegalArgumentException("Subscription " + subscriptionId + " is not found");
         }
 
-        SubscriptionModelLifeCycle delegate = this.delegate;
         return findFirstCompetingConsumerMatching(competingConsumer -> competingConsumer.isPausedFor(subscriptionId))
-                .flatMap(competingConsumer -> {
+                .map(competingConsumer -> {
                     final Subscription subscription;
-                    if (hasLock(subscriptionId, subscriptionId) || registerCompetingConsumer(subscriptionId, subscriptionId)) {
+                    String subscriberId = competingConsumer.getSubscriberId();
+                    if (hasLock(subscriptionId, subscriberId) || registerCompetingConsumer(subscriptionId, subscriberId)) {
                         competingConsumers.put(competingConsumer.subscriptionIdAndSubscriberId, competingConsumer.registerRunning());
                         // This works because method is and we've checked that it's already paused earlier
                         subscription = delegate.resumeSubscription(subscriptionId);
                     } else {
-                        subscription = null;
+                        // We're not allowed to resume since we don't have the lock.
+                        subscription = new CompetingConsumerSubscription(subscriptionId, subscriberId);
                     }
-                    return Optional.ofNullable(subscription);
+                    return subscription;
                 })
                 .orElseThrow(() -> new IllegalStateException("Cannot resume subscription " + subscriptionId + " since another consumer currently subscribes to it."));
     }
