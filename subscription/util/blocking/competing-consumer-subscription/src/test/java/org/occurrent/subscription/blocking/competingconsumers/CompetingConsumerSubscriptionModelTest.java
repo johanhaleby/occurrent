@@ -15,10 +15,8 @@ import org.occurrent.domain.NameWasChanged;
 import org.occurrent.eventstore.api.blocking.EventStore;
 import org.occurrent.eventstore.mongodb.spring.blocking.EventStoreConfig;
 import org.occurrent.eventstore.mongodb.spring.blocking.SpringMongoEventStore;
-import org.occurrent.filter.Filter;
 import org.occurrent.mongodb.timerepresentation.TimeRepresentation;
 import org.occurrent.subscription.StartAt;
-import org.occurrent.subscription.SubscriptionFilter;
 import org.occurrent.subscription.api.blocking.CompetingConsumerStrategy;
 import org.occurrent.subscription.blocking.durable.DurableSubscriptionModel;
 import org.occurrent.subscription.mongodb.spring.blocking.MongoLeaseCompetingConsumerStrategy;
@@ -302,6 +300,7 @@ class CompetingConsumerSubscriptionModelTest {
     }
 
     @Test
+    @Timeout(10)
     void stopping_and_starting_both_competing_subscription_models_several_times() {
         // Given
         CopyOnWriteArrayList<CloudEvent> cloudEvents = new CopyOnWriteArrayList<>();
@@ -329,6 +328,7 @@ class CompetingConsumerSubscriptionModelTest {
         competingConsumerSubscriptionModel1.start();
 
         eventStore.write("streamId", serialize(nameWasChanged2));
+
         competingConsumerSubscriptionModel2.stop();
         competingConsumerSubscriptionModel1.stop();
 
