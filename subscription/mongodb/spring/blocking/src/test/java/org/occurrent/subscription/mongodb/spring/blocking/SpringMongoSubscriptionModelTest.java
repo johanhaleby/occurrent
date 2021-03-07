@@ -392,6 +392,30 @@ public class SpringMongoSubscriptionModelTest {
         }
 
         @Test
+        void blocking_spring_subscription_allows_stopping_and_starting_all_subscriptions_when_not_waiting_for_stopped() throws InterruptedException {
+            // Given
+            LocalDateTime now = LocalDateTime.now();
+            CopyOnWriteArrayList<CloudEvent> state = new CopyOnWriteArrayList<>();
+            subscriptionModel.subscribe(UUID.randomUUID().toString(), state::add).waitUntilStarted(Duration.of(10, ChronoUnit.SECONDS));
+
+            NameDefined nameDefined1 = new NameDefined(UUID.randomUUID().toString(), now, "name1");
+            NameDefined nameDefined2 = new NameDefined(UUID.randomUUID().toString(), now.plusSeconds(2), "name2");
+            NameWasChanged nameWasChanged1 = new NameWasChanged(UUID.randomUUID().toString(), now.plusSeconds(10), "name3");
+
+            // When
+            subscriptionModel.stop();
+
+            // Then
+            subscriptionModel.start();
+
+            mongoEventStore.write("1", 0, serialize(nameDefined1));
+            mongoEventStore.write("2", 0, serialize(nameDefined2));
+            mongoEventStore.write("1", 1, serialize(nameWasChanged1));
+
+            await("state").atMost(2, SECONDS).with().pollInterval(Duration.of(20, MILLIS)).untilAsserted(() -> assertThat(state).hasSize(3));
+        }
+
+        @Test
         void blocking_spring_subscription_allows_pausing_and_resuming_individual_subscriptions() throws InterruptedException {
             // Given
             LocalDateTime now = LocalDateTime.now();

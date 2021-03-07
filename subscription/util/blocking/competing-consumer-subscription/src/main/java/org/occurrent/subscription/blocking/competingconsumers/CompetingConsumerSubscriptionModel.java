@@ -49,7 +49,12 @@ public class CompetingConsumerSubscriptionModel implements DelegatingSubscriptio
             competingConsumerSubscription = new CompetingConsumerSubscription(subscriptionId, subscriberId, subscription);
             competingConsumers.put(subscriptionIdAndSubscriberId, new CompetingConsumer(subscriptionIdAndSubscriberId, new Running()));
         } else {
-            competingConsumers.put(subscriptionIdAndSubscriberId, new CompetingConsumer(subscriptionIdAndSubscriberId, new Waiting(() -> delegate.subscribe(subscriptionId, filter, startAt, action))));
+            competingConsumers.put(subscriptionIdAndSubscriberId, new CompetingConsumer(subscriptionIdAndSubscriberId, new Waiting(() -> {
+                if (!delegate.isRunning()) {
+                    delegate.start();
+                }
+                return delegate.subscribe(subscriptionId, filter, startAt, action);
+            })));
             competingConsumerSubscription = new CompetingConsumerSubscription(subscriptionId, subscriberId);
         }
         return competingConsumerSubscription;
@@ -82,7 +87,10 @@ public class CompetingConsumerSubscriptionModel implements DelegatingSubscriptio
         if (isRunning()) {
             throw new IllegalStateException(CompetingConsumerSubscriptionModel.class.getSimpleName() + " is already started");
         }
-        System.out.println("### " + Thread.currentThread().getName() + ": competingConsumers " + competingConsumers);
+
+        // Note that we deliberately don't start the delegate subscription model here!!
+        // This is because we're not sure that we have the lock. It'll the underlying SM be started
+        // automatically if required (since it's instructed to do so in the Waiting state supplier).
 
         competingConsumers.values().stream()
                 .filter(not(CompetingConsumer::isRunning))
@@ -210,7 +218,8 @@ public class CompetingConsumerSubscriptionModel implements DelegatingSubscriptio
     }
 
     private void startWaitingConsumer(CompetingConsumer cc) {
-        competingConsumers.put(SubscriptionIdAndSubscriberId.from(cc.getSubscriptionId(), cc.getSubscriberId()), cc.registerRunning());
+        String subscriptionId = cc.getSubscriptionId();
+        competingConsumers.put(SubscriptionIdAndSubscriberId.from(subscriptionId, cc.getSubscriberId()), cc.registerRunning());
         ((Waiting) cc.state).startSubscription();
     }
 

@@ -207,7 +207,7 @@ class CompetingConsumerSubscriptionModelTest {
     }
 
     @Test
-    void stopping_and_starting_both_competing_subscription_models_when_sm_2_is_started_before_sm1() throws InterruptedException {
+    void stopping_and_starting_both_competing_subscription_models_when_sm_2_is_started_before_sm1() {
         // Given
         CopyOnWriteArrayList<CloudEvent> cloudEvents = new CopyOnWriteArrayList<>();
 

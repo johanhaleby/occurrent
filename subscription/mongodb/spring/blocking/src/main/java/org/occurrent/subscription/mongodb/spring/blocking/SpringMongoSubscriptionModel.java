@@ -181,7 +181,7 @@ public class SpringMongoSubscriptionModel implements PositionAwareSubscriptionMo
 
     @PreDestroy
     @Override
-    public void shutdown() {
+    public synchronized void shutdown() {
         shutdown = true;
         runningSubscriptions.forEach((__, internalSubscription) -> internalSubscription.shutdown());
         runningSubscriptions.clear();
@@ -262,7 +262,6 @@ public class SpringMongoSubscriptionModel implements PositionAwareSubscriptionMo
     @Override
     public synchronized void stop() {
         if (!shutdown) {
-            log.info("#### Stopping running subscriptions: {} (paused={})",  runningSubscriptions, pausedSubscriptions);
             runningSubscriptions.forEach((subscriptionId, __) -> pauseSubscription(subscriptionId));
             messageListenerContainer.stop();
         }
