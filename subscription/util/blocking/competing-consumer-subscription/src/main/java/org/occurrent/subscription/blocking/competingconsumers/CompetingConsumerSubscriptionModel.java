@@ -125,19 +125,21 @@ public class CompetingConsumerSubscriptionModel implements DelegatingSubscriptio
     public synchronized Subscription resumeSubscription(String subscriptionId) {
         if (isRunning(subscriptionId)) {
             throw new IllegalArgumentException("Subscription " + subscriptionId + " is not paused");
-        } else if (!isPaused(subscriptionId)) {
-            throw new IllegalArgumentException("Subscription " + subscriptionId + " is not found");
         }
-
-        return findFirstCompetingConsumerMatching(competingConsumer -> competingConsumer.isPausedFor(subscriptionId))
+        return findFirstCompetingConsumerMatching(competingConsumer -> competingConsumer.hasSubscriptionId(subscriptionId))
                 .map(competingConsumer -> {
                     final Subscription subscription;
                     String subscriberId = competingConsumer.getSubscriberId();
                     if (hasLock(subscriptionId, subscriberId)) {
-                        competingConsumers.put(competingConsumer.subscriptionIdAndSubscriberId, competingConsumer.registerRunning());
-                        // This works because we've checked that it's already paused earlier
-                        subscription = delegate.resumeSubscription(subscriptionId);
+                        if (competingConsumer.isWaiting()) {
+                            subscription = startWaitingConsumer(competingConsumer);
+                        } else {
+                            competingConsumers.put(competingConsumer.subscriptionIdAndSubscriberId, competingConsumer.registerRunning());
+                            // This works because we've checked that it's already paused earlier
+                            subscription = delegate.resumeSubscription(subscriptionId);
+                        }
                     } else if (registerCompetingConsumer(subscriptionId, subscriberId)) {
+                        // State will be changed in "onConsumeGranted"
                         subscription = new CompetingConsumerSubscription(subscriptionId, subscriberId);
                     } else {
                         // We're not allowed to resume since we don't have the lock.
@@ -151,18 +153,15 @@ public class CompetingConsumerSubscriptionModel implements DelegatingSubscriptio
     @Override
     public synchronized void pauseSubscription(String subscriptionId) {
         if (isPaused(subscriptionId)) {
-            throw new IllegalArgumentException("Subscription " + subscriptionId + " is not running");
-        } else if (!isRunning(subscriptionId)) {
-            throw new IllegalArgumentException("Subscription " + subscriptionId + " is not found");
+            throw new IllegalArgumentException("Subscription " + subscriptionId + " is already paused");
         }
 
-        findFirstCompetingConsumerMatching(competingConsumer -> competingConsumer.hasSubscriptionId(subscriptionId) && competingConsumer.isRunning())
+        findFirstCompetingConsumerMatching(competingConsumer -> competingConsumer.hasSubscriptionId(subscriptionId))
+                .filter(not(CompetingConsumer::isWaiting))
                 .ifPresent(competingConsumer -> {
-                    System.out.println("### BEFORE PAUSINGING DELEGAT");
                     delegate.pauseSubscription(subscriptionId);
                     competingConsumers.put(SubscriptionIdAndSubscriberId.from(competingConsumer), competingConsumer.registerPaused());
                     competingConsumerStrategy.unregisterCompetingConsumer(competingConsumer.getSubscriptionId(), competingConsumer.getSubscriberId());
-                    System.out.println("### AFTER PAUSINGING DELEGAT");
                 });
     }
 
@@ -217,10 +216,10 @@ public class CompetingConsumerSubscriptionModel implements DelegatingSubscriptio
         }
     }
 
-    private void startWaitingConsumer(CompetingConsumer cc) {
+    private Subscription startWaitingConsumer(CompetingConsumer cc) {
         String subscriptionId = cc.getSubscriptionId();
         competingConsumers.put(SubscriptionIdAndSubscriberId.from(subscriptionId, cc.getSubscriberId()), cc.registerRunning());
-        ((Waiting) cc.state).startSubscription();
+        return ((Waiting) cc.state).startSubscription();
     }
 
     private void pauseConsumer(CompetingConsumer cc, boolean hasPermissionToConsume) {
@@ -357,8 +356,8 @@ public class CompetingConsumerSubscriptionModel implements DelegatingSubscriptio
                 return false;
             }
 
-            private void startSubscription() {
-                supplier.get();
+            private Subscription startSubscription() {
+                return supplier.get();
             }
         }
 
