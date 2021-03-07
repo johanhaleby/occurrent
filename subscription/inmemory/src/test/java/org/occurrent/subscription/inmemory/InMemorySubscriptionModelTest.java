@@ -26,7 +26,6 @@ import org.occurrent.domain.NameDefined;
 import org.occurrent.domain.NameWasChanged;
 import org.occurrent.eventstore.inmemory.InMemoryEventStore;
 import org.occurrent.functional.CheckedFunction;
-import org.occurrent.functional.Not;
 import org.occurrent.subscription.StartAt;
 import org.occurrent.subscription.StringBasedSubscriptionPosition;
 import org.occurrent.time.TimeConversion;
@@ -49,10 +48,8 @@ import static java.util.concurrent.TimeUnit.SECONDS;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.catchThrowable;
 import static org.awaitility.Awaitility.await;
-import static org.awaitility.Durations.ONE_SECOND;
 import static org.hamcrest.Matchers.is;
 import static org.junit.jupiter.api.Assertions.assertAll;
-import static org.occurrent.functional.Not.not;
 
 public class InMemorySubscriptionModelTest {
 
@@ -152,7 +149,7 @@ public class InMemorySubscriptionModelTest {
         Throwable throwable = catchThrowable(() -> inMemorySubscriptionModel.subscribe("subscription1", StartAt.subscriptionPosition(new StringBasedSubscriptionPosition("343")), __ -> {
         }));
 
-        assertThat(throwable).isExactlyInstanceOf(IllegalArgumentException.class).hasMessage("InMemorySubscriptionModel only supports starting from 'now' (StartAt.now())");
+        assertThat(throwable).isExactlyInstanceOf(IllegalArgumentException.class).hasMessage("InMemorySubscriptionModel only supports starting from 'now' and 'default' (StartAt.now() or StartAt.subscriptionModelDefault())");
     }
     
     @Nested
