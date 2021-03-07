@@ -17,6 +17,7 @@ import com.mongodb.client.result.UpdateResult;
 import org.bson.BsonDocument;
 import org.bson.Document;
 import org.bson.conversions.Bson;
+import org.occurrent.retry.RetryStrategy;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -53,73 +54,76 @@ class MongoListenerLockService {
      * @return {@code Optional} with a {@link ListenerLock} if the lock is held by this subscriber,
      * otherwise an empty optional if the lock is held by a different subscriber.
      */
-    static Optional<ListenerLock> acquireOrRefreshFor(MongoCollection<BsonDocument> collection, Clock clock, Duration leaseTime, String subscriptionId, String subscriberId) {
-        log.debug("Attempt acquire or refresh lock. subscriptionId={} subscriberId={}", subscriptionId, subscriberId);
+    static Optional<ListenerLock> acquireOrRefreshFor(MongoCollection<BsonDocument> collection, Clock clock, RetryStrategy retryStrategy, Duration leaseTime, String subscriptionId, String subscriberId) {
+        return retryStrategy.execute(() -> {
+            log.debug("Attempt acquire or refresh lock. subscriptionId={} subscriberId={}", subscriptionId, subscriberId);
 
-        try {
-            final BsonDocument found = collection
+            try {
+                final BsonDocument found = collection
+                        .withWriteConcern(WriteConcern.MAJORITY)
+                        .findOneAndUpdate(
+                                and(
+                                        eq("_id", subscriptionId),
+                                        or(lockIsExpired(clock), eq("subscriberId", subscriberId))),
+                                singletonList(combine(
+                                        set("subscriberId", subscriberId),
+                                        set("version", sameIfRefreshOtherwiseIncrement(subscriberId)),
+                                        set("expiresAt", clock.instant().plus(leaseTime)))),
+                                new FindOneAndUpdateOptions()
+                                        .projection(include("version"))
+                                        .returnDocument(ReturnDocument.AFTER)
+                                        .upsert(true));
+
+                if (found == null) {
+                    throw new IllegalStateException("No lock document upserted, but none found. This should never happen.");
+                }
+
+                final ListenerLock lock = new ListenerLock(found.getNumber("version"));
+
+                log.debug("Lock acquired or refreshed. subscriptionId={} subscriberId={} lockVersion={}", subscriptionId, subscriberId, lock.version());
+
+                return Optional.of(lock);
+            } catch (MongoCommandException e) {
+                final ErrorCategory errorCategory = ErrorCategory.fromErrorCode(e.getErrorCode());
+
+                if (errorCategory.equals(DUPLICATE_KEY)) {
+                    log.debug("Lock owned by another subscriber. subscriptionId={} subscriberId={}", subscriptionId, subscriberId);
+                    return Optional.empty();
+                }
+
+                log.error("Error trying to acquire or refresh lock subscriptionId={} subscriberId={}",
+                        subscriptionId, subscriberId, e);
+
+                throw e;
+            }
+        });
+    }
+
+    static DeleteResult remove(MongoCollection<BsonDocument> collection, RetryStrategy retryStrategy, String subscriptionId) {
+        return retryStrategy.execute(() -> collection.deleteOne(eq("_id", subscriptionId)));
+    }
+
+    static boolean commit(MongoCollection<BsonDocument> collection, Clock clock, RetryStrategy retryStrategy, Duration leaseTime, String subscriptionId, String subscriberId) throws LostLockException {
+        return retryStrategy.execute(() -> {
+            Instant newLeaseTime = clock.instant().plus(leaseTime);
+            UpdateResult result = collection
                     .withWriteConcern(WriteConcern.MAJORITY)
-                    .findOneAndUpdate(
+                    .updateOne(
                             and(
                                     eq("_id", subscriptionId),
-                                    or(lockIsExpired(clock), eq("subscriberId", subscriberId))),
-                            singletonList(combine(
-                                    set("subscriberId", subscriberId),
-                                    set("version", sameIfRefreshOtherwiseIncrement(subscriberId)),
-                                    set("expiresAt", clock.instant().plus(leaseTime)))),
-                            new FindOneAndUpdateOptions()
-                                    .projection(include("version"))
-                                    .returnDocument(ReturnDocument.AFTER)
-                                    .upsert(true));
+                                    eq("subscriberId", subscriberId)),
+                            set("expiresAt", newLeaseTime));
 
-            if (found == null) {
-                throw new IllegalStateException(
-                        "No lock document upserted, but none found. This should never happen.");
+            if (result.getMatchedCount() == 0) {
+                return false;
             }
 
-            final ListenerLock lock = new ListenerLock(found.getNumber("version"));
-
-            log.debug("Lock acquired or refreshed. subscriptionId={} subscriberId={} lockVersion={}", subscriptionId, subscriberId, lock.version());
-
-            return Optional.of(lock);
-        } catch (MongoCommandException e) {
-            final ErrorCategory errorCategory = ErrorCategory.fromErrorCode(e.getErrorCode());
-
-            if (errorCategory.equals(DUPLICATE_KEY)) {
-                log.debug("Lock owned by another subscriber. subscriptionId={} subscriberId={}", subscriptionId, subscriberId);
-                return Optional.empty();
+            if (log.isDebugEnabled()) {
+                LocalDateTime localDateTime = LocalDateTime.ofInstant(newLeaseTime, clock.getZone());
+                log.debug("Updated lock expiration date for lock to {}. subscriptionId={} subscriberId={}", localDateTime, subscriptionId, subscriberId);
             }
-
-            log.error("Error trying to acquire or refresh lock subscriptionId={} subscriberId={}",
-                    subscriptionId, subscriberId, e);
-
-            throw e;
-        }
-    }
-
-    static DeleteResult remove(MongoCollection<BsonDocument> collection, String subscriptionId) {
-        return collection.deleteOne(eq("_id", subscriptionId));
-    }
-
-    static boolean commit(MongoCollection<BsonDocument> collection, Clock clock, Duration leaseTime, String subscriptionId, String subscriberId) throws LostLockException {
-        Instant newLeaseTime = clock.instant().plus(leaseTime);
-        UpdateResult result = collection
-                .withWriteConcern(WriteConcern.MAJORITY)
-                .updateOne(
-                        and(
-                                eq("_id", subscriptionId),
-                                eq("subscriberId", subscriberId)),
-                        set("expiresAt", newLeaseTime));
-
-        if (result.getMatchedCount() == 0) {
-            return false;
-        }
-
-        if (log.isDebugEnabled()) {
-            LocalDateTime localDateTime = LocalDateTime.ofInstant(newLeaseTime, clock.getZone());
-            log.debug("Updated lock expiration date for lock to {}. subscriptionId={} subscriberId={}", localDateTime, subscriptionId, subscriberId);
-        }
-        return true;
+            return true;
+        });
     }
 
     private static Bson lockIsExpired(Clock clock) {

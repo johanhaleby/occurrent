@@ -22,7 +22,6 @@ import static java.util.Objects.requireNonNull;
 import static org.occurrent.functionalsupport.internal.FunctionalSupport.not;
 import static org.occurrent.subscription.blocking.competingconsumers.CompetingConsumerSubscriptionModel.CompetingConsumerState.*;
 
-// TODO Add retry!!
 public class CompetingConsumerSubscriptionModel implements DelegatingSubscriptionModel, SubscriptionModel, SubscriptionModelLifeCycle, CompetingConsumerListener {
 
     private final SubscriptionModel delegate;
@@ -174,8 +173,9 @@ public class CompetingConsumerSubscriptionModel implements DelegatingSubscriptio
     @Override
     public synchronized void shutdown() {
         unregisterAllCompetingConsumers(cc -> competingConsumers.remove(cc.subscriptionIdAndSubscriberId));
-        competingConsumerStrategy.removeListener(this);
         delegate.shutdown();
+        competingConsumerStrategy.removeListener(this);
+        competingConsumerStrategy.shutdown();
     }
 
     @Override

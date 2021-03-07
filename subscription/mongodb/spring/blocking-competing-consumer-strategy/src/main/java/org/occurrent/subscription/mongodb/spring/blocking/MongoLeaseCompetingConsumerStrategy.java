@@ -2,6 +2,8 @@ package org.occurrent.subscription.mongodb.spring.blocking;
 
 import com.mongodb.client.MongoCollection;
 import org.bson.BsonDocument;
+import org.occurrent.retry.RetryStrategy;
+import org.occurrent.retry.RetryStrategy.Retry;
 import org.occurrent.subscription.api.blocking.CompetingConsumerStrategy;
 import org.springframework.data.mongodb.core.MongoOperations;
 
@@ -27,17 +29,21 @@ public class MongoLeaseCompetingConsumerStrategy implements CompetingConsumerStr
     private final ScheduledRefresh scheduledRefresh;
     private final Map<CompetingConsumer, Status> competingConsumers;
     private final Set<CompetingConsumerListener> competingConsumerListeners;
+    private final RetryStrategy retryStrategy;
+
+    private volatile boolean running;
 
     public static MongoLeaseCompetingConsumerStrategy withDefaults(MongoOperations mongoOperations) {
         return new MongoLeaseCompetingConsumerStrategy.Builder(mongoOperations).build();
     }
 
-    private MongoLeaseCompetingConsumerStrategy(MongoOperations mongoOperations, Duration leaseTime, String collectionName, Clock clock, ScheduledRefresh scheduledRefresh) {
+    private MongoLeaseCompetingConsumerStrategy(MongoOperations mongoOperations, Duration leaseTime, String collectionName, Clock clock, ScheduledRefresh scheduledRefresh, RetryStrategy retryStrategy) {
         Objects.requireNonNull(mongoOperations, MongoOperations.class.getSimpleName() + " cannot be null");
         Objects.requireNonNull(clock, Clock.class.getSimpleName() + " cannot be null");
         Objects.requireNonNull(leaseTime, "Lease time cannot be null");
         Objects.requireNonNull(collectionName, "Collection name cannot be null");
-        Objects.requireNonNull(scheduledRefresh, ScheduledRefresh.class.getSimpleName() + " name cannot be null");
+        Objects.requireNonNull(scheduledRefresh, ScheduledRefresh.class.getSimpleName() + " cannot be null");
+        Objects.requireNonNull(retryStrategy, RetryStrategy.class.getSimpleName() + " cannot be null");
         this.mongoOperations = mongoOperations;
         this.clock = clock;
         this.leaseTime = leaseTime;
@@ -45,6 +51,13 @@ public class MongoLeaseCompetingConsumerStrategy implements CompetingConsumerStr
         this.scheduledRefresh = scheduledRefresh;
         this.competingConsumerListeners = Collections.newSetFromMap(new ConcurrentHashMap<>());
         this.competingConsumers = new ConcurrentHashMap<>();
+
+        if (retryStrategy instanceof Retry) {
+            Retry retry = ((Retry) retryStrategy);
+            this.retryStrategy = retry.retryIf(retry.retryPredicate.and(__ -> running));
+        } else {
+            this.retryStrategy = retryStrategy;
+        }
 
         scheduledRefresh.scheduleInBackground(this::refreshOrAcquireLease, leaseTime);
     }
@@ -56,7 +69,7 @@ public class MongoLeaseCompetingConsumerStrategy implements CompetingConsumerStr
 
         CompetingConsumer competingConsumer = new CompetingConsumer(subscriptionId, subscriberId);
         Status oldStatus = competingConsumers.get(competingConsumer);
-        boolean acquired = withCompetingConsumerLocksCollectionDo(collection -> MongoListenerLockService.acquireOrRefreshFor(collection, clock, leaseTime, subscriptionId, subscriberId)).isPresent();
+        boolean acquired = withCompetingConsumerLocksCollectionDo(collection -> MongoListenerLockService.acquireOrRefreshFor(collection, clock, retryStrategy, leaseTime, subscriptionId, subscriberId)).isPresent();
         competingConsumers.put(competingConsumer, acquired ? Status.LOCK_ACQUIRED : Status.LOCK_NOT_ACQUIRED);
         if (oldStatus != Status.LOCK_ACQUIRED && acquired) {
             competingConsumerListeners.forEach(listener -> listener.onConsumeGranted(subscriptionId, subscriberId));
@@ -72,7 +85,7 @@ public class MongoLeaseCompetingConsumerStrategy implements CompetingConsumerStr
         Objects.requireNonNull(subscriberId, "Subscriber id cannot be null");
         System.out.println("## Removing " + subscriberId);
         Status status = competingConsumers.remove(new CompetingConsumer(subscriptionId, subscriberId));
-        withCompetingConsumerLocksCollectionDo(collection -> MongoListenerLockService.remove(collection, subscriptionId));
+        withCompetingConsumerLocksCollectionDo(collection -> MongoListenerLockService.remove(collection, retryStrategy, subscriptionId));
         if (status == Status.LOCK_ACQUIRED) {
             competingConsumerListeners.forEach(listener -> listener.onConsumeProhibited(subscriptionId, subscriberId));
         }
@@ -115,13 +128,14 @@ public class MongoLeaseCompetingConsumerStrategy implements CompetingConsumerStr
     @PreDestroy
     @Override
     public void shutdown() {
+        running = false;
         scheduledRefresh.close();
     }
 
     private void refreshOrAcquireLease() {
         competingConsumers.forEach((cc, status) -> {
             if (status == Status.LOCK_ACQUIRED) {
-                boolean stillHasLock = withCompetingConsumerLocksCollectionDo(collection -> MongoListenerLockService.commit(collection, clock, leaseTime, cc.subscriptionId, cc.subscriberId));
+                boolean stillHasLock = withCompetingConsumerLocksCollectionDo(collection -> MongoListenerLockService.commit(collection, clock, retryStrategy, leaseTime, cc.subscriptionId, cc.subscriberId));
                 if (!stillHasLock) {
                     // Lock was lost!
                     competingConsumers.put(cc, Status.LOCK_NOT_ACQUIRED);
@@ -165,6 +179,7 @@ public class MongoLeaseCompetingConsumerStrategy implements CompetingConsumerStr
         private Clock clock;
         private Duration leaseTime;
         private String collectionName;
+        private RetryStrategy retryStrategy;
 
         public Builder(MongoOperations mongoOperations) {
             Objects.requireNonNull(mongoOperations, MongoOperations.class.getSimpleName() + " cannot be null");
@@ -194,11 +209,18 @@ public class MongoLeaseCompetingConsumerStrategy implements CompetingConsumerStr
             return this;
         }
 
+        public Builder retryStrategy(RetryStrategy retryStrategy) {
+            Objects.requireNonNull(retryStrategy, RetryStrategy.class.getSimpleName() + " cannot be null");
+            this.retryStrategy = retryStrategy;
+            return this;
+        }
+
         public MongoLeaseCompetingConsumerStrategy build() {
             Clock clockToUse = clock == null ? Clock.systemUTC() : clock;
             Duration leaseTimeToUse = leaseTime == null ? DEFAULT_LEASE_TIME : leaseTime;
             String collectionNameToUse = collectionName == null ? DEFAULT_COMPETING_CONSUMER_LOCKS_COLLECTION : collectionName;
-            return new MongoLeaseCompetingConsumerStrategy(mongoOperations, leaseTimeToUse, collectionNameToUse, clockToUse, ScheduledRefresh.auto());
+            RetryStrategy retryStrategyToUse = retryStrategy == null ? RetryStrategy.exponentialBackoff(Duration.ofMillis(100), Duration.ofSeconds(2), 2.0f) : retryStrategy;
+            return new MongoLeaseCompetingConsumerStrategy(mongoOperations, leaseTimeToUse, collectionNameToUse, clockToUse, ScheduledRefresh.auto(), retryStrategyToUse);
         }
     }
 }
