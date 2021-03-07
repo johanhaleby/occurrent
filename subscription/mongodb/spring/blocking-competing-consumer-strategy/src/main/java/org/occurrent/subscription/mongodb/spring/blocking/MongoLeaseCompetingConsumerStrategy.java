@@ -83,7 +83,6 @@ public class MongoLeaseCompetingConsumerStrategy implements CompetingConsumerStr
     public synchronized void unregisterCompetingConsumer(String subscriptionId, String subscriberId) {
         Objects.requireNonNull(subscriptionId, "Subscription id cannot be null");
         Objects.requireNonNull(subscriberId, "Subscriber id cannot be null");
-        System.out.println("## Removing " + subscriberId);
         Status status = competingConsumers.remove(new CompetingConsumer(subscriptionId, subscriberId));
         withCompetingConsumerLocksCollectionDo(collection -> MongoListenerLockService.remove(collection, retryStrategy, subscriptionId));
         if (status == Status.LOCK_ACQUIRED) {
