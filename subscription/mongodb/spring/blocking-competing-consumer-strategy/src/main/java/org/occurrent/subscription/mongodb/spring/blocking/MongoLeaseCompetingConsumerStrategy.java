@@ -57,13 +57,10 @@ public class MongoLeaseCompetingConsumerStrategy implements CompetingConsumerStr
         CompetingConsumer competingConsumer = new CompetingConsumer(subscriptionId, subscriberId);
         Status oldStatus = competingConsumers.get(competingConsumer);
         boolean acquired = withCompetingConsumerLocksCollectionDo(collection -> MongoListenerLockService.acquireOrRefreshFor(collection, clock, leaseTime, subscriptionId, subscriberId)).isPresent();
-        System.out.println("### ACQUIRED?? " + subscriberId + ": " + acquired);
         competingConsumers.put(competingConsumer, acquired ? Status.LOCK_ACQUIRED : Status.LOCK_NOT_ACQUIRED);
         if (oldStatus != Status.LOCK_ACQUIRED && acquired) {
-            System.out.println("### ACQUIRED!! " + subscriberId);
             competingConsumerListeners.forEach(listener -> listener.onConsumeGranted(subscriptionId, subscriberId));
         } else if (oldStatus == Status.LOCK_ACQUIRED && !acquired) {
-            System.out.println("### NOT ACQUIRED!! " + subscriberId);
             competingConsumerListeners.forEach(listener -> listener.onConsumeProhibited(subscriptionId, subscriberId));
         }
         return acquired;
@@ -123,7 +120,6 @@ public class MongoLeaseCompetingConsumerStrategy implements CompetingConsumerStr
 
     private void refreshOrAcquireLease() {
         competingConsumers.forEach((cc, status) -> {
-            System.out.println("### CHECKING " + cc.subscriberId);
             if (status == Status.LOCK_ACQUIRED) {
                 boolean stillHasLock = withCompetingConsumerLocksCollectionDo(collection -> MongoListenerLockService.commit(collection, clock, leaseTime, cc.subscriptionId, cc.subscriberId));
                 if (!stillHasLock) {
@@ -132,7 +128,6 @@ public class MongoLeaseCompetingConsumerStrategy implements CompetingConsumerStr
                     competingConsumerListeners.forEach(listener -> listener.onConsumeProhibited(cc.subscriptionId, cc.subscriberId));
                 }
             } else {
-                System.out.println("### registering " + cc.subscriberId);
                 registerCompetingConsumer(cc.subscriptionId, cc.subscriberId);
             }
         });

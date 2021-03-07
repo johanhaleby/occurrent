@@ -135,7 +135,6 @@ class CompetingConsumerSubscriptionModelTest {
 
         competingConsumerSubscriptionModel1.pauseSubscription(subscriptionId);
 
-        System.out.println("### WRITING EVENT 2");
         eventStore.write("streamId", serialize(nameWasChanged));
 
         // Then
