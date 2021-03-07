@@ -122,7 +122,7 @@ public class CatchupSubscriptionModel implements SubscriptionModel, DelegatingSu
             return subscriptionModel.subscribe(subscriptionId, filter, firstStartAt, action);
         }
 
-        SubscriptionPosition subscriptionPosition = ((StartAtSubscriptionPosition) firstStartAt).subscriptionPosition;
+        SubscriptionPosition subscriptionPosition = ((StartAtSubscriptionPosition) firstStartAt.get()).subscriptionPosition;
 
         final Filter timeFilter;
         if (isBeginningOfTime(subscriptionPosition)) {
