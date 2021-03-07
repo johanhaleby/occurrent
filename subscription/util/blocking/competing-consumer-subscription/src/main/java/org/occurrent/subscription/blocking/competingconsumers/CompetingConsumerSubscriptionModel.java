@@ -82,13 +82,15 @@ public class CompetingConsumerSubscriptionModel implements DelegatingSubscriptio
         if (isRunning()) {
             throw new IllegalStateException(CompetingConsumerSubscriptionModel.class.getSimpleName() + " is already started");
         }
+        System.out.println("### " + Thread.currentThread().getName() + ": competingConsumers " + competingConsumers);
 
         competingConsumers.values().stream()
                 .filter(not(CompetingConsumer::isRunning))
                 .forEach(cc -> {
                             // Only change state if we have permission to consume
-                            if (cc.isWaiting() && competingConsumerStrategy.registerCompetingConsumer(cc.getSubscriptionId(), cc.getSubscriberId())) {
-                                startWaitingConsumer(cc);
+                            if (cc.isWaiting()) {
+                                // Registering a competing consumer will start the subscription automatically if lock was acquired
+                                competingConsumerStrategy.registerCompetingConsumer(cc.getSubscriptionId(), cc.getSubscriberId());
                             } else if (cc.isPaused()) {
                                 resumeSubscription(cc.getSubscriptionId());
                             }
@@ -123,10 +125,12 @@ public class CompetingConsumerSubscriptionModel implements DelegatingSubscriptio
                 .map(competingConsumer -> {
                     final Subscription subscription;
                     String subscriberId = competingConsumer.getSubscriberId();
-                    if (hasLock(subscriptionId, subscriberId) || registerCompetingConsumer(subscriptionId, subscriberId)) {
+                    if (hasLock(subscriptionId, subscriberId)) {
                         competingConsumers.put(competingConsumer.subscriptionIdAndSubscriberId, competingConsumer.registerRunning());
-                        // This works because method is and we've checked that it's already paused earlier
+                        // This works because we've checked that it's already paused earlier
                         subscription = delegate.resumeSubscription(subscriptionId);
+                    } else if (registerCompetingConsumer(subscriptionId, subscriberId)) {
+                        subscription = new CompetingConsumerSubscription(subscriptionId, subscriberId);
                     } else {
                         // We're not allowed to resume since we don't have the lock.
                         subscription = new CompetingConsumerSubscription(subscriptionId, subscriberId);
@@ -169,6 +173,7 @@ public class CompetingConsumerSubscriptionModel implements DelegatingSubscriptio
 
     @Override
     public synchronized void onConsumeGranted(String subscriptionId, String subscriberId) {
+        System.out.println("### CONSUME GRANTED FOR subscriptionId " + subscriptionId + " and subscriberId " + subscriberId);
         CompetingConsumer competingConsumer = competingConsumers.get(SubscriptionIdAndSubscriberId.from(subscriptionId, subscriberId));
         if (competingConsumer == null) {
             return;
@@ -179,7 +184,7 @@ public class CompetingConsumerSubscriptionModel implements DelegatingSubscriptio
             startWaitingConsumer(competingConsumer);
         } else if (competingConsumer.isPaused()) {
             Paused state = (Paused) competingConsumer.state;
-            System.out.println("### Competing consumer " + subscriberId + " + is paused, will start: " + state.hasPermissionToConsume);
+            System.out.println("### Competing consumer " + subscriberId + " is paused, will start: " + state.hasPermissionToConsume);
             if (state.hasPermissionToConsume) {
                 resumeSubscription(subscriptionId);
             }
@@ -188,6 +193,7 @@ public class CompetingConsumerSubscriptionModel implements DelegatingSubscriptio
 
     @Override
     public synchronized void onConsumeProhibited(String subscriptionId, String subscriberId) {
+        System.out.println("### CONSUME PROHIBITED FOR subscriptionId " + subscriptionId + " and subscriberId " + subscriberId);
         SubscriptionIdAndSubscriberId subscriptionIdAndSubscriberId = SubscriptionIdAndSubscriberId.from(subscriptionId, subscriberId);
         CompetingConsumer competingConsumer = competingConsumers.get(subscriptionIdAndSubscriberId);
         if (competingConsumer == null) {
@@ -204,8 +210,8 @@ public class CompetingConsumerSubscriptionModel implements DelegatingSubscriptio
     }
 
     private void startWaitingConsumer(CompetingConsumer cc) {
-        ((Waiting) cc.state).startSubscription();
         competingConsumers.put(SubscriptionIdAndSubscriberId.from(cc.getSubscriptionId(), cc.getSubscriberId()), cc.registerRunning());
+        ((Waiting) cc.state).startSubscription();
     }
 
     private void pauseConsumer(CompetingConsumer cc, boolean hasPermissionToConsume) {
@@ -370,10 +376,10 @@ public class CompetingConsumerSubscriptionModel implements DelegatingSubscriptio
     }
 
     private synchronized void unregisterCompetingConsumer(CompetingConsumer cc, Consumer<CompetingConsumer> and) {
-        System.out.println("### BEFORE UNREGISTER");
+        System.out.println("### " + Thread.currentThread().getName() + ": BEFORE UNREGISTER subscription " + cc.getSubscriptionId() + " subscriber " + cc.getSubscriberId());
         and.accept(cc);
         competingConsumerStrategy.unregisterCompetingConsumer(cc.getSubscriptionId(), cc.getSubscriberId());
-        System.out.println("### AFTER UNREGISTER");
+        System.out.println("###" + Thread.currentThread().getName() + ": AFTER UNREGISTER " + cc.getSubscriptionId() + " subscriber " + cc.getSubscriberId());
     }
 
     private boolean registerCompetingConsumer(String subscriptionId, String subscriberId) {

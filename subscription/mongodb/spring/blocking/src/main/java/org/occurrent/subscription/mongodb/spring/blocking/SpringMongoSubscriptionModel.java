@@ -51,6 +51,7 @@ import org.springframework.data.mongodb.core.messaging.MessageListenerContainer;
 
 import javax.annotation.PreDestroy;
 import java.util.Objects;
+import java.util.StringJoiner;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ConcurrentMap;
 import java.util.function.Consumer;
@@ -261,6 +262,7 @@ public class SpringMongoSubscriptionModel implements PositionAwareSubscriptionMo
     @Override
     public synchronized void stop() {
         if (!shutdown) {
+            log.info("#### Stopping running subscriptions: {} (paused={})",  runningSubscriptions, pausedSubscriptions);
             runningSubscriptions.forEach((subscriptionId, __) -> pauseSubscription(subscriptionId));
             messageListenerContainer.stop();
         }
@@ -357,6 +359,14 @@ public class SpringMongoSubscriptionModel implements PositionAwareSubscriptionMo
         @Override
         public int hashCode() {
             return Objects.hash(occurrentSubscription, changeStreamRequestBuilder);
+        }
+
+        @Override
+        public String toString() {
+            return new StringJoiner(", ", InternalSubscription.class.getSimpleName() + "[", "]")
+                    .add("occurrentSubscription=" + occurrentSubscription)
+                    .add("changeStreamRequestBuilder=" + changeStreamRequestBuilder)
+                    .toString();
         }
     }
 }

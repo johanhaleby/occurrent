@@ -207,7 +207,7 @@ class CompetingConsumerSubscriptionModelTest {
     }
 
     @Test
-    void stopping_and_starting_both_competing_subscription_models_when_sm_2_is_started_before_sm1() {
+    void stopping_and_starting_both_competing_subscription_models_when_sm_2_is_started_before_sm1() throws InterruptedException {
         // Given
         CopyOnWriteArrayList<CloudEvent> cloudEvents = new CopyOnWriteArrayList<>();
 
@@ -226,13 +226,21 @@ class CompetingConsumerSubscriptionModelTest {
         eventStore.write("streamId", serialize(nameDefined));
         await("waiting for first event").atMost(2, SECONDS).untilAsserted(() -> assertThat(cloudEvents).hasSize(1));
 
+        System.out.println("################ 1 STOPPING");
         competingConsumerSubscriptionModel1.stop();
+        System.out.println("################ 1 STOPPED");
+        System.out.println("################ 2 STOPPING");
         competingConsumerSubscriptionModel2.stop();
+        System.out.println("################ 2 STOPPED");
 
         eventStore.write("streamId", serialize(nameWasChanged1));
 
+        System.out.println("################ 2 STARTING");
         competingConsumerSubscriptionModel2.start();
+        System.out.println("################ 2 STARTED");
+        System.out.println("################ 1 STARTING");
         competingConsumerSubscriptionModel1.start();
+        System.out.println("################ 1 STARTED");
 
         eventStore.write("streamId", serialize(nameWasChanged2));
 
