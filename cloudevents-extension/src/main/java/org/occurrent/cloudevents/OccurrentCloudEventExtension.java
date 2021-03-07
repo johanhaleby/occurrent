@@ -16,13 +16,13 @@
 package org.occurrent.cloudevents;
 
 import io.cloudevents.CloudEvent;
+import io.cloudevents.CloudEventExtension;
 import io.cloudevents.CloudEventExtensions;
-import io.cloudevents.Extension;
 
 import java.util.*;
 
 /**
- * A {@link CloudEvent} {@link Extension} that adds required extensions for Occurrent. These are:<br><br>
+ * A {@link CloudEvent} {@link CloudEventExtension} that adds required extensions for Occurrent. These are:<br><br>
  *
  * <table>
  *     <tr><th>Key</th><th>Description</th></tr>
@@ -30,7 +30,7 @@ import java.util.*;
  *     <tr><td>{@value #STREAM_VERSION}</td><td>The version of an event in a particular event stream</td></tr>
  * </table>
  */
-public class OccurrentCloudEventExtension implements Extension {
+public class OccurrentCloudEventExtension implements CloudEventExtension {
     public static final String STREAM_ID = "streamid";
     public static final String STREAM_VERSION = "streamversion";
 
