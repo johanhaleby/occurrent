@@ -299,7 +299,6 @@ class CompetingConsumerSubscriptionModelTest {
         await("waiting for second event").atMost(5, SECONDS).untilAsserted(() -> assertThat(cloudEvents).extracting(CloudEvent::getId).containsExactly("1", "2", "3"));
     }
 
-    @Disabled("Temporary disabled since it doesn't work on CI")
     @Test
     @Timeout(10)
     void stopping_and_starting_both_competing_subscription_models_several_times() {
@@ -350,7 +349,6 @@ class CompetingConsumerSubscriptionModelTest {
         await("waiting for second event").atMost(5, SECONDS).untilAsserted(() -> assertThat(cloudEvents).extracting(CloudEvent::getId).containsExactly("1", "2", "3", "4", "5"));
     }
 
-    @Disabled("Temporary disabled since it doesn't work on CI")
     @RepeatedTest(3)
     void pausing_and_resuming_both_competing_subscription_models_several_times() {
         // Given
