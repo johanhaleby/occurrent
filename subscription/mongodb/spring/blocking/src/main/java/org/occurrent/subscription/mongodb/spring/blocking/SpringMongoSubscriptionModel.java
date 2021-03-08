@@ -54,6 +54,8 @@ import java.util.Objects;
 import java.util.StringJoiner;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ConcurrentMap;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.TimeUnit;
 import java.util.function.Consumer;
 import java.util.function.Function;
 
@@ -187,7 +189,7 @@ public class SpringMongoSubscriptionModel implements PositionAwareSubscriptionMo
         runningSubscriptions.clear();
         pausedSubscriptions.forEach((__, internalSubscription) -> internalSubscription.shutdown());
         pausedSubscriptions.clear();
-        messageListenerContainer.stop();
+        stopMessageListenerContainer();
     }
 
     @Override
@@ -263,7 +265,7 @@ public class SpringMongoSubscriptionModel implements PositionAwareSubscriptionMo
     public synchronized void stop() {
         if (!shutdown) {
             runningSubscriptions.forEach((subscriptionId, __) -> pauseSubscription(subscriptionId));
-            messageListenerContainer.stop();
+            stopMessageListenerContainer();
         }
     }
 
@@ -275,6 +277,19 @@ public class SpringMongoSubscriptionModel implements PositionAwareSubscriptionMo
     @Override
     public boolean isAutoStartup() {
         return messageListenerContainer.isAutoStartup();
+    }
+
+    private void stopMessageListenerContainer() {
+        CountDownLatch countDownLatch = new CountDownLatch(1);
+        messageListenerContainer.stop(countDownLatch::countDown);
+        try {
+            boolean success = countDownLatch.await(10, TimeUnit.SECONDS);
+            if (!success) {
+                log.warn("Failed to stop " + SpringMongoSubscriptionModel.class.getSimpleName() + " after 10 seconds");
+            }
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+        }
     }
 
     private org.springframework.data.mongodb.core.messaging.Subscription registerNewSpringSubscription(String subscriptionId, ChangeStreamRequest<Document> documentChangeStreamRequest) {

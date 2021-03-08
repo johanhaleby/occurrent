@@ -10,6 +10,7 @@
 * Removed the ability to pass a supplier returning `StartAt` to the subscribe methods in `org.occurrent.subscription.api.blocking.Subscribable` interface. Instead, use `StartAt.dynamic(supplier)` instead 
   to achieve the same results.
 * Upgrading to CloudEvents Java SDK 2.0.0
+* Waiting for internal message listener to be shutdown when stopping `SpringSubscriptionModel`.
 
 ## Changelog 0.8.0 (2021-02-20)
 
