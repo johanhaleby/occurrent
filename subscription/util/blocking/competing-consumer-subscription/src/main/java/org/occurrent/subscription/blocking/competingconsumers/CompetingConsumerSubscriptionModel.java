@@ -90,7 +90,6 @@ public class CompetingConsumerSubscriptionModel implements DelegatingSubscriptio
         // Note that we deliberately don't start the delegate subscription model here!!
         // This is because we're not sure that we have the lock. It'll the underlying SM be started
         // automatically if required (since it's instructed to do so in the Waiting state supplier).
-
         competingConsumers.values().stream()
                 .filter(not(CompetingConsumer::isRunning))
                 .forEach(cc -> {
@@ -137,9 +136,10 @@ public class CompetingConsumerSubscriptionModel implements DelegatingSubscriptio
                             // This works because we've checked that it's already paused earlier
                             subscription = delegate.resumeSubscription(subscriptionId);
                         }
-                    } else if (registerCompetingConsumer(subscriptionId, subscriberId)) {
-                        // State will be changed in "onConsumeGranted"
-                        subscription = new CompetingConsumerSubscription(subscriptionId, subscriberId);
+                    } else if (registerCompetingConsumer(subscriptionId, subscriberId) && !competingConsumer.isWaiting()) {
+                        // This works because we've checked that it's already paused earlier
+                        competingConsumers.put(competingConsumer.subscriptionIdAndSubscriberId, competingConsumer.registerRunning());
+                        subscription = delegate.resumeSubscription(subscriptionId);
                     } else {
                         // We're not allowed to resume since we don't have the lock.
                         subscription = new CompetingConsumerSubscription(subscriptionId, subscriberId);
@@ -159,7 +159,7 @@ public class CompetingConsumerSubscriptionModel implements DelegatingSubscriptio
                 .filter(not(CompetingConsumer::isWaiting))
                 .ifPresent(competingConsumer -> {
                     delegate.pauseSubscription(subscriptionId);
-                    competingConsumers.put(SubscriptionIdAndSubscriberId.from(competingConsumer), competingConsumer.registerPaused());
+                    competingConsumers.put(SubscriptionIdAndSubscriberId.from(competingConsumer), competingConsumer.registerPaused(true));
                     competingConsumerStrategy.unregisterCompetingConsumer(competingConsumer.getSubscriptionId(), competingConsumer.getSubscriberId());
                 });
     }
@@ -189,7 +189,7 @@ public class CompetingConsumerSubscriptionModel implements DelegatingSubscriptio
             startWaitingConsumer(competingConsumer);
         } else if (competingConsumer.isPaused()) {
             Paused state = (Paused) competingConsumer.state;
-            if (state.hasPermissionToConsume) {
+            if (!state.pausedByUser) {
                 resumeSubscription(subscriptionId);
             }
         }
@@ -205,10 +205,10 @@ public class CompetingConsumerSubscriptionModel implements DelegatingSubscriptio
 
         if (competingConsumer.isRunning()) {
             pauseSubscription(subscriptionId);
-            pauseConsumer(competingConsumer, true);
+            pauseConsumer(competingConsumer, false);
         } else if (competingConsumer.isPaused()) {
             Paused paused = (Paused) competingConsumer.state;
-            pauseConsumer(competingConsumer, paused.hasPermissionToConsume);
+            pauseConsumer(competingConsumer, paused.pausedByUser);
         }
     }
 
@@ -218,9 +218,9 @@ public class CompetingConsumerSubscriptionModel implements DelegatingSubscriptio
         return ((Waiting) cc.state).startSubscription();
     }
 
-    private void pauseConsumer(CompetingConsumer cc, boolean hasPermissionToConsume) {
+    private void pauseConsumer(CompetingConsumer cc, boolean pausedByUser) {
         SubscriptionIdAndSubscriberId subscriptionIdAndSubscriberId = SubscriptionIdAndSubscriberId.from(cc.getSubscriptionId(), cc.getSubscriberId());
-        competingConsumers.put(subscriptionIdAndSubscriberId, cc.registerPaused(hasPermissionToConsume));
+        competingConsumers.put(subscriptionIdAndSubscriberId, cc.registerPaused(pausedByUser));
     }
 
     private static class SubscriptionIdAndSubscriberId {
@@ -314,8 +314,8 @@ public class CompetingConsumerSubscriptionModel implements DelegatingSubscriptio
             return registerPaused(state.hasPermissionToConsume());
         }
 
-        CompetingConsumer registerPaused(boolean hasPermissionToConsume) {
-            return new CompetingConsumer(subscriptionIdAndSubscriberId, new Paused(hasPermissionToConsume));
+        CompetingConsumer registerPaused(boolean pausedByUser) {
+            return new CompetingConsumer(subscriptionIdAndSubscriberId, new Paused(pausedByUser));
         }
 
         @Override
@@ -358,15 +358,15 @@ public class CompetingConsumerSubscriptionModel implements DelegatingSubscriptio
         }
 
         static class Paused extends CompetingConsumerState {
-            private final boolean hasPermissionToConsume;
+            private final boolean pausedByUser;
 
-            Paused(boolean hasPermissionToConsume) {
-                this.hasPermissionToConsume = hasPermissionToConsume;
+            Paused(boolean pausedByUser) {
+                this.pausedByUser = pausedByUser;
             }
 
             @Override
             boolean hasPermissionToConsume() {
-                return hasPermissionToConsume;
+                return pausedByUser;
             }
         }
     }
