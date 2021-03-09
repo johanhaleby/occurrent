@@ -25,6 +25,8 @@ import org.occurrent.subscription.api.blocking.SubscriptionPositionStorage;
 import org.occurrent.subscription.mongodb.MongoOperationTimeSubscriptionPosition;
 import org.occurrent.subscription.mongodb.MongoResumeTokenSubscriptionPosition;
 import org.occurrent.subscription.mongodb.internal.MongoCommons;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.data.mongodb.core.MongoOperations;
 import org.springframework.data.mongodb.core.query.Update;
 
@@ -43,6 +45,7 @@ import static org.springframework.data.mongodb.core.query.Query.query;
  * A Spring implementation of {@link SubscriptionPositionStorage} that stores {@link SubscriptionPosition} in MongoDB.
  */
 public class SpringMongoSubscriptionPositionStorage implements SubscriptionPositionStorage {
+    private static final Logger log = LoggerFactory.getLogger(SpringMongoSubscriptionPositionStorage.class);
 
     private final MongoOperations mongoOperations;
     private final String subscriptionPositionCollection;
@@ -94,6 +97,7 @@ public class SpringMongoSubscriptionPositionStorage implements SubscriptionPosit
     @Override
     public SubscriptionPosition save(String subscriptionId, SubscriptionPosition subscriptionPosition) {
         Supplier<SubscriptionPosition> save = () -> {
+            log.info("### [SubscriptionPosition] saving {} {}", subscriptionId, subscriptionPosition);
             if (subscriptionPosition instanceof MongoResumeTokenSubscriptionPosition) {
                 persistResumeTokenStreamPosition(subscriptionId, ((MongoResumeTokenSubscriptionPosition) subscriptionPosition).resumeToken);
             } else if (subscriptionPosition instanceof MongoOperationTimeSubscriptionPosition) {

@@ -177,6 +177,7 @@ public class SpringMongoSubscriptionModel implements PositionAwareSubscriptionMo
     public void cancelSubscription(String subscriptionId) {
         InternalSubscription subscription = runningSubscriptions.remove(subscriptionId);
         if (subscription != null) {
+            log.info("### {} [cancelSubscription] cancelling {}", subscriptionId, SpringMongoSubscriptionModel.class.getSimpleName());
             messageListenerContainer.remove(subscription.getSpringSubscription());
         }
     }
@@ -184,6 +185,7 @@ public class SpringMongoSubscriptionModel implements PositionAwareSubscriptionMo
     @PreDestroy
     @Override
     public synchronized void shutdown() {
+        log.info("### {} [shutdown] shutting down", SpringMongoSubscriptionModel.class.getSimpleName());
         shutdown = true;
         runningSubscriptions.forEach((__, internalSubscription) -> internalSubscription.shutdown());
         runningSubscriptions.clear();
@@ -256,14 +258,19 @@ public class SpringMongoSubscriptionModel implements PositionAwareSubscriptionMo
     @Override
     public synchronized void start() {
         if (!shutdown) {
+            log.info("### {} [start] starting", SpringMongoSubscriptionModel.class.getSimpleName());
             messageListenerContainer.start();
             pausedSubscriptions.forEach((subscriptionId, __) -> resumeSubscription(subscriptionId).waitUntilStarted());
+            log.info("### {} [start] started", SpringMongoSubscriptionModel.class.getSimpleName());
+        } else {
+            log.info("### {} [start] cannot start due to shutdown", SpringMongoSubscriptionModel.class.getSimpleName());
         }
     }
 
     @Override
     public synchronized void stop() {
         if (!shutdown) {
+            log.info("### {} [stop] stopping", SpringMongoSubscriptionModel.class.getSimpleName());
             runningSubscriptions.forEach((subscriptionId, __) -> pauseSubscription(subscriptionId));
             stopMessageListenerContainer();
         }
@@ -290,6 +297,7 @@ public class SpringMongoSubscriptionModel implements PositionAwareSubscriptionMo
         } catch (InterruptedException e) {
             Thread.currentThread().interrupt();
         }
+        log.info("### {} [stopMessageListenerContainer] stopped", SpringMongoSubscriptionModel.class.getSimpleName());
     }
 
     private org.springframework.data.mongodb.core.messaging.Subscription registerNewSpringSubscription(String subscriptionId, ChangeStreamRequest<Document> documentChangeStreamRequest) {
