@@ -36,7 +36,8 @@ import org.occurrent.functional.CheckedFunction;
 import org.occurrent.functional.Not;
 import org.occurrent.mongodb.timerepresentation.TimeRepresentation;
 import org.occurrent.retry.RetryStrategy;
-import org.occurrent.subscription.api.blocking.*;
+import org.occurrent.subscription.api.blocking.DelegatingSubscriptionModel;
+import org.occurrent.subscription.api.blocking.SubscriptionPositionStorage;
 import org.occurrent.subscription.blocking.durable.DurableSubscriptionModel;
 import org.occurrent.subscription.mongodb.spring.blocking.SpringMongoSubscriptionModel;
 import org.occurrent.testsupport.mongodb.FlushMongoDBExtension;
@@ -134,7 +135,7 @@ class SpringRedisSubscriptionPositionStorageTest {
         await().atMost(2, SECONDS).with().pollInterval(Duration.of(20, MILLIS)).untilAsserted(() -> assertThat(state).hasSize(3));
     }
 
-    @RepeatedIfExceptionsTest(repeats = 2)
+    @RepeatedIfExceptionsTest(repeats = 5, suspend = 500)
     void redis_blocking_spring_subscription_allows_resuming_events_from_where_it_left_off() {
         // Given
         LocalDateTime now = LocalDateTime.now();
