@@ -139,7 +139,7 @@ public class SpringMongoSubscriptionPositionStorageTest {
         mongoEventStore.write("1", 1, serialize(nameWasChanged1));
 
         // Then
-        await().atMost(2, SECONDS).with().pollInterval(Duration.of(20, MILLIS)).untilAsserted(() -> assertThat(state).hasSize(3));
+        await().atMost(4, SECONDS).with().pollInterval(Duration.of(20, MILLIS)).untilAsserted(() -> assertThat(state).hasSize(3));
     }
 
     @Test
@@ -210,7 +210,7 @@ public class SpringMongoSubscriptionPositionStorageTest {
         mongoEventStore.write("1", 1, serialize(nameWasChanged1));
 
         // Then
-        await().atMost(2, SECONDS).with().pollInterval(Duration.of(20, MILLIS)).untilAsserted(() -> {
+        await().atMost(4, SECONDS).with().pollInterval(Duration.of(20, MILLIS)).untilAsserted(() -> {
             assertThat(state).hasSize(3);
             assertThat(numberOfWritesToBlockingSubscriptionStorage).hasValue(4); // 3 events and one for global subscription position
         });
@@ -258,7 +258,7 @@ public class SpringMongoSubscriptionPositionStorageTest {
         mongoEventStore.write("1", 1, serialize(nameWasChanged1));
 
         // Then
-        await().atMost(2, SECONDS).with().pollInterval(Duration.of(20, MILLIS)).untilAsserted(() -> {
+        await().atMost(4, SECONDS).with().pollInterval(Duration.of(20, MILLIS)).untilAsserted(() -> {
             assertThat(state).hasSize(3);
             assertThat(numberOfWritesToBlockingSubscriptionStorage).hasValue(2); // 1 event and one for global subscription position
         });
@@ -331,7 +331,7 @@ public class SpringMongoSubscriptionPositionStorageTest {
         mongoEventStore.write("1", 1, serialize(nameWasChanged1));
 
         // Then
-        await().atMost(2, SECONDS).with().pollInterval(Duration.of(20, MILLIS)).untilAsserted(() -> assertThat(state).hasSize(3));
+        await().atMost(4, SECONDS).with().pollInterval(Duration.of(20, MILLIS)).untilAsserted(() -> assertThat(state).hasSize(3));
     }
 
     @RepeatedIfExceptionsTest(repeats = 2, suspend = 500)
