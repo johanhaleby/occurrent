@@ -10,7 +10,10 @@
 * Removed the ability to pass a supplier returning `StartAt` to the subscribe methods in `org.occurrent.subscription.api.blocking.Subscribable` interface. Instead, use `StartAt.dynamic(supplier)` instead 
   to achieve the same results.
 * Upgrading to CloudEvents Java SDK 2.0.0
-* Waiting for internal message listener to be shutdown when stopping `SpringSubscriptionModel`.
+* Waiting for internal message listener to be shutdown when stopping `SpringMongoSubscriptionModel`.
+* Using a `org.springframework.scheduling.concurrent.ThreadPoolTaskExecutor` as executor in `SpringMongoSubscriptionModel` instead of the default `org.springframework.core.task.SimpleAsyncTaskExecutor`. 
+  The reason for this is that the `DefaultMessageListenerContainer` used internally in `SpringMongoSubscriptionModel` will wait for all threads in the `ThreadPoolTaskExecutor` to stop when stopping the
+  `SpringMongoSubscriptionModel` instance. Otherwise, a race conditions can occur when stopping and then immediately starting a `SpringMongoSubscriptionModel`.
 
 ## Changelog 0.8.0 (2021-02-20)
 

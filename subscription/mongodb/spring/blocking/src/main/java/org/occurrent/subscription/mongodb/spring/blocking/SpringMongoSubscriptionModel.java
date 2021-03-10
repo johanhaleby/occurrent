@@ -127,7 +127,7 @@ public class SpringMongoSubscriptionModel implements PositionAwareSubscriptionMo
         this.pausedSubscriptions = new ConcurrentHashMap<>();
         this.retryStrategy = config.retryStrategy;
         this.restartSubscriptionsOnChangeStreamHistoryLost = config.restartSubscriptionsOnChangeStreamHistoryLost;
-        this.messageListenerContainer = new DefaultMessageListenerContainer(mongoTemplate);
+        this.messageListenerContainer = new DefaultMessageListenerContainer(mongoTemplate, config.executor);
         this.messageListenerContainer.start();
     }
 

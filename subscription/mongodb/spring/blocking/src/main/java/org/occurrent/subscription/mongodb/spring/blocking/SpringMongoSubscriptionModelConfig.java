@@ -2,8 +2,13 @@ package org.occurrent.subscription.mongodb.spring.blocking;
 
 import org.occurrent.mongodb.timerepresentation.TimeRepresentation;
 import org.occurrent.retry.RetryStrategy;
+import org.springframework.data.mongodb.core.messaging.DefaultMessageListenerContainer;
+import org.springframework.scheduling.concurrent.ThreadPoolTaskExecutor;
 
 import java.time.Duration;
+import java.util.concurrent.Executor;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
 
 import static java.util.Objects.requireNonNull;
 
@@ -16,6 +21,7 @@ public class SpringMongoSubscriptionModelConfig {
     final TimeRepresentation timeRepresentation;
     final RetryStrategy retryStrategy;
     final boolean restartSubscriptionsOnChangeStreamHistoryLost;
+    final Executor executor;
 
     /**
      * Create a new instance of {@link SpringMongoSubscriptionModelConfig} with the given settings.
@@ -25,17 +31,20 @@ public class SpringMongoSubscriptionModelConfig {
      * @param timeRepresentation How time is represented in the database, must be the same as what's specified for the EventStore that stores the events.
      */
     public SpringMongoSubscriptionModelConfig(String eventCollection, TimeRepresentation timeRepresentation) {
-        this(eventCollection, timeRepresentation, RetryStrategy.exponentialBackoff(Duration.ofMillis(100), Duration.ofSeconds(2), 2.0f), false);
+        this(eventCollection, timeRepresentation, RetryStrategy.exponentialBackoff(Duration.ofMillis(100), Duration.ofSeconds(2), 2.0f), false, defaultExecutor());
     }
 
-    private SpringMongoSubscriptionModelConfig(String eventCollection, TimeRepresentation timeRepresentation, RetryStrategy retryStrategy, boolean restartSubscriptionsOnChangeStreamHistoryLost) {
+    private SpringMongoSubscriptionModelConfig(String eventCollection, TimeRepresentation timeRepresentation, RetryStrategy retryStrategy, boolean restartSubscriptionsOnChangeStreamHistoryLost,
+                                               Executor executor) {
         requireNonNull(eventCollection, "eventCollection cannot be null");
         requireNonNull(timeRepresentation, TimeRepresentation.class.getSimpleName() + " cannot be null");
         requireNonNull(retryStrategy, RetryStrategy.class.getSimpleName() + " cannot be null");
+        requireNonNull(executor, Executor.class.getSimpleName() + " cannot be null");
         this.eventCollection = eventCollection;
         this.timeRepresentation = timeRepresentation;
         this.retryStrategy = retryStrategy;
         this.restartSubscriptionsOnChangeStreamHistoryLost = restartSubscriptionsOnChangeStreamHistoryLost;
+        this.executor = executor;
     }
 
     /**
@@ -64,7 +73,7 @@ public class SpringMongoSubscriptionModelConfig {
      * @return A new instance of {@code SpringSubscriptionModelConfig}
      */
     public SpringMongoSubscriptionModelConfig restartSubscriptionsOnChangeStreamHistoryLost(boolean restartSubscriptionsOnChangeStreamHistoryLost) {
-        return new SpringMongoSubscriptionModelConfig(eventCollection, timeRepresentation, retryStrategy, restartSubscriptionsOnChangeStreamHistoryLost);
+        return new SpringMongoSubscriptionModelConfig(eventCollection, timeRepresentation, retryStrategy, restartSubscriptionsOnChangeStreamHistoryLost, executor);
     }
 
     /**
@@ -74,6 +83,27 @@ public class SpringMongoSubscriptionModelConfig {
      * @return A new instance of {@code SpringSubscriptionModelConfig}
      */
     public SpringMongoSubscriptionModelConfig retryStrategy(RetryStrategy retryStrategy) {
-        return new SpringMongoSubscriptionModelConfig(eventCollection, timeRepresentation, retryStrategy, restartSubscriptionsOnChangeStreamHistoryLost);
+        return new SpringMongoSubscriptionModelConfig(eventCollection, timeRepresentation, retryStrategy, restartSubscriptionsOnChangeStreamHistoryLost, executor);
+    }
+
+    /**
+     * Specify the executor to use for this subscription model. Under the hood the {@link SpringMongoSubscriptionModel} will use this executor when initializing the {@link DefaultMessageListenerContainer}
+     * to listen to events written MongoDB. By default a {@link ThreadPoolTaskExecutor} will be used with queue size {@code 0}, which effectively will make behave as unbounded {@link Executors#newCachedThreadPool()}.
+     *
+     * Note that if you're using a non-spring implementation, for example an {@link ExecutorService}, you need to shut it down your self after {@link SpringMongoSubscriptionModel} is shutdown.
+     *
+     * @param executor The executor to use
+     * @return A new instance of {@code SpringSubscriptionModelConfig}
+     * @see ThreadPoolTaskExecutor
+     */
+    public SpringMongoSubscriptionModelConfig executor(Executor executor) {
+        return new SpringMongoSubscriptionModelConfig(eventCollection, timeRepresentation, retryStrategy, restartSubscriptionsOnChangeStreamHistoryLost, executor);
+    }
+
+    private static Executor defaultExecutor() {
+        ThreadPoolTaskExecutor executor = new ThreadPoolTaskExecutor();
+        executor.setQueueCapacity(0);
+        executor.initialize();
+        return executor;
     }
 }

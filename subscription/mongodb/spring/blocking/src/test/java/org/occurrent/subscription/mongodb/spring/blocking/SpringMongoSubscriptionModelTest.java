@@ -141,6 +141,31 @@ public class SpringMongoSubscriptionModelTest {
     }
 
     @Test
+    void blocking_spring_subscription_calls_listeners_in_order() {
+        // Given
+        LocalDateTime now = LocalDateTime.now();
+        CopyOnWriteArrayList<CloudEvent> state = new CopyOnWriteArrayList<>();
+        subscriptionModel.subscribe(UUID.randomUUID().toString(), e -> {
+            if (e.getId().equals("1")) {
+                sleep(500);
+            }
+            state.add(e);
+        }).waitUntilStarted(Duration.of(10, ChronoUnit.SECONDS));
+
+        NameDefined nameDefined1 = new NameDefined("1", now, "name1");
+        NameDefined nameDefined2 = new NameDefined("2", now.plusSeconds(2), "name2");
+        NameWasChanged nameWasChanged1 = new NameWasChanged("3", now.plusSeconds(10), "name3");
+
+        // When
+        mongoEventStore.write("1", 0, serialize(nameDefined1));
+        mongoEventStore.write("2", 0, serialize(nameDefined2));
+        mongoEventStore.write("1", 1, serialize(nameWasChanged1));
+
+        // Then
+        await().atMost(10, SECONDS).with().pollInterval(Duration.of(20, MILLIS)).untilAsserted(() -> assertThat(state).hasSize(3));
+    }
+
+    @Test
     void resumes_stream_after_deletion_of_events_from_event_store() {
         // Given
         LocalDateTime now = LocalDateTime.now();
@@ -661,5 +686,13 @@ public class SpringMongoSubscriptionModelTest {
                 .withDataContentType("application/json")
                 .withData(CheckedFunction.unchecked(objectMapper::writeValueAsBytes).apply(e))
                 .build());
+    }
+
+    private static void sleep(long ms) {
+        try {
+            Thread.sleep(ms);
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+        }
     }
 }
