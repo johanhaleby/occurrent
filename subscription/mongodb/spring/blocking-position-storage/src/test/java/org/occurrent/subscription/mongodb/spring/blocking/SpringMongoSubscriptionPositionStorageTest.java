@@ -75,6 +75,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.groups.Tuple.tuple;
 import static org.awaitility.Awaitility.await;
 import static org.awaitility.Durations.ONE_SECOND;
+import static org.awaitility.Durations.TWO_SECONDS;
 import static org.hamcrest.Matchers.equalTo;
 import static org.hamcrest.Matchers.is;
 import static org.occurrent.functional.CheckedFunction.unchecked;
@@ -278,13 +279,13 @@ public class SpringMongoSubscriptionPositionStorageTest {
         mongoEventStore.write("1", 0, serialize(nameDefined1));
         cancelSubscription(subscriptionModel, subscriberId);
         // The subscription is async so we need to wait for it
-        await().atMost(ONE_SECOND).until(not(state::isEmpty));
+        await("state not to be empty").atMost(TWO_SECONDS).until(not(state::isEmpty));
         mongoEventStore.write("2", 0, serialize(nameDefined2));
         mongoEventStore.write("1", 1, serialize(nameWasChanged1));
         subscriptionModel.subscribe(subscriberId, state::add);
 
         // Then
-        await().atMost(2, SECONDS).with().pollInterval(Duration.of(20, MILLIS)).untilAsserted(() -> assertThat(state).hasSize(3));
+        await("state to has size equal to 3").atMost(5, SECONDS).with().pollInterval(Duration.of(20, MILLIS)).untilAsserted(() -> assertThat(state).hasSize(3));
     }
 
     @Test
