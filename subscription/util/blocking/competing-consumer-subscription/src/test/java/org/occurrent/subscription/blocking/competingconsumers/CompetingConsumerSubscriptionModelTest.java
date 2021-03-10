@@ -6,6 +6,7 @@ import com.mongodb.client.MongoClient;
 import com.mongodb.client.MongoClients;
 import io.cloudevents.CloudEvent;
 import io.cloudevents.core.builder.CloudEventBuilder;
+import io.github.artsok.RepeatedIfExceptionsTest;
 import org.assertj.core.groups.Tuple;
 import org.junit.jupiter.api.*;
 import org.junit.jupiter.api.DisplayNameGenerator.ReplaceUnderscores;
@@ -367,7 +368,13 @@ class CompetingConsumerSubscriptionModelTest {
         }
     }
 
-    @RepeatedTest(3)
+    // Note that pausing a subscription is async when using the SpringMongoSubscriptionModel.
+    // This means that if we resume a subscription fast enough (i.e. right after we've called pause), there's a chance that the
+    // "action" has not yet saved the position of the cloud event to the subscription position storage. This means that "resume" may
+    // start from an earlier event (the one previously written to the subscription position storage) and there may be duplicate events.
+    // This is why we're using awaitility so much in this test (to wait for the action to have written the cloud event position to storage)
+    @Timeout(20)
+    @RepeatedIfExceptionsTest(repeats = 3, suspend = 500)
     void pausing_and_resuming_both_competing_subscription_models_several_times() {
         System.out.println("### pausing_and_resuming_both_competing_subscription_models_several_times test");
 
@@ -404,6 +411,8 @@ class CompetingConsumerSubscriptionModelTest {
         competingConsumerSubscriptionModel1.resumeSubscription(subscriptionId).waitUntilStarted();
 
         eventStore.write("streamId", serialize(nameWasChanged2));
+        await("waiting for third event").atMost(2, SECONDS).untilAsserted(() -> assertThat(cloudEvents).hasSize(3));
+
         competingConsumerSubscriptionModel2.pauseSubscription(subscriptionId);
         competingConsumerSubscriptionModel1.pauseSubscription(subscriptionId);
 
@@ -411,6 +420,7 @@ class CompetingConsumerSubscriptionModelTest {
 
         competingConsumerSubscriptionModel2.resumeSubscription(subscriptionId).waitUntilStarted();
         competingConsumerSubscriptionModel1.resumeSubscription(subscriptionId).waitUntilStarted();
+        await("waiting for fourth event").atMost(2, SECONDS).untilAsserted(() -> assertThat(cloudEvents).hasSize(4));
 
         eventStore.write("streamId", serialize(nameWasChanged4));
 
