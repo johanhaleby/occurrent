@@ -21,7 +21,7 @@ import org.occurrent.mongodb.timerepresentation.TimeRepresentation;
 import org.occurrent.subscription.StartAt;
 import org.occurrent.subscription.api.blocking.CompetingConsumerStrategy;
 import org.occurrent.subscription.blocking.durable.DurableSubscriptionModel;
-import org.occurrent.subscription.mongodb.spring.blocking.MongoLeaseCompetingConsumerStrategy;
+import org.occurrent.subscription.mongodb.spring.blocking.SpringMongoLeaseCompetingConsumerStrategy;
 import org.occurrent.subscription.mongodb.spring.blocking.SpringMongoSubscriptionModel;
 import org.occurrent.subscription.mongodb.spring.blocking.SpringMongoSubscriptionPositionStorage;
 import org.occurrent.testsupport.mongodb.FlushMongoDBExtension;
@@ -120,8 +120,8 @@ class CompetingConsumerSubscriptionModelTest {
         // Given
         CopyOnWriteArrayList<CloudEvent> cloudEvents = new CopyOnWriteArrayList<>();
 
-        competingConsumerSubscriptionModel1 = new CompetingConsumerSubscriptionModel(springSubscriptionModel1, loggingStrategy("1", new MongoLeaseCompetingConsumerStrategy.Builder(mongoTemplate).leaseTime(Duration.ofSeconds(1)).build()));
-        competingConsumerSubscriptionModel2 = new CompetingConsumerSubscriptionModel(springSubscriptionModel2, loggingStrategy("2", new MongoLeaseCompetingConsumerStrategy.Builder(mongoTemplate).leaseTime(Duration.ofSeconds(1)).build()));
+        competingConsumerSubscriptionModel1 = new CompetingConsumerSubscriptionModel(springSubscriptionModel1, loggingStrategy("1", new SpringMongoLeaseCompetingConsumerStrategy.Builder(mongoTemplate).leaseTime(Duration.ofSeconds(1)).build()));
+        competingConsumerSubscriptionModel2 = new CompetingConsumerSubscriptionModel(springSubscriptionModel2, loggingStrategy("2", new SpringMongoLeaseCompetingConsumerStrategy.Builder(mongoTemplate).leaseTime(Duration.ofSeconds(1)).build()));
 
         String subscriptionId = UUID.randomUUID().toString();
         competingConsumerSubscriptionModel1.subscribe(subscriptionId, cloudEvents::add).waitUntilStarted();
@@ -147,8 +147,8 @@ class CompetingConsumerSubscriptionModelTest {
         // Given
         CopyOnWriteArrayList<CloudEvent> cloudEvents = new CopyOnWriteArrayList<>();
 
-        competingConsumerSubscriptionModel1 = new CompetingConsumerSubscriptionModel(springSubscriptionModel1, loggingStrategy("1", new MongoLeaseCompetingConsumerStrategy.Builder(mongoTemplate).leaseTime(Duration.ofSeconds(1)).build()));
-        competingConsumerSubscriptionModel2 = new CompetingConsumerSubscriptionModel(springSubscriptionModel2, loggingStrategy("2", new MongoLeaseCompetingConsumerStrategy.Builder(mongoTemplate).leaseTime(Duration.ofSeconds(1)).build()));
+        competingConsumerSubscriptionModel1 = new CompetingConsumerSubscriptionModel(springSubscriptionModel1, loggingStrategy("1", new SpringMongoLeaseCompetingConsumerStrategy.Builder(mongoTemplate).leaseTime(Duration.ofSeconds(1)).build()));
+        competingConsumerSubscriptionModel2 = new CompetingConsumerSubscriptionModel(springSubscriptionModel2, loggingStrategy("2", new SpringMongoLeaseCompetingConsumerStrategy.Builder(mongoTemplate).leaseTime(Duration.ofSeconds(1)).build()));
 
         String subscriptionId = UUID.randomUUID().toString();
         competingConsumerSubscriptionModel1.subscribe(subscriptionId, cloudEvents::add).waitUntilStarted();
@@ -180,9 +180,9 @@ class CompetingConsumerSubscriptionModelTest {
         // Given
         CopyOnWriteArrayList<CloudEvent> cloudEvents = new CopyOnWriteArrayList<>();
 
-        competingConsumerSubscriptionModel1 = new CompetingConsumerSubscriptionModel(springSubscriptionModel1, loggingStrategy("1", new MongoLeaseCompetingConsumerStrategy.Builder(mongoTemplate).leaseTime(Duration.ofSeconds(1)).build()));
-        MongoLeaseCompetingConsumerStrategy mongoLeaseCompetingConsumerStrategy2 = new MongoLeaseCompetingConsumerStrategy.Builder(mongoTemplate).leaseTime(Duration.ofSeconds(1)).build();
-        competingConsumerSubscriptionModel2 = new CompetingConsumerSubscriptionModel(springSubscriptionModel2, loggingStrategy("2", mongoLeaseCompetingConsumerStrategy2));
+        competingConsumerSubscriptionModel1 = new CompetingConsumerSubscriptionModel(springSubscriptionModel1, loggingStrategy("1", new SpringMongoLeaseCompetingConsumerStrategy.Builder(mongoTemplate).leaseTime(Duration.ofSeconds(1)).build()));
+        SpringMongoLeaseCompetingConsumerStrategy springMongoLeaseCompetingConsumerStrategy2 = new SpringMongoLeaseCompetingConsumerStrategy.Builder(mongoTemplate).leaseTime(Duration.ofSeconds(1)).build();
+        competingConsumerSubscriptionModel2 = new CompetingConsumerSubscriptionModel(springSubscriptionModel2, loggingStrategy("2", springMongoLeaseCompetingConsumerStrategy2));
 
         String subscriptionId = UUID.randomUUID().toString();
         competingConsumerSubscriptionModel1.subscribe("subscriber1", subscriptionId, null, StartAt.subscriptionModelDefault(), cloudEvents::add).waitUntilStarted();
@@ -201,7 +201,7 @@ class CompetingConsumerSubscriptionModelTest {
         // Cancelling a subscription also removes the subscription position from storage, thus this event will be lost!
         eventStore.write("streamId", serialize(nameWasChanged1));
 
-        await().atMost(2, SECONDS).untilAsserted(() -> assertThat(mongoLeaseCompetingConsumerStrategy2.hasLock(subscriptionId, "subscriber2")).isTrue());
+        await().atMost(2, SECONDS).untilAsserted(() -> assertThat(springMongoLeaseCompetingConsumerStrategy2.hasLock(subscriptionId, "subscriber2")).isTrue());
 
         eventStore.write("streamId", serialize(nameWasChanged2));
 
@@ -214,8 +214,8 @@ class CompetingConsumerSubscriptionModelTest {
         // Given
         CopyOnWriteArrayList<CloudEvent> cloudEvents = new CopyOnWriteArrayList<>();
 
-        competingConsumerSubscriptionModel1 = new CompetingConsumerSubscriptionModel(springSubscriptionModel1, loggingStrategy("1", new MongoLeaseCompetingConsumerStrategy.Builder(mongoTemplate).leaseTime(Duration.ofSeconds(1)).build()));
-        competingConsumerSubscriptionModel2 = new CompetingConsumerSubscriptionModel(springSubscriptionModel2, loggingStrategy("2", new MongoLeaseCompetingConsumerStrategy.Builder(mongoTemplate).leaseTime(Duration.ofSeconds(1)).build()));
+        competingConsumerSubscriptionModel1 = new CompetingConsumerSubscriptionModel(springSubscriptionModel1, loggingStrategy("1", new SpringMongoLeaseCompetingConsumerStrategy.Builder(mongoTemplate).leaseTime(Duration.ofSeconds(1)).build()));
+        competingConsumerSubscriptionModel2 = new CompetingConsumerSubscriptionModel(springSubscriptionModel2, loggingStrategy("2", new SpringMongoLeaseCompetingConsumerStrategy.Builder(mongoTemplate).leaseTime(Duration.ofSeconds(1)).build()));
 
         String subscriptionId = UUID.randomUUID().toString();
         competingConsumerSubscriptionModel1.subscribe(subscriptionId, cloudEvents::add).waitUntilStarted();
@@ -241,8 +241,8 @@ class CompetingConsumerSubscriptionModelTest {
         // Given
         CopyOnWriteArrayList<CloudEvent> cloudEvents = new CopyOnWriteArrayList<>();
 
-        competingConsumerSubscriptionModel1 = new CompetingConsumerSubscriptionModel(springSubscriptionModel1, loggingStrategy("1", new MongoLeaseCompetingConsumerStrategy.Builder(mongoTemplate).leaseTime(Duration.ofSeconds(1)).build()));
-        competingConsumerSubscriptionModel2 = new CompetingConsumerSubscriptionModel(springSubscriptionModel2, loggingStrategy("2", new MongoLeaseCompetingConsumerStrategy.Builder(mongoTemplate).leaseTime(Duration.ofSeconds(1)).build()));
+        competingConsumerSubscriptionModel1 = new CompetingConsumerSubscriptionModel(springSubscriptionModel1, loggingStrategy("1", new SpringMongoLeaseCompetingConsumerStrategy.Builder(mongoTemplate).leaseTime(Duration.ofSeconds(1)).build()));
+        competingConsumerSubscriptionModel2 = new CompetingConsumerSubscriptionModel(springSubscriptionModel2, loggingStrategy("2", new SpringMongoLeaseCompetingConsumerStrategy.Builder(mongoTemplate).leaseTime(Duration.ofSeconds(1)).build()));
 
         String subscriptionId = UUID.randomUUID().toString();
         competingConsumerSubscriptionModel1.subscribe(subscriptionId, cloudEvents::add).waitUntilStarted();
@@ -274,8 +274,8 @@ class CompetingConsumerSubscriptionModelTest {
         // Given
         CopyOnWriteArrayList<CloudEvent> cloudEvents = new CopyOnWriteArrayList<>();
 
-        competingConsumerSubscriptionModel1 = new CompetingConsumerSubscriptionModel(springSubscriptionModel1, loggingStrategy("1", new MongoLeaseCompetingConsumerStrategy.Builder(mongoTemplate).leaseTime(Duration.ofSeconds(1)).build()));
-        competingConsumerSubscriptionModel2 = new CompetingConsumerSubscriptionModel(springSubscriptionModel2, loggingStrategy("2", new MongoLeaseCompetingConsumerStrategy.Builder(mongoTemplate).leaseTime(Duration.ofSeconds(1)).build()));
+        competingConsumerSubscriptionModel1 = new CompetingConsumerSubscriptionModel(springSubscriptionModel1, loggingStrategy("1", new SpringMongoLeaseCompetingConsumerStrategy.Builder(mongoTemplate).leaseTime(Duration.ofSeconds(1)).build()));
+        competingConsumerSubscriptionModel2 = new CompetingConsumerSubscriptionModel(springSubscriptionModel2, loggingStrategy("2", new SpringMongoLeaseCompetingConsumerStrategy.Builder(mongoTemplate).leaseTime(Duration.ofSeconds(1)).build()));
 
         String subscriptionId = UUID.randomUUID().toString();
         competingConsumerSubscriptionModel1.subscribe(subscriptionId, cloudEvents::add).waitUntilStarted();
@@ -309,8 +309,8 @@ class CompetingConsumerSubscriptionModelTest {
         // Given
         CopyOnWriteArrayList<Tuple> cloudEvents = new CopyOnWriteArrayList<>();
 
-        competingConsumerSubscriptionModel1 = new CompetingConsumerSubscriptionModel(springSubscriptionModel1, loggingStrategy("1", new MongoLeaseCompetingConsumerStrategy.Builder(mongoTemplate).leaseTime(Duration.ofSeconds(1)).build()));
-        competingConsumerSubscriptionModel2 = new CompetingConsumerSubscriptionModel(springSubscriptionModel2, loggingStrategy("2", new MongoLeaseCompetingConsumerStrategy.Builder(mongoTemplate).leaseTime(Duration.ofSeconds(1)).build()));
+        competingConsumerSubscriptionModel1 = new CompetingConsumerSubscriptionModel(springSubscriptionModel1, loggingStrategy("1", new SpringMongoLeaseCompetingConsumerStrategy.Builder(mongoTemplate).leaseTime(Duration.ofSeconds(1)).build()));
+        competingConsumerSubscriptionModel2 = new CompetingConsumerSubscriptionModel(springSubscriptionModel2, loggingStrategy("2", new SpringMongoLeaseCompetingConsumerStrategy.Builder(mongoTemplate).leaseTime(Duration.ofSeconds(1)).build()));
 
         String subscriptionId = UUID.randomUUID().toString();
         competingConsumerSubscriptionModel1.subscribe(subscriptionId, e -> {
@@ -369,8 +369,8 @@ class CompetingConsumerSubscriptionModelTest {
         // Given
         CopyOnWriteArrayList<Tuple> cloudEvents = new CopyOnWriteArrayList<>();
 
-        competingConsumerSubscriptionModel1 = new CompetingConsumerSubscriptionModel(springSubscriptionModel1, loggingStrategy("1", new MongoLeaseCompetingConsumerStrategy.Builder(mongoTemplate).leaseTime(Duration.ofSeconds(1)).build()));
-        competingConsumerSubscriptionModel2 = new CompetingConsumerSubscriptionModel(springSubscriptionModel2, loggingStrategy("2", new MongoLeaseCompetingConsumerStrategy.Builder(mongoTemplate).leaseTime(Duration.ofSeconds(1)).build()));
+        competingConsumerSubscriptionModel1 = new CompetingConsumerSubscriptionModel(springSubscriptionModel1, loggingStrategy("1", new SpringMongoLeaseCompetingConsumerStrategy.Builder(mongoTemplate).leaseTime(Duration.ofSeconds(1)).build()));
+        competingConsumerSubscriptionModel2 = new CompetingConsumerSubscriptionModel(springSubscriptionModel2, loggingStrategy("2", new SpringMongoLeaseCompetingConsumerStrategy.Builder(mongoTemplate).leaseTime(Duration.ofSeconds(1)).build()));
 
         String subscriptionId = UUID.randomUUID().toString();
         competingConsumerSubscriptionModel1.subscribe(subscriptionId, e -> {
@@ -431,11 +431,11 @@ class CompetingConsumerSubscriptionModelTest {
                 .build());
     }
 
-    private static MongoLeaseCompetingConsumerStrategy loggingStrategy(String name, MongoTemplate mongoTemplate) {
-        return loggingStrategy(name, MongoLeaseCompetingConsumerStrategy.withDefaults(mongoTemplate));
+    private static SpringMongoLeaseCompetingConsumerStrategy loggingStrategy(String name, MongoTemplate mongoTemplate) {
+        return loggingStrategy(name, SpringMongoLeaseCompetingConsumerStrategy.withDefaults(mongoTemplate));
     }
 
-    private static MongoLeaseCompetingConsumerStrategy loggingStrategy(String name, MongoLeaseCompetingConsumerStrategy strategy) {
+    private static SpringMongoLeaseCompetingConsumerStrategy loggingStrategy(String name, SpringMongoLeaseCompetingConsumerStrategy strategy) {
         strategy.addListener(new CompetingConsumerStrategy.CompetingConsumerListener() {
             @Override
             public void onConsumeGranted(String subscriptionId, String subscriberId) {

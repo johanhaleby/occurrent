@@ -5,8 +5,6 @@ public interface CompetingConsumerStrategy {
 
     void unregisterCompetingConsumer(String subscriptionId, String subscriberId);
 
-    boolean isRegisteredCompetingConsumer(String subscriptionId, String subscriberId);
-
     boolean hasLock(String subscriptionId, String subscriberId);
 
     void addListener(CompetingConsumerListener listenerConsumer);
