@@ -27,6 +27,7 @@
     <modules>
         <module>blocking</module>
         <module>blocking-position-storage</module>
+        <module>blocking-competing-consumer-strategy</module>
     </modules>
     <modelVersion>4.0.0</modelVersion>
 </project>
