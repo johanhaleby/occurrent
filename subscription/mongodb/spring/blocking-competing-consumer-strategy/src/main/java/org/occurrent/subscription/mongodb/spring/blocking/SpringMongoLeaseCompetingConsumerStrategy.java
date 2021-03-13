@@ -17,7 +17,7 @@ import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.function.Function;
 
-public class MongoLeaseCompetingConsumerStrategy implements CompetingConsumerStrategy {
+public class SpringMongoLeaseCompetingConsumerStrategy implements CompetingConsumerStrategy {
 
     public static final String DEFAULT_COMPETING_CONSUMER_LOCKS_COLLECTION = "competing-consumer-locks";
     public static final Duration DEFAULT_LEASE_TIME = Duration.ofSeconds(20);
@@ -33,11 +33,11 @@ public class MongoLeaseCompetingConsumerStrategy implements CompetingConsumerStr
 
     private volatile boolean running;
 
-    public static MongoLeaseCompetingConsumerStrategy withDefaults(MongoOperations mongoOperations) {
-        return new MongoLeaseCompetingConsumerStrategy.Builder(mongoOperations).build();
+    public static SpringMongoLeaseCompetingConsumerStrategy withDefaults(MongoOperations mongoOperations) {
+        return new SpringMongoLeaseCompetingConsumerStrategy.Builder(mongoOperations).build();
     }
 
-    private MongoLeaseCompetingConsumerStrategy(MongoOperations mongoOperations, Duration leaseTime, String collectionName, Clock clock, ScheduledRefresh scheduledRefresh, RetryStrategy retryStrategy) {
+    private SpringMongoLeaseCompetingConsumerStrategy(MongoOperations mongoOperations, Duration leaseTime, String collectionName, Clock clock, ScheduledRefresh scheduledRefresh, RetryStrategy retryStrategy) {
         Objects.requireNonNull(mongoOperations, MongoOperations.class.getSimpleName() + " cannot be null");
         Objects.requireNonNull(clock, Clock.class.getSimpleName() + " cannot be null");
         Objects.requireNonNull(leaseTime, "Lease time cannot be null");
@@ -88,13 +88,6 @@ public class MongoLeaseCompetingConsumerStrategy implements CompetingConsumerStr
         if (status == Status.LOCK_ACQUIRED) {
             competingConsumerListeners.forEach(listener -> listener.onConsumeProhibited(subscriptionId, subscriberId));
         }
-    }
-
-    @Override
-    public boolean isRegisteredCompetingConsumer(String subscriptionId, String subscriberId) {
-        Objects.requireNonNull(subscriptionId, "Subscription id cannot be null");
-        Objects.requireNonNull(subscriberId, "Subscriber id cannot be null");
-        return competingConsumers.containsKey(new CompetingConsumer(subscriptionId, subscriberId));
     }
 
     @Override
@@ -214,12 +207,12 @@ public class MongoLeaseCompetingConsumerStrategy implements CompetingConsumerStr
             return this;
         }
 
-        public MongoLeaseCompetingConsumerStrategy build() {
+        public SpringMongoLeaseCompetingConsumerStrategy build() {
             Clock clockToUse = clock == null ? Clock.systemUTC() : clock;
             Duration leaseTimeToUse = leaseTime == null ? DEFAULT_LEASE_TIME : leaseTime;
             String collectionNameToUse = collectionName == null ? DEFAULT_COMPETING_CONSUMER_LOCKS_COLLECTION : collectionName;
             RetryStrategy retryStrategyToUse = retryStrategy == null ? RetryStrategy.exponentialBackoff(Duration.ofMillis(100), Duration.ofSeconds(2), 2.0f) : retryStrategy;
-            return new MongoLeaseCompetingConsumerStrategy(mongoOperations, leaseTimeToUse, collectionNameToUse, clockToUse, ScheduledRefresh.auto(), retryStrategyToUse);
+            return new SpringMongoLeaseCompetingConsumerStrategy(mongoOperations, leaseTimeToUse, collectionNameToUse, clockToUse, ScheduledRefresh.auto(), retryStrategyToUse);
         }
     }
 }
