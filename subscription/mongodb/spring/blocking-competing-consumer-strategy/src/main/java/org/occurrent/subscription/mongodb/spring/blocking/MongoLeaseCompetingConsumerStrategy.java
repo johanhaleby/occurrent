@@ -70,17 +70,13 @@ public class MongoLeaseCompetingConsumerStrategy implements CompetingConsumerStr
         Objects.requireNonNull(subscriptionId, "Subscription id cannot be null");
         Objects.requireNonNull(subscriberId, "Subscriber id cannot be null");
 
-        log.info("### [registerCompetingConsumer] {} {}", subscriptionId, subscriberId);
         CompetingConsumer competingConsumer = new CompetingConsumer(subscriptionId, subscriberId);
         Status oldStatus = competingConsumers.get(competingConsumer);
         boolean acquired = withCompetingConsumerLocksCollectionDo(collection -> MongoListenerLockService.acquireOrRefreshFor(collection, clock, retryStrategy, leaseTime, subscriptionId, subscriberId)).isPresent();
-        log.info("### [registerCompetingConsumer] acquired {} {} {}", acquired, subscriptionId, subscriberId);
         competingConsumers.put(competingConsumer, acquired ? Status.LOCK_ACQUIRED : Status.LOCK_NOT_ACQUIRED);
         if (oldStatus != Status.LOCK_ACQUIRED && acquired) {
-            log.info("### [registerCompetingConsumer] oldLock false, new true {} {}", subscriptionId, subscriberId);
             competingConsumerListeners.forEach(listener -> listener.onConsumeGranted(subscriptionId, subscriberId));
         } else if (oldStatus == Status.LOCK_ACQUIRED && !acquired) {
-            log.info("### [registerCompetingConsumer] oldLock true, new false {} {}", subscriptionId, subscriberId);
             competingConsumerListeners.forEach(listener -> listener.onConsumeProhibited(subscriptionId, subscriberId));
         }
         return acquired;
@@ -90,11 +86,9 @@ public class MongoLeaseCompetingConsumerStrategy implements CompetingConsumerStr
     public synchronized void unregisterCompetingConsumer(String subscriptionId, String subscriberId) {
         Objects.requireNonNull(subscriptionId, "Subscription id cannot be null");
         Objects.requireNonNull(subscriberId, "Subscriber id cannot be null");
-        log.info("### [unregisterCompetingConsumer] {} {}", subscriptionId, subscriberId);
         Status status = competingConsumers.remove(new CompetingConsumer(subscriptionId, subscriberId));
         withCompetingConsumerLocksCollectionDo(collection -> MongoListenerLockService.remove(collection, retryStrategy, subscriptionId));
         if (status == Status.LOCK_ACQUIRED) {
-            log.info("### [unregisterCompetingConsumer] LOCK_ACQUIRED {} {}", subscriptionId, subscriberId);
             competingConsumerListeners.forEach(listener -> listener.onConsumeProhibited(subscriptionId, subscriberId));
         }
     }
@@ -143,18 +137,13 @@ public class MongoLeaseCompetingConsumerStrategy implements CompetingConsumerStr
     private void refreshOrAcquireLease() {
         competingConsumers.forEach((cc, status) -> {
             if (status == Status.LOCK_ACQUIRED) {
-                log.info("### [refreshOrAcquireLease] Lock is acquired by {} {}", cc.subscriptionId, cc.subscriberId);
                 boolean stillHasLock = withCompetingConsumerLocksCollectionDo(collection -> MongoListenerLockService.commit(collection, clock, retryStrategy, leaseTime, cc.subscriptionId, cc.subscriberId));
                 if (!stillHasLock) {
-                    log.info("### [refreshOrAcquireLease] Lock was lost {} {}", cc.subscriptionId, cc.subscriberId);
                     // Lock was lost!
                     competingConsumers.put(cc, Status.LOCK_NOT_ACQUIRED);
                     competingConsumerListeners.forEach(listener -> listener.onConsumeProhibited(cc.subscriptionId, cc.subscriberId));
-                } else {
-                    log.info("### [refreshOrAcquireLease] Still has lock {} {}", cc.subscriptionId, cc.subscriberId);
                 }
             } else {
-                log.info("### [refreshOrAcquireLease] Will try to acquire lock {} {}", cc.subscriptionId, cc.subscriberId);
                 registerCompetingConsumer(cc.subscriptionId, cc.subscriberId);
             }
         });

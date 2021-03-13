@@ -35,7 +35,6 @@ import java.time.Duration;
 import java.util.function.Supplier;
 
 import static java.util.Objects.requireNonNull;
-import static org.occurrent.retry.Backoff.exponential;
 import static org.occurrent.retry.internal.RetryExecution.executeWithRetry;
 import static org.occurrent.subscription.mongodb.internal.MongoCloudEventsToJsonDeserializer.ID;
 import static org.springframework.data.mongodb.core.query.Criteria.where;
@@ -97,7 +96,6 @@ public class SpringMongoSubscriptionPositionStorage implements SubscriptionPosit
     @Override
     public SubscriptionPosition save(String subscriptionId, SubscriptionPosition subscriptionPosition) {
         Supplier<SubscriptionPosition> save = () -> {
-            log.info("### [SubscriptionPosition] saving {} {}", subscriptionId, subscriptionPosition);
             if (subscriptionPosition instanceof MongoResumeTokenSubscriptionPosition) {
                 persistResumeTokenStreamPosition(subscriptionId, ((MongoResumeTokenSubscriptionPosition) subscriptionPosition).resumeToken);
             } else if (subscriptionPosition instanceof MongoOperationTimeSubscriptionPosition) {

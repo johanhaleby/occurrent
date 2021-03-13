@@ -18,7 +18,6 @@ import org.occurrent.eventstore.api.blocking.EventStore;
 import org.occurrent.eventstore.mongodb.spring.blocking.EventStoreConfig;
 import org.occurrent.eventstore.mongodb.spring.blocking.SpringMongoEventStore;
 import org.occurrent.mongodb.timerepresentation.TimeRepresentation;
-import org.occurrent.subscription.PositionAwareCloudEvent;
 import org.occurrent.subscription.StartAt;
 import org.occurrent.subscription.api.blocking.CompetingConsumerStrategy;
 import org.occurrent.subscription.blocking.durable.DurableSubscriptionModel;
@@ -40,7 +39,6 @@ import java.time.Duration;
 import java.time.LocalDateTime;
 import java.util.UUID;
 import java.util.concurrent.CopyOnWriteArrayList;
-import java.util.stream.Collectors;
 import java.util.stream.Stream;
 
 import static java.time.ZoneOffset.UTC;
@@ -307,7 +305,6 @@ class CompetingConsumerSubscriptionModelTest {
     @Test
     @Timeout(10)
     void stopping_and_starting_both_competing_subscription_models_several_times() {
-        log.info("### stopping_and_starting_both_competing_subscription_models_several_times test");
 
         // Given
         CopyOnWriteArrayList<Tuple> cloudEvents = new CopyOnWriteArrayList<>();
@@ -317,11 +314,9 @@ class CompetingConsumerSubscriptionModelTest {
 
         String subscriptionId = UUID.randomUUID().toString();
         competingConsumerSubscriptionModel1.subscribe(subscriptionId, e -> {
-            log.info("### [1] Adding {} (position={})", e.getId(), PositionAwareCloudEvent.getSubscriptionPositionOrThrowIAE(e));
             cloudEvents.add(tuple("1", e));
         }).waitUntilStarted();
         competingConsumerSubscriptionModel2.subscribe(subscriptionId, e -> {
-            log.info("### [2] Adding {} (position={})", e.getId(), PositionAwareCloudEvent.getSubscriptionPositionOrThrowIAE(e));
             cloudEvents.add(tuple("2", e));
         }).waitUntilStarted();
 
@@ -359,13 +354,7 @@ class CompetingConsumerSubscriptionModelTest {
         competingConsumerSubscriptionModel2.start();
 
         // Then
-        try {
-            await("waiting for second event").atMost(5, SECONDS).untilAsserted(() -> assertThat(cloudEvents.stream().map(t -> ((CloudEvent) t.toArray()[1]).getId())).containsExactly("1", "2", "3", "4", "5"));
-        } catch (Throwable t) {
-            log.info("### stopping_and_starting_both_competing_subscription_models_several_times test failed: {}", cloudEvents);
-            log.info("### failed because: {}", cloudEvents.stream().map(t1 -> t1.toArray()[0] + ":" + ((CloudEvent) t1.toArray()[1]).getId()).collect(Collectors.toList()));
-            throw t;
-        }
+        await("waiting for second event").atMost(5, SECONDS).untilAsserted(() -> assertThat(cloudEvents.stream().map(t -> ((CloudEvent) t.toArray()[1]).getId())).containsExactly("1", "2", "3", "4", "5"));
     }
 
     // Note that pausing a subscription is async when using the SpringMongoSubscriptionModel.
@@ -376,7 +365,6 @@ class CompetingConsumerSubscriptionModelTest {
     @Timeout(20)
     @RepeatedIfExceptionsTest(repeats = 3, suspend = 500)
     void pausing_and_resuming_both_competing_subscription_models_several_times() {
-        System.out.println("### pausing_and_resuming_both_competing_subscription_models_several_times test");
 
         // Given
         CopyOnWriteArrayList<Tuple> cloudEvents = new CopyOnWriteArrayList<>();
@@ -386,11 +374,9 @@ class CompetingConsumerSubscriptionModelTest {
 
         String subscriptionId = UUID.randomUUID().toString();
         competingConsumerSubscriptionModel1.subscribe(subscriptionId, e -> {
-            log.info("### [1] Adding {} (position={})", e.getId(), PositionAwareCloudEvent.getSubscriptionPositionOrThrowIAE(e));
             cloudEvents.add(tuple("1", e));
         }).waitUntilStarted();
         competingConsumerSubscriptionModel2.subscribe(subscriptionId, e -> {
-            log.info("### [2] Adding {} (position={})", e.getId(), PositionAwareCloudEvent.getSubscriptionPositionOrThrowIAE(e));
             cloudEvents.add(tuple("2", e));
         }).waitUntilStarted();
 
@@ -430,13 +416,7 @@ class CompetingConsumerSubscriptionModelTest {
         competingConsumerSubscriptionModel2.resumeSubscription(subscriptionId).waitUntilStarted();
 
         // Then
-        try {
-            await("waiting for all events").atMost(5, SECONDS).untilAsserted(() -> assertThat(cloudEvents.stream().map(t -> ((CloudEvent) t.toArray()[1]).getId())).containsExactly("1", "2", "3", "4", "5"));
-        } catch (Throwable t) {
-            log.info("### pausing_and_resuming_both_competing_subscription_models_several_times test failed: {}", cloudEvents);
-            log.info("### failed because: {}", cloudEvents.stream().map(t1 -> t1.toArray()[0] + ":" + ((CloudEvent) t1.toArray()[1]).getId()).collect(Collectors.toList()));
-            throw t;
-        }
+        await("waiting for all events").atMost(5, SECONDS).untilAsserted(() -> assertThat(cloudEvents.stream().map(t -> ((CloudEvent) t.toArray()[1]).getId())).containsExactly("1", "2", "3", "4", "5"));
     }
 
     private Stream<CloudEvent> serialize(DomainEvent e) {

@@ -43,23 +43,18 @@ public class CompetingConsumerSubscriptionModel implements DelegatingSubscriptio
     public Subscription subscribe(String subscriberId, String subscriptionId, SubscriptionFilter filter, StartAt startAt, Consumer<CloudEvent> action) {
         Objects.requireNonNull(subscriberId, "SubscriberId cannot be null");
         Objects.requireNonNull(subscriptionId, "SubscriptionId cannot be null");
-        log.info("### [subscribe] {} {}", subscriptionId, subscriberId);
 
         SubscriptionIdAndSubscriberId subscriptionIdAndSubscriberId = SubscriptionIdAndSubscriberId.from(subscriptionId, subscriberId);
         final CompetingConsumerSubscription competingConsumerSubscription;
         if (competingConsumerStrategy.registerCompetingConsumer(subscriptionId, subscriberId)) {
-            log.info("### [subscribe] registerCompetingConsumer true {} {}", subscriptionId, subscriberId);
             Subscription subscription = delegate.subscribe(subscriptionId, filter, startAt, action);
             competingConsumerSubscription = new CompetingConsumerSubscription(subscriptionId, subscriberId, subscription);
             competingConsumers.put(subscriptionIdAndSubscriberId, new CompetingConsumer(subscriptionIdAndSubscriberId, new Running()));
         } else {
-            log.info("### [subscribe] registerCompetingConsumer false {} {}", subscriptionId, subscriberId);
             competingConsumers.put(subscriptionIdAndSubscriberId, new CompetingConsumer(subscriptionIdAndSubscriberId, new Waiting(() -> {
                 if (!delegate.isRunning()) {
-                    log.info("### [subscribe] registerCompetingConsumer false: starting {} {}", subscriptionId, subscriberId);
                     delegate.start();
                 }
-                log.info("### [subscribe] registerCompetingConsumer false: delegate subscribe {} {}", subscriptionId, subscriberId);
                 return delegate.subscribe(subscriptionId, filter, startAt, action);
             })));
             competingConsumerSubscription = new CompetingConsumerSubscription(subscriptionId, subscriberId);
@@ -74,11 +69,9 @@ public class CompetingConsumerSubscriptionModel implements DelegatingSubscriptio
 
     @Override
     public synchronized void cancelSubscription(String subscriptionId) {
-        log.info("### {} [cancelSubscription] cancelling", CompetingConsumerSubscriptionModel.class.getSimpleName());
         delegate.cancelSubscription(subscriptionId);
         findFirstCompetingConsumerMatching(cc -> cc.hasSubscriptionId(subscriptionId))
                 .ifPresent(cc -> unregisterCompetingConsumer(cc, __ -> competingConsumers.remove(cc.subscriptionIdAndSubscriberId)));
-        log.info("### {} [cancelSubscription] cancelled", CompetingConsumerSubscriptionModel.class.getSimpleName());
     }
 
     @Override
@@ -87,10 +80,8 @@ public class CompetingConsumerSubscriptionModel implements DelegatingSubscriptio
             return;
         }
 
-        log.info("### {} [stop] stopping", CompetingConsumerSubscriptionModel.class.getSimpleName());
         delegate.stop();
         unregisterAllCompetingConsumers(cc -> competingConsumers.put(cc.subscriptionIdAndSubscriberId, cc.registerPaused()));
-        log.info("### {} [stop] stopped", CompetingConsumerSubscriptionModel.class.getSimpleName());
     }
 
     @Override
@@ -99,7 +90,6 @@ public class CompetingConsumerSubscriptionModel implements DelegatingSubscriptio
             throw new IllegalStateException(CompetingConsumerSubscriptionModel.class.getSimpleName() + " is already started");
         }
 
-        log.info("### {} [start] starting", CompetingConsumerSubscriptionModel.class.getSimpleName());
 
         // Note that we deliberately don't start the delegate subscription model here!!
         // This is because we're not sure that we have the lock. It'll the underlying SM be started
@@ -116,7 +106,6 @@ public class CompetingConsumerSubscriptionModel implements DelegatingSubscriptio
                             }
                         }
                 );
-        log.info("### {} [start] started", CompetingConsumerSubscriptionModel.class.getSimpleName());
     }
 
     @Override
@@ -139,28 +128,23 @@ public class CompetingConsumerSubscriptionModel implements DelegatingSubscriptio
         if (isRunning(subscriptionId)) {
             throw new IllegalArgumentException("Subscription " + subscriptionId + " is not paused");
         }
-        log.info("### [resumeSubscription] {}", subscriptionId);
         return findFirstCompetingConsumerMatching(competingConsumer -> competingConsumer.hasSubscriptionId(subscriptionId))
                 .map(competingConsumer -> {
                     final Subscription subscription;
                     String subscriberId = competingConsumer.getSubscriberId();
                     if (hasLock(subscriptionId, subscriberId)) {
                         if (competingConsumer.isWaiting()) {
-                            log.info("### [resumeSubscription] has lock and waiting {} {}", subscriptionId, competingConsumer.getSubscriberId());
                             subscription = startWaitingConsumer(competingConsumer);
                         } else {
-                            log.info("### [resumeSubscription] has lock and NOT waiting {} {}", subscriptionId, competingConsumer.getSubscriberId());
                             competingConsumers.put(competingConsumer.subscriptionIdAndSubscriberId, competingConsumer.registerRunning());
                             // This works because we've checked that it's already paused earlier
                             subscription = delegate.resumeSubscription(subscriptionId);
                         }
                     } else if (registerCompetingConsumer(subscriptionId, subscriberId) && !competingConsumer.isWaiting()) {
-                        log.info("### [resumeSubscription] registeredCompetingConsumer {} {}", subscriptionId, competingConsumer.getSubscriberId());
                         // This works because we've checked that it's already paused earlier
                         competingConsumers.put(competingConsumer.subscriptionIdAndSubscriberId, competingConsumer.registerRunning());
                         subscription = delegate.resumeSubscription(subscriptionId);
                     } else {
-                        log.info("### [resumeSubscription] else {} {}", subscriptionId, competingConsumer.getSubscriberId());
                         // We're not allowed to resume since we don't have the lock.
                         subscription = new CompetingConsumerSubscription(subscriptionId, subscriberId);
                     }
@@ -174,11 +158,9 @@ public class CompetingConsumerSubscriptionModel implements DelegatingSubscriptio
         if (isPaused(subscriptionId)) {
             throw new IllegalArgumentException("Subscription " + subscriptionId + " is already paused");
         }
-        log.info("### [pauseSubscription] {}", subscriptionId);
         findFirstCompetingConsumerMatching(competingConsumer -> competingConsumer.hasSubscriptionId(subscriptionId))
                 .filter(not(CompetingConsumer::isWaiting))
                 .ifPresent(competingConsumer -> {
-                    log.info("### [pauseSubscription] running {} {}", subscriptionId, competingConsumer.getSubscriberId());
                     delegate.pauseSubscription(subscriptionId);
                     competingConsumers.put(SubscriptionIdAndSubscriberId.from(competingConsumer), competingConsumer.registerPaused(true));
                     competingConsumerStrategy.unregisterCompetingConsumer(competingConsumer.getSubscriptionId(), competingConsumer.getSubscriberId());
@@ -193,28 +175,23 @@ public class CompetingConsumerSubscriptionModel implements DelegatingSubscriptio
     @PreDestroy
     @Override
     public synchronized void shutdown() {
-        log.info("### {} [shutdown] shutting down", CompetingConsumerSubscriptionModel.class.getSimpleName());
         delegate.shutdown();
         unregisterAllCompetingConsumers(cc -> competingConsumers.remove(cc.subscriptionIdAndSubscriberId));
         competingConsumerStrategy.removeListener(this);
         competingConsumerStrategy.shutdown();
-        log.info("### {} [shutdown] shutdown completed", CompetingConsumerSubscriptionModel.class.getSimpleName());
     }
 
     @Override
     public synchronized void onConsumeGranted(String subscriptionId, String subscriberId) {
         CompetingConsumer competingConsumer = competingConsumers.get(SubscriptionIdAndSubscriberId.from(subscriptionId, subscriberId));
         if (competingConsumer == null) {
-            log.info("### [onConsumeGranted] competingConsumer == null {} {}", subscriptionId, subscriberId);
             return;
         }
 
         if (competingConsumer.isWaiting()) {
-            log.info("### [onConsumeGranted] isWaiting {} {}", subscriptionId, subscriberId);
             startWaitingConsumer(competingConsumer);
         } else if (competingConsumer.isPaused()) {
             Paused state = (Paused) competingConsumer.state;
-            log.info("### [onConsumeGranted] isPaused (state.pausedByUser = {}) {} {}", state.pausedByUser, subscriptionId, subscriberId);
             if (!state.pausedByUser) {
                 resumeSubscription(subscriptionId);
             }
@@ -226,23 +203,19 @@ public class CompetingConsumerSubscriptionModel implements DelegatingSubscriptio
         SubscriptionIdAndSubscriberId subscriptionIdAndSubscriberId = SubscriptionIdAndSubscriberId.from(subscriptionId, subscriberId);
         CompetingConsumer competingConsumer = competingConsumers.get(subscriptionIdAndSubscriberId);
         if (competingConsumer == null) {
-            log.info("### [onConsumeProhibited] competingConsumer == null {} {}", subscriptionId, subscriberId);
             return;
         }
 
         if (competingConsumer.isRunning()) {
-            log.info("### [onConsumeProhibited] isRunning {} {}", subscriptionId, subscriberId);
             pauseSubscription(subscriptionId);
             pauseConsumer(competingConsumer, false);
         } else if (competingConsumer.isPaused()) {
-            log.info("### [onConsumeProhibited] isPaused {} {}", subscriptionId, subscriberId);
             Paused paused = (Paused) competingConsumer.state;
             pauseConsumer(competingConsumer, paused.pausedByUser);
         }
     }
 
     private Subscription startWaitingConsumer(CompetingConsumer cc) {
-        log.info("### [startWaitingConsumer] {} {}", cc.getSubscriptionId(), cc.getSubscriberId());
         String subscriptionId = cc.getSubscriptionId();
         competingConsumers.put(SubscriptionIdAndSubscriberId.from(subscriptionId, cc.getSubscriberId()), cc.registerRunning());
         return ((Waiting) cc.state).startSubscription();

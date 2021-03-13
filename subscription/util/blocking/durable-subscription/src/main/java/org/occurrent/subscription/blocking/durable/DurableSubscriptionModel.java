@@ -91,9 +91,7 @@ public class DurableSubscriptionModel implements PositionAwareSubscriptionModel,
                     }
                 }
 
-                StartAt startAt1 = subscriptionPosition == null ? StartAt.subscriptionModelDefault() : StartAt.subscriptionPosition(subscriptionPosition);
-                System.out.println("### [Durable] Starting at " + startAt1);
-                return startAt1;
+                return subscriptionPosition == null ? StartAt.subscriptionModelDefault() : StartAt.subscriptionPosition(subscriptionPosition);
             });
         } else {
             startAtToUse = startAt;
