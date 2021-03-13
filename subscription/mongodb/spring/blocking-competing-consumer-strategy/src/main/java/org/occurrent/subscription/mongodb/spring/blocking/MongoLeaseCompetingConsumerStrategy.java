@@ -5,8 +5,6 @@ import org.bson.BsonDocument;
 import org.occurrent.retry.RetryStrategy;
 import org.occurrent.retry.RetryStrategy.Retry;
 import org.occurrent.subscription.api.blocking.CompetingConsumerStrategy;
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
 import org.springframework.data.mongodb.core.MongoOperations;
 
 import javax.annotation.PreDestroy;
@@ -20,7 +18,6 @@ import java.util.concurrent.ConcurrentHashMap;
 import java.util.function.Function;
 
 public class MongoLeaseCompetingConsumerStrategy implements CompetingConsumerStrategy {
-    private static final Logger log = LoggerFactory.getLogger(MongoLeaseCompetingConsumerStrategy.class);
 
     public static final String DEFAULT_COMPETING_CONSUMER_LOCKS_COLLECTION = "competing-consumer-locks";
     public static final Duration DEFAULT_LEASE_TIME = Duration.ofSeconds(20);
