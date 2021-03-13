@@ -5,8 +5,6 @@ import org.occurrent.subscription.StartAt;
 import org.occurrent.subscription.SubscriptionFilter;
 import org.occurrent.subscription.api.blocking.*;
 import org.occurrent.subscription.api.blocking.CompetingConsumerStrategy.CompetingConsumerListener;
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
 
 import javax.annotation.PreDestroy;
 import java.util.Objects;
@@ -25,7 +23,6 @@ import static org.occurrent.functionalsupport.internal.FunctionalSupport.not;
 import static org.occurrent.subscription.blocking.competingconsumers.CompetingConsumerSubscriptionModel.CompetingConsumerState.*;
 
 public class CompetingConsumerSubscriptionModel implements DelegatingSubscriptionModel, SubscriptionModel, SubscriptionModelLifeCycle, CompetingConsumerListener {
-    private static final Logger log = LoggerFactory.getLogger(CompetingConsumerSubscriptionModel.class);
 
     private final SubscriptionModel delegate;
     private final CompetingConsumerStrategy competingConsumerStrategy;
