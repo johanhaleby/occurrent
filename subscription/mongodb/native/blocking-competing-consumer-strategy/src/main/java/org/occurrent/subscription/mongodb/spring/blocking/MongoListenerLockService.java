@@ -18,8 +18,6 @@ import org.bson.BsonDocument;
 import org.bson.Document;
 import org.bson.conversions.Bson;
 import org.occurrent.retry.RetryStrategy;
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
 
 import java.time.Clock;
 import java.time.Duration;
@@ -38,7 +36,6 @@ import static java.util.Arrays.asList;
 import static java.util.Collections.singletonList;
 
 class MongoListenerLockService {
-    private static final Logger log = LoggerFactory.getLogger(MongoListenerLockService.class);
 
     /**
      * Attempts to acquire the lock for the current subscriber ID, or refresh a lock already held by
@@ -56,7 +53,6 @@ class MongoListenerLockService {
      */
     static Optional<ListenerLock> acquireOrRefreshFor(MongoCollection<BsonDocument> collection, Clock clock, RetryStrategy retryStrategy, Duration leaseTime, String subscriptionId, String subscriberId) {
         return retryStrategy.execute(() -> {
-            log.debug("Attempt acquire or refresh lock. subscriptionId={} subscriberId={}", subscriptionId, subscriberId);
 
             try {
                 final BsonDocument found = collection
@@ -80,19 +76,13 @@ class MongoListenerLockService {
 
                 final ListenerLock lock = new ListenerLock(found.getNumber("version"));
 
-                log.debug("Lock acquired or refreshed. subscriptionId={} subscriberId={} lockVersion={}", subscriptionId, subscriberId, lock.version());
 
                 return Optional.of(lock);
             } catch (MongoCommandException e) {
                 final ErrorCategory errorCategory = ErrorCategory.fromErrorCode(e.getErrorCode());
 
                 if (errorCategory.equals(DUPLICATE_KEY)) {
-                    log.debug("Lock owned by another subscriber. subscriptionId={} subscriberId={}", subscriptionId, subscriberId);
-                    return Optional.empty();
                 }
-
-                log.error("Error trying to acquire or refresh lock subscriptionId={} subscriberId={}",
-                        subscriptionId, subscriberId, e);
 
                 throw e;
             }
@@ -118,10 +108,6 @@ class MongoListenerLockService {
                 return false;
             }
 
-            if (log.isDebugEnabled()) {
-                LocalDateTime localDateTime = LocalDateTime.ofInstant(newLeaseTime, clock.getZone());
-                log.debug("Updated lock expiration date for lock to {}. subscriptionId={} subscriberId={}", localDateTime, subscriptionId, subscriberId);
-            }
             return true;
         });
     }
