@@ -36,7 +36,7 @@
         </dependency>
         <dependency>
             <groupId>org.occurrent</groupId>
-            <artifactId>subscription-mongodb-common</artifactId>
+            <artifactId>subscription-mongodb-base</artifactId>
             <version>0.8.1-SNAPSHOT</version>
         </dependency>
         <dependency>

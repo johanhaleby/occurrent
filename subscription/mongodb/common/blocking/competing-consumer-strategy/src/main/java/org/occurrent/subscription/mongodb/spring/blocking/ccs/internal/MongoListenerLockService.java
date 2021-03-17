@@ -4,7 +4,7 @@
  * Copyright (c) 2020 Alec Henninger
  */
 
-package org.occurrent.subscription.mongodb.spring.blocking;
+package org.occurrent.subscription.mongodb.spring.blocking.ccs.internal;
 
 import com.mongodb.ErrorCategory;
 import com.mongodb.MongoCommandException;
