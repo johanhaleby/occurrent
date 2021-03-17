@@ -12,10 +12,10 @@ import java.time.Clock;
 import java.time.Duration;
 import java.util.Objects;
 
-public class MongoLeaseCompetingConsumerStrategy implements CompetingConsumerStrategy {
+import static org.occurrent.subscription.mongodb.spring.blocking.ccs.internal.MongoLeaseCompetingConsumerStrategySupport.DEFAULT_COMPETING_CONSUMER_LOCKS_COLLECTION;
+import static org.occurrent.subscription.mongodb.spring.blocking.ccs.internal.MongoLeaseCompetingConsumerStrategySupport.DEFAULT_LEASE_TIME;
 
-    public static final String DEFAULT_COMPETING_CONSUMER_LOCKS_COLLECTION = "competing-consumer-locks";
-    public static final Duration DEFAULT_LEASE_TIME = Duration.ofSeconds(20);
+public class MongoLeaseCompetingConsumerStrategy implements CompetingConsumerStrategy {
 
     private final MongoCollection<BsonDocument> collection;
     private final MongoLeaseCompetingConsumerStrategySupport support;
@@ -42,7 +42,7 @@ public class MongoLeaseCompetingConsumerStrategy implements CompetingConsumerStr
 
     @Override
     public boolean hasLock(String subscriptionId, String subscriberId) {
-        return support.hasLock(collection, subscriptionId, subscriberId);
+        return support.hasLock(subscriptionId, subscriberId);
     }
 
     @Override

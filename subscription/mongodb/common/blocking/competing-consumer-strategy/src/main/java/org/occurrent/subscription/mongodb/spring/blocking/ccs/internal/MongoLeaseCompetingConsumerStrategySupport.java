@@ -47,7 +47,7 @@ public class MongoLeaseCompetingConsumerStrategySupport {
     }
 
     public MongoLeaseCompetingConsumerStrategySupport scheduleRefresh(Function<Consumer<MongoCollection<BsonDocument>>, Runnable> fn) {
-        scheduledRefresh.scheduleInBackground(fn.apply(this::refreshOrAcquireLease), leaseTime);
+        scheduledRefresh.scheduleInBackground(() -> fn.apply(this::refreshOrAcquireLease).run(), leaseTime);
         return this;
     }
 
@@ -77,7 +77,7 @@ public class MongoLeaseCompetingConsumerStrategySupport {
         }
     }
 
-    public boolean hasLock(MongoCollection<BsonDocument> collection, String subscriptionId, String subscriberId) {
+    public boolean hasLock(String subscriptionId, String subscriberId) {
         Objects.requireNonNull(subscriptionId, "Subscription id cannot be null");
         Objects.requireNonNull(subscriberId, "Subscriber id cannot be null");
         Status status = competingConsumers.get(new CompetingConsumer(subscriptionId, subscriberId));

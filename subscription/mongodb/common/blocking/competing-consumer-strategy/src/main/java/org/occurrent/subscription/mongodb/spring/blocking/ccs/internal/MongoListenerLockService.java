@@ -22,7 +22,6 @@ import org.occurrent.retry.RetryStrategy;
 import java.time.Clock;
 import java.time.Duration;
 import java.time.Instant;
-import java.time.LocalDateTime;
 import java.util.HashMap;
 import java.util.Map;
 import java.util.Optional;
@@ -53,7 +52,6 @@ class MongoListenerLockService {
      */
     static Optional<ListenerLock> acquireOrRefreshFor(MongoCollection<BsonDocument> collection, Clock clock, RetryStrategy retryStrategy, Duration leaseTime, String subscriptionId, String subscriberId) {
         return retryStrategy.execute(() -> {
-
             try {
                 final BsonDocument found = collection
                         .withWriteConcern(WriteConcern.MAJORITY)
@@ -82,6 +80,7 @@ class MongoListenerLockService {
                 final ErrorCategory errorCategory = ErrorCategory.fromErrorCode(e.getErrorCode());
 
                 if (errorCategory.equals(DUPLICATE_KEY)) {
+                    return Optional.empty();
                 }
 
                 throw e;
