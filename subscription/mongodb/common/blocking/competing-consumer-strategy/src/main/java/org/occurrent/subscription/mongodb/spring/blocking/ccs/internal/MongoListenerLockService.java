@@ -103,11 +103,7 @@ class MongoListenerLockService {
                                     eq("subscriberId", subscriberId)),
                             set("expiresAt", newLeaseTime));
 
-            if (result.getMatchedCount() == 0) {
-                return false;
-            }
-
-            return true;
+            return result.getMatchedCount() != 0;
         });
     }
 

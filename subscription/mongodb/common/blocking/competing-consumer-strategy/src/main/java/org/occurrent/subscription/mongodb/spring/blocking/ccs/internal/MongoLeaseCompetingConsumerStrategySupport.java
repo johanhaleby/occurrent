@@ -16,6 +16,9 @@ import java.util.concurrent.ConcurrentHashMap;
 import java.util.function.Consumer;
 import java.util.function.Function;
 
+/**
+ * Common operations for MongoDB lease-based competing consumer strategies
+ */
 public class MongoLeaseCompetingConsumerStrategySupport {
 
     public static final String DEFAULT_COMPETING_CONSUMER_LOCKS_COLLECTION = "competing-consumer-locks";

@@ -22,6 +22,30 @@ import static java.util.Objects.requireNonNull;
 import static org.occurrent.functionalsupport.internal.FunctionalSupport.not;
 import static org.occurrent.subscription.blocking.competingconsumers.CompetingConsumerSubscriptionModel.CompetingConsumerState.*;
 
+/**
+ * A competing consumer subscription model wraps another subscription model to allow several subscribers to subscribe to the same subscription. One of the subscribes will get a lock of the subscription
+ * and receive events from it. If a subscriber looses its lock, another subscriber will take over automatically. To achieve distributed locking, the subscription model uses a {@link CompetingConsumerStrategy} to
+ * support different algorithms. You can write custom algorithms by implementing this interface yourself. Here's an example of how to create and use the {@link CompetingConsumerSubscriptionModel}. This example
+ * uses the {@code NativeMongoLeaseCompetingConsumerStrategy} from module {@code org.occurrent:subscription-mongodb-native-blocking-competing-consumer-strategy}.
+ * It also wraps the <a href="https://occurrent.org/documentation#durable-subscriptions-blocking">DurableSubscriptionModel</a> which in turn wraps the
+ * <a href="https://occurrent.org/documentation#blocking-subscription-using-the-native-java-mongodb-driver">Native MongoDB</a> subscription model.
+ * <br>
+ * <br>
+ * <pre>
+ * MongoDatabase mongoDatabase = mongoClient.getDatabase("some-database");
+ * SubscriptionPositionStorage positionStorage = NativeMongoSubscriptionPositionStorage(mongoDatabase, "position-storage");
+ * SubscriptionModel wrappedSubscriptionModel = new DurableSubscriptionModel(new NativeMongoSubscriptionModel(mongoDatabase, "events", TimeRepresentation.DATE), positionStorage);
+ *
+ * // Create the CompetingConsumerSubscriptionModel
+ * NativeMongoLeaseCompetingConsumerStrategy competingConsumerStrategy = NativeMongoLeaseCompetingConsumerStrategy.withDefaults(mongoDatabase);
+ * CompetingConsumerSubscriptionModel competingConsumerSubscriptionModel = new CompetingConsumerSubscriptionModel(wrappedSubscriptionModel, competingConsumerStrategy);
+ *
+ * // Now subscribe!
+ * competingConsumerSubscriptionModel.subscribe("subscriptionId", type("SomeEvent"));
+ * </pre>
+ * <p>
+ * If the above code is executed on multiple nodes/processes, then only <i>one</i> subscriber will receive events.
+ */
 public class CompetingConsumerSubscriptionModel implements DelegatingSubscriptionModel, SubscriptionModel, SubscriptionModelLifeCycle, CompetingConsumerListener {
 
     private final SubscriptionModel delegate;
@@ -37,6 +61,15 @@ public class CompetingConsumerSubscriptionModel implements DelegatingSubscriptio
         this.competingConsumerStrategy.addListener(this);
     }
 
+    /**
+     * Start listening to cloud events persisted to the event store using the supplied start position and <code>filter</code>.
+     *
+     * @param subscriberId   The unique if of the subscriber
+     * @param subscriptionId The id of the subscription, must be unique!
+     * @param filter         The filter to use to limit which events that are of interest from the EventStore.
+     * @param startAt        The position to start the subscription from
+     * @param action         This action will be invoked for each cloud event that is stored in the EventStore.
+     */
     public Subscription subscribe(String subscriberId, String subscriptionId, SubscriptionFilter filter, StartAt startAt, Consumer<CloudEvent> action) {
         Objects.requireNonNull(subscriberId, "SubscriberId cannot be null");
         Objects.requireNonNull(subscriptionId, "SubscriptionId cannot be null");
@@ -59,11 +92,17 @@ public class CompetingConsumerSubscriptionModel implements DelegatingSubscriptio
         return competingConsumerSubscription;
     }
 
+    /**
+     * @see SubscriptionModel#subscribe(String, SubscriptionFilter, StartAt, Consumer)
+     */
     @Override
     public Subscription subscribe(String subscriptionId, SubscriptionFilter filter, StartAt startAt, Consumer<CloudEvent> action) {
         return subscribe(UUID.randomUUID().toString(), subscriptionId, filter, startAt, action);
     }
 
+    /**
+     * @see SubscriptionModelLifeCycle#cancelSubscription(String)
+     */
     @Override
     public synchronized void cancelSubscription(String subscriptionId) {
         delegate.cancelSubscription(subscriptionId);
@@ -71,6 +110,9 @@ public class CompetingConsumerSubscriptionModel implements DelegatingSubscriptio
                 .ifPresent(cc -> unregisterCompetingConsumer(cc, __ -> competingConsumers.remove(cc.subscriptionIdAndSubscriberId)));
     }
 
+    /**
+     * @see SubscriptionModelLifeCycle#stop()
+     */
     @Override
     public synchronized void stop() {
         if (!isRunning()) {
@@ -81,6 +123,9 @@ public class CompetingConsumerSubscriptionModel implements DelegatingSubscriptio
         unregisterAllCompetingConsumers(cc -> competingConsumers.put(cc.subscriptionIdAndSubscriberId, cc.registerPaused()));
     }
 
+    /**
+     * @see SubscriptionModelLifeCycle#start()
+     */
     @Override
     public synchronized void start() {
         if (isRunning()) {
@@ -105,21 +150,33 @@ public class CompetingConsumerSubscriptionModel implements DelegatingSubscriptio
                 );
     }
 
+    /**
+     * @see SubscriptionModelLifeCycle#isRunning()
+     */
     @Override
     public boolean isRunning() {
         return delegate.isRunning();
     }
 
+    /**
+     * @see SubscriptionModelLifeCycle#isRunning(String)
+     */
     @Override
     public boolean isRunning(String subscriptionId) {
         return delegate.isRunning(subscriptionId);
     }
 
+    /**
+     * @see SubscriptionModelLifeCycle#isPaused(String)
+     */
     @Override
     public boolean isPaused(String subscriptionId) {
         return delegate.isPaused(subscriptionId);
     }
 
+    /**
+     * @see SubscriptionModelLifeCycle#resumeSubscription(String)
+     */
     @Override
     public synchronized Subscription resumeSubscription(String subscriptionId) {
         if (isRunning(subscriptionId)) {
@@ -150,6 +207,9 @@ public class CompetingConsumerSubscriptionModel implements DelegatingSubscriptio
                 .orElseThrow(() -> new IllegalStateException("Cannot resume subscription " + subscriptionId + " since another consumer currently subscribes to it."));
     }
 
+    /**
+     * @see SubscriptionModelLifeCycle#pauseSubscription(String)
+     */
     @Override
     public synchronized void pauseSubscription(String subscriptionId) {
         if (isPaused(subscriptionId)) {
@@ -164,11 +224,17 @@ public class CompetingConsumerSubscriptionModel implements DelegatingSubscriptio
                 });
     }
 
+    /**
+     * @see DelegatingSubscriptionModel#getDelegatedSubscriptionModel()
+     */
     @Override
     public SubscriptionModel getDelegatedSubscriptionModel() {
         return delegate;
     }
 
+    /**
+     * @see SubscriptionModelLifeCycle#shutdown()
+     */
     @PreDestroy
     @Override
     public synchronized void shutdown() {
