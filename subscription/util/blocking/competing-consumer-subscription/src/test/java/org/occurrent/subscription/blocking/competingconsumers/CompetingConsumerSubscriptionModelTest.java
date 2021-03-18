@@ -302,7 +302,7 @@ class CompetingConsumerSubscriptionModelTest {
         await("waiting for second event").atMost(5, SECONDS).untilAsserted(() -> assertThat(cloudEvents).extracting(CloudEvent::getId).containsExactly("1", "2", "3"));
     }
 
-    @Test
+    @RepeatedIfExceptionsTest(repeats = 3, suspend = 400)
     @Timeout(10)
     void stopping_and_starting_both_competing_subscription_models_several_times() {
 
