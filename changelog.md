@@ -1,4 +1,4 @@
-## Changelog next version
+## Changelog 0.9.0 (2021-03-19)
                                                                                                                                                                                         
 * Fixed a bug in `InMemorySubscription` that accidentally pushed `null` values to subscriptions every 500 millis unless an actual event was received.
 * Renamed `org.occurrent.subscription.mongodb.spring.blocking.SpringSubscriptionModelConfig` to `org.occurrent.subscription.mongodb.spring.blocking.SpringMongoSubscriptionModelConfig`.
