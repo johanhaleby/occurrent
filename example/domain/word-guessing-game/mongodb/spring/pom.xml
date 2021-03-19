@@ -3,7 +3,7 @@
     <parent>
         <artifactId>example-domain-word-guessing-game-es-mongodb</artifactId>
         <groupId>org.occurrent</groupId>
-        <version>0.9.0</version>
+        <version>0.9.1-SNAPSHOT</version>
     </parent>
     <modelVersion>4.0.0</modelVersion>
 
