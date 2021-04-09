@@ -31,6 +31,7 @@ import org.occurrent.domain.DomainEvent;
 import org.occurrent.domain.DomainEventConverter;
 import org.occurrent.domain.Name;
 import org.occurrent.domain.NameDefined;
+import org.occurrent.eventstore.api.WriteResult;
 import org.occurrent.eventstore.inmemory.InMemoryEventStore;
 
 import java.time.LocalDateTime;
@@ -53,6 +54,22 @@ public class GenericApplicationServiceTest {
         CloudEventConverter<DomainEvent> cloudEventConverter = new GenericCloudEventConverter<>(domainEventConverter::convertToDomainEvent, domainEventConverter::convertToCloudEvent);
         eventStore = new InMemoryEventStore();
         applicationService = new GenericApplicationService<>(eventStore, cloudEventConverter);
+    }
+
+    @Test
+    void returns_write_result() {
+        // Given
+        UUID streamId = UUID.randomUUID();
+
+        // When
+        WriteResult writeResult = applicationService.execute(streamId,
+                toStreamCommand(events -> Name.defineName(events, UUID.randomUUID().toString(), LocalDateTime.now(), "Johan")));
+
+        // Then
+        assertAll(
+                () ->  assertThat(writeResult.getStreamId()).isEqualTo(streamId.toString()),
+                () -> assertThat(writeResult.getStreamVersion()).isEqualTo(1L)
+        );
     }
 
     @Nested
