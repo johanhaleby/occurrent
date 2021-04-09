@@ -1,3 +1,15 @@
+## Changelog next version
+
+* Upgraded Spring Boot from 2.4.2 to 2.4.4
+* Upgraded reactor from 3.4.2 to 3.4.4
+* Upgraded spring-data-mongodb from 3.1.1 to 3.1.7
+* Upgraded lettuce-core from 6.0.1 to 6.1.0
+* Upgraded mongo java client from 4.1.1 to 4.2.2
+* Upgraded spring-aspects from 5.2.9.RELEASE to 5.3.5
+* Upgraded spring-retry from 1.3.0 to 1.3.1
+* Upgraded kotlin from 1.4.31 to 1.4.32
+* Upgraded kotlinx-collections-immutable-jvm from 0.3.2 to 0.3.4
+
 ## Changelog 0.9.0 (2021-03-19)
                                                                                                                                                                                         
 * Fixed a bug in `InMemorySubscription` that accidentally pushed `null` values to subscriptions every 500 millis unless an actual event was received.
