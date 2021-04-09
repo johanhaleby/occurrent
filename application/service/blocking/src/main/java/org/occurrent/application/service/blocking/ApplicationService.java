@@ -1,6 +1,7 @@
 package org.occurrent.application.service.blocking;
 
 import io.cloudevents.CloudEvent;
+import org.occurrent.eventstore.api.WriteResult;
 
 import java.util.Objects;
 import java.util.UUID;
@@ -36,7 +37,7 @@ public interface ApplicationService<T> {
      *                                     if required.
      * @param sideEffect                   Side-effects that are executed <i>after</i> the events have been written to the event store.
      */
-    void execute(String streamId, Function<Stream<T>, Stream<T>> functionThatCallsDomainModel, Consumer<Stream<T>> sideEffect);
+    WriteResult execute(String streamId, Function<Stream<T>, Stream<T>> functionThatCallsDomainModel, Consumer<Stream<T>> sideEffect);
 
 
     /**
@@ -48,9 +49,9 @@ public interface ApplicationService<T> {
      * @param sideEffect                   Side-effects that are executed <i>after</i> the events have been written to the event store.
      * @see #execute(String, Function, Consumer)
      */
-    default void execute(UUID streamId, Function<Stream<T>, Stream<T>> functionThatCallsDomainModel, Consumer<Stream<T>> sideEffect) {
+    default WriteResult execute(UUID streamId, Function<Stream<T>, Stream<T>> functionThatCallsDomainModel, Consumer<Stream<T>> sideEffect) {
         Objects.requireNonNull(streamId, "Stream id cannot be null");
-        execute(streamId.toString(), functionThatCallsDomainModel, sideEffect);
+        return execute(streamId.toString(), functionThatCallsDomainModel, sideEffect);
     }
 
     /**
@@ -68,8 +69,8 @@ public interface ApplicationService<T> {
      * @param functionThatCallsDomainModel A <i>pure</i> function that calls the domain model. Use partial application ({@code org.occurrent:command-composition:<version>})
      *                                     if required.
      */
-    default void execute(String streamId, Function<Stream<T>, Stream<T>> functionThatCallsDomainModel) {
-        execute(streamId, functionThatCallsDomainModel, null);
+    default WriteResult execute(String streamId, Function<Stream<T>, Stream<T>> functionThatCallsDomainModel) {
+        return execute(streamId, functionThatCallsDomainModel, null);
     }
 
     /**
@@ -80,8 +81,8 @@ public interface ApplicationService<T> {
      *                                     if required.
      * @see #execute(String, Function)
      */
-    default void execute(UUID streamId, Function<Stream<T>, Stream<T>> functionThatCallsDomainModel) {
+    default WriteResult execute(UUID streamId, Function<Stream<T>, Stream<T>> functionThatCallsDomainModel) {
         Objects.requireNonNull(streamId, "Stream id cannot be null");
-        execute(streamId.toString(), functionThatCallsDomainModel);
+        return execute(streamId.toString(), functionThatCallsDomainModel);
     }
 }

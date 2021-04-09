@@ -25,8 +25,8 @@ import java.util.StringJoiner;
  */
 public class WriteResult {
 
-    public final String streamId;
-    public final long newStreamVersion;
+    private final String streamId;
+    private final long newStreamVersion;
 
     public WriteResult(String streamId, long newStreamVersion) {
         this.streamId = streamId;

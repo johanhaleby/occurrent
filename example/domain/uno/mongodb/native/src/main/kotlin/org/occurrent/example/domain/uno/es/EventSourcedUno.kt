@@ -48,13 +48,7 @@ fun main() {
     val database = mongoClient.getDatabase("test")
 
     val eventStore = MongoEventStore(mongoClient, database, database.getCollection("events"), EventStoreConfig(TimeRepresentation.DATE))
-    val subscriptionModel = NativeMongoSubscriptionModel(
-        database,
-        "events",
-        TimeRepresentation.DATE,
-        Executors.newCachedThreadPool(),
-        RetryStrategy.fixed(200)
-    )
+    val subscriptionModel = NativeMongoSubscriptionModel(database, "events", TimeRepresentation.DATE, Executors.newCachedThreadPool(), RetryStrategy.fixed(200))
 
     val objectMapper = jacksonObjectMapper()
     val cloudEventConverter = UnoCloudEventConverter(objectMapper)

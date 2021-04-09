@@ -1,5 +1,9 @@
 ## Changelog next version
-
+                   
+* The event store API's now returns an instance of `org.occurrent.eventstore.api.WriteResult` when writing events to the event store (previously `void` was returned). 
+  The `WriteResult` instance contains the stream id and the new stream version of the stream. The reason for this change is to make it easier to implement use cases such
+  as "read your own writes".
+* The blocking ApplicationService `org.occurrent.application.service.blocking.ApplicationService` now returns `WriteResult` instead of `void`.
 * Upgraded Spring Boot from 2.4.2 to 2.4.4
 * Upgraded reactor from 3.4.2 to 3.4.4
 * Upgraded spring-data-mongodb from 3.1.1 to 3.1.7

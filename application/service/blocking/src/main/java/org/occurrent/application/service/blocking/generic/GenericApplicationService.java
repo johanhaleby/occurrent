@@ -19,6 +19,7 @@ package org.occurrent.application.service.blocking.generic;
 import io.cloudevents.CloudEvent;
 import org.occurrent.application.converter.CloudEventConverter;
 import org.occurrent.application.service.blocking.ApplicationService;
+import org.occurrent.eventstore.api.WriteResult;
 import org.occurrent.eventstore.api.blocking.EventStore;
 import org.occurrent.eventstore.api.blocking.EventStream;
 
@@ -46,7 +47,7 @@ public class GenericApplicationService<T> implements ApplicationService<T> {
     }
 
     @Override
-    public void execute(String streamId, Function<Stream<T>, Stream<T>> functionThatCallsDomainModel, Consumer<Stream<T>> sideEffect) {
+    public WriteResult execute(String streamId, Function<Stream<T>, Stream<T>> functionThatCallsDomainModel, Consumer<Stream<T>> sideEffect) {
         Objects.requireNonNull(streamId, "Stream id cannot be null");
         Objects.requireNonNull(functionThatCallsDomainModel, "Function that calls domain model cannot be null");
         // Read all events from the event store for a particular stream
@@ -64,12 +65,13 @@ public class GenericApplicationService<T> implements ApplicationService<T> {
 
         // Convert to cloud events and write the new events to the event store
         Stream<CloudEvent> newEvents = (sideEffect == null ? newDomainEvents : newEventsAsList.stream()).map(cloudEventConverter::toCloudEvent);
-        eventStore.write(streamId, eventStream.version(), newEvents);
+        WriteResult writeResult = eventStore.write(streamId, eventStream.version(), newEvents);
 
         // Invoke side-effect
         if (sideEffect != null) {
             sideEffect.accept(newEventsAsList.stream());
         }
+        return writeResult;
     }
 
     private static <T> Stream<T> emptyStreamIfNull(Stream<T> stream) {
