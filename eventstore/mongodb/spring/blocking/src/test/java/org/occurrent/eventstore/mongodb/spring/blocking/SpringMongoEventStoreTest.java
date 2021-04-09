@@ -29,15 +29,13 @@ import io.cloudevents.core.data.PojoCloudEventData;
 import io.github.artsok.RepeatedIfExceptionsTest;
 import org.bson.Document;
 import org.junit.jupiter.api.*;
+import org.junit.jupiter.api.DisplayNameGenerator.ReplaceUnderscores;
 import org.junit.jupiter.api.condition.EnabledForJreRange;
 import org.junit.jupiter.api.condition.EnabledOnJre;
 import org.junit.jupiter.api.extension.RegisterExtension;
 import org.occurrent.cloudevents.OccurrentCloudEventExtension;
 import org.occurrent.domain.*;
-import org.occurrent.eventstore.api.DuplicateCloudEventException;
-import org.occurrent.eventstore.api.SortBy;
-import org.occurrent.eventstore.api.WriteCondition;
-import org.occurrent.eventstore.api.WriteConditionNotFulfilledException;
+import org.occurrent.eventstore.api.*;
 import org.occurrent.eventstore.api.blocking.EventStream;
 import org.occurrent.filter.Filter;
 import org.occurrent.functional.CheckedFunction;
@@ -85,6 +83,7 @@ import static org.springframework.data.mongodb.core.query.Query.query;
 
 @SuppressWarnings("SameParameterValue")
 @Testcontainers
+@DisplayNameGeneration(ReplaceUnderscores.class)
 public class SpringMongoEventStoreTest {
 
     @Container
@@ -192,7 +191,7 @@ public class SpringMongoEventStoreTest {
     }
 
     @Test
-    void can_read_events_with_skip_and_limit_using_mongo_event_store() {
+    void can_read_events_with_skip_and_limit_using_spring_mongo_event_store() {
         LocalDateTime now = LocalDateTime.now();
         NameDefined nameDefined = new NameDefined(UUID.randomUUID().toString(), now, "name");
         NameWasChanged nameWasChanged1 = new NameWasChanged(UUID.randomUUID().toString(), now.plusHours(1), "name2");
@@ -257,6 +256,77 @@ public class SpringMongoEventStoreTest {
                 () -> assertThat(readEvents).hasSize(2),
                 () -> assertThat(readEvents).containsExactly(nameDefined, nameWasChanged1)
         );
+    }
+    
+    @Nested
+    @DisplayName("write result")
+    class WriteResultTest {
+
+        @Test
+        void spring_mongo_event_store_returns_the_new_stream_version_when_at_least_one_event_is_written_to_an_empty_stream() {
+            // Given
+            LocalDateTime now = LocalDateTime.now();
+
+            // When
+            DomainEvent event1 = new NameDefined(UUID.randomUUID().toString(), now, "John Doe");
+            DomainEvent event2 = new NameWasChanged(UUID.randomUUID().toString(), now, "Jan Doe");
+            WriteResult writeResult = persist("name", Stream.of(event1, event2));
+
+            // Then
+            assertAll(
+                    () ->  assertThat(writeResult.getStreamId()).isEqualTo("name"),
+                    () -> assertThat(writeResult.getStreamVersion()).isEqualTo(2L)
+            );
+        }
+
+        @Test
+        void spring_mongo_event_store_returns_the_new_stream_version_when_at_least_one_event_is_written_to_an_existing_stream() {
+            // Given
+            LocalDateTime now = LocalDateTime.now();
+
+            // When
+            DomainEvent event1 = new NameDefined(UUID.randomUUID().toString(), now, "John Doe");
+            DomainEvent event2 = new NameWasChanged(UUID.randomUUID().toString(), now, "Jan Doe");
+            DomainEvent event3 = new NameWasChanged(UUID.randomUUID().toString(), now, "Jan Doe2");
+            persist("name", Stream.of(event1));
+            WriteResult writeResult = persist("name", Stream.of(event2, event3));
+
+            // Then
+            assertAll(
+                    () ->  assertThat(writeResult.getStreamId()).isEqualTo("name"),
+                    () -> assertThat(writeResult.getStreamVersion()).isEqualTo(3L)
+            );
+        }
+
+        @Test
+        void spring_mongo_event_store_returns_0_as_version_when_no_events_are_written_to_an_empty_stream() {
+            // When
+            WriteResult writeResult = persist("name", Stream.empty());
+
+            // Then
+            assertAll(
+                    () ->  assertThat(writeResult.getStreamId()).isEqualTo("name"),
+                    () -> assertThat(writeResult.getStreamVersion()).isEqualTo(0L)
+            );
+        }
+        
+        @Test
+        void spring_mongo_event_store_returns_the_previous_stream_version_when_no_events_are_written_to_an_existing_stream() {
+            // Given
+            LocalDateTime now = LocalDateTime.now();
+
+            // When
+            DomainEvent event1 = new NameDefined(UUID.randomUUID().toString(), now, "John Doe");
+            DomainEvent event2 = new NameWasChanged(UUID.randomUUID().toString(), now, "Jan Doe");
+            persist("name", Stream.of(event1, event2));
+            WriteResult writeResult = persist("name", Stream.empty());
+
+            // Then
+            assertAll(
+                    () ->  assertThat(writeResult.getStreamId()).isEqualTo("name"),
+                    () -> assertThat(writeResult.getStreamVersion()).isEqualTo(2L)
+            );
+        }
     }
 
     @Nested
@@ -1616,8 +1686,8 @@ public class SpringMongoEventStoreTest {
         persist(eventStreamId, events.stream());
     }
 
-    private void persist(String eventStreamId, Stream<DomainEvent> events) {
-        eventStore.write(eventStreamId, events.map(this::convertDomainEventCloudEvent));
+    private WriteResult persist(String eventStreamId, Stream<DomainEvent> events) {
+        return eventStore.write(eventStreamId, events.map(this::convertDomainEventCloudEvent));
     }
 
     private void persist(String eventStreamId, WriteCondition writeCondition, DomainEvent event) {

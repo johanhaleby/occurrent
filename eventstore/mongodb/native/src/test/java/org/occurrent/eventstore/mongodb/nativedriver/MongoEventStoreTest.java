@@ -41,10 +41,7 @@ import org.occurrent.domain.DomainEvent;
 import org.occurrent.domain.Name;
 import org.occurrent.domain.NameDefined;
 import org.occurrent.domain.NameWasChanged;
-import org.occurrent.eventstore.api.DuplicateCloudEventException;
-import org.occurrent.eventstore.api.SortBy;
-import org.occurrent.eventstore.api.WriteCondition;
-import org.occurrent.eventstore.api.WriteConditionNotFulfilledException;
+import org.occurrent.eventstore.api.*;
 import org.occurrent.eventstore.api.blocking.EventStream;
 import org.occurrent.filter.Filter;
 import org.occurrent.mongodb.timerepresentation.TimeRepresentation;
@@ -351,6 +348,78 @@ class MongoEventStoreTest {
             collection.dropIndex(index);
         }
     }
+
+    @Nested
+    @DisplayName("write result")
+    class WriteResultTest {
+
+        @Test
+        void mongo_event_store_returns_the_new_stream_version_when_at_least_one_event_is_written_to_an_empty_stream() {
+            // Given
+            LocalDateTime now = LocalDateTime.now();
+
+            // When
+            DomainEvent event1 = new NameDefined(UUID.randomUUID().toString(), now, "John Doe");
+            DomainEvent event2 = new NameWasChanged(UUID.randomUUID().toString(), now, "Jan Doe");
+            WriteResult writeResult = persist("name", Stream.of(event1, event2));
+
+            // Then
+            assertAll(
+                    () ->  assertThat(writeResult.getStreamId()).isEqualTo("name"),
+                    () -> assertThat(writeResult.getStreamVersion()).isEqualTo(2L)
+            );
+        }
+
+        @Test
+        void mongo_event_store_returns_the_new_stream_version_when_at_least_one_event_is_written_to_an_existing_stream() {
+            // Given
+            LocalDateTime now = LocalDateTime.now();
+
+            // When
+            DomainEvent event1 = new NameDefined(UUID.randomUUID().toString(), now, "John Doe");
+            DomainEvent event2 = new NameWasChanged(UUID.randomUUID().toString(), now, "Jan Doe");
+            DomainEvent event3 = new NameWasChanged(UUID.randomUUID().toString(), now, "Jan Doe2");
+            persist("name", Stream.of(event1));
+            WriteResult writeResult = persist("name", Stream.of(event2, event3));
+
+            // Then
+            assertAll(
+                    () ->  assertThat(writeResult.getStreamId()).isEqualTo("name"),
+                    () -> assertThat(writeResult.getStreamVersion()).isEqualTo(3L)
+            );
+        }
+
+        @Test
+        void mongo_event_store_returns_0_as_version_when_no_events_are_written_to_an_empty_stream() {
+            // When
+            WriteResult writeResult = persist("name", Stream.empty());
+
+            // Then
+            assertAll(
+                    () ->  assertThat(writeResult.getStreamId()).isEqualTo("name"),
+                    () -> assertThat(writeResult.getStreamVersion()).isEqualTo(0L)
+            );
+        }
+        
+        @Test
+        void mongo_event_store_returns_the_previous_stream_version_when_no_events_are_written_to_an_existing_stream() {
+            // Given
+            LocalDateTime now = LocalDateTime.now();
+
+            // When
+            DomainEvent event1 = new NameDefined(UUID.randomUUID().toString(), now, "John Doe");
+            DomainEvent event2 = new NameWasChanged(UUID.randomUUID().toString(), now, "Jan Doe");
+            persist("name", Stream.of(event1, event2));
+            WriteResult writeResult = persist("name", Stream.empty());
+
+            // Then
+            assertAll(
+                    () ->  assertThat(writeResult.getStreamId()).isEqualTo("name"),
+                    () -> assertThat(writeResult.getStreamVersion()).isEqualTo(2L)
+            );
+        }
+    }
+    
 
     @SuppressWarnings("ConstantConditions")
     @Nested
@@ -1652,8 +1721,8 @@ class MongoEventStoreTest {
         persist(eventStreamId, events.stream());
     }
 
-    private void persist(String eventStreamId, Stream<DomainEvent> events) {
-        eventStore.write(eventStreamId, events.map(convertDomainEventToCloudEvent()));
+    private WriteResult persist(String eventStreamId, Stream<DomainEvent> events) {
+        return eventStore.write(eventStreamId, events.map(convertDomainEventToCloudEvent()));
     }
 
     private Function<DomainEvent, CloudEvent> convertDomainEventToCloudEvent() {

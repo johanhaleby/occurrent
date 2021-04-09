@@ -26,11 +26,11 @@ import java.util.StringJoiner;
 public class WriteResult {
 
     private final String streamId;
-    private final long newStreamVersion;
+    private final long streamVersion;
 
-    public WriteResult(String streamId, long newStreamVersion) {
+    public WriteResult(String streamId, long streamVersion) {
         this.streamId = streamId;
-        this.newStreamVersion = newStreamVersion;
+        this.streamVersion = streamVersion;
     }
 
     @Override
@@ -38,24 +38,24 @@ public class WriteResult {
         if (this == o) return true;
         if (!(o instanceof WriteResult)) return false;
         WriteResult that = (WriteResult) o;
-        return newStreamVersion == that.newStreamVersion && Objects.equals(streamId, that.streamId);
+        return streamVersion == that.streamVersion && Objects.equals(streamId, that.streamId);
     }
 
     @Override
     public int hashCode() {
-        return Objects.hash(streamId, newStreamVersion);
+        return Objects.hash(streamId, streamVersion);
     }
 
     @Override
     public String toString() {
         return new StringJoiner(", ", WriteResult.class.getSimpleName() + "[", "]")
                 .add("streamId='" + streamId + "'")
-                .add("newStreamVersion=" + newStreamVersion)
+                .add("newStreamVersion=" + streamVersion)
                 .toString();
     }
 
-    public long getNewStreamVersion() {
-        return newStreamVersion;
+    public long getStreamVersion() {
+        return streamVersion;
     }
 
     public String getStreamId() {

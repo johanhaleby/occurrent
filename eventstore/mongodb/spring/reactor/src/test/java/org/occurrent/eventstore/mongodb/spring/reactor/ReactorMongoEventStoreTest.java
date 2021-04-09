@@ -185,7 +185,7 @@ public class ReactorMongoEventStoreTest {
     }
 
     @Test
-    void can_read_events_with_skip_and_limit_using_mongo_event_store() {
+    void can_read_events_with_skip_and_limit_using_reactor_mongo_event_() {
         LocalDateTime now = LocalDateTime.now();
         NameDefined nameDefined = new NameDefined(UUID.randomUUID().toString(), now, "name");
         NameWasChanged nameWasChanged1 = new NameWasChanged(UUID.randomUUID().toString(), now.plusHours(1), "name2");
@@ -336,6 +336,77 @@ public class ReactorMongoEventStoreTest {
                 () -> assertThat(versionAndEvents.events).hasSize(2),
                 () -> assertThat(versionAndEvents.events).containsExactly(nameDefined, nameWasChanged1)
         );
+    }
+
+    @Nested
+    @DisplayName("write result")
+    class WriteResultTest {
+
+        @Test
+        void reactor_mongo_event_returns_the_new_stream_version_when_at_least_one_event_is_written_to_an_empty_stream() {
+            // Given
+            LocalDateTime now = LocalDateTime.now();
+
+            // When
+            DomainEvent event1 = new NameDefined(UUID.randomUUID().toString(), now, "John Doe");
+            DomainEvent event2 = new NameWasChanged(UUID.randomUUID().toString(), now, "Jan Doe");
+            WriteResult writeResult = persist("name", Flux.just(event1, event2)).block();
+
+            // Then
+            assertAll(
+                    () ->  assertThat(writeResult.getStreamId()).isEqualTo("name"),
+                    () -> assertThat(writeResult.getStreamVersion()).isEqualTo(2L)
+            );
+        }
+
+        @Test
+        void reactor_mongo_event_returns_the_new_stream_version_when_at_least_one_event_is_written_to_an_existing_stream() {
+            // Given
+            LocalDateTime now = LocalDateTime.now();
+
+            // When
+            DomainEvent event1 = new NameDefined(UUID.randomUUID().toString(), now, "John Doe");
+            DomainEvent event2 = new NameWasChanged(UUID.randomUUID().toString(), now, "Jan Doe");
+            DomainEvent event3 = new NameWasChanged(UUID.randomUUID().toString(), now, "Jan Doe2");
+            persist("name", Flux.just(event1)).block();
+            WriteResult writeResult = persist("name", Flux.just(event2, event3)).block();
+
+            // Then
+            assertAll(
+                    () ->  assertThat(writeResult.getStreamId()).isEqualTo("name"),
+                    () -> assertThat(writeResult.getStreamVersion()).isEqualTo(3L)
+            );
+        }
+
+        @Test
+        void reactor_mongo_event_returns_0_as_version_when_no_events_are_written_to_an_empty_stream() {
+            // When
+            WriteResult writeResult = persist("name", Flux.empty()).block();
+
+            // Then
+            assertAll(
+                    () ->  assertThat(writeResult.getStreamId()).isEqualTo("name"),
+                    () -> assertThat(writeResult.getStreamVersion()).isEqualTo(0L)
+            );
+        }
+        
+        @Test
+        void reactor_mongo_event_returns_the_previous_stream_version_when_no_events_are_written_to_an_existing_stream() {
+            // Given
+            LocalDateTime now = LocalDateTime.now();
+
+            // When
+            DomainEvent event1 = new NameDefined(UUID.randomUUID().toString(), now, "John Doe");
+            DomainEvent event2 = new NameWasChanged(UUID.randomUUID().toString(), now, "Jan Doe");
+            persist("name", Flux.just(event1, event2)).block();
+            WriteResult writeResult = persist("name", Flux.empty()).block();
+
+            // Then
+            assertAll(
+                    () ->  assertThat(writeResult.getStreamId()).isEqualTo("name"),
+                    () -> assertThat(writeResult.getStreamVersion()).isEqualTo(2L)
+            );
+        }
     }
 
     @SuppressWarnings("ConstantConditions")
@@ -1655,7 +1726,6 @@ public class ReactorMongoEventStoreTest {
     private static String streamIdOf(Mono<EventStream<CloudEvent>> eventStreamMono) {
         return eventStreamMono.map(EventStream::id).block();
     }
-
 
     private Mono<WriteResult> persist(String eventStreamId, CloudEvent event) {
         return eventStore.write(eventStreamId, Flux.just(event));

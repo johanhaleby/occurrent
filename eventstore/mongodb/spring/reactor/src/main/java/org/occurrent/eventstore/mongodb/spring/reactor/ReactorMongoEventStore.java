@@ -102,7 +102,12 @@ public class ReactorMongoEventStore implements EventStore, EventStoreOperations,
                 .flatMap(currentStreamVersion -> {
                     Flux<Document> documentFlux = convertEventsToMongoDocuments(streamId, events, currentStreamVersion);
                     Mono<Long> newStreamVersionFlux = documentFlux.collectList().flatMap(documents -> {
-                        long newStreamVersion = documents.get(documents.size() - 1).getLong(STREAM_VERSION);
+                        final long newStreamVersion;
+                        if (documents.isEmpty()) {
+                            newStreamVersion = currentStreamVersion;
+                        } else {
+                            newStreamVersion = documents.get(documents.size() - 1).getLong(STREAM_VERSION);
+                        }
                         return insertAll(documents).then(Mono.just(newStreamVersion));
                     });
                     return newStreamVersionFlux.switchIfEmpty(Mono.just(currentStreamVersion));

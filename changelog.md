@@ -4,6 +4,7 @@
   The `WriteResult` instance contains the stream id and the new stream version of the stream. The reason for this change is to make it easier to implement use cases such
   as "read your own writes".
 * The blocking ApplicationService `org.occurrent.application.service.blocking.ApplicationService` now returns `WriteResult` instead of `void`.
+* Fixed bug in `InMemoryEventStore` that accidentally could skip version numbers when new events were inserted into the database. 
 * Upgraded Spring Boot from 2.4.2 to 2.4.4
 * Upgraded reactor from 3.4.2 to 3.4.4
 * Upgraded spring-data-mongodb from 3.1.1 to 3.1.7

@@ -147,7 +147,7 @@ public class InMemoryEventStore implements EventStore, EventStoreOperations, Eve
 
     private static List<CloudEvent> applyOccurrentCloudEventExtension(Stream<CloudEvent> events, String streamId, long streamVersion) {
         return zip(LongStream.iterate(streamVersion + 1, i -> i + 1).boxed(), events, Pair::new)
-                .map(pair -> modifyCloudEvent(e -> e.withExtension(new OccurrentCloudEventExtension(streamId, streamVersion + pair.t1))).apply(pair.t2))
+                .map(pair -> modifyCloudEvent(e -> e.withExtension(new OccurrentCloudEventExtension(streamId, pair.t1))).apply(pair.t2))
                 .collect(Collectors.toList());
     }
 
