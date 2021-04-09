@@ -16,6 +16,7 @@
 
 package org.occurrent.eventstore.mongodb.internal;
 
+import com.mongodb.ErrorCategory;
 import com.mongodb.MongoBulkWriteException;
 import com.mongodb.WriteError;
 import org.occurrent.eventstore.api.DuplicateCloudEventException;
@@ -35,7 +36,7 @@ public class MongoBulkWriteExceptionToDuplicateCloudEventExceptionTranslator {
      */
     public static DuplicateCloudEventException translateToDuplicateCloudEventException(MongoBulkWriteException e) {
         return e.getWriteErrors().stream()
-                .filter(error -> error.getCode() == 11000)
+                .filter(error -> ErrorCategory.fromErrorCode(error.getCode()) == ErrorCategory.DUPLICATE_KEY)
                 .map(WriteError::getMessage)
                 .filter(errorMessage -> errorMessage.contains("{ id: \"") && errorMessage.contains(", source: \""))
                 .map(errorMessage -> {
