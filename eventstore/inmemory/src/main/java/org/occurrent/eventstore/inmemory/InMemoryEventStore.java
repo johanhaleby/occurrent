@@ -21,15 +21,12 @@ import io.cloudevents.SpecVersion;
 import io.cloudevents.core.builder.CloudEventBuilder;
 import org.occurrent.cloudevents.OccurrentCloudEventExtension;
 import org.occurrent.cloudevents.OccurrentExtensionGetter;
-import org.occurrent.eventstore.api.LongConditionEvaluator;
-import org.occurrent.eventstore.api.SortBy;
+import org.occurrent.eventstore.api.*;
 import org.occurrent.eventstore.api.SortBy.MultipleSortStepsImpl;
 import org.occurrent.eventstore.api.SortBy.NaturalImpl;
 import org.occurrent.eventstore.api.SortBy.SingleFieldImpl;
 import org.occurrent.eventstore.api.SortBy.SortDirection;
-import org.occurrent.eventstore.api.WriteCondition;
 import org.occurrent.eventstore.api.WriteCondition.StreamVersionWriteCondition;
-import org.occurrent.eventstore.api.WriteConditionNotFulfilledException;
 import org.occurrent.eventstore.api.blocking.EventStore;
 import org.occurrent.eventstore.api.blocking.EventStoreOperations;
 import org.occurrent.eventstore.api.blocking.EventStoreQueries;
@@ -40,6 +37,7 @@ import org.occurrent.functionalsupport.internal.FunctionalSupport.Pair;
 import java.net.URI;
 import java.util.*;
 import java.util.Map.Entry;
+import java.util.concurrent.atomic.AtomicLong;
 import java.util.concurrent.atomic.AtomicReference;
 import java.util.function.Consumer;
 import java.util.function.Function;
@@ -108,13 +106,15 @@ public class InMemoryEventStore implements EventStore, EventStoreOperations, Eve
     }
 
     @Override
-    public void write(String streamId, WriteCondition writeCondition, Stream<CloudEvent> events) {
+    public WriteResult write(String streamId, WriteCondition writeCondition, Stream<CloudEvent> events) {
         requireTrue(writeCondition != null, WriteCondition.class.getSimpleName() + " cannot be null");
         Stream<CloudEvent> cloudEventStream = events.peek(e -> requireTrue(e.getSpecVersion() == SpecVersion.V1, "Spec version needs to be " + SpecVersion.V1));
 
         final AtomicReference<List<CloudEvent>> newCloudEvents = new AtomicReference<>();
+        final AtomicLong currentStreamVersionContainer = new AtomicLong();
         state.compute(streamId, (__, currentEvents) -> {
             long currentStreamVersion = calculateStreamVersion(currentEvents);
+            currentStreamVersionContainer.set(currentStreamVersion);
 
             if (currentEvents == null && isConditionFulfilledBy(writeCondition, 0)) {
                 List<CloudEvent> cloudEvents = applyOccurrentCloudEventExtension(cloudEventStream, streamId, 0);
@@ -131,10 +131,18 @@ public class InMemoryEventStore implements EventStore, EventStoreOperations, Eve
             }
         });
 
+        final WriteResult writeResult;
         List<CloudEvent> addedEvents = newCloudEvents.get();
         if (addedEvents != null && !addedEvents.isEmpty()) {
             listener.accept(addedEvents.stream());
+            CloudEvent cloudEvent = addedEvents.get(addedEvents.size() - 1);
+            long streamVersion = OccurrentExtensionGetter.getStreamVersion(cloudEvent);
+            writeResult = new WriteResult(streamId, streamVersion);
+        } else {
+            writeResult = new WriteResult(streamId, currentStreamVersionContainer.get());
         }
+
+        return writeResult;
     }
 
     private static List<CloudEvent> applyOccurrentCloudEventExtension(Stream<CloudEvent> events, String streamId, long streamVersion) {
@@ -144,8 +152,8 @@ public class InMemoryEventStore implements EventStore, EventStoreOperations, Eve
     }
 
     @Override
-    public void write(String streamId, Stream<CloudEvent> events) {
-        write(streamId, WriteCondition.anyStreamVersion(), events);
+    public WriteResult write(String streamId, Stream<CloudEvent> events) {
+        return write(streamId, WriteCondition.anyStreamVersion(), events);
     }
 
     @Override

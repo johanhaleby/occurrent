@@ -17,6 +17,7 @@
 package org.occurrent.eventstore.api.reactor;
 
 import io.cloudevents.CloudEvent;
+import org.occurrent.eventstore.api.WriteResult;
 import reactor.core.publisher.Flux;
 import reactor.core.publisher.Mono;
 
@@ -30,5 +31,5 @@ public interface UnconditionallyWriteToEventStream {
      * @param streamId The stream id of the stream to write to
      * @param events   The events to write
      */
-    Mono<Void> write(String streamId, Flux<CloudEvent> events);
+    Mono<WriteResult> write(String streamId, Flux<CloudEvent> events);
 }

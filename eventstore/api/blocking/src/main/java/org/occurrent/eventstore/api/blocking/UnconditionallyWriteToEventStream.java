@@ -17,6 +17,7 @@
 package org.occurrent.eventstore.api.blocking;
 
 import io.cloudevents.CloudEvent;
+import org.occurrent.eventstore.api.WriteResult;
 
 import java.util.stream.Stream;
 
@@ -29,6 +30,7 @@ public interface UnconditionallyWriteToEventStream {
      *
      * @param streamId The stream id of the stream to write to
      * @param events   The events to write
+     * @return The result of the write, includes useful metadata such as stream version.
      */
-    void write(String streamId, Stream<CloudEvent> events);
+    WriteResult write(String streamId, Stream<CloudEvent> events);
 }

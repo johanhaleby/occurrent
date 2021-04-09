@@ -24,10 +24,7 @@ import io.cloudevents.CloudEvent;
 import org.bson.Document;
 import org.bson.conversions.Bson;
 import org.occurrent.cloudevents.OccurrentExtensionGetter;
-import org.occurrent.eventstore.api.LongConditionEvaluator;
-import org.occurrent.eventstore.api.SortBy;
-import org.occurrent.eventstore.api.WriteCondition;
-import org.occurrent.eventstore.api.WriteConditionNotFulfilledException;
+import org.occurrent.eventstore.api.*;
 import org.occurrent.eventstore.api.reactor.EventStore;
 import org.occurrent.eventstore.api.reactor.EventStoreOperations;
 import org.occurrent.eventstore.api.reactor.EventStoreQueries;
@@ -46,6 +43,7 @@ import reactor.core.publisher.Flux;
 import reactor.core.publisher.Mono;
 
 import java.net.URI;
+import java.util.Collection;
 import java.util.Objects;
 import java.util.function.Function;
 
@@ -89,46 +87,29 @@ public class ReactorMongoEventStore implements EventStore, EventStoreOperations,
     }
 
     @Override
-    public Mono<Void> write(String streamId, Flux<CloudEvent> events) {
+    public Mono<WriteResult> write(String streamId, Flux<CloudEvent> events) {
         return write(streamId, WriteCondition.anyStreamVersion(), events);
     }
 
     @Override
-    public Mono<Void> write(String streamId, WriteCondition writeCondition, Flux<CloudEvent> events) {
+    public Mono<WriteResult> write(String streamId, WriteCondition writeCondition, Flux<CloudEvent> events) {
         if (writeCondition == null) {
             throw new IllegalArgumentException(WriteCondition.class.getSimpleName() + " cannot be null");
         }
 
-        return transactionalOperator.execute(transactionStatus -> {
-                    Flux<Document> documentFlux = currentStreamVersion(streamId)
-                            .flatMap(currentStreamVersion -> {
-                                final Mono<Long> result;
-                                if (isFulfilled(currentStreamVersion, writeCondition)) {
-                                    result = Mono.just(currentStreamVersion);
-                                } else {
-                                    result = Mono.error(new WriteConditionNotFulfilledException(streamId, currentStreamVersion, writeCondition, String.format("%s was not fulfilled. Expected version %s but was %s.", WriteCondition.class.getSimpleName(), writeCondition.toString(), currentStreamVersion)));
-                                }
-                                return result;
-                            })
-                            .flatMapMany(currentStreamVersion ->
-                                    infiniteFluxFrom(currentStreamVersion)
-                                            .zipWith(events)
-                                            .map(streamVersionAndEvent -> {
-                                                long streamVersion = streamVersionAndEvent.getT1();
-                                                CloudEvent event = streamVersionAndEvent.getT2();
-                                                return OccurrentCloudEventMongoDocumentMapper.convertToDocument(timeRepresentation, streamId, streamVersion, event);
-                                            }));
-                    return insertAll(documentFlux);
-                }
-        ).then();
-    }
+        Mono<Long> operation = currentStreamVersion(streamId)
+                .flatMap(currentStreamVersion -> validateWriteCondition(streamId, writeCondition, currentStreamVersion))
+                .flatMap(currentStreamVersion -> {
+                    Flux<Document> documentFlux = convertEventsToMongoDocuments(streamId, events, currentStreamVersion);
+                    Mono<Long> newStreamVersionFlux = documentFlux.collectList().flatMap(documents -> {
+                        long newStreamVersion = documents.get(documents.size() - 1).getLong(STREAM_VERSION);
+                        return insertAll(documents).then(Mono.just(newStreamVersion));
+                    });
+                    return newStreamVersionFlux.switchIfEmpty(Mono.just(currentStreamVersion));
+                });
 
-    private static Flux<Long> infiniteFluxFrom(Long currentStreamVersion) {
-        return Flux.generate(() -> currentStreamVersion, (version, sink) -> {
-            long nextVersion = version + 1L;
-            sink.next(nextVersion);
-            return nextVersion;
-        });
+        return transactionalOperator.transactional(operation)
+                .map(newStreamVersion -> new WriteResult(streamId, newStreamVersion));
     }
 
     @Override
@@ -170,8 +151,8 @@ public class ReactorMongoEventStore implements EventStore, EventStoreOperations,
     }
 
 
-    private Flux<Document> insertAll(Flux<Document> documents) {
-        return mongoTemplate.insertAll(documents.collectList(), eventStoreCollectionName)
+    private Flux<Document> insertAll(Collection<Document> documents) {
+        return mongoTemplate.insert(documents, eventStoreCollectionName)
                 .onErrorMap(DuplicateKeyException.class, Throwable::getCause)
                 .onErrorMap(MongoBulkWriteException.class, MongoBulkWriteExceptionToDuplicateCloudEventExceptionTranslator::translateToDuplicateCloudEventException);
     }
@@ -345,5 +326,33 @@ public class ReactorMongoEventStore implements EventStore, EventStoreOperations,
 
     private static Query cloudEventIdIs(String cloudEventId, URI cloudEventSource) {
         return Query.query(where("id").is(cloudEventId).and("source").is(cloudEventSource));
+    }
+
+    private static Mono<Long> validateWriteCondition(String streamId, WriteCondition writeCondition, Long currentStreamVersion) {
+        final Mono<Long> result;
+        if (isFulfilled(currentStreamVersion, writeCondition)) {
+            result = Mono.just(currentStreamVersion);
+        } else {
+            result = Mono.error(new WriteConditionNotFulfilledException(streamId, currentStreamVersion, writeCondition, String.format("%s was not fulfilled. Expected version %s but was %s.", WriteCondition.class.getSimpleName(), writeCondition, currentStreamVersion)));
+        }
+        return result;
+    }
+
+    private Flux<Document> convertEventsToMongoDocuments(String streamId, Flux<CloudEvent> events, Long currentStreamVersion) {
+        return infiniteFluxFrom(currentStreamVersion)
+                .zipWith(events)
+                .map(streamVersionAndEvent -> {
+                    long streamVersion = streamVersionAndEvent.getT1();
+                    CloudEvent event = streamVersionAndEvent.getT2();
+                    return OccurrentCloudEventMongoDocumentMapper.convertToDocument(timeRepresentation, streamId, streamVersion, event);
+                });
+    }
+
+    private static Flux<Long> infiniteFluxFrom(Long currentStreamVersion) {
+        return Flux.generate(() -> currentStreamVersion, (version, sink) -> {
+            long nextVersion = version + 1L;
+            sink.next(nextVersion);
+            return nextVersion;
+        });
     }
 }

@@ -29,10 +29,7 @@ import org.bson.Document;
 import org.bson.conversions.Bson;
 import org.occurrent.cloudevents.OccurrentExtensionGetter;
 import org.occurrent.condition.Condition;
-import org.occurrent.eventstore.api.LongConditionEvaluator;
-import org.occurrent.eventstore.api.SortBy;
-import org.occurrent.eventstore.api.WriteCondition;
-import org.occurrent.eventstore.api.WriteConditionNotFulfilledException;
+import org.occurrent.eventstore.api.*;
 import org.occurrent.eventstore.api.blocking.EventStore;
 import org.occurrent.eventstore.api.blocking.EventStoreOperations;
 import org.occurrent.eventstore.api.blocking.EventStoreQueries;
@@ -168,18 +165,18 @@ public class MongoEventStore implements EventStore, EventStoreOperations, EventS
     }
 
     @Override
-    public void write(String streamId, Stream<CloudEvent> events) {
-        write(streamId, anyStreamVersion(), events);
+    public WriteResult write(String streamId, Stream<CloudEvent> events) {
+        return write(streamId, anyStreamVersion(), events);
     }
 
     @Override
-    public void write(String streamId, WriteCondition writeCondition, Stream<CloudEvent> events) {
+    public WriteResult write(String streamId, WriteCondition writeCondition, Stream<CloudEvent> events) {
         if (writeCondition == null) {
             throw new IllegalArgumentException(WriteCondition.class.getSimpleName() + " cannot be null");
         }
 
         try (ClientSession clientSession = mongoClient.startSession()) {
-            clientSession.withTransaction(() -> {
+            Long newStreamVersion = clientSession.withTransaction(() -> {
                 long currentStreamVersion = currentStreamVersion(streamId);
 
                 if (!isFulfilled(currentStreamVersion, writeCondition)) {
@@ -190,15 +187,18 @@ public class MongoEventStore implements EventStore, EventStoreOperations, EventS
                         .map(pair -> convertToDocument(timeRepresentation, streamId, pair.t1, pair.t2))
                         .collect(Collectors.toList());
 
-                if (!cloudEventDocuments.isEmpty()) {
+                if (cloudEventDocuments.isEmpty()) {
+                    return currentStreamVersion;
+                } else {
                     try {
                         eventCollection.insertMany(clientSession, cloudEventDocuments);
                     } catch (MongoBulkWriteException e) {
                         throw translateToDuplicateCloudEventException(e);
                     }
+                    return cloudEventDocuments.get(cloudEventDocuments.size() - 1).getLong(STREAM_VERSION);
                 }
-                return "";
             }, transactionOptions);
+            return new WriteResult(streamId, newStreamVersion);
         }
     }
 

@@ -20,6 +20,7 @@ import io.cloudevents.CloudEvent;
 import org.occurrent.eventstore.api.DuplicateCloudEventException;
 import org.occurrent.eventstore.api.WriteCondition;
 import org.occurrent.eventstore.api.WriteConditionNotFulfilledException;
+import org.occurrent.eventstore.api.WriteResult;
 
 import java.util.stream.Stream;
 
@@ -36,12 +37,13 @@ public interface ConditionallyWriteToEventStream {
      * @param streamId              The id of the stream
      * @param expectedStreamVersion The stream must be equal to this version in order for the events to be written
      * @param events                The events to be appended/written to the stream
+     * @return The result of the write, includes useful metadata such as stream version.
      * @throws WriteConditionNotFulfilledException When the <code>writeCondition</code> was not fulfilled and the events couldn't be written
      * @throws DuplicateCloudEventException        If a cloud event in the supplied <code>events</code> stream already exists in the event store
      * @see #write(String, WriteCondition, Stream) for more advanced write conditions
      */
-    default void write(String streamId, long expectedStreamVersion, Stream<CloudEvent> events) {
-        write(streamId, streamVersionEq(expectedStreamVersion), events);
+    default WriteResult write(String streamId, long expectedStreamVersion, Stream<CloudEvent> events) {
+        return write(streamId, streamVersionEq(expectedStreamVersion), events);
     }
 
     /**
@@ -50,8 +52,9 @@ public interface ConditionallyWriteToEventStream {
      * @param streamId       The id of the stream
      * @param writeCondition The write condition that must be fulfilled for the events to be written
      * @param events         The events to be appended/written to the stream
+     * @return The result of the write, includes useful metadata such as stream version.
      * @throws WriteConditionNotFulfilledException When the <code>writeCondition</code> was not fulfilled and the events couldn't be written
      * @throws DuplicateCloudEventException        If a cloud event in the supplied <code>events</code> stream already exists in the event store
      */
-    void write(String streamId, WriteCondition writeCondition, Stream<CloudEvent> events);
+    WriteResult write(String streamId, WriteCondition writeCondition, Stream<CloudEvent> events);
 }

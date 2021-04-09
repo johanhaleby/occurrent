@@ -20,6 +20,7 @@ import io.cloudevents.CloudEvent;
 import org.occurrent.eventstore.api.DuplicateCloudEventException;
 import org.occurrent.eventstore.api.WriteCondition;
 import org.occurrent.eventstore.api.WriteConditionNotFulfilledException;
+import org.occurrent.eventstore.api.WriteResult;
 import reactor.core.publisher.Flux;
 import reactor.core.publisher.Mono;
 
@@ -44,7 +45,7 @@ public interface ConditionallyWriteToEventStream {
      * @param events                The events to be appended/written to the stream
      * @see #write(String, WriteCondition, Flux) for more advanced write conditions
      */
-    default Mono<Void> write(String streamId, long expectedStreamVersion, Flux<CloudEvent> events) {
+    default Mono<WriteResult> write(String streamId, long expectedStreamVersion, Flux<CloudEvent> events) {
         return write(streamId, streamVersionEq(expectedStreamVersion), events);
     }
 
@@ -63,5 +64,5 @@ public interface ConditionallyWriteToEventStream {
      * @param writeCondition The write condition that must be fulfilled for the events to be written
      * @param events         The events to be appended/written to the stream
      */
-    Mono<Void> write(String streamId, WriteCondition writeCondition, Flux<CloudEvent> events);
+    Mono<WriteResult> write(String streamId, WriteCondition writeCondition, Flux<CloudEvent> events);
 }

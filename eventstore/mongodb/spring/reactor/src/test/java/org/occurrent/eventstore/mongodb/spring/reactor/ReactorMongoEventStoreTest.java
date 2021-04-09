@@ -37,11 +37,7 @@ import org.junit.jupiter.api.extension.RegisterExtension;
 import org.occurrent.cloudevents.OccurrentCloudEventExtension;
 import org.occurrent.condition.Condition;
 import org.occurrent.domain.*;
-import org.occurrent.eventstore.api.DuplicateCloudEventException;
-import org.occurrent.eventstore.api.SortBy;
-import org.occurrent.eventstore.api.WriteCondition;
-import org.occurrent.eventstore.api.WriteConditionNotFulfilledException;
-import org.occurrent.eventstore.api.reactor.EventStoreQueries;
+import org.occurrent.eventstore.api.*;
 import org.occurrent.eventstore.api.reactor.EventStream;
 import org.occurrent.filter.Filter;
 import org.occurrent.functional.CheckedFunction;
@@ -1661,33 +1657,33 @@ public class ReactorMongoEventStoreTest {
     }
 
 
-    private Mono<Void> persist(String eventStreamId, CloudEvent event) {
+    private Mono<WriteResult> persist(String eventStreamId, CloudEvent event) {
         return eventStore.write(eventStreamId, Flux.just(event));
     }
 
-    private Mono<Void> persist(String eventStreamId, DomainEvent event) {
+    private Mono<WriteResult> persist(String eventStreamId, DomainEvent event) {
         return eventStore.write(eventStreamId, Flux.just(convertDomainEventCloudEvent(event)));
     }
 
-    private Mono<Void> persist(String eventStreamId, Flux<DomainEvent> events) {
+    private Mono<WriteResult> persist(String eventStreamId, Flux<DomainEvent> events) {
         return eventStore.write(eventStreamId, events.map(this::convertDomainEventCloudEvent));
     }
 
-    private Mono<Void> persist(String eventStreamId, List<DomainEvent> events) {
+    private Mono<WriteResult> persist(String eventStreamId, List<DomainEvent> events) {
         return persist(eventStreamId, Flux.fromIterable(events));
     }
 
-    private Mono<Void> persist(String eventStreamId, WriteCondition writeCondition, DomainEvent event) {
+    private Mono<WriteResult> persist(String eventStreamId, WriteCondition writeCondition, DomainEvent event) {
         List<DomainEvent> events = new ArrayList<>();
         events.add(event);
         return persist(eventStreamId, writeCondition, events);
     }
 
-    private Mono<Void> persist(String eventStreamId, WriteCondition writeCondition, List<DomainEvent> events) {
+    private Mono<WriteResult> persist(String eventStreamId, WriteCondition writeCondition, List<DomainEvent> events) {
         return persist(eventStreamId, writeCondition, Flux.fromIterable(events));
     }
 
-    private Mono<Void> persist(String eventStreamId, WriteCondition writeCondition, Flux<DomainEvent> events) {
+    private Mono<WriteResult> persist(String eventStreamId, WriteCondition writeCondition, Flux<DomainEvent> events) {
         return eventStore.write(eventStreamId, writeCondition, events.map(this::convertDomainEventCloudEvent));
     }
 
@@ -1715,4 +1711,3 @@ public class ReactorMongoEventStoreTest {
         }
     }
 }
-

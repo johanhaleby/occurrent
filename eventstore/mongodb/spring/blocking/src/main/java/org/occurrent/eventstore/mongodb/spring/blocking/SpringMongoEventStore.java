@@ -22,13 +22,11 @@ import com.mongodb.client.model.IndexOptions;
 import com.mongodb.client.model.Indexes;
 import io.cloudevents.CloudEvent;
 import org.bson.Document;
+import org.occurrent.cloudevents.OccurrentCloudEventExtension;
 import org.occurrent.cloudevents.OccurrentExtensionGetter;
 import org.occurrent.condition.Condition;
-import org.occurrent.eventstore.api.LongConditionEvaluator;
-import org.occurrent.eventstore.api.SortBy;
-import org.occurrent.eventstore.api.WriteCondition;
+import org.occurrent.eventstore.api.*;
 import org.occurrent.eventstore.api.WriteCondition.StreamVersionWriteCondition;
-import org.occurrent.eventstore.api.WriteConditionNotFulfilledException;
 import org.occurrent.eventstore.api.blocking.EventStore;
 import org.occurrent.eventstore.api.blocking.EventStoreOperations;
 import org.occurrent.eventstore.api.blocking.EventStoreQueries;
@@ -98,13 +96,14 @@ public class SpringMongoEventStore implements EventStore, EventStoreOperations, 
         return requireNonNull(eventStream).map(document -> convertToCloudEvent(timeRepresentation, document));
     }
 
+    @SuppressWarnings("ConstantConditions")
     @Override
-    public void write(String streamId, WriteCondition writeCondition, Stream<CloudEvent> events) {
+    public WriteResult write(String streamId, WriteCondition writeCondition, Stream<CloudEvent> events) {
         if (writeCondition == null) {
             throw new IllegalArgumentException(WriteCondition.class.getSimpleName() + " cannot be null");
         }
 
-        transactionTemplate.executeWithoutResult(transactionStatus -> {
+        long newStreamVersion = transactionTemplate.execute(transactionStatus -> {
             long currentStreamVersion = currentStreamVersion(streamId);
 
             if (!isFulfilled(currentStreamVersion, writeCondition)) {
@@ -115,13 +114,17 @@ public class SpringMongoEventStore implements EventStore, EventStoreOperations, 
 
             if (!cloudEventDocuments.isEmpty()) {
                 insertAll(cloudEventDocuments);
+                return cloudEventDocuments.get(cloudEventDocuments.size() - 1).getLong(OccurrentCloudEventExtension.STREAM_VERSION);
+            } else {
+                return currentStreamVersion;
             }
         });
+        return new WriteResult(streamId, newStreamVersion);
     }
 
     @Override
-    public void write(String streamId, Stream<CloudEvent> events) {
-        write(streamId, StreamVersionWriteCondition.any(), events);
+    public WriteResult write(String streamId, Stream<CloudEvent> events) {
+        return write(streamId, StreamVersionWriteCondition.any(), events);
     }
 
     @Override

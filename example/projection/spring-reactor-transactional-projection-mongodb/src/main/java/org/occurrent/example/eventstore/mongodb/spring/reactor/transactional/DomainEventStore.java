@@ -46,7 +46,7 @@ public class DomainEventStore {
     }
 
     public Mono<Void> append(UUID id, long expectedVersion, List<DomainEvent> events) {
-        return eventStore.write(id.toString(), expectedVersion, serialize(events));
+        return eventStore.write(id.toString(), expectedVersion, serialize(events)).then();
     }
 
     public Mono<EventStream<DomainEvent>> loadEventStream(UUID id) {
