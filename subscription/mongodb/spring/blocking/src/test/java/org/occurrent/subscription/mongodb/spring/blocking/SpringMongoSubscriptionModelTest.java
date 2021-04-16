@@ -92,7 +92,7 @@ import static org.occurrent.subscription.mongodb.spring.blocking.SpringMongoSubs
 public class SpringMongoSubscriptionModelTest {
 
     @Container
-    private static final MongoDBContainer mongoDBContainer = new MongoDBContainer("mongo:4.2.8");
+    private static final MongoDBContainer mongoDBContainer = new MongoDBContainer("mongo:4.2.8").withReuse(true);
     private static final String RESUME_TOKEN_COLLECTION = "ack";
 
     @RegisterExtension

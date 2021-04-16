@@ -56,7 +56,7 @@ class CompetingConsumerSubscriptionModelTest {
     private static final Logger log = LoggerFactory.getLogger(CompetingConsumerSubscriptionModelTest.class);
 
     @Container
-    private static final MongoDBContainer mongoDBContainer = new MongoDBContainer("mongo:4.2.8");
+    private static final MongoDBContainer mongoDBContainer = new MongoDBContainer("mongo:4.2.8").withReuse(true);
 
     @RegisterExtension
     FlushMongoDBExtension flushMongoDBExtension = new FlushMongoDBExtension(new ConnectionString(mongoDBContainer.getReplicaSetUrl()));

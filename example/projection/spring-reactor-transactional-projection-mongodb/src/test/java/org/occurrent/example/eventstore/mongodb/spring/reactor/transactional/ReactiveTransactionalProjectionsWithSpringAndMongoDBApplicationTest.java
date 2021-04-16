@@ -55,7 +55,7 @@ public class ReactiveTransactionalProjectionsWithSpringAndMongoDBApplicationTest
         mongoDBContainer = new MongoDBContainer("mongo:4.2.8");
         List<String> ports = new ArrayList<>();
         ports.add("27017:27017");
-        mongoDBContainer.setPortBindings(ports);
+        mongoDBContainer.withReuse(true).setPortBindings(ports);
     }
 
     @BeforeAll

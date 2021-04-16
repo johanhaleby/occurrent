@@ -83,7 +83,7 @@ import static org.occurrent.time.TimeConversion.toLocalDateTime;
 public class NativeMongoSubscriptionPositionStorageTest {
 
     @Container
-    private static final MongoDBContainer mongoDBContainer = new MongoDBContainer("mongo:4.2.8");
+    private static final MongoDBContainer mongoDBContainer = new MongoDBContainer("mongo:4.2.8").withReuse(true);
     private static final String TIMESTAMP_TOKEN_COLLECTION = "subscriptions";
 
     @RegisterExtension

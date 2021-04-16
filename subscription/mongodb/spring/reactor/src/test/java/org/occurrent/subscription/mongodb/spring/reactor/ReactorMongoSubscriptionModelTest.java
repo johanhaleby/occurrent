@@ -72,7 +72,7 @@ import static org.occurrent.time.TimeConversion.toLocalDateTime;
 public class ReactorMongoSubscriptionModelTest {
 
     @Container
-    private static final MongoDBContainer mongoDBContainer = new MongoDBContainer("mongo:4.2.8");
+    private static final MongoDBContainer mongoDBContainer = new MongoDBContainer("mongo:4.2.8").withReuse(true);
 
     private ReactorMongoEventStore mongoEventStore;
     private ReactorMongoSubscriptionModel subscription;

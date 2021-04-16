@@ -40,7 +40,7 @@ public class SpringAdhocProjectionTest {
     private static final MongoDBContainer mongoDBContainer;
 
     static {
-        mongoDBContainer = new MongoDBContainer("mongo:4.2.8");
+        mongoDBContainer = new MongoDBContainer("mongo:4.2.8").withReuse(true);
         List<String> ports = new ArrayList<>();
         ports.add("27017:27017");
         mongoDBContainer.setPortBindings(ports);
