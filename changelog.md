@@ -1,4 +1,4 @@
-## Changelog next version
+## Changelog 0.10.0 (2021-04-16)
                    
 * The event store API's now returns an instance of `org.occurrent.eventstore.api.WriteResult` when writing events to the event store (previously `void` was returned). 
   The `WriteResult` instance contains the stream id and the new stream version of the stream. The reason for this change is to make it easier to implement use cases such
