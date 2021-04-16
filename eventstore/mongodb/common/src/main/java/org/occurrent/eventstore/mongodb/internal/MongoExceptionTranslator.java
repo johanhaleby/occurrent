@@ -50,8 +50,12 @@ public class MongoExceptionTranslator {
                     .orElse(e);
         } else if (e instanceof MongoCommandException && e.getCode() == 112) {
             // See https://github.com/johanhaleby/occurrent/issues/85
-            runtimeException = new WriteConditionNotFulfilledException(ctx.eventStreamId, ctx.eventStreamVersion, ctx.writeCondition,
-                    String.format("%s was not fulfilled. Expected version %s but was %s.", WriteCondition.class.getSimpleName(), ctx.writeCondition.toString(), ctx.eventStreamVersion));
+            // We increase version by 1 since this error only happens when two or more clients write to the same stream at the same time
+            // while also have read the same previous event stream version. This means that one of these write "have won" and the
+            // version has increased by at least one.
+            long eventStreamVersion = ctx.eventStreamVersion + 1;
+            runtimeException = new WriteConditionNotFulfilledException(ctx.eventStreamId, eventStreamVersion, ctx.writeCondition,
+                    String.format("%s was not fulfilled. Expected version %s but was %s.", WriteCondition.class.getSimpleName(), ctx.writeCondition.toString(), eventStreamVersion));
         } else {
             runtimeException = e;
         }

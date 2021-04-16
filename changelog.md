@@ -1,3 +1,7 @@
+## Changelog next version
+
+* Improved error message and version for write condition not fulfilled that may happened when parallel writers write to the same stream at the same time. 
+
 ## Changelog 0.10.0 (2021-04-16)
                    
 * The event store API's now returns an instance of `org.occurrent.eventstore.api.WriteResult` when writing events to the event store (previously `void` was returned). 

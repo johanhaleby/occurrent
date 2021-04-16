@@ -42,7 +42,7 @@ public class WriteConditionNotFulfilledException extends RuntimeException {
         if (this == o) return true;
         if (!(o instanceof WriteConditionNotFulfilledException)) return false;
         WriteConditionNotFulfilledException that = (WriteConditionNotFulfilledException) o;
-        return eventStreamVersion == that.eventStreamVersion && Objects.equals(eventStreamId, that.eventStreamId) && Objects.equals(writeCondition, that.writeCondition);
+        return eventStreamVersion == that.eventStreamVersion && Objects.equals(eventStreamId, that.eventStreamId) && Objects.equals(writeCondition, that.writeCondition) && Objects.equals(getMessage(), that.getMessage());
     }
 
     @Override
@@ -56,6 +56,7 @@ public class WriteConditionNotFulfilledException extends RuntimeException {
                 .add("eventStreamId='" + eventStreamId + "'")
                 .add("eventStreamVersion=" + eventStreamVersion)
                 .add("writeCondition=" + writeCondition)
+                .add("message=" + super.getMessage())
                 .toString();
     }
 }

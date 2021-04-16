@@ -37,6 +37,7 @@ import org.bson.Document;
 import org.junit.jupiter.api.*;
 import org.junit.jupiter.api.condition.EnabledForJreRange;
 import org.junit.jupiter.api.condition.EnabledOnJre;
+import org.junit.jupiter.api.condition.EnabledOnOs;
 import org.junit.jupiter.api.extension.RegisterExtension;
 import org.occurrent.domain.DomainEvent;
 import org.occurrent.domain.Name;
@@ -70,11 +71,13 @@ import static io.vavr.API.*;
 import static io.vavr.Predicates.is;
 import static java.nio.charset.StandardCharsets.UTF_8;
 import static java.time.ZoneOffset.UTC;
+import static java.util.concurrent.TimeUnit.SECONDS;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.catchThrowable;
 import static org.junit.jupiter.api.Assertions.assertAll;
 import static org.junit.jupiter.api.condition.JRE.JAVA_11;
 import static org.junit.jupiter.api.condition.JRE.JAVA_8;
+import static org.junit.jupiter.api.condition.OS.MAC;
 import static org.occurrent.cloudevents.OccurrentCloudEventExtension.*;
 import static org.occurrent.condition.Condition.*;
 import static org.occurrent.domain.Composition.chain;
@@ -716,7 +719,8 @@ class MongoEventStoreTest {
         @DisplayName("parallel writes")
         class ParallelWritesToEventStoreReturns {
 
-            @RepeatedIfExceptionsTest(repeats = 10, suspend = 500)
+            @EnabledOnOs(MAC)
+            @RepeatedIfExceptionsTest(repeats = 5, suspend = 500)
             void parallel_writes_to_event_store_throws_WriteConditionNotFulfilledException() {
                 // Given
                 CyclicBarrier cyclicBarrier = new CyclicBarrier(2);
@@ -737,7 +741,7 @@ class MongoEventStoreTest {
                 }).start();
 
                 // Then
-                Awaitility.await().untilAsserted(() -> assertThat(exception.get()).isEqualTo(new WriteConditionNotFulfilledException("name", 0, writeCondition, "ikk")));
+                Awaitility.await().atMost(4, SECONDS).untilAsserted(() -> assertThat(exception).hasValue(new WriteConditionNotFulfilledException("name", 1, writeCondition, "WriteCondition was not fulfilled. Expected version to be equal to 0 but was 1.")));
             }
         }
 
