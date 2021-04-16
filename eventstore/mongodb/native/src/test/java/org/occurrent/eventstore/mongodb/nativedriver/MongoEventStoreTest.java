@@ -716,7 +716,7 @@ class MongoEventStoreTest {
         @DisplayName("parallel writes")
         class ParallelWritesToEventStoreReturns {
 
-            @Test
+            @RepeatedIfExceptionsTest(repeats = 10, suspend = 500)
             void parallel_writes_to_event_store_throws_WriteConditionNotFulfilledException() {
                 // Given
                 CyclicBarrier cyclicBarrier = new CyclicBarrier(2);
