@@ -16,7 +16,7 @@
 
 package org.occurrent.eventstore.mongodb.nativedriver;
 
-import com.mongodb.MongoBulkWriteException;
+import com.mongodb.MongoException;
 import com.mongodb.TransactionOptions;
 import com.mongodb.client.*;
 import com.mongodb.client.model.IndexOptions;
@@ -34,6 +34,7 @@ import org.occurrent.eventstore.api.blocking.EventStore;
 import org.occurrent.eventstore.api.blocking.EventStoreOperations;
 import org.occurrent.eventstore.api.blocking.EventStoreQueries;
 import org.occurrent.eventstore.api.blocking.EventStream;
+import org.occurrent.eventstore.mongodb.internal.MongoExceptionTranslator.WriteContext;
 import org.occurrent.filter.Filter;
 import org.occurrent.functionalsupport.internal.FunctionalSupport.Pair;
 import org.occurrent.mongodb.spring.filterbsonfilterconversion.internal.FilterToBsonFilterConverter;
@@ -61,7 +62,7 @@ import static org.occurrent.eventstore.api.SortBy.*;
 import static org.occurrent.eventstore.api.SortBy.SortDirection.ASCENDING;
 import static org.occurrent.eventstore.api.WriteCondition.StreamVersionWriteCondition;
 import static org.occurrent.eventstore.api.WriteCondition.anyStreamVersion;
-import static org.occurrent.eventstore.mongodb.internal.MongoBulkWriteExceptionToDuplicateCloudEventExceptionTranslator.translateToDuplicateCloudEventException;
+import static org.occurrent.eventstore.mongodb.internal.MongoExceptionTranslator.translateException;
 import static org.occurrent.eventstore.mongodb.internal.OccurrentCloudEventMongoDocumentMapper.convertToCloudEvent;
 import static org.occurrent.eventstore.mongodb.internal.OccurrentCloudEventMongoDocumentMapper.convertToDocument;
 import static org.occurrent.functionalsupport.internal.FunctionalSupport.zip;
@@ -192,8 +193,8 @@ public class MongoEventStore implements EventStore, EventStoreOperations, EventS
                 } else {
                     try {
                         eventCollection.insertMany(clientSession, cloudEventDocuments);
-                    } catch (MongoBulkWriteException e) {
-                        throw translateToDuplicateCloudEventException(e);
+                    } catch (MongoException e) {
+                        throw translateException(new WriteContext(streamId, currentStreamVersion, writeCondition), e);
                     }
                     return cloudEventDocuments.get(cloudEventDocuments.size() - 1).getLong(STREAM_VERSION);
                 }

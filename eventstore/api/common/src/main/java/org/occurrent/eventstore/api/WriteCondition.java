@@ -18,6 +18,8 @@ package org.occurrent.eventstore.api;
 
 import org.occurrent.condition.Condition;
 
+import java.util.Objects;
+
 import static java.util.Objects.requireNonNull;
 import static org.occurrent.condition.Condition.eq;
 
@@ -86,6 +88,19 @@ public abstract class WriteCondition {
 
         public boolean isAny() {
             return condition == null;
+        }
+
+        @Override
+        public boolean equals(Object o) {
+            if (this == o) return true;
+            if (!(o instanceof StreamVersionWriteCondition)) return false;
+            StreamVersionWriteCondition that = (StreamVersionWriteCondition) o;
+            return Objects.equals(condition, that.condition);
+        }
+
+        @Override
+        public int hashCode() {
+            return Objects.hash(condition);
         }
     }
 }

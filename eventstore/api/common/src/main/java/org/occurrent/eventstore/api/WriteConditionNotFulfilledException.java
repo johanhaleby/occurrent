@@ -16,6 +16,9 @@
 
 package org.occurrent.eventstore.api;
 
+import java.util.Objects;
+import java.util.StringJoiner;
+
 /**
  * The write condition was not fulfilled so events have not been written to the event store.
  * In a typical scenario, if an application read and writes stream A from two different places at the same time,
@@ -32,5 +35,27 @@ public class WriteConditionNotFulfilledException extends RuntimeException {
         this.writeCondition = writeCondition;
         this.eventStreamVersion = eventStreamVersion;
         this.eventStreamId = eventStreamId;
+    }
+
+    @Override
+    public boolean equals(Object o) {
+        if (this == o) return true;
+        if (!(o instanceof WriteConditionNotFulfilledException)) return false;
+        WriteConditionNotFulfilledException that = (WriteConditionNotFulfilledException) o;
+        return eventStreamVersion == that.eventStreamVersion && Objects.equals(eventStreamId, that.eventStreamId) && Objects.equals(writeCondition, that.writeCondition);
+    }
+
+    @Override
+    public int hashCode() {
+        return Objects.hash(eventStreamId, eventStreamVersion, writeCondition);
+    }
+
+    @Override
+    public String toString() {
+        return new StringJoiner(", ", WriteConditionNotFulfilledException.class.getSimpleName() + "[", "]")
+                .add("eventStreamId='" + eventStreamId + "'")
+                .add("eventStreamVersion=" + eventStreamVersion)
+                .add("writeCondition=" + writeCondition)
+                .toString();
     }
 }

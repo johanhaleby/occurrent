@@ -16,7 +16,7 @@
 
 package org.occurrent.eventstore.mongodb.spring.reactor;
 
-import com.mongodb.MongoBulkWriteException;
+import com.mongodb.MongoException;
 import com.mongodb.client.model.IndexOptions;
 import com.mongodb.client.model.Indexes;
 import com.mongodb.reactivestreams.client.MongoCollection;
@@ -29,13 +29,15 @@ import org.occurrent.eventstore.api.reactor.EventStore;
 import org.occurrent.eventstore.api.reactor.EventStoreOperations;
 import org.occurrent.eventstore.api.reactor.EventStoreQueries;
 import org.occurrent.eventstore.api.reactor.EventStream;
-import org.occurrent.eventstore.mongodb.internal.MongoBulkWriteExceptionToDuplicateCloudEventExceptionTranslator;
+import org.occurrent.eventstore.mongodb.internal.MongoExceptionTranslator;
+import org.occurrent.eventstore.mongodb.internal.MongoExceptionTranslator.WriteContext;
 import org.occurrent.eventstore.mongodb.internal.OccurrentCloudEventMongoDocumentMapper;
 import org.occurrent.filter.Filter;
 import org.occurrent.mongodb.spring.filterqueryconversion.internal.FilterConverter;
 import org.occurrent.mongodb.timerepresentation.TimeRepresentation;
 import org.springframework.dao.DuplicateKeyException;
 import org.springframework.data.domain.Sort;
+import org.springframework.data.mongodb.UncategorizedMongoDbException;
 import org.springframework.data.mongodb.core.ReactiveMongoTemplate;
 import org.springframework.data.mongodb.core.query.Query;
 import org.springframework.transaction.reactive.TransactionalOperator;
@@ -108,7 +110,7 @@ public class ReactorMongoEventStore implements EventStore, EventStoreOperations,
                         } else {
                             newStreamVersion = documents.get(documents.size() - 1).getLong(STREAM_VERSION);
                         }
-                        return insertAll(documents).then(Mono.just(newStreamVersion));
+                        return insertAll(streamId, currentStreamVersion, writeCondition, documents).then(Mono.just(newStreamVersion));
                     });
                     return newStreamVersionFlux.switchIfEmpty(Mono.just(currentStreamVersion));
                 });
@@ -156,10 +158,17 @@ public class ReactorMongoEventStore implements EventStore, EventStoreOperations,
     }
 
 
-    private Flux<Document> insertAll(Collection<Document> documents) {
+    private Flux<Document> insertAll(String streamId, long streamVersion, WriteCondition writeCondition, Collection<Document> documents) {
         return mongoTemplate.insert(documents, eventStoreCollectionName)
                 .onErrorMap(DuplicateKeyException.class, Throwable::getCause)
-                .onErrorMap(MongoBulkWriteException.class, MongoBulkWriteExceptionToDuplicateCloudEventExceptionTranslator::translateToDuplicateCloudEventException);
+                .onErrorMap(MongoException.class, e -> MongoExceptionTranslator.translateException(new WriteContext(streamId, streamVersion, writeCondition), e))
+                .onErrorMap(UncategorizedMongoDbException.class, e -> {
+                    if (e.getCause() instanceof MongoException) {
+                        return MongoExceptionTranslator.translateException(new WriteContext(streamId, streamVersion, writeCondition), (MongoException) e.getCause());
+                    } else {
+                        return e;
+                    }
+                });
     }
 
     private static boolean isFulfilled(long streamVersion, WriteCondition writeCondition) {

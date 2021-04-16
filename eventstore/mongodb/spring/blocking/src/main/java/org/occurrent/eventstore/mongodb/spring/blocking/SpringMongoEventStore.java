@@ -16,7 +16,7 @@
 
 package org.occurrent.eventstore.mongodb.spring.blocking;
 
-import com.mongodb.MongoBulkWriteException;
+import com.mongodb.MongoException;
 import com.mongodb.client.MongoCollection;
 import com.mongodb.client.model.IndexOptions;
 import com.mongodb.client.model.Indexes;
@@ -31,6 +31,7 @@ import org.occurrent.eventstore.api.blocking.EventStore;
 import org.occurrent.eventstore.api.blocking.EventStoreOperations;
 import org.occurrent.eventstore.api.blocking.EventStoreQueries;
 import org.occurrent.eventstore.api.blocking.EventStream;
+import org.occurrent.eventstore.mongodb.internal.MongoExceptionTranslator.WriteContext;
 import org.occurrent.filter.Filter;
 import org.occurrent.mongodb.spring.filterqueryconversion.internal.FilterConverter;
 import org.occurrent.mongodb.timerepresentation.TimeRepresentation;
@@ -52,7 +53,7 @@ import static java.util.Objects.requireNonNull;
 import static org.occurrent.cloudevents.OccurrentCloudEventExtension.STREAM_ID;
 import static org.occurrent.cloudevents.OccurrentCloudEventExtension.STREAM_VERSION;
 import static org.occurrent.eventstore.api.SortBy.SortDirection.ASCENDING;
-import static org.occurrent.eventstore.mongodb.internal.MongoBulkWriteExceptionToDuplicateCloudEventExceptionTranslator.translateToDuplicateCloudEventException;
+import static org.occurrent.eventstore.mongodb.internal.MongoExceptionTranslator.translateException;
 import static org.occurrent.eventstore.mongodb.internal.OccurrentCloudEventMongoDocumentMapper.convertToCloudEvent;
 import static org.occurrent.eventstore.mongodb.internal.OccurrentCloudEventMongoDocumentMapper.convertToDocument;
 import static org.occurrent.functionalsupport.internal.FunctionalSupport.mapWithIndex;
@@ -107,13 +108,13 @@ public class SpringMongoEventStore implements EventStore, EventStoreOperations, 
             long currentStreamVersion = currentStreamVersion(streamId);
 
             if (!isFulfilled(currentStreamVersion, writeCondition)) {
-                throw new WriteConditionNotFulfilledException(streamId, currentStreamVersion, writeCondition, String.format("%s was not fulfilled. Expected version %s but was %s.", WriteCondition.class.getSimpleName(), writeCondition.toString(), currentStreamVersion));
+                throw new WriteConditionNotFulfilledException(streamId, currentStreamVersion, writeCondition, String.format("%s was not fulfilled. Expected version %s but was %s.", WriteCondition.class.getSimpleName(), writeCondition, currentStreamVersion));
             }
 
             List<Document> cloudEventDocuments = mapWithIndex(events, currentStreamVersion, pair -> convertToDocument(timeRepresentation, streamId, pair.t1, pair.t2)).collect(Collectors.toList());
 
             if (!cloudEventDocuments.isEmpty()) {
-                insertAll(cloudEventDocuments);
+                insertAll(streamId, currentStreamVersion, writeCondition, cloudEventDocuments);
                 return cloudEventDocuments.get(cloudEventDocuments.size() - 1).getLong(OccurrentCloudEventExtension.STREAM_VERSION);
             } else {
                 return currentStreamVersion;
@@ -259,11 +260,11 @@ public class SpringMongoEventStore implements EventStore, EventStoreOperations, 
         }
     }
 
-    private void insertAll(List<Document> documents) {
+    private void insertAll(String streamId, long streamVersion, WriteCondition writeCondition, List<Document> documents) {
         try {
             mongoTemplate.getCollection(eventStoreCollectionName).insertMany(documents);
-        } catch (MongoBulkWriteException e) {
-            throw translateToDuplicateCloudEventException(e);
+        } catch (MongoException e) {
+            throw translateException(new WriteContext(streamId, streamVersion, writeCondition), e);
         }
     }
 

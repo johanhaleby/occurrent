@@ -27,6 +27,7 @@ import io.cloudevents.CloudEvent;
 import io.cloudevents.core.builder.CloudEventBuilder;
 import io.cloudevents.core.data.PojoCloudEventData;
 import io.github.artsok.RepeatedIfExceptionsTest;
+import org.awaitility.Awaitility;
 import org.bson.Document;
 import org.junit.jupiter.api.*;
 import org.junit.jupiter.api.DisplayNameGenerator.ReplaceUnderscores;
@@ -58,6 +59,8 @@ import java.time.ZoneId;
 import java.util.List;
 import java.util.Map;
 import java.util.*;
+import java.util.concurrent.CyclicBarrier;
+import java.util.concurrent.atomic.AtomicReference;
 import java.util.function.Function;
 import java.util.stream.Collectors;
 import java.util.stream.Stream;
@@ -257,7 +260,7 @@ public class SpringMongoEventStoreTest {
                 () -> assertThat(readEvents).containsExactly(nameDefined, nameWasChanged1)
         );
     }
-    
+
     @Nested
     @DisplayName("write result")
     class WriteResultTest {
@@ -274,7 +277,7 @@ public class SpringMongoEventStoreTest {
 
             // Then
             assertAll(
-                    () ->  assertThat(writeResult.getStreamId()).isEqualTo("name"),
+                    () -> assertThat(writeResult.getStreamId()).isEqualTo("name"),
                     () -> assertThat(writeResult.getStreamVersion()).isEqualTo(2L)
             );
         }
@@ -293,7 +296,7 @@ public class SpringMongoEventStoreTest {
 
             // Then
             assertAll(
-                    () ->  assertThat(writeResult.getStreamId()).isEqualTo("name"),
+                    () -> assertThat(writeResult.getStreamId()).isEqualTo("name"),
                     () -> assertThat(writeResult.getStreamVersion()).isEqualTo(3L)
             );
         }
@@ -305,11 +308,11 @@ public class SpringMongoEventStoreTest {
 
             // Then
             assertAll(
-                    () ->  assertThat(writeResult.getStreamId()).isEqualTo("name"),
+                    () -> assertThat(writeResult.getStreamId()).isEqualTo("name"),
                     () -> assertThat(writeResult.getStreamVersion()).isEqualTo(0L)
             );
         }
-        
+
         @Test
         void spring_mongo_event_store_returns_the_previous_stream_version_when_no_events_are_written_to_an_existing_stream() {
             // Given
@@ -323,7 +326,7 @@ public class SpringMongoEventStoreTest {
 
             // Then
             assertAll(
-                    () ->  assertThat(writeResult.getStreamId()).isEqualTo("name"),
+                    () -> assertThat(writeResult.getStreamId()).isEqualTo("name"),
                     () -> assertThat(writeResult.getStreamVersion()).isEqualTo(2L)
             );
         }
@@ -693,6 +696,35 @@ public class SpringMongoEventStoreTest {
     class ConditionallyWriteToSpringMongoEventStore {
 
         LocalDateTime now = LocalDateTime.now();
+
+        @Nested
+        @DisplayName("parallel writes")
+        class ParallelWritesToEventStoreReturns {
+
+            @Test
+            void parallel_writes_to_event_store_throws_WriteConditionNotFulfilledException() {
+                // Given
+                CyclicBarrier cyclicBarrier = new CyclicBarrier(2);
+                WriteCondition writeCondition = WriteCondition.streamVersionEq(0);
+                AtomicReference<Throwable> exception = new AtomicReference<>();
+
+                // When
+                new Thread(() -> {
+                    NameDefined event = new NameDefined(UUID.randomUUID().toString(), now, "John Doe");
+                    await(cyclicBarrier);
+                    exception.set(catchThrowable(() -> persist("name", writeCondition, event)));
+                }).start();
+
+                new Thread(() -> {
+                    NameDefined event = new NameDefined(UUID.randomUUID().toString(), now, "John Doe");
+                    await(cyclicBarrier);
+                    exception.set(catchThrowable(() -> persist("name", writeCondition, event)));
+                }).start();
+
+                // Then
+                Awaitility.await().untilAsserted(() -> assertThat(exception.get()).isEqualTo(new WriteConditionNotFulfilledException("name", 0, writeCondition, "ikk")));
+            }
+        }
 
         @Nested
         @DisplayName("eq")
@@ -1410,12 +1442,12 @@ public class SpringMongoEventStoreTest {
                 NameDefined nameDefined = new NameDefined(UUID.randomUUID().toString(), now, "name");
                 NameWasChanged nameWasChanged1 = new NameWasChanged(UUID.randomUUID().toString(), now, "name2");
                 NameWasChanged nameWasChanged2 = new NameWasChanged(UUID.randomUUID().toString(), now.plusHours(1), "name3");
-                
+
                 // When
                 persist("name1", nameDefined);
                 persist("name3", nameWasChanged1);
                 persist("name2", nameWasChanged2);
-                
+
                 // Then
                 Stream<CloudEvent> events = eventStore.all(SortBy.time(DESCENDING).thenNatural(DESCENDING));
                 assertThat(deserialize(events)).containsExactly(nameWasChanged2, nameWasChanged1, nameDefined);
@@ -1428,12 +1460,12 @@ public class SpringMongoEventStoreTest {
                 NameDefined nameDefined = new NameDefined(UUID.randomUUID().toString(), now, "name");
                 NameWasChanged nameWasChanged1 = new NameWasChanged(UUID.randomUUID().toString(), now, "name2");
                 NameWasChanged nameWasChanged2 = new NameWasChanged(UUID.randomUUID().toString(), now.plusHours(1), "name3");
-                
+
                 // When
                 persist("name", nameDefined);
                 persist("name", nameWasChanged1);
                 persist("name", nameWasChanged2);
-                
+
                 // Then
                 Stream<CloudEvent> events = eventStore.all(SortBy.time(DESCENDING).thenNatural(ASCENDING));
                 // Natural ignores other sort parameters!!
@@ -1726,6 +1758,14 @@ public class SpringMongoEventStoreTest {
             }});
         } catch (JsonProcessingException jsonProcessingException) {
             throw new RuntimeException(jsonProcessingException);
+        }
+    }
+
+    private static void await(CyclicBarrier cyclicBarrier) {
+        try {
+            cyclicBarrier.await();
+        } catch (Exception e) {
+            throw new RuntimeException(e);
         }
     }
 }

@@ -62,6 +62,7 @@ import java.util.ArrayList;
 import java.util.List;
 import java.util.UUID;
 import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.CyclicBarrier;
 import java.util.concurrent.atomic.AtomicReference;
 import java.util.function.Function;
 import java.util.stream.Collectors;
@@ -354,7 +355,7 @@ public class ReactorMongoEventStoreTest {
 
             // Then
             assertAll(
-                    () ->  assertThat(writeResult.getStreamId()).isEqualTo("name"),
+                    () -> assertThat(writeResult.getStreamId()).isEqualTo("name"),
                     () -> assertThat(writeResult.getStreamVersion()).isEqualTo(2L)
             );
         }
@@ -373,7 +374,7 @@ public class ReactorMongoEventStoreTest {
 
             // Then
             assertAll(
-                    () ->  assertThat(writeResult.getStreamId()).isEqualTo("name"),
+                    () -> assertThat(writeResult.getStreamId()).isEqualTo("name"),
                     () -> assertThat(writeResult.getStreamVersion()).isEqualTo(3L)
             );
         }
@@ -385,11 +386,11 @@ public class ReactorMongoEventStoreTest {
 
             // Then
             assertAll(
-                    () ->  assertThat(writeResult.getStreamId()).isEqualTo("name"),
+                    () -> assertThat(writeResult.getStreamId()).isEqualTo("name"),
                     () -> assertThat(writeResult.getStreamVersion()).isEqualTo(0L)
             );
         }
-        
+
         @Test
         void reactor_mongo_event_returns_the_previous_stream_version_when_no_events_are_written_to_an_existing_stream() {
             // Given
@@ -403,7 +404,7 @@ public class ReactorMongoEventStoreTest {
 
             // Then
             assertAll(
-                    () ->  assertThat(writeResult.getStreamId()).isEqualTo("name"),
+                    () -> assertThat(writeResult.getStreamId()).isEqualTo("name"),
                     () -> assertThat(writeResult.getStreamVersion()).isEqualTo(2L)
             );
         }
@@ -722,6 +723,35 @@ public class ReactorMongoEventStoreTest {
     class ConditionallyWriteToSpringMongoEventStore {
 
         LocalDateTime now = LocalDateTime.now();
+
+        @Nested
+        @DisplayName("parallel writes")
+        class ParallelWritesToEventStoreReturns {
+
+            @Test
+            void parallel_writes_to_event_store_throws_WriteConditionNotFulfilledException() {
+                // Given
+                CyclicBarrier cyclicBarrier = new CyclicBarrier(2);
+                WriteCondition writeCondition = WriteCondition.streamVersionEq(0);
+                AtomicReference<Throwable> exception = new AtomicReference<>();
+
+                // When
+                new Thread(() -> {
+                    NameDefined event = new NameDefined(UUID.randomUUID().toString(), now, "John Doe");
+                    await(cyclicBarrier);
+                    exception.set(catchThrowable(() -> persist("name", writeCondition, event).block()));
+                }).start();
+
+                new Thread(() -> {
+                    NameDefined event = new NameDefined(UUID.randomUUID().toString(), now, "John Doe");
+                    await(cyclicBarrier);
+                    exception.set(catchThrowable(() -> persist("name", writeCondition, event).block()));
+                }).start();
+
+                // Then
+                Awaitility.await().untilAsserted(() -> assertThat(exception.get()).isEqualTo(new WriteConditionNotFulfilledException("name", 0, writeCondition, "ikk")));
+            }
+        }
 
         @Nested
         @DisplayName("eq")
@@ -1777,6 +1807,14 @@ public class ReactorMongoEventStoreTest {
         try {
             countDownLatch.await();
         } catch (InterruptedException e) {
+            throw new RuntimeException(e);
+        }
+    }
+
+    private static void await(CyclicBarrier cyclicBarrier) {
+        try {
+            cyclicBarrier.await();
+        } catch (Exception e) {
             throw new RuntimeException(e);
         }
     }

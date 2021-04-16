@@ -6,6 +6,7 @@
 * The blocking ApplicationService `org.occurrent.application.service.blocking.ApplicationService` now returns `WriteResult` instead of `void`.
 * Fixed bug in `InMemoryEventStore` that accidentally could skip version numbers when new events were inserted into the database.
 * Improved detection of duplicate cloud event's in all MongoDB event stores
+* Fixed a bug where `WriteConditionNotFulfilledException` was not thrown when a streams was updated by several threads in parallel (fixed for all mongodb event store implementations)
 * Upgraded Spring Boot from 2.4.2 to 2.4.4
 * Upgraded reactor from 3.4.2 to 3.4.4
 * Upgraded spring-data-mongodb from 3.1.1 to 3.1.7
