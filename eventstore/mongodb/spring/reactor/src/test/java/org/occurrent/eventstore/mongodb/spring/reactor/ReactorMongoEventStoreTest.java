@@ -1194,7 +1194,7 @@ public class ReactorMongoEventStoreTest {
                     .withDataContentType("application/json")
                     .withData("{\"hello\":\"world\"}".getBytes(UTF_8))
                     .build()
-            );
+            ).block();
 
             // Then
             Flux<CloudEvent> events = eventStore.query(source(NAME_SOURCE));
@@ -1221,7 +1221,7 @@ public class ReactorMongoEventStoreTest {
                     .withDataContentType("application/json")
                     .withData("{\"hello\":\"world\"}".getBytes(UTF_8))
                     .build()
-            );
+            ).block();
 
             // Then
             Flux<CloudEvent> events = eventStore.query(source(NAME_SOURCE), 1, 1);
