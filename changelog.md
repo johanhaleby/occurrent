@@ -1,7 +1,8 @@
 ## Changelog next version
 
-* Improved error message and version for write condition not fulfilled that may happened when parallel writers write to the same stream at the same time.
+* Improved error message and version for write condition not fulfilled that may happene when parallel writers write to the same stream at the same time.
 * Upgraded to cloud events java sdk to version 2.1.1
+* Upgraded to Kotlin 1.5.0
 
 ## Changelog 0.10.0 (2021-04-16)
                    
