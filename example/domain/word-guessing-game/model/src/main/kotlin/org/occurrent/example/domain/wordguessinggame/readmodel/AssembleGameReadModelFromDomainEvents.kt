@@ -19,9 +19,10 @@ package org.occurrent.example.domain.wordguessinggame.readmodel
 import org.occurrent.example.domain.wordguessinggame.event.*
 import org.occurrent.example.domain.wordguessinggame.readmodel.OngoingGameReadModel.Guess
 import org.occurrent.example.domain.wordguessinggame.support.add
+import java.util.*
 
 
-fun Sequence<GameEvent>.rehydrateToGameReadModel(): GameReadModel? = fold(AssembleGameReadModelFromDomainEvents(), AssembleGameReadModelFromDomainEvents::applyEvent).gameReadModel
+fun Sequence<GameEvent>.assembleGameReadModelFromDomainEvents(): GameReadModel? = fold(AssembleGameReadModelFromDomainEvents(), AssembleGameReadModelFromDomainEvents::applyEvent).gameReadModel
 
 internal class AssembleGameReadModelFromDomainEvents(val gameReadModel: GameReadModel? = null) {
 
@@ -38,7 +39,7 @@ internal class AssembleGameReadModelFromDomainEvents(val gameReadModel: GameRead
     }
 
     private fun applyEvent(e: GameWasStarted): AssembleGameReadModelFromDomainEvents = e.run {
-        val upperCaseWordToGuess = wordToGuess.toUpperCase()
+        val upperCaseWordToGuess = wordToGuess.uppercase(Locale.getDefault())
         val initialWordHint = wordToGuess.map { char -> if (char.isDash()) char else '_' }.joinToString("")
         AssembleGameReadModelFromDomainEvents(OngoingGameReadModel(gameId, timestamp, category, maxNumberOfGuessesPerPlayer, maxNumberOfGuessesTotal, initialWordHint, emptyList(), upperCaseWordToGuess))
     }

@@ -19,7 +19,7 @@ package org.occurrent.example.domain.wordguessinggame.mongodb.spring.blocking.fe
 import org.occurrent.example.domain.wordguessinggame.event.GameEvent
 import org.occurrent.example.domain.wordguessinggame.mongodb.spring.blocking.features.GameEventQueries
 import org.occurrent.example.domain.wordguessinggame.readmodel.GameReadModel
-import org.occurrent.example.domain.wordguessinggame.readmodel.rehydrateToGameReadModel
+import org.occurrent.example.domain.wordguessinggame.readmodel.assembleGameReadModelFromDomainEvents
 import org.occurrent.filter.Filter.subject
 import org.springframework.stereotype.Component
 import java.util.*
@@ -29,5 +29,6 @@ class FindGameByIdQuery(private val gameEvents: GameEventQueries) {
 
     fun execute(gameId: UUID): GameReadModel? =
             // We use subject to retrieve _all_ game events from different streams
-            gameEvents.query<GameEvent>(subject(gameId.toString())).rehydrateToGameReadModel()
+            gameEvents.query<GameEvent>(subject(gameId.toString()))
+                    .assembleGameReadModelFromDomainEvents()
 }

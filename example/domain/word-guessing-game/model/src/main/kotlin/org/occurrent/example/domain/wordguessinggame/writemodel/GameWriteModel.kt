@@ -76,9 +76,9 @@ object MaxNumberOfGuessesTotal {
 
 data class WordList(val category: WordCategory, val words: List<Word>) : Sequence<Word> {
     init {
-        val distinctWords = words.distinctBy { it.value.toUpperCase() }
+        val distinctWords = words.distinctBy { it.value.uppercase(Locale.getDefault()) }
         if (distinctWords.size != words.size) {
-            val duplicateWords = words.groupBy { it.value.toUpperCase() }
+            val duplicateWords = words.groupBy { it.value.uppercase(Locale.getDefault()) }
                     .filterValues { it.size > 1 }
                     .values
                     .joinToString { wordList -> wordList.map(Word::value).joinToString() }
