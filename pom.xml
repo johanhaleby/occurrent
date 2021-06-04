@@ -76,7 +76,7 @@
         <spring-boot.version>2.4.4</spring-boot.version>
         <mongo.version>4.2.2</mongo.version>
         <dokka.version>1.4.10.2</dokka.version>
-        <awaitility.version>4.0.3</awaitility.version>
+        <awaitility.version>4.1.0</awaitility.version>
     </properties>
 
 
