@@ -54,8 +54,8 @@ class Website(
 
     @GetMapping
     fun games(response: ServletResponse) {
-        val ongoingGames = ongoingGamesQuery.execute(10).toList()
-        val endedGames = endedGamesOverviewQuery.execute(10).toList()
+        val ongoingGames = ongoingGamesQuery.execute(numberOfGames = 10).toList()
+        val endedGames = endedGamesOverviewQuery.execute(numberOfGames = 10).toList()
 
         response.writer.appendHTML().html {
             body {
