@@ -19,10 +19,13 @@ package org.occurrent.application.service.blocking.generic;
 import io.cloudevents.CloudEvent;
 import org.occurrent.application.converter.CloudEventConverter;
 import org.occurrent.application.service.blocking.ApplicationService;
+import org.occurrent.eventstore.api.WriteConditionNotFulfilledException;
 import org.occurrent.eventstore.api.WriteResult;
 import org.occurrent.eventstore.api.blocking.EventStore;
 import org.occurrent.eventstore.api.blocking.EventStream;
+import org.occurrent.retry.RetryStrategy;
 
+import java.time.Duration;
 import java.util.List;
 import java.util.Objects;
 import java.util.function.Consumer;
@@ -40,41 +43,75 @@ public class GenericApplicationService<T> implements ApplicationService<T> {
 
     private final EventStore eventStore;
     private final CloudEventConverter<T> cloudEventConverter;
+    private final RetryStrategy retryStrategy;
 
+    /**
+     * Create a GenericApplicationService with the supplied {@link EventStore} and {@link CloudEventConverter}.
+     * It will use a {@link RetryStrategy} for retries, with exponential backoff starting with 100 ms and progressively go up to max 2 seconds wait time between
+     * each retry if {@link WriteConditionNotFulfilledException} is caught).
+     *
+     * @param eventStore          The event store to use
+     * @param cloudEventConverter The cloud event converter
+     * @see #GenericApplicationService(EventStore, CloudEventConverter, RetryStrategy)
+     */
     public GenericApplicationService(EventStore eventStore, CloudEventConverter<T> cloudEventConverter) {
+        this(eventStore, cloudEventConverter, defaultRetryStrategy());
+    }
+
+    /**
+     * Create a GenericApplicationService with the supplied {@link EventStore}, {@link CloudEventConverter} and {@link RetryStrategy}.
+     *
+     * @param eventStore          The event store to use
+     * @param cloudEventConverter The cloud event converter
+     */
+    public GenericApplicationService(EventStore eventStore, CloudEventConverter<T> cloudEventConverter, RetryStrategy retryStrategy) {
+        if (eventStore == null) throw new IllegalArgumentException(EventStore.class.getSimpleName() + " cannot be null");
+        if (cloudEventConverter == null) throw new IllegalArgumentException(CloudEventConverter.class.getSimpleName() + " cannot be null");
+        if (retryStrategy == null) throw new IllegalArgumentException(RetryStrategy.class.getSimpleName() + " cannot be null");
         this.eventStore = eventStore;
         this.cloudEventConverter = cloudEventConverter;
+        this.retryStrategy = retryStrategy;
     }
 
     @Override
     public WriteResult execute(String streamId, Function<Stream<T>, Stream<T>> functionThatCallsDomainModel, Consumer<Stream<T>> sideEffect) {
         Objects.requireNonNull(streamId, "Stream id cannot be null");
         Objects.requireNonNull(functionThatCallsDomainModel, "Function that calls domain model cannot be null");
-        // Read all events from the event store for a particular stream
-        EventStream<CloudEvent> eventStream = eventStore.read(streamId);
 
-        // Convert the cloud events into domain events
-        Stream<T> eventsInStream = eventStream.events().map(cloudEventConverter::toDomainEvent);
+        return retryStrategy.execute(() -> {
+            // Read all events from the event store for a particular stream
+            EventStream<CloudEvent> eventStream = eventStore.read(streamId);
 
-        // Call a pure function from the domain model which returns a Stream of events
-        Stream<T> newDomainEvents = emptyStreamIfNull(functionThatCallsDomainModel.apply(eventsInStream));
+            // Convert the cloud events into domain events
+            Stream<T> eventsInStream = eventStream.events().map(cloudEventConverter::toDomainEvent);
 
-        // We need to convert the new domain event stream into a list in order to be able to call side-effects with new events
-        // if side effect is defined
-        final List<T> newEventsAsList = sideEffect == null ? null : newDomainEvents.collect(Collectors.toList());
+            // Call a pure function from the domain model which returns a Stream of events
+            Stream<T> newDomainEvents = emptyStreamIfNull(functionThatCallsDomainModel.apply(eventsInStream));
 
-        // Convert to cloud events and write the new events to the event store
-        Stream<CloudEvent> newEvents = (sideEffect == null ? newDomainEvents : newEventsAsList.stream()).map(cloudEventConverter::toCloudEvent);
-        WriteResult writeResult = eventStore.write(streamId, eventStream.version(), newEvents);
+            // We need to convert the new domain event stream into a list in order to be able to call side-effects with new events
+            // if side effect is defined
+            final List<T> newEventsAsList = sideEffect == null ? null : newDomainEvents.collect(Collectors.toList());
 
-        // Invoke side-effect
-        if (sideEffect != null) {
-            sideEffect.accept(newEventsAsList.stream());
-        }
-        return writeResult;
+            // Convert to cloud events and write the new events to the event store
+            Stream<CloudEvent> newEvents = (sideEffect == null ? newDomainEvents : newEventsAsList.stream()).map(cloudEventConverter::toCloudEvent);
+            WriteResult writeResult = eventStore.write(streamId, eventStream.version(), newEvents);
+
+            // Invoke side-effect
+            if (sideEffect != null) {
+                sideEffect.accept(newEventsAsList.stream());
+            }
+            return writeResult;
+        });
     }
 
     private static <T> Stream<T> emptyStreamIfNull(Stream<T> stream) {
         return stream == null ? Stream.empty() : stream;
+    }
+
+    /**
+     * @return The default {@link RetryStrategy} using exponential backoff starting with 100 ms and progressively go up to max 2 seconds wait time if {@link WriteConditionNotFulfilledException} is caught.
+     */
+    public static RetryStrategy defaultRetryStrategy() {
+        return RetryStrategy.exponentialBackoff(Duration.ofMillis(100), Duration.ofSeconds(2), 2.0f).retryIf(WriteConditionNotFulfilledException.class::isInstance);
     }
 }
