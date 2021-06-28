@@ -48,7 +48,7 @@ public class GenericApplicationService<T> implements ApplicationService<T> {
     /**
      * Create a GenericApplicationService with the supplied {@link EventStore} and {@link CloudEventConverter}.
      * It will use a {@link RetryStrategy} for retries, with exponential backoff starting with 100 ms and progressively go up to max 2 seconds wait time between
-     * each retry if {@link WriteConditionNotFulfilledException} is caught).
+     * each retry, if {@link WriteConditionNotFulfilledException} is caught. It will, by default, only retry 5 times before giving up, rethrowing the original exception.
      *
      * @param eventStore          The event store to use
      * @param cloudEventConverter The cloud event converter
@@ -97,7 +97,7 @@ public class GenericApplicationService<T> implements ApplicationService<T> {
             WriteResult writeResult = eventStore.write(streamId, eventStream.version(), newEvents);
             return new Tuple<>(writeResult, newEventsAsList);
         });
-        
+
         // Invoke side-effect
         if (sideEffect != null) {
             sideEffect.accept(result.v2.stream());
@@ -111,9 +111,10 @@ public class GenericApplicationService<T> implements ApplicationService<T> {
 
     /**
      * @return The default {@link RetryStrategy} using exponential backoff starting with 100 ms and progressively go up to max 2 seconds wait time if {@link WriteConditionNotFulfilledException} is caught.
+     * It will only retry 5 times before giving up, rethrowing the original exception.
      */
     public static RetryStrategy defaultRetryStrategy() {
-        return RetryStrategy.exponentialBackoff(Duration.ofMillis(100), Duration.ofSeconds(2), 2.0f).retryIf(WriteConditionNotFulfilledException.class::isInstance);
+        return RetryStrategy.exponentialBackoff(Duration.ofMillis(100), Duration.ofSeconds(2), 2.0f).maxAttempts(5).retryIf(WriteConditionNotFulfilledException.class::isInstance);
     }
 
     private static class Tuple<T1, T2> {
