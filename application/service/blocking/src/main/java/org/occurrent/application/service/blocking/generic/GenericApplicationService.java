@@ -78,7 +78,7 @@ public class GenericApplicationService<T> implements ApplicationService<T> {
         Objects.requireNonNull(streamId, "Stream id cannot be null");
         Objects.requireNonNull(functionThatCallsDomainModel, "Function that calls domain model cannot be null");
 
-        return retryStrategy.execute(() -> {
+        Tuple<WriteResult, List<T>> result = retryStrategy.execute(() -> {
             // Read all events from the event store for a particular stream
             EventStream<CloudEvent> eventStream = eventStore.read(streamId);
 
@@ -95,13 +95,14 @@ public class GenericApplicationService<T> implements ApplicationService<T> {
             // Convert to cloud events and write the new events to the event store
             Stream<CloudEvent> newEvents = (sideEffect == null ? newDomainEvents : newEventsAsList.stream()).map(cloudEventConverter::toCloudEvent);
             WriteResult writeResult = eventStore.write(streamId, eventStream.version(), newEvents);
-
-            // Invoke side-effect
-            if (sideEffect != null) {
-                sideEffect.accept(newEventsAsList.stream());
-            }
-            return writeResult;
+            return new Tuple<>(writeResult, newEventsAsList);
         });
+        
+        // Invoke side-effect
+        if (sideEffect != null) {
+            sideEffect.accept(result.v2.stream());
+        }
+        return result.v1;
     }
 
     private static <T> Stream<T> emptyStreamIfNull(Stream<T> stream) {
@@ -113,5 +114,15 @@ public class GenericApplicationService<T> implements ApplicationService<T> {
      */
     public static RetryStrategy defaultRetryStrategy() {
         return RetryStrategy.exponentialBackoff(Duration.ofMillis(100), Duration.ofSeconds(2), 2.0f).retryIf(WriteConditionNotFulfilledException.class::isInstance);
+    }
+
+    private static class Tuple<T1, T2> {
+        private final T1 v1;
+        private final T2 v2;
+
+        Tuple(T1 v1, T2 v2) {
+            this.v1 = v1;
+            this.v2 = v2;
+        }
     }
 }
