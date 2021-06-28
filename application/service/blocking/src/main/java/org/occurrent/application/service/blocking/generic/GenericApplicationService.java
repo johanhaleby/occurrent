@@ -24,6 +24,7 @@ import org.occurrent.eventstore.api.WriteResult;
 import org.occurrent.eventstore.api.blocking.EventStore;
 import org.occurrent.eventstore.api.blocking.EventStream;
 import org.occurrent.retry.RetryStrategy;
+import org.occurrent.retry.RetryStrategy.Retry;
 
 import java.time.Duration;
 import java.util.List;
@@ -113,7 +114,7 @@ public class GenericApplicationService<T> implements ApplicationService<T> {
      * @return The default {@link RetryStrategy} using exponential backoff starting with 100 ms and progressively go up to max 2 seconds wait time if {@link WriteConditionNotFulfilledException} is caught.
      * It will only retry 5 times before giving up, rethrowing the original exception.
      */
-    public static RetryStrategy defaultRetryStrategy() {
+    public static Retry defaultRetryStrategy() {
         return RetryStrategy.exponentialBackoff(Duration.ofMillis(100), Duration.ofSeconds(2), 2.0f).maxAttempts(5).retryIf(WriteConditionNotFulfilledException.class::isInstance);
     }
 

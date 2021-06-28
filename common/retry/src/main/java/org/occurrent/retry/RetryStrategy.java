@@ -19,10 +19,7 @@ package org.occurrent.retry;
 import java.time.Duration;
 import java.util.Objects;
 import java.util.StringJoiner;
-import java.util.function.BiConsumer;
-import java.util.function.Consumer;
-import java.util.function.Predicate;
-import java.util.function.Supplier;
+import java.util.function.*;
 
 import static org.occurrent.retry.MaxAttempts.Infinite.infinite;
 import static org.occurrent.retry.internal.RetryExecution.executeWithRetry;
@@ -218,13 +215,23 @@ public abstract class RetryStrategy {
         }
 
         /**
-         * Only retry if the specified predicate is {@code true}.
+         * Only retry if the specified predicate is {@code true}. Will override previous retry predicate.
          *
          * @return A new instance of {@link Retry} with the given retry predicate
          */
         public Retry retryIf(Predicate<Throwable> retryPredicate) {
             Objects.requireNonNull(retryPredicate, "Retry predicate cannot be null");
             return new Retry(backoff, maxAttempts, retryPredicate, errorListener);
+        }
+
+        /**
+         * Allows you specify a retry predicate by basing it on the current retry predicate.
+         *
+         * @return A new instance of {@link Retry} with the given retry predicate
+         */
+        public Retry mapRetryPredicate(Function<Predicate<Throwable>, Predicate<Throwable>> retryPredicateFn) {
+            Objects.requireNonNull(retryPredicateFn, "Retry predicate function cannot be null");
+            return new Retry(backoff, maxAttempts, retryPredicateFn.apply(retryPredicate), errorListener);
         }
 
         /**

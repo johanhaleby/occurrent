@@ -3,6 +3,18 @@
 * Improved error message and version for write condition not fulfilled that may happen when parallel writers write to the same stream at the same time.
 * Upgraded to cloud events java sdk to version 2.1.1
 * Upgraded to Kotlin 1.5.20
+* Added a `mapRetryPredicate` function to `Retry` that easily allows you to map the current retry predicate into a new one. This is useful if you e.g. want to add an additional predicate to the existing predicate. For example:
+
+    ```java
+    // Let's say you have a retry strategy:
+    Retry retry = RetryStrategy.exponentialBackoff(Duration.ofMillis(100), Duration.ofSeconds(2), 2.0f).maxAttempts(5).retryIf(WriteConditionNotFulfilledException.class::isInstance);
+    // Now you also want to retry if an IllegalArgumentException is thrown:
+    retry.mapRetryPredicate(currentRetryPredicate -> currentRetryPredicate.or(IllegalArgument.class::isInstance))
+    ```                                                                                                          
+* The GenericApplicationService now has a RetryStrategy enabled by default. The default retry strategy uses exponential backoff starting with 100 ms and progressively go up to max 2 seconds wait time between
+  each retry, if `WriteConditionNotFulfilledException` is caught. It will, by default, only retry 5 times before giving up, rethrowing the original exception. You can override the default strategy 
+  by calling `new GenericApplicationService(eventStore, cloudEventConverter, retryStrategy)`. Use `new GenericApplicationService(eventStore, cloudEventConverter, RetryStrategy.none())` to revert to previous
+  behavior.
 
 ## Changelog 0.10.0 (2021-04-16)
                    

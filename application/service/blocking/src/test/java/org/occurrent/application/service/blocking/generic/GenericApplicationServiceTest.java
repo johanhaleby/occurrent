@@ -31,13 +31,17 @@ import org.occurrent.domain.DomainEvent;
 import org.occurrent.domain.DomainEventConverter;
 import org.occurrent.domain.Name;
 import org.occurrent.domain.NameDefined;
+import org.occurrent.eventstore.api.WriteConditionNotFulfilledException;
 import org.occurrent.eventstore.api.WriteResult;
 import org.occurrent.eventstore.inmemory.InMemoryEventStore;
 
 import java.time.LocalDateTime;
 import java.util.UUID;
+import java.util.concurrent.atomic.AtomicInteger;
+import java.util.stream.Stream;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.catchThrowable;
 import static org.junit.jupiter.api.Assertions.assertAll;
 import static org.occurrent.application.composition.command.CommandConversion.toStreamCommand;
 import static org.occurrent.application.service.blocking.PolicySideEffect.executePolicy;
@@ -47,11 +51,12 @@ public class GenericApplicationServiceTest {
 
     private ApplicationService<DomainEvent> applicationService;
     private InMemoryEventStore eventStore;
+    private CloudEventConverter<DomainEvent> cloudEventConverter;
 
     @BeforeEach
     void initialize_application_service() {
         DomainEventConverter domainEventConverter = new DomainEventConverter(new ObjectMapper());
-        CloudEventConverter<DomainEvent> cloudEventConverter = new GenericCloudEventConverter<>(domainEventConverter::convertToDomainEvent, domainEventConverter::convertToCloudEvent);
+        cloudEventConverter = new GenericCloudEventConverter<>(domainEventConverter::convertToDomainEvent, domainEventConverter::convertToCloudEvent);
         eventStore = new InMemoryEventStore();
         applicationService = new GenericApplicationService<>(eventStore, cloudEventConverter);
     }
@@ -67,7 +72,7 @@ public class GenericApplicationServiceTest {
 
         // Then
         assertAll(
-                () ->  assertThat(writeResult.getStreamId()).isEqualTo(streamId.toString()),
+                () -> assertThat(writeResult.getStreamId()).isEqualTo(streamId.toString()),
                 () -> assertThat(writeResult.getStreamVersion()).isEqualTo(1L)
         );
     }
@@ -143,6 +148,79 @@ public class GenericApplicationServiceTest {
 
             // Then
             assertThat(averageSizePolicy.getAverageSizeOfName()).isEqualTo(0);
+        }
+    }
+
+    @Nested
+    @DisplayName("retries")
+    class RetryTest {
+
+        @Test
+        void automatically_retries_when_write_condition_not_fulfilled_is_thrown() {
+            // Given
+            UUID streamId = UUID.randomUUID();
+            AtomicInteger atomicInteger = new AtomicInteger();
+
+            // When
+            applicationService.execute(streamId, stream -> {
+                if (atomicInteger.getAndIncrement() == 0) {
+                    throw new WriteConditionNotFulfilledException(streamId.toString(), 2L, null, null);
+                } else {
+                    return Stream.empty();
+                }
+            });
+
+            // Then
+            assertThat(atomicInteger.get()).isEqualTo(2);
+        }
+
+        @Test
+        void does_not_retry_automatically_when_other_exception_than_write_condition_not_fulfilled_is_thrown() {
+            // Given
+            UUID streamId = UUID.randomUUID();
+
+            // When
+            Throwable throwable = catchThrowable(() -> applicationService.execute(streamId, stream -> {
+                throw new IllegalArgumentException("expected");
+            }));
+
+            // Then
+            assertThat(throwable).isExactlyInstanceOf(IllegalArgumentException.class).hasMessage("expected");
+        }
+
+        @Test
+        void retries_automatically_when_other_exception_than_write_condition_not_fulfilled_is_thrown_and_retry_strategy_is_configured_to_retry_this_expection() {
+            // Given
+            UUID streamId = UUID.randomUUID();
+            AtomicInteger atomicInteger = new AtomicInteger();
+            applicationService = new GenericApplicationService<>(eventStore, cloudEventConverter,
+                    GenericApplicationService.defaultRetryStrategy().mapRetryPredicate(p -> p.or(IllegalArgumentException.class::isInstance)));
+
+            // When
+            applicationService.execute(streamId, stream -> {
+                if (atomicInteger.getAndIncrement() == 0) {
+                    throw new IllegalArgumentException("expected");
+                } else {
+                    return Stream.empty();
+                }
+            });
+
+            // Then
+            assertThat(atomicInteger.get()).isEqualTo(2);
+        }
+
+        @Test
+        void number_of_retries_are_restricted_by_default() {
+            // Given
+            UUID streamId = UUID.randomUUID();
+
+            // When
+            Throwable throwable = catchThrowable(() -> applicationService.execute(streamId, stream -> {
+                throw new WriteConditionNotFulfilledException(streamId.toString(), 2L, null, null);
+            }));
+
+            // Then
+            assertThat(throwable).isExactlyInstanceOf(WriteConditionNotFulfilledException.class);
         }
     }
 }
