@@ -2,7 +2,7 @@
 
 * Improved error message and version for write condition not fulfilled that may happen when parallel writers write to the same stream at the same time.
 * Upgraded to cloud events java sdk to version 2.1.1
-* Upgraded to Kotlin 1.5.20
+* Upgraded to Kotlin 1.5.21
 * Added a `mapRetryPredicate` function to `Retry` that easily allows you to map the current retry predicate into a new one. This is useful if you e.g. want to add an additional predicate to the existing predicate. For example:
 
     ```java
