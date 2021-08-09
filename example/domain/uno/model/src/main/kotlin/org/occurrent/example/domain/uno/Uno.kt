@@ -42,13 +42,13 @@ object Uno {
                 val directionChanged = if (firstCard is KickBack) DirectionChanged(EventId.randomUUID(), gameId, timestamp, direction = CounterClockwise) else null
                 sequenceOf(gameStarted, directionChanged).filterNotNull()
             }
-            is Started -> throw IllegalStateException("The game cannot be started more than once")
+            is Ongoing -> throw IllegalStateException("The game cannot be started more than once")
         }
     }
 
     fun play(events: Sequence<Event>, timestamp: Timestamp, playerId: PlayerId, card: Card): Sequence<Event> = when (val state = events.evolve()) {
         NotStarted -> throw IllegalStateException("Game has not been started")
-        is Started -> {
+        is Ongoing -> {
             val (gameId, turn, topCard) = state
             val expectedPlayerId = turn.playerId
             when {
@@ -107,18 +107,14 @@ private data class Turn(val playerId: PlayerId, val playerCount: PlayerCount, va
 
 private sealed class State
 private object NotStarted : State()
-private data class Started(val gameId: GameId, val turn: Turn, val topCard: Card) : State()
+private data class Ongoing(val gameId: GameId, val turn: Turn, val topCard: Card) : State()
 
 private fun Sequence<Event>.evolve(): State = fold<Event, State>(NotStarted) { currentState, event ->
-    fun invalidStateTransition(): Nothing = throw IllegalStateException("${event::class.simpleName} is not a valid event in state ${currentState::class.simpleName}")
-    when (currentState) {
-        NotStarted -> if (event is GameStarted) Started(event.gameId, Turn(event.firstPlayerId, event.playerCount, Clockwise), event.firstCard) else invalidStateTransition()
-        is Started -> when (event) {
-            is GameStarted -> invalidStateTransition()
-            is CardPlayed -> currentState.copy(turn = currentState.turn.setPlayer(event.nextPlayerId), topCard = event.card)
-            is PlayerPlayedAtWrongTurn -> currentState
-            is PlayerPlayedWrongCard -> currentState
-            is DirectionChanged -> currentState.copy(turn = currentState.turn.setDirection(event.direction))
-        }
+    when (event) {
+        is GameStarted -> Ongoing(event.gameId, Turn(event.firstPlayerId, event.playerCount, Clockwise), event.firstCard)
+        is CardPlayed -> if (currentState is Ongoing) currentState.copy(turn = currentState.turn.setPlayer(event.nextPlayerId), topCard = event.card) else currentState
+        is PlayerPlayedAtWrongTurn -> currentState
+        is PlayerPlayedWrongCard -> currentState
+        is DirectionChanged -> if (currentState is Ongoing) currentState.copy(turn = currentState.turn.setDirection(event.direction)) else currentState
     }
 }
