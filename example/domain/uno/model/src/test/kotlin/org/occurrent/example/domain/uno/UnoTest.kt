@@ -161,7 +161,7 @@ class UnoTest {
         inner class AndPlayerTriesToBreakTheRules {
 
             @Test
-            fun `by playing when it's another players turn`() {
+            fun `by playing when it's another players turn then PlayerPlayedWrongCard event is returned`() {
                 // Given
                 val gameId = GameId.randomUUID()
                 val timestamp = Timestamp.now()
@@ -180,7 +180,7 @@ class UnoTest {
             }
 
             @Test
-            fun `by playing a wrong card`() {
+            fun `by playing a wrong card then PlayerPlayedWrongCard event is returned`() {
                 // Given
                 val gameId = GameId.randomUUID()
                 val timestamp = Timestamp.now()
