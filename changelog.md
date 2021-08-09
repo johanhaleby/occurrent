@@ -17,6 +17,7 @@
   behavior.
 * Upgraded spring-boot used in examples to 2.5.3
 * Upgraded spring-mongodb to 3.2.3
+* Upgraded the mongodb java driver to 4.3.1
 
 ## Changelog 0.10.0 (2021-04-16)
                    
