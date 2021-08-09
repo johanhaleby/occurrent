@@ -15,6 +15,8 @@
   each retry, if `WriteConditionNotFulfilledException` is caught. It will, by default, only retry 5 times before giving up, rethrowing the original exception. You can override the default strategy 
   by calling `new GenericApplicationService(eventStore, cloudEventConverter, retryStrategy)`. Use `new GenericApplicationService(eventStore, cloudEventConverter, RetryStrategy.none())` to revert to previous
   behavior.
+* Upgraded spring-boot used in examples to 2.5.3
+* Upgraded spring-mongodb to 3.2.3
 
 ## Changelog 0.10.0 (2021-04-16)
                    
