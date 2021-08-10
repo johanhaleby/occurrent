@@ -22,6 +22,7 @@ import org.occurrent.eventstore.api.WriteCondition;
 import org.occurrent.eventstore.api.WriteConditionNotFulfilledException;
 import org.occurrent.eventstore.api.WriteResult;
 
+import java.util.Objects;
 import java.util.stream.Stream;
 
 import static org.occurrent.eventstore.api.WriteCondition.streamVersionEq;
@@ -32,12 +33,43 @@ import static org.occurrent.eventstore.api.WriteCondition.streamVersionEq;
 public interface ConditionallyWriteToEventStream {
 
     /**
+     * A convenience function that writes a single event to an event store if the stream version is equal to {@code expectedStreamVersion}.
+     *
+     * @param streamId              The id of the stream
+     * @param expectedStreamVersion The stream must be equal to this version in order for the events to be written
+     * @param event                 The event to be appended/written to the stream
+     * @return The result of the write operation, includes useful metadata such as stream version.
+     * @throws WriteConditionNotFulfilledException When the <code>writeCondition</code> was not fulfilled and the events couldn't be written
+     * @throws DuplicateCloudEventException        If a cloud event in the supplied <code>events</code> stream already exists in the event store
+     * @see #write(String, WriteCondition, CloudEvent) for more advanced write conditions
+     */
+    default WriteResult write(String streamId, long expectedStreamVersion, CloudEvent event) {
+        Objects.requireNonNull(event, CloudEvent.class.getSimpleName() + " cannot be null");
+        return write(streamId, streamVersionEq(expectedStreamVersion), Stream.of(event));
+    }
+
+    /**
+     * A convenience function that writes a single event to an event store if the stream version is equal to {@code expectedStreamVersion}.
+     *
+     * @param streamId       The id of the stream
+     * @param writeCondition The write condition that must be fulfilled for the events to be written
+     * @param event          The event to be appended/written to the stream
+     * @return The result of the write operation, includes useful metadata such as stream version.
+     * @throws WriteConditionNotFulfilledException When the <code>writeCondition</code> was not fulfilled and the events couldn't be written
+     * @throws DuplicateCloudEventException        If a cloud event in the supplied <code>events</code> stream already exists in the event store
+     */
+    default WriteResult write(String streamId, WriteCondition writeCondition, CloudEvent event) {
+        Objects.requireNonNull(event, CloudEvent.class.getSimpleName() + " cannot be null");
+        return write(streamId, writeCondition, Stream.of(event));
+    }
+
+    /**
      * A convenience function that writes events to an event store if the stream version is equal to {@code expectedStreamVersion}.
      *
      * @param streamId              The id of the stream
      * @param expectedStreamVersion The stream must be equal to this version in order for the events to be written
      * @param events                The events to be appended/written to the stream
-     * @return The result of the write, includes useful metadata such as stream version.
+     * @return The result of the write operation, includes useful metadata such as stream version.
      * @throws WriteConditionNotFulfilledException When the <code>writeCondition</code> was not fulfilled and the events couldn't be written
      * @throws DuplicateCloudEventException        If a cloud event in the supplied <code>events</code> stream already exists in the event store
      * @see #write(String, WriteCondition, Stream) for more advanced write conditions
@@ -52,7 +84,7 @@ public interface ConditionallyWriteToEventStream {
      * @param streamId       The id of the stream
      * @param writeCondition The write condition that must be fulfilled for the events to be written
      * @param events         The events to be appended/written to the stream
-     * @return The result of the write, includes useful metadata such as stream version.
+     * @return The result of the write operation, includes useful metadata such as stream version.
      * @throws WriteConditionNotFulfilledException When the <code>writeCondition</code> was not fulfilled and the events couldn't be written
      * @throws DuplicateCloudEventException        If a cloud event in the supplied <code>events</code> stream already exists in the event store
      */

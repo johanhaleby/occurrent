@@ -18,6 +18,13 @@
 * Upgraded spring-boot used in examples to 2.5.3
 * Upgraded spring-mongodb to 3.2.3
 * Upgraded the mongodb java driver to 4.3.1
+* Added ability to write a single event to the event store instead of a stream. For example:
+
+    ```java          
+    CloudEvent event = ...
+    eventStore.write("streamId", event);
+    ```                                 
+  This have been implemented for both the blocking and reactive event stores.
 
 ## Changelog 0.10.0 (2021-04-16)
                    

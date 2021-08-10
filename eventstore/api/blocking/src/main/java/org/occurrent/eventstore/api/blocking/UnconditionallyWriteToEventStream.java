@@ -19,12 +19,26 @@ package org.occurrent.eventstore.api.blocking;
 import io.cloudevents.CloudEvent;
 import org.occurrent.eventstore.api.WriteResult;
 
+import java.util.Objects;
 import java.util.stream.Stream;
 
 /**
  * An interface that should be implemented by event streams that supports writing events to a stream without specifying a write condition.
  */
 public interface UnconditionallyWriteToEventStream {
+
+    /**
+     * Write a single {@code event} to a stream
+     *
+     * @param streamId The stream id of the stream to write to
+     * @param event    The events to write
+     * @return The result of the write, includes useful metadata such as stream version.
+     */
+    default WriteResult write(String streamId, CloudEvent event) {
+        Objects.requireNonNull(event, CloudEvent.class.getSimpleName() + " cannot be null");
+        return write(streamId, Stream.of(event));
+    }
+
     /**
      * Write {@code events} to a stream
      *

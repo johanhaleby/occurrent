@@ -24,12 +24,46 @@ import org.occurrent.eventstore.api.WriteResult;
 import reactor.core.publisher.Flux;
 import reactor.core.publisher.Mono;
 
+import java.util.Objects;
+
 import static org.occurrent.eventstore.api.WriteCondition.streamVersionEq;
 
 /**
  * Event stores that supports conditional writes to an event stream should implement this interface.
  */
 public interface ConditionallyWriteToEventStream {
+
+    /**
+     * A convenience function that writes a single event to an event store if the stream version is equal to {@code expectedStreamVersion}.
+     *
+     * @param streamId              The id of the stream
+     * @param expectedStreamVersion The stream must be equal to this version in order for the events to be written
+     * @param event                 The event to be appended/written to the stream
+     * @return The result of the write operation, includes useful metadata such as stream version.
+     * @throws WriteConditionNotFulfilledException When the <code>writeCondition</code> was not fulfilled and the events couldn't be written
+     * @throws DuplicateCloudEventException        If a cloud event in the supplied <code>events</code> stream already exists in the event store
+     * @see #write(String, WriteCondition, CloudEvent) for more advanced write conditions
+     */
+    default Mono<WriteResult> write(String streamId, long expectedStreamVersion, CloudEvent event) {
+        Objects.requireNonNull(event, CloudEvent.class.getSimpleName() + " cannot be null");
+        return write(streamId, streamVersionEq(expectedStreamVersion), Flux.just(event));
+    }
+
+    /**
+     * A convenience function that writes a single event to an event store if the stream version is equal to {@code expectedStreamVersion}.
+     *
+     * @param streamId       The id of the stream
+     * @param writeCondition The write condition that must be fulfilled for the events to be written
+     * @param event          The event to be appended/written to the stream
+     * @return The result of the write operation, includes useful metadata such as stream version.
+     * @throws WriteConditionNotFulfilledException When the <code>writeCondition</code> was not fulfilled and the events couldn't be written
+     * @throws DuplicateCloudEventException        If a cloud event in the supplied <code>events</code> stream already exists in the event store
+     */
+    default Mono<WriteResult> write(String streamId, WriteCondition writeCondition, CloudEvent event) {
+        Objects.requireNonNull(event, CloudEvent.class.getSimpleName() + " cannot be null");
+        return write(streamId, writeCondition, Flux.just(event));
+    }
+
     /**
      * A convenience function that writes events to an event store if the stream version is equal to {@code expectedStreamVersion}.
      * May return the following exceptions on the error track:
