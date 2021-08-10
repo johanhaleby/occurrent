@@ -23,8 +23,10 @@ import java.util.*
 /**
  * Start game
  */
-fun startGame(previousEvents: Sequence<GameEvent>, gameId: GameId, timestamp: Timestamp, playerId: PlayerId, wordList: WordList,
-              maxNumberOfGuessesPerPlayer: MaxNumberOfGuessesPerPlayer, maxNumberOfGuessesTotal: MaxNumberOfGuessesTotal): Sequence<GameEvent> {
+fun startGame(
+    previousEvents: Sequence<GameEvent>, gameId: GameId, timestamp: Timestamp, playerId: PlayerId, wordList: WordList,
+    maxNumberOfGuessesPerPlayer: MaxNumberOfGuessesPerPlayer, maxNumberOfGuessesTotal: MaxNumberOfGuessesTotal
+): Sequence<GameEvent> {
     val state = previousEvents.evolve()
 
     if (state !is NotStarted) {
@@ -33,8 +35,10 @@ fun startGame(previousEvents: Sequence<GameEvent>, gameId: GameId, timestamp: Ti
 
     val wordToGuess = wordList.words.random()
 
-    val gameStarted = GameWasStarted(eventId = UUID.randomUUID(), timestamp = timestamp, gameId = gameId, startedBy = playerId, category = wordList.category.value,
-            wordToGuess = wordToGuess.value, maxNumberOfGuessesPerPlayer = maxNumberOfGuessesPerPlayer.value, maxNumberOfGuessesTotal = maxNumberOfGuessesTotal.value)
+    val gameStarted = GameWasStarted(
+        eventId = UUID.randomUUID(), timestamp = timestamp, gameId = gameId, startedBy = playerId, category = wordList.category.value,
+        wordToGuess = wordToGuess.value, maxNumberOfGuessesPerPlayer = maxNumberOfGuessesPerPlayer.value, maxNumberOfGuessesTotal = maxNumberOfGuessesTotal.value
+    )
 
     return sequenceOf(gameStarted)
 }
@@ -83,14 +87,22 @@ private data class Ongoing(val gameId: GameId, val wordToGuess: String, val maxN
 
 private object Ended : GameState()
 
+
+// Evolve
 private fun Sequence<GameEvent>.evolve(): GameState = fold<GameEvent, GameState>(NotStarted) { state, event ->
-    when {
-        state is NotStarted && event is GameWasStarted -> Ongoing(event.gameId, event.wordToGuess, event.maxNumberOfGuessesPerPlayer, event.maxNumberOfGuessesTotal, event.startedBy)
-        state is Ongoing && event is PlayerGuessedTheWrongWord -> state.copy(guesses = state.guesses.add(Guess(event.playerId, event.timestamp, event.guessedWord)))
-        state is Ongoing && event is PlayerGuessedTheRightWord -> state.copy(guesses = state.guesses.add(Guess(event.playerId, event.timestamp, event.guessedWord)))
-        state is Ongoing && event is NumberOfGuessesWasExhaustedForPlayer -> state
-        state is Ongoing && event is GameWasWon -> Ended
-        state is Ongoing && event is GameWasLost -> Ended
-        else -> throw IllegalStateException("Event ${event.type} is not applicable in state ${state::class.simpleName!!}")
+    when (event) {
+        is GameWasStarted -> Ongoing(event.gameId, event.wordToGuess, event.maxNumberOfGuessesPerPlayer, event.maxNumberOfGuessesTotal, event.startedBy)
+        is PlayerGuessedTheWrongWord -> state.coerce<Ongoing> { copy(guesses = guesses.add(Guess(event.playerId, event.timestamp, event.guessedWord))) }
+        is PlayerGuessedTheRightWord -> state.coerce<Ongoing> { copy(guesses = guesses.add(Guess(event.playerId, event.timestamp, event.guessedWord))) }
+        is NumberOfGuessesWasExhaustedForPlayer -> state
+        is GameWasWon -> Ended
+        is GameWasLost -> Ended
+        // TODO Refactor events into different kinds!
+        is CharacterInWordHintWasRevealed -> state
+        is PlayerWasAwardedPointsForGuessingTheRightWord -> state
+        is PlayerWasNotAwardedAnyPointsForGuessingTheRightWord -> state
     }
 }
+
+private inline fun <reified ExpectedState : GameState> GameState.coerce(doWithState: ExpectedState.() -> GameState): GameState =
+    if (this is ExpectedState) doWithState(this) else throw IllegalStateException("Invalid state: Expecting ${ExpectedState::class.simpleName}, was ${this::class.simpleName}")
