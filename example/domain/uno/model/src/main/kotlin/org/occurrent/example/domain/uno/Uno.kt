@@ -109,12 +109,13 @@ private sealed class State
 private object NotStarted : State()
 private data class Started(val gameId: GameId, val turn: Turn, val topCard: Card) : State()
 
+private inline fun <reified ExpectedState : State> invalidState(actualState: State): Nothing = throw IllegalStateException("Invalid state: Expecting ${ExpectedState::class.simpleName}, was ${actualState::class.simpleName}")
 private fun Sequence<Event>.evolve(): State = fold<Event, State>(NotStarted) { currentState, event ->
     when (event) {
         is GameStarted -> Started(event.gameId, Turn(event.firstPlayerId, event.playerCount, Clockwise), event.firstCard)
-        is CardPlayed -> if (currentState is Started) currentState.copy(turn = currentState.turn.setPlayer(event.nextPlayerId), topCard = event.card) else currentState
+        is CardPlayed -> if (currentState is Started) currentState.copy(turn = currentState.turn.setPlayer(event.nextPlayerId), topCard = event.card) else invalidState<Started>(currentState)
         is PlayerPlayedAtWrongTurn -> currentState
         is PlayerPlayedWrongCard -> currentState
-        is DirectionChanged -> if (currentState is Started) currentState.copy(turn = currentState.turn.setDirection(event.direction)) else currentState
+        is DirectionChanged -> if (currentState is Started) currentState.copy(turn = currentState.turn.setDirection(event.direction)) else invalidState<Started>(currentState)
     }
 }
