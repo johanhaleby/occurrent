@@ -27,6 +27,7 @@
         <module>number-guessing-game</module>
         <module>word-guessing-game</module>
         <module>uno</module>
+        <module>rps</module>
     </modules>
     <modelVersion>4.0.0</modelVersion>
 
