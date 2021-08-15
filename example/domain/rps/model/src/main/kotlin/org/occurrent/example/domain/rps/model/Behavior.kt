@@ -21,33 +21,42 @@ import kotlinx.collections.immutable.PersistentList
 import kotlinx.collections.immutable.persistentListOf
 import org.occurrent.example.domain.rps.model.GameState.*
 
-fun handle(events: Sequence<GameEvent>, cmd: CreateGameCommand): Sequence<GameEvent> = when (events.evolve()) {
-    is CurrentState -> throw GameCannotBeCreatedMoreThanOnce()
-    else -> {
-        val (gameId, timestamp, creator, numberOfRounds) = cmd
-        sequenceOf(GameCreated(gameId, timestamp, creator, numberOfRounds))
-    }
-}
-
+fun handle(events: Sequence<GameEvent>, cmd: CreateGameCommand): Sequence<GameEvent> = StateMachine(events.evolve()).handle(cmd)
 fun handle(events: Sequence<GameEvent>, cmd: MakeMoveCommand): Sequence<GameEvent> = when (val currentState = events.evolve()) {
     is CurrentState -> makeMove(currentState, cmd)
     else -> throw GameDoesNotExist()
 }
 
-private fun makeMove(state: CurrentState, cmd: MakeMoveCommand): Sequence<GameEvent> {
-    val (timestamp, playerId, move) = cmd
-    val gameId = state.gameId
-    return when (state.state) {
-        WaitingForFirstPlayer -> sequenceOf(FirstPlayerJoinedGame(state.gameId, timestamp, playerId)) + startNewRound(state, timestamp, PlayerMove(playerId, move))
-        WaitingForSecondPlayer -> if (cmd.playerId == state.firstPlayer) throw CannotJoinTheGameTwice() else sequenceOf(
-            SecondPlayerJoinedGame(gameId, timestamp, playerId),
-            GameStarted(gameId, timestamp, playerId),
-            MoveMade(gameId, timestamp, playerId, move)
-        )
-        Ongoing -> TODO()
-        Ended -> throw CannotMakeMoveBecauseGameEnded()
+private class StateMachine(val state: CurrentState?, val events: PersistentList<GameEvent> = persistentListOf()) : Sequence<GameEvent> {
+
+    fun handle(cmd: CreateGameCommand) = when (state) {
+        is CurrentState -> throw GameCannotBeCreatedMoreThanOnce()
+        else -> {
+            val (gameId, timestamp, creator, numberOfRounds) = cmd
+            sequenceOf(GameCreated(gameId, timestamp, creator, numberOfRounds))
+        }
     }
+
+    fun handle(cmd: MakeMoveCommand): StateMachine {
+        val (timestamp, playerId, move) = cmd
+        val gameId = state.gameId
+        return when (state.state) {
+            WaitingForFirstPlayer -> apply(FirstPlayerJoinedGame(state.gameId, timestamp, playerId) + startNewRound(state, timestamp, PlayerMove(playerId, move))
+            WaitingForSecondPlayer -> if (cmd.playerId == state.firstPlayer) throw CannotJoinTheGameTwice() else sequenceOf(
+                SecondPlayerJoinedGame(gameId, timestamp, playerId),
+                GameStarted(gameId, timestamp, playerId),
+                MoveMade(gameId, timestamp, playerId, move)
+            )
+            Ongoing -> TODO()
+            Ended -> throw CannotMakeMoveBecauseGameEnded()
+        }
+    }
+
+    private fun apply(e: GameEvent): StateMachine = StateMachine(evolve(state, e), events.add(e))
+
+    override fun iterator(): Iterator<GameEvent> = events.iterator()
 }
+
 
 private fun startNewRound(state: CurrentState, timestamp: Timestamp, playerMove: PlayerMove): Sequence<GameEvent> {
     val currentNumberOfRounds = state.rounds.size
@@ -62,7 +71,7 @@ private fun startNewRound(state: CurrentState, timestamp: Timestamp, playerMove:
 }
 
 private fun makeMove(state: CurrentState, timestamp: Timestamp, playerMove: PlayerMove) {
-    
+
 }
 
 // Internal models
@@ -88,33 +97,33 @@ private data class CurrentState(
     val rounds: PersistentList<Round> = persistentListOf()
 )
 
-private fun Sequence<GameEvent>.evolve(): CurrentState? = fold<GameEvent, CurrentState?>(null) { currentState, e ->
-    when (e) {
-        is GameCreated -> CurrentState(gameId = e.game, state = WaitingForFirstPlayer, numberOfRounds = e.numberOfRounds)
-        is FirstPlayerJoinedGame -> currentState!!.copy(state = WaitingForSecondPlayer, firstPlayer = e.player)
-        is SecondPlayerJoinedGame -> currentState!!.copy(secondPlayer = e.player)
-        is GameStarted -> currentState!!.copy(state = Ongoing)
-        is RoundStarted -> currentState!!.copy(rounds = currentState.rounds.add(Round(RoundState.Started)))
-        is MoveMade -> currentState!!.updateRound(RoundNumber.unsafe(currentState.rounds.size)) {
-            copy(
-                moves = moves.add(PlayerMove(e.player, e.move)),
-                state = RoundState.MoveMade
-            )
-        }
-        is RoundWon -> currentState!!.updateRound(e.roundNumber) {
-            copy(
-                winner = e.winner,
-                state = RoundState.Won
-            )
-        }
-        is RoundTied -> currentState!!.updateRound(e.roundNumber) {
-            copy(state = RoundState.Tied)
-        }
-        is RoundEnded -> currentState
-        is GameTied -> currentState
-        is GameWon -> currentState
-        is GameEnded -> currentState!!.copy(state = Ended)
+private fun Sequence<GameEvent>.evolve(): CurrentState? = fold(null, ::evolve)
+
+private fun evolve(currentState: CurrentState?, e: GameEvent) = when (e) {
+    is GameCreated -> CurrentState(gameId = e.game, state = WaitingForFirstPlayer, numberOfRounds = e.numberOfRounds)
+    is FirstPlayerJoinedGame -> currentState!!.copy(state = WaitingForSecondPlayer, firstPlayer = e.player)
+    is SecondPlayerJoinedGame -> currentState!!.copy(secondPlayer = e.player)
+    is GameStarted -> currentState!!.copy(state = Ongoing)
+    is RoundStarted -> currentState!!.copy(rounds = currentState.rounds.add(Round(RoundState.Started)))
+    is MoveMade -> currentState!!.updateRound(RoundNumber.unsafe(currentState.rounds.size)) {
+        copy(
+            moves = moves.add(PlayerMove(e.player, e.move)),
+            state = RoundState.MoveMade
+        )
     }
+    is RoundWon -> currentState!!.updateRound(e.roundNumber) {
+        copy(
+            winner = e.winner,
+            state = RoundState.Won
+        )
+    }
+    is RoundTied -> currentState!!.updateRound(e.roundNumber) {
+        copy(state = RoundState.Tied)
+    }
+    is RoundEnded -> currentState
+    is GameTied -> currentState
+    is GameWon -> currentState
+    is GameEnded -> currentState!!.copy(state = Ended)
 }
 
 private fun CurrentState.updateRound(roundNumber: RoundNumber, fn: Round.() -> Round): CurrentState = copy(rounds = rounds.updateRound(roundNumber, fn))
