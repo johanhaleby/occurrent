@@ -21,57 +21,51 @@ import kotlinx.collections.immutable.PersistentList
 import kotlinx.collections.immutable.persistentListOf
 import org.occurrent.example.domain.rps.model.GameState.*
 
-fun handle(events: Sequence<GameEvent>, cmd: CreateGameCommand): Sequence<GameEvent> = StateMachine(events.evolve()).handle(cmd)
+fun handle(events: Sequence<GameEvent>, cmd: CreateGameCommand): Sequence<GameEvent> = when (val currentState = events.evolve()) {
+    is CurrentState -> throw GameCannotBeCreatedMoreThanOnce()
+    else -> {
+        val (gameId, timestamp, creator, numberOfRounds) = cmd
+        sequenceOf(GameCreated(gameId, timestamp, creator, numberOfRounds))
+    }
+}
+
 fun handle(events: Sequence<GameEvent>, cmd: MakeMoveCommand): Sequence<GameEvent> = when (val currentState = events.evolve()) {
-    is CurrentState -> makeMove(currentState, cmd)
+    is CurrentState -> makeMove(CommandState(cmd.timestamp, currentState), PlayerMove(cmd.playerId, cmd.move))
     else -> throw GameDoesNotExist()
 }
 
-private class StateMachine(val state: CurrentState?, val events: PersistentList<GameEvent> = persistentListOf()) : Sequence<GameEvent> {
-
-    fun handle(cmd: CreateGameCommand) = when (state) {
-        is CurrentState -> throw GameCannotBeCreatedMoreThanOnce()
-        else -> {
-            val (gameId, timestamp, creator, numberOfRounds) = cmd
-            sequenceOf(GameCreated(gameId, timestamp, creator, numberOfRounds))
-        }
-    }
-
-    fun handle(cmd: MakeMoveCommand): StateMachine {
-        val (timestamp, playerId, move) = cmd
-        val gameId = state.gameId
-        return when (state.state) {
-            WaitingForFirstPlayer -> apply(FirstPlayerJoinedGame(state.gameId, timestamp, playerId) + startNewRound(state, timestamp, PlayerMove(playerId, move))
-            WaitingForSecondPlayer -> if (cmd.playerId == state.firstPlayer) throw CannotJoinTheGameTwice() else sequenceOf(
-                SecondPlayerJoinedGame(gameId, timestamp, playerId),
-                GameStarted(gameId, timestamp, playerId),
-                MoveMade(gameId, timestamp, playerId, move)
-            )
-            Ongoing -> TODO()
-            Ended -> throw CannotMakeMoveBecauseGameEnded()
-        }
-    }
-
-    private fun apply(e: GameEvent): StateMachine = StateMachine(evolve(state, e), events.add(e))
-
-    override fun iterator(): Iterator<GameEvent> = events.iterator()
-}
-
-
-private fun startNewRound(state: CurrentState, timestamp: Timestamp, playerMove: PlayerMove): Sequence<GameEvent> {
+private fun startNewRound(commandState: CommandState, playerMove: PlayerMove): CommandState {
+    val (timestamp, state) = commandState
     val currentNumberOfRounds = state.rounds.size
-    return if (currentNumberOfRounds < state.numberOfRounds.value) {
-        sequenceOf(
+    val newEvents = if (currentNumberOfRounds < state.numberOfRounds.value) {
+        listOf(
             RoundStarted(state.gameId, timestamp, RoundNumber(currentNumberOfRounds.inc())),
             MoveMade(state.gameId, timestamp, playerMove.playerId, playerMove.move)
         )
     } else {
         throw IllegalStateException("Cannot start round since it would exceed ${state.numberOfRounds.value}")
     }
+    return commandState + newEvents
 }
 
-private fun makeMove(state: CurrentState, timestamp: Timestamp, playerMove: PlayerMove) {
-
+private fun makeMove(commandState: CommandState, playerMove: PlayerMove): CommandState {
+    val (timestamp, state) = commandState
+    val (playerId, move) = playerMove
+    val gameId = state.gameId
+    return when (state.state) {
+        WaitingForFirstPlayer -> commandState + FirstPlayerJoinedGame(gameId, timestamp, playerId) + ::startNewRound.partial(playerMove)
+        WaitingForSecondPlayer -> if (playerMove.playerId == state.firstPlayer) {
+            throw CannotJoinTheGameTwice()
+        } else {
+            commandState + listOf(
+                SecondPlayerJoinedGame(gameId, timestamp, playerId),
+                GameStarted(gameId, timestamp, playerId),
+                MoveMade(gameId, timestamp, playerId, move)
+            )
+        }
+        Ongoing -> TODO()
+        Ended -> throw CannotMakeMoveBecauseGameEnded()
+    }
 }
 
 // Internal models
@@ -91,13 +85,37 @@ private fun Round.play(player: PlayerId, move: Move) {
 
 }
 
+
+// Command evolution
+private data class CommandState(val timestamp: Timestamp, val state: CurrentState, val events: PersistentList<GameEvent> = persistentListOf()) : Sequence<GameEvent> {
+    override fun iterator(): Iterator<GameEvent> = events.iterator()
+}
+
+private fun CommandState.evolve(handlers: List<(CommandState) -> CommandState>): CommandState =
+    handlers.fold(this) { acc, function ->
+        function(acc)
+    }
+
+private fun CommandState.evolve(e: GameEvent, vararg es: GameEvent) = CommandState(
+    timestamp, sequenceOf(e, *es).evolve(state)!!, events.addAll(listOf(e, *es)),
+)
+
+private operator fun CommandState.plus(e: GameEvent) = evolve(e)
+
+private operator fun CommandState.plus(fn: (CommandState) -> CommandState): CommandState = fn(this)
+
+private operator fun CommandState.plus(es: List<GameEvent>): CommandState = es.fold(this) { state, e ->
+    state + e
+}
+
+
 // Evolving from events
 private data class CurrentState(
     val gameId: GameId, val state: GameState, val numberOfRounds: NumberOfRounds, val firstPlayer: PlayerId? = null, val secondPlayer: PlayerId? = null,
     val rounds: PersistentList<Round> = persistentListOf()
 )
 
-private fun Sequence<GameEvent>.evolve(): CurrentState? = fold(null, ::evolve)
+private fun Sequence<GameEvent>.evolve(currentState: CurrentState? = null): CurrentState? = fold(currentState, ::evolve)
 
 private fun evolve(currentState: CurrentState?, e: GameEvent) = when (e) {
     is GameCreated -> CurrentState(gameId = e.game, state = WaitingForFirstPlayer, numberOfRounds = e.numberOfRounds)
@@ -132,4 +150,8 @@ private fun PersistentList<Round>.updateRound(roundNumber: RoundNumber, fn: Roun
     val roundIndex = roundNumber.value - 1
     val updatedRound = fn(get(roundIndex))
     return set(roundIndex, updatedRound)
+}
+
+private fun <CS, A> ((CS, A) -> CS).partial(a: A): (CS) -> CS = { cs ->
+    this(cs, a)
 }
