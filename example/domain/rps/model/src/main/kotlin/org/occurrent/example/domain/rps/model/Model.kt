@@ -70,7 +70,7 @@ value class RoundNumber private constructor(val value: Int) {
 // Commands
 sealed interface Command
 data class CreateGameCommand(val gameId: GameId, val timestamp: Timestamp, val creator: GameCreatorId, val numberOfRounds: NumberOfRounds) : Command
-data class MakeMoveCommand(val timestamp: Timestamp, val playerId: PlayerId, val move: Move) : Command
+data class ShowHandCommand(val timestamp: Timestamp, val playerId: PlayerId, val move: Move) : Command
 
 class GameCannotBeCreatedMoreThanOnce : IllegalArgumentException()
 class GameDoesNotExist : IllegalArgumentException()
