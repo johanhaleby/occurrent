@@ -152,20 +152,18 @@ private object GameLogic {
         Round.WaitingForFirstHand -> true
         is Round.WaitingForSecondHand -> true
     }
+
+    private fun Hand.beats(other: Hand): Boolean = shape.beats(other.shape)
+
+    private fun Shape.beats(other: Shape): Boolean = when (this to other) {
+        Pair(ROCK, SCISSORS) -> true
+        Pair(PAPER, ROCK) -> true
+        Pair(SCISSORS, PAPER) -> true
+        else -> false
+    }
 }
 
 private data class Hand(val playerId: PlayerId, val shape: Shape)
-
-
-private fun Hand.beats(other: Hand): Boolean = shape.beats(other.shape)
-
-private fun Shape.beats(other: Shape): Boolean = when (this to other) {
-    Pair(ROCK, SCISSORS) -> true
-    Pair(PAPER, ROCK) -> true
-    Pair(SCISSORS, PAPER) -> true
-    else -> false
-}
-
 
 // Command evolution
 private data class StateChanges(private val evolvedState: EvolvedState, private val events: PersistentList<GameEvent> = persistentListOf()) : Sequence<GameEvent> {
@@ -211,8 +209,8 @@ private object StateTranslation {
         EvolvedGameState.WaitingForSecondPlayer -> WaitingForSecondPlayer(gameId, maxNumberOfRounds, firstPlayer!!)
         EvolvedGameState.Ongoing -> Ongoing(gameId, maxNumberOfRounds, firstPlayer!!, secondPlayer!!, rounds.map { round ->
             when (round.state) {
-                Started -> Round.WaitingForFirstHand
-                OneHandPlayed -> Round.WaitingForSecondHand(round.hands[0])
+                WaitingForFirstHand -> Round.WaitingForFirstHand
+                WaitingForSecondHand -> Round.WaitingForSecondHand(round.hands[0])
                 Tied -> Round.Tied(round.hands[0], round.hands[1])
                 Won -> Round.Won(round.hands[0], round.hands[1], round.winner!!)
             }
@@ -232,7 +230,7 @@ private object StateEvolution {
 
     data class EvolvedRound(val state: State, val hands: PersistentList<Hand> = persistentListOf(), val winner: PlayerId? = null) {
         enum class State {
-            Started, OneHandPlayed, Tied, Won
+            WaitingForFirstHand, WaitingForSecondHand, Tied, Won
         }
     }
 
@@ -249,11 +247,11 @@ private object StateEvolution {
         is FirstPlayerJoinedGame -> currentState!!.copy(state = EvolvedGameState.WaitingForSecondPlayer, firstPlayer = e.player)
         is SecondPlayerJoinedGame -> currentState!!.copy(secondPlayer = e.player)
         is GameStarted -> currentState!!.copy(state = EvolvedGameState.Ongoing)
-        is RoundStarted -> currentState!!.copy(rounds = currentState.rounds.add(EvolvedRound(Started)))
+        is RoundStarted -> currentState!!.copy(rounds = currentState.rounds.add(EvolvedRound(WaitingForFirstHand)))
         is HandPlayed -> currentState!!.updateRound(RoundNumber.unsafe(currentState.rounds.size)) {
             copy(
                 hands = hands.add(Hand(e.player, e.shape)),
-                state = OneHandPlayed
+                state = WaitingForSecondHand
             )
         }
         is RoundWon -> currentState!!.updateRound(e.roundNumber) {
