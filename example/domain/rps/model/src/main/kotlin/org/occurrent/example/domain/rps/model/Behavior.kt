@@ -38,7 +38,7 @@ fun handle(events: Sequence<GameEvent>, cmd: CreateGameCommand): Sequence<GameEv
 }
 
 fun handle(events: Sequence<GameEvent>, cmd: PlayHandCommand): Sequence<GameEvent> = when (val state = events.evolve()) {
-    is EvolvedState -> play(cmd, StateChanges(state))
+    is EvolvedState -> play(cmd, StateChanges.initializeFrom(state))
     else -> throw GameDoesNotExist()
 }
 
@@ -165,8 +165,7 @@ private object GameLogic {
 
 private data class Hand(val playerId: PlayerId, val shape: Shape)
 
-// Command evolution
-private data class StateChanges(private val evolvedState: EvolvedState, private val events: PersistentList<GameEvent> = persistentListOf()) : Sequence<GameEvent> {
+private class StateChanges private constructor(private val evolvedState: EvolvedState, private val events: PersistentList<GameEvent>) : Sequence<GameEvent> {
     val currentState: CurrentGameState by lazy {
         evolvedState.translateToDomain()
     }
@@ -180,6 +179,10 @@ private data class StateChanges(private val evolvedState: EvolvedState, private 
     operator fun plus(fn: (StateChanges) -> StateChanges): StateChanges = fn(this)
     operator fun plus(es: List<GameEvent>): StateChanges = es.fold(this) { state, e ->
         state + e
+    }
+
+    companion object {
+        fun initializeFrom(evolvedState: EvolvedState) = StateChanges(evolvedState, persistentListOf())
     }
 }
 
