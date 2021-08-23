@@ -24,7 +24,8 @@ import org.occurrent.example.domain.rps.model.CurrentGameState.*
 import org.occurrent.example.domain.rps.model.GameLogic.play
 import org.occurrent.example.domain.rps.model.Shape.*
 import org.occurrent.example.domain.rps.model.StateEvolution.EvolvedGameState
-import org.occurrent.example.domain.rps.model.StateEvolution.EvolvedRound.State.*
+import org.occurrent.example.domain.rps.model.StateEvolution.EvolvedRound
+import org.occurrent.example.domain.rps.model.StateEvolution.EvolvedRound.RoundState.*
 import org.occurrent.example.domain.rps.model.StateEvolution.EvolvedState
 import org.occurrent.example.domain.rps.model.StateEvolution.evolve
 import org.occurrent.example.domain.rps.model.StateTranslation.translateToDomain
@@ -49,15 +50,15 @@ private object GameLogic {
         val state = stateChanges.currentState
         val gameId = state.gameId
         return when (state) {
-            is WaitingForFirstPlayer -> stateChanges + FirstPlayerJoinedGame(gameId, timestamp, playerId) + ::startNewRound.partial(cmd.timestamp) + ::playHandAndEvaluateGameRules.partial(cmd)
+            is WaitingForFirstPlayer -> stateChanges +
+                    FirstPlayerJoinedGame(gameId, timestamp, playerId) +
+                    GameStarted(gameId, timestamp, playerId) +
+                    ::startNewRound.partial(cmd.timestamp) +
+                    ::playHandAndEvaluateGameRules.partial(cmd)
             is WaitingForSecondPlayer -> if (playerId == state.firstPlayer) {
                 throw CannotJoinTheGameTwice()
             } else {
-                stateChanges +
-                        listOf(
-                            SecondPlayerJoinedGame(gameId, timestamp, playerId),
-                            GameStarted(gameId, timestamp, playerId)
-                        ) + ::playHandAndEvaluateGameRules.partial(cmd)
+                stateChanges + SecondPlayerJoinedGame(gameId, timestamp, playerId) + ::playHandAndEvaluateGameRules.partial(cmd)
 
             }
             is Ongoing -> {
@@ -73,9 +74,9 @@ private object GameLogic {
 
     private fun startNewRound(timestamp: Timestamp, stateChanges: StateChanges): StateChanges {
         val state = stateChanges.currentState
-        val currentNumberOfRounds = (state as? Ongoing)?.rounds?.size ?: 0  // TODO Fix!
-        val newEvent = if (currentNumberOfRounds < state.maxNumberOfRounds.value) {
-            RoundStarted(state.gameId, timestamp, RoundNumber(currentNumberOfRounds.inc()))
+        val currentRoundNumber = state.currentRoundNumber()
+        val newEvent = if (currentRoundNumber.value < state.maxNumberOfRounds.value) {
+            RoundStarted(state.gameId, timestamp, currentRoundNumber.next())
         } else {
             throw IllegalStateException("Cannot start round since it would exceed ${state.maxNumberOfRounds.value}")
         }
@@ -86,12 +87,12 @@ private object GameLogic {
         val state = stateChanges.currentState
         val (timestamp, playerId, shapeOfHand) = cmd
         val gameId = state.gameId
-        val stateChangeAfterHandPlayed = stateChanges + HandPlayed(gameId, timestamp, playerId, shapeOfHand)
+        val roundNumber = state.currentRoundNumber()
+        val stateChangeAfterHandPlayed = stateChanges + HandPlayed(gameId, timestamp, playerId, shapeOfHand, roundNumber)
 
         return when (val currentRound = stateChangeAfterHandPlayed.currentRound) {
             is Round.WaitingForFirstHand -> stateChangeAfterHandPlayed
             is Round.WaitingForSecondHand -> {
-                val roundNumber = RoundNumber.unsafe(3) //  TODO("Add round number to Round")
                 val firstHand = currentRound.firstHand
                 val secondHand = Hand(playerId, shapeOfHand)
 
@@ -149,9 +150,17 @@ private object GameLogic {
     private fun StateChanges.isRoundOngoing(): Boolean = when (currentRound) {
         is Round.Tied -> false
         is Round.Won -> false
-        Round.WaitingForFirstHand -> true
+        is Round.WaitingForFirstHand -> true
         is Round.WaitingForSecondHand -> true
     }
+
+    private fun CurrentGameState.currentRoundNumber() = when (this) {
+        is Ongoing -> rounds.last().roundNumber
+        is WaitingForSecondPlayer -> round.roundNumber
+        else -> throw IllegalStateException("Cannot get round number in ${this::class.simpleName}")
+    }
+
+    private fun RoundNumber.next() = RoundNumber(value.inc())
 
     private fun Hand.beats(other: Hand): Boolean = shape.beats(other.shape)
 
@@ -191,34 +200,38 @@ private sealed interface CurrentGameState {
     val maxNumberOfRounds: MaxNumberOfRounds
 
     data class WaitingForFirstPlayer(override val gameId: GameId, override val maxNumberOfRounds: MaxNumberOfRounds) : CurrentGameState
-    data class WaitingForSecondPlayer(override val gameId: GameId, override val maxNumberOfRounds: MaxNumberOfRounds, val firstPlayer: PlayerId) : CurrentGameState
+    data class WaitingForSecondPlayer(override val gameId: GameId, override val maxNumberOfRounds: MaxNumberOfRounds, val firstPlayer: PlayerId, val round: Round) : CurrentGameState
     data class Ongoing(override val gameId: GameId, override val maxNumberOfRounds: MaxNumberOfRounds, val firstPlayer: PlayerId, val secondPlayer: PlayerId, val rounds: PersistentList<Round> = persistentListOf()) : CurrentGameState
     data class Ended(override val gameId: GameId, override val maxNumberOfRounds: MaxNumberOfRounds) : CurrentGameState
 }
 
 private sealed interface Round {
+    val roundNumber: RoundNumber
+
     sealed interface Ongoing : Round
-    object WaitingForFirstHand : Ongoing
-    data class WaitingForSecondHand(val firstHand: Hand) : Ongoing
+    data class WaitingForFirstHand(override val roundNumber: RoundNumber) : Ongoing
+    data class WaitingForSecondHand(override val roundNumber: RoundNumber, val firstHand: Hand) : Ongoing
     sealed interface Ended : Round
-    data class Tied(val firstHand: Hand, val secondHand: Hand) : Ended
-    data class Won(val firstHand: Hand, val secondHand: Hand, val winner: PlayerId) : Ended
+    data class Tied(override val roundNumber: RoundNumber, val firstHand: Hand, val secondHand: Hand) : Ended
+    data class Won(override val roundNumber: RoundNumber, val firstHand: Hand, val secondHand: Hand, val winner: PlayerId) : Ended
 }
 
 private object StateTranslation {
 
     fun EvolvedState.translateToDomain(): CurrentGameState = when (state) {
         EvolvedGameState.WaitingForFirstPlayer -> WaitingForFirstPlayer(gameId, maxNumberOfRounds)
-        EvolvedGameState.WaitingForSecondPlayer -> WaitingForSecondPlayer(gameId, maxNumberOfRounds, firstPlayer!!)
+        EvolvedGameState.WaitingForSecondPlayer -> WaitingForSecondPlayer(gameId, maxNumberOfRounds, firstPlayer!!, rounds[0].toDomain())
         EvolvedGameState.Ongoing -> Ongoing(gameId, maxNumberOfRounds, firstPlayer!!, secondPlayer!!, rounds.map { round ->
-            when (round.state) {
-                WaitingForFirstHand -> Round.WaitingForFirstHand
-                WaitingForSecondHand -> Round.WaitingForSecondHand(round.hands[0])
-                Tied -> Round.Tied(round.hands[0], round.hands[1])
-                Won -> Round.Won(round.hands[0], round.hands[1], round.winner!!)
-            }
+            round.toDomain()
         }.toPersistentList())
         EvolvedGameState.Ended -> Ended(gameId, maxNumberOfRounds)
+    }
+
+    private fun EvolvedRound.toDomain() = when (state) {
+        WaitingForFirstHand -> Round.WaitingForFirstHand(roundNumber)
+        WaitingForSecondHand -> Round.WaitingForSecondHand(roundNumber, hands[0])
+        Tied -> Round.Tied(roundNumber, hands[0], hands[1])
+        Won -> Round.Won(roundNumber, hands[0], hands[1], winner!!)
     }
 }
 
@@ -231,8 +244,8 @@ private object StateEvolution {
         val rounds: PersistentList<EvolvedRound> = persistentListOf()
     )
 
-    data class EvolvedRound(val state: State, val hands: PersistentList<Hand> = persistentListOf(), val winner: PlayerId? = null) {
-        enum class State {
+    data class EvolvedRound(val state: RoundState, val roundNumber: RoundNumber, val hands: PersistentList<Hand> = persistentListOf(), val winner: PlayerId? = null) {
+        enum class RoundState {
             WaitingForFirstHand, WaitingForSecondHand, Tied, Won
         }
     }
@@ -250,8 +263,8 @@ private object StateEvolution {
         is FirstPlayerJoinedGame -> currentState!!.copy(state = EvolvedGameState.WaitingForSecondPlayer, firstPlayer = e.player)
         is SecondPlayerJoinedGame -> currentState!!.copy(secondPlayer = e.player)
         is GameStarted -> currentState!!.copy(state = EvolvedGameState.Ongoing)
-        is RoundStarted -> currentState!!.copy(rounds = currentState.rounds.add(EvolvedRound(WaitingForFirstHand)))
-        is HandPlayed -> currentState!!.updateRound(RoundNumber.unsafe(currentState.rounds.size)) {
+        is RoundStarted -> currentState!!.copy(rounds = currentState.rounds.add(EvolvedRound(WaitingForFirstHand, e.roundNumber)))
+        is HandPlayed -> currentState!!.updateRound(e.roundNumber) {
             copy(
                 hands = hands.add(Hand(e.player, e.shape)),
                 state = WaitingForSecondHand
