@@ -21,12 +21,12 @@ import kotlinx.collections.immutable.PersistentList
 import kotlinx.collections.immutable.persistentListOf
 import kotlinx.collections.immutable.toPersistentList
 import org.occurrent.example.domain.rps.model.CurrentGameState.*
-import org.occurrent.example.domain.rps.model.EventEvolution.EvolvedGameState
-import org.occurrent.example.domain.rps.model.EventEvolution.EvolvedRound.State.*
-import org.occurrent.example.domain.rps.model.EventEvolution.EvolvedState
-import org.occurrent.example.domain.rps.model.EventEvolution.evolve
 import org.occurrent.example.domain.rps.model.GameLogic.play
 import org.occurrent.example.domain.rps.model.Shape.*
+import org.occurrent.example.domain.rps.model.StateEvolution.EvolvedGameState
+import org.occurrent.example.domain.rps.model.StateEvolution.EvolvedRound.State.*
+import org.occurrent.example.domain.rps.model.StateEvolution.EvolvedState
+import org.occurrent.example.domain.rps.model.StateEvolution.evolve
 import org.occurrent.example.domain.rps.model.StateTranslation.translateToDomain
 
 fun handle(events: Sequence<GameEvent>, cmd: CreateGameCommand): Sequence<GameEvent> = when (events.evolve()) {
@@ -38,22 +38,22 @@ fun handle(events: Sequence<GameEvent>, cmd: CreateGameCommand): Sequence<GameEv
 }
 
 fun handle(events: Sequence<GameEvent>, cmd: PlayHandCommand): Sequence<GameEvent> = when (val state = events.evolve()) {
-    is EvolvedState -> play(cmd, StateChange(state))
+    is EvolvedState -> play(cmd, StateChanges(state))
     else -> throw GameDoesNotExist()
 }
 
 private object GameLogic {
 
-    fun play(cmd: PlayHandCommand, stateChange: StateChange): StateChange {
+    fun play(cmd: PlayHandCommand, stateChanges: StateChanges): StateChanges {
         val (timestamp, playerId) = cmd
-        val state = stateChange.currentState
+        val state = stateChanges.currentState
         val gameId = state.gameId
         return when (state) {
-            is WaitingForFirstPlayer -> stateChange + FirstPlayerJoinedGame(gameId, timestamp, playerId) + ::startNewRound.partial(cmd.timestamp) + ::playHandAndEvaluateGameRules.partial(cmd)
+            is WaitingForFirstPlayer -> stateChanges + FirstPlayerJoinedGame(gameId, timestamp, playerId) + ::startNewRound.partial(cmd.timestamp) + ::playHandAndEvaluateGameRules.partial(cmd)
             is WaitingForSecondPlayer -> if (playerId == state.firstPlayer) {
                 throw CannotJoinTheGameTwice()
             } else {
-                stateChange +
+                stateChanges +
                         listOf(
                             SecondPlayerJoinedGame(gameId, timestamp, playerId),
                             GameStarted(gameId, timestamp, playerId)
@@ -61,32 +61,32 @@ private object GameLogic {
 
             }
             is Ongoing -> {
-                if (stateChange.isRoundOngoing()) {
-                    stateChange
+                if (stateChanges.isRoundOngoing()) {
+                    stateChanges
                 } else {
-                    stateChange + ::startNewRound.partial(cmd.timestamp)
+                    stateChanges + ::startNewRound.partial(cmd.timestamp)
                 } + ::playHandAndEvaluateGameRules.partial(cmd)
             }
             is Ended -> throw CannotMakeMoveBecauseGameEnded()
         }
     }
 
-    private fun startNewRound(timestamp: Timestamp, stateChange: StateChange): StateChange {
-        val state = stateChange.currentState
+    private fun startNewRound(timestamp: Timestamp, stateChanges: StateChanges): StateChanges {
+        val state = stateChanges.currentState
         val currentNumberOfRounds = (state as? Ongoing)?.rounds?.size ?: 0  // TODO Fix!
         val newEvent = if (currentNumberOfRounds < state.maxNumberOfRounds.value) {
             RoundStarted(state.gameId, timestamp, RoundNumber(currentNumberOfRounds.inc()))
         } else {
             throw IllegalStateException("Cannot start round since it would exceed ${state.maxNumberOfRounds.value}")
         }
-        return stateChange + newEvent
+        return stateChanges + newEvent
     }
 
-    private fun playHandAndEvaluateGameRules(cmd: PlayHandCommand, stateChange: StateChange): StateChange {
-        val state = stateChange.currentState
+    private fun playHandAndEvaluateGameRules(cmd: PlayHandCommand, stateChanges: StateChanges): StateChanges {
+        val state = stateChanges.currentState
         val (timestamp, playerId, shapeOfHand) = cmd
         val gameId = state.gameId
-        val stateChangeAfterHandPlayed = stateChange + HandPlayed(gameId, timestamp, playerId, shapeOfHand)
+        val stateChangeAfterHandPlayed = stateChanges + HandPlayed(gameId, timestamp, playerId, shapeOfHand)
 
         return when (val currentRound = stateChangeAfterHandPlayed.currentRound) {
             is Round.WaitingForFirstHand -> stateChangeAfterHandPlayed
@@ -103,8 +103,9 @@ private object GameLogic {
 
                 val roundEndedEvents = persistentListOf(roundOutcomeEvent, RoundEnded(gameId, timestamp, roundNumber))
 
-                val additionalEvents = if (stateChange.isLastMoveInGame()) {
-                    val winnerId = determineGameOutcome(stateChange)
+                // TODO Game should end if any player can't win! Not all rounds needs to be played!
+                val additionalEvents = if (stateChanges.isLastMoveInGame()) {
+                    val winnerId = determineGameOutcome(stateChanges)
                     roundEndedEvents + (if (winnerId == null) GameTied(gameId, timestamp) else GameWon(gameId, timestamp, winnerId)) + GameEnded(gameId, timestamp)
                 } else {
                     roundEndedEvents
@@ -115,7 +116,7 @@ private object GameLogic {
         }
     }
 
-    private fun determineGameOutcome(stateChange: StateChange): PlayerId? = when (val state = stateChange.currentState) {
+    private fun determineGameOutcome(stateChanges: StateChanges): PlayerId? = when (val state = stateChanges.currentState) {
         is Ongoing -> {
             val numberOfWinsPerPlayer = state.rounds
                 .groupBy { round -> (round as? Round.Won)?.winner }
@@ -134,18 +135,18 @@ private object GameLogic {
         else -> throw IllegalStateException("Cannot determine game outcome when game is in state ${state::class.simpleName}")
     }
 
-    private val StateChange.currentRound: Round
+    private val StateChanges.currentRound: Round
         get() = when (val state = currentState) {
             is Ongoing -> state.rounds.last()
             else -> throw IllegalStateException("There's no current round")
         }
 
-    private fun StateChange.isLastMoveInGame(): Boolean {
+    private fun StateChanges.isLastMoveInGame(): Boolean {
         val state = currentState
         return state is Ongoing && state.rounds.size == state.maxNumberOfRounds.value && currentRound is Round.Ended
     }
 
-    private fun StateChange.isRoundOngoing(): Boolean = when (currentRound) {
+    private fun StateChanges.isRoundOngoing(): Boolean = when (currentRound) {
         is Round.Tied -> false
         is Round.Won -> false
         Round.WaitingForFirstHand -> true
@@ -167,19 +168,19 @@ private fun Shape.beats(other: Shape): Boolean = when (this to other) {
 
 
 // Command evolution
-private data class StateChange(private val evolvedState: EvolvedState, private val events: PersistentList<GameEvent> = persistentListOf()) : Sequence<GameEvent> {
+private data class StateChanges(private val evolvedState: EvolvedState, private val events: PersistentList<GameEvent> = persistentListOf()) : Sequence<GameEvent> {
     val currentState: CurrentGameState by lazy {
         evolvedState.translateToDomain()
     }
 
     override fun iterator(): Iterator<GameEvent> = events.iterator()
-    fun evolve(e: GameEvent, vararg es: GameEvent) = StateChange(
+    fun evolve(e: GameEvent, vararg es: GameEvent) = StateChanges(
         sequenceOf(e, *es).evolve(evolvedState)!!, events.addAll(listOf(e, *es)),
     )
 
     operator fun plus(e: GameEvent) = evolve(e)
-    operator fun plus(fn: (StateChange) -> StateChange): StateChange = fn(this)
-    operator fun plus(es: List<GameEvent>): StateChange = es.fold(this) { state, e ->
+    operator fun plus(fn: (StateChanges) -> StateChanges): StateChanges = fn(this)
+    operator fun plus(es: List<GameEvent>): StateChanges = es.fold(this) { state, e ->
         state + e
     }
 }
@@ -222,7 +223,7 @@ private object StateTranslation {
 
 
 // Evolving from events
-private object EventEvolution {
+private object StateEvolution {
 
     data class EvolvedState(
         val gameId: GameId, val state: EvolvedGameState, val maxNumberOfRounds: MaxNumberOfRounds, val firstPlayer: PlayerId? = null, val secondPlayer: PlayerId? = null,
