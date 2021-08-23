@@ -33,7 +33,7 @@ value class GameCreatorId(val value: UUID)
 @JvmInline
 value class Timestamp(val value: ZonedDateTime)
 
-enum class Move {
+enum class Shape {
     ROCK, PAPER, SCISSORS
 }
 
@@ -42,8 +42,8 @@ value class NumberOfRounds private constructor(val value: Int) {
 
     companion object {
         operator fun invoke(value: Int): NumberOfRounds {
-            require(value in 1..5) {
-                "Number of rounds must be between 1 and 5"
+            require(value in 1..5 && value % 2 == 1) {
+                "Number of rounds can only be 1, 3 or 5"
             }
             return NumberOfRounds(value)
         }
@@ -70,7 +70,7 @@ value class RoundNumber private constructor(val value: Int) {
 // Commands
 sealed interface Command
 data class CreateGameCommand(val gameId: GameId, val timestamp: Timestamp, val creator: GameCreatorId, val numberOfRounds: NumberOfRounds) : Command
-data class ShowHandCommand(val timestamp: Timestamp, val playerId: PlayerId, val move: Move) : Command
+data class PlayHandCommand(val timestamp: Timestamp, val playerId: PlayerId, val shape: Shape) : Command
 
 class GameCannotBeCreatedMoreThanOnce : IllegalArgumentException()
 class GameDoesNotExist : IllegalArgumentException()

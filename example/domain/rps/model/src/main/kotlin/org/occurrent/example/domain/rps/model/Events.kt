@@ -30,7 +30,7 @@ data class GameStarted(override val game: GameId, override val timestamp: Timest
 data class GameEnded(override val game: GameId, override val timestamp: Timestamp) : GameEvent
 data class GameTied(override val game: GameId, override val timestamp: Timestamp) : GameEvent
 data class GameWon(override val game: GameId, override val timestamp: Timestamp, val winner: PlayerId) : GameEvent
-data class MoveMade(override val game: GameId, override val timestamp: Timestamp, val player: PlayerId, val move: Move) : GameEvent
+data class HandPlayed(override val game: GameId, override val timestamp: Timestamp, val player: PlayerId, val shape: Shape) : GameEvent
 data class RoundStarted(override val game: GameId, override val timestamp: Timestamp, val roundNumber: RoundNumber) : GameEvent
 data class RoundEnded(override val game: GameId, override val timestamp: Timestamp, val roundNumber: RoundNumber) : GameEvent
 data class RoundWon(override val game: GameId, override val timestamp: Timestamp, val roundNumber: RoundNumber, val winner: PlayerId) : GameEvent
