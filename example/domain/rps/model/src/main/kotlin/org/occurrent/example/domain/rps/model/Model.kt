@@ -38,17 +38,17 @@ enum class Shape {
 }
 
 @JvmInline
-value class NumberOfRounds private constructor(val value: Int) {
+value class MaxNumberOfRounds private constructor(val value: Int) {
 
     companion object {
-        operator fun invoke(value: Int): NumberOfRounds {
+        operator fun invoke(value: Int): MaxNumberOfRounds {
             require(value in 1..5 && value % 2 == 1) {
                 "Number of rounds can only be 1, 3 or 5"
             }
-            return NumberOfRounds(value)
+            return MaxNumberOfRounds(value)
         }
 
-        internal fun unsafe(value: Int) = NumberOfRounds(value)
+        internal fun unsafe(value: Int) = MaxNumberOfRounds(value)
     }
 }
 
@@ -69,7 +69,7 @@ value class RoundNumber private constructor(val value: Int) {
 
 // Commands
 sealed interface Command
-data class CreateGameCommand(val gameId: GameId, val timestamp: Timestamp, val creator: GameCreatorId, val numberOfRounds: NumberOfRounds) : Command
+data class CreateGameCommand(val gameId: GameId, val timestamp: Timestamp, val creator: GameCreatorId, val maxNumberOfRounds: MaxNumberOfRounds) : Command
 data class PlayHandCommand(val timestamp: Timestamp, val playerId: PlayerId, val shape: Shape) : Command
 
 class GameCannotBeCreatedMoreThanOnce : IllegalArgumentException()

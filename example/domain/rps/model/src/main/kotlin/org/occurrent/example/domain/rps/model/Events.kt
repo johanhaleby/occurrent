@@ -25,7 +25,7 @@ sealed interface GameEvent {
 data class FirstPlayerJoinedGame(override val game: GameId, override val timestamp: Timestamp, val player: PlayerId) : GameEvent
 data class SecondPlayerJoinedGame(override val game: GameId, override val timestamp: Timestamp, val player: PlayerId) : GameEvent
 
-data class GameCreated(override val game: GameId, override val timestamp: Timestamp, val createdBy: GameCreatorId, val numberOfRounds: NumberOfRounds) : GameEvent
+data class GameCreated(override val game: GameId, override val timestamp: Timestamp, val createdBy: GameCreatorId, val maxNumberOfRounds: MaxNumberOfRounds) : GameEvent
 data class GameStarted(override val game: GameId, override val timestamp: Timestamp, val startedBy: PlayerId) : GameEvent
 data class GameEnded(override val game: GameId, override val timestamp: Timestamp) : GameEvent
 data class GameTied(override val game: GameId, override val timestamp: Timestamp) : GameEvent

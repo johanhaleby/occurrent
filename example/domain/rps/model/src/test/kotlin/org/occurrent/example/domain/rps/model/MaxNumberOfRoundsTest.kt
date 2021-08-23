@@ -27,38 +27,38 @@ import org.junit.jupiter.params.provider.ValueSource
 
 
 @DisplayName("NumberOfRounds")
-class NumberOfRoundsTest {
+class MaxNumberOfRoundsTest {
 
     @ParameterizedTest(name = ARGUMENTS_PLACEHOLDER)
     @ValueSource(ints = [1, 3, 5])
     fun `Number of rounds can only be`(value: Int) {
-        NumberOfRounds(value)
+        MaxNumberOfRounds(value)
     }
 
     @ParameterizedTest(name = ARGUMENTS_PLACEHOLDER)
     @ValueSource(ints = [2, 4])
     fun `Number of rounds cannot be even`(value: Int) {
-        assertInvalidValue { NumberOfRounds(value) }
+        assertInvalidValue { MaxNumberOfRounds(value) }
     }
 
     @Test
     fun `Number of rounds cannot be 0`() {
-        assertInvalidValue { NumberOfRounds(0) }
+        assertInvalidValue { MaxNumberOfRounds(0) }
     }
 
     @ParameterizedTest(name = ARGUMENTS_PLACEHOLDER)
     @ValueSource(ints = [Int.MIN_VALUE, -1])
     fun `Number of rounds cannot be negative`(value: Int) {
-        assertInvalidValue { NumberOfRounds(value) }
+        assertInvalidValue { MaxNumberOfRounds(value) }
     }
 
     @ParameterizedTest(name = ARGUMENTS_PLACEHOLDER)
     @ValueSource(ints = [Int.MAX_VALUE, 6])
     fun `Number of rounds cannot be more than 5`(value: Int) {
-        assertInvalidValue { NumberOfRounds(value) }
+        assertInvalidValue { MaxNumberOfRounds(value) }
     }
 
-    private fun assertInvalidValue(fn: () -> NumberOfRounds) {
+    private fun assertInvalidValue(fn: () -> MaxNumberOfRounds) {
         val throwable = catchThrowable { fn() }
         assertThat(throwable).isExactlyInstanceOf(IllegalArgumentException::class.java).hasMessage("Number of rounds can only be 1, 3 or 5")
     }
