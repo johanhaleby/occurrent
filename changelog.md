@@ -1,5 +1,9 @@
 ## Changelog next version
 
+* Added ability to map event type to event name in subscriptions DSL from Kotlin
+
+## Changelog 0.11.0 (2021-08-13)
+
 * Improved error message and version for write condition not fulfilled that may happen when parallel writers write to the same stream at the same time.
 * Upgraded to cloud events java sdk to version 2.1.1
 * Upgraded to Kotlin 1.5.21

@@ -30,8 +30,8 @@ import kotlin.reflect.KClass
 /**
  * Subscription DSL
  */
-fun <T : Any> subscriptions(subscriptionModel: Subscribable, cloudEventConverter: CloudEventConverter<T>, subscriptions: Subscriptions<T>.() -> Unit) {
-    Subscriptions(subscriptionModel, cloudEventConverter).apply(subscriptions)
+fun <T : Any> subscriptions(subscriptionModel: Subscribable, cloudEventConverter: CloudEventConverter<T>, eventNameFromType: (KClass<out T>) -> String = { e -> e.simpleName!! }, subscriptions: Subscriptions<T>.() -> Unit) {
+    Subscriptions(subscriptionModel, cloudEventConverter, eventNameFromType).apply(subscriptions)
 }
 
 class Subscriptions<T : Any> @JvmOverloads constructor(
