@@ -125,7 +125,6 @@ class GamePlayTest {
             @Test
             fun `then hand is played in round one`() {
                 // Given
-                val gameId = GameId.random()
                 val currentEvents = sequenceOf(GameCreated(gameId, Timestamp.now(), GameCreatorId.random(), MaxNumberOfRounds(1)))
                 val timestamp = Timestamp.now()
                 val playerId = PlayerId.random()
@@ -135,6 +134,19 @@ class GamePlayTest {
 
                 // Then
                 assertThat(newEvents).contains(HandPlayed(gameId, timestamp, playerId, Shape.PAPER, RoundNumber(1)))
+            }
+
+            @Test
+            fun `then 4 events are returned`() {
+                // Given
+                val timestamp = Timestamp.now()
+                val playerId = PlayerId.random()
+
+                // When
+                val newEvents = handle(currentEvents, PlayHand(timestamp, playerId, Shape.PAPER))
+
+                // Then
+                assertThat(newEvents.map { it::class }).containsExactly(RoundStarted::class, GameStarted::class, FirstPlayerJoinedGame::class, HandPlayed::class)
             }
         }
     }
@@ -151,4 +163,12 @@ private fun <T> ObjectAssert<Sequence<T>>.containsExactly(vararg elements: T?) =
 
 private fun <T> ObjectAssert<Sequence<T>>.contains(vararg elements: T?) = satisfies { seq ->
     assertThat(seq.toList()).contains(*elements)
+}
+
+private fun <T> ObjectAssert<Sequence<T>>.doesNotContain(vararg elements: T?) = satisfies { seq ->
+    assertThat(seq.toList()).doesNotContain(*elements)
+}
+
+private fun <T> ObjectAssert<Sequence<T>>.hasSize(size : Int) = satisfies { seq ->
+    assertThat(seq.toList()).hasSize(size)
 }
