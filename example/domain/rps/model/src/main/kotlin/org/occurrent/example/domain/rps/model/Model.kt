@@ -92,5 +92,7 @@ data class PlayHand(val timestamp: Timestamp, val playerId: PlayerId, val shape:
 
 class GameCannotBeCreatedMoreThanOnce : IllegalArgumentException()
 class GameDoesNotExist : IllegalArgumentException()
-class CannotMakeMoveBecauseGameEnded : IllegalArgumentException()
+class CannotPlayHandBecauseGameEnded : IllegalArgumentException()
 class CannotJoinTheGameTwice : IllegalArgumentException()
+class GameAlreadyHasTwoPlayers : IllegalArgumentException()
+class PlayerAlreadyPlayedInRound : IllegalArgumentException()
