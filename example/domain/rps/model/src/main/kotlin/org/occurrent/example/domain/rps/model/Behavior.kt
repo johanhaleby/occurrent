@@ -30,17 +30,21 @@ import org.occurrent.example.domain.rps.model.StateEvolution.EvolvedState
 import org.occurrent.example.domain.rps.model.StateEvolution.evolve
 import org.occurrent.example.domain.rps.model.StateTranslation.translateToDomain
 
-fun handle(events: Sequence<GameEvent>, cmd: CreateGame): Sequence<GameEvent> = when (events.evolve()) {
-    is EvolvedState -> throw GameCannotBeCreatedMoreThanOnce()
-    else -> {
-        val (gameId, timestamp, creator, numberOfRounds) = cmd
-        sequenceOf(GameCreated(gameId, timestamp, creator, numberOfRounds))
+fun handle(events: Sequence<GameEvent>, cmd: Command): Sequence<GameEvent> {
+    val state = events.evolve()
+    return when (cmd) {
+        is CreateGame -> when (state) {
+            is EvolvedState -> throw GameCannotBeCreatedMoreThanOnce()
+            else -> {
+                val (gameId, timestamp, creator, numberOfRounds) = cmd
+                sequenceOf(GameCreated(gameId, timestamp, creator, numberOfRounds))
+            }
+        }
+        is PlayHand -> when (state) {
+            is EvolvedState -> play(cmd, EventRecorder.initializeFrom(state))
+            else -> throw GameDoesNotExist()
+        }
     }
-}
-
-fun handle(events: Sequence<GameEvent>, cmd: PlayHand): Sequence<GameEvent> = when (val state = events.evolve()) {
-    is EvolvedState -> play(cmd, EventRecorder.initializeFrom(state))
-    else -> throw GameDoesNotExist()
 }
 
 private object GameLogic {
@@ -292,7 +296,6 @@ private object StateEvolution {
         is GameWon -> currentState
         is GameEnded -> currentState!!.copy(state = EvolvedGameState.Ended)
     }
-
 
     private fun EvolvedState.updateRound(roundNumber: RoundNumber, fn: EvolvedRound.() -> EvolvedRound): EvolvedState = copy(rounds = rounds.updateRound(roundNumber, fn))
 

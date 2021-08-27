@@ -84,6 +84,7 @@ value class RoundNumber private constructor(val value: Int) {
     }
 }
 
+// TODO remove commands
 // Commands
 sealed interface Command
 data class CreateGame(val gameId: GameId, val timestamp: Timestamp, val creator: GameCreatorId, val maxNumberOfRounds: MaxNumberOfRounds) : Command

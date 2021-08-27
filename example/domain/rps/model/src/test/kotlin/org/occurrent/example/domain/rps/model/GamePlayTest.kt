@@ -23,6 +23,8 @@ import org.assertj.core.api.ObjectAssert
 import org.junit.jupiter.api.DisplayName
 import org.junit.jupiter.api.Nested
 import org.junit.jupiter.api.Test
+import org.occurrent.application.composition.command.composeCommands
+import org.occurrent.application.composition.command.partial
 
 @DisplayName("Rock Paper Scissors")
 class GamePlayTest {
@@ -63,24 +65,23 @@ class GamePlayTest {
     @Nested
     @DisplayName("when game is created")
     inner class WhenGameIsCreated {
+        private val gameId = GameId.random()
 
         @Test
         fun `then game cannot be created again`() {
             // Given
-            val currentEvents = sequenceOf(GameCreated(GameId.random(), Timestamp.now(), GameCreatorId.random(), MaxNumberOfRounds(1)))
+            val currentEvents = sequenceOf(GameCreated(gameId, Timestamp.now(), GameCreatorId.random(), MaxNumberOfRounds(1)))
 
             // When
-            val throwable = catchThrowable { handle(currentEvents, CreateGame(GameId.random(), Timestamp.now(), GameCreatorId.random(), MaxNumberOfRounds(1))) }
+            val throwable = catchThrowable { handle(currentEvents, CreateGame(gameId, Timestamp.now(), GameCreatorId.random(), MaxNumberOfRounds(1))) }
 
             // Then
             assertThat(throwable).isExactlyInstanceOf(GameCannotBeCreatedMoreThanOnce::class.java)
         }
 
         @Nested
-        @DisplayName("and first hand is played")
-        inner class AndFirstHandIsPlayed {
-
-            private val gameId = GameId.random()
+        @DisplayName("and no player has joined")
+        inner class AndNoPlayerHasJoined {
             private val currentEvents = sequenceOf(GameCreated(gameId, Timestamp.now(), GameCreatorId.random(), MaxNumberOfRounds(1)))
 
             @Test
@@ -125,7 +126,6 @@ class GamePlayTest {
             @Test
             fun `then hand is played in round one`() {
                 // Given
-                val currentEvents = sequenceOf(GameCreated(gameId, Timestamp.now(), GameCreatorId.random(), MaxNumberOfRounds(1)))
                 val timestamp = Timestamp.now()
                 val playerId = PlayerId.random()
 
@@ -149,8 +149,147 @@ class GamePlayTest {
                 assertThat(newEvents.map { it::class }).containsExactly(RoundStarted::class, GameStarted::class, FirstPlayerJoinedGame::class, HandPlayed::class)
             }
         }
+
+        @Nested
+        @DisplayName("and first player joined")
+        inner class WhenGameIsStarted {
+
+
+            @Test
+            fun `then first player cannot join the game again`() {
+                // Given
+                val firstPlayerId = PlayerId.random()
+                val currentEvents = composeEvents(
+                    CreateGame(gameId, Timestamp.now(), GameCreatorId.random(), MaxNumberOfRounds(1)),
+                    PlayHand(Timestamp.now(), firstPlayerId, Shape.PAPER)
+                )
+                val timestamp = Timestamp.now()
+
+                // When
+                val exception = catchThrowable { handle(currentEvents, PlayHand(timestamp, firstPlayerId, Shape.PAPER)) }
+
+                // Then
+                assertThat(exception).isExactlyInstanceOf(CannotJoinTheGameTwice::class.java)
+            }
+
+            @Nested
+            @DisplayName("and max number of rounds is one")
+            inner class AndMaxNumberOfRoundsIsOne {
+                private val firstPlayerId = PlayerId.random()
+                private val currentEvents = composeEvents(
+                    CreateGame(gameId, Timestamp.now(), GameCreatorId.random(), MaxNumberOfRounds(1)),
+                    PlayHand(Timestamp.now(), firstPlayerId, Shape.PAPER)
+                )
+
+                @Test
+                fun `then second player can join the game`() {
+                    // Given
+                    val secondPlayerId = PlayerId.random()
+                    val timestamp = Timestamp.now()
+
+                    // When
+                    val newEvents = handle(currentEvents, PlayHand(timestamp, secondPlayerId, Shape.PAPER))
+
+                    // Then
+                    assertThat(newEvents).contains(SecondPlayerJoinedGame(gameId, timestamp, secondPlayerId))
+                }
+
+                @Test
+                fun `then round is tied when first and second player has the same hand`() {
+                    // Given
+                    val secondPlayerId = PlayerId.random()
+                    val timestamp = Timestamp.now()
+
+                    // When
+                    val newEvents = handle(currentEvents, PlayHand(timestamp, secondPlayerId, Shape.PAPER))
+
+                    // Then
+                    assertThat(newEvents).contains(RoundTied(gameId, timestamp, RoundNumber(1)))
+                }
+
+                @Test
+                fun `then round is ended`() {
+                    // Given
+                    val secondPlayerId = PlayerId.random()
+                    val timestamp = Timestamp.now()
+
+                    // When
+                    val newEvents = handle(currentEvents, PlayHand(timestamp, secondPlayerId, Shape.SCISSORS))
+
+                    // Then
+                    assertThat(newEvents).contains(RoundEnded(gameId, timestamp, RoundNumber(1)))
+                }
+
+                @Test
+                fun `then game is ended`() {
+                    // Given
+                    val secondPlayerId = PlayerId.random()
+                    val timestamp = Timestamp.now()
+
+                    // When
+                    val newEvents = handle(currentEvents, PlayHand(timestamp, secondPlayerId, Shape.SCISSORS))
+
+                    // Then
+                    assertThat(newEvents).contains(GameEnded(gameId, timestamp))
+                }
+
+                @Test
+                fun `then first player wins round when first player's shape wins over second player's shape`() {
+                    // Given
+                    val secondPlayerId = PlayerId.random()
+                    val timestamp = Timestamp.now()
+
+                    // When
+                    val newEvents = handle(currentEvents, PlayHand(timestamp, secondPlayerId, Shape.ROCK))
+
+                    // Then
+                    assertThat(newEvents).contains(RoundWon(gameId, timestamp, RoundNumber(1), firstPlayerId))
+                }
+
+                @Test
+                fun `then second player wins round when second player's shape wins over first player's shape`() {
+                    // Given
+                    val secondPlayerId = PlayerId.random()
+                    val timestamp = Timestamp.now()
+
+                    // When
+                    val newEvents = handle(currentEvents, PlayHand(timestamp, secondPlayerId, Shape.SCISSORS))
+
+                    // Then
+                    assertThat(newEvents).contains(RoundWon(gameId, timestamp, RoundNumber(1), secondPlayerId))
+                }
+
+                @Test
+                fun `then first player wins game when first player's shape wins over second player's shape`() {
+                    // Given
+                    val secondPlayerId = PlayerId.random()
+                    val timestamp = Timestamp.now()
+
+                    // When
+                    val newEvents = handle(currentEvents, PlayHand(timestamp, secondPlayerId, Shape.ROCK))
+
+                    // Then
+                    assertThat(newEvents).contains(GameWon(gameId, timestamp, firstPlayerId))
+                }
+
+                @Test
+                fun `then second player wins game when second player's shape wins over first player's shape`() {
+                    // Given
+                    val secondPlayerId = PlayerId.random()
+                    val timestamp = Timestamp.now()
+
+                    // When
+                    val newEvents = handle(currentEvents, PlayHand(timestamp, secondPlayerId, Shape.SCISSORS))
+
+                    // Then
+                    assertThat(newEvents).contains(GameWon(gameId, timestamp, secondPlayerId))
+                }
+            }
+        }
     }
 }
+
+private fun composeEvents(vararg command: Command): Sequence<GameEvent> = composeCommands(command.asSequence().map { cmd -> ::handle.partial(cmd) })(emptySequence())
 
 // Extension functions to better support sequences in assertj
 private fun <T> ObjectAssert<Sequence<T>>.containsOnly(vararg elements: T?) = satisfies { seq ->
@@ -169,6 +308,6 @@ private fun <T> ObjectAssert<Sequence<T>>.doesNotContain(vararg elements: T?) = 
     assertThat(seq.toList()).doesNotContain(*elements)
 }
 
-private fun <T> ObjectAssert<Sequence<T>>.hasSize(size : Int) = satisfies { seq ->
+private fun <T> ObjectAssert<Sequence<T>>.hasSize(size: Int) = satisfies { seq ->
     assertThat(seq.toList()).hasSize(size)
 }
