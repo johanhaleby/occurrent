@@ -152,7 +152,7 @@ class GamePlayTest {
 
         @Nested
         @DisplayName("and first player joined")
-        inner class WhenGameIsStarted {
+        inner class AndFirstPlayerJoined {
 
 
             @Test
@@ -283,6 +283,181 @@ class GamePlayTest {
 
                     // Then
                     assertThat(newEvents).contains(GameWon(gameId, timestamp, secondPlayerId))
+                }
+            }
+
+            @Nested
+            @DisplayName("and max number of rounds is more than one")
+            inner class AndMaxNumberOfRoundsIsMoreThanOne {
+                private val firstPlayerId = PlayerId.random()
+                private val currentEvents = composeEvents(
+                    CreateGame(gameId, Timestamp.now(), GameCreatorId.random(), MaxNumberOfRounds(1)),
+                    PlayHand(Timestamp.now(), firstPlayerId, Shape.PAPER)
+                )
+
+                @Test
+                fun `then second player can join the game`() {
+                    // Given
+                    val secondPlayerId = PlayerId.random()
+                    val timestamp = Timestamp.now()
+
+                    // When
+                    val newEvents = handle(currentEvents, PlayHand(timestamp, secondPlayerId, Shape.PAPER))
+
+                    // Then
+                    assertThat(newEvents).contains(SecondPlayerJoinedGame(gameId, timestamp, secondPlayerId))
+                }
+
+                @Test
+                fun `then round is tied when first and second player has the same hand`() {
+                    // Given
+                    val secondPlayerId = PlayerId.random()
+                    val timestamp = Timestamp.now()
+
+                    // When
+                    val newEvents = handle(currentEvents, PlayHand(timestamp, secondPlayerId, Shape.PAPER))
+
+                    // Then
+                    assertThat(newEvents).contains(RoundTied(gameId, timestamp, RoundNumber(1)))
+                }
+
+                @Test
+                fun `then round is ended`() {
+                    // Given
+                    val secondPlayerId = PlayerId.random()
+                    val timestamp = Timestamp.now()
+
+                    // When
+                    val newEvents = handle(currentEvents, PlayHand(timestamp, secondPlayerId, Shape.SCISSORS))
+
+                    // Then
+                    assertThat(newEvents).contains(RoundEnded(gameId, timestamp, RoundNumber(1)))
+                }
+
+                @Test
+                fun `then game is not ended`() {
+                    // Given
+                    val secondPlayerId = PlayerId.random()
+                    val timestamp = Timestamp.now()
+
+                    // When
+                    val newEvents = handle(currentEvents, PlayHand(timestamp, secondPlayerId, Shape.SCISSORS))
+
+                    // Then
+                    assertThat(newEvents.map { it::class }).doesNotContain(GameEnded::class)
+                }
+
+                @Test
+                fun `then first player wins round when first player's shape wins over second player's shape`() {
+                    // Given
+                    val secondPlayerId = PlayerId.random()
+                    val timestamp = Timestamp.now()
+
+                    // When
+                    val newEvents = handle(currentEvents, PlayHand(timestamp, secondPlayerId, Shape.ROCK))
+
+                    // Then
+                    assertThat(newEvents).contains(RoundWon(gameId, timestamp, RoundNumber(1), firstPlayerId))
+                }
+
+                @Test
+                fun `then second player wins round when second player's shape wins over first player's shape`() {
+                    // Given
+                    val secondPlayerId = PlayerId.random()
+                    val timestamp = Timestamp.now()
+
+                    // When
+                    val newEvents = handle(currentEvents, PlayHand(timestamp, secondPlayerId, Shape.SCISSORS))
+
+                    // Then
+                    assertThat(newEvents).contains(RoundWon(gameId, timestamp, RoundNumber(1), secondPlayerId))
+                }
+            }
+        }
+
+        @Nested
+        @DisplayName("and both players joined")
+        inner class AndBothPlayersJoined {
+            private val firstPlayerId = PlayerId.random()
+            private val secondPlayerId = PlayerId.random()
+
+            @Test
+            fun `then the same player cannot play in the same round twice`() {
+                // Given
+                val currentEvents = composeEvents(
+                    CreateGame(gameId, Timestamp.now(), GameCreatorId.random(), MaxNumberOfRounds(3)),
+                    PlayHand(Timestamp.now(), firstPlayerId, Shape.PAPER),
+                    PlayHand(Timestamp.now(), secondPlayerId, Shape.PAPER),
+                    PlayHand(Timestamp.now(), firstPlayerId, Shape.ROCK)
+                )
+
+                // When
+                val exception = catchThrowable { handle(currentEvents, PlayHand(Timestamp.now(), firstPlayerId, Shape.SCISSORS)) }
+
+                // Then
+                assertThat(exception).isExactlyInstanceOf(PlayerAlreadyPlayedInRound::class.java)
+            }
+
+            @Test
+            fun `then a third player cannot join the game`() {
+                // Given
+                val currentEvents = composeEvents(
+                    CreateGame(gameId, Timestamp.now(), GameCreatorId.random(), MaxNumberOfRounds(3)),
+                    PlayHand(Timestamp.now(), firstPlayerId, Shape.PAPER),
+                    PlayHand(Timestamp.now(), secondPlayerId, Shape.PAPER)
+                )
+                val timestamp = Timestamp.now()
+
+                // When
+                val exception = catchThrowable { handle(currentEvents, PlayHand(timestamp, PlayerId.random(), Shape.PAPER)) }
+
+                // Then
+                assertThat(exception).isExactlyInstanceOf(GameAlreadyHasTwoPlayers::class.java)
+            }
+
+
+            @Nested
+            @DisplayName("and max number of rounds is more than one")
+            inner class AndMaxNumberOfRoundsIsMoreThanOne {
+
+                @Nested
+                @DisplayName("and next round is the last round in game")
+                inner class AndNextRoundIsTheLastRoundInGame {
+
+                }
+
+                @Nested
+                @DisplayName("and next round is not the last round in game")
+                inner class AndNextRoundIsNotTheLastRoundInGame {
+                    private val currentEvents = composeEvents(
+                        CreateGame(gameId, Timestamp.now(), GameCreatorId.random(), MaxNumberOfRounds(3)),
+                        PlayHand(Timestamp.now(), firstPlayerId, Shape.PAPER),
+                        PlayHand(Timestamp.now(), secondPlayerId, Shape.ROCK)
+                    )
+
+                    @Test
+                    fun `then a new round is started when first player plays`() {
+                        // Given
+                        val timestamp = Timestamp.now()
+
+                        // When
+                        val newEvents = handle(currentEvents, PlayHand(timestamp, firstPlayerId, Shape.PAPER))
+
+                        // Then
+                        assertThat(newEvents).contains(RoundStarted(gameId, timestamp, RoundNumber(2)))
+                    }
+
+                    @Test
+                    fun `then a new round is started when second player plays`() {
+                        // Given
+                        val timestamp = Timestamp.now()
+
+                        // When
+                        val newEvents = handle(currentEvents, PlayHand(timestamp, secondPlayerId, Shape.PAPER))
+
+                        // Then
+                        assertThat(newEvents).contains(RoundStarted(gameId, timestamp, RoundNumber(2)))
+                    }
                 }
             }
         }

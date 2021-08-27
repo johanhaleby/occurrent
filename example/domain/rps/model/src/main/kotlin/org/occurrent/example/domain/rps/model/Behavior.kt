@@ -68,19 +68,23 @@ private object GameLogic {
 
             }
             is BothPlayersJoined -> {
+                if (state.firstPlayer != playerId && state.secondPlayer != playerId) {
+                    throw GameAlreadyHasTwoPlayers()
+                }
+
                 if (eventRecorder.isRoundOngoing()) {
                     eventRecorder
                 } else {
                     eventRecorder + ::startNewRound.partial(cmd.timestamp)
                 } + ::playHandAndEvaluateGameRules.partial(cmd)
             }
-            is Ended -> throw CannotMakeMoveBecauseGameEnded()
+            is Ended -> throw CannotPlayHandBecauseGameEnded()
         }
     }
 
     private fun startNewRound(timestamp: Timestamp, eventRecorder: EventRecorder): EventRecorder {
         val state = eventRecorder.currentState
-        val currentRoundNumber = state.currentRoundNumber()
+        val currentRoundNumber = state.currentRound()?.roundNumber
         val newEvent = when {
             currentRoundNumber == null -> RoundStarted(state.gameId, timestamp, RoundNumber(1))
             currentRoundNumber.value < state.maxNumberOfRounds.value -> RoundStarted(state.gameId, timestamp, currentRoundNumber.next())
@@ -93,7 +97,11 @@ private object GameLogic {
         val state = eventRecorder.currentState
         val (timestamp, playerId, shapeOfHand) = cmd
         val gameId = state.gameId
-        val roundNumber = state.currentRoundNumber() ?: throw IllegalStateException("Cannot play when round is not started")
+        val round = state.currentRound() ?: throw IllegalStateException("Cannot play when round is not started")
+        if (round is Round.WaitingForSecondHand && round.firstHand.playerId == cmd.playerId) {
+            throw PlayerAlreadyPlayedInRound()
+        }
+        val roundNumber = round.roundNumber
         val stateChangeAfterHandPlayed = eventRecorder + HandPlayed(gameId, timestamp, playerId, shapeOfHand, roundNumber)
 
         return when (val currentRound = eventRecorder.currentRound) {
@@ -162,11 +170,11 @@ private object GameLogic {
         is Round.WaitingForSecondHand -> true
     }
 
-    private fun CurrentGameState.currentRoundNumber(): RoundNumber? = when (this) {
+    private fun CurrentGameState.currentRound(): Round? = when (this) {
         is Created -> null
-        is Started -> round.roundNumber
-        is FirstPlayerJoined -> round.roundNumber
-        is BothPlayersJoined -> rounds.last().roundNumber
+        is Started -> round
+        is FirstPlayerJoined -> round
+        is BothPlayersJoined -> rounds.last()
         is Ended -> throw IllegalStateException("Cannot get round number when game is in state ${this::class.simpleName}")
     }
 
