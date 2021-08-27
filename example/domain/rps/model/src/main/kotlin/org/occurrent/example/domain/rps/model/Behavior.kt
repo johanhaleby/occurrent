@@ -91,7 +91,7 @@ private object GameLogic {
         val roundNumber = state.currentRoundNumber() ?: throw IllegalStateException("Cannot play when round is not started")
         val stateChangeAfterHandPlayed = eventRecorder + HandPlayed(gameId, timestamp, playerId, shapeOfHand, roundNumber)
 
-        return when (val currentRound = stateChangeAfterHandPlayed.currentRound) {
+        return when (val currentRound = eventRecorder.currentRound) {
             is Round.WaitingForFirstHand -> stateChangeAfterHandPlayed
             is Round.WaitingForSecondHand -> {
                 val firstHand = currentRound.firstHand
@@ -106,8 +106,8 @@ private object GameLogic {
                 val roundEndedEvents = persistentListOf(roundOutcomeEvent, RoundEnded(gameId, timestamp, roundNumber))
 
                 // TODO Game should end if any player can't win! Not all rounds needs to be played!
-                val additionalEvents = if (eventRecorder.isLastMoveInGame()) {
-                    val winnerId = determineGameOutcome(eventRecorder)
+                val additionalEvents = if (stateChangeAfterHandPlayed.isLastMoveInGame()) {
+                    val winnerId = determineGameOutcome(stateChangeAfterHandPlayed)
                     roundEndedEvents + (if (winnerId == null) GameTied(gameId, timestamp) else GameWon(gameId, timestamp, winnerId)) + GameEnded(gameId, timestamp)
                 } else {
                     roundEndedEvents
