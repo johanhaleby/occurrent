@@ -116,16 +116,14 @@ private object GameLogic {
                     else -> RoundWon(gameId, timestamp, roundNumber, secondHand.playerId)
                 }
 
-                val roundEndedEvents = persistentListOf(roundOutcomeEvent, RoundEnded(gameId, timestamp, roundNumber))
-
+                val stateChangeAfterRoundEnded = stateChangeAfterHandPlayed + listOf(roundOutcomeEvent, RoundEnded(gameId, timestamp, roundNumber))
                 // TODO Game should end if any player can't win! Not all rounds needs to be played!
-                val additionalEvents = if (stateChangeAfterHandPlayed.isLastMoveInGame()) {
-                    val winnerId = determineGameOutcome(stateChangeAfterHandPlayed)
-                    roundEndedEvents + (if (winnerId == null) GameTied(gameId, timestamp) else GameWon(gameId, timestamp, winnerId)) + GameEnded(gameId, timestamp)
+                if (stateChangeAfterRoundEnded.isLastMoveInGame()) {
+                    val winnerId = determineGameOutcome(stateChangeAfterRoundEnded)
+                    stateChangeAfterRoundEnded + (if (winnerId == null) GameTied(gameId, timestamp) else GameWon(gameId, timestamp, winnerId)) + GameEnded(gameId, timestamp)
                 } else {
-                    roundEndedEvents
+                    stateChangeAfterRoundEnded
                 }
-                stateChangeAfterHandPlayed + additionalEvents
             }
             else -> throw IllegalStateException("Cannot play round when round is in state ${currentRound::class.simpleName}")
         }
