@@ -61,6 +61,12 @@
             <artifactId>kotlin-reflect</artifactId>
             <scope>test</scope>
         </dependency>
+        <dependency>
+            <groupId>org.occurrent</groupId>
+            <artifactId>command-composition</artifactId>
+            <version>0.11.1-SNAPSHOT</version>
+            <scope>test</scope>
+        </dependency>
     </dependencies>
 
 
