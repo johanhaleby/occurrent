@@ -41,7 +41,7 @@ fun handle(events: Sequence<GameEvent>, cmd: Command): Sequence<GameEvent> {
             }
         }
         is PlayHand -> when (state) {
-            is EvolvedState -> play(cmd, EventRecorder.initializeFrom(state))
+            is EvolvedState -> play(cmd, AccumulatedChanges.initializeFrom(state))
             else -> throw GameDoesNotExist()
         }
     }
@@ -49,22 +49,22 @@ fun handle(events: Sequence<GameEvent>, cmd: Command): Sequence<GameEvent> {
 
 private object GameLogic {
 
-    fun play(cmd: PlayHand, eventRecorder: EventRecorder): EventRecorder {
+    fun play(cmd: PlayHand, accumulatedChanges: AccumulatedChanges): AccumulatedChanges {
         val (timestamp, playerId) = cmd
-        val state = eventRecorder.currentState
+        val state = accumulatedChanges.currentState
         val gameId = state.gameId
         return when (state) {
-            is Created -> eventRecorder +
+            is Created -> accumulatedChanges +
                     ::startNewRound.partial(cmd.timestamp) +
                     GameStarted(gameId, timestamp) +
                     ::play.partial(cmd)
-            is Started -> eventRecorder +
+            is Started -> accumulatedChanges +
                     FirstPlayerJoinedGame(gameId, timestamp, playerId) +
                     ::playHandAndEvaluateGameRules.partial(cmd)
             is FirstPlayerJoined -> if (playerId == state.firstPlayer) {
                 throw CannotJoinTheGameTwice()
             } else {
-                eventRecorder + SecondPlayerJoinedGame(gameId, timestamp, playerId) + ::playHandAndEvaluateGameRules.partial(cmd)
+                accumulatedChanges + SecondPlayerJoinedGame(gameId, timestamp, playerId) + ::playHandAndEvaluateGameRules.partial(cmd)
 
             }
             is BothPlayersJoined -> {
@@ -72,29 +72,29 @@ private object GameLogic {
                     throw GameAlreadyHasTwoPlayers()
                 }
 
-                if (eventRecorder.isRoundOngoing()) {
-                    eventRecorder
+                if (accumulatedChanges.isRoundOngoing()) {
+                    accumulatedChanges
                 } else {
-                    eventRecorder + ::startNewRound.partial(cmd.timestamp)
+                    accumulatedChanges + ::startNewRound.partial(cmd.timestamp)
                 } + ::playHandAndEvaluateGameRules.partial(cmd)
             }
             is Ended -> throw CannotPlayHandBecauseGameEnded()
         }
     }
 
-    private fun startNewRound(timestamp: Timestamp, eventRecorder: EventRecorder): EventRecorder {
-        val state = eventRecorder.currentState
+    private fun startNewRound(timestamp: Timestamp, accumulatedChanges: AccumulatedChanges): AccumulatedChanges {
+        val state = accumulatedChanges.currentState
         val currentRoundNumber = state.currentRound()?.roundNumber
         val newEvent = when {
             currentRoundNumber == null -> RoundStarted(state.gameId, timestamp, RoundNumber(1))
             currentRoundNumber.value < state.maxNumberOfRounds.value -> RoundStarted(state.gameId, timestamp, currentRoundNumber.next())
             else -> throw IllegalStateException("Cannot start round since it would exceed ${state.maxNumberOfRounds.value}")
         }
-        return eventRecorder + newEvent
+        return accumulatedChanges + newEvent
     }
 
-    private fun playHandAndEvaluateGameRules(cmd: PlayHand, eventRecorder: EventRecorder): EventRecorder {
-        val state = eventRecorder.currentState
+    private fun playHandAndEvaluateGameRules(cmd: PlayHand, accumulatedChanges: AccumulatedChanges): AccumulatedChanges {
+        val state = accumulatedChanges.currentState
         val (timestamp, playerId, shapeOfHand) = cmd
         val gameId = state.gameId
         val round = state.currentRound() ?: throw IllegalStateException("Cannot play when round is not started")
@@ -102,10 +102,10 @@ private object GameLogic {
             throw PlayerAlreadyPlayedInRound()
         }
         val roundNumber = round.roundNumber
-        val stateChangeAfterHandPlayed = eventRecorder + HandPlayed(gameId, timestamp, playerId, shapeOfHand, roundNumber)
+        val changesAfterHandPlayed = accumulatedChanges + HandPlayed(gameId, timestamp, playerId, shapeOfHand, roundNumber)
 
-        return when (val currentRound = eventRecorder.currentRound) {
-            is Round.WaitingForFirstHand -> stateChangeAfterHandPlayed
+        return when (val currentRound = accumulatedChanges.currentRound) {
+            is Round.WaitingForFirstHand -> changesAfterHandPlayed
             is Round.WaitingForSecondHand -> {
                 val firstHand = currentRound.firstHand
                 val secondHand = Hand(playerId, shapeOfHand)
@@ -116,11 +116,11 @@ private object GameLogic {
                     else -> RoundWon(gameId, timestamp, roundNumber, secondHand.playerId)
                 }
 
-                val stateChangeAfterRoundEnded = stateChangeAfterHandPlayed + listOf(roundOutcomeEvent, RoundEnded(gameId, timestamp, roundNumber))
-                when (val status = determineGameStatus(stateChangeAfterRoundEnded)) {
-                    GameStatus.NotEnded -> stateChangeAfterRoundEnded
-                    GameStatus.Tied -> stateChangeAfterRoundEnded + GameTied(gameId, timestamp) + GameEnded(gameId, timestamp)
-                    is GameStatus.Won -> stateChangeAfterRoundEnded + GameWon(gameId, timestamp, status.winner) + GameEnded(gameId, timestamp)
+                val changesAfterRoundEnded = changesAfterHandPlayed + listOf(roundOutcomeEvent, RoundEnded(gameId, timestamp, roundNumber))
+                when (val status = determineGameStatus(changesAfterRoundEnded)) {
+                    GameStatus.NotEnded -> changesAfterRoundEnded
+                    GameStatus.Tied -> changesAfterRoundEnded + GameTied(gameId, timestamp) + GameEnded(gameId, timestamp)
+                    is GameStatus.Won -> changesAfterRoundEnded + GameWon(gameId, timestamp, status.winner) + GameEnded(gameId, timestamp)
                 }
             }
             else -> throw IllegalStateException("Cannot play round when round is in state ${currentRound::class.simpleName}")
@@ -133,7 +133,7 @@ private object GameLogic {
         object NotEnded : GameStatus
     }
 
-    private fun determineGameStatus(eventRecorder: EventRecorder): GameStatus = when (val state = eventRecorder.currentState) {
+    private fun determineGameStatus(accumulatedChanges: AccumulatedChanges): GameStatus = when (val state = accumulatedChanges.currentState) {
         is BothPlayersJoined -> {
             val maxNumberOfRounds = state.maxNumberOfRounds.value
             val roundNumber = state.currentRound()!!.roundNumber.value
@@ -163,7 +163,7 @@ private object GameLogic {
         else -> throw IllegalStateException("Cannot determine game outcome when game is in state ${state::class.simpleName}")
     }
 
-    private val EventRecorder.currentRound: Round
+    private val AccumulatedChanges.currentRound: Round
         get() = when (val state = currentState) {
             is Started -> state.round
             is FirstPlayerJoined -> state.round
@@ -171,7 +171,7 @@ private object GameLogic {
             else -> throw IllegalStateException("No round is started")
         }
 
-    private fun EventRecorder.isRoundOngoing(): Boolean = when (currentRound) {
+    private fun AccumulatedChanges.isRoundOngoing(): Boolean = when (currentRound) {
         is Round.Tied -> false
         is Round.Won -> false
         is Round.WaitingForFirstHand -> true
@@ -200,24 +200,24 @@ private object GameLogic {
 
 private data class Hand(val playerId: PlayerId, val shape: Shape)
 
-private class EventRecorder private constructor(private val evolvedState: EvolvedState, private val events: PersistentList<GameEvent>) : Sequence<GameEvent> {
+private class AccumulatedChanges private constructor(private val evolvedState: EvolvedState, private val events: PersistentList<GameEvent>) : Sequence<GameEvent> {
     val currentState: CurrentGameState by lazy {
         evolvedState.translateToDomain()
     }
 
     override fun iterator(): Iterator<GameEvent> = events.iterator()
-    fun evolve(e: GameEvent, vararg es: GameEvent) = EventRecorder(
+    fun evolve(e: GameEvent, vararg es: GameEvent) = AccumulatedChanges(
         sequenceOf(e, *es).evolve(evolvedState)!!, events.addAll(listOf(e, *es)),
     )
 
     operator fun plus(e: GameEvent) = evolve(e)
-    operator fun plus(fn: (EventRecorder) -> EventRecorder): EventRecorder = fn(this)
-    operator fun plus(es: List<GameEvent>): EventRecorder = es.fold(this) { state, e ->
+    operator fun plus(fn: (AccumulatedChanges) -> AccumulatedChanges): AccumulatedChanges = fn(this)
+    operator fun plus(es: List<GameEvent>): AccumulatedChanges = es.fold(this) { state, e ->
         state + e
     }
 
     companion object {
-        fun initializeFrom(evolvedState: EvolvedState) = EventRecorder(evolvedState, persistentListOf())
+        fun initializeFrom(evolvedState: EvolvedState) = AccumulatedChanges(evolvedState, persistentListOf())
     }
 }
 
