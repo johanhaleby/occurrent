@@ -53,9 +53,10 @@ private object GameLogic {
             is Created -> eventRecorder +
                     ::startNewRound.partial(cmd.timestamp) +
                     GameStarted(gameId, timestamp) +
+                    ::play.partial(cmd)
+            is Started -> eventRecorder +
                     FirstPlayerJoinedGame(gameId, timestamp, playerId) +
                     ::playHandAndEvaluateGameRules.partial(cmd)
-            is Started -> eventRecorder // TODO
             is FirstPlayerJoined -> if (playerId == state.firstPlayer) {
                 throw CannotJoinTheGameTwice()
             } else {
