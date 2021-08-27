@@ -30,7 +30,7 @@ import org.occurrent.example.domain.rps.model.StateEvolution.EvolvedState
 import org.occurrent.example.domain.rps.model.StateEvolution.evolve
 import org.occurrent.example.domain.rps.model.StateTranslation.translateToDomain
 
-fun handle(events: Sequence<GameEvent>, cmd: CreateGameCommand): Sequence<GameEvent> = when (events.evolve()) {
+fun handle(events: Sequence<GameEvent>, cmd: CreateGame): Sequence<GameEvent> = when (events.evolve()) {
     is EvolvedState -> throw GameCannotBeCreatedMoreThanOnce()
     else -> {
         val (gameId, timestamp, creator, numberOfRounds) = cmd
@@ -38,30 +38,31 @@ fun handle(events: Sequence<GameEvent>, cmd: CreateGameCommand): Sequence<GameEv
     }
 }
 
-fun handle(events: Sequence<GameEvent>, cmd: PlayHandCommand): Sequence<GameEvent> = when (val state = events.evolve()) {
+fun handle(events: Sequence<GameEvent>, cmd: PlayHand): Sequence<GameEvent> = when (val state = events.evolve()) {
     is EvolvedState -> play(cmd, EventRecorder.initializeFrom(state))
     else -> throw GameDoesNotExist()
 }
 
 private object GameLogic {
 
-    fun play(cmd: PlayHandCommand, eventRecorder: EventRecorder): EventRecorder {
+    fun play(cmd: PlayHand, eventRecorder: EventRecorder): EventRecorder {
         val (timestamp, playerId) = cmd
         val state = eventRecorder.currentState
         val gameId = state.gameId
         return when (state) {
-            is WaitingForFirstPlayer -> eventRecorder +
-                    FirstPlayerJoinedGame(gameId, timestamp, playerId) +
-                    GameStarted(gameId, timestamp, playerId) +
+            is Created -> eventRecorder +
                     ::startNewRound.partial(cmd.timestamp) +
+                    GameStarted(gameId, timestamp) +
+                    FirstPlayerJoinedGame(gameId, timestamp, playerId) +
                     ::playHandAndEvaluateGameRules.partial(cmd)
-            is WaitingForSecondPlayer -> if (playerId == state.firstPlayer) {
+            is Started -> eventRecorder // TODO
+            is FirstPlayerJoined -> if (playerId == state.firstPlayer) {
                 throw CannotJoinTheGameTwice()
             } else {
                 eventRecorder + SecondPlayerJoinedGame(gameId, timestamp, playerId) + ::playHandAndEvaluateGameRules.partial(cmd)
 
             }
-            is Ongoing -> {
+            is BothPlayersJoined -> {
                 if (eventRecorder.isRoundOngoing()) {
                     eventRecorder
                 } else {
@@ -75,19 +76,19 @@ private object GameLogic {
     private fun startNewRound(timestamp: Timestamp, eventRecorder: EventRecorder): EventRecorder {
         val state = eventRecorder.currentState
         val currentRoundNumber = state.currentRoundNumber()
-        val newEvent = if (currentRoundNumber.value < state.maxNumberOfRounds.value) {
-            RoundStarted(state.gameId, timestamp, currentRoundNumber.next())
-        } else {
-            throw IllegalStateException("Cannot start round since it would exceed ${state.maxNumberOfRounds.value}")
+        val newEvent = when {
+            currentRoundNumber == null -> RoundStarted(state.gameId, timestamp, RoundNumber(1))
+            currentRoundNumber.value < state.maxNumberOfRounds.value -> RoundStarted(state.gameId, timestamp, currentRoundNumber.next())
+            else -> throw IllegalStateException("Cannot start round since it would exceed ${state.maxNumberOfRounds.value}")
         }
         return eventRecorder + newEvent
     }
 
-    private fun playHandAndEvaluateGameRules(cmd: PlayHandCommand, eventRecorder: EventRecorder): EventRecorder {
+    private fun playHandAndEvaluateGameRules(cmd: PlayHand, eventRecorder: EventRecorder): EventRecorder {
         val state = eventRecorder.currentState
         val (timestamp, playerId, shapeOfHand) = cmd
         val gameId = state.gameId
-        val roundNumber = state.currentRoundNumber()
+        val roundNumber = state.currentRoundNumber() ?: throw IllegalStateException("Cannot play when round is not started")
         val stateChangeAfterHandPlayed = eventRecorder + HandPlayed(gameId, timestamp, playerId, shapeOfHand, roundNumber)
 
         return when (val currentRound = stateChangeAfterHandPlayed.currentRound) {
@@ -118,7 +119,7 @@ private object GameLogic {
     }
 
     private fun determineGameOutcome(eventRecorder: EventRecorder): PlayerId? = when (val state = eventRecorder.currentState) {
-        is Ongoing -> {
+        is BothPlayersJoined -> {
             val numberOfWinsPerPlayer = state.rounds
                 .groupBy { round -> (round as? Round.Won)?.winner }
                 .mapValues { (_, wonRounds) -> wonRounds.size }
@@ -138,13 +139,15 @@ private object GameLogic {
 
     private val EventRecorder.currentRound: Round
         get() = when (val state = currentState) {
-            is Ongoing -> state.rounds.last()
-            else -> throw IllegalStateException("There's no current round")
+            is Started -> state.round
+            is FirstPlayerJoined -> state.round
+            is BothPlayersJoined -> state.rounds.last()
+            else -> throw IllegalStateException("No round is started")
         }
 
     private fun EventRecorder.isLastMoveInGame(): Boolean {
         val state = currentState
-        return state is Ongoing && state.rounds.size == state.maxNumberOfRounds.value && currentRound is Round.Ended
+        return state is BothPlayersJoined && state.rounds.size == state.maxNumberOfRounds.value && currentRound is Round.Ended
     }
 
     private fun EventRecorder.isRoundOngoing(): Boolean = when (currentRound) {
@@ -154,10 +157,12 @@ private object GameLogic {
         is Round.WaitingForSecondHand -> true
     }
 
-    private fun CurrentGameState.currentRoundNumber() = when (this) {
-        is Ongoing -> rounds.last().roundNumber
-        is WaitingForSecondPlayer -> round.roundNumber
-        else -> throw IllegalStateException("Cannot get round number in ${this::class.simpleName}")
+    private fun CurrentGameState.currentRoundNumber(): RoundNumber? = when (this) {
+        is Created -> null
+        is Started -> round.roundNumber
+        is FirstPlayerJoined -> round.roundNumber
+        is BothPlayersJoined -> rounds.last().roundNumber
+        is Ended -> throw IllegalStateException("Cannot get round number when game is in state ${this::class.simpleName}")
     }
 
     private fun RoundNumber.next() = RoundNumber(value.inc())
@@ -199,9 +204,10 @@ private sealed interface CurrentGameState {
     val gameId: GameId
     val maxNumberOfRounds: MaxNumberOfRounds
 
-    data class WaitingForFirstPlayer(override val gameId: GameId, override val maxNumberOfRounds: MaxNumberOfRounds) : CurrentGameState
-    data class WaitingForSecondPlayer(override val gameId: GameId, override val maxNumberOfRounds: MaxNumberOfRounds, val firstPlayer: PlayerId, val round: Round) : CurrentGameState
-    data class Ongoing(override val gameId: GameId, override val maxNumberOfRounds: MaxNumberOfRounds, val firstPlayer: PlayerId, val secondPlayer: PlayerId, val rounds: PersistentList<Round> = persistentListOf()) : CurrentGameState
+    data class Created(override val gameId: GameId, override val maxNumberOfRounds: MaxNumberOfRounds) : CurrentGameState
+    data class Started(override val gameId: GameId, override val maxNumberOfRounds: MaxNumberOfRounds, val round: Round) : CurrentGameState
+    data class FirstPlayerJoined(override val gameId: GameId, override val maxNumberOfRounds: MaxNumberOfRounds, val firstPlayer: PlayerId, val round: Round) : CurrentGameState
+    data class BothPlayersJoined(override val gameId: GameId, override val maxNumberOfRounds: MaxNumberOfRounds, val firstPlayer: PlayerId, val secondPlayer: PlayerId, val rounds: PersistentList<Round> = persistentListOf()) : CurrentGameState
     data class Ended(override val gameId: GameId, override val maxNumberOfRounds: MaxNumberOfRounds) : CurrentGameState
 }
 
@@ -219,9 +225,10 @@ private sealed interface Round {
 private object StateTranslation {
 
     fun EvolvedState.translateToDomain(): CurrentGameState = when (state) {
-        EvolvedGameState.WaitingForFirstPlayer -> WaitingForFirstPlayer(gameId, maxNumberOfRounds)
-        EvolvedGameState.WaitingForSecondPlayer -> WaitingForSecondPlayer(gameId, maxNumberOfRounds, firstPlayer!!, rounds[0].toDomain())
-        EvolvedGameState.Ongoing -> Ongoing(gameId, maxNumberOfRounds, firstPlayer!!, secondPlayer!!, rounds.map { round ->
+        EvolvedGameState.Created -> Created(gameId, maxNumberOfRounds)
+        EvolvedGameState.Started -> Started(gameId, maxNumberOfRounds, rounds.first().toDomain())
+        EvolvedGameState.FirstPlayerJoined -> FirstPlayerJoined(gameId, maxNumberOfRounds, firstPlayer!!, rounds.first().toDomain())
+        EvolvedGameState.BothPlayersJoined -> BothPlayersJoined(gameId, maxNumberOfRounds, firstPlayer!!, secondPlayer!!, rounds.map { round ->
             round.toDomain()
         }.toPersistentList())
         EvolvedGameState.Ended -> Ended(gameId, maxNumberOfRounds)
@@ -252,17 +259,17 @@ private object StateEvolution {
 
     // Internal models
     enum class EvolvedGameState {
-        WaitingForFirstPlayer, WaitingForSecondPlayer, Ongoing, Ended
+        Created, Started, FirstPlayerJoined, BothPlayersJoined, Ended
     }
 
 
     fun Sequence<GameEvent>.evolve(currentState: EvolvedState? = null): EvolvedState? = fold(currentState, ::evolve)
 
     fun evolve(currentState: EvolvedState?, e: GameEvent) = when (e) {
-        is GameCreated -> EvolvedState(gameId = e.game, state = EvolvedGameState.WaitingForFirstPlayer, maxNumberOfRounds = e.maxNumberOfRounds)
-        is FirstPlayerJoinedGame -> currentState!!.copy(state = EvolvedGameState.WaitingForSecondPlayer, firstPlayer = e.player)
-        is SecondPlayerJoinedGame -> currentState!!.copy(secondPlayer = e.player)
-        is GameStarted -> currentState!!.copy(state = EvolvedGameState.Ongoing)
+        is GameCreated -> EvolvedState(gameId = e.game, state = EvolvedGameState.Created, maxNumberOfRounds = e.maxNumberOfRounds)
+        is GameStarted -> currentState!!.copy(state = EvolvedGameState.Started)
+        is FirstPlayerJoinedGame -> currentState!!.copy(state = EvolvedGameState.FirstPlayerJoined, firstPlayer = e.player)
+        is SecondPlayerJoinedGame -> currentState!!.copy(state = EvolvedGameState.BothPlayersJoined, secondPlayer = e.player)
         is RoundStarted -> currentState!!.copy(rounds = currentState.rounds.add(EvolvedRound(WaitingForFirstHand, e.roundNumber)))
         is HandPlayed -> currentState!!.updateRound(e.roundNumber) {
             copy(

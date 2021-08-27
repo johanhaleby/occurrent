@@ -22,16 +22,33 @@ import java.time.ZonedDateTime
 import java.util.*
 
 @JvmInline
-value class PlayerId(val value: UUID)
+value class PlayerId(val value: UUID) {
+    companion object {
+        fun random() = PlayerId(UUID.randomUUID())
+    }
+}
 
 @JvmInline
-value class GameId(val value: UUID)
+value class GameId(val value: UUID) {
+    companion object {
+        fun random() = GameId(UUID.randomUUID())
+    }
+}
 
 @JvmInline
-value class GameCreatorId(val value: UUID)
+value class GameCreatorId(val value: UUID) {
+    companion object {
+        fun random() = GameCreatorId(UUID.randomUUID())
+    }
+}
+
 
 @JvmInline
-value class Timestamp(val value: ZonedDateTime)
+value class Timestamp(val value: ZonedDateTime) {
+    companion object {
+        fun now() = Timestamp(ZonedDateTime.now())
+    }
+}
 
 enum class Shape {
     ROCK, PAPER, SCISSORS
@@ -69,8 +86,8 @@ value class RoundNumber private constructor(val value: Int) {
 
 // Commands
 sealed interface Command
-data class CreateGameCommand(val gameId: GameId, val timestamp: Timestamp, val creator: GameCreatorId, val maxNumberOfRounds: MaxNumberOfRounds) : Command
-data class PlayHandCommand(val timestamp: Timestamp, val playerId: PlayerId, val shape: Shape) : Command
+data class CreateGame(val gameId: GameId, val timestamp: Timestamp, val creator: GameCreatorId, val maxNumberOfRounds: MaxNumberOfRounds) : Command
+data class PlayHand(val timestamp: Timestamp, val playerId: PlayerId, val shape: Shape) : Command
 
 class GameCannotBeCreatedMoreThanOnce : IllegalArgumentException()
 class GameDoesNotExist : IllegalArgumentException()

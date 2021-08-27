@@ -25,7 +25,6 @@ import org.junit.jupiter.params.ParameterizedTest
 import org.junit.jupiter.params.ParameterizedTest.ARGUMENTS_PLACEHOLDER
 import org.junit.jupiter.params.provider.ValueSource
 
-
 @DisplayName("NumberOfRounds")
 class MaxNumberOfRoundsTest {
 
