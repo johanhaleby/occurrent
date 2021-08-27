@@ -450,8 +450,8 @@ class GamePlayTest {
                             CreateGame(gameId, Timestamp.now(), GameCreatorId.random(), MaxNumberOfRounds(3)),
                             PlayHand(Timestamp.now(), firstPlayerId, Shape.PAPER),
                             PlayHand(Timestamp.now(), secondPlayerId, Shape.ROCK),
-                            PlayHand(Timestamp.now(), firstPlayerId, Shape.PAPER),
-                            PlayHand(Timestamp.now(), secondPlayerId, Shape.ROCK),
+                            PlayHand(Timestamp.now(), firstPlayerId, Shape.ROCK),
+                            PlayHand(Timestamp.now(), secondPlayerId, Shape.PAPER),
                             PlayHand(Timestamp.now(), secondPlayerId, Shape.SCISSORS)
                         )
                         val timestamp = Timestamp.now()
@@ -464,7 +464,7 @@ class GamePlayTest {
                     }
 
                     @Test
-                    fun `then game is won when a player wins the majority of the rounds`() {
+                    fun `then game is won when first player wins the majority of the rounds`() {
                         // Given
                         val currentEvents = composeEvents(
                             CreateGame(gameId, Timestamp.now(), GameCreatorId.random(), MaxNumberOfRounds(3)),
@@ -480,6 +480,25 @@ class GamePlayTest {
 
                         // Then
                         assertThat(newEvents).contains(GameEnded(gameId, timestamp), GameWon(gameId, timestamp, firstPlayerId))
+                    }
+
+                    @Test
+                    fun `then game is won when second player wins the majority of the rounds`() {
+                        // Given
+                        val currentEvents = composeEvents(
+                            CreateGame(gameId, Timestamp.now(), GameCreatorId.random(), MaxNumberOfRounds(3)),
+                            PlayHand(Timestamp.now(), firstPlayerId, Shape.PAPER),
+                            PlayHand(Timestamp.now(), secondPlayerId, Shape.SCISSORS),
+                            PlayHand(Timestamp.now(), firstPlayerId, Shape.SCISSORS),
+                        )
+
+                        val timestamp = Timestamp.now()
+
+                        // When
+                        val newEvents = handle(currentEvents, PlayHand(timestamp, secondPlayerId, Shape.ROCK))
+
+                        // Then
+                        assertThat(newEvents).contains(GameEnded(gameId, timestamp), GameWon(gameId, timestamp, secondPlayerId))
                     }
                 }
 

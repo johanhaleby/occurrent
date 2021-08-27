@@ -117,20 +117,27 @@ private object GameLogic {
                 }
 
                 val stateChangeAfterRoundEnded = stateChangeAfterHandPlayed + listOf(roundOutcomeEvent, RoundEnded(gameId, timestamp, roundNumber))
-                // TODO Game should end if any player can't win! Not all rounds needs to be played!
-                if (stateChangeAfterRoundEnded.isLastMoveInGame()) {
-                    val winnerId = determineGameOutcome(stateChangeAfterRoundEnded)
-                    stateChangeAfterRoundEnded + (if (winnerId == null) GameTied(gameId, timestamp) else GameWon(gameId, timestamp, winnerId)) + GameEnded(gameId, timestamp)
-                } else {
-                    stateChangeAfterRoundEnded
+                when (val status = determineGameStatus(stateChangeAfterRoundEnded)) {
+                    GameStatus.NotEnded -> stateChangeAfterRoundEnded
+                    GameStatus.Tied -> stateChangeAfterRoundEnded + GameTied(gameId, timestamp) + GameEnded(gameId, timestamp)
+                    is GameStatus.Won -> stateChangeAfterRoundEnded + GameWon(gameId, timestamp, status.winner) + GameEnded(gameId, timestamp)
                 }
             }
             else -> throw IllegalStateException("Cannot play round when round is in state ${currentRound::class.simpleName}")
         }
     }
 
-    private fun determineGameOutcome(eventRecorder: EventRecorder): PlayerId? = when (val state = eventRecorder.currentState) {
+    private sealed interface GameStatus {
+        data class Won(val winner: PlayerId) : GameStatus
+        object Tied : GameStatus
+        object NotEnded : GameStatus
+    }
+
+    private fun determineGameStatus(eventRecorder: EventRecorder): GameStatus = when (val state = eventRecorder.currentState) {
         is BothPlayersJoined -> {
+            val maxNumberOfRounds = state.maxNumberOfRounds.value
+            val roundNumber = state.currentRound()!!.roundNumber.value
+
             val numberOfWinsPerPlayer = state.rounds
                 .groupBy { round -> (round as? Round.Won)?.winner }
                 .mapValues { (_, wonRounds) -> wonRounds.size }
@@ -138,12 +145,20 @@ private object GameLogic {
             val numberOfWinsForPlayer1 = numberOfWinsPerPlayer[state.firstPlayer] ?: 0
             val numberOfWinsForPlayer2 = numberOfWinsPerPlayer[state.secondPlayer] ?: 0
 
-            val winnerId = when {
-                numberOfWinsForPlayer1 > numberOfWinsForPlayer2 -> state.firstPlayer
-                numberOfWinsForPlayer2 > numberOfWinsForPlayer1 -> state.secondPlayer
-                else -> null
+            if (maxNumberOfRounds == roundNumber) {
+                when {
+                    numberOfWinsForPlayer1 > numberOfWinsForPlayer2 -> GameStatus.Won(state.firstPlayer)
+                    numberOfWinsForPlayer2 > numberOfWinsForPlayer1 -> GameStatus.Won(state.secondPlayer)
+                    else -> GameStatus.Tied
+                }
+            } else {
+                val numberOfRoundsRequiredForMajorityWin = (maxNumberOfRounds / 2).inc()
+                when {
+                    numberOfWinsForPlayer1 == numberOfRoundsRequiredForMajorityWin -> GameStatus.Won(state.firstPlayer)
+                    numberOfWinsForPlayer2 == numberOfRoundsRequiredForMajorityWin -> GameStatus.Won(state.secondPlayer)
+                    else -> GameStatus.NotEnded
+                }
             }
-            winnerId
         }
         else -> throw IllegalStateException("Cannot determine game outcome when game is in state ${state::class.simpleName}")
     }
@@ -155,11 +170,6 @@ private object GameLogic {
             is BothPlayersJoined -> state.rounds.last()
             else -> throw IllegalStateException("No round is started")
         }
-
-    private fun EventRecorder.isLastMoveInGame(): Boolean {
-        val state = currentState
-        return state is BothPlayersJoined && state.rounds.size == state.maxNumberOfRounds.value && currentRound is Round.Ended
-    }
 
     private fun EventRecorder.isRoundOngoing(): Boolean = when (currentRound) {
         is Round.Tied -> false
