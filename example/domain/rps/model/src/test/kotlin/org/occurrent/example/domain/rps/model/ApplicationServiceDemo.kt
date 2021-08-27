@@ -169,7 +169,7 @@ private fun ApplicationService<GameEvent>.execute(gameId: GameId, firstCommand: 
 }
 
 class SimpleCloudEventConverter : CloudEventConverter<GameEvent> {
-    private val xstream = XStream().apply { allowTypesByWildcard(arrayOf("org.occurrent.**")) }
+    private val xstream = XStream().apply { allowTypesByWildcard(arrayOf(GameEvent::class.java.packageName + ".**")) }
 
     override fun toCloudEvent(e: GameEvent): CloudEvent = CloudEventBuilder.v1()
         .withId(UUID.randomUUID().toString())
