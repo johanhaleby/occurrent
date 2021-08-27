@@ -17,9 +17,7 @@
 
 package org.occurrent.example.domain.rps.model
 
-import com.fasterxml.jackson.databind.ObjectMapper
-import com.fasterxml.jackson.module.kotlin.jacksonObjectMapper
-import com.fasterxml.jackson.module.kotlin.readValue
+import com.thoughtworks.xstream.XStream
 import io.cloudevents.CloudEvent
 import io.cloudevents.core.builder.CloudEventBuilder
 import org.assertj.core.api.Assertions.assertThat
@@ -43,7 +41,7 @@ class ApplicationServiceDemo {
     fun `simple cloud event converter and single command`() {
         // Given
         val inMemoryEventStore = InMemoryEventStore()
-        val cloudEventConvert = SimpleCloudEventConverter(jacksonObjectMapper())
+        val cloudEventConvert = SimpleCloudEventConverter()
         val applicationService = GenericApplicationService(inMemoryEventStore, cloudEventConvert)
 
         val gameId = GameId.random()
@@ -62,7 +60,7 @@ class ApplicationServiceDemo {
     fun `simple cloud event converter and composed commands`() {
         // Given
         val inMemoryEventStore = InMemoryEventStore()
-        val cloudEventConvert = SimpleCloudEventConverter(jacksonObjectMapper())
+        val cloudEventConvert = SimpleCloudEventConverter()
         val applicationService = GenericApplicationService(inMemoryEventStore, cloudEventConvert)
 
         val gameId = GameId.random()
@@ -91,7 +89,7 @@ class ApplicationServiceDemo {
     fun `simple cloud event converter and composed commands with partial function application`() {
         // Given
         val inMemoryEventStore = InMemoryEventStore()
-        val cloudEventConvert = SimpleCloudEventConverter(jacksonObjectMapper())
+        val cloudEventConvert = SimpleCloudEventConverter()
         val applicationService = GenericApplicationService(inMemoryEventStore, cloudEventConvert)
 
         val gameId = GameId.random()
@@ -117,7 +115,7 @@ class ApplicationServiceDemo {
     fun `simple cloud event converter and composed commands with partial function application using infix`() {
         // Given
         val inMemoryEventStore = InMemoryEventStore()
-        val cloudEventConvert = SimpleCloudEventConverter(jacksonObjectMapper())
+        val cloudEventConvert = SimpleCloudEventConverter()
         val applicationService = GenericApplicationService(inMemoryEventStore, cloudEventConvert)
 
         val gameId = GameId.random()
@@ -141,7 +139,7 @@ class ApplicationServiceDemo {
     fun `simple cloud event converter and composed commands with partial function application using custom extension function`() {
         // Given
         val inMemoryEventStore = InMemoryEventStore()
-        val cloudEventConvert = SimpleCloudEventConverter(jacksonObjectMapper())
+        val cloudEventConvert = SimpleCloudEventConverter()
         val applicationService = GenericApplicationService(inMemoryEventStore, cloudEventConvert)
 
         val gameId = GameId.random()
@@ -166,18 +164,22 @@ private fun ApplicationService<GameEvent>.execute(gameId: GameId, firstCommand: 
     val functionsToInvoke = sequenceOf(firstCommand, *additionalCommands).map { cmd ->
         ::handle.partial(cmd)
     }
+
     return execute(gameId.value, composeCommands(functionsToInvoke))
 }
 
-class SimpleCloudEventConverter(private val objectMapper: ObjectMapper) : CloudEventConverter<GameEvent> {
+class SimpleCloudEventConverter : CloudEventConverter<GameEvent> {
+    private val xstream = XStream().apply { allowTypesByWildcard(arrayOf("org.occurrent.**")) }
+
     override fun toCloudEvent(e: GameEvent): CloudEvent = CloudEventBuilder.v1()
         .withId(UUID.randomUUID().toString())
         .withSource(URI.create("urn:rockpaperscissors:gameplay"))
         .withType(e::class.qualifiedName)
         .withTime(OffsetDateTime.ofInstant(e.timestamp.value.toInstant(), e.timestamp.value.zone))
-        .withDataContentType("application/json")
-        .withData(objectMapper.writeValueAsBytes(e))
+        .withDataContentType("application/xml")
+        .withData(xstream.toXML(e).toByteArray())
         .build()
 
-    override fun toDomainEvent(cloudEvent: CloudEvent): GameEvent = objectMapper.readValue(cloudEvent.data!!.toBytes())
+    override fun toDomainEvent(cloudEvent: CloudEvent): GameEvent =
+        xstream.fromXML(String(cloudEvent.data!!.toBytes())) as GameEvent
 }
