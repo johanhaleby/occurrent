@@ -41,7 +41,7 @@ class ViewDemo {
         val applicationService = GenericApplicationService(inMemoryEventStore, cloudEventConverter)
 
         val numberOfStartedGames = AtomicInteger()
-        subscriptions(subscriptionModel, cloudEventConverter, { c -> c.qualifiedName!! }) {
+        subscriptions(subscriptionModel, cloudEventConverter) {
             subscribe<GameCreated> {
                 numberOfStartedGames.incrementAndGet()
             }
