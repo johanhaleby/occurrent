@@ -174,7 +174,7 @@ class SimpleCloudEventConverter : CloudEventConverter<GameEvent> {
     override fun toCloudEvent(e: GameEvent): CloudEvent = CloudEventBuilder.v1()
         .withId(UUID.randomUUID().toString())
         .withSource(URI.create("urn:rockpaperscissors:gameplay"))
-        .withType(e::class.qualifiedName)
+        .withType(e::class.simpleName)
         .withTime(OffsetDateTime.ofInstant(e.timestamp.value.toInstant(), e.timestamp.value.zone))
         .withDataContentType("application/xml")
         .withData(xstream.toXML(e).toByteArray())
