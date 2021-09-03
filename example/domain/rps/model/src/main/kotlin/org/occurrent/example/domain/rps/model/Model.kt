@@ -58,12 +58,9 @@ enum class Shape {
 value class MaxNumberOfRounds private constructor(val value: Int) {
 
     companion object {
-        operator fun invoke(value: Int): MaxNumberOfRounds {
-            require(value in 1..5 && value % 2 == 1) {
-                "Number of rounds can only be 1, 3 or 5"
-            }
-            return MaxNumberOfRounds(value)
-        }
+        val ONE = MaxNumberOfRounds(1)
+        val THREE = MaxNumberOfRounds(3)
+        val FIVE = MaxNumberOfRounds(5)
 
         internal fun unsafe(value: Int) = MaxNumberOfRounds(value)
     }
