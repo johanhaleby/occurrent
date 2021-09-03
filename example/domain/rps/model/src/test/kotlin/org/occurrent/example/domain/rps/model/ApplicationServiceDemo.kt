@@ -48,7 +48,7 @@ class ApplicationServiceDemo {
 
         // When
         applicationService.execute(gameId.value) { events: Sequence<GameEvent> ->
-            handle(events, CreateGame(gameId, Timestamp.now(), GameCreatorId.random(), MaxNumberOfRounds(1)))
+            handle(events, CreateGame(gameId, Timestamp.now(), GameCreatorId.random(), MaxNumberOfRounds.ONE))
         }
 
         // Then
@@ -70,7 +70,7 @@ class ApplicationServiceDemo {
             gameId.value,
             composeCommands(
                 { events: Sequence<GameEvent> ->
-                    handle(events, CreateGame(gameId, Timestamp.now(), GameCreatorId.random(), MaxNumberOfRounds(1)))
+                    handle(events, CreateGame(gameId, Timestamp.now(), GameCreatorId.random(), MaxNumberOfRounds.ONE))
                 },
                 { events ->
                     handle(events, PlayHand(Timestamp.now(), PlayerId.random(), Shape.ROCK))
@@ -98,7 +98,7 @@ class ApplicationServiceDemo {
         applicationService.execute(
             gameId.value,
             composeCommands(
-                ::handle.partial(CreateGame(gameId, Timestamp.now(), GameCreatorId.random(), MaxNumberOfRounds(1))),
+                ::handle.partial(CreateGame(gameId, Timestamp.now(), GameCreatorId.random(), MaxNumberOfRounds.ONE)),
                 ::handle.partial(PlayHand(Timestamp.now(), PlayerId.random(), Shape.ROCK))
             )
         )
@@ -123,7 +123,7 @@ class ApplicationServiceDemo {
         // When
         applicationService.execute(
             gameId.value,
-            ::handle.partial(CreateGame(gameId, Timestamp.now(), GameCreatorId.random(), MaxNumberOfRounds(1))) andThen
+            ::handle.partial(CreateGame(gameId, Timestamp.now(), GameCreatorId.random(), MaxNumberOfRounds.ONE)) andThen
                     ::handle.partial(PlayHand(Timestamp.now(), PlayerId.random(), Shape.ROCK))
         )
 
@@ -147,7 +147,7 @@ class ApplicationServiceDemo {
         // When
         applicationService.execute(
             gameId,
-            CreateGame(gameId, Timestamp.now(), GameCreatorId.random(), MaxNumberOfRounds(1)),
+            CreateGame(gameId, Timestamp.now(), GameCreatorId.random(), MaxNumberOfRounds.ONE),
             PlayHand(Timestamp.now(), PlayerId.random(), Shape.ROCK)
         )
 

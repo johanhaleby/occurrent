@@ -51,11 +51,11 @@ class ViewDemo {
         val gameId1 = GameId.random()
         val gameId2 = GameId.random()
         applicationService.execute(gameId1.value) { events: Sequence<GameEvent> ->
-            handle(events, CreateGame(gameId1, Timestamp.now(), GameCreatorId.random(), MaxNumberOfRounds(1)))
+            handle(events, CreateGame(gameId1, Timestamp.now(), GameCreatorId.random(), MaxNumberOfRounds.ONE))
         }
 
         applicationService.execute(gameId2.value) { events: Sequence<GameEvent> ->
-            handle(events, CreateGame(gameId2, Timestamp.now(), GameCreatorId.random(), MaxNumberOfRounds(3)))
+            handle(events, CreateGame(gameId2, Timestamp.now(), GameCreatorId.random(), MaxNumberOfRounds.THREE))
         }
 
         // Then
