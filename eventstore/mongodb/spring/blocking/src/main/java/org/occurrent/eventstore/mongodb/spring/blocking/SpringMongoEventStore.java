@@ -21,6 +21,7 @@ import com.mongodb.client.MongoCollection;
 import com.mongodb.client.model.IndexOptions;
 import com.mongodb.client.model.Indexes;
 import io.cloudevents.CloudEvent;
+import io.cloudevents.core.v1.CloudEventV1;
 import org.bson.Document;
 import org.occurrent.cloudevents.OccurrentCloudEventExtension;
 import org.occurrent.cloudevents.OccurrentExtensionGetter;
@@ -325,7 +326,7 @@ public class SpringMongoEventStore implements EventStore, EventStoreOperations, 
         }
         MongoCollection<Document> eventStoreCollection = mongoTemplate.getCollection(eventStoreCollectionName);
         // Cloud spec defines id + source must be unique!
-        eventStoreCollection.createIndex(Indexes.compoundIndex(Indexes.ascending("id"), Indexes.ascending("source")), new IndexOptions().unique(true));
+        eventStoreCollection.createIndex(Indexes.compoundIndex(Indexes.ascending(CloudEventV1.ID), Indexes.ascending(CloudEventV1.SOURCE)), new IndexOptions().unique(true));
         // Create a streamId + streamVersion ascending index (note that we don't need to index stream id separately since it's covered by this compound index)
         // Note also that this index supports when sorting both ascending and descending since MongoDB can traverse an index in both directions.
         eventStoreCollection.createIndex(Indexes.compoundIndex(Indexes.ascending(STREAM_ID), Indexes.ascending(STREAM_VERSION)), new IndexOptions().unique(true));
