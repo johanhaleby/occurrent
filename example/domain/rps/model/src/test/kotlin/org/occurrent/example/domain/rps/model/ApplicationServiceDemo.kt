@@ -17,9 +17,14 @@
 
 package org.occurrent.example.domain.rps.model
 
+import com.fasterxml.jackson.databind.ObjectMapper
+import com.fasterxml.jackson.module.kotlin.jacksonObjectMapper
+import com.fasterxml.jackson.module.kotlin.readValue
 import com.thoughtworks.xstream.XStream
 import io.cloudevents.CloudEvent
+import io.cloudevents.CloudEventData
 import io.cloudevents.core.builder.CloudEventBuilder
+import io.cloudevents.core.data.PojoCloudEventData
 import org.assertj.core.api.Assertions.assertThat
 import org.junit.jupiter.api.Test
 import org.occurrent.application.composition.command.andThen
@@ -158,6 +163,30 @@ class ApplicationServiceDemo {
                 FirstPlayerJoinedGame::class.qualifiedName, HandPlayed::class.qualifiedName
             )
     }
+
+    @Test
+    fun `production cloud event converter and composed commands with partial function application using custom extension function`() {
+        // Given
+        val inMemoryEventStore = InMemoryEventStore()
+        val cloudEventConvert = ProductionCloudEventConverter(jacksonObjectMapper())
+        val applicationService = GenericApplicationService(inMemoryEventStore, cloudEventConvert)
+
+        val gameId = GameId.random()
+
+        // When
+        applicationService.execute(
+            gameId,
+            CreateGame(gameId, Timestamp.now(), GameCreatorId.random(), MaxNumberOfRounds.ONE),
+            PlayHand(Timestamp.now(), PlayerId.random(), Shape.ROCK)
+        )
+
+        // Then
+        assertThat(inMemoryEventStore.read(gameId.value.toString()).map(CloudEvent::getType))
+            .containsOnly(
+                GameCreated::class.qualifiedName, RoundStarted::class.qualifiedName, GameStarted::class.qualifiedName,
+                FirstPlayerJoinedGame::class.qualifiedName, HandPlayed::class.qualifiedName
+            )
+    }
 }
 
 private fun ApplicationService<GameEvent>.execute(gameId: GameId, firstCommand: Command, vararg additionalCommands: Command): WriteResult {
@@ -173,8 +202,8 @@ class SimpleCloudEventConverter : CloudEventConverter<GameEvent> {
 
     override fun toCloudEvent(e: GameEvent): CloudEvent = CloudEventBuilder.v1()
         .withId(UUID.randomUUID().toString())
-        .withSource(URI.create("urn:rockpaperscissors:gameplay"))
-        .withType(e::class.simpleName)
+        .withSource(URI.create("urn:rockpaperscissors:game"))
+        .withType(e::class.qualifiedName)
         .withTime(OffsetDateTime.ofInstant(e.timestamp.value.toInstant(), e.timestamp.value.zone))
         .withDataContentType("application/xml")
         .withData(xstream.toXML(e).toByteArray())
@@ -182,4 +211,67 @@ class SimpleCloudEventConverter : CloudEventConverter<GameEvent> {
 
     override fun toDomainEvent(cloudEvent: CloudEvent): GameEvent =
         xstream.fromXML(String(cloudEvent.data!!.toBytes())) as GameEvent
+}
+
+class ProductionCloudEventConverter(private val objectMapper: ObjectMapper) : CloudEventConverter<GameEvent> {
+
+    override fun toCloudEvent(e: GameEvent): CloudEvent {
+        val data = when (e) {
+            is FirstPlayerJoinedGame -> mapOf("player" to e.player.value.toString())
+            is GameCreated -> mapOf("createdBy" to e.createdBy.value.toString(), "maxNumberOfRounds" to e.maxNumberOfRounds.value)
+            is GameEnded -> null
+            is GameStarted -> null
+            is GameTied -> null
+            is GameWon -> mapOf("winner" to e.winner.value.toString())
+            is HandPlayed -> mapOf("player" to e.player.value.toString(), "shape" to e.shape.name, "roundNumber" to e.roundNumber.value)
+            is RoundEnded -> mapOf("roundNumber" to e.roundNumber.value)
+            is RoundStarted -> mapOf("roundNumber" to e.roundNumber.value)
+            is RoundTied -> mapOf("roundNumber" to e.roundNumber.value)
+            is RoundWon -> mapOf("winner" to e.winner.value.toString(), "roundNumber" to e.roundNumber.value)
+            is SecondPlayerJoinedGame -> mapOf("player" to e.player.value.toString())
+        }
+
+        return CloudEventBuilder.v1()
+            .withId(UUID.randomUUID().toString())
+            .withSubject(e.game.value.toString())
+            .withSource(URI.create("urn:rockpaperscissors:game"))
+            .withType(e::class.qualifiedName)
+            .withTime(OffsetDateTime.ofInstant(e.timestamp.value.toInstant(), e.timestamp.value.zone))
+            .withDataContentType("application/xml")
+            .withData(if (data == null) null else PojoCloudEventData.wrap(data, objectMapper::writeValueAsBytes))
+            .build()
+    }
+
+    override fun toDomainEvent(cloudEvent: CloudEvent): GameEvent {
+        val gameId = GameId(UUID.fromString(cloudEvent.subject))
+        val timestamp = Timestamp(cloudEvent.time!!.toZonedDateTime())
+        val data = cloudEvent.data
+        return when (cloudEvent.type) {
+            FirstPlayerJoinedGame::class.simpleName -> FirstPlayerJoinedGame(gameId, timestamp, PlayerId(data["player"]))
+            GameCreated::class.simpleName -> GameCreated(gameId, timestamp, GameCreatorId(data["createdBy"]), MaxNumberOfRounds.unsafe(data["maxNumberOfRounds"]))
+            GameEnded::class.simpleName -> GameEnded(gameId, timestamp)
+            GameStarted::class.simpleName -> GameStarted(gameId, timestamp)
+            GameTied::class.simpleName -> GameTied(gameId, timestamp)
+            GameWon::class.simpleName -> GameWon(gameId, timestamp, PlayerId(data["winner"]))
+            HandPlayed::class.simpleName -> HandPlayed(gameId, timestamp, PlayerId(data["player"]), Shape.valueOf(data["shape"]), RoundNumber.unsafe(data["roundNumber"]))
+            RoundEnded::class.simpleName -> RoundEnded(gameId, timestamp, RoundNumber.unsafe(data["roundNumber"]))
+            RoundStarted::class.simpleName -> RoundStarted(gameId, timestamp, RoundNumber.unsafe(data["roundNumber"]))
+            RoundTied::class.simpleName -> RoundTied(gameId, timestamp, RoundNumber.unsafe(data["roundNumber"]))
+            RoundWon::class.simpleName -> RoundWon(gameId, timestamp, RoundNumber.unsafe(data["roundNumber"]), PlayerId(data["winner"]))
+            SecondPlayerJoinedGame::class.simpleName -> SecondPlayerJoinedGame(gameId, timestamp, PlayerId(data["playerId"]))
+            else -> throw IllegalStateException("Event type ${cloudEvent.type} is unknown")
+        }
+    }
+
+    private inline operator fun <reified T> CloudEventData?.get(propertyName: String): T {
+        val pojoCloudEventData = this as PojoCloudEventData<*>
+        val value = when (val value = pojoCloudEventData.value) {
+            is Map<*, *> -> value[propertyName]
+            else -> objectMapper.readValue<Map<String, Any>>(pojoCloudEventData.toBytes())[propertyName]
+        }
+        return when {
+            UUID::class == T::class && value is String -> UUID.fromString(value)
+            else -> value
+        } as T
+    }
 }
