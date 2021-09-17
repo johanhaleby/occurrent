@@ -117,10 +117,10 @@ private object GameLogic {
                 }
 
                 val changesAfterRoundEnded = changesAfterHandPlayed + listOf(roundOutcomeEvent, RoundEnded(gameId, timestamp, roundNumber))
-                when (val status = determineGameStatus(changesAfterRoundEnded)) {
-                    GameStatus.NotEnded -> changesAfterRoundEnded
-                    GameStatus.Tied -> changesAfterRoundEnded + GameTied(gameId, timestamp) + GameEnded(gameId, timestamp)
-                    is GameStatus.Won -> changesAfterRoundEnded + GameWon(gameId, timestamp, status.winner) + GameEnded(gameId, timestamp)
+                changesAfterRoundEnded + when (val status = determineGameStatus(changesAfterRoundEnded)) {
+                    GameStatus.NotEnded -> emptyList()
+                    GameStatus.Tied -> listOf(GameTied(gameId, timestamp), GameEnded(gameId, timestamp))
+                    is GameStatus.Won -> listOf(GameWon(gameId, timestamp, status.winner), GameEnded(gameId, timestamp))
                 }
             }
             else -> throw IllegalStateException("Cannot play round when round is in state ${currentRound::class.simpleName}")
@@ -256,8 +256,11 @@ private object StateTranslation {
     }
 
     private fun EvolvedRound.toDomain() = when (state) {
-        WaitingForFirstHand -> Round.WaitingForFirstHand(roundNumber)
-        WaitingForSecondHand -> Round.WaitingForSecondHand(roundNumber, hands[0])
+        Ongoing -> when (hands.size) {
+            0 -> Round.WaitingForFirstHand(roundNumber)
+            1 -> Round.WaitingForSecondHand(roundNumber, hands[0])
+            else -> throw IllegalStateException("Cannot play more than two hands in a round")
+        }
         Tied -> Round.Tied(roundNumber, hands[0], hands[1])
         Won -> Round.Won(roundNumber, hands[0], hands[1], winner!!)
     }
@@ -274,7 +277,7 @@ private object StateEvolution {
 
     data class EvolvedRound(val state: RoundState, val roundNumber: RoundNumber, val hands: PersistentList<Hand> = persistentListOf(), val winner: PlayerId? = null) {
         enum class RoundState {
-            WaitingForFirstHand, WaitingForSecondHand, Tied, Won
+            Ongoing, Tied, Won
         }
     }
 
@@ -291,12 +294,9 @@ private object StateEvolution {
         is GameStarted -> currentState!!.copy(state = EvolvedGameState.Started)
         is FirstPlayerJoinedGame -> currentState!!.copy(state = EvolvedGameState.FirstPlayerJoined, firstPlayer = e.player)
         is SecondPlayerJoinedGame -> currentState!!.copy(state = EvolvedGameState.BothPlayersJoined, secondPlayer = e.player)
-        is RoundStarted -> currentState!!.copy(rounds = currentState.rounds.add(EvolvedRound(WaitingForFirstHand, e.roundNumber)))
+        is RoundStarted -> currentState!!.copy(rounds = currentState.rounds.add(EvolvedRound(Ongoing, e.roundNumber)))
         is HandPlayed -> currentState!!.updateRound(e.roundNumber) {
-            copy(
-                hands = hands.add(Hand(e.player, e.shape)),
-                state = WaitingForSecondHand
-            )
+            copy(hands = hands.add(Hand(e.player, e.shape)))
         }
         is RoundWon -> currentState!!.updateRound(e.roundNumber) {
             copy(
