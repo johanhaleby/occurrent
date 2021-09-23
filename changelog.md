@@ -1,6 +1,7 @@
 ## Changelog next version
 
 * Added ability to map event type to event name in subscriptions DSL from Kotlin
+* Upgraded Kotlin to 1.5.31
 
 ## Changelog 0.11.0 (2021-08-13)
 
