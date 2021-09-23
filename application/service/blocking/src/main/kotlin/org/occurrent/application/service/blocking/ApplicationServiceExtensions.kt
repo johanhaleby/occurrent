@@ -22,6 +22,7 @@ import java.util.function.Function
 import java.util.stream.Stream
 import kotlin.streams.asSequence
 import kotlin.streams.asStream
+import kotlin.streams.toList
 
 /**
  * Extension function to [ApplicationService] that allows working with Kotlin sequences
@@ -59,9 +60,9 @@ fun <T> ApplicationService<T>.execute(streamId: String, functionThatCallsDomainM
 @JvmName("executeList")
 fun <T> ApplicationService<T>.execute(streamId: String, functionThatCallsDomainModel: (List<T>) -> List<T>) : WriteResult {
     val f = Function<Stream<T>, Stream<T>> { eventStream: Stream<T> ->
-        val list: List<T> = eventStream.asSequence().toList()
-        val s: Stream<T> = functionThatCallsDomainModel.invoke(list).stream()
-        s
+        val currentEvents: List<T> = eventStream.toList()
+        val newEvents: Stream<T> = functionThatCallsDomainModel.invoke(currentEvents).stream()
+        newEvents
     }
     return execute(streamId, f)
 }

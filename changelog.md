@@ -7,6 +7,7 @@
 * Upgraded the mongodb java driver to 4.3.2
 * Upgraded project reactor to 3.4.10
 * Upgrading to cloudevents sdk 2.2.0
+* Minor tweak in ApplicationService extension function for Kotlin so that it no longer converts the Java stream into a temporary Kotlin sequence before converting it to a List
 
 ## Changelog 0.11.0 (2021-08-13)
 
