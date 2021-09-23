@@ -6,6 +6,7 @@
 * Upgraded spring-mongodb to 3.2.5
 * Upgraded the mongodb java driver to 4.3.2
 * Upgraded project reactor to 3.4.10
+* Upgrading to cloudevents sdk 2.2.0
 
 ## Changelog 0.11.0 (2021-08-13)
 
