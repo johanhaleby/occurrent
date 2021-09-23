@@ -2,6 +2,10 @@
 
 * Added ability to map event type to event name in subscriptions DSL from Kotlin
 * Upgraded Kotlin to 1.5.31
+* Upgraded spring-boot used in examples to 2.5.4
+* Upgraded spring-mongodb to 3.2.5
+* Upgraded the mongodb java driver to 4.3.2
+* Upgraded project reactor to 3.4.10
 
 ## Changelog 0.11.0 (2021-08-13)
 
