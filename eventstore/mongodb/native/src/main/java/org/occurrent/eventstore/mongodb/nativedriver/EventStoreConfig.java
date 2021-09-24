@@ -17,21 +17,27 @@
 package org.occurrent.eventstore.mongodb.nativedriver;
 
 import com.mongodb.TransactionOptions;
+import com.mongodb.client.FindIterable;
 import io.cloudevents.CloudEvent;
+import org.bson.Document;
+import org.bson.conversions.Bson;
 import org.occurrent.mongodb.timerepresentation.TimeRepresentation;
 
 import java.util.Objects;
 import java.util.StringJoiner;
+import java.util.function.Function;
 
 /**
  * Configuration for the synchronous java driver MongoDB EventStore
  */
 public class EventStoreConfig {
     private static final boolean ENABLE_TRANSACTIONAL_READS_BY_DEFAULT = true;
+    private static final Function<FindIterable<Document>, FindIterable<Document>> DEFAULT_QUERY_OPTIONS_FUNCTION = Function.identity();
 
     public final TransactionOptions transactionOptions;
     public final TimeRepresentation timeRepresentation;
     public final boolean enableTransactionalReads;
+    public final Function<FindIterable<Document>, FindIterable<Document>> queryOptions;
 
     /**
      * Create an {@link EventStoreConfig} indicating to the event store that it should represent time according to the supplied
@@ -56,10 +62,10 @@ public class EventStoreConfig {
      * @see TimeRepresentation
      */
     public EventStoreConfig(TimeRepresentation timeRepresentation, TransactionOptions transactionOptions) {
-        this(timeRepresentation, transactionOptions, ENABLE_TRANSACTIONAL_READS_BY_DEFAULT);
+        this(timeRepresentation, transactionOptions, ENABLE_TRANSACTIONAL_READS_BY_DEFAULT, DEFAULT_QUERY_OPTIONS_FUNCTION);
     }
 
-    private EventStoreConfig(TimeRepresentation timeRepresentation, TransactionOptions transactionOptions, boolean enableTransactionalReads) {
+    private EventStoreConfig(TimeRepresentation timeRepresentation, TransactionOptions transactionOptions, boolean enableTransactionalReads, Function<FindIterable<Document>, FindIterable<Document>> queryOptions) {
         Objects.requireNonNull(timeRepresentation, "Time representation cannot be null");
         if (transactionOptions == null) {
             this.transactionOptions = TransactionOptions.builder().build();
@@ -68,6 +74,7 @@ public class EventStoreConfig {
         }
         this.timeRepresentation = timeRepresentation;
         this.enableTransactionalReads = enableTransactionalReads;
+        this.queryOptions = queryOptions == null ? DEFAULT_QUERY_OPTIONS_FUNCTION : queryOptions;
     }
 
     @Override
@@ -75,12 +82,12 @@ public class EventStoreConfig {
         if (this == o) return true;
         if (!(o instanceof EventStoreConfig)) return false;
         EventStoreConfig that = (EventStoreConfig) o;
-        return enableTransactionalReads == that.enableTransactionalReads && Objects.equals(transactionOptions, that.transactionOptions) && timeRepresentation == that.timeRepresentation;
+        return enableTransactionalReads == that.enableTransactionalReads && Objects.equals(transactionOptions, that.transactionOptions) && timeRepresentation == that.timeRepresentation && Objects.equals(queryOptions, that.queryOptions);
     }
 
     @Override
     public int hashCode() {
-        return Objects.hash(transactionOptions, timeRepresentation, enableTransactionalReads);
+        return Objects.hash(transactionOptions, timeRepresentation, enableTransactionalReads, queryOptions);
     }
 
     @Override
@@ -89,6 +96,7 @@ public class EventStoreConfig {
                 .add("transactionOptions=" + transactionOptions)
                 .add("timeRepresentation=" + timeRepresentation)
                 .add("enableTransactionalReads=" + enableTransactionalReads)
+                .add("queryOptions=" + queryOptions)
                 .toString();
     }
 
@@ -96,6 +104,7 @@ public class EventStoreConfig {
         private TransactionOptions transactionOptions;
         private TimeRepresentation timeRepresentation;
         private boolean enableTransactionalReads = ENABLE_TRANSACTIONAL_READS_BY_DEFAULT;
+        private Function<FindIterable<Document>, FindIterable<Document>> queryOptions = DEFAULT_QUERY_OPTIONS_FUNCTION;
 
         /**
          * @param transactionOptions The default {@link TransactionOptions} that the event store will use when starting transactions. May be <code>null</code>.
@@ -173,8 +182,23 @@ public class EventStoreConfig {
             return this;
         }
 
+        /**
+         * Specify a function that can be used to configuring the query options used for {@link org.occurrent.eventstore.api.blocking.EventStore#read(String)} and {@link org.occurrent.eventstore.api.blocking.EventStoreQueries}.
+         * This is an advanced feature and should be used sparingly. For example, you can configure cursor timeout, whether slave is OK, etc. By default, mongodb default query options are used.
+         * <br><br>
+         * Note that you must <i>not</i> use this to change the query itself, i.e. don't use the {@link FindIterable#sort(Bson)} etc. Only use options such as {@link FindIterable#batchSize(int)} that doesn't change
+         * the actual query or sort order.
+         *
+         * @param queryOptions The query options function to use, it cannot return null.
+         * @return A same {@code Builder instance}
+         */
+        public Builder queryOptions(Function<FindIterable<Document>, FindIterable<Document>> queryOptions) {
+            this.queryOptions = queryOptions;
+            return this;
+        }
+
         public EventStoreConfig build() {
-            return new EventStoreConfig(timeRepresentation, transactionOptions, enableTransactionalReads);
+            return new EventStoreConfig(timeRepresentation, transactionOptions, enableTransactionalReads, queryOptions);
         }
     }
 }

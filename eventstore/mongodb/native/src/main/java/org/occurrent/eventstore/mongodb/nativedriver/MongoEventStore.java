@@ -80,6 +80,7 @@ public class MongoEventStore implements EventStore, EventStoreOperations, EventS
     private final TimeRepresentation timeRepresentation;
     private final TransactionOptions transactionOptions;
     private final boolean transactionalReadsEnabled;
+    private final Function<FindIterable<Document>, FindIterable<Document>> queryOptions;
 
     /**
      * Create a new instance of {@code MongoEventStore}
@@ -113,6 +114,7 @@ public class MongoEventStore implements EventStore, EventStoreOperations, EventS
         transactionOptions = config.transactionOptions;
         this.timeRepresentation = config.timeRepresentation;
         this.transactionalReadsEnabled = config.enableTransactionalReads;
+        this.queryOptions = config.queryOptions;
         initializeEventStore(eventCollection, database);
     }
 
@@ -146,7 +148,7 @@ public class MongoEventStore implements EventStore, EventStoreOperations, EventS
     }
 
     private long currentStreamVersion(String streamId) {
-        Document documentWithLatestStreamVersion = eventCollection.find(streamIdEqualTo(streamId)).sort(Sorts.descending(STREAM_VERSION)).limit(1).projection(Projections.include(STREAM_VERSION)).first();
+        Document documentWithLatestStreamVersion = queryOptions.apply(eventCollection.find(streamIdEqualTo(streamId)).sort(descending(STREAM_VERSION)).limit(1).projection(Projections.include(STREAM_VERSION))).first();
         final long currentStreamVersion;
         if (documentWithLatestStreamVersion == null) {
             currentStreamVersion = 0;
@@ -173,7 +175,7 @@ public class MongoEventStore implements EventStore, EventStoreOperations, EventS
 
         Bson sort = convertToMongoDBSort(sortBy);
 
-        return StreamSupport.stream(documentsWithSkipAndLimit.sort(sort).spliterator(), false);
+        return StreamSupport.stream(queryOptions.apply(documentsWithSkipAndLimit.sort(sort)).spliterator(), false);
     }
 
     @Override

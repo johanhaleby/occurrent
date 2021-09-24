@@ -166,9 +166,32 @@ class MongoEventStoreTest {
     }
 
     @Test
-    void can_read_events_when_transactional_reads_are_disabled() {
+    void can_read_events_when_transactional_reads_are_disabled_for_native_mongo_event_store() {
         // Given
         EventStoreConfig eventStoreConfig = new EventStoreConfig.Builder().timeRepresentation(TimeRepresentation.DATE).transactionalReads(false).build();
+        eventStore = newMongoEventStore(eventStoreConfig);
+
+        LocalDateTime now = LocalDateTime.now();
+        List<DomainEvent> events = Composition.chain(Name.defineName(UUID.randomUUID().toString(), now, "Hello World"), es -> Name.changeName(es, UUID.randomUUID().toString(), now, "John Doe"));
+
+        // When
+        persist("name", WriteCondition.streamVersionEq(0), events);
+
+        // Then
+        EventStream<CloudEvent> eventStream = eventStore.read("name");
+        List<DomainEvent> readEvents = deserialize(eventStream.events());
+
+        assertAll(
+                () -> assertThat(eventStream.version()).isEqualTo(events.size()),
+                () -> assertThat(readEvents).hasSize(2),
+                () -> assertThat(readEvents).containsExactlyElementsOf(events)
+        );
+    }
+
+    @Test
+    void can_configure_query_options_for_native_mongo_event_store() {
+        // Given
+        EventStoreConfig eventStoreConfig = new EventStoreConfig.Builder().timeRepresentation(TimeRepresentation.DATE).queryOptions(query -> query.batchSize(10).noCursorTimeout(true)).build();
         eventStore = newMongoEventStore(eventStoreConfig);
 
         LocalDateTime now = LocalDateTime.now();
