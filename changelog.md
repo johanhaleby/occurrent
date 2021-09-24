@@ -64,14 +64,19 @@
   The reason for overriding any of these methods is to allow adding things such as correlation id that should be the same for all events in a stream.
 * Non-backward compatible change: The cloud event converter module name has changed from `org.occurrent:cloudevent-converter` to `org.occurrent:cloudevent-converter-api` 
 * Non-backward compatible change: The generic cloud event converter (`org.occurrent.application.converter.generic.GenericCloudEventConverter`) has been moved to its own module, depend on `org.occurrent:cloudevent-converter-generic` to use it.
-* Introduced a cloud event converter that uses XStream to (de-)serialize the domain event to cloud event data. Depend on `org.occurrent:cloudevent-converter-generic` and then use it like this:
+* Introduced a cloud event converter that uses XStream to (de-)serialize the domain event to cloud event data. Depend on `org.occurrent:cloudevent-converter-xstream` and then use it like this:
     ```java
     XStream xStream = new XStream();
     xStream.allowTypeHierarchy(MyDomainEvent.class);
     XStreamCloudEventConverter<MyDomainEvent> cloudEventConverter = new XStreamCloudEventConverter<>(xStream, URI.create("urn:occurrent:domain"));
     ```                                                                                                                                           
-  
-   You can also configure how different attributes of the domain event should be represented in the cloud event by using the builder, `new XStreamCloudEventConverter.Builder().. build()`. 
+   You can also configure how different attributes of the domain event should be represented in the cloud event by using the builder, `new XStreamCloudEventConverter.Builder<MyDomainEvent>().. build()`. 
+* Introduced a cloud event converter that uses Jackson to (de-)serialize the domain event to cloud event data. Depend on `org.occurrent:cloudevent-converter-jackson` and then use it like this:
+    ```java
+    ObjectMapper objectMapper = new ObjectMapper();
+    JacksonCloudEventConverter<MyDomainEvent> cloudEventConverter = new JacksonCloudEventConverter<>(objectMapper, URI.create("urn:occurrent:domain"));
+    ```                                                                                                                                           
+   You can also configure how different attributes of the domain event should be represented in the cloud event by using the builder, `new JacksonCloudEventConverter.Builder<MyDomainEvent>().. build()`. 
 
 ## Changelog 0.11.0 (2021-08-13)
 

@@ -15,82 +15,83 @@
  *  limitations under the License.
  */
 
-package org.occurrent.application.converter.xstream;
+package org.occurrent.application.converter.jackson;
 
-import com.thoughtworks.xstream.XStream;
+import com.fasterxml.jackson.core.type.TypeReference;
+import com.fasterxml.jackson.databind.ObjectMapper;
 import io.cloudevents.CloudEvent;
+import io.cloudevents.CloudEventData;
 import io.cloudevents.core.builder.CloudEventBuilder;
+import io.cloudevents.core.data.PojoCloudEventData;
 import org.occurrent.application.converter.CloudEventConverter;
 
+import java.io.IOException;
+import java.io.UncheckedIOException;
 import java.net.URI;
-import java.nio.charset.Charset;
 import java.time.OffsetDateTime;
+import java.util.Map;
 import java.util.UUID;
 import java.util.function.Function;
 
-import static java.nio.charset.StandardCharsets.UTF_8;
 import static java.time.ZoneOffset.UTC;
 import static java.util.Objects.requireNonNull;
 
 /**
- * An {@link CloudEventConverter} that uses {@link XStream} to serialize a domain event into XML (content type {@value #DEFAULT_CONTENT_TYPE}) that is used as data in a {@link CloudEvent}.
+ * An {@link CloudEventConverter} that uses a Jackson {@link ObjectMapper} to serialize a domain event to JSON (content type {@value #DEFAULT_CONTENT_TYPE}) that is used as data in a {@link CloudEvent}.
+ *
  *
  * @param <T> The type of your domain event(s) to convert
  */
-public class XStreamCloudEventConverter<T> implements CloudEventConverter<T> {
-    private static final String DEFAULT_CONTENT_TYPE = "application/xml";
-    private static final Charset DEFAULT_CHARSET = UTF_8;
+public class JacksonCloudEventConverter<T> implements CloudEventConverter<T> {
+    private static final String DEFAULT_CONTENT_TYPE = "application/json";
 
-    private final XStream xStream;
+    private final ObjectMapper objectMapper;
     private final URI cloudEventSource;
     private final Function<T, String> idMapper;
     private final Function<T, String> typeMapper;
     private final Function<T, OffsetDateTime> timeMapper;
     private final Function<T, String> subjectMapper;
     private final String contentType;
-    private final Charset charset;
 
     /**
-     * Create a new instance of the {@link XStreamCloudEventConverter} that does the following:
+     * Create a new instance of the {@link JacksonCloudEventConverter} that does the following:
      * <ol>
      *     <li>Uses a random UUID as cloud event id</li>
-     *     <li>Uses the simple name of the domain event class as cloud event type</li>
+     *     <li>Uses the fully-qualified name of the domain event class as cloud event type</li>
      *     <li>Uses {@code OffsetDateTime.now(UTC)} as cloud event time</li>
-     *     <li>Uses charset UTF-8 when converting the domain event to/from XML</li>
+     *     <li>Uses charset UTF-8 when converting the domain event to/from JSON</li>
      *     <li>No subject</li>
      * </ol>
      * <p>
      * See <a href="https://occurrent.org/documentation#cloudevents">cloud event documentation</a> for info on what the cloud event attributes mean.<br><br>
      * Use {@link Builder} for more advanced configuration.
      *
-     * @param xStream          The XStream instance to use
+     * @param objectMapper     The ObjectMapper instance to use
      * @param cloudEventSource The cloud event source.
      * @see Builder Builder for more advanced configuration
      */
-    public XStreamCloudEventConverter(XStream xStream, URI cloudEventSource) {
-        this(xStream, cloudEventSource, defaultIdMapperFunction(), defaultTypeMapperFunction(), defaultTimeMapperFunction(), defaultSubjectMapperFunction(), DEFAULT_CONTENT_TYPE, DEFAULT_CHARSET);
+    public JacksonCloudEventConverter(ObjectMapper objectMapper, URI cloudEventSource) {
+        this(objectMapper, cloudEventSource, defaultIdMapperFunction(), defaultTypeMapperFunction(), defaultTimeMapperFunction(), defaultSubjectMapperFunction(), DEFAULT_CONTENT_TYPE);
     }
 
-    private XStreamCloudEventConverter(XStream xStream, URI cloudEventSource, Function<T, String> idMapper, Function<T, String> typeMapper, Function<T, OffsetDateTime> timeMapper, Function<T, String> subjectMapper, String contentType, Charset charset) {
-        requireNonNull(xStream, XStream.class.getSimpleName() + " cannot be null");
+    private JacksonCloudEventConverter(ObjectMapper objectMapper, URI cloudEventSource, Function<T, String> idMapper, Function<T, String> typeMapper, Function<T, OffsetDateTime> timeMapper, Function<T, String> subjectMapper, String contentType) {
+        requireNonNull(objectMapper, ObjectMapper.class.getSimpleName() + " cannot be null");
         requireNonNull(cloudEventSource, "cloudEventSource cannot be null");
         requireNonNull(idMapper, "idMapper cannot be null");
         requireNonNull(typeMapper, "typeMapper cannot be null");
         requireNonNull(timeMapper, "timeMapper cannot be null");
         requireNonNull(subjectMapper, "subjectMapper cannot be null");
-        requireNonNull(charset, Charset.class.getSimpleName() + " cannot be null");
-        this.xStream = xStream;
+        this.objectMapper = objectMapper;
         this.cloudEventSource = cloudEventSource;
         this.idMapper = idMapper;
         this.typeMapper = typeMapper;
         this.timeMapper = timeMapper;
         this.subjectMapper = subjectMapper;
         this.contentType = contentType;
-        this.charset = charset;
     }
 
     /**
-     * Converts the {@code domainEvent} into a {@link CloudEvent} using {@link XStream}.
+     * Converts the {@code domainEvent} into a {@link CloudEvent} using {@link ObjectMapper}.
      *
      * @param domainEvent The domain event to convert
      * @return A {@link CloudEvent} converted from the <code>domainEvent</code>.
@@ -98,6 +99,9 @@ public class XStreamCloudEventConverter<T> implements CloudEventConverter<T> {
     @Override
     public CloudEvent toCloudEvent(T domainEvent) {
         requireNonNull(domainEvent, "Domain event cannot be null");
+        // @formatter:off
+        PojoCloudEventData<Map<String, Object>> cloudEventData = PojoCloudEventData.wrap(objectMapper.convertValue(domainEvent, new TypeReference<Map<String, Object>>() {}), objectMapper::writeValueAsBytes);
+        // @formatter:on
         return CloudEventBuilder.v1()
                 .withId(idMapper.apply(domainEvent))
                 .withSource(cloudEventSource)
@@ -105,12 +109,12 @@ public class XStreamCloudEventConverter<T> implements CloudEventConverter<T> {
                 .withTime(timeMapper.apply(domainEvent))
                 .withSubject(subjectMapper.apply(domainEvent))
                 .withDataContentType(contentType)
-                .withData(xStream.toXML(domainEvent).getBytes(charset))
+                .withData(cloudEventData)
                 .build();
     }
 
     /**
-     * Converts the {@link CloudEvent} back into a {@code domainEvent} using {@link XStream}.
+     * Converts the {@link CloudEvent} back into a {@code domainEvent} using {@link ObjectMapper}.
      *
      * @param cloudEvent The cloud event to convert
      * @return A <code>domainEvent</code> converted from a {@link CloudEvent}.
@@ -118,21 +122,41 @@ public class XStreamCloudEventConverter<T> implements CloudEventConverter<T> {
     @SuppressWarnings("unchecked")
     @Override
     public T toDomainEvent(CloudEvent cloudEvent) {
-        return (T) xStream.fromXML(new String(requireNonNull(cloudEvent.getData()).toBytes(), charset));
+        CloudEventData data = cloudEvent.getData();
+
+        final Class<T> domainEventType;
+        try {
+            domainEventType = (Class<T>) Class.forName(cloudEvent.getType());
+        } catch (ClassNotFoundException e) {
+            throw new RuntimeException(e);
+        }
+
+        final T domainEvent;
+        if (data instanceof PojoCloudEventData && ((PojoCloudEventData<Object>) data).getValue() instanceof Map) {
+            Map<String, Object> value = (Map<String, Object>) ((PojoCloudEventData<?>) data).getValue();
+            domainEvent = objectMapper.convertValue(value, domainEventType);
+        } else {
+            try {
+                domainEvent = objectMapper.readValue(requireNonNull(data, "cloud event data cannot be null").toBytes(), domainEventType);
+            } catch (IOException e) {
+                throw new UncheckedIOException(e);
+            }
+        }
+
+        return domainEvent;
     }
 
     public static final class Builder<T> {
-        private final XStream xStream;
+        private final ObjectMapper objectMapper;
         private final URI cloudEventSource;
         private String contentType = DEFAULT_CONTENT_TYPE;
-        private Charset charset = DEFAULT_CHARSET;
         private Function<T, String> idMapper = defaultIdMapperFunction();
         private Function<T, String> typeMapper = defaultTypeMapperFunction();
         private Function<T, OffsetDateTime> timeMapper = defaultTimeMapperFunction();
         private Function<T, String> subjectMapper = defaultSubjectMapperFunction();
 
-        public Builder(XStream xStream, URI cloudEventSource) {
-            this.xStream = xStream;
+        public Builder(ObjectMapper objectMapper, URI cloudEventSource) {
+            this.objectMapper = objectMapper;
             this.cloudEventSource = cloudEventSource;
         }
 
@@ -177,18 +201,10 @@ public class XStreamCloudEventConverter<T> implements CloudEventConverter<T> {
         }
 
         /**
-         * @param charset Specify the charset that XStream should use when serializing the domain event to bytes that is stored as the cloud event data attribute.
+         * @return A {@link JacksonCloudEventConverter} instance with the configured settings
          */
-        public Builder<T> charset(Charset charset) {
-            this.charset = charset;
-            return this;
-        }
-
-        /**
-         * @return A {@link XStreamCloudEventConverter} instance with the configured settings
-         */
-        public XStreamCloudEventConverter<T> build() {
-            return new XStreamCloudEventConverter<>(xStream, cloudEventSource, idMapper, typeMapper, timeMapper, subjectMapper, contentType, charset);
+        public JacksonCloudEventConverter<T> build() {
+            return new JacksonCloudEventConverter<>(objectMapper, cloudEventSource, idMapper, typeMapper, timeMapper, subjectMapper, contentType);
         }
     }
 
@@ -198,7 +214,7 @@ public class XStreamCloudEventConverter<T> implements CloudEventConverter<T> {
     }
 
     private static <T> Function<T, String> defaultTypeMapperFunction() {
-        return domainEvent -> domainEvent.getClass().getSimpleName();
+        return domainEvent -> domainEvent.getClass().getName();
     }
 
     private static <T> Function<T, OffsetDateTime> defaultTimeMapperFunction() {
