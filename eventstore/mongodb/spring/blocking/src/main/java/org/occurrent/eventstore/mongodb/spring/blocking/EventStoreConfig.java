@@ -17,11 +17,14 @@
 package org.occurrent.eventstore.mongodb.spring.blocking;
 
 import org.occurrent.mongodb.timerepresentation.TimeRepresentation;
+import org.springframework.data.domain.Sort;
 import org.springframework.data.mongodb.MongoTransactionManager;
+import org.springframework.data.mongodb.core.query.Query;
 import org.springframework.transaction.support.TransactionTemplate;
 
 import java.util.Objects;
 import java.util.StringJoiner;
+import java.util.function.Function;
 
 import static java.util.Objects.requireNonNull;
 
@@ -30,11 +33,13 @@ import static java.util.Objects.requireNonNull;
  */
 public class EventStoreConfig {
     private static final boolean ENABLE_TRANSACTIONAL_READS_BY_DEFAULT = true;
+    private static final Function<Query, Query> DEFAULT_QUERY_OPTIONS_FUNCTION = Function.identity();
 
     public final String eventStoreCollectionName;
     public final TransactionTemplate transactionTemplate;
     public final TimeRepresentation timeRepresentation;
     public final boolean enableTransactionalReads;
+    public final Function<Query, Query> queryOptions;
 
     /**
      * Create a new instance of {@code EventStoreConfig}.
@@ -44,10 +49,10 @@ public class EventStoreConfig {
      * @param timeRepresentation       How time should be represented in the database
      */
     public EventStoreConfig(String eventStoreCollectionName, TransactionTemplate transactionTemplate, TimeRepresentation timeRepresentation) {
-        this(eventStoreCollectionName, transactionTemplate, timeRepresentation, ENABLE_TRANSACTIONAL_READS_BY_DEFAULT);
+        this(eventStoreCollectionName, transactionTemplate, timeRepresentation, ENABLE_TRANSACTIONAL_READS_BY_DEFAULT, DEFAULT_QUERY_OPTIONS_FUNCTION);
     }
 
-    private EventStoreConfig(String eventStoreCollectionName, TransactionTemplate transactionTemplate, TimeRepresentation timeRepresentation, boolean enableTransactionalReads) {
+    private EventStoreConfig(String eventStoreCollectionName, TransactionTemplate transactionTemplate, TimeRepresentation timeRepresentation, boolean enableTransactionalReads, Function<Query, Query> queryOptions) {
         requireNonNull(eventStoreCollectionName, "Event store collection name cannot be null");
         requireNonNull(transactionTemplate, TransactionTemplate.class.getSimpleName() + " cannot be null");
         requireNonNull(timeRepresentation, TimeRepresentation.class.getSimpleName() + " cannot be null");
@@ -55,6 +60,7 @@ public class EventStoreConfig {
         this.transactionTemplate = transactionTemplate;
         this.timeRepresentation = timeRepresentation;
         this.enableTransactionalReads = enableTransactionalReads;
+        this.queryOptions = queryOptions == null ? DEFAULT_QUERY_OPTIONS_FUNCTION : queryOptions;
     }
 
     @Override
@@ -62,12 +68,12 @@ public class EventStoreConfig {
         if (this == o) return true;
         if (!(o instanceof EventStoreConfig)) return false;
         EventStoreConfig that = (EventStoreConfig) o;
-        return enableTransactionalReads == that.enableTransactionalReads && Objects.equals(eventStoreCollectionName, that.eventStoreCollectionName) && Objects.equals(transactionTemplate, that.transactionTemplate) && timeRepresentation == that.timeRepresentation;
+        return enableTransactionalReads == that.enableTransactionalReads && Objects.equals(eventStoreCollectionName, that.eventStoreCollectionName) && Objects.equals(transactionTemplate, that.transactionTemplate) && timeRepresentation == that.timeRepresentation && Objects.equals(queryOptions, that.queryOptions);
     }
 
     @Override
     public int hashCode() {
-        return Objects.hash(eventStoreCollectionName, transactionTemplate, timeRepresentation, enableTransactionalReads);
+        return Objects.hash(eventStoreCollectionName, transactionTemplate, timeRepresentation, enableTransactionalReads, queryOptions);
     }
 
     @Override
@@ -77,6 +83,7 @@ public class EventStoreConfig {
                 .add("transactionTemplate=" + transactionTemplate)
                 .add("timeRepresentation=" + timeRepresentation)
                 .add("enableTransactionalReads=" + enableTransactionalReads)
+                .add("queryOptions=" + queryOptions)
                 .toString();
     }
 
@@ -85,6 +92,7 @@ public class EventStoreConfig {
         private TransactionTemplate transactionTemplate;
         private TimeRepresentation timeRepresentation;
         private boolean enableTransactionalReads = ENABLE_TRANSACTIONAL_READS_BY_DEFAULT;
+        private Function<Query, Query> queryOptions = DEFAULT_QUERY_OPTIONS_FUNCTION;
 
         /**
          * @param eventStoreCollectionName The collection in which the events are persisted
@@ -121,32 +129,32 @@ public class EventStoreConfig {
          *     <li>There's a bug/limitation on Atlas free tier clusters which yields an exception when reading large number of events in a stream in a transaction.
          *     To workaround this you could disable transactional reads. The exception takes this form:
          *     <pre>
-         *         java.lang.IllegalStateException: state should be: open
-         * 	       at com.mongodb.assertions.Assertions.isTrue(Assertions.java:79)
-         * 	       at com.mongodb.internal.session.BaseClientSessionImpl.getServerSession(BaseClientSessionImpl.java:101)
-         * 	       at com.mongodb.internal.session.ClientSessionContext.getSessionId(ClientSessionContext.java:44)
-         * 	       at com.mongodb.internal.connection.ClusterClockAdvancingSessionContext.getSessionId(ClusterClockAdvancingSessionContext.java:46)
-         * 	       at com.mongodb.internal.connection.CommandMessage.getExtraElements(CommandMessage.java:265)
-         * 	       at com.mongodb.internal.connection.CommandMessage.encodeMessageBodyWithMetadata(CommandMessage.java:155)
-         * 	       at com.mongodb.internal.connection.RequestMessage.encode(RequestMessage.java:138)
-         * 	       at com.mongodb.internal.connection.CommandMessage.encode(CommandMessage.java:59)
-         * 	       at com.mongodb.internal.connection.InternalStreamConnection.sendAndReceive(InternalStreamConnection.java:268)
-         * 	       at com.mongodb.internal.connection.UsageTrackingInternalConnection.sendAndReceive(UsageTrackingInternalConnection.java:100)
-         * 	       at com.mongodb.internal.connection.DefaultConnectionPool$PooledConnection.sendAndReceive(DefaultConnectionPool.java:490)
-         * 	       at com.mongodb.internal.connection.CommandProtocolImpl.execute(CommandProtocolImpl.java:71)
-         * 	       at com.mongodb.internal.connection.DefaultServer$DefaultServerProtocolExecutor.execute(DefaultServer.java:253)
-         * 	       at com.mongodb.internal.connection.DefaultServerConnection.executeProtocol(DefaultServerConnection.java:202)
-         * 	       at com.mongodb.internal.connection.DefaultServerConnection.command(DefaultServerConnection.java:118)
-         * 	       at com.mongodb.internal.connection.DefaultServerConnection.command(DefaultServerConnection.java:110)
-         * 	       at com.mongodb.internal.operation.QueryBatchCursor.getMore(QueryBatchCursor.java:268)
-         * 	       at com.mongodb.internal.operation.QueryBatchCursor.hasNext(QueryBatchCursor.java:141)
-         * 	       at com.mongodb.client.internal.MongoBatchCursorAdapter.hasNext(MongoBatchCursorAdapter.java:54)
-         * 	       at java.base/java.util.Iterator.forEachRemaining(Iterator.java:132)
-         * 	       at java.base/java.util.Spliterators$IteratorSpliterator.forEachRemaining(Spliterators.java:1801)
-         * 	       at java.base/java.util.stream.AbstractPipeline.copyInto(AbstractPipeline.java:484)
-         * 	       at java.base/java.util.stream.AbstractPipeline.wrapAndCopyInto(AbstractPipeline.java:474)
-         * 	       at java.base/java.util.stream.ReduceOps$ReduceOp.evaluateSequential(ReduceOps.java:913)
-         * 	       at java.base/java.util.stream.AbstractPipeline.evaluate(AbstractPipeline.java:234)
+         *     java.lang.IllegalStateException: state should be: open
+         * 	   at com.mongodb.assertions.Assertions.isTrue(Assertions.java:79)
+         * 	   at com.mongodb.internal.session.BaseClientSessionImpl.getServerSession(BaseClientSessionImpl.java:101)
+         * 	   at com.mongodb.internal.session.ClientSessionContext.getSessionId(ClientSessionContext.java:44)
+         * 	   at com.mongodb.internal.connection.ClusterClockAdvancingSessionContext.getSessionId(ClusterClockAdvancingSessionContext.java:46)
+         * 	   at com.mongodb.internal.connection.CommandMessage.getExtraElements(CommandMessage.java:265)
+         * 	   at com.mongodb.internal.connection.CommandMessage.encodeMessageBodyWithMetadata(CommandMessage.java:155)
+         * 	   at com.mongodb.internal.connection.RequestMessage.encode(RequestMessage.java:138)
+         * 	   at com.mongodb.internal.connection.CommandMessage.encode(CommandMessage.java:59)
+         * 	   at com.mongodb.internal.connection.InternalStreamConnection.sendAndReceive(InternalStreamConnection.java:268)
+         * 	   at com.mongodb.internal.connection.UsageTrackingInternalConnection.sendAndReceive(UsageTrackingInternalConnection.java:100)
+         * 	   at com.mongodb.internal.connection.DefaultConnectionPool$PooledConnection.sendAndReceive(DefaultConnectionPool.java:490)
+         * 	   at com.mongodb.internal.connection.CommandProtocolImpl.execute(CommandProtocolImpl.java:71)
+         * 	   at com.mongodb.internal.connection.DefaultServer$DefaultServerProtocolExecutor.execute(DefaultServer.java:253)
+         * 	   at com.mongodb.internal.connection.DefaultServerConnection.executeProtocol(DefaultServerConnection.java:202)
+         * 	   at com.mongodb.internal.connection.DefaultServerConnection.command(DefaultServerConnection.java:118)
+         * 	   at com.mongodb.internal.connection.DefaultServerConnection.command(DefaultServerConnection.java:110)
+         * 	   at com.mongodb.internal.operation.QueryBatchCursor.getMore(QueryBatchCursor.java:268)
+         * 	   at com.mongodb.internal.operation.QueryBatchCursor.hasNext(QueryBatchCursor.java:141)
+         * 	   at com.mongodb.client.internal.MongoBatchCursorAdapter.hasNext(MongoBatchCursorAdapter.java:54)
+         * 	   at java.base/java.util.Iterator.forEachRemaining(Iterator.java:132)
+         * 	   at java.base/java.util.Spliterators$IteratorSpliterator.forEachRemaining(Spliterators.java:1801)
+         * 	   at java.base/java.util.stream.AbstractPipeline.copyInto(AbstractPipeline.java:484)
+         * 	   at java.base/java.util.stream.AbstractPipeline.wrapAndCopyInto(AbstractPipeline.java:474)
+         * 	   at java.base/java.util.stream.ReduceOps$ReduceOp.evaluateSequential(ReduceOps.java:913)
+         * 	   at java.base/java.util.stream.AbstractPipeline.evaluate(AbstractPipeline.java:234)
          *     </pre>
          *     It's possible that this would work if you enable "no cursor timeout" on the query, but this is not allowed on Atlas free tier.
          *     </li>
@@ -180,9 +188,24 @@ public class EventStoreConfig {
             return this;
         }
 
+        /**
+         * Specify a function that can be used to configuring the query options used for {@link org.occurrent.eventstore.api.blocking.EventStore#read(String)} and {@link org.occurrent.eventstore.api.blocking.EventStoreQueries}.
+         * This is an advanced feature and should be used sparingly. For example, you can configure cursor timeout, whether slave is OK, etc. By default, mongodb default query options are used.
+         * <br><br>
+         * Note that you must <i>not</i> use this to change the query itself, i.e. don't use the {@link Query#with(Sort)} etc. Only use options such as {@link Query#cursorBatchSize(int)} that doesn't change
+         * the actual query or sort order.
+         *
+         * @param queryOptions The query options function to use, it cannot return null.
+         * @return A same {@code Builder instance}
+         */
+        public Builder queryOptions(Function<Query, Query> queryOptions) {
+            this.queryOptions = queryOptions;
+            return this;
+        }
+
 
         public EventStoreConfig build() {
-            return new EventStoreConfig(eventStoreCollectionName, transactionTemplate, timeRepresentation, enableTransactionalReads);
+            return new EventStoreConfig(eventStoreCollectionName, transactionTemplate, timeRepresentation, enableTransactionalReads, queryOptions);
         }
     }
 }

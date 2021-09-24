@@ -47,11 +47,19 @@
   the last event returned from the event stream. This is because Occurrent does two reads to MongoDB when reading an event stream. First it finds the current version number of the stream (A),
   and secondly it queries for all events (B). If you disable transactional reads, then another thread might have written more events before the call to B has been made. Thus, the version number
   received from query A might be stale. This may or may not be a problem for your domain, but it's generally recommended having transactional reads enabled. Configuration example:
-
-  ```
+  ```java
   EventStoreConfig eventStoreConfig = new EventStoreConfig.Builder().transactionalReads(false). .. .build();
   eventStore = new SpringMongoEventStore(mongoTemplate, eventStoreConfig);
   ```
+* Added ability to tweak query options for reads in the event store, for example cursor timeouts, allow reads from slave etc. You can configure this in the `EventStoreConfig` for each event store
+  by using the `queryOption` higher-order function. For example:
+  ```java
+  EventStoreConfig eventStoreConfig = new EventStoreConfig.Builder().eventStoreCollectionName(connectionString.getCollection()).transactionConfig(mongoTransactionManager).timeRepresentation(TimeRepresentation.DATE)
+                  .queryOptions(query -> query.noCursorTimeout().allowSecondaryReads()).build();
+  var eventStore = new SpringMongoEventStore(mongoTemplate, eventStoreConfig);
+  ```
+  Note that you must <i>not</i> use this to change the query itself, i.e. don't use the `Query#with(Sort)` etc. Only use options such as `Query#cursorBatchSize(int)` that doesn't change the actual query or sort order.
+  This is an advanced feature and should be used sparingly.
 
 ## Changelog 0.11.0 (2021-08-13)
 

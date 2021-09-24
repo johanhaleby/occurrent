@@ -76,6 +76,7 @@ public class SpringMongoEventStore implements EventStore, EventStoreOperations, 
     private final TimeRepresentation timeRepresentation;
     private final TransactionTemplate transactionTemplate;
     private final boolean transactionalReadsEnabled;
+    private final Function<Query, Query> queryOptions;
 
     /**
      * Create a new instance of {@code SpringBlockingMongoEventStore}
@@ -91,6 +92,7 @@ public class SpringMongoEventStore implements EventStore, EventStoreOperations, 
         this.transactionTemplate = config.transactionTemplate;
         this.timeRepresentation = config.timeRepresentation;
         this.transactionalReadsEnabled = config.enableTransactionalReads;
+        this.queryOptions = config.queryOptions;
         initializeEventStore(eventStoreCollectionName, mongoTemplate);
     }
 
@@ -307,7 +309,7 @@ public class SpringMongoEventStore implements EventStore, EventStoreOperations, 
     private long currentStreamVersion(String streamId) {
         Query query = Query.query(where(STREAM_ID).is(streamId));
         query.fields().include(STREAM_VERSION);
-        Document documentWithLatestStreamVersion = mongoTemplate.findOne(query.with(Sort.by(DESC, STREAM_VERSION)).limit(1), Document.class, eventStoreCollectionName);
+        Document documentWithLatestStreamVersion = mongoTemplate.findOne(queryOptions.apply(query.with(Sort.by(DESC, STREAM_VERSION)).limit(1)), Document.class, eventStoreCollectionName);
         final long currentStreamVersion;
         if (documentWithLatestStreamVersion == null) {
             currentStreamVersion = 0;
@@ -323,7 +325,7 @@ public class SpringMongoEventStore implements EventStore, EventStoreOperations, 
         }
 
         Sort sort = convertToSpringSort(sortBy);
-        return StreamUtils.createStreamFromIterator(mongoTemplate.stream(query.with(sort), Document.class, eventStoreCollectionName));
+        return StreamUtils.createStreamFromIterator(mongoTemplate.stream(queryOptions.apply(query.with(sort)), Document.class, eventStoreCollectionName));
     }
 
     // Initialization
