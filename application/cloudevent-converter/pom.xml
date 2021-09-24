@@ -31,6 +31,4 @@
             <artifactId>cloudevents-api</artifactId>
         </dependency>
     </dependencies>
-
-
 </project>

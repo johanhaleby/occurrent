@@ -60,6 +60,8 @@
   ```
   Note that you must <i>not</i> use this to change the query itself, i.e. don't use the `Query#with(Sort)` etc. Only use options such as `Query#cursorBatchSize(int)` that doesn't change the actual query or sort order.
   This is an advanced feature and should be used sparingly.
+* Added ability to convert a `Stream` of cloud events to domain events and vice versa in the `CloudEventConverter` by overriding the new `toCloudEvents` and/or `toDomainEvents` methods. 
+  The reason for overriding any of these methods is to allow adding things such as correlation id that should be the same for all events in a stream.
 
 ## Changelog 0.11.0 (2021-08-13)
 
