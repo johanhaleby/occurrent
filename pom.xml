@@ -75,7 +75,7 @@
         <spring-data-mongodb.version>3.2.5</spring-data-mongodb.version>
         <spring-boot.version>2.5.4</spring-boot.version>
         <mongo.version>4.3.2</mongo.version>
-        <dokka.version>1.4.10.2</dokka.version>
+        <dokka.version>1.5.30</dokka.version>
         <awaitility.version>4.1.0</awaitility.version>
     </properties>
 
