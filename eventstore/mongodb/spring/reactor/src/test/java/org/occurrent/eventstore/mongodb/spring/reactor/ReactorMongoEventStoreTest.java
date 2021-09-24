@@ -213,6 +213,31 @@ public class ReactorMongoEventStoreTest {
     }
 
     @Test
+    void can_configure_query_options_for_spring_blocking_event_store() {
+        // Given
+        EventStoreConfig eventStoreConfig = new EventStoreConfig.Builder().eventStoreCollectionName(connectionString.getCollection()).transactionConfig(reactiveMongoTransactionManager).timeRepresentation(TimeRepresentation.DATE)
+                .queryOptions(query -> query.noCursorTimeout().allowSecondaryReads()).build();
+        eventStore = new ReactorMongoEventStore(mongoTemplate, eventStoreConfig);
+
+        LocalDateTime now = LocalDateTime.now();
+        List<DomainEvent> events = Composition.chain(Name.defineName(UUID.randomUUID().toString(), now, "Hello World"), es -> Name.changeName(es, UUID.randomUUID().toString(), now, "John Doe"));
+
+        // When
+        persist("name", WriteCondition.streamVersionEq(0), events).block();
+
+        // Then
+        Mono<EventStream<CloudEvent>> eventStream = eventStore.read("name");
+        VersionAndEvents versionAndEvents = deserialize(eventStream);
+
+        assertAll(
+                () -> assertThat(versionAndEvents.version).isEqualTo(events.size()),
+                () -> assertThat(versionAndEvents.events).hasSize(2),
+                () -> assertThat(versionAndEvents.events).containsExactlyElementsOf(events)
+        );
+    }
+
+
+    @Test
     void can_read_events_with_skip_and_limit_using_reactor_mongo_event_store() {
         LocalDateTime now = LocalDateTime.now();
         NameDefined nameDefined = new NameDefined(UUID.randomUUID().toString(), now, "name");

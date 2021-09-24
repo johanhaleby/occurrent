@@ -144,7 +144,7 @@ public class SpringMongoEventStoreTest {
     }
 
     @Test
-    void can_read_events_when_transactional_reads_are_disabled() {
+    void can_read_events_when_transactional_reads_are_disabled_for_spring_blocking_event_store() {
         // Given
         EventStoreConfig eventStoreConfig = new EventStoreConfig.Builder().eventStoreCollectionName(connectionString.getCollection()).transactionConfig(mongoTransactionManager).timeRepresentation(TimeRepresentation.DATE).transactionalReads(false).build();
         eventStore = new SpringMongoEventStore(mongoTemplate, eventStoreConfig);
@@ -167,7 +167,7 @@ public class SpringMongoEventStoreTest {
     }
 
     @Test
-    void can_configure_query_options() {
+    void can_configure_query_options_for_spring_blocking_event_store() {
         // Given
         EventStoreConfig eventStoreConfig = new EventStoreConfig.Builder().eventStoreCollectionName(connectionString.getCollection()).transactionConfig(mongoTransactionManager).timeRepresentation(TimeRepresentation.DATE)
                 .queryOptions(query -> query.noCursorTimeout().allowSecondaryReads()).build();

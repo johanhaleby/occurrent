@@ -72,6 +72,7 @@ public class ReactorMongoEventStore implements EventStore, EventStoreOperations,
     private final TimeRepresentation timeRepresentation;
     private final TransactionalOperator transactionalOperator;
     private final boolean transactionalReadsEnabled;
+    private final Function<Query, Query> queryOptions;
 
     /**
      * Create a new instance of {@code SpringReactorMongoEventStore}
@@ -87,6 +88,7 @@ public class ReactorMongoEventStore implements EventStore, EventStoreOperations,
         this.transactionalOperator = config.transactionalOperator;
         this.timeRepresentation = config.timeRepresentation;
         this.transactionalReadsEnabled = config.enableTransactionalReads;
+        this.queryOptions = config.queryOptions;
         initializeEventStore(eventStoreCollectionName, mongoTemplate).block();
     }
 
@@ -153,13 +155,13 @@ public class ReactorMongoEventStore implements EventStore, EventStoreOperations,
         }
 
         Sort sort = convertToSpringSort(sortBy);
-        return mongoTemplate.find(query.with(sort), Document.class, eventStoreCollectionName);
+        return mongoTemplate.find(queryOptions.apply(query.with(sort)), Document.class, eventStoreCollectionName);
     }
 
     private Mono<Long> currentStreamVersion(String streamId) {
         Query query = Query.query(where(STREAM_ID).is(streamId));
         query.fields().include(STREAM_VERSION);
-        return mongoTemplate.findOne(query.with(Sort.by(DESC, STREAM_VERSION)).limit(1), Document.class, eventStoreCollectionName)
+        return mongoTemplate.findOne(queryOptions.apply(query.with(Sort.by(DESC, STREAM_VERSION)).limit(1)), Document.class, eventStoreCollectionName)
                 .map(documentWithLatestStreamVersion -> documentWithLatestStreamVersion.getLong(STREAM_VERSION))
                 .switchIfEmpty(Mono.just(0L));
     }

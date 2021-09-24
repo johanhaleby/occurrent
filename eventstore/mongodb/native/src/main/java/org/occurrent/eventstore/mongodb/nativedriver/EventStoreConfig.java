@@ -183,7 +183,7 @@ public class EventStoreConfig {
         }
 
         /**
-         * Specify a function that can be used to configuring the query options used for {@link org.occurrent.eventstore.api.blocking.EventStore#read(String)} and {@link org.occurrent.eventstore.api.blocking.EventStoreQueries}.
+         * Specify a function that can be used to configure the query options used for {@link org.occurrent.eventstore.api.blocking.EventStore#read(String)} and {@link org.occurrent.eventstore.api.blocking.EventStoreQueries}.
          * This is an advanced feature and should be used sparingly. For example, you can configure cursor timeout, whether slave is OK, etc. By default, mongodb default query options are used.
          * <br><br>
          * Note that you must <i>not</i> use this to change the query itself, i.e. don't use the {@link FindIterable#sort(Bson)} etc. Only use options such as {@link FindIterable#batchSize(int)} that doesn't change

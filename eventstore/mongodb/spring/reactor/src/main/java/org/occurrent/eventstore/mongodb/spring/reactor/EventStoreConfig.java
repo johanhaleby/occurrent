@@ -17,11 +17,14 @@
 package org.occurrent.eventstore.mongodb.spring.reactor;
 
 import org.occurrent.mongodb.timerepresentation.TimeRepresentation;
+import org.springframework.data.domain.Sort;
+import org.springframework.data.mongodb.core.query.Query;
 import org.springframework.transaction.ReactiveTransactionManager;
 import org.springframework.transaction.reactive.TransactionalOperator;
 
 import java.util.Objects;
 import java.util.StringJoiner;
+import java.util.function.Function;
 
 import static java.util.Objects.requireNonNull;
 
@@ -30,11 +33,13 @@ import static java.util.Objects.requireNonNull;
  */
 public class EventStoreConfig {
     private static final boolean ENABLE_TRANSACTIONAL_READS_BY_DEFAULT = true;
+    private static final Function<Query, Query> DEFAULT_QUERY_OPTIONS_FUNCTION = Function.identity();
 
     public final String eventStoreCollectionName;
     public final TransactionalOperator transactionalOperator;
     public final TimeRepresentation timeRepresentation;
     public final boolean enableTransactionalReads;
+    public final Function<Query, Query> queryOptions;
 
     /**
      * Create a new instance of {@code EventStoreConfig}.
@@ -44,10 +49,10 @@ public class EventStoreConfig {
      * @param timeRepresentation       How time should be represented in the database
      */
     public EventStoreConfig(String eventStoreCollectionName, TransactionalOperator transactionalOperator, TimeRepresentation timeRepresentation) {
-        this(eventStoreCollectionName, transactionalOperator, timeRepresentation, ENABLE_TRANSACTIONAL_READS_BY_DEFAULT);
+        this(eventStoreCollectionName, transactionalOperator, timeRepresentation, ENABLE_TRANSACTIONAL_READS_BY_DEFAULT, DEFAULT_QUERY_OPTIONS_FUNCTION);
     }
 
-    private EventStoreConfig(String eventStoreCollectionName, TransactionalOperator transactionalOperator, TimeRepresentation timeRepresentation, boolean enableTransactionalReads) {
+    private EventStoreConfig(String eventStoreCollectionName, TransactionalOperator transactionalOperator, TimeRepresentation timeRepresentation, boolean enableTransactionalReads, Function<Query, Query> queryOptions) {
         requireNonNull(eventStoreCollectionName, "Event store collection name cannot be null");
         requireNonNull(transactionalOperator, TransactionalOperator.class.getSimpleName() + " cannot be null");
         requireNonNull(timeRepresentation, TimeRepresentation.class.getSimpleName() + " cannot be null");
@@ -55,6 +60,7 @@ public class EventStoreConfig {
         this.transactionalOperator = transactionalOperator;
         this.timeRepresentation = timeRepresentation;
         this.enableTransactionalReads = enableTransactionalReads;
+        this.queryOptions = queryOptions == null ? DEFAULT_QUERY_OPTIONS_FUNCTION : queryOptions;
     }
 
 
@@ -63,12 +69,12 @@ public class EventStoreConfig {
         if (this == o) return true;
         if (!(o instanceof EventStoreConfig)) return false;
         EventStoreConfig that = (EventStoreConfig) o;
-        return enableTransactionalReads == that.enableTransactionalReads && Objects.equals(eventStoreCollectionName, that.eventStoreCollectionName) && Objects.equals(transactionalOperator, that.transactionalOperator) && timeRepresentation == that.timeRepresentation;
+        return enableTransactionalReads == that.enableTransactionalReads && Objects.equals(eventStoreCollectionName, that.eventStoreCollectionName) && Objects.equals(transactionalOperator, that.transactionalOperator) && timeRepresentation == that.timeRepresentation && Objects.equals(queryOptions, that.queryOptions);
     }
 
     @Override
     public int hashCode() {
-        return Objects.hash(eventStoreCollectionName, transactionalOperator, timeRepresentation, enableTransactionalReads);
+        return Objects.hash(eventStoreCollectionName, transactionalOperator, timeRepresentation, enableTransactionalReads, queryOptions);
     }
 
     @Override
@@ -78,6 +84,7 @@ public class EventStoreConfig {
                 .add("transactionalOperator=" + transactionalOperator)
                 .add("timeRepresentation=" + timeRepresentation)
                 .add("enableTransactionalReads=" + enableTransactionalReads)
+                .add("queryOptions=" + queryOptions)
                 .toString();
     }
 
@@ -86,6 +93,7 @@ public class EventStoreConfig {
         private TransactionalOperator transactionalOperator;
         private TimeRepresentation timeRepresentation;
         private boolean enableTransactionalReads = ENABLE_TRANSACTIONAL_READS_BY_DEFAULT;
+        private Function<Query, Query> queryOptions;
 
         /**
          * @param eventStoreCollectionName The collection in which the events are persisted
@@ -181,9 +189,24 @@ public class EventStoreConfig {
             return this;
         }
 
+        /**
+         * Specify a function that can be used to configure the query options used for {@link org.occurrent.eventstore.api.reactor.EventStore#read(String)} and {@link org.occurrent.eventstore.api.reactor.EventStoreQueries}.
+         * This is an advanced feature and should be used sparingly. For example, you can configure cursor timeout, whether slave is OK, etc. By default, mongodb default query options are used.
+         * <br><br>
+         * Note that you must <i>not</i> use this to change the query itself, i.e. don't use the {@link Query#with(Sort)} etc. Only use options such as {@link Query#cursorBatchSize(int)} that doesn't change
+         * the actual query or sort order.
+         *
+         * @param queryOptions The query options function to use, it cannot return null.
+         * @return A same {@code Builder instance}
+         */
+        public Builder queryOptions(Function<Query, Query> queryOptions) {
+            this.queryOptions = queryOptions;
+            return this;
+        }
+
 
         public EventStoreConfig build() {
-            return new EventStoreConfig(eventStoreCollectionName, transactionalOperator, timeRepresentation, enableTransactionalReads);
+            return new EventStoreConfig(eventStoreCollectionName, transactionalOperator, timeRepresentation, enableTransactionalReads, queryOptions);
         }
     }
 }
