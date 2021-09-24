@@ -38,7 +38,7 @@ import java.util.stream.Stream;
  * A generic application service that works in many scenarios. If you need more complex logic, such as transaction support, you may consider either wrapping it
  * in a custom {@code ApplicationService} implementation, or simply copy and paste the source into your own code base and make changes there.
  *
- * @param <T> The type of the event to store. Normally this would be your custom "DomainEvent" class but it could also be {@link CloudEvent}.
+ * @param <T> The type of the event to store. Normally this would be your custom "DomainEvent" class, but it could also be {@link CloudEvent}.
  */
 public class GenericApplicationService<T> implements ApplicationService<T> {
 

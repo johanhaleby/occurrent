@@ -17,19 +17,18 @@
 
 <project xmlns="http://maven.apache.org/POM/4.0.0" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 http://maven.apache.org/xsd/maven-4.0.0.xsd">
     <parent>
-        <artifactId>occurrent</artifactId>
+        <artifactId>cloudevent-converter</artifactId>
         <groupId>org.occurrent</groupId>
         <version>0.11.1-SNAPSHOT</version>
     </parent>
-    <packaging>pom</packaging>
-    <modules>
-        <module>api</module>
-        <module>generic</module>
-        <module>xstream</module>
-    </modules>
     <modelVersion>4.0.0</modelVersion>
 
-    <artifactId>cloudevent-converter</artifactId>
+    <artifactId>cloudevent-converter-api</artifactId>
 
-    <description>Converts between domain events and cloud events</description>
+    <dependencies>
+        <dependency>
+            <groupId>io.cloudevents</groupId>
+            <artifactId>cloudevents-api</artifactId>
+        </dependency>
+    </dependencies>
 </project>

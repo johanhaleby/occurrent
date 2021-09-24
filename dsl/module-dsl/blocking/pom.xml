@@ -68,8 +68,15 @@
         </dependency>
         <dependency>
             <groupId>org.occurrent</groupId>
+            <artifactId>cloudevent-converter-generic</artifactId>
+            <version>0.11.1-SNAPSHOT</version>
+            <scope>test</scope>
+        </dependency>
+        <dependency>
+            <groupId>org.occurrent</groupId>
             <artifactId>eventstore-inmemory</artifactId>
             <version>0.11.1-SNAPSHOT</version>
+            <scope>test</scope>
         </dependency>
         <dependency>
             <groupId>org.occurrent</groupId>

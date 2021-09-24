@@ -28,7 +28,7 @@
     <dependencies>
         <dependency>
             <groupId>org.occurrent</groupId>
-            <artifactId>cloudevent-converter</artifactId>
+            <artifactId>cloudevent-converter-api</artifactId>
             <version>0.11.1-SNAPSHOT</version>
         </dependency>
         <dependency>
