@@ -8,7 +8,7 @@
 * Upgraded project reactor to 3.4.10
 * Upgrading to cloudevents sdk 2.2.0
 * Minor tweak in ApplicationService extension function for Kotlin so that it no longer converts the Java stream into a temporary Kotlin sequence before converting it to a List
-* Allow configuring whether transactional reads should be enabled or disabled for all MongoDB event stores.
+* Allow configuring (using the `EventStoreConfig` builder) whether transactional reads should be enabled or disabled for all MongoDB event stores.
   This is an advanced feature, and you almost always want to have it enabled. There are two reasons for disabling it:
   1. There's a bug/limitation on Atlas free tier clusters which yields an exception when reading large number of events in a stream in a transaction.
      To workaround this you could disable transactional reads. The exception takes this form:
@@ -46,7 +46,12 @@
   If you disable transactional reads, you _may_ end up with a mismatch between the version number in the `EventStream` and
   the last event returned from the event stream. This is because Occurrent does two reads to MongoDB when reading an event stream. First it finds the current version number of the stream (A),
   and secondly it queries for all events (B). If you disable transactional reads, then another thread might have written more events before the call to B has been made. Thus, the version number
-  received from query A might be stale. This may or may not be a problem for your domain, but it's generally recommended having transactional reads enabled.
+  received from query A might be stale. This may or may not be a problem for your domain, but it's generally recommended having transactional reads enabled. Configuration example:
+
+  ```
+  EventStoreConfig eventStoreConfig = new EventStoreConfig.Builder().transactionalReads(false). .. .build();
+  eventStore = new SpringMongoEventStore(mongoTemplate, eventStoreConfig);
+  ```
 
 ## Changelog 0.11.0 (2021-08-13)
 
