@@ -71,6 +71,7 @@ public class ReactorMongoEventStore implements EventStore, EventStoreOperations,
     private final String eventStoreCollectionName;
     private final TimeRepresentation timeRepresentation;
     private final TransactionalOperator transactionalOperator;
+    private final boolean transactionalReadsEnabled;
 
     /**
      * Create a new instance of {@code SpringReactorMongoEventStore}
@@ -85,6 +86,7 @@ public class ReactorMongoEventStore implements EventStore, EventStoreOperations,
         this.eventStoreCollectionName = config.eventStoreCollectionName;
         this.transactionalOperator = config.transactionalOperator;
         this.timeRepresentation = config.timeRepresentation;
+        this.transactionalReadsEnabled = config.enableTransactionalReads;
         initializeEventStore(eventStoreCollectionName, mongoTemplate).block();
     }
 
@@ -126,7 +128,12 @@ public class ReactorMongoEventStore implements EventStore, EventStoreOperations,
 
     @Override
     public Mono<EventStream<CloudEvent>> read(String streamId, int skip, int limit) {
-        Mono<EventStreamImpl> eventStream = transactionalOperator.execute(transactionStatus -> readEventStream(streamId, skip, limit)).single();
+        Mono<EventStreamImpl> eventStream;
+        if (transactionalReadsEnabled) {
+            eventStream = transactionalOperator.execute(transactionStatus -> readEventStream(streamId, skip, limit)).single();
+        } else {
+            eventStream = readEventStream(streamId, skip, limit);
+        }
         return convertToCloudEvent(timeRepresentation, eventStream);
     }
 

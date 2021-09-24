@@ -21,6 +21,7 @@ import io.cloudevents.CloudEvent;
 import org.occurrent.mongodb.timerepresentation.TimeRepresentation;
 
 import java.util.Objects;
+import java.util.StringJoiner;
 
 /**
  * Configuration for the synchronous java driver MongoDB EventStore
@@ -74,23 +75,22 @@ public class EventStoreConfig {
         if (this == o) return true;
         if (!(o instanceof EventStoreConfig)) return false;
         EventStoreConfig that = (EventStoreConfig) o;
-        return Objects.equals(transactionOptions, that.transactionOptions) &&
-                timeRepresentation == that.timeRepresentation;
+        return enableTransactionalReads == that.enableTransactionalReads && Objects.equals(transactionOptions, that.transactionOptions) && timeRepresentation == that.timeRepresentation;
     }
 
     @Override
     public int hashCode() {
-        return Objects.hash(transactionOptions, timeRepresentation);
+        return Objects.hash(transactionOptions, timeRepresentation, enableTransactionalReads);
     }
 
     @Override
     public String toString() {
-        return "EventStoreConfig{" +
-                "transactionOptions=" + transactionOptions +
-                ", timeRepresentation=" + timeRepresentation +
-                '}';
+        return new StringJoiner(", ", EventStoreConfig.class.getSimpleName() + "[", "]")
+                .add("transactionOptions=" + transactionOptions)
+                .add("timeRepresentation=" + timeRepresentation)
+                .add("enableTransactionalReads=" + enableTransactionalReads)
+                .toString();
     }
-
 
     public static final class Builder {
         private TransactionOptions transactionOptions;
