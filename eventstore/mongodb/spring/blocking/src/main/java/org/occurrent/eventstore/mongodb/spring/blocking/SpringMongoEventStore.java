@@ -75,6 +75,7 @@ public class SpringMongoEventStore implements EventStore, EventStoreOperations, 
     private final String eventStoreCollectionName;
     private final TimeRepresentation timeRepresentation;
     private final TransactionTemplate transactionTemplate;
+    private final boolean transactionalReadsEnabled;
 
     /**
      * Create a new instance of {@code SpringBlockingMongoEventStore}
@@ -89,12 +90,18 @@ public class SpringMongoEventStore implements EventStore, EventStoreOperations, 
         this.eventStoreCollectionName = config.eventStoreCollectionName;
         this.transactionTemplate = config.transactionTemplate;
         this.timeRepresentation = config.timeRepresentation;
+        this.transactionalReadsEnabled = config.enableTransactionalReads;
         initializeEventStore(eventStoreCollectionName, mongoTemplate);
     }
 
     @Override
     public EventStream<CloudEvent> read(String streamId, int skip, int limit) {
-        final EventStream<Document> eventStream = transactionTemplate.execute(transactionStatus -> readEventStream(streamId, skip, limit));
+        final EventStream<Document> eventStream;
+        if (transactionalReadsEnabled) {
+            eventStream = transactionTemplate.execute(transactionStatus -> readEventStream(streamId, skip, limit));
+        } else {
+            eventStream = readEventStream(streamId, skip, limit);
+        }
         return requireNonNull(eventStream).map(document -> convertToCloudEvent(timeRepresentation, document));
     }
 
