@@ -79,6 +79,7 @@ public class MongoEventStore implements EventStore, EventStoreOperations, EventS
     private final MongoClient mongoClient;
     private final TimeRepresentation timeRepresentation;
     private final TransactionOptions transactionOptions;
+    private final boolean transactionalReadsEnabled;
 
     /**
      * Create a new instance of {@code MongoEventStore}
@@ -111,6 +112,7 @@ public class MongoEventStore implements EventStore, EventStoreOperations, EventS
         this.eventCollection = eventCollection;
         transactionOptions = config.transactionOptions;
         this.timeRepresentation = config.timeRepresentation;
+        this.transactionalReadsEnabled = config.enableTransactionalReads;
         initializeEventStore(eventCollection, database);
     }
 
@@ -121,17 +123,26 @@ public class MongoEventStore implements EventStore, EventStoreOperations, EventS
     }
 
     private EventStreamImpl<Document> readEventStream(String streamId, int skip, int limit, TransactionOptions transactionOptions) {
-        try (ClientSession clientSession = mongoClient.startSession()) {
-            return clientSession.withTransaction(() -> {
-                long currentStreamVersion = currentStreamVersion(streamId);
-                if (currentStreamVersion == 0) {
-                    return new EventStreamImpl<>(streamId, 0, Stream.empty());
-                }
+        Function<ClientSession, EventStreamImpl<Document>> readEventStreamFunction = clientSession -> {
+            long currentStreamVersion = currentStreamVersion(streamId);
+            if (currentStreamVersion == 0) {
+                return new EventStreamImpl<>(streamId, 0, Stream.empty());
+            }
 
-                Stream<Document> stream = readCloudEvents(streamIdEqualTo(streamId), skip, limit, SortBy.streamVersion(ASCENDING), clientSession);
-                return new EventStreamImpl<>(streamId, currentStreamVersion, stream);
-            }, transactionOptions);
+            Stream<Document> stream = readCloudEvents(streamIdEqualTo(streamId), skip, limit, SortBy.streamVersion(ASCENDING), clientSession);
+            return new EventStreamImpl<>(streamId, currentStreamVersion, stream);
+        };
+
+        final EventStreamImpl<Document> eventStream;
+        if (transactionalReadsEnabled) {
+            try (ClientSession clientSession = mongoClient.startSession()) {
+                eventStream = clientSession.withTransaction(() -> readEventStreamFunction.apply(clientSession), transactionOptions);
+            }
+        } else {
+            eventStream = readEventStreamFunction.apply(null);
         }
+
+        return eventStream;
     }
 
     private long currentStreamVersion(String streamId) {

@@ -29,6 +29,8 @@ import static java.util.Objects.requireNonNull;
  * Configuration for the blocking Spring java driver for MongoDB EventStore
  */
 public class EventStoreConfig {
+    private static final boolean ENABLE_TRANSACTIONAL_READS_BY_DEFAULT = true;
+
     public final String eventStoreCollectionName;
     public final TransactionTemplate transactionTemplate;
     public final TimeRepresentation timeRepresentation;
@@ -42,7 +44,7 @@ public class EventStoreConfig {
      * @param timeRepresentation       How time should be represented in the database
      */
     public EventStoreConfig(String eventStoreCollectionName, TransactionTemplate transactionTemplate, TimeRepresentation timeRepresentation) {
-        this(eventStoreCollectionName, transactionTemplate, timeRepresentation, true);
+        this(eventStoreCollectionName, transactionTemplate, timeRepresentation, ENABLE_TRANSACTIONAL_READS_BY_DEFAULT);
     }
 
     private EventStoreConfig(String eventStoreCollectionName, TransactionTemplate transactionTemplate, TimeRepresentation timeRepresentation, boolean enableTransactionalReads) {
@@ -82,7 +84,7 @@ public class EventStoreConfig {
         private String eventStoreCollectionName;
         private TransactionTemplate transactionTemplate;
         private TimeRepresentation timeRepresentation;
-        private boolean enableTransactionalReads;
+        private boolean enableTransactionalReads = ENABLE_TRANSACTIONAL_READS_BY_DEFAULT;
 
         /**
          * @param eventStoreCollectionName The collection in which the events are persisted
@@ -180,7 +182,7 @@ public class EventStoreConfig {
 
 
         public EventStoreConfig build() {
-            return new EventStoreConfig(eventStoreCollectionName, transactionTemplate, timeRepresentation);
+            return new EventStoreConfig(eventStoreCollectionName, transactionTemplate, timeRepresentation, enableTransactionalReads);
         }
     }
 }

@@ -39,10 +39,7 @@ import org.junit.jupiter.api.condition.EnabledForJreRange;
 import org.junit.jupiter.api.condition.EnabledOnJre;
 import org.junit.jupiter.api.condition.EnabledOnOs;
 import org.junit.jupiter.api.extension.RegisterExtension;
-import org.occurrent.domain.DomainEvent;
-import org.occurrent.domain.Name;
-import org.occurrent.domain.NameDefined;
-import org.occurrent.domain.NameWasChanged;
+import org.occurrent.domain.*;
 import org.occurrent.eventstore.api.*;
 import org.occurrent.eventstore.api.blocking.EventStream;
 import org.occurrent.filter.Filter;
@@ -166,6 +163,29 @@ class MongoEventStoreTest {
         EventStream<CloudEvent> eventStream = eventStore.read("name");
 
         assertThat(eventStream.isEmpty()).isTrue();
+    }
+
+    @Test
+    void can_read_events_when_transactional_reads_are_disabled() {
+        // Given
+        EventStoreConfig eventStoreConfig = new EventStoreConfig.Builder().timeRepresentation(TimeRepresentation.DATE).transactionalReads(false).build();
+        eventStore = newMongoEventStore(eventStoreConfig);
+
+        LocalDateTime now = LocalDateTime.now();
+        List<DomainEvent> events = Composition.chain(Name.defineName(UUID.randomUUID().toString(), now, "Hello World"), es -> Name.changeName(es, UUID.randomUUID().toString(), now, "John Doe"));
+
+        // When
+        persist("name", WriteCondition.streamVersionEq(0), events);
+
+        // Then
+        EventStream<CloudEvent> eventStream = eventStore.read("name");
+        List<DomainEvent> readEvents = deserialize(eventStream.events());
+
+        assertAll(
+                () -> assertThat(eventStream.version()).isEqualTo(events.size()),
+                () -> assertThat(readEvents).hasSize(2),
+                () -> assertThat(readEvents).containsExactlyElementsOf(events)
+        );
     }
 
     @Test
@@ -1787,8 +1807,12 @@ class MongoEventStoreTest {
     }
 
     private MongoEventStore newMongoEventStore(TimeRepresentation timeRepresentation) {
+        return newMongoEventStore(new EventStoreConfig(timeRepresentation));
+    }
+
+    private MongoEventStore newMongoEventStore(EventStoreConfig eventStoreConfig) {
         ConnectionString connectionString = new ConnectionString(mongoDBContainer.getReplicaSetUrl());
-        return new MongoEventStore(mongoClient, connectionString.getDatabase(), "events", new EventStoreConfig(timeRepresentation));
+        return new MongoEventStore(mongoClient, connectionString.getDatabase(), "events", eventStoreConfig);
     }
 
     private static void await(CyclicBarrier cyclicBarrier) {
