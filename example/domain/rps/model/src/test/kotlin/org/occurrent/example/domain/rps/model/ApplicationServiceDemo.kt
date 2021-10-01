@@ -245,30 +245,38 @@ class ProductionCloudEventConverter(private val objectMapper: ObjectMapper) : Cl
     override fun toDomainEvent(cloudEvent: CloudEvent): GameEvent {
         val gameId = GameId(UUID.fromString(cloudEvent.subject))
         val timestamp = Timestamp(cloudEvent.time!!.toZonedDateTime())
-        val data = cloudEvent.data
+        val data = cloudEvent.data.asMap()
         return when (cloudEvent.type) {
-            FirstPlayerJoinedGame::class.simpleName -> FirstPlayerJoinedGame(gameId, timestamp, PlayerId(data["player"]))
-            GameCreated::class.simpleName -> GameCreated(gameId, timestamp, GameCreatorId(data["createdBy"]), MaxNumberOfRounds.unsafe(data["maxNumberOfRounds"]))
+            FirstPlayerJoinedGame::class.simpleName -> FirstPlayerJoinedGame(gameId, timestamp, PlayerId(data.coerced("player")))
+            GameCreated::class.simpleName -> GameCreated(gameId, timestamp, GameCreatorId(data.coerced("createdBy")), MaxNumberOfRounds.unsafe(data.coerced("maxNumberOfRounds")))
             GameEnded::class.simpleName -> GameEnded(gameId, timestamp)
             GameStarted::class.simpleName -> GameStarted(gameId, timestamp)
             GameTied::class.simpleName -> GameTied(gameId, timestamp)
-            GameWon::class.simpleName -> GameWon(gameId, timestamp, PlayerId(data["winner"]))
-            HandPlayed::class.simpleName -> HandPlayed(gameId, timestamp, PlayerId(data["player"]), Shape.valueOf(data["shape"]), RoundNumber.unsafe(data["roundNumber"]))
-            RoundEnded::class.simpleName -> RoundEnded(gameId, timestamp, RoundNumber.unsafe(data["roundNumber"]))
-            RoundStarted::class.simpleName -> RoundStarted(gameId, timestamp, RoundNumber.unsafe(data["roundNumber"]))
-            RoundTied::class.simpleName -> RoundTied(gameId, timestamp, RoundNumber.unsafe(data["roundNumber"]))
-            RoundWon::class.simpleName -> RoundWon(gameId, timestamp, RoundNumber.unsafe(data["roundNumber"]), PlayerId(data["winner"]))
-            SecondPlayerJoinedGame::class.simpleName -> SecondPlayerJoinedGame(gameId, timestamp, PlayerId(data["playerId"]))
+            GameWon::class.simpleName -> GameWon(gameId, timestamp, PlayerId(data.coerced("winner")))
+            HandPlayed::class.simpleName -> HandPlayed(gameId, timestamp, PlayerId(data.coerced("player")), Shape.valueOf(data.coerced("shape")), RoundNumber.unsafe(data.coerced("roundNumber")))
+            RoundEnded::class.simpleName -> RoundEnded(gameId, timestamp, RoundNumber.unsafe(data.coerced("roundNumber")))
+            RoundStarted::class.simpleName -> RoundStarted(gameId, timestamp, RoundNumber.unsafe(data.coerced("roundNumber")))
+            RoundTied::class.simpleName -> RoundTied(gameId, timestamp, RoundNumber.unsafe(data.coerced("roundNumber")))
+            RoundWon::class.simpleName -> RoundWon(gameId, timestamp, RoundNumber.unsafe(data.coerced("roundNumber")), PlayerId(data.coerced("winner")))
+            SecondPlayerJoinedGame::class.simpleName -> SecondPlayerJoinedGame(gameId, timestamp, PlayerId(data.coerced("playerId")))
             else -> throw IllegalStateException("Event type ${cloudEvent.type} is unknown")
         }
     }
 
-    private inline operator fun <reified T> CloudEventData?.get(propertyName: String): T {
-        val pojoCloudEventData = this as PojoCloudEventData<*>
-        val value = when (val value = pojoCloudEventData.value) {
-            is Map<*, *> -> value[propertyName]
-            else -> objectMapper.readValue<Map<String, Any>>(pojoCloudEventData.toBytes())[propertyName]
+    @Suppress("UNCHECKED_CAST")
+    private fun CloudEventData?.asMap(): Map<String, Any> =
+        if (this == null) {
+            emptyMap()
+        } else {
+            val pojoCloudEventData = this as PojoCloudEventData<*>
+            when (val value = pojoCloudEventData.value) {
+                is Map<*, *> -> value as Map<String, Any>
+                else -> objectMapper.readValue(pojoCloudEventData.toBytes())
+            }
         }
+
+    private inline fun <reified T> Map<String, Any>.coerced(propertyName: String): T {
+        val value = this[propertyName]
         return when {
             UUID::class == T::class && value is String -> UUID.fromString(value)
             else -> value
