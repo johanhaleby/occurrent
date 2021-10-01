@@ -257,6 +257,11 @@ public class SpringMongoEventStore implements EventStore, EventStoreOperations, 
             return events;
         }
 
+        @Override
+        public void close() {
+            events.close();
+        }
+
         public void set_id(String _id) {
             this._id = _id;
         }

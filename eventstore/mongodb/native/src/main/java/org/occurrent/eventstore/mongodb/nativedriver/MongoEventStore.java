@@ -131,15 +131,21 @@ public class MongoEventStore implements EventStore, EventStoreOperations, EventS
                 return new EventStreamImpl<>(streamId, 0, Stream.empty());
             }
 
-            Stream<Document> stream = readCloudEvents(streamIdEqualTo(streamId), skip, limit, SortBy.streamVersion(ASCENDING), clientSession);
+            Stream<Document> stream = readCloudEvents(streamIdEqualTo(streamId), skip, limit, SortBy.streamVersion(ASCENDING), clientSession)
+                    .onClose(() -> {
+                        if (clientSession != null) {
+                            clientSession.close();
+                        }
+                    });
             return new EventStreamImpl<>(streamId, currentStreamVersion, stream);
         };
 
         final EventStreamImpl<Document> eventStream;
         if (transactionalReadsEnabled) {
-            try (ClientSession clientSession = mongoClient.startSession()) {
-                eventStream = clientSession.withTransaction(() -> readEventStreamFunction.apply(clientSession), transactionOptions);
-            }
+            // Note that we deliberately don't have a try-statement here, there reason is that
+            // clients need to call "close" on the Stream in EventStream, which contains a "close hook".
+            ClientSession clientSession = mongoClient.startSession();
+            eventStream = clientSession.withTransaction(() -> readEventStreamFunction.apply(clientSession), transactionOptions);
         } else {
             eventStream = readEventStreamFunction.apply(null);
         }
@@ -343,6 +349,10 @@ public class MongoEventStore implements EventStore, EventStoreOperations, EventS
             return events;
         }
 
+        @Override
+        public void close() {
+            events.close();
+        }
     }
 
     private static void initializeEventStore(MongoCollection<Document> eventStoreCollection, MongoDatabase mongoDatabase) {

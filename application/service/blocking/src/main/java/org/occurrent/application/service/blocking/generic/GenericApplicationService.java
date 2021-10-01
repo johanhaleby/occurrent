@@ -81,22 +81,22 @@ public class GenericApplicationService<T> implements ApplicationService<T> {
 
         Tuple<WriteResult, List<T>> result = retryStrategy.execute(() -> {
             // Read all events from the event store for a particular stream
-            EventStream<CloudEvent> eventStream = eventStore.read(streamId);
+            try (EventStream<CloudEvent> eventStream = eventStore.read(streamId)) {
+                // Convert the cloud events into domain events
+                Stream<T> eventsInStream = cloudEventConverter.toDomainEvents(eventStream.events());
 
-            // Convert the cloud events into domain events
-            Stream<T> eventsInStream = cloudEventConverter.toDomainEvents(eventStream.events());
+                // Call a pure function from the domain model which returns a Stream of events
+                Stream<T> newDomainEvents = emptyStreamIfNull(functionThatCallsDomainModel.apply(eventsInStream));
 
-            // Call a pure function from the domain model which returns a Stream of events
-            Stream<T> newDomainEvents = emptyStreamIfNull(functionThatCallsDomainModel.apply(eventsInStream));
+                // We need to convert the new domain event stream into a list in order to be able to call side-effects with new events
+                // if side effect is defined
+                final List<T> newEventsAsList = sideEffect == null ? null : newDomainEvents.collect(Collectors.toList());
 
-            // We need to convert the new domain event stream into a list in order to be able to call side-effects with new events
-            // if side effect is defined
-            final List<T> newEventsAsList = sideEffect == null ? null : newDomainEvents.collect(Collectors.toList());
-
-            // Convert to cloud events and write the new events to the event store
-            Stream<CloudEvent> newEvents = cloudEventConverter.toCloudEvents(sideEffect == null ? newDomainEvents : newEventsAsList.stream());
-            WriteResult writeResult = eventStore.write(streamId, eventStream.version(), newEvents);
-            return new Tuple<>(writeResult, newEventsAsList);
+                // Convert to cloud events and write the new events to the event store
+                Stream<CloudEvent> newEvents = cloudEventConverter.toCloudEvents(sideEffect == null ? newDomainEvents : newEventsAsList.stream());
+                WriteResult writeResult = eventStore.write(streamId, eventStream.version(), newEvents);
+                return new Tuple<>(writeResult, newEventsAsList);
+            }
         });
 
         // Invoke side-effect
