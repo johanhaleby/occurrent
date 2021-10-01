@@ -1,3 +1,6 @@
+## Changelog next version
+* Fixed bug in MongoEventStore. When reading events, the correct client session was not used.
+
 ## Changelog 0.12.0 (2021-09-24)
 
 * Added ability to map event type to event name in subscriptions DSL from Kotlin

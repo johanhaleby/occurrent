@@ -126,7 +126,7 @@ public class MongoEventStore implements EventStore, EventStoreOperations, EventS
 
     private EventStreamImpl<Document> readEventStream(String streamId, int skip, int limit, TransactionOptions transactionOptions) {
         Function<ClientSession, EventStreamImpl<Document>> readEventStreamFunction = clientSession -> {
-            long currentStreamVersion = currentStreamVersion(streamId);
+            long currentStreamVersion = currentStreamVersion(streamId, clientSession);
             if (currentStreamVersion == 0) {
                 return new EventStreamImpl<>(streamId, 0, Stream.empty());
             }
@@ -147,8 +147,15 @@ public class MongoEventStore implements EventStore, EventStoreOperations, EventS
         return eventStream;
     }
 
-    private long currentStreamVersion(String streamId) {
-        Document documentWithLatestStreamVersion = queryOptions.apply(eventCollection.find(streamIdEqualTo(streamId)).sort(descending(STREAM_VERSION)).limit(1).projection(Projections.include(STREAM_VERSION))).first();
+    private long currentStreamVersion(String streamId, ClientSession clientSession) {
+        Bson streamIdFilter = streamIdEqualTo(streamId);
+        final FindIterable<Document> documents;
+        if (clientSession == null) {
+            documents = eventCollection.find(streamIdFilter);
+        } else {
+            documents = eventCollection.find(clientSession, streamIdFilter);
+        }
+        final Document documentWithLatestStreamVersion = queryOptions.apply(documents.sort(descending(STREAM_VERSION)).limit(1).projection(Projections.include(STREAM_VERSION))).first();
         final long currentStreamVersion;
         if (documentWithLatestStreamVersion == null) {
             currentStreamVersion = 0;
@@ -191,10 +198,10 @@ public class MongoEventStore implements EventStore, EventStoreOperations, EventS
 
         try (ClientSession clientSession = mongoClient.startSession()) {
             Long newStreamVersion = clientSession.withTransaction(() -> {
-                long currentStreamVersion = currentStreamVersion(streamId);
+                long currentStreamVersion = currentStreamVersion(streamId, clientSession);
 
                 if (!isFulfilled(currentStreamVersion, writeCondition)) {
-                    throw new WriteConditionNotFulfilledException(streamId, currentStreamVersion, writeCondition, String.format("%s was not fulfilled. Expected version %s but was %s.", WriteCondition.class.getSimpleName(), writeCondition.toString(), currentStreamVersion));
+                    throw new WriteConditionNotFulfilledException(streamId, currentStreamVersion, writeCondition, String.format("%s was not fulfilled. Expected version %s but was %s.", WriteCondition.class.getSimpleName(), writeCondition, currentStreamVersion));
                 }
 
                 List<Document> cloudEventDocuments = zip(LongStream.iterate(currentStreamVersion + 1, i -> i + 1).boxed(), events, Pair::new)
