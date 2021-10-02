@@ -58,6 +58,7 @@ import static org.occurrent.eventstore.mongodb.internal.MongoExceptionTranslator
 import static org.occurrent.eventstore.mongodb.internal.OccurrentCloudEventMongoDocumentMapper.convertToCloudEvent;
 import static org.occurrent.eventstore.mongodb.internal.OccurrentCloudEventMongoDocumentMapper.convertToDocument;
 import static org.occurrent.functionalsupport.internal.FunctionalSupport.mapWithIndex;
+import static org.occurrent.functionalsupport.internal.FunctionalSupport.takeWhile;
 import static org.occurrent.mongodb.spring.sortconversion.internal.SortConverter.convertToSpringSort;
 import static org.springframework.data.domain.Sort.Direction.DESC;
 import static org.springframework.data.mongodb.SessionSynchronization.ALWAYS;
@@ -75,7 +76,6 @@ public class SpringMongoEventStore implements EventStore, EventStoreOperations, 
     private final String eventStoreCollectionName;
     private final TimeRepresentation timeRepresentation;
     private final TransactionTemplate transactionTemplate;
-    private final boolean transactionalReadsEnabled;
     private final Function<Query, Query> queryOptions;
 
     /**
@@ -91,19 +91,13 @@ public class SpringMongoEventStore implements EventStore, EventStoreOperations, 
         this.eventStoreCollectionName = config.eventStoreCollectionName;
         this.transactionTemplate = config.transactionTemplate;
         this.timeRepresentation = config.timeRepresentation;
-        this.transactionalReadsEnabled = config.enableTransactionalReads;
         this.queryOptions = config.queryOptions;
         initializeEventStore(eventStoreCollectionName, mongoTemplate);
     }
 
     @Override
     public EventStream<CloudEvent> read(String streamId, int skip, int limit) {
-        final EventStream<Document> eventStream;
-        if (transactionalReadsEnabled) {
-            eventStream = transactionTemplate.execute(transactionStatus -> readEventStream(streamId, skip, limit));
-        } else {
-            eventStream = readEventStream(streamId, skip, limit);
-        }
+        final EventStream<Document> eventStream = readEventStream(streamId, skip, limit);
         return requireNonNull(eventStream).map(document -> convertToCloudEvent(timeRepresentation, document));
     }
 
@@ -304,7 +298,12 @@ public class SpringMongoEventStore implements EventStore, EventStoreOperations, 
         }
 
         Stream<Document> stream = readCloudEvents(streamIdEqualTo(streamId), skip, limit, SortBy.streamVersion(ASCENDING));
-        return new EventStreamImpl<>(streamId, currentStreamVersion, stream);
+        // We use "takeWhile" so that we don't have the start transactions on read. This means that even
+        // if another thread has inserted more events after we've read "currentStreamVersion" it doesn't matter.
+        // This is because we return a lazy Stream and only those returning event whose version is less than or equal to
+        // "currentStreamVersion". Note that we can use "takeWhile" on the Stream directly if upgraded to Java 9+.
+        Stream<Document> boundedStream = takeWhile(stream, document -> document.getLong(STREAM_VERSION) <= currentStreamVersion);
+        return new EventStreamImpl<>(streamId, currentStreamVersion, boundedStream);
     }
 
     private long currentStreamVersion(String streamId) {
