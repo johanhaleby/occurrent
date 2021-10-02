@@ -16,7 +16,6 @@
 
 package org.occurrent.eventstore.api.blocking;
 
-import java.io.Closeable;
 import java.util.Iterator;
 import java.util.List;
 import java.util.function.Function;
@@ -26,7 +25,7 @@ import java.util.stream.Stream;
 /**
  * Represents an event stream.
  */
-public interface EventStream<T> extends Iterable<T>, Closeable {
+public interface EventStream<T> extends Iterable<T> {
 
     /**
      * @return The id of the event stream
@@ -66,13 +65,6 @@ public interface EventStream<T> extends Iterable<T>, Closeable {
     }
 
     /**
-     * Closes the event stream. This may or may not be really important (it depends on the implementation)
-     * The safest way is to always call this method after you're done with the Stream.
-     */
-    @Override
-    void close();
-
-    /**
      * Apply a mapping function to the {@link EventStream}
      *
      * @param fn   The function to apply for each event.
@@ -81,11 +73,6 @@ public interface EventStream<T> extends Iterable<T>, Closeable {
      */
     default <T2> EventStream<T2> map(Function<T, T2> fn) {
         return new EventStream<T2>() {
-
-            @Override
-            public void close() {
-                EventStream.this.close();
-            }
 
             @Override
             public Iterator<T2> iterator() {

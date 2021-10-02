@@ -34,7 +34,6 @@ import org.occurrent.eventstore.api.blocking.EventStream;
 import org.occurrent.filter.Filter;
 import org.occurrent.functionalsupport.internal.FunctionalSupport.Pair;
 
-import java.io.IOException;
 import java.net.URI;
 import java.util.*;
 import java.util.Map.Entry;
@@ -332,11 +331,6 @@ public class InMemoryEventStore implements EventStore, EventStoreOperations, Eve
                     ", version=" + version +
                     ", events=" + events +
                     '}';
-        }
-
-        @Override
-        public void close() {
-            // Do nothing
         }
     }
 

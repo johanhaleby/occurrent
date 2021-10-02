@@ -328,11 +328,6 @@ public class MongoEventStore implements EventStore, EventStoreOperations, EventS
         public Stream<T> events() {
             return events;
         }
-
-        @Override
-        public void close() {
-            events.close();
-        }
     }
 
     private static void initializeEventStore(MongoCollection<Document> eventStoreCollection, MongoDatabase mongoDatabase) {
