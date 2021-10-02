@@ -1,8 +1,10 @@
 ## Changelog next version
+
 * Reading event streams from `MongoEventStore` and `SpringMongoEventStore` are now much faster and more reliable. Before there was a bug in both implementation in which
   the stream could be abruptly closed when reading a large number of events. This has now been fixed, and as a consequence, Occurrent doesn't need to start a MongoDB transaction
   when reading an event stream, which improves performance.
-* Removed the `transactionalReads` property (introduced in previous release) from `EventStoreConfig` for both `MongoEventStore` and `SpringMongoEventStore` since it's no longer needed.  
+* Removed the `transactionalReads` property (introduced in previous release) from `EventStoreConfig` for both `MongoEventStore` and `SpringMongoEventStore` since it's no longer needed.
+* Upgraded jackson from version 2.11.1 to 2.12.5
 
 ## Changelog 0.12.0 (2021-09-24)
 
