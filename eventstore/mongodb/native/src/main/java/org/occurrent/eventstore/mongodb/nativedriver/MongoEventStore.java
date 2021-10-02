@@ -65,6 +65,7 @@ import static org.occurrent.eventstore.api.WriteCondition.anyStreamVersion;
 import static org.occurrent.eventstore.mongodb.internal.MongoExceptionTranslator.translateException;
 import static org.occurrent.eventstore.mongodb.internal.OccurrentCloudEventMongoDocumentMapper.convertToCloudEvent;
 import static org.occurrent.eventstore.mongodb.internal.OccurrentCloudEventMongoDocumentMapper.convertToDocument;
+import static org.occurrent.functionalsupport.internal.FunctionalSupport.takeWhile;
 import static org.occurrent.functionalsupport.internal.FunctionalSupport.zip;
 
 /**
@@ -79,7 +80,6 @@ public class MongoEventStore implements EventStore, EventStoreOperations, EventS
     private final MongoClient mongoClient;
     private final TimeRepresentation timeRepresentation;
     private final TransactionOptions transactionOptions;
-    private final boolean transactionalReadsEnabled;
     private final Function<FindIterable<Document>, FindIterable<Document>> queryOptions;
 
     /**
@@ -113,44 +113,29 @@ public class MongoEventStore implements EventStore, EventStoreOperations, EventS
         this.eventCollection = eventCollection;
         transactionOptions = config.transactionOptions;
         this.timeRepresentation = config.timeRepresentation;
-        this.transactionalReadsEnabled = config.enableTransactionalReads;
         this.queryOptions = config.queryOptions;
         initializeEventStore(eventCollection, database);
     }
 
     @Override
     public EventStream<CloudEvent> read(String streamId, int skip, int limit) {
-        EventStream<Document> eventStream = readEventStream(streamId, skip, limit, transactionOptions);
+        EventStream<Document> eventStream = readEventStream(streamId, skip, limit);
         return eventStream.map(document -> convertToCloudEvent(timeRepresentation, document));
     }
 
-    private EventStreamImpl<Document> readEventStream(String streamId, int skip, int limit, TransactionOptions transactionOptions) {
-        Function<ClientSession, EventStreamImpl<Document>> readEventStreamFunction = clientSession -> {
-            long currentStreamVersion = currentStreamVersion(streamId, clientSession);
-            if (currentStreamVersion == 0) {
-                return new EventStreamImpl<>(streamId, 0, Stream.empty());
-            }
-
-            Stream<Document> stream = readCloudEvents(streamIdEqualTo(streamId), skip, limit, SortBy.streamVersion(ASCENDING), clientSession)
-                    .onClose(() -> {
-                        if (clientSession != null) {
-                            clientSession.close();
-                        }
-                    });
-            return new EventStreamImpl<>(streamId, currentStreamVersion, stream);
-        };
-
-        final EventStreamImpl<Document> eventStream;
-        if (transactionalReadsEnabled) {
-            // Note that we deliberately don't have a try-statement here, there reason is that
-            // clients need to call "close" on the Stream in EventStream, which contains a "close hook".
-            ClientSession clientSession = mongoClient.startSession();
-            eventStream = clientSession.withTransaction(() -> readEventStreamFunction.apply(clientSession), transactionOptions);
-        } else {
-            eventStream = readEventStreamFunction.apply(null);
+    private EventStreamImpl<Document> readEventStream(String streamId, int skip, int limit) {
+        long currentStreamVersion = currentStreamVersion(streamId, null);
+        if (currentStreamVersion == 0) {
+            return new EventStreamImpl<>(streamId, 0, Stream.empty());
         }
 
-        return eventStream;
+        Stream<Document> readStream = readCloudEvents(streamIdEqualTo(streamId), skip, limit, SortBy.streamVersion(ASCENDING));
+        // We use "takeWhile" so that we don't have the start transactions on read. This means that even
+        // if another thread has inserted more events after we've read "currentStreamVersion" it doesn't matter.
+        // This is because we return a lazy Stream and only those returning event whose version is less than or equal to
+        // "currentStreamVersion". Note that we can use "takeWhile" on the Stream directly if upgraded to Java 9+.
+        Stream<Document> boundedStream = takeWhile(readStream, document -> document.getLong(STREAM_VERSION) <= currentStreamVersion);
+        return new EventStreamImpl<>(streamId, currentStreamVersion, boundedStream);
     }
 
     private long currentStreamVersion(String streamId, ClientSession clientSession) {
@@ -171,13 +156,8 @@ public class MongoEventStore implements EventStore, EventStoreOperations, EventS
         return currentStreamVersion;
     }
 
-    private Stream<Document> readCloudEvents(Bson query, int skip, int limit, SortBy sortBy, ClientSession clientSession) {
-        final FindIterable<Document> documentsWithoutSkipAndLimit;
-        if (clientSession == null) {
-            documentsWithoutSkipAndLimit = eventCollection.find(query);
-        } else {
-            documentsWithoutSkipAndLimit = eventCollection.find(clientSession, query);
-        }
+    private Stream<Document> readCloudEvents(Bson query, int skip, int limit, SortBy sortBy) {
+        final FindIterable<Document> documentsWithoutSkipAndLimit = eventCollection.find(query);
 
         final FindIterable<Document> documentsWithSkipAndLimit;
         if (skip != 0 || limit != Integer.MAX_VALUE) {
@@ -302,7 +282,7 @@ public class MongoEventStore implements EventStore, EventStoreOperations, EventS
     public Stream<CloudEvent> query(Filter filter, int skip, int limit, SortBy sortBy) {
         requireNonNull(filter, "Filter cannot be null");
         final Bson query = FilterToBsonFilterConverter.convertFilterToBsonFilter(timeRepresentation, filter);
-        return readCloudEvents(query, skip, limit, sortBy, null)
+        return readCloudEvents(query, skip, limit, sortBy)
                 .map(document -> convertToCloudEvent(timeRepresentation, document));
     }
 
