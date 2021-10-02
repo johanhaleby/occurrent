@@ -12,7 +12,7 @@ You can find documentation on the [website](https://occurrent.org).
 
 #### Design Choices
 
-Occurrent is designed to be [simple](https://www.infoq.com/presentations/Simple-Made-Easy/), non-intrusive and pragmatic. It emphasises understandability, composability, transparentness and pragmatism.
+Occurrent is designed to be [simple](https://www.infoq.com/presentations/Simple-Made-Easy/), unintrusive and pragmatic. It emphasises understandability, composability, transparentness and pragmatism.
  
 * You should be able to design your domain model without _any_ dependencies to Occurrent or any other library. Your domain model can be expressed with pure functions that returns events. Use Occurrent to store these events.
 * Simple: Pick only the libraries you need, no need for an all or nothing solution.
