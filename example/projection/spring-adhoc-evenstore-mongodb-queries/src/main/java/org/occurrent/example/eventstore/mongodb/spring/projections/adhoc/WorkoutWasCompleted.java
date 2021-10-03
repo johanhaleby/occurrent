@@ -16,6 +16,11 @@
 
 package org.occurrent.example.eventstore.mongodb.spring.projections.adhoc;
 
+import com.fasterxml.jackson.databind.annotation.JsonDeserialize;
+import com.fasterxml.jackson.databind.annotation.JsonSerialize;
+import com.fasterxml.jackson.datatype.jsr310.deser.LocalDateTimeDeserializer;
+import com.fasterxml.jackson.datatype.jsr310.ser.LocalDateTimeSerializer;
+
 import java.time.LocalDateTime;
 import java.util.Objects;
 import java.util.UUID;
@@ -26,6 +31,9 @@ public class WorkoutWasCompleted {
     private final UUID workoutId;
     private final String completedBy;
     private final String activity;
+
+    @JsonSerialize(using = LocalDateTimeSerializer.class)
+    @JsonDeserialize(using = LocalDateTimeDeserializer.class)
     private final LocalDateTime completedAt;
 
     public WorkoutWasCompleted(UUID workoutId, LocalDateTime completedAt, String activity, String completedBy) {
