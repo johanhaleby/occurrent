@@ -1,3 +1,7 @@
+## Changelog 0.13.1 (2021-10-03)
+
+* No longer using transactional reads in `ReactorMongoEventStore`, this also means that the `transactionalReads` configuration property could be removed since it's no longer used. 
+
 ## Changelog 0.13.0 (2021-10-03)
 
 * Reading event streams from `MongoEventStore` and `SpringMongoEventStore` are now much faster and more reliable. Before there was a bug in both implementation in which

@@ -190,29 +190,6 @@ public class ReactorMongoEventStoreTest {
     }
 
     @Test
-    void can_read_events_when_transactional_reads_are_disabled() {
-        // Given
-        EventStoreConfig eventStoreConfig = new EventStoreConfig.Builder().eventStoreCollectionName(connectionString.getCollection()).transactionConfig(reactiveMongoTransactionManager).timeRepresentation(TimeRepresentation.DATE).transactionalReads(false).build();
-        eventStore = new ReactorMongoEventStore(mongoTemplate, eventStoreConfig);
-
-        LocalDateTime now = LocalDateTime.now();
-        List<DomainEvent> events = Composition.chain(Name.defineName(UUID.randomUUID().toString(), now, "Hello World"), es -> Name.changeName(es, UUID.randomUUID().toString(), now, "John Doe"));
-
-        // When
-        persist("name", WriteCondition.streamVersionEq(0), events).block();
-
-        // Then
-        Mono<EventStream<CloudEvent>> eventStream = eventStore.read("name");
-        VersionAndEvents versionAndEvents = deserialize(eventStream);
-
-        assertAll(
-                () -> assertThat(versionAndEvents.version).isEqualTo(events.size()),
-                () -> assertThat(versionAndEvents.events).hasSize(2),
-                () -> assertThat(versionAndEvents.events).containsExactlyElementsOf(events)
-        );
-    }
-
-    @Test
     void can_configure_query_options_for_spring_blocking_event_store() {
         // Given
         EventStoreConfig eventStoreConfig = new EventStoreConfig.Builder().eventStoreCollectionName(connectionString.getCollection()).transactionConfig(reactiveMongoTransactionManager).timeRepresentation(TimeRepresentation.DATE)
@@ -299,15 +276,15 @@ public class ReactorMongoEventStoreTest {
 
         // When
         transactionalOperator.execute(__ -> eventStore.read("name")
-                .flatMap(es -> es.events().collectList().map(eventList -> {
-                    await(countDownLatch);
-                    return new VersionAndEvents(es.version(), eventList.stream().map(deserialize()).collect(Collectors.toList()));
-                }))
-                .doOnNext(versionAndEventsRef::set))
+                        .flatMap(es -> es.events().collectList().map(eventList -> {
+                            await(countDownLatch);
+                            return new VersionAndEvents(es.version(), eventList.stream().map(deserialize()).collect(Collectors.toList()));
+                        }))
+                        .doOnNext(versionAndEventsRef::set))
                 .subscribe();
 
         transactionalOperator.execute(__ -> persist("name", WriteCondition.streamVersionEq(2), nameWasChanged2)
-                .then(Mono.fromRunnable(countDownLatch::countDown)).then())
+                        .then(Mono.fromRunnable(countDownLatch::countDown)).then())
                 .blockFirst();
 
         // Then

@@ -71,7 +71,6 @@ public class ReactorMongoEventStore implements EventStore, EventStoreOperations,
     private final String eventStoreCollectionName;
     private final TimeRepresentation timeRepresentation;
     private final TransactionalOperator transactionalOperator;
-    private final boolean transactionalReadsEnabled;
     private final Function<Query, Query> queryOptions;
 
     /**
@@ -87,7 +86,6 @@ public class ReactorMongoEventStore implements EventStore, EventStoreOperations,
         this.eventStoreCollectionName = config.eventStoreCollectionName;
         this.transactionalOperator = config.transactionalOperator;
         this.timeRepresentation = config.timeRepresentation;
-        this.transactionalReadsEnabled = config.enableTransactionalReads;
         this.queryOptions = config.queryOptions;
         initializeEventStore(eventStoreCollectionName, mongoTemplate).block();
     }
@@ -130,12 +128,7 @@ public class ReactorMongoEventStore implements EventStore, EventStoreOperations,
 
     @Override
     public Mono<EventStream<CloudEvent>> read(String streamId, int skip, int limit) {
-        Mono<EventStreamImpl> eventStream;
-        if (transactionalReadsEnabled) {
-            eventStream = transactionalOperator.execute(transactionStatus -> readEventStream(streamId, skip, limit)).single();
-        } else {
-            eventStream = readEventStream(streamId, skip, limit);
-        }
+        Mono<EventStreamImpl> eventStream = readEventStream(streamId, skip, limit);
         return convertToCloudEvent(timeRepresentation, eventStream);
     }
 
@@ -143,7 +136,12 @@ public class ReactorMongoEventStore implements EventStore, EventStoreOperations,
     private Mono<EventStreamImpl> readEventStream(String streamId, int skip, int limit) {
         return currentStreamVersion(streamId)
                 .flatMap(currentStreamVersion -> {
-                    Flux<Document> cloudEventDocuments = readCloudEvents(streamIdEqualTo(streamId), skip, limit, SortBy.streamVersion(ASCENDING));
+                    Flux<Document> cloudEventDocuments = readCloudEvents(streamIdEqualTo(streamId), skip, limit, SortBy.streamVersion(ASCENDING))
+                            // We use "takeWhile" so that we don't have the start transactions on read. This means that even
+                            // if another thread has inserted more events after we've read "currentStreamVersion" it doesn't matter.
+                            // This is because we return a lazy Stream and only those returning event whose version is less than or equal to
+                            // "currentStreamVersion".
+                            .takeWhile(document -> document.getLong(STREAM_VERSION) <= currentStreamVersion);
                     return Mono.just(new EventStreamImpl(streamId, currentStreamVersion, cloudEventDocuments));
                 })
                 .switchIfEmpty(Mono.fromSupplier(() -> new EventStreamImpl(streamId, 0, Flux.empty())));
