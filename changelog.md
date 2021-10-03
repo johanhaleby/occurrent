@@ -1,4 +1,4 @@
-## Changelog 0.13.0 (2021-10-02)
+## Changelog 0.13.0 (2021-10-03)
 
 * Reading event streams from `MongoEventStore` and `SpringMongoEventStore` are now much faster and more reliable. Before there was a bug in both implementation in which
   the stream could be abruptly closed when reading a large number of events. This has now been fixed, and as a consequence, Occurrent doesn't need to start a MongoDB transaction
