@@ -319,7 +319,7 @@ public class SpringMongoSubscriptionModel implements PositionAwareSubscriptionMo
                 }
             } else if (isCursorNoLongerOpen(throwable)) {
                 if (log.isDebugEnabled()) {
-                    log.debug("Cursor is not longer open for subscription {}, this may happen if you pause a subscription very soon after subscribing.", subscriptionId, throwable);
+                    log.debug("Cursor is no longer open for subscription {}, this may happen if you pause a subscription very soon after subscribing.", subscriptionId, throwable);
                 }
             } else {
                 log.error("An error occurred for subscription {}", subscriptionId, throwable);
