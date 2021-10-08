@@ -20,7 +20,7 @@ package org.occurrent.example.domain.rps.model
 import kotlinx.collections.immutable.PersistentList
 import kotlinx.collections.immutable.persistentListOf
 import kotlinx.collections.immutable.toPersistentList
-import org.occurrent.example.domain.rps.model.CurrentGameState.*
+import org.occurrent.example.domain.rps.model.DomainState.*
 import org.occurrent.example.domain.rps.model.GameLogic.play
 import org.occurrent.example.domain.rps.model.Shape.*
 import org.occurrent.example.domain.rps.model.StateEvolution.EvolvedGameState
@@ -178,7 +178,7 @@ private object GameLogic {
         is Round.WaitingForSecondHand -> true
     }
 
-    private fun CurrentGameState.currentRound(): Round? = when (this) {
+    private fun DomainState.currentRound(): Round? = when (this) {
         is Created -> null
         is Started -> round
         is FirstPlayerJoined -> round
@@ -201,7 +201,7 @@ private object GameLogic {
 private data class Hand(val playerId: PlayerId, val shape: Shape)
 
 private class AccumulatedChanges private constructor(private val evolvedState: EvolvedState, private val events: PersistentList<GameEvent>) : Sequence<GameEvent> {
-    val currentState: CurrentGameState by lazy {
+    val currentState: DomainState by lazy {
         evolvedState.translateToDomain()
     }
 
@@ -221,15 +221,15 @@ private class AccumulatedChanges private constructor(private val evolvedState: E
     }
 }
 
-private sealed interface CurrentGameState {
+private sealed interface DomainState {
     val gameId: GameId
     val maxNumberOfRounds: MaxNumberOfRounds
 
-    data class Created(override val gameId: GameId, override val maxNumberOfRounds: MaxNumberOfRounds) : CurrentGameState
-    data class Started(override val gameId: GameId, override val maxNumberOfRounds: MaxNumberOfRounds, val round: Round) : CurrentGameState
-    data class FirstPlayerJoined(override val gameId: GameId, override val maxNumberOfRounds: MaxNumberOfRounds, val firstPlayer: PlayerId, val round: Round) : CurrentGameState
-    data class BothPlayersJoined(override val gameId: GameId, override val maxNumberOfRounds: MaxNumberOfRounds, val firstPlayer: PlayerId, val secondPlayer: PlayerId, val rounds: PersistentList<Round> = persistentListOf()) : CurrentGameState
-    data class Ended(override val gameId: GameId, override val maxNumberOfRounds: MaxNumberOfRounds) : CurrentGameState
+    data class Created(override val gameId: GameId, override val maxNumberOfRounds: MaxNumberOfRounds) : DomainState
+    data class Started(override val gameId: GameId, override val maxNumberOfRounds: MaxNumberOfRounds, val round: Round) : DomainState
+    data class FirstPlayerJoined(override val gameId: GameId, override val maxNumberOfRounds: MaxNumberOfRounds, val firstPlayer: PlayerId, val round: Round) : DomainState
+    data class BothPlayersJoined(override val gameId: GameId, override val maxNumberOfRounds: MaxNumberOfRounds, val firstPlayer: PlayerId, val secondPlayer: PlayerId, val rounds: PersistentList<Round> = persistentListOf()) : DomainState
+    data class Ended(override val gameId: GameId, override val maxNumberOfRounds: MaxNumberOfRounds) : DomainState
 }
 
 private sealed interface Round {
@@ -245,7 +245,7 @@ private sealed interface Round {
 
 private object StateTranslation {
 
-    fun EvolvedState.translateToDomain(): CurrentGameState = when (state) {
+    fun EvolvedState.translateToDomain(): DomainState = when (state) {
         EvolvedGameState.Created -> Created(gameId, maxNumberOfRounds)
         EvolvedGameState.Started -> Started(gameId, maxNumberOfRounds, rounds.first().toDomain())
         EvolvedGameState.FirstPlayerJoined -> FirstPlayerJoined(gameId, maxNumberOfRounds, firstPlayer!!, rounds.first().toDomain())
@@ -270,6 +270,7 @@ private object StateTranslation {
 // Evolving from events
 private object StateEvolution {
 
+    // Models for state evolution
     data class EvolvedState(
         val gameId: GameId, val state: EvolvedGameState, val maxNumberOfRounds: MaxNumberOfRounds, val firstPlayer: PlayerId? = null, val secondPlayer: PlayerId? = null,
         val rounds: PersistentList<EvolvedRound> = persistentListOf()
@@ -281,7 +282,6 @@ private object StateEvolution {
         }
     }
 
-    // Internal models
     enum class EvolvedGameState {
         Created, Started, FirstPlayerJoined, BothPlayersJoined, Ended
     }
