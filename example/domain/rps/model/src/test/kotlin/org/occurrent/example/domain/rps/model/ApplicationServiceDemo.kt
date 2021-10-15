@@ -17,6 +17,9 @@
 
 package org.occurrent.example.domain.rps.model
 
+import CreateGame
+import GameCommand
+import PlayHand
 import com.fasterxml.jackson.databind.ObjectMapper
 import com.fasterxml.jackson.module.kotlin.jacksonObjectMapper
 import com.fasterxml.jackson.module.kotlin.readValue
@@ -53,7 +56,7 @@ class ApplicationServiceDemo {
 
         // When
         applicationService.execute(gameId.value) { events: Sequence<GameEvent> ->
-            handle(events, CreateGame(gameId, Timestamp.now(), GameCreatorId.random(), MaxNumberOfRounds.ONE))
+            handle(events, CreateGame(gameId, Timestamp.now(), GameCreatorId.random(), BestOfRounds.ONE))
         }
 
         // Then
@@ -75,7 +78,7 @@ class ApplicationServiceDemo {
             gameId.value,
             composeCommands(
                 { events: Sequence<GameEvent> ->
-                    handle(events, CreateGame(gameId, Timestamp.now(), GameCreatorId.random(), MaxNumberOfRounds.ONE))
+                    handle(events, CreateGame(gameId, Timestamp.now(), GameCreatorId.random(), BestOfRounds.ONE))
                 },
                 { events ->
                     handle(events, PlayHand(Timestamp.now(), PlayerId.random(), Shape.ROCK))
@@ -103,7 +106,7 @@ class ApplicationServiceDemo {
         applicationService.execute(
             gameId.value,
             composeCommands(
-                ::handle.partial(CreateGame(gameId, Timestamp.now(), GameCreatorId.random(), MaxNumberOfRounds.ONE)),
+                ::handle.partial(CreateGame(gameId, Timestamp.now(), GameCreatorId.random(), BestOfRounds.ONE)),
                 ::handle.partial(PlayHand(Timestamp.now(), PlayerId.random(), Shape.ROCK))
             )
         )
@@ -128,7 +131,7 @@ class ApplicationServiceDemo {
         // When
         applicationService.execute(
             gameId.value,
-            ::handle.partial(CreateGame(gameId, Timestamp.now(), GameCreatorId.random(), MaxNumberOfRounds.ONE)) andThen
+            ::handle.partial(CreateGame(gameId, Timestamp.now(), GameCreatorId.random(), BestOfRounds.ONE)) andThen
                     ::handle.partial(PlayHand(Timestamp.now(), PlayerId.random(), Shape.ROCK))
         )
 
@@ -152,7 +155,7 @@ class ApplicationServiceDemo {
         // When
         applicationService.execute(
             gameId,
-            CreateGame(gameId, Timestamp.now(), GameCreatorId.random(), MaxNumberOfRounds.ONE),
+            CreateGame(gameId, Timestamp.now(), GameCreatorId.random(), BestOfRounds.ONE),
             PlayHand(Timestamp.now(), PlayerId.random(), Shape.ROCK)
         )
 
@@ -176,7 +179,7 @@ class ApplicationServiceDemo {
         // When
         applicationService.execute(
             gameId,
-            CreateGame(gameId, Timestamp.now(), GameCreatorId.random(), MaxNumberOfRounds.ONE),
+            CreateGame(gameId, Timestamp.now(), GameCreatorId.random(), BestOfRounds.ONE),
             PlayHand(Timestamp.now(), PlayerId.random(), Shape.ROCK)
         )
 
@@ -189,7 +192,7 @@ class ApplicationServiceDemo {
     }
 }
 
-private fun ApplicationService<GameEvent>.execute(gameId: GameId, firstCommand: Command, vararg additionalCommands: Command): WriteResult {
+private fun ApplicationService<GameEvent>.execute(gameId: GameId, firstCommand: GameCommand, vararg additionalCommands: GameCommand): WriteResult {
     val functionsToInvoke = sequenceOf(firstCommand, *additionalCommands).map { cmd ->
         ::handle.partial(cmd)
     }
@@ -218,7 +221,7 @@ class ProductionCloudEventConverter(private val objectMapper: ObjectMapper) : Cl
     override fun toCloudEvent(e: GameEvent): CloudEvent {
         val data = when (e) {
             is FirstPlayerJoinedGame -> mapOf("player" to e.player.value.toString())
-            is GameCreated -> mapOf("createdBy" to e.createdBy.value.toString(), "maxNumberOfRounds" to e.maxNumberOfRounds.value)
+            is GameCreated -> mapOf("createdBy" to e.createdBy.value.toString(), "maxNumberOfRounds" to e.bestOfRounds.value)
             is GameEnded -> null
             is GameStarted -> null
             is GameTied -> null
@@ -248,7 +251,7 @@ class ProductionCloudEventConverter(private val objectMapper: ObjectMapper) : Cl
         val data = cloudEvent.data.asMap()
         return when (cloudEvent.type) {
             FirstPlayerJoinedGame::class.simpleName -> FirstPlayerJoinedGame(gameId, timestamp, PlayerId(data.coerced("player")))
-            GameCreated::class.simpleName -> GameCreated(gameId, timestamp, GameCreatorId(data.coerced("createdBy")), MaxNumberOfRounds.unsafe(data.coerced("maxNumberOfRounds")))
+            GameCreated::class.simpleName -> GameCreated(gameId, timestamp, GameCreatorId(data.coerced("createdBy")), BestOfRounds.unsafe(data.coerced("maxNumberOfRounds")))
             GameEnded::class.simpleName -> GameEnded(gameId, timestamp)
             GameStarted::class.simpleName -> GameStarted(gameId, timestamp)
             GameTied::class.simpleName -> GameTied(gameId, timestamp)

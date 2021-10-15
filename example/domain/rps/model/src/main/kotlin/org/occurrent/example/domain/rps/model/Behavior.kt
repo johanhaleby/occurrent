@@ -17,6 +17,9 @@
 
 package org.occurrent.example.domain.rps.model
 
+import CreateGame
+import GameCommand
+import PlayHand
 import kotlinx.collections.immutable.PersistentList
 import kotlinx.collections.immutable.persistentListOf
 import kotlinx.collections.immutable.toPersistentList
@@ -30,7 +33,7 @@ import org.occurrent.example.domain.rps.model.StateEvolution.EvolvedState
 import org.occurrent.example.domain.rps.model.StateEvolution.evolve
 import org.occurrent.example.domain.rps.model.StateTranslation.translateToDomain
 
-fun handle(events: Sequence<GameEvent>, cmd: Command): Sequence<GameEvent> {
+fun handle(events: Sequence<GameEvent>, cmd: GameCommand): Sequence<GameEvent> {
     val state = events.evolve()
     return when (cmd) {
         is CreateGame -> when (state) {
@@ -87,8 +90,8 @@ private object GameLogic {
         val currentRoundNumber = state.currentRound()?.roundNumber
         val newEvent = when {
             currentRoundNumber == null -> RoundStarted(state.gameId, timestamp, RoundNumber(1))
-            currentRoundNumber.value < state.maxNumberOfRounds.value -> RoundStarted(state.gameId, timestamp, currentRoundNumber.next())
-            else -> throw IllegalStateException("Cannot start round since it would exceed ${state.maxNumberOfRounds.value}")
+            currentRoundNumber.value < state.bestOfRounds.value -> RoundStarted(state.gameId, timestamp, currentRoundNumber.next())
+            else -> throw IllegalStateException("Cannot start round since it would exceed ${state.bestOfRounds.value}")
         }
         return accumulatedChanges + newEvent
     }
@@ -135,7 +138,7 @@ private object GameLogic {
 
     private fun determineGameStatus(accumulatedChanges: AccumulatedChanges): GameStatus = when (val state = accumulatedChanges.currentState) {
         is BothPlayersJoined -> {
-            val maxNumberOfRounds = state.maxNumberOfRounds.value
+            val maxNumberOfRounds = state.bestOfRounds.value
             val roundNumber = state.currentRound()!!.roundNumber.value
 
             val numberOfWinsPerPlayer = state.rounds
@@ -223,13 +226,13 @@ private class AccumulatedChanges private constructor(private val evolvedState: E
 
 private sealed interface DomainState {
     val gameId: GameId
-    val maxNumberOfRounds: MaxNumberOfRounds
+    val bestOfRounds: BestOfRounds
 
-    data class Created(override val gameId: GameId, override val maxNumberOfRounds: MaxNumberOfRounds) : DomainState
-    data class Started(override val gameId: GameId, override val maxNumberOfRounds: MaxNumberOfRounds, val round: Round) : DomainState
-    data class FirstPlayerJoined(override val gameId: GameId, override val maxNumberOfRounds: MaxNumberOfRounds, val firstPlayer: PlayerId, val round: Round) : DomainState
-    data class BothPlayersJoined(override val gameId: GameId, override val maxNumberOfRounds: MaxNumberOfRounds, val firstPlayer: PlayerId, val secondPlayer: PlayerId, val rounds: PersistentList<Round> = persistentListOf()) : DomainState
-    data class Ended(override val gameId: GameId, override val maxNumberOfRounds: MaxNumberOfRounds) : DomainState
+    data class Created(override val gameId: GameId, override val bestOfRounds: BestOfRounds) : DomainState
+    data class Started(override val gameId: GameId, override val bestOfRounds: BestOfRounds, val round: Round) : DomainState
+    data class FirstPlayerJoined(override val gameId: GameId, override val bestOfRounds: BestOfRounds, val firstPlayer: PlayerId, val round: Round) : DomainState
+    data class BothPlayersJoined(override val gameId: GameId, override val bestOfRounds: BestOfRounds, val firstPlayer: PlayerId, val secondPlayer: PlayerId, val rounds: PersistentList<Round> = persistentListOf()) : DomainState
+    data class Ended(override val gameId: GameId, override val bestOfRounds: BestOfRounds) : DomainState
 }
 
 private sealed interface Round {
@@ -246,13 +249,13 @@ private sealed interface Round {
 private object StateTranslation {
 
     fun EvolvedState.translateToDomain(): DomainState = when (state) {
-        EvolvedGameState.Created -> Created(gameId, maxNumberOfRounds)
-        EvolvedGameState.Started -> Started(gameId, maxNumberOfRounds, rounds.first().toDomain())
-        EvolvedGameState.FirstPlayerJoined -> FirstPlayerJoined(gameId, maxNumberOfRounds, firstPlayer!!, rounds.first().toDomain())
-        EvolvedGameState.BothPlayersJoined -> BothPlayersJoined(gameId, maxNumberOfRounds, firstPlayer!!, secondPlayer!!, rounds.map { round ->
+        EvolvedGameState.Created -> Created(gameId, bestOfRounds)
+        EvolvedGameState.Started -> Started(gameId, bestOfRounds, rounds.first().toDomain())
+        EvolvedGameState.FirstPlayerJoined -> FirstPlayerJoined(gameId, bestOfRounds, firstPlayer!!, rounds.first().toDomain())
+        EvolvedGameState.BothPlayersJoined -> BothPlayersJoined(gameId, bestOfRounds, firstPlayer!!, secondPlayer!!, rounds.map { round ->
             round.toDomain()
         }.toPersistentList())
-        EvolvedGameState.Ended -> Ended(gameId, maxNumberOfRounds)
+        EvolvedGameState.Ended -> Ended(gameId, bestOfRounds)
     }
 
     private fun EvolvedRound.toDomain() = when (state) {
@@ -272,7 +275,7 @@ private object StateEvolution {
 
     // Models for state evolution
     data class EvolvedState(
-        val gameId: GameId, val state: EvolvedGameState, val maxNumberOfRounds: MaxNumberOfRounds, val firstPlayer: PlayerId? = null, val secondPlayer: PlayerId? = null,
+        val gameId: GameId, val state: EvolvedGameState, val bestOfRounds: BestOfRounds, val firstPlayer: PlayerId? = null, val secondPlayer: PlayerId? = null,
         val rounds: PersistentList<EvolvedRound> = persistentListOf()
     )
 
@@ -290,7 +293,7 @@ private object StateEvolution {
     fun Sequence<GameEvent>.evolve(currentState: EvolvedState? = null): EvolvedState? = fold(currentState, ::evolve)
 
     fun evolve(currentState: EvolvedState?, e: GameEvent) = when (e) {
-        is GameCreated -> EvolvedState(gameId = e.game, state = EvolvedGameState.Created, maxNumberOfRounds = e.maxNumberOfRounds)
+        is GameCreated -> EvolvedState(gameId = e.game, state = EvolvedGameState.Created, bestOfRounds = e.bestOfRounds)
         is GameStarted -> currentState!!.copy(state = EvolvedGameState.Started)
         is FirstPlayerJoinedGame -> currentState!!.copy(state = EvolvedGameState.FirstPlayerJoined, firstPlayer = e.player)
         is SecondPlayerJoinedGame -> currentState!!.copy(state = EvolvedGameState.BothPlayersJoined, secondPlayer = e.player)

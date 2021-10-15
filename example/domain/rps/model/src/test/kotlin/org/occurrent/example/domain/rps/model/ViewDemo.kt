@@ -17,6 +17,7 @@
 
 package org.occurrent.example.domain.rps.model
 
+import CreateGame
 import org.assertj.core.api.Assertions.assertThat
 import org.awaitility.kotlin.await
 import org.awaitility.kotlin.untilAsserted
@@ -51,11 +52,11 @@ class ViewDemo {
         val gameId1 = GameId.random()
         val gameId2 = GameId.random()
         applicationService.execute(gameId1.value) { events: Sequence<GameEvent> ->
-            handle(events, CreateGame(gameId1, Timestamp.now(), GameCreatorId.random(), MaxNumberOfRounds.ONE))
+            handle(events, CreateGame(gameId1, Timestamp.now(), GameCreatorId.random(), BestOfRounds.ONE))
         }
 
         applicationService.execute(gameId2.value) { events: Sequence<GameEvent> ->
-            handle(events, CreateGame(gameId2, Timestamp.now(), GameCreatorId.random(), MaxNumberOfRounds.THREE))
+            handle(events, CreateGame(gameId2, Timestamp.now(), GameCreatorId.random(), BestOfRounds.THREE))
         }
 
         // Then

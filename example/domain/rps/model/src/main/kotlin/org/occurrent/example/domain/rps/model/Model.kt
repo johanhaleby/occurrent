@@ -55,14 +55,14 @@ enum class Shape {
 }
 
 @JvmInline
-value class MaxNumberOfRounds private constructor(val value: Int) {
+value class BestOfRounds private constructor(val value: Int) {
 
     companion object {
-        val ONE = MaxNumberOfRounds(1)
-        val THREE = MaxNumberOfRounds(3)
-        val FIVE = MaxNumberOfRounds(5)
+        val ONE = BestOfRounds(1)
+        val THREE = BestOfRounds(3)
+        val FIVE = BestOfRounds(5)
 
-        internal fun unsafe(value: Int) = MaxNumberOfRounds(value)
+        internal fun unsafe(value: Int) = BestOfRounds(value)
     }
 }
 
@@ -80,12 +80,6 @@ value class RoundNumber private constructor(val value: Int) {
         internal fun unsafe(value: Int) = RoundNumber(value)
     }
 }
-
-// TODO remove commands
-// Commands
-sealed interface Command
-data class CreateGame(val gameId: GameId, val timestamp: Timestamp, val creator: GameCreatorId, val maxNumberOfRounds: MaxNumberOfRounds) : Command
-data class PlayHand(val timestamp: Timestamp, val playerId: PlayerId, val shape: Shape) : Command
 
 class GameCannotBeCreatedMoreThanOnce : IllegalArgumentException()
 class GameDoesNotExist : IllegalArgumentException()
