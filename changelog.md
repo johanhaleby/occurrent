@@ -9,7 +9,7 @@
     * A `GenericApplication` instance (`ApplicationService`)
     * A subscription dsl instance (`Subscriptions`)
   See `org.occurrent.springboot.OccurrentMongoAutoConfiguration` if you want to know exactly what gets configured.
-* 
+* Upgraded spring-boot from 2.5.4 to 2.5.6.
 
 ## Changelog 0.13.1 (2021-10-03)
 
