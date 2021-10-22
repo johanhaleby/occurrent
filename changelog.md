@@ -1,3 +1,16 @@
+### Changelog next version
+
+* Introducing spring boot starter project to easily bootstrap Occurrent if using Spring. Depend on `org.occurrent:spring-boot-starter-mongo` and create a Spring Boot application annotated with `@SpringBootApplication` as you would normally do.
+  Occurrent will then configure the following components automatically:
+    * Spring MongoDB Event Store instance (`EventStore`)
+    * A Spring `SubscriptionPositionStorage` instance 
+    * A durable Spring MongoDB competing consumer subscription model (`SubscriptionModel`)
+    * A Jackson-based `CloudEventConverter`
+    * A `GenericApplication` instance (`ApplicationService`)
+    * A subscription dsl instance (`Subscriptions`)
+  See `org.occurrent.springboot.OccurrentMongoAutoConfiguration` if you want to know exactly what gets configured.
+* 
+
 ## Changelog 0.13.1 (2021-10-03)
 
 * No longer using transactional reads in `ReactorMongoEventStore`, this also means that the `transactionalReads` configuration property could be removed since it's no longer used. 
