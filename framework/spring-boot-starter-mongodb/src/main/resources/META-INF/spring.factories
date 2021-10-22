@@ -1,2 +1,2 @@
 org.springframework.boot.autoconfigure.EnableAutoConfiguration=\
-  org.occurrent.springboot.OccurrentMongoAutoConfiguration
+  org.occurrent.springboot.mongo.blocking.OccurrentMongoAutoConfiguration

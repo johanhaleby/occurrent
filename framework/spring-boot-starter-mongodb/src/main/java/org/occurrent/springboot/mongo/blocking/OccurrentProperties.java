@@ -15,7 +15,7 @@
  *  limitations under the License.
  */
 
-package org.occurrent.springboot;
+package org.occurrent.springboot.mongo.blocking;
 
 import org.occurrent.application.service.blocking.generic.GenericApplicationService;
 import org.occurrent.eventstore.api.WriteConditionNotFulfilledException;

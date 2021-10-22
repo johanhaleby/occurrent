@@ -15,7 +15,7 @@
  *  limitations under the License.
  */
 
-package org.occurrent.springboot;
+package org.occurrent.springboot.mongo.blocking;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
 import org.occurrent.application.converter.CloudEventConverter;
@@ -28,7 +28,7 @@ import org.occurrent.eventstore.api.blocking.EventStore;
 import org.occurrent.eventstore.mongodb.spring.blocking.EventStoreConfig;
 import org.occurrent.eventstore.mongodb.spring.blocking.SpringMongoEventStore;
 import org.occurrent.retry.RetryStrategy;
-import org.occurrent.springboot.OccurrentProperties.EventStoreProperties;
+import org.occurrent.springboot.mongo.blocking.OccurrentProperties.EventStoreProperties;
 import org.occurrent.subscription.api.blocking.CompetingConsumerStrategy.CompetingConsumerListener;
 import org.occurrent.subscription.api.blocking.Subscribable;
 import org.occurrent.subscription.api.blocking.SubscriptionModel;
