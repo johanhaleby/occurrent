@@ -22,6 +22,7 @@ import org.occurrent.application.converter.CloudEventConverter;
 import org.occurrent.application.converter.jackson.JacksonCloudEventConverter;
 import org.occurrent.application.service.blocking.ApplicationService;
 import org.occurrent.application.service.blocking.generic.GenericApplicationService;
+import org.occurrent.dsl.subscription.blocking.EventNameFromType;
 import org.occurrent.dsl.subscription.blocking.Subscriptions;
 import org.occurrent.eventstore.api.blocking.EventStore;
 import org.occurrent.eventstore.mongodb.spring.blocking.EventStoreConfig;
@@ -117,8 +118,10 @@ public class OccurrentMongoAutoConfiguration {
 
     @Bean
     @ConditionalOnMissingBean(Subscriptions.class)
-    public Subscriptions<?> occurrentSubscriptionDsl(Subscribable subscribable, CloudEventConverter<?> cloudEventConverter) {
-        return new Subscriptions<>(subscribable, cloudEventConverter);
+    public <T> Subscriptions<T> occurrentSubscriptionDsl(Subscribable subscribable, CloudEventConverter<T> cloudEventConverter, Optional<EventNameFromType<T>> eventNameFromType) {
+        return eventNameFromType
+                .map(converter -> new Subscriptions<>(subscribable, cloudEventConverter, converter))
+                .orElseGet(() -> new Subscriptions<>(subscribable, cloudEventConverter));
     }
 
     @Bean

@@ -9,6 +9,7 @@
     * A `GenericApplication` instance (`ApplicationService`)
     * A subscription dsl instance (`Subscriptions`)
   See `org.occurrent.springboot.OccurrentMongoAutoConfiguration` if you want to know exactly what gets configured.
+* Introduced `org.occurrent.dsl.subscription.blocking.EventNameFromType` is may be supplied to an instance of `org.occurrent.dsl.subscription.blocking.Subscriptions` that allows it to generate correct queries when subscribing.  
 * Upgraded spring-boot from 2.5.4 to 2.5.6.
 
 ## Changelog 0.13.1 (2021-10-03)
