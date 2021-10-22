@@ -30,6 +30,6 @@
     <artifactId>framework</artifactId>
 
     <modules>
-        <module>spring-boot-starter</module>
+        <module>spring-boot-starter-mongodb</module>
     </modules>
 </project>

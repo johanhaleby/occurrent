@@ -1,6 +1,6 @@
 ### Changelog next version
 
-* Introducing spring boot starter project to easily bootstrap Occurrent if using Spring. Depend on `org.occurrent:spring-boot-starter-mongo` and create a Spring Boot application annotated with `@SpringBootApplication` as you would normally do.
+* Introducing spring boot starter project to easily bootstrap Occurrent if using Spring. Depend on `org.occurrent:spring-boot-starter-mongodb` and create a Spring Boot application annotated with `@SpringBootApplication` as you would normally do.
   Occurrent will then configure the following components automatically:
     * Spring MongoDB Event Store instance (`EventStore`)
     * A Spring `SubscriptionPositionStorage` instance 
