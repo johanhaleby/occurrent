@@ -47,7 +47,7 @@ public class NameApplicationService {
 
 
     public void defineName(UUID id, LocalDateTime time, String name) {
-        List<DomainEvent> events = Name.defineName(id.toString(), time, name);
+        List<DomainEvent> events = Name.defineTheName(id.toString(), time, name);
         eventStore.append(id, 0, events);
         currentNameProjection.save(buildProjectionFromEvents(id, events));
     }

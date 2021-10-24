@@ -29,7 +29,7 @@ import java.util.function.Predicate;
 
 public class Name {
 
-    public static List<DomainEvent> defineName(List<DomainEvent> events, DefineName defineName) {
+    public static List<DomainEvent> defineNameFromCommand(List<DomainEvent> events, DefineName defineName) {
         return defineName(events, UUID.randomUUID().toString(), defineName.getTime(), defineName.getName());
     }
 
@@ -37,10 +37,10 @@ public class Name {
         if (!events.isEmpty()) {
             throw new IllegalStateException("No previous events can exist when defining a name");
         }
-        return defineName(eventId, time, name);
+        return defineTheName(eventId, time, name);
     }
 
-    public static List<DomainEvent> defineName(String eventId, LocalDateTime time, String name) {
+    public static List<DomainEvent> defineTheName(String eventId, LocalDateTime time, String name) {
         return Collections.singletonList(new NameDefined(eventId, TimeConversion.toDate(time), name));
     }
 

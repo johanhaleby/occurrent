@@ -129,7 +129,7 @@ public class SpringMongoEventStoreTest {
         LocalDateTime now = LocalDateTime.now();
 
         // When
-        List<DomainEvent> events = Name.defineName(UUID.randomUUID().toString(), now, "John Doe");
+        List<DomainEvent> events = Name.defineTheName(UUID.randomUUID().toString(), now, "John Doe");
         persist("name", WriteCondition.streamVersionEq(0), events);
 
         // Then
@@ -151,7 +151,7 @@ public class SpringMongoEventStoreTest {
         eventStore = new SpringMongoEventStore(mongoTemplate, eventStoreConfig);
 
         LocalDateTime now = LocalDateTime.now();
-        List<DomainEvent> events = Composition.chain(Name.defineName(UUID.randomUUID().toString(), now, "Hello World"), es -> Name.changeName(es, UUID.randomUUID().toString(), now, "John Doe"));
+        List<DomainEvent> events = Composition.chain(Name.defineTheName(UUID.randomUUID().toString(), now, "Hello World"), es -> Name.changeName(es, UUID.randomUUID().toString(), now, "John Doe"));
 
         // When
         persist("name", WriteCondition.streamVersionEq(0), events);
@@ -170,7 +170,7 @@ public class SpringMongoEventStoreTest {
     @Test
     void can_read_and_write_multiple_events_at_once_to_mongo_spring_blocking_event_store() {
         LocalDateTime now = LocalDateTime.now();
-        List<DomainEvent> events = Composition.chain(Name.defineName(UUID.randomUUID().toString(), now, "Hello World"), es -> Name.changeName(es, UUID.randomUUID().toString(), now, "John Doe"));
+        List<DomainEvent> events = Composition.chain(Name.defineTheName(UUID.randomUUID().toString(), now, "Hello World"), es -> Name.changeName(es, UUID.randomUUID().toString(), now, "John Doe"));
 
         // When
         persist("name", WriteCondition.streamVersionEq(0), events);
@@ -246,7 +246,7 @@ public class SpringMongoEventStoreTest {
     @Test
     void stream_version_is_not_updated_when_event_insertion_fails() {
         LocalDateTime now = LocalDateTime.now();
-        List<DomainEvent> events = Composition.chain(Name.defineName(UUID.randomUUID().toString(), now, "Hello World"), es -> Name.changeName(es, UUID.randomUUID().toString(), now, "John Doe"));
+        List<DomainEvent> events = Composition.chain(Name.defineTheName(UUID.randomUUID().toString(), now, "Hello World"), es -> Name.changeName(es, UUID.randomUUID().toString(), now, "John Doe"));
 
         persist("name", WriteCondition.streamVersionEq(0), events);
 

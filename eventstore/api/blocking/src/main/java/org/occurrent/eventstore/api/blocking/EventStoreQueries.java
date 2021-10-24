@@ -57,7 +57,7 @@ public interface EventStoreQueries {
     /**
      * Check if any events exists that matches the given {@code filter}.
      *
-     * @return <code>true</code> if any events exists that are matching the {@code filter}, <code>fase</code> otherwise.
+     * @return <code>true</code> if any events exists that are matching the {@code filter}, <code>false</code> otherwise.
      */
     boolean exists(Filter filter);
 

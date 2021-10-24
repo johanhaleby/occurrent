@@ -90,7 +90,7 @@ public class InMemoryEventStoreTest {
         LocalDateTime now = LocalDateTime.now();
 
         // When
-        List<DomainEvent> events = Name.defineName(eventId, now, "John Doe");
+        List<DomainEvent> events = Name.defineTheName(eventId, now, "John Doe");
         unconditionallyPersist(inMemoryEventStore, "name", events);
 
         // Then

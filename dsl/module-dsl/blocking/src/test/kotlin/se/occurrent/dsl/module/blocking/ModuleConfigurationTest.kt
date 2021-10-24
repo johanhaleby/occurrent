@@ -55,7 +55,7 @@ class ModuleConfigurationTest {
         // Module Configuration
         val module = module<Command, DomainEvent>(cloudEventConverter, eventNameFromType = { e -> e.qualifiedName!! }) {
             commands(dispatchTo(applicationService)) {
-                command(DefineName::getId, Name::defineName)
+                command(DefineName::getId, Name::defineNameFromCommand)
                 command(ChangeName::getId, Name::changeNameFromCommand)
             }
             subscriptions(subscriptionModel) {
