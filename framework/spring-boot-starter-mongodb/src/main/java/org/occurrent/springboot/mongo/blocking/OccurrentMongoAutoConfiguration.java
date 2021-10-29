@@ -22,9 +22,12 @@ import org.occurrent.application.converter.CloudEventConverter;
 import org.occurrent.application.converter.jackson.JacksonCloudEventConverter;
 import org.occurrent.application.service.blocking.ApplicationService;
 import org.occurrent.application.service.blocking.generic.GenericApplicationService;
-import org.occurrent.dsl.subscription.blocking.EventNameFromType;
+import org.occurrent.application.typemapper.ReflectionTypeMapper;
+import org.occurrent.application.typemapper.TypeMapper;
+import org.occurrent.dsl.query.blocking.DomainEventQueries;
 import org.occurrent.dsl.subscription.blocking.Subscriptions;
 import org.occurrent.eventstore.api.blocking.EventStore;
+import org.occurrent.eventstore.api.blocking.EventStoreQueries;
 import org.occurrent.eventstore.mongodb.spring.blocking.EventStoreConfig;
 import org.occurrent.eventstore.mongodb.spring.blocking.SpringMongoEventStore;
 import org.occurrent.retry.RetryStrategy;
@@ -57,7 +60,7 @@ import java.util.Optional;
 import static org.occurrent.subscription.mongodb.spring.blocking.SpringMongoSubscriptionModelConfig.withConfig;
 
 /**
- * Spring auto-configuration support for blocking MongoDB Occurrent
+ * Occurrent Spring auto-configuration support for blocking MongoDB event store and subscriptions
  */
 @Configuration
 @ConditionalOnClass({SpringMongoEventStore.class, SpringMongoSubscriptionModel.class})
@@ -109,19 +112,31 @@ public class OccurrentMongoAutoConfiguration {
         return new CompetingConsumerSubscriptionModel(durableSubscriptionModel, competingConsumerStrategy);
     }
 
-
     @Bean
     @ConditionalOnMissingBean(CloudEventConverter.class)
-    public CloudEventConverter<?> occurrentCloudEventConverter(Optional<ObjectMapper> objectMapper, OccurrentProperties occurrentProperties) {
-        return new JacksonCloudEventConverter<>(objectMapper.orElseGet(ObjectMapper::new), occurrentProperties.getCloudEventConverter().getCloudEventSource());
+    public <T> CloudEventConverter<?> occurrentCloudEventConverter(Optional<ObjectMapper> objectMapper, OccurrentProperties occurrentProperties, TypeMapper<T> typeMapper) {
+        ObjectMapper mapper = objectMapper.orElseGet(ObjectMapper::new);
+        return new JacksonCloudEventConverter.Builder<T>(mapper, occurrentProperties.getCloudEventConverter().getCloudEventSource())
+                .typeMapper(typeMapper)
+                .build();
+    }
+
+    @Bean
+    @ConditionalOnMissingBean(TypeMapper.class)
+    public TypeMapper<?> occurrentTypeMapper() {
+        return ReflectionTypeMapper.qualified();
     }
 
     @Bean
     @ConditionalOnMissingBean(Subscriptions.class)
-    public <T> Subscriptions<T> occurrentSubscriptionDsl(Subscribable subscribable, CloudEventConverter<T> cloudEventConverter, Optional<EventNameFromType<T>> eventNameFromType) {
-        return eventNameFromType
-                .map(converter -> new Subscriptions<>(subscribable, cloudEventConverter, converter))
-                .orElseGet(() -> new Subscriptions<>(subscribable, cloudEventConverter));
+    public <T> Subscriptions<T> occurrentSubscriptionDsl(Subscribable subscribable, CloudEventConverter<T> cloudEventConverter, TypeMapper<T> typeMapper) {
+        return new Subscriptions<>(subscribable, cloudEventConverter, typeMapper);
+    }
+
+    @Bean
+    @ConditionalOnMissingBean(DomainEventQueries.class)
+    public <T> DomainEventQueries<T> occurrentDomainEventQueries(EventStoreQueries eventStoreQueries, CloudEventConverter<T> cloudEventConverter, TypeMapper<T> typeMapper) {
+        return new DomainEventQueries<>(eventStoreQueries, cloudEventConverter, typeMapper);
     }
 
     @Bean

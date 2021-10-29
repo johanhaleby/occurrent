@@ -18,6 +18,9 @@ package org.occurrent.dsl.subscription.blocking
 
 import io.cloudevents.CloudEvent
 import org.occurrent.application.converter.CloudEventConverter
+import org.occurrent.application.typemapper.ReflectionTypeMapper
+import org.occurrent.application.typemapper.TypeMapper
+import org.occurrent.application.typemapper.get
 import org.occurrent.condition.Condition
 import org.occurrent.filter.Filter
 import org.occurrent.subscription.OccurrentSubscriptionFilter
@@ -28,23 +31,15 @@ import java.util.function.Consumer
 import kotlin.reflect.KClass
 
 /**
- * A functional interface that allows you to get the event name from a class.
- * This is used by [Subscriptions] to be able to query for events correctly.
- */
-fun interface EventNameFromType<T : Any> {
-    operator fun get(type: KClass<out T>): String
-}
-
-/**
  * Subscription DSL
  */
-fun <T : Any> subscriptions(subscriptionModel: Subscribable, cloudEventConverter: CloudEventConverter<T>, eventNameFromType: (KClass<out T>) -> String = { e -> e.simpleName!! }, subscriptions: Subscriptions<T>.() -> Unit) {
-    Subscriptions(subscriptionModel, cloudEventConverter, eventNameFromType).apply(subscriptions)
+fun <T : Any> subscriptions(subscriptionModel: Subscribable, cloudEventConverter: CloudEventConverter<T>, typeMapper: TypeMapper<T> = ReflectionTypeMapper.qualified(), subscriptions: Subscriptions<T>.() -> Unit) {
+    Subscriptions(subscriptionModel, cloudEventConverter, typeMapper).apply(subscriptions)
 }
 
 class Subscriptions<T : Any> @JvmOverloads constructor(
     private val subscriptionModel: Subscribable, private val cloudEventConverter: CloudEventConverter<T>,
-    private val eventNameFromType: EventNameFromType<T> = EventNameFromType { type -> type.simpleName!! }
+    private val typeMapper: TypeMapper<T> = ReflectionTypeMapper.qualified()
 ) {
 
     /**
@@ -84,8 +79,8 @@ class Subscriptions<T : Any> @JvmOverloads constructor(
     fun subscribe(subscriptionId: String, vararg eventTypes: KClass<out T>, startAt: StartAt? = null, fn: (T) -> Unit): Subscription {
         val condition = when {
             eventTypes.isEmpty() -> null
-            eventTypes.size == 1 -> Condition.eq(eventNameFromType[eventTypes[0]])
-            else -> Condition.or(eventTypes.map { e -> Condition.eq(eventNameFromType[e]) })
+            eventTypes.size == 1 -> Condition.eq(typeMapper[eventTypes[0]])
+            else -> Condition.or(eventTypes.map { e -> Condition.eq(typeMapper[e]) })
         }
         val filter = OccurrentSubscriptionFilter.filter(if (condition == null) Filter.all() else Filter.type(condition))
         return subscribe(subscriptionId, filter, startAt, fn)

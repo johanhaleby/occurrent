@@ -31,6 +31,7 @@ import org.occurrent.application.service.blocking.execute
 import org.occurrent.application.service.blocking.generic.GenericApplicationService
 import org.occurrent.domain.DomainEvent
 import org.occurrent.domain.Name
+import org.occurrent.domain.NameDefined
 import org.occurrent.domain.NameWasChanged
 import org.occurrent.eventstore.inmemory.InMemoryEventStore
 import org.occurrent.filter.Filter.type
@@ -110,5 +111,86 @@ class DomainEventQueriesKotlinTest {
 
         // Then
         assertThat(event).isEqualTo(NameWasChanged("eventId2", time, "Jane Doe"))
+    }
+
+    @Test
+    fun querySingleWithSpecificReifiedKClassType() {
+        // Given
+        val time = LocalDateTime.now()
+        applicationService.execute(
+            "stream", composeCommands(
+                Name::defineName.partial("eventId1", time, "Some Doe"),
+                Name::changeName.partial("eventId2", time, "Jane Doe")
+            )
+        )
+
+        // When
+        val event: NameWasChanged? = domainEventQueries.querySingle()
+
+        // Then
+        assertThat(event).isEqualTo(NameWasChanged("eventId2", time, "Jane Doe"))
+    }
+
+
+    @Test
+    fun querySingleWithSpecificKClassType() {
+        // Given
+        val time = LocalDateTime.now()
+        applicationService.execute(
+            "stream", composeCommands(
+                Name::defineName.partial("eventId1", time, "Some Doe"),
+                Name::changeName.partial("eventId2", time, "Jane Doe")
+            )
+        )
+
+        // When
+        val event = domainEventQueries.querySingle(NameWasChanged::class)
+
+        // Then
+        assertThat(event).isEqualTo(NameWasChanged("eventId2", time, "Jane Doe"))
+    }
+
+    @Test
+    fun queryForSequenceWithKClassType() {
+        // Given
+        val time = LocalDateTime.now()
+        applicationService.execute(
+            "stream", composeCommands(
+                Name::defineName.partial("eventId1", time, "Some Doe"),
+                Name::changeName.partial("eventId2", time, "Jane Doe")
+            )
+        )
+
+        // When
+        val sequence = domainEventQueries.queryForSequence(NameWasChanged::class)
+
+        // Then
+        val events: List<NameWasChanged> = sequence.toList()
+        assertAll(
+            { assertThat(events).hasSize(1) },
+            { assertThat(events.stream().findFirst()).hasValue(NameWasChanged("eventId2", time, "Jane Doe")) }
+        )
+    }
+
+    @Test
+    fun queryForSequenceWithMultipleKClassType() {
+        // Given
+        val time = LocalDateTime.now()
+        applicationService.execute(
+            "stream", composeCommands(
+                Name::defineName.partial("eventId1", time, "Some Doe"),
+                Name::changeName.partial("eventId2", time, "Jane Doe")
+            )
+        )
+
+        // When
+        val sequence = domainEventQueries.queryForSequence(NameDefined::class, NameWasChanged::class)
+
+        // Then
+        val events: List<DomainEvent> = sequence.toList()
+        assertAll(
+            { assertThat(events).hasSize(2) },
+            { assertThat(events.map { it.eventId }).containsOnly("eventId1", "eventId2") }
+        )
     }
 }

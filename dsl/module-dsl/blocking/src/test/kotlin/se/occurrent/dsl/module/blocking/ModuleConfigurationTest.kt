@@ -53,7 +53,7 @@ class ModuleConfigurationTest {
         val allEvents = CopyOnWriteArrayList<DomainEvent>()
 
         // Module Configuration
-        val module = module<Command, DomainEvent>(cloudEventConverter, eventNameFromType = { e -> e.qualifiedName!! }) {
+        val module = module<Command, DomainEvent>(cloudEventConverter) {
             commands(dispatchTo(applicationService)) {
                 command(DefineName::getId, Name::defineNameFromCommand)
                 command(ChangeName::getId, Name::changeNameFromCommand)

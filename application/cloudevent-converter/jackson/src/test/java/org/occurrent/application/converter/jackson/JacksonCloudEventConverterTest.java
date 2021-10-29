@@ -17,7 +17,6 @@
 
 package org.occurrent.application.converter.jackson;
 
-import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import io.cloudevents.CloudEvent;
 import io.cloudevents.core.builder.CloudEventBuilder;
@@ -76,7 +75,7 @@ public class JacksonCloudEventConverterTest {
                 .idMapper(DomainEvent::getEventId)
                 .subjectMapper(__ -> "subject")
                 .timeMapper(domainEvent -> OffsetDateTime.ofInstant(domainEvent.getTimestamp().toInstant(), UTC))
-                .typeMapper(domainEvent -> domainEvent.getClass().getName())
+                .typeMapper(Class::getName)
                 .build();
 
         NameDefined domainEvent = new NameDefined(UUID.randomUUID().toString(), new Date(), "name");

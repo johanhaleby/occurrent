@@ -91,7 +91,7 @@ class Bootstrap : WebMvcConfigurer {
 
     @Bean
     fun subscriptionDsl(subscriptionModel: SubscriptionModel, converter: CloudEventConverter<GameEvent>) =
-        Subscriptions(subscriptionModel, converter) { e -> e.eventType() }
+        Subscriptions(subscriptionModel, converter) { e -> e.kotlin.eventType() }
 
     @Bean
     fun objectMapper() = jacksonObjectMapper()

@@ -33,7 +33,9 @@ import org.occurrent.filter.Filter;
 
 import java.net.URI;
 import java.time.LocalDateTime;
+import java.util.Arrays;
 import java.util.List;
+import java.util.Optional;
 import java.util.stream.Collectors;
 
 import static org.assertj.core.api.Assertions.assertThat;
@@ -80,7 +82,7 @@ public class DomainEventQueriesTest {
     }
 
     @Test
-    void queryAll() {
+    void queryWithAllFilter() {
         // Given
         LocalDateTime time = LocalDateTime.now();
 
@@ -141,5 +143,93 @@ public class DomainEventQueriesTest {
 
         // Then
         assertThat(event).isEqualTo(new NameDefined("eventId1", time, "Some Doe"));
+    }
+
+    @Test
+    void queryBasedOnClassType() {
+        // Given
+        LocalDateTime time = LocalDateTime.now();
+
+        applicationService.execute("stream", toStreamCommand(
+                composeCommands(
+                        partial(Name::defineName, "eventId1", time, "Some Doe"),
+                        partial(Name::changeName, "eventId2", time, "Jane Doe")
+                )
+        ));
+
+        // When
+        List<NameDefined> events = domainEventQueries.query(NameDefined.class).collect(Collectors.toList());
+
+        // Then
+        assertAll(
+                () -> assertThat(events).hasSize(1),
+                () -> assertThat(events.stream().findFirst()).hasValue(new NameDefined("eventId1", time, "Some Doe"))
+        );
+    }
+
+    @Test
+    void queryOneBasedOnClassType() {
+        // Given
+        LocalDateTime time = LocalDateTime.now();
+
+        applicationService.execute("stream", toStreamCommand(
+                composeCommands(
+                        partial(Name::defineName, "eventId1", time, "Some Doe"),
+                        partial(Name::changeName, "eventId2", time, "Jane Doe"),
+                        partial(Name::changeName, "eventId3", time, "Jane Doe2")
+                )
+        ));
+
+        // When
+        Optional<NameWasChanged> event = domainEventQueries.queryOne(NameWasChanged.class);
+
+        // Then
+        assertThat(event).hasValue(new NameWasChanged("eventId2", time, "Jane Doe"));
+    }
+
+    @Test
+    void queryBasedOnVarArgClassType() {
+        // Given
+        LocalDateTime time = LocalDateTime.now();
+
+        applicationService.execute("stream", toStreamCommand(
+                composeCommands(
+                        partial(Name::defineName, "eventId1", time, "Some Doe"),
+                        partial(Name::changeName, "eventId2", time, "Jane Doe"),
+                        partial(Name::changeName, "eventId3", time, "Jane Doe2")
+                )
+        ));
+
+        // When
+        List<DomainEvent> events = domainEventQueries.query(NameWasChanged.class, NameDefined.class).collect(Collectors.toList());
+
+        // Then
+        assertAll(
+                () -> assertThat(events).hasSize(3),
+                () -> assertThat(events).extracting(DomainEvent::getEventId).containsOnly("eventId1", "eventId2", "eventId3")
+        );
+    }
+    
+    @Test
+    void queryBasedOCollectionClassType() {
+        // Given
+        LocalDateTime time = LocalDateTime.now();
+
+        applicationService.execute("stream", toStreamCommand(
+                composeCommands(
+                        partial(Name::defineName, "eventId1", time, "Some Doe"),
+                        partial(Name::changeName, "eventId2", time, "Jane Doe"),
+                        partial(Name::changeName, "eventId3", time, "Jane Doe2")
+                )
+        ));
+
+        // When
+        List<DomainEvent> events = domainEventQueries.query(Arrays.asList(NameWasChanged.class, NameDefined.class)).collect(Collectors.toList());
+
+        // Then
+        assertAll(
+                () -> assertThat(events).hasSize(3),
+                () -> assertThat(events).extracting(DomainEvent::getEventId).containsOnly("eventId1", "eventId2", "eventId3")
+        );
     }
 }

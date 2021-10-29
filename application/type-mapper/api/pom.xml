@@ -1,55 +1,42 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <!--
-  ~ Copyright 2021 Johan Haleby
   ~
-  ~ Licensed under the Apache License, Version 2.0 (the "License");
-  ~ you may not use this file except in compliance with the License.
-  ~ You may obtain a copy of the License at
+  ~  Copyright 2021 Johan Haleby
   ~
-  ~        http://www.apache.org/licenses/LICENSE-2.0
+  ~  Licensed under the Apache License, Version 2.0 (the "License");
+  ~  you may not use this file except in compliance with the License.
+  ~  You may obtain a copy of the License at
   ~
-  ~ Unless required by applicable law or agreed to in writing, software
-  ~ distributed under the License is distributed on an "AS IS" BASIS,
-  ~ WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-  ~ See the License for the specific language governing permissions and
-  ~ limitations under the License.
+  ~         http://www.apache.org/licenses/LICENSE-2.0
+  ~
+  ~  Unless required by applicable law or agreed to in writing, software
+  ~  distributed under the License is distributed on an "AS IS" BASIS,
+  ~  WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+  ~  See the License for the specific language governing permissions and
+  ~  limitations under the License.
   -->
 
-<project xmlns="http://maven.apache.org/POM/4.0.0" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 http://maven.apache.org/xsd/maven-4.0.0.xsd">
+<project xmlns="http://maven.apache.org/POM/4.0.0"
+         xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+         xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 http://maven.apache.org/xsd/maven-4.0.0.xsd">
     <parent>
-        <artifactId>subscription-dsl</artifactId>
+        <artifactId>type-mapper</artifactId>
         <groupId>org.occurrent</groupId>
         <version>0.13.2-SNAPSHOT</version>
     </parent>
     <modelVersion>4.0.0</modelVersion>
 
-    <artifactId>subscription-dsl-blocking</artifactId>
+    <artifactId>type-mapper-api</artifactId>
 
     <dependencies>
         <dependency>
-            <groupId>org.occurrent</groupId>
-            <artifactId>cloudevent-converter-api</artifactId>
-            <version>0.13.2-SNAPSHOT</version>
-        </dependency>
-        <dependency>
-            <groupId>org.occurrent</groupId>
-            <artifactId>subscription-api-blocking</artifactId>
-            <version>0.13.2-SNAPSHOT</version>
-        </dependency>
-        <dependency>
-            <groupId>org.occurrent</groupId>
-            <artifactId>type-mapper-reflection</artifactId>
-            <version>0.13.2-SNAPSHOT</version>
-        </dependency>
-        <dependency>
             <groupId>org.jetbrains.kotlin</groupId>
             <artifactId>kotlin-stdlib-jdk8</artifactId>
+            <optional>true</optional>
         </dependency>
     </dependencies>
 
     <build>
-        <sourceDirectory>src/main/kotlin</sourceDirectory>
-        <testSourceDirectory>src/test/kotlin</testSourceDirectory>
         <plugins>
             <plugin>
                 <groupId>org.jetbrains.kotlin</groupId>
@@ -101,8 +88,27 @@
             <build>
                 <plugins>
                     <plugin>
+                        <!-- See https://github.com/Kotlin/dokka#using-the-maven-plugin for more examples-->
                         <groupId>org.jetbrains.dokka</groupId>
                         <artifactId>dokka-maven-plugin</artifactId>
+                        <version>${dokka.version}</version>
+                        <executions>
+                            <execution>
+                                <phase>prepare-package</phase>
+                                <goals>
+                                    <goal>javadocJar</goal>
+                                </goals>
+                            </execution>
+                        </executions>
+                        <configuration>
+                            <dokkaPlugins>
+                                <plugin>
+                                    <groupId>org.jetbrains.dokka</groupId>
+                                    <artifactId>kotlin-as-java-plugin</artifactId>
+                                    <version>${dokka.version}</version>
+                                </plugin>
+                            </dokkaPlugins>
+                        </configuration>
                     </plugin>
                 </plugins>
             </build>

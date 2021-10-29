@@ -21,6 +21,8 @@ import com.thoughtworks.xstream.XStream;
 import io.cloudevents.CloudEvent;
 import io.cloudevents.core.builder.CloudEventBuilder;
 import org.occurrent.application.converter.CloudEventConverter;
+import org.occurrent.application.typemapper.ReflectionTypeMapper;
+import org.occurrent.application.typemapper.TypeMapper;
 
 import java.net.URI;
 import java.nio.charset.Charset;
@@ -44,7 +46,7 @@ public class XStreamCloudEventConverter<T> implements CloudEventConverter<T> {
     private final XStream xStream;
     private final URI cloudEventSource;
     private final Function<T, String> idMapper;
-    private final Function<T, String> typeMapper;
+    private final TypeMapper<T> typeMapper;
     private final Function<T, OffsetDateTime> timeMapper;
     private final Function<T, String> subjectMapper;
     private final String contentType;
@@ -54,7 +56,7 @@ public class XStreamCloudEventConverter<T> implements CloudEventConverter<T> {
      * Create a new instance of the {@link XStreamCloudEventConverter} that does the following:
      * <ol>
      *     <li>Uses a random UUID as cloud event id</li>
-     *     <li>Uses the simple name of the domain event class as cloud event type</li>
+     *     <li>Uses the qualified name of the domain event class as cloud event type. Note that XStream is able to convert clouds events from simple name as well, but qualified name is used by default for consistency between components.</li>
      *     <li>Uses {@code OffsetDateTime.now(UTC)} as cloud event time</li>
      *     <li>Uses charset UTF-8 when converting the domain event to/from XML</li>
      *     <li>No subject</li>
@@ -68,10 +70,10 @@ public class XStreamCloudEventConverter<T> implements CloudEventConverter<T> {
      * @see Builder Builder for more advanced configuration
      */
     public XStreamCloudEventConverter(XStream xStream, URI cloudEventSource) {
-        this(xStream, cloudEventSource, defaultIdMapperFunction(), defaultTypeMapperFunction(), defaultTimeMapperFunction(), defaultSubjectMapperFunction(), DEFAULT_CONTENT_TYPE, DEFAULT_CHARSET);
+        this(xStream, cloudEventSource, defaultIdMapperFunction(), defaultTypeMapper(), defaultTimeMapperFunction(), defaultSubjectMapperFunction(), DEFAULT_CONTENT_TYPE, DEFAULT_CHARSET);
     }
 
-    private XStreamCloudEventConverter(XStream xStream, URI cloudEventSource, Function<T, String> idMapper, Function<T, String> typeMapper, Function<T, OffsetDateTime> timeMapper, Function<T, String> subjectMapper, String contentType, Charset charset) {
+    private XStreamCloudEventConverter(XStream xStream, URI cloudEventSource, Function<T, String> idMapper, TypeMapper<T> typeMapper, Function<T, OffsetDateTime> timeMapper, Function<T, String> subjectMapper, String contentType, Charset charset) {
         requireNonNull(xStream, XStream.class.getSimpleName() + " cannot be null");
         requireNonNull(cloudEventSource, "cloudEventSource cannot be null");
         requireNonNull(idMapper, "idMapper cannot be null");
@@ -101,7 +103,7 @@ public class XStreamCloudEventConverter<T> implements CloudEventConverter<T> {
         return CloudEventBuilder.v1()
                 .withId(idMapper.apply(domainEvent))
                 .withSource(cloudEventSource)
-                .withType(typeMapper.apply(domainEvent))
+                .withType(typeMapper.getCloudEventType(domainEvent))
                 .withTime(timeMapper.apply(domainEvent))
                 .withSubject(subjectMapper.apply(domainEvent))
                 .withDataContentType(contentType)
@@ -127,7 +129,7 @@ public class XStreamCloudEventConverter<T> implements CloudEventConverter<T> {
         private String contentType = DEFAULT_CONTENT_TYPE;
         private Charset charset = DEFAULT_CHARSET;
         private Function<T, String> idMapper = defaultIdMapperFunction();
-        private Function<T, String> typeMapper = defaultTypeMapperFunction();
+        private TypeMapper<T> typeMapper = defaultTypeMapper();
         private Function<T, OffsetDateTime> timeMapper = defaultTimeMapperFunction();
         private Function<T, String> subjectMapper = defaultSubjectMapperFunction();
 
@@ -153,9 +155,9 @@ public class XStreamCloudEventConverter<T> implements CloudEventConverter<T> {
         }
 
         /**
-         * @param typeMapper A function that generates the cloud event type based on the domain event. By default, the "simple name" of the domain event is used.
+         * @param typeMapper A function that generates the cloud event type based on the domain event. By default, the "qualified name" of the domain event is used.
          */
-        public Builder<T> typeMapper(Function<T, String> typeMapper) {
+        public Builder<T> typeMapper(TypeMapper<T> typeMapper) {
             this.typeMapper = typeMapper;
             return this;
         }
@@ -197,8 +199,8 @@ public class XStreamCloudEventConverter<T> implements CloudEventConverter<T> {
         return __ -> UUID.randomUUID().toString();
     }
 
-    private static <T> Function<T, String> defaultTypeMapperFunction() {
-        return domainEvent -> domainEvent.getClass().getSimpleName();
+    private static <T> TypeMapper<T> defaultTypeMapper() {
+        return ReflectionTypeMapper.qualified();
     }
 
     private static <T> Function<T, OffsetDateTime> defaultTimeMapperFunction() {

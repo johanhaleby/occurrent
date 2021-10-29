@@ -56,7 +56,7 @@ public class XStreamCloudEventConverterTest {
         // Then
         assertAll(
                 () -> assertThat(cloudEvent.getId()).matches("([a-f0-9]{8}(-[a-f0-9]{4}){4}[a-f0-9]{8})"),
-                () -> assertThat(cloudEvent.getType()).isEqualTo(NameDefined.class.getSimpleName()),
+                () -> assertThat(cloudEvent.getType()).isEqualTo(NameDefined.class.getName()),
                 () -> assertThat(cloudEvent.getSource()).isEqualTo(CLOUD_EVENT_SOURCE),
                 () -> assertThat(cloudEvent.getSubject()).isNull(),
                 () -> assertThat(cloudEvent.getTime()).isCloseToUtcNow(within(3, ChronoUnit.SECONDS)),
@@ -77,7 +77,7 @@ public class XStreamCloudEventConverterTest {
                 .idMapper(DomainEvent::getEventId)
                 .subjectMapper(__ -> "subject")
                 .timeMapper(domainEvent -> OffsetDateTime.ofInstant(domainEvent.getTimestamp().toInstant(), UTC))
-                .typeMapper(domainEvent -> domainEvent.getClass().getName())
+                .typeMapper(Class::getSimpleName)
                 .build();
 
         NameDefined domainEvent = new NameDefined(UUID.randomUUID().toString(), new Date(), "name");
@@ -88,7 +88,7 @@ public class XStreamCloudEventConverterTest {
         // Then
         assertAll(
                 () -> assertThat(cloudEvent.getId()).isEqualTo(domainEvent.getEventId()),
-                () -> assertThat(cloudEvent.getType()).isEqualTo(NameDefined.class.getName()),
+                () -> assertThat(cloudEvent.getType()).isEqualTo(NameDefined.class.getSimpleName()),
                 () -> assertThat(cloudEvent.getSource()).isEqualTo(CLOUD_EVENT_SOURCE),
                 () -> assertThat(cloudEvent.getSubject()).isEqualTo("subject"),
                 () -> assertThat(cloudEvent.getTime()).isEqualTo(OffsetDateTime.ofInstant(domainEvent.getTimestamp().toInstant(), UTC)),
@@ -114,7 +114,7 @@ public class XStreamCloudEventConverterTest {
         CloudEvent cloudEvent = CloudEventBuilder.v1()
                 .withId(UUID.randomUUID().toString())
                 .withSource(CLOUD_EVENT_SOURCE)
-                .withType(NameDefined.class.getSimpleName())
+                .withType(NameDefined.class.getName())
                 .withTime(OffsetDateTime.now())
                 .withData(xml.getBytes(UTF_8))
                 .build();
