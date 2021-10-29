@@ -67,21 +67,12 @@ fun <T : Any> DomainEventQueries<T>.queryForSequence(
     query(typeList, skip, limit, sortBy)
 }).asSequence()
 
+/**
+ * Query for a single event (Kotlin equivalent to [DomainEventQueries.queryOne]).
+ */
+inline fun <reified T : Any> DomainEventQueries<in T>.queryOne(): T? = queryOne(T::class.java)
 
 /**
  * Query for a single event (Kotlin equivalent to [DomainEventQueries.queryOne]).
  */
-fun <T : Any> DomainEventQueries<in T>.queryOneOrNull(filter: Filter): T? =
-    queryOne<T>(filter).orElse(null)
-
-/**
- * Query for a single event (Kotlin equivalent to [DomainEventQueries.queryOne]).
- */
-inline fun <reified T : Any> DomainEventQueries<in T>.queryOne(): T? =
-    queryOne(T::class.java).orElse(null)
-
-/**
- * Query for a single event (Kotlin equivalent to [DomainEventQueries.queryOne]).
- */
-fun <T : Any> DomainEventQueries<in T>.queryOne(type: KClass<T>): T? =
-    queryOne(type.java).orElse(null)
+fun <T : Any> DomainEventQueries<in T>.queryOne(type: KClass<T>): T? = queryOne(type.java)

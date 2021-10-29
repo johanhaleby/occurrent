@@ -60,17 +60,17 @@ public class DomainEventQueries<T> {
      *
      * @return All cloud events matching the specified filter, skip, limit and sort by <code>sortBy</code>.
      */
-    public <E extends T> Optional<E> queryOne(Filter filter) {
-        return this.<E>toDomainEvents(eventStoreQueries.query(filter)).findFirst();
+    public <E extends T> E queryOne(Filter filter) {
+        return this.<E>toDomainEvents(eventStoreQueries.query(filter)).findFirst().orElse(null);
     }
 
     /**
      * Query for the first event of the given type.
      *
-     * @return All cloud events matching the specified type.
+     * @return The cloud event matching the specified type or {@code null}
      */
-    public <E extends T> Optional<E> queryOne(Class<E> type) {
-        return query(type).findFirst();
+    public <E extends T> E queryOne(Class<E> type) {
+        return query(type).findFirst().orElse(null);
     }
 
     /**

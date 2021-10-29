@@ -21,7 +21,7 @@
   ```java                                                      
   Stream<DomainEvent> events = domainQueries.query(GameStarted.class, GameEnded.class); // Find only events of this type
   GameStarted event1 = domainQueries.queryOne(GameStarted.class); // Find the first event of this type
-  GamePlayed event2s = domainQueries.queryOne(Filter.id("d7542cef-ac20-4e74-9128-fdec94540fda")); // Find event with this id
+  GamePlayed event2 = domainQueries.queryOne(Filter.id("d7542cef-ac20-4e74-9128-fdec94540fda")); // Find event with this id
   ```
   
   There are also some Kotlin extensions that you can use to query for a `Sequence` of events instead of a `Stream`:
@@ -29,7 +29,7 @@
   ```kotlin
   val events : Sequence<DomainEvent> = domainQueries.queryForSequence(GamePlayed::class, GameWon::class, skip = 2) // Find only events of this type and skip the first two events
   val event1 = domainQueries.queryOne<GameStarted>() // Find the first event of this type
-  val event2 = domainQueries.queryOneOrNull<GamePlayed>(Filter.id("d7542cef-ac20-4e74-9128-fdec94540fda")) // Find event with this id
+  val event2 = domainQueries.queryOne<GamePlayed>(Filter.id("d7542cef-ac20-4e74-9128-fdec94540fda")) // Find event with this id
   ```
 * Introducing spring boot starter project to easily bootstrap Occurrent if using Spring. Depend on `org.occurrent:spring-boot-starter-mongodb` and create a Spring Boot application annotated with `@SpringBootApplication` as you would normally do.
   Occurrent will then configure the following components automatically:
