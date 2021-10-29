@@ -27,35 +27,33 @@ import kotlin.streams.asSequence
  * Query that returns a [Sequence] instead of a [java.util.stream.Stream].
  * @see DomainEventQueries.query
  */
-@Suppress("UNCHECKED_CAST")
-fun <T, E : T> DomainEventQueries<T>.queryForSequence(
+fun <T : Any> DomainEventQueries<in T>.queryForSequence(
     filter: Filter = Filter.all(),
     skip: Int = 0,
     limit: Int = Int.MAX_VALUE,
     sortBy: SortBy = SortBy.natural(SortDirection.ASCENDING)
-): Sequence<E> =
-    query<E>(filter, skip, limit, sortBy)
-        .map { it as E }
+): Sequence<T> =
+    query<T>(filter, skip, limit, sortBy)
+        .map { it as T }
         .asSequence()
 
 /**
- * Query by type of domain event ([E]).
+ * Query by type of domain event ([T]).
+ *
  * @see DomainEventQueries.query
  */
-@Suppress("UNCHECKED_CAST")
-fun <T : Any, E : T> DomainEventQueries<T>.queryForSequence(
-    type: KClass<E>,
+fun <T : Any> DomainEventQueries<in T>.queryForSequence(
+    type: KClass<T>,
     skip: Int = 0,
     limit: Int = Int.MAX_VALUE,
     sortBy: SortBy = SortBy.natural(SortDirection.ASCENDING)
-): Sequence<E> =
+): Sequence<T> =
     query(type.java, skip, limit, sortBy).asSequence()
 
 /**
- * Query by type of domain event ([E]).
+ * Query by type of domain event ([T]).
  * @see DomainEventQueries.query
  */
-@Suppress("UNCHECKED_CAST")
 fun <T : Any> DomainEventQueries<T>.queryForSequence(
     type: KClass<out T>,
     vararg additionalTypes: KClass<out T>,
@@ -73,17 +71,17 @@ fun <T : Any> DomainEventQueries<T>.queryForSequence(
 /**
  * Query for a single event (Kotlin equivalent to [DomainEventQueries.queryOne]).
  */
-fun <T, E : T> DomainEventQueries<T>.querySingle(filter: Filter): E? =
-    queryOne<E>(filter).orElse(null)
+fun <T : Any> DomainEventQueries<in T>.queryOneOrNull(filter: Filter): T? =
+    queryOne<T>(filter).orElse(null)
 
 /**
  * Query for a single event (Kotlin equivalent to [DomainEventQueries.queryOne]).
  */
-inline fun <T, reified E : T> DomainEventQueries<T>.querySingle(): E? =
-    queryOne(E::class.java).orElse(null)
+inline fun <reified T : Any> DomainEventQueries<in T>.queryOne(): T? =
+    queryOne(T::class.java).orElse(null)
 
 /**
  * Query for a single event (Kotlin equivalent to [DomainEventQueries.queryOne]).
  */
-inline fun <T : Any, E : T> DomainEventQueries<T>.querySingle(type: KClass<E>): E? =
+fun <T : Any> DomainEventQueries<in T>.queryOne(type: KClass<T>): T? =
     queryOne(type.java).orElse(null)

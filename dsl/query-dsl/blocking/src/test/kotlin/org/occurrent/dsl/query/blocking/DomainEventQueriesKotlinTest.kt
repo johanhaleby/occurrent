@@ -107,7 +107,7 @@ class DomainEventQueriesKotlinTest {
         )
 
         // When
-        val event: NameWasChanged? = domainEventQueries.querySingle(type(NameWasChanged::class.qualifiedName))
+        val event = domainEventQueries.queryOneOrNull<NameWasChanged>(type(NameWasChanged::class.qualifiedName))
 
         // Then
         assertThat(event).isEqualTo(NameWasChanged("eventId2", time, "Jane Doe"))
@@ -125,7 +125,7 @@ class DomainEventQueriesKotlinTest {
         )
 
         // When
-        val event: NameWasChanged? = domainEventQueries.querySingle()
+        val event = domainEventQueries.queryOne<NameWasChanged>()
 
         // Then
         assertThat(event).isEqualTo(NameWasChanged("eventId2", time, "Jane Doe"))
@@ -144,7 +144,7 @@ class DomainEventQueriesKotlinTest {
         )
 
         // When
-        val event = domainEventQueries.querySingle(NameWasChanged::class)
+        val event = domainEventQueries.queryOne(NameWasChanged::class)
 
         // Then
         assertThat(event).isEqualTo(NameWasChanged("eventId2", time, "Jane Doe"))
