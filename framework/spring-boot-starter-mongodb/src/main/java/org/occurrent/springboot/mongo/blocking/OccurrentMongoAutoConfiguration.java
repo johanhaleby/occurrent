@@ -129,13 +129,13 @@ public class OccurrentMongoAutoConfiguration {
 
     @Bean
     @ConditionalOnMissingBean(Subscriptions.class)
-    public <T> Subscriptions<T> occurrentSubscriptionDsl(Subscribable subscribable, CloudEventConverter<T> cloudEventConverter, TypeMapper<T> typeMapper) {
+    public <T> Subscriptions<?> occurrentSubscriptionDsl(Subscribable subscribable, CloudEventConverter<T> cloudEventConverter, TypeMapper<T> typeMapper) {
         return new Subscriptions<>(subscribable, cloudEventConverter, typeMapper);
     }
 
     @Bean
     @ConditionalOnMissingBean(DomainEventQueries.class)
-    public <T> DomainEventQueries<T> occurrentDomainEventQueries(EventStoreQueries eventStoreQueries, CloudEventConverter<T> cloudEventConverter, TypeMapper<T> typeMapper) {
+    public <T> DomainEventQueries<?> occurrentDomainEventQueries(EventStoreQueries eventStoreQueries, CloudEventConverter<T> cloudEventConverter, TypeMapper<T> typeMapper) {
         return new DomainEventQueries<>(eventStoreQueries, cloudEventConverter, typeMapper);
     }
 
