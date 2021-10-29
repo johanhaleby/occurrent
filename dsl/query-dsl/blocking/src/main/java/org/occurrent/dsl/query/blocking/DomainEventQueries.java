@@ -30,6 +30,8 @@ import java.util.*;
 import java.util.stream.Collectors;
 import java.util.stream.Stream;
 
+import static org.occurrent.eventstore.api.SortBy.SortDirection.ASCENDING;
+
 /**
  * A wrapper around {@link EventStoreQueries} that maps the result of a query into your domain event type
  * using a {@link CloudEventConverter}.
@@ -74,7 +76,36 @@ public class DomainEventQueries<T> {
     }
 
     /**
-     * Query by event type (will use the supplied {@link TypeMapper} to get the cloud event type from the class.
+     * Query for the first event of the given type sorting by {@code sortBy}.
+     *
+     * @return The cloud event matching the specified type or {@code null}
+     */
+    public <E extends T> E queryOne(Class<E> type, SortBy sortBy) {
+        return queryOne(type, 0, Integer.MAX_VALUE, sortBy);
+    }
+
+    /**
+     * Query for the first event of the given type using {@code skip} and {@code limit}.
+     *
+     * @return The cloud event matching the specified type or {@code null}
+     */
+    public <E extends T> E queryOne(Class<E> type, int skip, int limit) {
+        return queryOne(type, skip, limit, SortBy.natural(ASCENDING));
+    }
+
+    /**
+     * Query for the first event of the given using {@code skip}, {@code limit} and {@code sortBy}.
+     *
+     * @return The cloud event matching the specified type or {@code null}
+     */
+    public <E extends T> E queryOne(Class<E> type, int skip, int limit, SortBy sortBy) {
+        Objects.requireNonNull(type, "type cannot be null");
+        //noinspection unchecked
+        return (E) query(Filter.type(typeMapper.getCloudEventType(type)), skip, limit, sortBy).findFirst().orElse(null);
+    }
+
+    /**
+     * Query by event type (will use the supplied {@link TypeMapper}) to get the cloud event type from the class.
      * <p>
      * Note that it's recommended to create an index the fields you're sorting on in order to make them efficient.
      *
@@ -85,7 +116,7 @@ public class DomainEventQueries<T> {
     }
 
     /**
-     * Query by event type (will use the supplied {@link TypeMapper} to get the cloud event type from the class, also include {@code skip} and {@code limit}.
+     * Query by event type (will use the supplied {@link TypeMapper}) to get the cloud event type from the class, also include {@code skip} and {@code limit}.
      * <p>
      * Note that it's recommended to create an index the fields you're sorting on in order to make them efficient.
      *
@@ -96,7 +127,7 @@ public class DomainEventQueries<T> {
     }
 
     /**
-     * Query by event type (will use the supplied {@link TypeMapper} to get the cloud event type from the class, also include {@code skip}, {@code limit} and {@code sortBy}.
+     * Query by event type (will use the supplied {@link TypeMapper}) to get the cloud event type from the class, also include {@code skip}, {@code limit} and {@code sortBy}.
      * <p>
      * Note that it's recommended to create an index the fields you're sorting on in order to make them efficient.
      *
@@ -107,7 +138,7 @@ public class DomainEventQueries<T> {
     }
 
     /**
-     * Query by event type (will use the supplied {@link TypeMapper} to get the cloud event type from the class, also including sorting .
+     * Query by event type (will use the supplied {@link TypeMapper}) to get the cloud event type from the class, also including sorting .
      * <p>
      * Note that it's recommended to create an index the fields you're sorting on in order to make them efficient.
      *
@@ -127,7 +158,7 @@ public class DomainEventQueries<T> {
     }
 
     /**
-     * Query by event types (will use the supplied {@link TypeMapper} to get the cloud event type from the class, also include {@code skip}, {@code limit} and {@code sortBy}.
+     * Query by event types (will use the supplied {@link TypeMapper}) to get the cloud event type from the class, also include {@code skip}, {@code limit} and {@code sortBy}.
      * <p>
      * Note that it's recommended to create an index the fields you're sorting on in order to make them efficient.
      *
@@ -143,7 +174,7 @@ public class DomainEventQueries<T> {
     }
 
     /**
-     * Query by event types (will use the supplied {@link TypeMapper} to get the cloud event type from the class, also include {@code skip}, {@code limit}.
+     * Query by event types (will use the supplied {@link TypeMapper}) to get the cloud event type from the class, also include {@code skip}, {@code limit}.
      * <p>
      * Note that it's recommended to create an index the fields you're sorting on in order to make them efficient.
      *
@@ -159,7 +190,7 @@ public class DomainEventQueries<T> {
     }
 
     /**
-     * Query by event types (will use the supplied {@link TypeMapper} to get the cloud event type from the class, also include {@code sortBy}.
+     * Query by event types (will use the supplied {@link TypeMapper}) to get the cloud event type from the class, also include {@code sortBy}.
      * <p>
      * Note that it's recommended to create an index the fields you're sorting on in order to make them efficient.
      *
@@ -191,7 +222,7 @@ public class DomainEventQueries<T> {
     }
 
     /**
-     * Query by event types (will use the supplied {@link TypeMapper} to get the cloud event type from the class, also include {@code sortBy}.
+     * Query by event types (will use the supplied {@link TypeMapper}) to get the cloud event type from the class, also include {@code sortBy}.
      * <p>
      * Note that it's recommended to create an index the fields you're sorting on in order to make them efficient.
      *

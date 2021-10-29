@@ -33,6 +33,8 @@ import org.occurrent.domain.DomainEvent
 import org.occurrent.domain.Name
 import org.occurrent.domain.NameDefined
 import org.occurrent.domain.NameWasChanged
+import org.occurrent.eventstore.api.SortBy
+import org.occurrent.eventstore.api.SortBy.SortDirection.DESCENDING
 import org.occurrent.eventstore.inmemory.InMemoryEventStore
 import org.occurrent.filter.Filter.type
 import java.net.URI
@@ -46,7 +48,7 @@ class DomainEventQueriesKotlinTest {
 
     @BeforeEach
     fun createInstances() {
-        val cloudEventConverter: CloudEventConverter<DomainEvent> = JacksonCloudEventConverter(ObjectMapper(), URI.create("urn:test"))
+        val cloudEventConverter: CloudEventConverter<DomainEvent> = JacksonCloudEventConverter.Builder<DomainEvent>(ObjectMapper(), URI.create("urn:test")).idMapper(DomainEvent::getEventId).build()
         val eventStore = InMemoryEventStore()
         applicationService = GenericApplicationService(eventStore, cloudEventConverter)
         domainEventQueries = DomainEventQueries(eventStore, cloudEventConverter)
@@ -192,5 +194,24 @@ class DomainEventQueriesKotlinTest {
             { assertThat(events).hasSize(2) },
             { assertThat(events.map { it.eventId }).containsOnly("eventId1", "eventId2") }
         )
+    }
+
+    @Test
+    fun queryOneBasedOnReifiedClassTypeAndSortBy() {
+        // Given
+        val time = LocalDateTime.now()
+        applicationService.execute(
+            "stream", composeCommands(
+                Name::defineName.partial("eventId1", time, "Some Doe"),
+                Name::changeName.partial("eventId2", time, "Jane Doe"),
+                Name::changeName.partial("eventId3", time, "Jane Doe2"),
+            )
+        )
+
+        // When
+        val nameWasChanged = domainEventQueries.queryOne<NameWasChanged>(sortBy = SortBy.natural(DESCENDING))
+
+        // Then
+        assertThat(nameWasChanged).isEqualTo(NameWasChanged("eventId3", time, "Jane Doe2"))
     }
 }

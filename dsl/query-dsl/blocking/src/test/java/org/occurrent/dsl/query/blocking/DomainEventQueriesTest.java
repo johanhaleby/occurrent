@@ -28,6 +28,7 @@ import org.occurrent.domain.DomainEvent;
 import org.occurrent.domain.Name;
 import org.occurrent.domain.NameDefined;
 import org.occurrent.domain.NameWasChanged;
+import org.occurrent.eventstore.api.SortBy;
 import org.occurrent.eventstore.inmemory.InMemoryEventStore;
 import org.occurrent.filter.Filter;
 
@@ -35,7 +36,6 @@ import java.net.URI;
 import java.time.LocalDateTime;
 import java.util.Arrays;
 import java.util.List;
-import java.util.Optional;
 import java.util.stream.Collectors;
 
 import static org.assertj.core.api.Assertions.assertThat;
@@ -43,6 +43,7 @@ import static org.junit.jupiter.api.Assertions.assertAll;
 import static org.occurrent.application.composition.command.CommandConversion.toStreamCommand;
 import static org.occurrent.application.composition.command.ListCommandComposition.composeCommands;
 import static org.occurrent.application.composition.command.partial.PartialListCommandApplication.partial;
+import static org.occurrent.eventstore.api.SortBy.SortDirection.DESCENDING;
 import static org.occurrent.filter.Filter.type;
 
 public class DomainEventQueriesTest {
@@ -52,7 +53,7 @@ public class DomainEventQueriesTest {
 
     @BeforeEach
     void createInstances() {
-        CloudEventConverter<DomainEvent> cloudEventConverter = new JacksonCloudEventConverter<>(new ObjectMapper(), URI.create("urn:test"));
+        CloudEventConverter<DomainEvent> cloudEventConverter = new JacksonCloudEventConverter.Builder<DomainEvent>(new ObjectMapper(), URI.create("urn:test")).idMapper(DomainEvent::getEventId).build();
         InMemoryEventStore eventStore = new InMemoryEventStore();
         applicationService = new GenericApplicationService<>(eventStore, cloudEventConverter);
         domainEventQueries = new DomainEventQueries<>(eventStore, cloudEventConverter);
@@ -139,7 +140,7 @@ public class DomainEventQueriesTest {
         ));
 
         // When
-        NameDefined event = domainEventQueries.<NameDefined>queryOne(type(NameDefined.class.getName())).orElse(null);
+        NameDefined event = domainEventQueries.<NameDefined>queryOne(type(NameDefined.class.getName()));
 
         // Then
         assertThat(event).isEqualTo(new NameDefined("eventId1", time, "Some Doe"));
@@ -181,10 +182,10 @@ public class DomainEventQueriesTest {
         ));
 
         // When
-        Optional<NameWasChanged> event = domainEventQueries.queryOne(NameWasChanged.class);
+        NameWasChanged event = domainEventQueries.queryOne(NameWasChanged.class);
 
         // Then
-        assertThat(event).hasValue(new NameWasChanged("eventId2", time, "Jane Doe"));
+        assertThat(event).isEqualTo(new NameWasChanged("eventId2", time, "Jane Doe"));
     }
 
     @Test
@@ -209,7 +210,7 @@ public class DomainEventQueriesTest {
                 () -> assertThat(events).extracting(DomainEvent::getEventId).containsOnly("eventId1", "eventId2", "eventId3")
         );
     }
-    
+
     @Test
     void queryBasedOCollectionClassType() {
         // Given
@@ -231,5 +232,25 @@ public class DomainEventQueriesTest {
                 () -> assertThat(events).hasSize(3),
                 () -> assertThat(events).extracting(DomainEvent::getEventId).containsOnly("eventId1", "eventId2", "eventId3")
         );
+    }
+
+    @Test
+    void queryOneBasedOnClassTypeAndSortBy() {
+        // Given
+        LocalDateTime time = LocalDateTime.now();
+
+        applicationService.execute("stream", toStreamCommand(
+                composeCommands(
+                        partial(Name::defineName, "eventId1", time, "Some Doe"),
+                        partial(Name::changeName, "eventId2", time, "Jane Doe"),
+                        partial(Name::changeName, "eventId3", time, "Jane Doe2")
+                )
+        ));
+
+        // When
+        NameWasChanged event = domainEventQueries.queryOne(NameWasChanged.class, SortBy.natural(DESCENDING));
+
+        // Then
+        assertThat(event).isEqualTo(new NameWasChanged("eventId3", time, "Jane Doe2"));
     }
 }
