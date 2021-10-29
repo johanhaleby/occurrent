@@ -16,8 +16,9 @@
 
 package org.occurrent.example.domain.wordguessinggame.mongodb.spring.blocking.features.gameplay.views.game
 
+import org.occurrent.dsl.query.blocking.DomainEventQueries
+import org.occurrent.dsl.query.blocking.queryForSequence
 import org.occurrent.example.domain.wordguessinggame.event.GameEvent
-import org.occurrent.example.domain.wordguessinggame.mongodb.spring.blocking.features.GameEventQueries
 import org.occurrent.example.domain.wordguessinggame.readmodel.GameReadModel
 import org.occurrent.example.domain.wordguessinggame.readmodel.assembleGameReadModelFromDomainEvents
 import org.occurrent.filter.Filter.subject
@@ -25,10 +26,9 @@ import org.springframework.stereotype.Component
 import java.util.*
 
 @Component
-class FindGameByIdQuery(private val gameEvents: GameEventQueries) {
+class FindGameByIdQuery(private val domainEventQueries: DomainEventQueries<GameEvent>) {
 
     fun execute(gameId: UUID): GameReadModel? =
-            // We use subject to retrieve _all_ game events from different streams
-            gameEvents.query<GameEvent>(subject(gameId.toString()))
-                    .assembleGameReadModelFromDomainEvents()
+        // We use subject to retrieve _all_ game events from different streams
+        domainEventQueries.queryForSequence(subject(gameId.toString())).assembleGameReadModelFromDomainEvents()
 }

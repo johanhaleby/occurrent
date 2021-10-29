@@ -18,8 +18,8 @@ package org.occurrent.example.domain.wordguessinggame.mongodb.spring.blocking.fe
 
 import org.occurrent.application.service.blocking.ApplicationService
 import org.occurrent.application.service.blocking.execute
+import org.occurrent.dsl.query.blocking.DomainEventQueries
 import org.occurrent.example.domain.wordguessinggame.event.*
-import org.occurrent.example.domain.wordguessinggame.mongodb.spring.blocking.features.GameEventQueries
 import org.occurrent.example.domain.wordguessinggame.writemodel.BasisForPointAwarding
 import org.occurrent.example.domain.wordguessinggame.writemodel.PointAwarding
 import org.occurrent.filter.Filter.streamId
@@ -31,14 +31,14 @@ import org.springframework.stereotype.Component
 @Component
 class AwardPointsToPlayerThatGuessedTheRightWord(
     private val applicationService: ApplicationService<GameEvent>,
-    private val gameEventQueries: GameEventQueries
+    private val domainEventQueries: DomainEventQueries<GameEvent>
 ) {
 
     @Retryable(backoff = Backoff(delay = 100, multiplier = 2.0, maxDelay = 1000))
     operator fun invoke(playerGuessedTheRightWord: PlayerGuessedTheRightWord) {
         val gameId = playerGuessedTheRightWord.gameId
         val playerId = playerGuessedTheRightWord.playerId
-        val gameWasStarted = gameEventQueries.queryOne<GameWasStarted>(streamId(gameId.toString()).and(type(GameWasStarted::class.eventType())))
+        val gameWasStarted = domainEventQueries.queryOne<GameWasStarted>(streamId(gameId.toString()).and(type(GameWasStarted::class.eventType())))
         applicationService.execute("points:$gameId") { events: Sequence<GameEvent> ->
             val eventList = events.toList()
             val totalNumberGuessesForPlayerInGame = eventList.count { event -> event is PlayerGuessedTheWrongWord && event.playerId == playerGuessedTheRightWord.playerId } + 1

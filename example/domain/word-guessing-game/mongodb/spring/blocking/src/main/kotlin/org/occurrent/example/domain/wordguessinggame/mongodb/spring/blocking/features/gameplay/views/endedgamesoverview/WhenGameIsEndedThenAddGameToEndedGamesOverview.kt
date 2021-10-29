@@ -16,9 +16,9 @@
 
 package org.occurrent.example.domain.wordguessinggame.mongodb.spring.blocking.features.gameplay.views.endedgamesoverview
 
+import org.occurrent.dsl.query.blocking.DomainEventQueries
 import org.occurrent.dsl.subscription.blocking.Subscriptions
 import org.occurrent.example.domain.wordguessinggame.event.*
-import org.occurrent.example.domain.wordguessinggame.mongodb.spring.blocking.features.GameEventQueries
 import org.occurrent.example.domain.wordguessinggame.mongodb.spring.blocking.support.loggerFor
 import org.occurrent.example.domain.wordguessinggame.readmodel.LostGameOverview
 import org.occurrent.example.domain.wordguessinggame.readmodel.WonGameOverview
@@ -40,14 +40,14 @@ class WhenGameIsEndedThenAddGameToEndedGamesOverview {
     private lateinit var mongo: MongoOperations
 
     @Autowired
-    private lateinit var gameEventQueries: GameEventQueries
+    private lateinit var domainEventQueries: DomainEventQueries<GameEvent>
 
     @Bean
     fun whenGameIsEndedThenAddGameToEndedGamesOverviewPolicy() =
         subscriptions.subscribe<GameWasWon, GameWasLost>("WhenGameIsEndedThenAddGameToGameEndedOverview") { e ->
             log.info("${e::class.eventType()} - will update ended games overview")
             val gameId = e.gameId
-            val gameWasStarted = gameEventQueries.queryOne<GameWasStarted>(streamId(gameId.toString()).and(type(GameWasStarted::class.eventType())))
+            val gameWasStarted = domainEventQueries.queryOne<GameWasStarted>(streamId(gameId.toString()).and(type(GameWasStarted::class.eventType())))
             val endedGameOverview = when (e) {
                 is GameWasWon -> WonGameOverview(
                     gameId,
