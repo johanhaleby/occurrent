@@ -19,7 +19,7 @@ import com.fasterxml.jackson.databind.ObjectMapper
 import com.fasterxml.jackson.module.kotlin.jacksonObjectMapper
 import org.occurrent.application.converter.CloudEventConverter
 import org.occurrent.application.service.blocking.generic.GenericApplicationService
-import org.occurrent.application.typemapper.TypeMapper
+import org.occurrent.application.typemapper.CloudEventTypeMapper
 import org.occurrent.dsl.query.blocking.DomainEventQueries
 import org.occurrent.dsl.subscription.blocking.Subscriptions
 import org.occurrent.eventstore.api.blocking.EventStoreQueries
@@ -92,15 +92,15 @@ class Bootstrap : WebMvcConfigurer {
     }
 
     @Bean
-    fun typeMapper() = TypeMapper<GameEvent> { e -> e.kotlin.eventType() }
+    fun typeMapper() = CloudEventTypeMapper<GameEvent> { e -> e.kotlin.eventType() }
 
     @Bean
-    fun subscriptionDsl(subscriptionModel: SubscriptionModel, converter: CloudEventConverter<GameEvent>, typeMapper : TypeMapper<GameEvent>) =
-        Subscriptions(subscriptionModel, converter, typeMapper)
+    fun subscriptionDsl(subscriptionModel: SubscriptionModel, converter: CloudEventConverter<GameEvent>, cloudEventTypeMapper : CloudEventTypeMapper<GameEvent>) =
+        Subscriptions(subscriptionModel, converter, cloudEventTypeMapper)
 
     @Bean
-    fun queryDsl(eventStoreQueries: EventStoreQueries, converter: CloudEventConverter<GameEvent>, typeMapper : TypeMapper<GameEvent>) =
-        DomainEventQueries(eventStoreQueries, converter, typeMapper)
+    fun queryDsl(eventStoreQueries: EventStoreQueries, converter: CloudEventConverter<GameEvent>, cloudEventTypeMapper : CloudEventTypeMapper<GameEvent>) =
+        DomainEventQueries(eventStoreQueries, converter, cloudEventTypeMapper)
 
     @Bean
     fun objectMapper() = jacksonObjectMapper()

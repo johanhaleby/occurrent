@@ -20,15 +20,15 @@ package org.occurrent.application.typemapper;
 import java.util.Objects;
 
 /**
- * A reflection-based {@link TypeMapper} that uses either the qualified or simple name of a domain event class
+ * A reflection-based {@link CloudEventTypeMapper} that uses either the qualified or simple name of a domain event class
  * as cloud event type.
  *
  * @param <T> The base-type of your domain events
  */
-public class ReflectionTypeMapper<T> implements TypeMapper<T> {
+public class ReflectionCloudEventTypeMapper<T> implements CloudEventTypeMapper<T> {
     private final ClassName className;
 
-    public ReflectionTypeMapper(ClassName className) {
+    public ReflectionCloudEventTypeMapper(ClassName className) {
         Objects.requireNonNull(className, ClassName.class.getSimpleName() + " cannot be null");
         this.className = className;
     }
@@ -45,16 +45,16 @@ public class ReflectionTypeMapper<T> implements TypeMapper<T> {
     }
 
     /**
-     * @return An instance of {@link ReflectionTypeMapper} that uses the simple name of a class as cloud event type
+     * @return An instance of {@link ReflectionCloudEventTypeMapper} that uses the simple name of a class as cloud event type
      */
-    public static <T> ReflectionTypeMapper<T> simple() {
-        return new ReflectionTypeMapper<>(ClassName.SIMPLE);
+    public static <T> ReflectionCloudEventTypeMapper<T> simple() {
+        return new ReflectionCloudEventTypeMapper<>(ClassName.SIMPLE);
     }
 
     /**
-     * @return An instance of {@link ReflectionTypeMapper} that uses the fully qualified name of a class as cloud event type
+     * @return An instance of {@link ReflectionCloudEventTypeMapper} that uses the fully qualified name of a class as cloud event type
      */
-    public static <T> ReflectionTypeMapper<T> qualified() {
-        return new ReflectionTypeMapper<>(ClassName.QUALIFIED);
+    public static <T> ReflectionCloudEventTypeMapper<T> qualified() {
+        return new ReflectionCloudEventTypeMapper<>(ClassName.QUALIFIED);
     }
 }

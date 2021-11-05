@@ -1,17 +1,17 @@
 ### Changelog next version
 
-* Introduced the concept of TypeMapper's. A type mapper is component whose purpose it is to get the [cloud event type](https://occurrent.org/documentation#cloudevents) from your domain events.
-  Type mappers are now used by multiple modules in the Occurrent ecosystem, for example the [subscription dsl](https://occurrent.org/documentation#subscription-dsl), [cloud event mapper](https://occurrent.org/documentation#cloudevent-conversion),
-  and the new domain queries DSL. You should use the same type mapper instance for all these components. To write a custom type mapper, depend on the `org.occurent:type-mapper-api` module and implement the `org.occurrent.application.typemapper.TypeMapper`
+* Introduced the concept of CloudEventTypeMapper's. A cloudevent type mapper is component whose purpose it is to get the [cloud event type](https://occurrent.org/documentation#cloudevents) from your domain events.
+  Cloud Event Type mappers are now used by multiple modules in the Occurrent ecosystem, for example the [subscription dsl](https://occurrent.org/documentation#subscription-dsl), [cloud event converter](https://occurrent.org/documentation#cloudevent-conversion),
+  and the new domain queries DSL. You should use the same type mapper instance for all these components. To write a custom type mapper, depend on the `org.occurent:cloudevent-type-mapper-api` module and implement the `org.occurrent.application.typemapper.CloudEventTypeMapper`
   (functional) interface.
-* Introduced a blocking Query DSL. It's a small wrapper around the [EventStoreQueries](https://occurrent.org/documentation#eventstore-queries) API that let's you work with domain events instead of CloudEvents. 
+* Introduced a blocking Query DSL. It's a small wrapper around the [EventStoreQueries](https://occurrent.org/documentation#eventstore-queries) API that lets you work with domain events instead of CloudEvents. 
   Depend on the `org.occurrent:query-dsl-blocking` module and create an instance of `org.occurrent.dsl.query.blocking.DomainEventQueries`. For example:
 
   ```java                                                      
   EventStoreQueries eventStoreQueries = .. 
   CloudEventConverter<DomainEvent> cloudEventConverter = ..
-  TypeMapper<DomainEvent> typeMapper = ..
-  DomainEventQueries<DomainEvent> domainEventQueries = new DomainEventQueries<DomainEvent>(eventStoreQueries, cloudEventConverter, typeMapper);
+  CloudEventTypeMapper<DomainEvent> cloudEventTypeMapper = ..
+  DomainEventQueries<DomainEvent> domainEventQueries = new DomainEventQueries<DomainEvent>(eventStoreQueries, cloudEventConverter, cloudEventTypeMapper);
    
   Stream<DomainEvent> events = domainQueries.query(Filter.subject("someSubject"));
   ```
@@ -39,7 +39,7 @@
     * A Jackson-based `CloudEventConverter`
     * A `GenericApplication` instance (`ApplicationService`)
     * A subscription dsl instance (`Subscriptions`)
-    * A reflection based type mapper that uses the fully-qualified class name as cloud event type (you _should_ absolutely override this bean for production use cases) (`TypeMapper`)
+    * A reflection based type mapper that uses the fully-qualified class name as cloud event type (you _should_ absolutely override this bean for production use cases) (`CloudEventTypeMapper`)
   See `org.occurrent.springboot.OccurrentMongoAutoConfiguration` if you want to know exactly what gets configured.
 * Upgraded spring-boot from 2.5.4 to 2.5.6.
 

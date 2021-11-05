@@ -17,8 +17,8 @@
 package se.occurrent.dsl.module.blocking
 
 import org.occurrent.application.converter.CloudEventConverter
-import org.occurrent.application.typemapper.ReflectionTypeMapper
-import org.occurrent.application.typemapper.TypeMapper
+import org.occurrent.application.typemapper.CloudEventTypeMapper
+import org.occurrent.application.typemapper.ReflectionCloudEventTypeMapper
 import org.occurrent.dsl.subscription.blocking.Subscriptions
 import org.occurrent.subscription.api.blocking.SubscriptionModel
 
@@ -30,10 +30,10 @@ import org.occurrent.subscription.api.blocking.SubscriptionModel
 internal annotation class ModuleDSL
 
 fun <C : Any, E : Any> module(
-    cloudEventConverter: CloudEventConverter<E>, typeMapper: TypeMapper<E> = ReflectionTypeMapper.qualified(),
+    cloudEventConverter: CloudEventConverter<E>, cloudEventTypeMapper: CloudEventTypeMapper<E> = ReflectionCloudEventTypeMapper.qualified(),
     b: (@ModuleDSL ModuleBuilder<C, E>).() -> Unit
 ): Module<C> {
-    val module = ModuleBuilder<C, E>(cloudEventConverter, typeMapper).apply(b)
+    val module = ModuleBuilder<C, E>(cloudEventConverter, cloudEventTypeMapper).apply(b)
 
     return object : Module<C> {
         override fun dispatch(vararg commands: C) {
@@ -45,7 +45,7 @@ fun <C : Any, E : Any> module(
 }
 
 @ModuleDSL
-class ModuleBuilder<C : Any, E : Any> internal constructor(private val cloudEventConverter: CloudEventConverter<E>, private val typeMapper: TypeMapper<E>) {
+class ModuleBuilder<C : Any, E : Any> internal constructor(private val cloudEventConverter: CloudEventConverter<E>, private val cloudEventTypeMapper: CloudEventTypeMapper<E>) {
     internal val commandDispatchers = mutableListOf<CommandDispatcher<C, out Any>>()
 
     fun <B : Any> commands(commandDispatcher: CommandDispatcher<C, B>, commands: (@ModuleDSL B).() -> Unit) {
@@ -58,7 +58,7 @@ class ModuleBuilder<C : Any, E : Any> internal constructor(private val cloudEven
     }
 
     fun subscriptions(subscriptionModel: SubscriptionModel, subscriptions: (@ModuleDSL Subscriptions<E>).() -> Unit) {
-        Subscriptions(subscriptionModel, cloudEventConverter, typeMapper).apply(subscriptions)
+        Subscriptions(subscriptionModel, cloudEventConverter, cloudEventTypeMapper).apply(subscriptions)
     }
 }
 

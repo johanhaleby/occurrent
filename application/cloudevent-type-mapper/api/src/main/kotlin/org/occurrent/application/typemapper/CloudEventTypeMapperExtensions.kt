@@ -15,19 +15,16 @@
  *  limitations under the License.
  */
 
-package org.occurrent.application.typemapper;
+package org.occurrent.application.typemapper
+
+import kotlin.reflect.KClass
 
 /**
- * The different class name options available for the {@link ReflectionTypeMapper}.
+ * Return the cloud event type for a specific domain event type
  */
-public enum ClassName {
-    /**
-     * Use the simple name of a class to represent the cloud event type
-     */
-    SIMPLE,
-    /**
-     * Use the (fully) qualified name of a class to represent the cloud event type.
-     * This is not recommended in production systems.
-     */
-    QUALIFIED
-}
+inline fun <reified T : Any> CloudEventTypeMapper<T>.cloudEventTypeOf(): String = getCloudEventType(T::class.java)
+
+/**
+ * Get the cloud event type for a specific domain event type
+ */
+operator fun <T : Any> CloudEventTypeMapper<T>.get(type: KClass<out T>): String = getCloudEventType(type.java)

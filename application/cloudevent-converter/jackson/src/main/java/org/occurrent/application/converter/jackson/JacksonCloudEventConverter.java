@@ -24,8 +24,8 @@ import io.cloudevents.CloudEventData;
 import io.cloudevents.core.builder.CloudEventBuilder;
 import io.cloudevents.core.data.PojoCloudEventData;
 import org.occurrent.application.converter.CloudEventConverter;
-import org.occurrent.application.typemapper.ReflectionTypeMapper;
-import org.occurrent.application.typemapper.TypeMapper;
+import org.occurrent.application.typemapper.CloudEventTypeMapper;
+import org.occurrent.application.typemapper.ReflectionCloudEventTypeMapper;
 
 import java.io.IOException;
 import java.io.UncheckedIOException;
@@ -49,7 +49,7 @@ public class JacksonCloudEventConverter<T> implements CloudEventConverter<T> {
     private final ObjectMapper objectMapper;
     private final URI cloudEventSource;
     private final Function<T, String> idMapper;
-    private final TypeMapper<T> typeMapper;
+    private final CloudEventTypeMapper<T> cloudEventTypeMapper;
     private final Function<T, OffsetDateTime> timeMapper;
     private final Function<T, String> subjectMapper;
     private final String contentType;
@@ -75,17 +75,17 @@ public class JacksonCloudEventConverter<T> implements CloudEventConverter<T> {
         this(objectMapper, cloudEventSource, defaultIdMapperFunction(), defaultTypeMapper(), defaultTimeMapperFunction(), defaultSubjectMapperFunction(), DEFAULT_CONTENT_TYPE);
     }
 
-    private JacksonCloudEventConverter(ObjectMapper objectMapper, URI cloudEventSource, Function<T, String> idMapper, TypeMapper<T> typeMapper, Function<T, OffsetDateTime> timeMapper, Function<T, String> subjectMapper, String contentType) {
+    private JacksonCloudEventConverter(ObjectMapper objectMapper, URI cloudEventSource, Function<T, String> idMapper, CloudEventTypeMapper<T> cloudEventTypeMapper, Function<T, OffsetDateTime> timeMapper, Function<T, String> subjectMapper, String contentType) {
         requireNonNull(objectMapper, ObjectMapper.class.getSimpleName() + " cannot be null");
         requireNonNull(cloudEventSource, "cloudEventSource cannot be null");
         requireNonNull(idMapper, "idMapper cannot be null");
-        requireNonNull(typeMapper, TypeMapper.class.getSimpleName() + " cannot be null");
+        requireNonNull(cloudEventTypeMapper, CloudEventTypeMapper.class.getSimpleName() + " cannot be null");
         requireNonNull(timeMapper, "timeMapper cannot be null");
         requireNonNull(subjectMapper, "subjectMapper cannot be null");
         this.objectMapper = objectMapper;
         this.cloudEventSource = cloudEventSource;
         this.idMapper = idMapper;
-        this.typeMapper = typeMapper;
+        this.cloudEventTypeMapper = cloudEventTypeMapper;
         this.timeMapper = timeMapper;
         this.subjectMapper = subjectMapper;
         this.contentType = contentType;
@@ -106,7 +106,7 @@ public class JacksonCloudEventConverter<T> implements CloudEventConverter<T> {
         return CloudEventBuilder.v1()
                 .withId(idMapper.apply(domainEvent))
                 .withSource(cloudEventSource)
-                .withType(typeMapper.getCloudEventType(domainEvent))
+                .withType(cloudEventTypeMapper.getCloudEventType(domainEvent))
                 .withTime(timeMapper.apply(domainEvent))
                 .withSubject(subjectMapper.apply(domainEvent))
                 .withDataContentType(contentType)
@@ -152,7 +152,7 @@ public class JacksonCloudEventConverter<T> implements CloudEventConverter<T> {
         private final URI cloudEventSource;
         private String contentType = DEFAULT_CONTENT_TYPE;
         private Function<T, String> idMapper = defaultIdMapperFunction();
-        private TypeMapper<T> typeMapper = defaultTypeMapper();
+        private CloudEventTypeMapper<T> cloudEventTypeMapper = defaultTypeMapper();
         private Function<T, OffsetDateTime> timeMapper = defaultTimeMapperFunction();
         private Function<T, String> subjectMapper = defaultSubjectMapperFunction();
 
@@ -178,10 +178,10 @@ public class JacksonCloudEventConverter<T> implements CloudEventConverter<T> {
         }
 
         /**
-         * @param typeMapper A function that generates the cloud event type based on the domain event. By default, the "simple name" of the domain event is used.
+         * @param cloudEventTypeMapper A function that generates the cloud event type based on the domain event. By default, the "simple name" of the domain event is used.
          */
-        public Builder<T> typeMapper(TypeMapper<T> typeMapper) {
-            this.typeMapper = typeMapper;
+        public Builder<T> typeMapper(CloudEventTypeMapper<T> cloudEventTypeMapper) {
+            this.cloudEventTypeMapper = cloudEventTypeMapper;
             return this;
         }
 
@@ -205,7 +205,7 @@ public class JacksonCloudEventConverter<T> implements CloudEventConverter<T> {
          * @return A {@link JacksonCloudEventConverter} instance with the configured settings
          */
         public JacksonCloudEventConverter<T> build() {
-            return new JacksonCloudEventConverter<>(objectMapper, cloudEventSource, idMapper, typeMapper, timeMapper, subjectMapper, contentType);
+            return new JacksonCloudEventConverter<>(objectMapper, cloudEventSource, idMapper, cloudEventTypeMapper, timeMapper, subjectMapper, contentType);
         }
     }
 
@@ -214,8 +214,8 @@ public class JacksonCloudEventConverter<T> implements CloudEventConverter<T> {
         return __ -> UUID.randomUUID().toString();
     }
 
-    private static <T> TypeMapper<T> defaultTypeMapper() {
-        return ReflectionTypeMapper.qualified();
+    private static <T> CloudEventTypeMapper<T> defaultTypeMapper() {
+        return ReflectionCloudEventTypeMapper.qualified();
     }
 
     private static <T> Function<T, OffsetDateTime> defaultTimeMapperFunction() {

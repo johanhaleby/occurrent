@@ -20,13 +20,13 @@ package org.occurrent.application.typemapper;
 import java.util.Objects;
 
 /**
- * A type mapper is component whose purpose it is to get the <a href="https://occurrent.org/documentation#cloudevents">cloud event type</a> from a
- * class or instance of your domain event type.
+ * A cloud event type mapper is component whose purpose it is to get the <a href="https://occurrent.org/documentation#cloudevents">cloud event type</a> from a
+ * class or instance of your domain event type. It is typically used by other components in the Occurrent ecosystem to achieve their tasks.
  *
  * @param <T> The base type of your domain events
  */
 @FunctionalInterface
-public interface TypeMapper<T> {
+public interface CloudEventTypeMapper<T> {
 
     /**
      * Get the cloud event type from a Java class.

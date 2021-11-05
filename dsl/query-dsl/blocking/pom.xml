@@ -41,7 +41,7 @@
         </dependency>
         <dependency>
             <groupId>org.occurrent</groupId>
-            <artifactId>type-mapper-reflection</artifactId>
+            <artifactId>cloudevent-type-mapper-reflection</artifactId>
             <version>0.13.2-SNAPSHOT</version>
         </dependency>
         <dependency>
