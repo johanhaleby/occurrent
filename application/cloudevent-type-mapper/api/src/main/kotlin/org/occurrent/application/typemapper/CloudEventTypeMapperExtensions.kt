@@ -22,9 +22,15 @@ import kotlin.reflect.KClass
 /**
  * Return the cloud event type for a specific domain event type
  */
-inline fun <reified T : Any> CloudEventTypeMapper<T>.cloudEventTypeOf(): String = getCloudEventType(T::class.java)
+inline fun <reified T : Any> CloudEventTypeGetter<T>.cloudEventTypeOf(): String = getCloudEventType(T::class.java)
 
 /**
  * Get the cloud event type for a specific domain event type
  */
-operator fun <T : Any> CloudEventTypeMapper<T>.get(type: KClass<out T>): String = getCloudEventType(type.java)
+operator fun <T : Any> CloudEventTypeGetter<T>.get(type: KClass<out T>): String = getCloudEventType(type.java)
+
+
+/**
+ * Return the domain event type from a cloud event type
+ */
+inline fun <reified T : Any> DomainEventTypeGetter<in T>.domainEventType(cloudEventType: String): Class<T> = getDomainEventType(cloudEventType)

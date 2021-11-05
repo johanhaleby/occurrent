@@ -24,6 +24,7 @@ import io.cloudevents.CloudEventData;
 import io.cloudevents.core.builder.CloudEventBuilder;
 import io.cloudevents.core.data.PojoCloudEventData;
 import org.occurrent.application.converter.CloudEventConverter;
+import org.occurrent.application.typemapper.ClassName;
 import org.occurrent.application.typemapper.CloudEventTypeMapper;
 import org.occurrent.application.typemapper.ReflectionCloudEventTypeMapper;
 
@@ -181,6 +182,14 @@ public class JacksonCloudEventConverter<T> implements CloudEventConverter<T> {
          * @param cloudEventTypeMapper A function that generates the cloud event type based on the domain event. By default, the "simple name" of the domain event is used.
          */
         public Builder<T> typeMapper(CloudEventTypeMapper<T> cloudEventTypeMapper) {
+            this.cloudEventTypeMapper = cloudEventTypeMapper;
+            return this;
+        }
+
+        /**
+         * @param cloudEventTypeMapper A function that generates the cloud event type based on the domain event. By default, the "simple name" of the domain event is used.
+         */
+        public Builder<T> simpleTypeMapperWithPackageNamePrefix(String packageName) {
             this.cloudEventTypeMapper = cloudEventTypeMapper;
             return this;
         }
