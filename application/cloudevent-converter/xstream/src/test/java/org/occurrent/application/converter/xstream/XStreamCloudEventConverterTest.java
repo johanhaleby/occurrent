@@ -56,7 +56,7 @@ public class XStreamCloudEventConverterTest {
         // Then
         assertAll(
                 () -> assertThat(cloudEvent.getId()).matches("([a-f0-9]{8}(-[a-f0-9]{4}){4}[a-f0-9]{8})"),
-                () -> assertThat(cloudEvent.getType()).isEqualTo(NameDefined.class.getName()),
+                () -> assertThat(cloudEvent.getType()).isEqualTo(NameDefined.class.getSimpleName()),
                 () -> assertThat(cloudEvent.getSource()).isEqualTo(CLOUD_EVENT_SOURCE),
                 () -> assertThat(cloudEvent.getSubject()).isNull(),
                 () -> assertThat(cloudEvent.getTime()).isCloseToUtcNow(within(3, ChronoUnit.SECONDS)),
@@ -77,7 +77,7 @@ public class XStreamCloudEventConverterTest {
                 .idMapper(DomainEvent::getEventId)
                 .subjectMapper(__ -> "subject")
                 .timeMapper(domainEvent -> OffsetDateTime.ofInstant(domainEvent.getTimestamp().toInstant(), UTC))
-                .typeMapper(Class::getSimpleName)
+                .typeGetter(Class::getSimpleName)
                 .build();
 
         NameDefined domainEvent = new NameDefined(UUID.randomUUID().toString(), new Date(), "name");

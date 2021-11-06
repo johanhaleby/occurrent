@@ -21,6 +21,7 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import io.cloudevents.CloudEvent;
 import io.cloudevents.core.builder.CloudEventBuilder;
 import org.junit.jupiter.api.Test;
+import org.occurrent.application.typemapper.ReflectionCloudEventTypeMapper;
 import org.occurrent.domain.DomainEvent;
 import org.occurrent.domain.NameDefined;
 
@@ -75,7 +76,7 @@ public class JacksonCloudEventConverterTest {
                 .idMapper(DomainEvent::getEventId)
                 .subjectMapper(__ -> "subject")
                 .timeMapper(domainEvent -> OffsetDateTime.ofInstant(domainEvent.getTimestamp().toInstant(), UTC))
-                .typeMapper(Class::getName)
+                .typeMapper(ReflectionCloudEventTypeMapper.qualified())
                 .build();
 
         NameDefined domainEvent = new NameDefined(UUID.randomUUID().toString(), new Date(), "name");

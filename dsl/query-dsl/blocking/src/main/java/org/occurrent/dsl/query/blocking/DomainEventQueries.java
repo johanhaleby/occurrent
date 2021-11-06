@@ -20,8 +20,8 @@ package org.occurrent.dsl.query.blocking;
 import io.cloudevents.CloudEvent;
 import org.jetbrains.annotations.Nullable;
 import org.occurrent.application.converter.CloudEventConverter;
+import org.occurrent.application.typemapper.CloudEventTypeGetter;
 import org.occurrent.application.typemapper.CloudEventTypeMapper;
-import org.occurrent.application.typemapper.ReflectionCloudEventTypeMapper;
 import org.occurrent.eventstore.api.SortBy;
 import org.occurrent.eventstore.api.blocking.EventStoreQueries;
 import org.occurrent.filter.Filter;
@@ -33,8 +33,7 @@ import java.util.stream.Stream;
 import static org.occurrent.eventstore.api.SortBy.SortDirection.ASCENDING;
 
 /**
- * A wrapper around {@link EventStoreQueries} that maps the result of a query into your domain event type
- * using a {@link CloudEventConverter}.
+ * A wrapper around {@link EventStoreQueries} that maps the result of a query into your domain event type using a {@link CloudEventConverter}.
  *
  * @param <T> The type of your event
  */
@@ -42,19 +41,28 @@ public class DomainEventQueries<T> {
 
     private final EventStoreQueries eventStoreQueries;
     private final CloudEventConverter<T> cloudEventConverter;
-    private final CloudEventTypeMapper<T> cloudEventTypeMapper;
+    private final CloudEventTypeGetter<T> cloudEventTypeMapper;
 
+    /**
+     * Creates an instance of {@code DomainEventQueries} that assumes that the cloud event type is the simple name of the domain event class type.
+     * (unless {@code cloudEventConverter} instance also implements {@link CloudEventTypeGetter}, then the {@code cloudEventConverter} will be used to derive the type).
+     * If this is not the case, use {@link #DomainEventQueries(EventStoreQueries, CloudEventConverter, CloudEventTypeGetter)} instead.
+     */
+    @SuppressWarnings("unchecked")
     public DomainEventQueries(EventStoreQueries eventStoreQueries, CloudEventConverter<T> cloudEventConverter) {
-        this(eventStoreQueries, cloudEventConverter, ReflectionCloudEventTypeMapper.qualified());
+        this(eventStoreQueries, cloudEventConverter, cloudEventConverter instanceof CloudEventTypeGetter ? (CloudEventTypeGetter<T>) cloudEventConverter : Class::getSimpleName);
     }
 
-    public DomainEventQueries(EventStoreQueries eventStoreQueries, CloudEventConverter<T> cloudEventConverter, CloudEventTypeMapper<T> cloudEventTypeMapper) {
-        this.cloudEventTypeMapper = cloudEventTypeMapper;
+    /**
+     * Creates an instance of {@code DomainEventQueries} that uses the {@code cloudEventTypeMapper} to get the cloud event type from the domain event class type.
+     */
+    public DomainEventQueries(EventStoreQueries eventStoreQueries, CloudEventConverter<T> cloudEventConverter, CloudEventTypeGetter<T> cloudEventTypeMapper) {
         Objects.requireNonNull(eventStoreQueries, EventStoreQueries.class.getSimpleName() + " cannot be null");
         Objects.requireNonNull(cloudEventConverter, CloudEventConverter.class.getSimpleName() + " cannot be null");
         Objects.requireNonNull(cloudEventTypeMapper, CloudEventTypeMapper.class.getSimpleName() + " cannot be null");
         this.eventStoreQueries = eventStoreQueries;
         this.cloudEventConverter = cloudEventConverter;
+        this.cloudEventTypeMapper = cloudEventTypeMapper;
     }
 
     /**

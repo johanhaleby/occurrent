@@ -24,7 +24,6 @@ import io.cloudevents.CloudEventData;
 import io.cloudevents.core.builder.CloudEventBuilder;
 import io.cloudevents.core.data.PojoCloudEventData;
 import org.occurrent.application.converter.CloudEventConverter;
-import org.occurrent.application.typemapper.ClassName;
 import org.occurrent.application.typemapper.CloudEventTypeMapper;
 import org.occurrent.application.typemapper.ReflectionCloudEventTypeMapper;
 
@@ -44,7 +43,7 @@ import static java.util.Objects.requireNonNull;
  *
  * @param <T> The type of your domain event(s) to convert
  */
-public class JacksonCloudEventConverter<T> implements CloudEventConverter<T> {
+public class JacksonCloudEventConverter<T> implements CloudEventConverter<T>, CloudEventTypeMapper<T> {
     private static final String DEFAULT_CONTENT_TYPE = "application/json";
 
     private final ObjectMapper objectMapper;
@@ -70,7 +69,7 @@ public class JacksonCloudEventConverter<T> implements CloudEventConverter<T> {
      *
      * @param objectMapper     The ObjectMapper instance to use
      * @param cloudEventSource The cloud event source.
-     * @see Builder Builder for more advanced configuration
+     * @see Builder The Builder for more advanced configuration
      */
     public JacksonCloudEventConverter(ObjectMapper objectMapper, URI cloudEventSource) {
         this(objectMapper, cloudEventSource, defaultIdMapperFunction(), defaultTypeMapper(), defaultTimeMapperFunction(), defaultSubjectMapperFunction(), DEFAULT_CONTENT_TYPE);
@@ -86,10 +85,10 @@ public class JacksonCloudEventConverter<T> implements CloudEventConverter<T> {
         this.objectMapper = objectMapper;
         this.cloudEventSource = cloudEventSource;
         this.idMapper = idMapper;
-        this.cloudEventTypeMapper = cloudEventTypeMapper;
         this.timeMapper = timeMapper;
         this.subjectMapper = subjectMapper;
         this.contentType = contentType;
+        this.cloudEventTypeMapper = cloudEventTypeMapper;
     }
 
     /**
@@ -148,6 +147,16 @@ public class JacksonCloudEventConverter<T> implements CloudEventConverter<T> {
         return domainEvent;
     }
 
+    @Override
+    public String getCloudEventType(Class<? extends T> type) {
+        return cloudEventTypeMapper.getCloudEventType(type);
+    }
+
+    @Override
+    public <E extends T> Class<E> getDomainEventType(String cloudEventType) {
+        return cloudEventTypeMapper.getDomainEventType(cloudEventType);
+    }
+
     public static final class Builder<T> {
         private final ObjectMapper objectMapper;
         private final URI cloudEventSource;
@@ -187,15 +196,7 @@ public class JacksonCloudEventConverter<T> implements CloudEventConverter<T> {
         }
 
         /**
-         * @param cloudEventTypeMapper A function that generates the cloud event type based on the domain event. By default, the "simple name" of the domain event is used.
-         */
-        public Builder<T> simpleTypeMapperWithPackageNamePrefix(String packageName) {
-            this.cloudEventTypeMapper = cloudEventTypeMapper;
-            return this;
-        }
-
-        /**
-         * @param timeMapper A function that generates the cloud event time based on the domain event. By default, {@code OffsetDateTime.now(UTC)} is always retuned.
+         * @param timeMapper A function that generates the cloud event time based on the domain event. By default, {@code OffsetDateTime.now(UTC)} is always returned.
          */
         public Builder<T> timeMapper(Function<T, OffsetDateTime> timeMapper) {
             this.timeMapper = timeMapper;
@@ -203,7 +204,7 @@ public class JacksonCloudEventConverter<T> implements CloudEventConverter<T> {
         }
 
         /**
-         * @param subjectMapper A function that generates the cloud event subject based on the domain event. By default, {@code null} is always retuned.
+         * @param subjectMapper A function that generates the cloud event subject based on the domain event. By default, {@code null} is always returned.
          */
         public Builder<T> subjectMapper(Function<T, String> subjectMapper) {
             this.subjectMapper = subjectMapper;

@@ -19,8 +19,6 @@ package org.occurrent.dsl.subscription.blocking
 import io.cloudevents.CloudEvent
 import org.occurrent.application.converter.CloudEventConverter
 import org.occurrent.application.typemapper.CloudEventTypeGetter
-import org.occurrent.application.typemapper.CloudEventTypeMapper
-import org.occurrent.application.typemapper.ReflectionCloudEventTypeMapper
 import org.occurrent.application.typemapper.get
 import org.occurrent.condition.Condition
 import org.occurrent.filter.Filter
@@ -32,7 +30,7 @@ import java.util.function.Consumer
 import kotlin.reflect.KClass
 
 /**
- * Subscription DSL entry-point. Pay close attention to the [cloudEventTypeGetter] since by default it presumes that the cloud event type is derived from the fully-qualified name of the domain class. I.e. if your domain class is
+ * Subscription DSL entry-point. Pay close attention to the [CloudEventTypeGetter] since, by default, it presumes that the cloud event type is derived from the simple name of the domain class. I.e. if your domain class is
  * `com.mycompany.MyEvent` then queries such as
  *
  * ```
@@ -45,25 +43,28 @@ import kotlin.reflect.KClass
  * }
  * ```
  *
+ * will use "MyEvent" as cloud event type. If this is not correct, then use [subscriptions] that takes the [CloudEventConverter] as third parameter
+ * instead to define how the cloud event type is derived from the domain event type.
  */
-inline fun <reified T : Any> subscriptions(
-    subscriptionModel: Subscribable, cloudEventConverter: CloudEventConverter<T>, subscriptions: Subscriptions<T>.() -> Unit
-) {
-    Subscriptions(subscriptionModel, cloudEventConverter, T::class.java).apply(subscriptions)
+fun <T : Any> subscriptions(subscriptionModel: Subscribable, cloudEventConverter: CloudEventConverter<T>, subscriptions: Subscriptions<T>.() -> Unit) {
+    Subscriptions(subscriptionModel, cloudEventConverter).apply(subscriptions)
 }
 
 fun <T : Any> subscriptions(subscriptionModel: Subscribable, cloudEventConverter: CloudEventConverter<T>, cloudEventTypeGetter: CloudEventTypeGetter<T>, subscriptions: Subscriptions<T>.() -> Unit) {
     Subscriptions(subscriptionModel, cloudEventConverter, cloudEventTypeGetter).apply(subscriptions)
 }
 
-class Subscriptions<T : Any> constructor(
+
+class Subscriptions<T : Any> @JvmOverloads constructor(
     private val subscriptionModel: Subscribable,
     private val cloudEventConverter: CloudEventConverter<T>,
-    private val cloudEventTypeMapper: CloudEventTypeMapper<T>
+    private val cloudEventTypeMapper: CloudEventTypeGetter<T> = if (cloudEventConverter is CloudEventTypeGetter<*>) {
+        @Suppress("UNCHECKED_CAST")
+        cloudEventConverter as CloudEventTypeGetter<T>
+    } else {
+        CloudEventTypeGetter<T> { type -> type.simpleName }
+    }
 ) {
-
-    constructor(subscriptionModel: Subscribable, cloudEventConverter: CloudEventConverter<T>, domainEventType: Class<T>)
-            : this(subscriptionModel, cloudEventConverter, ReflectionCloudEventTypeMapper.simple(domainEventType))
 
     /**
      * Create a new subscription that is invoked after a specific domain event is written to the event store

@@ -19,7 +19,6 @@ import com.fasterxml.jackson.databind.ObjectMapper
 import com.fasterxml.jackson.module.kotlin.jacksonObjectMapper
 import org.occurrent.application.converter.CloudEventConverter
 import org.occurrent.application.service.blocking.generic.GenericApplicationService
-import org.occurrent.application.typemapper.CloudEventTypeMapper
 import org.occurrent.application.typemapper.CloudEventTypeGetter
 import org.occurrent.dsl.query.blocking.DomainEventQueries
 import org.occurrent.dsl.subscription.blocking.Subscriptions
@@ -97,11 +96,11 @@ class Bootstrap : WebMvcConfigurer {
 
     @Bean
     fun subscriptionDsl(subscriptionModel: SubscriptionModel, converter: CloudEventConverter<GameEvent>, cloudEventTypeGetter : CloudEventTypeGetter<GameEvent>) =
-        Subscriptions(subscriptionModel, converter, cloudEventTypeMapper)
+        Subscriptions(subscriptionModel, converter, cloudEventTypeGetter)
 
     @Bean
-    fun queryDsl(eventStoreQueries: EventStoreQueries, converter: CloudEventConverter<GameEvent>, cloudEventTypeMapper : CloudEventTypeMapper<GameEvent>) =
-        DomainEventQueries(eventStoreQueries, converter, cloudEventTypeMapper)
+    fun queryDsl(eventStoreQueries: EventStoreQueries, converter: CloudEventConverter<GameEvent>, cloudEventTypeGetter : CloudEventTypeGetter<GameEvent>) =
+        DomainEventQueries(eventStoreQueries, converter, cloudEventTypeGetter)
 
     @Bean
     fun objectMapper() = jacksonObjectMapper()
