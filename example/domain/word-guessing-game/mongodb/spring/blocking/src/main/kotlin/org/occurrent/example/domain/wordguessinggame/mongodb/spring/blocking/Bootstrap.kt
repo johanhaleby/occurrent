@@ -19,14 +19,12 @@ import com.fasterxml.jackson.databind.ObjectMapper
 import com.fasterxml.jackson.module.kotlin.jacksonObjectMapper
 import org.occurrent.application.converter.CloudEventConverter
 import org.occurrent.application.service.blocking.generic.GenericApplicationService
-import org.occurrent.application.typemapper.CloudEventTypeGetter
 import org.occurrent.dsl.query.blocking.DomainEventQueries
 import org.occurrent.dsl.subscription.blocking.Subscriptions
 import org.occurrent.eventstore.api.blocking.EventStoreQueries
 import org.occurrent.eventstore.mongodb.spring.blocking.EventStoreConfig
 import org.occurrent.eventstore.mongodb.spring.blocking.SpringMongoEventStore
 import org.occurrent.example.domain.wordguessinggame.event.GameEvent
-import org.occurrent.example.domain.wordguessinggame.event.eventType
 import org.occurrent.example.domain.wordguessinggame.mongodb.spring.blocking.features.GameCloudEventConverter
 import org.occurrent.example.domain.wordguessinggame.mongodb.spring.blocking.features.emailwinner.SendEmailToWinner
 import org.occurrent.mongodb.timerepresentation.TimeRepresentation
@@ -92,15 +90,12 @@ class Bootstrap : WebMvcConfigurer {
     }
 
     @Bean
-    fun getCloudEventTypeFromDomainEventClass() = CloudEventTypeGetter<GameEvent> { e -> e.kotlin.eventType() }
+    fun subscriptionDsl(subscriptionModel: SubscriptionModel, converter: CloudEventConverter<GameEvent>) =
+        Subscriptions(subscriptionModel, converter)
 
     @Bean
-    fun subscriptionDsl(subscriptionModel: SubscriptionModel, converter: CloudEventConverter<GameEvent>, cloudEventTypeGetter : CloudEventTypeGetter<GameEvent>) =
-        Subscriptions(subscriptionModel, converter, cloudEventTypeGetter)
-
-    @Bean
-    fun queryDsl(eventStoreQueries: EventStoreQueries, converter: CloudEventConverter<GameEvent>, cloudEventTypeGetter : CloudEventTypeGetter<GameEvent>) =
-        DomainEventQueries(eventStoreQueries, converter, cloudEventTypeGetter)
+    fun queryDsl(eventStoreQueries: EventStoreQueries, converter: CloudEventConverter<GameEvent>) =
+        DomainEventQueries(eventStoreQueries, converter)
 
     @Bean
     fun objectMapper() = jacksonObjectMapper()

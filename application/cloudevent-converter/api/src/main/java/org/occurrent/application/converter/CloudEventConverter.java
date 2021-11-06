@@ -18,6 +18,7 @@ package org.occurrent.application.converter;
 
 import io.cloudevents.CloudEvent;
 
+import java.util.Objects;
 import java.util.stream.Stream;
 
 /**
@@ -27,19 +28,6 @@ import java.util.stream.Stream;
  * @param <T> The type of your domain event
  */
 public interface CloudEventConverter<T> {
-
-    /**
-     * Convert a stream of domain events into a stream of cloud events.
-     * The reason for implementing this method is to allow adding things such as correlation id
-     * that should be the same for all events in a stream.
-     *
-     * @param events The domain events to convert to cloud events
-     * @return A stram of cloud events.
-     */
-    default Stream<CloudEvent> toCloudEvents(Stream<T> events) {
-        Stream<T> stream = events == null ? Stream.empty() : events;
-        return stream.map(this::toCloudEvent);
-    }
 
     /**
      * Convert a domain event into a cloud event
@@ -56,6 +44,39 @@ public interface CloudEventConverter<T> {
      * @return The domain event instance, converted from the cloud event.
      */
     T toDomainEvent(CloudEvent cloudEvent);
+
+    /**
+     * Get the cloud event type from a Java class.
+     *
+     * @param type The java class that represents a specific domain event type
+     * @return The cloud event type of the domain event (cannot be {@code null})
+     */
+    String getCloudEventType(Class<? extends T> type);
+
+    /**
+     * Get the cloud event type from a Java instance.
+     *
+     * @param event An instance of a domain event
+     * @return The cloud event type of the domain event (cannot be {@code null})
+     */
+    default String getCloudEventType(T event) {
+        Objects.requireNonNull(event, "Domain event cannot be null");
+        //noinspection unchecked
+        return getCloudEventType((Class<T>) event.getClass());
+    }
+
+    /**
+     * Convert a stream of domain events into a stream of cloud events.
+     * The reason for implementing this method is to allow adding things such as correlation id
+     * that should be the same for all events in a stream.
+     *
+     * @param events The domain events to convert to cloud events
+     * @return A stram of cloud events.
+     */
+    default Stream<CloudEvent> toCloudEvents(Stream<T> events) {
+        Stream<T> stream = events == null ? Stream.empty() : events;
+        return stream.map(this::toCloudEvent);
+    }
 
     /**
      * Convert a stream of cloud events into a stream of domain events.

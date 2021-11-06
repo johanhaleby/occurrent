@@ -276,6 +276,11 @@
                 <artifactId>mongodb-driver-reactivestreams</artifactId>
                 <version>${mongo.version}</version>
             </dependency>
+            <dependency>
+                <groupId>org.jetbrains</groupId>
+                <artifactId>annotations</artifactId>
+                <version>22.0.0</version>
+            </dependency>
 
             <!-- Test -->
             <dependency>

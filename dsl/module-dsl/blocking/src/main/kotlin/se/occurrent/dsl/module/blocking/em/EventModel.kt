@@ -20,8 +20,6 @@ import org.occurrent.application.converter.CloudEventConverter
 import org.occurrent.application.service.blocking.ApplicationService
 import org.occurrent.application.service.blocking.execute
 import org.occurrent.application.service.blocking.generic.GenericApplicationService
-import org.occurrent.application.typemapper.CloudEventTypeMapper
-import org.occurrent.application.typemapper.ReflectionCloudEventTypeMapper
 import org.occurrent.dsl.subscription.blocking.Subscriptions
 import org.occurrent.eventstore.api.blocking.EventStore
 import org.occurrent.subscription.api.blocking.SubscriptionModel
@@ -36,10 +34,10 @@ import kotlin.reflect.KClass
 
 
 fun <C : Any, E : Any> eventModel(
-    eventStore: EventStore, cloudEventConverter: CloudEventConverter<E>, cloudEventTypeMapper: CloudEventTypeMapper<E> = ReflectionCloudEventTypeMapper.qualified(),
+    eventStore: EventStore, cloudEventConverter: CloudEventConverter<E>,
     eventModelSpecification: (@ModuleDSL EventModelSpecification<C, E>).() -> Unit
 ): Module<C> {
-    val spec = EventModelSpecification<C, E>(eventStore, cloudEventConverter, cloudEventTypeMapper).apply(eventModelSpecification)
+    val spec = EventModelSpecification<C, E>(eventStore, cloudEventConverter).apply(eventModelSpecification)
 
     return object : Module<C> {
         override fun dispatch(vararg commands: C) {
@@ -55,7 +53,6 @@ fun <C : Any, E : Any> eventModel(
 class EventModelSpecification<C : Any, E : Any> internal constructor(
     private val eventStore: EventStore,
     private val cloudEventConverter: CloudEventConverter<E>,
-    private val cloudEventTypeMapper: CloudEventTypeMapper<E>
 ) {
     internal val commandDispatchers = mutableListOf<CommandDispatcher<C, out Any>>()
 
@@ -73,7 +70,7 @@ class EventModelSpecification<C : Any, E : Any> internal constructor(
     }
 
     fun subscriptions(subscriptionModel: SubscriptionModel, subscriptions: (@ModuleDSL Subscriptions<E>).() -> Unit) {
-        Subscriptions(subscriptionModel, cloudEventConverter, cloudEventTypeMapper).apply(subscriptions)
+        Subscriptions(subscriptionModel, cloudEventConverter).apply(subscriptions)
     }
 }
 

@@ -18,8 +18,7 @@ package org.occurrent.dsl.subscription.blocking
 
 import io.cloudevents.CloudEvent
 import org.occurrent.application.converter.CloudEventConverter
-import org.occurrent.application.typemapper.CloudEventTypeGetter
-import org.occurrent.application.typemapper.get
+import org.occurrent.application.converter.get
 import org.occurrent.condition.Condition
 import org.occurrent.filter.Filter
 import org.occurrent.subscription.OccurrentSubscriptionFilter
@@ -30,41 +29,26 @@ import java.util.function.Consumer
 import kotlin.reflect.KClass
 
 /**
- * Subscription DSL entry-point. Pay close attention to the [CloudEventTypeGetter] since, by default, it presumes that the cloud event type is derived from the simple name of the domain class. I.e. if your domain class is
- * `com.mycompany.MyEvent` then queries such as
+ * Subscription DSL entry-point. Usage example:
  *
  * ```
  * val mySubscriptionModel = ..
  * val myCloudEventConverter = ..
  * subscriptions(mySubscriptionModel, myCloudEventConverter) {
- *      subscribe<MyEvent>("id") {
+ *      subscribe<MyEvent>("subscriptionId") {
  *          ...
  *      }
  * }
  * ```
  *
- * will use "MyEvent" as cloud event type. If this is not correct, then use [subscriptions] that takes the [CloudEventConverter] as third parameter
- * instead to define how the cloud event type is derived from the domain event type.
+ * This will create a subscription with id "subscriptionId" and subscribe to all events of type "MyEvent" (it uses the [cloudEventConverter] to derive the cloud event type from the domain event type).
  */
 fun <T : Any> subscriptions(subscriptionModel: Subscribable, cloudEventConverter: CloudEventConverter<T>, subscriptions: Subscriptions<T>.() -> Unit) {
     Subscriptions(subscriptionModel, cloudEventConverter).apply(subscriptions)
 }
 
-fun <T : Any> subscriptions(subscriptionModel: Subscribable, cloudEventConverter: CloudEventConverter<T>, cloudEventTypeGetter: CloudEventTypeGetter<T>, subscriptions: Subscriptions<T>.() -> Unit) {
-    Subscriptions(subscriptionModel, cloudEventConverter, cloudEventTypeGetter).apply(subscriptions)
-}
 
-
-class Subscriptions<T : Any> @JvmOverloads constructor(
-    private val subscriptionModel: Subscribable,
-    private val cloudEventConverter: CloudEventConverter<T>,
-    private val cloudEventTypeMapper: CloudEventTypeGetter<T> = if (cloudEventConverter is CloudEventTypeGetter<*>) {
-        @Suppress("UNCHECKED_CAST")
-        cloudEventConverter as CloudEventTypeGetter<T>
-    } else {
-        CloudEventTypeGetter<T> { type -> type.simpleName }
-    }
-) {
+class Subscriptions<T : Any>(private val subscriptionModel: Subscribable, private val cloudEventConverter: CloudEventConverter<T>) {
 
     /**
      * Create a new subscription that is invoked after a specific domain event is written to the event store
@@ -103,8 +87,8 @@ class Subscriptions<T : Any> @JvmOverloads constructor(
     fun subscribe(subscriptionId: String, vararg eventTypes: KClass<out T>, startAt: StartAt? = null, fn: (T) -> Unit): Subscription {
         val condition = when {
             eventTypes.isEmpty() -> null
-            eventTypes.size == 1 -> Condition.eq(cloudEventTypeMapper[eventTypes[0]])
-            else -> Condition.or(eventTypes.map { e -> Condition.eq(cloudEventTypeMapper[e]) })
+            eventTypes.size == 1 -> Condition.eq(cloudEventConverter[eventTypes[0]])
+            else -> Condition.or(eventTypes.map { e -> Condition.eq(cloudEventConverter[e]) })
         }
         val filter = OccurrentSubscriptionFilter.filter(if (condition == null) Filter.all() else Filter.type(condition))
         return subscribe(subscriptionId, filter, startAt, fn)
@@ -112,7 +96,7 @@ class Subscriptions<T : Any> @JvmOverloads constructor(
 
     fun subscribe(subscriptionId: String, filter: OccurrentSubscriptionFilter = OccurrentSubscriptionFilter.filter(Filter.all()), startAt: StartAt? = null, fn: (T) -> Unit): Subscription {
         val consumer: (CloudEvent) -> Unit = { cloudEvent ->
-            val event = cloudEventConverter.toDomainEvent(cloudEvent)
+            val event = cloudEventConverter[cloudEvent]
             fn(event)
         }
 

@@ -24,8 +24,8 @@ import io.cloudevents.CloudEventData;
 import io.cloudevents.core.builder.CloudEventBuilder;
 import io.cloudevents.core.data.PojoCloudEventData;
 import org.occurrent.application.converter.CloudEventConverter;
-import org.occurrent.application.typemapper.CloudEventTypeMapper;
-import org.occurrent.application.typemapper.ReflectionCloudEventTypeMapper;
+import org.occurrent.application.converter.typemapper.CloudEventTypeMapper;
+import org.occurrent.application.converter.typemapper.ReflectionCloudEventTypeMapper;
 
 import java.io.IOException;
 import java.io.UncheckedIOException;
@@ -43,7 +43,7 @@ import static java.util.Objects.requireNonNull;
  *
  * @param <T> The type of your domain event(s) to convert
  */
-public class JacksonCloudEventConverter<T> implements CloudEventConverter<T>, CloudEventTypeMapper<T> {
+public class JacksonCloudEventConverter<T> implements CloudEventConverter<T> {
     private static final String DEFAULT_CONTENT_TYPE = "application/json";
 
     private final ObjectMapper objectMapper;
@@ -58,7 +58,7 @@ public class JacksonCloudEventConverter<T> implements CloudEventConverter<T>, Cl
      * Create a new instance of the {@link JacksonCloudEventConverter} that does the following:
      * <ol>
      *     <li>Uses a random UUID as cloud event id</li>
-     *     <li>Uses the fully-qualified name of the domain event class as cloud event type</li>
+     *     <li>Uses the fully-qualified name of the domain event class as cloud event type. <b>You should definitely change this in production!</b></li>
      *     <li>Uses {@code OffsetDateTime.now(UTC)} as cloud event time</li>
      *     <li>Uses charset UTF-8 when converting the domain event to/from JSON</li>
      *     <li>No subject</li>
@@ -150,11 +150,6 @@ public class JacksonCloudEventConverter<T> implements CloudEventConverter<T>, Cl
     @Override
     public String getCloudEventType(Class<? extends T> type) {
         return cloudEventTypeMapper.getCloudEventType(type);
-    }
-
-    @Override
-    public <E extends T> Class<E> getDomainEventType(String cloudEventType) {
-        return cloudEventTypeMapper.getDomainEventType(cloudEventType);
     }
 
     public static final class Builder<T> {

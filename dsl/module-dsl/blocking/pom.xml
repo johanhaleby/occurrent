@@ -46,11 +46,6 @@
             <artifactId>eventstore-api-blocking</artifactId>
             <version>0.13.2-SNAPSHOT</version>
         </dependency>
-        <dependency>
-            <groupId>org.occurrent</groupId>
-            <artifactId>cloudevent-type-mapper-reflection</artifactId>
-            <version>0.13.2-SNAPSHOT</version>
-        </dependency>
 
         <!-- Kotlin -->
         <dependency>

@@ -49,7 +49,7 @@ class UnoCloudEventConverter(private val objectMapper: ObjectMapper) : CloudEven
         return CloudEventBuilder.v1()
             .withId(event.eventId.toString())
             .withSource(URI.create("urn:occurrent:example:uno"))
-            .withType(event.type)
+            .withType(getCloudEventType(event))
             .withTime(event.timestamp.atOffset(ZoneOffset.UTC).truncatedTo(MILLIS))
             .withSubject(event.gameId.toString())
             .withDataContentType("application/json")
@@ -76,6 +76,8 @@ class UnoCloudEventConverter(private val objectMapper: ObjectMapper) : CloudEven
         val data = objectMapper.readValue<T>(data!!.toBytes())
         return fn(data)
     }
+
+    override fun getCloudEventType(type: Class<out Event>): String = Event::class.type
 }
 
 sealed class Data
@@ -129,6 +131,3 @@ private fun String.toDigit(): Digit = when (this) {
 
 val KClass<out Event>.type: String
     get() = simpleName!!
-
-val Event.type: String
-    get() = this::class.type

@@ -1,8 +1,20 @@
 ### Changelog next version
 
-* Introduced the concept of CloudEventTypeMapper's. A cloudevent type mapper is component whose purpose it is to get the [cloud event type](https://occurrent.org/documentation#cloudevents) from your domain events.
-  Cloud Event Type mappers are now used by multiple modules in the Occurrent ecosystem, for example the [subscription dsl](https://occurrent.org/documentation#subscription-dsl), [cloud event converter](https://occurrent.org/documentation#cloudevent-conversion),
-  and the new domain queries DSL. You should use the same type mapper instance for all these components. To write a custom type mapper, depend on the `org.occurent:cloudevent-type-mapper-api` module and implement the `org.occurrent.application.typemapper.CloudEventTypeMapper`
+* Non-backward compitable change: CloudEventConverter's now has a third method that you must implement:
+  ```java
+  /**
+   * Get the cloud event type from a Java class.
+   *
+   * @param type The java class that represents a specific domain event type
+   * @return The cloud event type of the domain event (cannot be {@code null})
+   */
+  @NotNull String getCloudEventType(@NotNull Class<? extends T> type);
+  ```
+  The reason for this is that several components, such as the [subscription dsl](https://occurrent.org/documentation#subscription-dsl), needs to get the cloud event type from the domain event class. And since this is highly related to "cloud event conversion", 
+  this method has been added there to avoid complicating the API. 
+* Introduced the concept of CloudEventTypeMapper's. A cloud event type mapper is component whose purpose it is to get the [cloud event type](https://occurrent.org/documentation#cloudevents) from a domain event type and vice versa.
+  Cloud Event Type mappers are used by certain `CloudEventConverter`'s to define how they should derive the cloud event type from the domain event as well as a way to reconstruct the domain event type from the cloud event type.
+  and the new domain queries DSL. You should use the same type mapper instance for all these components. To write a custom type mapper, depend on the `org.occurent:cloudevent-type-mapper-api` module and implement the `org.occurrent.application.converter.typemapper.CloudEventTypeMapper`
   (functional) interface.
 * Introduced a blocking Query DSL. It's a small wrapper around the [EventStoreQueries](https://occurrent.org/documentation#eventstore-queries) API that lets you work with domain events instead of CloudEvents. 
   Depend on the `org.occurrent:query-dsl-blocking` module and create an instance of `org.occurrent.dsl.query.blocking.DomainEventQueries`. For example:
@@ -10,8 +22,7 @@
   ```java                                                      
   EventStoreQueries eventStoreQueries = .. 
   CloudEventConverter<DomainEvent> cloudEventConverter = ..
-  CloudEventTypeMapper<DomainEvent> cloudEventTypeMapper = ..
-  DomainEventQueries<DomainEvent> domainEventQueries = new DomainEventQueries<DomainEvent>(eventStoreQueries, cloudEventConverter, cloudEventTypeMapper);
+  DomainEventQueries<DomainEvent> domainEventQueries = new DomainEventQueries<DomainEvent>(eventStoreQueries, cloudEventConverter);
    
   Stream<DomainEvent> events = domainQueries.query(Filter.subject("someSubject"));
   ```
@@ -40,6 +51,29 @@
     * A `GenericApplication` instance (`ApplicationService`)
     * A subscription dsl instance (`Subscriptions`)
     * A reflection based type mapper that uses the fully-qualified class name as cloud event type (you _should_ absolutely override this bean for production use cases) (`CloudEventTypeMapper`)
+      For example, by doing:
+      ```java
+      @Bean
+      public CloudEventTypeMapper<GameEvent> cloudEventTypeMapper() {
+        return ReflectionCloudEventTypeMapper.simple(GameEvent.class);
+      }
+      ```
+      This will use the "simple name" (via reflection) of a domain event as the cloud event type. But since the package name is now lost, the `ReflectionCloudEventTypeMapper` will append the package name of `GameEvent` to when converting back into a domain event. 
+      This _only_ works if all your domain events are located in the exact same package as `GameEvent`. If this is not that case you need to implement a more advanced `CloudEventTypeMapper` such as:
+
+      ```kotlin
+      class CustomTypeMapper : CloudEventTypeMapper<GameEvent> {
+          override fun getCloudEventType(type: Class<out GameEvent>): String = type.simpleName
+      
+          override fun <E : GameEvent> getDomainEventType(cloudEventType: String): Class<E> = when (cloudEventType) {
+              GameStarted::class.simpleName -> GameStarted::class
+              GamePlayed::class.simpleName -> GamePlayed::class
+              // Add all other events here!!
+              ...
+              else -> throw IllegalStateException("Event type $cloudEventType is unknown")
+          }.java as Class<E>
+      }
+      ```
   See `org.occurrent.springboot.OccurrentMongoAutoConfiguration` if you want to know exactly what gets configured.
 * Upgraded spring-boot from 2.5.4 to 2.5.6.
 

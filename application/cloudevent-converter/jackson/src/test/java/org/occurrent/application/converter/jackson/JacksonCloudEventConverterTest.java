@@ -21,7 +21,7 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import io.cloudevents.CloudEvent;
 import io.cloudevents.core.builder.CloudEventBuilder;
 import org.junit.jupiter.api.Test;
-import org.occurrent.application.typemapper.ReflectionCloudEventTypeMapper;
+import org.occurrent.application.converter.typemapper.ReflectionCloudEventTypeMapper;
 import org.occurrent.domain.DomainEvent;
 import org.occurrent.domain.NameDefined;
 

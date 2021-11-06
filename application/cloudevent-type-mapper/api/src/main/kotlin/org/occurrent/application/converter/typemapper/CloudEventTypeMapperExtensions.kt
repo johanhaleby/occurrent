@@ -15,7 +15,7 @@
  *  limitations under the License.
  */
 
-package org.occurrent.application.typemapper
+package org.occurrent.application.converter.typemapper
 
 import kotlin.reflect.KClass
 

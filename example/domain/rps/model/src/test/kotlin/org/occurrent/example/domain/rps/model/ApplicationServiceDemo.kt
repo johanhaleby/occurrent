@@ -186,8 +186,8 @@ class ApplicationServiceDemo {
         // Then
         assertThat(inMemoryEventStore.read(gameId.value.toString()).map(CloudEvent::getType))
             .containsOnly(
-                GameCreated::class.qualifiedName, RoundStarted::class.qualifiedName, GameStarted::class.qualifiedName,
-                FirstPlayerJoinedGame::class.qualifiedName, HandPlayed::class.qualifiedName
+                GameCreated::class.simpleName, RoundStarted::class.simpleName, GameStarted::class.simpleName,
+                FirstPlayerJoinedGame::class.simpleName, HandPlayed::class.simpleName
             )
     }
 }
@@ -206,7 +206,7 @@ class SimpleCloudEventConverter : CloudEventConverter<GameEvent> {
     override fun toCloudEvent(e: GameEvent): CloudEvent = CloudEventBuilder.v1()
         .withId(UUID.randomUUID().toString())
         .withSource(URI.create("urn:rockpaperscissors:game"))
-        .withType(e::class.qualifiedName)
+        .withType(getCloudEventType(e))
         .withTime(OffsetDateTime.ofInstant(e.timestamp.value.toInstant(), e.timestamp.value.zone))
         .withDataContentType("application/xml")
         .withData(xstream.toXML(e).toByteArray())
@@ -214,6 +214,8 @@ class SimpleCloudEventConverter : CloudEventConverter<GameEvent> {
 
     override fun toDomainEvent(cloudEvent: CloudEvent): GameEvent =
         xstream.fromXML(String(cloudEvent.data!!.toBytes())) as GameEvent
+
+    override fun getCloudEventType(type: Class<out GameEvent>): String = type.name
 }
 
 class ProductionCloudEventConverter(private val objectMapper: ObjectMapper) : CloudEventConverter<GameEvent> {
@@ -238,7 +240,7 @@ class ProductionCloudEventConverter(private val objectMapper: ObjectMapper) : Cl
             .withId(UUID.randomUUID().toString())
             .withSubject(e.game.value.toString())
             .withSource(URI.create("urn:rockpaperscissors:game"))
-            .withType(e::class.qualifiedName)
+            .withType(getCloudEventType(e))
             .withTime(OffsetDateTime.ofInstant(e.timestamp.value.toInstant(), e.timestamp.value.zone))
             .withDataContentType("application/xml")
             .withData(if (data == null) null else PojoCloudEventData.wrap(data, objectMapper::writeValueAsBytes))
@@ -285,4 +287,6 @@ class ProductionCloudEventConverter(private val objectMapper: ObjectMapper) : Cl
             else -> value
         } as T
     }
+
+    override fun getCloudEventType(type: Class<out GameEvent>): String = type.simpleName
 }

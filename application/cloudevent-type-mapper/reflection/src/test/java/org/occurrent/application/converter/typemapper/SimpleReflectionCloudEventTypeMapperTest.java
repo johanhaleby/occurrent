@@ -15,7 +15,7 @@
  *  limitations under the License.
  */
 
-package org.occurrent.application.typemapper;
+package org.occurrent.application.converter.typemapper;
 
 import org.junit.jupiter.api.Test;
 import org.occurrent.domain.DomainEvent;
@@ -23,7 +23,6 @@ import org.occurrent.domain.NameDefined;
 import org.occurrent.domain.NameWasChanged;
 
 import static org.assertj.core.api.Assertions.assertThat;
-import static org.occurrent.application.typemapper.ClassName.simple;
 
 public class SimpleReflectionCloudEventTypeMapperTest {
 
@@ -42,7 +41,7 @@ public class SimpleReflectionCloudEventTypeMapperTest {
     @Test
     void getDomainEventType_returns_domain_event_type_from_simple_name_when_specifying_domain_event_package() {
         // Given
-        ReflectionCloudEventTypeMapper<DomainEvent> typeMapper = ReflectionCloudEventTypeMapper.fromClassName(simple(DomainEvent.class.getPackage()));
+        ReflectionCloudEventTypeMapper<DomainEvent> typeMapper = ReflectionCloudEventTypeMapper.fromClassName(ClassName.simple(DomainEvent.class.getPackage()));
 
         // When
         Class<DomainEvent> domainEventType = typeMapper.getDomainEventType(NameDefined.class.getSimpleName());
@@ -55,7 +54,7 @@ public class SimpleReflectionCloudEventTypeMapperTest {
     @Test
     void getDomainEventType_returns_domain_event_type_from_simple_name_when_specifying_domain_event_package_name() {
         // Given
-        ReflectionCloudEventTypeMapper<DomainEvent> typeMapper = ReflectionCloudEventTypeMapper.fromClassName(simple(DomainEvent.class.getPackage().getName()));
+        ReflectionCloudEventTypeMapper<DomainEvent> typeMapper = ReflectionCloudEventTypeMapper.fromClassName(ClassName.simple(DomainEvent.class.getPackage().getName()));
 
         // When
         Class<DomainEvent> domainEventType = typeMapper.getDomainEventType(NameDefined.class.getSimpleName());
@@ -67,7 +66,7 @@ public class SimpleReflectionCloudEventTypeMapperTest {
     @Test
     void getDomainEventType_returns_domain_event_type_from_simple_name_when_specifying_domain_event_package_name_that_ends_with_dot() {
         // Given
-        ReflectionCloudEventTypeMapper<DomainEvent> typeMapper = ReflectionCloudEventTypeMapper.fromClassName(simple(DomainEvent.class.getPackage().getName() + "."));
+        ReflectionCloudEventTypeMapper<DomainEvent> typeMapper = ReflectionCloudEventTypeMapper.fromClassName(ClassName.simple(DomainEvent.class.getPackage().getName() + "."));
 
         // When
         Class<DomainEvent> domainEventType = typeMapper.getDomainEventType(NameDefined.class.getSimpleName());

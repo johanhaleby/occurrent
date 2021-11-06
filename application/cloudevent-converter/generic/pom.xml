@@ -31,5 +31,10 @@
             <artifactId>cloudevent-converter-api</artifactId>
             <version>0.13.2-SNAPSHOT</version>
         </dependency>
+        <dependency>
+            <groupId>org.occurrent</groupId>
+            <artifactId>cloudevent-type-mapper-api</artifactId>
+            <version>0.13.2-SNAPSHOT</version>
+        </dependency>
     </dependencies>
 </project>

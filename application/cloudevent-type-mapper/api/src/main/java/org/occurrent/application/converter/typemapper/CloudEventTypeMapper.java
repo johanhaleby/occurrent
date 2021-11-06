@@ -15,16 +15,13 @@
  *  limitations under the License.
  */
 
-package org.occurrent.application.typemapper;
+package org.occurrent.application.converter.typemapper;
 
-@FunctionalInterface
-public interface DomainEventTypeGetter<T> {
-
-    /**
-     * Get the domain event class from a cloud event type.
-     *
-     * @param cloudEventType The type as defined by the cloud event
-     * @return The java class that represents a specific cloud event type
-     */
-    <E extends T> Class<E> getDomainEventType(String cloudEventType);
+/**
+ * A cloud event type mapper is component whose purpose it is to get the <a href="https://occurrent.org/documentation#cloudevents">cloud event type</a> from a
+ * class or instance of your domain event type and vice versa. It is typically used as a helper to {@code CloudEventConverter}'s.
+ *
+ * @param <T> The base type of your domain events
+ */
+public interface CloudEventTypeMapper<T> extends CloudEventTypeGetter<T>, DomainEventTypeGetter<T> {
 }

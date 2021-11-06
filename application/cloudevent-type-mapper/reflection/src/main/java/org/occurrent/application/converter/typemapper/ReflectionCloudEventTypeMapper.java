@@ -15,10 +15,7 @@
  *  limitations under the License.
  */
 
-package org.occurrent.application.typemapper;
-
-import org.occurrent.application.typemapper.ClassName.Qualified;
-import org.occurrent.application.typemapper.ClassName.Simple;
+package org.occurrent.application.converter.typemapper;
 
 import java.util.Objects;
 import java.util.function.Function;
@@ -40,9 +37,9 @@ public class ReflectionCloudEventTypeMapper<T> implements CloudEventTypeMapper<T
     @Override
     public String getCloudEventType(Class<? extends T> type) {
         final String cloudEventType;
-        if (className instanceof Simple) {
+        if (className instanceof ClassName.Simple) {
             cloudEventType = type.getSimpleName();
-        } else if (className instanceof Qualified) {
+        } else if (className instanceof ClassName.Qualified) {
             cloudEventType = type.getName();
         } else {
             throw new IllegalStateException("Internal error: Invalid class name setting " + className);
@@ -55,9 +52,9 @@ public class ReflectionCloudEventTypeMapper<T> implements CloudEventTypeMapper<T
     @Override
     public <E extends T> Class<E> getDomainEventType(String cloudEventType) {
         final Class<E> domainEvenType;
-        if (className instanceof Simple) {
-            domainEvenType = (Class<E>) ((Simple<T>) className).domainEventTypeFromCloudEventType.apply(cloudEventType);
-        } else if (className instanceof Qualified) {
+        if (className instanceof ClassName.Simple) {
+            domainEvenType = (Class<E>) ((ClassName.Simple<T>) className).domainEventTypeFromCloudEventType.apply(cloudEventType);
+        } else if (className instanceof ClassName.Qualified) {
             try {
                 //noinspection unchecked
                 domainEvenType = (Class<E>) Class.forName(cloudEventType);
@@ -101,6 +98,9 @@ public class ReflectionCloudEventTypeMapper<T> implements CloudEventTypeMapper<T
         return new ReflectionCloudEventTypeMapper<>(ClassName.qualified());
     }
 
+    /**
+     * @return An instance of {@link ReflectionCloudEventTypeMapper} that uses the supplied configuration from {@link ClassName}.
+     */
     public static <T> ReflectionCloudEventTypeMapper<T> fromClassName(ClassName className) {
         return new ReflectionCloudEventTypeMapper<>(className);
     }

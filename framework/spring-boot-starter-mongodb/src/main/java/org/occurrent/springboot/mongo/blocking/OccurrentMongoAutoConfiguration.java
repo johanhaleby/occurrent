@@ -20,10 +20,10 @@ package org.occurrent.springboot.mongo.blocking;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import org.occurrent.application.converter.CloudEventConverter;
 import org.occurrent.application.converter.jackson.JacksonCloudEventConverter;
+import org.occurrent.application.converter.typemapper.CloudEventTypeMapper;
+import org.occurrent.application.converter.typemapper.ReflectionCloudEventTypeMapper;
 import org.occurrent.application.service.blocking.ApplicationService;
 import org.occurrent.application.service.blocking.generic.GenericApplicationService;
-import org.occurrent.application.typemapper.CloudEventTypeMapper;
-import org.occurrent.application.typemapper.ReflectionCloudEventTypeMapper;
 import org.occurrent.dsl.query.blocking.DomainEventQueries;
 import org.occurrent.dsl.subscription.blocking.Subscriptions;
 import org.occurrent.eventstore.api.blocking.EventStore;
@@ -129,14 +129,14 @@ public class OccurrentMongoAutoConfiguration {
 
     @Bean
     @ConditionalOnMissingBean(Subscriptions.class)
-    public <T> Subscriptions<?> occurrentSubscriptionDsl(Subscribable subscribable, CloudEventConverter<T> cloudEventConverter, CloudEventTypeMapper<T> cloudEventTypeMapper) {
-        return new Subscriptions<>(subscribable, cloudEventConverter, cloudEventTypeMapper);
+    public <T> Subscriptions<?> occurrentSubscriptionDsl(Subscribable subscribable, CloudEventConverter<T> cloudEventConverter) {
+        return new Subscriptions<>(subscribable, cloudEventConverter);
     }
 
     @Bean
     @ConditionalOnMissingBean(DomainEventQueries.class)
-    public <T> DomainEventQueries<?> occurrentDomainEventQueries(EventStoreQueries eventStoreQueries, CloudEventConverter<T> cloudEventConverter, CloudEventTypeMapper<T> cloudEventTypeMapper) {
-        return new DomainEventQueries<>(eventStoreQueries, cloudEventConverter, cloudEventTypeMapper);
+    public <T> DomainEventQueries<?> occurrentDomainEventQueries(EventStoreQueries eventStoreQueries, CloudEventConverter<T> cloudEventConverter) {
+        return new DomainEventQueries<>(eventStoreQueries, cloudEventConverter);
     }
 
     @Bean

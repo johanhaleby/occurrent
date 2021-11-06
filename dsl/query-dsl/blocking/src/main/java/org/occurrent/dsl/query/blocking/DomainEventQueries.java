@@ -20,8 +20,6 @@ package org.occurrent.dsl.query.blocking;
 import io.cloudevents.CloudEvent;
 import org.jetbrains.annotations.Nullable;
 import org.occurrent.application.converter.CloudEventConverter;
-import org.occurrent.application.typemapper.CloudEventTypeGetter;
-import org.occurrent.application.typemapper.CloudEventTypeMapper;
 import org.occurrent.eventstore.api.SortBy;
 import org.occurrent.eventstore.api.blocking.EventStoreQueries;
 import org.occurrent.filter.Filter;
@@ -41,28 +39,15 @@ public class DomainEventQueries<T> {
 
     private final EventStoreQueries eventStoreQueries;
     private final CloudEventConverter<T> cloudEventConverter;
-    private final CloudEventTypeGetter<T> cloudEventTypeMapper;
 
     /**
-     * Creates an instance of {@code DomainEventQueries} that assumes that the cloud event type is the simple name of the domain event class type.
-     * (unless {@code cloudEventConverter} instance also implements {@link CloudEventTypeGetter}, then the {@code cloudEventConverter} will be used to derive the type).
-     * If this is not the case, use {@link #DomainEventQueries(EventStoreQueries, CloudEventConverter, CloudEventTypeGetter)} instead.
+     * Creates an instance of {@code DomainEventQueries}
      */
-    @SuppressWarnings("unchecked")
     public DomainEventQueries(EventStoreQueries eventStoreQueries, CloudEventConverter<T> cloudEventConverter) {
-        this(eventStoreQueries, cloudEventConverter, cloudEventConverter instanceof CloudEventTypeGetter ? (CloudEventTypeGetter<T>) cloudEventConverter : Class::getSimpleName);
-    }
-
-    /**
-     * Creates an instance of {@code DomainEventQueries} that uses the {@code cloudEventTypeMapper} to get the cloud event type from the domain event class type.
-     */
-    public DomainEventQueries(EventStoreQueries eventStoreQueries, CloudEventConverter<T> cloudEventConverter, CloudEventTypeGetter<T> cloudEventTypeMapper) {
         Objects.requireNonNull(eventStoreQueries, EventStoreQueries.class.getSimpleName() + " cannot be null");
         Objects.requireNonNull(cloudEventConverter, CloudEventConverter.class.getSimpleName() + " cannot be null");
-        Objects.requireNonNull(cloudEventTypeMapper, CloudEventTypeMapper.class.getSimpleName() + " cannot be null");
         this.eventStoreQueries = eventStoreQueries;
         this.cloudEventConverter = cloudEventConverter;
-        this.cloudEventTypeMapper = cloudEventTypeMapper;
     }
 
     /**
@@ -108,52 +93,51 @@ public class DomainEventQueries<T> {
      */
     public <E extends T> E queryOne(Class<E> type, int skip, int limit, SortBy sortBy) {
         Objects.requireNonNull(type, "type cannot be null");
-        //noinspection unchecked
-        return (E) query(Filter.type(cloudEventTypeMapper.getCloudEventType(type)), skip, limit, sortBy).findFirst().orElse(null);
+        return (E) query(Filter.type(cloudEventConverter.getCloudEventType(type)), skip, limit, sortBy).findFirst().orElse(null);
     }
 
     /**
-     * Query by event type (will use the supplied {@link CloudEventTypeMapper}) to get the cloud event type from the class.
+     * Query by event type (will use the supplied {@link CloudEventConverter}) to get the cloud event type from the class.
      * <p>
      * Note that it's recommended to create an index the fields you're sorting on in order to make them efficient.
      *
      * @return All cloud events matching the specified type.
      */
     public <E extends T> Stream<E> query(Class<E> type) {
-        return this.toDomainEvents(eventStoreQueries.query(Filter.type(cloudEventTypeMapper.getCloudEventType(type))));
+        return this.toDomainEvents(eventStoreQueries.query(Filter.type(cloudEventConverter.getCloudEventType(type))));
     }
 
     /**
-     * Query by event type (will use the supplied {@link CloudEventTypeMapper}) to get the cloud event type from the class, also include {@code skip} and {@code limit}.
+     * Query by event type (will use the supplied {@link CloudEventConverter}) to get the cloud event type from the class, also include {@code skip} and {@code limit}.
      * <p>
      * Note that it's recommended to create an index the fields you're sorting on in order to make them efficient.
      *
      * @return All cloud events matching the specified type, skip and limit.
      */
     public <E extends T> Stream<E> query(Class<E> type, int skip, int limit) {
-        return this.toDomainEvents(eventStoreQueries.query(Filter.type(cloudEventTypeMapper.getCloudEventType(type)), skip, limit));
+        return this.toDomainEvents(eventStoreQueries.query(Filter.type(cloudEventConverter.getCloudEventType(type)), skip, limit));
     }
 
     /**
-     * Query by event type (will use the supplied {@link CloudEventTypeMapper}) to get the cloud event type from the class, also include {@code skip}, {@code limit} and {@code sortBy}.
+     * Query by event type (will use the supplied {@link CloudEventConverter}) to get the cloud event type from the class, also include {@code skip}, {@code limit} and {@code sortBy}.
      * <p>
      * Note that it's recommended to create an index the fields you're sorting on in order to make them efficient.
      *
      * @return All cloud events matching the specified type, skip, limit and sort by <code>sortBy</code>.
      */
     public <E extends T> Stream<E> query(Class<E> type, int skip, int limit, SortBy sortBy) {
-        return this.toDomainEvents(eventStoreQueries.query(Filter.type(cloudEventTypeMapper.getCloudEventType(type)), skip, limit, sortBy));
+        return this.toDomainEvents(eventStoreQueries.query(Filter.type(cloudEventConverter.getCloudEventType(type)), skip, limit, sortBy));
     }
 
     /**
-     * Query by event type (will use the supplied {@link CloudEventTypeMapper}) to get the cloud event type from the class, also including sorting .
+     * Query by event type (will use the supplied {@link CloudEventConverter}) to get the cloud event type from the class, also including sorting .
      * <p>
      * Note that it's recommended to create an index the fields you're sorting on in order to make them efficient.
      *
      * @return All cloud events matching the specified type, sorted by <code>sortBy</code>.
      */
     public <E extends T> Stream<E> query(Class<E> type, SortBy sortBy) {
-        return this.toDomainEvents(eventStoreQueries.query(Filter.type(cloudEventTypeMapper.getCloudEventType(type)), sortBy));
+        return this.toDomainEvents(eventStoreQueries.query(Filter.type(cloudEventConverter.getCloudEventType(type)), sortBy));
     }
 
     /**
@@ -166,7 +150,7 @@ public class DomainEventQueries<T> {
     }
 
     /**
-     * Query by event types (will use the supplied {@link CloudEventTypeMapper}) to get the cloud event type from the class, also include {@code skip}, {@code limit} and {@code sortBy}.
+     * Query by event types (will use the supplied {@link CloudEventConverter}) to get the cloud event type from the class, also include {@code skip}, {@code limit} and {@code sortBy}.
      * <p>
      * Note that it's recommended to create an index the fields you're sorting on in order to make them efficient.
      *
@@ -182,7 +166,7 @@ public class DomainEventQueries<T> {
     }
 
     /**
-     * Query by event types (will use the supplied {@link CloudEventTypeMapper}) to get the cloud event type from the class, also include {@code skip}, {@code limit}.
+     * Query by event types (will use the supplied {@link CloudEventConverter}) to get the cloud event type from the class, also include {@code skip}, {@code limit}.
      * <p>
      * Note that it's recommended to create an index the fields you're sorting on in order to make them efficient.
      *
@@ -198,7 +182,7 @@ public class DomainEventQueries<T> {
     }
 
     /**
-     * Query by event types (will use the supplied {@link CloudEventTypeMapper}) to get the cloud event type from the class, also include {@code sortBy}.
+     * Query by event types (will use the supplied {@link CloudEventConverter}) to get the cloud event type from the class, also include {@code sortBy}.
      * <p>
      * Note that it's recommended to create an index the fields you're sorting on in order to make them efficient.
      *
@@ -214,7 +198,7 @@ public class DomainEventQueries<T> {
     }
 
     /**
-     * Query by event types (will use the supplied {@link CloudEventTypeMapper} to get the cloud event type from the class..
+     * Query by event types (will use the supplied {@link CloudEventConverter} to get the cloud event type from the class..
      * <p>
      * Note that it's recommended to create an index the fields you're sorting on in order to make them efficient.
      *
@@ -230,7 +214,7 @@ public class DomainEventQueries<T> {
     }
 
     /**
-     * Query by event types (will use the supplied {@link CloudEventTypeMapper}) to get the cloud event type from the class, also include {@code sortBy}.
+     * Query by event types (will use the supplied {@link CloudEventConverter}) to get the cloud event type from the class, also include {@code sortBy}.
      * <p>
      * Note that it's recommended to create an index the fields you're sorting on in order to make them efficient.
      *
@@ -331,7 +315,7 @@ public class DomainEventQueries<T> {
     @Nullable
     private Filter createFilterFrom(Collection<Class<? extends T>> types) {
         return (types == null ? Stream.<Class<? extends T>>empty() : types.stream())
-                .map(type -> Filter.type(cloudEventTypeMapper.getCloudEventType(type)))
+                .map(type -> Filter.type(cloudEventConverter.getCloudEventType(type)))
                 .reduce(Filter::or)
                 .orElse(null);
     }

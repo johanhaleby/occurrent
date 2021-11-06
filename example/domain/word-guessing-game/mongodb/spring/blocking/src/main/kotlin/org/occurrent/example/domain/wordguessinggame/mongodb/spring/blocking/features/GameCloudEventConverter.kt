@@ -52,7 +52,7 @@ internal class GameCloudEventConverter(private val objectMapper: ObjectMapper, p
                 .withId(gameEvent.eventId.toString())
                 .withSubject(gameEvent.gameId.toString())
                 .withSource(source)
-                .withType(gameEvent.type)
+                .withType(getCloudEventType(gameEvent))
                 .withTime(gameEvent.timestamp.toInstant().atOffset(ZoneOffset.UTC).truncatedTo(ChronoUnit.MILLIS))
                 .apply {
                     if (data != null) {
@@ -111,6 +111,8 @@ internal class GameCloudEventConverter(private val objectMapper: ObjectMapper, p
             } else {
                 objectMapper.readValue(data!!.toBytes())
             }
+
+    override fun getCloudEventType(type: Class<out GameEvent>): String = type.kotlin.eventType()
 }
 
 private sealed class EventData

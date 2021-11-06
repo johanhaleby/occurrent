@@ -21,7 +21,7 @@ import com.thoughtworks.xstream.XStream;
 import io.cloudevents.CloudEvent;
 import io.cloudevents.core.builder.CloudEventBuilder;
 import org.occurrent.application.converter.CloudEventConverter;
-import org.occurrent.application.typemapper.CloudEventTypeGetter;
+import org.occurrent.application.converter.typemapper.CloudEventTypeGetter;
 
 import java.net.URI;
 import java.nio.charset.Charset;
@@ -38,7 +38,7 @@ import static java.util.Objects.requireNonNull;
  *
  * @param <T> The type of your domain event(s) to convert
  */
-public class XStreamCloudEventConverter<T> implements CloudEventConverter<T>, CloudEventTypeGetter<T> {
+public class XStreamCloudEventConverter<T> implements CloudEventConverter<T> {
     private static final String DEFAULT_CONTENT_TYPE = "application/xml";
     private static final Charset DEFAULT_CHARSET = UTF_8;
 
