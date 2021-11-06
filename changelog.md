@@ -1,4 +1,4 @@
-### Changelog next version
+### Changelog 0.14.0 (2021-11-06)
 
 * Non-backward compitable change: CloudEventConverter's now has a third method that you must implement:
   ```java
