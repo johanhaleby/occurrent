@@ -137,7 +137,7 @@ public class SpringMongoEventStore implements EventStore, EventStoreOperations, 
 
     @Override
     public boolean exists(String streamId) {
-        return mongoTemplate.exists(Query.query(where(STREAM_ID).is(streamId)), eventStoreCollectionName);
+        return mongoTemplate.exists(queryOptions.apply(streamIdEqualTo(streamId)), eventStoreCollectionName);
     }
 
     @Override

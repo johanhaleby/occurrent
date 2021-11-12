@@ -16,6 +16,7 @@
 
 package org.occurrent.eventstore.mongodb.spring.reactor;
 
+import org.occurrent.eventstore.api.reactor.EventStoreQueries;
 import org.occurrent.mongodb.timerepresentation.TimeRepresentation;
 import org.springframework.data.domain.Sort;
 import org.springframework.data.mongodb.core.query.Query;
@@ -33,11 +34,13 @@ import static java.util.Objects.requireNonNull;
  */
 public class EventStoreConfig {
     private static final Function<Query, Query> DEFAULT_QUERY_OPTIONS_FUNCTION = Function.identity();
+    private static final Function<Query, Query> DEFAULT_READ_OPTIONS_FUNCTION = Function.identity();
 
     public final String eventStoreCollectionName;
     public final TransactionalOperator transactionalOperator;
     public final TimeRepresentation timeRepresentation;
     public final Function<Query, Query> queryOptions;
+    public final Function<Query, Query> readOptions;
 
     /**
      * Create a new instance of {@code EventStoreConfig}.
@@ -47,10 +50,10 @@ public class EventStoreConfig {
      * @param timeRepresentation       How time should be represented in the database
      */
     public EventStoreConfig(String eventStoreCollectionName, TransactionalOperator transactionalOperator, TimeRepresentation timeRepresentation) {
-        this(eventStoreCollectionName, transactionalOperator, timeRepresentation, DEFAULT_QUERY_OPTIONS_FUNCTION);
+        this(eventStoreCollectionName, transactionalOperator, timeRepresentation, DEFAULT_QUERY_OPTIONS_FUNCTION, DEFAULT_READ_OPTIONS_FUNCTION);
     }
 
-    private EventStoreConfig(String eventStoreCollectionName, TransactionalOperator transactionalOperator, TimeRepresentation timeRepresentation, Function<Query, Query> queryOptions) {
+    private EventStoreConfig(String eventStoreCollectionName, TransactionalOperator transactionalOperator, TimeRepresentation timeRepresentation, Function<Query, Query> queryOptions, Function<Query, Query> readOptions) {
         requireNonNull(eventStoreCollectionName, "Event store collection name cannot be null");
         requireNonNull(transactionalOperator, TransactionalOperator.class.getSimpleName() + " cannot be null");
         requireNonNull(timeRepresentation, TimeRepresentation.class.getSimpleName() + " cannot be null");
@@ -58,6 +61,7 @@ public class EventStoreConfig {
         this.transactionalOperator = transactionalOperator;
         this.timeRepresentation = timeRepresentation;
         this.queryOptions = queryOptions == null ? DEFAULT_QUERY_OPTIONS_FUNCTION : queryOptions;
+        this.readOptions = readOptions == null ? DEFAULT_READ_OPTIONS_FUNCTION : readOptions;
     }
 
 
@@ -66,12 +70,12 @@ public class EventStoreConfig {
         if (this == o) return true;
         if (!(o instanceof EventStoreConfig)) return false;
         EventStoreConfig that = (EventStoreConfig) o;
-        return Objects.equals(eventStoreCollectionName, that.eventStoreCollectionName) && Objects.equals(transactionalOperator, that.transactionalOperator) && timeRepresentation == that.timeRepresentation && Objects.equals(queryOptions, that.queryOptions);
+        return Objects.equals(eventStoreCollectionName, that.eventStoreCollectionName) && Objects.equals(transactionalOperator, that.transactionalOperator) && timeRepresentation == that.timeRepresentation && Objects.equals(queryOptions, that.queryOptions) && Objects.equals(readOptions, that.readOptions);
     }
 
     @Override
     public int hashCode() {
-        return Objects.hash(eventStoreCollectionName, transactionalOperator, timeRepresentation, queryOptions);
+        return Objects.hash(eventStoreCollectionName, transactionalOperator, timeRepresentation, queryOptions, readOptions);
     }
 
     @Override
@@ -81,6 +85,7 @@ public class EventStoreConfig {
                 .add("transactionalOperator=" + transactionalOperator)
                 .add("timeRepresentation=" + timeRepresentation)
                 .add("queryOptions=" + queryOptions)
+                .add("readOptions=" + readOptions)
                 .toString();
     }
 
@@ -89,6 +94,7 @@ public class EventStoreConfig {
         private TransactionalOperator transactionalOperator;
         private TimeRepresentation timeRepresentation;
         private Function<Query, Query> queryOptions;
+        private Function<Query, Query> readOptions;
 
         /**
          * @param eventStoreCollectionName The collection in which the events are persisted
@@ -127,8 +133,8 @@ public class EventStoreConfig {
         }
 
         /**
-         * Specify a function that can be used to configure the query options used for {@link org.occurrent.eventstore.api.reactor.EventStore#read(String)} and {@link org.occurrent.eventstore.api.reactor.EventStoreQueries}.
-         * This is an advanced feature and should be used sparingly. For example, you can configure cursor timeout, whether slave is OK, etc. By default, mongodb default query options are used.
+         * Specify a function that can be used to configure the query options used for {@link EventStoreQueries}, i.e. for query use cases.
+         * This is an advanced feature and should be used sparingly. For example, you can configure cursor timeout, whether reads from secondaries are OK, etc. By default, mongodb default query options are used.
          * <br><br>
          * Note that you must <i>not</i> use this to change the query itself, i.e. don't use the {@link Query#with(Sort)} etc. Only use options such as {@link Query#cursorBatchSize(int)} that doesn't change
          * the actual query or sort order.
@@ -142,8 +148,23 @@ public class EventStoreConfig {
         }
 
 
+        /**
+         * Specify a function that can be used to configure the query options used for {@link org.occurrent.eventstore.api.reactor.EventStore#read(String)}, i.e. for transactional scenarios.
+         * This is an advanced feature and should be used sparingly. For example, you can configure cursor timeout, whether reads from secondaries are OK, etc. By default, mongodb default query options are used.
+         * <br><br>
+         * Note that you must <i>not</i> use this to change the query itself, i.e. don't use the {@link Query#with(Sort)} etc. Only use options such as {@link Query#cursorBatchSize(int)} that doesn't change
+         * the actual query or sort order.
+         *
+         * @param readOptions The read options function to use, it cannot return null.
+         * @return A same {@code Builder instance}
+         */
+        public Builder readOptions(Function<Query, Query> readOptions) {
+            this.readOptions = readOptions;
+            return this;
+        }
+
         public EventStoreConfig build() {
-            return new EventStoreConfig(eventStoreCollectionName, transactionalOperator, timeRepresentation, queryOptions);
+            return new EventStoreConfig(eventStoreCollectionName, transactionalOperator, timeRepresentation, queryOptions, readOptions);
         }
     }
 }

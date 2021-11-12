@@ -72,6 +72,7 @@ public class ReactorMongoEventStore implements EventStore, EventStoreOperations,
     private final TimeRepresentation timeRepresentation;
     private final TransactionalOperator transactionalOperator;
     private final Function<Query, Query> queryOptions;
+    private final Function<Query, Query> readOptions;
 
     /**
      * Create a new instance of {@code SpringReactorMongoEventStore}
@@ -87,6 +88,7 @@ public class ReactorMongoEventStore implements EventStore, EventStoreOperations,
         this.transactionalOperator = config.transactionalOperator;
         this.timeRepresentation = config.timeRepresentation;
         this.queryOptions = config.queryOptions;
+        this.readOptions = config.readOptions;
         initializeEventStore(eventStoreCollectionName, mongoTemplate).block();
     }
 
@@ -123,7 +125,7 @@ public class ReactorMongoEventStore implements EventStore, EventStoreOperations,
 
     @Override
     public Mono<Boolean> exists(String streamId) {
-        return mongoTemplate.exists(streamIdEqualTo(streamId), eventStoreCollectionName);
+        return mongoTemplate.exists(queryOptions.apply(streamIdEqualTo(streamId)), eventStoreCollectionName);
     }
 
     @Override
@@ -136,7 +138,7 @@ public class ReactorMongoEventStore implements EventStore, EventStoreOperations,
     private Mono<EventStreamImpl> readEventStream(String streamId, int skip, int limit) {
         return currentStreamVersion(streamId)
                 .flatMap(currentStreamVersion -> {
-                    Flux<Document> cloudEventDocuments = readCloudEvents(streamIdEqualTo(streamId), skip, limit, SortBy.streamVersion(ASCENDING))
+                    Flux<Document> cloudEventDocuments = readCloudEvents(readOptions.apply(streamIdEqualTo(streamId)), skip, limit, SortBy.streamVersion(ASCENDING))
                             // We use "takeWhile" so that we don't have the start transactions on read. This means that even
                             // if another thread has inserted more events after we've read "currentStreamVersion" it doesn't matter.
                             // This is because we return a lazy Stream and only those returning event whose version is less than or equal to
@@ -153,11 +155,11 @@ public class ReactorMongoEventStore implements EventStore, EventStoreOperations,
         }
 
         Sort sort = convertToSpringSort(sortBy);
-        return mongoTemplate.find(queryOptions.apply(query.with(sort)), Document.class, eventStoreCollectionName);
+        return mongoTemplate.find(query.with(sort), Document.class, eventStoreCollectionName);
     }
 
     private Mono<Long> currentStreamVersion(String streamId) {
-        Query query = Query.query(where(STREAM_ID).is(streamId));
+        Query query = readOptions.apply(Query.query(where(STREAM_ID).is(streamId)));
         query.fields().include(STREAM_VERSION);
         return mongoTemplate.findOne(queryOptions.apply(query.with(Sort.by(DESC, STREAM_VERSION)).limit(1)), Document.class, eventStoreCollectionName)
                 .map(documentWithLatestStreamVersion -> documentWithLatestStreamVersion.getLong(STREAM_VERSION))
@@ -282,7 +284,7 @@ public class ReactorMongoEventStore implements EventStore, EventStoreOperations,
     @Override
     public Flux<CloudEvent> query(Filter filter, int skip, int limit, SortBy sortBy) {
         requireNonNull(filter, "Filter cannot be null");
-        final Query query = FilterConverter.convertFilterToQuery(timeRepresentation, filter);
+        final Query query = queryOptions.apply(FilterConverter.convertFilterToQuery(timeRepresentation, filter));
         return readCloudEvents(query, skip, limit, sortBy)
                 .map(document -> convertToCloudEvent(timeRepresentation, document));
     }
@@ -294,7 +296,7 @@ public class ReactorMongoEventStore implements EventStore, EventStoreOperations,
             //noinspection NullableProblems
             return mongoTemplate.createMono(eventStoreCollectionName, MongoCollection::estimatedDocumentCount);
         } else {
-            final Query query = FilterConverter.convertFilterToQuery(timeRepresentation, filter);
+            final Query query = queryOptions.apply(FilterConverter.convertFilterToQuery(timeRepresentation, filter));
             return mongoTemplate.count(query, eventStoreCollectionName);
         }
     }
@@ -305,7 +307,7 @@ public class ReactorMongoEventStore implements EventStore, EventStoreOperations,
         if (filter instanceof Filter.All) {
             return count().map(cnt -> cnt > 0);
         } else {
-            final Query query = FilterConverter.convertFilterToQuery(timeRepresentation, filter);
+            final Query query = queryOptions.apply(FilterConverter.convertFilterToQuery(timeRepresentation, filter));
             return mongoTemplate.exists(query, eventStoreCollectionName);
         }
     }

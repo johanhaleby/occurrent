@@ -155,7 +155,7 @@ public class EventStoreConfig {
          * Note that you must <i>not</i> use this to change the query itself, i.e. don't use the {@link Query#with(Sort)} etc. Only use options such as {@link Query#cursorBatchSize(int)} that doesn't change
          * the actual query or sort order.
          *
-         * @param readOptions The query options function to use, it cannot return null.
+         * @param readOptions The read options function to use, it cannot return null.
          * @return A same {@code Builder instance}
          */
         public Builder readOptions(Function<Query, Query> readOptions) {

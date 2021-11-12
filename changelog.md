@@ -10,6 +10,10 @@
     return new MongoTransactionManager(dbFactory, TransactionOptions.builder(). .. .build());
   }
   ```
+* Separating read- and query options configuration so that you can e.g. configure queries made by `EventStoreQueries` and reads from the `EventStore.read(..)` separately.  
+  This useful if you want to e.g. allow queries from `EventStoreQueries` to be made to secondary nodes but still force reads from `EventStore.read(..)` to be made from the primary.
+  You can configure this by supplying a `readOption` (to configure the reads from the `EventStore`) and `queryOption` (for `EventStoreQueries`) in the `EventStoreConfig`. 
+  This has been implemented for `SpringMongoEventStore` and `ReactorMongoEventStore`.
 
 ### Changelog 0.14.0 (2021-11-06)
 
