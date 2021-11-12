@@ -1,4 +1,4 @@
-### Changelog next version
+### Changelog 0.14.1 (2021-11-12)
 
 * Using `insert` from `MongoTemplate` when writing events in the `SpringMongoEventStore`. Previously, the vanilla `mongoClient` was (accidentally) used for this operation.
 * When using the spring boot starter project for MongoDB (`org.occurrent:spring-boot-starter-mongodb`), the transaction manager used by default is now configured to use "majority" read- and write concerns.
