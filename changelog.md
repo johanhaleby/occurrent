@@ -15,6 +15,15 @@
   
   This has been implemented for all MongoDB event stores.
 * Using `insert` from `MongoTemplate` when writing events in the `SpringMongoEventStore`. Previously, the vanilla `mongoClient` was (accidentally) used for this operation.
+* When using the spring boot starter project for MongoDB (`org.occurrent:spring-boot-starter-mongodb`), the transaction manager used by default is now configured to use "majority" read- and write concerns.
+  To revert to the "default" settings used by Spring, or change it to your own needs, specify a `MongoTransactionManager` bean. For example:
+
+  ```java                                                                       
+  @Bean
+  public MongoTransactionManager mongoTransactionManager(MongoDatabaseFactory dbFactory) {
+    return new MongoTransactionManager(dbFactory, TransactionOptions.builder(). .. .build());
+  }
+  ```
 
 ### Changelog 0.14.0 (2021-11-06)
 

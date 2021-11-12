@@ -18,6 +18,9 @@
 package org.occurrent.springboot.mongo.blocking;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.mongodb.ReadConcern;
+import com.mongodb.TransactionOptions;
+import com.mongodb.WriteConcern;
 import org.occurrent.application.converter.CloudEventConverter;
 import org.occurrent.application.converter.jackson.JacksonCloudEventConverter;
 import org.occurrent.application.converter.typemapper.CloudEventTypeMapper;
@@ -72,7 +75,7 @@ public class OccurrentMongoAutoConfiguration {
     @Bean
     @ConditionalOnMissingBean(MongoTransactionManager.class)
     public MongoTransactionManager mongoTransactionManager(MongoDatabaseFactory dbFactory) {
-        return new MongoTransactionManager(dbFactory);
+        return new MongoTransactionManager(dbFactory, TransactionOptions.builder().readConcern(ReadConcern.MAJORITY).writeConcern(WriteConcern.MAJORITY).build());
     }
 
     @Bean
