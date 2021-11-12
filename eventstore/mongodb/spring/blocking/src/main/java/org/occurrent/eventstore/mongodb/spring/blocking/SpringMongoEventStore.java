@@ -17,6 +17,7 @@
 package org.occurrent.eventstore.mongodb.spring.blocking;
 
 import com.mongodb.MongoException;
+import com.mongodb.WriteConcern;
 import com.mongodb.client.MongoCollection;
 import com.mongodb.client.model.IndexOptions;
 import com.mongodb.client.model.Indexes;
@@ -92,7 +93,7 @@ public class SpringMongoEventStore implements EventStore, EventStoreOperations, 
         this.transactionTemplate = config.transactionTemplate;
         this.timeRepresentation = config.timeRepresentation;
         this.queryOptions = config.queryOptions;
-        initializeEventStore(eventStoreCollectionName, mongoTemplate);
+        initializeEventStore(eventStoreCollectionName, mongoTemplate, config.writeConcern);
     }
 
     @Override
@@ -329,10 +330,15 @@ public class SpringMongoEventStore implements EventStore, EventStoreOperations, 
     }
 
     // Initialization
-    private static void initializeEventStore(String eventStoreCollectionName, MongoTemplate mongoTemplate) {
+    private static void initializeEventStore(String eventStoreCollectionName, MongoTemplate mongoTemplate, WriteConcern writeConcern) {
         if (!mongoTemplate.collectionExists(eventStoreCollectionName)) {
             mongoTemplate.createCollection(eventStoreCollectionName);
         }
+
+        if (writeConcern != null) {
+            mongoTemplate.setWriteConcernResolver(action -> Objects.equals(action.getCollectionName(), eventStoreCollectionName) ? writeConcern : action.getDefaultWriteConcern());
+        }
+
         MongoCollection<Document> eventStoreCollection = mongoTemplate.getCollection(eventStoreCollectionName);
         // Cloud spec defines id + source must be unique!
         eventStoreCollection.createIndex(Indexes.compoundIndex(Indexes.ascending(CloudEventV1.ID), Indexes.ascending(CloudEventV1.SOURCE)), new IndexOptions().unique(true));

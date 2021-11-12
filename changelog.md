@@ -1,3 +1,20 @@
+### Changelog next version
+
+* Allow configuring which [WriteConcern](https://mongodb.github.io/mongo-java-driver/3.6/javadoc/com/mongodb/WriteConcern.html) to use when writing to the "events" collection for MongoDB event stores.
+  For example:
+  ```java
+  EventStoreConfig eventStoreConfig = new EventStoreConfig.Builder().writeConcern(WriteConcern.JOURNALED). .. .build();
+  eventStore = new SpringMongoEventStore(mongoTemplate, eventStoreConfig);
+  ```
+  
+  By default, "majority" will be used as WriteConcern. To use the default write concern as specified by `MongoTemplate`, do for example:
+  ```java
+  EventStoreConfig eventStoreConfig = new EventStoreConfig.Builder().useDefaultWriteConcern(). .. .build();
+  eventStore = new SpringMongoEventStore(mongoTemplate, eventStoreConfig);
+  ```
+  
+  This has been implemented for all MongoDB event stores.
+
 ### Changelog 0.14.0 (2021-11-06)
 
 * Non-backward compitable change: CloudEventConverter's now has a third method that you must implement:
