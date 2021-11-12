@@ -1,19 +1,5 @@
 ### Changelog next version
 
-* Allow configuring which [WriteConcern](https://mongodb.github.io/mongo-java-driver/3.6/javadoc/com/mongodb/WriteConcern.html) to use when writing to the "events" collection for MongoDB event stores.
-  For example:
-  ```java
-  EventStoreConfig eventStoreConfig = new EventStoreConfig.Builder().writeConcern(WriteConcern.JOURNALED). .. .build();
-  eventStore = new SpringMongoEventStore(mongoTemplate, eventStoreConfig);
-  ```
-  
-  By default, "majority" will be used as WriteConcern. To use the default write concern as specified by `MongoTemplate`, do for example:
-  ```java
-  EventStoreConfig eventStoreConfig = new EventStoreConfig.Builder().useDefaultWriteConcern(). .. .build();
-  eventStore = new SpringMongoEventStore(mongoTemplate, eventStoreConfig);
-  ```
-  
-  This has been implemented for all MongoDB event stores.
 * Using `insert` from `MongoTemplate` when writing events in the `SpringMongoEventStore`. Previously, the vanilla `mongoClient` was (accidentally) used for this operation.
 * When using the spring boot starter project for MongoDB (`org.occurrent:spring-boot-starter-mongodb`), the transaction manager used by default is now configured to use "majority" read- and write concerns.
   To revert to the "default" settings used by Spring, or change it to your own needs, specify a `MongoTransactionManager` bean. For example:

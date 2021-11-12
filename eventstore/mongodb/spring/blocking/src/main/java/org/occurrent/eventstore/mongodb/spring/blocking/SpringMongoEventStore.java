@@ -17,7 +17,6 @@
 package org.occurrent.eventstore.mongodb.spring.blocking;
 
 import com.mongodb.MongoException;
-import com.mongodb.WriteConcern;
 import com.mongodb.client.MongoCollection;
 import com.mongodb.client.model.IndexOptions;
 import com.mongodb.client.model.Indexes;
@@ -94,7 +93,7 @@ public class SpringMongoEventStore implements EventStore, EventStoreOperations, 
         this.transactionTemplate = config.transactionTemplate;
         this.timeRepresentation = config.timeRepresentation;
         this.queryOptions = config.queryOptions;
-        initializeEventStore(eventStoreCollectionName, mongoTemplate, config.writeConcern);
+        initializeEventStore(eventStoreCollectionName, mongoTemplate);
     }
 
     @Override
@@ -336,13 +335,9 @@ public class SpringMongoEventStore implements EventStore, EventStoreOperations, 
     }
 
     // Initialization
-    private static void initializeEventStore(String eventStoreCollectionName, MongoTemplate mongoTemplate, WriteConcern writeConcern) {
+    private static void initializeEventStore(String eventStoreCollectionName, MongoTemplate mongoTemplate) {
         if (!mongoTemplate.collectionExists(eventStoreCollectionName)) {
             mongoTemplate.createCollection(eventStoreCollectionName);
-        }
-
-        if (writeConcern != null) {
-            mongoTemplate.setWriteConcernResolver(action -> Objects.equals(action.getCollectionName(), eventStoreCollectionName) ? writeConcern : action.getDefaultWriteConcern());
         }
 
         MongoCollection<Document> eventStoreCollection = mongoTemplate.getCollection(eventStoreCollectionName);
