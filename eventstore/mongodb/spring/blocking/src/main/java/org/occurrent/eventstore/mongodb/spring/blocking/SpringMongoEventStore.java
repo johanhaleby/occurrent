@@ -78,6 +78,7 @@ public class SpringMongoEventStore implements EventStore, EventStoreOperations, 
     private final TimeRepresentation timeRepresentation;
     private final TransactionTemplate transactionTemplate;
     private final Function<Query, Query> queryOptions;
+    private final Function<Query, Query> readOptions;
 
     /**
      * Create a new instance of {@code SpringBlockingMongoEventStore}
@@ -93,6 +94,7 @@ public class SpringMongoEventStore implements EventStore, EventStoreOperations, 
         this.transactionTemplate = config.transactionTemplate;
         this.timeRepresentation = config.timeRepresentation;
         this.queryOptions = config.queryOptions;
+        this.readOptions = config.readOptions;
         initializeEventStore(eventStoreCollectionName, mongoTemplate);
     }
 
@@ -145,7 +147,7 @@ public class SpringMongoEventStore implements EventStore, EventStoreOperations, 
             return count() > 0;
         } else {
             final Query query = FilterConverter.convertFilterToQuery(timeRepresentation, filter);
-            return mongoTemplate.exists(query, eventStoreCollectionName);
+            return mongoTemplate.exists(queryOptions.apply(query), eventStoreCollectionName);
         }
     }
 
@@ -204,7 +206,7 @@ public class SpringMongoEventStore implements EventStore, EventStoreOperations, 
     public Stream<CloudEvent> query(Filter filter, int skip, int limit, SortBy sortBy) {
         requireNonNull(filter, Filter.class.getSimpleName() + " cannot be null");
         requireNonNull(sortBy, SortBy.class.getSimpleName() + " cannot be null");
-        final Query query = FilterConverter.convertFilterToQuery(timeRepresentation, filter);
+        final Query query = queryOptions.apply(FilterConverter.convertFilterToQuery(timeRepresentation, filter));
         return readCloudEvents(query, skip, limit, sortBy)
                 .map(document -> convertToCloudEvent(timeRepresentation, document));
     }
@@ -216,7 +218,7 @@ public class SpringMongoEventStore implements EventStore, EventStoreOperations, 
             //noinspection ConstantConditions
             return mongoTemplate.execute(eventStoreCollectionName, MongoCollection::estimatedDocumentCount);
         } else {
-            final Query query = FilterConverter.convertFilterToQuery(timeRepresentation, filter);
+            final Query query = queryOptions.apply(FilterConverter.convertFilterToQuery(timeRepresentation, filter));
             return mongoTemplate.count(query, eventStoreCollectionName);
         }
     }
@@ -303,7 +305,8 @@ public class SpringMongoEventStore implements EventStore, EventStoreOperations, 
             return new EventStreamImpl<>(streamId, 0, Stream.empty());
         }
 
-        Stream<Document> stream = readCloudEvents(streamIdEqualTo(streamId), skip, limit, SortBy.streamVersion(ASCENDING));
+        final Query query = readOptions.apply(streamIdEqualTo(streamId));
+        Stream<Document> stream = readCloudEvents(query, skip, limit, SortBy.streamVersion(ASCENDING));
         // We use "takeWhile" so that we don't have the start transactions on read. This means that even
         // if another thread has inserted more events after we've read "currentStreamVersion" it doesn't matter.
         // This is because we return a lazy Stream and only those returning event whose version is less than or equal to
@@ -313,7 +316,7 @@ public class SpringMongoEventStore implements EventStore, EventStoreOperations, 
     }
 
     private long currentStreamVersion(String streamId) {
-        Query query = Query.query(where(STREAM_ID).is(streamId));
+        Query query = readOptions.apply(Query.query(where(STREAM_ID).is(streamId)));
         query.fields().include(STREAM_VERSION);
         Document documentWithLatestStreamVersion = mongoTemplate.findOne(queryOptions.apply(query.with(Sort.by(DESC, STREAM_VERSION)).limit(1)), Document.class, eventStoreCollectionName);
         final long currentStreamVersion;
@@ -331,7 +334,7 @@ public class SpringMongoEventStore implements EventStore, EventStoreOperations, 
         }
 
         Sort sort = convertToSpringSort(sortBy);
-        return StreamUtils.createStreamFromIterator(mongoTemplate.stream(queryOptions.apply(query.with(sort)), Document.class, eventStoreCollectionName));
+        return StreamUtils.createStreamFromIterator(mongoTemplate.stream(query.with(sort), Document.class, eventStoreCollectionName));
     }
 
     // Initialization
