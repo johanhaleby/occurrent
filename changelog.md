@@ -14,6 +14,7 @@
   ```
   
   This has been implemented for all MongoDB event stores.
+* Using `insert` from `MongoTemplate` when writing events in the `SpringMongoEventStore`. Previously, the vanilla `mongoClient` was (accidentally) used for this operation.
 
 ### Changelog 0.14.0 (2021-11-06)
 

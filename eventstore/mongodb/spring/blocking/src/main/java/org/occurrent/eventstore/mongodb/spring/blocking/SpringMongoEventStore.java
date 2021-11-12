@@ -37,6 +37,7 @@ import org.occurrent.eventstore.mongodb.internal.MongoExceptionTranslator.WriteC
 import org.occurrent.filter.Filter;
 import org.occurrent.mongodb.spring.filterqueryconversion.internal.FilterConverter;
 import org.occurrent.mongodb.timerepresentation.TimeRepresentation;
+import org.springframework.dao.DataAccessException;
 import org.springframework.data.domain.Sort;
 import org.springframework.data.mongodb.core.MongoTemplate;
 import org.springframework.data.mongodb.core.query.Query;
@@ -268,9 +269,14 @@ public class SpringMongoEventStore implements EventStore, EventStoreOperations, 
 
     private void insertAll(String streamId, long streamVersion, WriteCondition writeCondition, List<Document> documents) {
         try {
-            mongoTemplate.getCollection(eventStoreCollectionName).insertMany(documents);
-        } catch (MongoException e) {
-            throw translateException(new WriteContext(streamId, streamVersion, writeCondition), e);
+            mongoTemplate.insert(documents, eventStoreCollectionName);
+        } catch (DataAccessException e) {
+            final Throwable rootCause = e.getRootCause();
+            if (rootCause instanceof MongoException) {
+                throw translateException(new WriteContext(streamId, streamVersion, writeCondition), (MongoException) rootCause);
+            } else {
+                throw e;
+            }
         }
     }
 
