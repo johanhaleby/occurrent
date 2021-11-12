@@ -20,7 +20,7 @@
     <parent>
         <artifactId>example-rps</artifactId>
         <groupId>org.occurrent</groupId>
-        <version>0.14.1</version>
+        <version>0.14.2-SNAPSHOT</version>
     </parent>
     <modelVersion>4.0.0</modelVersion>
 
@@ -62,25 +62,25 @@
         <dependency>
             <groupId>org.occurrent</groupId>
             <artifactId>command-composition</artifactId>
-            <version>0.14.1</version>
+            <version>0.14.2-SNAPSHOT</version>
             <scope>test</scope>
         </dependency>
         <dependency>
             <groupId>org.occurrent</groupId>
             <artifactId>application-service-blocking</artifactId>
-            <version>0.14.1</version>
+            <version>0.14.2-SNAPSHOT</version>
             <scope>test</scope>
         </dependency>
         <dependency>
             <groupId>org.occurrent</groupId>
             <artifactId>eventstore-inmemory</artifactId>
-            <version>0.14.1</version>
+            <version>0.14.2-SNAPSHOT</version>
             <scope>test</scope>
         </dependency>
         <dependency>
             <groupId>org.occurrent</groupId>
             <artifactId>subscription-inmemory</artifactId>
-            <version>0.14.1</version>
+            <version>0.14.2-SNAPSHOT</version>
             <scope>test</scope>
         </dependency>
         <dependency>
@@ -96,7 +96,7 @@
         <dependency>
             <groupId>org.occurrent</groupId>
             <artifactId>subscription-dsl-blocking</artifactId>
-            <version>0.14.1</version>
+            <version>0.14.2-SNAPSHOT</version>
             <scope>test</scope>
         </dependency>
         <dependency>
