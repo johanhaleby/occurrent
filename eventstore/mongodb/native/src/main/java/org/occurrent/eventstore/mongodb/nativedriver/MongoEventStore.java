@@ -51,8 +51,7 @@ import java.util.stream.LongStream;
 import java.util.stream.Stream;
 import java.util.stream.StreamSupport;
 
-import static com.mongodb.client.model.Filters.and;
-import static com.mongodb.client.model.Filters.eq;
+import static com.mongodb.client.model.Filters.*;
 import static com.mongodb.client.model.Sorts.ascending;
 import static com.mongodb.client.model.Sorts.descending;
 import static java.util.Objects.requireNonNull;
@@ -65,7 +64,6 @@ import static org.occurrent.eventstore.api.WriteCondition.anyStreamVersion;
 import static org.occurrent.eventstore.mongodb.internal.MongoExceptionTranslator.translateException;
 import static org.occurrent.eventstore.mongodb.internal.OccurrentCloudEventMongoDocumentMapper.convertToCloudEvent;
 import static org.occurrent.eventstore.mongodb.internal.OccurrentCloudEventMongoDocumentMapper.convertToDocument;
-import static org.occurrent.functionalsupport.internal.FunctionalSupport.takeWhile;
 import static org.occurrent.functionalsupport.internal.FunctionalSupport.zip;
 
 /**
@@ -129,13 +127,10 @@ public class MongoEventStore implements EventStore, EventStoreOperations, EventS
             return new EventStreamImpl<>(streamId, 0, Stream.empty());
         }
 
-        Stream<Document> readStream = readCloudEvents(streamIdEqualTo(streamId), skip, limit, SortBy.streamVersion(ASCENDING));
-        // We use "takeWhile" so that we don't have the start transactions on read. This means that even
+        // We use "lte" currentStreamVersion so that we don't have the start transactions on read. This means that even
         // if another thread has inserted more events after we've read "currentStreamVersion" it doesn't matter.
-        // This is because we return a lazy Stream and only those returning event whose version is less than or equal to
-        // "currentStreamVersion". Note that we can use "takeWhile" on the Stream directly if upgraded to Java 9+.
-        Stream<Document> boundedStream = takeWhile(readStream, document -> document.getLong(STREAM_VERSION) <= currentStreamVersion);
-        return new EventStreamImpl<>(streamId, currentStreamVersion, boundedStream);
+        Stream<Document> documentStream = readCloudEvents(streamIdAndStreamVersionLessThanOrEqualTo(streamId, currentStreamVersion), skip, limit, SortBy.streamVersion(ASCENDING));
+        return new EventStreamImpl<>(streamId, currentStreamVersion, documentStream);
     }
 
     private long currentStreamVersion(String streamId, ClientSession clientSession) {
@@ -353,6 +348,10 @@ public class MongoEventStore implements EventStore, EventStoreOperations, EventS
 
     private static Bson streamIdEqualTo(String streamId) {
         return eq(STREAM_ID, streamId);
+    }
+
+    private static Bson streamIdAndStreamVersionLessThanOrEqualTo(String streamId, long version) {
+        return and(streamIdEqualTo(streamId), lte(STREAM_VERSION, version));
     }
 
     private static Bson uniqueCloudEvent(String cloudEventId, URI cloudEventSource) {
