@@ -1,3 +1,7 @@
+### Changelog next version
+
+* Improved `SpringMongoEventStore` so that it never does in-memory filtering of events that we're not interested in.
+
 ### Changelog 0.14.1 (2021-11-12)
 
 * Using `insert` from `MongoTemplate` when writing events in the `SpringMongoEventStore`. Previously, the vanilla `mongoClient` was (accidentally) used for this operation.

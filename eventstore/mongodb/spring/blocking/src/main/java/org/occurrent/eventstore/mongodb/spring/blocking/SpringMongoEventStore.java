@@ -39,6 +39,7 @@ import org.occurrent.mongodb.timerepresentation.TimeRepresentation;
 import org.springframework.dao.DataAccessException;
 import org.springframework.data.domain.Sort;
 import org.springframework.data.mongodb.core.MongoTemplate;
+import org.springframework.data.mongodb.core.query.Criteria;
 import org.springframework.data.mongodb.core.query.Query;
 import org.springframework.data.util.StreamUtils;
 import org.springframework.transaction.support.TransactionTemplate;
@@ -59,7 +60,6 @@ import static org.occurrent.eventstore.mongodb.internal.MongoExceptionTranslator
 import static org.occurrent.eventstore.mongodb.internal.OccurrentCloudEventMongoDocumentMapper.convertToCloudEvent;
 import static org.occurrent.eventstore.mongodb.internal.OccurrentCloudEventMongoDocumentMapper.convertToDocument;
 import static org.occurrent.functionalsupport.internal.FunctionalSupport.mapWithIndex;
-import static org.occurrent.functionalsupport.internal.FunctionalSupport.takeWhile;
 import static org.occurrent.mongodb.spring.sortconversion.internal.SortConverter.convertToSpringSort;
 import static org.springframework.data.domain.Sort.Direction.DESC;
 import static org.springframework.data.mongodb.SessionSynchronization.ALWAYS;
@@ -156,7 +156,7 @@ public class SpringMongoEventStore implements EventStore, EventStoreOperations, 
         requireNonNull(streamId, "Stream id cannot be null");
 
         transactionTemplate.executeWithoutResult(
-                __ -> mongoTemplate.remove(Query.query(where(STREAM_ID).is(streamId)), eventStoreCollectionName)
+                __ -> mongoTemplate.remove(Query.query(streamIdEqualToCriteria(streamId)), eventStoreCollectionName)
         );
     }
 
@@ -296,7 +296,11 @@ public class SpringMongoEventStore implements EventStore, EventStoreOperations, 
 
     // Read
     private static Query streamIdEqualTo(String streamId) {
-        return Query.query(where(STREAM_ID).is(streamId));
+        return Query.query(streamIdEqualToCriteria(streamId));
+    }
+
+    private static Criteria streamIdEqualToCriteria(String streamId) {
+        return where(STREAM_ID).is(streamId);
     }
 
     private EventStreamImpl<Document> readEventStream(String streamId, int skip, int limit) {
@@ -305,18 +309,15 @@ public class SpringMongoEventStore implements EventStore, EventStoreOperations, 
             return new EventStreamImpl<>(streamId, 0, Stream.empty());
         }
 
-        final Query query = readOptions.apply(streamIdEqualTo(streamId));
-        Stream<Document> stream = readCloudEvents(query, skip, limit, SortBy.streamVersion(ASCENDING));
-        // We use "takeWhile" so that we don't have the start transactions on read. This means that even
+        // We use "lte" currentStreamVersion so that we don't have the start transactions on read. This means that even
         // if another thread has inserted more events after we've read "currentStreamVersion" it doesn't matter.
-        // This is because we return a lazy Stream and only those returning event whose version is less than or equal to
-        // "currentStreamVersion". Note that we can use "takeWhile" on the Stream directly if upgraded to Java 9+.
-        Stream<Document> boundedStream = takeWhile(stream, document -> document.getLong(STREAM_VERSION) <= currentStreamVersion);
-        return new EventStreamImpl<>(streamId, currentStreamVersion, boundedStream);
+        final Query query = readOptions.apply(Query.query(streamIdEqualToCriteria(streamId).and(STREAM_VERSION).lte(currentStreamVersion)));
+        Stream<Document> stream = readCloudEvents(query, skip, limit, SortBy.streamVersion(ASCENDING));
+        return new EventStreamImpl<>(streamId, currentStreamVersion, stream);
     }
 
     private long currentStreamVersion(String streamId) {
-        Query query = readOptions.apply(Query.query(where(STREAM_ID).is(streamId)));
+        Query query = readOptions.apply(streamIdEqualTo(streamId));
         query.fields().include(STREAM_VERSION);
         Document documentWithLatestStreamVersion = mongoTemplate.findOne(queryOptions.apply(query.with(Sort.by(DESC, STREAM_VERSION)).limit(1)), Document.class, eventStoreCollectionName);
         final long currentStreamVersion;
@@ -347,7 +348,7 @@ public class SpringMongoEventStore implements EventStore, EventStoreOperations, 
         // Cloud spec defines id + source must be unique!
         eventStoreCollection.createIndex(Indexes.compoundIndex(Indexes.ascending(CloudEventV1.ID), Indexes.ascending(CloudEventV1.SOURCE)), new IndexOptions().unique(true));
         // Create a streamId + streamVersion ascending index (note that we don't need to index stream id separately since it's covered by this compound index)
-        // Note also that this index supports when sorting both ascending and descending since MongoDB can traverse an index in both directions.
+        // Note also that this index supports sorting both ascending and descending since MongoDB can traverse an index in both directions.
         eventStoreCollection.createIndex(Indexes.compoundIndex(Indexes.ascending(STREAM_ID), Indexes.ascending(STREAM_VERSION)), new IndexOptions().unique(true));
 
         // SessionSynchronization need to be "ALWAYS" in order for TransactionTemplate to work with mongo template!
