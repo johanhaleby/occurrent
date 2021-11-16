@@ -39,6 +39,7 @@ import org.springframework.dao.DuplicateKeyException;
 import org.springframework.data.domain.Sort;
 import org.springframework.data.mongodb.UncategorizedMongoDbException;
 import org.springframework.data.mongodb.core.ReactiveMongoTemplate;
+import org.springframework.data.mongodb.core.query.Criteria;
 import org.springframework.data.mongodb.core.query.Query;
 import org.springframework.transaction.reactive.TransactionalOperator;
 import reactor.core.publisher.Flux;
@@ -138,12 +139,9 @@ public class ReactorMongoEventStore implements EventStore, EventStoreOperations,
     private Mono<EventStreamImpl> readEventStream(String streamId, int skip, int limit) {
         return currentStreamVersion(streamId)
                 .flatMap(currentStreamVersion -> {
-                    Flux<Document> cloudEventDocuments = readCloudEvents(readOptions.apply(streamIdEqualTo(streamId)), skip, limit, SortBy.streamVersion(ASCENDING))
-                            // We use "takeWhile" so that we don't have the start transactions on read. This means that even
-                            // if another thread has inserted more events after we've read "currentStreamVersion" it doesn't matter.
-                            // This is because we return a lazy Stream and only those returning event whose version is less than or equal to
-                            // "currentStreamVersion".
-                            .takeWhile(document -> document.getLong(STREAM_VERSION) <= currentStreamVersion);
+                    // We use "lte" currentStreamVersion so that we don't have the start transactions on read. This means that even
+                    // if another thread has inserted more events after we've read "currentStreamVersion" it doesn't matter.
+                    Flux<Document> cloudEventDocuments = readCloudEvents(readOptions.apply(streamIdAndStreamVersionLessThanOrEqualTo(streamId, currentStreamVersion)), skip, limit, SortBy.streamVersion(ASCENDING));
                     return Mono.just(new EventStreamImpl(streamId, currentStreamVersion, cloudEventDocuments));
                 })
                 .switchIfEmpty(Mono.fromSupplier(() -> new EventStreamImpl(streamId, 0, Flux.empty())));
@@ -159,7 +157,7 @@ public class ReactorMongoEventStore implements EventStore, EventStoreOperations,
     }
 
     private Mono<Long> currentStreamVersion(String streamId) {
-        Query query = readOptions.apply(Query.query(where(STREAM_ID).is(streamId)));
+        Query query = readOptions.apply(streamIdEqualTo(streamId));
         query.fields().include(STREAM_VERSION);
         return mongoTemplate.findOne(queryOptions.apply(query.with(Sort.by(DESC, STREAM_VERSION)).limit(1)), Document.class, eventStoreCollectionName)
                 .map(documentWithLatestStreamVersion -> documentWithLatestStreamVersion.getLong(STREAM_VERSION))
@@ -344,7 +342,15 @@ public class ReactorMongoEventStore implements EventStore, EventStoreOperations,
     }
 
     private static Query streamIdEqualTo(String streamId) {
-        return Query.query(where(STREAM_ID).is(streamId));
+        return Query.query(streamIdEqualToCriteria(streamId));
+    }
+
+    private static Criteria streamIdEqualToCriteria(String streamId) {
+        return where(STREAM_ID).is(streamId);
+    }
+
+    private static Query streamIdAndStreamVersionLessThanOrEqualTo(String streamId, long streamVersion) {
+        return Query.query(streamIdEqualToCriteria(streamId).and(STREAM_VERSION).lte(streamVersion));
     }
 
     private static Query cloudEventIdIs(String cloudEventId, URI cloudEventSource) {
