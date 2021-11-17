@@ -4,6 +4,7 @@
 * Upgraded to Kotlin 1.6.0
 * Upgraded project reactor to 3.4.12
 * Upgraded Java MongoDB driver to 4.4.0
+* Upgraded Spring Data MongoDB to 3.3.0
 
 ### Changelog 0.14.1 (2021-11-12)
 
