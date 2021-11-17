@@ -2,7 +2,8 @@
 
 * Improved `SpringMongoEventStore`, `MongoEventStore` and `ReactorMongoEventStore` so that it never does in-memory filtering of events that we're not interested in.
 * Upgraded to Kotlin 1.6.0
-* * Upgraded project reactor to 3.4.12
+* Upgraded project reactor to 3.4.12
+* Upgraded Java MongoDB driver to 4.4.0
 
 ### Changelog 0.14.1 (2021-11-12)
 
