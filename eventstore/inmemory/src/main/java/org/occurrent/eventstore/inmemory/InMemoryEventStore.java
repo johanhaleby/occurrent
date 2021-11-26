@@ -75,7 +75,8 @@ public class InMemoryEventStore implements EventStore, EventStoreOperations, Eve
      */
     public InMemoryEventStore() {
         // @formatter:off
-        this(__ -> {});
+        this(__ -> {
+        });
         // @formatter:on
     }
 
@@ -133,13 +134,14 @@ public class InMemoryEventStore implements EventStore, EventStoreOperations, Eve
 
         final WriteResult writeResult;
         List<CloudEvent> addedEvents = newCloudEvents.get();
+        final long oldStreamVersion = currentStreamVersionContainer.get();
         if (addedEvents != null && !addedEvents.isEmpty()) {
             listener.accept(addedEvents.stream());
             CloudEvent cloudEvent = addedEvents.get(addedEvents.size() - 1);
-            long streamVersion = OccurrentExtensionGetter.getStreamVersion(cloudEvent);
-            writeResult = new WriteResult(streamId, streamVersion);
+            long newStreamVersion = OccurrentExtensionGetter.getStreamVersion(cloudEvent);
+            writeResult = new WriteResult(streamId, oldStreamVersion, newStreamVersion);
         } else {
-            writeResult = new WriteResult(streamId, currentStreamVersionContainer.get());
+            writeResult = new WriteResult(streamId, oldStreamVersion, oldStreamVersion);
         }
 
         return writeResult;

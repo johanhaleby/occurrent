@@ -385,7 +385,8 @@ public class ReactorMongoEventStoreTest {
             // Then
             assertAll(
                     () -> assertThat(writeResult.getStreamId()).isEqualTo("name"),
-                    () -> assertThat(writeResult.getStreamVersion()).isEqualTo(2L)
+                    () -> assertThat(writeResult.getOldStreamVersion()).isEqualTo(0L),
+                    () -> assertThat(writeResult.getNewStreamVersion()).isEqualTo(2L)
             );
         }
 
@@ -404,7 +405,8 @@ public class ReactorMongoEventStoreTest {
             // Then
             assertAll(
                     () -> assertThat(writeResult.getStreamId()).isEqualTo("name"),
-                    () -> assertThat(writeResult.getStreamVersion()).isEqualTo(3L)
+                    () -> assertThat(writeResult.getOldStreamVersion()).isEqualTo(1L),
+                    () -> assertThat(writeResult.getNewStreamVersion()).isEqualTo(3L)
             );
         }
 
@@ -416,7 +418,8 @@ public class ReactorMongoEventStoreTest {
             // Then
             assertAll(
                     () -> assertThat(writeResult.getStreamId()).isEqualTo("name"),
-                    () -> assertThat(writeResult.getStreamVersion()).isEqualTo(0L)
+                    () -> assertThat(writeResult.getOldStreamVersion()).isEqualTo(0L),
+                    () -> assertThat(writeResult.getNewStreamVersion()).isEqualTo(0L)
             );
         }
 
@@ -434,7 +437,8 @@ public class ReactorMongoEventStoreTest {
             // Then
             assertAll(
                     () -> assertThat(writeResult.getStreamId()).isEqualTo("name"),
-                    () -> assertThat(writeResult.getStreamVersion()).isEqualTo(2L)
+                    () -> assertThat(writeResult.getOldStreamVersion()).isEqualTo(2L),
+                    () -> assertThat(writeResult.getNewStreamVersion()).isEqualTo(2L)
             );
         }
     }

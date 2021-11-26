@@ -33,6 +33,7 @@ import org.occurrent.eventstore.api.blocking.EventStoreOperations;
 import org.occurrent.eventstore.api.blocking.EventStoreQueries;
 import org.occurrent.eventstore.api.blocking.EventStream;
 import org.occurrent.eventstore.mongodb.internal.MongoExceptionTranslator.WriteContext;
+import org.occurrent.eventstore.mongodb.internal.StreamVersionDiff;
 import org.occurrent.filter.Filter;
 import org.occurrent.mongodb.spring.filterqueryconversion.internal.FilterConverter;
 import org.occurrent.mongodb.timerepresentation.TimeRepresentation;
@@ -111,7 +112,7 @@ public class SpringMongoEventStore implements EventStore, EventStoreOperations, 
             throw new IllegalArgumentException(WriteCondition.class.getSimpleName() + " cannot be null");
         }
 
-        long newStreamVersion = transactionTemplate.execute(transactionStatus -> {
+        StreamVersionDiff streamVersion = transactionTemplate.execute(transactionStatus -> {
             long currentStreamVersion = currentStreamVersion(streamId);
 
             if (!isFulfilled(currentStreamVersion, writeCondition)) {
@@ -120,14 +121,16 @@ public class SpringMongoEventStore implements EventStore, EventStoreOperations, 
 
             List<Document> cloudEventDocuments = mapWithIndex(events, currentStreamVersion, pair -> convertToDocument(timeRepresentation, streamId, pair.t1, pair.t2)).collect(Collectors.toList());
 
+            final long newStreamVersion;
             if (!cloudEventDocuments.isEmpty()) {
                 insertAll(streamId, currentStreamVersion, writeCondition, cloudEventDocuments);
-                return cloudEventDocuments.get(cloudEventDocuments.size() - 1).getLong(OccurrentCloudEventExtension.STREAM_VERSION);
+                newStreamVersion = cloudEventDocuments.get(cloudEventDocuments.size() - 1).getLong(OccurrentCloudEventExtension.STREAM_VERSION);
             } else {
-                return currentStreamVersion;
+                newStreamVersion = currentStreamVersion;
             }
+            return new StreamVersionDiff(currentStreamVersion, newStreamVersion);
         });
-        return new WriteResult(streamId, newStreamVersion);
+        return new WriteResult(streamId, streamVersion.oldStreamVersion, streamVersion.newStreamVersion);
     }
 
     @Override

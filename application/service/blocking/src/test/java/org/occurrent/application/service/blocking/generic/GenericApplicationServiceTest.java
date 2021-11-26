@@ -73,7 +73,7 @@ public class GenericApplicationServiceTest {
         // Then
         assertAll(
                 () -> assertThat(writeResult.getStreamId()).isEqualTo(streamId.toString()),
-                () -> assertThat(writeResult.getStreamVersion()).isEqualTo(1L)
+                () -> assertThat(writeResult.getNewStreamVersion()).isEqualTo(1L)
         );
     }
 

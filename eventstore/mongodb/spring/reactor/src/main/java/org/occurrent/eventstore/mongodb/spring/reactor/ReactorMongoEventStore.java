@@ -32,6 +32,7 @@ import org.occurrent.eventstore.api.reactor.EventStream;
 import org.occurrent.eventstore.mongodb.internal.MongoExceptionTranslator;
 import org.occurrent.eventstore.mongodb.internal.MongoExceptionTranslator.WriteContext;
 import org.occurrent.eventstore.mongodb.internal.OccurrentCloudEventMongoDocumentMapper;
+import org.occurrent.eventstore.mongodb.internal.StreamVersionDiff;
 import org.occurrent.filter.Filter;
 import org.occurrent.mongodb.spring.filterqueryconversion.internal.FilterConverter;
 import org.occurrent.mongodb.timerepresentation.TimeRepresentation;
@@ -104,24 +105,25 @@ public class ReactorMongoEventStore implements EventStore, EventStoreOperations,
             throw new IllegalArgumentException(WriteCondition.class.getSimpleName() + " cannot be null");
         }
 
-        Mono<Long> operation = currentStreamVersion(streamId)
+        Mono<StreamVersionDiff> operation = currentStreamVersion(streamId)
                 .flatMap(currentStreamVersion -> validateWriteCondition(streamId, writeCondition, currentStreamVersion))
                 .flatMap(currentStreamVersion -> {
                     Flux<Document> documentFlux = convertEventsToMongoDocuments(streamId, events, currentStreamVersion);
-                    Mono<Long> newStreamVersionFlux = documentFlux.collectList().flatMap(documents -> {
+                    Mono<StreamVersionDiff> streamVersionDiffFlux = documentFlux.collectList().flatMap(documents -> {
                         final long newStreamVersion;
                         if (documents.isEmpty()) {
                             newStreamVersion = currentStreamVersion;
                         } else {
                             newStreamVersion = documents.get(documents.size() - 1).getLong(STREAM_VERSION);
                         }
-                        return insertAll(streamId, currentStreamVersion, writeCondition, documents).then(Mono.just(newStreamVersion));
+                        return insertAll(streamId, currentStreamVersion, writeCondition, documents)
+                                .then(Mono.just(StreamVersionDiff.of(currentStreamVersion, newStreamVersion)));
                     });
-                    return newStreamVersionFlux.switchIfEmpty(Mono.just(currentStreamVersion));
+                    return streamVersionDiffFlux.switchIfEmpty(Mono.just(StreamVersionDiff.of(currentStreamVersion, currentStreamVersion)));
                 });
 
         return transactionalOperator.transactional(operation)
-                .map(newStreamVersion -> new WriteResult(streamId, newStreamVersion));
+                .map(streamVersionDiff -> new WriteResult(streamId, streamVersionDiff.oldStreamVersion, streamVersionDiff.newStreamVersion));
     }
 
     @Override

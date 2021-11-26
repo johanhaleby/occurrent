@@ -35,6 +35,7 @@ import org.occurrent.eventstore.api.blocking.EventStoreOperations;
 import org.occurrent.eventstore.api.blocking.EventStoreQueries;
 import org.occurrent.eventstore.api.blocking.EventStream;
 import org.occurrent.eventstore.mongodb.internal.MongoExceptionTranslator.WriteContext;
+import org.occurrent.eventstore.mongodb.internal.StreamVersionDiff;
 import org.occurrent.filter.Filter;
 import org.occurrent.functionalsupport.internal.FunctionalSupport.Pair;
 import org.occurrent.mongodb.spring.filterbsonfilterconversion.internal.FilterToBsonFilterConverter;
@@ -178,7 +179,7 @@ public class MongoEventStore implements EventStore, EventStoreOperations, EventS
         }
 
         try (ClientSession clientSession = mongoClient.startSession()) {
-            Long newStreamVersion = clientSession.withTransaction(() -> {
+            StreamVersionDiff streamVersionDiff = clientSession.withTransaction(() -> {
                 long currentStreamVersion = currentStreamVersion(streamId, clientSession);
 
                 if (!isFulfilled(currentStreamVersion, writeCondition)) {
@@ -190,17 +191,18 @@ public class MongoEventStore implements EventStore, EventStoreOperations, EventS
                         .collect(Collectors.toList());
 
                 if (cloudEventDocuments.isEmpty()) {
-                    return currentStreamVersion;
+                    return StreamVersionDiff.of(currentStreamVersion, currentStreamVersion);
                 } else {
                     try {
                         eventCollection.insertMany(clientSession, cloudEventDocuments);
                     } catch (MongoException e) {
                         throw translateException(new WriteContext(streamId, currentStreamVersion, writeCondition), e);
                     }
-                    return cloudEventDocuments.get(cloudEventDocuments.size() - 1).getLong(STREAM_VERSION);
+                    final long newStreamVersion = cloudEventDocuments.get(cloudEventDocuments.size() - 1).getLong(STREAM_VERSION);
+                    return StreamVersionDiff.of(currentStreamVersion, newStreamVersion);
                 }
             }, transactionOptions);
-            return new WriteResult(streamId, newStreamVersion);
+            return new WriteResult(streamId, streamVersionDiff.oldStreamVersion, streamVersionDiff.newStreamVersion);
         }
     }
 

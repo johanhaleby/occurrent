@@ -21,16 +21,19 @@ import java.util.Objects;
 import java.util.StringJoiner;
 
 /**
- * The result of a write to the event store.
+ * The result of a write operation to the event store.
  */
 public class WriteResult {
 
     private final String streamId;
-    private final long streamVersion;
+    private final long oldStreamVersion;
+    private final long newStreamVersion;
 
-    public WriteResult(String streamId, long streamVersion) {
+    public WriteResult(String streamId, long oldStreamVersion, long newStreamVersion) {
+        Objects.requireNonNull(streamId, "Stream id cannot be null");
         this.streamId = streamId;
-        this.streamVersion = streamVersion;
+        this.oldStreamVersion = oldStreamVersion;
+        this.newStreamVersion = newStreamVersion;
     }
 
     @Override
@@ -38,27 +41,40 @@ public class WriteResult {
         if (this == o) return true;
         if (!(o instanceof WriteResult)) return false;
         WriteResult that = (WriteResult) o;
-        return streamVersion == that.streamVersion && Objects.equals(streamId, that.streamId);
+        return oldStreamVersion == that.oldStreamVersion && newStreamVersion == that.newStreamVersion && Objects.equals(streamId, that.streamId);
     }
 
     @Override
     public int hashCode() {
-        return Objects.hash(streamId, streamVersion);
+        return Objects.hash(streamId, oldStreamVersion, newStreamVersion);
     }
 
     @Override
     public String toString() {
         return new StringJoiner(", ", WriteResult.class.getSimpleName() + "[", "]")
                 .add("streamId='" + streamId + "'")
-                .add("newStreamVersion=" + streamVersion)
+                .add("oldStreamVersion=" + oldStreamVersion)
+                .add("newStreamVersion=" + newStreamVersion)
                 .toString();
     }
 
+    /**
+     * @deprecated Use {@link #getNewStreamVersion()} instead
+     */
+    @Deprecated
     public long getStreamVersion() {
-        return streamVersion;
+        return newStreamVersion;
     }
 
     public String getStreamId() {
         return streamId;
+    }
+
+    public long getOldStreamVersion() {
+        return oldStreamVersion;
+    }
+
+    public long getNewStreamVersion() {
+        return newStreamVersion;
     }
 }
