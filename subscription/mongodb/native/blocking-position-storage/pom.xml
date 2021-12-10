@@ -19,7 +19,7 @@
     <parent>
         <artifactId>subscription-mongodb-native</artifactId>
         <groupId>org.occurrent</groupId>
-        <version>0.14.2-SNAPSHOT</version>
+        <version>0.14.2</version>
     </parent>
     <modelVersion>4.0.0</modelVersion>
 
@@ -29,7 +29,7 @@
         <dependency>
             <groupId>org.occurrent</groupId>
             <artifactId>subscription-mongodb-native-blocking</artifactId>
-            <version>0.14.2-SNAPSHOT</version>
+            <version>0.14.2</version>
         </dependency>
         <dependency>
             <groupId>org.slf4j</groupId>
@@ -38,7 +38,7 @@
         <dependency>
             <groupId>org.occurrent</groupId>
             <artifactId>retry</artifactId>
-            <version>0.14.2-SNAPSHOT</version>
+            <version>0.14.2</version>
         </dependency>
         <dependency>
             <groupId>jakarta.annotation</groupId>
@@ -49,13 +49,13 @@
         <dependency>
             <groupId>org.occurrent</groupId>
             <artifactId>eventstore-mongodb-native</artifactId>
-            <version>0.14.2-SNAPSHOT</version>
+            <version>0.14.2</version>
             <scope>test</scope>
         </dependency>
         <dependency>
             <groupId>org.occurrent</groupId>
             <artifactId>durable-subscription</artifactId>
-            <version>0.14.2-SNAPSHOT</version>
+            <version>0.14.2</version>
             <scope>test</scope>
         </dependency>
         <dependency>
@@ -96,7 +96,7 @@
         <dependency>
             <groupId>org.occurrent</groupId>
             <artifactId>test-support</artifactId>
-            <version>0.14.2-SNAPSHOT</version>
+            <version>0.14.2</version>
             <scope>test</scope>
         </dependency>
         <dependency>
