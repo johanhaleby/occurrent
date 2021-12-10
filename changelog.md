@@ -1,4 +1,4 @@
-### Changelog next version
+### Changelog 0.14.2 (2021-12-10)
 
 * Improved `SpringMongoEventStore`, `MongoEventStore` and `ReactorMongoEventStore` so that they never does in-memory filtering of events that we're not interested in.
 * Added `oldStreamVersion` to `WriteResult` (that is returned when calling `write(..)` on an event store). The `getStreamVersion()` method has been deprecated in favor of `getNewStreamVersion()`.
