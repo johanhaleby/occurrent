@@ -19,7 +19,7 @@
     <parent>
         <artifactId>example-uno-es-mongodb-spring</artifactId>
         <groupId>org.occurrent</groupId>
-        <version>0.14.2</version>
+        <version>0.14.3-SNAPSHOT</version>
     </parent>
     <modelVersion>4.0.0</modelVersion>
 
@@ -34,42 +34,42 @@
         <dependency>
             <groupId>org.occurrent</groupId>
             <artifactId>example-uno-model</artifactId>
-            <version>0.14.2</version>
+            <version>0.14.3-SNAPSHOT</version>
         </dependency>
         <dependency>
             <groupId>org.occurrent</groupId>
             <artifactId>example-uno-es-mongodb-common</artifactId>
-            <version>0.14.2</version>
+            <version>0.14.3-SNAPSHOT</version>
         </dependency>
         <dependency>
             <groupId>org.occurrent</groupId>
             <artifactId>application-service-blocking</artifactId>
-            <version>0.14.2</version>
+            <version>0.14.3-SNAPSHOT</version>
         </dependency>
         <dependency>
             <groupId>org.occurrent</groupId>
             <artifactId>command-composition</artifactId>
-            <version>0.14.2</version>
+            <version>0.14.3-SNAPSHOT</version>
         </dependency>
         <dependency>
             <groupId>org.occurrent</groupId>
             <artifactId>eventstore-mongodb-spring-blocking</artifactId>
-            <version>0.14.2</version>
+            <version>0.14.3-SNAPSHOT</version>
         </dependency>
         <dependency>
             <groupId>org.occurrent</groupId>
             <artifactId>subscription-mongodb-spring-blocking</artifactId>
-            <version>0.14.2</version>
+            <version>0.14.3-SNAPSHOT</version>
         </dependency>
         <dependency>
             <groupId>org.occurrent</groupId>
             <artifactId>subscription-redis-spring-blocking-position-storage</artifactId>
-            <version>0.14.2</version>
+            <version>0.14.3-SNAPSHOT</version>
         </dependency>
         <dependency>
             <groupId>org.occurrent</groupId>
             <artifactId>durable-subscription</artifactId>
-            <version>0.14.2</version>
+            <version>0.14.3-SNAPSHOT</version>
         </dependency>
         <dependency>
             <groupId>org.springframework.boot</groupId>

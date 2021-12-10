@@ -19,7 +19,7 @@
     <parent>
         <artifactId>example-number-guessing-game-es-mongodb</artifactId>
         <groupId>org.occurrent</groupId>
-        <version>0.14.2</version>
+        <version>0.14.3-SNAPSHOT</version>
     </parent>
     <packaging>pom</packaging>
     <modelVersion>4.0.0</modelVersion>
