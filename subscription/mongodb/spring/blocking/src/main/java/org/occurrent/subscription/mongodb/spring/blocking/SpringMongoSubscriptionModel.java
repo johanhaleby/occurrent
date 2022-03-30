@@ -69,9 +69,6 @@ import static org.occurrent.subscription.mongodb.spring.blocking.SpringMongoSubs
  * This is a subscription that uses Spring and its {@link MessageListenerContainer} for MongoDB to listen to changes from an event store.
  * This Subscription doesn't maintain the subscription position, you need to store it yourself in order to continue the stream
  * from where it's left off on application restart/crash etc.
- * <p>
- * Note that this subscription doesn't provide retries if an exception is thrown when handling a {@link io.cloudevents.CloudEvent} (<code>action</code>).
- * This reason for this is that Spring provides retry capabilities (such as spring-retry) that you can easily hook into your <code>action</code>.
  */
 public class SpringMongoSubscriptionModel implements PositionAwareSubscriptionModel, SmartLifecycle {
     private static final Logger log = LoggerFactory.getLogger(SpringMongoSubscriptionModel.class);
