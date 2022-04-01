@@ -1,3 +1,7 @@
+### Changelog next version
+
+* Upgraded to Kotlin from 1.6.0 to 1.6.10
+
 ### Changelog 0.14.2 (2021-12-10)
 
 * Improved `SpringMongoEventStore`, `MongoEventStore` and `ReactorMongoEventStore` so that they never does in-memory filtering of events that we're not interested in.
