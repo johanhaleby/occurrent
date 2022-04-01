@@ -1,13 +1,13 @@
 ### Changelog next version
 
 * Upgraded to Kotlin from 1.6.0 to 1.6.10
+* Upgraded project reactor to 3.4.12 to 3.4.16
 
 ### Changelog 0.14.2 (2021-12-10)
 
 * Improved `SpringMongoEventStore`, `MongoEventStore` and `ReactorMongoEventStore` so that they never does in-memory filtering of events that we're not interested in.
 * Added `oldStreamVersion` to `WriteResult` (that is returned when calling `write(..)` on an event store). The `getStreamVersion()` method has been deprecated in favor of `getNewStreamVersion()`.
 * Upgraded to Kotlin 1.6.0
-* Upgraded project reactor to 3.4.12
 * Upgraded Java MongoDB driver to 4.4.0
 * Upgraded Spring Data MongoDB to 3.3.0
 * Upgraded Jackson to 2.13.0
