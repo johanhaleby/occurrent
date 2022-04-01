@@ -77,7 +77,7 @@ class UnoCloudEventConverter(private val objectMapper: ObjectMapper) : CloudEven
         return fn(data)
     }
 
-    override fun getCloudEventType(type: Class<out Event>): String = Event::class.type
+    override fun getCloudEventType(type: Class<out Event>): String = type.kotlin.type
 }
 
 sealed class Data
