@@ -5,6 +5,7 @@
 * Upgraded Spring Data MongoDB from 3.3.0 to 3.3.0
 * Upgraded Spring Boot from 2.5.6 to 2.6.5
 * Upgraded Java MongoDB driver from 4.4.0 to 4.5.1
+* Upgraded Java cloudevents SDK from 2.2.0 to 2.3.0 
 
 ### Changelog 0.14.2 (2021-12-10)
 
