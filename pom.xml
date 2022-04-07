@@ -70,7 +70,8 @@
         <junit.version>5.6.2</junit.version>
         <test-containers.version>1.16.2</test-containers.version>
         <kotlin.version>1.6.10</kotlin.version>
-        <jackson.version>2.13.0</jackson.version>
+        <jackson.version>2.13.2</jackson.version>
+        <jackson-databind.version>2.13.2.1</jackson-databind.version>
         <cloudevents.version>2.3.0</cloudevents.version>
         <reactor.version>3.4.16</reactor.version>
         <spring-data-mongodb.version>3.3.3</spring-data-mongodb.version>
@@ -106,7 +107,7 @@
             <dependency>
                 <groupId>com.fasterxml.jackson.core</groupId>
                 <artifactId>jackson-databind</artifactId>
-                <version>${jackson.version}</version>
+                <version>${jackson-databind.version}</version>
             </dependency>
             <dependency>
                 <groupId>com.fasterxml.jackson.core</groupId>
