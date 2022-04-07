@@ -1,6 +1,6 @@
 ### Changelog next version
 
-* Upgraded to Kotlin from 1.6.0 to 1.6.10
+* Upgraded to Kotlin from 1.6.0 to 1.6.20
 * Upgraded project reactor to 3.4.12 to 3.4.16
 * Upgraded Spring Data MongoDB from 3.3.0 to 3.3.0
 * Upgraded Spring Boot from 2.5.6 to 2.6.6
