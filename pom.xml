@@ -74,7 +74,7 @@
         <jackson-databind.version>2.13.2.1</jackson-databind.version>
         <cloudevents.version>2.3.0</cloudevents.version>
         <reactor.version>3.4.16</reactor.version>
-        <spring-data-mongodb.version>3.3.3</spring-data-mongodb.version>
+        <spring-data-mongodb.version>3.3.5</spring-data-mongodb.version>
         <spring-boot.version>2.6.7</spring-boot.version>
         <mongo.version>4.5.1</mongo.version>
         <dokka.version>1.5.31</dokka.version>
