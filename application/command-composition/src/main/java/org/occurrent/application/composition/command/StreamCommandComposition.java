@@ -19,7 +19,7 @@ package org.occurrent.application.composition.command;
 
 
 import org.occurrent.application.composition.command.internal.CreateListFromVarArgs;
-import org.occurrent.application.composition.command.partial.PartialStreamCommandApplication;
+import org.occurrent.application.composition.command.partial.PartialFunctionApplication;
 
 import java.util.List;
 import java.util.function.Function;
@@ -44,7 +44,7 @@ import java.util.stream.Stream;
  * <br>
  * <br>
  * Note that in most cases the domain function will not have the form {@code Function<Stream<T>, Stream<T>>}. You can then
- * use {@link PartialStreamCommandApplication} to create partially applied functions that you can then compose.
+ * use {@link PartialFunctionApplication} to create partially applied functions that you can then compose.
  */
 public class StreamCommandComposition {
 

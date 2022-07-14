@@ -42,7 +42,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.junit.jupiter.api.Assertions.assertAll;
 import static org.occurrent.application.composition.command.CommandConversion.toStreamCommand;
 import static org.occurrent.application.composition.command.ListCommandComposition.composeCommands;
-import static org.occurrent.application.composition.command.partial.PartialListCommandApplication.partial;
+import static org.occurrent.application.composition.command.partial.PartialFunctionApplication.partial;
 import static org.occurrent.eventstore.api.SortBy.SortDirection.DESCENDING;
 import static org.occurrent.filter.Filter.type;
 

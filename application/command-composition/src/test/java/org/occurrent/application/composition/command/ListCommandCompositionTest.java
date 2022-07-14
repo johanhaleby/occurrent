@@ -19,7 +19,7 @@ package org.occurrent.application.composition.command;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
-import org.occurrent.application.composition.command.partial.PartialListCommandApplication;
+import org.occurrent.application.composition.command.partial.PartialFunctionApplication;
 import org.occurrent.domain.DomainEvent;
 import org.occurrent.domain.Name;
 import org.occurrent.domain.NameDefined;
@@ -52,7 +52,7 @@ public class ListCommandCompositionTest {
         LocalDateTime now = LocalDateTime.now();
 
         // When
-        applicationService.executeListCommand("name1", ListCommandComposition.composeCommands(PartialListCommandApplication.partial(Name::defineName, eventId1, now, "My name"), PartialListCommandApplication.partial(Name::changeName, eventId2, now, "My name 2")));
+        applicationService.executeListCommand("name1", ListCommandComposition.composeCommands(PartialFunctionApplication.partial(Name::defineName, eventId1, now, "My name"), PartialFunctionApplication.partial(Name::changeName, eventId2, now, "My name 2")));
 
         // Then
         List<DomainEvent> domainEvents = eventStore.read("name1").events().map(applicationService::convertCloudEventToDomainEvent).collect(Collectors.toList());

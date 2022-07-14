@@ -1,3 +1,11 @@
+### Changelog next version
+
+* Removed `PartialListCommandApplication`, `PartialStreamCommandApplication` and `PartialApplicationFunctions` in package 
+  `org.occurrent.application.composition.command.partial` of module `command-composition`. They have all been replaced by
+  `org.occurrent.application.composition.command.partial.PartialFunctionApplication` which is a generic form a partial function
+  application that works on all kinds of functions, not only those taking `Stream` and/or `List`. A simple search and replace
+  should be enough to migrate.
+
 ### Changelog 0.14.3 (2022-04-27)
 
 * Upgraded to Kotlin from 1.6.0 to 1.6.21
