@@ -1,4 +1,4 @@
-### Changelog next version
+### 0.14.4 (2022-07-15)
   
 * Removed `PartialListCommandApplication`, `PartialStreamCommandApplication` and `PartialApplicationFunctions` in package 
   `org.occurrent.application.composition.command.partial` of module `command-composition`. They have all been replaced by
