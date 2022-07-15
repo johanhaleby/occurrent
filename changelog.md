@@ -1,10 +1,15 @@
 ### Changelog next version
-
+  
 * Removed `PartialListCommandApplication`, `PartialStreamCommandApplication` and `PartialApplicationFunctions` in package 
   `org.occurrent.application.composition.command.partial` of module `command-composition`. They have all been replaced by
   `org.occurrent.application.composition.command.partial.PartialFunctionApplication` which is a generic form a partial function
   application that works on all kinds of functions, not only those taking `Stream` and/or `List`. A simple search and replace
   should be enough to migrate.
+* Upgraded Jackson from 2.13.2 to 2.13.3
+* Upgraded project reactor to 3.4.16 to 3.4.21
+* Upgraded Spring Boot from 2.6.7 to 2.7.1
+* Upgraded Java MongoDB driver from 4.5.1 to 4.6.1
+* Upgraded Kotlin from 1.6.21 to 1.7.10
 
 ### Changelog 0.14.3 (2022-04-27)
 
