@@ -1,7 +1,8 @@
 ### Changelog next version
 * Updated Kotlin extension functions for partial function application (`org.occurrent.application.composition.command.PartialExtensions`)
   to work on any type of function instead of just those that has `List` or `Sequence`.
-* Added a Kotlin implementation of `andThen` the works with generic types and not just `Sequence` to `org.occurrent.application.composition.command.CompositionExtensions`. 
+* Added a Kotlin implementation of `andThen` the works with generic types and not just `Sequence` to `org.occurrent.application.composition.command.CompositionExtensions`.
+* `composeCommands` Kotlin extensions now works on generic types and not just `Sequence` or `List`.
 
 ### 0.14.4 (2022-07-15)
   
