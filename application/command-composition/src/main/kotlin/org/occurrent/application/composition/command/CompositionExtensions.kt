@@ -16,10 +16,8 @@
 
 package org.occurrent.application.composition.command
 
-// Sequence Composition
-
 /**
- * Compose two commands using infix notation. The resulting command will be executed atomically in the event store.
+ * Backward compose two commands using infix notation. The resulting command will be executed atomically in the event store.
  * For example:
  * ```kotlin
  * val cmd1 : (Sequence<DomainEvent>) -> Sequence<DomainEvent> = ..
@@ -28,10 +26,6 @@ package org.occurrent.application.composition.command
  * ```
  *
  * @param anotherCommand The other command to run after this one.
- */
-
-/**
- * Backward compose two functions
  */
 infix fun <A, B, R> ((A) -> B).andThen(anotherCommand: (B) -> R): (A) -> R = { a ->
     anotherCommand(this(a))
