@@ -16,130 +16,150 @@
 
 package org.occurrent.application.composition.command
 
-fun <EVENT, A> ((Sequence<EVENT>, A) -> Sequence<EVENT>).partial(a: A): (Sequence<EVENT>) -> Sequence<EVENT> = { events ->
-    this(events, a)
+fun <A, B, R> ((A, B) -> R).partial(b: B): (A) -> R = { a ->
+    this(a, b)
 }
 
-fun <EVENT, A, B> ((Sequence<EVENT>, A, B) -> Sequence<EVENT>).partial(a: A, b: B): (Sequence<EVENT>) -> Sequence<EVENT> = { events ->
-    this(events, a, b)
+fun <A, B, C, R> ((A, B, C) -> R).partial(b: B, c: C): (A) -> R = { a ->
+    this(a, b, c)
 }
 
-fun <EVENT, A, B, C> ((Sequence<EVENT>, A, B, C) -> Sequence<EVENT>).partial(a: A, b: B, c: C): (Sequence<EVENT>) -> Sequence<EVENT> = { events ->
-    this(events, a, b, c)
+fun <A, B, C, D, R> ((A, B, C, D) -> R).partial(b: B, c: C, d: D): (A) -> R = { a ->
+    this(a, b, c, d)
 }
 
-fun <EVENT, A, B, C, D> ((Sequence<EVENT>, A, B, C, D) -> Sequence<EVENT>).partial(a: A, b: B, c: C, d: D): (Sequence<EVENT>) -> Sequence<EVENT> = { events ->
-    this(events, a, b, c, d)
+fun <A, B, C, D, E, R> ((A, B, C, D, E) -> R).partial(b: B, c: C, d: D, e: E): (A) -> R = { a ->
+    this(a, b, c, d, e)
 }
 
-fun <EVENT, A, B, C, D, E> ((Sequence<EVENT>, A, B, C, D, E) -> Sequence<EVENT>).partial(a: A, b: B, c: C, d: D, e: E): (Sequence<EVENT>) -> Sequence<EVENT> = { events ->
-    this(events, a, b, c, d, e)
+fun <A, B, C, D, E, F, R> ((A, B, C, D, E, F) -> R).partial(b: B, c: C, d: D, e: E, f: F): (A) -> R = { a ->
+    this(a, b, c, d, e, f)
 }
 
-fun <EVENT, A, B, C, D, E, F> ((Sequence<EVENT>, A, B, C, D, E, F) -> Sequence<EVENT>).partial(a: A, b: B, c: C, d: D, e: E, f: F): (Sequence<EVENT>) -> Sequence<EVENT> = { events ->
-    this(events, a, b, c, d, e, f)
+fun <A, B, C, D, E, F, G, R> ((A, B, C, D, E, F, G) -> R).partial(b: B, c: C, d: D, e: E, f: F, g: G): (A) -> R = { a ->
+    this(a, b, c, d, e, f, g)
 }
 
-
-fun <EVENT, A, B, C, D, E, F, G> ((Sequence<EVENT>, A, B, C, D, E, F, G) -> Sequence<EVENT>).partial(a: A, b: B, c: C, d: D, e: E, f: F, g: G): (Sequence<EVENT>) -> Sequence<EVENT> = { events ->
-    this(events, a, b, c, d, e, f, g)
+fun <A, B, C, D, E, F, G, H, R> ((A, B, C, D, E, F, G, H) -> R).partial(
+    b: B,
+    c: C,
+    d: D,
+    e: E,
+    f: F,
+    g: G,
+    h: H
+): (A) -> R = { a ->
+    this(a, b, c, d, e, f, g, h)
 }
 
-
-fun <EVENT, A, B, C, D, E, F, G, H> ((Sequence<EVENT>, A, B, C, D, E, F, G, H) -> Sequence<EVENT>).partial(a: A, b: B, c: C, d: D, e: E, f: F, g: G, h: H): (Sequence<EVENT>) -> Sequence<EVENT> = { events ->
-    this(events, a, b, c, d, e, f, g, h)
+fun <A, B, C, D, E, F, G, H, I, R> ((A, B, C, D, E, F, G, H, I) -> R).partial(
+    b: B,
+    c: C,
+    d: D,
+    e: E,
+    f: F,
+    g: G,
+    h: H,
+    i: I,
+): (A) -> R = { a ->
+    this(a, b, c, d, e, f, g, h, i)
 }
 
-fun <EVENT, A, B, C, D, E, F, G, H, I> ((Sequence<EVENT>, A, B, C, D, E, F, G, H, I) -> Sequence<EVENT>).partial(a: A, b: B, c: C, d: D, e: E, f: F, g: G, h: H, i: I): (Sequence<EVENT>) -> Sequence<EVENT> = { events ->
-    this(events, a, b, c, d, e, f, g, h, i)
+fun <A, B, C, D, E, F, G, H, I, J, R> ((A, B, C, D, E, F, G, H, I, J) -> R).partial(
+    b: B,
+    c: C,
+    d: D,
+    e: E,
+    f: F,
+    g: G,
+    h: H,
+    i: I,
+    j: J,
+): (A) -> R = { a ->
+    this(a, b, c, d, e, f, g, h, i, j)
 }
 
-fun <EVENT, A, B, C, D, E, F, G, H, I, J> ((Sequence<EVENT>, A, B, C, D, E, F, G, H, I, J) -> Sequence<EVENT>).partial(a: A, b: B, c: C, d: D, e: E, f: F, g: G, h: H, i: I, j: J): (Sequence<EVENT>) -> Sequence<EVENT> = { events ->
-    this(events, a, b, c, d, e, f, g, h, i, j)
+fun <A, B, C, D, E, F, G, H, I, J, K, R> ((A, B, C, D, E, F, G, H, I, J, K) -> R).partial(
+    b: B,
+    c: C,
+    d: D,
+    e: E,
+    f: F,
+    g: G,
+    h: H,
+    i: I,
+    j: J,
+    k: K,
+): (A) -> R = { a ->
+    this(a, b, c, d, e, f, g, h, i, j, k)
 }
 
-fun <EVENT, A, B, C, D, E, F, G, H, I, J, K> ((Sequence<EVENT>, A, B, C, D, E, F, G, H, I, J, K) -> Sequence<EVENT>).partial(a: A, b: B, c: C, d: D, e: E, f: F, g: G, h: H, i: I, j: J, k: K): (Sequence<EVENT>) -> Sequence<EVENT> = { events ->
-    this(events, a, b, c, d, e, f, g, h, i, j, k)
+fun <A, B, C, D, E, F, G, H, I, J, K, L, R> ((A, B, C, D, E, F, G, H, I, J, K, L) -> R).partial(
+    b: B,
+    c: C,
+    d: D,
+    e: E,
+    f: F,
+    g: G,
+    h: H,
+    i: I,
+    j: J,
+    k: K,
+    l: L,
+): (A) -> R = { a ->
+    this(a, b, c, d, e, f, g, h, i, j, k, l)
 }
 
-fun <EVENT, A, B, C, D, E, F, G, H, I, J, K, L> ((Sequence<EVENT>, A, B, C, D, E, F, G, H, I, J, K, L) -> Sequence<EVENT>).partial(a: A, b: B, c: C, d: D, e: E, f: F, g: G, h: H, i: I, j: J, k: K, l: L): (Sequence<EVENT>) -> Sequence<EVENT> = { events ->
-    this(events, a, b, c, d, e, f, g, h, i, j, k, l)
+fun <A, B, C, D, E, F, G, H, I, J, K, L, M, R> ((A, B, C, D, E, F, G, H, I, J, K, L, M) -> R).partial(
+    b: B,
+    c: C,
+    d: D,
+    e: E,
+    f: F,
+    g: G,
+    h: H,
+    i: I,
+    j: J,
+    k: K,
+    l: L,
+    m: M,
+): (A) -> R = { a ->
+    this(a, b, c, d, e, f, g, h, i, j, k, l, m)
 }
 
-fun <EVENT, A, B, C, D, E, F, G, H, I, J, K, L, M> ((Sequence<EVENT>, A, B, C, D, E, F, G, H, I, J, K, L, M) -> Sequence<EVENT>).partial(a: A, b: B, c: C, d: D, e: E, f: F, g: G, h: H, i: I, j: J, k: K, l: L, m: M): (Sequence<EVENT>) -> Sequence<EVENT> = { events ->
-    this(events, a, b, c, d, e, f, g, h, i, j, k, l, m)
+fun <A, B, C, D, E, F, G, H, I, J, K, L, M, N, R> ((A, B, C, D, E, F, G, H, I, J, K, L, M, N) -> R).partial(
+    b: B,
+    c: C,
+    d: D,
+    e: E,
+    f: F,
+    g: G,
+    h: H,
+    i: I,
+    j: J,
+    k: K,
+    l: L,
+    m: M,
+    n: N,
+): (A) -> R = { a ->
+    this(a, b, c, d, e, f, g, h, i, j, k, l, m, n)
 }
 
-fun <EVENT, A, B, C, D, E, F, G, H, I, J, K, L, M, N> ((Sequence<EVENT>, A, B, C, D, E, F, G, H, I, J, K, L, M, N) -> Sequence<EVENT>).partial(a: A, b: B, c: C, d: D, e: E, f: F, g: G, h: H, i: I, j: J, k: K, l: L, m: M, n: N): (Sequence<EVENT>) -> Sequence<EVENT> = { events ->
-    this(events, a, b, c, d, e, f, g, h, i, j, k, l, m, n)
-}
-
-
-@JvmName("partialList")
-fun <EVENT, A> ((List<EVENT>, A) -> List<EVENT>).partial(a: A): (List<EVENT>) -> List<EVENT> = { events ->
-    this(events, a)
-}
-
-@JvmName("partialList")
-fun <EVENT, A, B> ((List<EVENT>, A, B) -> List<EVENT>).partial(a: A, b: B): (List<EVENT>) -> List<EVENT> = { events ->
-    this(events, a, b)
-}
-
-@JvmName("partialList")
-fun <EVENT, A, B, C> ((List<EVENT>, A, B, C) -> List<EVENT>).partial(a: A, b: B, c: C): (List<EVENT>) -> List<EVENT> = { events ->
-    this(events, a, b, c)
-}
-
-@JvmName("partialList")
-fun <EVENT, A, B, C, D> ((List<EVENT>, A, B, C, D) -> List<EVENT>).partial(a: A, b: B, c: C, d: D): (List<EVENT>) -> List<EVENT> = { events ->
-    this(events, a, b, c, d)
-}
-
-@JvmName("partialList")
-fun <EVENT, A, B, C, D, E> ((List<EVENT>, A, B, C, D, E) -> List<EVENT>).partial(a: A, b: B, c: C, d: D, e: E): (List<EVENT>) -> List<EVENT> = { events ->
-    this(events, a, b, c, d, e)
-}
-
-@JvmName("partialList")
-fun <EVENT, A, B, C, D, E, F> ((List<EVENT>, A, B, C, D, E, F) -> List<EVENT>).partial(a: A, b: B, c: C, d: D, e: E, f: F): (List<EVENT>) -> List<EVENT> = { events ->
-    this(events, a, b, c, d, e, f)
-}
-
-@JvmName("partialList")
-fun <EVENT, A, B, C, D, E, F, G> ((List<EVENT>, A, B, C, D, E, F, G) -> List<EVENT>).partial(a: A, b: B, c: C, d: D, e: E, f: F, g: G): (List<EVENT>) -> List<EVENT> = { events ->
-    this(events, a, b, c, d, e, f, g)
-}
-
-@JvmName("partialList")
-fun <EVENT, A, B, C, D, E, F, G, H> ((List<EVENT>, A, B, C, D, E, F, G, H) -> List<EVENT>).partial(a: A, b: B, c: C, d: D, e: E, f: F, g: G, h: H): (List<EVENT>) -> List<EVENT> = { events ->
-    this(events, a, b, c, d, e, f, g, h)
-}
-@JvmName("partialList")
-fun <EVENT, A, B, C, D, E, F, G, H, I> ((List<EVENT>, A, B, C, D, E, F, G, H, I) -> List<EVENT>).partial(a: A, b: B, c: C, d: D, e: E, f: F, g: G, h: H, i: I): (List<EVENT>) -> List<EVENT> = { events ->
-    this(events, a, b, c, d, e, f, g, h, i)
-}
-
-@JvmName("partialList")
-fun <EVENT, A, B, C, D, E, F, G, H, I, J> ((List<EVENT>, A, B, C, D, E, F, G, H, I, J) -> List<EVENT>).partial(a: A, b: B, c: C, d: D, e: E, f: F, g: G, h: H, i: I, j: J): (List<EVENT>) -> List<EVENT> = { events ->
-    this(events, a, b, c, d, e, f, g, h, i, j)
-}
-
-@JvmName("partialList")
-fun <EVENT, A, B, C, D, E, F, G, H, I, J, K> ((List<EVENT>, A, B, C, D, E, F, G, H, I, J, K) -> List<EVENT>).partial(a: A, b: B, c: C, d: D, e: E, f: F, g: G, h: H, i: I, j: J, k: K): (List<EVENT>) -> List<EVENT> = { events ->
-    this(events, a, b, c, d, e, f, g, h, i, j, k)
-}
-
-@JvmName("partialList")
-fun <EVENT, A, B, C, D, E, F, G, H, I, J, K, L> ((List<EVENT>, A, B, C, D, E, F, G, H, I, J, K, L) -> List<EVENT>).partial(a: A, b: B, c: C, d: D, e: E, f: F, g: G, h: H, i: I, j: J, k: K, l: L): (List<EVENT>) -> List<EVENT> = { events ->
-    this(events, a, b, c, d, e, f, g, h, i, j, k, l)
-}
-
-@JvmName("partialList")
-fun <EVENT, A, B, C, D, E, F, G, H, I, J, K, L, M> ((List<EVENT>, A, B, C, D, E, F, G, H, I, J, K, L, M) -> List<EVENT>).partial(a: A, b: B, c: C, d: D, e: E, f: F, g: G, h: H, i: I, j: J, k: K, l: L, m: M): (List<EVENT>) -> List<EVENT> = { events ->
-    this(events, a, b, c, d, e, f, g, h, i, j, k, l, m)
-}
-
-@JvmName("partialList")
-fun <EVENT, A, B, C, D, E, F, G, H, I, J, K, L, M, N> ((List<EVENT>, A, B, C, D, E, F, G, H, I, J, K, L, M, N) -> List<EVENT>).partial(a: A, b: B, c: C, d: D, e: E, f: F, g: G, h: H, i: I, j: J, k: K, l: L, m: M, n: N): (List<EVENT>) -> List<EVENT> = { events ->
-    this(events, a, b, c, d, e, f, g, h, i, j, k, l, m, n)
+fun <A, B, C, D, E, F, G, H, I, J, K, L, M, N, O, R> ((A, B, C, D, E, F, G, H, I, J, K, L, M, N, O) -> R).partial(
+    b: B,
+    c: C,
+    d: D,
+    e: E,
+    f: F,
+    g: G,
+    h: H,
+    i: I,
+    j: J,
+    k: K,
+    l: L,
+    m: M,
+    n: N,
+    o: O,
+): (A) -> R = { a ->
+    this(a, b, c, d, e, f, g, h, i, j, k, l, m, n, o)
 }

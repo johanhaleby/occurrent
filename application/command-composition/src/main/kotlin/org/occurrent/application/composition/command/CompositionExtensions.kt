@@ -31,6 +31,12 @@ import java.util.function.Function
  *
  * @param anotherCommand The other command to run after this one.
  */
+
+@JvmName("andThenDifferentTypes")
+infix fun <A, B, R> ((A) -> B).andThen(anotherCommand: (B) -> R): (A) -> R = { a ->
+    anotherCommand(this(a))
+}
+
 infix fun <T> ((Sequence<T>) -> Sequence<T>).andThen(anotherCommand: (Sequence<T>) -> Sequence<T>): (Sequence<T>) -> Sequence<T> =
     composeCommands(this, anotherCommand)
 
