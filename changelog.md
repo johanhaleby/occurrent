@@ -1,6 +1,7 @@
 ### Changelog next version
 * Updated Kotlin extension functions for partial function application (`org.occurrent.application.composition.command.PartialExtensions`)
   to work on any type of function instead of just those that has `List` or `Sequence`.
+* Fixed an issue in JacksonCloudEventConvert in which it didn't use the CloudEventTypeMapper correctly when calling `toCloudEvent` ([issue 119](https://github.com/johanhaleby/occurrent/issues/119)). 
 
 ### 0.14.4 (2022-07-15)
   
