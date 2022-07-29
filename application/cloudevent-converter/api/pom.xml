@@ -19,7 +19,7 @@
     <parent>
         <artifactId>cloudevent-converter</artifactId>
         <groupId>org.occurrent</groupId>
-        <version>0.14.5</version>
+        <version>0.14.6-SNAPSHOT</version>
     </parent>
     <modelVersion>4.0.0</modelVersion>
 
