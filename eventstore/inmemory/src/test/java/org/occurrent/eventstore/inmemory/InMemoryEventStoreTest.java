@@ -30,10 +30,7 @@ import org.occurrent.domain.DomainEvent;
 import org.occurrent.domain.Name;
 import org.occurrent.domain.NameDefined;
 import org.occurrent.domain.NameWasChanged;
-import org.occurrent.eventstore.api.SortBy;
-import org.occurrent.eventstore.api.WriteCondition;
-import org.occurrent.eventstore.api.WriteConditionNotFulfilledException;
-import org.occurrent.eventstore.api.WriteResult;
+import org.occurrent.eventstore.api.*;
 import org.occurrent.eventstore.api.blocking.EventStore;
 import org.occurrent.eventstore.api.blocking.EventStream;
 import org.occurrent.filter.Filter;
@@ -133,6 +130,47 @@ public class InMemoryEventStoreTest {
     }
 
     @Nested
+    @DisplayName("duplicates")
+    class DuplicateTest {
+
+        @Test
+        void writing_events_with_same_id_and_source_to_an_empty_event_stream_throws_duplicate_cloud_event_exception() {
+            // Given
+            InMemoryEventStore inMemoryEventStore = new InMemoryEventStore();
+            LocalDateTime now = LocalDateTime.now();
+            String eventId = UUID.randomUUID().toString();
+
+            // When
+            DomainEvent event1 = new NameDefined(eventId, now, "John Doe");
+            DomainEvent event2 = new NameWasChanged(eventId, now, "Jan Doe");
+            Throwable throwable = catchThrowable(() -> unconditionallyPersist(inMemoryEventStore, "name", Stream.of(event1, event2)));
+
+            // Then
+            assertThat(throwable)
+                    .isExactlyInstanceOf(DuplicateCloudEventException.class)
+                    .hasMessage("Duplicate CloudEvent detected with id " + eventId + " and source " + NAME_SOURCE + ".");
+        }
+
+        @Test
+        void writing_events_with_same_id_and_source_to_an_existing_event_stream_throws_duplicate_cloud_event_exception() {
+            // Given
+            InMemoryEventStore inMemoryEventStore = new InMemoryEventStore();
+            LocalDateTime now = LocalDateTime.now();
+            String eventId = UUID.randomUUID().toString();
+
+            unconditionallyPersist(inMemoryEventStore, "name", new NameDefined(eventId, now, "John Doe"));
+
+            // When
+            Throwable throwable = catchThrowable(() -> unconditionallyPersist(inMemoryEventStore, "name", new NameWasChanged(eventId, now, "Jan Doe")));
+
+            // Then
+            assertThat(throwable)
+                    .isExactlyInstanceOf(DuplicateCloudEventException.class)
+                    .hasMessage("Duplicate CloudEvent detected with id " + eventId + " and source " + NAME_SOURCE + ".");
+        }
+    }
+
+    @Nested
     @DisplayName("write result")
     class WriteResultTest {
 
@@ -149,7 +187,7 @@ public class InMemoryEventStoreTest {
 
             // Then
             assertAll(
-                    () ->  assertThat(writeResult.getStreamId()).isEqualTo("name"),
+                    () -> assertThat(writeResult.getStreamId()).isEqualTo("name"),
                     () -> assertThat(writeResult.getOldStreamVersion()).isEqualTo(0L),
                     () -> assertThat(writeResult.getNewStreamVersion()).isEqualTo(2L)
             );
@@ -170,7 +208,7 @@ public class InMemoryEventStoreTest {
 
             // Then
             assertAll(
-                    () ->  assertThat(writeResult.getStreamId()).isEqualTo("name"),
+                    () -> assertThat(writeResult.getStreamId()).isEqualTo("name"),
                     () -> assertThat(writeResult.getOldStreamVersion()).isEqualTo(1L),
                     () -> assertThat(writeResult.getNewStreamVersion()).isEqualTo(3L)
             );
@@ -186,12 +224,12 @@ public class InMemoryEventStoreTest {
 
             // Then
             assertAll(
-                    () ->  assertThat(writeResult.getStreamId()).isEqualTo("name"),
+                    () -> assertThat(writeResult.getStreamId()).isEqualTo("name"),
                     () -> assertThat(writeResult.getOldStreamVersion()).isEqualTo(0L),
                     () -> assertThat(writeResult.getNewStreamVersion()).isEqualTo(0L)
             );
         }
-        
+
         @Test
         void inmemory_event_store_returns_the_previous_stream_version_when_no_events_are_written_to_an_existing_stream() {
             // Given
@@ -206,7 +244,7 @@ public class InMemoryEventStoreTest {
 
             // Then
             assertAll(
-                    () ->  assertThat(writeResult.getStreamId()).isEqualTo("name"),
+                    () -> assertThat(writeResult.getStreamId()).isEqualTo("name"),
                     () -> assertThat(writeResult.getOldStreamVersion()).isEqualTo(2L),
                     () -> assertThat(writeResult.getNewStreamVersion()).isEqualTo(2L)
             );
@@ -817,7 +855,7 @@ public class InMemoryEventStoreTest {
             NameWasChanged nameWasChanged2 = new NameWasChanged(eventId2, now, "Another Name");
             // When
             Optional<DomainEvent> updatedEvent = inMemoryEventStore.updateEvent(eventId2, NAME_SOURCE, c ->
-                    CloudEventBuilder.v1(c).withData(unchecked(objectMapper::writeValueAsBytes).apply(nameWasChanged2)).build())
+                            CloudEventBuilder.v1(c).withData(unchecked(objectMapper::writeValueAsBytes).apply(nameWasChanged2)).build())
                     .map(deserialize(objectMapper));
 
             // Then

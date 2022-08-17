@@ -1,3 +1,6 @@
+### Next version
+* InMemoryEventStore now checks for duplicate events. You can no longer write two events with the same cloud event id and source to the same stream.
+
 ### 0.14.5 (2022-07-29)
 * Updated Kotlin extension functions for partial function application (`org.occurrent.application.composition.command.PartialExtensions`)
   to work on any type of function instead of just those that has `List` or `Sequence`.
@@ -16,7 +19,7 @@
 * Upgraded Java MongoDB driver from 4.5.1 to 4.6.1
 * Upgraded Kotlin from 1.6.21 to 1.7.10
 
-### Changelog 0.14.3 (2022-04-27)
+### 0.14.3 (2022-04-27)
 
 * Upgraded to Kotlin from 1.6.0 to 1.6.21
 * Upgraded project reactor to 3.4.12 to 3.4.16
@@ -27,7 +30,7 @@
 * Upgraded Jackson from 2.13.0 to 2.13.2 
 * Upgraded Jackson Databind from 2.13.0 to 2.13.2.1
 
-### Changelog 0.14.2 (2021-12-10)
+### 0.14.2 (2021-12-10)
 
 * Improved `SpringMongoEventStore`, `MongoEventStore` and `ReactorMongoEventStore` so that they never does in-memory filtering of events that we're not interested in.
 * Added `oldStreamVersion` to `WriteResult` (that is returned when calling `write(..)` on an event store). The `getStreamVersion()` method has been deprecated in favor of `getNewStreamVersion()`.
@@ -37,7 +40,7 @@
 * Upgraded Jackson to 2.13.0
 * Upgraded amqp-client to 5.14.0
 
-### Changelog 0.14.1 (2021-11-12)
+### 0.14.1 (2021-11-12)
 
 * Using `insert` from `MongoTemplate` when writing events in the `SpringMongoEventStore`. Previously, the vanilla `mongoClient` was (accidentally) used for this operation.
 * When using the spring boot starter project for MongoDB (`org.occurrent:spring-boot-starter-mongodb`), the transaction manager used by default is now configured to use "majority" read- and write concerns.
@@ -54,7 +57,7 @@
   You can configure this by supplying a `readOption` (to configure the reads from the `EventStore`) and `queryOption` (for `EventStoreQueries`) in the `EventStoreConfig`. 
   This has been implemented for `SpringMongoEventStore` and `ReactorMongoEventStore`.
 
-### Changelog 0.14.0 (2021-11-06)
+### 0.14.0 (2021-11-06)
 
 * Non-backward compitable change: CloudEventConverter's now has a third method that you must implement:
   ```java
@@ -133,11 +136,11 @@
   See `org.occurrent.springboot.OccurrentMongoAutoConfiguration` if you want to know exactly what gets configured.
 * Upgraded spring-boot from 2.5.4 to 2.5.6.
 
-## Changelog 0.13.1 (2021-10-03)
+## 0.13.1 (2021-10-03)
 
 * No longer using transactional reads in `ReactorMongoEventStore`, this also means that the `transactionalReads` configuration property could be removed since it's no longer used. 
 
-## Changelog 0.13.0 (2021-10-03)
+## 0.13.0 (2021-10-03)
 
 * Reading event streams from `MongoEventStore` and `SpringMongoEventStore` are now much faster and more reliable. Before there was a bug in both implementation in which
   the stream could be abruptly closed when reading a large number of events. This has now been fixed, and as a consequence, Occurrent doesn't need to start a MongoDB transaction
@@ -145,7 +148,7 @@
 * Removed the `transactionalReads` property (introduced in previous release) from `EventStoreConfig` for both `MongoEventStore` and `SpringMongoEventStore` since it's no longer needed.
 * Upgraded jackson from version 2.11.1 to 2.12.5
 
-## Changelog 0.12.0 (2021-09-24)
+## 0.12.0 (2021-09-24)
 
 * Added ability to map event type to event name in subscriptions DSL from Kotlin
 * Upgraded Kotlin to 1.5.31
@@ -225,7 +228,7 @@
     ```                                                                                                                                           
    You can also configure how different attributes of the domain event should be represented in the cloud event by using the builder, `new JacksonCloudEventConverter.Builder<MyDomainEvent>().. build()`. 
 
-## Changelog 0.11.0 (2021-08-13)
+## 0.11.0 (2021-08-13)
 
 * Improved error message and version for write condition not fulfilled that may happen when parallel writers write to the same stream at the same time.
 * Upgraded to cloud events java sdk to version 2.1.1
@@ -253,7 +256,7 @@
     ```                                 
   This have been implemented for both the blocking and reactive event stores.
 
-## Changelog 0.10.0 (2021-04-16)
+## 0.10.0 (2021-04-16)
                    
 * The event store API's now returns an instance of `org.occurrent.eventstore.api.WriteResult` when writing events to the event store (previously `void` was returned). 
   The `WriteResult` instance contains the stream id and the new stream version of the stream. The reason for this change is to make it easier to implement use cases such
@@ -272,7 +275,7 @@
 * Upgraded kotlin from 1.4.31 to 1.4.32
 * Upgraded kotlinx-collections-immutable-jvm from 0.3.2 to 0.3.4
 
-## Changelog 0.9.0 (2021-03-19)
+## 0.9.0 (2021-03-19)
                                                                                                                                                                                         
 * Fixed a bug in `InMemorySubscription` that accidentally pushed `null` values to subscriptions every 500 millis unless an actual event was received.
 * Renamed `org.occurrent.subscription.mongodb.spring.blocking.SpringSubscriptionModelConfig` to `org.occurrent.subscription.mongodb.spring.blocking.SpringMongoSubscriptionModelConfig`.
@@ -306,7 +309,7 @@
   
   If the above code is executed on multiple nodes/processes, then only *one* subscriber will receive events.
 
-## Changelog 0.8.0 (2021-02-20)
+## 0.8.0 (2021-02-20)
 
 * Only log with "warn" when subscription is restarted due to "ChangeStreamHistoryLost".
 * `InMemoryEventStore` now sorts queries by insertion order by default (before "time" was used)
@@ -341,7 +344,7 @@
 
   By default, events are sorted by time and then stream version (if two or more events have the same time).
 
-## Changelog 0.7.4 (2021-02-13)
+## 0.7.4 (2021-02-13)
 
 * Added better logging to `SpringMongoSubscriptionModel`, it'll now include the subscription id if an error occurs.
 * If there's not enough history available in the mongodb oplog to resume a subscription created from a `SpringMongoSubscriptionModel`, this subscription model now supports restarting the subscription from the current 
@@ -358,18 +361,18 @@
 * Better shutdown handling of all executor services used by subscription models.
 * Don't log to error when a `SpringMongoSubscriptionModel` subscription is paused right after it was created, leading to a race condition. This is not an error. It's now logged in "debug" mode instead.
 
-## Changelog 0.7.3 (2021-02-11)
+## 0.7.3 (2021-02-11)
 
 * Removed the automatic creation of the "streamid" index in all MongoDB event stores. The reason is that it's not needed since there's another (compound) index (streamid+version) and 
   queries for "streamid" will be covered by that index.
 
-## Changelog 0.7.2 (2021-02-05)
+## 0.7.2 (2021-02-05)
 
 * When running MongoDB subscriptions on services like Atlas, it's not possible to get the current time (global subscription position) when starting a new subscription since access is denied. 
   If this happens then the subscription will start at the "current time" instead (`StartAt.now()`). There's a catch however! If processing the very first event fails _and_ the application is restarted,
   then the event cannot be retried. If this is major concern, consider upgrading your MongoDB server to a non-shared environment.
 
-## Changelog 0.7.1 (2021-02-04)
+## 0.7.1 (2021-02-04)
                                                                                                                                                    
 * Removed `org.occurrent:eventstore-inmemory` as dependency to `org.occurrent:application-service-blocking` (it should have been a test dependency) 
 * Including a "details" message in `DuplicateCloudEventException` that adds more details on why this happens (which index etc). This is especially useful
@@ -379,7 +382,7 @@
 * When running MongoDB subscriptions on services like Atlas, it's not possible to get the current time (global subscription position) when starting a new subscription since access is denied. 
   If this happens then the local time of the client is used instead.
 
-## Changelog 0.7.0 (2021-01-31)
+## 0.7.0 (2021-01-31)
                                  
 * Introduced many more life-cycle methods to blocking subscription models. It's now possible to pause/resume individual subscriptions
   as well as starting/stopping _all_ subscriptions. This is useful for testing purposes when you want to write events 
@@ -424,7 +427,7 @@
   retryStrategy.execute(() -> Thing.thing());
   ```
   
-## Changelog 0.6.0 (2021-01-23)
+## 0.6.0 (2021-01-23)
 
 * Renamed method `shutdownSubscribers` in `DurableSubscriptonModel` to `shutdown`.
 * Added default subscription name to subscription DSL. You can now do:
@@ -457,12 +460,12 @@
   each retry when exceptions are thrown from the `action` callback (the callback that you implement to handle a `CloudEvent` instance from a subscription).
 * All blocking subscription models will throw an `IllegalArgumentException` if a subscription is registered more than once.
 
-## Changelog 0.5.1 (2021-01-07)
+## 0.5.1 (2021-01-07)
 
 * Renamed `org.occurrent.subscription.redis.spring.blocking.SpringSubscriptionPositionStorageForRedis` to `SpringRedisSubscriptionPositionStorage`.
 * Renamed `org.occurrent.subscription.mongodb.spring.reactor.ReactorMongoSubscription` to `ReactorMongoSubscriptionModel`.
 
-## Changelog 0.5.0 (2021-01-06)
+## 0.5.0 (2021-01-06)
 
 * Renamed `org.occurrent.subscription.api.blocking.BlockingSubscription` to `org.occurrent.subscription.api.blocking.SubscriptionModel`. The reason for this is that it was previously
   very confusing to differentiate between a `org.occurrent.subscription.api.blocking.BlockingSubscription` (where you start/cancel subscriptions) and a `org.occurrent.subscription.api.blocking.Subscription` 
@@ -535,12 +538,12 @@
 * Added a `@PreDestroy` annotation to the `shutdown` method in the `NativeMongoSubscriptionModel` implementation so that, if you're frameworks such as Spring Boot, you don't need to explicitly call the `shutdown` method when stopping.
 * Added partial extension functions for `List<DomainEvent>`, import from the `partial` method from `org.occurrent.application.composition.command`. 
 
-## Changelog 0.4.1 (2020-12-14)
+## 0.4.1 (2020-12-14)
 
 * Upgraded to Kotlin 1.4.21
 * Upgraded to cloud events 2.0.0.RC2
 
-## Changelog 0.4.0 (2020-12-04)
+## 0.4.0 (2020-12-04)
 
 * Upgraded to Kotlin 1.4.20
 * Upgraded to cloud events 2.0.0.RC1
@@ -599,7 +602,7 @@
     This will delete all events in stream "myStream" that has a version less than or equal to 19. This is useful if you implement "closing the books" or certain types of snapshots, and don't need the old events anymore.
     This has been implemented for all MongoDB event stores (both blocking and reactive) but not for the InMemory event store.
 
-## Changelog 0.3.0 (2020-11-21)
+## 0.3.0 (2020-11-21)
 * Upgraded Java Mongo driver from 4.0.4 to 4.1.1
 * Upgraded to cloud events 2.0.0-milestone4. This introduces a breaking change since the `CloudEvent` SDK no longer returns a `byte[]` as data but rather a `CloudEventData` interface.
   You need to change your code from:
@@ -625,13 +628,13 @@
 * The MongoDB event stores no longer needs to depend on the `cloudevents-json-jackson` module since Occurrent now ships with a custom event reader/writer. 
 * The MongoDB event subscriptions no longer needs to depend on the `cloudevents-json-jackson` module since Occurrent now ships with a custom event reader/writer. 
 
-## Changelog 0.2.1 (2020-11-03)
+## 0.2.1 (2020-11-03)
 * Fixed typo in `CatchupSupportingBlockingSubscriptionConfig`, renamed method `dontSubscriptionPositionStorage` to `dontUseSubscriptionPositionStorage`.
 * Added `getSubscriptionPosition()` to `PositionAwareCloudEvent` that returns `Optional<SubscriptionPosition>`.
 * Removed duplicate `GenericCloudEventConverter` located in the `org.occurrent.application.service.blocking.implementation` package. Use `org.occurrent.application.converter.implementation.CloudEventConverter` instead.
 * Handling if the domain model returns a null `Stream<DomainEvent>` in the `GenericApplicationService`. 
 
-## Changelog 0.2.0 (2020-10-31)
+## 0.2.0 (2020-10-31)
 * Renamed method `CloudEventWithSubscriptionPosition.getStreamPosition()` to `CloudEventWithSubscriptionPosition.getSubscriptionPosition()` since this was a typo.
 * Added ability to provide a list of conditions when composing them with `and` and `or`.
 * Added special convenience (overloaded) method for creating "or" with "equal to" conditions. For example you can now do: `filter(type(or("x", "y"))`. 
@@ -664,7 +667,7 @@
 * Added utilities, `org.occurrent:command-composition` for to easier do command composition when calling an application service.
   This module also contains utilities for doing partial application of functions which can be useful when composing functions.    
 
-## Changelog 0.1.1 (2020-09-26):
+## 0.1.1 (2020-09-26):
 
 * Catchup subscriptions (blocking)
 * EveryN for stream persistence (both blocking and reactive)

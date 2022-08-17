@@ -51,6 +51,7 @@ import static io.cloudevents.core.v1.CloudEventV1.*;
 import static java.util.Comparator.comparing;
 import static java.util.Objects.requireNonNull;
 import static java.util.Spliterators.spliteratorUnknownSize;
+import static java.util.stream.Collectors.groupingBy;
 import static org.occurrent.cloudevents.OccurrentCloudEventExtension.STREAM_ID;
 import static org.occurrent.cloudevents.OccurrentCloudEventExtension.STREAM_VERSION;
 import static org.occurrent.eventstore.api.SortBy.SortDirection.ASCENDING;
@@ -120,12 +121,14 @@ public class InMemoryEventStore implements EventStore, EventStoreOperations, Eve
             if (currentEvents == null && isConditionFulfilledBy(writeCondition, 0)) {
                 List<CloudEvent> cloudEvents = applyOccurrentCloudEventExtension(cloudEventStream, streamId, 0);
                 newCloudEvents.set(cloudEvents);
+                validateNoDuplicateEventExists(cloudEvents);
                 return cloudEvents;
             } else if (currentEvents != null && isConditionFulfilledBy(writeCondition, currentStreamVersion)) {
                 List<CloudEvent> eventList = new ArrayList<>(currentEvents);
                 List<CloudEvent> newEvents = applyOccurrentCloudEventExtension(cloudEventStream, streamId, currentStreamVersion);
-                newCloudEvents.set(newEvents);
                 eventList.addAll(newEvents);
+                validateNoDuplicateEventExists(eventList);
+                newCloudEvents.set(newEvents);
                 return eventList;
             } else {
                 throw new WriteConditionNotFulfilledException(streamId, currentStreamVersion, writeCondition, String.format("%s was not fulfilled. Expected version %s but was %s.", WriteCondition.class.getSimpleName(), writeCondition.toString(), currentStreamVersion));
@@ -145,6 +148,16 @@ public class InMemoryEventStore implements EventStore, EventStoreOperations, Eve
         }
 
         return writeResult;
+    }
+
+    private static void validateNoDuplicateEventExists(List<CloudEvent> events) {
+        Map<String, List<CloudEvent>> eventsById = events.stream().collect(groupingBy(c -> c.getId() + c.getSource().toString()));
+        eventsById.forEach((key, cloudEvents) -> {
+            if (cloudEvents.size() > 1) {
+                CloudEvent cloudEvent = cloudEvents.get(0);
+                throw new DuplicateCloudEventException(cloudEvent.getId(), cloudEvent.getSource());
+            }
+        });
     }
 
     private static List<CloudEvent> applyOccurrentCloudEventExtension(Stream<CloudEvent> events, String streamId, long streamVersion) {

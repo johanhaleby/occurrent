@@ -28,8 +28,13 @@ public class DuplicateCloudEventException extends RuntimeException {
     private final URI source;
     private final String details;
 
+
+    public DuplicateCloudEventException(String id, URI source) {
+        this(id, source, null, null);
+    }
+
     public DuplicateCloudEventException(String id, URI source, String details, Throwable cause) {
-        super("Duplicate CloudEvent detected with id " + unknownIfNull(id) + " and source " + unknownIfNull(source == null ? null : source.toString()) + ", details: " + unknownIfNull(details), cause);
+        super("Duplicate CloudEvent detected with id " + unknownIfNull(id) + " and source " + unknownIfNull(source == null ? null : source.toString()) + (details == null ? "." : ", details: " + unknownIfNull(details)), cause);
         this.id = id;
         this.source = source;
         this.details = details;
@@ -62,11 +67,7 @@ public class DuplicateCloudEventException extends RuntimeException {
 
     @Override
     public String toString() {
-        return new StringJoiner(", ", DuplicateCloudEventException.class.getSimpleName() + "[", "]")
-                .add("id='" + id + "'")
-                .add("source=" + source)
-                .add("details='" + details + "'")
-                .toString();
+        return new StringJoiner(", ", DuplicateCloudEventException.class.getSimpleName() + "[", "]").add("id='" + id + "'").add("source=" + source).add("details='" + details + "'").toString();
     }
 
     private static String unknownIfNull(String str) {
