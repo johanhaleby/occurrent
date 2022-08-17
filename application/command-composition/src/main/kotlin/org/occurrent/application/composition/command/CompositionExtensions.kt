@@ -88,8 +88,9 @@ fun <T> composeCommands(
  */
 fun <T> composeCommands(commands: List<(List<T>) -> List<T>>): (List<T>) -> List<T> {
     return { initial ->
-        commands.fold(initial) { acc, cmd ->
+        val fold: List<T> = commands.fold(initial) { acc, cmd ->
             acc + cmd(acc)
         }
+        fold.drop(initial.size) // Remove the events that already exists in stream since we only want to return _new_ events
     }
 }
