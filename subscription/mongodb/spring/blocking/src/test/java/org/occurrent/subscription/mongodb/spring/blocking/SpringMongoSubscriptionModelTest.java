@@ -19,6 +19,7 @@ package org.occurrent.subscription.mongodb.spring.blocking;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.mongodb.ConnectionString;
 import com.mongodb.MongoCommandException;
+import com.mongodb.MongoQueryException;
 import com.mongodb.ServerAddress;
 import com.mongodb.client.MongoClient;
 import com.mongodb.client.MongoClients;
@@ -659,6 +660,42 @@ public class SpringMongoSubscriptionModelTest {
             when(mongoTemplateSpy.getDb()).thenReturn(mongoDatabase).thenCallRealMethod();
             when(mongoDatabase.getCollection("events")).thenReturn(mongoCollection);
             when(mongoCollection.watch(any(Class.class))).thenThrow(new UncategorizedMongoDbException("expected", new MongoCommandException(new BsonDocument(elements), new ServerAddress())));
+
+            subscriptionModel = new SpringMongoSubscriptionModel(mongoTemplateSpy, withConfig("events", TimeRepresentation.RFC_3339_STRING).restartSubscriptionsOnChangeStreamHistoryLost(true));
+
+            LocalDateTime now = LocalDateTime.now();
+            CopyOnWriteArrayList<CloudEvent> state = new CopyOnWriteArrayList<>();
+            subscriptionModel.subscribe(UUID.randomUUID().toString(), state::add).waitUntilStarted();
+
+            // When
+            mongoEventStore.write("1", serialize(new NameDefined(UUID.randomUUID().toString(), now, "name1")));
+
+            // Then
+            await().atMost(2, SECONDS).with().pollInterval(Duration.of(20, MILLIS)).untilAsserted(() -> assertThat(state).hasSize(1));
+        }
+
+    }
+
+    @Nested
+    @DisplayName("MongoQueryException")
+    class MongoQueryExceptionTest {
+        @SuppressWarnings("unchecked")
+        @Timeout(value = 20, unit = SECONDS)
+        @Test
+        void restarts_subscription_on_mongo_query_exception() {
+            // Given
+            MongoTemplate mongoTemplateSpy = spy(mongoTemplate);
+            MongoDatabase mongoDatabase = mock(MongoDatabase.class);
+            MongoCollection<Document> mongoCollection = (MongoCollection<Document>) mock(MongoCollection.class);
+
+            List<BsonElement> elements = new ArrayList<>();
+            elements.add(new BsonElement("code", new BsonInt32(11600)));
+            elements.add(new BsonElement("codeName", new BsonString("InterruptedAtShutdown")));
+
+            // Called in org.springframework.data.mongodb.core.messaging.ChangeStreamTask#initCursor
+            when(mongoTemplateSpy.getDb()).thenReturn(mongoDatabase).thenCallRealMethod();
+            when(mongoDatabase.getCollection("events")).thenReturn(mongoCollection);
+            when(mongoCollection.watch(any(Class.class))).thenThrow(new UncategorizedMongoDbException("expected", new MongoQueryException(new MongoCommandException(new BsonDocument(elements), new ServerAddress()))));
 
             subscriptionModel = new SpringMongoSubscriptionModel(mongoTemplateSpy, withConfig("events", TimeRepresentation.RFC_3339_STRING).restartSubscriptionsOnChangeStreamHistoryLost(true));
 

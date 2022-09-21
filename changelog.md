@@ -1,3 +1,6 @@
+### Next version
+* Fixed issue in `SpringMongoSubscriptionModel` that prevents restrating of subscriptions when MongoDB goes into leader election mode.
+
 ### 0.14.6 (2022-08-17)
 * InMemoryEventStore now checks for duplicate events. You can no longer write two events with the same cloud event id and source to the same stream.
 * Fixed an issue with command composition in Kotlin in which, in version 0.14.5, returned _all_ events in a stream and not only _new_ events. 
