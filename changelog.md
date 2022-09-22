@@ -1,4 +1,4 @@
-### Next version
+### 0.14.7 (2022-09-22)
 * Fixed issue in `SpringMongoSubscriptionModel` that prevented restart of subscriptions when MongoDB goes into leader election mode.
 * Upgraded spring-boot to 2.7.3
 * Upgraded Spring Data MongoDB from 3.3.4 to 3.3.7
