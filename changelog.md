@@ -1,6 +1,7 @@
 ### Next version
 * Fixed issue in `SpringMongoSubscriptionModel` that prevents restrating of subscriptions when MongoDB goes into leader election mode.
 * Upgraded spring-boot to 2.7.3
+* Upgraded Spring Data MongoDB from 3.3.4 to 3.3.7
 
 ### 0.14.6 (2022-08-17)
 * InMemoryEventStore now checks for duplicate events. You can no longer write two events with the same cloud event id and source to the same stream.
