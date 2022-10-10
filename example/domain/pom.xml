@@ -19,7 +19,7 @@
     <parent>
         <artifactId>example</artifactId>
         <groupId>org.occurrent</groupId>
-        <version>0.14.8-SNAPSHOT</version>
+        <version>0.14.8</version>
     </parent>
     <packaging>pom</packaging>
     <artifactId>example-domain</artifactId>
