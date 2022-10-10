@@ -1,3 +1,6 @@
+### 0.14.8 (2022-10-10)
+* Fixed NPE issue in the toString() method in `org.occurrent.eventstore.api.StreamVersionWriteCondition` when stream condition was `any`.
+
 ### 0.14.7 (2022-09-22)
 * Fixed issue in `SpringMongoSubscriptionModel` that prevented restart of subscriptions when MongoDB goes into leader election mode.
 * Upgraded spring-boot to 2.7.3
