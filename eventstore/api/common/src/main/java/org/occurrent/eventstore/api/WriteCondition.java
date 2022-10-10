@@ -83,7 +83,7 @@ public abstract class WriteCondition {
 
         @Override
         public String toString() {
-            return condition.description;
+            return condition == null ? "any stream version" : condition.description;
         }
 
         public boolean isAny() {
