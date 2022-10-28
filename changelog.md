@@ -1,3 +1,6 @@
+### Next Version
+* Upgraded Kotlin from 1.7.10 to 1.7.20
+
 ### 0.14.8 (2022-10-10)
 * Fixed NPE issue in the toString() method in `org.occurrent.eventstore.api.StreamVersionWriteCondition` when stream condition was `any`.
 
