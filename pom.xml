@@ -16,7 +16,8 @@
   ~ limitations under the License.
   -->
 
-<project xmlns="http://maven.apache.org/POM/4.0.0" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 http://maven.apache.org/xsd/maven-4.0.0.xsd">
+<project xmlns="http://maven.apache.org/POM/4.0.0" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+         xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 http://maven.apache.org/xsd/maven-4.0.0.xsd">
     <modelVersion>4.0.0</modelVersion>
 
     <groupId>org.occurrent</groupId>
@@ -33,6 +34,7 @@
         <module>application</module>
         <module>dsl</module>
         <module>framework</module>
+        <module>deadline</module>
     </modules>
 
     <name>Occurrent</name>
@@ -78,6 +80,7 @@
         <mongo.version>4.6.1</mongo.version>
         <dokka.version>1.7.20</dokka.version>
         <awaitility.version>4.2.0</awaitility.version>
+        <jobrunr.version>5.3.0</jobrunr.version>
     </properties>
 
 
@@ -280,6 +283,11 @@
                 <groupId>org.jetbrains</groupId>
                 <artifactId>annotations</artifactId>
                 <version>22.0.0</version>
+            </dependency>
+            <dependency>
+                <groupId>org.jobrunr</groupId>
+                <artifactId>jobrunr</artifactId>
+                <version>${jobrunr.version}</version>
             </dependency>
 
             <!-- Test -->
