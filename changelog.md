@@ -1,6 +1,7 @@
 ### Next Version
 * Upgraded Kotlin from 1.7.10 to 1.7.20
 * Upgraded cloudevents from 2.3.0 to 2.4.0
+* Upgraded Spring Boot from 2.7.3 to 2.7.4
 
 ### 0.14.8 (2022-10-10)
 * Fixed NPE issue in the toString() method in `org.occurrent.eventstore.api.StreamVersionWriteCondition` when stream condition was `any`.
