@@ -70,7 +70,7 @@
         <junit.version>5.7.2</junit.version>
         <test-containers.version>1.17.3</test-containers.version>
         <kotlin.version>1.7.20</kotlin.version>
-        <jackson.version>2.13.3</jackson.version>
+        <jackson.version>2.13.4.1</jackson.version>
         <cloudevents.version>2.4.0</cloudevents.version>
         <reactor.version>3.4.21</reactor.version>
         <spring-data-mongodb.version>3.3.7</spring-data-mongodb.version>
