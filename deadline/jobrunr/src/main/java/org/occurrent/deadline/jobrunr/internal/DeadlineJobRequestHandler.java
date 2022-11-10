@@ -23,15 +23,15 @@ import org.occurrent.deadline.api.blocking.DeadlineConsumer;
 import org.occurrent.deadline.api.blocking.DeadlineConsumerRegistry;
 
 public class DeadlineJobRequestHandler implements JobRequestHandler<DeadlineJobRequest> {
-    private DeadlineConsumerRegistry deadlineConsumerRegistry;
+    private final DeadlineConsumerRegistry deadlineConsumerRegistry;
 
     public DeadlineJobRequestHandler(DeadlineConsumerRegistry deadlineConsumerRegistry) {
         this.deadlineConsumerRegistry = deadlineConsumerRegistry;
     }
 
     @Override
-    public void run(DeadlineJobRequest jobRequest) throws Exception {
-        DeadlineConsumer deadlineConsumer = deadlineConsumerRegistry.getConsumer(jobRequest.getCategory())
+    public void run(DeadlineJobRequest jobRequest) {
+        DeadlineConsumer<Object> deadlineConsumer = deadlineConsumerRegistry.getConsumer(jobRequest.getCategory())
                 .orElseThrow(() -> new IllegalStateException(String.format("Failed to find a deadline consumer for category %s (deadlineId=%s)", jobRequest.getCategory(), jobRequest.getId())));
         deadlineConsumer.accept(jobRequest.getId(), jobRequest.getCategory(), Deadline.ofEpochMilli(jobRequest.getDeadlineInEpochMilli()), jobRequest.getData());
     }

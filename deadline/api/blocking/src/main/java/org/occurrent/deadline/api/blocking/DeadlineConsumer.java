@@ -23,10 +23,10 @@ import java.util.Objects;
  * A consumer of deadline's
  */
 @FunctionalInterface
-public interface DeadlineConsumer {
-    void accept(String id, String category, Deadline deadline, Object data);
+public interface DeadlineConsumer<T> {
+    void accept(String id, String category, Deadline deadline, T data);
 
-    default DeadlineConsumer andThen(DeadlineConsumer after) {
+    default DeadlineConsumer<T> andThen(DeadlineConsumer<? super T> after) {
         Objects.requireNonNull(after);
         return (a, b, c, d) -> {
             accept(a, b, c, d);

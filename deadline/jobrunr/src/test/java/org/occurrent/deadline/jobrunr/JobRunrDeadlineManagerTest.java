@@ -17,6 +17,7 @@
 
 package org.occurrent.deadline.jobrunr;
 
+import org.hamcrest.Matchers;
 import org.jobrunr.configuration.JobRunr;
 import org.jobrunr.scheduling.JobRequestScheduler;
 import org.jobrunr.server.JobActivator;
@@ -25,18 +26,21 @@ import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.occurrent.deadline.api.blocking.Deadline;
+import org.occurrent.deadline.api.blocking.DeadlineConsumer;
 import org.occurrent.deadline.api.blocking.DeadlineConsumerRegistry;
 import org.occurrent.deadline.api.blocking.InMemoryDeadlineConsumerRegistry;
 import org.occurrent.deadline.jobrunr.internal.DeadlineJobRequestHandler;
 
-import java.util.HashMap;
-import java.util.Map;
-import java.util.StringJoiner;
-import java.util.UUID;
+import java.util.*;
 import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.atomic.AtomicReference;
 
+import static org.assertj.core.api.Assertions.assertThat;
 import static org.awaitility.Awaitility.await;
+import static org.hamcrest.Matchers.not;
+import static org.hamcrest.Matchers.nullValue;
 import static org.jobrunr.server.BackgroundJobServerConfiguration.usingStandardBackgroundJobServerConfiguration;
+import static org.junit.jupiter.api.Assertions.assertAll;
 
 class JobRunrDeadlineManagerTest {
     private JobRequestScheduler jobRequestScheduler;
@@ -73,17 +77,22 @@ class JobRunrDeadlineManagerTest {
     @Test
     void gd() {
         // Given
-        AtomicBoolean completed = new AtomicBoolean(false);
-        deadlineConsumerRegistry.register("Something", (id, category, deadline, data) -> {
-            System.out.printf("id=%s, category=%s, deadline=%s, data=%s%n", id, category, deadline, data);
-            completed.set(true);
-        });
+        AtomicReference<MyDTO> completed = new AtomicReference<>();
+        UUID deadlineId = UUID.randomUUID();
+
+        deadlineConsumerRegistry.register("Something", MyDTO.class, (id, category, deadline, data) -> completed.set(data));
 
         // When
-        jobRunrDeadlineScheduler.schedule(UUID.randomUUID(), "Something", Deadline.afterMillis(500), new MyDTO("something"));
+        jobRunrDeadlineScheduler.schedule(deadlineId, "Something", Deadline.afterMillis(500), new MyDTO("something"));
 
         // Then
-        await().untilTrue(completed);
+        MyDTO myDTO = await().untilAtomic(completed, not(nullValue()));
+        assertAll(
+                () -> assertThat(id).isEqualTo(deadlineId),
+                () -> assertThat(category).isEqualTo("Something"),
+                () -> assertThat(deadline.toDate()).isCloseTo(new Date(), 5000),
+                () -> assertThat(((MyDTO) data).something).isEqualTo("something")
+        );
     }
 
     static class MyDTO {

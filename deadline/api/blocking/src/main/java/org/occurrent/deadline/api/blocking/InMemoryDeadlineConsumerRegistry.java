@@ -23,10 +23,10 @@ import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ConcurrentMap;
 
 public class InMemoryDeadlineConsumerRegistry implements DeadlineConsumerRegistry {
-    private final ConcurrentMap<String, DeadlineConsumer> deadlineConsumers = new ConcurrentHashMap<>();
+    private final ConcurrentMap<String, DeadlineConsumer<Object>> deadlineConsumers = new ConcurrentHashMap<>();
 
     @Override
-    public DeadlineConsumerRegistry register(String category, DeadlineConsumer deadlineConsumer) {
+    public DeadlineConsumerRegistry register(String category, DeadlineConsumer<Object> deadlineConsumer) {
         Objects.requireNonNull(category, "category cannot be null");
         Objects.requireNonNull(deadlineConsumer, DeadlineConsumer.class.getSimpleName() + " cannot be null");
         deadlineConsumers.put(category, deadlineConsumer);

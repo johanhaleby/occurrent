@@ -20,11 +20,15 @@ package org.occurrent.deadline.api.blocking;
 import java.util.Optional;
 
 public interface DeadlineConsumerRegistry {
-    DeadlineConsumerRegistry register(String category, DeadlineConsumer deadlineConsumer);
+    DeadlineConsumerRegistry register(String category, DeadlineConsumer<Object> deadlineConsumer);
 
     DeadlineConsumerRegistry unregister(String category);
 
     DeadlineConsumerRegistry unregisterAll();
 
-    Optional<DeadlineConsumer> getConsumer(String category);
+    <T> Optional<DeadlineConsumer<T>> getConsumer(String category);
+
+    default <T> DeadlineConsumerRegistry register(String category, Class<T> type, DeadlineConsumer<T> deadlineConsumer) {
+        return register(category, (id, category1, deadline, data) -> deadlineConsumer.accept(id, category1, deadline, type.cast(data)));
+    }
 }
