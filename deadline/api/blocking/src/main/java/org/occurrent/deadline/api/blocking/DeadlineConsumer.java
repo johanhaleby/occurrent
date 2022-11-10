@@ -19,6 +19,9 @@ package org.occurrent.deadline.api.blocking;
 
 import java.util.Objects;
 
+/**
+ * A consumer of deadline's
+ */
 @FunctionalInterface
 public interface DeadlineConsumer {
     void accept(String id, String category, Deadline deadline, Object data);

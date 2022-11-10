@@ -26,6 +26,9 @@ import java.nio.charset.StandardCharsets;
 import java.util.Objects;
 import java.util.UUID;
 
+/**
+ * JobRunr deadline scheduler
+ */
 public class JobRunrDeadlineScheduler implements DeadlineScheduler {
     private final JobRequestScheduler JobRequestScheduler;
 

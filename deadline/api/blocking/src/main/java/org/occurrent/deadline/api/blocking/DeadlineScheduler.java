@@ -20,6 +20,9 @@ package org.occurrent.deadline.api.blocking;
 import java.util.Objects;
 import java.util.UUID;
 
+/**
+ * Main interface for deadline schedulers
+ */
 public interface DeadlineScheduler {
 
     void schedule(String id, String category, Deadline deadline, Object data);
