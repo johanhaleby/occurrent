@@ -19,7 +19,7 @@
     <parent>
         <artifactId>mongodb-spring</artifactId>
         <groupId>org.occurrent</groupId>
-        <version>0.14.9-SNAPSHOT</version>
+        <version>0.14.9</version>
     </parent>
     <modelVersion>4.0.0</modelVersion>
 
@@ -33,17 +33,17 @@
         <dependency>
             <groupId>org.occurrent</groupId>
             <artifactId>filter</artifactId>
-            <version>0.14.9-SNAPSHOT</version>
+            <version>0.14.9</version>
         </dependency>
         <dependency>
             <groupId>org.occurrent</groupId>
             <artifactId>mongodb-timerepresentation</artifactId>
-            <version>0.14.9-SNAPSHOT</version>
+            <version>0.14.9</version>
         </dependency>
         <dependency>
             <groupId>org.occurrent</groupId>
             <artifactId>mongodb-specialfilterhandling</artifactId>
-            <version>0.14.9-SNAPSHOT</version>
+            <version>0.14.9</version>
         </dependency>
     </dependencies>
 
