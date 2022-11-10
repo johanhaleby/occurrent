@@ -23,7 +23,6 @@ import com.mongodb.client.model.Indexes;
 import io.cloudevents.CloudEvent;
 import io.cloudevents.core.v1.CloudEventV1;
 import org.bson.Document;
-import org.occurrent.cloudevents.OccurrentCloudEventExtension;
 import org.occurrent.cloudevents.OccurrentExtensionGetter;
 import org.occurrent.condition.Condition;
 import org.occurrent.eventstore.api.*;
@@ -43,12 +42,14 @@ import org.springframework.data.mongodb.core.MongoTemplate;
 import org.springframework.data.mongodb.core.query.Criteria;
 import org.springframework.data.mongodb.core.query.Query;
 import org.springframework.data.util.StreamUtils;
+import org.springframework.transaction.support.TransactionCallback;
 import org.springframework.transaction.support.TransactionTemplate;
 
 import java.net.URI;
 import java.util.List;
 import java.util.Objects;
 import java.util.Optional;
+import java.util.function.BiFunction;
 import java.util.function.Function;
 import java.util.stream.Collectors;
 import java.util.stream.Stream;
@@ -112,24 +113,52 @@ public class SpringMongoEventStore implements EventStore, EventStoreOperations, 
             throw new IllegalArgumentException(WriteCondition.class.getSimpleName() + " cannot be null");
         }
 
-        StreamVersionDiff streamVersion = transactionTemplate.execute(transactionStatus -> {
+        // This is an (ugly) hack to fix problems when write condition is "any" and we have parallel writes
+        // to the same stream. This will cause MongoDB to throw an exception since we're in a transaction.
+        // But in this case we should just retry since if the user has specified "any" as stream version
+        // he/she will expect that the events are just written to the event store and WriteConditionNotFulfilledException
+        // should not be thrown. Since the write method takes a "Stream" of events we can't simply retry since,
+        // on the first retry, the stream would already have been consumed. Thus, we preemptively convert the "events"
+        // stream into a list when write condition is any. This way, we can retry without errors.
+        final BiFunction<Stream<CloudEvent>, Long, List<Document>> convertCloudEventsToDocuments;
+        if (writeCondition.isAnyStreamVersion()) {
+            List<CloudEvent> cached = events.collect(Collectors.toList());
+            convertCloudEventsToDocuments = (cloudEvents, currentStreamVersion) -> convertCloudEventsToDocuments(streamId, cached.stream(), currentStreamVersion);
+        } else {
+            convertCloudEventsToDocuments = (cloudEvents, currentStreamVersion) -> convertCloudEventsToDocuments(streamId, cloudEvents, currentStreamVersion);
+        }
+
+        // The actual write logic for the cloud events
+        TransactionCallback<StreamVersionDiff> writeLogic = transactionStatus -> {
             long currentStreamVersion = currentStreamVersion(streamId);
 
             if (!isFulfilled(currentStreamVersion, writeCondition)) {
                 throw new WriteConditionNotFulfilledException(streamId, currentStreamVersion, writeCondition, String.format("%s was not fulfilled. Expected version %s but was %s.", WriteCondition.class.getSimpleName(), writeCondition, currentStreamVersion));
             }
 
-            List<Document> cloudEventDocuments = mapWithIndex(events, currentStreamVersion, pair -> convertToDocument(timeRepresentation, streamId, pair.t1, pair.t2)).collect(Collectors.toList());
+            List<Document> cloudEventDocuments = convertCloudEventsToDocuments.apply(events, currentStreamVersion);
 
             final long newStreamVersion;
             if (!cloudEventDocuments.isEmpty()) {
                 insertAll(streamId, currentStreamVersion, writeCondition, cloudEventDocuments);
-                newStreamVersion = cloudEventDocuments.get(cloudEventDocuments.size() - 1).getLong(OccurrentCloudEventExtension.STREAM_VERSION);
+                newStreamVersion = cloudEventDocuments.get(cloudEventDocuments.size() - 1).getLong(STREAM_VERSION);
             } else {
                 newStreamVersion = currentStreamVersion;
             }
             return new StreamVersionDiff(currentStreamVersion, newStreamVersion);
-        });
+        };
+
+        StreamVersionDiff streamVersion;
+        try {
+            streamVersion = transactionTemplate.execute(writeLogic);
+        } catch (WriteConditionNotFulfilledException e) {
+            if (writeCondition.isAnyStreamVersion()) {
+                // See comments on "convertCloudEventsToDocuments" above
+                streamVersion = transactionTemplate.execute(writeLogic);
+            } else {
+                throw e;
+            }
+        }
         return new WriteResult(streamId, streamVersion.oldStreamVersion, streamVersion.newStreamVersion);
     }
 
@@ -224,6 +253,10 @@ public class SpringMongoEventStore implements EventStore, EventStoreOperations, 
             final Query query = queryOptions.apply(FilterConverter.convertFilterToQuery(timeRepresentation, filter));
             return mongoTemplate.count(query, eventStoreCollectionName);
         }
+    }
+
+    private List<Document> convertCloudEventsToDocuments(String streamId, Stream<CloudEvent> cloudEvents, long currentStreamVersion) {
+        return mapWithIndex(cloudEvents, currentStreamVersion, pair -> convertToDocument(timeRepresentation, streamId, pair.t1, pair.t2)).collect(Collectors.toList());
     }
 
     // Data structures etc

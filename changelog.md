@@ -3,6 +3,8 @@
 * Upgraded cloudevents from 2.3.0 to 2.4.0
 * Upgraded Spring Boot from 2.7.3 to 2.7.5
 * Changed toString() on StreamVersionWriteCondition when condition is null from "any stream version" to "any"
+* Fixed a bug in SpringMongoEventStore when several writes happened in parallel to the same stream and write condition was "any". 
+  This could result in a WriteConditionNotFulfilledException since the underlying MongoDB transaction failed. Now, after the fix, the events are stored as indented.
 
 ### 0.14.8 (2022-10-10)
 * Fixed NPE issue in the toString() method in `org.occurrent.eventstore.api.StreamVersionWriteCondition` when stream condition was `any`.
