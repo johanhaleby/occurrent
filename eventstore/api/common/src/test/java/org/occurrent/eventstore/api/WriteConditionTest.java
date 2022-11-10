@@ -37,6 +37,6 @@ class WriteConditionTest {
         String toString = writeCondition.toString();
 
         // Then
-        assertThat(toString).isEqualTo("any stream version");
+        assertThat(toString).isEqualTo("any");
     }
 }
