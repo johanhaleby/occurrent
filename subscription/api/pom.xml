@@ -19,7 +19,7 @@
     <parent>
         <artifactId>subscription</artifactId>
         <groupId>org.occurrent</groupId>
-        <version>0.14.9</version>
+        <version>0.14.10-SNAPSHOT</version>
     </parent>
     <packaging>pom</packaging>
     <modules>
