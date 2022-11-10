@@ -1,4 +1,4 @@
-### Next Version
+### 0.14.9 (2022-11-10)
 * Upgraded Kotlin from 1.7.10 to 1.7.20
 * Upgraded cloudevents from 2.3.0 to 2.4.0
 * Upgraded Spring Boot from 2.7.3 to 2.7.5
