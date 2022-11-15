@@ -113,8 +113,8 @@ public abstract class Deadline {
         return afterMillis(TimeUnit.HOURS.toMillis(hours));
     }
 
-    public static Deadline afterDays(long hours) {
-        return afterMillis(TimeUnit.DAYS.toMillis(hours));
+    public static Deadline afterDays(long days) {
+        return afterMillis(TimeUnit.DAYS.toMillis(days));
     }
 
     static class ZonedDateTimeDeadLine extends Deadline {
