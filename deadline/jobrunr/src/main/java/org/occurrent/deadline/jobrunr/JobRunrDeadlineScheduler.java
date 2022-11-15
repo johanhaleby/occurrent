@@ -30,23 +30,23 @@ import java.util.UUID;
  * JobRunr deadline scheduler
  */
 public class JobRunrDeadlineScheduler implements DeadlineScheduler {
-    private final JobRequestScheduler JobRequestScheduler;
+    private final JobRequestScheduler jobRequestScheduler;
 
 
     public JobRunrDeadlineScheduler(JobRequestScheduler jobRequestScheduler) {
         Objects.requireNonNull(jobRequestScheduler, JobRequestScheduler.class.getSimpleName() + " cannot be null");
-        this.JobRequestScheduler = jobRequestScheduler;
+        this.jobRequestScheduler = jobRequestScheduler;
     }
 
     @Override
     public void schedule(String id, String category, Deadline deadline, Object data) {
         long epochMilli = deadline.toEpochMilli();
-        JobRequestScheduler.schedule(generateUUIDFromString(id), deadline.toInstant(), new DeadlineJobRequest(id, category, epochMilli, data));
+        jobRequestScheduler.schedule(generateUUIDFromString(id), deadline.toInstant(), new DeadlineJobRequest(id, category, epochMilli, data));
     }
 
     @Override
     public void cancel(String id) {
-        JobRequestScheduler.delete(id);
+        jobRequestScheduler.delete(id);
     }
 
     private static UUID generateUUIDFromString(String id) {
