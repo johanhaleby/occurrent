@@ -17,7 +17,6 @@
 
 package org.occurrent.deadline.jobrunr;
 
-import org.hamcrest.Matchers;
 import org.jobrunr.configuration.JobRunr;
 import org.jobrunr.scheduling.JobRequestScheduler;
 import org.jobrunr.server.JobActivator;
@@ -32,7 +31,6 @@ import org.occurrent.deadline.api.blocking.InMemoryDeadlineConsumerRegistry;
 import org.occurrent.deadline.jobrunr.internal.DeadlineJobRequestHandler;
 
 import java.util.*;
-import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicReference;
 
 import static org.assertj.core.api.Assertions.assertThat;
@@ -75,24 +73,59 @@ class JobRunrDeadlineManagerTest {
     }
 
     @Test
-    void gd() {
+    void typed_deadline_registry() {
         // Given
-        AtomicReference<MyDTO> completed = new AtomicReference<>();
+        AtomicReference<ConsumedData<MyDTO>> completed = new AtomicReference<>();
         UUID deadlineId = UUID.randomUUID();
 
-        deadlineConsumerRegistry.register("Something", MyDTO.class, (id, category, deadline, data) -> completed.set(data));
+        deadlineConsumerRegistry.register("Something", MyDTO.class, (id, category, deadline, data) -> completed.set(new ConsumedData<>(id, category, deadline, data)));
 
         // When
         jobRunrDeadlineScheduler.schedule(deadlineId, "Something", Deadline.afterMillis(500), new MyDTO("something"));
 
         // Then
-        MyDTO myDTO = await().untilAtomic(completed, not(nullValue()));
+        ConsumedData<MyDTO> consumedData = await().untilAtomic(completed, not(nullValue()));
         assertAll(
-                () -> assertThat(id).isEqualTo(deadlineId),
-                () -> assertThat(category).isEqualTo("Something"),
-                () -> assertThat(deadline.toDate()).isCloseTo(new Date(), 5000),
-                () -> assertThat(((MyDTO) data).something).isEqualTo("something")
+                () -> assertThat(consumedData.id).isEqualTo(deadlineId.toString()),
+                () -> assertThat(consumedData.category).isEqualTo("Something"),
+                () -> assertThat(consumedData.deadline.toDate()).isCloseTo(new Date(), 5000),
+                () -> assertThat(consumedData.data.something).isEqualTo("something")
         );
+    }
+
+    @Test
+    void untyped_deadline_registry() {
+        // Given
+        AtomicReference<ConsumedData<Object>> completed = new AtomicReference<>();
+        UUID deadlineId = UUID.randomUUID();
+
+        deadlineConsumerRegistry.register("Something", (id, category, deadline, data) -> completed.set(new ConsumedData<>(id, category, deadline, data)));
+
+        // When
+        jobRunrDeadlineScheduler.schedule(deadlineId, "Something", Deadline.afterMillis(500), new MyDTO("something"));
+
+        // Then
+        ConsumedData<Object> consumedData = await().untilAtomic(completed, not(nullValue()));
+        assertAll(
+                () -> assertThat(consumedData.id).isEqualTo(deadlineId.toString()),
+                () -> assertThat(consumedData.category).isEqualTo("Something"),
+                () -> assertThat(consumedData.deadline.toDate()).isCloseTo(new Date(), 5000),
+                () -> assertThat(consumedData.data).isEqualTo(new MyDTO("something"))
+        );
+    }
+
+    static class ConsumedData<T> {
+        final String id;
+        final String category;
+        final Deadline deadline;
+        final T data;
+
+        ConsumedData(String id, String category, Deadline deadline, T data) {
+            this.id = id;
+            this.category = category;
+            this.deadline = deadline;
+            this.data = data;
+        }
     }
 
     static class MyDTO {
@@ -119,6 +152,19 @@ class JobRunrDeadlineManagerTest {
             return new StringJoiner(", ", MyDTO.class.getSimpleName() + "[", "]")
                     .add("something='" + something + "'")
                     .toString();
+        }
+
+        @Override
+        public boolean equals(Object o) {
+            if (this == o) return true;
+            if (!(o instanceof MyDTO)) return false;
+            MyDTO myDTO = (MyDTO) o;
+            return Objects.equals(something, myDTO.something);
+        }
+
+        @Override
+        public int hashCode() {
+            return Objects.hash(something);
         }
     }
 }
