@@ -25,10 +25,8 @@ import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.occurrent.deadline.api.blocking.Deadline;
-import org.occurrent.deadline.api.blocking.DeadlineConsumer;
 import org.occurrent.deadline.api.blocking.DeadlineConsumerRegistry;
-import org.occurrent.deadline.api.blocking.InMemoryDeadlineConsumerRegistry;
-import org.occurrent.deadline.jobrunr.internal.DeadlineJobRequestHandler;
+import org.occurrent.deadline.jobrunr.internal.DeadlineJobRequest;
 
 import java.util.*;
 import java.util.concurrent.atomic.AtomicReference;
@@ -47,11 +45,10 @@ class JobRunrDeadlineManagerTest {
 
     @BeforeEach
     void initialize() {
-        deadlineConsumerRegistry = new InMemoryDeadlineConsumerRegistry();
-        DeadlineJobRequestHandler deadlineJobRequestHandler = new DeadlineJobRequestHandler(deadlineConsumerRegistry);
+        deadlineConsumerRegistry = new JobRunrDeadlineConsumerRegistry();
 
         Map<Class<?>, Object> beans = new HashMap<>();
-        beans.put(DeadlineJobRequestHandler.class, deadlineJobRequestHandler);
+        beans.put(JobRunrDeadlineConsumerRegistry.class, deadlineConsumerRegistry);
 
         jobRequestScheduler = JobRunr.configure()
                 .useStorageProvider(new InMemoryStorageProvider())

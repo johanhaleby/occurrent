@@ -19,6 +19,8 @@ package org.occurrent.deadline.jobrunr.internal;
 
 import org.jobrunr.jobs.lambdas.JobRequest;
 import org.jobrunr.jobs.lambdas.JobRequestHandler;
+import org.occurrent.deadline.api.blocking.DeadlineConsumerRegistry;
+import org.occurrent.deadline.jobrunr.JobRunrDeadlineConsumerRegistry;
 
 import java.util.Objects;
 import java.util.StringJoiner;
@@ -42,7 +44,7 @@ public class DeadlineJobRequest implements JobRequest {
 
     @Override
     public Class<? extends JobRequestHandler> getJobRequestHandler() {
-        return DeadlineJobRequestHandler.class;
+        return JobRunrDeadlineConsumerRegistry.class;
     }
 
     public String getId() {

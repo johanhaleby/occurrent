@@ -15,14 +15,20 @@
  *  limitations under the License.
  */
 
-package org.occurrent.deadline.api.blocking;
+package org.occurrent.deadline.jobrunr;
+
+import org.jobrunr.jobs.lambdas.JobRequestHandler;
+import org.occurrent.deadline.api.blocking.Deadline;
+import org.occurrent.deadline.api.blocking.DeadlineConsumer;
+import org.occurrent.deadline.api.blocking.DeadlineConsumerRegistry;
+import org.occurrent.deadline.jobrunr.internal.DeadlineJobRequest;
 
 import java.util.Objects;
 import java.util.Optional;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ConcurrentMap;
 
-public class InMemoryDeadlineConsumerRegistry implements DeadlineConsumerRegistry {
+public class JobRunrDeadlineConsumerRegistry implements DeadlineConsumerRegistry, JobRequestHandler<DeadlineJobRequest> {
     private final ConcurrentMap<String, DeadlineConsumer<Object>> deadlineConsumers = new ConcurrentHashMap<>();
 
     @Override
@@ -50,5 +56,12 @@ public class InMemoryDeadlineConsumerRegistry implements DeadlineConsumerRegistr
     public Optional<DeadlineConsumer> getConsumer(String category) {
         Objects.requireNonNull(category, "category cannot be null");
         return Optional.ofNullable(deadlineConsumers.get(category));
+    }
+
+    @Override
+    public void run(DeadlineJobRequest jobRequest) {
+        DeadlineConsumer<Object> deadlineConsumer = Optional.ofNullable(deadlineConsumers.get(jobRequest.getCategory()))
+                .orElseThrow(() -> new IllegalStateException(String.format("Failed to find a deadline consumer for category %s (deadlineId=%s)", jobRequest.getCategory(), jobRequest.getId())));
+        deadlineConsumer.accept(jobRequest.getId(), jobRequest.getCategory(), Deadline.ofEpochMilli(jobRequest.getDeadlineInEpochMilli()), jobRequest.getData());
     }
 }
