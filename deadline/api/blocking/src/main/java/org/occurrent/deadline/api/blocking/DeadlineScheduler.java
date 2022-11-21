@@ -32,7 +32,6 @@ public interface DeadlineScheduler {
         schedule(id.toString(), category, deadline, data);
     }
 
-
     void cancel(String id);
 
     default void cancel(UUID id) {

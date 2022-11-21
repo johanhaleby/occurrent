@@ -13,6 +13,7 @@
     <modules>
         <module>api</module>
         <module>jobrunr</module>
+        <module>inmemory</module>
     </modules>
 
     <properties>

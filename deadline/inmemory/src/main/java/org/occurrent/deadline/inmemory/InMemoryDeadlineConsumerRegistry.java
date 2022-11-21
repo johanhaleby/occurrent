@@ -15,21 +15,48 @@
  *  limitations under the License.
  */
 
-package org.occurrent.deadline.jobrunr;
+package org.occurrent.deadline.inmemory;
 
-import org.jobrunr.jobs.lambdas.JobRequestHandler;
-import org.occurrent.deadline.api.blocking.Deadline;
 import org.occurrent.deadline.api.blocking.DeadlineConsumer;
 import org.occurrent.deadline.api.blocking.DeadlineConsumerRegistry;
-import org.occurrent.deadline.jobrunr.internal.DeadlineJobRequest;
+import org.occurrent.deadline.inmemory.internal.DeadlineData;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 import java.util.Objects;
 import java.util.Optional;
+import java.util.concurrent.BlockingDeque;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ConcurrentMap;
+import java.util.concurrent.TimeUnit;
 
-public class JobRunrDeadlineConsumerRegistry implements DeadlineConsumerRegistry, JobRequestHandler<DeadlineJobRequest> {
+public class InMemoryDeadlineConsumerRegistry implements DeadlineConsumerRegistry {
+    private static final Logger log = LoggerFactory.getLogger(InMemoryDeadlineConsumerRegistry.class);
+
     private final ConcurrentMap<String, DeadlineConsumer<Object>> deadlineConsumers = new ConcurrentHashMap<>();
+    private final Thread thread;
+    private volatile boolean running = true;
+
+    public InMemoryDeadlineConsumerRegistry(BlockingDeque<DeadlineData> deadlineQueue) {
+        thread = new Thread(() -> {
+            while (running) {
+                try {
+                    DeadlineData data = deadlineQueue.pollFirst(500, TimeUnit.MILLISECONDS);
+                    if (data != null) {
+                        DeadlineConsumer<Object> deadlineConsumer = deadlineConsumers.get(data.category);
+                        if (deadlineConsumer == null) {
+                            log.warn("Failed to find a deadline consumer for category {}, will try again later.", data.category);
+                        } else {
+                            deadlineConsumer.accept(data.id, data.category, data.deadline, data.data);
+                        }
+                    }
+                } catch (InterruptedException e) {
+                    throw new RuntimeException(e);
+                }
+            }
+        });
+        thread.start();
+    }
 
     @Override
     public DeadlineConsumerRegistry register(String category, DeadlineConsumer<Object> deadlineConsumer) {
@@ -59,10 +86,12 @@ public class JobRunrDeadlineConsumerRegistry implements DeadlineConsumerRegistry
         return Optional.ofNullable((DeadlineConsumer<T>) deadlineConsumers.get(category));
     }
 
-    @Override
-    public void run(DeadlineJobRequest jobRequest) {
-        DeadlineConsumer<Object> deadlineConsumer = Optional.ofNullable(deadlineConsumers.get(jobRequest.getCategory()))
-                .orElseThrow(() -> new IllegalStateException(String.format("Failed to find a deadline consumer for category %s (deadlineId=%s)", jobRequest.getCategory(), jobRequest.getId())));
-        deadlineConsumer.accept(jobRequest.getId(), jobRequest.getCategory(), Deadline.ofEpochMilli(jobRequest.getDeadlineInEpochMilli()), jobRequest.getData());
+    public void shutdown() {
+        running = false;
+        try {
+            thread.join();
+        } catch (InterruptedException e) {
+            throw new RuntimeException(e);
+        }
     }
 }

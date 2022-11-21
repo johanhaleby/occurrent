@@ -15,61 +15,53 @@
  *  limitations under the License.
  */
 
-package org.occurrent.deadline.jobrunr;
+package org.occurrent.deadline.inmemory;
 
-import org.jobrunr.configuration.JobRunr;
-import org.jobrunr.scheduling.JobRequestScheduler;
-import org.jobrunr.server.JobActivator;
-import org.jobrunr.storage.InMemoryStorageProvider;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
+import org.junit.jupiter.api.DisplayNameGeneration;
+import org.junit.jupiter.api.DisplayNameGenerator.ReplaceUnderscores;
 import org.junit.jupiter.api.Test;
 import org.occurrent.deadline.api.blocking.Deadline;
 import org.occurrent.deadline.api.blocking.DeadlineConsumerRegistry;
+import org.occurrent.deadline.inmemory.internal.DeadlineData;
 
-import java.util.*;
+import java.util.Date;
+import java.util.Objects;
+import java.util.StringJoiner;
+import java.util.UUID;
+import java.util.concurrent.BlockingDeque;
+import java.util.concurrent.LinkedBlockingDeque;
+import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicReference;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.awaitility.Awaitility.await;
 import static org.hamcrest.Matchers.not;
 import static org.hamcrest.Matchers.nullValue;
-import static org.jobrunr.server.BackgroundJobServerConfiguration.usingStandardBackgroundJobServerConfiguration;
 import static org.junit.jupiter.api.Assertions.assertAll;
 
-class JobRunrDeadlineManagerTest {
-    private JobRequestScheduler jobRequestScheduler;
-    private JobRunrDeadlineScheduler jobRunrDeadlineScheduler;
-    private DeadlineConsumerRegistry deadlineConsumerRegistry;
+@DisplayNameGeneration(ReplaceUnderscores.class)
+public class InMemoryDeadlineTest {
+
+    private InMemoryDeadlineConsumerRegistry deadlineConsumerRegistry;
+    private InMemoryDeadlineScheduler deadlineScheduler;
 
     @BeforeEach
     void initialize() {
-        deadlineConsumerRegistry = new JobRunrDeadlineConsumerRegistry();
-
-        Map<Class<?>, Object> beans = new HashMap<>();
-        beans.put(JobRunrDeadlineConsumerRegistry.class, deadlineConsumerRegistry);
-
-        jobRequestScheduler = JobRunr.configure()
-                .useStorageProvider(new InMemoryStorageProvider())
-                .useJobActivator(new JobActivator() {
-                    @Override
-                    public <T> T activateJob(Class<T> type) {
-                        return (T) beans.get(type);
-                    }
-                })
-                .useBackgroundJobServer(usingStandardBackgroundJobServerConfiguration().andPollIntervalInSeconds(1).andWorkerCount(2))
-                .initialize()
-                .getJobRequestScheduler();
-        jobRunrDeadlineScheduler = new JobRunrDeadlineScheduler(jobRequestScheduler);
+        BlockingDeque<DeadlineData> queue = new LinkedBlockingDeque<>();
+        deadlineConsumerRegistry = new InMemoryDeadlineConsumerRegistry(queue);
+        deadlineScheduler = new InMemoryDeadlineScheduler(queue);
     }
 
     @AfterEach
     void shutdown() {
-        jobRequestScheduler.shutdown();
+        deadlineScheduler.shutdown();
+        deadlineConsumerRegistry.shutdown();
     }
 
     @Test
-    void typed_deadline_registry() {
+    void inmemory_typed_deadline_registry() {
         // Given
         AtomicReference<ConsumedData<MyDTO>> completed = new AtomicReference<>();
         UUID deadlineId = UUID.randomUUID();
@@ -77,36 +69,15 @@ class JobRunrDeadlineManagerTest {
         deadlineConsumerRegistry.register("Something", MyDTO.class, (id, category, deadline, data) -> completed.set(new ConsumedData<>(id, category, deadline, data)));
 
         // When
-        jobRunrDeadlineScheduler.schedule(deadlineId, "Something", Deadline.afterMillis(500), new MyDTO("something"));
+        deadlineScheduler.schedule(deadlineId, "Something", Deadline.afterMillis(500), new MyDTO("something"));
 
         // Then
-        ConsumedData<MyDTO> consumedData = await().untilAtomic(completed, not(nullValue()));
+        ConsumedData<MyDTO> consumedData = await().atMost(2, TimeUnit.SECONDS).untilAtomic(completed, not(nullValue()));
         assertAll(
                 () -> assertThat(consumedData.id).isEqualTo(deadlineId.toString()),
                 () -> assertThat(consumedData.category).isEqualTo("Something"),
                 () -> assertThat(consumedData.deadline.toDate()).isCloseTo(new Date(), 5000),
                 () -> assertThat(consumedData.data.something).isEqualTo("something")
-        );
-    }
-
-    @Test
-    void untyped_deadline_registry() {
-        // Given
-        AtomicReference<ConsumedData<Object>> completed = new AtomicReference<>();
-        UUID deadlineId = UUID.randomUUID();
-
-        deadlineConsumerRegistry.register("Something", (id, category, deadline, data) -> completed.set(new ConsumedData<>(id, category, deadline, data)));
-
-        // When
-        jobRunrDeadlineScheduler.schedule(deadlineId, "Something", Deadline.afterMillis(500), new MyDTO("something"));
-
-        // Then
-        ConsumedData<Object> consumedData = await().untilAtomic(completed, not(nullValue()));
-        assertAll(
-                () -> assertThat(consumedData.id).isEqualTo(deadlineId.toString()),
-                () -> assertThat(consumedData.category).isEqualTo("Something"),
-                () -> assertThat(consumedData.deadline.toDate()).isCloseTo(new Date(), 5000),
-                () -> assertThat(consumedData.data).isEqualTo(new MyDTO("something"))
         );
     }
 
