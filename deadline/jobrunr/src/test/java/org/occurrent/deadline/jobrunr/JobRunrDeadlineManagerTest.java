@@ -57,7 +57,7 @@ class JobRunrDeadlineManagerTest {
                         return (T) beans.get(type);
                     }
                 })
-                .useBackgroundJobServer(usingStandardBackgroundJobServerConfiguration().andPollIntervalInSeconds(1).andWorkerCount(2))
+                .useBackgroundJobServer(usingStandardBackgroundJobServerConfiguration().andPollIntervalInSeconds(5).andWorkerCount(2))
                 .initialize()
                 .getJobRequestScheduler();
         jobRunrDeadlineScheduler = new JobRunrDeadlineScheduler(jobRequestScheduler);
