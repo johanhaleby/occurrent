@@ -17,10 +17,7 @@
 
 package org.occurrent.deadline.api.blocking;
 
-import java.time.Instant;
-import java.time.LocalDateTime;
-import java.time.OffsetDateTime;
-import java.time.ZonedDateTime;
+import java.time.*;
 import java.util.Date;
 import java.util.Objects;
 import java.util.StringJoiner;
@@ -115,6 +112,14 @@ public abstract class Deadline {
 
     public static Deadline afterDays(long days) {
         return afterMillis(TimeUnit.DAYS.toMillis(days));
+    }
+
+    public static Deadline afterDuration(Duration duration) {
+        return afterMillis(duration.toMillis());
+    }
+
+    public static Deadline afterTime(long time, TimeUnit timeUnit) {
+        return afterMillis(timeUnit.toMillis(time));
     }
 
     static class ZonedDateTimeDeadLine extends Deadline {
