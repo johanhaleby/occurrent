@@ -21,6 +21,7 @@ import org.occurrent.deadline.api.blocking.DeadlineConsumer;
 import org.occurrent.deadline.api.blocking.DeadlineConsumerRegistry;
 import org.occurrent.deadline.inmemory.internal.DeadlineData;
 import org.occurrent.retry.RetryStrategy;
+import org.occurrent.retry.RetryStrategy.Retry;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -46,6 +47,12 @@ public class InMemoryDeadlineConsumerRegistry implements DeadlineConsumerRegistr
 
     public InMemoryDeadlineConsumerRegistry(BlockingDeque<DeadlineData> deadlineQueue, Config config) {
         Objects.requireNonNull(deadlineQueue, "Deadline queue cannot be null");
+        final RetryStrategy retryStrategyToUse;
+        if (config.retryStrategy instanceof Retry) {
+            retryStrategyToUse = ((Retry) config.retryStrategy).retryIf(__ -> running);
+        } else {
+            retryStrategyToUse = config.retryStrategy;
+        }
         thread = new Thread(() -> {
             while (running) {
                 try {
@@ -55,7 +62,7 @@ public class InMemoryDeadlineConsumerRegistry implements DeadlineConsumerRegistr
                         if (deadlineConsumer == null) {
                             log.warn("Failed to find a deadline consumer for category {}, will try again later.", data.category);
                         } else {
-                            config.retryStrategy.execute(() -> deadlineConsumer.accept(data.id, data.category, data.deadline, data.data));
+                            retryStrategyToUse.execute(() -> deadlineConsumer.accept(data.id, data.category, data.deadline, data.data));
                         }
                     }
                 } catch (InterruptedException e) {
