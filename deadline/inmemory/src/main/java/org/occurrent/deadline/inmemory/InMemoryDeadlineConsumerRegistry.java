@@ -47,6 +47,7 @@ public class InMemoryDeadlineConsumerRegistry implements DeadlineConsumerRegistr
 
     public InMemoryDeadlineConsumerRegistry(BlockingDeque<DeadlineData> deadlineQueue, Config config) {
         Objects.requireNonNull(deadlineQueue, "Deadline queue cannot be null");
+        Objects.requireNonNull(config, "Config cannot be null");
         final RetryStrategy retryStrategyToUse;
         if (config.retryStrategy instanceof Retry) {
             retryStrategyToUse = ((Retry) config.retryStrategy).retryIf(__ -> running);
