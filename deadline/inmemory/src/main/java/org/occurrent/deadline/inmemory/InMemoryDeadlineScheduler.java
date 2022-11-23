@@ -21,6 +21,7 @@ import org.occurrent.deadline.api.blocking.Deadline;
 import org.occurrent.deadline.api.blocking.DeadlineScheduler;
 import org.occurrent.deadline.inmemory.internal.DeadlineData;
 
+import java.util.Objects;
 import java.util.concurrent.*;
 
 import static java.util.concurrent.TimeUnit.NANOSECONDS;
@@ -36,6 +37,7 @@ public class InMemoryDeadlineScheduler implements DeadlineScheduler {
     private final BlockingDeque<DeadlineData> queue;
 
     public InMemoryDeadlineScheduler(BlockingDeque<DeadlineData> queue) {
+        Objects.requireNonNull(queue, "Queue cannot be null");
         this.queue = queue;
     }
 

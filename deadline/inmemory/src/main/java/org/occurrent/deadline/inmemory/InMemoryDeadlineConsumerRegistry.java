@@ -38,10 +38,18 @@ public class InMemoryDeadlineConsumerRegistry implements DeadlineConsumerRegistr
     private volatile boolean running = true;
 
     public InMemoryDeadlineConsumerRegistry(BlockingDeque<DeadlineData> deadlineQueue) {
+        this(deadlineQueue, 500);
+    }
+
+    public InMemoryDeadlineConsumerRegistry(BlockingDeque<DeadlineData> deadlineQueue, long pollIntervalMillis) {
+        Objects.requireNonNull(deadlineQueue, "Deadline queue cannot be null");
+        if (pollIntervalMillis < 1) {
+            throw new IllegalArgumentException("Poll interval must be greater than zero");
+        }
         thread = new Thread(() -> {
             while (running) {
                 try {
-                    DeadlineData data = deadlineQueue.pollFirst(500, TimeUnit.MILLISECONDS);
+                    DeadlineData data = deadlineQueue.pollFirst(pollIntervalMillis, TimeUnit.MILLISECONDS);
                     if (data != null) {
                         DeadlineConsumer<Object> deadlineConsumer = deadlineConsumers.get(data.category);
                         if (deadlineConsumer == null) {
