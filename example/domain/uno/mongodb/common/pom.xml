@@ -19,7 +19,7 @@
     <parent>
         <artifactId>example-uno-es-mongodb</artifactId>
         <groupId>org.occurrent</groupId>
-        <version>0.14.10-SNAPSHOT</version>
+        <version>0.15.0</version>
     </parent>
     <modelVersion>4.0.0</modelVersion>
 
@@ -34,7 +34,7 @@
         <dependency>
             <groupId>org.occurrent</groupId>
             <artifactId>example-uno-model</artifactId>
-            <version>0.14.10-SNAPSHOT</version>
+            <version>0.15.0</version>
         </dependency>
         <dependency>
             <groupId>org.jetbrains.kotlin</groupId>
@@ -51,7 +51,7 @@
         <dependency>
             <groupId>org.occurrent</groupId>
             <artifactId>application-service-blocking</artifactId>
-            <version>0.14.10-SNAPSHOT</version>
+            <version>0.15.0</version>
         </dependency>
     </dependencies>
 
