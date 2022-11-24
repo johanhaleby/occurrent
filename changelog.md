@@ -1,3 +1,29 @@
+#### 0.15.0 (2022-11-24) 
+Introducing deadline scheduling. Scheduling (aka deadlines, alarm clock) is a very handy technique to schedule to commands to be executed in the future or periodically.  
+Imagine, for example, a multiplayer game, where we want to game to end automatically after 10 hours of inactivity.  
+This means that as soon as a player has made a guess, we’d like to schedule a “timeout game command” to be executed after 10 hours.
+
+The way it works in Occurrent is that you schedule a `org.occurrent.deadline.api.blocking.Deadline` using a `org.occurrent.deadline.api.blocking.DeadlineScheduler` implementation.
+The `Deadline` is a date/time in the future when the deadline is up. You also register a `org.occurrent.deadline.api.blocking.DeadlineConsumer` to a 
+`org.occurrent.deadline.api.blocking.DeadlineConsumerRegistry` implementation, and it'll be invoked when a deadline is up. For example: 
+
+
+```java
+// In some method we schedule that a deadline two hours from now with data "hello world" 
+var deadlineId = UUID.randomUUID(); 
+var deadlineCategory = "hello-world"; 
+var deadline = Deadline.afterHours(2)
+deadlineScheduler.schedule(deadlineId, deadlineCategory, deadline, "hello world");
+
+// In some other method, during application startup, we register a deadline consumer to the registry for the "hello-world" deadline category
+deadlineConsumerRegistry.register("hello-world", (deadlineId, deadlineCategory, deadline, data) -> System.out.println(data));
+```
+
+In the example above, the deadline consumer will print "hello world" after 2 hours.
+
+There are two implementations of `DeadlineScheduler` and `DeadlineConsumerRegistry`, one that uses [JobRunr](https://www.jobrunr.io/) and one in-memory implementation.
+Depend on `org.occurrent:deadline-jobrunr:0.15.0` to get the JobRunr implementation, and `org.occurrent:deadline-inmemory:0.15.0` to get the in-memory implementation. 
+
 ### 0.14.9 (2022-11-10)
 * Upgraded Kotlin from 1.7.10 to 1.7.20
 * Upgraded cloudevents from 2.3.0 to 2.4.0
