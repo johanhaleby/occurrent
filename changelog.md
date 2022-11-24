@@ -9,7 +9,7 @@ The `Deadline` is a date/time in the future when the deadline is up. You also re
 
 
 ```java
-// In some method we schedule that a deadline two hours from now with data "hello world" 
+// In some method we schedule a deadline two hours from now with data "hello world" 
 var deadlineId = UUID.randomUUID(); 
 var deadlineCategory = "hello-world"; 
 var deadline = Deadline.afterHours(2)
