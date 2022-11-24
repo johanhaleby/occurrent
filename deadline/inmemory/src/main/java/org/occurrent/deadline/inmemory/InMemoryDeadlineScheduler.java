@@ -27,16 +27,20 @@ import java.util.concurrent.*;
 import static java.util.concurrent.TimeUnit.NANOSECONDS;
 
 /**
- * Hello world!
+ * An in-memory implementation of a {@link DeadlineScheduler}. It uses a {@link BlockingDeque} to communicate with
+ * an {@link InMemoryDeadlineConsumerRegistry}. It important that same {@link BlockingDeque} is used for both the {@link InMemoryDeadlineConsumerRegistry}
+ * and {@link InMemoryDeadlineScheduler}.
+ * <p></p>
+ * <b>Note:</b> It's important to call {@link #shutdown()} when your application (or test) is shutting down.
  */
 public class InMemoryDeadlineScheduler implements DeadlineScheduler {
 
     private final ConcurrentMap<String, ScheduledFuture<?>> scheduledDeadlines = new ConcurrentHashMap<>();
     private final ScheduledExecutorService scheduledExecutorService = Executors.newScheduledThreadPool(2);
 
-    private final BlockingDeque<DeadlineData> queue;
+    private final BlockingDeque<Object> queue;
 
-    public InMemoryDeadlineScheduler(BlockingDeque<DeadlineData> queue) {
+    public InMemoryDeadlineScheduler(BlockingDeque<Object> queue) {
         Objects.requireNonNull(queue, "Queue cannot be null");
         this.queue = queue;
     }
@@ -60,6 +64,9 @@ public class InMemoryDeadlineScheduler implements DeadlineScheduler {
         scheduledFuture.cancel(true);
     }
 
+    /**
+     * Shutdown the {@link InMemoryDeadlineScheduler}
+     */
     public void shutdown() {
         boolean interrupted = false;
         try {

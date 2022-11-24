@@ -28,6 +28,9 @@ import java.util.Optional;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ConcurrentMap;
 
+/**
+ * <a href="https://www.jobrunr.io">JobRunr</a> {@link DeadlineConsumerRegistry} implementation.
+ */
 public class JobRunrDeadlineConsumerRegistry implements DeadlineConsumerRegistry, JobRequestHandler<DeadlineJobRequest> {
     private final ConcurrentMap<String, DeadlineConsumer<Object>> deadlineConsumers = new ConcurrentHashMap<>();
 

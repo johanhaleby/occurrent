@@ -25,10 +25,16 @@ import java.util.concurrent.TimeUnit;
 
 import static java.time.ZoneOffset.UTC;
 
+/**
+ * A deadline is a date/time in the future when a deadline is up.
+ */
 public abstract class Deadline {
     private Deadline() {
     }
 
+    /**
+     * @return Return the deadline time as a {@link Date}.
+     */
     public Date toDate() {
         if (this instanceof InstantDeadLine) {
             return Date.from(toInstant());
@@ -43,6 +49,9 @@ public abstract class Deadline {
         }
     }
 
+    /**
+     * @return Return the deadline time as an {@link Instant}.
+     */
     public Instant toInstant() {
         if (this instanceof InstantDeadLine) {
             return ((InstantDeadLine) this).instant;
@@ -57,67 +66,119 @@ public abstract class Deadline {
         }
     }
 
+    /**
+     * @return Return the deadline time as epoch millis.
+     */
     public long toEpochMilli() {
         return toInstant().toEpochMilli();
     }
 
+    /**
+     * Create a deadline that'll take place at {@code epochMilli}.
+     */
     public static Deadline ofEpochMilli(long epochMilli) {
         return new InstantDeadLine(Instant.ofEpochMilli(epochMilli));
     }
 
+    /**
+     * Create a deadline that'll take place at the supplied {@code date}.
+     */
     public static Deadline of(Date date) {
         Objects.requireNonNull(date, Date.class.getSimpleName() + " cannot be null");
         return new InstantDeadLine(date.toInstant());
     }
 
+    /**
+     * Create a deadline that'll take place at the supplied {@code instant}.
+     */
     public static Deadline of(Instant instant) {
         Objects.requireNonNull(instant, Instant.class.getSimpleName() + " cannot be null");
         return new InstantDeadLine(instant);
     }
 
+    /**
+     * Create a deadline that'll take place at the supplied {@code zonedDateTime}.
+     */
     public static Deadline of(ZonedDateTime zonedDateTime) {
         Objects.requireNonNull(zonedDateTime, ZonedDateTime.class.getSimpleName() + " cannot be null");
         return new ZonedDateTimeDeadLine(zonedDateTime);
     }
 
+    /**
+     * Create a deadline that'll take place at the supplied {@code offsetDateTime}.
+     */
     public static Deadline of(OffsetDateTime offsetDateTime) {
         Objects.requireNonNull(offsetDateTime, OffsetDateTime.class.getSimpleName() + " cannot be null");
         return new OffsetDateTimeDeadLine(offsetDateTime);
     }
 
+    /**
+     * Create a deadline that'll take place at the supplied {@code localDateTime}.
+     */
     public static Deadline of(LocalDateTime localDateTime) {
         Objects.requireNonNull(localDateTime, LocalDateTime.class.getSimpleName() + " cannot be null");
         return new LocalDateTimeDeadLine(localDateTime);
     }
 
+    /**
+     * Create a deadline that'll take place as soon as possible
+     */
     public static Deadline asap() {
         return new InstantDeadLine(Instant.now());
     }
 
+    /**
+     * Create a deadline that'll take place as after the supplied number of {@code millis}
+     */
     public static Deadline afterMillis(long millis) {
         return new InstantDeadLine(Instant.now().plusMillis(millis));
     }
 
+    /**
+     * Create a deadline that'll take place as after the supplied number of {@code seconds}
+     */
     public static Deadline afterSeconds(long seconds) {
         return afterMillis(TimeUnit.SECONDS.toMillis(seconds));
     }
 
+    /**
+     * Create a deadline that'll take place as after the supplied number of {@code minutes}
+     */
     public static Deadline afterMinutes(long minutes) {
         return afterMillis(TimeUnit.MINUTES.toMillis(minutes));
     }
 
+    /**
+     * Create a deadline that'll take place as after the supplied number of {@code hours}
+     */
     public static Deadline afterHours(long hours) {
         return afterMillis(TimeUnit.HOURS.toMillis(hours));
     }
 
+    /**
+     * Create a deadline that'll take place as after the supplied number of {@code days}
+     */
     public static Deadline afterDays(long days) {
         return afterMillis(TimeUnit.DAYS.toMillis(days));
     }
 
+    /**
+     * Create a deadline that'll take place as after the supplied number of {@code weeks}
+     */
+    public static Deadline afterWeeks(long weeks) {
+        return afterMillis(TimeUnit.DAYS.toMillis(weeks * 7));
+    }
+
+    /**
+     * Create a deadline that'll take place as after the supplied {@code duration}
+     */
     public static Deadline afterDuration(Duration duration) {
         return afterMillis(duration.toMillis());
     }
 
+    /**
+     * Create a deadline that'll take place as after the supplied {@code time} and {@code timeUnit}
+     */
     public static Deadline afterTime(long time, TimeUnit timeUnit) {
         return afterMillis(timeUnit.toMillis(time));
     }

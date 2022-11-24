@@ -23,8 +23,6 @@ import org.junit.jupiter.api.DisplayNameGeneration;
 import org.junit.jupiter.api.DisplayNameGenerator.ReplaceUnderscores;
 import org.junit.jupiter.api.Test;
 import org.occurrent.deadline.api.blocking.Deadline;
-import org.occurrent.deadline.api.blocking.DeadlineConsumerRegistry;
-import org.occurrent.deadline.inmemory.internal.DeadlineData;
 
 import java.util.Date;
 import java.util.Objects;
@@ -49,7 +47,7 @@ public class InMemoryDeadlineTest {
 
     @BeforeEach
     void initialize() {
-        BlockingDeque<DeadlineData> queue = new LinkedBlockingDeque<>();
+        BlockingDeque<Object> queue = new LinkedBlockingDeque<>();
         deadlineConsumerRegistry = new InMemoryDeadlineConsumerRegistry(queue);
         deadlineScheduler = new InMemoryDeadlineScheduler(queue);
     }

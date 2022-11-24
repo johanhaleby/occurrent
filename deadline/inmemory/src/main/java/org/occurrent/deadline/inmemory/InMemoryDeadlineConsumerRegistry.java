@@ -34,6 +34,15 @@ import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ConcurrentMap;
 import java.util.concurrent.TimeUnit;
 
+/**
+ * An in-memory implementation of a {@link DeadlineConsumerRegistry}. It uses a {@link BlockingDeque} to communicate with
+ * an {@link InMemoryDeadlineScheduler}. It important that same {@link BlockingDeque} is used for both the {@link InMemoryDeadlineConsumerRegistry}
+ * and {@link InMemoryDeadlineScheduler}. You can configure retries, poll interval etc by using the {@link Config}.
+ * <p></p>
+ * <b>Note:</b> It's important to call {@link #shutdown()} when your application (or test) is shutting down.
+ *
+ * @see DeadlineConsumerRegistry
+ */
 public class InMemoryDeadlineConsumerRegistry implements DeadlineConsumerRegistry {
     private static final Logger log = LoggerFactory.getLogger(InMemoryDeadlineConsumerRegistry.class);
 
@@ -41,11 +50,27 @@ public class InMemoryDeadlineConsumerRegistry implements DeadlineConsumerRegistr
     private final Thread thread;
     private volatile boolean running = true;
 
-    public InMemoryDeadlineConsumerRegistry(BlockingDeque<DeadlineData> deadlineQueue) {
+
+    /**
+     * Create a new InMemoryDeadlineConsumerRegistry with the supplied {@code deadlineQueue}.
+     * It important that same {@link BlockingDeque} is used for both the {@link InMemoryDeadlineConsumerRegistry}
+     * and {@link InMemoryDeadlineScheduler}.
+     *
+     * @param deadlineQueue The queue to use for internal communication
+     */
+    public InMemoryDeadlineConsumerRegistry(BlockingDeque<Object> deadlineQueue) {
         this(deadlineQueue, new Config());
     }
 
-    public InMemoryDeadlineConsumerRegistry(BlockingDeque<DeadlineData> deadlineQueue, Config config) {
+    /**
+     * Create a new InMemoryDeadlineConsumerRegistry with the supplied {@code deadlineQueue} and {@link Config}.
+     * It important that same {@link BlockingDeque} is used for both the {@link InMemoryDeadlineConsumerRegistry}
+     * and {@link InMemoryDeadlineScheduler}.
+     *
+     * @param deadlineQueue The queue to use for internal communication
+     * @param config        The configuration to use
+     */
+    public InMemoryDeadlineConsumerRegistry(BlockingDeque<Object> deadlineQueue, Config config) {
         Objects.requireNonNull(deadlineQueue, "Deadline queue cannot be null");
         Objects.requireNonNull(config, "Config cannot be null");
         final RetryStrategy retryStrategyToUse;
@@ -57,7 +82,7 @@ public class InMemoryDeadlineConsumerRegistry implements DeadlineConsumerRegistr
         thread = new Thread(() -> {
             while (running) {
                 try {
-                    DeadlineData data = deadlineQueue.pollFirst(config.pollInterval, config.pollIntervalTimeUnit);
+                    DeadlineData data = (DeadlineData) deadlineQueue.pollFirst(config.pollInterval, config.pollIntervalTimeUnit);
                     if (data != null) {
                         DeadlineConsumer<Object> deadlineConsumer = deadlineConsumers.get(data.category);
                         if (deadlineConsumer == null) {
@@ -102,6 +127,9 @@ public class InMemoryDeadlineConsumerRegistry implements DeadlineConsumerRegistr
         return Optional.ofNullable((DeadlineConsumer<T>) deadlineConsumers.get(category));
     }
 
+    /**
+     * Shuts down the {@link InMemoryDeadlineConsumerRegistry}
+     */
     public void shutdown() {
         running = false;
         try {
@@ -111,6 +139,9 @@ public class InMemoryDeadlineConsumerRegistry implements DeadlineConsumerRegistr
         }
     }
 
+    /**
+     * Configuration for the {@link InMemoryDeadlineConsumerRegistry}
+     */
     public static class Config {
         final long pollInterval;
         final TimeUnit pollIntervalTimeUnit;
@@ -127,6 +158,13 @@ public class InMemoryDeadlineConsumerRegistry implements DeadlineConsumerRegistr
             this(500, TimeUnit.MILLISECONDS, RetryStrategy.fixed(Duration.ofSeconds(1)));
         }
 
+        /**
+         * Create config with the following settings.
+         *
+         * @param pollInterval         The poll interval
+         * @param pollIntervalTimeUnit The timeunit of the poll interval
+         * @param retryStrategy        The retry strategy to use if a {@link DeadlineConsumer} throws an exception
+         */
         public Config(long pollInterval, TimeUnit pollIntervalTimeUnit, RetryStrategy retryStrategy) {
             if (pollInterval < 1) {
                 throw new IllegalArgumentException("pollInterval must be greater than zero");
@@ -138,14 +176,33 @@ public class InMemoryDeadlineConsumerRegistry implements DeadlineConsumerRegistr
             this.retryStrategy = retryStrategy;
         }
 
+        /**
+         * Specify the poll interval to use (in millis)
+         *
+         * @param pollIntervalMillis The number of millis to use for the poll interval
+         * @return A new instance of {@code Config}
+         */
         public Config pollIntervalMillis(long pollIntervalMillis) {
             return new Config(pollIntervalMillis, TimeUnit.MILLISECONDS, retryStrategy);
         }
 
-        public Config pollInterval(long pollIntervalMillis, TimeUnit timeUnit) {
-            return new Config(pollIntervalMillis, timeUnit, retryStrategy);
+        /**
+         * Specify the poll interval to use
+         *
+         * @param pollInterval The poll interval
+         * @param timeUnit     The poll interval time unit
+         * @return A new instance of {@code Config}
+         */
+        public Config pollInterval(long pollInterval, TimeUnit timeUnit) {
+            return new Config(pollInterval, timeUnit, retryStrategy);
         }
 
+        /**
+         * Specify the retry strategy to use  if a {@link DeadlineConsumer} throws an exception
+         *
+         * @param retryStrategy The retry strategy instance
+         * @return A new instance of {@code Config}
+         */
         public Config retryStrategy(RetryStrategy retryStrategy) {
             return new Config(pollInterval, pollIntervalTimeUnit, retryStrategy);
         }

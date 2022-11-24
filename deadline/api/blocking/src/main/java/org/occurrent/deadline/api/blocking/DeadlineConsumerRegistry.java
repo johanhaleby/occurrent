@@ -19,16 +19,63 @@ package org.occurrent.deadline.api.blocking;
 
 import java.util.Optional;
 
+/**
+ * A {@code DeadlineConsumerRegistry} is a place where you can register consumers that'll be notified when a deadline has occurred.
+ * There can only be one {@link DeadlineConsumer} per {@code category}. You are expected to {@link #register(String, DeadlineConsumer)}
+ * {@link DeadlineConsumer} every time the application starts.
+ */
 public interface DeadlineConsumerRegistry {
+
+    /**
+     * Register a {@link DeadlineConsumer} that will be invoked for each deadline that occur for a given category.
+     *
+     * @param category         The category of the deadline (specified when scheduling a deadline)
+     * @param deadlineConsumer The consumer that'll be invoked when a deadline occurs for the given category.
+     * @return The {@link DeadlineConsumerRegistry} instance.
+     */
     DeadlineConsumerRegistry register(String category, DeadlineConsumer<Object> deadlineConsumer);
 
+    /**
+     * Unregister a {@link DeadlineConsumer} from being invoked a given category.
+     *
+     * @param category The category of the deadline (specified when scheduling a deadline)
+     * @return The {@link DeadlineConsumerRegistry} instance.
+     */
     DeadlineConsumerRegistry unregister(String category);
 
+    /**
+     * Unregister all {@link DeadlineConsumer}'s
+     *
+     * @return The {@link DeadlineConsumerRegistry} instance.
+     */
     DeadlineConsumerRegistry unregisterAll();
 
+    /**
+     * Get the {@link DeadlineConsumer}, if any, that is registered to receive deadlines for the given {@code category}.
+     *
+     * @return The {@link DeadlineConsumerRegistry} instance.
+     */
     <T> Optional<DeadlineConsumer<T>> getConsumer(String category);
 
+    /**
+     * Register a {@link DeadlineConsumer} that is expected to contain data of a specific type.
+     * It'll be invoked for each deadline that occur for a given category.
+     *
+     * @param category         The category of the deadline (specified when scheduling a deadline)
+     * @param deadlineConsumer The consumer that'll be invoked when a deadline occurs for the given category.
+     * @param <T>              The type of data in the {@link DeadlineConsumer}
+     * @return The {@link DeadlineConsumerRegistry} instance.
+     */
     default <T> DeadlineConsumerRegistry register(String category, Class<T> type, DeadlineConsumer<T> deadlineConsumer) {
         return register(category, (id, category1, deadline, data) -> deadlineConsumer.accept(id, category1, deadline, type.cast(data)));
+    }
+
+    /**
+     * Check if the given {@code category} has a {@link DeadlineConsumer} registered.
+     *
+     * @return <code>true</code> if a {@link DeadlineConsumer} is registered for the supplied {@code category}, <code>false</code> otherwise.
+     */
+    default boolean hasConsumer(String category) {
+        return getConsumer(category).isPresent();
     }
 }

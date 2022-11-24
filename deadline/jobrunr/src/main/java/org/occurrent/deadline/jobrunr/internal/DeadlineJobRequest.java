@@ -19,12 +19,15 @@ package org.occurrent.deadline.jobrunr.internal;
 
 import org.jobrunr.jobs.lambdas.JobRequest;
 import org.jobrunr.jobs.lambdas.JobRequestHandler;
-import org.occurrent.deadline.api.blocking.DeadlineConsumerRegistry;
 import org.occurrent.deadline.jobrunr.JobRunrDeadlineConsumerRegistry;
 
 import java.util.Objects;
 import java.util.StringJoiner;
 
+/**
+ * The jobrunr {@link JobRequest} that'll be stored in a database. This class cannot be moved to different package or
+ * changed in a backward incompatible way.
+ */
 public class DeadlineJobRequest implements JobRequest {
     private String id;
     private String category;

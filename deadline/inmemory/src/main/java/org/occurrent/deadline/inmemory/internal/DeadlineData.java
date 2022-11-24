@@ -22,6 +22,9 @@ import org.occurrent.deadline.api.blocking.Deadline;
 import java.util.Objects;
 import java.util.StringJoiner;
 
+/**
+ * Interanal data structure that represent a deadline
+ */
 public class DeadlineData {
     public final String id;
     public final String category;

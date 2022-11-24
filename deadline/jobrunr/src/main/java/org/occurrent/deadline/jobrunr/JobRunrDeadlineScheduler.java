@@ -17,7 +17,6 @@
 
 package org.occurrent.deadline.jobrunr;
 
-import org.jobrunr.jobs.lambdas.JobRequestHandler;
 import org.jobrunr.scheduling.JobRequestScheduler;
 import org.occurrent.deadline.api.blocking.Deadline;
 import org.occurrent.deadline.api.blocking.DeadlineScheduler;
@@ -28,7 +27,7 @@ import java.util.Objects;
 import java.util.UUID;
 
 /**
- * JobRunr deadline scheduler
+ * <a href="https://www.jobrunr.io">JobRunr</a> deadline scheduler implementation.
  */
 public class JobRunrDeadlineScheduler implements DeadlineScheduler {
     private final JobRequestScheduler jobRequestScheduler;

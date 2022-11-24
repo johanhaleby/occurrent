@@ -21,19 +21,42 @@ import java.util.Objects;
 import java.util.UUID;
 
 /**
- * Main interface for deadline schedulers
+ * A {@code DeadlineScheduler} is the place where {@link Deadline}'s are scheduled. You can register {@link DeadlineConsumer}'s
+ * in a {@link DeadlineConsumerRegistry} which will be invoked once the {@link Deadline} is up.
  */
 public interface DeadlineScheduler {
 
+    /**
+     * Schedule a deadline that will take place in the future.
+     *
+     * @param id       The unique id of the deadline
+     * @param category The deadline category, for example "invoice-reminder"
+     * @param deadline The actual date/time of when the deadline takes places
+     * @param data     Data associated with the deadline.
+     */
     void schedule(String id, String category, Deadline deadline, Object data);
 
+    /**
+     * Schedule a deadline that will take place in the future.
+     *
+     * @param id       The unique id of the deadline
+     * @param category The deadline category, for example "invoice-reminder"
+     * @param deadline The actual date/time of when the deadline takes places
+     * @param data     Data associated with the deadline.
+     */
     default void schedule(UUID id, String category, Deadline deadline, Object data) {
         Objects.requireNonNull(id, "id cannot be null");
         schedule(id.toString(), category, deadline, data);
     }
 
+    /**
+     * Cancel a deadline, it will no longer be applied in the future.
+     */
     void cancel(String id);
 
+    /**
+     * Cancel a deadline, it will no longer be applied in the future.
+     */
     default void cancel(UUID id) {
         Objects.requireNonNull(id, "id cannot be null");
         cancel(id.toString());
