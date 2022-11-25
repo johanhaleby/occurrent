@@ -27,7 +27,11 @@ import org.occurrent.domain.DomainEvent
 import org.occurrent.domain.Name
 import org.occurrent.domain.NameDefined
 import org.occurrent.domain.NameWasChanged
+import org.occurrent.library.hederlig.model.Delay
 import java.time.LocalDateTime
+import java.time.Year
+import java.time.ZoneOffset.UTC
+import java.time.ZonedDateTime
 import java.util.*
 
 
@@ -35,8 +39,7 @@ import java.util.*
 class HederligTest {
 
     @Test
-    fun `gdsffd`() {
-        // Given
+    fun `example`() {
         module<Command, DomainEvent> {
             feature("manage name") {
                 commands {
@@ -48,16 +51,16 @@ class HederligTest {
                         println("Name defined: ${event.name}")
                     }
                     on<NameWasChanged> { event, cmdPublisher ->
-                        if (event.name == "John Doe") {
-                            cmdPublisher.publish(ChangeName(UUID.randomUUID().toString(), LocalDateTime.now(), "Forbidden Name"))
+                        when (event.name) {
+                            "John Doe" -> cmdPublisher.publish(ChangeName(UUID.randomUUID().toString(), LocalDateTime.now(), "Forbidden Name"))
+                            "Jane Doe" -> cmdPublisher.publish(ChangeName(UUID.randomUUID().toString(), LocalDateTime.now(), "Mrs ${event.name}"), Delay.ofMinutes(10))
+                            "Ikk Doe" -> cmdPublisher.publish(ChangeName(UUID.randomUUID().toString(), LocalDateTime.now(), "Hohoho"), Delay.until(ZonedDateTime.of(Year.now().value, 12, 25, 15, 0, 0, 0, UTC)))
+                            "Baby Doe" -> println("Baby detected!")
                         }
                     }
                 }
             }
         }
-        // When
 
-        // Then
     }
-
 }

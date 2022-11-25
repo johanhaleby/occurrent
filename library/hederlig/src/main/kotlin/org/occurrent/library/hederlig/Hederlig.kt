@@ -17,6 +17,7 @@
 
 package org.occurrent.library.hederlig
 
+import org.occurrent.library.hederlig.model.Delay
 import kotlin.reflect.KClass
 
 /**
@@ -63,6 +64,7 @@ class FeatureBuilder<C : Any, E : Any> internal constructor(private val name: St
         subscriptionBuilder(subscriptionDefinitions)
     }
 
+    // Subscriptions
     class SubscriptionDefinitions<C : Any, E : Any> internal constructor() {
         val subscriptionHandlers = mutableListOf<SubscriptionDefinition<out C, out E>>()
 
@@ -77,6 +79,7 @@ class FeatureBuilder<C : Any, E : Any> internal constructor(private val name: St
         }
     }
 
+    // Maybe change from CommandPublisher to Application/Module, because maybe one wants to issue a query as a part of a subscription?
     data class SubscriptionDefinition<C : Any, E : Any>(
         val type: KClass<E>,
         val fn: (E, CommandPublisher<C>) -> Unit
@@ -103,10 +106,13 @@ class FeatureBuilder<C : Any, E : Any> internal constructor(private val name: St
 
 interface CommandPublisher<C : Any> {
     fun publish(c: C)
+    fun publish(c: C, delay: Delay)
 }
 
 interface ModuleDefinition<C : Any, E : Any> {
     fun initialize(): Module<C, E>
 }
 
-interface Module<C : Any, E : Any>
+interface Module<C : Any, E : Any> {
+    fun publish(c: C)
+}
