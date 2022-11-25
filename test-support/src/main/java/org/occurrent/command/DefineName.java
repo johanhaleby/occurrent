@@ -33,6 +33,7 @@ public class DefineName implements Command {
         this.name = name;
     }
 
+    @Override
     public String getId() {
         return id;
     }

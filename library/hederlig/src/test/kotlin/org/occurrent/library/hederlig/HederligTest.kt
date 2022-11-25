@@ -46,6 +46,11 @@ class HederligTest {
                     command(DefineName::getId, Name::defineNameFromCommand)
                     command(ChangeName::getId, Name::changeNameFromCommand)
                 }
+                // Alternative
+                commands(Command::getId) {
+                    command(Name::defineNameFromCommand)
+                    command(Name::changeNameFromCommand)
+                }
                 subscriptions {
                     on<NameDefined> { event ->
                         println("Name defined: ${event.name}")

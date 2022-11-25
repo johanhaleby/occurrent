@@ -17,4 +17,5 @@
 package org.occurrent.command;
 
 public interface Command {
+    String getId();
 }

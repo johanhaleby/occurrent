@@ -33,6 +33,7 @@ public class ChangeName implements Command {
         this.newName = newName;
     }
 
+    @Override
     public String getId() {
         return id;
     }

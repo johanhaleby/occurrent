@@ -53,11 +53,18 @@ class ModuleDefinitionBuilder<C : Any, E : Any> internal constructor() {
 
 @ModuleDSL
 class FeatureBuilder<C : Any, E : Any> internal constructor(private val name: String) {
-    private val commandDefinitions = CommandDefinitions<C, E>()
+    private val commandWithIdDefinitions = CommandWithIdDefinitions<C, E>()
+    // TODO Ugly! Fix!
+    private lateinit var commandWithoutIdDefinitions : CommandWithoutIdDefinitions<C, E>
     private val subscriptionDefinitions = SubscriptionDefinitions<C, E>()
 
-    fun commands(commandBuilder: (@ModuleDSL CommandDefinitions<C, E>).() -> Unit) {
-        commandBuilder(commandDefinitions)
+    fun commands(commandBuilder: (@ModuleDSL CommandWithIdDefinitions<C, E>).() -> Unit) {
+        commandBuilder(commandWithIdDefinitions)
+    }
+
+    fun commands(id: (C) -> String, commandBuilder: (@ModuleDSL CommandWithoutIdDefinitions<C, E>).() -> Unit) {
+        commandWithoutIdDefinitions = CommandWithoutIdDefinitions(id)
+        commandBuilder(commandWithoutIdDefinitions)
     }
 
     fun subscriptions(subscriptionBuilder: (@ModuleDSL SubscriptionDefinitions<C, E>).() -> Unit) {
@@ -86,12 +93,21 @@ class FeatureBuilder<C : Any, E : Any> internal constructor(private val name: St
     )
 
     // Commands
-    class CommandDefinitions<C : Any, E : Any> internal constructor() {
+    class CommandWithIdDefinitions<C : Any, E : Any> internal constructor() {
         val commandHandlers = mutableListOf<CommandHandlerDefinition<out C, out E>>()
 
         inline fun <reified CMD : C> command(
             noinline id: (CMD) -> String, noinline commandHandler: (List<E>, CMD) -> List<E>
         ) {
+            commandHandlers.add(CommandHandlerDefinition(CMD::class, id, commandHandler))
+        }
+
+    }
+
+    class CommandWithoutIdDefinitions<C : Any, E : Any> internal constructor(val id: (C) -> String,) {
+        val commandHandlers = mutableListOf<CommandHandlerDefinition<out C, out E>>()
+
+        inline fun <reified CMD : C> command(noinline commandHandler: (List<E>, CMD) -> List<E>) {
             commandHandlers.add(CommandHandlerDefinition(CMD::class, id, commandHandler))
         }
 
