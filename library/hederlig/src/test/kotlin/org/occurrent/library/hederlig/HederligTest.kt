@@ -38,6 +38,7 @@ import java.util.*
 @DisplayNameGeneration(Simple::class)
 class HederligTest {
 
+    // TODO Idea: Introduce "bootstrap" to module definiton. Bootstrap can be an interface, thus we can provide a OccurrentBootStrapper that takes care of wiring everything together.
     @Test
     fun `example`() {
         module<Command, DomainEvent> {
