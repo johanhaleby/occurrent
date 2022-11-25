@@ -106,6 +106,9 @@ class FeatureBuilder<C : Any, E : Any> internal constructor(private val name: St
 
 interface CommandPublisher<C : Any> {
     fun publish(c: C)
+    // When integrating with deadline DSL we can do like this:
+    // 1. Register all command types to the DeadlineRegistry on boot, regardless of whether they are used, with category "hederlig:<command type>" (we can get the type from the command definition)
+    // 2. Schedule a deadline with the command and use the same category!
     fun publish(c: C, delay: Delay)
 }
 
