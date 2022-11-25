@@ -34,6 +34,7 @@
         <module>dsl</module>
         <module>framework</module>
         <module>deadline</module>
+        <module>library</module>
     </modules>
 
     <name>Occurrent</name>
