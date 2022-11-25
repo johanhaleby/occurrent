@@ -39,6 +39,7 @@ import java.util.*
 class HederligTest {
 
     // TODO Idea: Introduce "bootstrap" as a function in ModuleDefiniton. Bootstrap can be an interface, thus we can provide a OccurrentBootStrapper that takes care of wiring everything together.
+    // There can also be a Spring Starter project that creates a bean, "hederligOccurrentBootstraper", that one can inject when creating the module.
     @Test
     fun `example`() {
         module<Command, DomainEvent> {
