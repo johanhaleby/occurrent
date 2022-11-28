@@ -57,11 +57,11 @@ class HederligTest {
                     on<NameDefined> { event ->
                         println("Name defined: ${event.name}")
                     }
-                    on<NameWasChanged> { event, cmdPublisher ->
+                    on<NameWasChanged> { event, ctx ->
                         when (event.name) {
-                            "John Doe" -> cmdPublisher.publish(ChangeName(UUID.randomUUID().toString(), LocalDateTime.now(), "Forbidden Name"))
-                            "Jane Doe" -> cmdPublisher.publish(ChangeName(UUID.randomUUID().toString(), LocalDateTime.now(), "Mrs ${event.name}"), Delay.ofMinutes(10))
-                            "Ikk Doe" -> cmdPublisher.publish(ChangeName(UUID.randomUUID().toString(), LocalDateTime.now(), "Hohoho"), Delay.until(ZonedDateTime.of(Year.now().value, 12, 25, 15, 0, 0, 0, UTC)))
+                            "John Doe" -> ctx.publish(ChangeName(UUID.randomUUID().toString(), LocalDateTime.now(), "Forbidden Name"))
+                            "Jane Doe" -> ctx.publish(ChangeName(UUID.randomUUID().toString(), LocalDateTime.now(), "Mrs ${event.name}"), Delay.ofMinutes(10))
+                            "Ikk Doe" -> ctx.publish(ChangeName(UUID.randomUUID().toString(), LocalDateTime.now(), "Hohoho"), Delay.until(ZonedDateTime.of(Year.now().value, 12, 25, 15, 0, 0, 0, UTC)))
                             "Baby Doe" -> println("Baby detected!")
                         }
                     }

@@ -75,7 +75,7 @@ class FeatureBuilder<C : Any, E : Any> internal constructor(private val name: St
     class SubscriptionDefinitions<C : Any, E : Any> internal constructor() {
         val subscriptionHandlers = mutableListOf<SubscriptionDefinition<out C, out E>>()
 
-        inline fun <reified EVENT : E> on(noinline subscriptionHandler: (EVENT, CommandPublisher<C>) -> Unit) {
+        inline fun <reified EVENT : E> on(noinline subscriptionHandler: (EVENT, Context<C>) -> Unit) {
             subscriptionHandlers.add(SubscriptionDefinition(EVENT::class, subscriptionHandler))
         }
 
@@ -89,7 +89,7 @@ class FeatureBuilder<C : Any, E : Any> internal constructor(private val name: St
     // Maybe change from CommandPublisher to Application/Module, because maybe one wants to issue a query as a part of a subscription?
     data class SubscriptionDefinition<C : Any, E : Any>(
         val type: KClass<E>,
-        val fn: (E, CommandPublisher<C>) -> Unit
+        val fn: (E, Context<C>) -> Unit
     )
 
     // Commands
@@ -120,12 +120,12 @@ class FeatureBuilder<C : Any, E : Any> internal constructor(private val name: St
     )
 }
 
-interface CommandPublisher<C : Any> {
-    fun publish(c: C)
+interface Context<C : Any> {
+    fun publish(command: C)
     // When integrating with deadline DSL we can do like this:
     // 1. Register all command types to the DeadlineRegistry on boot, regardless of whether they are used, with category "hederlig:<command type>" (we can get the type from the command definition)
     // 2. Schedule a deadline with the command and use the same category!
-    fun publish(c: C, delay: Delay)
+    fun publish(command: C, delay: Delay)
 }
 
 interface ModuleDefinition<C : Any, E : Any> {
