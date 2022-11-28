@@ -1,4 +1,7 @@
-#### 0.15.0 (2022-11-24) 
+### Changelog next version
+* The spring-boot-starter module now supports Spring Boot 3 (thanks to Kirill Gavrilov for pull request)
+
+### 0.15.0 (2022-11-24) 
 Introducing deadline scheduling. Scheduling (aka deadlines, alarm clock) is a very handy technique to schedule to commands to be executed in the future or periodically.  
 Imagine, for example, a multiplayer game, where we want to game to end automatically after 10 hours of inactivity.  
 This means that as soon as a player has made a guess, we’d like to schedule a “timeout game command” to be executed after 10 hours.
