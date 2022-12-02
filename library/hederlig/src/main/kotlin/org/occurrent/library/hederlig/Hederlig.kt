@@ -27,24 +27,24 @@ import kotlin.reflect.KClass
 @Target(AnnotationTarget.TYPE, AnnotationTarget.CLASS)
 internal annotation class ModuleDSL
 
-fun <C : Any, E : Any> module(
-    definitionBuilder: (@ModuleDSL ModuleDefinitionBuilder<C, E>).() -> Unit
-): ModuleDefinition<C, E> {
-    val module = ModuleDefinitionBuilder<C, E>().apply(definitionBuilder)
+fun <C : Any, E : Any, Q : Any> module(
+    definitionBuilder: (@ModuleDSL ModuleDefinitionBuilder<C, E, Q>).() -> Unit
+): ModuleDefinition<C, E, Q> {
+    val module = ModuleDefinitionBuilder<C, E, Q>().apply(definitionBuilder)
 
-    return object : ModuleDefinition<C, E> {
-        override fun initialize(): Module<C, E> {
+    return object : ModuleDefinition<C, E, Q> {
+        override fun initialize(): Module<C, E, Q> {
             TODO()
         }
     }
 }
 
 @ModuleDSL
-class ModuleDefinitionBuilder<C : Any, E : Any> internal constructor() {
-    private val features = mutableListOf<FeatureBuilder<C, E>>()
+class ModuleDefinitionBuilder<C : Any, E : Any, Q : Any> internal constructor() {
+    private val features = mutableListOf<FeatureBuilder<C, E, Q>>()
 
-    fun feature(name: String, featureBuilder: (@ModuleDSL FeatureBuilder<C, E>).() -> Unit) {
-        val newFeatureBuilder = FeatureBuilder<C, E>(name)
+    fun feature(name: String, featureBuilder: (@ModuleDSL FeatureBuilder<C, E, Q>).() -> Unit) {
+        val newFeatureBuilder = FeatureBuilder<C, E, Q>(name)
         featureBuilder(newFeatureBuilder)
         features.add(newFeatureBuilder)
     }
@@ -52,11 +52,13 @@ class ModuleDefinitionBuilder<C : Any, E : Any> internal constructor() {
 
 
 @ModuleDSL
-class FeatureBuilder<C : Any, E : Any> internal constructor(private val name: String) {
+class FeatureBuilder<C : Any, E : Any, Q : Any> internal constructor(private val name: String) {
     private val commandWithIdDefinitions = CommandWithIdDefinitions<C, E>()
+
     // TODO Ugly! Fix!
-    private lateinit var commandWithoutIdDefinitions : CommandWithoutIdDefinitions<C, E>
+    private lateinit var commandWithoutIdDefinitions: CommandWithoutIdDefinitions<C, E>
     private val subscriptionDefinitions = SubscriptionDefinitions<C, E>()
+    private val queryDefinitions = QueryDefinitions<Q>()
 
     fun commands(commandBuilder: (@ModuleDSL CommandWithIdDefinitions<C, E>).() -> Unit) {
         commandBuilder(commandWithIdDefinitions)
@@ -71,11 +73,31 @@ class FeatureBuilder<C : Any, E : Any> internal constructor(private val name: St
         subscriptionBuilder(subscriptionDefinitions)
     }
 
+    fun queries(queryBuilder: (@ModuleDSL QueryDefinitions<Q>).() -> Unit) {
+        queryBuilder(queryDefinitions)
+    }
+
+    // Queries
+    class QueryDefinitions<Q : Any> internal constructor() {
+        val queryHandlers = mutableListOf<QueryDefinition<out Q, Any>>()
+
+        inline fun <reified QUERY : Q, R : Any> query(noinline queryHandler: (QUERY) -> R) {
+            queryHandlers.add(QueryDefinition(QUERY::class, queryHandler))
+        }
+    }
+
+    // Maybe change from CommandPublisher to Application/Module, because maybe one wants to issue a query as a part of a subscription?
+    data class QueryDefinition<Q : Any, R : Any>(
+        val type: KClass<Q>,
+        val fn: (Q) -> R
+    )
+
+
     // Subscriptions
     class SubscriptionDefinitions<C : Any, E : Any> internal constructor() {
         val subscriptionHandlers = mutableListOf<SubscriptionDefinition<out C, out E>>()
 
-        inline fun <reified EVENT : E> on(noinline subscriptionHandler: (EVENT, Context<C>) -> Unit) {
+        inline fun <reified EVENT : E> on(noinline subscriptionHandler: (EVENT, CommandContext<C>) -> Unit) {
             subscriptionHandlers.add(SubscriptionDefinition(EVENT::class, subscriptionHandler))
         }
 
@@ -89,7 +111,7 @@ class FeatureBuilder<C : Any, E : Any> internal constructor(private val name: St
     // Maybe change from CommandPublisher to Application/Module, because maybe one wants to issue a query as a part of a subscription?
     data class SubscriptionDefinition<C : Any, E : Any>(
         val type: KClass<E>,
-        val fn: (E, Context<C>) -> Unit
+        val fn: (E, CommandContext<C>) -> Unit
     )
 
     // Commands
@@ -104,7 +126,7 @@ class FeatureBuilder<C : Any, E : Any> internal constructor(private val name: St
 
     }
 
-    class CommandWithoutIdDefinitions<C : Any, E : Any> internal constructor(val id: (C) -> String,) {
+    class CommandWithoutIdDefinitions<C : Any, E : Any> internal constructor(val id: (C) -> String) {
         val commandHandlers = mutableListOf<CommandHandlerDefinition<out C, out E>>()
 
         inline fun <reified CMD : C> command(noinline commandHandler: (List<E>, CMD) -> List<E>) {
@@ -120,18 +142,19 @@ class FeatureBuilder<C : Any, E : Any> internal constructor(private val name: St
     )
 }
 
-interface Context<C : Any> {
+interface CommandContext<C : Any> {
     fun publish(command: C)
+
     // When integrating with deadline DSL we can do like this:
     // 1. Register all command types to the DeadlineRegistry on boot, regardless of whether they are used, with category "hederlig:<command type>" (we can get the type from the command definition)
     // 2. Schedule a deadline with the command and use the same category!
     fun publish(command: C, delay: Delay)
 }
 
-interface ModuleDefinition<C : Any, E : Any> {
-    fun initialize(): Module<C, E>
+interface ModuleDefinition<C : Any, E : Any, Q : Any> {
+    fun initialize(): Module<C, E, Q>
 }
 
-interface Module<C : Any, E : Any> {
+interface Module<C : Any, E : Any, Q : Any> {
     fun publish(c: C)
 }

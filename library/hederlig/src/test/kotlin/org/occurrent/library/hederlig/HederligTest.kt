@@ -28,6 +28,7 @@ import org.occurrent.domain.Name
 import org.occurrent.domain.NameDefined
 import org.occurrent.domain.NameWasChanged
 import org.occurrent.library.hederlig.model.Delay
+import org.occurrent.library.hederlig.domain.NameQuery
 import java.time.LocalDateTime
 import java.time.Year
 import java.time.ZoneOffset.UTC
@@ -42,7 +43,7 @@ class HederligTest {
     // There can also be a Spring Starter project that creates a bean, "hederligOccurrentBootstraper", that one can inject when creating the module.
     @Test
     fun `example`() {
-        module<Command, DomainEvent> {
+        module<Command, DomainEvent, NameQuery> {
             feature("manage name") {
                 commands {
                     command(DefineName::getId, Name::defineNameFromCommand)
@@ -64,6 +65,11 @@ class HederligTest {
                             "Ikk Doe" -> ctx.publish(ChangeName(UUID.randomUUID().toString(), LocalDateTime.now(), "Hohoho"), Delay.until(ZonedDateTime.of(Year.now().value, 12, 25, 15, 0, 0, 0, UTC)))
                             "Baby Doe" -> println("Baby detected!")
                         }
+                    }
+                }
+                queries {
+                    query<AllNames> { q ->
+                        
                     }
                 }
             }
