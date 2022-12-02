@@ -85,6 +85,7 @@ class FeatureBuilder<C : Any, E : Any, Q : Any> internal constructor(private val
             query { q: QUERY, _ -> queryHandler(q) }
         }
 
+        @JvmName("queryContext")
         inline fun <reified QUERY : Q> query(noinline queryHandler: (QueryContext<E>) -> Any?) {
             query { _: QUERY, ctx ->
                 queryHandler(ctx)
