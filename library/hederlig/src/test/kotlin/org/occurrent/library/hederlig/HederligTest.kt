@@ -27,8 +27,10 @@ import org.occurrent.domain.DomainEvent
 import org.occurrent.domain.Name
 import org.occurrent.domain.NameDefined
 import org.occurrent.domain.NameWasChanged
+import org.occurrent.library.hederlig.domain.AllNames
+import org.occurrent.library.hederlig.domain.PersonNamed
+import org.occurrent.library.hederlig.domain.Query
 import org.occurrent.library.hederlig.model.Delay
-import org.occurrent.library.hederlig.domain.NameQuery
 import java.time.LocalDateTime
 import java.time.Year
 import java.time.ZoneOffset.UTC
@@ -43,17 +45,28 @@ class HederligTest {
     // There can also be a Spring Starter project that creates a bean, "hederligOccurrentBootstraper", that one can inject when creating the module.
     @Test
     fun `example`() {
-        module<Command, DomainEvent, NameQuery> {
+        module<Command, DomainEvent, Query> {
             feature("manage name") {
                 commands {
                     command(DefineName::getId, Name::defineNameFromCommand)
                     command(ChangeName::getId, Name::changeNameFromCommand)
                 }
-                // Alternative
+                // Alternative 1
                 commands(Command::getId) {
                     command(Name::defineNameFromCommand)
                     command(Name::changeNameFromCommand)
                 }
+
+                // Alternative 2 - When domain model doesn't use commands!
+                commands {
+                    command(DefineName::getId) { e, cmd ->
+                        Name.defineName(e, cmd.id, cmd.time, cmd.name)
+                    }
+                    command<ChangeName>({ changeName -> changeName.id }) { e, cmd ->
+                        Name.defineName(e, cmd.id, cmd.time, cmd.newName)
+                    }
+                }
+
                 subscriptions {
                     on<NameDefined> { event ->
                         println("Name defined: ${event.name}")
@@ -68,12 +81,14 @@ class HederligTest {
                     }
                 }
                 queries {
-                    query<AllNames> { q ->
-                        
+                    query<AllNames> { ctx ->
+                        ctx.queryForSequence<NameDefined>().map { e -> e.name }
+                    }
+                    query<PersonNamed> { (name), ctx ->
+                        ctx.queryForSequence<NameDefined>().filter { e -> e.name == name }
                     }
                 }
             }
         }
-
     }
 }

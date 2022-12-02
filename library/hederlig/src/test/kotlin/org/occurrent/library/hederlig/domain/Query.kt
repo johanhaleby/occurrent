@@ -18,6 +18,6 @@
 package org.occurrent.library.hederlig.domain
 
 
-sealed interface NameQuery
-object AllNames : NameQuery
-data class PersonNamed(val name: String) : NameQuery
+sealed interface Query
+object AllNames : Query
+data class PersonNamed(val name: String) : Query

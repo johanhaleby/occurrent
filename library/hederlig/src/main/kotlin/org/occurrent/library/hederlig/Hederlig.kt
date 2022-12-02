@@ -58,7 +58,7 @@ class FeatureBuilder<C : Any, E : Any, Q : Any> internal constructor(private val
     // TODO Ugly! Fix!
     private lateinit var commandWithoutIdDefinitions: CommandWithoutIdDefinitions<C, E>
     private val subscriptionDefinitions = SubscriptionDefinitions<C, E>()
-    private val queryDefinitions = QueryDefinitions<Q>()
+    private val queryDefinitions = QueryDefinitions<Q, E>()
 
     fun commands(commandBuilder: (@ModuleDSL CommandWithIdDefinitions<C, E>).() -> Unit) {
         commandBuilder(commandWithIdDefinitions)
@@ -73,23 +73,35 @@ class FeatureBuilder<C : Any, E : Any, Q : Any> internal constructor(private val
         subscriptionBuilder(subscriptionDefinitions)
     }
 
-    fun queries(queryBuilder: (@ModuleDSL QueryDefinitions<Q>).() -> Unit) {
+    fun queries(queryBuilder: (@ModuleDSL QueryDefinitions<Q, E>).() -> Unit) {
         queryBuilder(queryDefinitions)
     }
 
     // Queries
-    class QueryDefinitions<Q : Any> internal constructor() {
-        val queryHandlers = mutableListOf<QueryDefinition<out Q, Any>>()
+    class QueryDefinitions<Q : Any, E : Any> internal constructor() {
+        val queryHandlers = mutableListOf<QueryDefinition<out Q, out E>>()
 
-        inline fun <reified QUERY : Q, R : Any> query(noinline queryHandler: (QUERY) -> R) {
+        inline fun <reified QUERY : Q> query(noinline queryHandler: (QUERY) -> Any?) {
+            query { q: QUERY, _ -> queryHandler(q) }
+        }
+
+        inline fun <reified QUERY : Q> query(noinline queryHandler: (QueryContext<E>) -> Any?) {
+            query { _: QUERY, ctx ->
+                queryHandler(ctx)
+            }
+        }
+
+        inline fun <reified QUERY : Q> query(noinline queryHandler: (QUERY, QueryContext<E>) -> Any?) {
             queryHandlers.add(QueryDefinition(QUERY::class, queryHandler))
         }
+
+        // TODO Add Occurrent specific extension functions in the Occurrent Bootstrap Module that expose methods in "domain queries" interface
     }
 
     // Maybe change from CommandPublisher to Application/Module, because maybe one wants to issue a query as a part of a subscription?
-    data class QueryDefinition<Q : Any, R : Any>(
+    data class QueryDefinition<Q : Any, E : Any>(
         val type: KClass<Q>,
-        val fn: (Q) -> R
+        val fn: (Q, QueryContext<E>) -> Any?
     )
 
 
@@ -149,6 +161,10 @@ interface CommandContext<C : Any> {
     // 1. Register all command types to the DeadlineRegistry on boot, regardless of whether they are used, with category "hederlig:<command type>" (we can get the type from the command definition)
     // 2. Schedule a deadline with the command and use the same category!
     fun publish(command: C, delay: Delay)
+}
+
+interface QueryContext<E : Any> {
+    fun <EVENT : E> queryForSequence(): Sequence<EVENT>
 }
 
 interface ModuleDefinition<C : Any, E : Any, Q : Any> {
