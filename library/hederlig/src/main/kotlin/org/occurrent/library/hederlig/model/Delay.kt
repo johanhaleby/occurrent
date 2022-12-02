@@ -21,7 +21,9 @@ import java.time.Duration
 import java.time.Instant
 import java.time.ZonedDateTime
 
-
+/**
+ * Data structure that represents Delay's
+ */
 sealed interface Delay {
     companion object {
         fun ofMinutes(minutes: Long): Delay = RelativeDelay(Duration.ofMinutes(minutes))
