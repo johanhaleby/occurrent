@@ -41,20 +41,14 @@ import static org.occurrent.retry.internal.RetryExecution.executeWithRetry;
  * </pre>
  * </p>
  */
-public abstract class RetryStrategy {
-
-    private RetryStrategy() {
-    }
-
-    private static final Predicate<Throwable> ALWAYS_RETRY = __ -> true;
-
+public sealed interface RetryStrategy {
     /**
      * Create a retry strategy that performs retries if exceptions are caught.
      *
      * @return {@link Retry}
      * @see Retry
      */
-    public static Retry retry() {
+    static Retry retry() {
         return new Retry();
     }
 
@@ -64,7 +58,7 @@ public abstract class RetryStrategy {
      * @return {@link DontRetry}
      * @see DontRetry
      */
-    public static DontRetry none() {
+    static DontRetry none() {
         return DontRetry.INSTANCE;
     }
 
@@ -80,7 +74,7 @@ public abstract class RetryStrategy {
      * @param multiplier Multiplier between retries
      * @return A retry strategy with exponential backoff
      */
-    public static Retry exponentialBackoff(Duration initial, Duration max, double multiplier) {
+    static Retry exponentialBackoff(Duration initial, Duration max, double multiplier) {
         return RetryStrategy.retry().backoff(Backoff.exponential(initial, max, multiplier));
     }
 
@@ -94,7 +88,7 @@ public abstract class RetryStrategy {
      * @param duration The duration to wait before retry
      * @return A retry strategy with fixed backoff
      */
-    public static Retry fixed(Duration duration) {
+    static Retry fixed(Duration duration) {
         return RetryStrategy.retry().backoff(Backoff.fixed(duration));
     }
 
@@ -108,7 +102,7 @@ public abstract class RetryStrategy {
      * @param millis The number of millis to wait before retry
      * @return A retry strategy with fixed backoff
      */
-    public static Retry fixed(long millis) {
+    static Retry fixed(long millis) {
         return RetryStrategy.retry().backoff(Backoff.fixed(millis));
     }
 
@@ -119,9 +113,9 @@ public abstract class RetryStrategy {
      * @param supplier The supplier to execute
      * @return The result of the supplier, if successful.
      */
-    public <T> T execute(Supplier<T> supplier) {
+    default <T> T execute(Supplier<T> supplier) {
         Objects.requireNonNull(supplier, Supplier.class.getSimpleName() + " cannot be null");
-        return executeWithRetry(supplier, ALWAYS_RETRY, this).get();
+        return executeWithRetry(supplier, __ -> true, this).get();
     }
 
     /**
@@ -130,15 +124,15 @@ public abstract class RetryStrategy {
      *
      * @param runnable The runnable to execute
      */
-    public void execute(Runnable runnable) {
+    default void execute(Runnable runnable) {
         Objects.requireNonNull(runnable, Runnable.class.getSimpleName() + " cannot be null");
-        executeWithRetry(runnable, ALWAYS_RETRY, this).run();
+        executeWithRetry(runnable, __ -> true, this).run();
     }
 
     /**
      * A retry strategy that doesn't retry at all. Just rethrows the exception.
      */
-    public static class DontRetry extends RetryStrategy {
+    final class DontRetry implements RetryStrategy {
         private static final DontRetry INSTANCE = new DontRetry();
 
         private DontRetry() {
@@ -160,7 +154,7 @@ public abstract class RetryStrategy {
      *     <li>No error listener (will retry silently)</li>
      * </ul>
      */
-    public static class Retry extends RetryStrategy {
+    final class Retry implements RetryStrategy {
         private static final BiConsumer<RetryInfo, Throwable> NOOP_ERROR_LISTENER = (__, ___) -> {
         };
 
@@ -180,7 +174,7 @@ public abstract class RetryStrategy {
         }
 
         private Retry() {
-            this(Backoff.none(), infinite(), ALWAYS_RETRY, NOOP_ERROR_LISTENER);
+            this(Backoff.none(), infinite(), __ -> true, NOOP_ERROR_LISTENER);
         }
 
         /**
@@ -258,8 +252,7 @@ public abstract class RetryStrategy {
         @Override
         public boolean equals(Object o) {
             if (this == o) return true;
-            if (!(o instanceof Retry)) return false;
-            Retry retry = (Retry) o;
+            if (!(o instanceof Retry retry)) return false;
             return Objects.equals(backoff, retry.backoff) && Objects.equals(maxAttempts, retry.maxAttempts) && Objects.equals(retryPredicate, retry.retryPredicate) && Objects.equals(errorListener, retry.errorListener);
         }
 
@@ -279,3 +272,4 @@ public abstract class RetryStrategy {
         }
     }
 }
+
