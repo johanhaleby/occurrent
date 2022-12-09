@@ -73,7 +73,7 @@ public sealed interface WriteCondition {
 
         @Override
         public String toString() {
-            return condition == null ? "any" : condition.description;
+            return condition == null ? "any" : condition.description();
         }
 
         public boolean isAny() {

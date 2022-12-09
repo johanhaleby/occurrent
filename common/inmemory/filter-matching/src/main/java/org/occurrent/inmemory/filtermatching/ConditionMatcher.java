@@ -23,7 +23,6 @@ import org.occurrent.condition.Condition.SingleOperandCondition;
 import org.occurrent.condition.Condition.SingleOperandConditionName;
 
 import java.net.URI;
-import java.util.HashSet;
 import java.util.List;
 import java.util.Objects;
 import java.util.Set;
@@ -39,22 +38,12 @@ import static org.occurrent.filter.Filter.*;
  */
 public class ConditionMatcher {
 
-    private static final Set<String> ATTRIBUTE_NAMES = new HashSet<String>() {{
-        add(SPEC_VERSION);
-        add(ID);
-        add(TYPE);
-        add(TIME);
-        add(SOURCE);
-        add(SUBJECT);
-        add(DATA_SCHEMA);
-        add(DATA_CONTENT_TYPE);
-    }};
+    private static final Set<String> ATTRIBUTE_NAMES = Set.of(SPEC_VERSION, ID, TYPE, TIME, SOURCE, SUBJECT, DATA_SCHEMA, DATA_CONTENT_TYPE);
 
     public static <T> boolean matchesCondition(CloudEvent cloudEvent, String fieldName, Condition<T> condition) {
-        if (condition instanceof MultiOperandCondition) {
-            MultiOperandCondition<T> operation = (MultiOperandCondition<T>) condition;
-            Condition.MultiOperandConditionName operationName = operation.operationName;
-            List<Condition<T>> operations = operation.operations;
+        if (condition instanceof MultiOperandCondition<T> operation) {
+            Condition.MultiOperandConditionName operationName = operation.operationName();
+            List<Condition<T>> operations = operation.operations();
             Stream<Boolean> filters = operations.stream().map(c -> matchesCondition(cloudEvent, fieldName, c));
             switch (operationName) {
                 case AND:
@@ -66,10 +55,9 @@ public class ConditionMatcher {
                 default:
                     throw new IllegalStateException("Unexpected value: " + operationName);
             }
-        } else if (condition instanceof SingleOperandCondition) {
-            SingleOperandCondition<T> singleOperandCondition = (SingleOperandCondition<T>) condition;
-            T expected = singleOperandCondition.operand;
-            SingleOperandConditionName singleOperandConditionName = singleOperandCondition.singleOperandConditionName;
+        } else if (condition instanceof SingleOperandCondition<T> singleOperandCondition) {
+            T expected = singleOperandCondition.operand();
+            SingleOperandConditionName singleOperandConditionName = singleOperandCondition.operandConditionName();
             Object actual = extractValue(cloudEvent, fieldName);
             final boolean matches;
             if (singleOperandConditionName == EQ) {

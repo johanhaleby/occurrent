@@ -29,10 +29,9 @@ import java.util.List;
 public class ConditionToCriteriaConverter {
 
     public static <T> Criteria convertConditionToCriteria(String fieldName, Condition<T> condition) {
-        if (condition instanceof Condition.MultiOperandCondition) {
-            MultiOperandCondition<T> operation = (MultiOperandCondition<T>) condition;
-            Condition.MultiOperandConditionName operationName = operation.operationName;
-            List<Condition<T>> operations = operation.operations;
+        if (condition instanceof MultiOperandCondition<T> operation) {
+            Condition.MultiOperandConditionName operationName = operation.operationName();
+            List<Condition<T>> operations = operation.operations();
             Criteria[] criteria = operations.stream().map(c -> convertConditionToCriteria(fieldName, c)).toArray(Criteria[]::new);
             switch (operationName) {
                 case AND:
@@ -44,10 +43,9 @@ public class ConditionToCriteriaConverter {
                 default:
                     throw new IllegalStateException("Unexpected value: " + operationName);
             }
-        } else if (condition instanceof SingleOperandCondition) {
-            SingleOperandCondition<T> singleOperandCondition = (SingleOperandCondition<T>) condition;
-            T value = singleOperandCondition.operand;
-            Condition.SingleOperandConditionName singleOperandConditionName = singleOperandCondition.singleOperandConditionName;
+        } else if (condition instanceof SingleOperandCondition<T> singleOperandCondition) {
+            T value = singleOperandCondition.operand();
+            Condition.SingleOperandConditionName singleOperandConditionName = singleOperandCondition.operandConditionName();
             switch (singleOperandConditionName) {
                 case EQ:
                     return Criteria.where(fieldName).is(value);

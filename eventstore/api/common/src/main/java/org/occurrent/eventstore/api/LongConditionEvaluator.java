@@ -33,10 +33,9 @@ public class LongConditionEvaluator {
     public static boolean evaluate(Condition<Long> condition, long value) {
         Objects.requireNonNull(condition, "Condition cannot be null");
 
-        if (condition instanceof MultiOperandCondition) {
-            MultiOperandCondition<Long> operation = (MultiOperandCondition<Long>) condition;
-            MultiOperandConditionName operationName = operation.operationName;
-            Stream<Condition<Long>> operations = operation.operations.stream();
+        if (condition instanceof MultiOperandCondition<Long> operation) {
+            MultiOperandConditionName operationName = operation.operationName();
+            Stream<Condition<Long>> operations = operation.operations().stream();
             switch (operationName) {
                 case AND:
                     return operations.allMatch(c -> evaluate(c, value));
@@ -47,10 +46,9 @@ public class LongConditionEvaluator {
                 default:
                     throw new IllegalStateException("Unexpected value: " + operationName);
             }
-        } else if (condition instanceof SingleOperandCondition) {
-            SingleOperandCondition<Long> singleOperandCondition = (SingleOperandCondition<Long>) condition;
-            long operand = singleOperandCondition.operand;
-            SingleOperandConditionName singleOperandConditionName = singleOperandCondition.singleOperandConditionName;
+        } else if (condition instanceof SingleOperandCondition<Long> singleOperandCondition) {
+            long operand = singleOperandCondition.operand();
+            SingleOperandConditionName singleOperandConditionName = singleOperandCondition.operandConditionName();
             switch (singleOperandConditionName) {
                 case EQ:
                     return value == operand;

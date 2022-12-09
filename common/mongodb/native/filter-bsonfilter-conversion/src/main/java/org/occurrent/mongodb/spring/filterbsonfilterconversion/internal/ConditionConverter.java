@@ -31,10 +31,9 @@ import java.util.List;
 public class ConditionConverter {
 
     public static <T> Bson convertConditionToBsonCriteria(String fieldName, Condition<T> condition) {
-        if (condition instanceof MultiOperandCondition) {
-            MultiOperandCondition<T> operation = (MultiOperandCondition<T>) condition;
-            Condition.MultiOperandConditionName operationName = operation.operationName;
-            List<Condition<T>> operations = operation.operations;
+        if (condition instanceof MultiOperandCondition<T> operation) {
+            Condition.MultiOperandConditionName operationName = operation.operationName();
+            List<Condition<T>> operations = operation.operations();
             Bson[] filters = operations.stream().map(c -> convertConditionToBsonCriteria(fieldName, c)).toArray(Bson[]::new);
             switch (operationName) {
                 case AND:
@@ -48,8 +47,8 @@ public class ConditionConverter {
             }
         } else if (condition instanceof SingleOperandCondition) {
             SingleOperandCondition<T> singleOperandCondition = (SingleOperandCondition<T>) condition;
-            T expectedVersion = singleOperandCondition.operand;
-            SingleOperandConditionName singleOperandConditionName = singleOperandCondition.singleOperandConditionName;
+            T expectedVersion = singleOperandCondition.operand();
+            SingleOperandConditionName singleOperandConditionName = singleOperandCondition.operandConditionName();
             switch (singleOperandConditionName) {
                 case EQ:
                     return Filters.eq(fieldName, expectedVersion);

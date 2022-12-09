@@ -31,87 +31,72 @@ import static org.occurrent.condition.Condition.SingleOperandConditionName.*;
  *
  * @param <T> The type of the value in the condition
  */
-public abstract class Condition<T> {
-    public final String description;
+public sealed interface Condition<T> {
 
-    public abstract <T2> Condition<T2> map(Function<T, T2> fn);
+    String description();
 
-    private Condition(String description) {
-        this.description = description;
-    }
+    <T2> Condition<T2> map(Function<T, T2> fn);
 
-    @Override
-    public String toString() {
-        return description;
-    }
+    record SingleOperandCondition<T>(SingleOperandConditionName operandConditionName, T operand, String description) implements Condition<T> {
 
-    public static class SingleOperandCondition<T> extends Condition<T> {
-        public final SingleOperandConditionName singleOperandConditionName;
-        public final T operand;
-
-        private SingleOperandCondition(SingleOperandConditionName singleOperandConditionName, T operand, String description) {
-            super(description);
-            this.singleOperandConditionName = singleOperandConditionName;
-            this.operand = operand;
+        public SingleOperandCondition {
+            requireNonNull(operandConditionName, "Operand condition name cannot be null");
+            requireNonNull(operand, "Operand cannot be null");
+            requireNonNull(description, "Description cannot be null");
         }
 
         @Override
         public <T2> Condition<T2> map(Function<T, T2> fn) {
             requireNonNull(fn, "Mapping function cannot be null");
-            return new SingleOperandCondition<>(singleOperandConditionName, fn.apply(operand), description);
+            return new SingleOperandCondition<>(operandConditionName, fn.apply(operand), description);
         }
     }
 
-    public static class MultiOperandCondition<T> extends Condition<T> {
-        public final MultiOperandConditionName operationName;
-        public final List<Condition<T>> operations;
+    record MultiOperandCondition<T>(MultiOperandConditionName operationName, List<Condition<T>> operations, String description) implements Condition<T> {
 
-        private MultiOperandCondition(final MultiOperandConditionName operationName, List<Condition<T>> operations, String description) {
-            super(description);
+        public MultiOperandCondition {
+            requireNonNull(operationName, "Operation name cannot be null");
             requireNonNull(operations, "Operations cannot be null");
-            this.operationName = operationName;
-            this.operations = Collections.unmodifiableList(operations);
+            requireNonNull(description, "Description cannot be null");
         }
 
         @Override
         public <T2> Condition<T2> map(Function<T, T2> fn) {
-            return new MultiOperandCondition<>(operationName,
-                    operations.stream().map(condition -> condition.map(fn)).collect(Collectors.toList()),
-                    description);
+            return new MultiOperandCondition<>(operationName, operations.stream().map(condition -> condition.map(fn)).collect(Collectors.toList()), description);
         }
     }
 
-    public static <T> Condition<T> eq(T t) {
+    static <T> Condition<T> eq(T t) {
         return new SingleOperandCondition<>(EQ, t, String.format("to be equal to %s", t));
     }
 
-    public static <T> Condition<T> lt(T t) {
+    static <T> Condition<T> lt(T t) {
         return new SingleOperandCondition<>(LT, t, String.format("to be less than %s", t));
     }
 
-    public static <T> Condition<T> gt(T t) {
+    static <T> Condition<T> gt(T t) {
         return new SingleOperandCondition<>(GT, t, String.format("to be greater than %s", t));
     }
 
-    public static <T> Condition<T> lte(T t) {
+    static <T> Condition<T> lte(T t) {
         return new SingleOperandCondition<>(LTE, t, String.format("to be less than or equal to %s", t));
     }
 
-    public static <T> Condition<T> gte(T t) {
+    static <T> Condition<T> gte(T t) {
         return new SingleOperandCondition<>(GTE, t, String.format("to be greater than or equal to %s", t));
     }
 
-    public static <T> Condition<T> ne(T t) {
+    static <T> Condition<T> ne(T t) {
         return new SingleOperandCondition<>(NE, t, String.format("to not be equal to %s", t));
     }
 
     @SafeVarargs
-    public static <T> Condition<T> and(Condition<T> firstCondition, Condition<T> secondCondition, Condition<T>... additionalConditions) {
+    static <T> Condition<T> and(Condition<T> firstCondition, Condition<T> secondCondition, Condition<T>... additionalConditions) {
         List<Condition<T>> conditions = createList(firstCondition, secondCondition, additionalConditions);
         return and(conditions);
     }
 
-    public static <T> Condition<T> and(List<Condition<T>> conditions) {
+    static <T> Condition<T> and(List<Condition<T>> conditions) {
         return new MultiOperandCondition<>(AND, conditions, conditions.stream().map(Condition::toString).collect(Collectors.joining(" and ")));
     }
 
@@ -119,7 +104,7 @@ public abstract class Condition<T> {
      * Special case of {@link #and(Condition, Condition, Condition[])} where each element will be mapped to equal conditions ({@link #eq(Object)}).
      */
     @SafeVarargs
-    public static <T> Condition<T> and(T first, T second, T... additional) {
+    static <T> Condition<T> and(T first, T second, T... additional) {
         List<Condition<T>> conditions = createList(first, second, additional).stream().map(Condition::eq).collect(Collectors.toList());
         return and(conditions);
     }
@@ -128,22 +113,22 @@ public abstract class Condition<T> {
      * Special case of {@link #or(Condition, Condition, Condition[])} where each element will be mapped to equal conditions ({@link #eq(Object)}).
      */
     @SafeVarargs
-    public static <T> Condition<T> or(T first, T second, T... additional) {
+    static <T> Condition<T> or(T first, T second, T... additional) {
         List<Condition<T>> conditions = createList(first, second, additional).stream().map(Condition::eq).collect(Collectors.toList());
         return or(conditions);
     }
 
     @SafeVarargs
-    public static <T> Condition<T> or(Condition<T> firstCondition, Condition<T> secondCondition, Condition<T>... additionalConditions) {
+    static <T> Condition<T> or(Condition<T> firstCondition, Condition<T> secondCondition, Condition<T>... additionalConditions) {
         List<Condition<T>> conditions = createList(firstCondition, secondCondition, additionalConditions);
         return or(conditions);
     }
 
-    public static <T> Condition<T> or(List<Condition<T>> conditions) {
+    static <T> Condition<T> or(List<Condition<T>> conditions) {
         return new MultiOperandCondition<>(OR, conditions, conditions.stream().map(Condition::toString).collect(Collectors.joining(" or ")));
     }
 
-    public static <T> Condition<T> not(Condition<T> condition) {
+    static <T> Condition<T> not(Condition<T> condition) {
         return new MultiOperandCondition<>(NOT, Collections.singletonList(condition), "not " + condition);
     }
 
@@ -159,11 +144,11 @@ public abstract class Condition<T> {
         return conditions;
     }
 
-    public enum SingleOperandConditionName {
+    enum SingleOperandConditionName {
         EQ, LT, GT, LTE, GTE, NE
     }
 
-    public enum MultiOperandConditionName {
+    enum MultiOperandConditionName {
         AND, OR, NOT
     }
 }
