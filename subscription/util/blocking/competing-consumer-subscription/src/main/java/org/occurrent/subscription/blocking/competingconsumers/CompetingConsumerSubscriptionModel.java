@@ -9,7 +9,6 @@ import org.occurrent.subscription.api.blocking.CompetingConsumerStrategy.Competi
 import javax.annotation.PreDestroy;
 import java.util.Objects;
 import java.util.Optional;
-import java.util.StringJoiner;
 import java.util.UUID;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ConcurrentMap;
@@ -289,14 +288,7 @@ public class CompetingConsumerSubscriptionModel implements DelegatingSubscriptio
         competingConsumers.put(subscriptionIdAndSubscriberId, cc.registerPaused(pausedByUser));
     }
 
-    private static class SubscriptionIdAndSubscriberId {
-        private final String subscriptionId;
-        private final String subscriberId;
-
-        private SubscriptionIdAndSubscriberId(String subscriptionId, String subscriberId) {
-            this.subscriptionId = subscriptionId;
-            this.subscriberId = subscriberId;
-        }
+    private record SubscriptionIdAndSubscriberId(String subscriptionId, String subscriberId) {
 
         private static SubscriptionIdAndSubscriberId from(String subscriptionId, String subscriberId) {
             return new SubscriptionIdAndSubscriberId(subscriptionId, subscriberId);
@@ -305,76 +297,55 @@ public class CompetingConsumerSubscriptionModel implements DelegatingSubscriptio
         private static SubscriptionIdAndSubscriberId from(CompetingConsumer cc) {
             return from(cc.getSubscriptionId(), cc.getSubscriberId());
         }
-
-        @Override
-        public boolean equals(Object o) {
-            if (this == o) return true;
-            if (!(o instanceof SubscriptionIdAndSubscriberId)) return false;
-            SubscriptionIdAndSubscriberId that = (SubscriptionIdAndSubscriberId) o;
-            return Objects.equals(subscriptionId, that.subscriptionId) && Objects.equals(subscriberId, that.subscriberId);
-        }
-
-        @Override
-        public int hashCode() {
-            return Objects.hash(subscriptionId, subscriberId);
-        }
-
-        @Override
-        public String toString() {
-            return new StringJoiner(", ", SubscriptionIdAndSubscriberId.class.getSimpleName() + "[", "]")
-                    .add("subscriptionId='" + subscriptionId + "'")
-                    .add("subscriberId='" + subscriberId + "'")
-                    .toString();
-        }
     }
 
 
-    record CompetingConsumer(SubscriptionIdAndSubscriberId subscriptionIdAndSubscriberId, CompetingConsumerState state) {
+    private record CompetingConsumer(SubscriptionIdAndSubscriberId subscriptionIdAndSubscriberId, CompetingConsumerState state) {
 
         boolean hasId(String subscriptionId, String subscriberId) {
-                return hasSubscriptionId(subscriptionId) && Objects.equals(getSubscriberId(), subscriberId);
-            }
-
-            boolean hasSubscriptionId(String subscriptionId) {
-                return Objects.equals(getSubscriptionId(), subscriptionId);
-            }
-
-            boolean isPaused() {
-                return state instanceof Paused;
-            }
-
-            boolean isRunning() {
-                return state instanceof Running;
-            }
-
-            boolean isWaiting() {
-                return state instanceof Waiting;
-            }
-
-            boolean isPausedFor(String subscriptionId) {
-                return isPaused() && hasSubscriptionId(subscriptionId);
-            }
-
-            String getSubscriptionId() {
-                return subscriptionIdAndSubscriberId.subscriptionId;
-            }
-
-            String getSubscriberId() {
-                return subscriptionIdAndSubscriberId.subscriberId;
-            }
-
-            CompetingConsumer registerRunning() {
-                return new CompetingConsumer(subscriptionIdAndSubscriberId, new Running());
-            }
-
-            CompetingConsumer registerPaused() {
-                return registerPaused(state.hasPermissionToConsume());
-            }
-
-            CompetingConsumer registerPaused(boolean pausedByUser) {
-                return new CompetingConsumer(subscriptionIdAndSubscriberId, new Paused(pausedByUser));
-            }
+            return hasSubscriptionId(subscriptionId) && Objects.equals(getSubscriberId(), subscriberId);
         }
+
+        boolean hasSubscriptionId(String subscriptionId) {
+            return Objects.equals(getSubscriptionId(), subscriptionId);
+        }
+
+        boolean isPaused() {
+            return state instanceof Paused;
+        }
+
+        boolean isRunning() {
+            return state instanceof Running;
+        }
+
+        boolean isWaiting() {
+            return state instanceof Waiting;
+        }
+
+        boolean isPausedFor(String subscriptionId) {
+            return isPaused() && hasSubscriptionId(subscriptionId);
+        }
+
+        String getSubscriptionId() {
+            return subscriptionIdAndSubscriberId.subscriptionId;
+        }
+
+        String getSubscriberId() {
+            return subscriptionIdAndSubscriberId.subscriberId;
+        }
+
+        CompetingConsumer registerRunning() {
+            return new CompetingConsumer(subscriptionIdAndSubscriberId, new Running());
+        }
+
+        CompetingConsumer registerPaused() {
+            return registerPaused(state.hasPermissionToConsume());
+        }
+
+        CompetingConsumer registerPaused(boolean pausedByUser) {
+            return new CompetingConsumer(subscriptionIdAndSubscriberId, new Paused(pausedByUser));
+        }
+    }
 
     static abstract class CompetingConsumerState {
         private CompetingConsumerState() {
@@ -447,28 +418,5 @@ public class CompetingConsumerSubscriptionModel implements DelegatingSubscriptio
 
     private Stream<CompetingConsumer> findCompetingConsumersMatching(Predicate<CompetingConsumer> predicate) {
         return competingConsumers.values().stream().filter(predicate);
-    }
-
-
-    @Override
-    public boolean equals(Object o) {
-        if (this == o) return true;
-        if (!(o instanceof CompetingConsumerSubscriptionModel)) return false;
-        CompetingConsumerSubscriptionModel that = (CompetingConsumerSubscriptionModel) o;
-        return Objects.equals(delegate, that.delegate) && Objects.equals(competingConsumerStrategy, that.competingConsumerStrategy) && Objects.equals(competingConsumers, that.competingConsumers);
-    }
-
-    @Override
-    public int hashCode() {
-        return Objects.hash(delegate, competingConsumerStrategy, competingConsumers);
-    }
-
-    @Override
-    public String toString() {
-        return new StringJoiner(", ", CompetingConsumerSubscriptionModel.class.getSimpleName() + "[", "]")
-                .add("delegate=" + delegate)
-                .add("competingConsumersStrategy=" + competingConsumerStrategy)
-                .add("competingConsumers=" + competingConsumers)
-                .toString();
     }
 }
