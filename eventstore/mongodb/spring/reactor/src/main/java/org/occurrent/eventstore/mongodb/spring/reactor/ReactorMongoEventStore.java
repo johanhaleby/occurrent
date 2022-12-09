@@ -190,7 +190,7 @@ public class ReactorMongoEventStore implements EventStore, EventStoreOperations,
         }
 
         WriteCondition.StreamVersionWriteCondition c = (WriteCondition.StreamVersionWriteCondition) writeCondition;
-        return LongConditionEvaluator.evaluate(c.condition, streamVersion);
+        return LongConditionEvaluator.evaluate(c.condition(), streamVersion);
     }
 
     // Initialization

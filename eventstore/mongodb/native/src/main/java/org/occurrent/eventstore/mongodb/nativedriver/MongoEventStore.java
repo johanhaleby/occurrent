@@ -215,7 +215,7 @@ public class MongoEventStore implements EventStore, EventStoreOperations, EventS
             throw new IllegalArgumentException("Invalid " + WriteCondition.class.getSimpleName() + ": " + writeCondition);
         }
 
-        Condition<Long> condition = ((StreamVersionWriteCondition) writeCondition).condition;
+        Condition<Long> condition = ((StreamVersionWriteCondition) writeCondition).condition();
         return LongConditionEvaluator.evaluate(condition, currentStreamVersion);
     }
 
@@ -300,31 +300,7 @@ public class MongoEventStore implements EventStore, EventStoreOperations, EventS
         return count(filter) > 0;
     }
 
-    private static class EventStreamImpl<T> implements EventStream<T> {
-        private final String id;
-        private final long version;
-        private final Stream<T> events;
-
-        EventStreamImpl(String id, long version, Stream<T> events) {
-            this.id = id;
-            this.version = version;
-            this.events = events;
-        }
-
-        @Override
-        public String id() {
-            return id;
-        }
-
-        @Override
-        public long version() {
-            return version;
-        }
-
-        @Override
-        public Stream<T> events() {
-            return events;
-        }
+    private record EventStreamImpl<T>(String id, long version, Stream<T> events) implements EventStream<T> {
     }
 
     private static void initializeEventStore(MongoCollection<Document> eventStoreCollection, MongoDatabase mongoDatabase) {
@@ -366,8 +342,7 @@ public class MongoEventStore implements EventStore, EventStoreOperations, EventS
         final Bson sort;
         if (sortBy instanceof NaturalImpl) {
             sort = ((NaturalImpl) sortBy).direction == ASCENDING ? ascending(NATURAL) : descending(NATURAL);
-        } else if (sortBy instanceof SingleFieldImpl) {
-            SingleFieldImpl singleField = (SingleFieldImpl) sortBy;
+        } else if (sortBy instanceof SingleFieldImpl singleField) {
             sort = singleField.direction == ASCENDING ? ascending(singleField.fieldName) : descending(singleField.fieldName);
         } else if (sortBy instanceof MultipleSortStepsImpl) {
             sort = ((MultipleSortStepsImpl) sortBy).steps.stream()

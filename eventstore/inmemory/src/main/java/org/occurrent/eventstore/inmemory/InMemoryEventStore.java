@@ -186,7 +186,7 @@ public class InMemoryEventStore implements EventStore, EventStoreOperations, Eve
         }
 
         StreamVersionWriteCondition c = (StreamVersionWriteCondition) writeCondition;
-        return LongConditionEvaluator.evaluate(c.condition, version);
+        return LongConditionEvaluator.evaluate(c.condition(), version);
     }
 
     @Override

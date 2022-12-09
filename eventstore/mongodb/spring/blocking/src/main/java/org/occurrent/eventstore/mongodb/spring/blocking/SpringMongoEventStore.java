@@ -324,7 +324,7 @@ public class SpringMongoEventStore implements EventStore, EventStoreOperations, 
             throw new IllegalArgumentException("Invalid " + WriteCondition.class.getSimpleName() + ": " + writeCondition);
         }
 
-        Condition<Long> condition = ((StreamVersionWriteCondition) writeCondition).condition;
+        Condition<Long> condition = ((StreamVersionWriteCondition) writeCondition).condition();
         return LongConditionEvaluator.evaluate(condition, currentStreamVersion);
     }
 

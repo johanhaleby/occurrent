@@ -18,8 +18,6 @@ package org.occurrent.eventstore.api;
 
 import org.occurrent.condition.Condition;
 
-import java.util.Objects;
-
 import static java.util.Objects.requireNonNull;
 import static org.occurrent.condition.Condition.eq;
 
@@ -27,17 +25,14 @@ import static org.occurrent.condition.Condition.eq;
  * A write condition may be applied when writing events to an event store. If the write condition is not fulfilled the events
  * will not be written.
  */
-public abstract class WriteCondition {
-
-    private WriteCondition() {
-    }
+public sealed interface WriteCondition {
 
     /**
      * Stream version doesn't matter, essentially the same as an unconditional write condition.
      *
      * @return A {@link WriteCondition} with the behavior specified above.
      */
-    public static WriteCondition anyStreamVersion() {
+    static WriteCondition anyStreamVersion() {
         return StreamVersionWriteCondition.any();
     }
 
@@ -47,7 +42,7 @@ public abstract class WriteCondition {
      *
      * @return A {@link WriteCondition} with the behavior specified above.
      */
-    public static WriteCondition streamVersionEq(long version) {
+    static WriteCondition streamVersionEq(long version) {
         return streamVersion(eq(version));
     }
 
@@ -57,20 +52,15 @@ public abstract class WriteCondition {
      *
      * @return A {@link WriteCondition} with the behavior specified above.
      */
-    public static WriteCondition streamVersion(Condition<Long> condition) {
+    static WriteCondition streamVersion(Condition<Long> condition) {
         return StreamVersionWriteCondition.streamVersion(condition);
     }
 
-    public boolean isAnyStreamVersion() {
+    default boolean isAnyStreamVersion() {
         return this instanceof StreamVersionWriteCondition && ((StreamVersionWriteCondition) this).isAny();
     }
 
-    public static class StreamVersionWriteCondition extends WriteCondition {
-        public final Condition<Long> condition;
-
-        private StreamVersionWriteCondition(Condition<Long> condition) {
-            this.condition = condition;
-        }
+    record StreamVersionWriteCondition(Condition<Long> condition) implements WriteCondition {
 
         public static StreamVersionWriteCondition streamVersion(Condition<Long> condition) {
             requireNonNull(condition, "Stream version condition cannot be null");
@@ -88,19 +78,6 @@ public abstract class WriteCondition {
 
         public boolean isAny() {
             return condition == null;
-        }
-
-        @Override
-        public boolean equals(Object o) {
-            if (this == o) return true;
-            if (!(o instanceof StreamVersionWriteCondition)) return false;
-            StreamVersionWriteCondition that = (StreamVersionWriteCondition) o;
-            return Objects.equals(condition, that.condition);
-        }
-
-        @Override
-        public int hashCode() {
-            return Objects.hash(condition);
         }
     }
 }
