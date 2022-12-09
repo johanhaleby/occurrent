@@ -23,22 +23,16 @@ import java.util.function.Function;
 /**
  * The different class name options available for the {@link ReflectionCloudEventTypeMapper}.
  */
-public abstract class ClassName {
+public sealed interface ClassName {
 
-    private ClassName() {
-    }
-
-    public static class Simple<T> extends ClassName {
-        public final Function<String, Class<? extends T>> domainEventTypeFromCloudEventType;
-
-        public Simple(Function<String, Class<? extends T>> domainEventTypeFromCloudEventType) {
+    record Simple<T>(Function<String, Class<? extends T>> domainEventTypeFromCloudEventType) implements ClassName {
+        public Simple {
             Objects.requireNonNull(domainEventTypeFromCloudEventType, "packageNameFromCloudEventType cannot be null");
-            this.domainEventTypeFromCloudEventType = domainEventTypeFromCloudEventType;
         }
     }
 
 
-    public static class Qualified extends ClassName {
+    record Qualified() implements ClassName {
     }
 
     /**
@@ -46,7 +40,7 @@ public abstract class ClassName {
      * When getting the domain event type from the cloud event, prepend the {@code packageName}.
      * This assumes that <i>all</i> events have the same package name.
      */
-    public static <T> Simple<T> simple(String packageName) {
+    static <T> Simple<T> simple(String packageName) {
         String packageNameBeforeDots = packageName == null ? "" : packageName.trim();
         final String packageNameToUse;
         if (packageNameBeforeDots.endsWith(".")) {
@@ -71,18 +65,18 @@ public abstract class ClassName {
      * When getting the domain event type from the cloud event, prepend the {@code packageName} from the supplied {@code domainEventType}.
      * This assumes that <i>all</i> events have the same package name as the {@code domainEventType}.
      */
-    public static <T> Simple<T> simple(Class<?> domainEventType) {
+    static <T> Simple<T> simple(Class<?> domainEventType) {
         Objects.requireNonNull(domainEventType, "domainEventType cannot be null");
         return simple(domainEventType.getPackage());
     }
 
     /**
-     * Use the name of a this package to represent the cloud event type.
+     * Use the name of a package to represent the cloud event type.
      * <p>
      * When getting the domain event type from the cloud event, prepend the {@code packageName} from the supplied {@code domainEventPackage}.
      * This assumes that <i>all</i> events have the same package name as {@code domainEventPackage}.
      */
-    public static <T> Simple<T> simple(Package domainEventPackage) {
+    static <T> Simple<T> simple(Package domainEventPackage) {
         Objects.requireNonNull(domainEventPackage, "domainEventPackage cannot be null");
         return simple(domainEventPackage.getName());
     }
@@ -93,7 +87,7 @@ public abstract class ClassName {
      *
      * @param packageNameFromCloudEventType A function that returns the fully-qualified domain event class name from the simple domain event class name (i.e. the cloud event type).
      */
-    public static <T> Simple<T> simple(Function<String, Class<? extends T>> packageNameFromCloudEventType) {
+    static <T> Simple<T> simple(Function<String, Class<? extends T>> packageNameFromCloudEventType) {
         return new Simple<>(packageNameFromCloudEventType);
     }
 
@@ -101,7 +95,7 @@ public abstract class ClassName {
      * Use the (fully) qualified name of a class to represent the cloud event type.
      * This is not recommended in production systems.
      */
-    public static Qualified qualified() {
+    static Qualified qualified() {
         return new Qualified();
     }
 }
