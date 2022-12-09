@@ -1,5 +1,5 @@
 #!/bin/bash
-echo "!!!!!DON'T FORGET TO SWTICH TO JAVA 8!!!!!"
+echo "!!!!!DON'T FORGET TO SWTICH TO JAVA 17!!!!!"
 read -p "Enter the version to release: " releaseVersion
 echo "Starting to release Occurrent $releaseVersion"
 
