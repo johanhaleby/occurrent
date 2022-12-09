@@ -695,7 +695,7 @@ public class SpringMongoSubscriptionModelTest {
             // Called in org.springframework.data.mongodb.core.messaging.ChangeStreamTask#initCursor
             when(mongoTemplateSpy.getDb()).thenReturn(mongoDatabase).thenCallRealMethod();
             when(mongoDatabase.getCollection("events")).thenReturn(mongoCollection);
-            when(mongoCollection.watch(any(Class.class))).thenThrow(new UncategorizedMongoDbException("expected", new MongoQueryException(new MongoCommandException(new BsonDocument(elements), new ServerAddress()))));
+            when(mongoCollection.watch(any(Class.class))).thenThrow(new UncategorizedMongoDbException("expected", new MongoQueryException(new BsonDocument(elements), new ServerAddress())));
 
             subscriptionModel = new SpringMongoSubscriptionModel(mongoTemplateSpy, withConfig("events", TimeRepresentation.RFC_3339_STRING).restartSubscriptionsOnChangeStreamHistoryLost(true));
 
