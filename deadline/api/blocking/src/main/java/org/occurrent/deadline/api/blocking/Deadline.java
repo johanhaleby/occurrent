@@ -28,14 +28,11 @@ import static java.time.ZoneOffset.UTC;
 /**
  * A deadline is a date/time in the future when a deadline is up.
  */
-public abstract class Deadline {
-    private Deadline() {
-    }
-
+public sealed interface Deadline {
     /**
      * @return Return the deadline time as a {@link Date}.
      */
-    public Date toDate() {
+    default Date toDate() {
         if (this instanceof InstantDeadLine) {
             return Date.from(toInstant());
         } else if (this instanceof ZonedDateTimeDeadLine) {
@@ -52,7 +49,7 @@ public abstract class Deadline {
     /**
      * @return Return the deadline time as an {@link Instant}.
      */
-    public Instant toInstant() {
+    default Instant toInstant() {
         if (this instanceof InstantDeadLine) {
             return ((InstantDeadLine) this).instant;
         } else if (this instanceof ZonedDateTimeDeadLine) {
@@ -69,21 +66,21 @@ public abstract class Deadline {
     /**
      * @return Return the deadline time as epoch millis.
      */
-    public long toEpochMilli() {
+    default long toEpochMilli() {
         return toInstant().toEpochMilli();
     }
 
     /**
      * Create a deadline that'll take place at {@code epochMilli}.
      */
-    public static Deadline ofEpochMilli(long epochMilli) {
+    static Deadline ofEpochMilli(long epochMilli) {
         return new InstantDeadLine(Instant.ofEpochMilli(epochMilli));
     }
 
     /**
      * Create a deadline that'll take place at the supplied {@code date}.
      */
-    public static Deadline of(Date date) {
+    static Deadline of(Date date) {
         Objects.requireNonNull(date, Date.class.getSimpleName() + " cannot be null");
         return new InstantDeadLine(date.toInstant());
     }
@@ -91,7 +88,7 @@ public abstract class Deadline {
     /**
      * Create a deadline that'll take place at the supplied {@code instant}.
      */
-    public static Deadline of(Instant instant) {
+    static Deadline of(Instant instant) {
         Objects.requireNonNull(instant, Instant.class.getSimpleName() + " cannot be null");
         return new InstantDeadLine(instant);
     }
@@ -99,7 +96,7 @@ public abstract class Deadline {
     /**
      * Create a deadline that'll take place at the supplied {@code zonedDateTime}.
      */
-    public static Deadline of(ZonedDateTime zonedDateTime) {
+    static Deadline of(ZonedDateTime zonedDateTime) {
         Objects.requireNonNull(zonedDateTime, ZonedDateTime.class.getSimpleName() + " cannot be null");
         return new ZonedDateTimeDeadLine(zonedDateTime);
     }
@@ -107,7 +104,7 @@ public abstract class Deadline {
     /**
      * Create a deadline that'll take place at the supplied {@code offsetDateTime}.
      */
-    public static Deadline of(OffsetDateTime offsetDateTime) {
+    static Deadline of(OffsetDateTime offsetDateTime) {
         Objects.requireNonNull(offsetDateTime, OffsetDateTime.class.getSimpleName() + " cannot be null");
         return new OffsetDateTimeDeadLine(offsetDateTime);
     }
@@ -115,7 +112,7 @@ public abstract class Deadline {
     /**
      * Create a deadline that'll take place at the supplied {@code localDateTime}.
      */
-    public static Deadline of(LocalDateTime localDateTime) {
+    static Deadline of(LocalDateTime localDateTime) {
         Objects.requireNonNull(localDateTime, LocalDateTime.class.getSimpleName() + " cannot be null");
         return new LocalDateTimeDeadLine(localDateTime);
     }
@@ -123,67 +120,67 @@ public abstract class Deadline {
     /**
      * Create a deadline that'll take place as soon as possible
      */
-    public static Deadline asap() {
+    static Deadline asap() {
         return new InstantDeadLine(Instant.now());
     }
 
     /**
      * Create a deadline that'll take place as after the supplied number of {@code millis}
      */
-    public static Deadline afterMillis(long millis) {
+    static Deadline afterMillis(long millis) {
         return new InstantDeadLine(Instant.now().plusMillis(millis));
     }
 
     /**
      * Create a deadline that'll take place as after the supplied number of {@code seconds}
      */
-    public static Deadline afterSeconds(long seconds) {
+    static Deadline afterSeconds(long seconds) {
         return afterMillis(TimeUnit.SECONDS.toMillis(seconds));
     }
 
     /**
      * Create a deadline that'll take place as after the supplied number of {@code minutes}
      */
-    public static Deadline afterMinutes(long minutes) {
+    static Deadline afterMinutes(long minutes) {
         return afterMillis(TimeUnit.MINUTES.toMillis(minutes));
     }
 
     /**
      * Create a deadline that'll take place as after the supplied number of {@code hours}
      */
-    public static Deadline afterHours(long hours) {
+    static Deadline afterHours(long hours) {
         return afterMillis(TimeUnit.HOURS.toMillis(hours));
     }
 
     /**
      * Create a deadline that'll take place as after the supplied number of {@code days}
      */
-    public static Deadline afterDays(long days) {
+    static Deadline afterDays(long days) {
         return afterMillis(TimeUnit.DAYS.toMillis(days));
     }
 
     /**
      * Create a deadline that'll take place as after the supplied number of {@code weeks}
      */
-    public static Deadline afterWeeks(long weeks) {
+    static Deadline afterWeeks(long weeks) {
         return afterMillis(TimeUnit.DAYS.toMillis(weeks * 7));
     }
 
     /**
      * Create a deadline that'll take place as after the supplied {@code duration}
      */
-    public static Deadline afterDuration(Duration duration) {
+    static Deadline afterDuration(Duration duration) {
         return afterMillis(duration.toMillis());
     }
 
     /**
      * Create a deadline that'll take place as after the supplied {@code time} and {@code timeUnit}
      */
-    public static Deadline afterTime(long time, TimeUnit timeUnit) {
+    static Deadline afterTime(long time, TimeUnit timeUnit) {
         return afterMillis(timeUnit.toMillis(time));
     }
 
-    static class ZonedDateTimeDeadLine extends Deadline {
+    final class ZonedDateTimeDeadLine implements Deadline {
         final ZonedDateTime zonedDateTime;
 
         ZonedDateTimeDeadLine(ZonedDateTime zonedDateTime) {
@@ -194,8 +191,7 @@ public abstract class Deadline {
         @Override
         public boolean equals(Object o) {
             if (this == o) return true;
-            if (!(o instanceof ZonedDateTimeDeadLine)) return false;
-            ZonedDateTimeDeadLine that = (ZonedDateTimeDeadLine) o;
+            if (!(o instanceof ZonedDateTimeDeadLine that)) return false;
             return Objects.equals(zonedDateTime, that.zonedDateTime);
         }
 
@@ -212,7 +208,7 @@ public abstract class Deadline {
         }
     }
 
-    static class OffsetDateTimeDeadLine extends Deadline {
+    final class OffsetDateTimeDeadLine implements Deadline {
         final OffsetDateTime offsetDateTime;
 
         OffsetDateTimeDeadLine(OffsetDateTime offsetDateTime) {
@@ -223,8 +219,7 @@ public abstract class Deadline {
         @Override
         public boolean equals(Object o) {
             if (this == o) return true;
-            if (!(o instanceof OffsetDateTimeDeadLine)) return false;
-            OffsetDateTimeDeadLine that = (OffsetDateTimeDeadLine) o;
+            if (!(o instanceof OffsetDateTimeDeadLine that)) return false;
             return Objects.equals(offsetDateTime, that.offsetDateTime);
         }
 
@@ -241,7 +236,7 @@ public abstract class Deadline {
         }
     }
 
-    static class LocalDateTimeDeadLine extends Deadline {
+    final class LocalDateTimeDeadLine implements Deadline {
         final LocalDateTime localDateTime;
 
         LocalDateTimeDeadLine(LocalDateTime localDateTime) {
@@ -252,8 +247,7 @@ public abstract class Deadline {
         @Override
         public boolean equals(Object o) {
             if (this == o) return true;
-            if (!(o instanceof LocalDateTimeDeadLine)) return false;
-            LocalDateTimeDeadLine that = (LocalDateTimeDeadLine) o;
+            if (!(o instanceof LocalDateTimeDeadLine that)) return false;
             return Objects.equals(localDateTime, that.localDateTime);
         }
 
@@ -270,10 +264,10 @@ public abstract class Deadline {
         }
     }
 
-    static class InstantDeadLine extends Deadline {
+    final class InstantDeadLine implements Deadline {
         final Instant instant;
 
-        public InstantDeadLine(Instant instant) {
+        InstantDeadLine(Instant instant) {
             Objects.requireNonNull(instant, Instant.class.getSimpleName() + " cannot be null");
             this.instant = instant;
         }
@@ -281,8 +275,7 @@ public abstract class Deadline {
         @Override
         public boolean equals(Object o) {
             if (this == o) return true;
-            if (!(o instanceof InstantDeadLine)) return false;
-            InstantDeadLine that = (InstantDeadLine) o;
+            if (!(o instanceof InstantDeadLine that)) return false;
             return Objects.equals(instant, that.instant);
         }
 
