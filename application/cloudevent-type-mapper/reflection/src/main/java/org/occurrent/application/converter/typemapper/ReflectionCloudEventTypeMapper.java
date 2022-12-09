@@ -53,7 +53,7 @@ public class ReflectionCloudEventTypeMapper<T> implements CloudEventTypeMapper<T
     public <E extends T> Class<E> getDomainEventType(String cloudEventType) {
         final Class<E> domainEvenType;
         if (className instanceof ClassName.Simple) {
-            domainEvenType = (Class<E>) ((ClassName.Simple<T>) className).domainEventTypeFromCloudEventType.apply(cloudEventType);
+            domainEvenType = (Class<E>) ((ClassName.Simple<T>) className).domainEventTypeFromCloudEventType().apply(cloudEventType);
         } else if (className instanceof ClassName.Qualified) {
             try {
                 //noinspection unchecked
