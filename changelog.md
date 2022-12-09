@@ -1,3 +1,20 @@
+### 0.16.0 (2022-12-09)
+
+* Occurrent now require Java 17 instead of Java 8. This is major change to support the latest Spring client libraries for various databases such MongoDB and Redis. 
+  This was also done to better support Spring Boot 3 and jakartaee.
+* Lots of changes under the hood, refactorings to make use of records, sealed classes and built-in functional constructs available in Java 17.
+* Refactored SubscriptionPositionStorageConfig to sealed interface
+* Refactored CompetingConsumerSubscriptionModel
+* Refactored StartAt to a sealed interface
+* Refactored ClassName to a sealed interface
+* Refactored RetryStrategy to a sealed interface
+* Converted Deadline to a sealed interface
+* Converted CompetingConsumer in CompetingConsumerSubscriptionModel to a record
+* Converting Backoff to sealed interface
+* Converting Condition and WriteCondition to sealed interfaces
+* Converting SortBy to a sealed interface
+* Refactor MaxAttempts to sealed interface and implementations to records
+
 ### 0.15.1 (2022-12-02)
 * The spring-boot-starter module now supports Spring Boot 3 (thanks to Kirill Gavrilov for pull request)
 
