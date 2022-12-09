@@ -19,7 +19,6 @@ import java.util.stream.Stream;
 
 import static java.util.Objects.requireNonNull;
 import static java.util.function.Predicate.not;
-import static org.occurrent.subscription.blocking.competingconsumers.CompetingConsumerSubscriptionModel.CompetingConsumerState.*;
 
 /**
  * A competing consumer subscription model wraps another subscription model to allow several subscribers to subscribe to the same subscription. One of the subscribes will get a lock of the subscription
@@ -78,9 +77,9 @@ public class CompetingConsumerSubscriptionModel implements DelegatingSubscriptio
         if (competingConsumerStrategy.registerCompetingConsumer(subscriptionId, subscriberId)) {
             Subscription subscription = delegate.subscribe(subscriptionId, filter, startAt, action);
             competingConsumerSubscription = new CompetingConsumerSubscription(subscriptionId, subscriberId, subscription);
-            competingConsumers.put(subscriptionIdAndSubscriberId, new CompetingConsumer(subscriptionIdAndSubscriberId, new Running()));
+            competingConsumers.put(subscriptionIdAndSubscriberId, new CompetingConsumer(subscriptionIdAndSubscriberId, new CompetingConsumerState.Running()));
         } else {
-            competingConsumers.put(subscriptionIdAndSubscriberId, new CompetingConsumer(subscriptionIdAndSubscriberId, new Waiting(() -> {
+            competingConsumers.put(subscriptionIdAndSubscriberId, new CompetingConsumer(subscriptionIdAndSubscriberId, new CompetingConsumerState.Waiting(() -> {
                 if (!delegate.isRunning()) {
                     delegate.start();
                 }
@@ -253,7 +252,7 @@ public class CompetingConsumerSubscriptionModel implements DelegatingSubscriptio
         if (competingConsumer.isWaiting()) {
             startWaitingConsumer(competingConsumer);
         } else if (competingConsumer.isPaused()) {
-            Paused state = (Paused) competingConsumer.state;
+            CompetingConsumerState.Paused state = (CompetingConsumerState.Paused) competingConsumer.state;
             if (!state.pausedByUser) {
                 resumeSubscription(subscriptionId);
             }
@@ -272,7 +271,7 @@ public class CompetingConsumerSubscriptionModel implements DelegatingSubscriptio
             pauseSubscription(subscriptionId);
             pauseConsumer(competingConsumer, false);
         } else if (competingConsumer.isPaused()) {
-            Paused paused = (Paused) competingConsumer.state;
+            CompetingConsumerState.Paused paused = (CompetingConsumerState.Paused) competingConsumer.state;
             pauseConsumer(competingConsumer, paused.pausedByUser);
         }
     }
@@ -280,7 +279,7 @@ public class CompetingConsumerSubscriptionModel implements DelegatingSubscriptio
     private Subscription startWaitingConsumer(CompetingConsumer cc) {
         String subscriptionId = cc.getSubscriptionId();
         competingConsumers.put(SubscriptionIdAndSubscriberId.from(subscriptionId, cc.getSubscriberId()), cc.registerRunning());
-        return ((Waiting) cc.state).startSubscription();
+        return ((CompetingConsumerState.Waiting) cc.state).startSubscription();
     }
 
     private void pauseConsumer(CompetingConsumer cc, boolean pausedByUser) {
@@ -311,15 +310,15 @@ public class CompetingConsumerSubscriptionModel implements DelegatingSubscriptio
         }
 
         boolean isPaused() {
-            return state instanceof Paused;
+            return state instanceof CompetingConsumerState.Paused;
         }
 
         boolean isRunning() {
-            return state instanceof Running;
+            return state instanceof CompetingConsumerState.Running;
         }
 
         boolean isWaiting() {
-            return state instanceof Waiting;
+            return state instanceof CompetingConsumerState.Waiting;
         }
 
         boolean isPausedFor(String subscriptionId) {
@@ -335,7 +334,7 @@ public class CompetingConsumerSubscriptionModel implements DelegatingSubscriptio
         }
 
         CompetingConsumer registerRunning() {
-            return new CompetingConsumer(subscriptionIdAndSubscriberId, new Running());
+            return new CompetingConsumer(subscriptionIdAndSubscriberId, new CompetingConsumerState.Running());
         }
 
         CompetingConsumer registerPaused() {
@@ -343,24 +342,22 @@ public class CompetingConsumerSubscriptionModel implements DelegatingSubscriptio
         }
 
         CompetingConsumer registerPaused(boolean pausedByUser) {
-            return new CompetingConsumer(subscriptionIdAndSubscriberId, new Paused(pausedByUser));
+            return new CompetingConsumer(subscriptionIdAndSubscriberId, new CompetingConsumerState.Paused(pausedByUser));
         }
     }
 
-    static abstract class CompetingConsumerState {
-        private CompetingConsumerState() {
-        }
+    private sealed interface CompetingConsumerState {
 
-        abstract boolean hasPermissionToConsume();
+        boolean hasPermissionToConsume();
 
-        static class Running extends CompetingConsumerState {
+        final class Running implements CompetingConsumerState {
             @Override
-            boolean hasPermissionToConsume() {
+            public boolean hasPermissionToConsume() {
                 return true;
             }
         }
 
-        static class Waiting extends CompetingConsumerState {
+        final class Waiting implements CompetingConsumerState {
             private final Supplier<Subscription> supplier;
 
             Waiting(Supplier<Subscription> supplier) {
@@ -368,7 +365,7 @@ public class CompetingConsumerSubscriptionModel implements DelegatingSubscriptio
             }
 
             @Override
-            boolean hasPermissionToConsume() {
+            public boolean hasPermissionToConsume() {
                 return false;
             }
 
@@ -377,7 +374,7 @@ public class CompetingConsumerSubscriptionModel implements DelegatingSubscriptio
             }
         }
 
-        static class Paused extends CompetingConsumerState {
+        final class Paused implements CompetingConsumerState {
             private final boolean pausedByUser;
 
             Paused(boolean pausedByUser) {
@@ -385,7 +382,7 @@ public class CompetingConsumerSubscriptionModel implements DelegatingSubscriptio
             }
 
             @Override
-            boolean hasPermissionToConsume() {
+            public boolean hasPermissionToConsume() {
                 return pausedByUser;
             }
         }
