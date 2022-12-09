@@ -35,7 +35,6 @@ import static io.vavr.API.Match;
 import static io.vavr.Predicates.instanceOf;
 
 @Service
-@Transactional
 public class NameApplicationService {
 
     private final DomainEventStore eventStore;
@@ -46,6 +45,7 @@ public class NameApplicationService {
         this.currentNameProjection = currentNameProjection;
     }
 
+    @Transactional
     public Mono<Void> defineName(UUID id, LocalDateTime time, String name) {
         List<DomainEvent> events = Name.defineTheName(id.toString(), time, name);
         return eventStore.append(id, 0, events)
@@ -53,6 +53,7 @@ public class NameApplicationService {
                 .then();
     }
 
+    @Transactional
     public Mono<Void> changeName(UUID id, LocalDateTime time, String name) {
         return eventStore.loadEventStream(id)
                 .flatMap(eventStream -> eventStream.eventList().flatMap(events -> {
