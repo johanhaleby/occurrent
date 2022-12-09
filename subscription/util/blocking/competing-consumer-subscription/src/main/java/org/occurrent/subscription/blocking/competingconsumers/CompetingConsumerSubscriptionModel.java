@@ -329,69 +329,52 @@ public class CompetingConsumerSubscriptionModel implements DelegatingSubscriptio
     }
 
 
-    static class CompetingConsumer {
-
-        final SubscriptionIdAndSubscriberId subscriptionIdAndSubscriberId;
-        final CompetingConsumerState state;
-
-
-        CompetingConsumer(SubscriptionIdAndSubscriberId subscriptionIdAndSubscriberId, CompetingConsumerState state) {
-            this.subscriptionIdAndSubscriberId = subscriptionIdAndSubscriberId;
-            this.state = state;
-        }
+    record CompetingConsumer(SubscriptionIdAndSubscriberId subscriptionIdAndSubscriberId, CompetingConsumerState state) {
 
         boolean hasId(String subscriptionId, String subscriberId) {
-            return hasSubscriptionId(subscriptionId) && Objects.equals(getSubscriberId(), subscriberId);
-        }
+                return hasSubscriptionId(subscriptionId) && Objects.equals(getSubscriberId(), subscriberId);
+            }
 
-        boolean hasSubscriptionId(String subscriptionId) {
-            return Objects.equals(getSubscriptionId(), subscriptionId);
-        }
+            boolean hasSubscriptionId(String subscriptionId) {
+                return Objects.equals(getSubscriptionId(), subscriptionId);
+            }
 
-        boolean isPaused() {
-            return state instanceof Paused;
-        }
+            boolean isPaused() {
+                return state instanceof Paused;
+            }
 
-        boolean isRunning() {
-            return state instanceof Running;
-        }
+            boolean isRunning() {
+                return state instanceof Running;
+            }
 
-        boolean isWaiting() {
-            return state instanceof Waiting;
-        }
+            boolean isWaiting() {
+                return state instanceof Waiting;
+            }
 
-        boolean isPausedFor(String subscriptionId) {
-            return isPaused() && hasSubscriptionId(subscriptionId);
-        }
+            boolean isPausedFor(String subscriptionId) {
+                return isPaused() && hasSubscriptionId(subscriptionId);
+            }
 
-        String getSubscriptionId() {
-            return subscriptionIdAndSubscriberId.subscriptionId;
-        }
+            String getSubscriptionId() {
+                return subscriptionIdAndSubscriberId.subscriptionId;
+            }
 
-        String getSubscriberId() {
-            return subscriptionIdAndSubscriberId.subscriberId;
-        }
+            String getSubscriberId() {
+                return subscriptionIdAndSubscriberId.subscriberId;
+            }
 
-        CompetingConsumer registerRunning() {
-            return new CompetingConsumer(subscriptionIdAndSubscriberId, new Running());
-        }
+            CompetingConsumer registerRunning() {
+                return new CompetingConsumer(subscriptionIdAndSubscriberId, new Running());
+            }
 
-        CompetingConsumer registerPaused() {
-            return registerPaused(state.hasPermissionToConsume());
-        }
+            CompetingConsumer registerPaused() {
+                return registerPaused(state.hasPermissionToConsume());
+            }
 
-        CompetingConsumer registerPaused(boolean pausedByUser) {
-            return new CompetingConsumer(subscriptionIdAndSubscriberId, new Paused(pausedByUser));
+            CompetingConsumer registerPaused(boolean pausedByUser) {
+                return new CompetingConsumer(subscriptionIdAndSubscriberId, new Paused(pausedByUser));
+            }
         }
-
-        @Override
-        public String toString() {
-            return new StringJoiner(", ", CompetingConsumer.class.getSimpleName() + "[", "]")
-                    .add("subscriptionIdAndSubscriberId=" + subscriptionIdAndSubscriberId)
-                    .add("state=" + state)
-                    .toString();
-        }
-    }
 
     static abstract class CompetingConsumerState {
         private CompetingConsumerState() {
