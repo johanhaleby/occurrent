@@ -23,19 +23,19 @@ import java.util.function.Supplier;
 /**
  * Specifies in which position a subscription should start when subscribing to it
  */
-public abstract class StartAt {
+public sealed interface StartAt {
 
-    public abstract StartAt get();
+    StartAt get();
 
-    public boolean isNow() {
+    default boolean isNow() {
         return this instanceof Now;
     }
 
-    public boolean isDefault() {
+    default boolean isDefault() {
         return this instanceof Default;
     }
 
-    public static class Now extends StartAt {
+    final class Now implements StartAt {
         private Now() {
         }
 
@@ -50,7 +50,7 @@ public abstract class StartAt {
         }
     }
 
-    public static class Default extends StartAt {
+    final class Default implements StartAt {
         private Default() {
         }
 
@@ -65,7 +65,7 @@ public abstract class StartAt {
         }
     }
 
-    public static class Dynamic extends StartAt {
+    final class Dynamic implements StartAt {
         public final Supplier<StartAt> supplier;
 
         private Dynamic(Supplier<StartAt> supplier) {
@@ -92,7 +92,7 @@ public abstract class StartAt {
         }
     }
 
-    public static class StartAtSubscriptionPosition extends StartAt {
+    final class StartAtSubscriptionPosition implements StartAt {
         public final SubscriptionPosition subscriptionPosition;
 
         private StartAtSubscriptionPosition(SubscriptionPosition subscriptionPosition) {
@@ -114,7 +114,7 @@ public abstract class StartAt {
     /**
      * Start subscribing at this moment in time
      */
-    public static StartAt.Now now() {
+    static StartAt.Now now() {
         return new Now();
     }
 
@@ -123,14 +123,14 @@ public abstract class StartAt {
      * Start subscribing to the subscription model default. Typically this would be the same as "now", but
      * subscription models may override this default behavior e.g. to start from the last stored position instead of now.
      */
-    public static StartAt.Default subscriptionModelDefault() {
+    static StartAt.Default subscriptionModelDefault() {
         return new Default();
     }
 
     /**
      * Start subscribing to the subscription from the given subscription position
      */
-    public static StartAt subscriptionPosition(SubscriptionPosition subscriptionPosition) {
+    static StartAt subscriptionPosition(SubscriptionPosition subscriptionPosition) {
         return new StartAtSubscriptionPosition(subscriptionPosition);
     }
 
@@ -138,7 +138,7 @@ public abstract class StartAt {
      * Create a "dynamic" start at position that may change during the life-cycle of a subcription model.
      * For example, it could return the latest subscription position from a subscription position storage.
      */
-    public static StartAt dynamic(Supplier<StartAt> supplier) {
+    static StartAt dynamic(Supplier<StartAt> supplier) {
         return new Dynamic(supplier);
     }
 }
