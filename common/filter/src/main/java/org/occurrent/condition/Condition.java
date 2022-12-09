@@ -50,6 +50,11 @@ public sealed interface Condition<T> {
             requireNonNull(fn, "Mapping function cannot be null");
             return new SingleOperandCondition<>(operandConditionName, fn.apply(operand), description);
         }
+
+        @Override
+        public String toString() {
+            return description;
+        }
     }
 
     record MultiOperandCondition<T>(MultiOperandConditionName operationName, List<Condition<T>> operations, String description) implements Condition<T> {
@@ -63,6 +68,11 @@ public sealed interface Condition<T> {
         @Override
         public <T2> Condition<T2> map(Function<T, T2> fn) {
             return new MultiOperandCondition<>(operationName, operations.stream().map(condition -> condition.map(fn)).collect(Collectors.toList()), description);
+        }
+
+        @Override
+        public String toString() {
+            return description;
         }
     }
 
