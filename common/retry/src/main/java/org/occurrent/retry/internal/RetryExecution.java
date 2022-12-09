@@ -25,7 +25,6 @@ import org.occurrent.retry.RetryStrategy.Retry;
 
 import java.time.Duration;
 import java.util.Iterator;
-import java.util.Objects;
 import java.util.function.Consumer;
 import java.util.function.Predicate;
 import java.util.function.Supplier;
@@ -124,7 +123,7 @@ public class RetryExecution {
         if (maxAttempts instanceof MaxAttempts.Infinite) {
             return false;
         }
-        return attempt >= ((MaxAttempts.Limit) maxAttempts).limit;
+        return attempt >= ((MaxAttempts.Limit) maxAttempts).limit();
     }
 
     private static Iterator<Long> convertToDelayStream(Backoff backoff) {
@@ -134,8 +133,7 @@ public class RetryExecution {
         } else if (backoff instanceof Backoff.Fixed) {
             long millis = ((Backoff.Fixed) backoff).millis;
             delay = Stream.iterate(millis, __ -> millis);
-        } else if (backoff instanceof Backoff.Exponential) {
-            Backoff.Exponential strategy = (Backoff.Exponential) backoff;
+        } else if (backoff instanceof Backoff.Exponential strategy) {
             long initialMillis = strategy.initial.toMillis();
             long maxMillis = strategy.max.toMillis();
             double multiplier = strategy.multiplier;
@@ -173,7 +171,7 @@ public class RetryExecution {
             if (isInfiniteRetriesLeft()) {
                 return Integer.MAX_VALUE;
             }
-            return ((MaxAttempts.Limit) maxAttempts).limit;
+            return ((MaxAttempts.Limit) maxAttempts).limit();
         }
 
         @Override
