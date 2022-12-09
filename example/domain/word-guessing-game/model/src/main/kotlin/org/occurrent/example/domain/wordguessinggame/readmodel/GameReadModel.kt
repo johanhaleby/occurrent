@@ -9,11 +9,11 @@ typealias GuessedWord = String
 typealias Category = String
 
 
-sealed class GameReadModel {
-    abstract val gameId: UUID
+sealed interface GameReadModel {
+    val gameId: UUID
 }
 
-abstract class GameEndedReadModel(val status : String) : GameReadModel() {
+abstract class GameEndedReadModel(val status : String) : GameReadModel {
     abstract val startedAt: Date
     abstract val endedAt: Date
     abstract val category: String
@@ -34,7 +34,7 @@ data class GameWasWonReadModel(override val gameId: UUID, override val startedAt
 
 data class OngoingGameReadModel(override val gameId: UUID, val startedAt: Date, val category: Category,
                                 val maxNumberOfGuessesPerPlayer: Int, val maxNumberOfGuessesTotal: Int,
-                                val hint: WordHint, val guesses: List<Guess>, val wordToGuess: WordToGuess) : GameReadModel() {
+                                val hint: WordHint, val guesses: List<Guess>, val wordToGuess: WordToGuess) : GameReadModel {
 
     class Guess internal constructor(val playerId: UUID, val word: GuessedWord, val guessMadeAt: Date)
 
