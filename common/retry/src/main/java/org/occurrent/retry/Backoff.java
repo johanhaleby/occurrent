@@ -22,29 +22,26 @@ import java.util.Objects;
 /**
  * Retry strategy to use if the action throws an exception.
  */
-public abstract class Backoff {
-
-    private Backoff() {
-    }
+public sealed interface Backoff {
 
     /**
      * @return Don't retry and re-throw an exception thrown when action is invoked.
      */
-    public static Backoff none() {
+    static Backoff none() {
         return new None();
     }
 
     /**
      * @return Retry after a fixed number of millis if an action throws an exception.
      */
-    public static Backoff fixed(long millis) {
+    static Backoff fixed(long millis) {
         return new Fixed(millis);
     }
 
     /**
      * @return Retry after a fixed duration if an action throws an exception.
      */
-    public static Backoff fixed(Duration duration) {
+    static Backoff fixed(Duration duration) {
         Objects.requireNonNull(duration, "Duration cannot be null");
         return new Fixed(duration.toMillis());
     }
@@ -52,17 +49,17 @@ public abstract class Backoff {
     /**
      * @return Retry after with exponential backoff if an action throws an exception.
      */
-    public static Backoff exponential(Duration initial, Duration max, double multiplier) {
+    static Backoff exponential(Duration initial, Duration max, double multiplier) {
         return new Exponential(initial, max, multiplier);
     }
 
 
-    public final static class None extends Backoff {
+    final class None implements Backoff {
         private None() {
         }
     }
 
-    public final static class Fixed extends Backoff {
+    final class Fixed implements Backoff {
         public final long millis;
 
         private Fixed(long millis) {
@@ -73,7 +70,7 @@ public abstract class Backoff {
         }
     }
 
-    public final static class Exponential extends Backoff {
+    final class Exponential implements Backoff {
         public final Duration initial;
         public final Duration max;
         public final double multiplier;
