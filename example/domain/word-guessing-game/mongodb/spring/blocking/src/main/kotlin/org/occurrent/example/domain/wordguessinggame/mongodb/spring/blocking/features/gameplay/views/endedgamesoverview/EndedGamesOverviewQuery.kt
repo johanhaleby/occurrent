@@ -23,6 +23,7 @@ import org.springframework.data.mongodb.core.MongoOperations
 import org.springframework.data.mongodb.core.query.Query
 import org.springframework.data.mongodb.core.stream
 import org.springframework.stereotype.Component
+import kotlin.streams.asSequence
 
 
 @Component

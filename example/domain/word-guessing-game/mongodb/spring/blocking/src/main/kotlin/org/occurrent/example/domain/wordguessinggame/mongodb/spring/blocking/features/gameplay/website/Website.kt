@@ -15,6 +15,8 @@
  */
 package org.occurrent.example.domain.wordguessinggame.mongodb.spring.blocking.features.gameplay.website
 
+import jakarta.servlet.ServletResponse
+import jakarta.servlet.http.HttpSession
 import kotlinx.html.*
 import kotlinx.html.stream.appendHTML
 import org.occurrent.example.domain.wordguessinggame.mongodb.spring.blocking.features.gameplay.usecases.MakeGuess
@@ -39,8 +41,6 @@ import org.springframework.web.bind.annotation.*
 import java.time.OffsetDateTime
 import java.time.format.DateTimeFormatter
 import java.util.*
-import javax.servlet.ServletResponse
-import javax.servlet.http.HttpSession
 
 @RestController
 @RequestMapping(path = ["/games"], produces = [MediaType.TEXT_HTML_VALUE])

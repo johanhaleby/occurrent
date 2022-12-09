@@ -47,7 +47,7 @@ class LoadLatestGamesOverviewFromMongoDB implements LatestGamesOverview {
     @Override
     public Stream<GameOverview> findOverviewOfLatestGames(int numberOfLatestGames) {
         Query query = query(new Criteria()).limit(10).with(Sort.by(DESC, "startedAt"));
-        return StreamUtils.createStreamFromIterator(mongoTemplate.stream(query, Document.class, LatestGamesOverviewCollection.NAME))
+        return mongoTemplate.stream(query, Document.class, LatestGamesOverviewCollection.NAME)
                 .map(game -> {
                     UUID gameId = UUID.fromString(game.getString("_id"));
                     LocalDateTime startedAt = toLocalDateTime(game.getDate("startedAt"));

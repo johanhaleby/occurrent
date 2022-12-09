@@ -41,7 +41,6 @@ import org.springframework.data.domain.Sort;
 import org.springframework.data.mongodb.core.MongoTemplate;
 import org.springframework.data.mongodb.core.query.Criteria;
 import org.springframework.data.mongodb.core.query.Query;
-import org.springframework.data.util.StreamUtils;
 import org.springframework.transaction.support.TransactionCallback;
 import org.springframework.transaction.support.TransactionTemplate;
 
@@ -122,7 +121,7 @@ public class SpringMongoEventStore implements EventStore, EventStoreOperations, 
         // stream into a list when write condition is any. This way, we can retry without errors.
         final BiFunction<Stream<CloudEvent>, Long, List<Document>> convertCloudEventsToDocuments;
         if (writeCondition.isAnyStreamVersion()) {
-            List<CloudEvent> cached = events.collect(Collectors.toList());
+            List<CloudEvent> cached = events.toList();
             convertCloudEventsToDocuments = (cloudEvents, currentStreamVersion) -> convertCloudEventsToDocuments(streamId, cached.stream(), currentStreamVersion);
         } else {
             convertCloudEventsToDocuments = (cloudEvents, currentStreamVersion) -> convertCloudEventsToDocuments(streamId, cloudEvents, currentStreamVersion);
@@ -371,7 +370,7 @@ public class SpringMongoEventStore implements EventStore, EventStoreOperations, 
         }
 
         Sort sort = convertToSpringSort(sortBy);
-        return StreamUtils.createStreamFromIterator(mongoTemplate.stream(query.with(sort), Document.class, eventStoreCollectionName));
+        return mongoTemplate.stream(query.with(sort), Document.class, eventStoreCollectionName);
     }
 
     // Initialization
