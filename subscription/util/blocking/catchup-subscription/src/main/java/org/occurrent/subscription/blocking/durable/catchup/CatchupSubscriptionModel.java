@@ -40,7 +40,6 @@ import java.util.stream.Stream;
 
 import static org.occurrent.condition.Condition.gt;
 import static org.occurrent.filter.Filter.time;
-import static org.occurrent.functionalsupport.internal.FunctionalSupport.takeWhile;
 import static org.occurrent.time.internal.RFC3339.RFC_3339_DATE_TIME_FORMATTER;
 
 /**
@@ -146,7 +145,7 @@ public class CatchupSubscriptionModel implements SubscriptionModel, DelegatingSu
             stream = eventStoreQueries.query(timeFilter.and(userSuppliedFilter), config.catchupPhaseSortBy);
         }
 
-        takeWhile(stream, __ -> !shuttingDown && runningCatchupSubscriptions.containsKey(subscriptionId))
+        stream.takeWhile(__ -> !shuttingDown && runningCatchupSubscriptions.containsKey(subscriptionId))
                 .peek(action)
                 .peek(e -> cache.put(e.getId()))
                 .filter(returnIfSubscriptionPositionStorageConfigIs(SubscriptionPositionStorageConfig.PersistSubscriptionPositionDuringCatchupPhase.class, cfg -> cfg.persistCloudEventPositionPredicate).orElse(__ -> false))

@@ -51,12 +51,12 @@ import static io.cloudevents.core.v1.CloudEventV1.*;
 import static java.util.Comparator.comparing;
 import static java.util.Objects.requireNonNull;
 import static java.util.Spliterators.spliteratorUnknownSize;
+import static java.util.function.Predicate.not;
 import static java.util.stream.Collectors.groupingBy;
 import static org.occurrent.cloudevents.OccurrentCloudEventExtension.STREAM_ID;
 import static org.occurrent.cloudevents.OccurrentCloudEventExtension.STREAM_VERSION;
 import static org.occurrent.eventstore.api.SortBy.SortDirection.ASCENDING;
 import static org.occurrent.eventstore.api.SortBy.SortDirection.DESCENDING;
-import static org.occurrent.functionalsupport.internal.FunctionalSupport.not;
 import static org.occurrent.functionalsupport.internal.FunctionalSupport.zip;
 import static org.occurrent.inmemory.filtermatching.FilterMatcher.matchesFilter;
 
