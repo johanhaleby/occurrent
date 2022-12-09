@@ -18,10 +18,7 @@ import static org.occurrent.eventstore.api.SortBy.SortDirection.DESCENDING;
  * var allEvents = eventStoreQueries.all(SortBy.time(DESCENDING));
  * </pre>
  */
-public abstract class SortBy {
-    private SortBy() {
-    }
-
+public sealed interface SortBy {
     /**
      * Sort by natural order in the supplied direction. This is typically the insertion order,
      * but it could also be undefined for certain datastores.
@@ -29,7 +26,7 @@ public abstract class SortBy {
      * @param direction The direction
      * @return A new instance of {@link SortBy}.
      */
-    public static Natural natural(SortDirection direction) {
+    static Natural natural(SortDirection direction) {
         return new NaturalImpl(direction);
     }
 
@@ -39,7 +36,7 @@ public abstract class SortBy {
      * @param direction The direction
      * @return A new instance of {@link SortBy}.
      */
-    public static SingleField time(SortDirection direction) {
+    static SingleField time(SortDirection direction) {
         return field(TIME, direction);
     }
 
@@ -48,7 +45,7 @@ public abstract class SortBy {
      *
      * @return A new instance of {@link SortBy}.
      */
-    public static ComposableSortStep ascending(String field1, String... fields) {
+    static ComposableSortStep ascending(String field1, String... fields) {
         return combine(field1, ASCENDING, fields);
     }
 
@@ -57,7 +54,7 @@ public abstract class SortBy {
      *
      * @return A new instance of {@link SortBy}.
      */
-    public static ComposableSortStep descending(String field1, String... fields) {
+    static ComposableSortStep descending(String field1, String... fields) {
         return combine(field1, DESCENDING, fields);
     }
 
@@ -67,7 +64,7 @@ public abstract class SortBy {
      * @param direction The direction
      * @return A new instance of {@link SortBy}.
      */
-    public static SingleField streamVersion(SortDirection direction) {
+    static SingleField streamVersion(SortDirection direction) {
         return field(STREAM_VERSION, direction);
     }
 
@@ -77,16 +74,14 @@ public abstract class SortBy {
      * @param direction The direction
      * @return A new instance of {@link SortBy}.
      */
-    public static SingleField field(String fieldName, SortDirection direction) {
+    static SingleField field(String fieldName, SortDirection direction) {
         return new SingleFieldImpl(fieldName, direction);
     }
 
-    public static abstract class Natural extends SortBy {
-        private Natural() {
-        }
+    sealed interface Natural extends SortBy {
     }
 
-    public static final class NaturalImpl extends Natural {
+    final class NaturalImpl implements Natural {
         public final SortDirection direction;
 
         private NaturalImpl(SortDirection direction) {
@@ -97,8 +92,7 @@ public abstract class SortBy {
         @Override
         public boolean equals(Object o) {
             if (this == o) return true;
-            if (!(o instanceof NaturalImpl)) return false;
-            NaturalImpl natural = (NaturalImpl) o;
+            if (!(o instanceof NaturalImpl natural)) return false;
             return direction == natural.direction;
         }
 
@@ -115,9 +109,7 @@ public abstract class SortBy {
         }
     }
 
-    public static abstract class SingleField extends ComposableSortStep {
-        private SingleField() {
-        }
+    sealed interface SingleField extends ComposableSortStep {
 
         /**
          * Combines this sorting step and with another step such that the latter is applied only when the former considered values equal.
@@ -125,12 +117,12 @@ public abstract class SortBy {
          * @param direction The direction
          * @return A new instance of {@link SortBy}.
          */
-        public SortBy thenNatural(SortDirection direction) {
+        default SortBy thenNatural(SortDirection direction) {
             return then(new NaturalImpl(direction));
         }
 
         @Override
-        public MultipleSortStepsImpl then(ComposableSortStep next) {
+        default MultipleSortStepsImpl then(ComposableSortStep next) {
             return then((SortBy) next);
         }
 
@@ -141,7 +133,7 @@ public abstract class SortBy {
     }
 
 
-    public static final class SingleFieldImpl extends SingleField {
+    final class SingleFieldImpl implements SingleField {
         public final String fieldName;
         public final SortDirection direction;
 
@@ -155,8 +147,7 @@ public abstract class SortBy {
         @Override
         public boolean equals(Object o) {
             if (this == o) return true;
-            if (!(o instanceof SingleFieldImpl)) return false;
-            SingleFieldImpl that = (SingleFieldImpl) o;
+            if (!(o instanceof SingleFieldImpl that)) return false;
             return Objects.equals(fieldName, that.fieldName) && direction == that.direction;
         }
 
@@ -174,9 +165,7 @@ public abstract class SortBy {
         }
     }
 
-    public static abstract class MultipleSortSteps extends ComposableSortStep {
-        private MultipleSortSteps() {
-        }
+    sealed interface MultipleSortSteps extends ComposableSortStep {
 
         /**
          * Combines this sorting step and with another step such that the latter is applied only when the former considered values equal.
@@ -184,19 +173,19 @@ public abstract class SortBy {
          * @param direction The direction
          * @return A new instance of {@link SortBy}.
          */
-        public SortBy thenNatural(SortDirection direction) {
+        default SortBy thenNatural(SortDirection direction) {
             return thenMerge(new NaturalImpl(direction));
         }
 
         @Override
-        public MultipleSortSteps then(ComposableSortStep next) {
+        default MultipleSortSteps then(ComposableSortStep next) {
             return thenMerge(next);
         }
 
-        protected abstract MultipleSortSteps thenMerge(SortBy next);
+        MultipleSortSteps thenMerge(SortBy next);
     }
 
-    public static final class MultipleSortStepsImpl extends MultipleSortSteps {
+    final class MultipleSortStepsImpl implements MultipleSortSteps {
         public List<SortBy> steps;
 
         private MultipleSortStepsImpl(List<SortBy> steps) {
@@ -208,7 +197,7 @@ public abstract class SortBy {
         }
 
         @Override
-        protected MultipleSortSteps thenMerge(SortBy next) {
+        public MultipleSortSteps thenMerge(SortBy next) {
             Objects.requireNonNull(next, ComposableSortStep.class.getSimpleName() + " cannot be null");
             List<SortBy> newSteps = new ArrayList<>(steps);
             if (next instanceof MultipleSortStepsImpl) {
@@ -222,8 +211,7 @@ public abstract class SortBy {
         @Override
         public boolean equals(Object o) {
             if (this == o) return true;
-            if (!(o instanceof MultipleSortStepsImpl)) return false;
-            MultipleSortStepsImpl that = (MultipleSortStepsImpl) o;
+            if (!(o instanceof MultipleSortStepsImpl that)) return false;
             return Objects.equals(steps, that.steps);
         }
 
@@ -240,13 +228,11 @@ public abstract class SortBy {
         }
     }
 
-    public enum SortDirection {
+    enum SortDirection {
         ASCENDING, DESCENDING
     }
 
-    public abstract static class ComposableSortStep extends SortBy {
-        private ComposableSortStep() {
-        }
+    sealed interface ComposableSortStep extends SortBy {
 
         /**
          * Combines this field and the given field such that the latter is applied only when the former considered values equal.
@@ -255,7 +241,7 @@ public abstract class SortBy {
          * @param direction The direction
          * @return CompositeSortSteps
          */
-        public MultipleSortSteps then(String fieldName, SortDirection direction) {
+        default MultipleSortSteps then(String fieldName, SortDirection direction) {
             return then(field(fieldName, direction));
         }
 
@@ -265,7 +251,7 @@ public abstract class SortBy {
          * @param direction The direction
          * @return CompositeSortSteps
          */
-        public MultipleSortSteps thenStreamVersion(SortDirection direction) {
+        default MultipleSortSteps thenStreamVersion(SortDirection direction) {
             return then(field(STREAM_VERSION, direction));
         }
 
@@ -275,7 +261,7 @@ public abstract class SortBy {
          * @param direction The direction
          * @return CompositeSortSteps
          */
-        public MultipleSortSteps thenTime(SortDirection direction) {
+        default MultipleSortSteps thenTime(SortDirection direction) {
             return then(field(STREAM_VERSION, direction));
         }
 
@@ -285,7 +271,7 @@ public abstract class SortBy {
          * @param next The next step.
          * @return A new instance of {@link SortBy}.
          */
-        public abstract MultipleSortSteps then(ComposableSortStep next);
+        MultipleSortSteps then(ComposableSortStep next);
     }
 
     private static MultipleSortSteps combine(String field1, SortDirection direction, String[] fields) {
