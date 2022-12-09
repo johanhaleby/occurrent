@@ -26,9 +26,7 @@ import java.util.function.Predicate;
 /**
  * Configures if and how subscription position persistence should be handled during the catch-up phase.
  */
-public abstract class SubscriptionPositionStorageConfig {
-    private SubscriptionPositionStorageConfig() {
-    }
+public sealed interface SubscriptionPositionStorageConfig {
 
     /**
      * Don't use a subscription position storage. The catch-up subscription will start from beginning of time each time it is started (for example
@@ -36,7 +34,7 @@ public abstract class SubscriptionPositionStorageConfig {
      *
      * @return An instance of {@link DontUseSubscriptionPositionInStorage}.
      */
-    public static DontUseSubscriptionPositionInStorage dontUseSubscriptionPositionStorage() {
+    static DontUseSubscriptionPositionInStorage dontUseSubscriptionPositionStorage() {
         return new DontUseSubscriptionPositionInStorage();
     }
 
@@ -57,23 +55,18 @@ public abstract class SubscriptionPositionStorageConfig {
      *                on application restart.
      * @return A {@link UseSubscriptionPositionInStorage} instance.
      */
-    public static UseSubscriptionPositionInStorage useSubscriptionPositionStorage(SubscriptionPositionStorage storage) {
-        return new UseSubscriptionPositionInStorage(storage);
+    static UseSubscriptionPositionInStorage useSubscriptionPositionStorage(SubscriptionPositionStorage storage) {
+        return new UseOnlySubscriptionPositionInStorage(storage);
     }
 
-    static final class DontUseSubscriptionPositionInStorage extends SubscriptionPositionStorageConfig {
+    record DontUseSubscriptionPositionInStorage() implements SubscriptionPositionStorageConfig {
     }
 
-    public static class UseSubscriptionPositionInStorage extends SubscriptionPositionStorageConfig {
-        public final SubscriptionPositionStorage storage;
-
-        UseSubscriptionPositionInStorage(SubscriptionPositionStorage storage) {
-            Objects.requireNonNull(storage, SubscriptionPositionStorage.class.getSimpleName() + " cannot be null");
-            this.storage = storage;
-        }
+    sealed interface UseSubscriptionPositionInStorage extends SubscriptionPositionStorageConfig {
+        SubscriptionPositionStorage storage();
 
         /**
-         * Configure the catch-up subscription to periodically store store the event position in a storage in case
+         * Configure the catch-up subscription to periodically store the event position in a storage in case
          * the application is restarted during the catch-up phase. On restart the application will continue from the
          * last stored position, instead of starting from the beginning. This is useful if you have lot's of events
          * and don't want to risk starting from the beginning on failure!
@@ -83,12 +76,12 @@ public abstract class SubscriptionPositionStorageConfig {
          * @return An instance of {@link PersistSubscriptionPositionDuringCatchupPhase}
          * @see EveryN
          */
-        public PersistSubscriptionPositionDuringCatchupPhase andPersistSubscriptionPositionDuringCatchupPhaseWhen(Predicate<CloudEvent> persistCloudEventPositionPredicate) {
-            return new PersistSubscriptionPositionDuringCatchupPhase(storage, persistCloudEventPositionPredicate);
+        default PersistSubscriptionPositionDuringCatchupPhase andPersistSubscriptionPositionDuringCatchupPhaseWhen(Predicate<CloudEvent> persistCloudEventPositionPredicate) {
+            return new PersistSubscriptionPositionDuringCatchupPhase(storage(), persistCloudEventPositionPredicate);
         }
 
         /**
-         * Configure the catch-up subscription to periodically store store the event position in a storage in case
+         * Configure the catch-up subscription to periodically store the event position in a storage in case
          * the application is restarted during the catch-up phase. On restart the application will continue from the
          * last stored position, instead of starting from the beginning. This is useful if you have lot's of events
          * and don't want to risk starting from the beginning on failure!
@@ -96,69 +89,29 @@ public abstract class SubscriptionPositionStorageConfig {
          * @param persistPositionForEveryNCloudEvent Persist the position of every N cloud event so that it's possible to avoid restarting from scratch when the <i>catch-up</i> subscription is restarted.
          * @return An instance of {@link PersistSubscriptionPositionDuringCatchupPhase}
          */
-        public PersistSubscriptionPositionDuringCatchupPhase andPersistSubscriptionPositionDuringCatchupPhaseForEveryNEvents(int persistPositionForEveryNCloudEvent) {
-            return new PersistSubscriptionPositionDuringCatchupPhase(storage, EveryN.every(persistPositionForEveryNCloudEvent));
-        }
-
-        @Override
-        public boolean equals(Object o) {
-            if (this == o) return true;
-            if (!(o instanceof UseSubscriptionPositionInStorage)) return false;
-            UseSubscriptionPositionInStorage that = (UseSubscriptionPositionInStorage) o;
-            return Objects.equals(storage, that.storage);
-        }
-
-        @Override
-        public int hashCode() {
-            return Objects.hash(storage);
-        }
-
-        @Override
-        public String toString() {
-            return "UseSubscriptionPositionInStorage{" +
-                    "storage=" + storage +
-                    '}';
+        default PersistSubscriptionPositionDuringCatchupPhase andPersistSubscriptionPositionDuringCatchupPhaseForEveryNEvents(int persistPositionForEveryNCloudEvent) {
+            return new PersistSubscriptionPositionDuringCatchupPhase(storage(), EveryN.every(persistPositionForEveryNCloudEvent));
         }
     }
 
     /**
+     * @param storage                            The storage that will maintain the subscription position during catch-up mode.
+     * @param persistCloudEventPositionPredicate A predicate that evaluates to <code>true</code> if the cloud event position should be persisted. See {@link EveryN}.
+     *                                           Supply a predicate that always returns {@code false} to never store the position.
      * @see UseSubscriptionPositionInStorage#andPersistSubscriptionPositionDuringCatchupPhaseWhen(Predicate)
      * @see UseSubscriptionPositionInStorage#andPersistSubscriptionPositionDuringCatchupPhaseForEveryNEvents(int)
      */
-    public static final class PersistSubscriptionPositionDuringCatchupPhase extends UseSubscriptionPositionInStorage {
-        public final Predicate<CloudEvent> persistCloudEventPositionPredicate;
-
-        /**
-         * @param storage                            The storage that will maintain the subscription position during catch-up mode.
-         * @param persistCloudEventPositionPredicate A predicate that evaluates to <code>true</code> if the cloud event position should be persisted. See {@link EveryN}.
-         *                                           Supply a predicate that always returns {@code false} to never store the position.
-         */
-        PersistSubscriptionPositionDuringCatchupPhase(SubscriptionPositionStorage storage, Predicate<CloudEvent> persistCloudEventPositionPredicate) {
-            super(storage);
+    record PersistSubscriptionPositionDuringCatchupPhase(SubscriptionPositionStorage storage,
+                                                         Predicate<CloudEvent> persistCloudEventPositionPredicate) implements UseSubscriptionPositionInStorage {
+        public PersistSubscriptionPositionDuringCatchupPhase {
+            Objects.requireNonNull(storage, SubscriptionPositionStorage.class.getSimpleName() + " cannot be null");
             Objects.requireNonNull(persistCloudEventPositionPredicate, "persistCloudEventPositionPredicate cannot be null");
-            this.persistCloudEventPositionPredicate = persistCloudEventPositionPredicate;
         }
+    }
 
-        @Override
-        public boolean equals(Object o) {
-            if (this == o) return true;
-            if (!(o instanceof PersistSubscriptionPositionDuringCatchupPhase)) return false;
-            PersistSubscriptionPositionDuringCatchupPhase that = (PersistSubscriptionPositionDuringCatchupPhase) o;
-            return Objects.equals(storage, that.storage) &&
-                    Objects.equals(persistCloudEventPositionPredicate, that.persistCloudEventPositionPredicate);
-        }
-
-        @Override
-        public int hashCode() {
-            return Objects.hash(storage, persistCloudEventPositionPredicate);
-        }
-
-        @Override
-        public String toString() {
-            return "PersistSubscriptionPositionDuringCatchupPhase{" +
-                    "storage=" + storage +
-                    ", persistCloudEventPositionPredicate=" + persistCloudEventPositionPredicate +
-                    '}';
+    record UseOnlySubscriptionPositionInStorage(SubscriptionPositionStorage storage) implements UseSubscriptionPositionInStorage {
+        public UseOnlySubscriptionPositionInStorage {
+            Objects.requireNonNull(storage, SubscriptionPositionStorage.class.getSimpleName() + " cannot be null");
         }
     }
 }
