@@ -40,19 +40,19 @@ public class FilterMatcher {
             matches = true;
         } else if (filter instanceof SingleConditionFilter) {
             SingleConditionFilter scf = (SingleConditionFilter) filter;
-            matches = ConditionMatcher.matchesCondition(cloudEvent, scf.fieldName, scf.condition);
+            matches = ConditionMatcher.matchesCondition(cloudEvent, scf.fieldName(), scf.condition());
         } else if (filter instanceof CompositionFilter) {
             CompositionFilter cf = (CompositionFilter) filter;
             Predicate<Filter> matchingPredicate = f -> matchesFilter(cloudEvent, f);
-            switch (cf.operator) {
+            switch (cf.operator()) {
                 case AND:
-                    matches = cf.filters.stream().allMatch(matchingPredicate);
+                    matches = cf.filters().stream().allMatch(matchingPredicate);
                     break;
                 case OR:
-                    matches = cf.filters.stream().anyMatch(matchingPredicate);
+                    matches = cf.filters().stream().anyMatch(matchingPredicate);
                     break;
                 default:
-                    throw new IllegalArgumentException("Unrecognized composition operator: " + cf.operator.getClass().getName());
+                    throw new IllegalArgumentException("Unrecognized composition operator: " + cf.operator().getClass().getName());
             }
         } else {
             throw new IllegalArgumentException("Unrecognized filter: " + filter.getClass().getName());

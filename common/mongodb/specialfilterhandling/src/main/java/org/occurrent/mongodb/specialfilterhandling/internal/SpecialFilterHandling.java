@@ -34,14 +34,14 @@ public class SpecialFilterHandling {
 
     @SuppressWarnings("unchecked")
     public static Condition<?> resolveSpecialCases(TimeRepresentation timeRepresentation, SingleConditionFilter scf) {
-        if (TIME.equals(scf.fieldName)) {
-            Condition<OffsetDateTime> zdfCondition = (Condition<OffsetDateTime>) scf.condition;
+        if (TIME.equals(scf.fieldName())) {
+            Condition<OffsetDateTime> zdfCondition = (Condition<OffsetDateTime>) scf.condition();
             if (timeRepresentation == RFC_3339_STRING) {
                 return zdfCondition.map(RFC_3339_DATE_TIME_FORMATTER::format);
             } else {
                 return zdfCondition.map(zdf -> Date.from(zdf.toInstant()));
             }
         }
-        return scf.condition;
+        return scf.condition();
     }
 }

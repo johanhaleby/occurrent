@@ -17,7 +17,6 @@
 package org.occurrent.filter;
 
 import io.cloudevents.SpecVersion;
-import io.cloudevents.core.v1.CloudEventV1;
 import org.occurrent.cloudevents.OccurrentCloudEventExtension;
 import org.occurrent.condition.Condition;
 
@@ -26,7 +25,6 @@ import java.time.OffsetDateTime;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.List;
-import java.util.Objects;
 import java.util.function.Supplier;
 
 import static java.util.Objects.requireNonNull;
@@ -37,114 +35,57 @@ import static org.occurrent.filter.Filter.CompositionOperator.OR;
 /**
  * Filters that can be applied when querying an event store or subscription that supports querying capabilities
  */
-public abstract class Filter {
-    public static final String SPEC_VERSION = "specversion";
-    public static final String ID = "id";
-    public static final String TYPE = "type";
-    public static final String TIME = "time";
-    public static final String SOURCE = "source";
-    public static final String SUBJECT = "subject";
-    public static final String DATA_SCHEMA = "dataschema";
-    public static final String DATA_CONTENT_TYPE = "datacontenttype";
-    public static final String DATA = "data";
+public sealed interface Filter {
+    String SPEC_VERSION = "specversion";
+    String ID = "id";
+    String TYPE = "type";
+    String TIME = "time";
+    String SOURCE = "source";
+    String SUBJECT = "subject";
+    String DATA_SCHEMA = "dataschema";
+    String DATA_CONTENT_TYPE = "datacontenttype";
+    String DATA = "data";
 
-    private Filter() {
+    record All() implements Filter {
     }
 
-
-    public static final class All extends Filter {
-        private All() {
-        }
-    }
-
-    public static final class SingleConditionFilter extends Filter {
-        public final String fieldName;
-        public final Condition<?> condition;
-
-        private SingleConditionFilter(String fieldName, Condition<?> condition) {
+    record SingleConditionFilter(String fieldName, Condition<?> condition) implements Filter {
+        public SingleConditionFilter {
             requireNonNull(fieldName, "Field name cannot be null");
             requireNonNull(condition, "Condition cannot be null");
-            this.fieldName = fieldName;
-            this.condition = condition;
-        }
-
-        @Override
-        public boolean equals(Object o) {
-            if (this == o) return true;
-            if (!(o instanceof SingleConditionFilter)) return false;
-            SingleConditionFilter that = (SingleConditionFilter) o;
-            return Objects.equals(fieldName, that.fieldName) &&
-                    Objects.equals(condition, that.condition);
-        }
-
-        @Override
-        public int hashCode() {
-            return Objects.hash(fieldName, condition);
-        }
-
-        @Override
-        public String toString() {
-            return "SingleConditionFilter{" +
-                    "fieldName='" + fieldName + '\'' +
-                    ", condition=" + condition +
-                    '}';
         }
     }
 
-    public static final class CompositionFilter extends Filter {
-        public final CompositionOperator operator;
-        public final List<Filter> filters;
+    record CompositionFilter(CompositionOperator operator, List<Filter> filters) implements Filter {
 
-        private CompositionFilter(CompositionOperator operator, List<Filter> filters) {
-            this.operator = operator;
-            this.filters = filters;
-        }
-
-        @Override
-        public boolean equals(Object o) {
-            if (this == o) return true;
-            if (!(o instanceof CompositionFilter)) return false;
-            CompositionFilter that = (CompositionFilter) o;
-            return operator == that.operator &&
-                    Objects.equals(filters, that.filters);
-        }
-
-        @Override
-        public int hashCode() {
-            return Objects.hash(operator, filters);
-        }
-
-        @Override
-        public String toString() {
-            return "ComposedFilter{" +
-                    "operator=" + operator +
-                    ", filters=" + filters +
-                    '}';
+        public CompositionFilter {
+            requireNonNull(operator, "Operator cannot be null");
+            requireNonNull(filters, "Filters cannot be null");
         }
     }
 
-    public static <T> Filter filter(Supplier<String> fieldName, Condition<T> condition) {
+    static <T> Filter filter(Supplier<String> fieldName, Condition<T> condition) {
         return filter(fieldName.get(), condition);
     }
 
-    public static <T> Filter filter(String fieldName, Condition<T> condition) {
+    static <T> Filter filter(String fieldName, Condition<T> condition) {
         return new SingleConditionFilter(fieldName, condition);
     }
 
-    public <T> Filter and(String fieldName, Condition<T> condition) {
+    default <T> Filter and(String fieldName, Condition<T> condition) {
         return and(filter(fieldName, condition));
     }
 
-    public <T> Filter or(String fieldName, Condition<T> condition) {
+    default <T> Filter or(String fieldName, Condition<T> condition) {
         return or(filter(fieldName, condition));
     }
 
-    public Filter and(Filter filter, Filter... filters) {
+    default Filter and(Filter filter, Filter... filters) {
         List<Filter> filterList = toList(this, filter, filters);
         return new CompositionFilter(AND, filterList);
     }
 
-    public Filter or(Filter filter, Filter... filters) {
+    default Filter or(Filter filter, Filter... filters) {
         List<Filter> filterList = toList(this, filter, filters);
         return new CompositionFilter(OR, filterList);
     }
@@ -161,96 +102,96 @@ public abstract class Filter {
         return allFilters;
     }
 
-    public static Filter all() {
+    static Filter all() {
         return new All();
     }
 
     // Convenience methods
-    public static Filter id(String value) {
+    static Filter id(String value) {
         return id(eq(value));
     }
 
-    public static Filter id(Condition<String> condition) {
+    static Filter id(Condition<String> condition) {
         return filter(ID, condition);
     }
 
-    public static Filter type(String value) {
+    static Filter type(String value) {
         return type(eq(value));
     }
 
-    public static Filter type(Condition<String> condition) {
+    static Filter type(Condition<String> condition) {
         return filter(TYPE, condition);
     }
 
-    public static Filter source(URI condition) {
+    static Filter source(URI condition) {
         return source(eq(condition));
     }
 
-    public static Filter source(Condition<URI> condition) {
+    static Filter source(Condition<URI> condition) {
         return filter(SOURCE, condition.map(URI::toString));
     }
 
-    public static Filter subject(String value) {
+    static Filter subject(String value) {
         return subject(eq(value));
     }
 
-    public static Filter subject(Condition<String> condition) {
+    static Filter subject(Condition<String> condition) {
         return filter(SUBJECT, condition);
     }
 
-    public static Filter dataSchema(URI value) {
+    static Filter dataSchema(URI value) {
         return dataSchema(eq(value));
     }
 
-    public static Filter dataSchema(Condition<URI> condition) {
+    static Filter dataSchema(Condition<URI> condition) {
         return filter(DATA_SCHEMA, condition.map(URI::toString));
     }
 
-    public static Filter dataContentType(String value) {
+    static Filter dataContentType(String value) {
         return dataContentType(eq(value));
     }
 
-    public static Filter dataContentType(Condition<String> condition) {
+    static Filter dataContentType(Condition<String> condition) {
         return filter(DATA_CONTENT_TYPE, condition);
     }
 
-    public static Filter time(OffsetDateTime value) {
+    static Filter time(OffsetDateTime value) {
         return time(eq(value));
     }
 
-    public static Filter time(Condition<OffsetDateTime> condition) {
+    static Filter time(Condition<OffsetDateTime> condition) {
         return filter(TIME, condition);
     }
 
-    public static Filter streamId(String value) {
+    static Filter streamId(String value) {
         return streamId(eq(value));
     }
 
-    public static Filter streamId(Condition<String> condition) {
+    static Filter streamId(Condition<String> condition) {
         return filter(OccurrentCloudEventExtension.STREAM_ID, condition);
     }
 
-    public static Filter streamVersion(long value) {
+    static Filter streamVersion(long value) {
         return streamVersion(eq(value));
     }
 
-    public static Filter streamVersion(Condition<Long> condition) {
+    static Filter streamVersion(Condition<Long> condition) {
         return filter(OccurrentCloudEventExtension.STREAM_VERSION, condition);
     }
 
-    public static Filter specVersion(SpecVersion value) {
+    static Filter specVersion(SpecVersion value) {
         return specVersion(value.toString());
     }
 
-    public static Filter specVersion(String value) {
+    static Filter specVersion(String value) {
         return specVersion(eq(value));
     }
 
-    public static Filter specVersion(Condition<String> condition) {
+    static Filter specVersion(Condition<String> condition) {
         return filter(SPEC_VERSION, condition);
     }
 
-    public static <T> Filter data(String name, Condition<T> condition) {
+    static <T> Filter data(String name, Condition<T> condition) {
         requireNonNull(name, "Data name cannot be null");
         return filter(DATA + "." + name, condition);
     }
@@ -262,11 +203,11 @@ public abstract class Filter {
      * @param source The source of the cloud event
      * @return A filter list describing the query
      */
-    public static Filter cloudEvent(String id, URI source) {
+    static Filter cloudEvent(String id, URI source) {
         return id(id).and(source(source));
     }
 
-    public enum CompositionOperator {
+    enum CompositionOperator {
         AND, OR
     }
 }

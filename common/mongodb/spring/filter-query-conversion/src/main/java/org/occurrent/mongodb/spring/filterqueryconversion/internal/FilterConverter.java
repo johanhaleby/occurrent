@@ -55,16 +55,15 @@ public class FilterConverter {
         final Criteria criteria;
         if (filter instanceof All) {
             criteria = new Criteria();
-        } else if (filter instanceof SingleConditionFilter) {
-            SingleConditionFilter scf = (SingleConditionFilter) filter;
+        } else if (filter instanceof SingleConditionFilter scf) {
             Condition<?> conditionToUse = SpecialFilterHandling.resolveSpecialCases(timeRepresentation, scf);
-            String fieldName = fieldNameOf(fieldNamePrefix, scf.fieldName);
+            String fieldName = fieldNameOf(fieldNamePrefix, scf.fieldName());
             criteria = ConditionToCriteriaConverter.convertConditionToCriteria(fieldName, conditionToUse);
         } else if (filter instanceof CompositionFilter) {
             CompositionFilter cf = (CompositionFilter) filter;
-            Criteria[] composedCriteria = cf.filters.stream().map(f -> FilterConverter.convertFilterToCriteria(fieldNamePrefix, timeRepresentation, f)).toArray(Criteria[]::new);
+            Criteria[] composedCriteria = cf.filters().stream().map(f -> FilterConverter.convertFilterToCriteria(fieldNamePrefix, timeRepresentation, f)).toArray(Criteria[]::new);
             Criteria c = new Criteria();
-            switch (cf.operator) {
+            switch (cf.operator()) {
                 case AND:
                     c.andOperator(composedCriteria);
                     break;
@@ -72,7 +71,7 @@ public class FilterConverter {
                     c.orOperator(composedCriteria);
                     break;
                 default:
-                    throw new IllegalStateException("Unexpected value: " + cf.operator);
+                    throw new IllegalStateException("Unexpected value: " + cf.operator());
             }
             criteria = c;
         } else {
