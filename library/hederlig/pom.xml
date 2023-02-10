@@ -1,4 +1,5 @@
-<project xmlns="http://maven.apache.org/POM/4.0.0" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 http://maven.apache.org/xsd/maven-4.0.0.xsd">
+<project xmlns="http://maven.apache.org/POM/4.0.0" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+         xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 http://maven.apache.org/xsd/maven-4.0.0.xsd">
     <parent>
         <artifactId>library</artifactId>
         <groupId>org.occurrent</groupId>
@@ -17,17 +18,40 @@
     </properties>
 
     <dependencies>
+        <!-- DSL dependencies -->
         <dependency>
             <groupId>org.jetbrains.kotlin</groupId>
             <artifactId>kotlin-stdlib-jdk8</artifactId>
         </dependency>
-        <!-- Test -->
+
+        <!-- Occurrent initialization deps -->
         <dependency>
             <groupId>org.occurrent</groupId>
             <artifactId>eventstore-inmemory</artifactId>
             <version>0.16.1-SNAPSHOT</version>
-            <scope>test</scope>
         </dependency>
+        <dependency>
+            <groupId>org.occurrent</groupId>
+            <artifactId>application-service-blocking</artifactId>
+            <version>0.16.1-SNAPSHOT</version>
+        </dependency>
+        <dependency>
+            <groupId>org.occurrent</groupId>
+            <artifactId>subscription-dsl-blocking</artifactId>
+            <version>0.16.1-SNAPSHOT</version>
+        </dependency>
+        <dependency>
+            <groupId>org.occurrent</groupId>
+            <artifactId>cloudevent-converter-jackson</artifactId>
+            <version>0.16.1-SNAPSHOT</version>
+        </dependency>
+        <dependency>
+            <groupId>org.occurrent</groupId>
+            <artifactId>query-dsl-blocking</artifactId>
+            <version>0.16.1-SNAPSHOT</version>
+        </dependency>
+
+        <!-- Test -->
         <dependency>
             <groupId>org.occurrent</groupId>
             <artifactId>test-support</artifactId>
@@ -36,19 +60,13 @@
         </dependency>
         <dependency>
             <groupId>org.occurrent</groupId>
-            <artifactId>application-service-blocking</artifactId>
-            <version>0.16.1-SNAPSHOT</version>
-            <scope>test</scope>
-        </dependency>
-        <dependency>
-            <groupId>org.occurrent</groupId>
-            <artifactId>cloudevent-converter-jackson</artifactId>
-            <version>0.16.1-SNAPSHOT</version>
-            <scope>test</scope>
-        </dependency>
-        <dependency>
-            <groupId>org.occurrent</groupId>
             <artifactId>command-composition</artifactId>
+            <version>0.16.1-SNAPSHOT</version>
+            <scope>test</scope>
+        </dependency>
+        <dependency>
+            <groupId>org.occurrent</groupId>
+            <artifactId>subscription-inmemory</artifactId>
             <version>0.16.1-SNAPSHOT</version>
             <scope>test</scope>
         </dependency>

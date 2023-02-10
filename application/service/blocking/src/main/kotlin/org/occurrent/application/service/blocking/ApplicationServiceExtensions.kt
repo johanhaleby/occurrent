@@ -22,7 +22,6 @@ import java.util.function.Function
 import java.util.stream.Stream
 import kotlin.streams.asSequence
 import kotlin.streams.asStream
-import kotlin.streams.toList
 
 /**
  * Extension function to [ApplicationService] that allows working with Kotlin sequences

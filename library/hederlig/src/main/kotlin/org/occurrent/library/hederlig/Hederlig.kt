@@ -17,6 +17,7 @@
 
 package org.occurrent.library.hederlig
 
+import org.occurrent.library.hederlig.initialization.*
 import org.occurrent.library.hederlig.model.Delay
 import kotlin.reflect.KClass
 
@@ -32,16 +33,38 @@ fun <C : Any, E : Any, Q : Any> module(
 ): ModuleDefinition<C, E, Q> {
     val module = ModuleDefinitionBuilder<C, E, Q>().apply(definitionBuilder)
 
+    @Suppress("UNCHECKED_CAST")
     return object : ModuleDefinition<C, E, Q> {
-        override fun initialize(): Module<C, E, Q> {
-            TODO()
+        override fun initialize(initializer: HederligModuleInitializer<C, E, Q>): Module<C, E, Q> {
+
+            val initial = Handlers<C, E, Q>(emptyList(), emptyList(), emptyList())
+
+            val fold = module.features.fold(initial) { handlers, feature ->
+                val commandHandlers = (feature.commandWithIdDefinitions.commandHandlers + feature.commandWithoutIdDefinitions.commandHandlers)
+                    .map { ch ->
+                        val id: (C) -> String = ch.id as (C) -> String
+                        val type = ch.type as KClass<C>
+                        val fn = ch.commandHandler as (List<E>, C) -> List<E>
+                        CommandHandler(id, type, fn)
+                    }
+                val queryHandlers = feature.queryDefinitions.queryHandlers.map { qh -> QueryHandler(qh.type as KClass<Q>, qh.fn as (Any, QueryContext<E>) -> E?) }
+                val subscriptionHandlers = feature.subscriptionDefinitions.subscriptionHandlers.map { sh -> SubscriptionHandler(sh.type as KClass<E>, sh.fn as (E, CommandContext<C>) -> Unit) }
+
+                handlers.copy(
+                    cmds = handlers.cmds + commandHandlers,
+                    queries = handlers.queries + queryHandlers,
+                    subscriptionHandlers = handlers.subscriptionHandlers + subscriptionHandlers
+                )
+            }
+
+            return initializer.initialize(fold)
         }
     }
 }
 
 @ModuleDSL
 class ModuleDefinitionBuilder<C : Any, E : Any, Q : Any> internal constructor() {
-    private val features = mutableListOf<FeatureBuilder<C, E, Q>>()
+    internal val features = mutableListOf<FeatureBuilder<C, E, Q>>()
 
     fun feature(name: String, featureBuilder: (@ModuleDSL FeatureBuilder<C, E, Q>).() -> Unit) {
         val newFeatureBuilder = FeatureBuilder<C, E, Q>(name)
@@ -53,12 +76,12 @@ class ModuleDefinitionBuilder<C : Any, E : Any, Q : Any> internal constructor() 
 
 @ModuleDSL
 class FeatureBuilder<C : Any, E : Any, Q : Any> internal constructor(private val name: String) {
-    private val commandWithIdDefinitions = CommandWithIdDefinitions<C, E>()
+    internal val commandWithIdDefinitions = CommandWithIdDefinitions<C, E>()
 
     // TODO Ugly! Fix!
-    private lateinit var commandWithoutIdDefinitions: CommandWithoutIdDefinitions<C, E>
-    private val subscriptionDefinitions = SubscriptionDefinitions<C, E>()
-    private val queryDefinitions = QueryDefinitions<Q, E>()
+    internal lateinit var commandWithoutIdDefinitions: CommandWithoutIdDefinitions<C, E>
+    internal val subscriptionDefinitions = SubscriptionDefinitions<C, E>()
+    internal val queryDefinitions = QueryDefinitions<Q, E>()
 
     fun commands(commandBuilder: (@ModuleDSL CommandWithIdDefinitions<C, E>).() -> Unit) {
         commandBuilder(commandWithIdDefinitions)
@@ -165,13 +188,16 @@ interface CommandContext<C : Any> {
 }
 
 interface QueryContext<E : Any> {
-    fun <EVENT : E> queryForSequence(): Sequence<EVENT>
+    fun <EVENT : E> queryForSequence(type: KClass<EVENT>): Sequence<EVENT>
 }
 
+inline fun <reified EVENT : Any> QueryContext<in EVENT>.queryForSequence(): Sequence<EVENT> = queryForSequence(EVENT::class)
+
 interface ModuleDefinition<C : Any, E : Any, Q : Any> {
-    fun initialize(): Module<C, E, Q>
+    fun initialize(initializer: HederligModuleInitializer<C, E, Q>): Module<C, E, Q>
 }
 
 interface Module<C : Any, E : Any, Q : Any> {
+    fun <QUERY : Q, R : Any> query(q: QUERY): R
     fun publish(c: C)
 }
