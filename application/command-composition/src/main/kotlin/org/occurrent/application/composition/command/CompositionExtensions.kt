@@ -48,10 +48,12 @@ fun <T> composeCommands(
  */
 fun <T> composeCommands(commands: Sequence<(Sequence<T>) -> Sequence<T>>): (Sequence<T>) -> Sequence<T> {
     return { initial ->
-        commands.fold(initial) { acc, cmd ->
+        val initialList = initial.toList()
+        val fold = commands.fold(initialList.asSequence()) { acc, cmd ->
             val elements = acc.toList()
             (elements + cmd(elements.asSequence())).asSequence()
         }
+        fold.drop(initialList.size)
     }
 }
 
