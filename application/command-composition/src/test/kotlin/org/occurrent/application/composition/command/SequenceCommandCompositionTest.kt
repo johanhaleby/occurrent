@@ -26,7 +26,6 @@ import org.occurrent.eventstore.inmemory.InMemoryEventStore
 import java.time.LocalDateTime
 import java.util.*
 
-
 class SequenceCommandCompositionTest {
 
     private lateinit var eventStore: InMemoryEventStore
@@ -49,7 +48,7 @@ class SequenceCommandCompositionTest {
         applicationService.executeSequenceCommand(
             "name1",
             NameWithSequenceCommand::defineName.partial(eventId1, now, "My Name 1")
-                    andThen NameWithSequenceCommand::changeName.partial(eventId2, now, "My Name 2")
+                andThen NameWithSequenceCommand::changeName.partial(eventId2, now, "My Name 2")
         )
 
         // Then
@@ -89,5 +88,68 @@ class SequenceCommandCompositionTest {
             NameWasChanged::class.java.simpleName
         )
         assertThat(domainEvents.map { event -> event.name }).containsExactly("My Name 1", "My Name 2", "My Name 3")
+    }
+
+    @Test
+    fun `compose sequence commands using composeCommands when an event already exists`() {
+        // Given
+        val eventId1 = UUID.randomUUID().toString()
+        val eventId2 = UUID.randomUUID().toString()
+        val eventId3 = UUID.randomUUID().toString()
+        val eventId4 = UUID.randomUUID().toString()
+        val now = LocalDateTime.now()
+
+        // When
+        applicationService.executeSequenceCommand(
+            "name1",
+            composeCommands(
+                NameWithSequenceCommand::defineName.partial(eventId1, now, "My Name 1"),
+                NameWithSequenceCommand::changeName.partial(eventId2, now, "My Name 2")
+            )
+        )
+
+        applicationService.executeSequenceCommand(
+            "name1",
+            composeCommands(
+                NameWithSequenceCommand::changeName.partial(eventId3, now, "My Name 3"),
+                NameWithSequenceCommand::changeName.partial(eventId4, now, "My Name 4")
+            )
+        )
+
+        // Then
+        val domainEvents = eventStore.read("name1").map(applicationService::convertCloudEventToDomainEvent).toList()
+
+        assertThat(domainEvents.map { event -> event.javaClass.simpleName }).containsExactly(
+            NameDefined::class.java.simpleName,
+            NameWasChanged::class.java.simpleName,
+            NameWasChanged::class.java.simpleName,
+            NameWasChanged::class.java.simpleName
+        )
+        assertThat(domainEvents.map { event -> event.name }).containsExactly(
+            "My Name 1",
+            "My Name 2",
+            "My Name 3",
+            "My Name 4"
+        )
+    }
+
+    @Test
+    fun `compose commands should only return new commands`() {
+        val eventId1 = UUID.randomUUID().toString()
+        val eventId2 = UUID.randomUUID().toString()
+        val eventId3 = UUID.randomUUID().toString()
+        val now = LocalDateTime.now()
+
+        val events = composeCommands(
+            NameWithSequenceCommand::changeName.partial(eventId2, now, "My Name 2"),
+            NameWithSequenceCommand::changeName.partial(eventId3, now, "My Name 3")
+        )
+        val currentEvents = NameWithSequenceCommand.defineName(emptySequence(), eventId1, now, "My Name 1")
+        val newEvents = events(currentEvents).toList()
+        assertThat(newEvents.size).isEqualTo(2)
+        assertThat(newEvents.map { event -> event.name }).containsExactly(
+            "My Name 2",
+            "My Name 3"
+        )
     }
 }
