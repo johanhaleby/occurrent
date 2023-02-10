@@ -138,18 +138,21 @@ class SequenceCommandCompositionTest {
         val eventId1 = UUID.randomUUID().toString()
         val eventId2 = UUID.randomUUID().toString()
         val eventId3 = UUID.randomUUID().toString()
+        val eventId4 = UUID.randomUUID().toString()
         val now = LocalDateTime.now()
 
         val events = composeCommands(
             NameWithSequenceCommand::changeName.partial(eventId2, now, "My Name 2"),
-            NameWithSequenceCommand::changeName.partial(eventId3, now, "My Name 3")
+            NameWithSequenceCommand::changeName.partial(eventId3, now, "My Name 3"),
+            NameWithSequenceCommand::changeName.partial(eventId4, now, "My Name 4")
         )
         val currentEvents = NameWithSequenceCommand.defineName(emptySequence(), eventId1, now, "My Name 1")
         val newEvents = events(currentEvents).toList()
-        assertThat(newEvents.size).isEqualTo(2)
+        assertThat(newEvents.size).isEqualTo(3)
         assertThat(newEvents.map { event -> event.name }).containsExactly(
             "My Name 2",
-            "My Name 3"
+            "My Name 3",
+            "My Name 4"
         )
     }
 }
