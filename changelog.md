@@ -1,9 +1,7 @@
-### Changelog next version
-
+### 0.16.1 (2023-02-11)
 * Fix error in the sequence command composition that leaves old events in the sequence (issue #131) (thanks to chrisdginn for pull request)
 
 ### 0.16.0 (2022-12-09)
-
 * Occurrent now require Java 17 instead of Java 8. This is major change to support the latest Spring client libraries for various databases such MongoDB and Redis. 
   This was also done to better support Spring Boot 3 and jakartaee.
 * Lots of changes under the hood, refactorings to make use of records, sealed classes and built-in functional constructs available in Java 17.
