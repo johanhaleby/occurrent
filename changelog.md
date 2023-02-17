@@ -1,3 +1,6 @@
+### Changelog next version
+* Upgraded Kotlin from 1.7.20 to 1.8.0
+
 ### 0.16.1 (2023-02-11)
 * Fix error in the sequence command composition that leaves old events in the sequence (issue #131) (thanks to chrisdginn for pull request)
 
