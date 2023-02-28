@@ -296,19 +296,19 @@ public class SpringMongoSubscriptionModel implements PositionAwareSubscriptionMo
                 Throwable cause = throwable.getCause();
                 if (cause instanceof MongoQueryException) {
                     log.warn("Caught {} ({}) for subscription {}, will restart!", MongoQueryException.class.getSimpleName(), cause.getMessage(), subscriptionId, throwable);
-                    restartInternalSubscription(subscriptionId);
+                    restartInternalSubscription(subscriptionId, StartAt.subscriptionModelDefault());
                 } else if (cause instanceof MongoCommandException && ((MongoCommandException) cause).getErrorCode() == CHANGE_STREAM_HISTORY_LOST_ERROR_CODE) {
                     String restartMessage = restartSubscriptionsOnChangeStreamHistoryLost ? "will restart subscription from current time." :
                             "will not restart subscription! Consider remove the subscription from the durable storage or use a catch-up subscription to get up to speed if needed.";
                     if (restartSubscriptionsOnChangeStreamHistoryLost) {
                         log.warn("There was not enough oplog to resume subscription {}, {}", subscriptionId, restartMessage, throwable);
-                        restartInternalSubscription(subscriptionId);
+                        restartInternalSubscription(subscriptionId, StartAt.now());
                     } else {
                         log.error("There was not enough oplog to resume subscription {}, {}", subscriptionId, restartMessage, throwable);
                     }
                 } else {
-                    log.error("Internal error caught for subscription {}: {} {}. Will restart subscription!", subscriptionId, cause.getClass().getName(), cause.getMessage(), throwable);
-                    restartInternalSubscription(subscriptionId);
+                    log.error("Error caught for subscription {}: {} {}. Will restart!", subscriptionId, cause.getClass().getName(), cause.getMessage(), throwable);
+                    restartInternalSubscription(subscriptionId, StartAt.subscriptionModelDefault());
                 }
             } else if (isCursorNoLongerOpen(throwable)) {
                 if (log.isDebugEnabled()) {
@@ -320,13 +320,13 @@ public class SpringMongoSubscriptionModel implements PositionAwareSubscriptionMo
         });
     }
 
-    private void restartInternalSubscription(String subscriptionId) {
+    private void restartInternalSubscription(String subscriptionId, StartAt startAt) {
         InternalSubscription internalSubscription = runningSubscriptions.get(subscriptionId);
         if (internalSubscription != null) {
             new Thread(() -> {
                 // We restart from now!!
                 org.springframework.data.mongodb.core.messaging.Subscription oldSpringSubscription = internalSubscription.getSpringSubscription();
-                ChangeStreamRequest<Document> newChangeStreamRequestFromNow = internalSubscription.newChangeStreamRequest(StartAt.now());
+                ChangeStreamRequest<Document> newChangeStreamRequestFromNow = internalSubscription.newChangeStreamRequest(startAt);
                 org.springframework.data.mongodb.core.messaging.Subscription newSpringSubscription = registerNewSpringSubscription(subscriptionId, newChangeStreamRequestFromNow);
                 internalSubscription.occurrentSubscription.changeSubscription(newSpringSubscription);
                 messageListenerContainer.remove(oldSpringSubscription);
