@@ -1,4 +1,21 @@
-package org.occurrent.subscription.mongodb.spring.blocking.ccs.internal;
+/*
+ *
+ *  Copyright 2023 Johan Haleby
+ *
+ *  Licensed under the Apache License, Version 2.0 (the "License");
+ *  you may not use this file except in compliance with the License.
+ *  You may obtain a copy of the License at
+ *
+ *         http://www.apache.org/licenses/LICENSE-2.0
+ *
+ *  Unless required by applicable law or agreed to in writing, software
+ *  distributed under the License is distributed on an "AS IS" BASIS,
+ *  WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ *  See the License for the specific language governing permissions and
+ *  limitations under the License.
+ */
+
+package org.occurrent.subscription.mongodb.blocking.ccs.internal;
 
 import com.mongodb.client.MongoCollection;
 import org.bson.BsonDocument;
@@ -41,8 +58,7 @@ public class MongoLeaseCompetingConsumerStrategySupport {
         this.competingConsumerListeners = Collections.newSetFromMap(new ConcurrentHashMap<>());
         this.competingConsumers = new ConcurrentHashMap<>();
 
-        if (retryStrategy instanceof Retry) {
-            Retry retry = ((Retry) retryStrategy);
+        if (retryStrategy instanceof Retry retry) {
             this.retryStrategy = retry.retryIf(retry.retryPredicate.and(__ -> running));
         } else {
             this.retryStrategy = retryStrategy;
@@ -117,27 +133,7 @@ public class MongoLeaseCompetingConsumerStrategySupport {
         });
     }
 
-    private static class CompetingConsumer {
-        private final String subscriptionId;
-        private final String subscriberId;
-
-        private CompetingConsumer(String subscriptionId, String subscriberId) {
-            this.subscriptionId = subscriptionId;
-            this.subscriberId = subscriberId;
-        }
-
-        @Override
-        public boolean equals(Object o) {
-            if (this == o) return true;
-            if (!(o instanceof CompetingConsumer)) return false;
-            CompetingConsumer that = (CompetingConsumer) o;
-            return Objects.equals(subscriptionId, that.subscriptionId) && Objects.equals(subscriberId, that.subscriberId);
-        }
-
-        @Override
-        public int hashCode() {
-            return Objects.hash(subscriptionId, subscriberId);
-        }
+    private record CompetingConsumer(String subscriptionId, String subscriberId) {
     }
 
     private enum Status {

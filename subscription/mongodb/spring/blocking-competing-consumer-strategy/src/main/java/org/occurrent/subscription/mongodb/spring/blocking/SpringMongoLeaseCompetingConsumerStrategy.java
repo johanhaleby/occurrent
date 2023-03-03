@@ -4,7 +4,7 @@ import com.mongodb.client.MongoCollection;
 import org.bson.BsonDocument;
 import org.occurrent.retry.RetryStrategy;
 import org.occurrent.subscription.api.blocking.CompetingConsumerStrategy;
-import org.occurrent.subscription.mongodb.spring.blocking.ccs.internal.MongoLeaseCompetingConsumerStrategySupport;
+import org.occurrent.subscription.mongodb.blocking.ccs.internal.MongoLeaseCompetingConsumerStrategySupport;
 import org.springframework.data.mongodb.core.MongoOperations;
 
 import javax.annotation.PreDestroy;
@@ -14,8 +14,8 @@ import java.util.Objects;
 import java.util.function.Consumer;
 import java.util.function.Function;
 
-import static org.occurrent.subscription.mongodb.spring.blocking.ccs.internal.MongoLeaseCompetingConsumerStrategySupport.DEFAULT_COMPETING_CONSUMER_LOCKS_COLLECTION;
-import static org.occurrent.subscription.mongodb.spring.blocking.ccs.internal.MongoLeaseCompetingConsumerStrategySupport.DEFAULT_LEASE_TIME;
+import static org.occurrent.subscription.mongodb.blocking.ccs.internal.MongoLeaseCompetingConsumerStrategySupport.DEFAULT_COMPETING_CONSUMER_LOCKS_COLLECTION;
+import static org.occurrent.subscription.mongodb.blocking.ccs.internal.MongoLeaseCompetingConsumerStrategySupport.DEFAULT_LEASE_TIME;
 
 /**
  * A (Spring) MongoDB {@link CompetingConsumerStrategy} that uses a lease stored in MongoDB to make sure that only one subscriber can
