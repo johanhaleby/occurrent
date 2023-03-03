@@ -2,7 +2,9 @@
 * Upgraded Kotlin from 1.7.20 to 1.8.0
 * Upgraded cloudevents to 2.4.1
 * Improvements to `SpringMongoSubscriptionModel` in which it'll restart the subscription from the default subscription position instead of now on unknown or query-related MongoDB errors. This eliminates the risk of loosing messages if using a durable subscription model.
-* Fixed a subtle bug in `SpringMongoLeaseCompetingConsumerStrategy` in which it _could_ crash in some cases where MongoDB was down for more than 30 seconds.   
+* Fixed a subtle bug in `SpringMongoLeaseCompetingConsumerStrategy` in which it _could_ crash in some cases where MongoDB was down for more than 30 seconds.
+* Upgraded to Spring Boot 3.0.3
+* Upgraded spring-aspects from 6.0.2 to 6.0.6
 
 ### 0.16.1 (2023-02-11)
 * Fix error in the sequence command composition that leaves old events in the sequence (issue #131) (thanks to chrisdginn for pull request)
