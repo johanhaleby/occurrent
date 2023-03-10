@@ -19,6 +19,7 @@ package org.occurrent.library.hederlig
 
 import org.occurrent.library.hederlig.initialization.*
 import org.occurrent.library.hederlig.model.Delay
+import org.occurrent.library.hederlig.model.Query
 import kotlin.reflect.KClass
 
 /**
@@ -28,14 +29,14 @@ import kotlin.reflect.KClass
 @Target(AnnotationTarget.TYPE, AnnotationTarget.CLASS)
 internal annotation class ModuleDSL
 
-fun <C : Any, E : Any, Q : Any> module(
+fun <C : Any, E : Any, Q : Query<out Any>> module(
     definitionBuilder: (@ModuleDSL ModuleDefinitionBuilder<C, E, Q>).() -> Unit
 ): ModuleDefinition<C, E, Q> {
     val module = ModuleDefinitionBuilder<C, E, Q>().apply(definitionBuilder)
 
     @Suppress("UNCHECKED_CAST")
     return object : ModuleDefinition<C, E, Q> {
-        override fun initialize(initializer: HederligModuleInitializer<C, E, Q>): Module<C, E, Q> {
+        override fun initialize(initializer: HederligModuleInitializer<C, E, Q>): Module<C, E, Any, Q> {
 
             val initial = Handlers<C, E, Q>(emptyList(), emptyList(), emptyList())
 
@@ -193,11 +194,15 @@ interface QueryContext<E : Any> {
 
 inline fun <reified EVENT : Any> QueryContext<in EVENT>.queryForSequence(): Sequence<EVENT> = queryForSequence(EVENT::class)
 
-interface ModuleDefinition<C : Any, E : Any, Q : Any> {
-    fun initialize(initializer: HederligModuleInitializer<C, E, Q>): Module<C, E, Q>
+interface ModuleDefinition<C : Any, E : Any, Q : Query<out Any>> {
+    fun initialize(initializer: HederligModuleInitializer<C, E, Q>): Module<C, E, Any, Q>
 }
 
-interface Module<C : Any, E : Any, Q : Any> {
-    fun <QUERY : Q, R : Any> query(q: QUERY): R
-    fun publish(c: C)
-}
+//@Suppress("BOUNDS_NOT_ALLOWED_IF_BOUNDED_BY_TYPE_PARAMETER")
+//interface Module<C : Any, E : Any, Q : Query<out Any>> {
+//    fun <R, IKK> query(q: IKK): R                 
+//            where IKK : Query<R>,
+//                  IKK : Q
+//
+//    fun publish(c: C)
+//}

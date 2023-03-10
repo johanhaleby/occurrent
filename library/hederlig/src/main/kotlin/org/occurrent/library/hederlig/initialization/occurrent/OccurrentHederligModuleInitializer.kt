@@ -28,26 +28,27 @@ import org.occurrent.library.hederlig.QueryContext
 import org.occurrent.library.hederlig.initialization.Handlers
 import org.occurrent.library.hederlig.initialization.HederligModuleInitializer
 import org.occurrent.library.hederlig.model.Delay
+import org.occurrent.library.hederlig.model.Query
 import kotlin.reflect.KClass
 
 
-class OccurrentHederligModuleInitializer<C : Any, E : Any, Q : Any>(
+class OccurrentHederligModuleInitializer<C : Any, E : Any, Q : Query<out Any>>(
     private val applicationService: ApplicationService<E>,
     private val subscriptionDSL: Subscriptions<E>,
     private val queriesDSL: DomainEventQueries<E>
 ) : HederligModuleInitializer<C, E, Q> {
 
-    override fun initialize(handlers: Handlers<C, E, Q>): Module<C, E, Q> {
+    override fun initialize(handlers: Handlers<C, E, Q>): Module<C, E, Any, Q> {
         return OccurrentModule(applicationService, subscriptionDSL, queriesDSL, handlers)
     }
 }
 
-class OccurrentModule<C : Any, E : Any, Q : Any>(
+class OccurrentModule<C : Any, E : Any, Q : Query<out Any>>(
     private val applicationService: ApplicationService<E>,
     private val subscriptionDSL: Subscriptions<E>,
     private val queriesDSL: DomainEventQueries<E>,
     private val handlers: Handlers<C, E, Q>
-) : Module<C, E, Q> {
+) : Module<C, E, Any, Q> {
 
     init {
         handlers.subscriptionHandlers.forEach { subscriptionHandler ->
@@ -71,16 +72,6 @@ class OccurrentModule<C : Any, E : Any, Q : Any>(
         }
     }
 
-    override fun <QUERY : Q, R : Any> query(q: QUERY): R {
-        val queryHandler = handlers.queries.find { it.type == q::class } ?: throw IllegalArgumentException("Cannot find a query handler for type ${q::class.qualifiedName}")
-
-        val result = queryHandler.fn(q, object : QueryContext<E> {
-            override fun <EVENT : E> queryForSequence(type: KClass<EVENT>): Sequence<EVENT> = queriesDSL.queryForSequence(type)
-        })
-
-        @Suppress("UNCHECKED_CAST")
-        return result as R
-    }
 
     override fun publish(c: C) {
         val commandHandler = handlers.cmds.find { it.type == c::class } ?: throw IllegalArgumentException("Cannot find a command handler for type ${c::class.qualifiedName}")
@@ -88,5 +79,16 @@ class OccurrentModule<C : Any, E : Any, Q : Any>(
         applicationService.execute(streamId) { events: List<E> ->
             commandHandler.fn(events, c)
         }
+    }
+
+    @Suppress("UNCHECKED_CAST")
+    override fun <R : Any?, QUERY : Query<R>> query(q: QUERY): R {
+        val queryHandler = handlers.queries.find { it.type == q::class } ?: throw IllegalArgumentException("Cannot find a query handler for type ${q::class.qualifiedName}")
+
+        val result = queryHandler.fn(q as Q, object : QueryContext<E> {
+            override fun <EVENT : E> queryForSequence(type: KClass<EVENT>): Sequence<EVENT> = queriesDSL.queryForSequence(type)
+        })
+
+        return result as R
     }
 }

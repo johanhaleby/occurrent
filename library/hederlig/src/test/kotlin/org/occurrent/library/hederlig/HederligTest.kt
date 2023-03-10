@@ -29,7 +29,7 @@ import org.occurrent.domain.NameDefined
 import org.occurrent.domain.NameWasChanged
 import org.occurrent.library.hederlig.domain.AllNames
 import org.occurrent.library.hederlig.domain.PersonNamed
-import org.occurrent.library.hederlig.domain.Query
+import org.occurrent.library.hederlig.domain.DomainQuery
 import org.occurrent.library.hederlig.model.Delay
 import java.time.LocalDateTime
 import java.time.Year
@@ -45,7 +45,7 @@ class HederligTest {
     // There can also be a Spring Starter project that creates a bean, "hederligOccurrentBootstraper", that one can inject when creating the module.
     @Test
     fun `example`() {
-        module<Command, DomainEvent, Query> {
+        module<Command, DomainEvent, DomainQuery<out Any>> {
             feature("manage name") {
                 commands {
                     command(DefineName::getId, Name::defineNameFromCommand)

@@ -36,7 +36,7 @@ import org.occurrent.dsl.subscription.blocking.Subscriptions
 import org.occurrent.eventstore.inmemory.InMemoryEventStore
 import org.occurrent.library.hederlig.domain.AllNames
 import org.occurrent.library.hederlig.domain.PersonNamed
-import org.occurrent.library.hederlig.domain.Query
+import org.occurrent.library.hederlig.domain.DomainQuery
 import org.occurrent.library.hederlig.initialization.occurrent.OccurrentHederligModuleInitializer
 import org.occurrent.library.hederlig.model.Delay
 import org.occurrent.subscription.inmemory.InMemorySubscriptionModel
@@ -61,10 +61,9 @@ class HederligOccurrentTest {
         val applicationService = GenericApplicationService(eventStore, cloudEventConverter)
         val subscriptions = Subscriptions(subscriptionModel, cloudEventConverter)
         val queries = DomainEventQueries(eventStore, cloudEventConverter)
-        val initializer = OccurrentHederligModuleInitializer<Command, DomainEvent, Query>(applicationService, subscriptions, queries)
+        val initializer = OccurrentHederligModuleInitializer<Command, DomainEvent, DomainQuery<out Any>>(applicationService, subscriptions, queries)
 
-
-        val module = module<Command, DomainEvent, Query> {
+        val module = module<Command, DomainEvent, DomainQuery<out Any>> {
             feature("manage name") {
                 commands {
                     command(DefineName::getId, Name::defineNameFromCommand)
@@ -114,7 +113,7 @@ class HederligOccurrentTest {
         module.publish(DefineName(id, LocalDateTime.now(), "Some Doe"))
         module.publish(ChangeName(id, LocalDateTime.now(), "Baby Doe"))
 
-        val names : Sequence<String> = module.query(AllNames)
+        val names = module.query(AllNames)
         names.forEach(::println)
     }
 }

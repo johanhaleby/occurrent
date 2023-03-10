@@ -1,6 +1,6 @@
 /*
  *
- *  Copyright 2022 Johan Haleby
+ *  Copyright 2023 Johan Haleby
  *
  *  Licensed under the Apache License, Version 2.0 (the "License");
  *  you may not use this file except in compliance with the License.
@@ -15,9 +15,6 @@
  *  limitations under the License.
  */
 
-package org.occurrent.library.hederlig.domain
+package org.occurrent.library.hederlig.model
 
-
-sealed interface Query
-object AllNames : Query
-data class PersonNamed(val name: String) : Query
+interface Query<T : Any>
