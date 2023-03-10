@@ -64,7 +64,7 @@ fun <C : Any, E : Any, Q : Query<out Any>> module(
 }
 
 @ModuleDSL
-class ModuleDefinitionBuilder<C : Any, E : Any, Q : Any> internal constructor() {
+class ModuleDefinitionBuilder<C : Any, E : Any, Q : Query<out Any>> internal constructor() {
     internal val features = mutableListOf<FeatureBuilder<C, E, Q>>()
 
     fun feature(name: String, featureBuilder: (@ModuleDSL FeatureBuilder<C, E, Q>).() -> Unit) {
@@ -76,7 +76,7 @@ class ModuleDefinitionBuilder<C : Any, E : Any, Q : Any> internal constructor() 
 
 
 @ModuleDSL
-class FeatureBuilder<C : Any, E : Any, Q : Any> internal constructor(private val name: String) {
+class FeatureBuilder<C : Any, E : Any, Q : Query<out Any>> internal constructor(private val name: String) {
     internal val commandWithIdDefinitions = CommandWithIdDefinitions<C, E>()
 
     // TODO Ugly! Fix!
@@ -102,7 +102,7 @@ class FeatureBuilder<C : Any, E : Any, Q : Any> internal constructor(private val
     }
 
     // Queries
-    class QueryDefinitions<Q : Any, E : Any> internal constructor() {
+    class QueryDefinitions<Q : Query<out Any>, E : Any> internal constructor() {
         val queryHandlers = mutableListOf<QueryDefinition<out Q, out E>>()
 
         inline fun <reified QUERY : Q> query(noinline queryHandler: (QUERY) -> Any?) {
@@ -196,6 +196,11 @@ inline fun <reified EVENT : Any> QueryContext<in EVENT>.queryForSequence(): Sequ
 
 interface ModuleDefinition<C : Any, E : Any, Q : Query<out Any>> {
     fun initialize(initializer: HederligModuleInitializer<C, E, Q>): Module<C, E, Any, Q>
+}
+
+interface Module<C, E, R2, Q : Query<out Any>> {
+    fun <R : R2, QUERY : Query<R>> query(query: QUERY): R
+    fun publish(c: C)
 }
 
 //@Suppress("BOUNDS_NOT_ALLOWED_IF_BOUNDED_BY_TYPE_PARAMETER")

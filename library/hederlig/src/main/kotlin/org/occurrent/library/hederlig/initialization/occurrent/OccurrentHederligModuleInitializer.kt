@@ -82,13 +82,14 @@ class OccurrentModule<C : Any, E : Any, Q : Query<out Any>>(
     }
 
     @Suppress("UNCHECKED_CAST")
-    override fun <R : Any?, QUERY : Query<R>> query(q: QUERY): R {
-        val queryHandler = handlers.queries.find { it.type == q::class } ?: throw IllegalArgumentException("Cannot find a query handler for type ${q::class.qualifiedName}")
+    override fun <R : Any, QUERY : Query<R>> query(query: QUERY): R {
+        val queryHandler = handlers.queries.find { it.type == query::class } ?: throw IllegalArgumentException("Cannot find a query handler for type ${query::class.qualifiedName}")
 
-        val result = queryHandler.fn(q as Q, object : QueryContext<E> {
+        val result = queryHandler.fn(query as Q, object : QueryContext<E> {
             override fun <EVENT : E> queryForSequence(type: KClass<EVENT>): Sequence<EVENT> = queriesDSL.queryForSequence(type)
         })
 
         return result as R
     }
+
 }
