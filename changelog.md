@@ -1,5 +1,6 @@
 ### 0.16.3 (2023-04-19)
 * Upgraded jobrunr from 5.3.0 to 6.1.2
+* Upgraded Kotlin from 1.8.0 to 1.8.20 
 
 ### 0.16.2 (2023-03-03)
 * Upgraded Kotlin from 1.7.20 to 1.8.0
