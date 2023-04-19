@@ -1,4 +1,4 @@
-### 0.16.3 (2023-04-19)
+### Next version
 * Upgraded jobrunr from 5.3.0 to 6.1.2
 * Upgraded Kotlin from 1.8.0 to 1.8.20
 * Upgraded Jackson from 2.14.1 to 2.14.2
