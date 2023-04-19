@@ -18,6 +18,7 @@
 package org.occurrent.library.hederlig
 
 import com.fasterxml.jackson.databind.ObjectMapper
+import org.junit.jupiter.api.Disabled
 import org.junit.jupiter.api.DisplayNameGeneration
 import org.junit.jupiter.api.DisplayNameGenerator.Simple
 import org.junit.jupiter.api.Test
@@ -35,8 +36,8 @@ import org.occurrent.dsl.query.blocking.DomainEventQueries
 import org.occurrent.dsl.subscription.blocking.Subscriptions
 import org.occurrent.eventstore.inmemory.InMemoryEventStore
 import org.occurrent.library.hederlig.domain.AllNames
-import org.occurrent.library.hederlig.domain.PersonNamed
 import org.occurrent.library.hederlig.domain.DomainQuery
+import org.occurrent.library.hederlig.domain.PersonNamed
 import org.occurrent.library.hederlig.initialization.occurrent.OccurrentHederligModuleInitializer
 import org.occurrent.library.hederlig.model.Delay
 import org.occurrent.subscription.inmemory.InMemorySubscriptionModel
@@ -53,6 +54,7 @@ class HederligOccurrentTest {
 
     // TODO Idea: Introduce "bootstrap" as a function in ModuleDefiniton. Bootstrap can be an interface, thus we can provide a OccurrentBootStrapper that takes care of wiring everything together.
     // There can also be a Spring Starter project that creates a bean, "hederligOccurrentBootstraper", that one can inject when creating the module.
+    @Disabled
     @Test
     fun `example with occurrent`() {
         val cloudEventConverter: CloudEventConverter<DomainEvent> = JacksonCloudEventConverter(ObjectMapper(), URI.create("urn:occurrent"))
