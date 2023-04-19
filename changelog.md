@@ -5,6 +5,7 @@
 * Upgraded project reactor from 3.5.0 to 3.5.5
 * Upgraded to Spring Boot from 3.0.3 to 3.0.5
 * Upgraded to Spring from 6.0.6 to 6.0.8
+* Upgraded to Spring Data MongoDB from 4.0.0 to 4.0.5
 
 ### 0.16.2 (2023-03-03)
 * Upgraded Kotlin from 1.7.20 to 1.8.0
