@@ -26,6 +26,7 @@ import org.occurrent.retry.RetryStrategy.Retry;
 import java.time.Duration;
 import java.util.Iterator;
 import java.util.function.Consumer;
+import java.util.function.Function;
 import java.util.function.Predicate;
 import java.util.function.Supplier;
 import java.util.stream.Stream;
@@ -36,11 +37,15 @@ import java.util.stream.Stream;
 public class RetryExecution {
 
     public static <T1> Supplier<T1> executeWithRetry(Supplier<T1> supplier, Predicate<Throwable> shutdownPredicate, RetryStrategy retryStrategy) {
+        return () -> executeWithRetry((Function<RetryInfo, T1>) __ -> supplier.get(), shutdownPredicate, retryStrategy).apply(null);
+    }
+
+    public static <T1> Function<RetryInfo, T1> executeWithRetry(Function<RetryInfo, T1> function, Predicate<Throwable> shutdownPredicate, RetryStrategy retryStrategy) {
         if (retryStrategy instanceof DontRetry) {
-            return supplier;
+            return function;
         }
         Retry retry = applyShutdownPredicate(shutdownPredicate, retryStrategy);
-        return executeWithRetry(supplier, retry, convertToDelayStream(retry.backoff), 1);
+        return executeWithRetry(function, retry, convertToDelayStream(retry.backoff), 1);
     }
 
     public static Runnable executeWithRetry(Runnable runnable, Predicate<Throwable> shutdownPredicate, RetryStrategy retryStrategy) {
@@ -74,7 +79,8 @@ public class RetryExecution {
             try {
                 fn.accept(t1);
             } catch (Throwable e) {
-                if (shouldRetry(retry, delay, attempt, e)) {
+                var retryInfo = newRetryInfo(retry, delay, attempt);
+                if (handleError(retry, retryInfo, attempt, e)) {
                     executeWithRetry(fn, retry, delay, attempt + 1).accept(t1);
                 } else {
                     throw e;
@@ -83,13 +89,14 @@ public class RetryExecution {
         };
     }
 
-    private static <T1> Supplier<T1> executeWithRetry(Supplier<T1> supplier, Retry retry, Iterator<Long> delay, int attempt) {
-        return () -> {
+    private static <T1> Function<RetryInfo, T1> executeWithRetry(Function<RetryInfo, T1> fn, Retry retry, Iterator<Long> delay, int attempt) {
+        return (RetryInfo) -> {
+            var retryInfo = newRetryInfo(retry, delay, attempt);
             try {
-                return supplier.get();
+                return fn.apply(retryInfo);
             } catch (Throwable e) {
-                if (shouldRetry(retry, delay, attempt, e)) {
-                    return executeWithRetry(supplier, retry, delay, attempt + 1).get();
+                if (handleError(retry, retryInfo, attempt, e)) {
+                    return executeWithRetry(fn, retry, delay, attempt + 1).apply(retryInfo);
                 } else {
                     throw e;
                 }
@@ -97,13 +104,20 @@ public class RetryExecution {
         };
     }
 
-    private static boolean shouldRetry(Retry retry, Iterator<Long> delay, int attempt, Throwable e) {
+    private static RetryInfo newRetryInfo(Retry retry, Iterator<Long> delay, int attempt) {
+        Long backoffMillis = delay.next();
+        Duration backoffDuration = backoffMillis == 0 ? Duration.ZERO : Duration.ofMillis(backoffMillis);
+        return new RetryInfoImpl(attempt, retry.maxAttempts, backoffDuration);
+    }
+
+    /**
+     * @return {@code true} if retry should be made, {@code false} otherwise.
+     */
+    private static boolean handleError(Retry retry, RetryInfo retryInfo, int attempt, Throwable e) {
+        retry.errorListener.accept(retryInfo, e);
         if (!isExhausted(attempt, retry.maxAttempts) && retry.retryPredicate.test(e)) {
-            Long backoffMillis = delay.next();
-            Duration backoffDuration = backoffMillis == 0 ? Duration.ZERO : Duration.ofMillis(backoffMillis);
-            RetryInfo retryInfo = new RetryInfoImpl(attempt, retry.maxAttempts, backoffDuration);
-            retry.errorListener.accept(retryInfo, e);
             try {
+                long backoffMillis = retryInfo.getBackoff().toMillis();
                 if (backoffMillis > 0) {
                     Thread.sleep(backoffMillis);
                 }
@@ -194,7 +208,7 @@ public class RetryExecution {
             if (isInfiniteRetriesLeft()) {
                 return false;
             }
-            return getMaxAttempts() - 1 == attempt;
+            return getMaxAttempts() == attempt;
         }
 
         @Override

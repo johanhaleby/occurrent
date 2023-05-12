@@ -1,4 +1,17 @@
 ### Next version
+* Added support to the retry module to execute retries with a function that takes an instance of `org.occurrent.retry.RetryInfo`. This is useful if you need to know the current state of your of the retry while retrying. For example:
+  ```java  
+  RetryStrategy retryStrategy = RetryStrategy
+                                  .exponentialBackoff(initialDelay, maxDelay, 2.0)
+                                  .maxAttempts(10)
+  retryStrategy.execute(info -> {
+        if(info.getNumberOfAttempts() > 2 &&  info.getNumberOfAttempts() < 6) {
+            System.out.println("Number of attempts is between 3 and 5");
+        }
+        ...     
+  });
+  ```
+* Fixed bug in the retry module, in which error listeners where not called for the last error.
 * Upgraded jobrunr from 5.3.0 to 6.1.2
 * Upgraded Kotlin from 1.8.0 to 1.8.20
 * Upgraded Jackson from 2.14.1 to 2.14.2

@@ -38,6 +38,40 @@ public class RetryStrategyTest {
         );
     }
 
+    @Timeout(2000)
+    @Test
+    void example_of_retry_executed_with_function_that_takes_retry_info() {
+        // Given
+        CopyOnWriteArrayList<RetryInfo> retryInfos = new CopyOnWriteArrayList<>();
+        Retry retryStrategy = RetryStrategy.retry()
+                .maxAttempts(4);
+
+        AtomicInteger counter = new AtomicInteger(0);
+
+        // When
+        Throwable throwable = catchThrowable(() -> retryStrategy.execute(info -> {
+            retryInfos.add(info);
+            counter.incrementAndGet();
+            throw new IllegalArgumentException("expected");
+        }));
+
+        // Then
+        assertAll(
+                () -> assertThat(throwable).isExactlyInstanceOf(IllegalArgumentException.class).hasMessage("expected"),
+                () -> assertThat(counter).hasValue(4),
+                () -> assertThat(retryInfos).hasSize(4),
+                () -> assertThat(retryInfos).extracting(RetryInfo::getRetryCount).containsExactly(0, 1, 2, 3),
+                () -> assertThat(retryInfos).extracting(RetryInfo::getNumberOfAttempts).containsExactly(1, 2, 3, 4),
+                () -> assertThat(retryInfos).extracting(RetryInfo::getBackoff).containsExactly(Duration.ofMillis(0), Duration.ofMillis(0), Duration.ofMillis(0), Duration.ofMillis(0)),
+                () -> assertThat(retryInfos).extracting(RetryInfo::getMaxAttempts).containsExactly(4, 4, 4, 4),
+                () -> assertThat(retryInfos).extracting(RetryInfo::getAttemptsLeft).containsExactly(3, 2, 1, 0),
+                () -> assertThat(retryInfos).extracting(RetryInfo::isFirstAttempt).containsExactly(true, false, false, false),
+                () -> assertThat(retryInfos).extracting(RetryInfo::isLastAttempt).containsExactly(false, false, false, true),
+                () -> assertThat(retryInfos).extracting(RetryInfo::isInfiniteRetriesLeft).containsExactly(false, false, false, false)
+        );
+    }
+
+
     @Nested
     @DisplayName("backoff")
     class BackoffTest {
@@ -368,15 +402,15 @@ public class RetryStrategyTest {
             assertAll(
                     () -> assertThat(throwable).isExactlyInstanceOf(IllegalArgumentException.class).hasMessage("expected"),
                     () -> assertThat(counter).hasValue(4),
-                    () -> assertThat(retryInfos).hasSize(3),
-                    () -> assertThat(retryInfos).extracting(RetryInfo::getRetryCount).containsExactly(0, 1, 2),
-                    () -> assertThat(retryInfos).extracting(RetryInfo::getNumberOfAttempts).containsExactly(1, 2, 3),
-                    () -> assertThat(retryInfos).extracting(RetryInfo::getBackoff).containsExactly(Duration.ofMillis(0), Duration.ofMillis(0), Duration.ofMillis(0)),
-                    () -> assertThat(retryInfos).extracting(RetryInfo::getMaxAttempts).containsExactly(4, 4, 4),
-                    () -> assertThat(retryInfos).extracting(RetryInfo::getAttemptsLeft).containsExactly(3, 2, 1),
-                    () -> assertThat(retryInfos).extracting(RetryInfo::isFirstAttempt).containsExactly(true, false, false),
-                    () -> assertThat(retryInfos).extracting(RetryInfo::isLastAttempt).containsExactly(false, false, true),
-                    () -> assertThat(retryInfos).extracting(RetryInfo::isInfiniteRetriesLeft).containsExactly(false, false, false)
+                    () -> assertThat(retryInfos).hasSize(4),
+                    () -> assertThat(retryInfos).extracting(RetryInfo::getRetryCount).containsExactly(0, 1, 2, 3),
+                    () -> assertThat(retryInfos).extracting(RetryInfo::getNumberOfAttempts).containsExactly(1, 2, 3, 4),
+                    () -> assertThat(retryInfos).extracting(RetryInfo::getBackoff).containsExactly(Duration.ofMillis(0), Duration.ofMillis(0), Duration.ofMillis(0), Duration.ofMillis(0)),
+                    () -> assertThat(retryInfos).extracting(RetryInfo::getMaxAttempts).containsExactly(4, 4, 4, 4),
+                    () -> assertThat(retryInfos).extracting(RetryInfo::getAttemptsLeft).containsExactly(3, 2, 1, 0),
+                    () -> assertThat(retryInfos).extracting(RetryInfo::isFirstAttempt).containsExactly(true, false, false, false),
+                    () -> assertThat(retryInfos).extracting(RetryInfo::isLastAttempt).containsExactly(false, false, false, true),
+                    () -> assertThat(retryInfos).extracting(RetryInfo::isInfiniteRetriesLeft).containsExactly(false, false, false, false)
             );
         }
     }
@@ -405,7 +439,7 @@ public class RetryStrategyTest {
             // Then
             assertAll(
                     () -> assertThat(counter).hasValue(5),
-                    () -> assertThat(throwables).hasSize(4),
+                    () -> assertThat(throwables).hasSize(5),
                     () -> assertThat(throwables).extracting(Throwable::getClass, Throwable::getMessage).containsOnly(tuple(IllegalArgumentException.class, "expected")),
                     () -> assertThat(throwable).isExactlyInstanceOf(IllegalArgumentException.class).hasMessage("expected"),
                     () -> assertThat(endTime - startTime).isGreaterThanOrEqualTo(4 * millis).isLessThan(5 * millis)
@@ -432,7 +466,7 @@ public class RetryStrategyTest {
             // Then
             assertAll(
                     () -> assertThat(counter).hasValue(5),
-                    () -> assertThat(throwables).hasSize(4),
+                    () -> assertThat(throwables).hasSize(5),
                     () -> assertThat(throwables).extracting(Throwable::getClass, Throwable::getMessage).containsOnly(tuple(IllegalArgumentException.class, "expected")),
                     () -> assertThat(throwable).isExactlyInstanceOf(IllegalArgumentException.class).hasMessage("expected"),
                     () -> assertThat(endTime - startTime).isGreaterThanOrEqualTo(4 * millis).isLessThan(5 * millis)
