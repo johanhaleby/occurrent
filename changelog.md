@@ -12,7 +12,7 @@
   });
   ```
 * Fixed bug in the retry module, in which error listeners where not called for the last error.
-* Upgraded jobrunr from 5.3.0 to 6.1.2
+* Upgraded jobrunr from 5.3.0 to 6.1.4
 * Upgraded Kotlin from 1.8.0 to 1.8.20
 * Upgraded Jackson from 2.14.1 to 2.14.2
 * Upgraded project reactor from 3.5.0 to 3.5.5
