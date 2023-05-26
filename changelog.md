@@ -1,3 +1,31 @@
+### Next version
+*  A kotlin extension function that makes it easier to execute a `RetryStrategy` with a "Supplier".
+    
+    The reasons for this is that when just doing this from kotlin:
+    
+    ```
+    val string = retryStrategy.execute { "hello" }
+    ```
+    
+    This will return `Unit` and not the "hello" string that you would expect.
+    This is because execute in the example above delegates to org.occurrent.retry.RetryStrategy.execute(java.lang.Runnable)
+    and not org.occurrent.retry.RetryStrategy.execute(java.util.function.Supplier<T>) which one would expect.
+    Thus, you can use this function instead to avoid specifying the `Supplier` SAM explicitly.
+    
+    I.e. instead of doing:
+    
+    ```kotlin
+      val string : String = retryStrategy.execute(Supplier { "hello" })
+    ```
+    
+    you can do:
+    
+    ```kotlin
+      val string : String = retryStrategy.exec { "hello" }
+    ```
+    
+    after having imported `org.occurrent.retry.exec`.
+
 ### 0.16.3 (2023-05-12)
 * Added support to the retry module to execute retries with a function that takes an instance of `org.occurrent.retry.RetryInfo`. This is useful if you need to know the current state of your of the retry while retrying. For example:
   ```java  
