@@ -174,19 +174,22 @@ public sealed interface RetryStrategy {
         public final MaxAttempts maxAttempts;
         public final Predicate<Throwable> retryPredicate;
         public final BiConsumer<RetryInfo, Throwable> errorListener;
+        public final Function<Throwable, Throwable> errorMapper;
 
-        private Retry(Backoff backoff, MaxAttempts maxAttempts, Predicate<Throwable> retryPredicate, BiConsumer<RetryInfo, Throwable> errorListener) {
+        private Retry(Backoff backoff, MaxAttempts maxAttempts, Function<Throwable, Throwable> errorMapper, Predicate<Throwable> retryPredicate, BiConsumer<RetryInfo, Throwable> errorListener) {
             Objects.requireNonNull(backoff, Backoff.class.getSimpleName() + " cannot be null");
             Objects.requireNonNull(maxAttempts, MaxAttempts.class.getSimpleName() + " cannot be null");
             Objects.requireNonNull(retryPredicate, "Retry predicate cannot be null");
+            Objects.requireNonNull(errorMapper, "Error mapper cannot be null");
             this.backoff = backoff;
             this.maxAttempts = maxAttempts;
             this.retryPredicate = retryPredicate;
+            this.errorMapper = errorMapper;
             this.errorListener = errorListener == null ? NOOP_ERROR_LISTENER : errorListener;
         }
 
         private Retry() {
-            this(Backoff.none(), infinite(), __ -> true, NOOP_ERROR_LISTENER);
+            this(Backoff.none(), infinite(), Function.identity(), __ -> true, NOOP_ERROR_LISTENER);
         }
 
         /**
@@ -198,7 +201,7 @@ public sealed interface RetryStrategy {
          */
         public Retry backoff(Backoff backoff) {
             Objects.requireNonNull(backoff, Backoff.class.getSimpleName() + " cannot be null");
-            return new Retry(backoff, maxAttempts, retryPredicate, errorListener);
+            return new Retry(backoff, maxAttempts, errorMapper, retryPredicate, errorListener);
         }
 
         /**
@@ -208,7 +211,7 @@ public sealed interface RetryStrategy {
          * @see #maxAttempts(int)
          */
         public Retry infiniteAttempts() {
-            return new Retry(backoff, infinite(), retryPredicate, errorListener);
+            return new Retry(backoff, infinite(), errorMapper, retryPredicate, errorListener);
         }
 
         /**
@@ -217,7 +220,7 @@ public sealed interface RetryStrategy {
          * @return A new instance of {@link Retry} with the max number of attempts configured.
          */
         public Retry maxAttempts(int maxAttempts) {
-            return new Retry(backoff, new MaxAttempts.Limit(maxAttempts), retryPredicate, errorListener);
+            return new Retry(backoff, new MaxAttempts.Limit(maxAttempts), errorMapper, retryPredicate, errorListener);
         }
 
         /**
@@ -227,7 +230,7 @@ public sealed interface RetryStrategy {
          */
         public Retry retryIf(Predicate<Throwable> retryPredicate) {
             Objects.requireNonNull(retryPredicate, "Retry predicate cannot be null");
-            return new Retry(backoff, maxAttempts, retryPredicate, errorListener);
+            return new Retry(backoff, maxAttempts, errorMapper, retryPredicate, errorListener);
         }
 
         /**
@@ -237,7 +240,40 @@ public sealed interface RetryStrategy {
          */
         public Retry mapRetryPredicate(Function<Predicate<Throwable>, Predicate<Throwable>> retryPredicateFn) {
             Objects.requireNonNull(retryPredicateFn, "Retry predicate function cannot be null");
-            return new Retry(backoff, maxAttempts, retryPredicateFn.apply(retryPredicate), errorListener);
+            return new Retry(backoff, maxAttempts, errorMapper, retryPredicateFn.apply(retryPredicate), errorListener);
+        }
+
+        /**
+         * Maps any thrown throwable to another throwable
+         *
+         * @param errorMapper The function that maps throwable to another throwable
+         * @return A new instance of {@link Retry} with the given retry predicate
+         */
+        public Retry mapError(Function<Throwable, Throwable> errorMapper) {
+            Objects.requireNonNull(errorMapper, "Mapping function cannot be null");
+            return new Retry(backoff, maxAttempts, errorMapper, retryPredicate, errorListener);
+        }
+
+        /**
+         * Maps a throwable that is an <i>instance of</i> {@code E}.
+         *
+         * @param <E> The type of throwable that should trigger the {@code mapper} function
+         * @param type The type of the throwable
+         * @param mapper The mapper function that will be invoked if an exception is thrown by an {@code execute} function that is instance of {@code type}
+         * @return A new instance of {@link Retry} with the given retry predicate
+         */
+        @SuppressWarnings("unchecked")
+        public <E extends Throwable> Retry mapError(Class<E> type, Function<? super E, ? extends Throwable> mapper) {
+            Objects.requireNonNull(type, "Exception type cannot be null");
+            Objects.requireNonNull(mapper, "Mapper function cannot be null");
+            Function<Throwable, Throwable> matchingError = errorMapper.andThen(e -> {
+                if (type.isAssignableFrom(e.getClass())) {
+                    return mapper.apply((E) e);
+                } else {
+                    return e;
+                }
+            });
+            return new Retry(backoff, maxAttempts, errorMapper.andThen(matchingError), retryPredicate, errorListener);
         }
 
         /**
@@ -247,7 +283,7 @@ public sealed interface RetryStrategy {
          * @see #onError(Consumer)
          */
         public Retry onError(BiConsumer<RetryInfo, Throwable> errorListener) {
-            return new Retry(backoff, maxAttempts, retryPredicate, errorListener);
+            return new Retry(backoff, maxAttempts, errorMapper, retryPredicate, errorListener);
         }
 
         /**
@@ -265,12 +301,12 @@ public sealed interface RetryStrategy {
         public boolean equals(Object o) {
             if (this == o) return true;
             if (!(o instanceof Retry retry)) return false;
-            return Objects.equals(backoff, retry.backoff) && Objects.equals(maxAttempts, retry.maxAttempts) && Objects.equals(retryPredicate, retry.retryPredicate) && Objects.equals(errorListener, retry.errorListener);
+            return Objects.equals(backoff, retry.backoff) && Objects.equals(maxAttempts, retry.maxAttempts) && Objects.equals(retryPredicate, retry.retryPredicate) && Objects.equals(errorListener, retry.errorListener) && Objects.equals(errorMapper, retry.errorMapper);
         }
 
         @Override
         public int hashCode() {
-            return Objects.hash(backoff, maxAttempts, retryPredicate, errorListener);
+            return Objects.hash(backoff, maxAttempts, retryPredicate, errorListener, errorMapper);
         }
 
         @Override
@@ -280,8 +316,8 @@ public sealed interface RetryStrategy {
                     .add("maxAttempts=" + maxAttempts)
                     .add("retryPredicate=" + retryPredicate)
                     .add("errorListener=" + errorListener)
+                    .add("errorMapper=" + errorMapper)
                     .toString();
         }
     }
 }
-

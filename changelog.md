@@ -26,6 +26,34 @@
     
     after having imported `org.occurrent.retry.exec`.
 * Kotlin jvm target is set to 17
+* Added ability to map errors with `RetryStrategy`, either by doing:
+
+  ```
+  retryStrategy
+              .mapError(IllegalArgumentException.class, IllegalStateException::new)
+              .maxAttempts(2)
+              .execute(() -> {
+                  throw new IllegalArgumentException("expected");
+              }));
+  ```
+  
+  In the end, an `IllegalStateException` will be thrown. You can also do like this:
+
+  ```
+  retryStrategy
+              .mapError(t -> {
+                  if (t instanceof IllegalArgumentException iae) {
+                      return new IllegalStateException(iae.getMessage());
+                  } else {
+                      return t;
+                  }
+              })
+              .maxAttempts(2)
+              .execute(() -> {
+                  throw new IllegalArgumentException("expected");
+              }));
+  ```
+  
 
 ### 0.16.3 (2023-05-12)
 * Added support to the retry module to execute retries with a function that takes an instance of `org.occurrent.retry.RetryInfo`. This is useful if you need to know the current state of your of the retry while retrying. For example:

@@ -71,6 +71,125 @@ public class RetryStrategyTest {
         );
     }
 
+    @Nested
+    @DisplayName("MapError")
+    class MapErrorTest {
+
+        @Test
+        void mapError_for_all_exceptions() {
+            // Given
+            Retry retryStrategy = RetryStrategy.retry().backoff(fixed(10));
+
+            // When
+            Throwable throwable = catchThrowable(() ->
+                    retryStrategy
+                            .mapError(t -> {
+                                if (t instanceof IllegalArgumentException iae) {
+                                    return new IllegalStateException(iae.getMessage());
+                                } else {
+                                    return t;
+                                }
+                            })
+                            .maxAttempts(2)
+                            .execute(() -> {
+                                throw new IllegalArgumentException("expected");
+                            }));
+
+            // Then
+            assertAll(
+                    () -> assertThat(throwable).isExactlyInstanceOf(IllegalStateException.class).hasMessage("expected")
+            );
+        }
+
+        @Nested
+        @DisplayName("mapError for specific exception")
+        class MapErrorForSpecificExceptionTest {
+
+            @Test
+            void maps_exception_to_another_exception_when_mapError_matches_the_thrown_exception() {
+                // Given
+                Retry retryStrategy = RetryStrategy.retry().backoff(fixed(10));
+
+                // When
+                Throwable throwable = catchThrowable(() ->
+                        retryStrategy
+                                .mapError(IllegalArgumentException.class, IllegalStateException::new)
+                                .maxAttempts(2)
+                                .execute(() -> {
+                                    throw new IllegalArgumentException("expected");
+                                }));
+
+                // Then
+                assertAll(
+                        () -> assertThat(throwable).isExactlyInstanceOf(IllegalStateException.class).hasRootCauseMessage("expected")
+                );
+            }
+
+            @Test
+            void maps_exception_to_another_exception_when_mapError_matches_the_thrown_exception_and_there_are_multiple_error_mappers_defined() {
+                // Given
+                Retry retryStrategy = RetryStrategy.retry().backoff(fixed(10));
+
+                // When
+                Throwable throwable = catchThrowable(() ->
+                        retryStrategy
+                                .mapError(IllegalStateException.class, IllegalArgumentException::new)
+                                .mapError(IllegalArgumentException.class, IllegalStateException::new)
+                                .maxAttempts(2)
+                                .execute(() -> {
+                                    throw new IllegalArgumentException("expected");
+                                }));
+
+                // Then
+                assertAll(
+                        () -> assertThat(throwable).isExactlyInstanceOf(IllegalStateException.class).hasRootCauseMessage("expected")
+                );
+            }
+
+            @Test
+            void maps_exception_to_another_exception_when_mapError_matches_the_thrown_exception_and_there_are_multiple_error_mappers_defined_for_the_same_exception_then_the_first_has_precedence() {
+                // Given
+                Retry retryStrategy = RetryStrategy.retry().backoff(fixed(10));
+
+                // When
+                Throwable throwable = catchThrowable(() ->
+                        retryStrategy
+                                .mapError(IllegalArgumentException.class, IllegalStateException::new)
+                                .mapError(IllegalArgumentException.class, RuntimeException::new)
+                                .maxAttempts(2)
+                                .execute(() -> {
+                                    throw new IllegalArgumentException("expected");
+                                }));
+
+                // Then
+                assertAll(
+                        () -> assertThat(throwable).isExactlyInstanceOf(IllegalStateException.class).hasRootCauseMessage("expected")
+                );
+            }
+
+            @Test
+            void example_of_multiple_mapErrors_in_a_chain() {
+                // Given
+                Retry retryStrategy = RetryStrategy.retry().backoff(fixed(10));
+
+                // When
+                Throwable throwable = catchThrowable(() ->
+                        retryStrategy
+                                .mapError(IllegalArgumentException.class, IllegalStateException::new)
+                                .mapError(IllegalStateException.class, RuntimeException::new)
+                                .maxAttempts(2)
+                                .execute(() -> {
+                                    throw new IllegalArgumentException("expected");
+                                }));
+
+                // Then
+                assertAll(
+                        () -> assertThat(throwable).isExactlyInstanceOf(RuntimeException.class).hasCauseExactlyInstanceOf(IllegalStateException.class)
+                                .hasRootCauseExactlyInstanceOf(IllegalArgumentException.class).hasRootCauseMessage("expected")
+                );
+            }
+        }
+    }
 
     @Nested
     @DisplayName("backoff")

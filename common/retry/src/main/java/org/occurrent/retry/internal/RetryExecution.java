@@ -83,7 +83,8 @@ public class RetryExecution {
                 if (handleError(retry, retryInfo, attempt, e)) {
                     executeWithRetry(fn, retry, delay, attempt + 1).accept(t1);
                 } else {
-                    throw e;
+                    //noinspection ResultOfMethodCallIgnored
+                    SafeExceptionRethrower.safeRethrow(retry.errorMapper.apply(e));
                 }
             }
         };
@@ -98,7 +99,7 @@ public class RetryExecution {
                 if (handleError(retry, retryInfo, attempt, e)) {
                     return executeWithRetry(fn, retry, delay, attempt + 1).apply(retryInfo);
                 } else {
-                    throw e;
+                    return SafeExceptionRethrower.safeRethrow(retry.errorMapper.apply(e));
                 }
             }
         };
