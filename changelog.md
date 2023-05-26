@@ -25,6 +25,7 @@
     ```
     
     after having imported `org.occurrent.retry.exec`.
+* Kotlin jvm target is set to 17
 
 ### 0.16.3 (2023-05-12)
 * Added support to the retry module to execute retries with a function that takes an instance of `org.occurrent.retry.RetryInfo`. This is useful if you need to know the current state of your of the retry while retrying. For example:
