@@ -29,6 +29,7 @@
 
     <modules>
         <module>model</module>
+        <module>pragmatic-model</module>
     </modules>
     
 </project>
