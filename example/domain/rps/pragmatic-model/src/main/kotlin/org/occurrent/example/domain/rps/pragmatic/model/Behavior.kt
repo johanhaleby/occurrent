@@ -18,7 +18,7 @@
 package org.occurrent.example.domain.rps.pragmatic.model
 
 import org.occurrent.example.domain.rps.pragmatic.model.HandShape.*
-import org.occurrent.example.domain.rps.pragmatic.model.StateEvolution.EvolvedGameState.*
+import org.occurrent.example.domain.rps.pragmatic.model.StateEvolution.GameStatus.*
 import org.occurrent.example.domain.rps.pragmatic.model.StateEvolution.evolve
 
 private typealias WinnerId = PlayerId
@@ -32,8 +32,8 @@ object RPS {
     }
 
     fun join(events: List<GameEvent>, timestamp: Timestamp, playerId: PlayerId): PlayerReadyEvent {
-        val (gameId, gameState, _, firstPlayer) = events.evolve() ?: throw GameDoesNotExist()
-        return when (gameState) {
+        val (gameId, status, _, firstPlayer) = events.evolve() ?: throw GameDoesNotExist()
+        return when (status) {
             Created -> FirstPlayerBecameReady(gameId, timestamp, playerId)
             FirstPlayerReady -> {
                 if (firstPlayer == playerId) throw CannotJoinTheGameTwice()
@@ -45,9 +45,9 @@ object RPS {
     }
 
     fun play(events: List<GameEvent>, timestamp: Timestamp, playerId: PlayerId, shape: HandShape): List<GameEvent> {
-        val (gameId, gameState, _, firstPlayerId, secondPlayerId, moves) = events.evolve() ?: throw GameDoesNotExist()
+        val (gameId, status, _, firstPlayerId, secondPlayerId, moves) = events.evolve() ?: throw GameDoesNotExist()
 
-        return when (gameState) {
+        return when (status) {
             Created, FirstPlayerReady -> throw CannotPlayHandBecauseWaitingPlayersToBeReady()
             BothPlayersReady -> {
                 if (playerId != firstPlayerId && playerId != secondPlayerId) {
@@ -90,30 +90,27 @@ private fun PlayerHand.beats(other: PlayerHand): WinnerId? = when {
 
 private data class PlayerHand(val playerId: PlayerId, val shape: HandShape)
 
-// Evolving from events
 private object StateEvolution {
 
-    // Models for state evolution
-    data class EvolvedState(
-        val gameId: GameId, val gameState: EvolvedGameState, val createdBy: GameCreatorId, val firstPlayer: PlayerId? = null, val secondPlayer: PlayerId? = null, val hands: List<PlayerHand> = emptyList()
+    data class Game(
+        val gameId: GameId, val status: GameStatus, val createdBy: GameCreatorId, val firstPlayer: PlayerId? = null, val secondPlayer: PlayerId? = null, val hands: List<PlayerHand> = emptyList()
     )
 
-    enum class EvolvedGameState {
+    enum class GameStatus {
         Created, FirstPlayerReady, BothPlayersReady, Ongoing, Ended
     }
 
+    fun List<GameEvent>.evolve(currentState: Game? = null): Game? = fold(currentState, ::evolve)
 
-    fun List<GameEvent>.evolve(currentState: EvolvedState? = null): EvolvedState? = fold(currentState, ::evolve)
-
-    fun evolve(currentState: EvolvedState?, e: GameEvent) = when (e) {
-        is GameCreated -> EvolvedState(gameId = e.game, createdBy = e.createdBy, gameState = Created)
-        is FirstPlayerBecameReady -> currentState!!.copy(gameState = FirstPlayerReady, firstPlayer = e.player)
-        is SecondPlayerBecameReady -> currentState!!.copy(gameState = BothPlayersReady, secondPlayer = e.player)
-        is GameStarted -> currentState!!.copy(gameState = Ongoing)
+    fun evolve(currentState: Game?, e: GameEvent) = when (e) {
+        is GameCreated -> Game(gameId = e.game, createdBy = e.createdBy, status = Created)
+        is FirstPlayerBecameReady -> currentState!!.copy(status = FirstPlayerReady, firstPlayer = e.player)
+        is SecondPlayerBecameReady -> currentState!!.copy(status = BothPlayersReady, secondPlayer = e.player)
+        is GameStarted -> currentState!!.copy(status = Ongoing)
         is HandPlayed -> currentState!!.copy(hands = currentState.hands + PlayerHand(e.player, e.shape))
         is GameTied -> currentState
         is GameWon -> currentState
-        is GameEnded -> currentState!!.copy(gameState = Ended)
+        is GameEnded -> currentState!!.copy(status = Ended)
     }
 
     private operator fun List<PlayerHand>.plus(playerHand: PlayerHand): List<PlayerHand> = toMutableList().apply { add(playerHand) }
