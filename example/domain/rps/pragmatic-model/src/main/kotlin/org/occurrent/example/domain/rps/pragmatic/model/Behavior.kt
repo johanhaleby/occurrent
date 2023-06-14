@@ -48,7 +48,7 @@ object RPS {
         val (gameId, status, _, firstPlayerId, secondPlayerId, moves) = events.evolve() ?: throw GameDoesNotExist()
 
         return when (status) {
-            Created, FirstPlayerReady -> throw CannotPlayHandBecauseWaitingPlayersToBeReady()
+            Created, FirstPlayerReady -> throw CannotPlayHandBecauseWaitingForBothPlayersToBeReady()
             BothPlayersReady -> {
                 if (playerId != firstPlayerId && playerId != secondPlayerId) {
                     throw GameAlreadyHasTwoPlayers()

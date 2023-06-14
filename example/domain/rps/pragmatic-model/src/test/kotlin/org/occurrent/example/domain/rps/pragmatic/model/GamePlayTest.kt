@@ -120,7 +120,7 @@ class GamePlayTest {
                 val throwable = catchThrowable { RPS.play(currentEvents, timestamp, playerId, PAPER) }
 
                 // Then
-                assertThat(throwable).isExactlyInstanceOf(CannotPlayHandBecauseWaitingPlayersToBeReady::class.java)
+                assertThat(throwable).isExactlyInstanceOf(CannotPlayHandBecauseWaitingForBothPlayersToBeReady::class.java)
             }
         }
 

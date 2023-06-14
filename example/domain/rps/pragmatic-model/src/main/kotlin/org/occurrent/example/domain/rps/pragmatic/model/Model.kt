@@ -67,5 +67,5 @@ class CannotJoinTheGameTwice : IllegalArgumentException()
 class GameAlreadyHasTwoPlayers : IllegalArgumentException()
 
 class CannotPlayHandBecauseGameEnded : IllegalArgumentException()
-class CannotPlayHandBecauseWaitingPlayersToBeReady : IllegalArgumentException()
+class CannotPlayHandBecauseWaitingForBothPlayersToBeReady : IllegalArgumentException()
 class CannotPlayTheSameGameTwice : IllegalArgumentException()
