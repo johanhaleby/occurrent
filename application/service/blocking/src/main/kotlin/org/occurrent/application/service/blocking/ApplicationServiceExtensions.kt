@@ -65,6 +65,8 @@ fun <T> ApplicationService<T>.execute(streamId: String, functionThatCallsDomainM
     }
     return execute(streamId, f)
 }
+@JvmName("executeList")
+fun <T> ApplicationService<T>.execute(streamId: UUID, functionThatCallsDomainModel: (List<T>) -> List<T>) : WriteResult = execute(streamId.toString(), functionThatCallsDomainModel)
 
 private fun <T> ((Sequence<T>) -> Unit).toStreamSideEffect(): (Stream<T>) -> Unit {
     return { streamOfEvents -> this(streamOfEvents.asSequence()) }
