@@ -25,7 +25,6 @@
     <version>0.16.7-SNAPSHOT</version>
     <modules>
         <module>test-support</module>
-        <module>example</module>
         <module>eventstore</module>
         <module>subscription</module>
         <module>cloudevents-extension</module>
@@ -509,6 +508,15 @@
     </build>
 
     <profiles>
+        <profile>
+            <id>examples-module</id>
+            <modules>
+                <module>example</module>
+            </modules>
+            <activation>
+                <activeByDefault>true</activeByDefault>
+            </activation>
+        </profile>
         <profile>
             <id>release</id>
             <!-- Don't include test-support and example modules-->
