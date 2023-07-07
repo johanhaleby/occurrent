@@ -19,7 +19,7 @@
     <parent>
         <artifactId>example-number-guessing-game-es-mongodb-spring</artifactId>
         <groupId>org.occurrent</groupId>
-        <version>0.16.4</version>
+        <version>0.16.5-SNAPSHOT</version>
     </parent>
     <modelVersion>4.0.0</modelVersion>
 
@@ -29,22 +29,22 @@
         <dependency>
             <groupId>org.occurrent</groupId>
             <artifactId>example-number-guessing-game-model</artifactId>
-            <version>0.16.4</version>
+            <version>0.16.5-SNAPSHOT</version>
         </dependency>
         <dependency>
             <groupId>org.occurrent</groupId>
             <artifactId>eventstore-mongodb-spring-blocking</artifactId>
-            <version>0.16.4</version>
+            <version>0.16.5-SNAPSHOT</version>
         </dependency>
         <dependency>
             <groupId>org.occurrent</groupId>
             <artifactId>subscription-mongodb-spring-blocking-position-storage</artifactId>
-            <version>0.16.4</version>
+            <version>0.16.5-SNAPSHOT</version>
         </dependency>
         <dependency>
             <groupId>org.occurrent</groupId>
             <artifactId>durable-subscription</artifactId>
-            <version>0.16.4</version>
+            <version>0.16.5-SNAPSHOT</version>
         </dependency>
         <dependency>
             <groupId>org.springframework.boot</groupId>
