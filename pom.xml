@@ -81,7 +81,6 @@
         <dokka.version>1.8.10</dokka.version>
         <awaitility.version>4.2.0</awaitility.version>
         <jobrunr.version>6.1.4</jobrunr.version>
-        <spring.version>6.0.9</spring.version>
     </properties>
 
 
@@ -186,7 +185,7 @@
             <dependency>
                 <groupId>org.springframework</groupId>
                 <artifactId>spring-aspects</artifactId>
-                <version>${spring.version}</version>
+                <version>6.0.10</version>
             </dependency>
             <dependency>
                 <groupId>org.springframework.boot</groupId>
