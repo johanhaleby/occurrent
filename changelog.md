@@ -55,6 +55,7 @@
   ```
 * Added a new `execute` Kotlin extension function to the `ApplicationService` that allows one to use a `java.util.UUID` as a streamId when working with lists of events (as opposed to `Sequence`).
 * Upgraded xstream from 1.4.19 to 1.4.20
+* Added better logging to `org.occurrent.subscription.mongodb.spring.blocking.SpringMongoSubscriptionModel`, including some debug logs that can be used for detailed information about what's going on.
   
 
 ### 0.16.3 (2023-05-12)

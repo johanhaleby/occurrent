@@ -154,10 +154,23 @@ public class SpringMongoSubscriptionModel implements PositionAwareSubscriptionMo
 
         MessageListener<ChangeStreamDocument<Document>, Document> listener = change -> {
             ChangeStreamDocument<Document> raw = change.getRaw();
-            BsonDocument resumeToken = requireNonNull(raw).getResumeToken();
+            if (raw == null) {
+                log.error("[{}] Internal Error: ChangeStreamDocument in collection {} was null", subscriptionId, eventCollection);
+                return;
+            }
+
+            if (log.isDebugEnabled()) {
+                log.debug("[{}] Received event with for operation {} in collection {}: {}", subscriptionId, raw.getOperationTypeString(), eventCollection, raw.getFullDocument());
+            }
+
+            BsonDocument resumeToken = raw.getResumeToken();
             MongoCloudEventsToJsonDeserializer.deserializeToCloudEvent(raw, timeRepresentation)
                     .map(cloudEvent -> new PositionAwareCloudEvent(cloudEvent, new MongoResumeTokenSubscriptionPosition(resumeToken)))
-                    .ifPresent(executeWithRetry(action, __ -> !shutdown, retryStrategy));
+                    .ifPresentOrElse(executeWithRetry(action, __ -> !shutdown, retryStrategy), () -> {
+                        if (log.isDebugEnabled()) {
+                            log.debug("Failed to deserialize document to cloud event for operation type {}: {}", raw.getOperationTypeString(), raw.getFullDocument());
+                        }
+                    });
         };
 
         Function<StartAt, ChangeStreamRequest<Document>> requestBuilder = sa -> new ChangeStreamRequest<>(listener, requestOptionsFunction.apply(sa));
