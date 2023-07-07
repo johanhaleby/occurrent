@@ -26,10 +26,6 @@
     <artifactId>cloudevent-converter-jackson</artifactId>
     <description>CloudEvent Converter for Jackson</description>
 
-    <properties>
-        <kotlin.version>1.7.10</kotlin.version>
-    </properties>
-
     <dependencies>
         <dependency>
             <groupId>org.occurrent</groupId>
