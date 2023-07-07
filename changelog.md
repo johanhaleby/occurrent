@@ -1,4 +1,4 @@
-### Next version
+### 0.16.4 (2023-07-7)
 *  A kotlin extension function that makes it easier to execute a `RetryStrategy` with a "Supplier".
     
     The reasons for this is that when just doing this from kotlin:
