@@ -160,7 +160,7 @@ public class SpringMongoSubscriptionModel implements PositionAwareSubscriptionMo
             }
 
             if (log.isDebugEnabled()) {
-                log.debug("[{}] Received event with for operation {} in collection {}: {}", subscriptionId, raw.getOperationTypeString(), eventCollection, raw.getFullDocument());
+                log.debug("[{}] Received event with for operation {} in namespace {}. Document: {}, Document Key: {}, Update Description: {}", subscriptionId, raw.getOperationTypeString(), raw.getNamespace(), raw.getFullDocument(), raw.getDocumentKey(), raw.getUpdateDescription());
             }
 
             BsonDocument resumeToken = raw.getResumeToken();
@@ -168,7 +168,7 @@ public class SpringMongoSubscriptionModel implements PositionAwareSubscriptionMo
                     .map(cloudEvent -> new PositionAwareCloudEvent(cloudEvent, new MongoResumeTokenSubscriptionPosition(resumeToken)))
                     .ifPresentOrElse(executeWithRetry(action, __ -> !shutdown, retryStrategy), () -> {
                         if (log.isDebugEnabled()) {
-                            log.debug("Failed to deserialize document to cloud event for operation type {}: {}", raw.getOperationTypeString(), raw.getFullDocument());
+                            log.debug("Won't deserialize document to cloud event for operation type {} in namespace {}: {}", raw.getOperationTypeString(), raw.getNamespace(), raw.getFullDocument());
                         }
                     });
         };

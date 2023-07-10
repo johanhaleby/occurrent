@@ -1,3 +1,6 @@
+### 016.5 (2023-07-7)
+* Improved debug logging in `org.occurrent.subscription.mongodb.spring.blocking.SpringMongoSubscriptionModel`
+
 ### 0.16.4 (2023-07-7)
 *  A kotlin extension function that makes it easier to execute a `RetryStrategy` with a "Supplier".
     
