@@ -1,4 +1,4 @@
-### Next version
+### 0.16.6 (2023-08-15)
 * The SpringMongoSubscriptionModel is now restarted for all instances of `org.springframework.dao.DataAccessException` instead of just instances of `org.springframework.data.mongodb.UncategorizedMongoDbException`.
 * Upgraded cloudevents from 2.4.2 to 2.5.0
 * Upgraded Spring Boot from 3.0.7 to 3.0.8
@@ -7,7 +7,7 @@
 * Upgraded mongo driver from 4.8.1 to 4.10.2
 * Upgraded jobrunr from 6.1.4 to 6.3.0
 
-### 016.5 (2023-07-7)
+### 0.16.5 (2023-07-7)
 * Improved debug logging in `org.occurrent.subscription.mongodb.spring.blocking.SpringMongoSubscriptionModel`
 
 ### 0.16.4 (2023-07-7)
