@@ -3,6 +3,7 @@
 * Upgraded cloudevents from 2.4.2 to 2.5.0
 * Upgraded Spring Boot from 3.0.7 to 3.0.8
 * Upgraded project reactor from 3.5.6 to 3.5.8
+* Upgraded spring data mongodb from 4.0.6 to 4.0.8
 
 ### 016.5 (2023-07-7)
 * Improved debug logging in `org.occurrent.subscription.mongodb.spring.blocking.SpringMongoSubscriptionModel`
