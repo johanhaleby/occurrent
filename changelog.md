@@ -5,6 +5,7 @@
 * Upgraded project reactor from 3.5.6 to 3.5.8
 * Upgraded spring data mongodb from 4.0.6 to 4.0.8
 * Upgraded mongo driver from 4.8.1 to 4.10.2
+* Upgraded jobrunr from 6.1.4 to 6.3.0
 
 ### 016.5 (2023-07-7)
 * Improved debug logging in `org.occurrent.subscription.mongodb.spring.blocking.SpringMongoSubscriptionModel`
