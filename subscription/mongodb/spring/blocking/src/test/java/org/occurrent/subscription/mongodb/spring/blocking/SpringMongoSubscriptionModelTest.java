@@ -17,10 +17,7 @@
 package org.occurrent.subscription.mongodb.spring.blocking;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
-import com.mongodb.ConnectionString;
-import com.mongodb.MongoCommandException;
-import com.mongodb.MongoQueryException;
-import com.mongodb.ServerAddress;
+import com.mongodb.*;
 import com.mongodb.client.MongoClient;
 import com.mongodb.client.MongoClients;
 import com.mongodb.client.MongoCollection;
@@ -47,6 +44,7 @@ import org.occurrent.subscription.SubscriptionPosition;
 import org.occurrent.subscription.mongodb.MongoFilterSpecification;
 import org.occurrent.testsupport.mongodb.FlushMongoDBExtension;
 import org.occurrent.time.TimeConversion;
+import org.springframework.dao.DataAccessResourceFailureException;
 import org.springframework.data.mongodb.MongoTransactionManager;
 import org.springframework.data.mongodb.UncategorizedMongoDbException;
 import org.springframework.data.mongodb.core.MongoTemplate;
@@ -541,7 +539,7 @@ public class SpringMongoSubscriptionModelTest {
             NameWasChanged nameWasChanged2 = new NameWasChanged(UUID.randomUUID().toString(), now.plusSeconds(4), "name4");
 
             subscriptionModel.subscribe(subscriberId, filter(match(and(eq("fullDocument.id", nameDefined2.getEventId()), eq("fullDocument.type", NameDefined.class.getName())))), state::add
-            )
+                    )
                     .waitUntilStarted(Duration.of(10, ChronoUnit.SECONDS));
 
             // When
@@ -677,25 +675,39 @@ public class SpringMongoSubscriptionModelTest {
     }
 
     @Nested
-    @DisplayName("MongoQueryException")
-    class MongoQueryExceptionTest {
-        @SuppressWarnings("unchecked")
+    @DisplayName("MongoException")
+    class MongoExceptionTest {
+
         @Timeout(value = 20, unit = SECONDS)
         @Test
         void restarts_subscription_on_mongo_query_exception() {
+            List<BsonElement> elements = new ArrayList<>();
+            elements.add(new BsonElement("code", new BsonInt32(11600)));
+            elements.add(new BsonElement("codeName", new BsonString("InterruptedAtShutdown")));
+
+            UncategorizedMongoDbException exception = new UncategorizedMongoDbException("expected", new MongoQueryException(new BsonDocument(elements), new ServerAddress()));
+            
+            assertSubscriptionIsRestartedForException(exception);
+        }
+
+        @Timeout(value = 20, unit = SECONDS)
+        @Test
+        void restarts_subscription_on_DataAccessResourceFailureException() {
+            DataAccessResourceFailureException exception = new DataAccessResourceFailureException("expected", new MongoTimeoutException("timed out"));
+            assertSubscriptionIsRestartedForException(exception);
+        }
+
+        @SuppressWarnings("unchecked")
+        private void assertSubscriptionIsRestartedForException(Exception exception) {
             // Given
             MongoTemplate mongoTemplateSpy = spy(mongoTemplate);
             MongoDatabase mongoDatabase = mock(MongoDatabase.class);
             MongoCollection<Document> mongoCollection = (MongoCollection<Document>) mock(MongoCollection.class);
 
-            List<BsonElement> elements = new ArrayList<>();
-            elements.add(new BsonElement("code", new BsonInt32(11600)));
-            elements.add(new BsonElement("codeName", new BsonString("InterruptedAtShutdown")));
-
             // Called in org.springframework.data.mongodb.core.messaging.ChangeStreamTask#initCursor
             when(mongoTemplateSpy.getDb()).thenReturn(mongoDatabase).thenCallRealMethod();
             when(mongoDatabase.getCollection("events")).thenReturn(mongoCollection);
-            when(mongoCollection.watch(any(Class.class))).thenThrow(new UncategorizedMongoDbException("expected", new MongoQueryException(new BsonDocument(elements), new ServerAddress())));
+            when(mongoCollection.watch(any(Class.class))).thenThrow(exception);
 
             subscriptionModel = new SpringMongoSubscriptionModel(mongoTemplateSpy, withConfig("events", TimeRepresentation.RFC_3339_STRING).restartSubscriptionsOnChangeStreamHistoryLost(true));
 
@@ -709,7 +721,6 @@ public class SpringMongoSubscriptionModelTest {
             // Then
             await().atMost(2, SECONDS).with().pollInterval(Duration.of(20, MILLIS)).untilAsserted(() -> assertThat(state).hasSize(1));
         }
-
     }
 
 

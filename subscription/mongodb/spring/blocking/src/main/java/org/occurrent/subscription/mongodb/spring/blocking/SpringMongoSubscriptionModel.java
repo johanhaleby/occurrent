@@ -39,6 +39,7 @@ import org.occurrent.subscription.mongodb.spring.internal.ApplyFilterToChangeStr
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.context.SmartLifecycle;
+import org.springframework.dao.DataAccessException;
 import org.springframework.data.mongodb.UncategorizedMongoDbException;
 import org.springframework.data.mongodb.core.ChangeStreamOptions;
 import org.springframework.data.mongodb.core.ChangeStreamOptions.ChangeStreamOptionsBuilder;
@@ -305,7 +306,7 @@ public class SpringMongoSubscriptionModel implements PositionAwareSubscriptionMo
 
     private org.springframework.data.mongodb.core.messaging.Subscription registerNewSpringSubscription(String subscriptionId, ChangeStreamRequest<Document> documentChangeStreamRequest) {
         return messageListenerContainer.register(documentChangeStreamRequest, Document.class, throwable -> {
-            if (throwable instanceof UncategorizedMongoDbException) {
+            if (throwable instanceof DataAccessException) {
                 Throwable cause = throwable.getCause();
                 if (cause instanceof MongoQueryException) {
                     log.warn("Caught {} ({}) for subscription {}, will restart!", MongoQueryException.class.getSimpleName(), cause.getMessage(), subscriptionId, throwable);
@@ -318,6 +319,10 @@ public class SpringMongoSubscriptionModel implements PositionAwareSubscriptionMo
                         restartInternalSubscription(subscriptionId, StartAt.now());
                     } else {
                         log.error("There was not enough oplog to resume subscription {}, {}", subscriptionId, restartMessage, throwable);
+                    }
+                } else if (shutdown) {
+                    if (log.isDebugEnabled()) {
+                        log.debug("Subscription {} is shutting down, ignoring {}.", subscriptionId, throwable.getClass().getName(), throwable);
                     }
                 } else {
                     log.error("Error caught for subscription {}: {} {}. Will restart!", subscriptionId, cause.getClass().getName(), cause.getMessage(), throwable);
