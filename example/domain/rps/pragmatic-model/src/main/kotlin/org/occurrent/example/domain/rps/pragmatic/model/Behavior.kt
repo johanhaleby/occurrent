@@ -112,6 +112,4 @@ private object StateEvolution {
         is GameWon -> currentState
         is GameEnded -> currentState!!.copy(status = Ended)
     }
-
-    private operator fun List<PlayerHand>.plus(playerHand: PlayerHand): List<PlayerHand> = toMutableList().apply { add(playerHand) }
 }
