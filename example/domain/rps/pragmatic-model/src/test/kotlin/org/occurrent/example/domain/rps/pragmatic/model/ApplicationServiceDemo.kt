@@ -41,6 +41,7 @@ import java.util.*
 
 /**
  * This is an example, showing different ways to store events returned from the RPS model, using the Occurrent application service.
+ * It is NOT an example of you should write good tests with Occurrent.
  */
 class ApplicationServiceDemo {
 
