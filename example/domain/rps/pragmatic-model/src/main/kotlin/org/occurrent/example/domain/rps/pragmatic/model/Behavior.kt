@@ -26,12 +26,12 @@ private typealias WinnerId = PlayerId
 object RPS {
 
     fun create(events: List<GameEvent>, gameId: GameId, timestamp: Timestamp, creator: GameCreatorId): GameCreated {
-        val gameAlreadyStarted = events.evolve() != null
-        if (gameAlreadyStarted) throw GameCannotBeCreatedMoreThanOnce()
+        val gameAlreadyCreated = events.evolve() != null
+        if (gameAlreadyCreated) throw GameCannotBeCreatedMoreThanOnce()
         return GameCreated(gameId, timestamp, createdBy = creator)
     }
 
-    fun join(events: List<GameEvent>, timestamp: Timestamp, playerId: PlayerId): PlayerReadyEvent {
+    fun join(events: List<GameEvent>, timestamp: Timestamp, playerId: PlayerId): PlayerBecameReady {
         val (gameId, status, _, firstPlayer) = events.evolve() ?: throw GameDoesNotExist()
         return when (status) {
             Created -> FirstPlayerBecameReady(gameId, timestamp, playerId)

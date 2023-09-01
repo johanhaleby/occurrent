@@ -21,10 +21,10 @@ sealed interface GameEvent {
     val game: GameId
     val timestamp: Timestamp
 }
-sealed interface PlayerReadyEvent : GameEvent
+sealed interface PlayerBecameReady : GameEvent
 
-data class FirstPlayerBecameReady(override val game: GameId, override val timestamp: Timestamp, val player: PlayerId) : PlayerReadyEvent
-data class SecondPlayerBecameReady(override val game: GameId, override val timestamp: Timestamp, val player: PlayerId) : PlayerReadyEvent
+data class FirstPlayerBecameReady(override val game: GameId, override val timestamp: Timestamp, val player: PlayerId) : PlayerBecameReady
+data class SecondPlayerBecameReady(override val game: GameId, override val timestamp: Timestamp, val player: PlayerId) : PlayerBecameReady
 data class GameCreated(override val game: GameId, override val timestamp: Timestamp, val createdBy: GameCreatorId) : GameEvent
 data class GameStarted(override val game: GameId, override val timestamp: Timestamp) : GameEvent
 data class GameEnded(override val game: GameId, override val timestamp: Timestamp) : GameEvent
