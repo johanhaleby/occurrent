@@ -39,6 +39,9 @@ import java.net.URI
 import java.time.OffsetDateTime
 import java.util.*
 
+/**
+ * This is an example, showing different ways to store events returned from the RPS model, using the Occurrent application service.
+ */
 class ApplicationServiceDemo {
 
     @Test
