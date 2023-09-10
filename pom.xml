@@ -78,6 +78,7 @@
         <spring-boot.version>3.0.8</spring-boot.version>
         <mongo.version>4.10.2</mongo.version>
         <dokka.version>1.8.10</dokka.version>
+        <sundrio.version>0.100.3</sundrio.version>
         <awaitility.version>4.2.0</awaitility.version>
         <jobrunr.version>6.3.0</jobrunr.version>
     </properties>
@@ -564,6 +565,35 @@
                                 </goals>
                             </execution>
                         </executions>
+                    </plugin>
+                    <plugin>
+                        <groupId>io.sundr</groupId>
+                        <artifactId>sundr-maven-plugin</artifactId>
+                        <version>${sundrio.version}</version>
+                        <executions>
+                            <execution>
+                                <goals>
+                                    <goal>generate-bom</goal>
+                                </goals>
+                            </execution>
+                        </executions>
+                        <configuration>
+                            <boms>
+                                <bom>
+                                    <artifactId>occurrent-bom</artifactId>
+                                    <name>Occurrent: BOM</name>
+                                    <description>
+                                        Centralized dependencyManagement for the Occurrent Project
+                                    </description>
+                                    <modules>
+                                        <excludes>
+                                            <exclude>org.occurrent:example*</exclude>
+                                            <exclude>org.occurrent:test-support</exclude>
+                                        </excludes>
+                                    </modules>
+                                </bom>
+                            </boms>
+                        </configuration>
                     </plugin>
                     <plugin>
                         <groupId>org.sonatype.plugins</groupId>
