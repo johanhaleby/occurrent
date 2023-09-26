@@ -25,6 +25,8 @@ import org.occurrent.retry.RetryStrategy.Retry;
 
 import java.time.Duration;
 import java.util.Iterator;
+import java.util.Objects;
+import java.util.StringJoiner;
 import java.util.function.Consumer;
 import java.util.function.Function;
 import java.util.function.Predicate;
@@ -215,6 +217,27 @@ public class RetryExecution {
         @Override
         public boolean isFirstAttempt() {
             return attempt == 1;
+        }
+
+        @Override
+        public boolean equals(Object o) {
+            if (this == o) return true;
+            if (!(o instanceof RetryInfoImpl retryInfo)) return false;
+            return attempt == retryInfo.attempt && Objects.equals(maxAttempts, retryInfo.maxAttempts) && Objects.equals(backoff, retryInfo.backoff);
+        }
+
+        @Override
+        public int hashCode() {
+            return Objects.hash(attempt, maxAttempts, backoff);
+        }
+
+        @Override
+        public String toString() {
+            return new StringJoiner(", ", RetryInfo.class.getSimpleName() + "[", "]")
+                    .add("attempt=" + attempt)
+                    .add("maxAttempts=" + maxAttempts)
+                    .add("backoff=" + backoff)
+                    .toString();
         }
     }
 }
