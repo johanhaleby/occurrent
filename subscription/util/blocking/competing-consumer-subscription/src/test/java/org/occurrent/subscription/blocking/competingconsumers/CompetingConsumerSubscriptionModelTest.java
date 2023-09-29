@@ -175,7 +175,7 @@ class CompetingConsumerSubscriptionModelTest {
         await("waiting for second event").atMost(5, SECONDS).untilAsserted(() -> assertThat(cloudEvents).extracting(CloudEvent::getId).containsExactly("1", "2", "3"));
     }
 
-    @Test
+    @RepeatedIfExceptionsTest(repeats = 3, suspend = 400)
     void another_consumer_takes_over_when_first_subscription_is_canceled() {
         // Given
         CopyOnWriteArrayList<CloudEvent> cloudEvents = new CopyOnWriteArrayList<>();
@@ -199,6 +199,7 @@ class CompetingConsumerSubscriptionModelTest {
         competingConsumerSubscriptionModel1.cancelSubscription(subscriptionId);
 
         // Cancelling a subscription also removes the subscription position from storage, thus this event will be lost!
+        // However, cancelSubscription is async because of Spring, this is why we have the @RepeatedIfExceptionsTest annotation here.
         eventStore.write("streamId", serialize(nameWasChanged1));
 
         await().atMost(2, SECONDS).untilAsserted(() -> assertThat(springMongoLeaseCompetingConsumerStrategy2.hasLock(subscriptionId, "subscriber2")).isTrue());
