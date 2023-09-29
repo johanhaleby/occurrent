@@ -3,6 +3,7 @@
 * Small changes to how retries are performed in the competing consumer strategies for MongoDB
 * Improved debug logging in competing consumer implementations  
 * Upgraded kotlin from 1.9.0 to 1.9.10
+* Upgraded jobrunr from 6.3.0 to 6.3.2
 
 ### 0.16.6 (2023-08-15)
 * The SpringMongoSubscriptionModel is now restarted for all instances of `org.springframework.dao.DataAccessException` instead of just instances of `org.springframework.data.mongodb.UncategorizedMongoDbException`.
