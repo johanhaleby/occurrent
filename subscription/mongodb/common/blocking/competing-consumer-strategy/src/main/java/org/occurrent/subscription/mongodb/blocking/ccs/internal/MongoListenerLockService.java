@@ -29,6 +29,8 @@ import org.bson.BsonDocument;
 import org.bson.Document;
 import org.bson.conversions.Bson;
 import org.occurrent.retry.RetryStrategy;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 import java.time.Clock;
 import java.time.Duration;
@@ -46,6 +48,7 @@ import static java.util.Arrays.asList;
 import static java.util.Collections.singletonList;
 
 class MongoListenerLockService {
+    private static final Logger log = LoggerFactory.getLogger(MongoListenerLockService.class);
 
     /**
      * Attempts to acquire the lock for the current subscriber ID, or refresh a lock already held by
@@ -64,6 +67,7 @@ class MongoListenerLockService {
     static Optional<ListenerLock> acquireOrRefreshFor(MongoCollection<BsonDocument> collection, Clock clock, RetryStrategy retryStrategy, Duration leaseTime, String subscriptionId, String subscriberId) {
         return retryStrategy.execute(() -> {
             try {
+                logDebug("acquireOrRefreshFor (subscriberId={}, subscriptionId={})", subscriberId, subscriptionId);
                 final BsonDocument found = collection
                         .withWriteConcern(WriteConcern.MAJORITY)
                         .findOneAndUpdate(
@@ -85,10 +89,14 @@ class MongoListenerLockService {
 
                 final ListenerLock lock = new ListenerLock(found.getNumber("version"));
 
+                logDebug("Found lock: {} (subscriberId={}, subscriptionId={})", lock.version(), subscriberId, subscriptionId);
 
                 return Optional.of(lock);
             } catch (MongoCommandException e) {
                 final ErrorCategory errorCategory = ErrorCategory.fromErrorCode(e.getErrorCode());
+
+                logDebug("Caught {} - {} in acquireOrRefreshFor (errorCategory={}, subscriberId={}, subscriptionId={}, duplicate={})",
+                        e.getClass().getName(), e.getMessage(), errorCategory, subscriberId, subscriptionId, errorCategory.equals(DUPLICATE_KEY));
 
                 if (errorCategory.equals(DUPLICATE_KEY)) {
                     return Optional.empty();
@@ -105,6 +113,7 @@ class MongoListenerLockService {
 
     static boolean commit(MongoCollection<BsonDocument> collection, Clock clock, RetryStrategy retryStrategy, Duration leaseTime, String subscriptionId, String subscriberId) throws LostLockException {
         return retryStrategy.execute(() -> {
+            logDebug("Before commit (subscriberId={}, subscriptionId={})", subscriberId, subscriptionId);
             Instant newLeaseTime = clock.instant().plus(leaseTime);
             UpdateResult result = collection
                     .withWriteConcern(WriteConcern.MAJORITY)
@@ -114,7 +123,9 @@ class MongoListenerLockService {
                                     eq("subscriberId", subscriberId)),
                             set("expiresAt", newLeaseTime));
 
-            return result.getMatchedCount() != 0;
+            boolean gotLock = result.getMatchedCount() != 0;
+            logDebug("After commit gotLock={} (subscriberId={}, subscriptionId={})", gotLock, subscriberId, subscriptionId);
+            return gotLock;
         });
     }
 
@@ -134,5 +145,11 @@ class MongoListenerLockService {
         map.put("else", "$version");
 
         return new Document("$cond", new Document(map));
+    }
+
+    private static void logDebug(String message, Object... params) {
+        if (log.isDebugEnabled()) {
+            log.debug(message, params);
+        }
     }
 }

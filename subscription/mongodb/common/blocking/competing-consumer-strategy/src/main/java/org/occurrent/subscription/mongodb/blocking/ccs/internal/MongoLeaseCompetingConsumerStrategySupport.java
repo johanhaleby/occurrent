@@ -22,6 +22,8 @@ import org.bson.BsonDocument;
 import org.occurrent.retry.RetryStrategy;
 import org.occurrent.retry.RetryStrategy.Retry;
 import org.occurrent.subscription.api.blocking.CompetingConsumerStrategy.CompetingConsumerListener;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 import java.time.Clock;
 import java.time.Duration;
@@ -37,6 +39,7 @@ import java.util.function.Function;
  * Common operations for MongoDB lease-based competing consumer strategies
  */
 public class MongoLeaseCompetingConsumerStrategySupport {
+    private static final Logger log = LoggerFactory.getLogger(MongoLeaseCompetingConsumerStrategySupport.class);
 
     public static final String DEFAULT_COMPETING_CONSUMER_LOCKS_COLLECTION = "competing-consumer-locks";
     public static final Duration DEFAULT_LEASE_TIME = Duration.ofSeconds(20);
@@ -77,10 +80,13 @@ public class MongoLeaseCompetingConsumerStrategySupport {
         CompetingConsumer competingConsumer = new CompetingConsumer(subscriptionId, subscriberId);
         Status oldStatus = competingConsumers.get(competingConsumer);
         boolean acquired = MongoListenerLockService.acquireOrRefreshFor(collection, clock, retryStrategy, leaseTime, subscriptionId, subscriberId).isPresent();
+        logDebug("oldStatus={} acquired lock={} (subscriberId={}, subscriptionId={})", oldStatus, acquired, subscriberId, subscriptionId);
         competingConsumers.put(competingConsumer, acquired ? Status.LOCK_ACQUIRED : Status.LOCK_NOT_ACQUIRED);
         if (oldStatus != Status.LOCK_ACQUIRED && acquired) {
+            logDebug("Consumption granted (subscriberId={}, subscriptionId={})", subscriberId, subscriptionId);
             competingConsumerListeners.forEach(listener -> listener.onConsumeGranted(subscriptionId, subscriberId));
         } else if (oldStatus == Status.LOCK_ACQUIRED && !acquired) {
+            logDebug("Consumption prohibited (subscriberId={}, subscriptionId={})", subscriberId, subscriptionId);
             competingConsumerListeners.forEach(listener -> listener.onConsumeProhibited(subscriptionId, subscriberId));
         }
         return acquired;
@@ -89,6 +95,7 @@ public class MongoLeaseCompetingConsumerStrategySupport {
     public void unregisterCompetingConsumer(MongoCollection<BsonDocument> collection, String subscriptionId, String subscriberId) {
         Objects.requireNonNull(subscriptionId, "Subscription id cannot be null");
         Objects.requireNonNull(subscriberId, "Subscriber id cannot be null");
+        logDebug("Unregistering consumer (subscriberId={}, subscriptionId={})", subscriberId, subscriptionId);
         Status status = competingConsumers.remove(new CompetingConsumer(subscriptionId, subscriberId));
         MongoListenerLockService.remove(collection, retryStrategy, subscriptionId);
         if (status == Status.LOCK_ACQUIRED) {
@@ -100,7 +107,9 @@ public class MongoLeaseCompetingConsumerStrategySupport {
         Objects.requireNonNull(subscriptionId, "Subscription id cannot be null");
         Objects.requireNonNull(subscriberId, "Subscriber id cannot be null");
         Status status = competingConsumers.get(new CompetingConsumer(subscriptionId, subscriberId));
-        return status == Status.LOCK_ACQUIRED;
+        boolean hasLock = status == Status.LOCK_ACQUIRED;
+        logDebug("hasLock={} (subscriberId={}, subscriptionId={})", hasLock, subscriberId, subscriptionId);
+        return hasLock;
     }
 
     public void addListener(CompetingConsumerListener listenerConsumer) {
@@ -114,18 +123,23 @@ public class MongoLeaseCompetingConsumerStrategySupport {
     }
 
     public void shutdown() {
+        logDebug("Shutting down");
         running = false;
         scheduledRefresh.close();
     }
 
     private void refreshOrAcquireLease(MongoCollection<BsonDocument> collection) {
+        logDebug("In refreshOrAcquireLease with {} competing consumers", competingConsumers.size());
         competingConsumers.forEach((cc, status) -> {
+            logDebug("Status {} (subscriberId={}, subscriptionId={})", status, cc.subscriberId, cc.subscriptionId);
             if (status == Status.LOCK_ACQUIRED) {
                 boolean stillHasLock = MongoListenerLockService.commit(collection, clock, retryStrategy, leaseTime, cc.subscriptionId, cc.subscriberId);
                 if (!stillHasLock) {
+                    logDebug("Lost lock! (subscriberId={}, subscriptionId={})", cc.subscriberId, cc.subscriptionId);
                     // Lock was lost!
                     competingConsumers.put(cc, Status.LOCK_NOT_ACQUIRED);
                     competingConsumerListeners.forEach(listener -> listener.onConsumeProhibited(cc.subscriptionId, cc.subscriberId));
+                    logDebug("Completed calling onConsumeProhibited for all listeners (subscriberId={}, subscriptionId={})", cc.subscriberId, cc.subscriptionId);
                 }
             } else {
                 registerCompetingConsumer(collection, cc.subscriptionId, cc.subscriberId);
@@ -138,5 +152,9 @@ public class MongoLeaseCompetingConsumerStrategySupport {
 
     private enum Status {
         LOCK_ACQUIRED, LOCK_NOT_ACQUIRED
+    }
+
+    private static void logDebug(String message, Object... params) {
+        log.debug(message, params);
     }
 }

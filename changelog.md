@@ -1,6 +1,7 @@
 ### Next version
 * Added equals/hashcode and toString to RetryInfo
 * Small changes to how retries are performed in the competing consumer strategies for MongoDB
+* Improved debug logging in competing consumer implementations  
 * Upgraded kotlin from 1.9.0 to 1.9.10
 
 ### 0.16.6 (2023-08-15)
