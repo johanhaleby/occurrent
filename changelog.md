@@ -6,6 +6,7 @@
 * Upgraded kotlin from 1.9.0 to 1.9.10
 * Upgraded jobrunr from 6.3.0 to 6.3.2
 * Upgraded spring data mongodb from 4.0.8 to 4.0.10
+* Upgraded jackson from version 2.14.3 to 2.15.2
 
 ### 0.16.6 (2023-08-15)
 * The SpringMongoSubscriptionModel is now restarted for all instances of `org.springframework.dao.DataAccessException` instead of just instances of `org.springframework.data.mongodb.UncategorizedMongoDbException`.
