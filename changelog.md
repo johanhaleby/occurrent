@@ -1,5 +1,6 @@
 ### Next version
 * Added equals/hashcode and toString to RetryInfo
+* Small changes to how retries are performed in the competing consumer strategies for MongoDB 
 
 ### 0.16.6 (2023-08-15)
 * The SpringMongoSubscriptionModel is now restarted for all instances of `org.springframework.dao.DataAccessException` instead of just instances of `org.springframework.data.mongodb.UncategorizedMongoDbException`.

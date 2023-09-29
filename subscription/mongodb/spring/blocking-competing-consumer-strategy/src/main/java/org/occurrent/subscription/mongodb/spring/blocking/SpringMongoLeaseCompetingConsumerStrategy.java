@@ -218,11 +218,11 @@ public class SpringMongoLeaseCompetingConsumerStrategy implements CompetingConsu
             String collectionNameToUse = collectionName == null ? DEFAULT_COMPETING_CONSUMER_LOCKS_COLLECTION : collectionName;
             RetryStrategy retryStrategyToUse = retryStrategy == null ? RetryStrategy.exponentialBackoff(Duration.ofMillis(100), Duration.ofSeconds(2), 2.0f) : retryStrategy;
             MongoLeaseCompetingConsumerStrategySupport support = new MongoLeaseCompetingConsumerStrategySupport(leaseTimeToUse, clockToUse, retryStrategyToUse)
-                    .scheduleRefresh(consumer -> () -> retryStrategyToUse.execute(
+                    .scheduleRefresh(consumer ->
                             () -> staticallyWithCompetingConsumerLocksCollectionReturn(mongoOperations, collectionNameToUse, collection -> {
                                 consumer.accept(collection);
                                 return null;
-                            })));
+                            }));
             return new SpringMongoLeaseCompetingConsumerStrategy(mongoOperations, collectionNameToUse, support);
         }
     }

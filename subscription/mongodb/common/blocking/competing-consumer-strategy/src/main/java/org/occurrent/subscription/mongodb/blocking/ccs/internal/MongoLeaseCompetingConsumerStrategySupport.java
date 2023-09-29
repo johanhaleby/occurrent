@@ -66,7 +66,7 @@ public class MongoLeaseCompetingConsumerStrategySupport {
     }
 
     public MongoLeaseCompetingConsumerStrategySupport scheduleRefresh(Function<Consumer<MongoCollection<BsonDocument>>, Runnable> fn) {
-        scheduledRefresh.scheduleInBackground(() -> fn.apply(this::refreshOrAcquireLease).run(), leaseTime);
+        scheduledRefresh.scheduleInBackground(() -> retryStrategy.execute(() -> fn.apply(this::refreshOrAcquireLease).run()), leaseTime);
         return this;
     }
 
