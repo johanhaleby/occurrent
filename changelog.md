@@ -1,4 +1,4 @@
-### Next version
+### 0.16.7 (2023-09-29)
 * Added equals/hashcode and toString to RetryInfo
 * Small changes to how retries are performed in the competing consumer strategies for MongoDB
 * Improved debug logging in competing consumer implementations
