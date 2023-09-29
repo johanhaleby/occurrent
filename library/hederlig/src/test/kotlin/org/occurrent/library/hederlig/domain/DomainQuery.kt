@@ -20,5 +20,5 @@ package org.occurrent.library.hederlig.domain
 import org.occurrent.library.hederlig.model.Query
 
 sealed interface DomainQuery<T : Any> : Query<T>
-object AllNames : DomainQuery<List<String>>
+data object AllNames : DomainQuery<List<String>>
 data class PersonNamed(val name: String) : DomainQuery<String>
