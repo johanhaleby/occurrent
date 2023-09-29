@@ -8,6 +8,7 @@
 * Upgraded spring data mongodb from 4.0.8 to 4.1.4
 * Upgraded jackson from version 2.14.3 to 2.15.2
 * Upgraded project reactor from 3.5.8 to 3.5.10
+* Upgraded spring-retry from 2.0.0 to 2.0.3
 
 ### 0.16.6 (2023-08-15)
 * The SpringMongoSubscriptionModel is now restarted for all instances of `org.springframework.dao.DataAccessException` instead of just instances of `org.springframework.data.mongodb.UncategorizedMongoDbException`.
