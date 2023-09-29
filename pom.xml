@@ -16,7 +16,8 @@
   ~ limitations under the License.
   -->
 
-<project xmlns="http://maven.apache.org/POM/4.0.0" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 http://maven.apache.org/xsd/maven-4.0.0.xsd">
+<project xmlns="http://maven.apache.org/POM/4.0.0" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+         xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 http://maven.apache.org/xsd/maven-4.0.0.xsd">
     <modelVersion>4.0.0</modelVersion>
 
     <groupId>org.occurrent</groupId>
@@ -75,7 +76,7 @@
         <cloudevents.version>2.5.0</cloudevents.version>
         <reactor.version>3.5.8</reactor.version>
         <spring-data-mongodb.version>4.0.10</spring-data-mongodb.version>
-        <spring-boot.version>3.0.8</spring-boot.version>
+        <spring-boot.version>3.1.4</spring-boot.version>
         <mongo.version>4.10.2</mongo.version>
         <dokka.version>1.9.0</dokka.version>
         <sundrio.version>0.100.3</sundrio.version>
@@ -289,12 +290,20 @@
                 <artifactId>jobrunr</artifactId>
                 <version>${jobrunr.version}</version>
             </dependency>
+            <!-- Bom -->
+            <dependency>
+                <groupId>org.springframework.boot</groupId>
+                <artifactId>spring-boot-dependencies</artifactId>
+                <version>${spring-boot.version}</version>
+                <type>pom</type>
+                <scope>import</scope>
+            </dependency>
 
             <!-- Test -->
             <dependency>
                 <groupId>org.springframework.boot</groupId>
                 <artifactId>spring-boot-starter-test</artifactId>
-                <version>${spring-boot.version}</version>
+                <version>3.1.4</version>
                 <exclusions>
                     <exclusion>
                         <groupId>org.junit.vintage</groupId>

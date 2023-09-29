@@ -1,7 +1,8 @@
 ### Next version
 * Added equals/hashcode and toString to RetryInfo
 * Small changes to how retries are performed in the competing consumer strategies for MongoDB
-* Improved debug logging in competing consumer implementations  
+* Improved debug logging in competing consumer implementations
+* Upgraded Spring Boot from 3.0.8 to 3.1.4
 * Upgraded kotlin from 1.9.0 to 1.9.10
 * Upgraded jobrunr from 6.3.0 to 6.3.2
 * Upgraded spring data mongodb from 4.0.8 to 4.0.10
