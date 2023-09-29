@@ -77,7 +77,7 @@
         <spring-data-mongodb.version>4.0.10</spring-data-mongodb.version>
         <spring-boot.version>3.0.8</spring-boot.version>
         <mongo.version>4.10.2</mongo.version>
-        <dokka.version>1.8.10</dokka.version>
+        <dokka.version>1.9.0</dokka.version>
         <sundrio.version>0.100.3</sundrio.version>
         <awaitility.version>4.2.0</awaitility.version>
         <jobrunr.version>6.3.2</jobrunr.version>
