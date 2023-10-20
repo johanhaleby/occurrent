@@ -18,6 +18,7 @@ package org.occurrent.example.eventstore.mongodb.spring.transactional;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.jsontype.impl.LaissezFaireSubTypeValidator;
+import jakarta.annotation.PostConstruct;
 import org.occurrent.eventstore.api.blocking.EventStore;
 import org.occurrent.eventstore.mongodb.spring.blocking.EventStoreConfig;
 import org.occurrent.eventstore.mongodb.spring.blocking.SpringMongoEventStore;
@@ -30,8 +31,6 @@ import org.springframework.data.mongodb.MongoTransactionManager;
 import org.springframework.data.mongodb.core.MongoOperations;
 import org.springframework.data.mongodb.core.MongoTemplate;
 import org.springframework.data.mongodb.repository.config.EnableMongoRepositories;
-
-import javax.annotation.PostConstruct;
 
 import static com.fasterxml.jackson.databind.ObjectMapper.DefaultTyping.EVERYTHING;
 

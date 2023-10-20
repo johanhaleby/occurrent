@@ -16,12 +16,12 @@
 
 package org.occurrent.example.domain.wordguessinggame.mongodb.spring.blocking.features.gameplay.views.endedgamesoverview
 
+import jakarta.annotation.PostConstruct
 import org.springframework.data.mongodb.core.CollectionOptions
 import org.springframework.data.mongodb.core.MongoOperations
 import org.springframework.data.mongodb.core.collectionExists
 import org.springframework.data.mongodb.core.createCollection
 import org.springframework.stereotype.Component
-import javax.annotation.PostConstruct
 
 
 @Component

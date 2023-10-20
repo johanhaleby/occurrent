@@ -1,12 +1,12 @@
 package org.occurrent.subscription.blocking.competingconsumers;
 
 import io.cloudevents.CloudEvent;
+import jakarta.annotation.PreDestroy;
 import org.occurrent.subscription.StartAt;
 import org.occurrent.subscription.SubscriptionFilter;
 import org.occurrent.subscription.api.blocking.*;
 import org.occurrent.subscription.api.blocking.CompetingConsumerStrategy.CompetingConsumerListener;
 
-import javax.annotation.PreDestroy;
 import java.util.Objects;
 import java.util.Optional;
 import java.util.UUID;

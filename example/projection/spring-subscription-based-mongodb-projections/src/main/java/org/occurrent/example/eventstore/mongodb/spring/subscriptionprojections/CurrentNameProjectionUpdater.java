@@ -16,13 +16,13 @@
 
 package org.occurrent.example.eventstore.mongodb.spring.subscriptionprojections;
 
+import jakarta.annotation.PostConstruct;
 import org.occurrent.domain.DomainEvent;
 import org.occurrent.domain.NameDefined;
 import org.occurrent.domain.NameWasChanged;
 import org.occurrent.subscription.api.blocking.SubscriptionModel;
 import org.springframework.stereotype.Component;
 
-import javax.annotation.PostConstruct;
 import java.time.Duration;
 
 import static io.vavr.API.*;

@@ -19,6 +19,7 @@ package org.occurrent.subscription.mongodb.nativedriver.blocking;
 import com.mongodb.client.MongoCollection;
 import com.mongodb.client.MongoDatabase;
 import com.mongodb.client.model.ReplaceOptions;
+import jakarta.annotation.PreDestroy;
 import org.bson.BsonTimestamp;
 import org.bson.BsonValue;
 import org.bson.Document;
@@ -28,7 +29,6 @@ import org.occurrent.subscription.api.blocking.SubscriptionPositionStorage;
 import org.occurrent.subscription.mongodb.MongoOperationTimeSubscriptionPosition;
 import org.occurrent.subscription.mongodb.MongoResumeTokenSubscriptionPosition;
 
-import javax.annotation.PreDestroy;
 import java.time.Duration;
 import java.util.function.Supplier;
 

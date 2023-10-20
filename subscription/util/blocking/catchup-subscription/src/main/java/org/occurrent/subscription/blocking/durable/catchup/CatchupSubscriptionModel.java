@@ -17,6 +17,7 @@
 package org.occurrent.subscription.blocking.durable.catchup;
 
 import io.cloudevents.CloudEvent;
+import jakarta.annotation.PreDestroy;
 import org.occurrent.eventstore.api.blocking.EventStoreQueries;
 import org.occurrent.filter.Filter;
 import org.occurrent.subscription.*;
@@ -25,7 +26,6 @@ import org.occurrent.subscription.api.blocking.*;
 import org.occurrent.subscription.blocking.durable.catchup.SubscriptionPositionStorageConfig.PersistSubscriptionPositionDuringCatchupPhase;
 import org.occurrent.subscription.blocking.durable.catchup.SubscriptionPositionStorageConfig.UseSubscriptionPositionInStorage;
 
-import javax.annotation.PreDestroy;
 import java.time.Duration;
 import java.time.OffsetDateTime;
 import java.util.LinkedHashMap;

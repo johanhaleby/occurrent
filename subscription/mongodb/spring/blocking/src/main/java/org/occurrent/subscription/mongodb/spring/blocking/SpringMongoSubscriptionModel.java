@@ -20,6 +20,7 @@ import com.mongodb.MongoCommandException;
 import com.mongodb.MongoQueryException;
 import com.mongodb.client.model.changestream.ChangeStreamDocument;
 import io.cloudevents.CloudEvent;
+import jakarta.annotation.PreDestroy;
 import org.bson.BsonDocument;
 import org.bson.BsonTimestamp;
 import org.bson.Document;
@@ -51,7 +52,6 @@ import org.springframework.data.mongodb.core.messaging.DefaultMessageListenerCon
 import org.springframework.data.mongodb.core.messaging.MessageListener;
 import org.springframework.data.mongodb.core.messaging.MessageListenerContainer;
 
-import javax.annotation.PreDestroy;
 import java.util.Objects;
 import java.util.StringJoiner;
 import java.util.concurrent.ConcurrentHashMap;

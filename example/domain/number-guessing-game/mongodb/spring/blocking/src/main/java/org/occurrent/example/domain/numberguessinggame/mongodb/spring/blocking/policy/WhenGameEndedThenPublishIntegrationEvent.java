@@ -17,6 +17,7 @@
 package org.occurrent.example.domain.numberguessinggame.mongodb.spring.blocking.policy;
 
 import io.cloudevents.CloudEvent;
+import jakarta.annotation.PostConstruct;
 import org.occurrent.cloudevents.OccurrentExtensionGetter;
 import org.occurrent.eventstore.api.blocking.EventStoreQueries;
 import org.occurrent.example.domain.numberguessinggame.model.domainevents.*;
@@ -29,7 +30,6 @@ import org.springframework.amqp.core.TopicExchange;
 import org.springframework.amqp.rabbit.core.RabbitTemplate;
 import org.springframework.stereotype.Component;
 
-import javax.annotation.PostConstruct;
 import java.time.Duration;
 import java.time.LocalDateTime;
 import java.util.Date;

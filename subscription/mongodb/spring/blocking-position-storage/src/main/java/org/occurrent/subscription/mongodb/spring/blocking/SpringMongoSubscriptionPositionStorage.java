@@ -16,6 +16,7 @@
 
 package org.occurrent.subscription.mongodb.spring.blocking;
 
+import jakarta.annotation.PreDestroy;
 import org.bson.BsonTimestamp;
 import org.bson.BsonValue;
 import org.bson.Document;
@@ -30,7 +31,6 @@ import org.slf4j.LoggerFactory;
 import org.springframework.data.mongodb.core.MongoOperations;
 import org.springframework.data.mongodb.core.query.Update;
 
-import javax.annotation.PreDestroy;
 import java.time.Duration;
 import java.util.function.Supplier;
 

@@ -17,12 +17,12 @@
 package org.occurrent.subscription.blocking.durable;
 
 import io.cloudevents.CloudEvent;
+import jakarta.annotation.PreDestroy;
 import org.occurrent.subscription.StartAt;
 import org.occurrent.subscription.SubscriptionFilter;
 import org.occurrent.subscription.SubscriptionPosition;
 import org.occurrent.subscription.api.blocking.*;
 
-import javax.annotation.PreDestroy;
 import java.util.Objects;
 import java.util.function.Consumer;
 

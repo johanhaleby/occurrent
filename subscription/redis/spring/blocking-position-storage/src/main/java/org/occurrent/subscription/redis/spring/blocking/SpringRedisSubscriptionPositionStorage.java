@@ -16,13 +16,13 @@
 
 package org.occurrent.subscription.redis.spring.blocking;
 
+import jakarta.annotation.PreDestroy;
 import org.occurrent.retry.RetryStrategy;
 import org.occurrent.subscription.StringBasedSubscriptionPosition;
 import org.occurrent.subscription.SubscriptionPosition;
 import org.occurrent.subscription.api.blocking.SubscriptionPositionStorage;
 import org.springframework.data.redis.core.RedisOperations;
 
-import javax.annotation.PreDestroy;
 import java.time.Duration;
 import java.util.function.Supplier;
 

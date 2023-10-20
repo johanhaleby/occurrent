@@ -17,6 +17,7 @@
 package org.occurrent.subscription.inmemory;
 
 import io.cloudevents.CloudEvent;
+import jakarta.annotation.PreDestroy;
 import org.occurrent.filter.Filter;
 import org.occurrent.retry.RetryStrategy;
 import org.occurrent.subscription.OccurrentSubscriptionFilter;
@@ -26,7 +27,6 @@ import org.occurrent.subscription.api.blocking.Subscription;
 import org.occurrent.subscription.api.blocking.SubscriptionModel;
 import org.occurrent.subscription.internal.ExecutorShutdown;
 
-import javax.annotation.PreDestroy;
 import java.util.List;
 import java.util.concurrent.*;
 import java.util.function.Consumer;

@@ -1,13 +1,13 @@
 package org.occurrent.subscription.mongodb.spring.blocking;
 
 import com.mongodb.client.MongoCollection;
+import jakarta.annotation.PreDestroy;
 import org.bson.BsonDocument;
 import org.occurrent.retry.RetryStrategy;
 import org.occurrent.subscription.api.blocking.CompetingConsumerStrategy;
 import org.occurrent.subscription.mongodb.blocking.ccs.internal.MongoLeaseCompetingConsumerStrategySupport;
 import org.springframework.data.mongodb.core.MongoOperations;
 
-import javax.annotation.PreDestroy;
 import java.time.Clock;
 import java.time.Duration;
 import java.util.Objects;

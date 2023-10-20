@@ -17,6 +17,8 @@
 package org.occurrent.example.springevent;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
+import jakarta.annotation.PostConstruct;
+import jakarta.annotation.PreDestroy;
 import org.occurrent.domain.DomainEvent;
 import org.occurrent.functional.CheckedFunction;
 import org.occurrent.subscription.reactor.durable.ReactorDurableSubscriptionModel;
@@ -27,8 +29,6 @@ import org.springframework.stereotype.Component;
 import reactor.core.Disposable;
 import reactor.core.publisher.Mono;
 
-import javax.annotation.PostConstruct;
-import javax.annotation.PreDestroy;
 import java.util.Objects;
 import java.util.concurrent.atomic.AtomicReference;
 

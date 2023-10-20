@@ -1,3 +1,6 @@
+### Next version
+* Upgraded jakarta-api from 1.3.5 to 2.11 (which means that all javax annotations have been replaced by jakarta)
+
 ### 0.16.7 (2023-09-29)
 * Added equals/hashcode and toString to RetryInfo
 * Small changes to how retries are performed in the competing consumer strategies for MongoDB

@@ -17,6 +17,7 @@
 package org.occurrent.example.domain.numberguessinggame.mongodb.spring.blocking.view.latestgamesoverview.impl;
 
 import io.cloudevents.CloudEvent;
+import jakarta.annotation.PostConstruct;
 import org.bson.Document;
 import org.occurrent.example.domain.numberguessinggame.model.domainevents.*;
 import org.occurrent.example.domain.numberguessinggame.mongodb.spring.blocking.infrastructure.Serialization;
@@ -31,7 +32,6 @@ import org.springframework.retry.annotation.Backoff;
 import org.springframework.retry.annotation.Retryable;
 import org.springframework.stereotype.Component;
 
-import javax.annotation.PostConstruct;
 import java.time.Duration;
 import java.time.LocalDateTime;
 import java.util.Date;

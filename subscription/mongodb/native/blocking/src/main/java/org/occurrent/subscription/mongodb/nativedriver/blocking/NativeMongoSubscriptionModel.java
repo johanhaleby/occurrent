@@ -25,6 +25,7 @@ import com.mongodb.client.MongoCollection;
 import com.mongodb.client.MongoDatabase;
 import com.mongodb.client.model.changestream.ChangeStreamDocument;
 import io.cloudevents.CloudEvent;
+import jakarta.annotation.PreDestroy;
 import org.bson.BsonDocument;
 import org.bson.BsonTimestamp;
 import org.bson.Document;
@@ -47,7 +48,6 @@ import org.occurrent.subscription.mongodb.internal.MongoCommons;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
-import javax.annotation.PreDestroy;
 import java.time.Duration;
 import java.util.Collections;
 import java.util.List;
