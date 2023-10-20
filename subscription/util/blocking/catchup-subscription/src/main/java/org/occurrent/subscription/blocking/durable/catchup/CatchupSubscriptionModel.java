@@ -134,7 +134,7 @@ public class CatchupSubscriptionModel implements SubscriptionModel, DelegatingSu
 
         // Here's the reason why we're forcing the wrapping subscription to be a PositionAwareBlockingSubscription.
         // This is in order to be 100% safe since we need to take events that are published meanwhile the EventStoreQuery
-        // is executed. Thus we need the global position of the subscription at the time of starting the query.
+        // is executed. Thus, we need the global position of the subscription at the time of starting the query.
         SubscriptionPosition globalSubscriptionPosition = subscriptionModel.globalSubscriptionPosition();
 
         FixedSizeCache cache = new FixedSizeCache(config.cacheSize);
@@ -168,7 +168,7 @@ public class CatchupSubscriptionModel implements SubscriptionModel, DelegatingSu
 
         // When the catch-up subscription is ready we store the global position in the position storage so that subscriptions
         // that have not received _any_ new events during replay will start at the global position if the application is restarted.
-        // Otherwise nothing will be stored in the "storage" and replay of historic events will take place again on application restart
+        // Otherwise, nothing will be stored in the "storage" and replay of historic events will take place again on application restart
         // which is not what we want! The reason for doing this with UseSubscriptionPositionInStorage (as opposed to just
         // PersistSubscriptionPositionDuringCatchupPhase) is that if using a "storage" at all in the config, is to accommodate
         // that the wrapping subscription continues from where we left off.
