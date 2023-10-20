@@ -7,7 +7,6 @@ import org.occurrent.retry.RetryStrategy.Retry;
 import java.time.Duration;
 import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.atomic.AtomicInteger;
-import java.util.function.Consumer;
 
 import static org.assertj.core.api.Assertions.*;
 import static org.junit.jupiter.api.Assertions.assertAll;
@@ -61,10 +60,10 @@ public class RetryStrategyTest {
                 () -> assertThat(counter).hasValue(4),
                 () -> assertThat(retryInfos).hasSize(4),
                 () -> assertThat(retryInfos).extracting(RetryInfo::getRetryCount).containsExactly(0, 1, 2, 3),
-                () -> assertThat(retryInfos).extracting(RetryInfo::getNumberOfAttempts).containsExactly(1, 2, 3, 4),
+                () -> assertThat(retryInfos).extracting(RetryInfo::getAttemptNumber).containsExactly(1, 2, 3, 4),
                 () -> assertThat(retryInfos).extracting(RetryInfo::getBackoff).containsExactly(Duration.ofMillis(0), Duration.ofMillis(0), Duration.ofMillis(0), Duration.ofMillis(0)),
                 () -> assertThat(retryInfos).extracting(RetryInfo::getMaxAttempts).containsExactly(4, 4, 4, 4),
-                () -> assertThat(retryInfos).extracting(RetryInfo::getAttemptsLeft).containsExactly(3, 2, 1, 0),
+                () -> assertThat(retryInfos).extracting(RetryInfo::getAttemptsLeft).containsExactly(4, 3, 2, 1),
                 () -> assertThat(retryInfos).extracting(RetryInfo::isFirstAttempt).containsExactly(true, false, false, false),
                 () -> assertThat(retryInfos).extracting(RetryInfo::isLastAttempt).containsExactly(false, false, false, true),
                 () -> assertThat(retryInfos).extracting(RetryInfo::isInfiniteRetriesLeft).containsExactly(false, false, false, false)
@@ -377,6 +376,40 @@ public class RetryStrategyTest {
                     () -> assertThat(throwable).isExactlyInstanceOf(IllegalStateException.class).hasMessage("expected")
             );
         }
+
+        @Test
+        void on_before_retry_listener_retry_info_data_is_correct_when_max_attempts_and_exponential_backoff_is_specified() {
+            // Given
+            CopyOnWriteArrayList<RetryInfo> retryInfos = new CopyOnWriteArrayList<>();
+            Retry retryStrategy = RetryStrategy
+                    .exponentialBackoff(Duration.ofMillis(1), Duration.ofMillis(10), 2.0)
+                    .maxAttempts(40)
+                    .onBeforeRetry((info, __) -> retryInfos.add(info));
+
+            AtomicInteger counter = new AtomicInteger(0);
+
+            // When
+            retryStrategy.execute(() -> {
+                if (counter.incrementAndGet() <= 3) {
+                    throw new IllegalArgumentException("expected");
+                }
+            });
+
+            // Then
+            assertAll(
+                    () -> assertThat(counter).hasValue(4),
+                    () -> assertThat(retryInfos).hasSize(3),
+                    () -> assertThat(retryInfos).extracting(RetryInfo::getRetryCount).containsExactly(1, 2, 3),
+                    () -> assertThat(retryInfos).extracting(RetryInfo::getAttemptNumber).containsExactly(2, 3, 4),
+                    () -> assertThat(retryInfos).extracting(RetryInfo::getNumberOfPreviousAttempts).containsExactly(1, 2, 3),
+                    () -> assertThat(retryInfos).extracting(RetryInfo::getBackoff).containsExactly(Duration.ofMillis(1), Duration.ofMillis(2), Duration.ofMillis(4)),
+                    () -> assertThat(retryInfos).extracting(RetryInfo::getMaxAttempts).containsExactly(40, 40, 40),
+                    () -> assertThat(retryInfos).extracting(RetryInfo::getAttemptsLeft).containsExactly(39, 38, 37),
+                    () -> assertThat(retryInfos).extracting(RetryInfo::isFirstAttempt).containsExactly(false, false, false),
+                    () -> assertThat(retryInfos).extracting(RetryInfo::isLastAttempt).containsExactly(false, false, false),
+                    () -> assertThat(retryInfos).extracting(RetryInfo::isInfiniteRetriesLeft).containsExactly(false, false, false)
+            );
+        }
     }
 
     @Nested
@@ -384,10 +417,10 @@ public class RetryStrategyTest {
     class ErrorListenerTest {
 
         @Test
-        void error_listener_is_invoked_when_defined_as_a_consumer() {
+        void error_listener_is_not_invoked_when_there_are_transient_errors() {
             // Given
             CopyOnWriteArrayList<Throwable> throwables = new CopyOnWriteArrayList<>();
-            Retry retryStrategy = RetryStrategy.retry().onError((Consumer<Throwable>) throwables::add);
+            Retry retryStrategy = RetryStrategy.retry().onError(throwables::add);
 
             AtomicInteger counter = new AtomicInteger(0);
 
@@ -401,47 +434,46 @@ public class RetryStrategyTest {
             // Then
             assertAll(
                     () -> assertThat(counter).hasValue(5),
-                    () -> assertThat(throwables).hasSize(4),
-                    () -> assertThat(throwables).extracting(Throwable::getClass, Throwable::getMessage).containsOnly(tuple(IllegalArgumentException.class, "expected"))
+                    () -> assertThat(throwables).isEmpty()
             );
         }
 
         @Test
-        void error_listener_is_invoked_when_defined_as_a_biconsumer() {
+        void error_listener_is_invoked_when_end_result_is_error() {
             // Given
             CopyOnWriteArrayList<Throwable> throwables = new CopyOnWriteArrayList<>();
-            CopyOnWriteArrayList<RetryInfo> retryInfos = new CopyOnWriteArrayList<>();
-            Retry retryStrategy = RetryStrategy.retry().onError((info, throwable) -> {
-                retryInfos.add(info);
-                throwables.add(throwable);
-            });
+            Retry retryStrategy = RetryStrategy.retry().maxAttempts(5).onError(throwables::add);
 
             AtomicInteger counter = new AtomicInteger(0);
 
             // When
-            retryStrategy.execute(() -> {
-                if (counter.incrementAndGet() <= 2) {
-                    throw new IllegalArgumentException("expected");
-                }
-            });
+            Throwable throwable = catchThrowable(() -> retryStrategy.execute(() -> {
+                counter.incrementAndGet();
+                throw new IllegalArgumentException("expected");
+            }));
 
             // Then
             assertAll(
-                    () -> assertThat(counter).hasValue(3),
-                    () -> assertThat(retryInfos).hasSize(2),
-                    () -> assertThat(throwables).hasSize(2),
+                    () -> assertThat(throwable).isExactlyInstanceOf(IllegalArgumentException.class).hasMessage("expected"),
+                    () -> assertThat(counter).hasValue(5),
+                    () -> assertThat(throwables).hasSize(1),
                     () -> assertThat(throwables).extracting(Throwable::getClass, Throwable::getMessage).containsOnly(tuple(IllegalArgumentException.class, "expected"))
             );
         }
+    }
+
+    @Nested
+    @DisplayName("on before retry listener")
+    class OnBeforeRetry {
 
         @Test
-        void error_listener_retry_info_data_is_correct_when_max_attempts_and_exponential_backoff_is_specified() {
+        void on_before_retry_listener_retry_info_data_is_correct_when_max_attempts_and_exponential_backoff_is_specified() {
             // Given
             CopyOnWriteArrayList<RetryInfo> retryInfos = new CopyOnWriteArrayList<>();
             Retry retryStrategy = RetryStrategy
                     .exponentialBackoff(Duration.ofMillis(1), Duration.ofMillis(10), 2.0)
                     .maxAttempts(40)
-                    .onError((info, __) -> retryInfos.add(info));
+                    .onBeforeRetry((info, __) -> retryInfos.add(info));
 
             AtomicInteger counter = new AtomicInteger(0);
 
@@ -456,25 +488,25 @@ public class RetryStrategyTest {
             assertAll(
                     () -> assertThat(counter).hasValue(4),
                     () -> assertThat(retryInfos).hasSize(3),
-                    () -> assertThat(retryInfos).extracting(RetryInfo::getRetryCount).containsExactly(0, 1, 2),
-                    () -> assertThat(retryInfos).extracting(RetryInfo::getNumberOfAttempts).containsExactly(1, 2, 3),
+                    () -> assertThat(retryInfos).extracting(RetryInfo::getRetryCount).containsExactly(1, 2, 3),
+                    () -> assertThat(retryInfos).extracting(RetryInfo::getAttemptNumber).containsExactly(2, 3, 4),
                     () -> assertThat(retryInfos).extracting(RetryInfo::getBackoff).containsExactly(Duration.ofMillis(1), Duration.ofMillis(2), Duration.ofMillis(4)),
                     () -> assertThat(retryInfos).extracting(RetryInfo::getMaxAttempts).containsExactly(40, 40, 40),
                     () -> assertThat(retryInfos).extracting(RetryInfo::getAttemptsLeft).containsExactly(39, 38, 37),
-                    () -> assertThat(retryInfos).extracting(RetryInfo::isFirstAttempt).containsExactly(true, false, false),
+                    () -> assertThat(retryInfos).extracting(RetryInfo::isFirstAttempt).containsExactly(false, false, false),
                     () -> assertThat(retryInfos).extracting(RetryInfo::isLastAttempt).containsExactly(false, false, false),
                     () -> assertThat(retryInfos).extracting(RetryInfo::isInfiniteRetriesLeft).containsExactly(false, false, false)
             );
         }
 
         @Test
-        void error_listener_retry_info_data_is_correct_when_infinite_max_attempts_and_fixed_backoff_is_specified() {
+        void on_before_retry_retry_info_data_is_correct_when_infinite_max_attempts_and_fixed_backoff_is_specified() {
             // Given
             CopyOnWriteArrayList<RetryInfo> retryInfos = new CopyOnWriteArrayList<>();
             Retry retryStrategy = RetryStrategy
                     .fixed(10)
                     .infiniteAttempts()
-                    .onError((info, __) -> retryInfos.add(info));
+                    .onBeforeRetry((info, __) -> retryInfos.add(info));
 
             AtomicInteger counter = new AtomicInteger(0);
 
@@ -489,12 +521,12 @@ public class RetryStrategyTest {
             assertAll(
                     () -> assertThat(counter).hasValue(4),
                     () -> assertThat(retryInfos).hasSize(3),
-                    () -> assertThat(retryInfos).extracting(RetryInfo::getRetryCount).containsExactly(0, 1, 2),
-                    () -> assertThat(retryInfos).extracting(RetryInfo::getNumberOfAttempts).containsExactly(1, 2, 3),
+                    () -> assertThat(retryInfos).extracting(RetryInfo::getRetryCount).containsExactly(1, 2, 3),
+                    () -> assertThat(retryInfos).extracting(RetryInfo::getAttemptNumber).containsExactly(2, 3, 4),
                     () -> assertThat(retryInfos).extracting(RetryInfo::getBackoff).containsExactly(Duration.ofMillis(10), Duration.ofMillis(10), Duration.ofMillis(10)),
                     () -> assertThat(retryInfos).extracting(RetryInfo::getMaxAttempts).containsExactly(Integer.MAX_VALUE, Integer.MAX_VALUE, Integer.MAX_VALUE),
                     () -> assertThat(retryInfos).extracting(RetryInfo::getAttemptsLeft).containsExactly(Integer.MAX_VALUE, Integer.MAX_VALUE, Integer.MAX_VALUE),
-                    () -> assertThat(retryInfos).extracting(RetryInfo::isFirstAttempt).containsExactly(true, false, false),
+                    () -> assertThat(retryInfos).extracting(RetryInfo::isFirstAttempt).containsExactly(false, false, false),
                     () -> assertThat(retryInfos).extracting(RetryInfo::isLastAttempt).containsExactly(false, false, false),
                     () -> assertThat(retryInfos).extracting(RetryInfo::isInfiniteRetriesLeft).containsExactly(true, true, true)
             );
@@ -502,12 +534,12 @@ public class RetryStrategyTest {
 
         @Timeout(2000)
         @Test
-        void error_listener_retry_info_data_is_correct_when_finite_max_attempts_are_exceeded() {
+        void on_before_retry_listener_retry_info_data_is_correct_when_finite_max_attempts_are_exceeded() {
             // Given
             CopyOnWriteArrayList<RetryInfo> retryInfos = new CopyOnWriteArrayList<>();
             Retry retryStrategy = RetryStrategy.retry()
                     .maxAttempts(4)
-                    .onError((info, __) -> retryInfos.add(info));
+                    .onBeforeRetry((info, __) -> retryInfos.add(info));
 
             AtomicInteger counter = new AtomicInteger(0);
 
@@ -521,15 +553,16 @@ public class RetryStrategyTest {
             assertAll(
                     () -> assertThat(throwable).isExactlyInstanceOf(IllegalArgumentException.class).hasMessage("expected"),
                     () -> assertThat(counter).hasValue(4),
-                    () -> assertThat(retryInfos).hasSize(4),
-                    () -> assertThat(retryInfos).extracting(RetryInfo::getRetryCount).containsExactly(0, 1, 2, 3),
-                    () -> assertThat(retryInfos).extracting(RetryInfo::getNumberOfAttempts).containsExactly(1, 2, 3, 4),
-                    () -> assertThat(retryInfos).extracting(RetryInfo::getBackoff).containsExactly(Duration.ofMillis(0), Duration.ofMillis(0), Duration.ofMillis(0), Duration.ofMillis(0)),
-                    () -> assertThat(retryInfos).extracting(RetryInfo::getMaxAttempts).containsExactly(4, 4, 4, 4),
-                    () -> assertThat(retryInfos).extracting(RetryInfo::getAttemptsLeft).containsExactly(3, 2, 1, 0),
-                    () -> assertThat(retryInfos).extracting(RetryInfo::isFirstAttempt).containsExactly(true, false, false, false),
-                    () -> assertThat(retryInfos).extracting(RetryInfo::isLastAttempt).containsExactly(false, false, false, true),
-                    () -> assertThat(retryInfos).extracting(RetryInfo::isInfiniteRetriesLeft).containsExactly(false, false, false, false)
+                    () -> assertThat(retryInfos).hasSize(3),
+                    () -> assertThat(retryInfos).extracting(RetryInfo::getRetryCount).containsExactly(1, 2, 3),
+                    () -> assertThat(retryInfos).extracting(RetryInfo::getNumberOfPreviousAttempts).containsExactly(1, 2, 3),
+                    () -> assertThat(retryInfos).extracting(RetryInfo::getAttemptNumber).containsExactly(2, 3, 4),
+                    () -> assertThat(retryInfos).extracting(RetryInfo::getBackoff).containsExactly(Duration.ofMillis(0), Duration.ofMillis(0), Duration.ofMillis(0)),
+                    () -> assertThat(retryInfos).extracting(RetryInfo::getMaxAttempts).containsExactly(4, 4, 4),
+                    () -> assertThat(retryInfos).extracting(RetryInfo::getAttemptsLeft).containsExactly(3, 2, 1),
+                    () -> assertThat(retryInfos).extracting(RetryInfo::isFirstAttempt).containsExactly(false, false, false),
+                    () -> assertThat(retryInfos).extracting(RetryInfo::isLastAttempt).containsExactly(false, false, true),
+                    () -> assertThat(retryInfos).extracting(RetryInfo::isInfiniteRetriesLeft).containsExactly(false, false, false)
             );
         }
     }
@@ -543,7 +576,7 @@ public class RetryStrategyTest {
             // Given
             CopyOnWriteArrayList<Throwable> throwables = new CopyOnWriteArrayList<>();
             int millis = 150;
-            Retry retryStrategy = RetryStrategy.fixed(millis).onError((Consumer<Throwable>) throwables::add).maxAttempts(5);
+            Retry retryStrategy = RetryStrategy.fixed(millis).onError(throwables::add).maxAttempts(5);
 
             AtomicInteger counter = new AtomicInteger(0);
 
@@ -558,7 +591,34 @@ public class RetryStrategyTest {
             // Then
             assertAll(
                     () -> assertThat(counter).hasValue(5),
-                    () -> assertThat(throwables).hasSize(5),
+                    () -> assertThat(throwables).hasSize(1),
+                    () -> assertThat(throwables).extracting(Throwable::getClass, Throwable::getMessage).containsOnly(tuple(IllegalArgumentException.class, "expected")),
+                    () -> assertThat(throwable).isExactlyInstanceOf(IllegalArgumentException.class).hasMessage("expected"),
+                    () -> assertThat(endTime - startTime).isGreaterThanOrEqualTo(4 * millis).isLessThan(5 * millis)
+            );
+        }
+
+        @Test
+        void combining_backoff_with_max_attempts_and_on_before_retry_listener() {
+            // Given
+            CopyOnWriteArrayList<Throwable> throwables = new CopyOnWriteArrayList<>();
+            int millis = 150;
+            Retry retryStrategy = RetryStrategy.fixed(millis).onBeforeRetry((__, e) -> throwables.add(e)).maxAttempts(5);
+
+            AtomicInteger counter = new AtomicInteger(0);
+
+            // When
+            final long startTime = System.currentTimeMillis();
+            Throwable throwable = catchThrowable(() -> retryStrategy.execute(() -> {
+                counter.incrementAndGet();
+                throw new IllegalArgumentException("expected");
+            }));
+            final long endTime = System.currentTimeMillis();
+
+            // Then
+            assertAll(
+                    () -> assertThat(counter).hasValue(5),
+                    () -> assertThat(throwables).hasSize(4),
                     () -> assertThat(throwables).extracting(Throwable::getClass, Throwable::getMessage).containsOnly(tuple(IllegalArgumentException.class, "expected")),
                     () -> assertThat(throwable).isExactlyInstanceOf(IllegalArgumentException.class).hasMessage("expected"),
                     () -> assertThat(endTime - startTime).isGreaterThanOrEqualTo(4 * millis).isLessThan(5 * millis)
@@ -571,7 +631,7 @@ public class RetryStrategyTest {
             CopyOnWriteArrayList<Throwable> throwables = new CopyOnWriteArrayList<>();
             AtomicInteger counter = new AtomicInteger(0);
             int millis = 150;
-            Retry retryStrategy = RetryStrategy.fixed(millis).onError((Consumer<Throwable>) throwables::add).retryIf(__ -> counter.get() < 5);
+            Retry retryStrategy = RetryStrategy.fixed(millis).onError(throwables::add).retryIf(__ -> counter.get() < 5);
 
 
             // When
@@ -585,7 +645,34 @@ public class RetryStrategyTest {
             // Then
             assertAll(
                     () -> assertThat(counter).hasValue(5),
-                    () -> assertThat(throwables).hasSize(5),
+                    () -> assertThat(throwables).hasSize(1),
+                    () -> assertThat(throwables).extracting(Throwable::getClass, Throwable::getMessage).containsOnly(tuple(IllegalArgumentException.class, "expected")),
+                    () -> assertThat(throwable).isExactlyInstanceOf(IllegalArgumentException.class).hasMessage("expected"),
+                    () -> assertThat(endTime - startTime).isGreaterThanOrEqualTo(4 * millis).isLessThan(5 * millis)
+            );
+        }
+
+        @Test
+        void combining_backoff_retry_predicate_and_on_before_retry_listener() {
+            // Given
+            CopyOnWriteArrayList<Throwable> throwables = new CopyOnWriteArrayList<>();
+            AtomicInteger counter = new AtomicInteger(0);
+            int millis = 150;
+            Retry retryStrategy = RetryStrategy.fixed(millis).onBeforeRetry((__, e) -> throwables.add(e)).retryIf(__ -> counter.get() < 5);
+
+
+            // When
+            final long startTime = System.currentTimeMillis();
+            Throwable throwable = catchThrowable(() -> retryStrategy.execute(() -> {
+                counter.incrementAndGet();
+                throw new IllegalArgumentException("expected");
+            }));
+            final long endTime = System.currentTimeMillis();
+
+            // Then
+            assertAll(
+                    () -> assertThat(counter).hasValue(5),
+                    () -> assertThat(throwables).hasSize(4), // Expect one less than the counter, since onBeforeRetry is only called for _retries_
                     () -> assertThat(throwables).extracting(Throwable::getClass, Throwable::getMessage).containsOnly(tuple(IllegalArgumentException.class, "expected")),
                     () -> assertThat(throwable).isExactlyInstanceOf(IllegalArgumentException.class).hasMessage("expected"),
                     () -> assertThat(endTime - startTime).isGreaterThanOrEqualTo(4 * millis).isLessThan(5 * millis)

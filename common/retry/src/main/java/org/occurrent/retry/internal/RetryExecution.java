@@ -83,8 +83,10 @@ public class RetryExecution {
             } catch (Throwable e) {
                 var retryInfo = newRetryInfo(retry, delay, attempt);
                 if (handleError(retry, retryInfo, attempt, e)) {
+                    retry.onBeforeRetryListener.accept(retryInfo.increaseAttemptsAndRetryCountByOne(), e);
                     executeWithRetry(fn, retry, delay, attempt + 1).accept(t1);
                 } else {
+                    retry.errorListener.accept(e);
                     //noinspection ResultOfMethodCallIgnored
                     SafeExceptionRethrower.safeRethrow(retry.errorMapper.apply(e));
                 }
@@ -99,15 +101,17 @@ public class RetryExecution {
                 return fn.apply(retryInfo);
             } catch (Throwable e) {
                 if (handleError(retry, retryInfo, attempt, e)) {
+                    retry.onBeforeRetryListener.accept(retryInfo.increaseAttemptsAndRetryCountByOne(), e);
                     return executeWithRetry(fn, retry, delay, attempt + 1).apply(retryInfo);
                 } else {
+                    retry.errorListener.accept(e);
                     return SafeExceptionRethrower.safeRethrow(retry.errorMapper.apply(e));
                 }
             }
         };
     }
 
-    private static RetryInfo newRetryInfo(Retry retry, Iterator<Long> delay, int attempt) {
+    private static RetryInfoImpl newRetryInfo(Retry retry, Iterator<Long> delay, int attempt) {
         Long backoffMillis = delay.next();
         Duration backoffDuration = backoffMillis == 0 ? Duration.ZERO : Duration.ofMillis(backoffMillis);
         return new RetryInfoImpl(attempt, retry.maxAttempts, backoffDuration);
@@ -117,7 +121,6 @@ public class RetryExecution {
      * @return {@code true} if retry should be made, {@code false} otherwise.
      */
     private static boolean handleError(Retry retry, RetryInfo retryInfo, int attempt, Throwable e) {
-        retry.errorListener.accept(retryInfo, e);
         if (!isExhausted(attempt, retry.maxAttempts) && retry.retryPredicate.test(e)) {
             try {
                 long backoffMillis = retryInfo.getBackoff().toMillis();
@@ -160,24 +163,24 @@ public class RetryExecution {
 
     static class RetryInfoImpl implements RetryInfo {
 
-        private final int attempt;
+        private final int attemptNumber;
         private final MaxAttempts maxAttempts;
         private final Duration backoff;
 
-        public RetryInfoImpl(int attempt, MaxAttempts maxAttempts, Duration backoff) {
-            this.attempt = attempt;
+        public RetryInfoImpl(int attemptNumber, MaxAttempts maxAttempts, Duration backoff) {
+            this.attemptNumber = attemptNumber;
             this.maxAttempts = maxAttempts;
             this.backoff = backoff;
         }
 
         @Override
         public int getRetryCount() {
-            return attempt - 1;
+            return attemptNumber - 1;
         }
 
         @Override
-        public int getNumberOfAttempts() {
-            return attempt;
+        public int getAttemptNumber() {
+            return attemptNumber;
         }
 
         @Override
@@ -193,7 +196,7 @@ public class RetryExecution {
             if (isInfiniteRetriesLeft()) {
                 return Integer.MAX_VALUE;
             }
-            return getMaxAttempts() - attempt;
+            return getMaxAttempts() - getAttemptNumber() + 1;
         }
 
         @Override
@@ -211,33 +214,37 @@ public class RetryExecution {
             if (isInfiniteRetriesLeft()) {
                 return false;
             }
-            return getMaxAttempts() == attempt;
+            return getAttemptNumber() == getMaxAttempts();
         }
 
         @Override
         public boolean isFirstAttempt() {
-            return attempt == 1;
+            return attemptNumber == 1;
         }
 
         @Override
         public boolean equals(Object o) {
             if (this == o) return true;
             if (!(o instanceof RetryInfoImpl retryInfo)) return false;
-            return attempt == retryInfo.attempt && Objects.equals(maxAttempts, retryInfo.maxAttempts) && Objects.equals(backoff, retryInfo.backoff);
+            return attemptNumber == retryInfo.attemptNumber && Objects.equals(maxAttempts, retryInfo.maxAttempts) && Objects.equals(backoff, retryInfo.backoff);
         }
 
         @Override
         public int hashCode() {
-            return Objects.hash(attempt, maxAttempts, backoff);
+            return Objects.hash(attemptNumber, maxAttempts, backoff);
         }
 
         @Override
         public String toString() {
             return new StringJoiner(", ", RetryInfo.class.getSimpleName() + "[", "]")
-                    .add("attempt=" + attempt)
+                    .add("attempt=" + attemptNumber)
                     .add("maxAttempts=" + maxAttempts)
                     .add("backoff=" + backoff)
                     .toString();
+        }
+
+        RetryInfoImpl increaseAttemptsAndRetryCountByOne() {
+            return new RetryInfoImpl(attemptNumber + 1, maxAttempts, backoff);
         }
     }
 }

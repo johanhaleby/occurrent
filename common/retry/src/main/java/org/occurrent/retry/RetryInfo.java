@@ -7,14 +7,21 @@ import java.time.Duration;
  */
 public interface RetryInfo {
     /**
-     * @return The count of this retry
+     * @return The count of the <i>current</i> retry, {@code 0} if first <i>attempt</i>, but <i>1</i> for the first <i>retry attempt</i>.
      */
     int getRetryCount();
 
     /**
-     * @return The number of attempts to call the method that may be retried
+     * @return The number of attempts that <i>has been made</i>, {@code 0} if first attempt
      */
-    int getNumberOfAttempts();
+    default int getNumberOfPreviousAttempts() {
+        return getAttemptNumber() - 1;
+    }
+
+    /**
+     * @return The number of <i>this</i> attempt, {@code 1} if first attempt.
+     */
+    int getAttemptNumber();
 
     /**
      * @return The maximum number of attempts configured for the retry. Returns {@code Integer.MAX_VALUE} if infinite.

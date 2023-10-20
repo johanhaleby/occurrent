@@ -1,6 +1,11 @@
 ### Next version
 * Upgraded jakarta-api from 1.3.5 to 2.11 (which means that all javax annotations have been replaced by jakarta)
 * Fixed a bug in CatchupSubscriptionModel that prevented it from working in MongoDB clusters that doesn't have access to the `hostInfo` command such as Atlas free-tier.
+* Several changes to the `RetryStrategy`:
+  1. Renamed `getNumberOfAttempts` to `getNumberOfPreviousAttempts`
+  2. Added `getAttemptNumber` which is the number of the _current_ attempt
+  3. `onError` is now _only_ called if the _end result_ is an error. I.e. it will only be called at most once, and not for intermediate errors. Because of this, the variant of `onError` that took a `BiConsumer<RetryInfo, Throwable>` has been removed (because there's no need for `RetryInfo` when the operation has failed). 
+  4. Added the `onBeforeRetry` method, which is called before a _retry attempt_ is made. This function takes a `BiConsumer<RetryInfo, Throwable>` in which the `RetryInfo` instance contains details about the current retry attempt.    
 
 ### 0.16.7 (2023-09-29)
 * Added equals/hashcode and toString to RetryInfo

@@ -167,16 +167,20 @@ public sealed interface RetryStrategy {
      * </ul>
      */
     final class Retry implements RetryStrategy {
-        private static final BiConsumer<RetryInfo, Throwable> NOOP_ERROR_LISTENER = (__, ___) -> {
-        };
+        // @formatter:off
+        private static final Consumer<Throwable> NOOP_ERROR_LISTENER = (__) -> {};
+        private static final BiConsumer<RetryInfo, Throwable> NOOP_RETRY_LISTENER = (__, ___) -> {};
+    // @formatter:on
 
         public final Backoff backoff;
         public final MaxAttempts maxAttempts;
         public final Predicate<Throwable> retryPredicate;
-        public final BiConsumer<RetryInfo, Throwable> errorListener;
+        public final Consumer<Throwable> errorListener;
+        public final BiConsumer<RetryInfo, Throwable> onBeforeRetryListener;
         public final Function<Throwable, Throwable> errorMapper;
 
-        private Retry(Backoff backoff, MaxAttempts maxAttempts, Function<Throwable, Throwable> errorMapper, Predicate<Throwable> retryPredicate, BiConsumer<RetryInfo, Throwable> errorListener) {
+        private Retry(Backoff backoff, MaxAttempts maxAttempts, Function<Throwable, Throwable> errorMapper, Predicate<Throwable> retryPredicate, Consumer<Throwable> errorListener,
+                      BiConsumer<RetryInfo, Throwable> onBeforeRetryListener) {
             Objects.requireNonNull(backoff, Backoff.class.getSimpleName() + " cannot be null");
             Objects.requireNonNull(maxAttempts, MaxAttempts.class.getSimpleName() + " cannot be null");
             Objects.requireNonNull(retryPredicate, "Retry predicate cannot be null");
@@ -186,10 +190,11 @@ public sealed interface RetryStrategy {
             this.retryPredicate = retryPredicate;
             this.errorMapper = errorMapper;
             this.errorListener = errorListener == null ? NOOP_ERROR_LISTENER : errorListener;
+            this.onBeforeRetryListener = onBeforeRetryListener == null ? NOOP_RETRY_LISTENER : onBeforeRetryListener;
         }
 
         private Retry() {
-            this(Backoff.none(), infinite(), Function.identity(), __ -> true, NOOP_ERROR_LISTENER);
+            this(Backoff.none(), infinite(), Function.identity(), __ -> true, NOOP_ERROR_LISTENER, NOOP_RETRY_LISTENER);
         }
 
         /**
@@ -201,7 +206,7 @@ public sealed interface RetryStrategy {
          */
         public Retry backoff(Backoff backoff) {
             Objects.requireNonNull(backoff, Backoff.class.getSimpleName() + " cannot be null");
-            return new Retry(backoff, maxAttempts, errorMapper, retryPredicate, errorListener);
+            return new Retry(backoff, maxAttempts, errorMapper, retryPredicate, errorListener, onBeforeRetryListener);
         }
 
         /**
@@ -211,7 +216,7 @@ public sealed interface RetryStrategy {
          * @see #maxAttempts(int)
          */
         public Retry infiniteAttempts() {
-            return new Retry(backoff, infinite(), errorMapper, retryPredicate, errorListener);
+            return new Retry(backoff, infinite(), errorMapper, retryPredicate, errorListener, onBeforeRetryListener);
         }
 
         /**
@@ -220,7 +225,7 @@ public sealed interface RetryStrategy {
          * @return A new instance of {@link Retry} with the max number of attempts configured.
          */
         public Retry maxAttempts(int maxAttempts) {
-            return new Retry(backoff, new MaxAttempts.Limit(maxAttempts), errorMapper, retryPredicate, errorListener);
+            return new Retry(backoff, new MaxAttempts.Limit(maxAttempts), errorMapper, retryPredicate, errorListener, onBeforeRetryListener);
         }
 
         /**
@@ -230,7 +235,7 @@ public sealed interface RetryStrategy {
          */
         public Retry retryIf(Predicate<Throwable> retryPredicate) {
             Objects.requireNonNull(retryPredicate, "Retry predicate cannot be null");
-            return new Retry(backoff, maxAttempts, errorMapper, retryPredicate, errorListener);
+            return new Retry(backoff, maxAttempts, errorMapper, retryPredicate, errorListener, onBeforeRetryListener);
         }
 
         /**
@@ -240,7 +245,7 @@ public sealed interface RetryStrategy {
          */
         public Retry mapRetryPredicate(Function<Predicate<Throwable>, Predicate<Throwable>> retryPredicateFn) {
             Objects.requireNonNull(retryPredicateFn, "Retry predicate function cannot be null");
-            return new Retry(backoff, maxAttempts, errorMapper, retryPredicateFn.apply(retryPredicate), errorListener);
+            return new Retry(backoff, maxAttempts, errorMapper, retryPredicateFn.apply(retryPredicate), errorListener, onBeforeRetryListener);
         }
 
         /**
@@ -251,14 +256,14 @@ public sealed interface RetryStrategy {
          */
         public Retry mapError(Function<Throwable, Throwable> errorMapper) {
             Objects.requireNonNull(errorMapper, "Mapping function cannot be null");
-            return new Retry(backoff, maxAttempts, errorMapper, retryPredicate, errorListener);
+            return new Retry(backoff, maxAttempts, errorMapper, retryPredicate, errorListener, onBeforeRetryListener);
         }
 
         /**
          * Maps a throwable that is an <i>instance of</i> {@code E}.
          *
-         * @param <E> The type of throwable that should trigger the {@code mapper} function
-         * @param type The type of the throwable
+         * @param <E>    The type of throwable that should trigger the {@code mapper} function
+         * @param type   The type of the throwable
          * @param mapper The mapper function that will be invoked if an exception is thrown by an {@code execute} function that is instance of {@code type}
          * @return A new instance of {@link Retry} with the given retry predicate
          */
@@ -273,28 +278,29 @@ public sealed interface RetryStrategy {
                     return e;
                 }
             });
-            return new Retry(backoff, maxAttempts, errorMapper.andThen(matchingError), retryPredicate, errorListener);
+            return new Retry(backoff, maxAttempts, errorMapper.andThen(matchingError), retryPredicate, errorListener, onBeforeRetryListener);
         }
 
         /**
-         * Only retry if the specified predicate is {@code true}.
+         * If the {@code RetryStrategy} records an error (exception) even after all retry attempts have been exhausted,
+         * then the supplied {@code errorListener} will be invoked before the exception is thrown.
          *
+         * @param errorListener The consumer to invoke
          * @return A new instance of {@link Retry} with the given error listener
-         * @see #onError(Consumer)
-         */
-        public Retry onError(BiConsumer<RetryInfo, Throwable> errorListener) {
-            return new Retry(backoff, maxAttempts, errorMapper, retryPredicate, errorListener);
-        }
-
-        /**
-         * Only retry if the specified predicate is {@code true}. Also includes a {@link RetryInfo}
-         * instance which contains useful information on the state of the retry.
-         *
-         * @return A new instance of {@link Retry} with the given error listener
-         * @see #onError(BiConsumer)
          */
         public Retry onError(Consumer<Throwable> errorListener) {
-            return onError((__, throwable) -> errorListener.accept(throwable));
+            return new Retry(backoff, maxAttempts, errorMapper, retryPredicate, errorListener, onBeforeRetryListener);
+        }
+
+        /**
+         * Specify a bi-consumer that accepts retry information ({@link RetryInfo}) as well the exception that caused the {@code RetryStrategy} to retry.
+         * The bi-consumer will be invoked <i>before</i> the retry takes place.
+         *
+         * @param onBeforeRetryListener The bi-consumer to invoke
+         * @return A new instance of {@link Retry} with the given onBeforeRetryListener
+         */
+        public Retry onBeforeRetry(BiConsumer<RetryInfo, Throwable> onBeforeRetryListener) {
+            return new Retry(backoff, maxAttempts, errorMapper, retryPredicate, errorListener, onBeforeRetryListener);
         }
 
         @Override
