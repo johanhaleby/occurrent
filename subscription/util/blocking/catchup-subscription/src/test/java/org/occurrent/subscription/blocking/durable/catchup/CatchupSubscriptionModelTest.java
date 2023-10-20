@@ -234,7 +234,7 @@ public class CatchupSubscriptionModelTest {
     }
 
     @Test
-    void catchup_subscription_continues_where_it_left_off_when_not_using_filter() throws InterruptedException {
+    void catchup_subscription_continues_where_it_left_off_when_not_using_filter() {
         // Given
         LocalDateTime now = LocalDateTime.now();
         NameDefined nameDefined1 = new NameDefined(UUID.randomUUID().toString(), now, "name1");
