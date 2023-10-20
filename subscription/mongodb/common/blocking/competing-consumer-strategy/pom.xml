@@ -3,7 +3,7 @@
     <parent>
         <artifactId>subscription-mongodb-common-blocking</artifactId>
         <groupId>org.occurrent</groupId>
-        <version>0.16.9-SNAPSHOT</version>
+        <version>0.16.9</version>
     </parent>
     <modelVersion>4.0.0</modelVersion>
 
@@ -17,17 +17,17 @@
         <dependency>
             <groupId>org.occurrent</groupId>
             <artifactId>subscription-mongodb-base</artifactId>
-            <version>0.16.9-SNAPSHOT</version>
+            <version>0.16.9</version>
         </dependency>
         <dependency>
             <groupId>org.occurrent</groupId>
             <artifactId>subscription-api-blocking</artifactId>
-            <version>0.16.9-SNAPSHOT</version>
+            <version>0.16.9</version>
         </dependency>
         <dependency>
             <groupId>org.occurrent</groupId>
             <artifactId>retry</artifactId>
-            <version>0.16.9-SNAPSHOT</version>
+            <version>0.16.9</version>
         </dependency>
         <dependency>
             <groupId>ch.qos.logback</groupId>
@@ -38,19 +38,19 @@
         <dependency>
             <groupId>org.occurrent</groupId>
             <artifactId>subscription-mongodb-native-blocking</artifactId>
-            <version>0.16.9-SNAPSHOT</version>
+            <version>0.16.9</version>
             <scope>test</scope>
         </dependency>
         <dependency>
             <groupId>org.occurrent</groupId>
             <artifactId>eventstore-mongodb-native</artifactId>
-            <version>0.16.9-SNAPSHOT</version>
+            <version>0.16.9</version>
             <scope>test</scope>
         </dependency>
         <dependency>
             <groupId>org.occurrent</groupId>
             <artifactId>test-support</artifactId>
-            <version>0.16.9-SNAPSHOT</version>
+            <version>0.16.9</version>
             <scope>test</scope>
         </dependency>
         <dependency>
