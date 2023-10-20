@@ -135,7 +135,7 @@ public sealed interface StartAt {
     }
 
     /**
-     * Create a "dynamic" start at position that may change during the life-cycle of a subcription model.
+     * Create a "dynamic" start at position that may change during the life-cycle of a subscription model.
      * For example, it could return the latest subscription position from a subscription position storage.
      */
     static StartAt dynamic(Supplier<StartAt> supplier) {
