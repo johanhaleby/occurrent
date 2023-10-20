@@ -1,5 +1,6 @@
 ### Next version
 * Upgraded jakarta-api from 1.3.5 to 2.11 (which means that all javax annotations have been replaced by jakarta)
+* Fixed a bug in CatchupSubscriptionModel that prevented it from working in MongoDB clusters that doesn't have access to the `hostInfo` command such as Atlas free-tier.
 
 ### 0.16.7 (2023-09-29)
 * Added equals/hashcode and toString to RetryInfo

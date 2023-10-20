@@ -166,7 +166,7 @@ public class CatchupSubscriptionModel implements SubscriptionModel, DelegatingSu
         // Be careful since the wrapping subscription has not yet saved the global position here...
         // We need a durable cache in order to be 100% safe.
 
-        // When the catch-up subscription is ready we store the global position in the position storage so that subscriptions
+        // When the catch-up subscription is ready, we store the global position in the position storage so that subscriptions
         // that have not received _any_ new events during replay will start at the global position if the application is restarted.
         // Otherwise, nothing will be stored in the "storage" and replay of historic events will take place again on application restart
         // which is not what we want! The reason for doing this with UseSubscriptionPositionInStorage (as opposed to just
@@ -174,7 +174,7 @@ public class CatchupSubscriptionModel implements SubscriptionModel, DelegatingSu
         // that the wrapping subscription continues from where we left off.
         StartAt startAtSupplierToUse = StartAt.dynamic(this.<Supplier<StartAt>, UseSubscriptionPositionInStorage>returnIfSubscriptionPositionStorageConfigIs(UseSubscriptionPositionInStorage.class,
                 cfg -> () -> {
-                    // It's important that we find the document inside the supplier so that we lookup the latest resume token on retry
+                    // It's important that we find the document inside the supplier so that we look up the latest resume token on retry
                     SubscriptionPosition position = cfg.storage().read(subscriptionId);
                     // If there is no position stored in storage, or if the stored position is time-based
                     // (i.e. written by the catch-up subscription), we save the globalSubscriptionPosition.
@@ -182,9 +182,12 @@ public class CatchupSubscriptionModel implements SubscriptionModel, DelegatingSu
                     // is that the wrapped subscription might not support time-based subscriptions.
                     if ((position == null || isTimeBasedSubscriptionPosition(position)) && globalSubscriptionPosition != null) {
                         position = cfg.storage().save(subscriptionId, globalSubscriptionPosition);
+                    } else if (position == null) {
+                        // Position can still be null here if globalSubscriptionPosition is null, if so, we start at the "subscriptionModelDefault"
+                        return StartAt.subscriptionModelDefault();
                     }
                     return StartAt.subscriptionPosition(position);
-                }).orElse(() -> globalSubscriptionPosition == null ? StartAt.now() : StartAt.subscriptionPosition(globalSubscriptionPosition)));
+                }).orElse(() -> globalSubscriptionPosition == null ? StartAt.subscriptionModelDefault() : StartAt.subscriptionPosition(globalSubscriptionPosition)));
 
         final Subscription subscription;
         if (subscriptionsWasCancelledOrShutdown) {
