@@ -3,7 +3,7 @@ package org.occurrent.retry;
 import java.time.Duration;
 
 /**
- * Contains useful information on the state of the retry
+ * Contains useful information of the state of the retry
  */
 public interface RetryInfo {
     /**
@@ -39,17 +39,17 @@ public interface RetryInfo {
     boolean isInfiniteRetriesLeft();
 
     /**
-     * @return The backoff duration before retrying again.
+     * @return The backoff duration of the current charging attempt.
      */
     Duration getBackoff();
 
     /**
-     * @return {@code true} if the next attempt is the last attempt, {@code false} otherwise.
+     * @return {@code true} if this attempt is the last attempt, {@code false} otherwise.
      */
     boolean isLastAttempt();
 
     /**
-     * @return {@code true} if this attempt was the first attempt, {@code false} otherwise.
+     * @return {@code true} if this attempt is the first attempt, {@code false} otherwise.
      */
     boolean isFirstAttempt();
 }

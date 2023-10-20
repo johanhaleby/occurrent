@@ -16,6 +16,7 @@
 
 package org.occurrent.retry.internal;
 
+import org.occurrent.retry.AfterRetryInfo.ResultOfRetryAttempt;
 import org.occurrent.retry.Backoff;
 import org.occurrent.retry.MaxAttempts;
 import org.occurrent.retry.RetryInfo;
@@ -25,8 +26,6 @@ import org.occurrent.retry.RetryStrategy.Retry;
 
 import java.time.Duration;
 import java.util.Iterator;
-import java.util.Objects;
-import java.util.StringJoiner;
 import java.util.function.Consumer;
 import java.util.function.Function;
 import java.util.function.Predicate;
@@ -47,7 +46,7 @@ public class RetryExecution {
             return function;
         }
         Retry retry = applyShutdownPredicate(shutdownPredicate, retryStrategy);
-        return executeWithRetry(function, retry, convertToDelayStream(retry.backoff), 1);
+        return executeWithRetry(function, retry, convertToDelayStream(retry.backoff), 1, null, Duration.ZERO);
     }
 
     public static Runnable executeWithRetry(Runnable runnable, Predicate<Throwable> shutdownPredicate, RetryStrategy retryStrategy) {
@@ -63,7 +62,7 @@ public class RetryExecution {
             return fn;
         }
         Retry retry = applyShutdownPredicate(shutdownPredicate, retryStrategy);
-        return executeWithRetry(fn, retry, convertToDelayStream(retry.backoff), 1);
+        return executeWithRetry(fn, retry, convertToDelayStream(retry.backoff));
     }
 
     private static Retry applyShutdownPredicate(Predicate<Throwable> shutdownPredicate, RetryStrategy retryStrategy) {
@@ -73,37 +72,52 @@ public class RetryExecution {
 
     private static Runnable executeWithRetry(Runnable runnable, Retry retry, Iterator<Long> delay) {
         Consumer<Void> runnableConsumer = __ -> runnable.run();
-        return () -> executeWithRetry(runnableConsumer, retry, delay, 1).accept(null);
+        return () -> executeWithRetry(runnableConsumer, retry, delay).accept(null);
     }
 
-    private static <T1> Consumer<T1> executeWithRetry(Consumer<T1> fn, Retry retry, Iterator<Long> delay, int attempt) {
-        return t1 -> {
-            try {
-                fn.accept(t1);
-            } catch (Throwable e) {
-                var retryInfo = newRetryInfo(retry, delay, attempt);
-                if (handleError(retry, retryInfo, attempt, e)) {
-                    retry.onBeforeRetryListener.accept(retryInfo.increaseAttemptsAndRetryCountByOne(), e);
-                    executeWithRetry(fn, retry, delay, attempt + 1).accept(t1);
-                } else {
-                    retry.errorListener.accept(e);
-                    //noinspection ResultOfMethodCallIgnored
-                    SafeExceptionRethrower.safeRethrow(retry.errorMapper.apply(e));
-                }
-            }
-        };
+    private static <T1> Consumer<T1> executeWithRetry(Consumer<T1> fn, Retry retry, Iterator<Long> delay) {
+        return t1 -> executeWithRetry(retryInfo -> {
+            fn.accept(t1);
+            return null;
+        }, retry, delay, 1, null, Duration.ZERO).apply(null);
     }
 
-    private static <T1> Function<RetryInfo, T1> executeWithRetry(Function<RetryInfo, T1> fn, Retry retry, Iterator<Long> delay, int attempt) {
+    private static <T1> Function<RetryInfo, T1> executeWithRetry(Function<RetryInfo, T1> fn, Retry retry, Iterator<Long> delay, int attempt, Throwable lastError, Duration previousBackoff) {
         return (RetryInfo) -> {
-            var retryInfo = newRetryInfo(retry, delay, attempt);
+            var nextRetryInfo = newRetryInfo(retry, delay, attempt);
+            var retryInfoWithPreviousBackoff = nextRetryInfo.withBackoff(previousBackoff);
+            boolean currentAttemptIsARetryAttempt = lastError != null;
+
+            if (currentAttemptIsARetryAttempt) {
+                retry.onBeforeRetryListener.accept(new BeforeRetryInfoImpl(retryInfoWithPreviousBackoff), lastError);
+            }
+
             try {
-                return fn.apply(retryInfo);
+                T1 result = fn.apply(retryInfoWithPreviousBackoff);
+                if (currentAttemptIsARetryAttempt) {
+                    retry.onAfterRetryListener.accept(new AfterRetryInfoImpl(retryInfoWithPreviousBackoff, new ResultOfRetryAttempt.Success(), null), lastError);
+                }
+                return result;
             } catch (Throwable e) {
-                if (handleError(retry, retryInfo, attempt, e)) {
-                    retry.onBeforeRetryListener.accept(retryInfo.increaseAttemptsAndRetryCountByOne(), e);
-                    return executeWithRetry(fn, retry, delay, attempt + 1).apply(retryInfo);
+                Duration currentBackoff = nextRetryInfo.getBackoff();
+                boolean shouldRetryAgain = !isExhausted(attempt, retry.maxAttempts) && retry.retryPredicate.test(e);
+                if (shouldRetryAgain) {
+                    if (currentAttemptIsARetryAttempt) {
+                        retry.onAfterRetryListener.accept(new AfterRetryInfoImpl(retryInfoWithPreviousBackoff, new ResultOfRetryAttempt.Failed(e), currentBackoff), lastError);
+                    }
+                    try {
+                        long backoffMillis = ((RetryInfo) nextRetryInfo).getBackoff().toMillis();
+                        if (backoffMillis > 0) {
+                            Thread.sleep(backoffMillis);
+                        }
+                    } catch (InterruptedException interruptedException) {
+                        throw new RuntimeException(e);
+                    }
+                    return executeWithRetry(fn, retry, delay, attempt + 1, e, currentBackoff).apply(nextRetryInfo);
                 } else {
+                    if (currentAttemptIsARetryAttempt) {
+                        retry.onAfterRetryListener.accept(new AfterRetryInfoImpl(retryInfoWithPreviousBackoff, new ResultOfRetryAttempt.Failed(e), null), lastError);
+                    }
                     retry.errorListener.accept(e);
                     return SafeExceptionRethrower.safeRethrow(retry.errorMapper.apply(e));
                 }
@@ -114,26 +128,7 @@ public class RetryExecution {
     private static RetryInfoImpl newRetryInfo(Retry retry, Iterator<Long> delay, int attempt) {
         Long backoffMillis = delay.next();
         Duration backoffDuration = backoffMillis == 0 ? Duration.ZERO : Duration.ofMillis(backoffMillis);
-        return new RetryInfoImpl(attempt, retry.maxAttempts, backoffDuration);
-    }
-
-    /**
-     * @return {@code true} if retry should be made, {@code false} otherwise.
-     */
-    private static boolean handleError(Retry retry, RetryInfo retryInfo, int attempt, Throwable e) {
-        if (!isExhausted(attempt, retry.maxAttempts) && retry.retryPredicate.test(e)) {
-            try {
-                long backoffMillis = retryInfo.getBackoff().toMillis();
-                if (backoffMillis > 0) {
-                    Thread.sleep(backoffMillis);
-                }
-            } catch (InterruptedException interruptedException) {
-                throw new RuntimeException(e);
-            }
-            return true;
-        } else {
-            return false;
-        }
+        return new RetryInfoImpl(attempt, attempt - 1, retry.maxAttempts, backoffDuration);
     }
 
     private static boolean isExhausted(int attempt, MaxAttempts maxAttempts) {
@@ -159,92 +154,5 @@ public class RetryExecution {
             throw new IllegalStateException("Invalid retry strategy: " + backoff.getClass().getName());
         }
         return delay.iterator();
-    }
-
-    static class RetryInfoImpl implements RetryInfo {
-
-        private final int attemptNumber;
-        private final MaxAttempts maxAttempts;
-        private final Duration backoff;
-
-        public RetryInfoImpl(int attemptNumber, MaxAttempts maxAttempts, Duration backoff) {
-            this.attemptNumber = attemptNumber;
-            this.maxAttempts = maxAttempts;
-            this.backoff = backoff;
-        }
-
-        @Override
-        public int getRetryCount() {
-            return attemptNumber - 1;
-        }
-
-        @Override
-        public int getAttemptNumber() {
-            return attemptNumber;
-        }
-
-        @Override
-        public int getMaxAttempts() {
-            if (isInfiniteRetriesLeft()) {
-                return Integer.MAX_VALUE;
-            }
-            return ((MaxAttempts.Limit) maxAttempts).limit();
-        }
-
-        @Override
-        public int getAttemptsLeft() {
-            if (isInfiniteRetriesLeft()) {
-                return Integer.MAX_VALUE;
-            }
-            return getMaxAttempts() - getAttemptNumber() + 1;
-        }
-
-        @Override
-        public boolean isInfiniteRetriesLeft() {
-            return maxAttempts instanceof MaxAttempts.Infinite;
-        }
-
-        @Override
-        public Duration getBackoff() {
-            return backoff;
-        }
-
-        @Override
-        public boolean isLastAttempt() {
-            if (isInfiniteRetriesLeft()) {
-                return false;
-            }
-            return getAttemptNumber() == getMaxAttempts();
-        }
-
-        @Override
-        public boolean isFirstAttempt() {
-            return attemptNumber == 1;
-        }
-
-        @Override
-        public boolean equals(Object o) {
-            if (this == o) return true;
-            if (!(o instanceof RetryInfoImpl retryInfo)) return false;
-            return attemptNumber == retryInfo.attemptNumber && Objects.equals(maxAttempts, retryInfo.maxAttempts) && Objects.equals(backoff, retryInfo.backoff);
-        }
-
-        @Override
-        public int hashCode() {
-            return Objects.hash(attemptNumber, maxAttempts, backoff);
-        }
-
-        @Override
-        public String toString() {
-            return new StringJoiner(", ", RetryInfo.class.getSimpleName() + "[", "]")
-                    .add("attempt=" + attemptNumber)
-                    .add("maxAttempts=" + maxAttempts)
-                    .add("backoff=" + backoff)
-                    .toString();
-        }
-
-        RetryInfoImpl increaseAttemptsAndRetryCountByOne() {
-            return new RetryInfoImpl(attemptNumber + 1, maxAttempts, backoff);
-        }
     }
 }

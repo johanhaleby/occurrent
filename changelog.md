@@ -1,3 +1,6 @@
+### 0.16.9 (2023-10-20)
+* Added `onAfterRetry` to `RetryStrategy`
+
 ### 0.16.8 (2023-10-20)
 * Upgraded jakarta-api from 1.3.5 to 2.11 (which means that all javax annotations have been replaced by jakarta)
 * Fixed a bug in CatchupSubscriptionModel that prevented it from working in MongoDB clusters that doesn't have access to the `hostInfo` command such as Atlas free-tier.
