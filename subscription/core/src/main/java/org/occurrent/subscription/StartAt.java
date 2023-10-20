@@ -120,7 +120,7 @@ public sealed interface StartAt {
 
 
     /**
-     * Start subscribing to the subscription model default. Typically this would be the same as "now", but
+     * Start subscribing to the subscription model default. Typically, this would be the same as "now", but
      * subscription models may override this default behavior e.g. to start from the last stored position instead of now.
      */
     static StartAt.Default subscriptionModelDefault() {
