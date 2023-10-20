@@ -31,7 +31,7 @@ public interface PositionAwareSubscriptionModel extends SubscriptionModel {
      * The global subscription position might be e.g. the wall clock time of the server, vector clock, number of events consumed etc.
      * This is useful to get the initial position of a subscription before any message has been consumed by the subscription
      * (and thus no {@link SubscriptionPosition} has been persisted for the subscription). The reason for doing this would be
-     * to make sure that a subscription doesn't loose the very first message if there's an error consuming the first event.
+     * to make sure that a subscription doesn't lose the very first message if there's an error consuming the first event.
      *
      * @return The global subscription position for the database.
      */
