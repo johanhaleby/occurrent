@@ -10,10 +10,12 @@ import java.util.concurrent.atomic.AtomicInteger;
 
 import static org.assertj.core.api.Assertions.*;
 import static org.junit.jupiter.api.Assertions.assertAll;
+import static org.junit.jupiter.api.Assertions.fail;
 import static org.occurrent.retry.Backoff.*;
 
 @DisplayName("Retry Strategy")
 @DisplayNameGeneration(ReplaceUnderscores.class)
+@Timeout(10)
 public class RetryStrategyTest {
 
     @Test
@@ -384,7 +386,7 @@ public class RetryStrategyTest {
             Retry retryStrategy = RetryStrategy
                     .exponentialBackoff(Duration.ofMillis(1), Duration.ofMillis(10), 2.0)
                     .maxAttempts(40)
-                    .onBeforeRetry((info, __) -> retryInfos.add(info));
+                    .onBeforeRetry((__, info) -> retryInfos.add(info));
 
             AtomicInteger counter = new AtomicInteger(0);
 
@@ -417,10 +419,10 @@ public class RetryStrategyTest {
     class ErrorListenerTest {
 
         @Test
-        void error_listener_is_not_invoked_when_there_are_transient_errors() {
+        void error_listener_is_invoked_for_both_final_and_intermediate_errors() {
             // Given
             CopyOnWriteArrayList<Throwable> throwables = new CopyOnWriteArrayList<>();
-            Retry retryStrategy = RetryStrategy.retry().onError(throwables::add);
+            Retry retryStrategy = RetryStrategy.retry().onError((throwable, __) -> throwables.add(throwable));
 
             AtomicInteger counter = new AtomicInteger(0);
 
@@ -434,7 +436,9 @@ public class RetryStrategyTest {
             // Then
             assertAll(
                     () -> assertThat(counter).hasValue(5),
-                    () -> assertThat(throwables).isEmpty()
+                    () -> assertThat(throwables)
+                            .hasSize(4)
+                            .extracting(Throwable::getClass, Throwable::getMessage).containsOnly(tuple(IllegalArgumentException.class, "expected"))
             );
         }
 
@@ -442,7 +446,7 @@ public class RetryStrategyTest {
         void error_listener_is_invoked_when_end_result_is_error() {
             // Given
             CopyOnWriteArrayList<Throwable> throwables = new CopyOnWriteArrayList<>();
-            Retry retryStrategy = RetryStrategy.retry().maxAttempts(5).onError(throwables::add);
+            Retry retryStrategy = RetryStrategy.retry().maxAttempts(5).onError(throwable -> throwables.add(throwable));
 
             AtomicInteger counter = new AtomicInteger(0);
 
@@ -456,8 +460,83 @@ public class RetryStrategyTest {
             assertAll(
                     () -> assertThat(throwable).isExactlyInstanceOf(IllegalArgumentException.class).hasMessage("expected"),
                     () -> assertThat(counter).hasValue(5),
-                    () -> assertThat(throwables).hasSize(1),
+                    () -> assertThat(throwables).hasSize(5),
                     () -> assertThat(throwables).extracting(Throwable::getClass, Throwable::getMessage).containsOnly(tuple(IllegalArgumentException.class, "expected"))
+            );
+        }
+
+        @Test
+        void error_listener_supports_checking_if_error_is_retryable_when_retry_predicate_is_defined() {
+            // Given
+            CopyOnWriteArrayList<Throwable> retryableExceptions = new CopyOnWriteArrayList<>();
+            CopyOnWriteArrayList<Throwable> finalException = new CopyOnWriteArrayList<>();
+            AtomicInteger counter = new AtomicInteger(0);
+            int millis = 150;
+            Retry retryStrategy = RetryStrategy.fixed(millis)
+                    .onError((throwable, info) -> {
+                        if (info.isRetryable()) {
+                            retryableExceptions.add(throwable);
+                        } else {
+                            finalException.add(throwable);
+                        }
+                    })
+                    .retryIf(e -> e instanceof IllegalArgumentException && e.getMessage().equals("intermediate"));
+
+            // When
+            final long startTime = System.currentTimeMillis();
+            Throwable throwable = catchThrowable(() -> retryStrategy.execute(() -> {
+                int count = counter.incrementAndGet();
+                if (count <= 4) {
+                    throw new IllegalArgumentException("intermediate");
+                } else {
+                    throw new IllegalArgumentException("final");
+                }
+            }));
+            final long endTime = System.currentTimeMillis();
+
+            // Then
+            assertAll(
+                    () -> assertThat(counter).hasValue(5),
+                    () -> assertThat(retryableExceptions).hasSize(4),
+                    () -> assertThat(retryableExceptions).extracting(Throwable::getClass, Throwable::getMessage).containsOnly(tuple(IllegalArgumentException.class, "intermediate")),
+                    () -> assertThat(finalException).hasSize(1),
+                    () -> assertThat(finalException).extracting(Throwable::getClass, Throwable::getMessage).containsOnly(tuple(IllegalArgumentException.class, "final")),
+                    () -> assertThat(throwable).isExactlyInstanceOf(IllegalArgumentException.class).hasMessage("final"),
+                    () -> assertThat(endTime - startTime).isGreaterThanOrEqualTo(4 * millis).isLessThan(5 * millis)
+            );
+        }
+
+        @Test
+        void error_listener_supports_checking_if_error_is_retryable_when_no_retry_predicate_defined() {
+            // Given
+            CopyOnWriteArrayList<Throwable> throwables = new CopyOnWriteArrayList<>();
+            AtomicInteger counter = new AtomicInteger(0);
+            int millis = 150;
+            Retry retryStrategy = RetryStrategy.fixed(millis)
+                    .onError((throwable, info) -> {
+                        if (info.isRetryable()) {
+                            throwables.add(throwable);
+                        } else {
+                            fail("Expected retryable");
+                        }
+                    });
+
+            // When
+            retryStrategy.execute(() -> {
+                int count = counter.incrementAndGet();
+                if (count <= 4) {
+                    throw new IllegalArgumentException("intermediate");
+                } else if (count == 5) {
+                    throw new IllegalArgumentException("final");
+                }
+            });
+
+            // Then
+            assertAll(
+                    () -> assertThat(counter).hasValue(6),
+                    () -> assertThat(throwables).hasSize(5),
+                    () -> assertThat(throwables.subList(0, 4)).extracting(Throwable::getClass, Throwable::getMessage).containsOnly(tuple(IllegalArgumentException.class, "intermediate")),
+                    () -> assertThat(throwables.subList(4, 5)).extracting(Throwable::getClass, Throwable::getMessage).containsOnly(tuple(IllegalArgumentException.class, "final"))
             );
         }
     }
@@ -473,7 +552,7 @@ public class RetryStrategyTest {
             Retry retryStrategy = RetryStrategy
                     .exponentialBackoff(Duration.ofMillis(1), Duration.ofMillis(10), 2.0)
                     .maxAttempts(40)
-                    .onBeforeRetry((info, __) -> retryInfos.add(info));
+                    .onBeforeRetry((__, info) -> retryInfos.add(info));
 
             AtomicInteger counter = new AtomicInteger(0);
 
@@ -506,7 +585,7 @@ public class RetryStrategyTest {
             Retry retryStrategy = RetryStrategy
                     .fixed(10)
                     .infiniteAttempts()
-                    .onBeforeRetry((info, __) -> retryInfos.add(info));
+                    .onBeforeRetry((__, info) -> retryInfos.add(info));
 
             AtomicInteger counter = new AtomicInteger(0);
 
@@ -539,7 +618,7 @@ public class RetryStrategyTest {
             CopyOnWriteArrayList<RetryInfo> retryInfos = new CopyOnWriteArrayList<>();
             Retry retryStrategy = RetryStrategy.retry()
                     .maxAttempts(4)
-                    .onBeforeRetry((info, __) -> retryInfos.add(info));
+                    .onBeforeRetry((__, info) -> retryInfos.add(info));
 
             AtomicInteger counter = new AtomicInteger(0);
 
@@ -578,7 +657,7 @@ public class RetryStrategyTest {
             Retry retryStrategy = RetryStrategy
                     .exponentialBackoff(Duration.ofMillis(1), Duration.ofMillis(10), 2.0)
                     .maxAttempts(40)
-                    .onAfterRetry((info, __) -> retryInfos.add(info));
+                    .onAfterRetry((__, info) -> retryInfos.add(info));
 
             AtomicInteger counter = new AtomicInteger(0);
 
@@ -621,7 +700,7 @@ public class RetryStrategyTest {
             Retry retryStrategy = RetryStrategy
                     .fixed(10)
                     .infiniteAttempts()
-                    .onAfterRetry((info, __) -> retryInfos.add(info));
+                    .onAfterRetry((__, info) -> retryInfos.add(info));
 
             AtomicInteger counter = new AtomicInteger(0);
 
@@ -654,7 +733,7 @@ public class RetryStrategyTest {
             CopyOnWriteArrayList<AfterRetryInfo> retryInfos = new CopyOnWriteArrayList<>();
             Retry retryStrategy = RetryStrategy.retry()
                     .maxAttempts(4)
-                    .onAfterRetry((info, __) -> retryInfos.add(info));
+                    .onAfterRetry((__, info) -> retryInfos.add(info));
 
             AtomicInteger counter = new AtomicInteger(0);
 
@@ -700,7 +779,7 @@ public class RetryStrategyTest {
             // Given
             CopyOnWriteArrayList<Throwable> throwables = new CopyOnWriteArrayList<>();
             int millis = 150;
-            Retry retryStrategy = RetryStrategy.fixed(millis).onError(throwables::add).maxAttempts(5);
+            Retry retryStrategy = RetryStrategy.fixed(millis).onError(throwable -> throwables.add(throwable)).maxAttempts(5);
 
             AtomicInteger counter = new AtomicInteger(0);
 
@@ -715,7 +794,7 @@ public class RetryStrategyTest {
             // Then
             assertAll(
                     () -> assertThat(counter).hasValue(5),
-                    () -> assertThat(throwables).hasSize(1),
+                    () -> assertThat(throwables).hasSize(5),
                     () -> assertThat(throwables).extracting(Throwable::getClass, Throwable::getMessage).containsOnly(tuple(IllegalArgumentException.class, "expected")),
                     () -> assertThat(throwable).isExactlyInstanceOf(IllegalArgumentException.class).hasMessage("expected"),
                     () -> assertThat(endTime - startTime).isGreaterThanOrEqualTo(4 * millis).isLessThan(5 * millis)
@@ -727,7 +806,7 @@ public class RetryStrategyTest {
             // Given
             CopyOnWriteArrayList<Throwable> throwables = new CopyOnWriteArrayList<>();
             int millis = 150;
-            Retry retryStrategy = RetryStrategy.fixed(millis).onBeforeRetry((__, e) -> throwables.add(e)).maxAttempts(5);
+            Retry retryStrategy = RetryStrategy.fixed(millis).onBeforeRetry(e -> throwables.add(e)).maxAttempts(5);
 
             AtomicInteger counter = new AtomicInteger(0);
 
@@ -750,12 +829,14 @@ public class RetryStrategyTest {
         }
 
         @Test
-        void combining_backoff_retry_predicate_and_error_listener() {
+        void combining_backoff_and_retry_predicate_and_error_listener() {
             // Given
             CopyOnWriteArrayList<Throwable> throwables = new CopyOnWriteArrayList<>();
             AtomicInteger counter = new AtomicInteger(0);
             int millis = 150;
-            Retry retryStrategy = RetryStrategy.fixed(millis).onError(throwables::add).retryIf(__ -> counter.get() < 5);
+            Retry retryStrategy = RetryStrategy.fixed(millis)
+                    .onError(throwable -> throwables.add(throwable))
+                    .retryIf(__ -> counter.get() < 5);
 
 
             // When
@@ -769,7 +850,7 @@ public class RetryStrategyTest {
             // Then
             assertAll(
                     () -> assertThat(counter).hasValue(5),
-                    () -> assertThat(throwables).hasSize(1),
+                    () -> assertThat(throwables).hasSize(5),
                     () -> assertThat(throwables).extracting(Throwable::getClass, Throwable::getMessage).containsOnly(tuple(IllegalArgumentException.class, "expected")),
                     () -> assertThat(throwable).isExactlyInstanceOf(IllegalArgumentException.class).hasMessage("expected"),
                     () -> assertThat(endTime - startTime).isGreaterThanOrEqualTo(4 * millis).isLessThan(5 * millis)
@@ -782,7 +863,7 @@ public class RetryStrategyTest {
             CopyOnWriteArrayList<Throwable> throwables = new CopyOnWriteArrayList<>();
             AtomicInteger counter = new AtomicInteger(0);
             int millis = 150;
-            Retry retryStrategy = RetryStrategy.fixed(millis).onBeforeRetry((__, e) -> throwables.add(e)).retryIf(__ -> counter.get() < 5);
+            Retry retryStrategy = RetryStrategy.fixed(millis).onBeforeRetry((e, __) -> throwables.add(e)).retryIf(__ -> counter.get() < 5);
 
 
             // When

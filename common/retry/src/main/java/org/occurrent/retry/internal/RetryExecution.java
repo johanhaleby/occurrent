@@ -89,21 +89,22 @@ public class RetryExecution {
             boolean currentAttemptIsARetryAttempt = lastError != null;
 
             if (currentAttemptIsARetryAttempt) {
-                retry.onBeforeRetryListener.accept(new BeforeRetryInfoImpl(retryInfoWithPreviousBackoff), lastError);
+                retry.onBeforeRetryListener.accept(lastError, new BeforeRetryInfoImpl(retryInfoWithPreviousBackoff));
             }
 
             try {
                 T1 result = fn.apply(retryInfoWithPreviousBackoff);
                 if (currentAttemptIsARetryAttempt) {
-                    retry.onAfterRetryListener.accept(new AfterRetryInfoImpl(retryInfoWithPreviousBackoff, new ResultOfRetryAttempt.Success(), null), lastError);
+                    retry.onAfterRetryListener.accept(lastError, new AfterRetryInfoImpl(retryInfoWithPreviousBackoff, new ResultOfRetryAttempt.Success(), null));
                 }
                 return result;
             } catch (Throwable e) {
                 Duration currentBackoff = nextRetryInfo.getBackoff();
                 boolean shouldRetryAgain = !isExhausted(attempt, retry.maxAttempts) && retry.retryPredicate.test(e);
+                retry.errorListener.accept(e, new ErrorInfoImpl(retryInfoWithPreviousBackoff, shouldRetryAgain ? currentBackoff : null, shouldRetryAgain));
                 if (shouldRetryAgain) {
                     if (currentAttemptIsARetryAttempt) {
-                        retry.onAfterRetryListener.accept(new AfterRetryInfoImpl(retryInfoWithPreviousBackoff, new ResultOfRetryAttempt.Failed(e), currentBackoff), lastError);
+                        retry.onAfterRetryListener.accept(lastError, new AfterRetryInfoImpl(retryInfoWithPreviousBackoff, new ResultOfRetryAttempt.Failed(e), currentBackoff));
                     }
                     try {
                         long backoffMillis = ((RetryInfo) nextRetryInfo).getBackoff().toMillis();
@@ -116,9 +117,8 @@ public class RetryExecution {
                     return executeWithRetry(fn, retry, delay, attempt + 1, e, currentBackoff).apply(nextRetryInfo);
                 } else {
                     if (currentAttemptIsARetryAttempt) {
-                        retry.onAfterRetryListener.accept(new AfterRetryInfoImpl(retryInfoWithPreviousBackoff, new ResultOfRetryAttempt.Failed(e), null), lastError);
+                        retry.onAfterRetryListener.accept(lastError, new AfterRetryInfoImpl(retryInfoWithPreviousBackoff, new ResultOfRetryAttempt.Failed(e), null));
                     }
-                    retry.errorListener.accept(e);
                     return SafeExceptionRethrower.safeRethrow(retry.errorMapper.apply(e));
                 }
             }

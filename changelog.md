@@ -1,3 +1,8 @@
+### Next version
+* Several changes to `RetryStrategy` again:
+  1. `onError` is will be called for each throwable again. The new `ErrorInfo` instance, that is supplied to the error listener, can be used to determine whether the error is "final" or if it's retryable.
+  2. In the previous version, `onBeforeRetry` and `onAfterRetry`, accepted a `BiConsumer<RetryInfo, Throwable>`. The arguments have now been reversed, so the types of the BiConsumer is now `BiConsumer<Throwable, RetryInfo>`.  
+
 ### 0.16.9 (2023-10-20)
 * Added `onAfterRetry` to `RetryStrategy`
 
