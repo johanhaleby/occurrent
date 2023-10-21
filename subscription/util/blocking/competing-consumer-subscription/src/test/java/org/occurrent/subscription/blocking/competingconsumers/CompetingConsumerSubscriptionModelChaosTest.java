@@ -107,7 +107,8 @@ class CompetingConsumerSubscriptionModelChaosTest {
         Retry retry = RetryStrategy
                 .fixed(1000)
                 .retryIf(not(DuplicateCloudEventException.class::isInstance))
-                .onBeforeRetry(((throwable, retryInfo) -> log.warn("Detected error (retryCount={}). Error={} - {}", retryInfo.getRetryCount(), throwable.getClass().getSimpleName(), throwable.getMessage())));
+                .onError(((throwable, info) -> log.warn("Detected error (retryCount={}). Error={} - {}. Backoff before retry={}",
+                        info.getRetryCount(), throwable.getClass().getSimpleName(), throwable.getMessage(), info.getBackoffBeforeNextRetryAttempt().orElse(Duration.ZERO))));
 
         Thread eventPublishingThread = new Thread(() -> {
             // When
