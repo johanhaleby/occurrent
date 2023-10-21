@@ -39,7 +39,7 @@ public interface RetryInfo {
     boolean isInfiniteRetriesLeft();
 
     /**
-     * @return The backoff duration of the current charging attempt.
+     * @return The backoff duration of the <i>current</i> attempt.
      */
     Duration getBackoff();
 
