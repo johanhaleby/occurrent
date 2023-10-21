@@ -7,7 +7,7 @@ import java.time.Duration;
  */
 public interface RetryInfo {
     /**
-     * @return The count of the <i>current</i> retry, {@code 0} if first <i>attempt</i>, but <i>1</i> for the first <i>retry attempt</i>.
+     * @return The count of the <i>current</i> retry, {@code 0} if first <i>attempt</i>, but <i>1</i> for the first <i>retry attempt</i> etc.
      */
     int getRetryCount();
 
