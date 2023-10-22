@@ -676,14 +676,11 @@ public class RetryStrategyTest {
                     () -> assertThat(retryInfos).extracting(AfterRetryInfo::getRetryCount).containsExactly(1, 2, 3),
                     () -> assertThat(retryInfos).extracting(AfterRetryInfo::getAttemptNumber).containsExactly(2, 3, 4),
                     () -> assertThat(retryInfos).extracting(AfterRetryInfo::getBackoff).containsExactly(Duration.ofMillis(1), Duration.ofMillis(2), Duration.ofMillis(4)),
-                    () -> assertThat(retryInfos).extracting(AfterRetryInfo::getBackoffBeforeNextRetryAttempt)
-                            .extracting(it -> it.orElse(null))
-                            .containsExactly(Duration.ofMillis(2), Duration.ofMillis(4), null),
+                    () -> assertThat(retryInfos).extracting(AfterRetryInfo::getBackoffBeforeNextRetryAttempt).containsExactly(Duration.ofMillis(2), Duration.ofMillis(4), null),
                     () -> assertThat(retryInfos).extracting(AfterRetryInfo::wasSuccessfulRetryAttempt).containsExactly(false, false, true),
                     () -> assertThat(retryInfos).extracting(AfterRetryInfo::wasFailedRetryAttempt).containsExactly(true, true, false),
                     () -> assertThat(retryInfos).extracting(AfterRetryInfo::getFailedRetryAttemptException)
-                            .extracting(it -> it.map(Throwable::getMessage))
-                            .extracting(it -> it.orElse(null))
+                            .extracting(Throwable::getMessage)
                             .containsExactly("expected: 2", "expected: 3", null),
                     () -> assertThat(retryInfos).extracting(AfterRetryInfo::getMaxAttempts).containsExactly(40, 40, 40),
                     () -> assertThat(retryInfos).extracting(AfterRetryInfo::getAttemptsLeft).containsExactly(39, 38, 37),
@@ -756,14 +753,11 @@ public class RetryStrategyTest {
                     () -> assertThat(retryInfos).extracting(AfterRetryInfo::getAttemptsLeft).containsExactly(3, 2, 1),
                     () -> assertThat(retryInfos).extracting(AfterRetryInfo::isFirstAttempt).containsExactly(false, false, false),
                     () -> assertThat(retryInfos).extracting(AfterRetryInfo::isLastAttempt).containsExactly(false, false, true),
-                    () -> assertThat(retryInfos).extracting(AfterRetryInfo::getBackoffBeforeNextRetryAttempt)
-                            .extracting(it -> it.orElse(null))
-                            .containsExactly(Duration.ZERO, Duration.ZERO, null),
+                    () -> assertThat(retryInfos).extracting(AfterRetryInfo::getBackoffBeforeNextRetryAttempt).containsExactly(Duration.ZERO, Duration.ZERO, null),
                     () -> assertThat(retryInfos).extracting(AfterRetryInfo::wasSuccessfulRetryAttempt).containsExactly(false, false, false),
                     () -> assertThat(retryInfos).extracting(AfterRetryInfo::wasFailedRetryAttempt).containsExactly(true, true, true),
                     () -> assertThat(retryInfos).extracting(AfterRetryInfo::getFailedRetryAttemptException)
-                            .extracting(it -> it.map(Throwable::getMessage))
-                            .extracting(it -> it.orElse(null))
+                            .extracting(Throwable::getMessage)
                             .containsExactly("expected: 2", "expected: 3", "expected: 4"),
                     () -> assertThat(retryInfos).extracting(AfterRetryInfo::isInfiniteRetriesLeft).containsExactly(false, false, false)
             );

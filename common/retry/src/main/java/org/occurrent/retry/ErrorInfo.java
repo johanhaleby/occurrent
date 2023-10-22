@@ -17,8 +17,9 @@
 
 package org.occurrent.retry;
 
+import org.jetbrains.annotations.Nullable;
+
 import java.time.Duration;
-import java.util.Optional;
 
 /**
  * Contains useful information of the state of the error
@@ -26,9 +27,10 @@ import java.util.Optional;
 public interface ErrorInfo extends RetryInfo {
 
     /**
-     * @return An {@code Optional} containing how long to wait before the next retry attempt kicks in case there additional retries left, or an {@code empty} {@code Optional}.
+     * @return How long to wait before the next retry attempt kicks in case there additional retries left, or {@code null}.
      */
-    Optional<Duration> getBackoffBeforeNextRetryAttempt();
+    @Nullable
+    Duration getBackoffBeforeNextRetryAttempt();
 
     /**
      * @return {@code true} if the error is retryable, {@code false} otherwise.

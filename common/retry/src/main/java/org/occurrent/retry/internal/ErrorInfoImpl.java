@@ -22,7 +22,6 @@ import org.occurrent.retry.ErrorInfo;
 import org.occurrent.retry.RetryInfo;
 
 import java.time.Duration;
-import java.util.Optional;
 
 record ErrorInfoImpl(RetryInfo retryInfo, @Nullable Duration backoffDurationBeforeNextRetry, boolean isRetryable) implements ErrorInfo {
     @Override
@@ -66,8 +65,8 @@ record ErrorInfoImpl(RetryInfo retryInfo, @Nullable Duration backoffDurationBefo
     }
 
     @Override
-    public Optional<Duration> getBackoffBeforeNextRetryAttempt() {
-        return Optional.ofNullable(backoffDurationBeforeNextRetry);
+    public Duration getBackoffBeforeNextRetryAttempt() {
+        return backoffDurationBeforeNextRetry;
     }
 
     @Override

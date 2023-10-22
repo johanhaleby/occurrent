@@ -1,5 +1,8 @@
 ### Next version
-* Removed `isFinalError` method from `ErrorInfo` used by `RetryStrategy`, use `isLastAttempt()` instead.
+* Several changes to the `RetryStrategy`:
+  1. Removed `isFinalError` method from `ErrorInfo` used by `RetryStrategy`, use `isLastAttempt()` instead.
+  2. `getFailedRetryAttemptException` in `AfterRetryInfo` is no `Optional`, instead it's `nullable` (for better Kotlin interop).
+  3. `getBackoffBeforeNextRetryAttempt` in `AfterRetryInfo` and `ErrorInfo` no longer returns `Optional`, instead it's `nullable` (for better Kotlin interop).
 
 ### 0.16.10 (2023-10-21)
 * Several changes to `RetryStrategy` again:

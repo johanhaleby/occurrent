@@ -17,8 +17,9 @@
 
 package org.occurrent.retry;
 
+import org.jetbrains.annotations.Nullable;
+
 import java.time.Duration;
-import java.util.Optional;
 
 /**
  * Contains useful information of the state of the retry after a retry attempt
@@ -42,21 +43,23 @@ public interface AfterRetryInfo extends RetryInfo {
     }
 
     /**
-     * @return The exception (throwable) of the retry attempt if it failed, otherwise the {@code Optional} will be {@code empty}.
+     * @return The exception (throwable) of the retry attempt if it failed, or {@code null}
      * @see #getResultOfRetryAttempt()
      */
-    default Optional<Throwable> getFailedRetryAttemptException() {
+    @Nullable
+    default Throwable getFailedRetryAttemptException() {
         if (wasSuccessfulRetryAttempt()) {
-            return Optional.empty();
+            return null;
         } else {
-            return Optional.of(((ResultOfRetryAttempt.Failed) getResultOfRetryAttempt()).error());
+            return ((ResultOfRetryAttempt.Failed) getResultOfRetryAttempt()).error();
         }
     }
 
     /**
-     * @return An {@code Optional} containing how long to wait before the next retry attempt kicks in case the retry attempt failed and there additional retries left, or an {@code empty} {@code Optional}.
+     * @return How long to wait before the next retry attempt kicks in case there additional retries left, or {@code null}.
      */
-    Optional<Duration> getBackoffBeforeNextRetryAttempt();
+    @Nullable
+    Duration getBackoffBeforeNextRetryAttempt();
 
     /**
      * @return The result of the retry attempt
