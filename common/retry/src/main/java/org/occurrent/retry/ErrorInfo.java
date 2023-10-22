@@ -34,11 +34,4 @@ public interface ErrorInfo extends RetryInfo {
      * @return {@code true} if the error is retryable, {@code false} otherwise.
      */
     boolean isRetryable();
-
-    /**
-     * @return {@code true} if the error is the final error, i.e. the `RetryStrategy` will throw this error back to the caller, {@code false} otherwise. This is the opposite of {@link #isRetryable()}.
-     */
-    default boolean isFinalError() {
-        return !isRetryable();
-    }
 }
