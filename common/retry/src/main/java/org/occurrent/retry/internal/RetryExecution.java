@@ -84,7 +84,7 @@ public class RetryExecution {
 
     private static <T1> Function<RetryInfo, T1> executeWithRetry(Function<RetryInfo, T1> fn, Retry retry, Iterator<Long> delay, int attempt, Throwable lastError, Duration previousBackoff) {
         return (RetryInfo) -> {
-            var nextRetryInfo = newRetryInfo(retry, delay, attempt);
+            var nextRetryInfo = evolveRetryInfo(retry, delay, attempt);
             var retryInfoWithPreviousBackoff = nextRetryInfo.withBackoff(previousBackoff);
             boolean currentAttemptIsARetryAttempt = lastError != null;
 
@@ -125,7 +125,7 @@ public class RetryExecution {
         };
     }
 
-    private static RetryInfoImpl newRetryInfo(Retry retry, Iterator<Long> delay, int attempt) {
+    private static RetryInfoImpl evolveRetryInfo(Retry retry, Iterator<Long> delay, int attempt) {
         Long backoffMillis = delay.next();
         Duration backoffDuration = backoffMillis == 0 ? Duration.ZERO : Duration.ofMillis(backoffMillis);
         return new RetryInfoImpl(attempt, attempt - 1, retry.maxAttempts, backoffDuration);
