@@ -21,6 +21,8 @@ import org.jetbrains.annotations.NotNull;
 import org.jetbrains.annotations.Nullable;
 
 import java.util.List;
+import java.util.function.BiFunction;
+import java.util.function.Predicate;
 
 public interface Decider<C, S, E> {
     S initialState();
@@ -35,7 +37,7 @@ public interface Decider<C, S, E> {
     }
 
     default Result<S, E> decide(List<E> events, C command) {
-        S currentState = fold(initialState(), events);
+        @Nullable S currentState = fold(initialState(), events);
         List<E> newEvents = decide(command, currentState);
         S newState = fold(currentState, newEvents);
         return new Result<>(newState, newEvents);
@@ -46,11 +48,13 @@ public interface Decider<C, S, E> {
         return decide(command, state);
     }
 
+    @Nullable
     default S decideAndReturnState(List<E> events, C command) {
         return decide(events, command).state;
     }
 
-    private S fold(S state, List<E> events) {
+    @Nullable
+    private S fold(@Nullable S state, List<E> events) {
         for (E event : events) {
             state = evolve(state, event);
             if (isTerminal(state)) {
@@ -60,6 +64,38 @@ public interface Decider<C, S, E> {
         return state;
     }
 
-    record Result<S, E>(S state, List<E> events) {
+    record Result<S, E>(@Nullable S state, List<E> events) {
+    }
+
+    static <C, S, E> Decider<C, S, E> create(@Nullable S initialState, @NotNull BiFunction<C, S, List<E>> decide, @NotNull BiFunction<S, E, S> evolve) {
+        return create(initialState, decide, evolve, __ -> false);
+    }
+
+    static <C, S, E> Decider<C, S, E> create(@Nullable S initialState, @NotNull BiFunction<C, S, List<E>> decide, @NotNull BiFunction<S, E, S> evolve,
+                                             @NotNull Predicate<@Nullable S> isTerminal) {
+
+        return new Decider<>() {
+            @Override
+            public S initialState() {
+                return initialState;
+            }
+
+            @NotNull
+            @Override
+            public List<E> decide(@NotNull C command, @Nullable S state) {
+                return decide.apply(command, state);
+            }
+
+            @NotNull
+            @Override
+            public S evolve(@Nullable S state, @NotNull E event) {
+                return evolve.apply(state, event);
+            }
+
+            @Override
+            public boolean isTerminal(@Nullable S state) {
+                return isTerminal.test(state);
+            }
+        };
     }
 }

@@ -17,7 +17,11 @@
 
 package org.occurrent.dsl.decider
 
+import org.assertj.core.api.Assertions.assertThat
+import org.junit.jupiter.api.DisplayNameGeneration
+import org.junit.jupiter.api.DisplayNameGenerator
 import org.junit.jupiter.api.Test
+import org.junit.jupiter.api.assertAll
 import org.occurrent.command.ChangeName
 import org.occurrent.command.DefineName
 import org.occurrent.command.NameCommand
@@ -29,6 +33,7 @@ import java.time.LocalDateTime
 import java.util.*
 
 
+@DisplayNameGeneration(DisplayNameGenerator.Simple::class)
 class MyDeciderTest {
 
     @Test
@@ -56,11 +61,16 @@ class MyDeciderTest {
                 NameDefined("event1", LocalDateTime.now(), "Johan Haleby"),
                 NameWasChanged("event2", LocalDateTime.now(), "Eric Evans"),
                 NameWasChanged("event3", LocalDateTime.now(), "Tina Haleby"),
-                NameWasChanged("event4", LocalDateTime.now(), "John Doe")
+                NameWasChanged("event4", LocalDateTime.now(), "Some Doe")
             ),
             command = ChangeName("id", LocalDateTime.now(), "Another Name")
         )
 
         // Then
+        assertAll(
+            { assertThat(state).isEqualTo("Another Name") },
+            { assertThat(events).hasSize(1) },
+            { assertThat(events[0].name()).isEqualTo("Another Name") },
+        )
     }
 }

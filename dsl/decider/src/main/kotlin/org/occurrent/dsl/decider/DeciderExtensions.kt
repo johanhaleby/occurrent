@@ -21,8 +21,7 @@ import org.occurrent.application.service.blocking.ApplicationService
 import org.occurrent.application.service.blocking.execute
 import java.util.*
 
-fun <C, S, E> decider(initialState: S?, decide: (C, S) -> List<E>, evolve: (S, E) -> S, isTerminal: (S?) -> Boolean = { false }): Decider<C, S, E> =
-    OccurrentDecider(initialState, decide, evolve, isTerminal)
+fun <C, S, E> decider(initialState: S?, decide: (C, S?) -> List<E>, evolve: (S?, E) -> S, isTerminal: (S?) -> Boolean = { false }): Decider<C, S, E> = Decider.create(initialState, decide, evolve, isTerminal)
 
 fun <C, S, E> Decider<C, S, E>.decide(events: List<E>, command: C): Decider.Result<S, E> = decide(events, command)
 
