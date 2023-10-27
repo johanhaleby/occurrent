@@ -52,8 +52,8 @@ public class CurrentNameProjectionUpdater {
                     DomainEvent domainEvent = deserializeCloudEventToDomainEvent.deserialize(cloudEvent);
                     String streamId = getStreamId(cloudEvent);
                     CurrentName currentName = Match(domainEvent).of(
-                            Case($(instanceOf(NameDefined.class)), e -> new CurrentName(streamId, e.getName())),
-                            Case($(instanceOf(NameWasChanged.class)), e -> new CurrentName(streamId, e.getName())));
+                            Case($(instanceOf(NameDefined.class)), e -> new CurrentName(streamId, e.name())),
+                            Case($(instanceOf(NameWasChanged.class)), e -> new CurrentName(streamId, e.name())));
                     currentNameProjection.save(currentName);
                 })
                 .waitUntilStarted(Duration.of(2, SECONDS));

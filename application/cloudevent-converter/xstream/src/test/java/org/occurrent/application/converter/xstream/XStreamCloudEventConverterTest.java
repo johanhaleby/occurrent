@@ -74,9 +74,9 @@ public class XStreamCloudEventConverterTest {
         XStreamCloudEventConverter<DomainEvent> cloudEventConverter = new XStreamCloudEventConverter.Builder<DomainEvent>(xStream, CLOUD_EVENT_SOURCE)
                 .charset(UTF_16LE)
                 .contentType("application/xstream+xml")
-                .idMapper(DomainEvent::getEventId)
+                .idMapper(DomainEvent::eventId)
                 .subjectMapper(__ -> "subject")
-                .timeMapper(domainEvent -> OffsetDateTime.ofInstant(domainEvent.getTimestamp().toInstant(), UTC))
+                .timeMapper(domainEvent -> OffsetDateTime.ofInstant(domainEvent.timestamp().toInstant(), UTC))
                 .typeGetter(Class::getSimpleName)
                 .build();
 
@@ -87,11 +87,11 @@ public class XStreamCloudEventConverterTest {
 
         // Then
         assertAll(
-                () -> assertThat(cloudEvent.getId()).isEqualTo(domainEvent.getEventId()),
+                () -> assertThat(cloudEvent.getId()).isEqualTo(domainEvent.eventId()),
                 () -> assertThat(cloudEvent.getType()).isEqualTo(NameDefined.class.getSimpleName()),
                 () -> assertThat(cloudEvent.getSource()).isEqualTo(CLOUD_EVENT_SOURCE),
                 () -> assertThat(cloudEvent.getSubject()).isEqualTo("subject"),
-                () -> assertThat(cloudEvent.getTime()).isEqualTo(OffsetDateTime.ofInstant(domainEvent.getTimestamp().toInstant(), UTC)),
+                () -> assertThat(cloudEvent.getTime()).isEqualTo(OffsetDateTime.ofInstant(domainEvent.timestamp().toInstant(), UTC)),
                 () -> assertThat(cloudEvent.getDataSchema()).isNull(),
                 () -> assertThat(cloudEvent.getDataContentType()).isEqualTo("application/xstream+xml"),
                 () -> assertThat(new String(cloudEvent.getData().toBytes(), UTF_16LE)).isEqualTo(xStream.toXML(domainEvent))
@@ -126,9 +126,9 @@ public class XStreamCloudEventConverterTest {
         assertThat(domainEvent).isExactlyInstanceOf(NameDefined.class);
         NameDefined nameDefined = (NameDefined) domainEvent;
         assertAll(
-                () -> assertThat(nameDefined.getName()).isEqualTo("name"),
-                () -> assertThat(nameDefined.getEventId()).isEqualTo("45a5925b-b1df-41f2-b51b-d5bf6d0fba88"),
-                () -> assertThat(nameDefined.getTimestamp()).isEqualTo(new Date(LocalDateTime.of(2021, 9, 24, 10, 39, 3, 556_000_000).atZone(UTC).toInstant().toEpochMilli()))
+                () -> assertThat(nameDefined.name()).isEqualTo("name"),
+                () -> assertThat(nameDefined.eventId()).isEqualTo("45a5925b-b1df-41f2-b51b-d5bf6d0fba88"),
+                () -> assertThat(nameDefined.timestamp()).isEqualTo(new Date(LocalDateTime.of(2021, 9, 24, 10, 39, 3, 556_000_000).atZone(UTC).toInstant().toEpochMilli()))
         );
     }
 }

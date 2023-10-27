@@ -238,7 +238,7 @@ public class NativeMongoSubscriptionModelTest {
             NameWasChanged nameWasChanged1 = new NameWasChanged(UUID.randomUUID().toString(), now.plusSeconds(3), "name3");
             NameWasChanged nameWasChanged2 = new NameWasChanged(UUID.randomUUID().toString(), now.plusSeconds(4), "name4");
 
-            subscriptionModel.subscribe(subscriberId, filter().id(Filters::eq, nameDefined2.getEventId()).type(Filters::eq, NameDefined.class.getName()), state::add
+            subscriptionModel.subscribe(subscriberId, filter().id(Filters::eq, nameDefined2.eventId()).type(Filters::eq, NameDefined.class.getName()), state::add
             ).waitUntilStarted();
 
             // When
@@ -249,7 +249,7 @@ public class NativeMongoSubscriptionModelTest {
 
             // Then
             await().atMost(FIVE_SECONDS).until(state::size, is(1));
-            assertThat(state).extracting(CloudEvent::getId, CloudEvent::getType).containsOnly(tuple(nameDefined2.getEventId(), NameDefined.class.getName()));
+            assertThat(state).extracting(CloudEvent::getId, CloudEvent::getType).containsOnly(tuple(nameDefined2.eventId(), NameDefined.class.getName()));
         }
 
         @Test
@@ -263,7 +263,7 @@ public class NativeMongoSubscriptionModelTest {
             NameWasChanged nameWasChanged1 = new NameWasChanged(UUID.randomUUID().toString(), now.plusSeconds(3), "name3");
             NameWasChanged nameWasChanged2 = new NameWasChanged(UUID.randomUUID().toString(), now.plusSeconds(4), "name4");
 
-            subscriptionModel.subscribe(subscriberId, filter(match(and(eq("fullDocument.id", nameDefined2.getEventId()), eq("fullDocument.type", NameDefined.class.getName())))), state::add).waitUntilStarted();
+            subscriptionModel.subscribe(subscriberId, filter(match(and(eq("fullDocument.id", nameDefined2.eventId()), eq("fullDocument.type", NameDefined.class.getName())))), state::add).waitUntilStarted();
 
             // When
             mongoEventStore.write("1", 0, serialize(nameDefined1));
@@ -273,7 +273,7 @@ public class NativeMongoSubscriptionModelTest {
 
             // Then
             await().atMost(FIVE_SECONDS).until(state::size, is(1));
-            assertThat(state).extracting(CloudEvent::getId, CloudEvent::getType).containsOnly(tuple(nameDefined2.getEventId(), NameDefined.class.getName()));
+            assertThat(state).extracting(CloudEvent::getId, CloudEvent::getType).containsOnly(tuple(nameDefined2.eventId(), NameDefined.class.getName()));
         }
     }
     
@@ -426,9 +426,9 @@ public class NativeMongoSubscriptionModelTest {
             mongoEventStore.write("1", 1, serialize(nameWasChanged1));
 
             await("subscription1 received all events").atMost(2, SECONDS).with().pollInterval(Duration.of(20, MILLIS)).untilAsserted(() ->
-                    assertThat(subscription1State).extracting(CloudEvent::getId).containsExactly(nameDefined2.getEventId(), nameWasChanged1.getEventId()));
+                    assertThat(subscription1State).extracting(CloudEvent::getId).containsExactly(nameDefined2.eventId(), nameWasChanged1.eventId()));
             await("subscription2 received all events").atMost(2, SECONDS).with().pollInterval(Duration.of(20, MILLIS)).untilAsserted(() ->
-                    assertThat(subscription2State).extracting(CloudEvent::getId).containsExactly(nameDefined1.getEventId(), nameDefined2.getEventId(), nameWasChanged1.getEventId()));
+                    assertThat(subscription2State).extracting(CloudEvent::getId).containsExactly(nameDefined1.eventId(), nameDefined2.eventId(), nameWasChanged1.eventId()));
         }
     }
 
@@ -507,7 +507,7 @@ public class NativeMongoSubscriptionModelTest {
 
             // Then
             await().atMost(FIVE_SECONDS).until(state::size, is(1));
-            assertThat(state).extracting(CloudEvent::getId).containsOnly(nameWasChanged1.getEventId());
+            assertThat(state).extracting(CloudEvent::getId).containsOnly(nameWasChanged1.eventId());
         }
 
         @Test
@@ -521,7 +521,7 @@ public class NativeMongoSubscriptionModelTest {
             NameWasChanged nameWasChanged1 = new NameWasChanged(UUID.randomUUID().toString(), now.plusSeconds(3), "name3");
             NameWasChanged nameWasChanged2 = new NameWasChanged(UUID.randomUUID().toString(), now.plusSeconds(4), "name4");
 
-            Filter filter = Filter.id(nameDefined2.getEventId()).and(type(NameDefined.class.getName()));
+            Filter filter = Filter.id(nameDefined2.eventId()).and(type(NameDefined.class.getName()));
             subscriptionModel.subscribe(subscriberId, OccurrentSubscriptionFilter.filter(filter), state::add).waitUntilStarted();
 
             // When
@@ -532,17 +532,17 @@ public class NativeMongoSubscriptionModelTest {
 
             // Then
             await().atMost(FIVE_SECONDS).until(state::size, is(1));
-            assertThat(state).extracting(CloudEvent::getId, CloudEvent::getType).containsOnly(tuple(nameDefined2.getEventId(), NameDefined.class.getName()));
+            assertThat(state).extracting(CloudEvent::getId, CloudEvent::getType).containsOnly(tuple(nameDefined2.eventId(), NameDefined.class.getName()));
         }
     }
 
     private Stream<CloudEvent> serialize(DomainEvent e) {
         return Stream.of(CloudEventBuilder.v1()
-                .withId(e.getEventId())
+                .withId(e.eventId())
                 .withSource(URI.create("http://name"))
                 .withType(e.getClass().getName())
-                .withTime(toLocalDateTime(e.getTimestamp()).atOffset(UTC))
-                .withSubject(e.getName())
+                .withTime(toLocalDateTime(e.timestamp()).atOffset(UTC))
+                .withSubject(e.name())
                 .withDataContentType("application/json")
                 .withData(unchecked(objectMapper::writeValueAsBytes).apply(e))
                 .build());

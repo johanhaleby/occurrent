@@ -17,54 +17,6 @@
 package org.occurrent.command;
 
 import java.time.LocalDateTime;
-import java.util.Objects;
-import java.util.StringJoiner;
 
-public class DefineName implements Command {
-
-    private final String id;
-    private final LocalDateTime time;
-    private final String name;
-
-
-    public DefineName(String id, LocalDateTime time, String name) {
-        this.id = id;
-        this.time = time;
-        this.name = name;
-    }
-
-    @Override
-    public String getId() {
-        return id;
-    }
-
-    public LocalDateTime getTime() {
-        return time;
-    }
-
-    public String getName() {
-        return name;
-    }
-
-    @Override
-    public boolean equals(Object o) {
-        if (this == o) return true;
-        if (!(o instanceof DefineName)) return false;
-        DefineName that = (DefineName) o;
-        return Objects.equals(id, that.id) && Objects.equals(time, that.time) && Objects.equals(name, that.name);
-    }
-
-    @Override
-    public int hashCode() {
-        return Objects.hash(id, time, name);
-    }
-
-    @Override
-    public String toString() {
-        return new StringJoiner(", ", DefineName.class.getSimpleName() + "[", "]")
-                .add("id='" + id + "'")
-                .add("time=" + time)
-                .add("name='" + name + "'")
-                .toString();
-    }
+public record DefineName(String id, LocalDateTime time, String name) implements NameCommand {
 }

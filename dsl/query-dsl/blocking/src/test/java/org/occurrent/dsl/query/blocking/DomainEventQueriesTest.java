@@ -53,7 +53,7 @@ public class DomainEventQueriesTest {
 
     @BeforeEach
     void createInstances() {
-        CloudEventConverter<DomainEvent> cloudEventConverter = new JacksonCloudEventConverter.Builder<DomainEvent>(new ObjectMapper(), URI.create("urn:test")).idMapper(DomainEvent::getEventId).build();
+        CloudEventConverter<DomainEvent> cloudEventConverter = new JacksonCloudEventConverter.Builder<DomainEvent>(new ObjectMapper(), URI.create("urn:test")).idMapper(DomainEvent::eventId).build();
         InMemoryEventStore eventStore = new InMemoryEventStore();
         applicationService = new GenericApplicationService<>(eventStore, cloudEventConverter);
         domainEventQueries = new DomainEventQueries<>(eventStore, cloudEventConverter);
@@ -207,7 +207,7 @@ public class DomainEventQueriesTest {
         // Then
         assertAll(
                 () -> assertThat(events).hasSize(3),
-                () -> assertThat(events).extracting(DomainEvent::getEventId).containsOnly("eventId1", "eventId2", "eventId3")
+                () -> assertThat(events).extracting(DomainEvent::eventId).containsOnly("eventId1", "eventId2", "eventId3")
         );
     }
 
@@ -230,7 +230,7 @@ public class DomainEventQueriesTest {
         // Then
         assertAll(
                 () -> assertThat(events).hasSize(3),
-                () -> assertThat(events).extracting(DomainEvent::getEventId).containsOnly("eventId1", "eventId2", "eventId3")
+                () -> assertThat(events).extracting(DomainEvent::eventId).containsOnly("eventId1", "eventId2", "eventId3")
         );
     }
 

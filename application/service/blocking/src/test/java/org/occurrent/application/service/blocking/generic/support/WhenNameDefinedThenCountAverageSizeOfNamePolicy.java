@@ -27,7 +27,7 @@ public class WhenNameDefinedThenCountAverageSizeOfNamePolicy {
     AtomicReference<State> averageSizeOfName = new AtomicReference<>(new State());
 
     public void whenNameDefinedThenCountAverageSizeOfName(NameDefined nameDefined) {
-        averageSizeOfName.getAndUpdate(state -> state.addName(nameDefined.getName().length()));
+        averageSizeOfName.getAndUpdate(state -> state.addName(nameDefined.name().length()));
     }
 
     public int getAverageSizeOfName() {

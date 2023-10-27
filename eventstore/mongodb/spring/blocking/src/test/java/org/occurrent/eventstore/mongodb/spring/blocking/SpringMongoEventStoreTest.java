@@ -557,7 +557,7 @@ public class SpringMongoEventStoreTest {
             persist("name", Stream.of(nameDefined, nameWasChanged1));
 
             // When
-            eventStore.deleteEvent(nameWasChanged1.getEventId(), NAME_SOURCE);
+            eventStore.deleteEvent(nameWasChanged1.eventId(), NAME_SOURCE);
 
             // Then
             EventStream<CloudEvent> eventStream = eventStore.read("name");
@@ -639,7 +639,7 @@ public class SpringMongoEventStoreTest {
             // When
             eventStore.updateEvent(eventId2, NAME_SOURCE, cloudEvent -> {
                 NameWasChanged e = deserialize(cloudEvent);
-                NameWasChanged correctedName = new NameWasChanged(e.getEventId(), e.getTimestamp(), "name3");
+                NameWasChanged correctedName = new NameWasChanged(e.eventId(), e.timestamp(), "name3");
                 return CloudEventBuilder.v1(cloudEvent).withData(serializeEvent(correctedName)).build();
             });
 
@@ -661,7 +661,7 @@ public class SpringMongoEventStoreTest {
             // When
             Optional<NameWasChanged> updatedCloudEvent = eventStore.updateEvent(eventId2, NAME_SOURCE, cloudEvent -> {
                 NameWasChanged e = deserialize(cloudEvent);
-                NameWasChanged correctedName = new NameWasChanged(e.getEventId(), e.getTimestamp(), "name3");
+                NameWasChanged correctedName = new NameWasChanged(e.eventId(), e.timestamp(), "name3");
                 return CloudEventBuilder.v1(cloudEvent).withData(serializeEvent(correctedName)).build();
             }).map(SpringMongoEventStoreTest.this::deserialize);
 
@@ -680,7 +680,7 @@ public class SpringMongoEventStoreTest {
             // When
             Optional<CloudEvent> updatedCloudEvent = eventStore.updateEvent(UUID.randomUUID().toString(), NAME_SOURCE, cloudEvent -> {
                 NameWasChanged e = deserialize(cloudEvent);
-                NameWasChanged correctedName = new NameWasChanged(e.getEventId(), e.getTimestamp(), "name3");
+                NameWasChanged correctedName = new NameWasChanged(e.eventId(), e.timestamp(), "name3");
                 return CloudEventBuilder.v1(cloudEvent).withData(serializeEvent(correctedName)).build();
             });
             // Then
@@ -791,7 +791,7 @@ public class SpringMongoEventStoreTest {
                     EventStream<CloudEvent> eventStream = eventStore.read("name");
                     assertThat(deserialize(eventStream.events()))
                             .extracting(it -> (NameWasChanged) it)
-                            .extracting(NameWasChanged::getName)
+                            .extracting(NameWasChanged::name)
                             .contains("Ikk Doe", "Ikkster Doe");
                 });
                 assertThat(exception.get()).isNull();
@@ -1811,10 +1811,10 @@ public class SpringMongoEventStoreTest {
 
     private CloudEvent convertDomainEventCloudEvent(DomainEvent domainEvent) {
         return CloudEventBuilder.v1()
-                .withId(domainEvent.getEventId())
+                .withId(domainEvent.eventId())
                 .withSource(NAME_SOURCE)
                 .withType(domainEvent.getClass().getSimpleName())
-                .withTime(TimeConversion.toLocalDateTime(domainEvent.getTimestamp()).atOffset(UTC))
+                .withTime(TimeConversion.toLocalDateTime(domainEvent.timestamp()).atOffset(UTC))
                 .withSubject(domainEvent.getClass().getSimpleName().substring(4)) // Defined or WasChanged
                 .withDataContentType("application/json")
                 .withData(serializeEvent(domainEvent))
@@ -1825,9 +1825,9 @@ public class SpringMongoEventStoreTest {
         try {
             return objectMapper.writeValueAsBytes(new HashMap<String, Object>() {{
                 put("type", e.getClass().getSimpleName());
-                put("eventId", e.getEventId());
-                put("name", e.getName());
-                put("time", e.getTimestamp().getTime());
+                put("eventId", e.eventId());
+                put("name", e.name());
+                put("time", e.timestamp().getTime());
             }});
         } catch (JsonProcessingException jsonProcessingException) {
             throw new RuntimeException(jsonProcessingException);

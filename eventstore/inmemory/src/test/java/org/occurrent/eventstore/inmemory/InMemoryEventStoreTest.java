@@ -1045,7 +1045,7 @@ public class InMemoryEventStoreTest {
             unconditionallyPersist(inMemoryEventStore, "name2", nameWasChanged2);
 
             // Then
-            Stream<CloudEvent> events = inMemoryEventStore.query(subject(nameWasChanged1.getName()));
+            Stream<CloudEvent> events = inMemoryEventStore.query(subject(nameWasChanged1.name()));
             assertThat(events.map(deserialize(objectMapper))).containsExactly(nameWasChanged1);
         }
 
@@ -1486,11 +1486,11 @@ public class InMemoryEventStoreTest {
 
     private static Function<DomainEvent, CloudEvent> convertDomainEventToCloudEvent(ObjectMapper objectMapper) {
         return e -> CloudEventBuilder.v1()
-                .withId(e.getEventId())
+                .withId(e.eventId())
                 .withSource(NAME_SOURCE)
                 .withType(e.getClass().getName())
-                .withTime(toLocalDateTime(e.getTimestamp()).atOffset(UTC))
-                .withSubject(e.getName())
+                .withTime(toLocalDateTime(e.timestamp()).atOffset(UTC))
+                .withSubject(e.name())
                 .withData(unchecked(objectMapper::writeValueAsBytes).apply(e))
                 .build();
     }

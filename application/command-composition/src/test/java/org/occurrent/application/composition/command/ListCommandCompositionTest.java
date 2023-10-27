@@ -57,7 +57,7 @@ public class ListCommandCompositionTest {
         // Then
         List<DomainEvent> domainEvents = eventStore.read("name1").events().map(applicationService::convertCloudEventToDomainEvent).collect(Collectors.toList());
         assertThat(domainEvents.stream().map(event -> event.getClass().getSimpleName())).containsExactly(NameDefined.class.getSimpleName(), NameWasChanged.class.getSimpleName());
-        assertThat(domainEvents.stream().map(DomainEvent::getName)).containsExactly("My name", "My name 2");
+        assertThat(domainEvents.stream().map(DomainEvent::name)).containsExactly("My name", "My name 2");
     }
 
     @Test
@@ -71,7 +71,7 @@ public class ListCommandCompositionTest {
         // Then
         List<DomainEvent> domainEvents = composedCommand.apply(Arrays.asList(new NameDefined("eventId3", new Date(), "name3"), new NameDefined("eventId4", new Date(), "name4")));
         assertThat(domainEvents).hasSize(2);
-        assertThat(domainEvents).extracting(DomainEvent::getEventId).containsExactly("eventId1", "eventId2");
+        assertThat(domainEvents).extracting(DomainEvent::eventId).containsExactly("eventId1", "eventId2");
     }
 
     @Test
@@ -97,6 +97,6 @@ public class ListCommandCompositionTest {
         // Then
         List<DomainEvent> domainEvents = composedCommand.apply(Arrays.asList(new NameDefined("eventId3", new Date(), "name3"), new NameDefined("eventId4", new Date(), "name4")));
         assertThat(domainEvents).hasSize(2);
-        assertThat(domainEvents).extracting(DomainEvent::getEventId).containsExactly("eventId1", "eventId2");
+        assertThat(domainEvents).extracting(DomainEvent::eventId).containsExactly("eventId1", "eventId2");
     }
 }

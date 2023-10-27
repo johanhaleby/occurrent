@@ -57,11 +57,11 @@ public class DomainEventStore {
     private Stream<CloudEvent> serialize(List<DomainEvent> events) {
         return events.stream()
                 .map(e -> CloudEventBuilder.v1()
-                        .withId(e.getEventId())
+                        .withId(e.eventId())
                         .withSource(URI.create("http://name"))
                         .withType(e.getClass().getName())
-                        .withTime(toLocalDateTime(e.getTimestamp()).atOffset(UTC))
-                        .withSubject(e.getName())
+                        .withTime(toLocalDateTime(e.timestamp()).atOffset(UTC))
+                        .withSubject(e.name())
                         .withDataContentType("application/json")
                         .withData(unchecked(objectMapper::writeValueAsBytes).apply(e))
                         .build());

@@ -25,8 +25,8 @@ import org.junit.jupiter.api.Test
 import org.occurrent.application.converter.generic.GenericCloudEventConverter
 import org.occurrent.application.service.blocking.generic.GenericApplicationService
 import org.occurrent.command.ChangeName
-import org.occurrent.command.Command
 import org.occurrent.command.DefineName
+import org.occurrent.command.NameCommand
 import org.occurrent.domain.*
 import org.occurrent.eventstore.inmemory.InMemoryEventStore
 import org.occurrent.subscription.inmemory.InMemorySubscriptionModel
@@ -53,17 +53,17 @@ class ModuleConfigurationTest {
         val allEvents = CopyOnWriteArrayList<DomainEvent>()
 
         // Module Configuration
-        val module = module<Command, DomainEvent>(cloudEventConverter) {
+        val module = module<NameCommand, DomainEvent>(cloudEventConverter) {
             commands(dispatchTo(applicationService)) {
-                command(DefineName::getId, Name::defineNameFromCommand)
-                command(ChangeName::getId, Name::changeNameFromCommand)
+                command(DefineName::id, Name::defineNameFromCommand)
+                command(ChangeName::id, Name::changeNameFromCommand)
             }
             subscriptions(subscriptionModel) {
                 subscribe<NameDefined> { e ->
-                    log.info("Hello ${e.name}")
+                    log.info("Hello ${e.name()}")
                 }
                 subscribe<NameWasChanged> { e ->
-                    log.info("Changed name to ${e.name}")
+                    log.info("Changed name to ${e.name()}")
                 }
                 subscribe("everything") { e ->
                     allEvents.add(e)
@@ -84,6 +84,6 @@ class ModuleConfigurationTest {
         await withPollInterval Duration.of(10, MILLIS) untilAsserted {
             assertThat(allEvents).hasSize(20)
         }
-        assertThat(allEvents.map { e -> e.name.substringAfter(":").toInt() }).isSubsetOf(0 until 10)
+        assertThat(allEvents.map { e -> e.name().substringAfter(":").toInt() }).isSubsetOf(0 until 10)
     }
 }

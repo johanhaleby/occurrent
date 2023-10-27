@@ -67,10 +67,10 @@ class ApplicationService {
 
     private CloudEvent convertDomainEventCloudEvent(DomainEvent domainEvent) {
         return CloudEventBuilder.v1()
-                .withId(domainEvent.getEventId())
+                .withId(domainEvent.eventId())
                 .withSource(NAME_SOURCE)
                 .withType(domainEvent.getClass().getSimpleName())
-                .withTime(TimeConversion.toLocalDateTime(domainEvent.getTimestamp()).atOffset(UTC))
+                .withTime(TimeConversion.toLocalDateTime(domainEvent.timestamp()).atOffset(UTC))
                 .withSubject(domainEvent.getClass().getSimpleName().substring(4)) // Defined or WasChanged
                 .withDataContentType("application/json")
                 .withData(serializeEvent(domainEvent))
@@ -81,9 +81,9 @@ class ApplicationService {
         try {
             return objectMapper.writeValueAsBytes(new HashMap<String, Object>() {{
                 put("type", e.getClass().getSimpleName());
-                put("eventId", e.getEventId());
-                put("name", e.getName());
-                put("time", e.getTimestamp().getTime());
+                put("eventId", e.eventId());
+                put("name", e.name());
+                put("time", e.timestamp().getTime());
             }});
         } catch (JsonProcessingException jsonProcessingException) {
             throw new RuntimeException(jsonProcessingException);

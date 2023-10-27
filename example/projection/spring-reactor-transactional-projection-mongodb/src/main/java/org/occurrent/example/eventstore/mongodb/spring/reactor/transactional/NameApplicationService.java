@@ -68,8 +68,8 @@ public class NameApplicationService {
     private CurrentName buildProjectionFromEvents(UUID id, List<DomainEvent> domainEvents) {
         return io.vavr.collection.List.ofAll(domainEvents).foldLeft(new CurrentName(id.toString()), (currentName, domainEvent) ->
                 Match(domainEvent).of(
-                        API.Case(API.$(instanceOf(NameDefined.class)), e -> currentName.changeName(e.getName())),
-                        API.Case(API.$(instanceOf(NameWasChanged.class)), e -> currentName.changeName(e.getName()))
+                        API.Case(API.$(instanceOf(NameDefined.class)), e -> currentName.changeName(e.name())),
+                        API.Case(API.$(instanceOf(NameWasChanged.class)), e -> currentName.changeName(e.name()))
                 )
         );
     }

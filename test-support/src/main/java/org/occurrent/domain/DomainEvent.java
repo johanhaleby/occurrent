@@ -18,10 +18,10 @@ package org.occurrent.domain;
 
 import java.util.Date;
 
-public interface DomainEvent {
-    String getEventId();
+public sealed interface DomainEvent permits NameDefined, NameWasChanged {
+    String eventId();
 
-    Date getTimestamp();
+    Date timestamp();
 
-    String getName();
+    String name();
 }

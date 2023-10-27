@@ -58,7 +58,7 @@ class SequenceCommandCompositionTest {
             NameDefined::class.java.simpleName,
             NameWasChanged::class.java.simpleName
         )
-        assertThat(domainEvents.map { event -> event.name }).containsExactly("My Name 1", "My Name 2")
+        assertThat(domainEvents.map { event -> event.name() }).containsExactly("My Name 1", "My Name 2")
     }
 
     @Test
@@ -87,7 +87,7 @@ class SequenceCommandCompositionTest {
             NameWasChanged::class.java.simpleName,
             NameWasChanged::class.java.simpleName
         )
-        assertThat(domainEvents.map { event -> event.name }).containsExactly("My Name 1", "My Name 2", "My Name 3")
+        assertThat(domainEvents.map { event -> event.name() }).containsExactly("My Name 1", "My Name 2", "My Name 3")
     }
 
     @Test
@@ -125,7 +125,7 @@ class SequenceCommandCompositionTest {
             NameWasChanged::class.java.simpleName,
             NameWasChanged::class.java.simpleName
         )
-        assertThat(domainEvents.map { event -> event.name }).containsExactly(
+        assertThat(domainEvents.map { event -> event.name() }).containsExactly(
             "My Name 1",
             "My Name 2",
             "My Name 3",
@@ -149,7 +149,7 @@ class SequenceCommandCompositionTest {
         val currentEvents = NameWithSequenceCommand.defineName(emptySequence(), eventId1, now, "My Name 1")
         val newEvents = events(currentEvents).toList()
         assertThat(newEvents.size).isEqualTo(3)
-        assertThat(newEvents.map { event -> event.name }).containsExactly(
+        assertThat(newEvents.map { event -> event.name() }).containsExactly(
             "My Name 2",
             "My Name 3",
             "My Name 4"

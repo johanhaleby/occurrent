@@ -30,7 +30,7 @@ import java.util.function.Predicate;
 public class Name {
 
     public static List<DomainEvent> defineNameFromCommand(List<DomainEvent> events, DefineName defineName) {
-        return defineName(events, UUID.randomUUID().toString(), defineName.getTime(), defineName.getName());
+        return defineName(events, UUID.randomUUID().toString(), defineName.time(), defineName.name());
     }
 
     public static List<DomainEvent> defineName(List<DomainEvent> events, String eventId, LocalDateTime time, String name) {
@@ -45,7 +45,16 @@ public class Name {
     }
 
     public static List<DomainEvent> changeNameFromCommand(List<DomainEvent> events, ChangeName changeName) {
-        return changeName(events, UUID.randomUUID().toString(), changeName.getTime(), changeName.getNewName());
+        return changeName(events, UUID.randomUUID().toString(), changeName.time(), changeName.newName());
+    }
+
+    public static List<DomainEvent> changeNameFromCurrent(String eventId, LocalDateTime time, String currentName, String newName) {
+        if (Objects.equals(currentName, "John Doe")) {
+            throw new IllegalArgumentException("Cannot change name from John Doe since this is the ultimate name");
+        } else if (currentName.isEmpty()) {
+            throw new IllegalArgumentException("Cannot change name this it is currently undefined");
+        }
+        return Collections.singletonList(new NameWasChanged(eventId, TimeConversion.toDate(time), newName));
     }
 
     public static List<DomainEvent> changeName(List<DomainEvent> events, String eventId, LocalDateTime time, String newName) {
@@ -54,13 +63,9 @@ public class Name {
 
         String currentName = events.stream()
                 .filter(isInstanceOfNameDefined.or(isInstanceOfNameWasChanged))
-                .reduce("", (__, e) -> e instanceof NameDefined ? e.getName() : e.getName(), (name1, name2) -> name2);
+                .reduce("", (__, e) -> e.name(), (name1, name2) -> name2);
 
-        if (Objects.equals(currentName, "John Doe")) {
-            throw new IllegalArgumentException("Cannot change name from John Doe since this is the ultimate name");
-        } else if (currentName.isEmpty()) {
-            throw new IllegalArgumentException("Cannot change name this it is currently undefined");
-        }
-        return Collections.singletonList(new NameWasChanged(eventId, TimeConversion.toDate(time), newName));
+        return changeNameFromCurrent(eventId, time, currentName, newName);
     }
+
 }

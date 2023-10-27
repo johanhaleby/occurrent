@@ -337,9 +337,9 @@ class MongoEventStoreTest {
         assertThat(throwable).isExactlyInstanceOf(DuplicateCloudEventException.class).hasCauseExactlyInstanceOf(MongoBulkWriteException.class);
         DuplicateCloudEventException duplicateCloudEventException = (DuplicateCloudEventException) throwable;
         assertAll(
-                () -> assertThat(duplicateCloudEventException.getId()).isEqualTo(nameWasChanged1.getEventId()),
+                () -> assertThat(duplicateCloudEventException.getId()).isEqualTo(nameWasChanged1.eventId()),
                 () -> assertThat(duplicateCloudEventException.getSource()).isEqualTo(NAME_SOURCE),
-                () -> assertThat(duplicateCloudEventException.getDetails()).endsWith("Write errors: [BulkWriteError{index=1, code=11000, message='E11000 duplicate key error collection: test.events index: id_1_source_1 dup key: { id: \"" + nameWasChanged1.getEventId() + "\", source: \"http://name\" }', details={}}]."),
+                () -> assertThat(duplicateCloudEventException.getDetails()).endsWith("Write errors: [BulkWriteError{index=1, code=11000, message='E11000 duplicate key error collection: test.events index: id_1_source_1 dup key: { id: \"" + nameWasChanged1.eventId() + "\", source: \"http://name\" }', details={}}]."),
                 () -> assertThat(throwable).hasMessageNotContaining("unknown"),
                 () -> assertThat(eventStream.version()).isEqualTo(2),
                 () -> assertThat(readEvents).containsExactly(nameDefined, nameWasChanged1)
@@ -495,7 +495,7 @@ class MongoEventStoreTest {
             persist("name", Stream.of(nameDefined, nameWasChanged1));
 
             // When
-            eventStore.deleteEvent(nameWasChanged1.getEventId(), NAME_SOURCE);
+            eventStore.deleteEvent(nameWasChanged1.eventId(), NAME_SOURCE);
 
             // Then
             EventStream<CloudEvent> eventStream = eventStore.read("name");
@@ -685,7 +685,7 @@ class MongoEventStoreTest {
             // When
             eventStore.updateEvent(eventId2, NAME_SOURCE, cloudEvent -> {
                 NameWasChanged e = deserialize(cloudEvent);
-                NameWasChanged correctedName = new NameWasChanged(e.getEventId(), e.getTimestamp(), "name3");
+                NameWasChanged correctedName = new NameWasChanged(e.eventId(), e.timestamp(), "name3");
                 return CloudEventBuilder.v1(cloudEvent).withData(serializeEvent(correctedName)).build();
             });
 
@@ -707,7 +707,7 @@ class MongoEventStoreTest {
             // When
             Optional<NameWasChanged> updatedCloudEvent = eventStore.updateEvent(eventId2, NAME_SOURCE, cloudEvent -> {
                 NameWasChanged e = deserialize(cloudEvent);
-                NameWasChanged correctedName = new NameWasChanged(e.getEventId(), e.getTimestamp(), "name3");
+                NameWasChanged correctedName = new NameWasChanged(e.eventId(), e.timestamp(), "name3");
                 return CloudEventBuilder.v1(cloudEvent).withData(serializeEvent(correctedName)).build();
             }).map(MongoEventStoreTest.this::deserialize);
             // Then
@@ -725,7 +725,7 @@ class MongoEventStoreTest {
             // When
             Optional<CloudEvent> updatedCloudEvent = eventStore.updateEvent(UUID.randomUUID().toString(), NAME_SOURCE, cloudEvent -> {
                 NameWasChanged e = deserialize(cloudEvent);
-                NameWasChanged correctedName = new NameWasChanged(e.getEventId(), e.getTimestamp(), "name3");
+                NameWasChanged correctedName = new NameWasChanged(e.eventId(), e.timestamp(), "name3");
                 return CloudEventBuilder.v1(cloudEvent).withData(serializeEvent(correctedName)).build();
             });
             // Then
@@ -1787,10 +1787,10 @@ class MongoEventStoreTest {
 
     private Function<DomainEvent, CloudEvent> convertDomainEventToCloudEvent() {
         return e -> CloudEventBuilder.v1()
-                .withId(e.getEventId())
+                .withId(e.eventId())
                 .withSource(NAME_SOURCE)
                 .withType(e.getClass().getSimpleName())
-                .withTime(toLocalDateTime(e.getTimestamp()).atOffset(UTC))
+                .withTime(toLocalDateTime(e.timestamp()).atOffset(UTC))
                 .withSubject(e.getClass().getSimpleName().substring(4)) // Defined or WasChanged
                 .withDataContentType("application/json")
                 .withData(serializeEvent(e))
@@ -1801,9 +1801,9 @@ class MongoEventStoreTest {
         try {
             return objectMapper.writeValueAsBytes(new HashMap<String, Object>() {{
                 put("type", e.getClass().getSimpleName());
-                put("eventId", e.getEventId());
-                put("name", e.getName());
-                put("time", e.getTimestamp().getTime());
+                put("eventId", e.eventId());
+                put("name", e.name());
+                put("time", e.timestamp().getTime());
             }});
         } catch (JsonProcessingException jsonProcessingException) {
             throw new RuntimeException(jsonProcessingException);

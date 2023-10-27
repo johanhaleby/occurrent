@@ -586,7 +586,7 @@ public class ReactorMongoEventStoreTest {
             persist("name", Flux.just(nameDefined, nameWasChanged1)).block();
 
             // When
-            eventStore.deleteEvent(nameWasChanged1.getEventId(), NAME_SOURCE).block();
+            eventStore.deleteEvent(nameWasChanged1.eventId(), NAME_SOURCE).block();
 
             // Then
             VersionAndEvents versionAndEvents = deserialize(eventStore.read("name"));
@@ -668,7 +668,7 @@ public class ReactorMongoEventStoreTest {
             // When
             eventStore.updateEvent(eventId2, NAME_SOURCE, cloudEvent -> {
                 NameWasChanged e = deserialize(cloudEvent);
-                NameWasChanged correctedName = new NameWasChanged(e.getEventId(), e.getTimestamp(), "name3");
+                NameWasChanged correctedName = new NameWasChanged(e.eventId(), e.timestamp(), "name3");
                 return CloudEventBuilder.v1(cloudEvent).withData(serializeEvent(correctedName)).build();
             }).block();
 
@@ -690,7 +690,7 @@ public class ReactorMongoEventStoreTest {
             // When
             DomainEvent updatedCloudEvent = eventStore.updateEvent(eventId2, NAME_SOURCE, cloudEvent -> {
                 NameWasChanged e = deserialize(cloudEvent);
-                NameWasChanged correctedName = new NameWasChanged(e.getEventId(), e.getTimestamp(), "name3");
+                NameWasChanged correctedName = new NameWasChanged(e.eventId(), e.timestamp(), "name3");
                 return CloudEventBuilder.v1(cloudEvent).withData(serializeEvent(correctedName)).build();
             }).map(deserialize()).block();
 
@@ -709,7 +709,7 @@ public class ReactorMongoEventStoreTest {
             // When
             CloudEvent updatedCloudEvent = eventStore.updateEvent(UUID.randomUUID().toString(), NAME_SOURCE, cloudEvent -> {
                 NameWasChanged e = deserialize(cloudEvent);
-                NameWasChanged correctedName = new NameWasChanged(e.getEventId(), e.getTimestamp(), "name3");
+                NameWasChanged correctedName = new NameWasChanged(e.eventId(), e.timestamp(), "name3");
                 return CloudEventBuilder.v1(cloudEvent).withData(serializeEvent(correctedName)).build();
             }).block();
             // Then
@@ -1823,10 +1823,10 @@ public class ReactorMongoEventStoreTest {
 
     private CloudEvent convertDomainEventCloudEvent(DomainEvent domainEvent) {
         return CloudEventBuilder.v1()
-                .withId(domainEvent.getEventId())
+                .withId(domainEvent.eventId())
                 .withSource(NAME_SOURCE)
                 .withType(domainEvent.getClass().getName())
-                .withTime(TimeConversion.toLocalDateTime(domainEvent.getTimestamp()).atOffset(UTC))
+                .withTime(TimeConversion.toLocalDateTime(domainEvent.timestamp()).atOffset(UTC))
                 .withSubject(domainEvent.getClass().getSimpleName().substring(4)) // Defined or WasChanged
                 .withDataContentType("application/json")
                 .withData(serializeEvent(domainEvent))

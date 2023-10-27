@@ -73,9 +73,9 @@ public class JacksonCloudEventConverterTest {
         ObjectMapper objectMapper = new ObjectMapper();
         JacksonCloudEventConverter<DomainEvent> cloudEventConverter = new JacksonCloudEventConverter.Builder<DomainEvent>(objectMapper, CLOUD_EVENT_SOURCE)
                 .contentType("application/xstream+xml")
-                .idMapper(DomainEvent::getEventId)
+                .idMapper(DomainEvent::eventId)
                 .subjectMapper(__ -> "subject")
-                .timeMapper(domainEvent -> OffsetDateTime.ofInstant(domainEvent.getTimestamp().toInstant(), UTC))
+                .timeMapper(domainEvent -> OffsetDateTime.ofInstant(domainEvent.timestamp().toInstant(), UTC))
                 .typeMapper(ReflectionCloudEventTypeMapper.qualified())
                 .build();
 
@@ -86,11 +86,11 @@ public class JacksonCloudEventConverterTest {
 
         // Then
         assertAll(
-                () -> assertThat(cloudEvent.getId()).isEqualTo(domainEvent.getEventId()),
+                () -> assertThat(cloudEvent.getId()).isEqualTo(domainEvent.eventId()),
                 () -> assertThat(cloudEvent.getType()).isEqualTo(NameDefined.class.getName()),
                 () -> assertThat(cloudEvent.getSource()).isEqualTo(CLOUD_EVENT_SOURCE),
                 () -> assertThat(cloudEvent.getSubject()).isEqualTo("subject"),
-                () -> assertThat(cloudEvent.getTime()).isEqualTo(OffsetDateTime.ofInstant(domainEvent.getTimestamp().toInstant(), UTC)),
+                () -> assertThat(cloudEvent.getTime()).isEqualTo(OffsetDateTime.ofInstant(domainEvent.timestamp().toInstant(), UTC)),
                 () -> assertThat(cloudEvent.getDataSchema()).isNull(),
                 () -> assertThat(cloudEvent.getDataContentType()).isEqualTo("application/xstream+xml"),
                 () -> assertThat(new String(cloudEvent.getData().toBytes(), UTF_8)).isEqualTo(objectMapper.writeValueAsString(domainEvent))
@@ -120,9 +120,9 @@ public class JacksonCloudEventConverterTest {
         assertThat(domainEvent).isExactlyInstanceOf(NameDefined.class);
         NameDefined nameDefined = (NameDefined) domainEvent;
         assertAll(
-                () -> assertThat(nameDefined.getName()).isEqualTo("name"),
-                () -> assertThat(nameDefined.getEventId()).isEqualTo("6ec13db8-b216-41cc-9e61-d4553cfc5476"),
-                () -> assertThat(nameDefined.getTimestamp()).isEqualTo(new Date(LocalDateTime.of(2021, 9, 24, 11, 21, 31, 299_000_000).atZone(UTC).toInstant().toEpochMilli()))
+                () -> assertThat(nameDefined.name()).isEqualTo("name"),
+                () -> assertThat(nameDefined.eventId()).isEqualTo("6ec13db8-b216-41cc-9e61-d4553cfc5476"),
+                () -> assertThat(nameDefined.timestamp()).isEqualTo(new Date(LocalDateTime.of(2021, 9, 24, 11, 21, 31, 299_000_000).atZone(UTC).toInstant().toEpochMilli()))
         );
     }
 }

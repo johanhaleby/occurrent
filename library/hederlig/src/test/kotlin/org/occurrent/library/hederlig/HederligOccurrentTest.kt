@@ -26,8 +26,8 @@ import org.occurrent.application.converter.CloudEventConverter
 import org.occurrent.application.converter.jackson.JacksonCloudEventConverter
 import org.occurrent.application.service.blocking.generic.GenericApplicationService
 import org.occurrent.command.ChangeName
-import org.occurrent.command.Command
 import org.occurrent.command.DefineName
+import org.occurrent.command.NameCommand
 import org.occurrent.domain.DomainEvent
 import org.occurrent.domain.Name
 import org.occurrent.domain.NameDefined
@@ -63,38 +63,38 @@ class HederligOccurrentTest {
         val applicationService = GenericApplicationService(eventStore, cloudEventConverter)
         val subscriptions = Subscriptions(subscriptionModel, cloudEventConverter)
         val queries = DomainEventQueries(eventStore, cloudEventConverter)
-        val initializer = OccurrentHederligModuleInitializer<Command, DomainEvent, DomainQuery<out Any>>(applicationService, subscriptions, queries)
+        val initializer = OccurrentHederligModuleInitializer<NameCommand, DomainEvent, DomainQuery<out Any>>(applicationService, subscriptions, queries)
 
-        val module = module<Command, DomainEvent, DomainQuery<out Any>> {
+        val module = module<NameCommand, DomainEvent, DomainQuery<out Any>> {
             feature("manage name") {
                 commands {
-                    command(DefineName::getId, Name::defineNameFromCommand)
-                    command(ChangeName::getId, Name::changeNameFromCommand)
+                    command(DefineName::id, Name::defineNameFromCommand)
+                    command(ChangeName::id, Name::changeNameFromCommand)
                 }
                 // Alternative 1
-                commands(Command::getId) {
+                commands(NameCommand::id) {
                     command(Name::defineNameFromCommand)
                     command(Name::changeNameFromCommand)
                 }
 
                 // Alternative 2 - When domain model doesn't use commands!
                 commands {
-                    command(DefineName::getId) { e, cmd ->
-                        Name.defineName(e, cmd.id, cmd.time, cmd.name)
+                    command(DefineName::id) { e, cmd ->
+                        Name.defineName(e, cmd.id(), cmd.time(), cmd.name())
                     }
-                    command<ChangeName>({ changeName -> changeName.id }) { e, cmd ->
-                        Name.defineName(e, cmd.id, cmd.time, cmd.newName)
+                    command<ChangeName>({ changeName -> changeName.id() }) { e, cmd ->
+                        Name.defineName(e, cmd.id(), cmd.time(), cmd.newName())
                     }
                 }
 
                 subscriptions {
                     on<NameDefined> { event ->
-                        println("Name defined: ${event.name}")
+                        println("Name defined: ${event.name()}")
                     }
                     on<NameWasChanged> { event, ctx ->
-                        when (event.name) {
+                        when (event.name()) {
                             "John Doe" -> ctx.publish(ChangeName(UUID.randomUUID().toString(), LocalDateTime.now(), "Forbidden Name"))
-                            "Jane Doe" -> ctx.publish(ChangeName(UUID.randomUUID().toString(), LocalDateTime.now(), "Mrs ${event.name}"), Delay.ofMinutes(10))
+                            "Jane Doe" -> ctx.publish(ChangeName(UUID.randomUUID().toString(), LocalDateTime.now(), "Mrs ${event.name()}"), Delay.ofMinutes(10))
                             "Ikk Doe" -> ctx.publish(ChangeName(UUID.randomUUID().toString(), LocalDateTime.now(), "Hohoho"), Delay.until(ZonedDateTime.of(Year.now().value, 12, 25, 15, 0, 0, 0, UTC)))
                             "Baby Doe" -> println("Baby detected!")
                         }
@@ -102,10 +102,10 @@ class HederligOccurrentTest {
                 }
                 queries {
                     query<AllNames> { ctx ->
-                        ctx.queryForSequence<NameDefined>().map { e -> e.name }
+                        ctx.queryForSequence<NameDefined>().map { e -> e.name() }
                     }
                     query<PersonNamed> { (name), ctx ->
-                        ctx.queryForSequence<NameDefined>().filter { e -> e.name == name }
+                        ctx.queryForSequence<NameDefined>().filter { e -> e.name() == name }
                     }
                 }
             }

@@ -128,8 +128,8 @@ public class ReactorSubscriptionPositionStorageTest {
                 .withId(UUID.randomUUID().toString())
                 .withSource(URI.create("http://name"))
                 .withType(e.getClass().getSimpleName())
-                .withTime(toLocalDateTime(e.getTimestamp()).atOffset(UTC))
-                .withSubject(e.getName())
+                .withTime(toLocalDateTime(e.timestamp()).atOffset(UTC))
+                .withSubject(e.name())
                 .withDataContentType("application/json")
                 .withData(unchecked(objectMapper::writeValueAsBytes).apply(e))
                 .build());

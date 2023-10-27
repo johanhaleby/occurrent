@@ -27,8 +27,8 @@ import org.occurrent.application.converter.generic.GenericCloudEventConverter
 import org.occurrent.application.service.blocking.execute
 import org.occurrent.application.service.blocking.generic.GenericApplicationService
 import org.occurrent.command.ChangeName
-import org.occurrent.command.Command
 import org.occurrent.command.DefineName
+import org.occurrent.command.NameCommand
 import org.occurrent.domain.*
 import org.occurrent.eventstore.inmemory.InMemoryEventStore
 import org.occurrent.subscription.inmemory.InMemorySubscriptionModel
@@ -54,21 +54,22 @@ class MultipleCommandDispatchersTest {
         val allEvents = CopyOnWriteArrayList<DomainEvent>()
 
         // Module Configuration
-        val module = module<Command, DomainEvent>(cloudEventConverter) {
+        val module = module<NameCommand, DomainEvent>(cloudEventConverter) {
             commands(dispatchTo(applicationService)) {
-                command(DefineName::getId, Name::defineNameFromCommand)
+                command(DefineName::id, Name::defineNameFromCommand)
             }
             commands { cmd ->
                 when (cmd) {
-                    is ChangeName -> applicationService.execute(cmd.id, Name::changeNameFromCommand.partial(cmd))
+                    is DefineName -> applicationService.execute(cmd.id(), Name::defineNameFromCommand.partial(cmd))
+                    is ChangeName -> applicationService.execute(cmd.id(), Name::changeNameFromCommand.partial(cmd))
                 }
             }
             subscriptions(subscriptionModel) {
                 subscribe<NameDefined>("nameDefined") { e ->
-                    log.info("Hello ${e.name}")
+                    log.info("Hello ${e.name()}")
                 }
                 subscribe<NameWasChanged>("nameChanged") { e ->
-                    log.info("Changed name to ${e.name}")
+                    log.info("Changed name to ${e.name()}")
                 }
                 subscribe("everything") { e ->
                     allEvents.add(e)
@@ -89,6 +90,6 @@ class MultipleCommandDispatchersTest {
         await withPollInterval Duration.of(10, MILLIS) untilAsserted {
             assertThat(allEvents).hasSize(20)
         }
-        assertThat(allEvents.map { e -> e.name.substringAfter(":").toInt() }).isSubsetOf(0 until 10)
+        assertThat(allEvents.map { e -> e.name().substringAfter(":").toInt() }).isSubsetOf(0 until 10)
     }
 }

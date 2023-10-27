@@ -21,15 +21,15 @@ import org.junit.jupiter.api.DisplayNameGeneration
 import org.junit.jupiter.api.DisplayNameGenerator.Simple
 import org.junit.jupiter.api.Test
 import org.occurrent.command.ChangeName
-import org.occurrent.command.Command
 import org.occurrent.command.DefineName
+import org.occurrent.command.NameCommand
 import org.occurrent.domain.DomainEvent
 import org.occurrent.domain.Name
 import org.occurrent.domain.NameDefined
 import org.occurrent.domain.NameWasChanged
 import org.occurrent.library.hederlig.domain.AllNames
-import org.occurrent.library.hederlig.domain.PersonNamed
 import org.occurrent.library.hederlig.domain.DomainQuery
+import org.occurrent.library.hederlig.domain.PersonNamed
 import org.occurrent.library.hederlig.model.Delay
 import java.time.LocalDateTime
 import java.time.Year
@@ -45,36 +45,36 @@ class HederligTest {
     // There can also be a Spring Starter project that creates a bean, "hederligOccurrentBootstraper", that one can inject when creating the module.
     @Test
     fun `example`() {
-        module<Command, DomainEvent, DomainQuery<out Any>> {
+        module<NameCommand, DomainEvent, DomainQuery<out Any>> {
             feature("manage name") {
                 commands {
-                    command(DefineName::getId, Name::defineNameFromCommand)
-                    command(ChangeName::getId, Name::changeNameFromCommand)
+                    command(DefineName::id, Name::defineNameFromCommand)
+                    command(ChangeName::id, Name::changeNameFromCommand)
                 }
                 // Alternative 1
-                commands(Command::getId) {
+                commands(NameCommand::id) {
                     command(Name::defineNameFromCommand)
                     command(Name::changeNameFromCommand)
                 }
 
                 // Alternative 2 - When domain model doesn't use commands!
                 commands {
-                    command(DefineName::getId) { e, cmd ->
-                        Name.defineName(e, cmd.id, cmd.time, cmd.name)
+                    command(DefineName::id) { e, cmd ->
+                        Name.defineName(e, cmd.id(), cmd.time(), cmd.name())
                     }
-                    command<ChangeName>({ changeName -> changeName.id }) { e, cmd ->
-                        Name.defineName(e, cmd.id, cmd.time, cmd.newName)
+                    command<ChangeName>({ changeName -> changeName.id() }) { e, cmd ->
+                        Name.defineName(e, cmd.id(), cmd.time(), cmd.newName())
                     }
                 }
 
                 subscriptions {
                     on<NameDefined> { event ->
-                        println("Name defined: ${event.name}")
+                        println("Name defined: ${event.name()}")
                     }
                     on<NameWasChanged> { event, ctx ->
-                        when (event.name) {
+                        when (event.name()) {
                             "John Doe" -> ctx.publish(ChangeName(UUID.randomUUID().toString(), LocalDateTime.now(), "Forbidden Name"))
-                            "Jane Doe" -> ctx.publish(ChangeName(UUID.randomUUID().toString(), LocalDateTime.now(), "Mrs ${event.name}"), Delay.ofMinutes(10))
+                            "Jane Doe" -> ctx.publish(ChangeName(UUID.randomUUID().toString(), LocalDateTime.now(), "Mrs ${event.name()}"), Delay.ofMinutes(10))
                             "Ikk Doe" -> ctx.publish(ChangeName(UUID.randomUUID().toString(), LocalDateTime.now(), "Hohoho"), Delay.until(ZonedDateTime.of(Year.now().value, 12, 25, 15, 0, 0, 0, UTC)))
                             "Baby Doe" -> println("Baby detected!")
                         }
@@ -82,10 +82,10 @@ class HederligTest {
                 }
                 queries {
                     query<AllNames> { ctx ->
-                        ctx.queryForSequence<NameDefined>().map { e -> e.name }
+                        ctx.queryForSequence<NameDefined>().map { e -> e.name() }
                     }
                     query<PersonNamed> { (name), ctx ->
-                        ctx.queryForSequence<NameDefined>().filter { e -> e.name == name }
+                        ctx.queryForSequence<NameDefined>().filter { e -> e.name() == name }
                     }
                 }
             }

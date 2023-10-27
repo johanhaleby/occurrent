@@ -16,6 +16,9 @@
 
 package org.occurrent.command;
 
-public interface Command {
-    String getId();
+import java.time.LocalDateTime;
+
+public sealed interface NameCommand permits ChangeName, DefineName {
+    String id();
+    LocalDateTime time();
 }

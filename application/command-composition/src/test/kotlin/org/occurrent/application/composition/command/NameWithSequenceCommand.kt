@@ -30,8 +30,8 @@ object NameWithSequenceCommand {
     fun changeName(events: Sequence<DomainEvent>, eventId: String, time: LocalDateTime, newName: String): Sequence<DomainEvent> {
         val currentName = events.fold("") { _, e ->
             when (e) {
-                is NameDefined -> e.name
-                is NameWasChanged -> e.name
+                is NameDefined -> e.name()
+                is NameWasChanged -> e.name()
                 else -> throw IllegalStateException()
             }
         }

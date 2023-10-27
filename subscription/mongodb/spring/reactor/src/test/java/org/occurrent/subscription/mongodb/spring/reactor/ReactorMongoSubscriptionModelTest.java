@@ -160,7 +160,7 @@ public class ReactorMongoSubscriptionModelTest {
             NameWasChanged nameWasChanged1 = new NameWasChanged(UUID.randomUUID().toString(), now.plusSeconds(3), "name3");
             NameWasChanged nameWasChanged2 = new NameWasChanged(UUID.randomUUID().toString(), now.plusSeconds(4), "name4");
 
-            subscription.subscribe(MongoFilterSpecification.MongoBsonFilterSpecification.filter().id(Filters::eq, nameDefined2.getEventId()).and().type(Filters::eq, NameDefined.class.getSimpleName()))
+            subscription.subscribe(MongoFilterSpecification.MongoBsonFilterSpecification.filter().id(Filters::eq, nameDefined2.eventId()).and().type(Filters::eq, NameDefined.class.getSimpleName()))
                     .flatMap(cloudEvent -> Mono.fromRunnable(() -> state.add(cloudEvent)))
                     .subscribe();
 
@@ -174,7 +174,7 @@ public class ReactorMongoSubscriptionModelTest {
 
             // Then
             await().atMost(ONE_SECOND).until(state::size, is(1));
-            assertThat(state).extracting(CloudEvent::getId, CloudEvent::getType).containsOnly(tuple(nameDefined2.getEventId(), NameDefined.class.getSimpleName()));
+            assertThat(state).extracting(CloudEvent::getId, CloudEvent::getType).containsOnly(tuple(nameDefined2.eventId(), NameDefined.class.getSimpleName()));
         }
 
         @Test
@@ -187,7 +187,7 @@ public class ReactorMongoSubscriptionModelTest {
             NameWasChanged nameWasChanged1 = new NameWasChanged(UUID.randomUUID().toString(), now.plusSeconds(3), "name3");
             NameWasChanged nameWasChanged2 = new NameWasChanged(UUID.randomUUID().toString(), now.plusSeconds(4), "name4");
 
-            subscription.subscribe(MongoFilterSpecification.MongoBsonFilterSpecification.filter(match(and(eq("fullDocument.id", nameDefined2.getEventId()), eq("fullDocument.type", NameDefined.class.getSimpleName())))))
+            subscription.subscribe(MongoFilterSpecification.MongoBsonFilterSpecification.filter(match(and(eq("fullDocument.id", nameDefined2.eventId()), eq("fullDocument.type", NameDefined.class.getSimpleName())))))
                     .flatMap(cloudEvent -> Mono.fromRunnable(() -> state.add(cloudEvent)))
                     .subscribe();
 
@@ -201,7 +201,7 @@ public class ReactorMongoSubscriptionModelTest {
 
             // Then
             await().atMost(ONE_SECOND).until(state::size, is(1));
-            assertThat(state).extracting(CloudEvent::getId, CloudEvent::getType).containsOnly(tuple(nameDefined2.getEventId(), NameDefined.class.getSimpleName()));
+            assertThat(state).extracting(CloudEvent::getId, CloudEvent::getType).containsOnly(tuple(nameDefined2.eventId(), NameDefined.class.getSimpleName()));
         }
     }
 
@@ -277,7 +277,7 @@ public class ReactorMongoSubscriptionModelTest {
             NameWasChanged nameWasChanged1 = new NameWasChanged(UUID.randomUUID().toString(), now.plusSeconds(3), "name3");
             NameWasChanged nameWasChanged2 = new NameWasChanged(UUID.randomUUID().toString(), now.plusSeconds(4), "name4");
 
-            Filter filter = Filter.id(nameDefined2.getEventId()).and(Filter.type(NameDefined.class.getSimpleName()));
+            Filter filter = Filter.id(nameDefined2.eventId()).and(Filter.type(NameDefined.class.getSimpleName()));
             subscription.subscribe(OccurrentSubscriptionFilter.filter(filter))
                     .flatMap(cloudEvent -> Mono.fromRunnable(() -> state.add(cloudEvent)))
                     .subscribe();
@@ -292,17 +292,17 @@ public class ReactorMongoSubscriptionModelTest {
 
             // Then
             await().atMost(FIVE_SECONDS).until(state::size, is(1));
-            assertThat(state).extracting(CloudEvent::getId, CloudEvent::getType).containsOnly(tuple(nameDefined2.getEventId(), NameDefined.class.getSimpleName()));
+            assertThat(state).extracting(CloudEvent::getId, CloudEvent::getType).containsOnly(tuple(nameDefined2.eventId(), NameDefined.class.getSimpleName()));
         }
     }
 
     private Flux<CloudEvent> serialize(DomainEvent e) {
         return Flux.just(CloudEventBuilder.v1()
-                .withId(e.getEventId())
+                .withId(e.eventId())
                 .withSource(URI.create("http://name"))
                 .withType(e.getClass().getSimpleName())
-                .withTime(toLocalDateTime(e.getTimestamp()).atOffset(UTC))
-                .withSubject(e.getName())
+                .withTime(toLocalDateTime(e.timestamp()).atOffset(UTC))
+                .withSubject(e.name())
                 .withDataContentType("application/json")
                 .withData(unchecked(objectMapper::writeValueAsBytes).apply(e))
                 .build());

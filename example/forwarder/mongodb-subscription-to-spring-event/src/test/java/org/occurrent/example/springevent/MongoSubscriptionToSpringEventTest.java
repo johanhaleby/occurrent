@@ -104,8 +104,8 @@ public class MongoSubscriptionToSpringEventTest {
                         .withId(UUID.randomUUID().toString())
                         .withSource(URI.create("http://name"))
                         .withType(e.getClass().getSimpleName())
-                        .withTime(TimeConversion.toLocalDateTime(e.getTimestamp()).atOffset(UTC))
-                        .withSubject(e.getName())
+                        .withTime(TimeConversion.toLocalDateTime(e.timestamp()).atOffset(UTC))
+                        .withSubject(e.name())
                         .withDataContentType("application/json")
                         .withData(CheckedFunction.unchecked(objectMapper::writeValueAsBytes).apply(e))
                         .build());

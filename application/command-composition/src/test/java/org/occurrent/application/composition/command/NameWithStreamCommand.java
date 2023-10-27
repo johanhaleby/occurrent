@@ -39,7 +39,7 @@ class NameWithStreamCommand {
 
         String currentName = events
                 .filter(isInstanceOfNameDefined.or(isInstanceOfNameWasChanged))
-                .reduce("", (__, e) -> e instanceof NameDefined ? e.getName() : e.getName(), (name1, name2) -> name2);
+                .reduce("", (__, e) -> e instanceof NameDefined ? e.name() : e.name(), (name1, name2) -> name2);
 
         if (Objects.equals(currentName, "John Doe")) {
             throw new IllegalArgumentException("Cannot change name from John Doe since this is the ultimate name");

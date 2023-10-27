@@ -48,7 +48,7 @@ class DomainEventQueriesKotlinTest {
 
     @BeforeEach
     fun createInstances() {
-        val cloudEventConverter: CloudEventConverter<DomainEvent> = JacksonCloudEventConverter.Builder<DomainEvent>(ObjectMapper(), URI.create("urn:test")).idMapper(DomainEvent::getEventId).build()
+        val cloudEventConverter: CloudEventConverter<DomainEvent> = JacksonCloudEventConverter.Builder<DomainEvent>(ObjectMapper(), URI.create("urn:test")).idMapper(DomainEvent::eventId).build()
         val eventStore = InMemoryEventStore()
         applicationService = GenericApplicationService(eventStore, cloudEventConverter)
         domainEventQueries = DomainEventQueries(eventStore, cloudEventConverter)
@@ -192,7 +192,7 @@ class DomainEventQueriesKotlinTest {
         val events: List<DomainEvent> = sequence.toList()
         assertAll(
             { assertThat(events).hasSize(2) },
-            { assertThat(events.map { it.eventId }).containsOnly("eventId1", "eventId2") }
+            { assertThat(events.map { it.eventId() }).containsOnly("eventId1", "eventId2") }
         )
     }
 
