@@ -18,6 +18,8 @@
 package org.occurrent.application.converter.xstream;
 
 import com.thoughtworks.xstream.XStream;
+import com.thoughtworks.xstream.core.ClassLoaderReference;
+import com.thoughtworks.xstream.mapper.DefaultMapper;
 import io.cloudevents.CloudEvent;
 import io.cloudevents.core.builder.CloudEventBuilder;
 import org.junit.jupiter.api.Test;
@@ -102,6 +104,8 @@ public class XStreamCloudEventConverterTest {
     void converts_cloud_event_to_domain_event() {
         // Given
         XStream xStream = new XStream();
+        // TODO Remove when upgrading to xstream 1.5
+        xStream.registerConverter(new RecordConverter(new DefaultMapper(new ClassLoaderReference(this.getClass().getClassLoader()))));
         xStream.allowTypeHierarchy(DomainEvent.class);
         XStreamCloudEventConverter<DomainEvent> cloudEventConverter = new XStreamCloudEventConverter<>(xStream, CLOUD_EVENT_SOURCE);
 
