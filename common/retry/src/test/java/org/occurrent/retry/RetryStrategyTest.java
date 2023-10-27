@@ -680,7 +680,7 @@ public class RetryStrategyTest {
                     () -> assertThat(retryInfos).extracting(AfterRetryInfo::wasSuccessfulRetryAttempt).containsExactly(false, false, true),
                     () -> assertThat(retryInfos).extracting(AfterRetryInfo::wasFailedRetryAttempt).containsExactly(true, true, false),
                     () -> assertThat(retryInfos).extracting(AfterRetryInfo::getFailedRetryAttemptException)
-                            .extracting(Throwable::getMessage)
+                            .extracting(it -> it == null ? null : it.getMessage())
                             .containsExactly("expected: 2", "expected: 3", null),
                     () -> assertThat(retryInfos).extracting(AfterRetryInfo::getMaxAttempts).containsExactly(40, 40, 40),
                     () -> assertThat(retryInfos).extracting(AfterRetryInfo::getAttemptsLeft).containsExactly(39, 38, 37),
