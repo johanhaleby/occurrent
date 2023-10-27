@@ -78,6 +78,7 @@ public class GenericApplicationService<T> implements ApplicationService<T> {
     public WriteResult execute(String streamId, Function<Stream<T>, Stream<T>> functionThatCallsDomainModel, Consumer<Stream<T>> sideEffect) {
         Objects.requireNonNull(streamId, "Stream id cannot be null");
         Objects.requireNonNull(functionThatCallsDomainModel, "Function that calls domain model cannot be null");
+        record Tuple<T1, T2>(T1 v1, T2 v2) {}
 
         Tuple<WriteResult, List<T>> result = retryStrategy.execute(() -> {
             // Read all events from the event store for a particular stream
@@ -88,7 +89,7 @@ public class GenericApplicationService<T> implements ApplicationService<T> {
             // Call a pure function from the domain model which returns a Stream of events
             Stream<T> newDomainEvents = emptyStreamIfNull(functionThatCallsDomainModel.apply(eventsInStream));
 
-            // We need to convert the new domain event stream into a list in order to be able to call side-effects with new events
+            // We need to convert the new domain event stream into a list in order to be able to call side effects with new events
             // if side effect is defined
             final List<T> newEventsAsList = sideEffect == null ? null : newDomainEvents.collect(Collectors.toList());
 
@@ -115,15 +116,5 @@ public class GenericApplicationService<T> implements ApplicationService<T> {
      */
     public static Retry defaultRetryStrategy() {
         return RetryStrategy.exponentialBackoff(Duration.ofMillis(100), Duration.ofSeconds(2), 2.0f).maxAttempts(5).retryIf(WriteConditionNotFulfilledException.class::isInstance);
-    }
-
-    private static class Tuple<T1, T2> {
-        private final T1 v1;
-        private final T2 v2;
-
-        Tuple(T1 v1, T2 v2) {
-            this.v1 = v1;
-            this.v2 = v2;
-        }
     }
 }
