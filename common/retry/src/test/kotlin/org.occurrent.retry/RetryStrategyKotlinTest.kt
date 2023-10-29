@@ -83,7 +83,7 @@ class RetryStrategyKotlinTest {
         val throwables = CopyOnWriteArrayList<Throwable>()
 
         // When
-        val myString: String = retryStrategy.onAfterRetry { _, info ->
+        val myString: String = retryStrategy.onAfterRetry { info, _ ->
             throwables.add(info.retryAttemptException)
         }.exec { info ->
             if (info.isLastAttempt) {
@@ -110,7 +110,7 @@ class RetryStrategyKotlinTest {
 
         // When
         catchThrowable {
-            retryStrategy.onError { _, info ->
+            retryStrategy.onError {info, _ ->
                 durations.add(info.nextBackoff)
             }.exec {
                 throw IllegalArgumentException("expected")

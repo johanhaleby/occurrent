@@ -2,7 +2,8 @@
 * Removed `isFinalError` method from `ErrorInfo` used by `RetryStrategy`, use `isLastAttempt()` instead.
 * Added `RetryInfo` as argument to the `exec` extension function in `RetryStrategy`.
 * Added `retryAttemptException` as an extension property to `org.occurrent.retry.AfterRetryInfo` so that you don't need to use the `getFailedRetryAttemptException` method that returns an `Optional` in the Java interface. Instead, the `retryAttemptException` function returns a `Throwable?`.  Import the extension property from the `org.occurrent.retry.AfterRetryInfoExtensions` file. 
-* Added `nextBackoff` as an extension property to `org.occurrent.retry.ErrorInfo` so that you don't need to use the `getBackoffBeforeNextRetryAttempt` method that returns an `Optional` in the Java interface. Instead, the `nextBackoff` function returns a `Duration?`.  Import the extension property from the `org.occurrent.retry.ErrorInfoExtensions` file. 
+* Added `nextBackoff` as an extension property to `org.occurrent.retry.ErrorInfo` so that you don't need to use the `getBackoffBeforeNextRetryAttempt` method that returns an `Optional` in the Java interface. Instead, the `nextBackoff` function returns a `Duration?`.  Import the extension property from the `org.occurrent.retry.ErrorInfoExtensions` file.
+* In the previous version, in the retry strategy module, `onBeforeRetry`, `onAfterRetry`, `onError` etc, accepted a `BiConsumer<Throwable, RetryInfo>`. The arguments have now been reversed, so the types of the BiConsumer is now `BiConsumer<RetryInfo, Throwable>`.
 
 ### 0.16.10 (2023-10-21)
 * Several changes to `RetryStrategy` again:

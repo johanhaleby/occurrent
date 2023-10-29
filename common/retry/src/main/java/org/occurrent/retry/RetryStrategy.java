@@ -168,22 +168,22 @@ public sealed interface RetryStrategy {
      */
     final class Retry implements RetryStrategy {
         // @formatter:off
-        private static final BiConsumer<Throwable, ErrorInfo> NOOP_ERROR_LISTENER = (__, ___) -> {};
-        private static final BiConsumer<Throwable, BeforeRetryInfo> NOOP_BEFORE_RETRY_LISTENER = (__, ___) -> {};
-        private static final BiConsumer<Throwable, AfterRetryInfo> NOOP_AFTER_RETRY_LISTENER = (__, ___) -> {};
+        private static final BiConsumer<ErrorInfo, Throwable> NOOP_ERROR_LISTENER = (__, ___) -> {};
+        private static final BiConsumer<BeforeRetryInfo, Throwable> NOOP_BEFORE_RETRY_LISTENER = (__, ___) -> {};
+        private static final BiConsumer<AfterRetryInfo, Throwable> NOOP_AFTER_RETRY_LISTENER = (__, ___) -> {};
     // @formatter:on
 
         public final Backoff backoff;
         public final MaxAttempts maxAttempts;
         public final Predicate<Throwable> retryPredicate;
-        public final BiConsumer<Throwable, ErrorInfo> errorListener;
-        public final BiConsumer<Throwable, BeforeRetryInfo> onBeforeRetryListener;
-        public final BiConsumer<Throwable, AfterRetryInfo> onAfterRetryListener;
+        public final BiConsumer<ErrorInfo, Throwable> errorListener;
+        public final BiConsumer<BeforeRetryInfo, Throwable> onBeforeRetryListener;
+        public final BiConsumer<AfterRetryInfo, Throwable> onAfterRetryListener;
 
         public final Function<Throwable, Throwable> errorMapper;
 
-        private Retry(Backoff backoff, MaxAttempts maxAttempts, Function<Throwable, Throwable> errorMapper, Predicate<Throwable> retryPredicate, BiConsumer<Throwable, ErrorInfo> errorListener,
-                      BiConsumer<Throwable, BeforeRetryInfo> onBeforeRetryListener, BiConsumer<Throwable, AfterRetryInfo> onAfterRetryListener) {
+        private Retry(Backoff backoff, MaxAttempts maxAttempts, Function<Throwable, Throwable> errorMapper, Predicate<Throwable> retryPredicate, BiConsumer<ErrorInfo, Throwable> errorListener,
+                      BiConsumer<BeforeRetryInfo, Throwable> onBeforeRetryListener, BiConsumer<AfterRetryInfo, Throwable> onAfterRetryListener) {
             Objects.requireNonNull(backoff, Backoff.class.getSimpleName() + " cannot be null");
             Objects.requireNonNull(maxAttempts, MaxAttempts.class.getSimpleName() + " cannot be null");
             Objects.requireNonNull(retryPredicate, "Retry predicate cannot be null");
@@ -293,7 +293,7 @@ public sealed interface RetryStrategy {
          * @param errorListener The consumer to invoke
          * @return A new instance of {@link Retry} with the given error listener
          */
-        public Retry onError(BiConsumer<Throwable, ErrorInfo> errorListener) {
+        public Retry onError(BiConsumer<ErrorInfo, Throwable> errorListener) {
             return new Retry(backoff, maxAttempts, errorMapper, retryPredicate, errorListener, onBeforeRetryListener, onAfterRetryListener);
         }
 
@@ -305,7 +305,7 @@ public sealed interface RetryStrategy {
          * @see #onError(BiConsumer)
          */
         public Retry onError(Consumer<Throwable> errorListener) {
-            return onError((throwable, __) -> errorListener.accept(throwable));
+            return onError((__, throwable) -> errorListener.accept(throwable));
         }
 
         /**
@@ -315,7 +315,7 @@ public sealed interface RetryStrategy {
          * @param onBeforeRetryListener The bi-consumer to invoke
          * @return A new instance of {@link Retry} with the given onBeforeRetryListener
          */
-        public Retry onBeforeRetry(BiConsumer<Throwable, BeforeRetryInfo> onBeforeRetryListener) {
+        public Retry onBeforeRetry(BiConsumer<BeforeRetryInfo, Throwable> onBeforeRetryListener) {
             return new Retry(backoff, maxAttempts, errorMapper, retryPredicate, errorListener, onBeforeRetryListener, onAfterRetryListener);
         }
 
@@ -327,7 +327,7 @@ public sealed interface RetryStrategy {
          * @see #onBeforeRetry(BiConsumer)
          */
         public Retry onBeforeRetry(Consumer<Throwable> onBeforeRetryListener) {
-            return onBeforeRetry(((throwable, __) -> onBeforeRetryListener.accept(throwable)));
+            return onBeforeRetry(((__, throwable) -> onBeforeRetryListener.accept(throwable)));
         }
 
         /**
@@ -337,7 +337,7 @@ public sealed interface RetryStrategy {
          * @param onAfterRetryListener The bi-consumer to invoke
          * @return A new instance of {@link Retry} with the given onAfterRetryListener
          */
-        public Retry onAfterRetry(BiConsumer<Throwable, AfterRetryInfo> onAfterRetryListener) {
+        public Retry onAfterRetry(BiConsumer<AfterRetryInfo, Throwable> onAfterRetryListener) {
             return new Retry(backoff, maxAttempts, errorMapper, retryPredicate, errorListener, onBeforeRetryListener, onAfterRetryListener);
         }
 
@@ -349,7 +349,7 @@ public sealed interface RetryStrategy {
          * @see #onAfterRetryListener
          */
         public Retry onAfterRetry(Consumer<Throwable> onAfterRetryListener) {
-            return onAfterRetry(((throwable, __) -> onAfterRetryListener.accept(throwable)));
+            return onAfterRetry(((__, throwable) -> onAfterRetryListener.accept(throwable)));
         }
 
         @Override

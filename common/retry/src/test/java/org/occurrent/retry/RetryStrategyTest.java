@@ -386,7 +386,7 @@ public class RetryStrategyTest {
             Retry retryStrategy = RetryStrategy
                     .exponentialBackoff(Duration.ofMillis(1), Duration.ofMillis(10), 2.0)
                     .maxAttempts(40)
-                    .onBeforeRetry((__, info) -> retryInfos.add(info));
+                    .onBeforeRetry((info, __) -> retryInfos.add(info));
 
             AtomicInteger counter = new AtomicInteger(0);
 
@@ -422,7 +422,7 @@ public class RetryStrategyTest {
         void error_listener_is_invoked_for_both_final_and_intermediate_errors() {
             // Given
             CopyOnWriteArrayList<Throwable> throwables = new CopyOnWriteArrayList<>();
-            Retry retryStrategy = RetryStrategy.retry().onError((throwable, __) -> throwables.add(throwable));
+            Retry retryStrategy = RetryStrategy.retry().onError(throwable -> throwables.add(throwable));
 
             AtomicInteger counter = new AtomicInteger(0);
 
@@ -473,7 +473,7 @@ public class RetryStrategyTest {
             AtomicInteger counter = new AtomicInteger(0);
             int millis = 150;
             Retry retryStrategy = RetryStrategy.fixed(millis)
-                    .onError((throwable, info) -> {
+                    .onError((info, throwable) -> {
                         if (info.isRetryable()) {
                             retryableExceptions.add(throwable);
                         } else {
@@ -513,7 +513,7 @@ public class RetryStrategyTest {
             AtomicInteger counter = new AtomicInteger(0);
             int millis = 150;
             Retry retryStrategy = RetryStrategy.fixed(millis)
-                    .onError((throwable, info) -> {
+                    .onError((info, throwable) -> {
                         if (info.isRetryable()) {
                             throwables.add(throwable);
                         } else {
@@ -552,7 +552,7 @@ public class RetryStrategyTest {
             Retry retryStrategy = RetryStrategy
                     .exponentialBackoff(Duration.ofMillis(1), Duration.ofMillis(10), 2.0)
                     .maxAttempts(40)
-                    .onBeforeRetry((__, info) -> retryInfos.add(info));
+                    .onBeforeRetry((info, __) -> retryInfos.add(info));
 
             AtomicInteger counter = new AtomicInteger(0);
 
@@ -585,7 +585,7 @@ public class RetryStrategyTest {
             Retry retryStrategy = RetryStrategy
                     .fixed(10)
                     .infiniteAttempts()
-                    .onBeforeRetry((__, info) -> retryInfos.add(info));
+                    .onBeforeRetry((info, __) -> retryInfos.add(info));
 
             AtomicInteger counter = new AtomicInteger(0);
 
@@ -618,7 +618,7 @@ public class RetryStrategyTest {
             CopyOnWriteArrayList<RetryInfo> retryInfos = new CopyOnWriteArrayList<>();
             Retry retryStrategy = RetryStrategy.retry()
                     .maxAttempts(4)
-                    .onBeforeRetry((__, info) -> retryInfos.add(info));
+                    .onBeforeRetry((info, __) -> retryInfos.add(info));
 
             AtomicInteger counter = new AtomicInteger(0);
 
@@ -657,7 +657,7 @@ public class RetryStrategyTest {
             Retry retryStrategy = RetryStrategy
                     .exponentialBackoff(Duration.ofMillis(1), Duration.ofMillis(10), 2.0)
                     .maxAttempts(40)
-                    .onAfterRetry((__, info) -> retryInfos.add(info));
+                    .onAfterRetry((info, __) -> retryInfos.add(info));
 
             AtomicInteger counter = new AtomicInteger(0);
 
@@ -700,7 +700,7 @@ public class RetryStrategyTest {
             Retry retryStrategy = RetryStrategy
                     .fixed(10)
                     .infiniteAttempts()
-                    .onAfterRetry((__, info) -> retryInfos.add(info));
+                    .onAfterRetry((info, __) -> retryInfos.add(info));
 
             AtomicInteger counter = new AtomicInteger(0);
 
@@ -733,7 +733,7 @@ public class RetryStrategyTest {
             CopyOnWriteArrayList<AfterRetryInfo> retryInfos = new CopyOnWriteArrayList<>();
             Retry retryStrategy = RetryStrategy.retry()
                     .maxAttempts(4)
-                    .onAfterRetry((__, info) -> retryInfos.add(info));
+                    .onAfterRetry((info, __) -> retryInfos.add(info));
 
             AtomicInteger counter = new AtomicInteger(0);
 
@@ -863,7 +863,7 @@ public class RetryStrategyTest {
             CopyOnWriteArrayList<Throwable> throwables = new CopyOnWriteArrayList<>();
             AtomicInteger counter = new AtomicInteger(0);
             int millis = 150;
-            Retry retryStrategy = RetryStrategy.fixed(millis).onBeforeRetry((e, __) -> throwables.add(e)).retryIf(__ -> counter.get() < 5);
+            Retry retryStrategy = RetryStrategy.fixed(millis).onBeforeRetry((__, e) -> throwables.add(e)).retryIf(__ -> counter.get() < 5);
 
 
             // When
