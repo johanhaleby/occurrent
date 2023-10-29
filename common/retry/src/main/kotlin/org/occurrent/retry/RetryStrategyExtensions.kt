@@ -17,8 +17,6 @@
 
 package org.occurrent.retry
 
-import java.util.function.Supplier
-
 
 /**
  * A kotlin extension function that makes it easier to execute the retry strategy with a "Supplier".
@@ -48,4 +46,4 @@ import java.util.function.Supplier
  *
  * after having imported `org.occurrent.retry.exec`.
  */
-fun <T> RetryStrategy.exec(fn: () -> T): T = execute(Supplier { fn() })
+fun <T> RetryStrategy.exec(fn: (RetryInfo) -> T): T = execute { retryInfo -> fn(retryInfo)}

@@ -15,23 +15,13 @@
  *  limitations under the License.
  */
 
-package org.occurrent.retry;
+package org.occurrent.retry
 
-import java.time.Duration;
-import java.util.Optional;
+import java.time.Duration
 
 /**
- * Contains useful information of the state of the error
+ * An extension function that calls [ErrorInfo.getBackoffBeforeNextRetryAttempt] but instead of going through an `Optional`,
+ * it's converted to a nullable `Duration` type.
  */
-public interface ErrorInfo extends RetryInfo {
-
-    /**
-     * @return An {@code Optional} containing how long to wait before the next retry attempt kicks in case there additional retries left, or an {@code empty} {@code Optional}.
-     */
-    Optional<Duration> getBackoffBeforeNextRetryAttempt();
-
-    /**
-     * @return {@code true} if the error is retryable, {@code false} otherwise.
-     */
-    boolean isRetryable();
-}
+val ErrorInfo.nextBackoff: Duration?
+    get() = backoffBeforeNextRetryAttempt.orElse(null)

@@ -22,6 +22,7 @@ import org.occurrent.retry.AfterRetryInfo;
 import org.occurrent.retry.RetryInfo;
 
 import java.time.Duration;
+import java.util.Optional;
 
 record AfterRetryInfoImpl(RetryInfo retryInfo, ResultOfRetryAttempt result, @Nullable Duration backoffBeforeNextRetryAttempt) implements AfterRetryInfo {
     @Override
@@ -65,11 +66,11 @@ record AfterRetryInfoImpl(RetryInfo retryInfo, ResultOfRetryAttempt result, @Nul
     }
 
     @Override
-    public Duration getBackoffBeforeNextRetryAttempt() {
+    public Optional<Duration> getBackoffBeforeNextRetryAttempt() {
         if (wasSuccessfulRetryAttempt()) {
-            return null;
+            return Optional.empty();
         } else {
-            return backoffBeforeNextRetryAttempt;
+            return Optional.ofNullable(backoffBeforeNextRetryAttempt);
         }
     }
 
