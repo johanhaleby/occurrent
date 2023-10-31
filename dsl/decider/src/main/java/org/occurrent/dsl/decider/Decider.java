@@ -36,11 +36,11 @@ public interface Decider<C, S, E> {
         return false;
     }
 
-    default Result<S, E> decide(List<E> events, C command) {
+    default StateChanges<S, E> decide(List<E> events, C command) {
         @Nullable S currentState = fold(initialState(), events);
         List<E> newEvents = decide(command, currentState);
         S newState = fold(currentState, newEvents);
-        return new Result<>(newState, newEvents);
+        return new StateChanges<>(newState, newEvents);
     }
 
     default List<E> decideAndReturnEvents(List<E> events, C command) {
@@ -64,7 +64,7 @@ public interface Decider<C, S, E> {
         return state;
     }
 
-    record Result<S, E>(@Nullable S state, List<E> events) {
+    record StateChanges<S, E>(@Nullable S state, List<E> events) {
     }
 
     static <C, S, E> Decider<C, S, E> create(@Nullable S initialState, @NotNull BiFunction<C, S, List<E>> decide, @NotNull BiFunction<S, E, S> evolve) {
