@@ -542,6 +542,120 @@ public class RetryStrategyTest {
     }
 
     @Nested
+    @DisplayName("retryable error listener")
+    class RetryableErrorListenerTest {
+
+        @Test
+        void retryable_error_listener_is_invoked_for_intermediate_errors() {
+            // Given
+            CopyOnWriteArrayList<Throwable> throwables = new CopyOnWriteArrayList<>();
+            Retry retryStrategy = RetryStrategy.retry().onRetryableError(throwable -> throwables.add(throwable));
+
+            AtomicInteger counter = new AtomicInteger(0);
+
+            // When
+            retryStrategy.execute(() -> {
+                if (counter.incrementAndGet() <= 4) {
+                    throw new IllegalArgumentException("expected");
+                }
+            });
+
+            // Then
+            assertAll(
+                    () -> assertThat(counter).hasValue(5),
+                    () -> assertThat(throwables)
+                            .hasSize(4)
+                            .extracting(Throwable::getClass, Throwable::getMessage).containsOnly(tuple(IllegalArgumentException.class, "expected"))
+            );
+        }
+
+        @Test
+        void retryable_error_listener_is_invoked_when_end_result_is_error() {
+            // Given
+            CopyOnWriteArrayList<Throwable> throwables = new CopyOnWriteArrayList<>();
+            Retry retryStrategy = RetryStrategy.retry().maxAttempts(5).onRetryableError(throwable -> throwables.add(throwable));
+
+            AtomicInteger counter = new AtomicInteger(0);
+
+            // When
+            Throwable throwable = catchThrowable(() -> retryStrategy.execute(() -> {
+                counter.incrementAndGet();
+                throw new IllegalArgumentException("expected");
+            }));
+
+            // Then
+            assertAll(
+                    () -> assertThat(throwable).isExactlyInstanceOf(IllegalArgumentException.class).hasMessage("expected"),
+                    () -> assertThat(counter).hasValue(5),
+                    () -> assertThat(throwables).hasSize(4),
+                    () -> assertThat(throwables).extracting(Throwable::getClass, Throwable::getMessage).containsOnly(tuple(IllegalArgumentException.class, "expected"))
+            );
+        }
+
+        @Test
+        void retryable_error_listener_supports_checking_if_error_is_retryable_when_retry_predicate_is_defined() {
+            // Given
+            CopyOnWriteArrayList<Throwable> retryableExceptions = new CopyOnWriteArrayList<>();
+            AtomicInteger counter = new AtomicInteger(0);
+            int millis = 150;
+            Retry retryStrategy = RetryStrategy.fixed(millis)
+                    .onRetryableError((info, throwable) -> {
+                        retryableExceptions.add(throwable);
+                    })
+                    .retryIf(e -> e instanceof IllegalArgumentException && e.getMessage().equals("intermediate"));
+
+            // When
+            final long startTime = System.currentTimeMillis();
+            Throwable throwable = catchThrowable(() -> retryStrategy.execute(() -> {
+                int count = counter.incrementAndGet();
+                if (count <= 4) {
+                    throw new IllegalArgumentException("intermediate");
+                } else {
+                    throw new IllegalArgumentException("final");
+                }
+            }));
+            final long endTime = System.currentTimeMillis();
+
+            // Then
+            assertAll(
+                    () -> assertThat(counter).hasValue(5),
+                    () -> assertThat(retryableExceptions).hasSize(4),
+                    () -> assertThat(retryableExceptions).extracting(Throwable::getClass, Throwable::getMessage).containsOnly(tuple(IllegalArgumentException.class, "intermediate")),
+                    () -> assertThat(throwable).isExactlyInstanceOf(IllegalArgumentException.class).hasMessage("final"),
+                    () -> assertThat(endTime - startTime).isGreaterThanOrEqualTo(4 * millis).isLessThan(5 * millis)
+            );
+        }
+
+        @Test
+        void retryable_error_listener_when_no_retry_predicate_defined() {
+            // Given
+            CopyOnWriteArrayList<Throwable> throwables = new CopyOnWriteArrayList<>();
+            AtomicInteger counter = new AtomicInteger(0);
+            int millis = 150;
+            Retry retryStrategy = RetryStrategy.fixed(millis)
+                    .onRetryableError((__, throwable) -> throwables.add(throwable));
+
+            // When
+            retryStrategy.execute(() -> {
+                int count = counter.incrementAndGet();
+                if (count <= 4) {
+                    throw new IllegalArgumentException("intermediate");
+                } else if (count == 5) {
+                    throw new IllegalArgumentException("final");
+                }
+            });
+
+            // Then
+            assertAll(
+                    () -> assertThat(counter).hasValue(6),
+                    () -> assertThat(throwables).hasSize(5),
+                    () -> assertThat(throwables.subList(0, 4)).extracting(Throwable::getClass, Throwable::getMessage).containsOnly(tuple(IllegalArgumentException.class, "intermediate")),
+                    () -> assertThat(throwables.subList(4, 5)).extracting(Throwable::getClass, Throwable::getMessage).containsOnly(tuple(IllegalArgumentException.class, "final"))
+            );
+        }
+    }
+
+    @Nested
     @DisplayName("on before retry listener")
     class OnBeforeRetry {
 

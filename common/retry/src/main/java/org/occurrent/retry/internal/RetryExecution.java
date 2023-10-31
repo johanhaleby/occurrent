@@ -103,6 +103,7 @@ public class RetryExecution {
                 boolean shouldRetryAgain = !isExhausted(attempt, retry.maxAttempts) && retry.retryPredicate.test(e);
                 retry.errorListener.accept(new ErrorInfoImpl(retryInfoWithPreviousBackoff, shouldRetryAgain ? currentBackoff : null, shouldRetryAgain), e);
                 if (shouldRetryAgain) {
+                    retry.onRetryableErrorListener.accept(new RetryableErrorInfoImpl(retryInfoWithPreviousBackoff, currentBackoff), e);
                     if (currentAttemptIsARetryAttempt) {
                         retry.onAfterRetryListener.accept(new AfterRetryInfoImpl(retryInfoWithPreviousBackoff, new ResultOfRetryAttempt.Failed(e), currentBackoff), lastError);
                     }
