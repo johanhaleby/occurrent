@@ -84,7 +84,7 @@ public interface Decider<C, S, E> {
     }
 
     static <C, S, E> Decider<C, S, E> create(@Nullable S initialState, @NotNull BiFunction<C, S, List<E>> decide, @NotNull BiFunction<S, E, S> evolve,
-                                             @NotNull Predicate<@Nullable S> isTerminal) {
+                                             @NotNull Predicate<S> isTerminal) {
 
         return new Decider<>() {
             @Override
