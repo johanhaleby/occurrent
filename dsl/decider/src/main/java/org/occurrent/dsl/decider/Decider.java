@@ -30,7 +30,7 @@ public interface Decider<C, S, E> {
     @NotNull
     List<E> decide(@NotNull C command, @Nullable S state);
 
-    @NotNull S evolve(@Nullable S state, @NotNull E event);
+    @Nullable S evolve(@Nullable S state, @NotNull E event);
 
     default boolean isTerminal(@Nullable S state) {
         return false;
