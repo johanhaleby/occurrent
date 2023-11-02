@@ -21,17 +21,17 @@ import org.occurrent.application.service.blocking.ApplicationService
 import org.occurrent.application.service.blocking.execute
 import java.util.*
 
-fun <C, S, E> decider(initialState: S?, decide: (C, S?) -> List<E>, evolve: (S?, E) -> S, isTerminal: (S?) -> Boolean = { false }): Decider<C, S, E> = Decider.create(initialState, decide, evolve, isTerminal)
+fun <C, S, E> decider(initialState: S, decide: (C, S) -> List<E>, evolve: (S, E) -> S, isTerminal: (S?) -> Boolean = { false }): Decider<C, S, E> = Decider.create(initialState, decide, evolve, isTerminal)
 
 @Suppress("EXTENSION_SHADOWED_BY_MEMBER")
-fun <C, S, E> Decider<C, S, E>.decide(events: List<E>, command: C): Decider.Decision<S, E> = decide(events, command)
+fun <C, S, E> Decider<C, S, E>.decide(events: List<E>, command: C): Decider.Decision<S, E> = decideOnEvents(events, command)
 
 operator fun <S, E> Decider.Decision<S, E>.component1() : S? = state
 operator fun <S, E> Decider.Decision<S, E>.component2() : List<E> = events
 
 
 fun <C, S, E> ApplicationService<E>.execute(streamId: String, c: C, decider: Decider<C, S, E>) = execute(streamId) { events: List<E> ->
-    decider.decideAndReturnEvents(events, c)
+    decider.decideOnEventAndReturnEvents(events, c)
 }
 
 fun <C, S, E> ApplicationService<E>.execute(streamId: UUID, c: C, decider: Decider<C, S, E>) = execute(streamId.toString(), c, decider)

@@ -36,21 +36,33 @@ public interface Decider<C, S, E> {
         return false;
     }
 
-    default Decision<S, E> decide(List<E> events, C command) {
+    default Decision<S, E> decideOnEvents(List<E> events, C command) {
         @Nullable S currentState = fold(initialState(), events);
         List<E> newEvents = decide(command, currentState);
         S newState = fold(currentState, newEvents);
         return new Decision<>(newState, newEvents);
     }
 
-    default List<E> decideAndReturnEvents(List<E> events, C command) {
-        S state = fold(initialState(), events);
-        return decide(command, state);
+    default List<E> decideOnEventAndReturnEvents(List<E> events, C command) {
+        return decideOnEvents(events, command).events;
     }
 
-    @Nullable
-    default S decideAndReturnState(List<E> events, C command) {
-        return decide(events, command).state;
+    default @Nullable S decideOnEventsAndReturnState(List<E> events, C command) {
+        return decideOnEvents(events, command).state;
+    }
+
+    default Decision<S, E> decideOnState(S state, C command) {
+        List<E> newEvents = decide(command, state);
+        @Nullable S newState = fold(state, newEvents);
+        return new Decision<>(newState, newEvents);
+    }
+
+    default List<E> decideOnStateAndReturnEvents(S state, C command) {
+        return decideOnState(state, command).events;
+    }
+
+    default @Nullable S decideOnStateAndReturnState(S state, C command) {
+        return decideOnState(state, command).state;
     }
 
     @Nullable
