@@ -39,7 +39,7 @@ class MyDeciderTest {
     @Test
     fun `simple decider test`() {
         // Given
-        val decider = decider<NameCommand, String, DomainEvent>(
+        val decider = decider<NameCommand, String?, DomainEvent>(
             initialState = null,
             decide = { cmd, state ->
                 when (cmd) {
