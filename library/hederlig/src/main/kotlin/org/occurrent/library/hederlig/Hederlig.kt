@@ -19,8 +19,9 @@ package org.occurrent.library.hederlig
 
 import org.occurrent.library.hederlig.initialization.*
 import org.occurrent.library.hederlig.model.Delay
-import org.occurrent.library.hederlig.model.Query
 import kotlin.reflect.KClass
+
+typealias Query<R> = Query<R>
 
 /**
  * DSL marker annotation which is used to limit callers so that they will not have implicit access to multiple receivers whose classes are in the set of annotated classes.
@@ -29,7 +30,7 @@ import kotlin.reflect.KClass
 @Target(AnnotationTarget.TYPE, AnnotationTarget.CLASS)
 internal annotation class ModuleDSL
 
-fun <C : Any, E : Any, Q : Query<out Any>> module(
+fun <C : Any, E : Any, Q : Query<Any>> module(
     definitionBuilder: (@ModuleDSL ModuleDefinitionBuilder<C, E, Q>).() -> Unit
 ): ModuleDefinition<C, E, Q> {
     val module = ModuleDefinitionBuilder<C, E, Q>().apply(definitionBuilder)
@@ -64,7 +65,7 @@ fun <C : Any, E : Any, Q : Query<out Any>> module(
 }
 
 @ModuleDSL
-class ModuleDefinitionBuilder<C : Any, E : Any, Q : Query<out Any>> internal constructor() {
+class ModuleDefinitionBuilder<C : Any, E : Any, Q : Query<Any>> internal constructor() {
     internal val features = mutableListOf<FeatureBuilder<C, E, Q>>()
 
     fun feature(name: String, featureBuilder: (@ModuleDSL FeatureBuilder<C, E, Q>).() -> Unit) {
@@ -76,7 +77,7 @@ class ModuleDefinitionBuilder<C : Any, E : Any, Q : Query<out Any>> internal con
 
 
 @ModuleDSL
-class FeatureBuilder<C : Any, E : Any, Q : Query<out Any>> internal constructor(private val name: String) {
+class FeatureBuilder<C : Any, E : Any, Q : Query<Any>> internal constructor(private val name: String) {
     internal val commandWithIdDefinitions = CommandWithIdDefinitions<C, E>()
 
     // TODO Ugly! Fix!
@@ -102,7 +103,7 @@ class FeatureBuilder<C : Any, E : Any, Q : Query<out Any>> internal constructor(
     }
 
     // Queries
-    class QueryDefinitions<Q : Query<out Any>, E : Any> internal constructor() {
+    class QueryDefinitions<Q : Query<Any>, E : Any> internal constructor() {
         val queryHandlers = mutableListOf<QueryDefinition<out Q, out E>>()
 
         inline fun <reified QUERY : Q> query(noinline queryHandler: (QUERY) -> Any?) {
@@ -194,11 +195,11 @@ interface QueryContext<E : Any> {
 
 inline fun <reified EVENT : Any> QueryContext<in EVENT>.queryForSequence(): Sequence<EVENT> = queryForSequence(EVENT::class)
 
-interface ModuleDefinition<C : Any, E : Any, Q : Query<out Any>> {
+interface ModuleDefinition<C : Any, E : Any, Q : Query<Any>> {
     fun initialize(initializer: HederligModuleInitializer<C, E, Q>): Module<C, E, Any, Q>
 }
 
-interface Module<C, E, R2, Q : Query<out Any>> {
+interface Module<C, E, R2, Q : Query<Any>> {
     fun <R : R2, QUERY : Query<R>> query(query: QUERY): R
     fun publish(c: C)
 }

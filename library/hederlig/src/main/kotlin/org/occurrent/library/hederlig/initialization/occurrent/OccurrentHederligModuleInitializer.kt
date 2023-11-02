@@ -24,13 +24,12 @@ import org.occurrent.dsl.query.blocking.queryForSequence
 import org.occurrent.dsl.subscription.blocking.Subscriptions
 import org.occurrent.library.hederlig.CommandContext
 import org.occurrent.library.hederlig.Module
+import org.occurrent.library.hederlig.Query
 import org.occurrent.library.hederlig.QueryContext
 import org.occurrent.library.hederlig.initialization.Handlers
 import org.occurrent.library.hederlig.initialization.HederligModuleInitializer
 import org.occurrent.library.hederlig.model.Delay
-import org.occurrent.library.hederlig.model.Query
 import kotlin.reflect.KClass
-
 
 class OccurrentHederligModuleInitializer<C : Any, E : Any, Q : Query<out Any>>(
     private val applicationService: ApplicationService<E>,
@@ -43,7 +42,7 @@ class OccurrentHederligModuleInitializer<C : Any, E : Any, Q : Query<out Any>>(
     }
 }
 
-class OccurrentModule<C : Any, E : Any, Q : Query<out Any>>(
+class OccurrentModule<C : Any, E : Any, Q : Query<Any>>(
     private val applicationService: ApplicationService<E>,
     private val subscriptionDSL: Subscriptions<E>,
     private val queriesDSL: DomainEventQueries<E>,

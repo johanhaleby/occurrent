@@ -19,8 +19,8 @@ package org.occurrent.library.hederlig.initialization
 
 import org.occurrent.library.hederlig.CommandContext
 import org.occurrent.library.hederlig.Module
+import org.occurrent.library.hederlig.Query
 import org.occurrent.library.hederlig.QueryContext
-import org.occurrent.library.hederlig.model.Query
 import kotlin.reflect.KClass
 
 data class CommandHandler<C : Any, E : Any>(
@@ -40,6 +40,6 @@ data class SubscriptionHandler<C : Any, E : Any>(
 data class Handlers<C : Any, E : Any, Q : Any>(val cmds: List<CommandHandler<C, E>>, val queries: List<QueryHandler<Q, E>>, val subscriptionHandlers: List<SubscriptionHandler<C, E>>)
 
 
-interface HederligModuleInitializer<C : Any, E : Any, Q : Query<out Any>> {
+interface HederligModuleInitializer<C : Any, E : Any, Q : Query<Any>> {
     fun initialize(handlers: Handlers<C, E, Q>): Module<C, E, Any, Q>
 }

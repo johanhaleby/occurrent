@@ -17,7 +17,7 @@
 
 package org.occurrent.library.hederlig.domain
 
-import org.occurrent.library.hederlig.model.Query
+import org.occurrent.library.hederlig.Query
 
 sealed interface DomainQuery<T : Any> : Query<T>
 data object AllNames : DomainQuery<List<String>>
