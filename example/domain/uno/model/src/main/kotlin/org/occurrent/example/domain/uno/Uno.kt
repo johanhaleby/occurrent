@@ -106,7 +106,7 @@ private data class Turn(val playerId: PlayerId, val playerCount: PlayerCount, va
 }
 
 private sealed class State
-private object NotStarted : State()
+private data object NotStarted : State()
 private data class Started(val gameId: GameId, val turn: Turn, val topCard: Card) : State()
 
 private inline fun <reified ExpectedState : State> State.coerce(doWithState: ExpectedState.() -> State): State =
