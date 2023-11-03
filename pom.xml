@@ -70,14 +70,14 @@
         <maven.compiler.target>17</maven.compiler.target>
         <junit.version>5.10.0</junit.version>
         <test-containers.version>1.19.0</test-containers.version>
-        <kotlin.version>1.9.10</kotlin.version>
+        <kotlin.version>1.9.20</kotlin.version>
         <jackson.version>2.15.2</jackson.version>
         <cloudevents.version>2.5.0</cloudevents.version>
         <reactor.version>3.5.10</reactor.version>
         <spring-data-mongodb.version>4.1.4</spring-data-mongodb.version>
         <spring-boot.version>3.1.4</spring-boot.version>
         <mongo.version>4.10.2</mongo.version>
-        <dokka.version>1.9.0</dokka.version>
+        <dokka.version>1.9.10</dokka.version>
         <sundrio.version>0.100.3</sundrio.version>
         <awaitility.version>4.2.0</awaitility.version>
         <jobrunr.version>6.3.2</jobrunr.version>
