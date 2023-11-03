@@ -32,13 +32,14 @@ val rps = decider<GameCommand, GameState, GameEvent>(
     initialState = DoesNotExist,
     decide = { c, s ->
         when {
-            c is CreateGame && s is DoesNotExist -> listOf(GameCreated(c.gameId, c.timestamp, c.playerId))
+            c is InitiateNewGame && s is DoesNotExist -> listOf(NewGameInitiated(c.gameId, c.timestamp, c.playerId))
             c is MakeHandGesture && s is WaitingForFirstPlayerToMakeGesture -> listOf(GameStarted(c.gameId, c.timestamp), HandGestureShown(c.gameId, c.timestamp, c.playerId, c.gesture))
             c is MakeHandGesture && s is WaitingForSecondPlayerToMakeGesture -> {
-                val (firstPlayerId, firstPlayerGesture) = s
+                val (firstPlayerId, firstPlayerGesture, idOfPlayerThatInitiatedTheGame) = s
                 val (gameId, timestamp, secondPlayerId, secondPayerGesture) = c
-                if (firstPlayerId == secondPlayerId) {
-                    throw IllegalArgumentException("First player is not allowed to make another hand gesture")
+                when {
+                    firstPlayerId == secondPlayerId -> throw IllegalArgumentException("First player is not allowed to make another hand gesture")
+                    idOfPlayerThatInitiatedTheGame !in setOf(firstPlayerId, secondPlayerId) -> throw IllegalArgumentException("A third player cannot join the game")
                 }
 
                 val gameResultEvent = when {
@@ -58,8 +59,8 @@ val rps = decider<GameCommand, GameState, GameEvent>(
     },
     evolve = { s, e ->
         when (e) {
-            is GameCreated -> WaitingForFirstPlayerToMakeGesture
-            is HandGestureShown -> if (s is WaitingForFirstPlayerToMakeGesture) WaitingForSecondPlayerToMakeGesture(e.player, e.gesture) else Ended
+            is NewGameInitiated -> WaitingForFirstPlayerToMakeGesture(e.playerId)
+            is HandGestureShown -> if (s is WaitingForFirstPlayerToMakeGesture) WaitingForSecondPlayerToMakeGesture(e.player, e.gesture, s.idOfPlayerThatInitiatedTheGame) else Ended
             else -> s
         }
     },

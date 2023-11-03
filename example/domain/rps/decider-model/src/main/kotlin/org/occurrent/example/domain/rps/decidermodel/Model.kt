@@ -13,7 +13,7 @@ enum class HandGesture {
 
 sealed interface GameState {
     data object DoesNotExist : GameState
-    data object WaitingForFirstPlayerToMakeGesture : GameState
-    data class WaitingForSecondPlayerToMakeGesture(val firstPlayerId: PlayerId, val firstPlayerGesture: HandGesture) : GameState
+    data class WaitingForFirstPlayerToMakeGesture(val idOfPlayerThatInitiatedTheGame: PlayerId) : GameState
+    data class WaitingForSecondPlayerToMakeGesture(val firstPlayerId: PlayerId, val firstPlayerGesture: HandGesture, val idOfPlayerThatInitiatedTheGame: PlayerId) : GameState
     data object Ended : GameState
 }

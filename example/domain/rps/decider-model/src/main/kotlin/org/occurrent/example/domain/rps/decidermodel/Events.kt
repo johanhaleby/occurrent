@@ -23,7 +23,7 @@ sealed interface GameEvent {
     val timestamp: Timestamp
 }
 
-data class GameCreated(override val gameId: GameId, override val timestamp: Timestamp, val playerId: PlayerId) : GameEvent
+data class NewGameInitiated(override val gameId: GameId, override val timestamp: Timestamp, val playerId: PlayerId) : GameEvent
 data class GameStarted(override val gameId: GameId, override val timestamp: Timestamp) : GameEvent
 data class GameEnded(override val gameId: GameId, override val timestamp: Timestamp) : GameEvent
 data class GameTied(override val gameId: GameId, override val timestamp: Timestamp) : GameEvent

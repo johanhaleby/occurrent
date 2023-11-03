@@ -23,5 +23,5 @@ sealed interface GameCommand {
 
 }
 
-data class CreateGame(override val gameId: GameId, override val timestamp: Timestamp, val playerId: PlayerId) : GameCommand
+data class InitiateNewGame(override val gameId: GameId, override val timestamp: Timestamp, val playerId: PlayerId) : GameCommand
 data class MakeHandGesture(override val gameId: GameId, override val timestamp: Timestamp, val playerId: PlayerId, val gesture: HandGesture) : GameCommand
