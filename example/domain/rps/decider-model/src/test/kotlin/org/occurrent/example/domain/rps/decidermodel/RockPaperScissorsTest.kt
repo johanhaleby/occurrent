@@ -47,7 +47,7 @@ class RockPaperScissorsTest {
 
             // Then
             assertAll(
-                { assertThat(state).isEqualTo(Created) },
+                { assertThat(state).isEqualTo(WaitingForFirstPlayerToMakeGesture) },
                 { assertThat(events).containsOnly(GameCreated(c.gameId, c.timestamp, c.playerId)) },
             )
         }
@@ -67,10 +67,11 @@ class RockPaperScissorsTest {
                 val c = CreateGame(GameId.randomUUID(), Timestamp.now(), PlayerId.randomUUID())
 
                 // When
-                val throwable = catchThrowable { rps.decideOnState(Created, c) }
+                val throwable = catchThrowable { rps.decideOnState(WaitingForFirstPlayerToMakeGesture, c) }
 
                 // Then
-                assertThat(throwable).isExactlyInstanceOf(IllegalArgumentException::class.java).hasMessage("Cannot CreateGame when game is Created")
+                assertThat(throwable).isExactlyInstanceOf(IllegalArgumentException::class.java)
+                    .hasMessage("Cannot ${CreateGame::class.simpleName} when game is ${WaitingForFirstPlayerToMakeGesture::class.simpleName}")
             }
 
             @Nested
@@ -80,14 +81,14 @@ class RockPaperScissorsTest {
                 @Test
                 fun `then game is started`() {
                     // Given
-                    val c = ShowHandGesture(GameId.randomUUID(), Timestamp.now(), PlayerId.randomUUID(), ROCK)
+                    val c = MakeHandGesture(GameId.randomUUID(), Timestamp.now(), PlayerId.randomUUID(), ROCK)
 
                     // When
-                    val (state, events) = rps.decideOnState(Created, c)
+                    val (state, events) = rps.decideOnState(WaitingForFirstPlayerToMakeGesture, c)
 
                     // Then
                     assertAll(
-                        { assertThat(state).isEqualTo(Ongoing(c.playerId, c.gesture)) },
+                        { assertThat(state).isEqualTo(WaitingForSecondPlayerToMakeGesture(c.playerId, c.gesture)) },
                         { assertThat(events).contains(GameStarted(c.gameId, c.timestamp)) },
                     )
                 }
@@ -95,10 +96,10 @@ class RockPaperScissorsTest {
                 @Test
                 fun `then hand gesture is shown`() {
                     // Given
-                    val c = ShowHandGesture(GameId.randomUUID(), Timestamp.now(), PlayerId.randomUUID(), ROCK)
+                    val c = MakeHandGesture(GameId.randomUUID(), Timestamp.now(), PlayerId.randomUUID(), ROCK)
 
                     // When
-                    val events = rps.decideOnStateAndReturnEvents(Created, c)
+                    val events = rps.decideOnStateAndReturnEvents(WaitingForFirstPlayerToMakeGesture, c)
 
                     // Then
                     assertThat(events).contains(HandGestureShown(c.gameId, c.timestamp, c.playerId, c.gesture))
@@ -111,24 +112,24 @@ class RockPaperScissorsTest {
         inner class Started {
 
             @Nested
-            @DisplayName("and first player tries to shows a different hand gesture")
+            @DisplayName("and first player tries to make a different hand gesture")
             inner class FirstPlayerGesture {
 
                 @Test
                 fun `then the rules prevents it`() {
                     // Given
-                    val c = ShowHandGesture(GameId.randomUUID(), Timestamp.now(), PlayerId.randomUUID(), ROCK)
+                    val c = MakeHandGesture(GameId.randomUUID(), Timestamp.now(), PlayerId.randomUUID(), ROCK)
 
                     // When
-                    val throwable = catchThrowable { rps.decideOnState(Ongoing(c.playerId, SCISSORS), c) }
+                    val throwable = catchThrowable { rps.decideOnState(WaitingForSecondPlayerToMakeGesture(c.playerId, SCISSORS), c) }
 
                     // Then
-                    assertThat(throwable).isExactlyInstanceOf(IllegalArgumentException::class.java).hasMessage("First player cannot show hand again")
+                    assertThat(throwable).isExactlyInstanceOf(IllegalArgumentException::class.java).hasMessage("First player is not allowed to make another hand gesture")
                 }
             }
 
             @Nested
-            @DisplayName("and second player shows a hand gesture")
+            @DisplayName("and second player makes a hand gesture")
             inner class SecondPlayerGesture {
 
                 @Test
@@ -136,10 +137,10 @@ class RockPaperScissorsTest {
                     // Given
                     val firstPlayerId = UUID.randomUUID()
                     val secondPlayerId = UUID.randomUUID()
-                    val c = ShowHandGesture(GameId.randomUUID(), Timestamp.now(), secondPlayerId, ROCK)
+                    val c = MakeHandGesture(GameId.randomUUID(), Timestamp.now(), secondPlayerId, ROCK)
 
                     // When
-                    val events = rps.decideOnStateAndReturnEvents(Ongoing(firstPlayerId, SCISSORS), c)
+                    val events = rps.decideOnStateAndReturnEvents(WaitingForSecondPlayerToMakeGesture(firstPlayerId, SCISSORS), c)
 
                     // Then
                     assertThat(events).contains(HandGestureShown(c.gameId, c.timestamp, c.playerId, ROCK))
@@ -150,10 +151,10 @@ class RockPaperScissorsTest {
                     // Given
                     val firstPlayerId = UUID.randomUUID()
                     val secondPlayerId = UUID.randomUUID()
-                    val c = ShowHandGesture(GameId.randomUUID(), Timestamp.now(), secondPlayerId, ROCK)
+                    val c = MakeHandGesture(GameId.randomUUID(), Timestamp.now(), secondPlayerId, ROCK)
 
                     // When
-                    val (state, events) = rps.decideOnState(Ongoing(firstPlayerId, SCISSORS), c)
+                    val (state, events) = rps.decideOnState(WaitingForSecondPlayerToMakeGesture(firstPlayerId, SCISSORS), c)
 
                     // Then
                     assertAll(
@@ -162,7 +163,7 @@ class RockPaperScissorsTest {
                     )
                 }
 
-                @ParameterizedTest(name = "when first player shows {0} and second player shows {1}")
+                @ParameterizedTest(name = "when first player makes {0} and second player makes {1}")
                 @CsvSource(
                     "ROCK, SCISSORS",
                     "SCISSORS, PAPER",
@@ -173,17 +174,17 @@ class RockPaperScissorsTest {
                     // Given
                     val firstPlayerId = UUID.randomUUID()
                     val secondPlayerId = UUID.randomUUID()
-                    val c = ShowHandGesture(GameId.randomUUID(), Timestamp.now(), secondPlayerId, gesture2)
+                    val c = MakeHandGesture(GameId.randomUUID(), Timestamp.now(), secondPlayerId, gesture2)
 
                     // When
-                    val events = rps.decideOnStateAndReturnEvents(Ongoing(firstPlayerId, gesture1), c)
+                    val events = rps.decideOnStateAndReturnEvents(WaitingForSecondPlayerToMakeGesture(firstPlayerId, gesture1), c)
 
                     // Then
                     val (_, _, winnerId) = events.find { it is GameWon } as GameWon
                     assertThat(winnerId).isEqualTo(firstPlayerId)
                 }
 
-                @ParameterizedTest(name = "when first player shows {0} and second player shows {1}")
+                @ParameterizedTest(name = "when first player makes {0} and second player makes {1}")
                 @CsvSource(
                     "SCISSORS, ROCK",
                     "PAPER, SCISSORS",
@@ -194,17 +195,17 @@ class RockPaperScissorsTest {
                     // Given
                     val firstPlayerId = UUID.randomUUID()
                     val secondPlayerId = UUID.randomUUID()
-                    val c = ShowHandGesture(GameId.randomUUID(), Timestamp.now(), secondPlayerId, gesture2)
+                    val c = MakeHandGesture(GameId.randomUUID(), Timestamp.now(), secondPlayerId, gesture2)
 
                     // When
-                    val events = rps.decideOnStateAndReturnEvents(Ongoing(firstPlayerId, gesture1), c)
+                    val events = rps.decideOnStateAndReturnEvents(WaitingForSecondPlayerToMakeGesture(firstPlayerId, gesture1), c)
 
                     // Then
                     val (_, _, winnerId) = events.find { it is GameWon } as GameWon
                     assertThat(winnerId).isEqualTo(secondPlayerId)
                 }
 
-                @ParameterizedTest(name = "when first player shows {0} and second player shows {1}")
+                @ParameterizedTest(name = "when first player makes {0} and second player makes {1}")
                 @CsvSource(
                     "ROCK, ROCK",
                     "SCISSORS, SCISSORS",
@@ -215,10 +216,10 @@ class RockPaperScissorsTest {
                     // Given
                     val firstPlayerId = UUID.randomUUID()
                     val secondPlayerId = UUID.randomUUID()
-                    val c = ShowHandGesture(GameId.randomUUID(), Timestamp.now(), secondPlayerId, gesture2)
+                    val c = MakeHandGesture(GameId.randomUUID(), Timestamp.now(), secondPlayerId, gesture2)
 
                     // When
-                    val events = rps.decideOnStateAndReturnEvents(Ongoing(firstPlayerId, gesture1), c)
+                    val events = rps.decideOnStateAndReturnEvents(WaitingForSecondPlayerToMakeGesture(firstPlayerId, gesture1), c)
 
                     // Then
                     assertThat(events)

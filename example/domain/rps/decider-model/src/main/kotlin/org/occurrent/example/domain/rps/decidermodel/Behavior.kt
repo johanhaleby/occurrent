@@ -33,12 +33,12 @@ val rps = decider<GameCommand, GameState, GameEvent>(
     decide = { c, s ->
         when {
             c is CreateGame && s is DoesNotExist -> listOf(GameCreated(c.gameId, c.timestamp, c.playerId))
-            c is ShowHandGesture && s is Created -> listOf(GameStarted(c.gameId, c.timestamp), HandGestureShown(c.gameId, c.timestamp, c.playerId, c.gesture))
-            c is ShowHandGesture && s is Ongoing -> {
+            c is MakeHandGesture && s is WaitingForFirstPlayerToMakeGesture -> listOf(GameStarted(c.gameId, c.timestamp), HandGestureShown(c.gameId, c.timestamp, c.playerId, c.gesture))
+            c is MakeHandGesture && s is WaitingForSecondPlayerToMakeGesture -> {
                 val (firstPlayerId, firstPlayerGesture) = s
                 val (gameId, timestamp, secondPlayerId, secondPayerGesture) = c
                 if (firstPlayerId == secondPlayerId) {
-                    throw IllegalArgumentException("First player cannot show hand again")
+                    throw IllegalArgumentException("First player is not allowed to make another hand gesture")
                 }
 
                 val gameResultEvent = when {
@@ -58,8 +58,8 @@ val rps = decider<GameCommand, GameState, GameEvent>(
     },
     evolve = { s, e ->
         when (e) {
-            is GameCreated -> Created
-            is HandGestureShown -> if (s is Created) Ongoing(e.player, e.gesture) else Ended
+            is GameCreated -> WaitingForFirstPlayerToMakeGesture
+            is HandGestureShown -> if (s is WaitingForFirstPlayerToMakeGesture) WaitingForSecondPlayerToMakeGesture(e.player, e.gesture) else Ended
             else -> s
         }
     },
