@@ -18,23 +18,23 @@ package org.occurrent.example.domain.uno
 
 
 sealed class Digit {
-    object Zero : Digit()
-    object One : Digit()
-    object Two : Digit()
-    object Three : Digit()
-    object Four : Digit()
-    object Five : Digit()
-    object Six : Digit()
-    object Seven : Digit()
-    object Eight : Digit()
-    object Nine : Digit()
+    data object Zero : Digit()
+    data object One : Digit()
+    data object Two : Digit()
+    data object Three : Digit()
+    data object Four : Digit()
+    data object Five : Digit()
+    data object Six : Digit()
+    data object Seven : Digit()
+    data object Eight : Digit()
+    data object Nine : Digit()
 }
 
 sealed class Color {
-    object Red : Color()
-    object Green : Color()
-    object Blue : Color()
-    object Yellow : Color()
+    data object Red : Color()
+    data object Green : Color()
+    data object Blue : Color()
+    data object Yellow : Color()
 }
 
 sealed class Card {
@@ -46,6 +46,6 @@ sealed class Card {
 }
 
 sealed class Direction {
-    object Clockwise : Direction()
-    object CounterClockwise : Direction()
+    data object Clockwise : Direction()
+    data object CounterClockwise : Direction()
 }
