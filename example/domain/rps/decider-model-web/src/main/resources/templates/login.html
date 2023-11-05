@@ -1,0 +1,21 @@
+<!doctype html>
+<html lang="en" xmlns:layout="http://www.ultraq.net.nz/thymeleaf/layout" layout:decorate="~{/layout.html}"
+      xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+      xsi:schemaLocation="http://www.ultraq.net.nz/thymeleaf/layout http://www.ultraq.net.nz/thymeleaf/layout">
+<head>
+    <title>Rock Paper Scissors</title>
+</head>
+<body>
+<section layout:fragment="content">
+    <form class="row g-3" action="/login" method="POST">
+        <div class="col-auto">
+            <label for="email" class="form-control">Email</label>
+            <input type="email" class="form-control" id="email" name="email" placeholder="john@doe.org">
+        </div>
+        <div class="col-auto">
+            <button type="submit" class="btn btn-primary mb-3">Confirm identity</button>
+        </div>
+    </form>
+</section>
+</body>
+</html>

@@ -1,0 +1,18 @@
+spring:
+  application:
+    name: rps-decider-web
+  thymeleaf:
+    cache: false
+    # Specifying the prefix like this will load the templates from disk.
+    # This way, you can press F5 in the browser without recompiling when changing html/templates.
+    prefix: file:/Users/johan/devtools/java/projects/occurrent/example/domain/rps/decider-model-web/src/main/resources/templates/
+#    prefix: classpath:/templates/
+# In production use this:
+#  prefix: classpath:/templates/
+# Or simply remove it.
+occurrent:
+  cloud-event-converter:
+    cloud-event-source: "org:occurrent:rps"
+logging:
+  level:
+    org.springframework: debug
