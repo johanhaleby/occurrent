@@ -62,4 +62,22 @@ class JacksonCloudEventConverterKotlinTest {
         // Then
         assertThat(cloudEventConverter.toDomainEvent(data)).isEqualTo(MyEvent("123"))
     }
+
+    @Test
+    fun `using kotlin extensions`() {
+        // Given
+        val objectMapper = ObjectMapper()
+        val cloudEventConverter: JacksonCloudEventConverter<BaseEvent> =
+            jacksonCloudEventConverter(
+                objectMapper = objectMapper,
+                cloudEventSource = URI.create("urn:myevents"),
+                typeMapper = MyCloudEventTypeMapper(),
+            )
+
+        // When
+        val data = cloudEventConverter.toCloudEvent(MyEvent("123"))
+
+        // Then
+        assertThat(cloudEventConverter.toDomainEvent(data)).isEqualTo(MyEvent("123"))
+    }
 }

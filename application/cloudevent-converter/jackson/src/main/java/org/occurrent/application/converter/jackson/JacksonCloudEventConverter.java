@@ -44,7 +44,7 @@ import static java.util.Objects.requireNonNull;
  * @param <T> The type of your domain event(s) to convert
  */
 public class JacksonCloudEventConverter<T> implements CloudEventConverter<T> {
-    private static final String DEFAULT_CONTENT_TYPE = "application/json";
+    static final String DEFAULT_CONTENT_TYPE = "application/json";
 
     private final ObjectMapper objectMapper;
     private final URI cloudEventSource;
@@ -211,19 +211,19 @@ public class JacksonCloudEventConverter<T> implements CloudEventConverter<T> {
     }
 
 
-    private static <T> Function<T, String> defaultIdMapperFunction() {
+    static <T> Function<T, String> defaultIdMapperFunction() {
         return __ -> UUID.randomUUID().toString();
     }
 
-    private static <T> CloudEventTypeMapper<T> defaultTypeMapper() {
+    static <T> CloudEventTypeMapper<T> defaultTypeMapper() {
         return ReflectionCloudEventTypeMapper.qualified();
     }
 
-    private static <T> Function<T, OffsetDateTime> defaultTimeMapperFunction() {
+    static <T> Function<T, OffsetDateTime> defaultTimeMapperFunction() {
         return __ -> OffsetDateTime.now(UTC);
     }
 
-    private static <T> Function<T, String> defaultSubjectMapperFunction() {
+    static <T> Function<T, String> defaultSubjectMapperFunction() {
         return __ -> null;
     }
 }
