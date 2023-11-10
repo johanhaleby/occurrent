@@ -194,6 +194,7 @@ interface QueryContext<E : Any> {
 }
 
 inline fun <reified EVENT : Any> QueryContext<in EVENT>.queryForSequence(): Sequence<EVENT> = queryForSequence(EVENT::class)
+inline fun <reified EVENT : Any> QueryContext<in EVENT>.queryForList(): List<EVENT> = queryForSequence<EVENT>().toList()
 
 interface ModuleDefinition<C : Any, E : Any, Q : Query<Any>> {
     fun initialize(initializer: HederligModuleInitializer<C, E, Q>): Module<C, E, Any, Q>
