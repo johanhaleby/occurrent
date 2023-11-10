@@ -102,7 +102,7 @@ class HederligOccurrentTest {
                 }
                 queries {
                     query<AllNames> { ctx ->
-                        ctx.queryForSequence<NameDefined>().map { e -> e.name() }
+                        ctx.queryForSequence<NameDefined>().map { e -> e.name() }.toList()
                     }
                     query<PersonNamed> { (name), ctx ->
                         ctx.queryForSequence<NameDefined>().filter { e -> e.name() == name }

@@ -21,7 +21,7 @@ import org.occurrent.library.hederlig.initialization.*
 import org.occurrent.library.hederlig.model.Delay
 import kotlin.reflect.KClass
 
-typealias Query<R> = Query<R>
+typealias Query<R> = Function<R>
 
 /**
  * DSL marker annotation which is used to limit callers so that they will not have implicit access to multiple receivers whose classes are in the set of annotated classes.
@@ -203,12 +203,3 @@ interface Module<C, E, R2, Q : Query<Any>> {
     fun <R : R2, QUERY : Query<R>> query(query: QUERY): R
     fun publish(c: C)
 }
-
-//@Suppress("BOUNDS_NOT_ALLOWED_IF_BOUNDED_BY_TYPE_PARAMETER")
-//interface Module<C : Any, E : Any, Q : Query<out Any>> {
-//    fun <R, IKK> query(q: IKK): R                 
-//            where IKK : Query<R>,
-//                  IKK : Q
-//
-//    fun publish(c: C)
-//}
