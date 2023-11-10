@@ -105,7 +105,7 @@ class HederligOccurrentTest {
                         ctx.queryForList<NameDefined>().map { e -> e.name() }.toList()
                     }
                     query<PersonNamed> { (name), ctx ->
-                        ctx.queryForList<NameDefined>().first { e -> e.name() == name }
+                        ctx.queryForList<NameDefined>().firstOrNull { e -> e.name() == name }?.name
                     }
                 }
             }
@@ -117,5 +117,6 @@ class HederligOccurrentTest {
 
         val names = module.query(AllNames)
         names.forEach(::println)
+        println(module.query(PersonNamed("Some Doe")))
     }
 }
