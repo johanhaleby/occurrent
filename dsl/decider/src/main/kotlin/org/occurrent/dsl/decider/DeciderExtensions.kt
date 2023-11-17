@@ -31,7 +31,7 @@ operator fun <S, E> Decider.Decision<S, E>.component2() : List<E> = events
 
 
 fun <C, S, E> ApplicationService<E>.execute(streamId: String, c: C, decider: Decider<C, S, E>) = execute(streamId) { events: List<E> ->
-    decider.decideOnEventAndReturnEvents(events, c)
+    decider.decideOnEventsAndReturnEvents(events, c)
 }
 
 fun <C, S, E> ApplicationService<E>.execute(streamId: UUID, c: C, decider: Decider<C, S, E>) = execute(streamId.toString(), c, decider)

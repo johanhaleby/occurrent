@@ -17,7 +17,7 @@ data class PlayerHandGesture(val playerId: PlayerId, val handGesture: HandGestur
 
 
 sealed interface RoundState {
-    data object Ongoing : RoundState
+    data object Started : RoundState
     sealed interface Ended : RoundState {
         data object Tied : Ended
         data class WonBy(val playerId: PlayerId) : Ended

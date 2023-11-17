@@ -31,7 +31,7 @@ import org.occurrent.example.domain.rps.multirounddecidermodel.InitiateNewGame.N
 class RockPaperScissorsExample {
 
     @Test
-    fun `winner is lpaer`() {
+    fun winner() {
         // Given
         val gameId = GameId.randomUUID()
         val firstPlayerId = PlayerId.randomUUID()

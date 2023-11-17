@@ -18,30 +18,27 @@
 package org.occurrent.example.domain.rps.multirounddecidermodel
 
 import org.occurrent.dsl.decider.decider
-import org.occurrent.example.domain.rps.multirounddecidermodel.GameLogic.initiateNewGame
 import org.occurrent.example.domain.rps.multirounddecidermodel.GameLogic.handleFirstHandGesture
-import org.occurrent.example.domain.rps.multirounddecidermodel.GameLogic.handleSecondHandGesture
+import org.occurrent.example.domain.rps.multirounddecidermodel.GameLogic.initiateNewGame
 import org.occurrent.example.domain.rps.multirounddecidermodel.GameStatus.*
 import org.occurrent.example.domain.rps.multirounddecidermodel.GameStatus.Ended
 import org.occurrent.example.domain.rps.multirounddecidermodel.HandGesture.*
 import org.occurrent.example.domain.rps.multirounddecidermodel.InitiateNewGame.NumberOfRounds.*
 import org.occurrent.example.domain.rps.multirounddecidermodel.StateManagement.DecisionState.*
-import org.occurrent.example.domain.rps.multirounddecidermodel.StateManagement.DecisionState.WaitingForFirstHandGesture.WaitingForFirstPlayerToShowFirstHandGestureInGame
-import org.occurrent.example.domain.rps.multirounddecidermodel.StateManagement.DecisionState.WaitingForFirstHandGesture.WaitingForPlayerToShowFirstHandGestureInRound
-import org.occurrent.example.domain.rps.multirounddecidermodel.StateManagement.DecisionState.WaitingForSecondHandGesture.*
-import org.occurrent.example.domain.rps.multirounddecidermodel.StateManagement.DecisionState.WaitingForSecondHandGesture.RoundOutcome.WonBy
-import org.occurrent.example.domain.rps.multirounddecidermodel.StateManagement.evolveDecisionState
+import org.occurrent.example.domain.rps.multirounddecidermodel.StateManagement.DecisionState.AllRoundsPlayed.RoundOutcome
+import org.occurrent.example.domain.rps.multirounddecidermodel.StateManagement.DecisionState.WaitingForHandGesture.WaitingForFirstHandGestureInRound
+import org.occurrent.example.domain.rps.multirounddecidermodel.StateManagement.DecisionState.WaitingForHandGesture.WaitingForSecondHandGestureInRound
+import org.occurrent.example.domain.rps.multirounddecidermodel.StateManagement.evolveToDecisionState
 import org.occurrent.example.domain.rps.multirounddecidermodel.StateManagement.toDecisionState
 
 val rps = decider<GameCommand, GameState?, GameEvent>(
     initialState = null,
     decide = { c, gameState ->
-        val s = gameState.toDecisionState()
+        val decisionState = gameState.toDecisionState()
         when {
-            c is InitiateNewGame && s == DoesNotExist -> initiateNewGame(c)
-            c is ShowHandGesture && s is WaitingForFirstHandGesture -> handleFirstHandGesture(s, c)
-            c is ShowHandGesture && s is WaitingForSecondHandGesture -> handleSecondHandGesture(c, s, gameState)
-            else -> throw IllegalArgumentException("Cannot ${c::class.simpleName} when game is ${s::class.simpleName}")
+            c is InitiateNewGame && decisionState == DoesNotExist -> initiateNewGame(c)
+            c is ShowHandGesture && decisionState is WaitingForHandGesture -> handleFirstHandGesture(gameState, decisionState, c)
+            else -> throw IllegalArgumentException("Cannot ${c::class.simpleName} when game is ${decisionState::class.simpleName}")
         }
     },
     evolve = StateManagement::evolveDomainState,
@@ -51,55 +48,51 @@ val rps = decider<GameCommand, GameState?, GameEvent>(
 private object GameLogic {
     fun initiateNewGame(c: InitiateNewGame) = listOf(NewGameInitiated(c.gameId, c.timestamp, c.playerId, c.numberOfRounds.toInt()))
 
-    fun handleFirstHandGesture(s: WaitingForFirstHandGesture, c: ShowHandGesture): List<GameEvent> {
-        val events = mutableListOf<GameEvent>()
-        val roundNumber = when (s) {
-            is WaitingForFirstPlayerToShowFirstHandGestureInGame -> {
-                events.add(GameStarted(c.gameId, c.timestamp))
-                1
+    fun handleFirstHandGesture(domainState: GameState?, decisionState: WaitingForHandGesture, c: ShowHandGesture): List<GameEvent> =
+        when (decisionState) {
+            is WaitingForHandGesture.WaitingForFirstHandGestureInGame -> listOf(
+                GameStarted(c.gameId, c.timestamp),
+                RoundStarted(c.gameId, c.timestamp, roundNumber = decisionState.roundNumber, c.playerId),
+                HandGestureShown(c.gameId, c.timestamp, c.playerId, c.gesture),
+            )
+
+            is WaitingForHandGesture.WaitingForSecondHandGestureInGame -> playRound(c.gameId, c.timestamp, decisionState.roundNumber, decisionState.firstHandGestureInGame, PlayerHandGesture(c.playerId, c.gesture))
+            is WaitingForFirstHandGestureInRound -> {
+                require(decisionState.playerId in setOf(decisionState.firstPlayerId, decisionState.secondPlayerId)) { "A third player cannot join the game" }
+                listOf(
+                    RoundStarted(c.gameId, c.timestamp, decisionState.lastRoundNumber.inc(), c.playerId),
+                    HandGestureShown(c.gameId, c.timestamp, c.playerId, c.gesture),
+                )
             }
 
-            is WaitingForPlayerToShowFirstHandGestureInRound -> {
-                require(s.playerId in setOf(s.firstPlayerId, s.secondPlayerId)) { "A third player cannot join the game" }
-                s.lastRoundNumber.inc()
+            is WaitingForSecondHandGestureInRound -> {
+                val (gameId, timestamp, thisPlayerId, thisHandGesture) = c
+                val events = mutableListOf<GameEvent>()
+                val secondHandGesture = PlayerHandGesture(thisPlayerId, thisHandGesture)
+                events.addAll(playRound(gameId, timestamp, decisionState.roundNumber, decisionState.firstHandGestureInRound, secondHandGesture))
+
+                if (decisionState.isLastRound()) {
+                    val stateAfterAllRoundsPlayed = evolveToDecisionState(domainState, events) as? AllRoundsPlayed ?: throw IllegalStateException("Expected state ${AllRoundsPlayed::class.simpleName}")
+                    val gameResultEvent = when (val gameResult = stateAfterAllRoundsPlayed.gameResult) {
+                        GameResult.Tied -> GameTied(gameId, timestamp)
+                        is GameResult.WonBy -> GameWon(gameId, timestamp, gameResult.playerId)
+                    }
+
+                    events.add(gameResultEvent)
+                    events.add(GameEnded(gameId, timestamp))
+                }
+                events
             }
         }
-        return events + RoundStarted(c.gameId, c.timestamp, roundNumber, c.playerId) + HandGestureShown(c.gameId, c.timestamp, c.playerId, c.gesture)
-    }
 
-    fun handleSecondHandGesture(c: ShowHandGesture, s: WaitingForSecondHandGesture, gameState: GameState?): List<GameEvent> {
-        val (gameId, timestamp, thisPlayerId, secondHandGesture) = c
-
-        require(s.playerIdThatMadeTheFirstHandGestureInRound != thisPlayerId) {
-            "Player ${s.playerIdThatMadeTheFirstHandGestureInRound} is not allowed to make another hand gesture"
-        }
-
-        if (s is WaitingForPlayerToMakeSecondHandGestureInRound) {
-            require(thisPlayerId in setOf(s.firstPlayerId, s.secondPlayerId)) {
-                throw IllegalArgumentException("A third player cannot join the game")
-            }
-        }
-
+    private fun playRound(gameId: GameId, timestamp: Timestamp, roundNumber: RoundNumber, firstHandGesture: PlayerHandGesture, secondHandGesture: PlayerHandGesture): List<GameEvent> {
+        val handGestureShown = HandGestureShown(gameId, timestamp, secondHandGesture.playerId, secondHandGesture.handGesture)
         val roundResultEvent = when {
-            s.firstHandGestureInRound hasHandGesture secondHandGesture -> RoundTied(gameId, timestamp, s.roundNumber)
-            s.firstHandGestureInRound beats secondHandGesture -> RoundWon(gameId, timestamp, s.roundNumber, s.playerIdThatMadeTheFirstHandGestureInRound)
-            else -> RoundWon(gameId, timestamp, s.roundNumber, thisPlayerId)
+            firstHandGesture hasSameHandGesture secondHandGesture -> RoundTied(gameId, timestamp, roundNumber)
+            firstHandGesture beats secondHandGesture -> RoundWon(gameId, timestamp, roundNumber, firstHandGesture.playerId)
+            else -> RoundWon(gameId, timestamp, roundNumber, secondHandGesture.playerId)
         }
-
-        val events = mutableListOf(HandGestureShown(gameId, timestamp, thisPlayerId, secondHandGesture), roundResultEvent)
-
-        if (s.isLastRound()) {
-            val stateAfterAllRoundsPlayed = evolveDecisionState(gameState, roundResultEvent) as AllRoundsPlayed
-            val gameResultEvent = when (val gameResult = stateAfterAllRoundsPlayed.gameResult) {
-                GameResult.Tied -> GameTied(gameId, timestamp)
-                is GameResult.WonBy -> GameWon(gameId, timestamp, gameResult.playerId)
-            }
-
-            events.add(gameResultEvent)
-            events.add(GameEnded(gameId, timestamp))
-        }
-
-        return events
+        return listOf(handGestureShown, roundResultEvent)
     }
 
     private val AllRoundsPlayed.gameResult
@@ -109,7 +102,7 @@ private object GameLogic {
             val (numberOfTiedGames, wins) = roundOutcomes.fold(GameStats()) { gameStats, roundOutcome ->
                 when (roundOutcome) {
                     RoundOutcome.Tied -> gameStats.copy(numberOfTiedGames = gameStats.numberOfTiedGames.inc())
-                    is WonBy -> {
+                    is RoundOutcome.WonBy -> {
                         gameStats.wins.compute(roundOutcome.winnerId) { _, numberOfWins ->
                             numberOfWins?.inc() ?: 1
                         }
@@ -135,8 +128,8 @@ private object GameLogic {
         FIVE -> 5
     }
 
-    private infix fun PlayerHandGesture.beats(other: HandGesture): Boolean = this.handGesture.beats(other)
-    private infix fun PlayerHandGesture.hasHandGesture(other: HandGesture): Boolean = this.handGesture == other
+    private infix fun PlayerHandGesture.beats(other: PlayerHandGesture): Boolean = this.handGesture.beats(other.handGesture)
+    private infix fun PlayerHandGesture.hasSameHandGesture(other: PlayerHandGesture): Boolean = this.handGesture == other.handGesture
 
     private infix fun HandGesture.beats(other: HandGesture): Boolean = when {
         this == ROCK && other == SCISSORS -> true
@@ -155,58 +148,46 @@ private object StateManagement {
 
     sealed interface DecisionState {
         data object DoesNotExist : DecisionState
-        sealed interface WaitingForFirstHandGesture : DecisionState {
-            val playerId: PlayerId
+        sealed interface WaitingForHandGesture : DecisionState {
 
-            data class WaitingForFirstPlayerToShowFirstHandGestureInGame(override val playerId: PlayerId) : WaitingForFirstHandGesture
+            data class WaitingForFirstHandGestureInGame(val gameInitiatedBy: PlayerId) : WaitingForHandGesture {
+                val roundNumber: RoundNumber get() = 1
+            }
 
-            data class WaitingForPlayerToShowFirstHandGestureInRound(override val playerId: PlayerId, val lastRoundNumber: RoundNumber, val firstPlayerId: PlayerId, val secondPlayerId: PlayerId) :
-                WaitingForFirstHandGesture
+            data class WaitingForSecondHandGestureInGame(val firstHandGestureInGame: PlayerHandGesture) : WaitingForHandGesture {
+                val roundNumber: RoundNumber get() = 1
+            }
+
+            data class WaitingForFirstHandGestureInRound(val playerId: PlayerId, val lastRoundNumber: RoundNumber, val firstPlayerId: PlayerId, val secondPlayerId: PlayerId) : WaitingForHandGesture
+            data class WaitingForSecondHandGestureInRound(
+                val firstHandGestureInRound: PlayerHandGesture,
+                val roundNumber: RoundNumber,
+                val totalNumberOfRounds: NumberOfRounds,
+                val firstPlayerId: PlayerId,
+                val secondPlayerId: PlayerId,
+            ) : WaitingForHandGesture {
+                fun isLastRound() = roundNumber == totalNumberOfRounds
+            }
         }
 
-        sealed interface WaitingForSecondHandGesture : DecisionState {
-            val firstHandGestureInRound: PlayerHandGesture
-            val roundNumber: RoundNumber
-            val totalNumberOfRounds: NumberOfRounds
-
+        data class AllRoundsPlayed(val firstPlayerId: PlayerId, val secondPlayerId: PlayerId, val roundOutcomes: List<RoundOutcome>) : DecisionState {
             sealed interface RoundOutcome {
                 data object Tied : RoundOutcome
                 data class WonBy(val winnerId: PlayerId) : RoundOutcome
             }
-
-
-            val playerIdThatMadeTheFirstHandGestureInRound: PlayerId get() = firstHandGestureInRound.playerId
-            fun isLastRound() = totalNumberOfRounds == roundNumber
-
-            data class WaitingForSecondPlayerToMakeFirstHandGestureInGame(
-                override val firstHandGestureInRound: PlayerHandGesture,
-                override val roundNumber: RoundNumber,
-                override val totalNumberOfRounds: NumberOfRounds,
-            ) : WaitingForSecondHandGesture
-
-            data class WaitingForPlayerToMakeSecondHandGestureInRound(
-                override val firstHandGestureInRound: PlayerHandGesture,
-                override val roundNumber: RoundNumber,
-                override val totalNumberOfRounds: NumberOfRounds,
-                val firstPlayerId: PlayerId,
-                val secondPlayerId: PlayerId,
-            ) : WaitingForSecondHandGesture
         }
 
-        data object WaitingForNextRoundToStart : DecisionState
-        data class AllRoundsPlayed(val firstPlayerId: PlayerId, val secondPlayerId: PlayerId, val roundOutcomes: List<RoundOutcome>) : DecisionState
         data object Ended : DecisionState
-
     }
 
     fun GameState?.toDecisionState(): DecisionState = when (this) {
         null -> DoesNotExist
         else -> when (status) {
-            WaitingForFirstHandGestureInGame -> WaitingForFirstPlayerToShowFirstHandGestureInGame(initiatedBy)
+            WaitingForFirstHandGestureInGame -> WaitingForHandGesture.WaitingForFirstHandGestureInGame(initiatedBy)
             WaitingForSecondHandGestureInGame -> {
                 val round = rounds.last()
                 val firstHandGestureInGame = round.handGestures.first()
-                WaitingForSecondPlayerToMakeFirstHandGestureInGame(firstHandGestureInGame, round.roundNumber, totalNumberOfRounds)
+                WaitingForHandGesture.WaitingForSecondHandGestureInGame(firstHandGestureInGame)
             }
 
             Ongoing -> {
@@ -215,24 +196,18 @@ private object StateManagement {
                 val (roundNumber, startedBy, handGestures, state) = currentRound
 
                 when (state) {
-                    RoundState.Ongoing ->
-                        if (handGestures.isEmpty()) {
-                            WaitingForPlayerToShowFirstHandGestureInRound(startedBy, roundNumber, firstPlayerId!!, secondPlayerId!!)
-                        } else {
-                            WaitingForPlayerToMakeSecondHandGestureInRound(handGestures[0], roundNumber, totalNumberOfRounds, firstPlayerId!!, secondPlayerId!!)
-                        }
-
-                    RoundState.Ended.Tied, is RoundState.Ended.WonBy -> if (isLastRound) {
+                    RoundState.Started -> WaitingForSecondHandGestureInRound(handGestures[0], roundNumber, totalNumberOfRounds, firstPlayerId!!, secondPlayerId!!)
+                    is RoundState.Ended -> if (isLastRound) {
                         val roundOutcomes = rounds.mapNotNull { round ->
                             when (round.state) {
                                 RoundState.Ended.Tied -> RoundOutcome.Tied
-                                is RoundState.Ended.WonBy -> WonBy(round.state.playerId)
-                                RoundState.Ongoing -> null
+                                is RoundState.Ended.WonBy -> RoundOutcome.WonBy(round.state.playerId)
+                                RoundState.Started -> null
                             }
                         }
                         AllRoundsPlayed(firstPlayerId!!, secondPlayerId!!, roundOutcomes)
                     } else {
-                        WaitingForNextRoundToStart
+                        WaitingForFirstHandGestureInRound(startedBy, roundNumber, firstPlayerId!!, secondPlayerId!!)
                     }
                 }
             }
@@ -241,33 +216,35 @@ private object StateManagement {
         }
     }
 
-    fun evolveDecisionState(s: GameState?, e: GameEvent): DecisionState = evolveDomainState(s, e).toDecisionState()
+    fun evolveToDecisionState(s: GameState?, es: List<GameEvent>): DecisionState = es.fold(s, ::evolveDomainState).toDecisionState()
 
     fun evolveDomainState(s: GameState?, e: GameEvent): GameState {
-        fun updateLastRound(fn: (Round) -> Round): GameState {
-            val thisRound = s!!.rounds.last()
+        fun updateRoundNumber(roundNumber: RoundNumber, fn: (Round) -> Round): GameState {
+            val thisRound = s!!.rounds.first { it.roundNumber == roundNumber }
             val updatedRound = fn(thisRound)
-            return s.copy(rounds = s.rounds.dropLast(1) + updatedRound)
+            val newRounds = s.rounds.map { round -> if (round.roundNumber == roundNumber) updatedRound else round }
+            return s.copy(rounds = newRounds)
         }
 
         return when (e) {
             is NewGameInitiated -> GameState(e.gameId, initiatedBy = e.playerId, firstPlayerId = null, secondPlayerId = null, e.numberOfRounds, rounds = emptyList(), status = WaitingForFirstHandGestureInGame)
             is GameStarted, is GameWon, is GameTied -> s!!
             is GameEnded -> s!!.copy(status = Ended)
-            is RoundStarted -> s!!.copy(rounds = s.rounds + Round(e.roundNumber, startedBy = e.startedBy, handGestures = emptyList(), state = RoundState.Ongoing))
+            is RoundStarted -> s!!.copy(rounds = s.rounds + Round(e.roundNumber, startedBy = e.startedBy, handGestures = emptyList(), state = RoundState.Started))
             is HandGestureShown -> {
-                val gameWithNewHandGesture = updateLastRound { round ->
+                val roundNumber = s!!.rounds.last().roundNumber
+                val gameWithNewHandGesture = updateRoundNumber(roundNumber) { round ->
                     round.copy(handGestures = round.handGestures + PlayerHandGesture(e.playerId, e.gesture))
                 }
-                val handGesturesInFirstRound = gameWithNewHandGesture.rounds.first().handGestures
+
                 when (gameWithNewHandGesture.status) {
                     WaitingForFirstHandGestureInGame -> gameWithNewHandGesture.copy(
-                        firstPlayerId = handGesturesInFirstRound.first().playerId,
+                        firstPlayerId = e.playerId,
                         status = WaitingForSecondHandGestureInGame
                     )
 
                     WaitingForSecondHandGestureInGame -> gameWithNewHandGesture.copy(
-                        secondPlayerId = handGesturesInFirstRound[1].playerId,
+                        secondPlayerId = e.playerId,
                         status = Ongoing
                     )
 
@@ -275,11 +252,11 @@ private object StateManagement {
                 }
             }
 
-            is RoundTied -> updateLastRound { round ->
+            is RoundTied -> updateRoundNumber(e.roundNumber) { round ->
                 round.copy(state = RoundState.Ended.Tied)
             }
 
-            is RoundWon -> updateLastRound { round ->
+            is RoundWon -> updateRoundNumber(e.roundNumber) { round ->
                 round.copy(state = RoundState.Ended.WonBy(e.playerId))
             }
         }

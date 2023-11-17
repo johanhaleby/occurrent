@@ -23,10 +23,14 @@ sealed interface GameEvent {
     val timestamp: Timestamp
 }
 
+sealed interface RoundEvent : GameEvent {
+    val roundNumber: RoundNumber
+}
+
 data class NewGameInitiated(override val gameId: GameId, override val timestamp: Timestamp, val playerId: PlayerId, val numberOfRounds : NumberOfRounds) : GameEvent
-data class RoundStarted(override val gameId: GameId, override val timestamp: Timestamp, val roundNumber: RoundNumber, val startedBy: PlayerId) : GameEvent
-data class RoundWon(override val gameId: GameId, override val timestamp: Timestamp, val roundNumber: RoundNumber, val playerId: PlayerId) : GameEvent
-data class RoundTied(override val gameId: GameId, override val timestamp: Timestamp, val roundNumber: RoundNumber) : GameEvent
+data class RoundStarted(override val gameId: GameId, override val timestamp: Timestamp, override val roundNumber: RoundNumber, val startedBy: PlayerId) : RoundEvent
+data class RoundWon(override val gameId: GameId, override val timestamp: Timestamp, override val roundNumber: RoundNumber, val playerId: PlayerId) : RoundEvent
+data class RoundTied(override val gameId: GameId, override val timestamp: Timestamp, override val roundNumber: RoundNumber) : RoundEvent
 data class GameStarted(override val gameId: GameId, override val timestamp: Timestamp) : GameEvent
 data class GameEnded(override val gameId: GameId, override val timestamp: Timestamp) : GameEvent
 data class GameTied(override val gameId: GameId, override val timestamp: Timestamp) : GameEvent
