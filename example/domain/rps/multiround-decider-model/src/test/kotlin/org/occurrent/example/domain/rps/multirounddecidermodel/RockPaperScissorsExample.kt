@@ -21,7 +21,6 @@ import org.junit.jupiter.api.DisplayName
 import org.junit.jupiter.api.DisplayNameGeneration
 import org.junit.jupiter.api.DisplayNameGenerator
 import org.junit.jupiter.api.Test
-import org.occurrent.dsl.decider.Decider.Decision
 import org.occurrent.dsl.decider.component1
 import org.occurrent.dsl.decider.component2
 import org.occurrent.example.domain.rps.multirounddecidermodel.InitiateNewGame.NumberOfRounds.THREE
@@ -38,7 +37,7 @@ class RockPaperScissorsExample {
         val secondPlayerId = PlayerId.randomUUID()
 
         // When
-        val (state, events) = executeCommands(
+        val (state, events) = rps.decideOnEvents(emptyList(),
             InitiateNewGame(gameId, Timestamp.now(), firstPlayerId, THREE),
 
             ShowHandGesture(gameId, Timestamp.now(), firstPlayerId, HandGesture.PAPER),
@@ -56,10 +55,4 @@ class RockPaperScissorsExample {
         println()
         println("events:\n${events.joinToString("\n")}")
     }
-
-    private fun executeCommands(vararg gameCommands: GameCommand): Decision<GameState, GameEvent> =
-        gameCommands.fold(Decision<GameState, GameEvent>(null, emptyList())) { decision, c ->
-            val (newState, newEvents) = rps.decideOnState(decision.state, c)
-            Decision(newState, decision.events + newEvents)
-        }
 }
