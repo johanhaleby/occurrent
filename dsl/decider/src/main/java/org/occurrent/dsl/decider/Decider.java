@@ -43,7 +43,7 @@ public interface Decider<C, S, E> {
         return new Decision<>(newState, newEvents);
     }
 
-    default List<E> decideOnEventAndReturnEvents(List<E> events, C command) {
+    default List<E> decideOnEventsAndReturnEvents(List<E> events, C command) {
         return decideOnEvents(events, command).events;
     }
 
