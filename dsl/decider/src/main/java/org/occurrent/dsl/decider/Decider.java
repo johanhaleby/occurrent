@@ -46,14 +46,17 @@ public interface Decider<C, S, E> {
 
     @NotNull
     default Decision<S, E> decideOnEvents(List<E> events, List<C> commands) {
-        Decision<S, E> decision = new Decision<>(initialState(), Collections.emptyList());
+        Decision<S, E> decision = new Decision<>(initialState(), events);
         for (C command : commands) {
-            Decision<S, E> thisDecision = decideOnEventsWithSingleCommand(events, command);
+            Decision<S, E> thisDecision = decideOnEventsWithSingleCommand(decision.events, command);
             List<E> accumulatedEvents = new ArrayList<>(decision.events);
             accumulatedEvents.addAll(thisDecision.events);
             decision = new Decision<>(thisDecision.state, accumulatedEvents);
         }
-        return decision;
+        // The decision now has all events, including the ones we passed in. But we're only interested
+        // in the new ones, thus we remove the events that we passed in.
+        List<E> newEvents = decision.events.subList(events.size(), decision.events.size());
+        return new Decision<>(decision.state, newEvents);
     }
 
     @NotNull
