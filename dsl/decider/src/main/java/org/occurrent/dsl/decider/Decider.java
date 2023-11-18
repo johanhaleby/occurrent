@@ -39,21 +39,14 @@ public interface Decider<C, S, E> {
 
     @SuppressWarnings("unchecked")
     default Decision<S, E> decideOnEvents(List<E> events, C command, C... additionalCommands) {
-        BiFunction<List<E>, C, Decision<S, E>> single = (es, c) -> {
-            @Nullable S currentState = fold(initialState(), es);
-            List<E> newEvents = decide(c, currentState);
-            S newState = fold(currentState, newEvents);
-            return new Decision<>(newState, newEvents);
-        };
-
-        Decision<S, E> decisionAfterFirstCommand = single.apply(events, command);
+        Decision<S, E> decisionAfterFirstCommand = makeDecisionOnSingleEvent(events, command);
         final Decision<S, E> finalDecision;
         if (additionalCommands == null || additionalCommands.length == 0) {
             finalDecision = decisionAfterFirstCommand;
         } else {
             Decision<S, E> decision = decisionAfterFirstCommand;
             for (C additionalCommand : additionalCommands) {
-                Decision<S, E> thisDecision = single.apply(decision.events, additionalCommand);
+                Decision<S, E> thisDecision = makeDecisionOnSingleEvent(decision.events, additionalCommand);
                 List<E> accumulatedEvents = new ArrayList<>(decision.events);
                 accumulatedEvents.addAll(thisDecision.events);
                 decision = new Decision<>(thisDecision.state, accumulatedEvents);
@@ -85,6 +78,14 @@ public interface Decider<C, S, E> {
 
     default @Nullable S decideOnStateAndReturnState(S state, C command) {
         return decideOnState(state, command).state;
+    }
+
+    @NotNull
+    private Decision<S, E> makeDecisionOnSingleEvent(List<E> events, C command) {
+        @Nullable S currentState = fold(initialState(), events);
+        List<E> newEvents = decide(command, currentState);
+        S newState = fold(currentState, newEvents);
+        return new Decision<>(newState, newEvents);
     }
 
     @Nullable
