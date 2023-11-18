@@ -30,14 +30,15 @@ import org.occurrent.example.domain.rps.multirounddecidermodel.InitiateNewGame.N
 class RockPaperScissorsExample {
 
     @Test
-    fun `using decideOnEvents with multiple commands`() {
+    fun `using decideOnEvents with multiple commands as varargs`() {
         // Given
         val gameId = GameId.randomUUID()
         val firstPlayerId = PlayerId.randomUUID()
         val secondPlayerId = PlayerId.randomUUID()
 
         // When
-        val (state, events) = rps.decideOnEvents(emptyList(),
+        val (state, events) = rps.decideOnEvents(
+            emptyList(),
             InitiateNewGame(gameId, Timestamp.now(), firstPlayerId, THREE),
 
             ShowHandGesture(gameId, Timestamp.now(), firstPlayerId, HandGesture.PAPER),
@@ -57,7 +58,37 @@ class RockPaperScissorsExample {
     }
 
     @Test
-    fun `using decideOnState with multiple commands`() {
+    fun `using decideOnEvents with multiple commands as list`() {
+        // Given
+        val gameId = GameId.randomUUID()
+        val firstPlayerId = PlayerId.randomUUID()
+        val secondPlayerId = PlayerId.randomUUID()
+
+        // When
+        val (state, events) = rps.decideOnEvents(
+            emptyList(),
+            listOf(
+                InitiateNewGame(gameId, Timestamp.now(), firstPlayerId, THREE),
+
+                ShowHandGesture(gameId, Timestamp.now(), firstPlayerId, HandGesture.PAPER),
+                ShowHandGesture(gameId, Timestamp.now(), secondPlayerId, HandGesture.PAPER),
+
+                ShowHandGesture(gameId, Timestamp.now(), firstPlayerId, HandGesture.ROCK),
+                ShowHandGesture(gameId, Timestamp.now(), secondPlayerId, HandGesture.SCISSORS),
+
+                ShowHandGesture(gameId, Timestamp.now(), firstPlayerId, HandGesture.SCISSORS),
+                ShowHandGesture(gameId, Timestamp.now(), secondPlayerId, HandGesture.PAPER),
+            )
+        )
+
+        // Then
+        println("state:\n$state")
+        println()
+        println("events:\n${events.joinToString("\n")}")
+    }
+
+    @Test
+    fun `using decideOnState with multiple commands as varargs`() {
         // Given
         val gameId = GameId.randomUUID()
         val firstPlayerId = PlayerId.randomUUID()
@@ -66,7 +97,8 @@ class RockPaperScissorsExample {
         // When
         val (state1, events1) = rps.decideOnEvents(emptyList(), InitiateNewGame(gameId, Timestamp.now(), firstPlayerId, THREE))
 
-        val (state2, events2) = rps.decideOnState(state1,
+        val (state2, events2) = rps.decideOnState(
+            state1,
             ShowHandGesture(gameId, Timestamp.now(), firstPlayerId, HandGesture.PAPER),
             ShowHandGesture(gameId, Timestamp.now(), secondPlayerId, HandGesture.PAPER),
 
@@ -75,6 +107,36 @@ class RockPaperScissorsExample {
 
             ShowHandGesture(gameId, Timestamp.now(), firstPlayerId, HandGesture.SCISSORS),
             ShowHandGesture(gameId, Timestamp.now(), secondPlayerId, HandGesture.PAPER),
+        )
+
+        // Then
+        println("state:\n$state2")
+        println()
+        println("events:\n${(events1 + events2).joinToString("\n")}")
+    }
+
+    @Test
+    fun `using decideOnState with multiple commands as list`() {
+        // Given
+        val gameId = GameId.randomUUID()
+        val firstPlayerId = PlayerId.randomUUID()
+        val secondPlayerId = PlayerId.randomUUID()
+
+        // When
+        val (state1, events1) = rps.decideOnEvents(emptyList(), InitiateNewGame(gameId, Timestamp.now(), firstPlayerId, THREE))
+
+        val (state2, events2) = rps.decideOnState(
+            state1,
+            listOf(
+                ShowHandGesture(gameId, Timestamp.now(), firstPlayerId, HandGesture.PAPER),
+                ShowHandGesture(gameId, Timestamp.now(), secondPlayerId, HandGesture.PAPER),
+
+                ShowHandGesture(gameId, Timestamp.now(), firstPlayerId, HandGesture.ROCK),
+                ShowHandGesture(gameId, Timestamp.now(), secondPlayerId, HandGesture.SCISSORS),
+
+                ShowHandGesture(gameId, Timestamp.now(), firstPlayerId, HandGesture.SCISSORS),
+                ShowHandGesture(gameId, Timestamp.now(), secondPlayerId, HandGesture.PAPER),
+            )
         )
 
         // Then

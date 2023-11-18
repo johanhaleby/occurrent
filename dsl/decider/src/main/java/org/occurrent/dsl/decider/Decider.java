@@ -21,6 +21,7 @@ import org.jetbrains.annotations.NotNull;
 import org.jetbrains.annotations.Nullable;
 
 import java.util.ArrayList;
+import java.util.Collections;
 import java.util.List;
 import java.util.function.BiFunction;
 import java.util.function.Predicate;
@@ -40,21 +41,19 @@ public interface Decider<C, S, E> {
     @NotNull
     @SuppressWarnings("unchecked")
     default Decision<S, E> decideOnEvents(List<E> events, C command, C... additionalCommands) {
-        Decision<S, E> decisionAfterFirstCommand = decideOnEventsWithSingleCommand(events, command);
-        final Decision<S, E> finalDecision;
-        if (additionalCommands == null || additionalCommands.length == 0) {
-            finalDecision = decisionAfterFirstCommand;
-        } else {
-            Decision<S, E> decision = decisionAfterFirstCommand;
-            for (C additionalCommand : additionalCommands) {
-                Decision<S, E> thisDecision = decideOnEventsWithSingleCommand(decision.events, additionalCommand);
-                List<E> accumulatedEvents = new ArrayList<>(decision.events);
-                accumulatedEvents.addAll(thisDecision.events);
-                decision = new Decision<>(thisDecision.state, accumulatedEvents);
-            }
-            finalDecision = decision;
+        return decideOnEvents(events, toList(command, additionalCommands));
+    }
+
+    @NotNull
+    default Decision<S, E> decideOnEvents(List<E> events, List<C> commands) {
+        Decision<S, E> decision = new Decision<>(initialState(), events);
+        for (C command : commands) {
+            Decision<S, E> thisDecision = decideOnEventsWithSingleCommand(decision.events, command);
+            List<E> accumulatedEvents = new ArrayList<>(decision.events);
+            accumulatedEvents.addAll(thisDecision.events);
+            decision = new Decision<>(thisDecision.state, accumulatedEvents);
         }
-        return finalDecision;
+        return decision;
     }
 
     @NotNull
@@ -70,23 +69,41 @@ public interface Decider<C, S, E> {
     }
 
     @NotNull
+    default List<E> decideOnEventsAndReturnEvents(List<E> events, List<C> commands) {
+        return decideOnEvents(events, commands).events;
+    }
+
+    @Nullable
+    default S decideOnEventsAndReturnState(List<E> events, List<C> commands) {
+        return decideOnEvents(events, commands).state;
+    }
+
+    @NotNull
     @SuppressWarnings("unchecked")
     default Decision<S, E> decideOnState(S state, C command, C... additionalCommands) {
-        Decision<S, E> decisionAfterFirstCommand = decideOnStateWithSingleCommand(state, command);
-        final Decision<S, E> finalDecision;
-        if (additionalCommands == null || additionalCommands.length == 0) {
-            finalDecision = decisionAfterFirstCommand;
-        } else {
-            Decision<S, E> decision = decisionAfterFirstCommand;
-            for (C additionalCommand : additionalCommands) {
-                Decision<S, E> thisDecision = decideOnStateWithSingleCommand(decision.state, additionalCommand);
-                List<E> accumulatedEvents = new ArrayList<>(decision.events);
-                accumulatedEvents.addAll(thisDecision.events);
-                decision = new Decision<>(thisDecision.state, accumulatedEvents);
-            }
-            finalDecision = decision;
+        return decideOnState(state, toList(command, additionalCommands));
+    }
+
+    @NotNull
+    default Decision<S, E> decideOnState(S state, List<C> commands) {
+        Decision<S, E> decision = new Decision<>(state, List.of());
+        for (C command : commands) {
+            Decision<S, E> thisDecision = decideOnStateWithSingleCommand(decision.state, command);
+            List<E> accumulatedEvents = new ArrayList<>(decision.events);
+            accumulatedEvents.addAll(thisDecision.events);
+            decision = new Decision<>(thisDecision.state, accumulatedEvents);
         }
-        return finalDecision;
+        return decision;
+    }
+
+    @NotNull
+    default List<E> decideOnStateAndReturnEvents(S state, List<C> commands) {
+        return decideOnState(state, commands).events;
+    }
+
+    @Nullable
+    default S decideOnStateAndReturnState(S state, List<C> commands) {
+        return decideOnState(state, commands).state;
     }
 
     @NotNull
@@ -125,6 +142,16 @@ public interface Decider<C, S, E> {
             }
         }
         return state;
+    }
+
+    @NotNull
+    private static <C> List<C> toList(C command, C[] additionalCommands) {
+        List<C> commands = new ArrayList<>();
+        commands.add(command);
+        if (additionalCommands != null && additionalCommands.length != 0) {
+            Collections.addAll(commands, additionalCommands);
+        }
+        return commands;
     }
 
     record Decision<S, E>(@Nullable S state, List<E> events) {
