@@ -37,16 +37,17 @@ public interface Decider<C, S, E> {
         return false;
     }
 
+    @NotNull
     @SuppressWarnings("unchecked")
     default Decision<S, E> decideOnEvents(List<E> events, C command, C... additionalCommands) {
-        Decision<S, E> decisionAfterFirstCommand = makeDecisionOnSingleEvent(events, command);
+        Decision<S, E> decisionAfterFirstCommand = decideOnEventsWithSingleCommand(events, command);
         final Decision<S, E> finalDecision;
         if (additionalCommands == null || additionalCommands.length == 0) {
             finalDecision = decisionAfterFirstCommand;
         } else {
             Decision<S, E> decision = decisionAfterFirstCommand;
             for (C additionalCommand : additionalCommands) {
-                Decision<S, E> thisDecision = makeDecisionOnSingleEvent(decision.events, additionalCommand);
+                Decision<S, E> thisDecision = decideOnEventsWithSingleCommand(decision.events, additionalCommand);
                 List<E> accumulatedEvents = new ArrayList<>(decision.events);
                 accumulatedEvents.addAll(thisDecision.events);
                 decision = new Decision<>(thisDecision.state, accumulatedEvents);
@@ -56,37 +57,64 @@ public interface Decider<C, S, E> {
         return finalDecision;
     }
 
+    @NotNull
     @SuppressWarnings("unchecked")
     default List<E> decideOnEventsAndReturnEvents(List<E> events, C command, C... additionalCommands) {
         return decideOnEvents(events, command, additionalCommands).events;
     }
 
+    @Nullable
     @SuppressWarnings("unchecked")
-    default @Nullable S decideOnEventsAndReturnState(List<E> events, C command, C... additionalCommands) {
+    default S decideOnEventsAndReturnState(List<E> events, C command, C... additionalCommands) {
         return decideOnEvents(events, command, additionalCommands).state;
     }
 
-    default Decision<S, E> decideOnState(S state, C command) {
-        List<E> newEvents = decide(command, state);
-        @Nullable S newState = fold(state, newEvents);
-        return new Decision<>(newState, newEvents);
-    }
-
-    default List<E> decideOnStateAndReturnEvents(S state, C command) {
-        return decideOnState(state, command).events;
-    }
-
-    default @Nullable S decideOnStateAndReturnState(S state, C command) {
-        return decideOnState(state, command).state;
+    @NotNull
+    @SuppressWarnings("unchecked")
+    default Decision<S, E> decideOnState(S state, C command, C... additionalCommands) {
+        Decision<S, E> decisionAfterFirstCommand = decideOnStateWithSingleCommand(state, command);
+        final Decision<S, E> finalDecision;
+        if (additionalCommands == null || additionalCommands.length == 0) {
+            finalDecision = decisionAfterFirstCommand;
+        } else {
+            Decision<S, E> decision = decisionAfterFirstCommand;
+            for (C additionalCommand : additionalCommands) {
+                Decision<S, E> thisDecision = decideOnStateWithSingleCommand(decision.state, additionalCommand);
+                List<E> accumulatedEvents = new ArrayList<>(decision.events);
+                accumulatedEvents.addAll(thisDecision.events);
+                decision = new Decision<>(thisDecision.state, accumulatedEvents);
+            }
+            finalDecision = decision;
+        }
+        return finalDecision;
     }
 
     @NotNull
-    private Decision<S, E> makeDecisionOnSingleEvent(List<E> events, C command) {
+    @SuppressWarnings("unchecked")
+    default List<E> decideOnStateAndReturnEvents(S state, C command, C... additionalCommands) {
+        return decideOnState(state, command, additionalCommands).events;
+    }
+
+    @Nullable
+    default S decideOnStateAndReturnState(S state, C command, C... additionalCommands) {
+        return decideOnState(state, command, additionalCommands).state;
+    }
+
+    @NotNull
+    private Decision<S, E> decideOnEventsWithSingleCommand(List<E> events, C command) {
         @Nullable S currentState = fold(initialState(), events);
         List<E> newEvents = decide(command, currentState);
         S newState = fold(currentState, newEvents);
         return new Decision<>(newState, newEvents);
     }
+
+    @NotNull
+    default Decision<S, E> decideOnStateWithSingleCommand(S state, C command) {
+        List<E> newEvents = decide(command, state);
+        @Nullable S newState = fold(state, newEvents);
+        return new Decision<>(newState, newEvents);
+    }
+
 
     @Nullable
     private S fold(@Nullable S state, List<E> events) {

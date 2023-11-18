@@ -30,7 +30,7 @@ import org.occurrent.example.domain.rps.multirounddecidermodel.InitiateNewGame.N
 class RockPaperScissorsExample {
 
     @Test
-    fun winner() {
+    fun `using decideOnEvents with multiple commands`() {
         // Given
         val gameId = GameId.randomUUID()
         val firstPlayerId = PlayerId.randomUUID()
@@ -54,5 +54,32 @@ class RockPaperScissorsExample {
         println("state:\n$state")
         println()
         println("events:\n${events.joinToString("\n")}")
+    }
+
+    @Test
+    fun `using decideOnState with multiple commands`() {
+        // Given
+        val gameId = GameId.randomUUID()
+        val firstPlayerId = PlayerId.randomUUID()
+        val secondPlayerId = PlayerId.randomUUID()
+
+        // When
+        val (state1, events1) = rps.decideOnEvents(emptyList(), InitiateNewGame(gameId, Timestamp.now(), firstPlayerId, THREE))
+
+        val (state2, events2) = rps.decideOnState(state1,
+            ShowHandGesture(gameId, Timestamp.now(), firstPlayerId, HandGesture.PAPER),
+            ShowHandGesture(gameId, Timestamp.now(), secondPlayerId, HandGesture.PAPER),
+
+            ShowHandGesture(gameId, Timestamp.now(), firstPlayerId, HandGesture.ROCK),
+            ShowHandGesture(gameId, Timestamp.now(), secondPlayerId, HandGesture.SCISSORS),
+
+            ShowHandGesture(gameId, Timestamp.now(), firstPlayerId, HandGesture.SCISSORS),
+            ShowHandGesture(gameId, Timestamp.now(), secondPlayerId, HandGesture.PAPER),
+        )
+
+        // Then
+        println("state:\n$state2")
+        println()
+        println("events:\n${(events1 + events2).joinToString("\n")}")
     }
 }
