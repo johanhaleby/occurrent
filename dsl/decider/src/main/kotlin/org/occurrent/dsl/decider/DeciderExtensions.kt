@@ -23,7 +23,6 @@ import java.util.*
 
 fun <C, S, E> decider(initialState: S, decide: (C, S) -> List<E>, evolve: (S, E) -> S, isTerminal: (S) -> Boolean = { false }): Decider<C, S, E> = Decider.create(initialState, decide, evolve, isTerminal)
 
-@Suppress("EXTENSION_SHADOWED_BY_MEMBER")
 fun <C, S, E> Decider<C, S, E>.decide(events: List<E>, command: C): Decider.Decision<S, E> = decideOnEvents(events, command)
 
 operator fun <S, E> Decider.Decision<S, E>.component1() : S? = state

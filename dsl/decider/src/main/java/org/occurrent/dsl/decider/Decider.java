@@ -46,9 +46,9 @@ public interface Decider<C, S, E> {
 
     @NotNull
     default Decision<S, E> decideOnEvents(List<E> events, List<C> commands) {
-        Decision<S, E> decision = new Decision<>(initialState(), events);
+        Decision<S, E> decision = new Decision<>(initialState(), Collections.emptyList());
         for (C command : commands) {
-            Decision<S, E> thisDecision = decideOnEventsWithSingleCommand(decision.events, command);
+            Decision<S, E> thisDecision = decideOnEventsWithSingleCommand(events, command);
             List<E> accumulatedEvents = new ArrayList<>(decision.events);
             accumulatedEvents.addAll(thisDecision.events);
             decision = new Decision<>(thisDecision.state, accumulatedEvents);
