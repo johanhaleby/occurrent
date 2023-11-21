@@ -17,7 +17,7 @@
       )
   ```
 * Fixed problem with spring-boot autoconfiguration in which it previously failed to create a default cloud event converter if no type mapper was specified explicitly.
-* Updated to Kotlin 1.9.20
+* Upgraded to Kotlin 1.9.20
 
 ### 0.16.10 (2023-10-21)
 * Several changes to `RetryStrategy` again:
