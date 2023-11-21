@@ -21,6 +21,7 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import com.mongodb.ReadConcern;
 import com.mongodb.TransactionOptions;
 import com.mongodb.WriteConcern;
+import org.jetbrains.annotations.NotNull;
 import org.occurrent.application.converter.CloudEventConverter;
 import org.occurrent.application.converter.jackson.JacksonCloudEventConverter;
 import org.occurrent.application.converter.typemapper.CloudEventTypeMapper;
@@ -117,16 +118,22 @@ public class OccurrentMongoAutoConfiguration {
 
     @Bean
     @ConditionalOnMissingBean(CloudEventConverter.class)
-    public <T> CloudEventConverter<?> occurrentCloudEventConverter(Optional<ObjectMapper> objectMapper, OccurrentProperties occurrentProperties, CloudEventTypeMapper<T> cloudEventTypeMapper) {
-        ObjectMapper mapper = objectMapper.orElseGet(ObjectMapper::new);
-        return new JacksonCloudEventConverter.Builder<T>(mapper, occurrentProperties.getCloudEventConverter().getCloudEventSource())
-                .typeMapper(cloudEventTypeMapper)
+    public <T> CloudEventConverter<?> occurrentCloudEventConverter(Optional<ObjectMapper> objectMapper, OccurrentProperties occurrentProperties, Optional<CloudEventTypeMapper<T>> cloudEventTypeMapper) {
+        ObjectMapper om = objectMapper.orElseGet(ObjectMapper::new);
+        CloudEventTypeMapper<T> cm = cloudEventTypeMapper.orElseGet(OccurrentMongoAutoConfiguration::newDefaultCloudEventTypeMapper);
+        return new JacksonCloudEventConverter.Builder<T>(om, occurrentProperties.getCloudEventConverter().getCloudEventSource())
+                .typeMapper(cm)
                 .build();
     }
 
     @Bean
     @ConditionalOnMissingBean(CloudEventTypeMapper.class)
     public CloudEventTypeMapper<?> occurrentTypeMapper() {
+        return newDefaultCloudEventTypeMapper();
+    }
+
+    @NotNull
+    private static <T> CloudEventTypeMapper<T> newDefaultCloudEventTypeMapper() {
         return ReflectionCloudEventTypeMapper.qualified();
     }
 
