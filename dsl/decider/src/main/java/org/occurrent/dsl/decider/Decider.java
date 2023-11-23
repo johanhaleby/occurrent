@@ -27,7 +27,7 @@ import java.util.function.BiFunction;
 import java.util.function.Predicate;
 
 /**
- * A decider is a model that can be implemented to get a structured way to implement decision logic for a business capability.
+ * A decider is a model that can be implemented to get a structured way to implement decision logic for a business entity (typically aggregate) or use case.
  *
  * @param <C> The type of commands that the decider can handle
  * @param <S> The state that the decider work
