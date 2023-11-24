@@ -19,6 +19,9 @@ package org.occurrent.dsl.decider.arrow
 
 import arrow.core.Either
 
+/**
+ * Decider implementation that uses `Either` from the Arrow library
+ */
 interface Decider<C, S, E, ER> {
     fun initialState(): S
     fun decide(command: C, state: S): Either<ER, List<E>>
