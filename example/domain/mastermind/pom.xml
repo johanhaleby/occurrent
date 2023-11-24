@@ -17,20 +17,17 @@
 
 <project xmlns="http://maven.apache.org/POM/4.0.0" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 http://maven.apache.org/xsd/maven-4.0.0.xsd">
     <parent>
-        <artifactId>example</artifactId>
+        <artifactId>example-domain</artifactId>
         <groupId>org.occurrent</groupId>
         <version>0.16.11-SNAPSHOT</version>
     </parent>
-    <packaging>pom</packaging>
-    <artifactId>example-domain</artifactId>
-    <modules>
-        <module>number-guessing-game</module>
-        <module>word-guessing-game</module>
-        <module>uno</module>
-        <module>rps</module>
-        <module>mastermind</module>
-    </modules>
     <modelVersion>4.0.0</modelVersion>
+    <packaging>pom</packaging>
+    <modules>
+        <module>decider-model-kotlin</module>        
+    </modules>
+
+    <artifactId>example-mastermind</artifactId>
 
 
 
