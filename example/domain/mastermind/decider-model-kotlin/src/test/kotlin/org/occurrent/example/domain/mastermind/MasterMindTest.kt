@@ -29,6 +29,8 @@ import org.occurrent.example.domain.mastermind.CodePeg.*
 import org.occurrent.example.domain.mastermind.DetermineFeedback.determineFeedback
 import org.occurrent.example.domain.mastermind.KeyPeg.Black
 import org.occurrent.example.domain.mastermind.KeyPeg.White
+import org.occurrent.example.domain.mastermind.KeyPegHoleStatus.Empty
+import org.occurrent.example.domain.mastermind.KeyPegHoleStatus.Occupied
 import java.util.stream.Stream
 
 
@@ -39,13 +41,14 @@ class MasterMindTest {
     companion object {
         @JvmStatic
         fun input(): Stream<Arguments> = Stream.of(
-            Arguments.of(SecretCode(Red, Green, Blue, Yellow), Guess(Green, Purple, Red, Red), ExpectedFeedback(White, null, White, null)),
-            Arguments.of(SecretCode(Red, Green, Blue, Yellow), Guess(Red, Purple, Red, Red), ExpectedFeedback(Black, null, null, null)),
-            Arguments.of(SecretCode(Red, Green, Blue, Red), Guess(Red, Red, Red, Red), ExpectedFeedback(Black, null, null, Black)),
-            Arguments.of(SecretCode(Red, Green, Blue, Red), Guess(Red, Yellow, Red, Purple), ExpectedFeedback(Black, null, White, null)),
-            Arguments.of(SecretCode(Red, Red, Blue, Red), Guess(Red, Red, Red, Purple), ExpectedFeedback(Black, Black, White, null)),
-            Arguments.of(SecretCode(Red, Blue, Blue, Red), Guess(Red, Red, Red, Purple), ExpectedFeedback(Black, White, null, null)),
-            Arguments.of(SecretCode(Red, Blue, Red, Red), Guess(Red, Red, Red, Purple), ExpectedFeedback(Black, White, Black, null)),
+            Arguments.of(SecretCode(Red, Green, Blue, Yellow), Guess(Green, Purple, Red, Red), ExpectedFeedback(Occupied(White), Empty, Occupied(White), Empty)),
+            Arguments.of(SecretCode(Red, Green, Blue, Yellow), Guess(Red, Purple, Red, Red), ExpectedFeedback(Occupied(Black), Empty, Empty, Empty)),
+            Arguments.of(SecretCode(Red, Green, Blue, Red), Guess(Red, Red, Red, Red), ExpectedFeedback(Occupied(Black), Empty, Empty, Occupied(Black))),
+            Arguments.of(SecretCode(Red, Green, Blue, Red), Guess(Red, Yellow, Red, Purple), ExpectedFeedback(Occupied(Black), Empty, Occupied(White), Empty)),
+            Arguments.of(SecretCode(Red, Red, Blue, Red), Guess(Red, Red, Red, Purple), ExpectedFeedback(Occupied(Black), Occupied(Black), Occupied(White), Empty)),
+            Arguments.of(SecretCode(Red, Blue, Blue, Red), Guess(Red, Red, Red, Purple), ExpectedFeedback(Occupied(Black), Occupied(White), Empty, Empty)),
+            Arguments.of(SecretCode(Red, Blue, Red, Red), Guess(Red, Red, Red, Purple), ExpectedFeedback(Occupied(Black), Occupied(White), Occupied(Black), Empty)),
+            Arguments.of(SecretCode(Orange, Red, Red, Purple), Guess(Orange, Purple, Purple, Red), ExpectedFeedback(Occupied(Black), Occupied(White), Empty, Occupied(White))),
         )
     }
 
@@ -53,18 +56,18 @@ class MasterMindTest {
     @MethodSource("input")
     fun `determine feedback`(secretCode: SecretCode, guess: Guess, expectedFeedback: ExpectedFeedback) {
         // When
-        val (peg1, peg2, peg3, peg4) = determineFeedback(secretCode, guess)
+        val (hole1Status, hole2Status, hole3Status, hole4Status) = determineFeedback(secretCode, guess)
 
         // Then
-        val (expectedKeyPeg1, expectedKeyPeg2, expectedKeyPeg3, expectedKeyPeg4) = expectedFeedback
+        val (expectedHole1Status, expectedHole2Status, expectedHole3Status, expectedHole4Status) = expectedFeedback
 
         assertAll(
-            { assertThat(peg1).describedAs("peg1").isEqualTo(expectedKeyPeg1) },
-            { assertThat(peg2).describedAs("peg2").isEqualTo(expectedKeyPeg2) },
-            { assertThat(peg3).describedAs("peg3").isEqualTo(expectedKeyPeg3) },
-            { assertThat(peg4).describedAs("peg4").isEqualTo(expectedKeyPeg4) },
+            { assertThat(hole1Status).describedAs("status of key peg hole 1").isEqualTo(expectedHole1Status) },
+            { assertThat(hole2Status).describedAs("status of key peg hole 2").isEqualTo(expectedHole2Status) },
+            { assertThat(hole3Status).describedAs("status of key peg hole 3").isEqualTo(expectedHole3Status) },
+            { assertThat(hole4Status).describedAs("status of key peg hole 4").isEqualTo(expectedHole4Status) },
         )
     }
 
-    data class ExpectedFeedback(val peg1: KeyPeg?, val peg2: KeyPeg?, val peg3: KeyPeg?, val peg4: KeyPeg?)
+    data class ExpectedFeedback(val hole1: KeyPegHoleStatus, val hole2: KeyPegHoleStatus, val hole3: KeyPegHoleStatus, val hole4: KeyPegHoleStatus)
 }

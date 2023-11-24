@@ -45,8 +45,7 @@ private val evolve: (MasterMindState, MasterMindEvent) -> MasterMindState = { s,
 }
 
 val mastermind = decider<MasterMindCommand, MasterMindState, MasterMindEvent>(
-    initialState = NotStarted,
-    decide = { c, s ->
+    initialState = NotStarted, decide = { c, s ->
         when (c) {
             is StartGame -> when (s) {
                 is NotStarted -> listOf(GameStarted(c.gameId, c.timestamp, c.codeBreakerId, c.codeMakerId, c.secretCode, c.totalNumberOfGuesses.toInt()))
@@ -70,8 +69,7 @@ val mastermind = decider<MasterMindCommand, MasterMindState, MasterMindEvent>(
                 }
             }
         }
-    },
-    evolve = evolve
+    }, evolve = evolve
 )
 
 private fun TotalNumberOfGuesses.toInt() = when (this) {
@@ -80,56 +78,64 @@ private fun TotalNumberOfGuesses.toInt() = when (this) {
     TotalNumberOfGuesses.TWELVE -> 12
 }
 
-private fun Feedback.isSecretCodeGuessed() = listOf(peg1, peg2, peg3, peg4).all { peg -> peg == Black }
+private fun Feedback.isSecretCodeGuessed() = listOf(hole1, hole2, hole3, hole4).all { hole -> hole is KeyPegHoleStatus.Occupied && hole.keyPeg == Black }
 
 internal object DetermineFeedback {
     private fun Guess.toList() = listOf(peg1, peg2, peg3, peg4)
     private fun SecretCode.toList() = listOf(peg1, peg2, peg3, peg4)
-    private fun emptyFeedback() = InternalFeedback(
-        mutableListOf(
-            CodePegFeedback(null, null),
-            CodePegFeedback(null, null),
-            CodePegFeedback(null, null),
-            CodePegFeedback(null, null),
-        )
-    )
 
-    private data class CodePegFeedback(val codePeg: CodePeg?, val keyPeg: KeyPeg?)
-    private data class InternalFeedback(val current: MutableList<CodePegFeedback>) {
-        fun setFeedback(position: Int, codePeg: CodePeg, result: KeyPeg): InternalFeedback {
-            current[position] = CodePegFeedback(codePeg, result)
+    private data class FeedbackSlot(val hole: KeyPegHoleStatus, val guessedCodePegForThisSlot: CodePeg?)
+    private data class InternalFeedback(val slots: MutableList<FeedbackSlot>) {
+        fun addFeedbackKeyPeg(position: Int, codePeg: CodePeg, keyPeg: KeyPeg): InternalFeedback {
+            slots[position] = FeedbackSlot(KeyPegHoleStatus.Occupied(keyPeg), codePeg)
             return this
+        }
+
+        companion object {
+            fun empty() = InternalFeedback(
+                mutableListOf(
+                    FeedbackSlot(KeyPegHoleStatus.Empty, null),
+                    FeedbackSlot(KeyPegHoleStatus.Empty, null),
+                    FeedbackSlot(KeyPegHoleStatus.Empty, null),
+                    FeedbackSlot(KeyPegHoleStatus.Empty, null),
+                )
+            )
         }
     }
 
-    private fun containsPegOfThisColorThatHasNotYetBeenRevealed(secretCode: SecretCode, feedback: InternalFeedback, peg: CodePeg): Boolean {
-        val previousMatches = feedback.current.count { (p) -> p == peg }
-        val numberOfPegsOfThisColorInSecret = secretCode.toList().count { it == peg }
+    private fun containsPegOfThisColorThatHasNotYetBeenRevealed(secretCodePegs: List<CodePeg>, feedback: InternalFeedback, peg: CodePeg): Boolean {
+        val previousMatches = feedback.slots.count { (_, guessCodePegForSlot) -> guessCodePegForSlot == peg }
+        val numberOfPegsOfThisColorInSecret = secretCodePegs.count { it == peg }
         return numberOfPegsOfThisColorInSecret > previousMatches
     }
 
-    private fun removePreviousWhiteKeyPegsForCodePeg(position: Int, secretCode: SecretCode, feedback: InternalFeedback, guessedPeg: CodePeg): InternalFeedback {
-        fun CodePegFeedback.hasWhiteKeyPegForCodePeg(guessedPeg: CodePeg) = codePeg == guessedPeg && keyPeg == White
-        val remainingSecretsWithSamePegColorAfterThisGuess = secretCode.toList().drop(position.inc()).count { it == guessedPeg }
-        return feedback.copy(current = feedback.current
-            .map { codePegFeedback -> if (codePegFeedback.hasWhiteKeyPegForCodePeg(guessedPeg) && remainingSecretsWithSamePegColorAfterThisGuess == 0) CodePegFeedback(codePegFeedback.codePeg, null) else codePegFeedback }
-            .toMutableList())
-    }
+    private fun removePreviousWhiteKeyPegsForCodePegIfApplicable(position: Int, secretCodePegs: List<CodePeg>, feedback: InternalFeedback, guessedPeg: CodePeg): InternalFeedback {
+        fun FeedbackSlot.hasWhiteKeyPegWithCodePeg(codePeg: CodePeg) = guessedCodePegForThisSlot == codePeg && hole is KeyPegHoleStatus.Occupied && hole.keyPeg == White
+        fun FeedbackSlot.removeKeyPeg() = copy(hole = KeyPegHoleStatus.Empty)
 
+        // We should only remove if there are no more code pegs of the same color in the secret
+        val numberOfRemainingSecretsWithSamePegColorAfterThisGuess = secretCodePegs.drop(position.inc()).count { it == guessedPeg }
+        return feedback.copy(slots = feedback.slots.map { feedbackSlot ->
+            if (feedbackSlot.hasWhiteKeyPegWithCodePeg(guessedPeg) && numberOfRemainingSecretsWithSamePegColorAfterThisGuess == 0) {
+                feedbackSlot.removeKeyPeg()
+            } else {
+                feedbackSlot
+            }
+        }.toMutableList())
+    }
 
     fun determineFeedback(secretCode: SecretCode, guess: Guess): Feedback {
         val guessedPegs = guess.toList()
-        val secretCombination = secretCode.toList()
+        val secretCodePegs = secretCode.toList()
 
-        val internalFeedback = guessedPegs
-            .foldIndexed(emptyFeedback()) { position, feedback, guessedPeg ->
-                when {
-                    secretCombination[position] == guessedPeg -> removePreviousWhiteKeyPegsForCodePeg(position, secretCode, feedback, guessedPeg).setFeedback(position, guessedPeg, Black)
-                    containsPegOfThisColorThatHasNotYetBeenRevealed(secretCode, feedback, guessedPeg) -> feedback.setFeedback(position, guessedPeg, White)
-                    else -> feedback
-                }
+        val internalFeedback = guessedPegs.foldIndexed(InternalFeedback.empty()) { position, feedback, guessedPeg ->
+            when {
+                secretCodePegs[position] == guessedPeg -> removePreviousWhiteKeyPegsForCodePegIfApplicable(position, secretCodePegs, feedback, guessedPeg).addFeedbackKeyPeg(position, guessedPeg, Black)
+                containsPegOfThisColorThatHasNotYetBeenRevealed(secretCodePegs, feedback, guessedPeg) -> feedback.addFeedbackKeyPeg(position, guessedPeg, White)
+                else -> feedback
             }
-        val (keyPeg1, keyPeg2, keyPeg3, keyPeg4) = internalFeedback.current.map { it.keyPeg }
-        return Feedback(keyPeg1, keyPeg2, keyPeg3, keyPeg4)
+        }
+        val (hole1, hole2, hole3, hole4) = internalFeedback.slots.map { slot -> slot.hole }
+        return Feedback(hole1, hole2, hole3, hole4)
     }
 }

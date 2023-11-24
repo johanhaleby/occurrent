@@ -53,10 +53,14 @@ enum class KeyPeg {
 }
 
 
-
 typealias MaxNumberOfGuesses = Int
 
-data class Feedback(val peg1: KeyPeg?, val peg2: KeyPeg?, val peg3: KeyPeg?, val peg4: KeyPeg?)
+sealed interface KeyPegHoleStatus {
+    data object Empty : KeyPegHoleStatus
+    data class Occupied(val keyPeg: KeyPeg) : KeyPegHoleStatus
+}
+
+data class Feedback(val hole1: KeyPegHoleStatus, val hole2: KeyPegHoleStatus, val hole3: KeyPegHoleStatus, val hole4: KeyPegHoleStatus)
 data class SecretCode(val peg1: CodePeg, val peg2: CodePeg, val peg3: CodePeg, val peg4: CodePeg)
 data class Guess(val peg1: CodePeg, val peg2: CodePeg, val peg3: CodePeg, val peg4: CodePeg)
 
