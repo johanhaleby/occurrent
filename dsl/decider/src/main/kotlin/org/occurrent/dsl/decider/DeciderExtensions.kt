@@ -21,9 +21,13 @@ import org.occurrent.application.service.blocking.ApplicationService
 import org.occurrent.application.service.blocking.execute
 import java.util.*
 
+/**
+ * A utility function for creating deciders a bit more nicer in Kotlin
+ */
 fun <C, S, E> decider(initialState: S, decide: (C, S) -> List<E>, evolve: (S, E) -> S, isTerminal: (S) -> Boolean = { false }): Decider<C, S, E> = Decider.create(initialState, decide, evolve, isTerminal)
 
-fun <C, S, E> Decider<C, S, E>.decide(events: List<E>, command: C): Decider.Decision<S, E> = decideOnEvents(events, command)
+fun <C, S, E> Decider<C, S, E>.decide(events: List<E>, command: C, vararg moreCommands: C): Decider.Decision<S, E> = decideOnEvents(events, listOf(command, *moreCommands))
+fun <C, S, E> Decider<C, S, E>.decide(events: List<E>, commands : List<C>): Decider.Decision<S, E> = decideOnEvents(events, commands)
 
 operator fun <S, E> Decider.Decision<S, E>.component1() : S? = state
 operator fun <S, E> Decider.Decision<S, E>.component2() : List<E> = events
