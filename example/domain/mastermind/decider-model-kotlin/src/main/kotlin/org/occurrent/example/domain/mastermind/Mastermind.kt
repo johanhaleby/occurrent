@@ -24,8 +24,6 @@ import GuessMade
 import MasterMindEvent
 import org.occurrent.dsl.decider.decider
 import org.occurrent.example.domain.mastermind.DetermineFeedback.determineFeedback
-import org.occurrent.example.domain.mastermind.GameResult.LOST
-import org.occurrent.example.domain.mastermind.GameResult.WON
 import org.occurrent.example.domain.mastermind.KeyPeg.Black
 import org.occurrent.example.domain.mastermind.KeyPeg.White
 import org.occurrent.example.domain.mastermind.MasterMindException.MakeGuessException.GameAlreadyHasAnotherCodeBreaker
@@ -39,8 +37,8 @@ private val evolve: (MasterMindState, MasterMindEvent) -> MasterMindState = { s,
     when (e) {
         is GameStarted -> Started(e.gameId, e.timestamp, e.codeBreakerId, e.codeMakerId, e.secretCode, currentNumberOfGuesses = 0, e.maxNumberOfGuesses)
         is GuessMade -> (s as Started).copy(currentNumberOfGuesses = s.currentNumberOfGuesses.inc())
-        is GameWon -> Ended(WON)
-        is GameLost -> Ended(LOST)
+        is GameWon -> Ended.Won((s as Started).currentNumberOfGuesses)
+        is GameLost -> Ended.Lost((s as Started).secretCode)
     }
 }
 

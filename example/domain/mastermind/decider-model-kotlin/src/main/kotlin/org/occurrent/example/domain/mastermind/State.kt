@@ -18,11 +18,8 @@
 package org.occurrent.example.domain.mastermind
 
 
+typealias NumberOfGuesses = Int
 typealias CurrentNumberOfGuesses = Int
-
-enum class GameResult {
-    WON, LOST
-}
 
 sealed interface MasterMindState {
     data object NotStarted : MasterMindState
@@ -31,5 +28,8 @@ sealed interface MasterMindState {
         val currentNumberOfGuesses: CurrentNumberOfGuesses, val maxNumberOfGuesses: MaxNumberOfGuesses
     ) : MasterMindState
 
-    data class Ended(val result: GameResult) : MasterMindState
+    sealed interface Ended : MasterMindState {
+        data class Won(val numberOfGuesses: NumberOfGuesses) : Ended
+        data class Lost(val secretCode: SecretCode) : Ended
+    }
 }
