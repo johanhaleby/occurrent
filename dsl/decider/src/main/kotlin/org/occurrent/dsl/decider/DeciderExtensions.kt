@@ -28,6 +28,8 @@ fun <C, S, E> decider(initialState: S, decide: (C, S) -> List<E>, evolve: (S, E)
 
 fun <C, S, E> Decider<C, S, E>.decide(events: List<E>, command: C, vararg moreCommands: C): Decider.Decision<S, E> = decideOnEvents(events, listOf(command, *moreCommands))
 fun <C, S, E> Decider<C, S, E>.decide(events: List<E>, commands : List<C>): Decider.Decision<S, E> = decideOnEvents(events, commands)
+fun <C, S, E> Decider<C, S, E>.decide(state : S, command: C, vararg moreCommands: C): Decider.Decision<S, E> = decideOnState(state, listOf(command, *moreCommands))
+fun <C, S, E> Decider<C, S, E>.decide(state : S, commands : List<C>): Decider.Decision<S, E> = decideOnState(state, commands)
 
 operator fun <S, E> Decider.Decision<S, E>.component1() : S? = state
 operator fun <S, E> Decider.Decision<S, E>.component2() : List<E> = events
