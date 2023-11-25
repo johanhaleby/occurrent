@@ -213,6 +213,10 @@ public class InMemoryEventStore implements EventStore, EventStoreOperations, Eve
         });
     }
 
+    public void deleteAll() {
+        state.clear();
+    }
+
     @Override
     public void delete(Filter filter) {
         requireNonNull(filter, "Filter cannot be null");
