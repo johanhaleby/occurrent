@@ -37,11 +37,11 @@ public interface Decider<C, S, E> {
     S initialState();
 
     @NotNull
-    List<E> decide(@NotNull C command, @Nullable S state);
+    List<E> decide(@NotNull C command, S state);
 
-    @Nullable S evolve(@Nullable S state, @NotNull E event);
+    S evolve(S state, @NotNull E event);
 
-    default boolean isTerminal(@Nullable S state) {
+    default boolean isTerminal(S state) {
         return false;
     }
 
@@ -129,7 +129,7 @@ public interface Decider<C, S, E> {
 
     @NotNull
     private Decision<S, E> decideOnEventsWithSingleCommand(List<E> events, C command) {
-        @Nullable S currentState = fold(initialState(), events);
+        S currentState = fold(initialState(), events);
         List<E> newEvents = decide(command, currentState);
         S newState = fold(currentState, newEvents);
         return new Decision<>(newState, newEvents);
@@ -138,13 +138,13 @@ public interface Decider<C, S, E> {
     @NotNull
     default Decision<S, E> decideOnStateWithSingleCommand(S state, C command) {
         List<E> newEvents = decide(command, state);
-        @Nullable S newState = fold(state, newEvents);
+        S newState = fold(state, newEvents);
         return new Decision<>(newState, newEvents);
     }
 
 
     @Nullable
-    private S fold(@Nullable S state, List<E> events) {
+    private S fold(S state, List<E> events) {
         for (E event : events) {
             state = evolve(state, event);
             if (isTerminal(state)) {
@@ -164,14 +164,14 @@ public interface Decider<C, S, E> {
         return commands;
     }
 
-    record Decision<S, E>(@Nullable S state, List<E> events) {
+    record Decision<S, E>(S state, List<E> events) {
     }
 
-    static <C, S, E> Decider<C, S, E> create(@Nullable S initialState, @NotNull BiFunction<C, S, List<E>> decide, @NotNull BiFunction<S, E, S> evolve) {
+    static <C, S, E> Decider<C, S, E> create(S initialState, @NotNull BiFunction<C, S, List<E>> decide, @NotNull BiFunction<S, E, S> evolve) {
         return create(initialState, decide, evolve, __ -> false);
     }
 
-    static <C, S, E> Decider<C, S, E> create(@Nullable S initialState, @NotNull BiFunction<C, S, List<E>> decide, @NotNull BiFunction<S, E, S> evolve,
+    static <C, S, E> Decider<C, S, E> create(S initialState, @NotNull BiFunction<C, S, List<E>> decide, @NotNull BiFunction<S, E, S> evolve,
                                              @NotNull Predicate<S> isTerminal) {
 
         return new Decider<>() {
@@ -182,18 +182,18 @@ public interface Decider<C, S, E> {
 
             @NotNull
             @Override
-            public List<E> decide(@NotNull C command, @Nullable S state) {
+            public List<E> decide(@NotNull C command, S state) {
                 return decide.apply(command, state);
             }
 
             @NotNull
             @Override
-            public S evolve(@Nullable S state, @NotNull E event) {
+            public S evolve(S state, @NotNull E event) {
                 return evolve.apply(state, event);
             }
 
             @Override
-            public boolean isTerminal(@Nullable S state) {
+            public boolean isTerminal(S state) {
                 return isTerminal.test(state);
             }
         };
