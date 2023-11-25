@@ -34,7 +34,7 @@ import java.util.*
 
 
 @DisplayNameGeneration(DisplayNameGenerator.Simple::class)
-class MyDeciderTest {
+class DeciderTest {
 
     @Test
     fun `simple decider test`() {

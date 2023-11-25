@@ -69,7 +69,7 @@ fun main() {
         }
         val (guess1, guess2, guess3, guess4) = codePegsNotNull
         val guess = Guess(guess1, guess2, guess3, guess4)
-        val decision = mastermind.decide(state = state!!, command = MakeGuess(gameId, Timestamp.now(), codebreakerId, guess))
+        val decision = mastermind.decide(state = state, command = MakeGuess(gameId, Timestamp.now(), codebreakerId, guess))
         state = decision.state
         if (state is Started) {
             val event = decision.events.last { it is GuessMade } as GuessMade
