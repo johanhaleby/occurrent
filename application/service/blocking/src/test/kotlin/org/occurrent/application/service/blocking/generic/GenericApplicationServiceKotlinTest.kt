@@ -67,8 +67,8 @@ class GenericApplicationServiceKotlinTest {
         )
         // Then
         assertAll(
-            { assertThat(writeResult.streamId).isEqualTo(streamId) },
-            { assertThat(writeResult.newStreamVersion).isEqualTo(2L) }
+            { assertThat(writeResult.streamId()).isEqualTo(streamId) },
+            { assertThat(writeResult.newStreamVersion()).isEqualTo(2L) }
         )
     }
 
@@ -94,8 +94,8 @@ class GenericApplicationServiceKotlinTest {
         )
         // Then
         assertAll(
-            { assertThat(writeResult.streamId).isEqualTo(streamId) },
-            { assertThat(writeResult.newStreamVersion).isEqualTo(4L) }
+            { assertThat(writeResult.streamId()).isEqualTo(streamId) },
+            { assertThat(writeResult.newStreamVersion()).isEqualTo(4L) }
         )
     }
 

@@ -187,9 +187,9 @@ public class InMemoryEventStoreTest {
 
             // Then
             assertAll(
-                    () -> assertThat(writeResult.getStreamId()).isEqualTo("name"),
-                    () -> assertThat(writeResult.getOldStreamVersion()).isEqualTo(0L),
-                    () -> assertThat(writeResult.getNewStreamVersion()).isEqualTo(2L)
+                    () -> assertThat(writeResult.streamId()).isEqualTo("name"),
+                    () -> assertThat(writeResult.oldStreamVersion()).isEqualTo(0L),
+                    () -> assertThat(writeResult.newStreamVersion()).isEqualTo(2L)
             );
         }
 
@@ -208,9 +208,9 @@ public class InMemoryEventStoreTest {
 
             // Then
             assertAll(
-                    () -> assertThat(writeResult.getStreamId()).isEqualTo("name"),
-                    () -> assertThat(writeResult.getOldStreamVersion()).isEqualTo(1L),
-                    () -> assertThat(writeResult.getNewStreamVersion()).isEqualTo(3L)
+                    () -> assertThat(writeResult.streamId()).isEqualTo("name"),
+                    () -> assertThat(writeResult.oldStreamVersion()).isEqualTo(1L),
+                    () -> assertThat(writeResult.newStreamVersion()).isEqualTo(3L)
             );
         }
 
@@ -224,9 +224,9 @@ public class InMemoryEventStoreTest {
 
             // Then
             assertAll(
-                    () -> assertThat(writeResult.getStreamId()).isEqualTo("name"),
-                    () -> assertThat(writeResult.getOldStreamVersion()).isEqualTo(0L),
-                    () -> assertThat(writeResult.getNewStreamVersion()).isEqualTo(0L)
+                    () -> assertThat(writeResult.streamId()).isEqualTo("name"),
+                    () -> assertThat(writeResult.oldStreamVersion()).isEqualTo(0L),
+                    () -> assertThat(writeResult.newStreamVersion()).isEqualTo(0L)
             );
         }
 
@@ -244,9 +244,9 @@ public class InMemoryEventStoreTest {
 
             // Then
             assertAll(
-                    () -> assertThat(writeResult.getStreamId()).isEqualTo("name"),
-                    () -> assertThat(writeResult.getOldStreamVersion()).isEqualTo(2L),
-                    () -> assertThat(writeResult.getNewStreamVersion()).isEqualTo(2L)
+                    () -> assertThat(writeResult.streamId()).isEqualTo("name"),
+                    () -> assertThat(writeResult.oldStreamVersion()).isEqualTo(2L),
+                    () -> assertThat(writeResult.newStreamVersion()).isEqualTo(2L)
             );
         }
     }
