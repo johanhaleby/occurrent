@@ -19,10 +19,7 @@ package org.occurrent.dsl.decider
 
 import com.fasterxml.jackson.databind.ObjectMapper
 import org.assertj.core.api.Assertions.assertThat
-import org.junit.jupiter.api.AfterEach
-import org.junit.jupiter.api.BeforeEach
-import org.junit.jupiter.api.Test
-import org.junit.jupiter.api.assertAll
+import org.junit.jupiter.api.*
 import org.occurrent.application.converter.CloudEventConverter
 import org.occurrent.application.converter.jackson.jacksonCloudEventConverter
 import org.occurrent.application.service.blocking.ApplicationService
@@ -34,10 +31,12 @@ import org.occurrent.domain.DomainEvent
 import org.occurrent.domain.Name
 import org.occurrent.domain.NameDefined
 import org.occurrent.domain.NameWasChanged
+import org.occurrent.eventstore.api.WriteResult
 import org.occurrent.eventstore.inmemory.InMemoryEventStore
 import java.net.URI
 import java.time.LocalDateTime
 import java.util.*
+import java.util.stream.Stream
 
 
 class DeciderApplicationServiceExtensionsTest {
@@ -78,22 +77,350 @@ class DeciderApplicationServiceExtensionsTest {
         eventStore.deleteAll()
     }
 
-    @Test
-    fun executeAndReturnDecision() {
-        // Given
-        val streamId = UUID.randomUUID()
-        val command = DefineName(UUID.randomUUID().toString(), LocalDateTime.now(), "Johan")
+    @Nested
+    @DisplayName("execute")
+    inner class Execute {
 
-        // When
-        val (state, events) = applicationService.executeAndReturnDecision(streamId, command, decider)
+        @Nested
+        @DisplayName("when streamid is a UUID")
+        inner class IsUUID {
 
-        // Then
-        assertAll(
-            { assertThat(state).isEqualTo("Johan") },
-            { assertThat(events).containsOnly(NameDefined(command.id, command.time, command.name)) },
-            { assertThat(eventStore.allEvents()).containsOnly(NameDefined(command.id, command.time, command.name)) },
-        )
+            @Test
+            fun and_single_command() {
+                // Given
+                val streamId = UUID.randomUUID()
+                val command = DefineName(UUID.randomUUID().toString(), LocalDateTime.now(), "Johan")
+
+                // When
+                val result = applicationService.execute(streamId, command, decider)
+
+                // Then
+                assertThat(result).isEqualTo(WriteResult(streamId.toString(), 0, 1))
+            }
+
+            @Test
+            fun and_list_of_commands() {
+                // Given
+                val streamId = UUID.randomUUID()
+                val command1 = DefineName(UUID.randomUUID().toString(), LocalDateTime.now(), "John")
+                val command2 = ChangeName(UUID.randomUUID().toString(), LocalDateTime.now(), "Johan")
+
+                // When
+                val result = applicationService.execute(streamId, commands = listOf(command1, command2), decider)
+
+                // Then
+                assertThat(result).isEqualTo(WriteResult(streamId.toString(), 0, 2))
+            }
+        }
+
+        @Nested
+        @DisplayName("when streamid is a String")
+        inner class IsString {
+
+            @Test
+            fun and_single_command() {
+                // Given
+                val streamId = UUID.randomUUID().toString()
+                val command = DefineName(UUID.randomUUID().toString(), LocalDateTime.now(), "Johan")
+
+                // When
+                val result = applicationService.execute(streamId, command, decider)
+
+                // Then
+                assertThat(result).isEqualTo(WriteResult(streamId, 0, 1))
+            }
+
+            @Test
+            fun and_list_of_commands() {
+                // Given
+                val streamId = UUID.randomUUID().toString()
+                val command1 = DefineName(UUID.randomUUID().toString(), LocalDateTime.now(), "John")
+                val command2 = ChangeName(UUID.randomUUID().toString(), LocalDateTime.now(), "Johan")
+
+                // When
+                val result = applicationService.execute(streamId, commands = listOf(command1, command2), decider)
+
+                // Then
+                assertThat(result).isEqualTo(WriteResult(streamId, 0, 2))
+            }
+        }
     }
 
-    private fun InMemoryEventStore.allEvents(): List<DomainEvent> = eventStore.all().map { cloudEventConverter.toDomainEvent(it) }.toList()
+    @Nested
+    @DisplayName("executeAndReturnDecision")
+    inner class ExecuteAndReturnDecision {
+
+        @Nested
+        @DisplayName("when streamid is a UUID")
+        inner class IsUUID {
+
+            @Test
+            fun and_single_command() {
+                // Given
+                val streamId = UUID.randomUUID()
+                val command = DefineName(UUID.randomUUID().toString(), LocalDateTime.now(), "Johan")
+
+                // When
+                val (state, events) = applicationService.executeAndReturnDecision(streamId, command, decider)
+
+                // Then
+                assertAll(
+                    { assertThat(state).isEqualTo("Johan") },
+                    { assertThat(events).containsOnly(NameDefined(command.id, command.time, command.name)) },
+                    { assertThat(eventStore.domainEvents()).containsOnly(NameDefined(command.id, command.time, command.name)) },
+                )
+            }
+
+            @Test
+            fun and_list_of_commands() {
+                // Given
+                val streamId = UUID.randomUUID()
+                val command1 = DefineName(UUID.randomUUID().toString(), LocalDateTime.now(), "John")
+                val command2 = ChangeName(UUID.randomUUID().toString(), LocalDateTime.now(), "Johan")
+
+                // When
+                val (state, events) = applicationService.executeAndReturnDecision(streamId, commands = listOf(command1, command2), decider)
+
+                // Then
+                assertAll(
+                    { assertThat(state).isEqualTo("Johan") },
+                    {
+                        assertThat(events).containsOnly(
+                            NameDefined(command1.id, command1.time, command1.name),
+                            NameWasChanged(command2.id, command2.time, command2.newName)
+                        )
+                    },
+                    {
+                        assertThat(eventStore.domainEvents()).containsOnly(
+                            NameDefined(command1.id, command1.time, command1.name),
+                            NameWasChanged(command2.id, command2.time, command2.newName),
+                        )
+                    },
+                )
+            }
+        }
+
+        @Nested
+        @DisplayName("when streamid is a String")
+        inner class IsString {
+
+            @Test
+            fun and_single_command() {
+                // Given
+                val streamId = UUID.randomUUID().toString()
+                val command = DefineName(UUID.randomUUID().toString(), LocalDateTime.now(), "Johan")
+
+                // When
+                val (state, events) = applicationService.executeAndReturnDecision(streamId, command, decider)
+
+                // Then
+                assertAll(
+                    { assertThat(state).isEqualTo("Johan") },
+                    { assertThat(events).containsOnly(NameDefined(command.id, command.time, command.name)) },
+                    { assertThat(eventStore.domainEvents()).containsOnly(NameDefined(command.id, command.time, command.name)) },
+                )
+            }
+
+            @Test
+            fun and_list_of_commands() {
+                // Given
+                val streamId = UUID.randomUUID().toString()
+                val command1 = DefineName(UUID.randomUUID().toString(), LocalDateTime.now(), "John")
+                val command2 = ChangeName(UUID.randomUUID().toString(), LocalDateTime.now(), "Johan")
+
+                // When
+                val (state, events) = applicationService.executeAndReturnDecision(streamId, commands = listOf(command1, command2), decider)
+
+                // Then
+                assertAll(
+                    { assertThat(state).isEqualTo("Johan") },
+                    {
+                        assertThat(events).containsOnly(
+                            NameDefined(command1.id, command1.time, command1.name),
+                            NameWasChanged(command2.id, command2.time, command2.newName)
+                        )
+                    },
+                    {
+                        assertThat(eventStore.domainEvents()).containsOnly(
+                            NameDefined(command1.id, command1.time, command1.name),
+                            NameWasChanged(command2.id, command2.time, command2.newName),
+                        )
+                    },
+                )
+            }
+        }
+    }
+
+
+    @Nested
+    @DisplayName("executeAndReturnState")
+    inner class ExecuteAndReturnState {
+
+        @Nested
+        @DisplayName("when streamid is a UUID")
+        inner class IsUUID {
+
+            @Test
+            fun and_single_command() {
+                // Given
+                val streamId = UUID.randomUUID()
+                val command = DefineName(UUID.randomUUID().toString(), LocalDateTime.now(), "Johan")
+
+                // When
+                val state = applicationService.executeAndReturnState(streamId, command, decider)
+
+                // Then
+                assertThat(state).isEqualTo("Johan")
+            }
+
+            @Test
+            fun and_list_of_commands() {
+                // Given
+                val streamId = UUID.randomUUID()
+                val command1 = DefineName(UUID.randomUUID().toString(), LocalDateTime.now(), "John")
+                val command2 = ChangeName(UUID.randomUUID().toString(), LocalDateTime.now(), "Johan")
+
+                // When
+                val state = applicationService.executeAndReturnState(streamId, commands = listOf(command1, command2), decider)
+
+                // Then
+                assertThat(state).isEqualTo("Johan")
+            }
+        }
+
+        @Nested
+        @DisplayName("when streamid is a String")
+        inner class IsString {
+
+            @Test
+            fun and_single_command() {
+                // Given
+                val streamId = UUID.randomUUID().toString()
+                val command = DefineName(UUID.randomUUID().toString(), LocalDateTime.now(), "Johan")
+
+                // When
+                val state = applicationService.executeAndReturnState(streamId, command, decider)
+
+                // Then
+                assertThat(state).isEqualTo("Johan")
+            }
+
+            @Test
+            fun and_list_of_commands() {
+                // Given
+                val streamId = UUID.randomUUID().toString()
+                val command1 = DefineName(UUID.randomUUID().toString(), LocalDateTime.now(), "John")
+                val command2 = ChangeName(UUID.randomUUID().toString(), LocalDateTime.now(), "Johan")
+
+                // When
+                val state = applicationService.executeAndReturnState(streamId, commands = listOf(command1, command2), decider)
+
+                // Then
+                assertThat(state).isEqualTo("Johan")
+            }
+        }
+    }
+
+    @Nested
+    @DisplayName("executeAndReturnEvents")
+    inner class ExecuteAndReturnEvents {
+
+        @Nested
+        @DisplayName("when streamid is a UUID")
+        inner class IsUUID {
+
+            @Test
+            fun and_single_command() {
+                // Given
+                val streamId = UUID.randomUUID()
+                val command = DefineName(UUID.randomUUID().toString(), LocalDateTime.now(), "Johan")
+
+                // When
+                val events = applicationService.executeAndReturnEvents(streamId, command, decider)
+
+                // Then
+                assertAll(
+                    { assertThat(events).containsOnly(NameDefined(command.id, command.time, command.name)) },
+                    { assertThat(eventStore.domainEvents()).containsOnly(NameDefined(command.id, command.time, command.name)) },
+                )
+            }
+
+            @Test
+            fun and_list_of_commands() {
+                // Given
+                val streamId = UUID.randomUUID()
+                val command1 = DefineName(UUID.randomUUID().toString(), LocalDateTime.now(), "John")
+                val command2 = ChangeName(UUID.randomUUID().toString(), LocalDateTime.now(), "Johan")
+
+                // When
+                val events = applicationService.executeAndReturnEvents(streamId, commands = listOf(command1, command2), decider)
+
+                // Then
+                assertAll(
+                    {
+                        assertThat(events).containsOnly(
+                            NameDefined(command1.id, command1.time, command1.name),
+                            NameWasChanged(command2.id, command2.time, command2.newName)
+                        )
+                    },
+                    {
+                        assertThat(eventStore.domainEvents()).containsOnly(
+                            NameDefined(command1.id, command1.time, command1.name),
+                            NameWasChanged(command2.id, command2.time, command2.newName),
+                        )
+                    },
+                )
+            }
+        }
+
+        @Nested
+        @DisplayName("when streamid is a String")
+        inner class IsString {
+
+            @Test
+            fun and_single_command() {
+                // Given
+                val streamId = UUID.randomUUID().toString()
+                val command = DefineName(UUID.randomUUID().toString(), LocalDateTime.now(), "Johan")
+
+                // When
+                val events = applicationService.executeAndReturnEvents(streamId, command, decider)
+
+                // Then
+                assertAll(
+                    { assertThat(events).containsOnly(NameDefined(command.id, command.time, command.name)) },
+                    { assertThat(eventStore.domainEvents()).containsOnly(NameDefined(command.id, command.time, command.name)) },
+                )
+            }
+
+            @Test
+            fun and_list_of_commands() {
+                // Given
+                val streamId = UUID.randomUUID().toString()
+                val command1 = DefineName(UUID.randomUUID().toString(), LocalDateTime.now(), "John")
+                val command2 = ChangeName(UUID.randomUUID().toString(), LocalDateTime.now(), "Johan")
+
+                // When
+                val events = applicationService.executeAndReturnEvents(streamId, commands = listOf(command1, command2), decider)
+
+                // Then
+                assertAll(
+                    {
+                        assertThat(events).containsOnly(
+                            NameDefined(command1.id, command1.time, command1.name),
+                            NameWasChanged(command2.id, command2.time, command2.newName)
+                        )
+                    },
+                    {
+                        assertThat(eventStore.domainEvents()).containsOnly(
+                            NameDefined(command1.id, command1.time, command1.name),
+                            NameWasChanged(command2.id, command2.time, command2.newName),
+                        )
+                    },
+                )
+            }
+        }
+    }
+
+    private fun InMemoryEventStore.domainEvents(): Stream<DomainEvent> = all().map { cloudEventConverter.toDomainEvent(it) }
 }

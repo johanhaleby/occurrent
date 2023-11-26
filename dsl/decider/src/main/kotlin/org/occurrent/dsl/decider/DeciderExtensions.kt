@@ -39,24 +39,36 @@ operator fun <S, E> Decision<S, E>.component2(): List<E> = events
 
 // Application service extension functions
 
-fun <C, S, E> ApplicationService<E>.execute(streamId: String, c: C, decider: Decider<C, S, E>): WriteResult = execute(streamId) { events: List<E> ->
-    decider.decideOnEventsAndReturnEvents(events, c)
+// Execute
+fun <C, S, E> ApplicationService<E>.execute(streamId: UUID, command: C, decider: Decider<C, S, E>): WriteResult = execute(streamId.toString(), command, decider)
+fun <C, S, E> ApplicationService<E>.execute(streamId: String, command: C, decider: Decider<C, S, E>): WriteResult = execute(streamId, listOf(command), decider)
+fun <C, S, E> ApplicationService<E>.execute(streamId: UUID, commands: List<C>, decider: Decider<C, S, E>): WriteResult = execute(streamId.toString(), commands, decider)
+fun <C, S, E> ApplicationService<E>.execute(streamId: String, commands: List<C>, decider: Decider<C, S, E>): WriteResult = execute(streamId) { events: List<E> ->
+    decider.decideOnEventsAndReturnEvents(events, commands)
 }
 
-fun <C, S, E> ApplicationService<E>.execute(streamId: UUID, c: C, decider: Decider<C, S, E>): WriteResult = execute(streamId.toString(), c, decider)
-
-fun <C, S, E> ApplicationService<E>.executeAndReturnDecision(streamId: String, c: C, decider: Decider<C, S, E>): Decision<S, E> {
+// ExecuteAndReturnDecision
+fun <C, S, E> ApplicationService<E>.executeAndReturnDecision(streamId: UUID, command: C, decider: Decider<C, S, E>): Decision<S, E> = executeAndReturnDecision(streamId.toString(), command, decider)
+fun <C, S, E> ApplicationService<E>.executeAndReturnDecision(streamId: UUID, commands: List<C>, decider: Decider<C, S, E>): Decision<S, E> = executeAndReturnDecision(streamId.toString(), commands, decider)
+fun <C, S, E> ApplicationService<E>.executeAndReturnDecision(streamId: String, command: C, decider: Decider<C, S, E>): Decision<S, E> = executeAndReturnDecision(streamId, listOf(command), decider)
+fun <C, S, E> ApplicationService<E>.executeAndReturnDecision(streamId: String, commands: List<C>, decider: Decider<C, S, E>): Decision<S, E> {
     val cheat = AtomicReference<Decision<S, E>>()
     execute(streamId) { events: List<E> ->
-        val decision: Decision<S, E> = decider.decideOnEvents(events, c)
+        val decision: Decision<S, E> = decider.decideOnEvents(events, commands)
         cheat.set(decision)
         decision.events
     }
     return cheat.get()
 }
 
-fun <C, S, E> ApplicationService<E>.executeAndReturnDecision(streamId: UUID, c: C, decider: Decider<C, S, E>): Decision<S, E> = executeAndReturnDecision(streamId.toString(), c, decider)
-fun <C, S, E> ApplicationService<E>.executeAndReturnState(streamId: String, c: C, decider: Decider<C, S, E>): S = executeAndReturnDecision(streamId, c, decider).state
-fun <C, S, E> ApplicationService<E>.executeAndReturnState(streamId: UUID, c: C, decider: Decider<C, S, E>): S = executeAndReturnDecision(streamId, c, decider).state
-fun <C, S, E> ApplicationService<E>.executeAndReturnEvents(streamId: String, c: C, decider: Decider<C, S, E>): List<E> = executeAndReturnDecision(streamId, c, decider).events
-fun <C, S, E> ApplicationService<E>.executeAndReturnEvents(streamId: UUID, c: C, decider: Decider<C, S, E>): List<E> = executeAndReturnDecision(streamId, c, decider).events
+// ExecuteAndReturnState
+fun <C, S, E> ApplicationService<E>.executeAndReturnState(streamId: String, command: C, decider: Decider<C, S, E>): S = executeAndReturnDecision(streamId, command, decider).state
+fun <C, S, E> ApplicationService<E>.executeAndReturnState(streamId: UUID, command: C, decider: Decider<C, S, E>): S = executeAndReturnDecision(streamId, command, decider).state
+fun <C, S, E> ApplicationService<E>.executeAndReturnState(streamId: String, commands: List<C>, decider: Decider<C, S, E>): S = executeAndReturnDecision(streamId, commands, decider).state
+fun <C, S, E> ApplicationService<E>.executeAndReturnState(streamId: UUID, commands: List<C>, decider: Decider<C, S, E>): S = executeAndReturnDecision(streamId, commands, decider).state
+
+// ExecuteAndReturnEvents
+fun <C, S, E> ApplicationService<E>.executeAndReturnEvents(streamId: String, command: C, decider: Decider<C, S, E>): List<E> = executeAndReturnDecision(streamId, command, decider).events
+fun <C, S, E> ApplicationService<E>.executeAndReturnEvents(streamId: UUID, command: C, decider: Decider<C, S, E>): List<E> = executeAndReturnDecision(streamId, command, decider).events
+fun <C, S, E> ApplicationService<E>.executeAndReturnEvents(streamId: String, commands: List<C>, decider: Decider<C, S, E>): List<E> = executeAndReturnDecision(streamId, commands, decider).events
+fun <C, S, E> ApplicationService<E>.executeAndReturnEvents(streamId: UUID, commands: List<C>, decider: Decider<C, S, E>): List<E> = executeAndReturnDecision(streamId, commands, decider).events
