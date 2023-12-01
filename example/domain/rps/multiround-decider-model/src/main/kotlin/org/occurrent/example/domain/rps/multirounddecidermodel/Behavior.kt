@@ -18,7 +18,7 @@
 package org.occurrent.example.domain.rps.multirounddecidermodel
 
 import org.occurrent.dsl.decider.decider
-import org.occurrent.example.domain.rps.multirounddecidermodel.GameLogic.handleFirstHandGesture
+import org.occurrent.example.domain.rps.multirounddecidermodel.GameLogic.handleHandGesture
 import org.occurrent.example.domain.rps.multirounddecidermodel.GameLogic.initiateNewGame
 import org.occurrent.example.domain.rps.multirounddecidermodel.GameStatus.*
 import org.occurrent.example.domain.rps.multirounddecidermodel.GameStatus.Ended
@@ -37,7 +37,7 @@ val rps = decider<GameCommand, GameState?, GameEvent>(
         val decisionState = gameState.toDecisionState()
         when {
             c is InitiateNewGame && decisionState == DoesNotExist -> initiateNewGame(c)
-            c is ShowHandGesture && decisionState is WaitingForHandGesture -> handleFirstHandGesture(gameState, decisionState, c)
+            c is ShowHandGesture && decisionState is WaitingForHandGesture -> handleHandGesture(gameState, decisionState, c)
             else -> throw IllegalArgumentException("Cannot ${c::class.simpleName} when game is ${decisionState::class.simpleName}")
         }
     },
@@ -48,7 +48,7 @@ val rps = decider<GameCommand, GameState?, GameEvent>(
 private object GameLogic {
     fun initiateNewGame(c: InitiateNewGame) = listOf(NewGameInitiated(c.gameId, c.timestamp, c.playerId, c.numberOfRounds.toInt()))
 
-    fun handleFirstHandGesture(domainState: GameState?, decisionState: WaitingForHandGesture, c: ShowHandGesture): List<GameEvent> =
+    fun handleHandGesture(domainState: GameState?, decisionState: WaitingForHandGesture, c: ShowHandGesture): List<GameEvent> =
         when (decisionState) {
             is WaitingForHandGesture.WaitingForFirstHandGestureInGame -> listOf(
                 GameStarted(c.gameId, c.timestamp),
