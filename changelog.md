@@ -20,7 +20,7 @@
 * Upgraded to Kotlin 1.9.20
 * Added a "deleteAll" method to InMemoryEventStore which is useful for testing
 * The `org.occurrent.eventstore.api.WriteConditon` has been converted to a java record.
-* Removed the deprected method "getStreamVersion" in `org.occurrent.eventstore.api.WriteConditon`, use `newStreamVersion()` instead. 
+* Removed the deprecated method "getStreamVersion" in `org.occurrent.eventstore.api.WriteConditon`, use `newStreamVersion()` instead. 
 
 ### 0.16.10 (2023-10-21)
 * Several changes to `RetryStrategy` again:
