@@ -31,5 +31,3 @@ fun <C, S, E> Decider<C, S, E>.decide(state: S, commands: List<C>): Decision<S, 
 
 operator fun <S, E> Decision<S, E>.component1(): S = state
 operator fun <S, E> Decision<S, E>.component2(): List<E> = events
-
-
