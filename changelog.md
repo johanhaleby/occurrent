@@ -1,3 +1,6 @@
+### Changelog next version
+* Upgraded from Kotlin 1.9.20 to 1.9.21
+
 ### 0.16.11 (2023-12-01)
 * Removed `isFinalError` method from `ErrorInfo` used by `RetryStrategy`, use `isLastAttempt()` instead.
 * Added `RetryInfo` as argument to the `exec` extension function in `RetryStrategy`.
