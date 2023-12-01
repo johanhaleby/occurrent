@@ -85,6 +85,8 @@
     </dependencies>
 
     <build>
+        <sourceDirectory>src/main/kotlin</sourceDirectory>
+        <testSourceDirectory>src/test/kotlin</testSourceDirectory>
         <plugins>
             <plugin>
                 <groupId>org.jetbrains.kotlin</groupId>
@@ -136,27 +138,8 @@
             <build>
                 <plugins>
                     <plugin>
-                        <!-- See https://github.com/Kotlin/dokka#using-the-maven-plugin for more examples-->
                         <groupId>org.jetbrains.dokka</groupId>
                         <artifactId>dokka-maven-plugin</artifactId>
-                        <version>${dokka.version}</version>
-                        <executions>
-                            <execution>
-                                <phase>prepare-package</phase>
-                                <goals>
-                                    <goal>javadocJar</goal>
-                                </goals>
-                            </execution>
-                        </executions>
-                        <configuration>
-                            <dokkaPlugins>
-                                <plugin>
-                                    <groupId>org.jetbrains.dokka</groupId>
-                                    <artifactId>kotlin-as-java-plugin</artifactId>
-                                    <version>${dokka.version}</version>
-                                </plugin>
-                            </dokkaPlugins>
-                        </configuration>
                     </plugin>
                 </plugins>
             </build>

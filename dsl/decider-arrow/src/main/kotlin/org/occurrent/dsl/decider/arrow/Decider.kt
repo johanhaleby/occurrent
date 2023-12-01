@@ -30,6 +30,9 @@ interface Decider<C, S, E, ER> {
 }
 
 
+/**
+ * Create a new decider
+ */
 fun <C, S, E, ER> decider(initialState: S, decide: (C, S) -> Either<ER, List<E>>, evolve: (S, E) -> S, isTerminal: (S) -> Boolean = { false }): Decider<C, S, E, ER> =
     object : Decider<C, S, E, ER> {
         override fun initialState(): S = initialState
