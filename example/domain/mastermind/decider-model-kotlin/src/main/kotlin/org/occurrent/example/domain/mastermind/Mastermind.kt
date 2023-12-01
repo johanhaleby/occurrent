@@ -43,7 +43,8 @@ private val evolve: (MasterMindState, MasterMindEvent) -> MasterMindState = { s,
 }
 
 val mastermind = decider<MasterMindCommand, MasterMindState, MasterMindEvent>(
-    initialState = NotStarted, decide = { c, s ->
+    initialState = NotStarted,
+    decide = { c, s ->
         when (c) {
             is StartGame -> when (s) {
                 is NotStarted -> listOf(GameStarted(c.gameId, c.timestamp, c.codeBreakerId, c.codeMakerId, c.secretCode, c.totalNumberOfGuesses.toInt()))
@@ -67,7 +68,8 @@ val mastermind = decider<MasterMindCommand, MasterMindState, MasterMindEvent>(
                 }
             }
         }
-    }, evolve = evolve
+    },
+    evolve = evolve
 )
 
 private fun TotalNumberOfGuesses.toInt() = when (this) {
@@ -101,10 +103,10 @@ internal object DetermineFeedback {
         }
     }
 
-    private fun containsPegOfThisColorThatHasNotYetBeenRevealed(secretCodePegs: List<CodePeg>, feedback: InternalFeedback, peg: CodePeg): Boolean {
-        val previousMatches = feedback.slots.count { (_, guessCodePegForSlot) -> guessCodePegForSlot == peg }
-        val numberOfPegsOfThisColorInSecret = secretCodePegs.count { it == peg }
-        return numberOfPegsOfThisColorInSecret > previousMatches
+    private fun containsPegWithSameColorThatHasNotYetBeenRevealed(secretCodePegs: List<CodePeg>, feedback: InternalFeedback, peg: CodePeg): Boolean {
+        val previousMatches = feedback.slots.count { (_, guessedCodePegForSlot) -> guessedCodePegForSlot == peg }
+        val numberOfPegsWithSameColorInSecret = secretCodePegs.count { it == peg }
+        return numberOfPegsWithSameColorInSecret > previousMatches
     }
 
     private fun removePreviousWhiteKeyPegsForCodePegIfApplicable(position: Int, secretCodePegs: List<CodePeg>, feedback: InternalFeedback, guessedPeg: CodePeg): InternalFeedback {
@@ -129,7 +131,7 @@ internal object DetermineFeedback {
         val internalFeedback = guessedPegs.foldIndexed(InternalFeedback.empty()) { position, feedback, guessedPeg ->
             when {
                 secretCodePegs[position] == guessedPeg -> removePreviousWhiteKeyPegsForCodePegIfApplicable(position, secretCodePegs, feedback, guessedPeg).addFeedbackKeyPeg(position, guessedPeg, Black)
-                containsPegOfThisColorThatHasNotYetBeenRevealed(secretCodePegs, feedback, guessedPeg) -> feedback.addFeedbackKeyPeg(position, guessedPeg, White)
+                containsPegWithSameColorThatHasNotYetBeenRevealed(secretCodePegs, feedback, guessedPeg) -> feedback.addFeedbackKeyPeg(position, guessedPeg, White)
                 else -> feedback
             }
         }
