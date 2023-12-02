@@ -20,7 +20,7 @@ package org.occurrent.subscription.mongodb.blocking.ccs.internal;
 import com.mongodb.client.MongoCollection;
 import org.bson.BsonDocument;
 import org.occurrent.retry.RetryStrategy;
-import org.occurrent.retry.RetryStrategy.Retry;
+import org.occurrent.retry.internal.RetryImpl;
 import org.occurrent.subscription.api.blocking.CompetingConsumerStrategy.CompetingConsumerListener;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -61,8 +61,8 @@ public class MongoLeaseCompetingConsumerStrategySupport {
         this.competingConsumerListeners = Collections.newSetFromMap(new ConcurrentHashMap<>());
         this.competingConsumers = new ConcurrentHashMap<>();
 
-        if (retryStrategy instanceof Retry retry) {
-            this.retryStrategy = retry.retryIf(retry.retryPredicate.and(__ -> running));
+        if (retryStrategy instanceof RetryImpl retry) {
+            this.retryStrategy = retry.mapRetryPredicate(currentPredicate -> currentPredicate.and(__ -> running));
         } else {
             this.retryStrategy = retryStrategy;
         }

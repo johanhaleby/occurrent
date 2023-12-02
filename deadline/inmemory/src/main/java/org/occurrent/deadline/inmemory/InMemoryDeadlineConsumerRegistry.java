@@ -22,6 +22,7 @@ import org.occurrent.deadline.api.blocking.DeadlineConsumerRegistry;
 import org.occurrent.deadline.inmemory.internal.DeadlineData;
 import org.occurrent.retry.RetryStrategy;
 import org.occurrent.retry.RetryStrategy.Retry;
+import org.occurrent.retry.internal.RetryImpl;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -74,7 +75,7 @@ public class InMemoryDeadlineConsumerRegistry implements DeadlineConsumerRegistr
         Objects.requireNonNull(deadlineQueue, "Deadline queue cannot be null");
         Objects.requireNonNull(config, "Config cannot be null");
         final RetryStrategy retryStrategyToUse;
-        if (config.retryStrategy instanceof Retry) {
+        if (config.retryStrategy instanceof RetryImpl) {
             retryStrategyToUse = ((Retry) config.retryStrategy).retryIf(__ -> running);
         } else {
             retryStrategyToUse = config.retryStrategy;

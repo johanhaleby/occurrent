@@ -22,7 +22,6 @@ import org.occurrent.retry.MaxAttempts;
 import org.occurrent.retry.RetryInfo;
 import org.occurrent.retry.RetryStrategy;
 import org.occurrent.retry.RetryStrategy.DontRetry;
-import org.occurrent.retry.RetryStrategy.Retry;
 
 import java.time.Duration;
 import java.util.Iterator;
@@ -45,7 +44,7 @@ public class RetryExecution {
         if (retryStrategy instanceof DontRetry) {
             return function;
         }
-        Retry retry = applyShutdownPredicate(shutdownPredicate, retryStrategy);
+        RetryImpl retry = applyShutdownPredicate(shutdownPredicate, retryStrategy);
         return executeWithRetry(function, retry, convertToDelayStream(retry.backoff), 1, null, Duration.ZERO);
     }
 
@@ -53,7 +52,7 @@ public class RetryExecution {
         if (retryStrategy instanceof DontRetry) {
             return runnable;
         }
-        Retry retry = applyShutdownPredicate(shutdownPredicate, retryStrategy);
+        RetryImpl retry = applyShutdownPredicate(shutdownPredicate, retryStrategy);
         return executeWithRetry(runnable, retry, convertToDelayStream(retry.backoff));
     }
 
@@ -61,28 +60,28 @@ public class RetryExecution {
         if (retryStrategy instanceof DontRetry) {
             return fn;
         }
-        Retry retry = applyShutdownPredicate(shutdownPredicate, retryStrategy);
+        RetryImpl retry = applyShutdownPredicate(shutdownPredicate, retryStrategy);
         return executeWithRetry(fn, retry, convertToDelayStream(retry.backoff));
     }
 
-    private static Retry applyShutdownPredicate(Predicate<Throwable> shutdownPredicate, RetryStrategy retryStrategy) {
-        Retry retry = (Retry) retryStrategy;
+    private static RetryImpl applyShutdownPredicate(Predicate<Throwable> shutdownPredicate, RetryStrategy retryStrategy) {
+        RetryImpl retry = (RetryImpl) retryStrategy;
         return retry.retryIf(shutdownPredicate.and(retry.retryPredicate));
     }
 
-    private static Runnable executeWithRetry(Runnable runnable, Retry retry, Iterator<Long> delay) {
+    private static Runnable executeWithRetry(Runnable runnable, RetryImpl retry, Iterator<Long> delay) {
         Consumer<Void> runnableConsumer = __ -> runnable.run();
         return () -> executeWithRetry(runnableConsumer, retry, delay).accept(null);
     }
 
-    private static <T1> Consumer<T1> executeWithRetry(Consumer<T1> fn, Retry retry, Iterator<Long> delay) {
+    private static <T1> Consumer<T1> executeWithRetry(Consumer<T1> fn, RetryImpl retry, Iterator<Long> delay) {
         return t1 -> executeWithRetry(retryInfo -> {
             fn.accept(t1);
             return null;
         }, retry, delay, 1, null, Duration.ZERO).apply(null);
     }
 
-    private static <T1> Function<RetryInfo, T1> executeWithRetry(Function<RetryInfo, T1> fn, Retry retry, Iterator<Long> delay, int attempt, Throwable lastError, Duration previousBackoff) {
+    private static <T1> Function<RetryInfo, T1> executeWithRetry(Function<RetryInfo, T1> fn, RetryImpl retry, Iterator<Long> delay, int attempt, Throwable lastError, Duration previousBackoff) {
         return (RetryInfo) -> {
             var nextRetryInfo = evolveRetryInfo(retry, delay, attempt);
             var retryInfoWithPreviousBackoff = nextRetryInfo.withBackoff(previousBackoff);
@@ -126,7 +125,7 @@ public class RetryExecution {
         };
     }
 
-    private static RetryInfoImpl evolveRetryInfo(Retry retry, Iterator<Long> delay, int attempt) {
+    private static RetryInfoImpl evolveRetryInfo(RetryImpl retry, Iterator<Long> delay, int attempt) {
         Long backoffMillis = delay.next();
         Duration backoffDuration = backoffMillis == 0 ? Duration.ZERO : Duration.ofMillis(backoffMillis);
         return new RetryInfoImpl(attempt, attempt - 1, retry.maxAttempts, backoffDuration);
