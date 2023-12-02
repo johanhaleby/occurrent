@@ -41,7 +41,7 @@ import static org.occurrent.retry.internal.RetryExecution.executeWithRetry;
  * </pre>
  * </p>
  */
-public sealed interface RetryStrategy {
+public interface RetryStrategy {
     /**
      * Create a retry strategy that performs retries if exceptions are caught.
      *
@@ -156,7 +156,7 @@ public sealed interface RetryStrategy {
         }
     }
 
-    sealed interface Retry extends RetryStrategy permits RetryImpl {
+    interface Retry extends RetryStrategy {
         /**
          * Configure the backoff settings for the retry strategy.
          *
