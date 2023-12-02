@@ -1,5 +1,6 @@
 ### Changelog next version
 * Upgraded from Kotlin 1.9.20 to 1.9.21
+* Upgraded amqp-client from 5.16.0 to 5.20.0
 
 ### 0.16.11 (2023-12-01)
 * Removed `isFinalError` method from `ErrorInfo` used by `RetryStrategy`, use `isLastAttempt()` instead.
