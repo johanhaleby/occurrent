@@ -39,7 +39,7 @@ fun main() {
 
     var (state) = mastermind.decide(events = emptyList(), command = StartGame(gameId, Timestamp.now(), codebreakerId, codeMakerId, secretCode, totalNumberOfGuesses))
 
-    val inputExample = "Enter guess in this format: RGBP"
+    val inputExample = "Enter guess in this format: RGBPYOP"
     println("Welcome to MasterMind, you have ${totalNumberOfGuesses.name.lowercase()} guesses, use them wisely. $inputExample")
 
     while (state !is Ended) {
@@ -55,7 +55,7 @@ fun main() {
                 'G' -> CodePeg.Green
                 'B' -> CodePeg.Blue
                 'Y' -> CodePeg.Yellow
-                'O' -> CodePeg.Orange
+                'Y' -> CodePeg.Orange
                 'P' -> CodePeg.Purple
                 else -> null
             }
