@@ -1,6 +1,14 @@
 ### Changelog next version
 * Upgraded from Kotlin 1.9.20 to 1.9.21
 * Upgraded amqp-client from 5.16.0 to 5.20.0
+* Upgraded Spring Boot from 3.1.4 to 3.2.0
+* Upgraded reactor from 3.5.10 to 3.6.0 
+* Upgraded Spring data MongoDB from 4.1.4 to 4.2.0 
+* Upgraded jobrunr from 6.3.2 to 6.3.3
+* Upgraded mongodb drivers from 4.10.2 to 4.11.1
+* Upgraded lettuce core from 6.2.6.RELEASE to 6.3.0.RELEASE
+* Upgraded spring-aspects from 6.0.10 to 6.1.1
+* Upgraded jackson from 2.15.2 to 2.16.0
 
 ### 0.16.11 (2023-12-01)
 * Removed `isFinalError` method from `ErrorInfo` used by `RetryStrategy`, use `isLastAttempt()` instead.

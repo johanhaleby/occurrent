@@ -68,19 +68,19 @@
         <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
         <maven.compiler.source>17</maven.compiler.source>
         <maven.compiler.target>17</maven.compiler.target>
-        <junit.version>5.10.0</junit.version>
+        <junit.version>5.10.1</junit.version>
         <test-containers.version>1.19.3</test-containers.version>
         <kotlin.version>1.9.21</kotlin.version>
-        <jackson.version>2.15.2</jackson.version>
+        <jackson.version>2.16.0</jackson.version>
         <cloudevents.version>2.5.0</cloudevents.version>
-        <reactor.version>3.5.10</reactor.version>
-        <spring-data-mongodb.version>4.1.4</spring-data-mongodb.version>
-        <spring-boot.version>3.1.4</spring-boot.version>
-        <mongo.version>4.10.2</mongo.version>
+        <reactor.version>3.6.0</reactor.version>
+        <spring-data-mongodb.version>4.2.0</spring-data-mongodb.version>
+        <spring-boot.version>3.2.0</spring-boot.version>
+        <mongo.version>4.11.1</mongo.version>
         <dokka.version>1.9.10</dokka.version>
         <sundrio.version>0.100.3</sundrio.version>
         <awaitility.version>4.2.0</awaitility.version>
-        <jobrunr.version>6.3.2</jobrunr.version>
+        <jobrunr.version>6.3.3</jobrunr.version>
     </properties>
 
 
@@ -185,7 +185,7 @@
             <dependency>
                 <groupId>org.springframework</groupId>
                 <artifactId>spring-aspects</artifactId>
-                <version>6.0.10</version>
+                <version>6.1.1</version>
             </dependency>
             <dependency>
                 <groupId>org.springframework.boot</groupId>
@@ -246,7 +246,7 @@
             <dependency>
                 <groupId>io.arrow-kt</groupId>
                 <artifactId>arrow-core</artifactId>
-                <version>1.2.0</version>
+                <version>1.2.1</version>
             </dependency>
 
             <!-- Redis -->
@@ -258,7 +258,7 @@
             <dependency>
                 <groupId>io.lettuce</groupId>
                 <artifactId>lettuce-core</artifactId>
-                <version>6.2.6.RELEASE</version>
+                <version>6.3.0.RELEASE</version>
             </dependency>
             <!-- Mongo -->
             <dependency>
