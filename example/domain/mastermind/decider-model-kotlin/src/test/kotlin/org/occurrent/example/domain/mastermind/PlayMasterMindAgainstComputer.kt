@@ -55,7 +55,7 @@ fun main() {
                 'G' -> CodePeg.Green
                 'B' -> CodePeg.Blue
                 'Y' -> CodePeg.Yellow
-                'Y' -> CodePeg.Orange
+                'O' -> CodePeg.Orange
                 'P' -> CodePeg.Purple
                 else -> null
             }
