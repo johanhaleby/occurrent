@@ -72,7 +72,6 @@ class SubscriptionExtensionsTest {
         )
 
         // Then
-        Thread.sleep(500)
         val viewState = await untilCallTo { viewStateRepository.fetch("johan") } matches { name -> name == "Johan Haleby" }
         assertThat(viewState).isEqualTo("Johan Haleby")
     }
