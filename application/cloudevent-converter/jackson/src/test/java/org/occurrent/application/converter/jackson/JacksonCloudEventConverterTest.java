@@ -48,7 +48,7 @@ public class JacksonCloudEventConverterTest {
         // Given
         ObjectMapper objectMapper = new ObjectMapper();
         JacksonCloudEventConverter<DomainEvent> cloudEventConverter = new JacksonCloudEventConverter<>(objectMapper, CLOUD_EVENT_SOURCE);
-        NameDefined domainEvent = new NameDefined(UUID.randomUUID().toString(), new Date(), "name");
+        NameDefined domainEvent = new NameDefined(UUID.randomUUID().toString(), new Date(), "name", "name");
 
         // When
         CloudEvent cloudEvent = cloudEventConverter.toCloudEvent(domainEvent);
@@ -79,7 +79,7 @@ public class JacksonCloudEventConverterTest {
                 .typeMapper(ReflectionCloudEventTypeMapper.qualified())
                 .build();
 
-        NameDefined domainEvent = new NameDefined(UUID.randomUUID().toString(), new Date(), "name");
+        NameDefined domainEvent = new NameDefined(UUID.randomUUID().toString(), new Date(), "name", "name");
 
         // When
         CloudEvent cloudEvent = cloudEventConverter.toCloudEvent(domainEvent);

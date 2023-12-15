@@ -68,7 +68,7 @@ public class GenericApplicationServiceTest {
 
         // When
         WriteResult writeResult = applicationService.execute(streamId,
-                toStreamCommand(events -> Name.defineName(events, UUID.randomUUID().toString(), LocalDateTime.now(), "Johan")));
+                toStreamCommand(events -> Name.defineName(events, UUID.randomUUID().toString(), LocalDateTime.now(), "name", "Johan")));
 
         // Then
         assertAll(
@@ -89,19 +89,19 @@ public class GenericApplicationServiceTest {
             // When
             PolicySideEffect<DomainEvent> sideEffect = executePolicy(NameDefined.class, averageSizePolicy::whenNameDefinedThenCountAverageSizeOfName);
             applicationService.execute(UUID.randomUUID(),
-                    toStreamCommand(events -> Name.defineName(events, UUID.randomUUID().toString(), LocalDateTime.now(), "Johan")),
+                    toStreamCommand(events -> Name.defineName(events, UUID.randomUUID().toString(), LocalDateTime.now(), "name", "Johan")),
                     sideEffect);
 
             applicationService.execute(UUID.randomUUID(),
-                    toStreamCommand(events -> Name.defineName(events, UUID.randomUUID().toString(), LocalDateTime.now(), "Tina")),
+                    toStreamCommand(events -> Name.defineName(events, UUID.randomUUID().toString(), LocalDateTime.now(), "tina", "Tina")),
                     sideEffect);
 
             applicationService.execute(UUID.randomUUID(),
-                    toStreamCommand(events -> Name.defineName(events, UUID.randomUUID().toString(), LocalDateTime.now(), "Abbe")),
+                    toStreamCommand(events -> Name.defineName(events, UUID.randomUUID().toString(), LocalDateTime.now(), "abbe", "Abbe")),
                     sideEffect);
 
             applicationService.execute(UUID.randomUUID(),
-                    toStreamCommand(events -> Name.defineName(events, UUID.randomUUID().toString(), LocalDateTime.now(), "Agnes")),
+                    toStreamCommand(events -> Name.defineName(events, UUID.randomUUID().toString(), LocalDateTime.now(), "agnes", "Agnes")),
                     sideEffect);
 
             // Then
@@ -119,11 +119,11 @@ public class GenericApplicationServiceTest {
 
             // When
             applicationService.execute(UUID.randomUUID(),
-                    toStreamCommand(events -> Name.defineName(events, UUID.randomUUID().toString(), LocalDateTime.now(), "Johan")),
+                    toStreamCommand(events -> Name.defineName(events, UUID.randomUUID().toString(), LocalDateTime.now(), "name", "Johan")),
                     policy);
 
             applicationService.execute(UUID.randomUUID(),
-                    toStreamCommand(events -> Name.defineName(events, UUID.randomUUID().toString(), LocalDateTime.now(), "Agnes")),
+                    toStreamCommand(events -> Name.defineName(events, UUID.randomUUID().toString(), LocalDateTime.now(), "agnes", "Agnes")),
                     policy);
 
             // Then
@@ -140,10 +140,10 @@ public class GenericApplicationServiceTest {
             UUID streamId = UUID.randomUUID();
 
             // When
-            applicationService.execute(streamId, toStreamCommand(events -> Name.defineName(events, UUID.randomUUID().toString(), LocalDateTime.now(), "Johan")));
+            applicationService.execute(streamId, toStreamCommand(events -> Name.defineName(events, UUID.randomUUID().toString(), LocalDateTime.now(), "name", "Johan")));
 
             applicationService.execute(streamId,
-                    toStreamCommand(events -> Name.changeName(events, UUID.randomUUID().toString(), LocalDateTime.now(), "Tina")),
+                    toStreamCommand(events -> Name.changeName(events, UUID.randomUUID().toString(), LocalDateTime.now(), "tina", "Tina")),
                     executePolicy(NameDefined.class, averageSizePolicy::whenNameDefinedThenCountAverageSizeOfName));
 
             // Then
@@ -189,7 +189,7 @@ public class GenericApplicationServiceTest {
         }
 
         @Test
-        void retries_automatically_when_other_exception_than_write_condition_not_fulfilled_is_thrown_and_retry_strategy_is_configured_to_retry_this_expection() {
+        void retries_automatically_when_other_exception_than_write_condition_not_fulfilled_is_thrown_and_retry_strategy_is_configured_to_retry_this_exception() {
             // Given
             UUID streamId = UUID.randomUUID();
             AtomicInteger atomicInteger = new AtomicInteger();

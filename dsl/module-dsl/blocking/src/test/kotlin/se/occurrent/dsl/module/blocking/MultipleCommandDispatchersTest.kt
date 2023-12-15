@@ -56,12 +56,12 @@ class MultipleCommandDispatchersTest {
         // Module Configuration
         val module = module<NameCommand, DomainEvent>(cloudEventConverter) {
             commands(dispatchTo(applicationService)) {
-                command(DefineName::id, Name::defineNameFromCommand)
+                command(DefineName::commandId, Name::defineNameFromCommand)
             }
             commands { cmd ->
                 when (cmd) {
-                    is DefineName -> applicationService.execute(cmd.id(), Name::defineNameFromCommand.partial(cmd))
-                    is ChangeName -> applicationService.execute(cmd.id(), Name::changeNameFromCommand.partial(cmd))
+                    is DefineName -> applicationService.execute(cmd.commandId(), Name::defineNameFromCommand.partial(cmd))
+                    is ChangeName -> applicationService.execute(cmd.commandId(), Name::changeNameFromCommand.partial(cmd))
                 }
             }
             subscriptions(subscriptionModel) {
@@ -81,8 +81,8 @@ class MultipleCommandDispatchersTest {
         repeat(10) { count ->
             val streamId = count.toString()
             module.dispatch(
-                DefineName(streamId, LocalDateTime.now(), "Johan:$streamId"),
-                ChangeName(streamId, LocalDateTime.now(), "Eric:$streamId")
+                DefineName(streamId, LocalDateTime.now(), streamId, "Johan:$streamId"),
+                ChangeName(streamId, LocalDateTime.now(), streamId, "Eric:$streamId")
             )
         }
 

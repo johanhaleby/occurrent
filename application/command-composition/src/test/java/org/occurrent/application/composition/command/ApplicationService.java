@@ -59,9 +59,10 @@ class ApplicationService {
         LocalDateTime time = LocalDateTime.ofInstant(instant, UTC);
         String eventId = (String) event.get("eventId");
         String name = (String) event.get("name");
+        String userId = (String) event.get("userId");
         return Match(event.get("type")).of(
-                Case($(is(NameDefined.class.getSimpleName())), e -> new NameDefined(eventId, time, name)),
-                Case($(is(NameWasChanged.class.getSimpleName())), e -> new NameWasChanged(eventId, time, name))
+                Case($(is(NameDefined.class.getSimpleName())), e -> new NameDefined(eventId, time, userId, name)),
+                Case($(is(NameWasChanged.class.getSimpleName())), e -> new NameWasChanged(eventId, time, userId, name))
         );
     }
 
@@ -83,6 +84,7 @@ class ApplicationService {
                 put("type", e.getClass().getSimpleName());
                 put("eventId", e.eventId());
                 put("name", e.name());
+                put("userId", e.userId());
                 put("time", e.timestamp().getTime());
             }});
         } catch (JsonProcessingException jsonProcessingException) {

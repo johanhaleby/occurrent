@@ -32,6 +32,7 @@
         <module>query-dsl</module>
         <module>decider</module>
         <module>decider-arrow</module>
+        <module>view-dsl</module>
     </modules>
 
 </project>

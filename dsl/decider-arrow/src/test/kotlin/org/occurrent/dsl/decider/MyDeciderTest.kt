@@ -43,14 +43,14 @@ class MyDeciderTest {
         // Given
         val decider = decider<NameCommand, String?, DomainEvent, Throwable>(
             initialState = null,
-            decide = { cmd, state ->
+            decide = { cmd, currentName ->
                 when (cmd) {
                     is DefineName -> catch {
-                        Name.defineTheName(UUID.randomUUID().toString(), cmd.time, cmd.name)
+                        Name.defineTheName(UUID.randomUUID().toString(), cmd.time, cmd.userId, cmd.name)
                     }
 
                     is ChangeName -> catch {
-                        Name.changeNameFromCurrent(UUID.randomUUID().toString(), cmd.time, state, cmd.newName)
+                        Name.changeNameFromCurrent(UUID.randomUUID().toString(), cmd.time, cmd.userId, currentName, cmd.newName)
                     }
                 }
             },
@@ -64,12 +64,12 @@ class MyDeciderTest {
 
         // When
         val success = decider.decide(
-            command = ChangeName("id", LocalDateTime.now(), "Another Name"),
+            command = ChangeName("id", LocalDateTime.now(), "name", "Another Name"),
             state = "Jane Doe"
         )
 
         val fail = decider.decide(
-            command = ChangeName("id", LocalDateTime.now(), "Another Name"),
+            command = ChangeName("id", LocalDateTime.now(), "name", "Another Name"),
             state = "John Doe"
         )
 

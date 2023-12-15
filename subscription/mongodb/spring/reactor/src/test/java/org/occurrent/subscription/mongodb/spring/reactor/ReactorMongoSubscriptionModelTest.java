@@ -109,9 +109,9 @@ public class ReactorMongoSubscriptionModelTest {
         CopyOnWriteArrayList<CloudEvent> state = new CopyOnWriteArrayList<>();
         disposeAfterTest(subscription.subscribe().flatMap(cloudEvent -> Mono.fromRunnable(() -> state.add(cloudEvent))).subscribe());
         Thread.sleep(200);
-        NameDefined nameDefined1 = new NameDefined(UUID.randomUUID().toString(), now, "name1");
-        NameDefined nameDefined2 = new NameDefined(UUID.randomUUID().toString(), now.plusSeconds(2), "name2");
-        NameWasChanged nameWasChanged1 = new NameWasChanged(UUID.randomUUID().toString(), now.plusSeconds(10), "name3");
+        NameDefined nameDefined1 = new NameDefined(UUID.randomUUID().toString(), now, "name", "name1");
+        NameDefined nameDefined2 = new NameDefined(UUID.randomUUID().toString(), now.plusSeconds(2), "name", "name2");
+        NameWasChanged nameWasChanged1 = new NameWasChanged(UUID.randomUUID().toString(), now.plusSeconds(10), "name", "name3");
 
         // When
         mongoEventStore.write("1", 0, serialize(nameDefined1)).block();
@@ -134,10 +134,10 @@ public class ReactorMongoSubscriptionModelTest {
                     .flatMap(cloudEvent -> Mono.fromRunnable(() -> state.add(cloudEvent)))
                     .subscribe();
             Thread.sleep(200);
-            NameDefined nameDefined1 = new NameDefined(UUID.randomUUID().toString(), now, "name1");
-            NameDefined nameDefined2 = new NameDefined(UUID.randomUUID().toString(), now.plusSeconds(2), "name2");
-            NameWasChanged nameWasChanged1 = new NameWasChanged(UUID.randomUUID().toString(), now.plusSeconds(3), "name3");
-            NameWasChanged nameWasChanged2 = new NameWasChanged(UUID.randomUUID().toString(), now.plusSeconds(4), "name4");
+            NameDefined nameDefined1 = new NameDefined(UUID.randomUUID().toString(), now, "name", "name1");
+            NameDefined nameDefined2 = new NameDefined(UUID.randomUUID().toString(), now.plusSeconds(2), "name", "name2");
+            NameWasChanged nameWasChanged1 = new NameWasChanged(UUID.randomUUID().toString(), now.plusSeconds(3), "name", "name3");
+            NameWasChanged nameWasChanged2 = new NameWasChanged(UUID.randomUUID().toString(), now.plusSeconds(4), "name", "name4");
 
             // When
             mongoEventStore.write("1", 0, serialize(nameDefined1)).block();
@@ -155,10 +155,10 @@ public class ReactorMongoSubscriptionModelTest {
             // Given
             LocalDateTime now = LocalDateTime.now();
             CopyOnWriteArrayList<CloudEvent> state = new CopyOnWriteArrayList<>();
-            NameDefined nameDefined1 = new NameDefined(UUID.randomUUID().toString(), now, "name1");
-            NameDefined nameDefined2 = new NameDefined(UUID.randomUUID().toString(), now.plusSeconds(2), "name2");
-            NameWasChanged nameWasChanged1 = new NameWasChanged(UUID.randomUUID().toString(), now.plusSeconds(3), "name3");
-            NameWasChanged nameWasChanged2 = new NameWasChanged(UUID.randomUUID().toString(), now.plusSeconds(4), "name4");
+            NameDefined nameDefined1 = new NameDefined(UUID.randomUUID().toString(), now, "name", "name1");
+            NameDefined nameDefined2 = new NameDefined(UUID.randomUUID().toString(), now.plusSeconds(2), "name", "name2");
+            NameWasChanged nameWasChanged1 = new NameWasChanged(UUID.randomUUID().toString(), now.plusSeconds(3), "name", "name3");
+            NameWasChanged nameWasChanged2 = new NameWasChanged(UUID.randomUUID().toString(), now.plusSeconds(4), "name", "name4");
 
             subscription.subscribe(MongoFilterSpecification.MongoBsonFilterSpecification.filter().id(Filters::eq, nameDefined2.eventId()).and().type(Filters::eq, NameDefined.class.getSimpleName()))
                     .flatMap(cloudEvent -> Mono.fromRunnable(() -> state.add(cloudEvent)))
@@ -182,10 +182,10 @@ public class ReactorMongoSubscriptionModelTest {
             // Given
             LocalDateTime now = LocalDateTime.now();
             CopyOnWriteArrayList<CloudEvent> state = new CopyOnWriteArrayList<>();
-            NameDefined nameDefined1 = new NameDefined(UUID.randomUUID().toString(), now, "name1");
-            NameDefined nameDefined2 = new NameDefined(UUID.randomUUID().toString(), now.plusSeconds(2), "name2");
-            NameWasChanged nameWasChanged1 = new NameWasChanged(UUID.randomUUID().toString(), now.plusSeconds(3), "name3");
-            NameWasChanged nameWasChanged2 = new NameWasChanged(UUID.randomUUID().toString(), now.plusSeconds(4), "name4");
+            NameDefined nameDefined1 = new NameDefined(UUID.randomUUID().toString(), now, "name", "name1");
+            NameDefined nameDefined2 = new NameDefined(UUID.randomUUID().toString(), now.plusSeconds(2), "name", "name2");
+            NameWasChanged nameWasChanged1 = new NameWasChanged(UUID.randomUUID().toString(), now.plusSeconds(3), "name", "name3");
+            NameWasChanged nameWasChanged2 = new NameWasChanged(UUID.randomUUID().toString(), now.plusSeconds(4), "name", "name4");
 
             subscription.subscribe(MongoFilterSpecification.MongoBsonFilterSpecification.filter(match(and(eq("fullDocument.id", nameDefined2.eventId()), eq("fullDocument.type", NameDefined.class.getSimpleName())))))
                     .flatMap(cloudEvent -> Mono.fromRunnable(() -> state.add(cloudEvent)))
@@ -216,10 +216,10 @@ public class ReactorMongoSubscriptionModelTest {
             subscription.subscribe(MongoFilterSpecification.MongoJsonFilterSpecification.filter("{ $match : { \"" + MongoFilterSpecification.FULL_DOCUMENT + ".type\" : \"" + NameDefined.class.getSimpleName() + "\" } }"))
                     .flatMap(cloudEvent -> Mono.fromRunnable(() -> state.add(cloudEvent)))
                     .subscribe();
-            NameDefined nameDefined1 = new NameDefined(UUID.randomUUID().toString(), now, "name1");
-            NameDefined nameDefined2 = new NameDefined(UUID.randomUUID().toString(), now.plusSeconds(2), "name2");
-            NameWasChanged nameWasChanged1 = new NameWasChanged(UUID.randomUUID().toString(), now.plusSeconds(3), "name3");
-            NameWasChanged nameWasChanged2 = new NameWasChanged(UUID.randomUUID().toString(), now.plusSeconds(4), "name4");
+            NameDefined nameDefined1 = new NameDefined(UUID.randomUUID().toString(), now, "name", "name1");
+            NameDefined nameDefined2 = new NameDefined(UUID.randomUUID().toString(), now.plusSeconds(2), "name", "name2");
+            NameWasChanged nameWasChanged1 = new NameWasChanged(UUID.randomUUID().toString(), now.plusSeconds(3), "name", "name3");
+            NameWasChanged nameWasChanged2 = new NameWasChanged(UUID.randomUUID().toString(), now.plusSeconds(4), "name", "name4");
 
             Thread.sleep(200);
 
@@ -249,10 +249,10 @@ public class ReactorMongoSubscriptionModelTest {
                     .flatMap(cloudEvent -> Mono.fromRunnable(() -> state.add(cloudEvent)))
                     .subscribe();
 
-            NameDefined nameDefined1 = new NameDefined(UUID.randomUUID().toString(), now, "name1");
-            NameDefined nameDefined2 = new NameDefined(UUID.randomUUID().toString(), now.plusSeconds(2), "name2");
-            NameWasChanged nameWasChanged1 = new NameWasChanged(UUID.randomUUID().toString(), now.plusSeconds(3), "name3");
-            NameWasChanged nameWasChanged2 = new NameWasChanged(UUID.randomUUID().toString(), now.plusSeconds(4), "name4");
+            NameDefined nameDefined1 = new NameDefined(UUID.randomUUID().toString(), now, "name", "name1");
+            NameDefined nameDefined2 = new NameDefined(UUID.randomUUID().toString(), now.plusSeconds(2), "name", "name2");
+            NameWasChanged nameWasChanged1 = new NameWasChanged(UUID.randomUUID().toString(), now.plusSeconds(3), "name", "name3");
+            NameWasChanged nameWasChanged2 = new NameWasChanged(UUID.randomUUID().toString(), now.plusSeconds(4), "name", "name4");
 
             Thread.sleep(200);
 
@@ -272,10 +272,10 @@ public class ReactorMongoSubscriptionModelTest {
             // Given
             LocalDateTime now = LocalDateTime.now();
             CopyOnWriteArrayList<CloudEvent> state = new CopyOnWriteArrayList<>();
-            NameDefined nameDefined1 = new NameDefined(UUID.randomUUID().toString(), now, "name1");
-            NameDefined nameDefined2 = new NameDefined(UUID.randomUUID().toString(), now.plusSeconds(2), "name2");
-            NameWasChanged nameWasChanged1 = new NameWasChanged(UUID.randomUUID().toString(), now.plusSeconds(3), "name3");
-            NameWasChanged nameWasChanged2 = new NameWasChanged(UUID.randomUUID().toString(), now.plusSeconds(4), "name4");
+            NameDefined nameDefined1 = new NameDefined(UUID.randomUUID().toString(), now, "name", "name1");
+            NameDefined nameDefined2 = new NameDefined(UUID.randomUUID().toString(), now.plusSeconds(2), "name", "name2");
+            NameWasChanged nameWasChanged1 = new NameWasChanged(UUID.randomUUID().toString(), now.plusSeconds(3), "name", "name3");
+            NameWasChanged nameWasChanged2 = new NameWasChanged(UUID.randomUUID().toString(), now.plusSeconds(4), "name", "name4");
 
             Filter filter = Filter.id(nameDefined2.eventId()).and(Filter.type(NameDefined.class.getSimpleName()));
             subscription.subscribe(OccurrentSubscriptionFilter.filter(filter))

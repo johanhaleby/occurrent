@@ -68,22 +68,22 @@ class HederligOccurrentTest {
         val module = module<NameCommand, DomainEvent, DomainQuery<out Any>> {
             feature("manage name") {
                 commands {
-                    command(DefineName::id, Name::defineNameFromCommand)
-                    command(ChangeName::id, Name::changeNameFromCommand)
+                    command(DefineName::userId, Name::defineNameFromCommand)
+                    command(ChangeName::userId, Name::changeNameFromCommand)
                 }
                 // Alternative 1
-                commands(NameCommand::id) {
+                commands(NameCommand::userId) {
                     command(Name::defineNameFromCommand)
                     command(Name::changeNameFromCommand)
                 }
 
                 // Alternative 2 - When domain model doesn't use commands!
                 commands {
-                    command(DefineName::id) { e, cmd ->
-                        Name.defineName(e, cmd.id(), cmd.time(), cmd.name())
+                    command(DefineName::userId) { e, cmd ->
+                        Name.defineName(e, cmd.commandId, cmd.time, cmd.userId, cmd.name)
                     }
-                    command<ChangeName>({ changeName -> changeName.id() }) { e, cmd ->
-                        Name.defineName(e, cmd.id(), cmd.time(), cmd.newName())
+                    command<ChangeName>({ changeName -> changeName.userId }) { e, cmd ->
+                        Name.defineName(e, cmd.commandId, cmd.time, cmd.userId, cmd.newName)
                     }
                 }
 
@@ -93,9 +93,9 @@ class HederligOccurrentTest {
                     }
                     on<NameWasChanged> { event, ctx ->
                         when (event.name()) {
-                            "John Doe" -> ctx.publish(ChangeName(UUID.randomUUID().toString(), LocalDateTime.now(), "Forbidden Name"))
-                            "Jane Doe" -> ctx.publish(ChangeName(UUID.randomUUID().toString(), LocalDateTime.now(), "Mrs ${event.name()}"), Delay.ofMinutes(10))
-                            "Ikk Doe" -> ctx.publish(ChangeName(UUID.randomUUID().toString(), LocalDateTime.now(), "Hohoho"), Delay.until(ZonedDateTime.of(Year.now().value, 12, 25, 15, 0, 0, 0, UTC)))
+                            "John Doe" -> ctx.publish(ChangeName(UUID.randomUUID().toString(), LocalDateTime.now(), "john", "Forbidden Name"))
+                            "Jane Doe" -> ctx.publish(ChangeName(UUID.randomUUID().toString(), LocalDateTime.now(), "jane", "Mrs ${event.name()}"), Delay.ofMinutes(10))
+                            "Ikk Doe" -> ctx.publish(ChangeName(UUID.randomUUID().toString(), LocalDateTime.now(), "ikk", "Hohoho"), Delay.until(ZonedDateTime.of(Year.now().value, 12, 25, 15, 0, 0, 0, UTC)))
                             "Baby Doe" -> println("Baby detected!")
                         }
                     }
@@ -112,8 +112,8 @@ class HederligOccurrentTest {
         }.initialize(initializer)
 
         val id = UUID.randomUUID().toString()
-        module.publish(DefineName(id, LocalDateTime.now(), "Some Doe"))
-        module.publish(ChangeName(id, LocalDateTime.now(), "Baby Doe"))
+        module.publish(DefineName(id, LocalDateTime.now(), "doe", "Some Doe"))
+        module.publish(ChangeName(id, LocalDateTime.now(), "doe", "Baby Doe"))
 
         val names = module.query(AllNames)
         names.forEach(::println)

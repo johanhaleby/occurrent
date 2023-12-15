@@ -52,8 +52,8 @@ class DeciderApplicationServiceExtensionsTest {
             initialState = null,
             decide = { cmd, state ->
                 when (cmd) {
-                    is DefineName -> Name.defineTheName(cmd.id, cmd.time, cmd.name)
-                    is ChangeName -> Name.changeNameFromCurrent(cmd.id, cmd.time, state, cmd.newName)
+                    is DefineName -> Name.defineTheName(cmd.commandId, cmd.time, cmd.userId, cmd.name)
+                    is ChangeName -> Name.changeNameFromCurrent(cmd.commandId, cmd.time, cmd.userId, state, cmd.newName)
                 }
             },
             evolve = { _, e ->
@@ -89,7 +89,7 @@ class DeciderApplicationServiceExtensionsTest {
             fun and_single_command() {
                 // Given
                 val streamId = UUID.randomUUID()
-                val command = DefineName(UUID.randomUUID().toString(), LocalDateTime.now(), "Johan")
+                val command = DefineName(UUID.randomUUID().toString(), LocalDateTime.now(), "name", "Johan")
 
                 // When
                 val result = applicationService.execute(streamId, command, decider)
@@ -102,8 +102,8 @@ class DeciderApplicationServiceExtensionsTest {
             fun and_list_of_commands() {
                 // Given
                 val streamId = UUID.randomUUID()
-                val command1 = DefineName(UUID.randomUUID().toString(), LocalDateTime.now(), "John")
-                val command2 = ChangeName(UUID.randomUUID().toString(), LocalDateTime.now(), "Johan")
+                val command1 = DefineName(UUID.randomUUID().toString(), LocalDateTime.now(), "name", "John")
+                val command2 = ChangeName(UUID.randomUUID().toString(), LocalDateTime.now(), "name", "Johan")
 
                 // When
                 val result = applicationService.execute(streamId, commands = listOf(command1, command2), decider)
@@ -121,7 +121,7 @@ class DeciderApplicationServiceExtensionsTest {
             fun and_single_command() {
                 // Given
                 val streamId = UUID.randomUUID().toString()
-                val command = DefineName(UUID.randomUUID().toString(), LocalDateTime.now(), "Johan")
+                val command = DefineName(UUID.randomUUID().toString(), LocalDateTime.now(), "name", "Johan")
 
                 // When
                 val result = applicationService.execute(streamId, command, decider)
@@ -134,8 +134,8 @@ class DeciderApplicationServiceExtensionsTest {
             fun and_list_of_commands() {
                 // Given
                 val streamId = UUID.randomUUID().toString()
-                val command1 = DefineName(UUID.randomUUID().toString(), LocalDateTime.now(), "John")
-                val command2 = ChangeName(UUID.randomUUID().toString(), LocalDateTime.now(), "Johan")
+                val command1 = DefineName(UUID.randomUUID().toString(), LocalDateTime.now(), "name", "John")
+                val command2 = ChangeName(UUID.randomUUID().toString(), LocalDateTime.now(), "name", "Johan")
 
                 // When
                 val result = applicationService.execute(streamId, commands = listOf(command1, command2), decider)
@@ -158,7 +158,7 @@ class DeciderApplicationServiceExtensionsTest {
             fun and_single_command() {
                 // Given
                 val streamId = UUID.randomUUID()
-                val command = DefineName(UUID.randomUUID().toString(), LocalDateTime.now(), "Johan")
+                val command = DefineName(UUID.randomUUID().toString(), LocalDateTime.now(), "name", "Johan")
 
                 // When
                 val (state, events) = applicationService.executeAndReturnDecision(streamId, command, decider)
@@ -166,8 +166,8 @@ class DeciderApplicationServiceExtensionsTest {
                 // Then
                 assertAll(
                     { assertThat(state).isEqualTo("Johan") },
-                    { assertThat(events).containsOnly(NameDefined(command.id, command.time, command.name)) },
-                    { assertThat(eventStore.domainEvents()).containsOnly(NameDefined(command.id, command.time, command.name)) },
+                    { assertThat(events).containsOnly(NameDefined(command.commandId, command.time, command.userId, command.name)) },
+                    { assertThat(eventStore.domainEvents()).containsOnly(NameDefined(command.commandId, command.time, command.userId, command.name)) },
                 )
             }
 
@@ -175,8 +175,8 @@ class DeciderApplicationServiceExtensionsTest {
             fun and_list_of_commands() {
                 // Given
                 val streamId = UUID.randomUUID()
-                val command1 = DefineName(UUID.randomUUID().toString(), LocalDateTime.now(), "John")
-                val command2 = ChangeName(UUID.randomUUID().toString(), LocalDateTime.now(), "Johan")
+                val command1 = DefineName(UUID.randomUUID().toString(), LocalDateTime.now(), "name", "John")
+                val command2 = ChangeName(UUID.randomUUID().toString(), LocalDateTime.now(), "name", "Johan")
 
                 // When
                 val (state, events) = applicationService.executeAndReturnDecision(streamId, commands = listOf(command1, command2), decider)
@@ -186,14 +186,14 @@ class DeciderApplicationServiceExtensionsTest {
                     { assertThat(state).isEqualTo("Johan") },
                     {
                         assertThat(events).containsOnly(
-                            NameDefined(command1.id, command1.time, command1.name),
-                            NameWasChanged(command2.id, command2.time, command2.newName)
+                            NameDefined(command1.commandId, command1.time, command1.userId, command1.name),
+                            NameWasChanged(command2.commandId, command2.time, command2.userId, command2.newName)
                         )
                     },
                     {
                         assertThat(eventStore.domainEvents()).containsOnly(
-                            NameDefined(command1.id, command1.time, command1.name),
-                            NameWasChanged(command2.id, command2.time, command2.newName),
+                            NameDefined(command1.commandId, command1.time, command1.userId, command1.name),
+                            NameWasChanged(command2.commandId, command2.time, command2.userId, command2.newName),
                         )
                     },
                 )
@@ -208,7 +208,7 @@ class DeciderApplicationServiceExtensionsTest {
             fun and_single_command() {
                 // Given
                 val streamId = UUID.randomUUID().toString()
-                val command = DefineName(UUID.randomUUID().toString(), LocalDateTime.now(), "Johan")
+                val command = DefineName(UUID.randomUUID().toString(), LocalDateTime.now(), "name", "Johan")
 
                 // When
                 val (state, events) = applicationService.executeAndReturnDecision(streamId, command, decider)
@@ -216,8 +216,8 @@ class DeciderApplicationServiceExtensionsTest {
                 // Then
                 assertAll(
                     { assertThat(state).isEqualTo("Johan") },
-                    { assertThat(events).containsOnly(NameDefined(command.id, command.time, command.name)) },
-                    { assertThat(eventStore.domainEvents()).containsOnly(NameDefined(command.id, command.time, command.name)) },
+                    { assertThat(events).containsOnly(NameDefined(command.commandId, command.time, command.userId, command.name)) },
+                    { assertThat(eventStore.domainEvents()).containsOnly(NameDefined(command.commandId, command.time, command.userId, command.name)) },
                 )
             }
 
@@ -225,8 +225,8 @@ class DeciderApplicationServiceExtensionsTest {
             fun and_list_of_commands() {
                 // Given
                 val streamId = UUID.randomUUID().toString()
-                val command1 = DefineName(UUID.randomUUID().toString(), LocalDateTime.now(), "John")
-                val command2 = ChangeName(UUID.randomUUID().toString(), LocalDateTime.now(), "Johan")
+                val command1 = DefineName(UUID.randomUUID().toString(), LocalDateTime.now(), "name", "John")
+                val command2 = ChangeName(UUID.randomUUID().toString(), LocalDateTime.now(), "name", "Johan")
 
                 // When
                 val (state, events) = applicationService.executeAndReturnDecision(streamId, commands = listOf(command1, command2), decider)
@@ -236,14 +236,14 @@ class DeciderApplicationServiceExtensionsTest {
                     { assertThat(state).isEqualTo("Johan") },
                     {
                         assertThat(events).containsOnly(
-                            NameDefined(command1.id, command1.time, command1.name),
-                            NameWasChanged(command2.id, command2.time, command2.newName)
+                            NameDefined(command1.commandId, command1.time, command1.userId, command1.name),
+                            NameWasChanged(command2.commandId, command2.time, command2.userId, command2.newName)
                         )
                     },
                     {
                         assertThat(eventStore.domainEvents()).containsOnly(
-                            NameDefined(command1.id, command1.time, command1.name),
-                            NameWasChanged(command2.id, command2.time, command2.newName),
+                            NameDefined(command1.commandId, command1.time, command1.userId, command1.name),
+                            NameWasChanged(command2.commandId, command2.time, command2.userId, command2.newName),
                         )
                     },
                 )
@@ -264,7 +264,7 @@ class DeciderApplicationServiceExtensionsTest {
             fun and_single_command() {
                 // Given
                 val streamId = UUID.randomUUID()
-                val command = DefineName(UUID.randomUUID().toString(), LocalDateTime.now(), "Johan")
+                val command = DefineName(UUID.randomUUID().toString(), LocalDateTime.now(), "name", "Johan")
 
                 // When
                 val state = applicationService.executeAndReturnState(streamId, command, decider)
@@ -277,8 +277,8 @@ class DeciderApplicationServiceExtensionsTest {
             fun and_list_of_commands() {
                 // Given
                 val streamId = UUID.randomUUID()
-                val command1 = DefineName(UUID.randomUUID().toString(), LocalDateTime.now(), "John")
-                val command2 = ChangeName(UUID.randomUUID().toString(), LocalDateTime.now(), "Johan")
+                val command1 = DefineName(UUID.randomUUID().toString(), LocalDateTime.now(), "name", "John")
+                val command2 = ChangeName(UUID.randomUUID().toString(), LocalDateTime.now(), "name", "Johan")
 
                 // When
                 val state = applicationService.executeAndReturnState(streamId, commands = listOf(command1, command2), decider)
@@ -296,7 +296,7 @@ class DeciderApplicationServiceExtensionsTest {
             fun and_single_command() {
                 // Given
                 val streamId = UUID.randomUUID().toString()
-                val command = DefineName(UUID.randomUUID().toString(), LocalDateTime.now(), "Johan")
+                val command = DefineName(UUID.randomUUID().toString(), LocalDateTime.now(), "name", "Johan")
 
                 // When
                 val state = applicationService.executeAndReturnState(streamId, command, decider)
@@ -309,8 +309,8 @@ class DeciderApplicationServiceExtensionsTest {
             fun and_list_of_commands() {
                 // Given
                 val streamId = UUID.randomUUID().toString()
-                val command1 = DefineName(UUID.randomUUID().toString(), LocalDateTime.now(), "John")
-                val command2 = ChangeName(UUID.randomUUID().toString(), LocalDateTime.now(), "Johan")
+                val command1 = DefineName(UUID.randomUUID().toString(), LocalDateTime.now(), "name", "John")
+                val command2 = ChangeName(UUID.randomUUID().toString(), LocalDateTime.now(), "name", "Johan")
 
                 // When
                 val state = applicationService.executeAndReturnState(streamId, commands = listOf(command1, command2), decider)
@@ -333,15 +333,15 @@ class DeciderApplicationServiceExtensionsTest {
             fun and_single_command() {
                 // Given
                 val streamId = UUID.randomUUID()
-                val command = DefineName(UUID.randomUUID().toString(), LocalDateTime.now(), "Johan")
+                val command = DefineName(UUID.randomUUID().toString(), LocalDateTime.now(), "name", "Johan")
 
                 // When
                 val events = applicationService.executeAndReturnEvents(streamId, command, decider)
 
                 // Then
                 assertAll(
-                    { assertThat(events).containsOnly(NameDefined(command.id, command.time, command.name)) },
-                    { assertThat(eventStore.domainEvents()).containsOnly(NameDefined(command.id, command.time, command.name)) },
+                    { assertThat(events).containsOnly(NameDefined(command.commandId, command.time, command.userId, command.name)) },
+                    { assertThat(eventStore.domainEvents()).containsOnly(NameDefined(command.commandId, command.time, command.userId, command.name)) },
                 )
             }
 
@@ -349,8 +349,8 @@ class DeciderApplicationServiceExtensionsTest {
             fun and_list_of_commands() {
                 // Given
                 val streamId = UUID.randomUUID()
-                val command1 = DefineName(UUID.randomUUID().toString(), LocalDateTime.now(), "John")
-                val command2 = ChangeName(UUID.randomUUID().toString(), LocalDateTime.now(), "Johan")
+                val command1 = DefineName(UUID.randomUUID().toString(), LocalDateTime.now(), "name", "John")
+                val command2 = ChangeName(UUID.randomUUID().toString(), LocalDateTime.now(), "name", "Johan")
 
                 // When
                 val events = applicationService.executeAndReturnEvents(streamId, commands = listOf(command1, command2), decider)
@@ -359,14 +359,14 @@ class DeciderApplicationServiceExtensionsTest {
                 assertAll(
                     {
                         assertThat(events).containsOnly(
-                            NameDefined(command1.id, command1.time, command1.name),
-                            NameWasChanged(command2.id, command2.time, command2.newName)
+                            NameDefined(command1.commandId, command1.time, command1.userId, command1.name),
+                            NameWasChanged(command2.commandId, command2.time, command2.userId, command2.newName)
                         )
                     },
                     {
                         assertThat(eventStore.domainEvents()).containsOnly(
-                            NameDefined(command1.id, command1.time, command1.name),
-                            NameWasChanged(command2.id, command2.time, command2.newName),
+                            NameDefined(command1.commandId, command1.time, command1.userId, command1.name),
+                            NameWasChanged(command2.commandId, command2.time, command2.userId, command2.newName),
                         )
                     },
                 )
@@ -381,15 +381,15 @@ class DeciderApplicationServiceExtensionsTest {
             fun and_single_command() {
                 // Given
                 val streamId = UUID.randomUUID().toString()
-                val command = DefineName(UUID.randomUUID().toString(), LocalDateTime.now(), "Johan")
+                val command = DefineName(UUID.randomUUID().toString(), LocalDateTime.now(), "name", "Johan")
 
                 // When
                 val events = applicationService.executeAndReturnEvents(streamId, command, decider)
 
                 // Then
                 assertAll(
-                    { assertThat(events).containsOnly(NameDefined(command.id, command.time, command.name)) },
-                    { assertThat(eventStore.domainEvents()).containsOnly(NameDefined(command.id, command.time, command.name)) },
+                    { assertThat(events).containsOnly(NameDefined(command.commandId, command.time, command.userId, command.name)) },
+                    { assertThat(eventStore.domainEvents()).containsOnly(NameDefined(command.commandId, command.time, command.userId, command.name)) },
                 )
             }
 
@@ -397,8 +397,8 @@ class DeciderApplicationServiceExtensionsTest {
             fun and_list_of_commands() {
                 // Given
                 val streamId = UUID.randomUUID().toString()
-                val command1 = DefineName(UUID.randomUUID().toString(), LocalDateTime.now(), "John")
-                val command2 = ChangeName(UUID.randomUUID().toString(), LocalDateTime.now(), "Johan")
+                val command1 = DefineName(UUID.randomUUID().toString(), LocalDateTime.now(), "name", "John")
+                val command2 = ChangeName(UUID.randomUUID().toString(), LocalDateTime.now(), "name", "Johan")
 
                 // When
                 val events = applicationService.executeAndReturnEvents(streamId, commands = listOf(command1, command2), decider)
@@ -407,14 +407,14 @@ class DeciderApplicationServiceExtensionsTest {
                 assertAll(
                     {
                         assertThat(events).containsOnly(
-                            NameDefined(command1.id, command1.time, command1.name),
-                            NameWasChanged(command2.id, command2.time, command2.newName)
+                            NameDefined(command1.commandId, command1.time, command1.userId, command1.name),
+                            NameWasChanged(command2.commandId, command2.time, command2.userId, command2.newName)
                         )
                     },
                     {
                         assertThat(eventStore.domainEvents()).containsOnly(
-                            NameDefined(command1.id, command1.time, command1.name),
-                            NameWasChanged(command2.id, command2.time, command2.newName),
+                            NameDefined(command1.commandId, command1.time, command1.userId, command1.name),
+                            NameWasChanged(command2.commandId, command2.time, command2.userId, command2.newName),
                         )
                     },
                 )

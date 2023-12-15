@@ -46,27 +46,27 @@ public class NameApplicationService {
     }
 
     @Transactional
-    public Mono<Void> defineName(UUID id, LocalDateTime time, String name) {
-        List<DomainEvent> events = Name.defineTheName(id.toString(), time, name);
-        return eventStore.append(id, 0, events)
-                .then(currentNameProjection.save(buildProjectionFromEvents(id, events)))
+    public Mono<Void> defineName(UUID userId, LocalDateTime time, String name) {
+        List<DomainEvent> events = Name.defineTheName(userId.toString(), time, userId.toString(), name);
+        return eventStore.append(userId, 0, events)
+                .then(currentNameProjection.save(buildProjectionFromEvents(userId, events)))
                 .then();
     }
 
     @Transactional
-    public Mono<Void> changeName(UUID id, LocalDateTime time, String name) {
-        return eventStore.loadEventStream(id)
+    public Mono<Void> changeName(UUID userId, LocalDateTime time, String name) {
+        return eventStore.loadEventStream(userId)
                 .flatMap(eventStream -> eventStream.eventList().flatMap(events -> {
-                    List<DomainEvent> newEvents = Name.changeName(events, UUID.randomUUID().toString(), time, name);
+                    List<DomainEvent> newEvents = Name.changeName(events, UUID.randomUUID().toString(), time, userId.toString(), name);
 
-                    return eventStore.append(id, eventStream.version(), newEvents)
-                            .then(currentNameProjection.save(buildProjectionFromEvents(id, append(events, newEvents))))
+                    return eventStore.append(userId, eventStream.version(), newEvents)
+                            .then(currentNameProjection.save(buildProjectionFromEvents(userId, append(events, newEvents))))
                             .then();
                 }));
     }
 
-    private CurrentName buildProjectionFromEvents(UUID id, List<DomainEvent> domainEvents) {
-        return io.vavr.collection.List.ofAll(domainEvents).foldLeft(new CurrentName(id.toString()), (currentName, domainEvent) ->
+    private CurrentName buildProjectionFromEvents(UUID userId, List<DomainEvent> domainEvents) {
+        return io.vavr.collection.List.ofAll(domainEvents).foldLeft(new CurrentName(userId.toString()), (currentName, domainEvent) ->
                 Match(domainEvent).of(
                         API.Case(API.$(instanceOf(NameDefined.class)), e -> currentName.changeName(e.name())),
                         API.Case(API.$(instanceOf(NameWasChanged.class)), e -> currentName.changeName(e.name()))

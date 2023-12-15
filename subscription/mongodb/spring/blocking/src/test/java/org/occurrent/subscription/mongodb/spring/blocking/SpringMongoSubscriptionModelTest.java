@@ -126,9 +126,9 @@ public class SpringMongoSubscriptionModelTest {
         LocalDateTime now = LocalDateTime.now();
         CopyOnWriteArrayList<CloudEvent> state = new CopyOnWriteArrayList<>();
         subscriptionModel.subscribe(UUID.randomUUID().toString(), state::add).waitUntilStarted(Duration.of(10, ChronoUnit.SECONDS));
-        NameDefined nameDefined1 = new NameDefined(UUID.randomUUID().toString(), now, "name1");
-        NameDefined nameDefined2 = new NameDefined(UUID.randomUUID().toString(), now.plusSeconds(2), "name2");
-        NameWasChanged nameWasChanged1 = new NameWasChanged(UUID.randomUUID().toString(), now.plusSeconds(10), "name3");
+        NameDefined nameDefined1 = new NameDefined(UUID.randomUUID().toString(), now, "name", "name1");
+        NameDefined nameDefined2 = new NameDefined(UUID.randomUUID().toString(), now.plusSeconds(2), "name2", "name2");
+        NameWasChanged nameWasChanged1 = new NameWasChanged(UUID.randomUUID().toString(), now.plusSeconds(10), "name", "name3");
 
         // When
         mongoEventStore.write("1", 0, serialize(nameDefined1));
@@ -151,9 +151,9 @@ public class SpringMongoSubscriptionModelTest {
             state.add(e);
         }).waitUntilStarted(Duration.of(10, ChronoUnit.SECONDS));
 
-        NameDefined nameDefined1 = new NameDefined("1", now, "name1");
-        NameDefined nameDefined2 = new NameDefined("2", now.plusSeconds(2), "name2");
-        NameWasChanged nameWasChanged1 = new NameWasChanged("3", now.plusSeconds(10), "name3");
+        NameDefined nameDefined1 = new NameDefined("1", now, "name", "name1");
+        NameDefined nameDefined2 = new NameDefined("2", now.plusSeconds(2), "name2", "name2");
+        NameWasChanged nameWasChanged1 = new NameWasChanged("3", now.plusSeconds(10), "name", "name3");
 
         // When
         mongoEventStore.write("1", 0, serialize(nameDefined1));
@@ -171,9 +171,9 @@ public class SpringMongoSubscriptionModelTest {
         CopyOnWriteArrayList<CloudEvent> state = new CopyOnWriteArrayList<>();
         subscriptionModel.subscribe(UUID.randomUUID().toString(), state::add).waitUntilStarted(Duration.of(10, ChronoUnit.SECONDS));
 
-        NameDefined nameDefined1 = new NameDefined(UUID.randomUUID().toString(), now, "name1");
-        NameDefined nameDefined2 = new NameDefined(UUID.randomUUID().toString(), now.plusSeconds(2), "name2");
-        NameWasChanged nameWasChanged1 = new NameWasChanged(UUID.randomUUID().toString(), now.plusSeconds(10), "name3");
+        NameDefined nameDefined1 = new NameDefined(UUID.randomUUID().toString(), now, "name", "name1");
+        NameDefined nameDefined2 = new NameDefined(UUID.randomUUID().toString(), now.plusSeconds(2), "name2", "name2");
+        NameWasChanged nameWasChanged1 = new NameWasChanged(UUID.randomUUID().toString(), now.plusSeconds(10), "name", "name3");
 
         mongoEventStore.write("1", 0, serialize(nameDefined1));
         mongoEventStore.write("2", 0, serialize(nameDefined2));
@@ -184,8 +184,8 @@ public class SpringMongoSubscriptionModelTest {
         // Now we delete the events
         mongoEventStore.delete(all());
         // And write some additional events
-        mongoEventStore.write("1", 0, serialize(new NameWasChanged(UUID.randomUUID().toString(), now.plusSeconds(15), "name4")));
-        mongoEventStore.write("3", 0, serialize(new NameDefined(UUID.randomUUID().toString(), now, "name5")));
+        mongoEventStore.write("1", 0, serialize(new NameWasChanged(UUID.randomUUID().toString(), now.plusSeconds(15), "name", "name4")));
+        mongoEventStore.write("3", 0, serialize(new NameDefined(UUID.randomUUID().toString(), now, "name5", "name5")));
 
         // Then
         await().atMost(2, SECONDS).with().pollInterval(Duration.of(20, MILLIS)).untilAsserted(() -> assertThat(state).hasSize(5));
@@ -201,8 +201,8 @@ public class SpringMongoSubscriptionModelTest {
 
         String eventId1 = UUID.randomUUID().toString();
         String eventId2 = UUID.randomUUID().toString();
-        NameDefined nameDefined1 = new NameDefined(eventId1, now, "name1");
-        NameDefined nameDefined2 = new NameDefined(eventId2, now.plusSeconds(2), "name3");
+        NameDefined nameDefined1 = new NameDefined(eventId1, now, "name", "name1");
+        NameDefined nameDefined2 = new NameDefined(eventId2, now.plusSeconds(2), "name3", "name3");
 
         mongoEventStore.write("1", 0, serialize(nameDefined1));
 
@@ -274,9 +274,9 @@ public class SpringMongoSubscriptionModelTest {
             }
             state.add(c);
         }).waitUntilStarted(Duration.of(10, ChronoUnit.SECONDS));
-        NameDefined nameDefined1 = new NameDefined(UUID.randomUUID().toString(), now, "name1");
-        NameDefined nameDefined2 = new NameDefined(UUID.randomUUID().toString(), now.plusSeconds(2), "name2");
-        NameWasChanged nameWasChanged1 = new NameWasChanged(UUID.randomUUID().toString(), now.plusSeconds(10), "name3");
+        NameDefined nameDefined1 = new NameDefined(UUID.randomUUID().toString(), now, "name", "name1");
+        NameDefined nameDefined2 = new NameDefined(UUID.randomUUID().toString(), now.plusSeconds(2), "name2", "name2");
+        NameWasChanged nameWasChanged1 = new NameWasChanged(UUID.randomUUID().toString(), now.plusSeconds(10), "name", "name3");
 
         // When
         mongoEventStore.write("1", 0, serialize(nameDefined1));
@@ -298,7 +298,7 @@ public class SpringMongoSubscriptionModelTest {
             CopyOnWriteArrayList<CloudEvent> state = new CopyOnWriteArrayList<>();
             String subscriberId = UUID.randomUUID().toString();
             subscriptionModel.subscribe(subscriberId, state::add).waitUntilStarted(Duration.of(10, ChronoUnit.SECONDS));
-            NameDefined nameDefined1 = new NameDefined(UUID.randomUUID().toString(), now, "name1");
+            NameDefined nameDefined1 = new NameDefined(UUID.randomUUID().toString(), now, "name", "name1");
 
             // When
             mongoEventStore.write("1", 0, serialize(nameDefined1));
@@ -393,9 +393,9 @@ public class SpringMongoSubscriptionModelTest {
             CopyOnWriteArrayList<CloudEvent> state = new CopyOnWriteArrayList<>();
             subscriptionModel.subscribe(UUID.randomUUID().toString(), state::add).waitUntilStarted(Duration.of(10, ChronoUnit.SECONDS));
 
-            NameDefined nameDefined1 = new NameDefined(UUID.randomUUID().toString(), now, "name1");
-            NameDefined nameDefined2 = new NameDefined(UUID.randomUUID().toString(), now.plusSeconds(2), "name2");
-            NameWasChanged nameWasChanged1 = new NameWasChanged(UUID.randomUUID().toString(), now.plusSeconds(10), "name3");
+            NameDefined nameDefined1 = new NameDefined(UUID.randomUUID().toString(), now, "name", "name1");
+            NameDefined nameDefined2 = new NameDefined(UUID.randomUUID().toString(), now.plusSeconds(2), "name2", "name2");
+            NameWasChanged nameWasChanged1 = new NameWasChanged(UUID.randomUUID().toString(), now.plusSeconds(10), "name", "name3");
 
             CountDownLatch waitUntilStopped = new CountDownLatch(1);
             // When
@@ -422,9 +422,9 @@ public class SpringMongoSubscriptionModelTest {
             CopyOnWriteArrayList<CloudEvent> state = new CopyOnWriteArrayList<>();
             subscriptionModel.subscribe(UUID.randomUUID().toString(), state::add).waitUntilStarted(Duration.of(10, ChronoUnit.SECONDS));
 
-            NameDefined nameDefined1 = new NameDefined(UUID.randomUUID().toString(), now, "name1");
-            NameDefined nameDefined2 = new NameDefined(UUID.randomUUID().toString(), now.plusSeconds(2), "name2");
-            NameWasChanged nameWasChanged1 = new NameWasChanged(UUID.randomUUID().toString(), now.plusSeconds(10), "name3");
+            NameDefined nameDefined1 = new NameDefined(UUID.randomUUID().toString(), now, "name", "name1");
+            NameDefined nameDefined2 = new NameDefined(UUID.randomUUID().toString(), now.plusSeconds(2), "name2", "name2");
+            NameWasChanged nameWasChanged1 = new NameWasChanged(UUID.randomUUID().toString(), now.plusSeconds(10), "name", "name3");
 
             // When
             subscriptionModel.stop();
@@ -449,9 +449,9 @@ public class SpringMongoSubscriptionModelTest {
             subscriptionModel.subscribe(subscriptionId, subscription1State::add).waitUntilStarted(Duration.of(10, ChronoUnit.SECONDS));
             subscriptionModel.subscribe(UUID.randomUUID().toString(), subscription2State::add).waitUntilStarted(Duration.of(10, ChronoUnit.SECONDS));
 
-            NameDefined nameDefined1 = new NameDefined(UUID.randomUUID().toString(), now, "name1");
-            NameDefined nameDefined2 = new NameDefined(UUID.randomUUID().toString(), now.plusSeconds(2), "name2");
-            NameWasChanged nameWasChanged1 = new NameWasChanged(UUID.randomUUID().toString(), now.plusSeconds(10), "name3");
+            NameDefined nameDefined1 = new NameDefined(UUID.randomUUID().toString(), now, "name", "name1");
+            NameDefined nameDefined2 = new NameDefined(UUID.randomUUID().toString(), now.plusSeconds(2), "name2", "name2");
+            NameWasChanged nameWasChanged1 = new NameWasChanged(UUID.randomUUID().toString(), now.plusSeconds(10), "name", "name3");
 
             // When
             subscriptionModel.pauseSubscription(subscriptionId);
@@ -486,10 +486,10 @@ public class SpringMongoSubscriptionModelTest {
             String subscriberId = UUID.randomUUID().toString();
             subscriptionModel.subscribe(subscriberId, filter().type(Filters::eq, NameDefined.class.getName()), state::add)
                     .waitUntilStarted(Duration.of(10, ChronoUnit.SECONDS));
-            NameDefined nameDefined1 = new NameDefined(UUID.randomUUID().toString(), now, "name1");
-            NameDefined nameDefined2 = new NameDefined(UUID.randomUUID().toString(), now.plusSeconds(2), "name2");
-            NameWasChanged nameWasChanged1 = new NameWasChanged(UUID.randomUUID().toString(), now.plusSeconds(3), "name3");
-            NameWasChanged nameWasChanged2 = new NameWasChanged(UUID.randomUUID().toString(), now.plusSeconds(4), "name4");
+            NameDefined nameDefined1 = new NameDefined(UUID.randomUUID().toString(), now, "name", "name1");
+            NameDefined nameDefined2 = new NameDefined(UUID.randomUUID().toString(), now.plusSeconds(2), "name2", "name2");
+            NameWasChanged nameWasChanged1 = new NameWasChanged(UUID.randomUUID().toString(), now.plusSeconds(3), "name", "name3");
+            NameWasChanged nameWasChanged2 = new NameWasChanged(UUID.randomUUID().toString(), now.plusSeconds(4), "name2", "name4");
 
             // When
             mongoEventStore.write("1", 0, serialize(nameDefined1));
@@ -508,10 +508,10 @@ public class SpringMongoSubscriptionModelTest {
             LocalDateTime now = LocalDateTime.now();
             CopyOnWriteArrayList<CloudEvent> state = new CopyOnWriteArrayList<>();
             String subscriberId = UUID.randomUUID().toString();
-            NameDefined nameDefined1 = new NameDefined(UUID.randomUUID().toString(), now, "name1");
-            NameDefined nameDefined2 = new NameDefined(UUID.randomUUID().toString(), now.plusSeconds(2), "name2");
-            NameWasChanged nameWasChanged1 = new NameWasChanged(UUID.randomUUID().toString(), now.plusSeconds(3), "name3");
-            NameWasChanged nameWasChanged2 = new NameWasChanged(UUID.randomUUID().toString(), now.plusSeconds(4), "name4");
+            NameDefined nameDefined1 = new NameDefined(UUID.randomUUID().toString(), now, "name", "name1");
+            NameDefined nameDefined2 = new NameDefined(UUID.randomUUID().toString(), now.plusSeconds(2), "name2", "name2");
+            NameWasChanged nameWasChanged1 = new NameWasChanged(UUID.randomUUID().toString(), now.plusSeconds(3), "name", "name3");
+            NameWasChanged nameWasChanged2 = new NameWasChanged(UUID.randomUUID().toString(), now.plusSeconds(4), "name2", "name4");
 
             subscriptionModel.subscribe(subscriberId, filter().id(Filters::eq, nameDefined2.eventId()).type(Filters::eq, NameDefined.class.getName()), state::add)
                     .waitUntilStarted(Duration.of(10, ChronoUnit.SECONDS));
@@ -533,10 +533,10 @@ public class SpringMongoSubscriptionModelTest {
             LocalDateTime now = LocalDateTime.now();
             CopyOnWriteArrayList<CloudEvent> state = new CopyOnWriteArrayList<>();
             String subscriberId = UUID.randomUUID().toString();
-            NameDefined nameDefined1 = new NameDefined(UUID.randomUUID().toString(), now, "name1");
-            NameDefined nameDefined2 = new NameDefined(UUID.randomUUID().toString(), now.plusSeconds(2), "name2");
-            NameWasChanged nameWasChanged1 = new NameWasChanged(UUID.randomUUID().toString(), now.plusSeconds(3), "name3");
-            NameWasChanged nameWasChanged2 = new NameWasChanged(UUID.randomUUID().toString(), now.plusSeconds(4), "name4");
+            NameDefined nameDefined1 = new NameDefined(UUID.randomUUID().toString(), now, "name", "name1");
+            NameDefined nameDefined2 = new NameDefined(UUID.randomUUID().toString(), now.plusSeconds(2), "name2", "name2");
+            NameWasChanged nameWasChanged1 = new NameWasChanged(UUID.randomUUID().toString(), now.plusSeconds(3), "name", "name3");
+            NameWasChanged nameWasChanged2 = new NameWasChanged(UUID.randomUUID().toString(), now.plusSeconds(4), "name2", "name4");
 
             subscriptionModel.subscribe(subscriberId, filter(match(and(eq("fullDocument.id", nameDefined2.eventId()), eq("fullDocument.type", NameDefined.class.getName())))), state::add
                     )
@@ -565,10 +565,10 @@ public class SpringMongoSubscriptionModelTest {
             String subscriberId = UUID.randomUUID().toString();
             subscriptionModel.subscribe(subscriberId, MongoFilterSpecification.MongoJsonFilterSpecification.filter("{ $match : { \"" + MongoFilterSpecification.FULL_DOCUMENT + ".type\" : \"" + NameDefined.class.getName() + "\" } }"), state::add)
                     .waitUntilStarted(Duration.of(10, ChronoUnit.SECONDS));
-            NameDefined nameDefined1 = new NameDefined(UUID.randomUUID().toString(), now, "name1");
-            NameDefined nameDefined2 = new NameDefined(UUID.randomUUID().toString(), now.plusSeconds(2), "name2");
-            NameWasChanged nameWasChanged1 = new NameWasChanged(UUID.randomUUID().toString(), now.plusSeconds(3), "name3");
-            NameWasChanged nameWasChanged2 = new NameWasChanged(UUID.randomUUID().toString(), now.plusSeconds(4), "name4");
+            NameDefined nameDefined1 = new NameDefined(UUID.randomUUID().toString(), now, "name", "name1");
+            NameDefined nameDefined2 = new NameDefined(UUID.randomUUID().toString(), now.plusSeconds(2), "name2", "name2");
+            NameWasChanged nameWasChanged1 = new NameWasChanged(UUID.randomUUID().toString(), now.plusSeconds(3), "name", "name3");
+            NameWasChanged nameWasChanged2 = new NameWasChanged(UUID.randomUUID().toString(), now.plusSeconds(4), "name2", "name4");
 
             // When
             mongoEventStore.write("1", 0, serialize(nameDefined1));
@@ -594,10 +594,10 @@ public class SpringMongoSubscriptionModelTest {
             CopyOnWriteArrayList<CloudEvent> state = new CopyOnWriteArrayList<>();
             String subscriberId = UUID.randomUUID().toString();
             subscriptionModel.subscribe(subscriberId, OccurrentSubscriptionFilter.filter(Filter.type(NameDefined.class.getName())), state::add).waitUntilStarted();
-            NameDefined nameDefined1 = new NameDefined(UUID.randomUUID().toString(), now, "name1");
-            NameDefined nameDefined2 = new NameDefined(UUID.randomUUID().toString(), now.plusSeconds(2), "name2");
-            NameWasChanged nameWasChanged1 = new NameWasChanged(UUID.randomUUID().toString(), now.plusSeconds(3), "name3");
-            NameWasChanged nameWasChanged2 = new NameWasChanged(UUID.randomUUID().toString(), now.plusSeconds(4), "name4");
+            NameDefined nameDefined1 = new NameDefined(UUID.randomUUID().toString(), now, "name", "name1");
+            NameDefined nameDefined2 = new NameDefined(UUID.randomUUID().toString(), now.plusSeconds(2), "name2", "name2");
+            NameWasChanged nameWasChanged1 = new NameWasChanged(UUID.randomUUID().toString(), now.plusSeconds(3), "name", "name3");
+            NameWasChanged nameWasChanged2 = new NameWasChanged(UUID.randomUUID().toString(), now.plusSeconds(4), "name2", "name4");
 
             // When
             mongoEventStore.write("1", 0, serialize(nameDefined1));
@@ -616,10 +616,10 @@ public class SpringMongoSubscriptionModelTest {
             LocalDateTime now = LocalDateTime.now();
             CopyOnWriteArrayList<CloudEvent> state = new CopyOnWriteArrayList<>();
             String subscriberId = UUID.randomUUID().toString();
-            NameDefined nameDefined1 = new NameDefined(UUID.randomUUID().toString(), now, "name1");
-            NameDefined nameDefined2 = new NameDefined(UUID.randomUUID().toString(), now.plusSeconds(2), "name2");
-            NameWasChanged nameWasChanged1 = new NameWasChanged(UUID.randomUUID().toString(), now.plusSeconds(3), "name3");
-            NameWasChanged nameWasChanged2 = new NameWasChanged(UUID.randomUUID().toString(), now.plusSeconds(4), "name4");
+            NameDefined nameDefined1 = new NameDefined(UUID.randomUUID().toString(), now, "name", "name1");
+            NameDefined nameDefined2 = new NameDefined(UUID.randomUUID().toString(), now.plusSeconds(2), "name2", "name2");
+            NameWasChanged nameWasChanged1 = new NameWasChanged(UUID.randomUUID().toString(), now.plusSeconds(3), "name", "name3");
+            NameWasChanged nameWasChanged2 = new NameWasChanged(UUID.randomUUID().toString(), now.plusSeconds(4), "name2", "name4");
 
             Filter filter = Filter.id(nameDefined2.eventId()).and(Filter.type(NameDefined.class.getName()));
             subscriptionModel.subscribe(subscriberId, OccurrentSubscriptionFilter.filter(filter), state::add).waitUntilStarted();
@@ -666,7 +666,7 @@ public class SpringMongoSubscriptionModelTest {
             subscriptionModel.subscribe(UUID.randomUUID().toString(), state::add).waitUntilStarted();
 
             // When
-            mongoEventStore.write("1", serialize(new NameDefined(UUID.randomUUID().toString(), now, "name1")));
+            mongoEventStore.write("1", serialize(new NameDefined(UUID.randomUUID().toString(), now, "name", "name1")));
 
             // Then
             await().atMost(2, SECONDS).with().pollInterval(Duration.of(20, MILLIS)).untilAsserted(() -> assertThat(state).hasSize(1));
@@ -716,7 +716,7 @@ public class SpringMongoSubscriptionModelTest {
             subscriptionModel.subscribe(UUID.randomUUID().toString(), state::add).waitUntilStarted();
 
             // When
-            mongoEventStore.write("1", serialize(new NameDefined(UUID.randomUUID().toString(), now, "name1")));
+            mongoEventStore.write("1", serialize(new NameDefined(UUID.randomUUID().toString(), now, "name", "name1")));
 
             // Then
             await().atMost(2, SECONDS).with().pollInterval(Duration.of(20, MILLIS)).untilAsserted(() -> assertThat(state).hasSize(1));

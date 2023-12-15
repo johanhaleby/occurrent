@@ -164,7 +164,7 @@ public class InMemorySubscriptionModelTest {
             CountDownLatch eventReceived = new CountDownLatch(1);
             String subscriberId = UUID.randomUUID().toString();
             inMemorySubscriptionModel.subscribe(subscriberId, __ -> eventReceived.countDown()).waitUntilStarted(Duration.of(10, ChronoUnit.SECONDS));
-            NameDefined nameDefined1 = new NameDefined(UUID.randomUUID().toString(), now, "name1");
+            NameDefined nameDefined1 = new NameDefined(UUID.randomUUID().toString(), now, "name", "name1");
 
             // When
             inMemoryEventStore.write("1", serialize(nameDefined1));
@@ -258,9 +258,9 @@ public class InMemorySubscriptionModelTest {
             CopyOnWriteArrayList<CloudEvent> state = new CopyOnWriteArrayList<>();
             inMemorySubscriptionModel.subscribe(UUID.randomUUID().toString(), state::add).waitUntilStarted(Duration.of(10, ChronoUnit.SECONDS));
 
-            NameDefined nameDefined1 = new NameDefined(UUID.randomUUID().toString(), now, "name1");
-            NameDefined nameDefined2 = new NameDefined(UUID.randomUUID().toString(), now.plusSeconds(2), "name2");
-            NameWasChanged nameWasChanged1 = new NameWasChanged(UUID.randomUUID().toString(), now.plusSeconds(10), "name3");
+            NameDefined nameDefined1 = new NameDefined(UUID.randomUUID().toString(), now, "name", "name1");
+            NameDefined nameDefined2 = new NameDefined(UUID.randomUUID().toString(), now.plusSeconds(2), "name", "name2");
+            NameWasChanged nameWasChanged1 = new NameWasChanged(UUID.randomUUID().toString(), now.plusSeconds(10), "name", "name3");
 
             // When
             inMemorySubscriptionModel.stop();
@@ -285,9 +285,9 @@ public class InMemorySubscriptionModelTest {
             inMemorySubscriptionModel.subscribe(subscriptionId, subscription1State::add).waitUntilStarted(Duration.of(10, ChronoUnit.SECONDS));
             inMemorySubscriptionModel.subscribe(UUID.randomUUID().toString(), subscription2State::add).waitUntilStarted(Duration.of(10, ChronoUnit.SECONDS));
 
-            NameDefined nameDefined1 = new NameDefined(UUID.randomUUID().toString(), now, "name1");
-            NameDefined nameDefined2 = new NameDefined(UUID.randomUUID().toString(), now.plusSeconds(2), "name2");
-            NameWasChanged nameWasChanged1 = new NameWasChanged(UUID.randomUUID().toString(), now.plusSeconds(10), "name3");
+            NameDefined nameDefined1 = new NameDefined(UUID.randomUUID().toString(), now, "name", "name1");
+            NameDefined nameDefined2 = new NameDefined(UUID.randomUUID().toString(), now.plusSeconds(2), "name", "name2");
+            NameWasChanged nameWasChanged1 = new NameWasChanged(UUID.randomUUID().toString(), now.plusSeconds(10), "name", "name3");
 
             // When
             inMemorySubscriptionModel.pauseSubscription(subscriptionId);

@@ -84,15 +84,15 @@ public class ReactiveTransactionalProjectionsWithSpringAndMongoDBApplicationTest
     void write_events_and_projection_in_the_same_tx() {
         // Given
         LocalDateTime now = LocalDateTime.now();
-        UUID id = UUID.randomUUID();
+        UUID userId = UUID.randomUUID();
 
         // When
-        nameApplicationService.defineName(id, now, "John Doe").block();
+        nameApplicationService.defineName(userId, now, "John Doe").block();
 
         // Then
         assertAll(
-                () -> assertThat(currentNameProjection.findById(id.toString()).block()).isEqualTo(new CurrentName(id.toString(), "John Doe")),
-                () -> Assertions.assertThat(requireNonNull(eventStore.loadEventStream(id).block()).eventList().block()).containsExactly(new NameDefined(id.toString(), now, "John Doe"))
+                () -> assertThat(currentNameProjection.findById(userId.toString()).block()).isEqualTo(new CurrentName(userId.toString(), "John Doe")),
+                () -> Assertions.assertThat(requireNonNull(eventStore.loadEventStream(userId).block()).eventList().block()).containsExactly(new NameDefined(UUID.randomUUID().toString(), now, userId.toString(), "John Doe"))
         );
     }
 
@@ -100,16 +100,16 @@ public class ReactiveTransactionalProjectionsWithSpringAndMongoDBApplicationTest
     void can_load_current_events_and_write_new_ones() {
         // Given
         LocalDateTime now = LocalDateTime.now();
-        UUID id = UUID.randomUUID();
-        nameApplicationService.defineName(id, now, "Jane Doe").block();
+        UUID userId = UUID.randomUUID();
+        nameApplicationService.defineName(userId, now, "Jane Doe").block();
 
         // When
-        nameApplicationService.changeName(id, now, "John Doe").block();
+        nameApplicationService.changeName(userId, now, "John Doe").block();
 
         // Then
         assertAll(
-                () -> assertThat(currentNameProjection.findById(id.toString()).block()).isEqualTo(new CurrentName(id.toString(), "John Doe")),
-                () -> Assertions.assertThat(requireNonNull(eventStore.loadEventStream(id).block()).eventList().block())
+                () -> assertThat(currentNameProjection.findById(userId.toString()).block()).isEqualTo(new CurrentName(userId.toString(), "John Doe")),
+                () -> Assertions.assertThat(requireNonNull(eventStore.loadEventStream(userId).block()).eventList().block())
                         .extracting("name")
                         .containsExactly("Jane Doe", "John Doe")
         );
@@ -120,18 +120,18 @@ public class ReactiveTransactionalProjectionsWithSpringAndMongoDBApplicationTest
         replaceCurrentNameProjectionWithMock(() -> {
             // Given
             LocalDateTime now = LocalDateTime.now();
-            UUID id = UUID.randomUUID();
+            UUID userId = UUID.randomUUID();
             given(currentNameProjectionMock.save(any())).willReturn(Mono.error(new IllegalArgumentException("expected")));
 
             // When
-            Throwable throwable = catchThrowable(() -> nameApplicationService.defineName(id, now, "John Doe").block());
+            Throwable throwable = catchThrowable(() -> nameApplicationService.defineName(userId, now, "John Doe").block());
 
             // Then
-            Mono<EventStream<DomainEvent>> eventStream = eventStore.loadEventStream(id);
+            Mono<EventStream<DomainEvent>> eventStream = eventStore.loadEventStream(userId);
 
             assertAll(
                     () -> assertThat(throwable).isExactlyInstanceOf(IllegalArgumentException.class),
-                    () -> assertThat(currentNameProjection.findById(id.toString()).block()).isNull(),
+                    () -> assertThat(currentNameProjection.findById(userId.toString()).block()).isNull(),
                     () -> assertThat(requireNonNull(eventStream.block()).isEmpty()).isTrue()
             );
         });

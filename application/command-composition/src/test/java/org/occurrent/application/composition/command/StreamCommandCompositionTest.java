@@ -35,7 +35,7 @@ public class StreamCommandCompositionTest {
         LocalDateTime now = LocalDateTime.now();
 
         // When
-        applicationService.executeStreamCommand("name1", StreamCommandComposition.composeCommands(PartialFunctionApplication.partial(NameWithStreamCommand::defineName, eventId1, now, "My name"), PartialFunctionApplication.partial(NameWithStreamCommand::changeName, eventId2, now, "My name 2")));
+        applicationService.executeStreamCommand("name1", StreamCommandComposition.composeCommands(PartialFunctionApplication.partial(NameWithStreamCommand::defineName, eventId1, now, "name", "My name"), PartialFunctionApplication.partial(NameWithStreamCommand::changeName, eventId2, now, "name", "My name 2")));
 
         // Then
         List<DomainEvent> domainEvents = eventStore.read("name1").events().map(applicationService::convertCloudEventToDomainEvent).collect(Collectors.toList());

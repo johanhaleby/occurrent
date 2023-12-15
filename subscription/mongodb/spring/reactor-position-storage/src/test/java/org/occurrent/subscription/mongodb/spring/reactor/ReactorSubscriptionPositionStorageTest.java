@@ -110,7 +110,7 @@ public class ReactorSubscriptionPositionStorageTest {
             return storage.save(subscriberId, PositionAwareCloudEvent.getSubscriptionPositionOrThrowIAE(ce));
         }).subscribe());
         Thread.sleep(200);
-        NameDefined nameDefined1 = new NameDefined(UUID.randomUUID().toString(), now, "name1");
+        NameDefined nameDefined1 = new NameDefined(UUID.randomUUID().toString(), now, "name", "name1");
 
         // When
         mongoEventStore.write("1", 0, serialize(nameDefined1)).block();

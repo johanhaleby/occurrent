@@ -22,6 +22,7 @@ public sealed interface DomainEvent permits NameDefined, NameWasChanged {
     String eventId();
 
     Date timestamp();
+    String userId();
 
     String name();
 }

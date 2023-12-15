@@ -43,8 +43,8 @@ class DeciderTest {
             initialState = null,
             decide = { cmd, state ->
                 when (cmd) {
-                    is DefineName -> Name.defineTheName(UUID.randomUUID().toString(), cmd.time, cmd.name)
-                    is ChangeName -> Name.changeNameFromCurrent(UUID.randomUUID().toString(), cmd.time, state, cmd.newName)
+                    is DefineName -> Name.defineTheName(UUID.randomUUID().toString(), cmd.time, cmd.userId, cmd.name)
+                    is ChangeName -> Name.changeNameFromCurrent(UUID.randomUUID().toString(), cmd.time, cmd.userId, state, cmd.newName)
                 }
             },
             evolve = { _, e ->
@@ -58,12 +58,12 @@ class DeciderTest {
         // When
         val (state, events) = decider.decide(
             events = listOf(
-                NameDefined("event1", LocalDateTime.now(), "Johan Haleby"),
-                NameWasChanged("event2", LocalDateTime.now(), "Eric Evans"),
-                NameWasChanged("event3", LocalDateTime.now(), "Tina Haleby"),
-                NameWasChanged("event4", LocalDateTime.now(), "Some Doe")
+                NameDefined("event1", LocalDateTime.now(), "name", "Johan Haleby"),
+                NameWasChanged("event2", LocalDateTime.now(), "name", "Eric Evans"),
+                NameWasChanged("event3", LocalDateTime.now(), "name", "Tina Haleby"),
+                NameWasChanged("event4", LocalDateTime.now(), "name", "Some Doe")
             ),
-            command = ChangeName("id", LocalDateTime.now(), "Another Name")
+            command = ChangeName("id", LocalDateTime.now(), "name", "Another Name")
         )
 
         // Then

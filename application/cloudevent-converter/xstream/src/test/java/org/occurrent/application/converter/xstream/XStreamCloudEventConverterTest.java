@@ -50,7 +50,7 @@ public class XStreamCloudEventConverterTest {
         // Given
         XStream xStream = new XStream();
         XStreamCloudEventConverter<DomainEvent> cloudEventConverter = new XStreamCloudEventConverter<>(xStream, CLOUD_EVENT_SOURCE);
-        NameDefined domainEvent = new NameDefined(UUID.randomUUID().toString(), new Date(), "name");
+        NameDefined domainEvent = new NameDefined(UUID.randomUUID().toString(), new Date(), "name", "name");
 
         // When
         CloudEvent cloudEvent = cloudEventConverter.toCloudEvent(domainEvent);
@@ -82,7 +82,7 @@ public class XStreamCloudEventConverterTest {
                 .typeGetter(Class::getSimpleName)
                 .build();
 
-        NameDefined domainEvent = new NameDefined(UUID.randomUUID().toString(), new Date(), "name");
+        NameDefined domainEvent = new NameDefined(UUID.randomUUID().toString(), new Date(), "name", "name");
 
         // When
         CloudEvent cloudEvent = cloudEventConverter.toCloudEvent(domainEvent);

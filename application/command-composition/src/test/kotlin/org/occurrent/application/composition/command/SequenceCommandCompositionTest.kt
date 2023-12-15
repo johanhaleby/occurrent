@@ -47,8 +47,8 @@ class SequenceCommandCompositionTest {
         // When
         applicationService.executeSequenceCommand(
             "name1",
-            NameWithSequenceCommand::defineName.partial(eventId1, now, "My Name 1")
-                andThen NameWithSequenceCommand::changeName.partial(eventId2, now, "My Name 2")
+            NameWithSequenceCommand::defineName.partial(eventId1, now, "name", "My Name 1")
+                andThen NameWithSequenceCommand::changeName.partial(eventId2, now, "name", "My Name 2")
         )
 
         // Then
@@ -73,9 +73,9 @@ class SequenceCommandCompositionTest {
         applicationService.executeSequenceCommand(
             "name1",
             composeCommands(
-                NameWithSequenceCommand::defineName.partial(eventId1, now, "My Name 1"),
-                NameWithSequenceCommand::changeName.partial(eventId2, now, "My Name 2"),
-                NameWithSequenceCommand::changeName.partial(eventId3, now, "My Name 3")
+                NameWithSequenceCommand::defineName.partial(eventId1, now, "name", "My Name 1"),
+                NameWithSequenceCommand::changeName.partial(eventId2, now, "name", "My Name 2"),
+                NameWithSequenceCommand::changeName.partial(eventId3, now, "name", "My Name 3")
             )
         )
 
@@ -103,16 +103,16 @@ class SequenceCommandCompositionTest {
         applicationService.executeSequenceCommand(
             "name1",
             composeCommands(
-                NameWithSequenceCommand::defineName.partial(eventId1, now, "My Name 1"),
-                NameWithSequenceCommand::changeName.partial(eventId2, now, "My Name 2")
+                NameWithSequenceCommand::defineName.partial(eventId1, now, "name", "My Name 1"),
+                NameWithSequenceCommand::changeName.partial(eventId2, now, "name", "My Name 2")
             )
         )
 
         applicationService.executeSequenceCommand(
             "name1",
             composeCommands(
-                NameWithSequenceCommand::changeName.partial(eventId3, now, "My Name 3"),
-                NameWithSequenceCommand::changeName.partial(eventId4, now, "My Name 4")
+                NameWithSequenceCommand::changeName.partial(eventId3, now, "name", "My Name 3"),
+                NameWithSequenceCommand::changeName.partial(eventId4, now, "name", "My Name 4")
             )
         )
 
@@ -142,11 +142,11 @@ class SequenceCommandCompositionTest {
         val now = LocalDateTime.now()
 
         val events = composeCommands(
-            NameWithSequenceCommand::changeName.partial(eventId2, now, "My Name 2"),
-            NameWithSequenceCommand::changeName.partial(eventId3, now, "My Name 3"),
-            NameWithSequenceCommand::changeName.partial(eventId4, now, "My Name 4")
+            NameWithSequenceCommand::changeName.partial(eventId2, now, "name", "My Name 2"),
+            NameWithSequenceCommand::changeName.partial(eventId3, now, "name", "My Name 3"),
+            NameWithSequenceCommand::changeName.partial(eventId4, now, "name", "My Name 4")
         )
-        val currentEvents = NameWithSequenceCommand.defineName(emptySequence(), eventId1, now, "My Name 1")
+        val currentEvents = NameWithSequenceCommand.defineName(emptySequence(), eventId1, now, "name", "My Name 1")
         val newEvents = events(currentEvents).toList()
         assertThat(newEvents.size).isEqualTo(3)
         assertThat(newEvents.map { event -> event.name() }).containsExactly(

@@ -34,7 +34,7 @@ class CustomTypeMapperTest {
     fun `custom type mapper works`() {
         // Given
         val objectMapper = ObjectMapper()
-        val expectedEvent = NameDefined("eventId", Date(), "Name")
+        val expectedEvent = NameDefined("eventId", Date(), "name", "Name")
         val customTypeMapper = CustomTypeMapper()
 
 

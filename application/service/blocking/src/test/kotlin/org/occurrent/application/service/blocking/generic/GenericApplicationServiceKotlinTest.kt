@@ -61,8 +61,8 @@ class GenericApplicationServiceKotlinTest {
         // When
         val writeResult = applicationService.execute(
             streamId, composeCommands(
-                Name::defineName.partial("eventId1", time, "Some Doe"),
-                Name::changeName.partial("eventId2", time, "Jane Doe")
+                Name::defineName.partial("eventId1", time, "name", "Some Doe"),
+                Name::changeName.partial("eventId2", time, "name", "Jane Doe")
             )
         )
         // Then
@@ -80,16 +80,16 @@ class GenericApplicationServiceKotlinTest {
 
         applicationService.execute(
             streamId, composeCommands(
-                Name::defineName.partial("eventId1", time, "Some Doe"),
-                Name::changeName.partial("eventId2", time, "Jane Doe")
+                Name::defineName.partial("eventId1", time, "name", "Some Doe"),
+                Name::changeName.partial("eventId2", time, "name", "Jane Doe")
             )
         )
 
         // When
         val writeResult = applicationService.execute(
             streamId, composeCommands(
-                Name::changeName.partial("eventId3", time, "Hello"),
-                Name::changeName.partial("eventId4", time, "World")
+                Name::changeName.partial("eventId3", time, "name", "Hello"),
+                Name::changeName.partial("eventId4", time, "name", "World")
             )
         )
         // Then

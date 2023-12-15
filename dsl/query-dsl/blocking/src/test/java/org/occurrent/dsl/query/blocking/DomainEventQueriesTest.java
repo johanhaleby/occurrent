@@ -66,8 +66,8 @@ public class DomainEventQueriesTest {
 
         applicationService.execute("stream", toStreamCommand(
                 composeCommands(
-                        partial(Name::defineName, "eventId1", time, "Some Doe"),
-                        partial(Name::changeName, "eventId2", time, "Jane Doe")
+                        partial(Name::defineName, "eventId1", time, "name", "Some Doe"),
+                        partial(Name::changeName, "eventId2", time, "name", "Jane Doe")
                 )
         ));
 
@@ -77,8 +77,8 @@ public class DomainEventQueriesTest {
         // Then
         assertAll(
                 () -> assertThat(events).hasSize(2),
-                () -> assertThat(events.stream().findFirst()).hasValue(new NameDefined("eventId1", time, "Some Doe")),
-                () -> assertThat(events.stream().skip(1).findFirst()).hasValue(new NameWasChanged("eventId2", time, "Jane Doe"))
+                () -> assertThat(events.stream().findFirst()).hasValue(new NameDefined("eventId1", time, "name", "Some Doe")),
+                () -> assertThat(events.stream().skip(1).findFirst()).hasValue(new NameWasChanged("eventId2", time, "name", "Jane Doe"))
         );
     }
 
@@ -89,8 +89,8 @@ public class DomainEventQueriesTest {
 
         applicationService.execute("stream", toStreamCommand(
                 composeCommands(
-                        partial(Name::defineName, "eventId1", time, "Some Doe"),
-                        partial(Name::changeName, "eventId2", time, "Jane Doe")
+                        partial(Name::defineName, "eventId1", time, "name", "Some Doe"),
+                        partial(Name::changeName, "eventId2", time, "name", "Jane Doe")
                 )
         ));
 
@@ -100,8 +100,8 @@ public class DomainEventQueriesTest {
         // Then
         assertAll(
                 () -> assertThat(events).hasSize(2),
-                () -> assertThat(events.stream().findFirst()).hasValue(new NameDefined("eventId1", time, "Some Doe")),
-                () -> assertThat(events.stream().skip(1).findFirst()).hasValue(new NameWasChanged("eventId2", time, "Jane Doe"))
+                () -> assertThat(events.stream().findFirst()).hasValue(new NameDefined("eventId1", time, "name", "Some Doe")),
+                () -> assertThat(events.stream().skip(1).findFirst()).hasValue(new NameWasChanged("eventId2", time, "name", "Jane Doe"))
         );
     }
 
@@ -112,8 +112,8 @@ public class DomainEventQueriesTest {
 
         applicationService.execute("stream", toStreamCommand(
                 composeCommands(
-                        partial(Name::defineName, "eventId1", time, "Some Doe"),
-                        partial(Name::changeName, "eventId2", time, "Jane Doe")
+                        partial(Name::defineName, "eventId1", time, "name", "Some Doe"),
+                        partial(Name::changeName, "eventId2", time, "name", "Jane Doe")
                 )
         ));
 
@@ -123,7 +123,7 @@ public class DomainEventQueriesTest {
         // Then
         assertAll(
                 () -> assertThat(events).hasSize(1),
-                () -> assertThat(events.stream().findFirst()).hasValue(new NameDefined("eventId1", time, "Some Doe"))
+                () -> assertThat(events.stream().findFirst()).hasValue(new NameDefined("eventId1", time, "name", "Some Doe"))
         );
     }
 
@@ -134,8 +134,8 @@ public class DomainEventQueriesTest {
 
         applicationService.execute("stream", toStreamCommand(
                 composeCommands(
-                        partial(Name::defineName, "eventId1", time, "Some Doe"),
-                        partial(Name::changeName, "eventId2", time, "Jane Doe")
+                        partial(Name::defineName, "eventId1", time, "name", "Some Doe"),
+                        partial(Name::changeName, "eventId2", time, "name", "Jane Doe")
                 )
         ));
 
@@ -143,7 +143,7 @@ public class DomainEventQueriesTest {
         NameDefined event = domainEventQueries.<NameDefined>queryOne(type(NameDefined.class.getName()));
 
         // Then
-        assertThat(event).isEqualTo(new NameDefined("eventId1", time, "Some Doe"));
+        assertThat(event).isEqualTo(new NameDefined("eventId1", time, "name", "Some Doe"));
     }
 
     @Test
@@ -153,8 +153,8 @@ public class DomainEventQueriesTest {
 
         applicationService.execute("stream", toStreamCommand(
                 composeCommands(
-                        partial(Name::defineName, "eventId1", time, "Some Doe"),
-                        partial(Name::changeName, "eventId2", time, "Jane Doe")
+                        partial(Name::defineName, "eventId1", time, "name", "Some Doe"),
+                        partial(Name::changeName, "eventId2", time, "name", "Jane Doe")
                 )
         ));
 
@@ -164,7 +164,7 @@ public class DomainEventQueriesTest {
         // Then
         assertAll(
                 () -> assertThat(events).hasSize(1),
-                () -> assertThat(events.stream().findFirst()).hasValue(new NameDefined("eventId1", time, "Some Doe"))
+                () -> assertThat(events.stream().findFirst()).hasValue(new NameDefined("eventId1", time, "name", "Some Doe"))
         );
     }
 
@@ -175,9 +175,9 @@ public class DomainEventQueriesTest {
 
         applicationService.execute("stream", toStreamCommand(
                 composeCommands(
-                        partial(Name::defineName, "eventId1", time, "Some Doe"),
-                        partial(Name::changeName, "eventId2", time, "Jane Doe"),
-                        partial(Name::changeName, "eventId3", time, "Jane Doe2")
+                        partial(Name::defineName, "eventId1", time, "name", "Some Doe"),
+                        partial(Name::changeName, "eventId2", time, "name", "Jane Doe"),
+                        partial(Name::changeName, "eventId3", time, "name", "Jane Doe2")
                 )
         ));
 
@@ -185,7 +185,7 @@ public class DomainEventQueriesTest {
         NameWasChanged event = domainEventQueries.queryOne(NameWasChanged.class);
 
         // Then
-        assertThat(event).isEqualTo(new NameWasChanged("eventId2", time, "Jane Doe"));
+        assertThat(event).isEqualTo(new NameWasChanged("eventId2", time, "name", "Jane Doe"));
     }
 
     @Test
@@ -195,9 +195,9 @@ public class DomainEventQueriesTest {
 
         applicationService.execute("stream", toStreamCommand(
                 composeCommands(
-                        partial(Name::defineName, "eventId1", time, "Some Doe"),
-                        partial(Name::changeName, "eventId2", time, "Jane Doe"),
-                        partial(Name::changeName, "eventId3", time, "Jane Doe2")
+                        partial(Name::defineName, "eventId1", time, "name", "Some Doe"),
+                        partial(Name::changeName, "eventId2", time, "name", "Jane Doe"),
+                        partial(Name::changeName, "eventId3", time, "name", "Jane Doe2")
                 )
         ));
 
@@ -218,9 +218,9 @@ public class DomainEventQueriesTest {
 
         applicationService.execute("stream", toStreamCommand(
                 composeCommands(
-                        partial(Name::defineName, "eventId1", time, "Some Doe"),
-                        partial(Name::changeName, "eventId2", time, "Jane Doe"),
-                        partial(Name::changeName, "eventId3", time, "Jane Doe2")
+                        partial(Name::defineName, "eventId1", time, "name", "Some Doe"),
+                        partial(Name::changeName, "eventId2", time, "name", "Jane Doe"),
+                        partial(Name::changeName, "eventId3", time, "name", "Jane Doe2")
                 )
         ));
 
@@ -241,9 +241,9 @@ public class DomainEventQueriesTest {
 
         applicationService.execute("stream", toStreamCommand(
                 composeCommands(
-                        partial(Name::defineName, "eventId1", time, "Some Doe"),
-                        partial(Name::changeName, "eventId2", time, "Jane Doe"),
-                        partial(Name::changeName, "eventId3", time, "Jane Doe2")
+                        partial(Name::defineName, "eventId1", time, "name", "Some Doe"),
+                        partial(Name::changeName, "eventId2", time, "name", "Jane Doe"),
+                        partial(Name::changeName, "eventId3", time, "name", "Jane Doe2")
                 )
         ));
 
@@ -251,6 +251,6 @@ public class DomainEventQueriesTest {
         NameWasChanged event = domainEventQueries.queryOne(NameWasChanged.class, SortBy.natural(DESCENDING));
 
         // Then
-        assertThat(event).isEqualTo(new NameWasChanged("eventId3", time, "Jane Doe2"));
+        assertThat(event).isEqualTo(new NameWasChanged("eventId3", time, "name", "Jane Doe2"));
     }
 }

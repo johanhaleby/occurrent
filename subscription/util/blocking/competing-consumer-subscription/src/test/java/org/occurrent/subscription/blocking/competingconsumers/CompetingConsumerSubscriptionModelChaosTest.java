@@ -115,8 +115,8 @@ class CompetingConsumerSubscriptionModelChaosTest {
             for (int i = 0; i < 1000; i++) {
                 String streamId = UUID.randomUUID().toString();
 
-                NameDefined nameDefined = new NameDefined(UUID.randomUUID().toString(), LocalDateTime.of(2021, 2, 26, 14, 15, 16), "my name");
-                NameWasChanged nameWasChanged = new NameWasChanged(UUID.randomUUID().toString(), LocalDateTime.of(2021, 2, 26, 14, 15, 16), "my name changed");
+                NameDefined nameDefined = new NameDefined(UUID.randomUUID().toString(), LocalDateTime.of(2021, 2, 26, 14, 15, 16), "name", "my name");
+                NameWasChanged nameWasChanged = new NameWasChanged(UUID.randomUUID().toString(), LocalDateTime.of(2021, 2, 26, 14, 15, 16), "name", "my name changed");
 
                 try {
                     retry.execute(() -> eventStore.write(streamId, serialize(nameDefined)));

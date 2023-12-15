@@ -18,5 +18,5 @@ package org.occurrent.command;
 
 import java.time.LocalDateTime;
 
-public record ChangeName(String id, LocalDateTime time, String newName) implements NameCommand {
+public record ChangeName(String commandId, LocalDateTime time, String userId, String newName) implements NameCommand {
 }

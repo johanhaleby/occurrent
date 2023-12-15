@@ -54,6 +54,7 @@ import org.testcontainers.junit.jupiter.Container;
 import org.testcontainers.junit.jupiter.Testcontainers;
 import reactor.core.publisher.Flux;
 import reactor.core.publisher.Mono;
+import reactor.core.scheduler.Schedulers;
 
 import java.net.URI;
 import java.time.LocalDateTime;
@@ -133,7 +134,7 @@ public class ReactorMongoEventStoreTest {
         LocalDateTime now = LocalDateTime.now();
 
         // When
-        List<DomainEvent> events = Name.defineTheName(UUID.randomUUID().toString(), now, "John Doe");
+        List<DomainEvent> events = Name.defineTheName(UUID.randomUUID().toString(), now, "john", "John Doe");
         persist("name", WriteCondition.streamVersionEq(0), events).block();
 
         // Then
@@ -150,7 +151,7 @@ public class ReactorMongoEventStoreTest {
     @Test
     void can_read_and_write_multiple_events_at_once_to_mongo_spring_reactive_event_store() {
         LocalDateTime now = LocalDateTime.now();
-        List<DomainEvent> events = Composition.chain(Name.defineTheName(UUID.randomUUID().toString(), now, "Hello World"), es -> Name.changeName(es, UUID.randomUUID().toString(), now, "John Doe"));
+        List<DomainEvent> events = Composition.chain(Name.defineTheName(UUID.randomUUID().toString(), now, "name", "Hello World"), es -> Name.changeName(es, UUID.randomUUID().toString(), now, "name", "John Doe"));
 
         // When
         persist("name", WriteCondition.streamVersionEq(0), events).block();
@@ -169,9 +170,9 @@ public class ReactorMongoEventStoreTest {
     @Test
     void can_read_and_write_multiple_events_at_different_occasions_to_mongo_spring_reactive_event_store() {
         LocalDateTime now = LocalDateTime.now();
-        NameDefined nameDefined = new NameDefined(UUID.randomUUID().toString(), now, "name");
-        NameWasChanged nameWasChanged1 = new NameWasChanged(UUID.randomUUID().toString(), now.plusHours(1), "name2");
-        NameWasChanged nameWasChanged2 = new NameWasChanged(UUID.randomUUID().toString(), now.plusHours(2), "name3");
+        NameDefined nameDefined = new NameDefined(UUID.randomUUID().toString(), now, "name", "name");
+        NameWasChanged nameWasChanged1 = new NameWasChanged(UUID.randomUUID().toString(), now.plusHours(1), "name", "name2");
+        NameWasChanged nameWasChanged2 = new NameWasChanged(UUID.randomUUID().toString(), now.plusHours(2), "name", "name3");
 
         // When
         persist("name", WriteCondition.streamVersionEq(0), nameDefined).block();
@@ -197,7 +198,7 @@ public class ReactorMongoEventStoreTest {
         eventStore = new ReactorMongoEventStore(mongoTemplate, eventStoreConfig);
 
         LocalDateTime now = LocalDateTime.now();
-        List<DomainEvent> events = Composition.chain(Name.defineTheName(UUID.randomUUID().toString(), now, "Hello World"), es -> Name.changeName(es, UUID.randomUUID().toString(), now, "John Doe"));
+        List<DomainEvent> events = Composition.chain(Name.defineTheName(UUID.randomUUID().toString(), now, "name", "Hello World"), es -> Name.changeName(es, UUID.randomUUID().toString(), now, "name", "John Doe"));
 
         // When
         persist("name", WriteCondition.streamVersionEq(0), events).block();
@@ -217,9 +218,9 @@ public class ReactorMongoEventStoreTest {
     @Test
     void can_read_events_with_skip_and_limit_using_reactor_mongo_event_store() {
         LocalDateTime now = LocalDateTime.now();
-        NameDefined nameDefined = new NameDefined(UUID.randomUUID().toString(), now, "name");
-        NameWasChanged nameWasChanged1 = new NameWasChanged(UUID.randomUUID().toString(), now.plusHours(1), "name2");
-        NameWasChanged nameWasChanged2 = new NameWasChanged(UUID.randomUUID().toString(), now.plusHours(2), "name3");
+        NameDefined nameDefined = new NameDefined(UUID.randomUUID().toString(), now, "name", "name");
+        NameWasChanged nameWasChanged1 = new NameWasChanged(UUID.randomUUID().toString(), now.plusHours(1), "name", "name2");
+        NameWasChanged nameWasChanged2 = new NameWasChanged(UUID.randomUUID().toString(), now.plusHours(2), "name", "name3");
 
         // When
         persist("name", WriteCondition.streamVersionEq(0), nameDefined).block();
@@ -240,7 +241,7 @@ public class ReactorMongoEventStoreTest {
     @Test
     void stream_version_is_not_updated_when_event_insertion_fails() {
         LocalDateTime now = LocalDateTime.now();
-        List<DomainEvent> events = Composition.chain(Name.defineTheName(UUID.randomUUID().toString(), now, "Hello World"), es -> Name.changeName(es, UUID.randomUUID().toString(), now, "John Doe"));
+        List<DomainEvent> events = Composition.chain(Name.defineTheName(UUID.randomUUID().toString(), now, "name", "Hello World"), es -> Name.changeName(es, UUID.randomUUID().toString(), now, "name", "John Doe"));
 
         persist("name", WriteCondition.streamVersionEq(0), events).block();
 
@@ -263,9 +264,9 @@ public class ReactorMongoEventStoreTest {
     void read_skew_is_avoided_and_transaction_is_started() {
         // Given
         LocalDateTime now = LocalDateTime.now();
-        NameDefined nameDefined = new NameDefined(UUID.randomUUID().toString(), now, "name");
-        NameWasChanged nameWasChanged1 = new NameWasChanged(UUID.randomUUID().toString(), now.plusHours(1), "name2");
-        NameWasChanged nameWasChanged2 = new NameWasChanged(UUID.randomUUID().toString(), now.plusHours(2), "name3");
+        NameDefined nameDefined = new NameDefined(UUID.randomUUID().toString(), now, "name", "name");
+        NameWasChanged nameWasChanged1 = new NameWasChanged(UUID.randomUUID().toString(), now.plusHours(1), "name", "name2");
+        NameWasChanged nameWasChanged2 = new NameWasChanged(UUID.randomUUID().toString(), now.plusHours(2), "name", "name3");
 
         persist("name", WriteCondition.streamVersionEq(0), Flux.just(nameDefined, nameWasChanged1)).block();
 
@@ -300,9 +301,9 @@ public class ReactorMongoEventStoreTest {
     void read_skew_is_avoided_and_skip_and_limit_is_defined_even_when_no_transaction_is_started() {
         // Given
         LocalDateTime now = LocalDateTime.now();
-        NameDefined nameDefined = new NameDefined(UUID.randomUUID().toString(), now, "name");
-        NameWasChanged nameWasChanged1 = new NameWasChanged(UUID.randomUUID().toString(), now.plusHours(1), "name2");
-        NameWasChanged nameWasChanged2 = new NameWasChanged(UUID.randomUUID().toString(), now.plusHours(2), "name3");
+        NameDefined nameDefined = new NameDefined(UUID.randomUUID().toString(), now, "name", "name");
+        NameWasChanged nameWasChanged1 = new NameWasChanged(UUID.randomUUID().toString(), now.plusHours(1), "name", "name2");
+        NameWasChanged nameWasChanged2 = new NameWasChanged(UUID.randomUUID().toString(), now.plusHours(2), "name", "name3");
 
         persist("name", WriteCondition.streamVersionEq(0), Flux.just(nameDefined, nameWasChanged1)).block();
 
@@ -325,9 +326,9 @@ public class ReactorMongoEventStoreTest {
     void no_events_are_inserted_when_batch_contains_duplicate_events() {
         LocalDateTime now = LocalDateTime.now();
 
-        NameDefined nameDefined = new NameDefined(UUID.randomUUID().toString(), now, "name");
-        NameWasChanged nameWasChanged1 = new NameWasChanged(UUID.randomUUID().toString(), now.plusHours(1), "name2");
-        NameWasChanged nameWasChanged2 = new NameWasChanged(UUID.randomUUID().toString(), now.plusHours(2), "name4");
+        NameDefined nameDefined = new NameDefined(UUID.randomUUID().toString(), now, "name", "name");
+        NameWasChanged nameWasChanged1 = new NameWasChanged(UUID.randomUUID().toString(), now.plusHours(1), "name", "name2");
+        NameWasChanged nameWasChanged2 = new NameWasChanged(UUID.randomUUID().toString(), now.plusHours(2), "name", "name4");
 
         // When
         Throwable throwable = catchThrowable(() -> persist("name", WriteCondition.streamVersionEq(0), Flux.just(nameDefined, nameWasChanged1, nameWasChanged1, nameWasChanged2)).block());
@@ -347,9 +348,9 @@ public class ReactorMongoEventStoreTest {
     void no_events_are_inserted_when_batch_contains_event_that_has_already_been_persisted() {
         LocalDateTime now = LocalDateTime.now();
 
-        NameDefined nameDefined = new NameDefined(UUID.randomUUID().toString(), now, "name");
-        NameWasChanged nameWasChanged1 = new NameWasChanged(UUID.randomUUID().toString(), now.plusHours(1), "name2");
-        NameWasChanged nameWasChanged2 = new NameWasChanged(UUID.randomUUID().toString(), now.plusHours(2), "name4");
+        NameDefined nameDefined = new NameDefined(UUID.randomUUID().toString(), now, "name", "name");
+        NameWasChanged nameWasChanged1 = new NameWasChanged(UUID.randomUUID().toString(), now.plusHours(1), "name", "name2");
+        NameWasChanged nameWasChanged2 = new NameWasChanged(UUID.randomUUID().toString(), now.plusHours(2), "name", "name4");
 
         persist("name", WriteCondition.streamVersionEq(0), Flux.just(nameDefined, nameWasChanged1)).block();
 
@@ -378,8 +379,8 @@ public class ReactorMongoEventStoreTest {
             LocalDateTime now = LocalDateTime.now();
 
             // When
-            DomainEvent event1 = new NameDefined(UUID.randomUUID().toString(), now, "John Doe");
-            DomainEvent event2 = new NameWasChanged(UUID.randomUUID().toString(), now, "Jan Doe");
+            DomainEvent event1 = new NameDefined(UUID.randomUUID().toString(), now, "name", "John Doe");
+            DomainEvent event2 = new NameWasChanged(UUID.randomUUID().toString(), now, "name", "Jan Doe");
             WriteResult writeResult = persist("name", Flux.just(event1, event2)).block();
 
             // Then
@@ -396,9 +397,9 @@ public class ReactorMongoEventStoreTest {
             LocalDateTime now = LocalDateTime.now();
 
             // When
-            DomainEvent event1 = new NameDefined(UUID.randomUUID().toString(), now, "John Doe");
-            DomainEvent event2 = new NameWasChanged(UUID.randomUUID().toString(), now, "Jan Doe");
-            DomainEvent event3 = new NameWasChanged(UUID.randomUUID().toString(), now, "Jan Doe2");
+            DomainEvent event1 = new NameDefined(UUID.randomUUID().toString(), now, "name", "John Doe");
+            DomainEvent event2 = new NameWasChanged(UUID.randomUUID().toString(), now, "name", "Jan Doe");
+            DomainEvent event3 = new NameWasChanged(UUID.randomUUID().toString(), now, "name", "Jan Doe2");
             persist("name", Flux.just(event1)).block();
             WriteResult writeResult = persist("name", Flux.just(event2, event3)).block();
 
@@ -429,8 +430,8 @@ public class ReactorMongoEventStoreTest {
             LocalDateTime now = LocalDateTime.now();
 
             // When
-            DomainEvent event1 = new NameDefined(UUID.randomUUID().toString(), now, "John Doe");
-            DomainEvent event2 = new NameWasChanged(UUID.randomUUID().toString(), now, "Jan Doe");
+            DomainEvent event1 = new NameDefined(UUID.randomUUID().toString(), now, "name", "John Doe");
+            DomainEvent event2 = new NameWasChanged(UUID.randomUUID().toString(), now, "name", "Jan Doe");
             persist("name", Flux.just(event1, event2)).block();
             WriteResult writeResult = persist("name", Flux.empty()).block();
 
@@ -452,9 +453,9 @@ public class ReactorMongoEventStoreTest {
         void count_without_any_filter_returns_all_the_count_of_all_events_in_the_event_store() {
             // Given
             LocalDateTime now = LocalDateTime.now();
-            DomainEvent event1 = new NameDefined(UUID.randomUUID().toString(), now, "John Doe");
-            DomainEvent event2 = new NameWasChanged(UUID.randomUUID().toString(), now, "Jan Doe");
-            DomainEvent event3 = new NameDefined(UUID.randomUUID().toString(), now, "Hello Doe");
+            DomainEvent event1 = new NameDefined(UUID.randomUUID().toString(), now, "name", "John Doe");
+            DomainEvent event2 = new NameWasChanged(UUID.randomUUID().toString(), now, "name", "Jan Doe");
+            DomainEvent event3 = new NameDefined(UUID.randomUUID().toString(), now, "name", "Hello Doe");
             persist("name", Stream.of(event1, event2, event3).collect(Collectors.toList())).block();
 
             // When
@@ -468,9 +469,9 @@ public class ReactorMongoEventStoreTest {
         void count_with_filter_returns_only_events_that_matches_the_filter() {
             // Given
             LocalDateTime now = LocalDateTime.now();
-            DomainEvent event1 = new NameDefined(UUID.randomUUID().toString(), now, "John Doe");
-            DomainEvent event2 = new NameWasChanged(UUID.randomUUID().toString(), now, "Jan Doe");
-            DomainEvent event3 = new NameDefined(UUID.randomUUID().toString(), now, "Hello Doe");
+            DomainEvent event1 = new NameDefined(UUID.randomUUID().toString(), now, "name", "John Doe");
+            DomainEvent event2 = new NameWasChanged(UUID.randomUUID().toString(), now, "name", "Jan Doe");
+            DomainEvent event3 = new NameDefined(UUID.randomUUID().toString(), now, "name", "Hello Doe");
             persist("name", Stream.of(event1, event2, event3).collect(Collectors.toList())).block();
 
             // When
@@ -499,9 +500,9 @@ public class ReactorMongoEventStoreTest {
         void returns_true_when_there_are_events_in_the_event_store_and_filter_is_all() {
             // Given
             LocalDateTime now = LocalDateTime.now();
-            DomainEvent event1 = new NameDefined(UUID.randomUUID().toString(), now, "John Doe");
-            DomainEvent event2 = new NameWasChanged(UUID.randomUUID().toString(), now, "Jan Doe");
-            DomainEvent event3 = new NameDefined(UUID.randomUUID().toString(), now, "Hello Doe");
+            DomainEvent event1 = new NameDefined(UUID.randomUUID().toString(), now, "name", "John Doe");
+            DomainEvent event2 = new NameWasChanged(UUID.randomUUID().toString(), now, "name", "Jan Doe");
+            DomainEvent event3 = new NameDefined(UUID.randomUUID().toString(), now, "name", "Hello Doe");
             persist("name", Stream.of(event1, event2, event3).collect(Collectors.toList())).block();
 
             // When
@@ -524,9 +525,9 @@ public class ReactorMongoEventStoreTest {
         void returns_true_when_there_are_matching_events_in_the_event_store_and_filter_not_all() {
             // Given
             LocalDateTime now = LocalDateTime.now();
-            DomainEvent event1 = new NameDefined(UUID.randomUUID().toString(), now, "John Doe");
-            DomainEvent event2 = new NameWasChanged(UUID.randomUUID().toString(), now, "Jan Doe");
-            DomainEvent event3 = new NameDefined(UUID.randomUUID().toString(), now, "Hello Doe");
+            DomainEvent event1 = new NameDefined(UUID.randomUUID().toString(), now, "name", "John Doe");
+            DomainEvent event2 = new NameWasChanged(UUID.randomUUID().toString(), now, "name", "Jan Doe");
+            DomainEvent event3 = new NameDefined(UUID.randomUUID().toString(), now, "name", "Hello Doe");
             persist("name", Stream.of(event1, event2, event3).collect(Collectors.toList())).block();
 
             // When
@@ -540,8 +541,8 @@ public class ReactorMongoEventStoreTest {
         void returns_false_when_there_events_in_the_event_store_that_doesnt_match_filter() {
             // Given
             LocalDateTime now = LocalDateTime.now();
-            DomainEvent event1 = new NameDefined(UUID.randomUUID().toString(), now, "John Doe");
-            DomainEvent event2 = new NameDefined(UUID.randomUUID().toString(), now, "Hello Doe");
+            DomainEvent event1 = new NameDefined(UUID.randomUUID().toString(), now, "name", "John Doe");
+            DomainEvent event2 = new NameDefined(UUID.randomUUID().toString(), now, "name", "Hello Doe");
             persist("name", Stream.of(event1, event2).collect(Collectors.toList())).block();
 
             // When
@@ -560,8 +561,8 @@ public class ReactorMongoEventStoreTest {
         void deleteEventStream_deletes_all_events_in_event_stream() {
             // Given
             LocalDateTime now = LocalDateTime.now();
-            NameDefined nameDefined = new NameDefined(UUID.randomUUID().toString(), now, "name");
-            NameWasChanged nameWasChanged1 = new NameWasChanged(UUID.randomUUID().toString(), now.plusHours(1), "name2");
+            NameDefined nameDefined = new NameDefined(UUID.randomUUID().toString(), now, "name", "name");
+            NameWasChanged nameWasChanged1 = new NameWasChanged(UUID.randomUUID().toString(), now.plusHours(1), "name", "name2");
             persist("name", Flux.just(nameDefined, nameWasChanged1)).block();
 
             // When
@@ -581,8 +582,8 @@ public class ReactorMongoEventStoreTest {
         void deleteEvent_deletes_only_specific_event_in_event_stream() {
             // Given
             LocalDateTime now = LocalDateTime.now();
-            NameDefined nameDefined = new NameDefined(UUID.randomUUID().toString(), now, "name");
-            NameWasChanged nameWasChanged1 = new NameWasChanged(UUID.randomUUID().toString(), now.plusHours(1), "name2");
+            NameDefined nameDefined = new NameDefined(UUID.randomUUID().toString(), now, "name", "name");
+            NameWasChanged nameWasChanged1 = new NameWasChanged(UUID.randomUUID().toString(), now.plusHours(1), "name", "name2");
             persist("name", Flux.just(nameDefined, nameWasChanged1)).block();
 
             // When
@@ -602,11 +603,11 @@ public class ReactorMongoEventStoreTest {
         void delete_deletes_events_according_to_the_filter() {
             // Given
             LocalDateTime now = LocalDateTime.now();
-            NameDefined nameDefined = new NameDefined(UUID.randomUUID().toString(), now, "name");
-            NameWasChanged nameWasChanged1 = new NameWasChanged(UUID.randomUUID().toString(), now.plusHours(1), "name2");
+            NameDefined nameDefined = new NameDefined(UUID.randomUUID().toString(), now, "name", "name");
+            NameWasChanged nameWasChanged1 = new NameWasChanged(UUID.randomUUID().toString(), now.plusHours(1), "name", "name2");
             persist("name", Flux.just(nameDefined, nameWasChanged1)).block();
 
-            NameDefined nameDefined2 = new NameDefined(UUID.randomUUID().toString(), now, "name2");
+            NameDefined nameDefined2 = new NameDefined(UUID.randomUUID().toString(), now, "name", "name2");
             persist("name2", nameDefined2).block();
 
             // When
@@ -631,8 +632,8 @@ public class ReactorMongoEventStoreTest {
         void returns_true_when_stream_exists_and_contains_events() {
             // Given
             LocalDateTime now = LocalDateTime.now();
-            NameDefined nameDefined = new NameDefined(UUID.randomUUID().toString(), now, "name");
-            NameWasChanged nameWasChanged1 = new NameWasChanged(UUID.randomUUID().toString(), now.plusHours(1), "name2");
+            NameDefined nameDefined = new NameDefined(UUID.randomUUID().toString(), now, "name", "name");
+            NameWasChanged nameWasChanged1 = new NameWasChanged(UUID.randomUUID().toString(), now.plusHours(1), "name", "name2");
             persist("name", Flux.just(nameDefined, nameWasChanged1)).block();
 
             // When
@@ -660,56 +661,56 @@ public class ReactorMongoEventStoreTest {
         void updates_cloud_event_when_cloud_event_exists() {
             // Given
             LocalDateTime now = LocalDateTime.now();
-            NameDefined nameDefined = new NameDefined(UUID.randomUUID().toString(), now, "name");
+            NameDefined nameDefined = new NameDefined(UUID.randomUUID().toString(), now, "name", "name");
             String eventId2 = UUID.randomUUID().toString();
-            NameWasChanged nameWasChanged1 = new NameWasChanged(eventId2, now.plusHours(1), "name2");
+            NameWasChanged nameWasChanged1 = new NameWasChanged(eventId2, now.plusHours(1), "name", "name2");
             persist("name", Flux.just(nameDefined, nameWasChanged1)).block();
 
             // When
             eventStore.updateEvent(eventId2, NAME_SOURCE, cloudEvent -> {
                 NameWasChanged e = deserialize(cloudEvent);
-                NameWasChanged correctedName = new NameWasChanged(e.eventId(), e.timestamp(), "name3");
+                NameWasChanged correctedName = new NameWasChanged(e.eventId(), e.timestamp(), "name", "name3");
                 return CloudEventBuilder.v1(cloudEvent).withData(serializeEvent(correctedName)).build();
             }).block();
 
             // Then
             Mono<EventStream<CloudEvent>> eventStream = eventStore.read("name");
             VersionAndEvents versionAndEvents = deserialize(eventStream);
-            assertThat(versionAndEvents.events).containsExactly(nameDefined, new NameWasChanged(eventId2, now.plusHours(1), "name3"));
+            assertThat(versionAndEvents.events).containsExactly(nameDefined, new NameWasChanged(eventId2, now.plusHours(1), "name", "name3"));
         }
 
         @Test
         void returns_updated_cloud_event_when_cloud_event_exists() {
             // Given
             LocalDateTime now = LocalDateTime.now();
-            NameDefined nameDefined = new NameDefined(UUID.randomUUID().toString(), now, "name");
+            NameDefined nameDefined = new NameDefined(UUID.randomUUID().toString(), now, "name", "name");
             String eventId2 = UUID.randomUUID().toString();
-            NameWasChanged nameWasChanged1 = new NameWasChanged(eventId2, now.plusHours(1), "name2");
+            NameWasChanged nameWasChanged1 = new NameWasChanged(eventId2, now.plusHours(1), "name", "name2");
             persist("name", Flux.just(nameDefined, nameWasChanged1)).block();
 
             // When
             DomainEvent updatedCloudEvent = eventStore.updateEvent(eventId2, NAME_SOURCE, cloudEvent -> {
                 NameWasChanged e = deserialize(cloudEvent);
-                NameWasChanged correctedName = new NameWasChanged(e.eventId(), e.timestamp(), "name3");
+                NameWasChanged correctedName = new NameWasChanged(e.eventId(), e.timestamp(), "name", "name3");
                 return CloudEventBuilder.v1(cloudEvent).withData(serializeEvent(correctedName)).build();
             }).map(deserialize()).block();
 
             // Then
-            assertThat(updatedCloudEvent).isEqualTo(new NameWasChanged(eventId2, now.plusHours(1), "name3"));
+            assertThat(updatedCloudEvent).isEqualTo(new NameWasChanged(eventId2, now.plusHours(1), "name", "name3"));
         }
 
         @Test
         void returns_empty_optional_when_cloud_event_does_not_exists() {
             // Given
             LocalDateTime now = LocalDateTime.now();
-            NameDefined nameDefined = new NameDefined(UUID.randomUUID().toString(), now, "name");
-            NameWasChanged nameWasChanged1 = new NameWasChanged(UUID.randomUUID().toString(), now.plusHours(1), "name2");
+            NameDefined nameDefined = new NameDefined(UUID.randomUUID().toString(), now, "name", "name");
+            NameWasChanged nameWasChanged1 = new NameWasChanged(UUID.randomUUID().toString(), now.plusHours(1), "name", "name2");
             persist("name", Flux.just(nameDefined, nameWasChanged1)).block();
 
             // When
             CloudEvent updatedCloudEvent = eventStore.updateEvent(UUID.randomUUID().toString(), NAME_SOURCE, cloudEvent -> {
                 NameWasChanged e = deserialize(cloudEvent);
-                NameWasChanged correctedName = new NameWasChanged(e.eventId(), e.timestamp(), "name3");
+                NameWasChanged correctedName = new NameWasChanged(e.eventId(), e.timestamp(), "name", "name3");
                 return CloudEventBuilder.v1(cloudEvent).withData(serializeEvent(correctedName)).build();
             }).block();
             // Then
@@ -720,9 +721,9 @@ public class ReactorMongoEventStoreTest {
         void throw_iae_when_update_function_returns_null() {
             // Given
             LocalDateTime now = LocalDateTime.now();
-            NameDefined nameDefined = new NameDefined(UUID.randomUUID().toString(), now, "name");
+            NameDefined nameDefined = new NameDefined(UUID.randomUUID().toString(), now, "name", "name");
             String eventId2 = UUID.randomUUID().toString();
-            NameWasChanged nameWasChanged1 = new NameWasChanged(eventId2, now.plusHours(1), "name2");
+            NameWasChanged nameWasChanged1 = new NameWasChanged(eventId2, now.plusHours(1), "name", "name2");
             persist("name", Flux.just(nameDefined, nameWasChanged1)).block();
 
             // When
@@ -736,9 +737,9 @@ public class ReactorMongoEventStoreTest {
         void when_update_function_returns_the_same_argument_then_cloud_event_is_unchanged_in_the_database() {
             // Given
             LocalDateTime now = LocalDateTime.now();
-            NameDefined nameDefined = new NameDefined(UUID.randomUUID().toString(), now, "name");
+            NameDefined nameDefined = new NameDefined(UUID.randomUUID().toString(), now, "name", "name");
             String eventId2 = UUID.randomUUID().toString();
-            NameWasChanged nameWasChanged1 = new NameWasChanged(eventId2, now.plusHours(1), "name2");
+            NameWasChanged nameWasChanged1 = new NameWasChanged(eventId2, now.plusHours(1), "name", "name2");
             persist("name", Flux.just(nameDefined, nameWasChanged1)).block();
 
             // When
@@ -771,13 +772,13 @@ public class ReactorMongoEventStoreTest {
 
                 // When
                 new Thread(() -> {
-                    NameDefined event = new NameDefined(UUID.randomUUID().toString(), now, "John Doe");
+                    NameDefined event = new NameDefined(UUID.randomUUID().toString(), now, "name", "John Doe");
                     await(cyclicBarrier);
                     exception.set(catchThrowable(() -> persist("name", writeCondition, event).block()));
                 }).start();
 
                 new Thread(() -> {
-                    NameDefined event = new NameDefined(UUID.randomUUID().toString(), now, "John Doe");
+                    NameDefined event = new NameDefined(UUID.randomUUID().toString(), now, "name", "John Doe");
                     await(cyclicBarrier);
                     exception.set(catchThrowable(() -> persist("name", writeCondition, event).block()));
                 }).start();
@@ -794,10 +795,10 @@ public class ReactorMongoEventStoreTest {
             @Test
             void writes_events_when_stream_version_matches_expected_version() {
                 // When
-                DomainEvent event1 = new NameDefined(UUID.randomUUID().toString(), now, "John Doe");
+                DomainEvent event1 = new NameDefined(UUID.randomUUID().toString(), now, "name", "John Doe");
                 persist("name", event1).block();
 
-                DomainEvent event2 = new NameWasChanged(UUID.randomUUID().toString(), now, "Jan Doe");
+                DomainEvent event2 = new NameWasChanged(UUID.randomUUID().toString(), now, "name", "Jan Doe");
 
                 eventStore.read("name").flatMap(eventStream1 -> persist(eventStream1.id(), WriteCondition.streamVersionEq(eventStream1.version()), event2)).block();
 
@@ -809,11 +810,11 @@ public class ReactorMongoEventStoreTest {
             @Test
             void throws_write_condition_not_fulfilled_when_stream_version_does_not_match_expected_version() {
                 // Given
-                DomainEvent event1 = new NameDefined(UUID.randomUUID().toString(), now, "John Doe");
+                DomainEvent event1 = new NameDefined(UUID.randomUUID().toString(), now, "name", "John Doe");
                 persist("name", event1).block();
 
                 // When
-                DomainEvent event2 = new NameWasChanged(UUID.randomUUID().toString(), now, "Jan Doe");
+                DomainEvent event2 = new NameWasChanged(UUID.randomUUID().toString(), now, "name", "Jan Doe");
                 Throwable throwable = catchThrowable(() -> persist("name", WriteCondition.streamVersionEq(10), event2).block());
 
                 // Then
@@ -829,10 +830,10 @@ public class ReactorMongoEventStoreTest {
             @Test
             void writes_events_when_stream_version_does_not_match_expected_version() {
                 // When
-                DomainEvent event1 = new NameDefined(UUID.randomUUID().toString(), now, "John Doe");
+                DomainEvent event1 = new NameDefined(UUID.randomUUID().toString(), now, "name", "John Doe");
                 persist("name", event1).block();
 
-                DomainEvent event2 = new NameWasChanged(UUID.randomUUID().toString(), now, "Jan Doe");
+                DomainEvent event2 = new NameWasChanged(UUID.randomUUID().toString(), now, "name", "Jan Doe");
                 Mono<EventStream<CloudEvent>> eventStream1 = eventStore.read("name");
                 persist(streamIdOf(eventStream1), WriteCondition.streamVersion(ne(20L)), event2).block();
 
@@ -844,11 +845,11 @@ public class ReactorMongoEventStoreTest {
             @Test
             void throws_write_condition_not_fulfilled_when_stream_version_match_expected_version() {
                 // Given
-                DomainEvent event1 = new NameDefined(UUID.randomUUID().toString(), now, "John Doe");
+                DomainEvent event1 = new NameDefined(UUID.randomUUID().toString(), now, "name", "John Doe");
                 persist("name", event1).block();
 
                 // When
-                DomainEvent event2 = new NameWasChanged(UUID.randomUUID().toString(), now, "Jan Doe");
+                DomainEvent event2 = new NameWasChanged(UUID.randomUUID().toString(), now, "name", "Jan Doe");
                 Throwable throwable = catchThrowable(() -> persist("name", WriteCondition.streamVersion(ne(1L)), event2).block());
 
                 // Then
@@ -864,10 +865,10 @@ public class ReactorMongoEventStoreTest {
             @Test
             void writes_events_when_stream_version_is_less_than_expected_version() {
                 // When
-                DomainEvent event1 = new NameDefined(UUID.randomUUID().toString(), now, "John Doe");
+                DomainEvent event1 = new NameDefined(UUID.randomUUID().toString(), now, "name", "John Doe");
                 persist("name", event1).block();
 
-                DomainEvent event2 = new NameWasChanged(UUID.randomUUID().toString(), now, "Jan Doe");
+                DomainEvent event2 = new NameWasChanged(UUID.randomUUID().toString(), now, "name", "Jan Doe");
                 Mono<EventStream<CloudEvent>> eventStream1 = eventStore.read("name");
                 persist(streamIdOf(eventStream1), WriteCondition.streamVersion(lt(10L)), event2).block();
 
@@ -879,11 +880,11 @@ public class ReactorMongoEventStoreTest {
             @Test
             void throws_write_condition_not_fulfilled_when_stream_version_is_greater_than_expected_version() {
                 // Given
-                DomainEvent event1 = new NameDefined(UUID.randomUUID().toString(), now, "John Doe");
+                DomainEvent event1 = new NameDefined(UUID.randomUUID().toString(), now, "name", "John Doe");
                 persist("name", event1).block();
 
                 // When
-                DomainEvent event2 = new NameWasChanged(UUID.randomUUID().toString(), now, "Jan Doe");
+                DomainEvent event2 = new NameWasChanged(UUID.randomUUID().toString(), now, "name", "Jan Doe");
                 Throwable throwable = catchThrowable(() -> persist("name", WriteCondition.streamVersion(lt(0L)), event2).block());
 
                 // Then
@@ -894,11 +895,11 @@ public class ReactorMongoEventStoreTest {
             @Test
             void throws_write_condition_not_fulfilled_when_stream_version_is_equal_to_expected_version() {
                 // Given
-                DomainEvent event1 = new NameDefined(UUID.randomUUID().toString(), now, "John Doe");
+                DomainEvent event1 = new NameDefined(UUID.randomUUID().toString(), now, "name", "John Doe");
                 persist("name", event1).block();
 
                 // When
-                DomainEvent event2 = new NameWasChanged(UUID.randomUUID().toString(), now, "Jan Doe");
+                DomainEvent event2 = new NameWasChanged(UUID.randomUUID().toString(), now, "name", "Jan Doe");
                 Throwable throwable = catchThrowable(() -> persist("name", WriteCondition.streamVersion(lt(1L)), event2).block());
 
                 // Then
@@ -914,10 +915,10 @@ public class ReactorMongoEventStoreTest {
             @Test
             void writes_events_when_stream_version_is_greater_than_expected_version() {
                 // When
-                DomainEvent event1 = new NameDefined(UUID.randomUUID().toString(), now, "John Doe");
+                DomainEvent event1 = new NameDefined(UUID.randomUUID().toString(), now, "name", "John Doe");
                 persist("name", event1).block();
 
-                DomainEvent event2 = new NameWasChanged(UUID.randomUUID().toString(), now, "Jan Doe");
+                DomainEvent event2 = new NameWasChanged(UUID.randomUUID().toString(), now, "name", "Jan Doe");
                 Mono<EventStream<CloudEvent>> eventStream1 = eventStore.read("name");
                 persist(streamIdOf(eventStream1), WriteCondition.streamVersion(gt(0L)), event2).block();
 
@@ -929,11 +930,11 @@ public class ReactorMongoEventStoreTest {
             @Test
             void throws_write_condition_not_fulfilled_when_stream_version_is_less_than_expected_version() {
                 // Given
-                DomainEvent event1 = new NameDefined(UUID.randomUUID().toString(), now, "John Doe");
+                DomainEvent event1 = new NameDefined(UUID.randomUUID().toString(), now, "name", "John Doe");
                 persist("name", event1).block();
 
                 // When
-                DomainEvent event2 = new NameWasChanged(UUID.randomUUID().toString(), now, "Jan Doe");
+                DomainEvent event2 = new NameWasChanged(UUID.randomUUID().toString(), now, "name", "Jan Doe");
                 Throwable throwable = catchThrowable(() -> persist("name", WriteCondition.streamVersion(gt(100L)), event2).block());
 
                 // Then
@@ -944,11 +945,11 @@ public class ReactorMongoEventStoreTest {
             @Test
             void throws_write_condition_not_fulfilled_when_stream_version_is_equal_to_expected_version() {
                 // Given
-                DomainEvent event1 = new NameDefined(UUID.randomUUID().toString(), now, "John Doe");
+                DomainEvent event1 = new NameDefined(UUID.randomUUID().toString(), now, "name", "John Doe");
                 persist("name", event1).block();
 
                 // When
-                DomainEvent event2 = new NameWasChanged(UUID.randomUUID().toString(), now, "Jan Doe");
+                DomainEvent event2 = new NameWasChanged(UUID.randomUUID().toString(), now, "name", "Jan Doe");
                 Throwable throwable = catchThrowable(() -> persist("name", WriteCondition.streamVersion(gt(1L)), event2).block());
 
                 // Then
@@ -964,10 +965,10 @@ public class ReactorMongoEventStoreTest {
             @Test
             void writes_events_when_stream_version_is_less_than_expected_version() {
                 // When
-                DomainEvent event1 = new NameDefined(UUID.randomUUID().toString(), now, "John Doe");
+                DomainEvent event1 = new NameDefined(UUID.randomUUID().toString(), now, "name", "John Doe");
                 persist("name", event1).block();
 
-                DomainEvent event2 = new NameWasChanged(UUID.randomUUID().toString(), now, "Jan Doe");
+                DomainEvent event2 = new NameWasChanged(UUID.randomUUID().toString(), now, "name", "Jan Doe");
                 Mono<EventStream<CloudEvent>> eventStream1 = eventStore.read("name");
                 persist(streamIdOf(eventStream1), WriteCondition.streamVersion(lte(10L)), event2).block();
 
@@ -980,10 +981,10 @@ public class ReactorMongoEventStoreTest {
             @Test
             void writes_events_when_stream_version_is_equal_to_expected_version() {
                 // When
-                DomainEvent event1 = new NameDefined(UUID.randomUUID().toString(), now, "John Doe");
+                DomainEvent event1 = new NameDefined(UUID.randomUUID().toString(), now, "name", "John Doe");
                 persist("name", event1).block();
 
-                DomainEvent event2 = new NameWasChanged(UUID.randomUUID().toString(), now, "Jan Doe");
+                DomainEvent event2 = new NameWasChanged(UUID.randomUUID().toString(), now, "name", "Jan Doe");
                 Mono<EventStream<CloudEvent>> eventStream1 = eventStore.read("name");
                 persist(streamIdOf(eventStream1), WriteCondition.streamVersion(lte(1L)), event2).block();
 
@@ -995,11 +996,11 @@ public class ReactorMongoEventStoreTest {
             @Test
             void throws_write_condition_not_fulfilled_when_stream_version_is_greater_than_expected_version() {
                 // Given
-                DomainEvent event1 = new NameDefined(UUID.randomUUID().toString(), now, "John Doe");
+                DomainEvent event1 = new NameDefined(UUID.randomUUID().toString(), now, "name", "John Doe");
                 persist("name", event1).block();
 
                 // When
-                DomainEvent event2 = new NameWasChanged(UUID.randomUUID().toString(), now, "Jan Doe");
+                DomainEvent event2 = new NameWasChanged(UUID.randomUUID().toString(), now, "name", "Jan Doe");
                 Throwable throwable = catchThrowable(() -> persist("name", WriteCondition.streamVersion(lte(0L)), event2).block());
 
                 // Then
@@ -1015,10 +1016,10 @@ public class ReactorMongoEventStoreTest {
             @Test
             void writes_events_when_stream_version_is_greater_than_expected_version() {
                 // When
-                DomainEvent event1 = new NameDefined(UUID.randomUUID().toString(), now, "John Doe");
+                DomainEvent event1 = new NameDefined(UUID.randomUUID().toString(), now, "name", "John Doe");
                 persist("name", event1).block();
 
-                DomainEvent event2 = new NameWasChanged(UUID.randomUUID().toString(), now, "Jan Doe");
+                DomainEvent event2 = new NameWasChanged(UUID.randomUUID().toString(), now, "name", "Jan Doe");
                 Mono<EventStream<CloudEvent>> eventStream1 = eventStore.read("name");
                 persist(streamIdOf(eventStream1), WriteCondition.streamVersion(gte(0L)), event2).block();
 
@@ -1030,10 +1031,10 @@ public class ReactorMongoEventStoreTest {
             @Test
             void writes_events_when_stream_version_is_equal_to_expected_version() {
                 // When
-                DomainEvent event1 = new NameDefined(UUID.randomUUID().toString(), now, "John Doe");
+                DomainEvent event1 = new NameDefined(UUID.randomUUID().toString(), now, "name", "John Doe");
                 persist("name", event1).block();
 
-                DomainEvent event2 = new NameWasChanged(UUID.randomUUID().toString(), now, "Jan Doe");
+                DomainEvent event2 = new NameWasChanged(UUID.randomUUID().toString(), now, "name", "Jan Doe");
                 Mono<EventStream<CloudEvent>> eventStream1 = eventStore.read("name");
                 persist(streamIdOf(eventStream1), WriteCondition.streamVersion(gte(0L)), event2).block();
 
@@ -1045,11 +1046,11 @@ public class ReactorMongoEventStoreTest {
             @Test
             void throws_write_condition_not_fulfilled_when_stream_version_is_less_than_expected_version() {
                 // Given
-                DomainEvent event1 = new NameDefined(UUID.randomUUID().toString(), now, "John Doe");
+                DomainEvent event1 = new NameDefined(UUID.randomUUID().toString(), now, "name", "John Doe");
                 persist("name", event1).block();
 
                 // When
-                DomainEvent event2 = new NameWasChanged(UUID.randomUUID().toString(), now, "Jan Doe");
+                DomainEvent event2 = new NameWasChanged(UUID.randomUUID().toString(), now, "name", "Jan Doe");
                 Throwable throwable = catchThrowable(() -> persist("name", WriteCondition.streamVersion(gte(100L)), event2).block());
 
                 // Then
@@ -1065,10 +1066,10 @@ public class ReactorMongoEventStoreTest {
             @Test
             void writes_events_when_stream_version_is_when_all_conditions_match_and_expression() {
                 // When
-                DomainEvent event1 = new NameDefined(UUID.randomUUID().toString(), now, "John Doe");
+                DomainEvent event1 = new NameDefined(UUID.randomUUID().toString(), now, "name", "John Doe");
                 persist("name", event1).block();
 
-                DomainEvent event2 = new NameWasChanged(UUID.randomUUID().toString(), now, "Jan Doe");
+                DomainEvent event2 = new NameWasChanged(UUID.randomUUID().toString(), now, "name", "Jan Doe");
                 Mono<EventStream<CloudEvent>> eventStream1 = eventStore.read("name");
                 persist(streamIdOf(eventStream1), WriteCondition.streamVersion(and(gte(0L), lt(100L), ne(40L))), event2).block();
 
@@ -1080,11 +1081,11 @@ public class ReactorMongoEventStoreTest {
             @Test
             void throws_write_condition_not_fulfilled_when_any_of_the_operations_in_the_and_expression_is_not_fulfilled() {
                 // Given
-                DomainEvent event1 = new NameDefined(UUID.randomUUID().toString(), now, "John Doe");
+                DomainEvent event1 = new NameDefined(UUID.randomUUID().toString(), now, "name", "John Doe");
                 persist("name", event1).block();
 
                 // When
-                DomainEvent event2 = new NameWasChanged(UUID.randomUUID().toString(), now, "Jan Doe");
+                DomainEvent event2 = new NameWasChanged(UUID.randomUUID().toString(), now, "name", "Jan Doe");
                 Throwable throwable = catchThrowable(() -> persist("name", WriteCondition.streamVersion(and(gte(0L), lt(100L), ne(1L))), event2).block());
 
                 // Then
@@ -1100,10 +1101,10 @@ public class ReactorMongoEventStoreTest {
             @Test
             void writes_events_when_stream_version_is_when_any_condition_in_or_expression_matches() {
                 // When
-                DomainEvent event1 = new NameDefined(UUID.randomUUID().toString(), now, "John Doe");
+                DomainEvent event1 = new NameDefined(UUID.randomUUID().toString(), now, "name", "John Doe");
                 persist("name", event1).block();
 
-                DomainEvent event2 = new NameWasChanged(UUID.randomUUID().toString(), now, "Jan Doe");
+                DomainEvent event2 = new NameWasChanged(UUID.randomUUID().toString(), now, "name", "Jan Doe");
                 Mono<EventStream<CloudEvent>> eventStream1 = eventStore.read("name");
                 persist(streamIdOf(eventStream1), WriteCondition.streamVersion(or(gte(100L), lt(0L), ne(40L))), event2).block();
 
@@ -1115,11 +1116,11 @@ public class ReactorMongoEventStoreTest {
             @Test
             void throws_write_condition_not_fulfilled_when_none_of_the_operations_in_the_and_expression_is_fulfilled() {
                 // Given
-                DomainEvent event1 = new NameDefined(UUID.randomUUID().toString(), now, "John Doe");
+                DomainEvent event1 = new NameDefined(UUID.randomUUID().toString(), now, "name", "John Doe");
                 persist("name", event1).block();
 
                 // When
-                DomainEvent event2 = new NameWasChanged(UUID.randomUUID().toString(), now, "Jan Doe");
+                DomainEvent event2 = new NameWasChanged(UUID.randomUUID().toString(), now, "name", "Jan Doe");
                 Throwable throwable = catchThrowable(() -> persist("name", WriteCondition.streamVersion(or(gte(100L), lt(1L))), event2).block());
 
                 // Then
@@ -1135,10 +1136,10 @@ public class ReactorMongoEventStoreTest {
             @Test
             void writes_events_when_stream_version_is_not_matching_condition() {
                 // When
-                DomainEvent event1 = new NameDefined(UUID.randomUUID().toString(), now, "John Doe");
+                DomainEvent event1 = new NameDefined(UUID.randomUUID().toString(), now, "name", "John Doe");
                 persist("name", event1).block();
 
-                DomainEvent event2 = new NameWasChanged(UUID.randomUUID().toString(), now, "Jan Doe");
+                DomainEvent event2 = new NameWasChanged(UUID.randomUUID().toString(), now, "name", "Jan Doe");
                 Mono<EventStream<CloudEvent>> eventStream1 = eventStore.read("name");
                 persist(streamIdOf(eventStream1), WriteCondition.streamVersion(Condition.not(eq(100L))), event2).block();
 
@@ -1150,11 +1151,11 @@ public class ReactorMongoEventStoreTest {
             @Test
             void throws_write_condition_not_fulfilled_when_condition_is_fulfilled_but_should_not_be_so() {
                 // Given
-                DomainEvent event1 = new NameDefined(UUID.randomUUID().toString(), now, "John Doe");
+                DomainEvent event1 = new NameDefined(UUID.randomUUID().toString(), now, "name", "John Doe");
                 persist("name", event1).block();
 
                 // When
-                DomainEvent event2 = new NameWasChanged(UUID.randomUUID().toString(), now, "Jan Doe");
+                DomainEvent event2 = new NameWasChanged(UUID.randomUUID().toString(), now, "name", "Jan Doe");
                 Throwable throwable = catchThrowable(() -> persist("name", WriteCondition.streamVersion(Condition.not(eq(1L))), event2).block());
 
                 // Then
@@ -1172,9 +1173,9 @@ public class ReactorMongoEventStoreTest {
         void all_without_skip_and_limit_returns_all_events() {
             // Given
             LocalDateTime now = LocalDateTime.now();
-            NameDefined nameDefined = new NameDefined(UUID.randomUUID().toString(), now, "name");
-            NameWasChanged nameWasChanged1 = new NameWasChanged(UUID.randomUUID().toString(), now.plusHours(1), "name2");
-            NameWasChanged nameWasChanged2 = new NameWasChanged(UUID.randomUUID().toString(), now.plusHours(2), "name3");
+            NameDefined nameDefined = new NameDefined(UUID.randomUUID().toString(), now, "name", "name");
+            NameWasChanged nameWasChanged1 = new NameWasChanged(UUID.randomUUID().toString(), now.plusHours(1), "name", "name2");
+            NameWasChanged nameWasChanged2 = new NameWasChanged(UUID.randomUUID().toString(), now.plusHours(2), "name", "name3");
 
             // When
             persist("name1", nameDefined).block();
@@ -1190,9 +1191,9 @@ public class ReactorMongoEventStoreTest {
         void all_with_skip_and_limit_returns_all_events_within_skip_and_limit() {
             // Given
             LocalDateTime now = LocalDateTime.now();
-            NameDefined nameDefined = new NameDefined(UUID.randomUUID().toString(), now, "name");
-            NameWasChanged nameWasChanged1 = new NameWasChanged(UUID.randomUUID().toString(), now.plusHours(1), "name2");
-            NameWasChanged nameWasChanged2 = new NameWasChanged(UUID.randomUUID().toString(), now.plusHours(2), "name3");
+            NameDefined nameDefined = new NameDefined(UUID.randomUUID().toString(), now, "name", "name");
+            NameWasChanged nameWasChanged1 = new NameWasChanged(UUID.randomUUID().toString(), now.plusHours(1), "name", "name2");
+            NameWasChanged nameWasChanged2 = new NameWasChanged(UUID.randomUUID().toString(), now.plusHours(2), "name", "name3");
 
             // When
             persist("name1", Flux.just(nameDefined, nameWasChanged1)).block();
@@ -1207,9 +1208,9 @@ public class ReactorMongoEventStoreTest {
         void query_with_single_filter_without_skip_and_limit() {
             // Given
             LocalDateTime now = LocalDateTime.now();
-            NameDefined nameDefined = new NameDefined(UUID.randomUUID().toString(), now, "name");
-            NameWasChanged nameWasChanged1 = new NameWasChanged(UUID.randomUUID().toString(), now.plusHours(1), "name2");
-            NameWasChanged nameWasChanged2 = new NameWasChanged(UUID.randomUUID().toString(), now.plusHours(2), "name3");
+            NameDefined nameDefined = new NameDefined(UUID.randomUUID().toString(), now, "name", "name");
+            NameWasChanged nameWasChanged1 = new NameWasChanged(UUID.randomUUID().toString(), now.plusHours(1), "name", "name2");
+            NameWasChanged nameWasChanged2 = new NameWasChanged(UUID.randomUUID().toString(), now.plusHours(2), "name", "name3");
 
             // When
             persist("name1", Flux.just(nameDefined, nameWasChanged1)).block();
@@ -1234,9 +1235,9 @@ public class ReactorMongoEventStoreTest {
         void query_with_single_filter_with_skip_and_limit() {
             // Given
             LocalDateTime now = LocalDateTime.now();
-            NameDefined nameDefined = new NameDefined(UUID.randomUUID().toString(), now, "name");
-            NameWasChanged nameWasChanged1 = new NameWasChanged(UUID.randomUUID().toString(), now.plusHours(1), "name2");
-            NameWasChanged nameWasChanged2 = new NameWasChanged(UUID.randomUUID().toString(), now.plusHours(2), "name3");
+            NameDefined nameDefined = new NameDefined(UUID.randomUUID().toString(), now, "name", "name");
+            NameWasChanged nameWasChanged1 = new NameWasChanged(UUID.randomUUID().toString(), now.plusHours(1), "name", "name2");
+            NameWasChanged nameWasChanged2 = new NameWasChanged(UUID.randomUUID().toString(), now.plusHours(2), "name", "name3");
 
             // When
             persist("name1", Flux.just(nameDefined, nameWasChanged1)).block();
@@ -1262,9 +1263,9 @@ public class ReactorMongoEventStoreTest {
             // Given
             LocalDateTime now = LocalDateTime.now();
             UUID uuid = UUID.randomUUID();
-            NameDefined nameDefined = new NameDefined(uuid.toString(), now, "name");
-            NameWasChanged nameWasChanged1 = new NameWasChanged(UUID.randomUUID().toString(), now.plusHours(1), "name2");
-            NameWasChanged nameWasChanged2 = new NameWasChanged(UUID.randomUUID().toString(), now.plusHours(2), "name3");
+            NameDefined nameDefined = new NameDefined(uuid.toString(), now, "name", "name");
+            NameWasChanged nameWasChanged1 = new NameWasChanged(UUID.randomUUID().toString(), now.plusHours(1), "name", "name2");
+            NameWasChanged nameWasChanged2 = new NameWasChanged(UUID.randomUUID().toString(), now.plusHours(2), "name", "name3");
 
             // When
             persist("name1", Flux.just(nameDefined, nameWasChanged1)).block();
@@ -1279,9 +1280,9 @@ public class ReactorMongoEventStoreTest {
         void compose_filters_using_or() {
             // Given
             LocalDateTime now = LocalDateTime.now();
-            NameDefined nameDefined = new NameDefined(UUID.randomUUID().toString(), now, "name");
-            NameWasChanged nameWasChanged1 = new NameWasChanged(UUID.randomUUID().toString(), now.plusHours(1), "name2");
-            NameWasChanged nameWasChanged2 = new NameWasChanged(UUID.randomUUID().toString(), now.plusHours(2), "name3");
+            NameDefined nameDefined = new NameDefined(UUID.randomUUID().toString(), now, "name", "name");
+            NameWasChanged nameWasChanged1 = new NameWasChanged(UUID.randomUUID().toString(), now.plusHours(1), "name", "name2");
+            NameWasChanged nameWasChanged2 = new NameWasChanged(UUID.randomUUID().toString(), now.plusHours(2), "name", "name3");
 
             // When
             persist("name1", Flux.just(nameDefined, nameWasChanged1)).block();
@@ -1296,9 +1297,9 @@ public class ReactorMongoEventStoreTest {
         void query_filter_by_subject() {
             // Given
             LocalDateTime now = LocalDateTime.now();
-            NameDefined nameDefined = new NameDefined(UUID.randomUUID().toString(), now, "name");
-            NameWasChanged nameWasChanged1 = new NameWasChanged(UUID.randomUUID().toString(), now.plusHours(1), "name2");
-            NameWasChanged nameWasChanged2 = new NameWasChanged(UUID.randomUUID().toString(), now.plusHours(2), "name3");
+            NameDefined nameDefined = new NameDefined(UUID.randomUUID().toString(), now, "name", "name");
+            NameWasChanged nameWasChanged1 = new NameWasChanged(UUID.randomUUID().toString(), now.plusHours(1), "name", "name2");
+            NameWasChanged nameWasChanged2 = new NameWasChanged(UUID.randomUUID().toString(), now.plusHours(2), "name", "name3");
 
             // When
             persist("name1", Flux.just(nameDefined, nameWasChanged1)).block();
@@ -1313,9 +1314,9 @@ public class ReactorMongoEventStoreTest {
         void query_filter_by_data() {
             // Given
             LocalDateTime now = LocalDateTime.now();
-            NameDefined nameDefined = new NameDefined(UUID.randomUUID().toString(), now, "name");
-            NameWasChanged nameWasChanged1 = new NameWasChanged(UUID.randomUUID().toString(), now.plusHours(1), "name2");
-            NameWasChanged nameWasChanged2 = new NameWasChanged(UUID.randomUUID().toString(), now.plusHours(2), "name3");
+            NameDefined nameDefined = new NameDefined(UUID.randomUUID().toString(), now, "name", "name");
+            NameWasChanged nameWasChanged1 = new NameWasChanged(UUID.randomUUID().toString(), now.plusHours(1), "name", "name2");
+            NameWasChanged nameWasChanged2 = new NameWasChanged(UUID.randomUUID().toString(), now.plusHours(2), "name", "name3");
 
             // When
             persist("name1", Flux.just(nameDefined, nameWasChanged1)).block();
@@ -1330,10 +1331,10 @@ public class ReactorMongoEventStoreTest {
         void query_filter_by_cloud_event() {
             // Given
             LocalDateTime now = LocalDateTime.now();
-            NameDefined nameDefined = new NameDefined(UUID.randomUUID().toString(), now, "name");
+            NameDefined nameDefined = new NameDefined(UUID.randomUUID().toString(), now, "name", "name");
             String eventId = UUID.randomUUID().toString();
-            NameWasChanged nameWasChanged1 = new NameWasChanged(eventId, now.plusHours(1), "name2");
-            NameWasChanged nameWasChanged2 = new NameWasChanged(UUID.randomUUID().toString(), now.plusHours(2), "name3");
+            NameWasChanged nameWasChanged1 = new NameWasChanged(eventId, now.plusHours(1), "name", "name2");
+            NameWasChanged nameWasChanged2 = new NameWasChanged(UUID.randomUUID().toString(), now.plusHours(2), "name", "name3");
 
             // When
             persist("name1", Flux.just(nameDefined, nameWasChanged1)).block();
@@ -1348,9 +1349,9 @@ public class ReactorMongoEventStoreTest {
         void query_filter_by_type() {
             // Given
             LocalDateTime now = LocalDateTime.now();
-            NameDefined nameDefined = new NameDefined(UUID.randomUUID().toString(), now, "name");
-            NameWasChanged nameWasChanged1 = new NameWasChanged(UUID.randomUUID().toString(), now.plusHours(1), "name2");
-            NameWasChanged nameWasChanged2 = new NameWasChanged(UUID.randomUUID().toString(), now.plusHours(2), "name3");
+            NameDefined nameDefined = new NameDefined(UUID.randomUUID().toString(), now, "name", "name");
+            NameWasChanged nameWasChanged1 = new NameWasChanged(UUID.randomUUID().toString(), now.plusHours(1), "name", "name2");
+            NameWasChanged nameWasChanged2 = new NameWasChanged(UUID.randomUUID().toString(), now.plusHours(2), "name", "name3");
 
             // When
             persist("name1", Flux.just(nameDefined, nameWasChanged1)).block();
@@ -1365,9 +1366,9 @@ public class ReactorMongoEventStoreTest {
         void query_filter_by_data_schema() {
             // Given
             LocalDateTime now = LocalDateTime.now();
-            NameDefined nameDefined = new NameDefined(UUID.randomUUID().toString(), now, "name");
-            NameWasChanged nameWasChanged1 = new NameWasChanged(UUID.randomUUID().toString(), now.plusHours(1), "name2");
-            NameWasChanged nameWasChanged2 = new NameWasChanged(UUID.randomUUID().toString(), now.plusHours(2), "name3");
+            NameDefined nameDefined = new NameDefined(UUID.randomUUID().toString(), now, "name", "name");
+            NameWasChanged nameWasChanged1 = new NameWasChanged(UUID.randomUUID().toString(), now.plusHours(1), "name", "name2");
+            NameWasChanged nameWasChanged2 = new NameWasChanged(UUID.randomUUID().toString(), now.plusHours(2), "name", "name3");
 
             // When
             persist("name1", Flux.just(nameDefined, nameWasChanged1)).block();
@@ -1395,9 +1396,9 @@ public class ReactorMongoEventStoreTest {
         void query_filter_by_data_content_type() {
             // Given
             LocalDateTime now = LocalDateTime.now();
-            NameDefined nameDefined = new NameDefined(UUID.randomUUID().toString(), now, "name");
-            NameWasChanged nameWasChanged1 = new NameWasChanged(UUID.randomUUID().toString(), now.plusHours(1), "name2");
-            NameWasChanged nameWasChanged2 = new NameWasChanged(UUID.randomUUID().toString(), now.plusHours(2), "name3");
+            NameDefined nameDefined = new NameDefined(UUID.randomUUID().toString(), now, "name", "name");
+            NameWasChanged nameWasChanged1 = new NameWasChanged(UUID.randomUUID().toString(), now.plusHours(1), "name", "name2");
+            NameWasChanged nameWasChanged2 = new NameWasChanged(UUID.randomUUID().toString(), now.plusHours(2), "name", "name3");
 
             // When
             persist("name1", Flux.just(nameDefined, nameWasChanged1)).block();
@@ -1428,9 +1429,9 @@ public class ReactorMongoEventStoreTest {
             void sort_by_natural_asc() {
                 // Given
                 LocalDateTime now = LocalDateTime.now();
-                NameDefined nameDefined = new NameDefined(UUID.randomUUID().toString(), now, "name");
-                NameWasChanged nameWasChanged1 = new NameWasChanged(UUID.randomUUID().toString(), now.plusHours(-2), "name2");
-                NameWasChanged nameWasChanged2 = new NameWasChanged(UUID.randomUUID().toString(), now.plusHours(1), "name3");
+                NameDefined nameDefined = new NameDefined(UUID.randomUUID().toString(), now, "name", "name");
+                NameWasChanged nameWasChanged1 = new NameWasChanged(UUID.randomUUID().toString(), now.plusHours(-2), "name", "name2");
+                NameWasChanged nameWasChanged2 = new NameWasChanged(UUID.randomUUID().toString(), now.plusHours(1), "name", "name3");
 
                 // When
                 persist("name3", nameWasChanged1).block();
@@ -1446,9 +1447,9 @@ public class ReactorMongoEventStoreTest {
             void sort_by_natural_desc() {
                 // Given
                 LocalDateTime now = LocalDateTime.now();
-                NameDefined nameDefined = new NameDefined(UUID.randomUUID().toString(), now, "name");
-                NameWasChanged nameWasChanged1 = new NameWasChanged(UUID.randomUUID().toString(), now.plusHours(-2), "name2");
-                NameWasChanged nameWasChanged2 = new NameWasChanged(UUID.randomUUID().toString(), now.plusHours(1), "name3");
+                NameDefined nameDefined = new NameDefined(UUID.randomUUID().toString(), now, "name", "name");
+                NameWasChanged nameWasChanged1 = new NameWasChanged(UUID.randomUUID().toString(), now.plusHours(-2), "name", "name2");
+                NameWasChanged nameWasChanged2 = new NameWasChanged(UUID.randomUUID().toString(), now.plusHours(1), "name", "name3");
 
                 // When
                 persist("name3", nameWasChanged1).block();
@@ -1464,9 +1465,9 @@ public class ReactorMongoEventStoreTest {
             void sort_by_time_asc() {
                 // Given
                 LocalDateTime now = LocalDateTime.now();
-                NameDefined nameDefined = new NameDefined(UUID.randomUUID().toString(), now, "name");
-                NameWasChanged nameWasChanged1 = new NameWasChanged(UUID.randomUUID().toString(), now.plusHours(-2), "name2");
-                NameWasChanged nameWasChanged2 = new NameWasChanged(UUID.randomUUID().toString(), now.plusHours(1), "name3");
+                NameDefined nameDefined = new NameDefined(UUID.randomUUID().toString(), now, "name", "name");
+                NameWasChanged nameWasChanged1 = new NameWasChanged(UUID.randomUUID().toString(), now.plusHours(-2), "name", "name2");
+                NameWasChanged nameWasChanged2 = new NameWasChanged(UUID.randomUUID().toString(), now.plusHours(1), "name", "name3");
 
                 // When
                 persist("name3", nameWasChanged1).block();
@@ -1482,9 +1483,9 @@ public class ReactorMongoEventStoreTest {
             void sort_by_time_desc() {
                 // Given
                 LocalDateTime now = LocalDateTime.now();
-                NameDefined nameDefined = new NameDefined(UUID.randomUUID().toString(), now.plusHours(3), "name");
-                NameWasChanged nameWasChanged1 = new NameWasChanged(UUID.randomUUID().toString(), now.plusHours(-2), "name2");
-                NameWasChanged nameWasChanged2 = new NameWasChanged(UUID.randomUUID().toString(), now.plusHours(1), "name3");
+                NameDefined nameDefined = new NameDefined(UUID.randomUUID().toString(), now.plusHours(3), "name", "name");
+                NameWasChanged nameWasChanged1 = new NameWasChanged(UUID.randomUUID().toString(), now.plusHours(-2), "name", "name2");
+                NameWasChanged nameWasChanged2 = new NameWasChanged(UUID.randomUUID().toString(), now.plusHours(1), "name", "name3");
 
                 // When
                 persist("name3", nameWasChanged1).block();
@@ -1499,9 +1500,9 @@ public class ReactorMongoEventStoreTest {
             @Test
             void sort_by_time_desc_and_natural_descending() {
                 LocalDateTime now = LocalDateTime.now();
-                NameDefined nameDefined = new NameDefined(UUID.randomUUID().toString(), now, "name");
-                NameWasChanged nameWasChanged1 = new NameWasChanged(UUID.randomUUID().toString(), now, "name2");
-                NameWasChanged nameWasChanged2 = new NameWasChanged(UUID.randomUUID().toString(), now.plusHours(1), "name3");
+                NameDefined nameDefined = new NameDefined(UUID.randomUUID().toString(), now, "name", "name");
+                NameWasChanged nameWasChanged1 = new NameWasChanged(UUID.randomUUID().toString(), now, "name", "name2");
+                NameWasChanged nameWasChanged2 = new NameWasChanged(UUID.randomUUID().toString(), now.plusHours(1), "name", "name3");
 
                 // When
                 persist("name1", nameDefined).block();
@@ -1517,9 +1518,9 @@ public class ReactorMongoEventStoreTest {
             void sort_by_time_desc_and_natural_ascending() {
                 // Given
                 LocalDateTime now = LocalDateTime.now();
-                NameDefined nameDefined = new NameDefined(UUID.randomUUID().toString(), now, "name");
-                NameWasChanged nameWasChanged1 = new NameWasChanged(UUID.randomUUID().toString(), now, "name2");
-                NameWasChanged nameWasChanged2 = new NameWasChanged(UUID.randomUUID().toString(), now.plusHours(1), "name3");
+                NameDefined nameDefined = new NameDefined(UUID.randomUUID().toString(), now, "name", "name");
+                NameWasChanged nameWasChanged1 = new NameWasChanged(UUID.randomUUID().toString(), now, "name", "name2");
+                NameWasChanged nameWasChanged2 = new NameWasChanged(UUID.randomUUID().toString(), now.plusHours(1), "name", "name3");
 
                 // When
                 persist("name", nameDefined).block();
@@ -1535,9 +1536,9 @@ public class ReactorMongoEventStoreTest {
             @Test
             void sort_by_time_desc_and_other_field_descending() {
                 LocalDateTime now = LocalDateTime.now();
-                NameDefined nameDefined = new NameDefined(UUID.randomUUID().toString(), now, "name");
-                NameWasChanged nameWasChanged1 = new NameWasChanged(UUID.randomUUID().toString(), now, "name2");
-                NameWasChanged nameWasChanged2 = new NameWasChanged(UUID.randomUUID().toString(), now.plusHours(1), "name3");
+                NameDefined nameDefined = new NameDefined(UUID.randomUUID().toString(), now, "name", "name");
+                NameWasChanged nameWasChanged1 = new NameWasChanged(UUID.randomUUID().toString(), now, "name", "name2");
+                NameWasChanged nameWasChanged2 = new NameWasChanged(UUID.randomUUID().toString(), now.plusHours(1), "name", "name3");
 
                 // When
                 persist("name", nameDefined).block();
@@ -1553,9 +1554,9 @@ public class ReactorMongoEventStoreTest {
             void sort_by_time_desc_and_other_field_ascending() {
                 // Given
                 LocalDateTime now = LocalDateTime.now();
-                NameDefined nameDefined = new NameDefined(UUID.randomUUID().toString(), now, "name");
-                NameWasChanged nameWasChanged1 = new NameWasChanged(UUID.randomUUID().toString(), now, "name2");
-                NameWasChanged nameWasChanged2 = new NameWasChanged(UUID.randomUUID().toString(), now.plusHours(1), "name3");
+                NameDefined nameDefined = new NameDefined(UUID.randomUUID().toString(), now, "name", "name");
+                NameWasChanged nameWasChanged1 = new NameWasChanged(UUID.randomUUID().toString(), now, "name", "name2");
+                NameWasChanged nameWasChanged2 = new NameWasChanged(UUID.randomUUID().toString(), now.plusHours(1), "name", "name3");
 
                 // When
                 persist("name1", nameDefined).block();
@@ -1576,9 +1577,9 @@ public class ReactorMongoEventStoreTest {
             void query_filter_by_time_but_is_using_slow_string_comparison() {
                 // Given
                 LocalDateTime now = LocalDateTime.now();
-                NameDefined nameDefined = new NameDefined(UUID.randomUUID().toString(), now, "name");
-                NameWasChanged nameWasChanged1 = new NameWasChanged(UUID.randomUUID().toString(), now.plusHours(1), "name2");
-                NameWasChanged nameWasChanged2 = new NameWasChanged(UUID.randomUUID().toString(), now.plusHours(2), "name3");
+                NameDefined nameDefined = new NameDefined(UUID.randomUUID().toString(), now, "name", "name");
+                NameWasChanged nameWasChanged1 = new NameWasChanged(UUID.randomUUID().toString(), now.plusHours(1), "name", "name2");
+                NameWasChanged nameWasChanged2 = new NameWasChanged(UUID.randomUUID().toString(), now.plusHours(2), "name", "name3");
 
                 // When
                 persist("name1", Flux.just(nameDefined, nameWasChanged1)).block();
@@ -1593,9 +1594,9 @@ public class ReactorMongoEventStoreTest {
             void query_filter_by_time_range_is_wider_than_persisted_time_range() {
                 // Given
                 LocalDateTime now = LocalDateTime.now();
-                NameDefined nameDefined = new NameDefined(UUID.randomUUID().toString(), now, "name");
-                NameWasChanged nameWasChanged1 = new NameWasChanged(UUID.randomUUID().toString(), now.plusHours(1), "name2");
-                NameWasChanged nameWasChanged2 = new NameWasChanged(UUID.randomUUID().toString(), now.plusHours(2), "name3");
+                NameDefined nameDefined = new NameDefined(UUID.randomUUID().toString(), now, "name", "name");
+                NameWasChanged nameWasChanged1 = new NameWasChanged(UUID.randomUUID().toString(), now.plusHours(1), "name", "name2");
+                NameWasChanged nameWasChanged2 = new NameWasChanged(UUID.randomUUID().toString(), now.plusHours(2), "name", "name3");
 
                 // When
                 persist("name1", Flux.just(nameDefined, nameWasChanged1)).block();
@@ -1611,9 +1612,9 @@ public class ReactorMongoEventStoreTest {
             void query_filter_by_time_range_has_exactly_the_same_range_as_persisted_time_range_when_using_java_8() {
                 // Given
                 LocalDateTime now = LocalDateTime.now();
-                NameDefined nameDefined = new NameDefined(UUID.randomUUID().toString(), now, "name");
-                NameWasChanged nameWasChanged1 = new NameWasChanged(UUID.randomUUID().toString(), now.plusHours(1), "name2");
-                NameWasChanged nameWasChanged2 = new NameWasChanged(UUID.randomUUID().toString(), now.plusHours(2), "name3");
+                NameDefined nameDefined = new NameDefined(UUID.randomUUID().toString(), now, "name", "name");
+                NameWasChanged nameWasChanged1 = new NameWasChanged(UUID.randomUUID().toString(), now.plusHours(1), "name", "name2");
+                NameWasChanged nameWasChanged2 = new NameWasChanged(UUID.randomUUID().toString(), now.plusHours(2), "name", "name3");
 
                 // When
                 persist("name1", Flux.just(nameDefined, nameWasChanged1)).block();
@@ -1629,9 +1630,9 @@ public class ReactorMongoEventStoreTest {
             void query_filter_by_time_range_has_exactly_the_same_range_as_persisted_time_range_when_using_java_11_and_above() {
                 // Given
                 LocalDateTime now = LocalDateTime.now();
-                NameDefined nameDefined = new NameDefined(UUID.randomUUID().toString(), now, "name");
-                NameWasChanged nameWasChanged1 = new NameWasChanged(UUID.randomUUID().toString(), now.plusHours(1), "name2");
-                NameWasChanged nameWasChanged2 = new NameWasChanged(UUID.randomUUID().toString(), now.plusHours(2), "name3");
+                NameDefined nameDefined = new NameDefined(UUID.randomUUID().toString(), now, "name", "name");
+                NameWasChanged nameWasChanged1 = new NameWasChanged(UUID.randomUUID().toString(), now.plusHours(1), "name", "name2");
+                NameWasChanged nameWasChanged2 = new NameWasChanged(UUID.randomUUID().toString(), now.plusHours(2), "name", "name3");
 
                 // When
                 persist("name1", Flux.just(nameDefined, nameWasChanged1)).block();
@@ -1646,9 +1647,9 @@ public class ReactorMongoEventStoreTest {
             void query_filter_by_time_range_has_a_range_smaller_as_persisted_time_range() {
                 // Given
                 LocalDateTime now = LocalDateTime.now();
-                NameDefined nameDefined = new NameDefined(UUID.randomUUID().toString(), now, "name");
-                NameWasChanged nameWasChanged1 = new NameWasChanged(UUID.randomUUID().toString(), now.plusHours(1), "name2");
-                NameWasChanged nameWasChanged2 = new NameWasChanged(UUID.randomUUID().toString(), now.plusHours(2), "name3");
+                NameDefined nameDefined = new NameDefined(UUID.randomUUID().toString(), now, "name", "name");
+                NameWasChanged nameWasChanged1 = new NameWasChanged(UUID.randomUUID().toString(), now.plusHours(1), "name", "name2");
+                NameWasChanged nameWasChanged2 = new NameWasChanged(UUID.randomUUID().toString(), now.plusHours(2), "name", "name3");
 
                 // When
                 persist("name1", Flux.just(nameDefined, nameWasChanged1)).block();
@@ -1673,9 +1674,9 @@ public class ReactorMongoEventStoreTest {
             void query_filter_by_time_lt() {
                 // Given
                 LocalDateTime now = LocalDateTime.now();
-                NameDefined nameDefined = new NameDefined(UUID.randomUUID().toString(), now, "name");
-                NameWasChanged nameWasChanged1 = new NameWasChanged(UUID.randomUUID().toString(), now.plusHours(1), "name2");
-                NameWasChanged nameWasChanged2 = new NameWasChanged(UUID.randomUUID().toString(), now.plusHours(2), "name3");
+                NameDefined nameDefined = new NameDefined(UUID.randomUUID().toString(), now, "name", "name");
+                NameWasChanged nameWasChanged1 = new NameWasChanged(UUID.randomUUID().toString(), now.plusHours(1), "name", "name2");
+                NameWasChanged nameWasChanged2 = new NameWasChanged(UUID.randomUUID().toString(), now.plusHours(2), "name", "name3");
 
                 // When
                 persist("name1", Flux.just(nameDefined, nameWasChanged1)).block();
@@ -1690,9 +1691,9 @@ public class ReactorMongoEventStoreTest {
             void query_filter_by_time_range_is_wider_than_persisted_time_range() {
                 // Given
                 LocalDateTime now = LocalDateTime.now();
-                NameDefined nameDefined = new NameDefined(UUID.randomUUID().toString(), now, "name");
-                NameWasChanged nameWasChanged1 = new NameWasChanged(UUID.randomUUID().toString(), now.plusHours(1), "name2");
-                NameWasChanged nameWasChanged2 = new NameWasChanged(UUID.randomUUID().toString(), now.plusHours(2), "name3");
+                NameDefined nameDefined = new NameDefined(UUID.randomUUID().toString(), now, "name", "name");
+                NameWasChanged nameWasChanged1 = new NameWasChanged(UUID.randomUUID().toString(), now.plusHours(1), "name", "name2");
+                NameWasChanged nameWasChanged2 = new NameWasChanged(UUID.randomUUID().toString(), now.plusHours(2), "name", "name3");
 
                 // When
                 persist("name1", Flux.just(nameDefined, nameWasChanged1)).block();
@@ -1707,9 +1708,9 @@ public class ReactorMongoEventStoreTest {
             void query_filter_by_time_range_has_exactly_the_same_range_as_persisted_time_range() {
                 // Given
                 LocalDateTime now = LocalDateTime.now();
-                NameDefined nameDefined = new NameDefined(UUID.randomUUID().toString(), now, "name");
-                NameWasChanged nameWasChanged1 = new NameWasChanged(UUID.randomUUID().toString(), now.plusHours(1), "name2");
-                NameWasChanged nameWasChanged2 = new NameWasChanged(UUID.randomUUID().toString(), now.plusHours(2), "name3");
+                NameDefined nameDefined = new NameDefined(UUID.randomUUID().toString(), now, "name", "name");
+                NameWasChanged nameWasChanged1 = new NameWasChanged(UUID.randomUUID().toString(), now.plusHours(1), "name", "name2");
+                NameWasChanged nameWasChanged2 = new NameWasChanged(UUID.randomUUID().toString(), now.plusHours(2), "name", "name3");
 
                 // When
                 persist("name1", Flux.just(nameDefined, nameWasChanged1)).block();
@@ -1724,9 +1725,9 @@ public class ReactorMongoEventStoreTest {
             void query_filter_by_time_range_has_a_range_smaller_as_persisted_time_range() {
                 // Given
                 LocalDateTime now = LocalDateTime.now();
-                NameDefined nameDefined = new NameDefined(UUID.randomUUID().toString(), now, "name");
-                NameWasChanged nameWasChanged1 = new NameWasChanged(UUID.randomUUID().toString(), now.plusHours(1), "name2");
-                NameWasChanged nameWasChanged2 = new NameWasChanged(UUID.randomUUID().toString(), now.plusHours(2), "name3");
+                NameDefined nameDefined = new NameDefined(UUID.randomUUID().toString(), now, "name", "name");
+                NameWasChanged nameWasChanged1 = new NameWasChanged(UUID.randomUUID().toString(), now.plusHours(1), "name", "name2");
+                NameWasChanged nameWasChanged2 = new NameWasChanged(UUID.randomUUID().toString(), now.plusHours(2), "name", "name3");
 
                 // When
                 persist("name1", Flux.just(nameDefined, nameWasChanged1)).block();
@@ -1742,6 +1743,7 @@ public class ReactorMongoEventStoreTest {
 
     private VersionAndEvents deserialize(Mono<EventStream<CloudEvent>> eventStreamMono) {
         return eventStreamMono
+                .publishOn(Schedulers.boundedElastic())
                 .map(es -> {
                     List<DomainEvent> events = es.events()
                             .map(deserialize())

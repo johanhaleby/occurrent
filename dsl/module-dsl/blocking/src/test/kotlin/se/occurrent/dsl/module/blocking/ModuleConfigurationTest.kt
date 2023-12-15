@@ -55,8 +55,8 @@ class ModuleConfigurationTest {
         // Module Configuration
         val module = module<NameCommand, DomainEvent>(cloudEventConverter) {
             commands(dispatchTo(applicationService)) {
-                command(DefineName::id, Name::defineNameFromCommand)
-                command(ChangeName::id, Name::changeNameFromCommand)
+                command(DefineName::commandId, Name::defineNameFromCommand)
+                command(ChangeName::commandId, Name::changeNameFromCommand)
             }
             subscriptions(subscriptionModel) {
                 subscribe<NameDefined> { e ->
@@ -75,8 +75,8 @@ class ModuleConfigurationTest {
         repeat(10) { count ->
             val streamId = count.toString()
             module.dispatch(
-                DefineName(streamId, LocalDateTime.now(), "Johan:$streamId"),
-                ChangeName(streamId, LocalDateTime.now(), "Eric:$streamId")
+                DefineName(streamId, LocalDateTime.now(), streamId, "Johan:$streamId"),
+                ChangeName(streamId, LocalDateTime.now(), streamId, "Eric:$streamId")
             )
         }
 

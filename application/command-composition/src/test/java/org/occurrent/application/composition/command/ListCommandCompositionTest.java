@@ -52,7 +52,7 @@ public class ListCommandCompositionTest {
         LocalDateTime now = LocalDateTime.now();
 
         // When
-        applicationService.executeListCommand("name1", ListCommandComposition.composeCommands(PartialFunctionApplication.partial(Name::defineName, eventId1, now, "My name"), PartialFunctionApplication.partial(Name::changeName, eventId2, now, "My name 2")));
+        applicationService.executeListCommand("name1", ListCommandComposition.composeCommands(PartialFunctionApplication.partial(Name::defineName, eventId1, now, "name", "My name"), PartialFunctionApplication.partial(Name::changeName, eventId2, now, "name", "My name 2")));
 
         // Then
         List<DomainEvent> domainEvents = eventStore.read("name1").events().map(applicationService::convertCloudEventToDomainEvent).collect(Collectors.toList());
@@ -63,13 +63,13 @@ public class ListCommandCompositionTest {
     @Test
     void compose_list_commands_with_partial_application_does_not_return_previous_events() {
         // Given
-        List<Function<List<DomainEvent>, List<DomainEvent>>> fns = Arrays.asList(e -> Collections.singletonList(new NameDefined("eventId1", new Date(), "name1")), e -> Collections.singletonList(new NameWasChanged("eventId2", new Date(), "name2")));
+        List<Function<List<DomainEvent>, List<DomainEvent>>> fns = Arrays.asList(e -> Collections.singletonList(new NameDefined("eventId1", new Date(), "name", "name1")), e -> Collections.singletonList(new NameWasChanged("eventId2", new Date(), "name", "name2")));
 
         // When
         Function<List<DomainEvent>, List<DomainEvent>> composedCommand = ListCommandComposition.composeCommands(fns);
 
         // Then
-        List<DomainEvent> domainEvents = composedCommand.apply(Arrays.asList(new NameDefined("eventId3", new Date(), "name3"), new NameDefined("eventId4", new Date(), "name4")));
+        List<DomainEvent> domainEvents = composedCommand.apply(Arrays.asList(new NameDefined("eventId3", new Date(), "name", "name3"), new NameDefined("eventId4", new Date(), "name", "name4")));
         assertThat(domainEvents).hasSize(2);
         assertThat(domainEvents).extracting(DomainEvent::eventId).containsExactly("eventId1", "eventId2");
     }
@@ -79,13 +79,13 @@ public class ListCommandCompositionTest {
         // Given
         List<Function<List<DomainEvent>, List<DomainEvent>>> fns = Arrays.asList(e -> {
             if (e.size() == 2) {
-                return Collections.singletonList(new NameDefined("eventId1", new Date(), "name1"));
+                return Collections.singletonList(new NameDefined("eventId1", new Date(), "name", "name1"));
             } else {
                 return Collections.emptyList();
             }
         }, e -> {
             if (e.size() == 3) {
-                return Collections.singletonList(new NameWasChanged("eventId2", new Date(), "name2"));
+                return Collections.singletonList(new NameWasChanged("eventId2", new Date(), "name", "name2"));
             } else {
                 return Collections.emptyList();
             }
@@ -95,7 +95,7 @@ public class ListCommandCompositionTest {
         Function<List<DomainEvent>, List<DomainEvent>> composedCommand = ListCommandComposition.composeCommands(fns);
 
         // Then
-        List<DomainEvent> domainEvents = composedCommand.apply(Arrays.asList(new NameDefined("eventId3", new Date(), "name3"), new NameDefined("eventId4", new Date(), "name4")));
+        List<DomainEvent> domainEvents = composedCommand.apply(Arrays.asList(new NameDefined("eventId3", new Date(), "name", "name3"), new NameDefined("eventId4", new Date(), "name", "name4")));
         assertThat(domainEvents).hasSize(2);
         assertThat(domainEvents).extracting(DomainEvent::eventId).containsExactly("eventId1", "eventId2");
     }

@@ -60,8 +60,8 @@ class DomainEventQueriesKotlinTest {
         val time = LocalDateTime.now()
         applicationService.execute(
             "stream", composeCommands(
-                Name::defineName.partial("eventId1", time, "Some Doe"),
-                Name::changeName.partial("eventId2", time, "Jane Doe")
+                Name::defineName.partial("eventId1", time, "name", "Some Doe"),
+                Name::changeName.partial("eventId2", time, "name", "Jane Doe")
             )
         )
 
@@ -71,7 +71,7 @@ class DomainEventQueriesKotlinTest {
         // Then
         assertAll(
             { assertThat(events).hasSize(1) },
-            { assertThat(events.stream().findFirst()).hasValue(NameWasChanged("eventId2", time, "Jane Doe")) }
+            { assertThat(events.stream().findFirst()).hasValue(NameWasChanged("eventId2", time, "name", "Jane Doe")) }
         )
     }
 
@@ -81,8 +81,8 @@ class DomainEventQueriesKotlinTest {
         val time = LocalDateTime.now()
         applicationService.execute(
             "stream", composeCommands(
-                Name::defineName.partial("eventId1", time, "Some Doe"),
-                Name::changeName.partial("eventId2", time, "Jane Doe")
+                Name::defineName.partial("eventId1", time, "name", "Some Doe"),
+                Name::changeName.partial("eventId2", time, "name", "Jane Doe")
             )
         )
 
@@ -93,7 +93,7 @@ class DomainEventQueriesKotlinTest {
         val events: List<NameWasChanged> = sequence.toList()
         assertAll(
             { assertThat(events).hasSize(1) },
-            { assertThat(events.stream().findFirst()).hasValue(NameWasChanged("eventId2", time, "Jane Doe")) }
+            { assertThat(events.stream().findFirst()).hasValue(NameWasChanged("eventId2", time, "name", "Jane Doe")) }
         )
     }
 
@@ -103,8 +103,8 @@ class DomainEventQueriesKotlinTest {
         val time = LocalDateTime.now()
         applicationService.execute(
             "stream", composeCommands(
-                Name::defineName.partial("eventId1", time, "Some Doe"),
-                Name::changeName.partial("eventId2", time, "Jane Doe")
+                Name::defineName.partial("eventId1", time, "name", "Some Doe"),
+                Name::changeName.partial("eventId2", time, "name", "Jane Doe")
             )
         )
 
@@ -112,7 +112,7 @@ class DomainEventQueriesKotlinTest {
         val event = domainEventQueries.queryOne<NameWasChanged>(type(NameWasChanged::class.qualifiedName))
 
         // Then
-        assertThat(event).isEqualTo(NameWasChanged("eventId2", time, "Jane Doe"))
+        assertThat(event).isEqualTo(NameWasChanged("eventId2", time, "name", "Jane Doe"))
     }
 
     @Test
@@ -121,8 +121,8 @@ class DomainEventQueriesKotlinTest {
         val time = LocalDateTime.now()
         applicationService.execute(
             "stream", composeCommands(
-                Name::defineName.partial("eventId1", time, "Some Doe"),
-                Name::changeName.partial("eventId2", time, "Jane Doe")
+                Name::defineName.partial("eventId1", time, "name", "Some Doe"),
+                Name::changeName.partial("eventId2", time, "name", "Jane Doe")
             )
         )
 
@@ -130,7 +130,7 @@ class DomainEventQueriesKotlinTest {
         val event = domainEventQueries.queryOne<NameWasChanged>()
 
         // Then
-        assertThat(event).isEqualTo(NameWasChanged("eventId2", time, "Jane Doe"))
+        assertThat(event).isEqualTo(NameWasChanged("eventId2", time, "name", "Jane Doe"))
     }
 
 
@@ -140,8 +140,8 @@ class DomainEventQueriesKotlinTest {
         val time = LocalDateTime.now()
         applicationService.execute(
             "stream", composeCommands(
-                Name::defineName.partial("eventId1", time, "Some Doe"),
-                Name::changeName.partial("eventId2", time, "Jane Doe")
+                Name::defineName.partial("eventId1", time, "name", "Some Doe"),
+                Name::changeName.partial("eventId2", time, "name", "Jane Doe")
             )
         )
 
@@ -149,7 +149,7 @@ class DomainEventQueriesKotlinTest {
         val event = domainEventQueries.queryOne(NameWasChanged::class)
 
         // Then
-        assertThat(event).isEqualTo(NameWasChanged("eventId2", time, "Jane Doe"))
+        assertThat(event).isEqualTo(NameWasChanged("eventId2", time, "name", "Jane Doe"))
     }
 
     @Test
@@ -158,8 +158,8 @@ class DomainEventQueriesKotlinTest {
         val time = LocalDateTime.now()
         applicationService.execute(
             "stream", composeCommands(
-                Name::defineName.partial("eventId1", time, "Some Doe"),
-                Name::changeName.partial("eventId2", time, "Jane Doe")
+                Name::defineName.partial("eventId1", time, "name", "Some Doe"),
+                Name::changeName.partial("eventId2", time, "name", "Jane Doe")
             )
         )
 
@@ -170,7 +170,7 @@ class DomainEventQueriesKotlinTest {
         val events: List<NameWasChanged> = sequence.toList()
         assertAll(
             { assertThat(events).hasSize(1) },
-            { assertThat(events.stream().findFirst()).hasValue(NameWasChanged("eventId2", time, "Jane Doe")) }
+            { assertThat(events.stream().findFirst()).hasValue(NameWasChanged("eventId2", time, "name", "Jane Doe")) }
         )
     }
 
@@ -180,8 +180,8 @@ class DomainEventQueriesKotlinTest {
         val time = LocalDateTime.now()
         applicationService.execute(
             "stream", composeCommands(
-                Name::defineName.partial("eventId1", time, "Some Doe"),
-                Name::changeName.partial("eventId2", time, "Jane Doe")
+                Name::defineName.partial("eventId1", time, "name", "Some Doe"),
+                Name::changeName.partial("eventId2", time, "name", "Jane Doe")
             )
         )
 
@@ -202,9 +202,9 @@ class DomainEventQueriesKotlinTest {
         val time = LocalDateTime.now()
         applicationService.execute(
             "stream", composeCommands(
-                Name::defineName.partial("eventId1", time, "Some Doe"),
-                Name::changeName.partial("eventId2", time, "Jane Doe"),
-                Name::changeName.partial("eventId3", time, "Jane Doe2"),
+                Name::defineName.partial("eventId1", time, "name", "Some Doe"),
+                Name::changeName.partial("eventId2", time, "name", "Jane Doe"),
+                Name::changeName.partial("eventId3", time, "name", "Jane Doe2"),
             )
         )
 
@@ -212,6 +212,6 @@ class DomainEventQueriesKotlinTest {
         val nameWasChanged = domainEventQueries.queryOne<NameWasChanged>(sortBy = SortBy.natural(DESCENDING))
 
         // Then
-        assertThat(nameWasChanged).isEqualTo(NameWasChanged("eventId3", time, "Jane Doe2"))
+        assertThat(nameWasChanged).isEqualTo(NameWasChanged("eventId3", time, "name", "Jane Doe2"))
     }
 }

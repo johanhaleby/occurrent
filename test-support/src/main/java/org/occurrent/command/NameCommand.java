@@ -19,6 +19,8 @@ package org.occurrent.command;
 import java.time.LocalDateTime;
 
 public sealed interface NameCommand permits ChangeName, DefineName {
-    String id();
+    String commandId();
+    String userId();
+
     LocalDateTime time();
 }

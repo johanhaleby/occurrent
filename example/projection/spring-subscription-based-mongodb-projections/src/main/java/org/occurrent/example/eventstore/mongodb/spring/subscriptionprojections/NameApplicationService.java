@@ -35,7 +35,7 @@ public class NameApplicationService {
     }
 
     public void defineName(UUID streamId, LocalDateTime time, String name) {
-        List<DomainEvent> events = Name.defineTheName(UUID.randomUUID().toString(), time, name);
+        List<DomainEvent> events = Name.defineTheName(UUID.randomUUID().toString(), time, streamId.toString(), name);
         eventStore.append(streamId, events);
     }
 
@@ -43,7 +43,7 @@ public class NameApplicationService {
         EventStream<DomainEvent> eventStream = eventStore.loadEventStream(streamId);
         List<DomainEvent> events = eventStream.eventList();
 
-        List<DomainEvent> newEvents = Name.changeName(events, UUID.randomUUID().toString(), time, name);
+        List<DomainEvent> newEvents = Name.changeName(events, UUID.randomUUID().toString(), time, streamId.toString(), name);
 
         eventStore.append(streamId, newEvents);
     }

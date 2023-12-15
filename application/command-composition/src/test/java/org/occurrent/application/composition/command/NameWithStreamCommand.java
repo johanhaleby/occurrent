@@ -28,12 +28,12 @@ import java.util.stream.Stream;
 
 class NameWithStreamCommand {
 
-    static Stream<DomainEvent> defineName(Stream<DomainEvent> __, String eventId, LocalDateTime time, String name) {
-        return Stream.of(new NameDefined(eventId, TimeConversion.toDate(time), name));
+    static Stream<DomainEvent> defineName(Stream<DomainEvent> __, String eventId, LocalDateTime time, String userId, String name) {
+        return Stream.of(new NameDefined(eventId, TimeConversion.toDate(time), userId, name));
     }
 
 
-    static Stream<DomainEvent> changeName(Stream<DomainEvent> events, String eventId, LocalDateTime time, String newName) {
+    static Stream<DomainEvent> changeName(Stream<DomainEvent> events, String eventId, LocalDateTime time, String userId, String newName) {
         Predicate<DomainEvent> isInstanceOfNameDefined = NameDefined.class::isInstance;
         Predicate<DomainEvent> isInstanceOfNameWasChanged = NameWasChanged.class::isInstance;
 
@@ -46,6 +46,6 @@ class NameWithStreamCommand {
         } else if (currentName.isEmpty()) {
             throw new IllegalArgumentException("Cannot change name since it is currently undefined");
         }
-        return Stream.of(new NameWasChanged(eventId, TimeConversion.toDate(time), newName));
+        return Stream.of(new NameWasChanged(eventId, TimeConversion.toDate(time), userId, newName));
     }
 }

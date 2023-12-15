@@ -24,10 +24,10 @@ import java.time.LocalDateTime
 
 object NameWithSequenceCommand {
 
-    fun defineName(@Suppress("UNUSED_PARAMETER") events: Sequence<DomainEvent>, eventId: String, time: LocalDateTime, name: String): Sequence<DomainEvent> =
-        sequenceOf(NameDefined(eventId, time, name))
+    fun defineName(@Suppress("UNUSED_PARAMETER") events: Sequence<DomainEvent>, eventId: String, time: LocalDateTime, userId: String, name: String): Sequence<DomainEvent> =
+        sequenceOf(NameDefined(eventId, time, userId, name))
 
-    fun changeName(events: Sequence<DomainEvent>, eventId: String, time: LocalDateTime, newName: String): Sequence<DomainEvent> {
+    fun changeName(events: Sequence<DomainEvent>, eventId: String, time: LocalDateTime, userId: String, newName: String): Sequence<DomainEvent> {
         val currentName = events.fold("") { _, e ->
             when (e) {
                 is NameDefined -> e.name()
@@ -39,7 +39,7 @@ object NameWithSequenceCommand {
         return when {
             currentName == "John Doe" -> throw IllegalArgumentException("Cannot change name from John Doe since this is the ultimate name")
             currentName.isBlank() -> throw IllegalArgumentException("Cannot change name since it is currently undefined")
-            else -> sequenceOf(NameWasChanged(eventId, time, newName))
+            else -> sequenceOf(NameWasChanged(eventId, time, userId, newName))
         }
     }
 }

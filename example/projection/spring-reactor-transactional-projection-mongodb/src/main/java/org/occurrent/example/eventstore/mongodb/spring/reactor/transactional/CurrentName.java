@@ -21,33 +21,34 @@ import org.springframework.data.annotation.TypeAlias;
 import org.springframework.data.mongodb.core.mapping.Document;
 
 import java.util.Objects;
+import java.util.StringJoiner;
 
 @Document(collection = "current-name-projection")
 @TypeAlias("CurrentName")
 public class CurrentName {
     @Id
-    private String id;
+    private String userId;
     private String name;
 
     @SuppressWarnings("unused")
     CurrentName() {
     }
 
-    CurrentName(String id) {
-        this(id, null);
+    CurrentName(String userId) {
+        this(userId, null);
     }
 
-    public CurrentName(String id, String name) {
-        this.id = id;
+    public CurrentName(String userId, String name) {
+        this.userId = userId;
         this.name = name;
     }
 
-    public String getId() {
-        return id;
+    public String getUserId() {
+        return userId;
     }
 
-    void setId(String id) {
-        this.id = id;
+    void setUserId(String userId) {
+        this.userId = userId;
     }
 
     public String getName() {
@@ -66,22 +67,20 @@ public class CurrentName {
     @Override
     public boolean equals(Object o) {
         if (this == o) return true;
-        if (!(o instanceof CurrentName)) return false;
-        CurrentName that = (CurrentName) o;
-        return Objects.equals(id, that.id) &&
-                Objects.equals(name, that.name);
+        if (!(o instanceof CurrentName that)) return false;
+        return Objects.equals(userId, that.userId) && Objects.equals(name, that.name);
     }
 
     @Override
     public int hashCode() {
-        return Objects.hash(id, name);
+        return Objects.hash(userId, name);
     }
 
     @Override
     public String toString() {
-        return "CurrentName{" +
-                "id='" + id + '\'' +
-                ", name='" + name + '\'' +
-                '}';
+        return new StringJoiner(", ", CurrentName.class.getSimpleName() + "[", "]")
+                .add("userId='" + userId + "'")
+                .add("name='" + name + "'")
+                .toString();
     }
 }

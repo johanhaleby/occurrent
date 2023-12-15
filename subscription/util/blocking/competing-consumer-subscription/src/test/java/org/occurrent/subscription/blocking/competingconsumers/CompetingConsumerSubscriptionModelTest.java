@@ -105,7 +105,7 @@ class CompetingConsumerSubscriptionModelTest {
         competingConsumerSubscriptionModel1.subscribe(subscriptionId, cloudEvents::add).waitUntilStarted();
         competingConsumerSubscriptionModel2.subscribe(subscriptionId, cloudEvents::add).waitUntilStarted();
 
-        NameDefined nameDefined = new NameDefined("eventId", LocalDateTime.of(2021, 2, 26, 14, 15, 16), "my name");
+        NameDefined nameDefined = new NameDefined("eventId", LocalDateTime.of(2021, 2, 26, 14, 15, 16), "name", "my name");
 
         // When
         eventStore.write("streamId", serialize(nameDefined));
@@ -127,8 +127,8 @@ class CompetingConsumerSubscriptionModelTest {
         competingConsumerSubscriptionModel1.subscribe(subscriptionId, cloudEvents::add).waitUntilStarted();
         competingConsumerSubscriptionModel2.subscribe(subscriptionId, cloudEvents::add).waitUntilStarted();
 
-        NameDefined nameDefined = new NameDefined("eventId1", LocalDateTime.of(2021, 2, 26, 14, 15, 16), "my name");
-        NameWasChanged nameWasChanged = new NameWasChanged("eventId2", LocalDateTime.of(2021, 2, 26, 14, 15, 16), "my name");
+        NameDefined nameDefined = new NameDefined("eventId1", LocalDateTime.of(2021, 2, 26, 14, 15, 16), "name", "my name");
+        NameWasChanged nameWasChanged = new NameWasChanged("eventId2", LocalDateTime.of(2021, 2, 26, 14, 15, 16), "name", "my name");
 
         // When
         eventStore.write("streamId", serialize(nameDefined));
@@ -154,9 +154,9 @@ class CompetingConsumerSubscriptionModelTest {
         competingConsumerSubscriptionModel1.subscribe(subscriptionId, cloudEvents::add).waitUntilStarted();
         competingConsumerSubscriptionModel2.subscribe(subscriptionId, cloudEvents::add).waitUntilStarted(); // Subscription in SM2 is now in waiting state
 
-        NameDefined nameDefined = new NameDefined("1", LocalDateTime.of(2021, 2, 26, 14, 15, 16), "my name");
-        NameWasChanged nameWasChanged1 = new NameWasChanged("2", LocalDateTime.of(2021, 2, 26, 14, 15, 17), "my name1");
-        NameWasChanged nameWasChanged2 = new NameWasChanged("3", LocalDateTime.of(2021, 2, 26, 14, 15, 17), "my name2");
+        NameDefined nameDefined = new NameDefined("1", LocalDateTime.of(2021, 2, 26, 14, 15, 16), "name", "my name");
+        NameWasChanged nameWasChanged1 = new NameWasChanged("2", LocalDateTime.of(2021, 2, 26, 14, 15, 17), "name", "my name1");
+        NameWasChanged nameWasChanged2 = new NameWasChanged("3", LocalDateTime.of(2021, 2, 26, 14, 15, 17), "name", "my name2");
 
         // When
         eventStore.write("streamId", serialize(nameDefined));
@@ -188,9 +188,9 @@ class CompetingConsumerSubscriptionModelTest {
         competingConsumerSubscriptionModel1.subscribe("subscriber1", subscriptionId, null, StartAt.subscriptionModelDefault(), cloudEvents::add).waitUntilStarted();
         competingConsumerSubscriptionModel2.subscribe("subscriber2", subscriptionId, null, StartAt.subscriptionModelDefault(), cloudEvents::add).waitUntilStarted();
 
-        NameDefined nameDefined = new NameDefined("eventId1", LocalDateTime.of(2021, 2, 26, 14, 15, 16), "my name");
-        NameWasChanged nameWasChanged1 = new NameWasChanged("eventId2", LocalDateTime.of(2021, 2, 26, 14, 15, 17), "my name1");
-        NameWasChanged nameWasChanged2 = new NameWasChanged("eventId3", LocalDateTime.of(2021, 2, 26, 14, 15, 18), "my name2");
+        NameDefined nameDefined = new NameDefined("eventId1", LocalDateTime.of(2021, 2, 26, 14, 15, 16), "name", "my name");
+        NameWasChanged nameWasChanged1 = new NameWasChanged("eventId2", LocalDateTime.of(2021, 2, 26, 14, 15, 17), "name", "my name1");
+        NameWasChanged nameWasChanged2 = new NameWasChanged("eventId3", LocalDateTime.of(2021, 2, 26, 14, 15, 18), "name", "my name2");
 
         // When
         eventStore.write("streamId", serialize(nameDefined));
@@ -222,8 +222,8 @@ class CompetingConsumerSubscriptionModelTest {
         competingConsumerSubscriptionModel1.subscribe(subscriptionId, cloudEvents::add).waitUntilStarted();
         competingConsumerSubscriptionModel2.subscribe(subscriptionId, cloudEvents::add).waitUntilStarted();
 
-        NameDefined nameDefined = new NameDefined("eventId1", LocalDateTime.of(2021, 2, 26, 14, 15, 16), "my name");
-        NameWasChanged nameWasChanged = new NameWasChanged("eventId2", LocalDateTime.of(2021, 2, 26, 14, 15, 16), "my name");
+        NameDefined nameDefined = new NameDefined("eventId1", LocalDateTime.of(2021, 2, 26, 14, 15, 16), "name", "my name");
+        NameWasChanged nameWasChanged = new NameWasChanged("eventId2", LocalDateTime.of(2021, 2, 26, 14, 15, 16), "name", "my name");
 
         // When
         eventStore.write("streamId", serialize(nameDefined));
@@ -249,9 +249,9 @@ class CompetingConsumerSubscriptionModelTest {
         competingConsumerSubscriptionModel1.subscribe(subscriptionId, cloudEvents::add).waitUntilStarted();
         competingConsumerSubscriptionModel2.subscribe(subscriptionId, cloudEvents::add).waitUntilStarted();
 
-        NameDefined nameDefined = new NameDefined("1", LocalDateTime.of(2021, 2, 26, 14, 15, 16), "my name");
-        NameWasChanged nameWasChanged1 = new NameWasChanged("2", LocalDateTime.of(2021, 2, 26, 14, 15, 17), "my name2");
-        NameWasChanged nameWasChanged2 = new NameWasChanged("3", LocalDateTime.of(2021, 2, 26, 14, 15, 18), "my name3");
+        NameDefined nameDefined = new NameDefined("1", LocalDateTime.of(2021, 2, 26, 14, 15, 16), "name", "my name");
+        NameWasChanged nameWasChanged1 = new NameWasChanged("2", LocalDateTime.of(2021, 2, 26, 14, 15, 17), "name", "my name2");
+        NameWasChanged nameWasChanged2 = new NameWasChanged("3", LocalDateTime.of(2021, 2, 26, 14, 15, 18), "name", "my name3");
 
         // When
         eventStore.write("streamId", serialize(nameDefined));
@@ -282,9 +282,9 @@ class CompetingConsumerSubscriptionModelTest {
         competingConsumerSubscriptionModel1.subscribe(subscriptionId, cloudEvents::add).waitUntilStarted();
         competingConsumerSubscriptionModel2.subscribe(subscriptionId, cloudEvents::add).waitUntilStarted();
 
-        NameDefined nameDefined = new NameDefined("1", LocalDateTime.of(2021, 2, 26, 14, 15, 16), "my name");
-        NameWasChanged nameWasChanged1 = new NameWasChanged("2", LocalDateTime.of(2021, 2, 26, 14, 15, 17), "my name2");
-        NameWasChanged nameWasChanged2 = new NameWasChanged("3", LocalDateTime.of(2021, 2, 26, 14, 15, 18), "my name3");
+        NameDefined nameDefined = new NameDefined("1", LocalDateTime.of(2021, 2, 26, 14, 15, 16), "name", "my name");
+        NameWasChanged nameWasChanged1 = new NameWasChanged("2", LocalDateTime.of(2021, 2, 26, 14, 15, 17), "name", "my name2");
+        NameWasChanged nameWasChanged2 = new NameWasChanged("3", LocalDateTime.of(2021, 2, 26, 14, 15, 18), "name", "my name3");
 
         // When
         eventStore.write("streamId", serialize(nameDefined));
@@ -321,11 +321,11 @@ class CompetingConsumerSubscriptionModelTest {
             cloudEvents.add(tuple("2", e));
         }).waitUntilStarted();
 
-        NameDefined nameDefined = new NameDefined("1", LocalDateTime.of(2021, 2, 26, 14, 15, 16), "my name");
-        NameWasChanged nameWasChanged1 = new NameWasChanged("2", LocalDateTime.of(2021, 2, 26, 14, 15, 17), "my name2");
-        NameWasChanged nameWasChanged2 = new NameWasChanged("3", LocalDateTime.of(2021, 2, 26, 14, 15, 18), "my name3");
-        NameWasChanged nameWasChanged3 = new NameWasChanged("4", LocalDateTime.of(2021, 2, 26, 14, 15, 19), "my name4");
-        NameWasChanged nameWasChanged4 = new NameWasChanged("5", LocalDateTime.of(2021, 2, 26, 14, 15, 20), "my name5");
+        NameDefined nameDefined = new NameDefined("1", LocalDateTime.of(2021, 2, 26, 14, 15, 16), "name", "my name");
+        NameWasChanged nameWasChanged1 = new NameWasChanged("2", LocalDateTime.of(2021, 2, 26, 14, 15, 17), "name", "my name2");
+        NameWasChanged nameWasChanged2 = new NameWasChanged("3", LocalDateTime.of(2021, 2, 26, 14, 15, 18), "name", "my name3");
+        NameWasChanged nameWasChanged3 = new NameWasChanged("4", LocalDateTime.of(2021, 2, 26, 14, 15, 19), "name", "my name4");
+        NameWasChanged nameWasChanged4 = new NameWasChanged("5", LocalDateTime.of(2021, 2, 26, 14, 15, 20), "name", "my name5");
 
         // When
         eventStore.write("streamId", serialize(nameDefined));
@@ -381,11 +381,11 @@ class CompetingConsumerSubscriptionModelTest {
             cloudEvents.add(tuple("2", e));
         }).waitUntilStarted();
 
-        NameDefined nameDefined = new NameDefined("1", LocalDateTime.of(2021, 2, 26, 14, 15, 16), "my name");
-        NameWasChanged nameWasChanged1 = new NameWasChanged("2", LocalDateTime.of(2021, 2, 26, 14, 15, 17), "my name2");
-        NameWasChanged nameWasChanged2 = new NameWasChanged("3", LocalDateTime.of(2021, 2, 26, 14, 15, 18), "my name3");
-        NameWasChanged nameWasChanged3 = new NameWasChanged("4", LocalDateTime.of(2021, 2, 26, 14, 15, 19), "my name4");
-        NameWasChanged nameWasChanged4 = new NameWasChanged("5", LocalDateTime.of(2021, 2, 26, 14, 15, 20), "my name5");
+        NameDefined nameDefined = new NameDefined("1", LocalDateTime.of(2021, 2, 26, 14, 15, 16), "name", "my name");
+        NameWasChanged nameWasChanged1 = new NameWasChanged("2", LocalDateTime.of(2021, 2, 26, 14, 15, 17), "name", "my name2");
+        NameWasChanged nameWasChanged2 = new NameWasChanged("3", LocalDateTime.of(2021, 2, 26, 14, 15, 18), "name", "my name3");
+        NameWasChanged nameWasChanged3 = new NameWasChanged("4", LocalDateTime.of(2021, 2, 26, 14, 15, 19), "name", "my name4");
+        NameWasChanged nameWasChanged4 = new NameWasChanged("5", LocalDateTime.of(2021, 2, 26, 14, 15, 20), "name", "my name5");
 
         // When
         eventStore.write("streamId", serialize(nameDefined));

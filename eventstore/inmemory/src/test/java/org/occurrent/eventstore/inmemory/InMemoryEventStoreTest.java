@@ -87,14 +87,14 @@ public class InMemoryEventStoreTest {
         LocalDateTime now = LocalDateTime.now();
 
         // When
-        List<DomainEvent> events = Name.defineTheName(eventId, now, "John Doe");
+        List<DomainEvent> events = Name.defineTheName(eventId, now, "name", "John Doe");
         unconditionallyPersist(inMemoryEventStore, "name", events);
 
         // Then
         EventStream<NameDefined> eventStream = inMemoryEventStore.read("name").map(unchecked(cloudEvent -> objectMapper.readValue(cloudEvent.getData().toBytes(), NameDefined.class)));
         softly.assertThat(eventStream.version()).isEqualTo(events.size());
         softly.assertThat(eventStream.events()).hasSize(1);
-        softly.assertThat(eventStream.events().collect(Collectors.toList())).containsExactly(new NameDefined(eventId, now, "John Doe"));
+        softly.assertThat(eventStream.events().collect(Collectors.toList())).containsExactly(new NameDefined(eventId, now, "name", "John Doe"));
     }
 
     @Test
@@ -104,8 +104,8 @@ public class InMemoryEventStoreTest {
         LocalDateTime now = LocalDateTime.now();
 
         // When
-        DomainEvent event1 = new NameDefined(UUID.randomUUID().toString(), now, "John Doe");
-        DomainEvent event2 = new NameWasChanged(UUID.randomUUID().toString(), now, "Jan Doe");
+        DomainEvent event1 = new NameDefined(UUID.randomUUID().toString(), now, "name", "John Doe");
+        DomainEvent event2 = new NameWasChanged(UUID.randomUUID().toString(), now, "name", "Jan Doe");
         unconditionallyPersist(inMemoryEventStore, "name", Stream.of(event1, event2).collect(Collectors.toList()));
 
         // Then
@@ -120,8 +120,8 @@ public class InMemoryEventStoreTest {
         LocalDateTime now = LocalDateTime.now();
 
         // When
-        DomainEvent event1 = new NameDefined(UUID.randomUUID().toString(), now, "John Doe");
-        DomainEvent event2 = new NameWasChanged(UUID.randomUUID().toString(), now, "Jan Doe");
+        DomainEvent event1 = new NameDefined(UUID.randomUUID().toString(), now, "name", "John Doe");
+        DomainEvent event2 = new NameWasChanged(UUID.randomUUID().toString(), now, "name", "Jan Doe");
         unconditionallyPersist(inMemoryEventStore, "name", Stream.of(event1, event2).collect(Collectors.toList()));
 
         // Then
@@ -141,8 +141,8 @@ public class InMemoryEventStoreTest {
             String eventId = UUID.randomUUID().toString();
 
             // When
-            DomainEvent event1 = new NameDefined(eventId, now, "John Doe");
-            DomainEvent event2 = new NameWasChanged(eventId, now, "Jan Doe");
+            DomainEvent event1 = new NameDefined(eventId, now, "name", "John Doe");
+            DomainEvent event2 = new NameWasChanged(eventId, now, "name", "Jan Doe");
             Throwable throwable = catchThrowable(() -> unconditionallyPersist(inMemoryEventStore, "name", Stream.of(event1, event2)));
 
             // Then
@@ -158,10 +158,10 @@ public class InMemoryEventStoreTest {
             LocalDateTime now = LocalDateTime.now();
             String eventId = UUID.randomUUID().toString();
 
-            unconditionallyPersist(inMemoryEventStore, "name", new NameDefined(eventId, now, "John Doe"));
+            unconditionallyPersist(inMemoryEventStore, "name", new NameDefined(eventId, now, "name", "John Doe"));
 
             // When
-            Throwable throwable = catchThrowable(() -> unconditionallyPersist(inMemoryEventStore, "name", new NameWasChanged(eventId, now, "Jan Doe")));
+            Throwable throwable = catchThrowable(() -> unconditionallyPersist(inMemoryEventStore, "name", new NameWasChanged(eventId, now, "name", "Jan Doe")));
 
             // Then
             assertThat(throwable)
@@ -181,8 +181,8 @@ public class InMemoryEventStoreTest {
             LocalDateTime now = LocalDateTime.now();
 
             // When
-            DomainEvent event1 = new NameDefined(UUID.randomUUID().toString(), now, "John Doe");
-            DomainEvent event2 = new NameWasChanged(UUID.randomUUID().toString(), now, "Jan Doe");
+            DomainEvent event1 = new NameDefined(UUID.randomUUID().toString(), now, "name", "John Doe");
+            DomainEvent event2 = new NameWasChanged(UUID.randomUUID().toString(), now, "name", "Jan Doe");
             WriteResult writeResult = unconditionallyPersist(inMemoryEventStore, "name", Stream.of(event1, event2));
 
             // Then
@@ -200,9 +200,9 @@ public class InMemoryEventStoreTest {
             LocalDateTime now = LocalDateTime.now();
 
             // When
-            DomainEvent event1 = new NameDefined(UUID.randomUUID().toString(), now, "John Doe");
-            DomainEvent event2 = new NameWasChanged(UUID.randomUUID().toString(), now, "Jan Doe");
-            DomainEvent event3 = new NameWasChanged(UUID.randomUUID().toString(), now, "Jan Doe2");
+            DomainEvent event1 = new NameDefined(UUID.randomUUID().toString(), now, "name", "John Doe");
+            DomainEvent event2 = new NameWasChanged(UUID.randomUUID().toString(), now, "name", "Jan Doe");
+            DomainEvent event3 = new NameWasChanged(UUID.randomUUID().toString(), now, "name", "Jan Doe2");
             unconditionallyPersist(inMemoryEventStore, "name", Stream.of(event1));
             WriteResult writeResult = unconditionallyPersist(inMemoryEventStore, "name", Stream.of(event2, event3));
 
@@ -237,8 +237,8 @@ public class InMemoryEventStoreTest {
             LocalDateTime now = LocalDateTime.now();
 
             // When
-            DomainEvent event1 = new NameDefined(UUID.randomUUID().toString(), now, "John Doe");
-            DomainEvent event2 = new NameWasChanged(UUID.randomUUID().toString(), now, "Jan Doe");
+            DomainEvent event1 = new NameDefined(UUID.randomUUID().toString(), now, "name", "John Doe");
+            DomainEvent event2 = new NameWasChanged(UUID.randomUUID().toString(), now, "name", "Jan Doe");
             unconditionallyPersist(inMemoryEventStore, "name", Stream.of(event1, event2));
             WriteResult writeResult = unconditionallyPersist(inMemoryEventStore, "name", Stream.empty());
 
@@ -262,8 +262,8 @@ public class InMemoryEventStoreTest {
             LocalDateTime now = LocalDateTime.now();
 
             // When
-            DomainEvent event1 = new NameDefined(UUID.randomUUID().toString(), now, "John Doe");
-            DomainEvent event2 = new NameWasChanged(UUID.randomUUID().toString(), now, "Jan Doe");
+            DomainEvent event1 = new NameDefined(UUID.randomUUID().toString(), now, "name", "John Doe");
+            DomainEvent event2 = new NameWasChanged(UUID.randomUUID().toString(), now, "name", "Jan Doe");
             unconditionallyPersist(inMemoryEventStore, "name", Stream.of(event1, event2));
 
             // Then
@@ -303,8 +303,8 @@ public class InMemoryEventStoreTest {
             InMemoryEventStore inMemoryEventStore = new InMemoryEventStore(stream -> events.addAll(stream.map(deserialize(objectMapper)).collect(Collectors.toList())));
             LocalDateTime now = LocalDateTime.now();
 
-            DomainEvent event1 = new NameDefined(UUID.randomUUID().toString(), now, "John Doe");
-            DomainEvent event2 = new NameWasChanged(UUID.randomUUID().toString(), now.plusHours(1), "Jan Doe");
+            DomainEvent event1 = new NameDefined(UUID.randomUUID().toString(), now, "name", "John Doe");
+            DomainEvent event2 = new NameWasChanged(UUID.randomUUID().toString(), now.plusHours(1), "name", "Jan Doe");
 
             // When
             unconditionallyPersist(inMemoryEventStore, "name", Stream.of(event1, event2));
@@ -321,13 +321,13 @@ public class InMemoryEventStoreTest {
             InMemoryEventStore inMemoryEventStore = new InMemoryEventStore(stream -> events.addAll(stream.map(deserialize(objectMapper)).collect(Collectors.toList())));
             LocalDateTime now = LocalDateTime.now();
 
-            DomainEvent event1 = new NameDefined(UUID.randomUUID().toString(), now, "John Doe");
-            DomainEvent event2 = new NameWasChanged(UUID.randomUUID().toString(), now.plusHours(1), "Jan Doe");
+            DomainEvent event1 = new NameDefined(UUID.randomUUID().toString(), now, "name", "John Doe");
+            DomainEvent event2 = new NameWasChanged(UUID.randomUUID().toString(), now.plusHours(1), "name", "Jan Doe");
 
             unconditionallyPersist(inMemoryEventStore, "name", Stream.of(event1, event2));
 
-            DomainEvent event3 = new NameWasChanged(UUID.randomUUID().toString(), now.plusHours(2), "Jan Doe1");
-            DomainEvent event4 = new NameWasChanged(UUID.randomUUID().toString(), now.plusHours(3), "Jan Doe2");
+            DomainEvent event3 = new NameWasChanged(UUID.randomUUID().toString(), now.plusHours(2), "name", "Jan Doe1");
+            DomainEvent event4 = new NameWasChanged(UUID.randomUUID().toString(), now.plusHours(3), "name", "Jan Doe2");
 
             // When
             unconditionallyPersist(inMemoryEventStore, "name", Stream.of(event3, event4));
@@ -348,8 +348,8 @@ public class InMemoryEventStoreTest {
             LocalDateTime now = LocalDateTime.now();
 
             String streamId = UUID.randomUUID().toString();
-            DomainEvent event1 = new NameDefined(UUID.randomUUID().toString(), now, "John Doe");
-            DomainEvent event2 = new NameWasChanged(UUID.randomUUID().toString(), now, "Jan Doe");
+            DomainEvent event1 = new NameDefined(UUID.randomUUID().toString(), now, "name", "John Doe");
+            DomainEvent event2 = new NameWasChanged(UUID.randomUUID().toString(), now, "name", "Jan Doe");
             unconditionallyPersist(inMemoryEventStore, streamId, Stream.of(event1, event2));
 
             // When
@@ -368,9 +368,9 @@ public class InMemoryEventStoreTest {
             LocalDateTime now = LocalDateTime.now();
 
             String streamId = UUID.randomUUID().toString();
-            DomainEvent event1 = new NameDefined(UUID.randomUUID().toString(), now, "John Doe");
+            DomainEvent event1 = new NameDefined(UUID.randomUUID().toString(), now, "name", "John Doe");
             String eventId = UUID.randomUUID().toString();
-            DomainEvent event2 = new NameWasChanged(eventId, now, "Jan Doe");
+            DomainEvent event2 = new NameWasChanged(eventId, now, "name", "Jan Doe");
             unconditionallyPersist(inMemoryEventStore, streamId, Stream.of(event1, event2));
 
             // When
@@ -389,11 +389,11 @@ public class InMemoryEventStoreTest {
             InMemoryEventStore inMemoryEventStore = new InMemoryEventStore();
             LocalDateTime now = LocalDateTime.now();
 
-            DomainEvent event1 = new NameDefined(UUID.randomUUID().toString(), now, "John Doe");
-            DomainEvent event2 = new NameWasChanged(UUID.randomUUID().toString(), now.plusHours(1), "Jan Doe");
+            DomainEvent event1 = new NameDefined(UUID.randomUUID().toString(), now, "name", "John Doe");
+            DomainEvent event2 = new NameWasChanged(UUID.randomUUID().toString(), now.plusHours(1), "name", "Jan Doe");
             unconditionallyPersist(inMemoryEventStore, "name", Stream.of(event1, event2));
 
-            DomainEvent event3 = new NameDefined(UUID.randomUUID().toString(), now, "Jane Doe");
+            DomainEvent event3 = new NameDefined(UUID.randomUUID().toString(), now, "name2", "Jane Doe");
             unconditionallyPersist(inMemoryEventStore, "name2", Stream.of(event3));
 
             // When
@@ -414,11 +414,11 @@ public class InMemoryEventStoreTest {
             InMemoryEventStore inMemoryEventStore = new InMemoryEventStore();
             LocalDateTime now = LocalDateTime.now();
 
-            DomainEvent event1 = new NameDefined(UUID.randomUUID().toString(), now, "John Doe");
-            DomainEvent event2 = new NameWasChanged(UUID.randomUUID().toString(), now.plusHours(1), "Jan Doe");
+            DomainEvent event1 = new NameDefined(UUID.randomUUID().toString(), now, "name", "John Doe");
+            DomainEvent event2 = new NameWasChanged(UUID.randomUUID().toString(), now.plusHours(1), "name", "Jan Doe");
             unconditionallyPersist(inMemoryEventStore, "name", Stream.of(event1, event2));
 
-            DomainEvent event3 = new NameDefined(UUID.randomUUID().toString(), now, "Jane Doe");
+            DomainEvent event3 = new NameDefined(UUID.randomUUID().toString(), now, "name2", "Jane Doe");
             unconditionallyPersist(inMemoryEventStore, "name2", Stream.of(event3));
 
             // When
@@ -448,10 +448,10 @@ public class InMemoryEventStoreTest {
             @Test
             void writes_events_when_stream_version_matches_expected_version() {
                 // When
-                DomainEvent event1 = new NameDefined(UUID.randomUUID().toString(), now, "John Doe");
+                DomainEvent event1 = new NameDefined(UUID.randomUUID().toString(), now, "name", "John Doe");
                 unconditionallyPersist(inMemoryEventStore, "name", Stream.of(event1));
 
-                DomainEvent event2 = new NameWasChanged(UUID.randomUUID().toString(), now, "Jan Doe");
+                DomainEvent event2 = new NameWasChanged(UUID.randomUUID().toString(), now, "name", "Jan Doe");
                 EventStream<CloudEvent> eventStream1 = inMemoryEventStore.read("name");
                 conditionallyPersist(inMemoryEventStore, eventStream1.id(), streamVersionEq(eventStream1.version()), Stream.of(event2));
 
@@ -463,11 +463,11 @@ public class InMemoryEventStoreTest {
             @Test
             void throws_write_condition_not_fulfilled_when_stream_version_does_not_match_expected_version() {
                 // Given
-                DomainEvent event1 = new NameDefined(UUID.randomUUID().toString(), now, "John Doe");
+                DomainEvent event1 = new NameDefined(UUID.randomUUID().toString(), now, "name", "John Doe");
                 unconditionallyPersist(inMemoryEventStore, "name", Stream.of(event1));
 
                 // When
-                DomainEvent event2 = new NameWasChanged(UUID.randomUUID().toString(), now, "Jan Doe");
+                DomainEvent event2 = new NameWasChanged(UUID.randomUUID().toString(), now, "name", "Jan Doe");
                 Throwable throwable = catchThrowable(() -> conditionallyPersist(inMemoryEventStore, "name", streamVersionEq(10), Stream.of(event2)));
 
                 // Then
@@ -483,10 +483,10 @@ public class InMemoryEventStoreTest {
             @Test
             void writes_events_when_stream_version_does_not_match_expected_version() {
                 // When
-                DomainEvent event1 = new NameDefined(UUID.randomUUID().toString(), now, "John Doe");
+                DomainEvent event1 = new NameDefined(UUID.randomUUID().toString(), now, "name", "John Doe");
                 unconditionallyPersist(inMemoryEventStore, "name", Stream.of(event1));
 
-                DomainEvent event2 = new NameWasChanged(UUID.randomUUID().toString(), now, "Jan Doe");
+                DomainEvent event2 = new NameWasChanged(UUID.randomUUID().toString(), now, "name", "Jan Doe");
                 EventStream<CloudEvent> eventStream1 = inMemoryEventStore.read("name");
                 conditionallyPersist(inMemoryEventStore, eventStream1.id(), streamVersion(ne(20L)), Stream.of(event2));
 
@@ -498,11 +498,11 @@ public class InMemoryEventStoreTest {
             @Test
             void throws_write_condition_not_fulfilled_when_stream_version_match_expected_version() {
                 // Given
-                DomainEvent event1 = new NameDefined(UUID.randomUUID().toString(), now, "John Doe");
+                DomainEvent event1 = new NameDefined(UUID.randomUUID().toString(), now, "name", "John Doe");
                 unconditionallyPersist(inMemoryEventStore, "name", Stream.of(event1));
 
                 // When
-                DomainEvent event2 = new NameWasChanged(UUID.randomUUID().toString(), now, "Jan Doe");
+                DomainEvent event2 = new NameWasChanged(UUID.randomUUID().toString(), now, "name", "Jan Doe");
                 Throwable throwable = catchThrowable(() -> conditionallyPersist(inMemoryEventStore, "name", streamVersion(ne(1L)), Stream.of(event2)));
 
                 // Then
@@ -518,10 +518,10 @@ public class InMemoryEventStoreTest {
             @Test
             void writes_events_when_stream_version_is_less_than_expected_version() {
                 // When
-                DomainEvent event1 = new NameDefined(UUID.randomUUID().toString(), now, "John Doe");
+                DomainEvent event1 = new NameDefined(UUID.randomUUID().toString(), now, "name", "John Doe");
                 unconditionallyPersist(inMemoryEventStore, "name", Stream.of(event1));
 
-                DomainEvent event2 = new NameWasChanged(UUID.randomUUID().toString(), now, "Jan Doe");
+                DomainEvent event2 = new NameWasChanged(UUID.randomUUID().toString(), now, "name", "Jan Doe");
                 EventStream<CloudEvent> eventStream1 = inMemoryEventStore.read("name");
                 conditionallyPersist(inMemoryEventStore, eventStream1.id(), streamVersion(lt(10L)), Stream.of(event2));
 
@@ -533,11 +533,11 @@ public class InMemoryEventStoreTest {
             @Test
             void throws_write_condition_not_fulfilled_when_stream_version_is_greater_than_expected_version() {
                 // Given
-                DomainEvent event1 = new NameDefined(UUID.randomUUID().toString(), now, "John Doe");
+                DomainEvent event1 = new NameDefined(UUID.randomUUID().toString(), now, "name", "John Doe");
                 unconditionallyPersist(inMemoryEventStore, "name", Stream.of(event1));
 
                 // When
-                DomainEvent event2 = new NameWasChanged(UUID.randomUUID().toString(), now, "Jan Doe");
+                DomainEvent event2 = new NameWasChanged(UUID.randomUUID().toString(), now, "name", "Jan Doe");
                 Throwable throwable = catchThrowable(() -> conditionallyPersist(inMemoryEventStore, "name", streamVersion(lt(0L)), Stream.of(event2)));
 
                 // Then
@@ -548,11 +548,11 @@ public class InMemoryEventStoreTest {
             @Test
             void throws_write_condition_not_fulfilled_when_stream_version_is_equal_to_expected_version() {
                 // Given
-                DomainEvent event1 = new NameDefined(UUID.randomUUID().toString(), now, "John Doe");
+                DomainEvent event1 = new NameDefined(UUID.randomUUID().toString(), now, "name", "John Doe");
                 unconditionallyPersist(inMemoryEventStore, "name", Stream.of(event1));
 
                 // When
-                DomainEvent event2 = new NameWasChanged(UUID.randomUUID().toString(), now, "Jan Doe");
+                DomainEvent event2 = new NameWasChanged(UUID.randomUUID().toString(), now, "name", "Jan Doe");
                 Throwable throwable = catchThrowable(() -> conditionallyPersist(inMemoryEventStore, "name", streamVersion(lt(1L)), Stream.of(event2)));
 
                 // Then
@@ -568,10 +568,10 @@ public class InMemoryEventStoreTest {
             @Test
             void writes_events_when_stream_version_is_greater_than_expected_version() {
                 // When
-                DomainEvent event1 = new NameDefined(UUID.randomUUID().toString(), now, "John Doe");
+                DomainEvent event1 = new NameDefined(UUID.randomUUID().toString(), now, "name", "John Doe");
                 unconditionallyPersist(inMemoryEventStore, "name", Stream.of(event1));
 
-                DomainEvent event2 = new NameWasChanged(UUID.randomUUID().toString(), now, "Jan Doe");
+                DomainEvent event2 = new NameWasChanged(UUID.randomUUID().toString(), now, "name", "Jan Doe");
                 EventStream<CloudEvent> eventStream1 = inMemoryEventStore.read("name");
                 conditionallyPersist(inMemoryEventStore, eventStream1.id(), streamVersion(gt(0L)), Stream.of(event2));
 
@@ -583,11 +583,11 @@ public class InMemoryEventStoreTest {
             @Test
             void throws_write_condition_not_fulfilled_when_stream_version_is_less_than_expected_version() {
                 // Given
-                DomainEvent event1 = new NameDefined(UUID.randomUUID().toString(), now, "John Doe");
+                DomainEvent event1 = new NameDefined(UUID.randomUUID().toString(), now, "name", "John Doe");
                 unconditionallyPersist(inMemoryEventStore, "name", Stream.of(event1));
 
                 // When
-                DomainEvent event2 = new NameWasChanged(UUID.randomUUID().toString(), now, "Jan Doe");
+                DomainEvent event2 = new NameWasChanged(UUID.randomUUID().toString(), now, "name", "Jan Doe");
                 Throwable throwable = catchThrowable(() -> conditionallyPersist(inMemoryEventStore, "name", streamVersion(gt(100L)), Stream.of(event2)));
 
                 // Then
@@ -598,11 +598,11 @@ public class InMemoryEventStoreTest {
             @Test
             void throws_write_condition_not_fulfilled_when_stream_version_is_equal_to_expected_version() {
                 // Given
-                DomainEvent event1 = new NameDefined(UUID.randomUUID().toString(), now, "John Doe");
+                DomainEvent event1 = new NameDefined(UUID.randomUUID().toString(), now, "name", "John Doe");
                 unconditionallyPersist(inMemoryEventStore, "name", Stream.of(event1));
 
                 // When
-                DomainEvent event2 = new NameWasChanged(UUID.randomUUID().toString(), now, "Jan Doe");
+                DomainEvent event2 = new NameWasChanged(UUID.randomUUID().toString(), now, "name", "Jan Doe");
                 Throwable throwable = catchThrowable(() -> conditionallyPersist(inMemoryEventStore, "name", streamVersion(gt(1L)), Stream.of(event2)));
 
                 // Then
@@ -618,10 +618,10 @@ public class InMemoryEventStoreTest {
             @Test
             void writes_events_when_stream_version_is_less_than_expected_version() {
                 // When
-                DomainEvent event1 = new NameDefined(UUID.randomUUID().toString(), now, "John Doe");
+                DomainEvent event1 = new NameDefined(UUID.randomUUID().toString(), now, "name", "John Doe");
                 unconditionallyPersist(inMemoryEventStore, "name", Stream.of(event1));
 
-                DomainEvent event2 = new NameWasChanged(UUID.randomUUID().toString(), now, "Jan Doe");
+                DomainEvent event2 = new NameWasChanged(UUID.randomUUID().toString(), now, "name", "Jan Doe");
                 EventStream<CloudEvent> eventStream1 = inMemoryEventStore.read("name");
                 conditionallyPersist(inMemoryEventStore, eventStream1.id(), streamVersion(lte(10L)), Stream.of(event2));
 
@@ -634,10 +634,10 @@ public class InMemoryEventStoreTest {
             @Test
             void writes_events_when_stream_version_is_equal_to_expected_version() {
                 // When
-                DomainEvent event1 = new NameDefined(UUID.randomUUID().toString(), now, "John Doe");
+                DomainEvent event1 = new NameDefined(UUID.randomUUID().toString(), now, "name", "John Doe");
                 unconditionallyPersist(inMemoryEventStore, "name", Stream.of(event1));
 
-                DomainEvent event2 = new NameWasChanged(UUID.randomUUID().toString(), now, "Jan Doe");
+                DomainEvent event2 = new NameWasChanged(UUID.randomUUID().toString(), now, "name", "Jan Doe");
                 EventStream<CloudEvent> eventStream1 = inMemoryEventStore.read("name");
                 conditionallyPersist(inMemoryEventStore, eventStream1.id(), streamVersion(lte(1L)), Stream.of(event2));
 
@@ -649,11 +649,11 @@ public class InMemoryEventStoreTest {
             @Test
             void throws_write_condition_not_fulfilled_when_stream_version_is_greater_than_expected_version() {
                 // Given
-                DomainEvent event1 = new NameDefined(UUID.randomUUID().toString(), now, "John Doe");
+                DomainEvent event1 = new NameDefined(UUID.randomUUID().toString(), now, "name", "John Doe");
                 unconditionallyPersist(inMemoryEventStore, "name", Stream.of(event1));
 
                 // When
-                DomainEvent event2 = new NameWasChanged(UUID.randomUUID().toString(), now, "Jan Doe");
+                DomainEvent event2 = new NameWasChanged(UUID.randomUUID().toString(), now, "name", "Jan Doe");
                 Throwable throwable = catchThrowable(() -> conditionallyPersist(inMemoryEventStore, "name", streamVersion(lte(0L)), Stream.of(event2)));
 
                 // Then
@@ -669,10 +669,10 @@ public class InMemoryEventStoreTest {
             @Test
             void writes_events_when_stream_version_is_greater_than_expected_version() {
                 // When
-                DomainEvent event1 = new NameDefined(UUID.randomUUID().toString(), now, "John Doe");
+                DomainEvent event1 = new NameDefined(UUID.randomUUID().toString(), now, "name", "John Doe");
                 unconditionallyPersist(inMemoryEventStore, "name", Stream.of(event1));
 
-                DomainEvent event2 = new NameWasChanged(UUID.randomUUID().toString(), now, "Jan Doe");
+                DomainEvent event2 = new NameWasChanged(UUID.randomUUID().toString(), now, "name", "Jan Doe");
                 EventStream<CloudEvent> eventStream1 = inMemoryEventStore.read("name");
                 conditionallyPersist(inMemoryEventStore, eventStream1.id(), streamVersion(gte(0L)), Stream.of(event2));
 
@@ -684,10 +684,10 @@ public class InMemoryEventStoreTest {
             @Test
             void writes_events_when_stream_version_is_equal_to_expected_version() {
                 // When
-                DomainEvent event1 = new NameDefined(UUID.randomUUID().toString(), now, "John Doe");
+                DomainEvent event1 = new NameDefined(UUID.randomUUID().toString(), now, "name", "John Doe");
                 unconditionallyPersist(inMemoryEventStore, "name", Stream.of(event1));
 
-                DomainEvent event2 = new NameWasChanged(UUID.randomUUID().toString(), now, "Jan Doe");
+                DomainEvent event2 = new NameWasChanged(UUID.randomUUID().toString(), now, "name", "Jan Doe");
                 EventStream<CloudEvent> eventStream1 = inMemoryEventStore.read("name");
                 conditionallyPersist(inMemoryEventStore, eventStream1.id(), streamVersion(gte(0L)), Stream.of(event2));
 
@@ -699,11 +699,11 @@ public class InMemoryEventStoreTest {
             @Test
             void throws_write_condition_not_fulfilled_when_stream_version_is_less_than_expected_version() {
                 // Given
-                DomainEvent event1 = new NameDefined(UUID.randomUUID().toString(), now, "John Doe");
+                DomainEvent event1 = new NameDefined(UUID.randomUUID().toString(), now, "name", "John Doe");
                 unconditionallyPersist(inMemoryEventStore, "name", Stream.of(event1));
 
                 // When
-                DomainEvent event2 = new NameWasChanged(UUID.randomUUID().toString(), now, "Jan Doe");
+                DomainEvent event2 = new NameWasChanged(UUID.randomUUID().toString(), now, "name", "Jan Doe");
                 Throwable throwable = catchThrowable(() -> conditionallyPersist(inMemoryEventStore, "name", streamVersion(gte(100L)), Stream.of(event2)));
 
                 // Then
@@ -719,10 +719,10 @@ public class InMemoryEventStoreTest {
             @Test
             void writes_events_when_stream_version_is_when_all_conditions_match_and_expression() {
                 // When
-                DomainEvent event1 = new NameDefined(UUID.randomUUID().toString(), now, "John Doe");
+                DomainEvent event1 = new NameDefined(UUID.randomUUID().toString(), now, "name", "John Doe");
                 unconditionallyPersist(inMemoryEventStore, "name", Stream.of(event1));
 
-                DomainEvent event2 = new NameWasChanged(UUID.randomUUID().toString(), now, "Jan Doe");
+                DomainEvent event2 = new NameWasChanged(UUID.randomUUID().toString(), now, "name", "Jan Doe");
                 EventStream<CloudEvent> eventStream1 = inMemoryEventStore.read("name");
                 conditionallyPersist(inMemoryEventStore, eventStream1.id(), streamVersion(and(gte(0L), lt(100L), ne(40L))), Stream.of(event2));
 
@@ -734,11 +734,11 @@ public class InMemoryEventStoreTest {
             @Test
             void throws_write_condition_not_fulfilled_when_any_of_the_operations_in_the_and_expression_is_not_fulfilled() {
                 // Given
-                DomainEvent event1 = new NameDefined(UUID.randomUUID().toString(), now, "John Doe");
+                DomainEvent event1 = new NameDefined(UUID.randomUUID().toString(), now, "name", "John Doe");
                 unconditionallyPersist(inMemoryEventStore, "name", Stream.of(event1));
 
                 // When
-                DomainEvent event2 = new NameWasChanged(UUID.randomUUID().toString(), now, "Jan Doe");
+                DomainEvent event2 = new NameWasChanged(UUID.randomUUID().toString(), now, "name", "Jan Doe");
                 Throwable throwable = catchThrowable(() -> conditionallyPersist(inMemoryEventStore, "name", streamVersion(and(gte(0L), lt(100L), ne(1L))), Stream.of(event2)));
 
                 // Then
@@ -754,10 +754,10 @@ public class InMemoryEventStoreTest {
             @Test
             void writes_events_when_stream_version_is_when_any_condition_in_or_expression_matches() {
                 // When
-                DomainEvent event1 = new NameDefined(UUID.randomUUID().toString(), now, "John Doe");
+                DomainEvent event1 = new NameDefined(UUID.randomUUID().toString(), now, "name", "John Doe");
                 unconditionallyPersist(inMemoryEventStore, "name", Stream.of(event1));
 
-                DomainEvent event2 = new NameWasChanged(UUID.randomUUID().toString(), now, "Jan Doe");
+                DomainEvent event2 = new NameWasChanged(UUID.randomUUID().toString(), now, "name", "Jan Doe");
                 EventStream<CloudEvent> eventStream1 = inMemoryEventStore.read("name");
                 conditionallyPersist(inMemoryEventStore, eventStream1.id(), streamVersion(or(gte(100L), lt(0L), ne(40L))), Stream.of(event2));
 
@@ -769,11 +769,11 @@ public class InMemoryEventStoreTest {
             @Test
             void throws_write_condition_not_fulfilled_when_none_of_the_operations_in_the_and_expression_is_fulfilled() {
                 // Given
-                DomainEvent event1 = new NameDefined(UUID.randomUUID().toString(), now, "John Doe");
+                DomainEvent event1 = new NameDefined(UUID.randomUUID().toString(), now, "name", "John Doe");
                 unconditionallyPersist(inMemoryEventStore, "name", Stream.of(event1));
 
                 // When
-                DomainEvent event2 = new NameWasChanged(UUID.randomUUID().toString(), now, "Jan Doe");
+                DomainEvent event2 = new NameWasChanged(UUID.randomUUID().toString(), now, "name", "Jan Doe");
                 Throwable throwable = catchThrowable(() -> conditionallyPersist(inMemoryEventStore, "name", streamVersion(or(gte(100L), lt(1L))), Stream.of(event2)));
 
                 // Then
@@ -789,10 +789,10 @@ public class InMemoryEventStoreTest {
             @Test
             void writes_events_when_stream_version_is_not_matching_condition() {
                 // When
-                DomainEvent event1 = new NameDefined(UUID.randomUUID().toString(), now, "John Doe");
+                DomainEvent event1 = new NameDefined(UUID.randomUUID().toString(), now, "name", "John Doe");
                 unconditionallyPersist(inMemoryEventStore, "name", Stream.of(event1));
 
-                DomainEvent event2 = new NameWasChanged(UUID.randomUUID().toString(), now, "Jan Doe");
+                DomainEvent event2 = new NameWasChanged(UUID.randomUUID().toString(), now, "name", "Jan Doe");
                 EventStream<CloudEvent> eventStream1 = inMemoryEventStore.read("name");
                 conditionallyPersist(inMemoryEventStore, eventStream1.id(), streamVersion(not(eq(100L))), Stream.of(event2));
 
@@ -804,11 +804,11 @@ public class InMemoryEventStoreTest {
             @Test
             void throws_write_condition_not_fulfilled_when_condition_is_fulfilled_but_should_not_be_so() {
                 // Given
-                DomainEvent event1 = new NameDefined(UUID.randomUUID().toString(), now, "John Doe");
+                DomainEvent event1 = new NameDefined(UUID.randomUUID().toString(), now, "name", "John Doe");
                 unconditionallyPersist(inMemoryEventStore, "name", Stream.of(event1));
 
                 // When
-                DomainEvent event2 = new NameWasChanged(UUID.randomUUID().toString(), now, "Jan Doe");
+                DomainEvent event2 = new NameWasChanged(UUID.randomUUID().toString(), now, "name", "Jan Doe");
                 Throwable throwable = catchThrowable(() -> conditionallyPersist(inMemoryEventStore, "name", streamVersion(not(eq(1L))), Stream.of(event2)));
 
                 // Then
@@ -828,12 +828,12 @@ public class InMemoryEventStoreTest {
         void update_specific_event_will_persist_the_updated_event_in_the_event_stream() {
             // Given
             String streamId = UUID.randomUUID().toString();
-            DomainEvent event1 = new NameDefined(UUID.randomUUID().toString(), now, "John Doe");
+            DomainEvent event1 = new NameDefined(UUID.randomUUID().toString(), now, "name", "John Doe");
             String eventId2 = UUID.randomUUID().toString();
-            DomainEvent event2 = new NameWasChanged(eventId2, now, "Jan Doe");
+            DomainEvent event2 = new NameWasChanged(eventId2, now, "name", "Jan Doe");
             unconditionallyPersist(inMemoryEventStore, streamId, Stream.of(event1, event2));
 
-            NameWasChanged nameWasChanged2 = new NameWasChanged(eventId2, now, "Another Name");
+            NameWasChanged nameWasChanged2 = new NameWasChanged(eventId2, now, "name", "Another Name");
             // When
             inMemoryEventStore.updateEvent(eventId2, NAME_SOURCE, c ->
                     CloudEventBuilder.v1(c).withData(unchecked(objectMapper::writeValueAsBytes).apply(nameWasChanged2)).build());
@@ -847,12 +847,12 @@ public class InMemoryEventStoreTest {
         void update_specific_event_will_return_the_updated_event() {
             // Given
             String streamId = UUID.randomUUID().toString();
-            DomainEvent event1 = new NameDefined(UUID.randomUUID().toString(), now, "John Doe");
+            DomainEvent event1 = new NameDefined(UUID.randomUUID().toString(), now, "name", "John Doe");
             String eventId2 = UUID.randomUUID().toString();
-            DomainEvent event2 = new NameWasChanged(eventId2, now, "Jan Doe");
+            DomainEvent event2 = new NameWasChanged(eventId2, now, "name", "Jan Doe");
             unconditionallyPersist(inMemoryEventStore, streamId, Stream.of(event1, event2));
 
-            NameWasChanged nameWasChanged2 = new NameWasChanged(eventId2, now, "Another Name");
+            NameWasChanged nameWasChanged2 = new NameWasChanged(eventId2, now, "name", "Another Name");
             // When
             Optional<DomainEvent> updatedEvent = inMemoryEventStore.updateEvent(eventId2, NAME_SOURCE, c ->
                             CloudEventBuilder.v1(c).withData(unchecked(objectMapper::writeValueAsBytes).apply(nameWasChanged2)).build())
@@ -866,8 +866,8 @@ public class InMemoryEventStoreTest {
         void update_specific_event_when_event_is_not_found_will_return_empty() {
             // Given
             String streamId = UUID.randomUUID().toString();
-            DomainEvent event1 = new NameDefined(UUID.randomUUID().toString(), now, "John Doe");
-            DomainEvent event2 = new NameWasChanged(UUID.randomUUID().toString(), now, "Jan Doe");
+            DomainEvent event1 = new NameDefined(UUID.randomUUID().toString(), now, "name", "John Doe");
+            DomainEvent event2 = new NameWasChanged(UUID.randomUUID().toString(), now, "name", "Jan Doe");
             unconditionallyPersist(inMemoryEventStore, streamId, Stream.of(event1, event2));
 
             // When
@@ -893,9 +893,9 @@ public class InMemoryEventStoreTest {
         void all_without_skip_and_limit_returns_all_events() {
             // Given
             LocalDateTime now = LocalDateTime.now();
-            NameDefined nameDefined = new NameDefined(UUID.randomUUID().toString(), now, "name");
-            NameWasChanged nameWasChanged1 = new NameWasChanged(UUID.randomUUID().toString(), now.plusHours(1), "name2");
-            NameWasChanged nameWasChanged2 = new NameWasChanged(UUID.randomUUID().toString(), now.plusHours(2), "name3");
+            NameDefined nameDefined = new NameDefined(UUID.randomUUID().toString(), now, "name", "name");
+            NameWasChanged nameWasChanged1 = new NameWasChanged(UUID.randomUUID().toString(), now.plusHours(1), "name", "name2");
+            NameWasChanged nameWasChanged2 = new NameWasChanged(UUID.randomUUID().toString(), now.plusHours(2), "name", "name3");
 
             // When
             unconditionallyPersist(inMemoryEventStore, "name2", nameWasChanged1);
@@ -911,9 +911,9 @@ public class InMemoryEventStoreTest {
         void all_with_skip_and_limit_returns_all_events_within_skip_and_limit() {
             // Given
             LocalDateTime now = LocalDateTime.now();
-            NameDefined nameDefined = new NameDefined(UUID.randomUUID().toString(), now, "name");
-            NameWasChanged nameWasChanged1 = new NameWasChanged(UUID.randomUUID().toString(), now.plusHours(1), "name2");
-            NameWasChanged nameWasChanged2 = new NameWasChanged(UUID.randomUUID().toString(), now.plusHours(2), "name3");
+            NameDefined nameDefined = new NameDefined(UUID.randomUUID().toString(), now, "name", "name");
+            NameWasChanged nameWasChanged1 = new NameWasChanged(UUID.randomUUID().toString(), now.plusHours(1), "name", "name2");
+            NameWasChanged nameWasChanged2 = new NameWasChanged(UUID.randomUUID().toString(), now.plusHours(2), "name", "name3");
 
             // When
             unconditionallyPersist(inMemoryEventStore, "name1", Stream.of(nameDefined, nameWasChanged1));
@@ -928,9 +928,9 @@ public class InMemoryEventStoreTest {
         void query_with_single_filter_without_skip_and_limit() {
             // Given
             LocalDateTime now = LocalDateTime.now();
-            NameDefined nameDefined = new NameDefined(UUID.randomUUID().toString(), now, "name");
-            NameWasChanged nameWasChanged1 = new NameWasChanged(UUID.randomUUID().toString(), now.plusHours(1), "name2");
-            NameWasChanged nameWasChanged2 = new NameWasChanged(UUID.randomUUID().toString(), now.plusHours(2), "name3");
+            NameDefined nameDefined = new NameDefined(UUID.randomUUID().toString(), now, "name", "name");
+            NameWasChanged nameWasChanged1 = new NameWasChanged(UUID.randomUUID().toString(), now.plusHours(1), "name", "name2");
+            NameWasChanged nameWasChanged2 = new NameWasChanged(UUID.randomUUID().toString(), now.plusHours(2), "name", "name3");
 
             // When
             unconditionallyPersist(inMemoryEventStore, "name1", Stream.of(nameDefined, nameWasChanged1));
@@ -955,9 +955,9 @@ public class InMemoryEventStoreTest {
         void query_with_single_filter_with_skip_and_limit() {
             // Given
             LocalDateTime now = LocalDateTime.now();
-            NameDefined nameDefined = new NameDefined(UUID.randomUUID().toString(), now, "name");
-            NameWasChanged nameWasChanged1 = new NameWasChanged(UUID.randomUUID().toString(), now.plusHours(1), "name2");
-            NameWasChanged nameWasChanged2 = new NameWasChanged(UUID.randomUUID().toString(), now.plusHours(2), "name3");
+            NameDefined nameDefined = new NameDefined(UUID.randomUUID().toString(), now, "name", "name");
+            NameWasChanged nameWasChanged1 = new NameWasChanged(UUID.randomUUID().toString(), now.plusHours(1), "name", "name2");
+            NameWasChanged nameWasChanged2 = new NameWasChanged(UUID.randomUUID().toString(), now.plusHours(2), "name", "name3");
 
             // When
             unconditionallyPersist(inMemoryEventStore, "name1", Stream.of(nameDefined, nameWasChanged1));
@@ -983,9 +983,9 @@ public class InMemoryEventStoreTest {
             // Given
             LocalDateTime now = LocalDateTime.now();
             UUID uuid = UUID.randomUUID();
-            NameDefined nameDefined = new NameDefined(uuid.toString(), now, "name");
-            NameWasChanged nameWasChanged1 = new NameWasChanged(UUID.randomUUID().toString(), now.plusHours(1), "name2");
-            NameWasChanged nameWasChanged2 = new NameWasChanged(UUID.randomUUID().toString(), now.plusHours(2), "name3");
+            NameDefined nameDefined = new NameDefined(uuid.toString(), now, "name", "name");
+            NameWasChanged nameWasChanged1 = new NameWasChanged(UUID.randomUUID().toString(), now.plusHours(1), "name", "name2");
+            NameWasChanged nameWasChanged2 = new NameWasChanged(UUID.randomUUID().toString(), now.plusHours(2), "name", "name3");
 
             // When
             unconditionallyPersist(inMemoryEventStore, "name1", Stream.of(nameDefined, nameWasChanged1));
@@ -1000,9 +1000,9 @@ public class InMemoryEventStoreTest {
         void compose_filters_using_or() {
             // Given
             LocalDateTime now = LocalDateTime.now();
-            NameDefined nameDefined = new NameDefined(UUID.randomUUID().toString(), now, "name");
-            NameWasChanged nameWasChanged1 = new NameWasChanged(UUID.randomUUID().toString(), now.plusHours(1), "name2");
-            NameWasChanged nameWasChanged2 = new NameWasChanged(UUID.randomUUID().toString(), now.plusHours(2), "name3");
+            NameDefined nameDefined = new NameDefined(UUID.randomUUID().toString(), now, "name", "name");
+            NameWasChanged nameWasChanged1 = new NameWasChanged(UUID.randomUUID().toString(), now.plusHours(1), "name", "name2");
+            NameWasChanged nameWasChanged2 = new NameWasChanged(UUID.randomUUID().toString(), now.plusHours(2), "name", "name3");
 
             // When
             unconditionallyPersist(inMemoryEventStore, "name1", Stream.of(nameDefined, nameWasChanged1));
@@ -1017,9 +1017,9 @@ public class InMemoryEventStoreTest {
         void query_filter_by_data() {
             // Given
             LocalDateTime now = LocalDateTime.now();
-            NameDefined nameDefined = new NameDefined(UUID.randomUUID().toString(), now, "name");
-            NameWasChanged nameWasChanged1 = new NameWasChanged(UUID.randomUUID().toString(), now.plusHours(1), "name2");
-            NameWasChanged nameWasChanged2 = new NameWasChanged(UUID.randomUUID().toString(), now.plusHours(2), "name3");
+            NameDefined nameDefined = new NameDefined(UUID.randomUUID().toString(), now, "name", "name");
+            NameWasChanged nameWasChanged1 = new NameWasChanged(UUID.randomUUID().toString(), now.plusHours(1), "name", "name2");
+            NameWasChanged nameWasChanged2 = new NameWasChanged(UUID.randomUUID().toString(), now.plusHours(2), "name", "name3");
 
             // When
             unconditionallyPersist(inMemoryEventStore, "name1", Stream.of(nameDefined, nameWasChanged1));
@@ -1036,9 +1036,9 @@ public class InMemoryEventStoreTest {
         void query_filter_by_subject() {
             // Given
             LocalDateTime now = LocalDateTime.now();
-            NameDefined nameDefined = new NameDefined(UUID.randomUUID().toString(), now, "name");
-            NameWasChanged nameWasChanged1 = new NameWasChanged(UUID.randomUUID().toString(), now.plusHours(1), "name2");
-            NameWasChanged nameWasChanged2 = new NameWasChanged(UUID.randomUUID().toString(), now.plusHours(2), "name3");
+            NameDefined nameDefined = new NameDefined(UUID.randomUUID().toString(), now, "name", "name");
+            NameWasChanged nameWasChanged1 = new NameWasChanged(UUID.randomUUID().toString(), now.plusHours(1), "name", "name2");
+            NameWasChanged nameWasChanged2 = new NameWasChanged(UUID.randomUUID().toString(), now.plusHours(2), "name", "name3");
 
             // When
             unconditionallyPersist(inMemoryEventStore, "name1", Stream.of(nameDefined, nameWasChanged1));
@@ -1053,10 +1053,10 @@ public class InMemoryEventStoreTest {
         void query_filter_by_cloud_event() {
             // Given
             LocalDateTime now = LocalDateTime.now();
-            NameDefined nameDefined = new NameDefined(UUID.randomUUID().toString(), now, "name");
+            NameDefined nameDefined = new NameDefined(UUID.randomUUID().toString(), now, "name", "name");
             String eventId = UUID.randomUUID().toString();
-            NameWasChanged nameWasChanged1 = new NameWasChanged(eventId, now.plusHours(1), "name2");
-            NameWasChanged nameWasChanged2 = new NameWasChanged(UUID.randomUUID().toString(), now.plusHours(2), "name3");
+            NameWasChanged nameWasChanged1 = new NameWasChanged(eventId, now.plusHours(1), "name", "name2");
+            NameWasChanged nameWasChanged2 = new NameWasChanged(UUID.randomUUID().toString(), now.plusHours(2), "name", "name3");
 
             // When
             unconditionallyPersist(inMemoryEventStore, "name1", Stream.of(nameDefined, nameWasChanged1));
@@ -1071,9 +1071,9 @@ public class InMemoryEventStoreTest {
         void query_filter_by_type() {
             // Given
             LocalDateTime now = LocalDateTime.now();
-            NameDefined nameDefined = new NameDefined(UUID.randomUUID().toString(), now, "name");
-            NameWasChanged nameWasChanged1 = new NameWasChanged(UUID.randomUUID().toString(), now.plusHours(1), "name2");
-            NameWasChanged nameWasChanged2 = new NameWasChanged(UUID.randomUUID().toString(), now.plusHours(2), "name3");
+            NameDefined nameDefined = new NameDefined(UUID.randomUUID().toString(), now, "name", "name");
+            NameWasChanged nameWasChanged1 = new NameWasChanged(UUID.randomUUID().toString(), now.plusHours(1), "name", "name2");
+            NameWasChanged nameWasChanged2 = new NameWasChanged(UUID.randomUUID().toString(), now.plusHours(2), "name", "name3");
 
             // When
             unconditionallyPersist(inMemoryEventStore, "name1", Stream.of(nameDefined, nameWasChanged1));
@@ -1088,9 +1088,9 @@ public class InMemoryEventStoreTest {
         void query_filter_by_data_schema() {
             // Given
             LocalDateTime now = LocalDateTime.now();
-            NameDefined nameDefined = new NameDefined(UUID.randomUUID().toString(), now, "name");
-            NameWasChanged nameWasChanged1 = new NameWasChanged(UUID.randomUUID().toString(), now.plusHours(1), "name2");
-            NameWasChanged nameWasChanged2 = new NameWasChanged(UUID.randomUUID().toString(), now.plusHours(2), "name3");
+            NameDefined nameDefined = new NameDefined(UUID.randomUUID().toString(), now, "name", "name");
+            NameWasChanged nameWasChanged1 = new NameWasChanged(UUID.randomUUID().toString(), now.plusHours(1), "name", "name2");
+            NameWasChanged nameWasChanged2 = new NameWasChanged(UUID.randomUUID().toString(), now.plusHours(2), "name", "name3");
 
             // When
             unconditionallyPersist(inMemoryEventStore, "name1", Stream.of(nameDefined, nameWasChanged1));
@@ -1117,9 +1117,9 @@ public class InMemoryEventStoreTest {
         void query_filter_by_data_content_type() {
             // Given
             LocalDateTime now = LocalDateTime.now();
-            NameDefined nameDefined = new NameDefined(UUID.randomUUID().toString(), now, "name");
-            NameWasChanged nameWasChanged1 = new NameWasChanged(UUID.randomUUID().toString(), now.plusHours(1), "name2");
-            NameWasChanged nameWasChanged2 = new NameWasChanged(UUID.randomUUID().toString(), now.plusHours(2), "name3");
+            NameDefined nameDefined = new NameDefined(UUID.randomUUID().toString(), now, "name", "name");
+            NameWasChanged nameWasChanged1 = new NameWasChanged(UUID.randomUUID().toString(), now.plusHours(1), "name", "name2");
+            NameWasChanged nameWasChanged2 = new NameWasChanged(UUID.randomUUID().toString(), now.plusHours(2), "name", "name3");
 
             // When
             unconditionallyPersist(inMemoryEventStore, "name1", Stream.of(nameDefined, nameWasChanged1));
@@ -1150,9 +1150,9 @@ public class InMemoryEventStoreTest {
             void sort_by_natural_asc_sorts_by_insertion_order() {
                 // Given
                 LocalDateTime now = LocalDateTime.now();
-                NameDefined nameDefined = new NameDefined(UUID.randomUUID().toString(), now, "name");
-                NameWasChanged nameWasChanged2 = new NameWasChanged(UUID.randomUUID().toString(), now.plusHours(1), "name3");
-                NameWasChanged nameWasChanged1 = new NameWasChanged(UUID.randomUUID().toString(), now.minusHours(2), "name2");
+                NameDefined nameDefined = new NameDefined(UUID.randomUUID().toString(), now, "name", "name");
+                NameWasChanged nameWasChanged2 = new NameWasChanged(UUID.randomUUID().toString(), now.plusHours(1), "name", "name3");
+                NameWasChanged nameWasChanged1 = new NameWasChanged(UUID.randomUUID().toString(), now.minusHours(2), "name", "name2");
 
                 // When
                 unconditionallyPersist(inMemoryEventStore, "name3", nameWasChanged1);
@@ -1168,9 +1168,9 @@ public class InMemoryEventStoreTest {
             void sort_by_natural_desc_sorts_by_reversed_insertion_order() {
                 // Given
                 LocalDateTime now = LocalDateTime.now();
-                NameDefined nameDefined = new NameDefined(UUID.randomUUID().toString(), now, "name");
-                NameWasChanged nameWasChanged2 = new NameWasChanged(UUID.randomUUID().toString(), now.plusHours(1), "name3");
-                NameWasChanged nameWasChanged1 = new NameWasChanged(UUID.randomUUID().toString(), now.minusHours(2), "name2");
+                NameDefined nameDefined = new NameDefined(UUID.randomUUID().toString(), now, "name", "name");
+                NameWasChanged nameWasChanged2 = new NameWasChanged(UUID.randomUUID().toString(), now.plusHours(1), "name", "name3");
+                NameWasChanged nameWasChanged1 = new NameWasChanged(UUID.randomUUID().toString(), now.minusHours(2), "name", "name2");
 
                 // When
                 unconditionallyPersist(inMemoryEventStore, "name3", nameWasChanged1);
@@ -1186,9 +1186,9 @@ public class InMemoryEventStoreTest {
             void sort_by_time_asc() {
                 // Given
                 LocalDateTime now = LocalDateTime.now();
-                NameDefined nameDefined = new NameDefined(UUID.randomUUID().toString(), now, "name");
-                NameWasChanged nameWasChanged1 = new NameWasChanged(UUID.randomUUID().toString(), now.minusHours(2), "name2");
-                NameWasChanged nameWasChanged2 = new NameWasChanged(UUID.randomUUID().toString(), now.plusHours(1), "name3");
+                NameDefined nameDefined = new NameDefined(UUID.randomUUID().toString(), now, "name", "name");
+                NameWasChanged nameWasChanged1 = new NameWasChanged(UUID.randomUUID().toString(), now.minusHours(2), "name", "name2");
+                NameWasChanged nameWasChanged2 = new NameWasChanged(UUID.randomUUID().toString(), now.plusHours(1), "name", "name3");
 
                 // When
                 unconditionallyPersist(inMemoryEventStore, "name3", nameWasChanged1);
@@ -1204,9 +1204,9 @@ public class InMemoryEventStoreTest {
             void sort_by_time_desc() {
                 // Given
                 LocalDateTime now = LocalDateTime.now();
-                NameDefined nameDefined = new NameDefined(UUID.randomUUID().toString(), now.plusHours(3), "name");
-                NameWasChanged nameWasChanged1 = new NameWasChanged(UUID.randomUUID().toString(), now.minusHours(2), "name2");
-                NameWasChanged nameWasChanged2 = new NameWasChanged(UUID.randomUUID().toString(), now.plusHours(1), "name3");
+                NameDefined nameDefined = new NameDefined(UUID.randomUUID().toString(), now.plusHours(3), "name", "name");
+                NameWasChanged nameWasChanged1 = new NameWasChanged(UUID.randomUUID().toString(), now.minusHours(2), "name", "name2");
+                NameWasChanged nameWasChanged2 = new NameWasChanged(UUID.randomUUID().toString(), now.plusHours(1), "name", "name3");
 
                 // When
                 unconditionallyPersist(inMemoryEventStore, "name3", nameWasChanged1);
@@ -1222,9 +1222,9 @@ public class InMemoryEventStoreTest {
             void sort_by_time_desc_and_natural_descending() {
                 // Given
                 LocalDateTime now = LocalDateTime.now();
-                NameDefined nameDefined = new NameDefined(UUID.randomUUID().toString(), now, "name");
-                NameWasChanged nameWasChanged1 = new NameWasChanged(UUID.randomUUID().toString(), now, "name2");
-                NameWasChanged nameWasChanged2 = new NameWasChanged(UUID.randomUUID().toString(), now.plusHours(1), "name3");
+                NameDefined nameDefined = new NameDefined(UUID.randomUUID().toString(), now, "name", "name");
+                NameWasChanged nameWasChanged1 = new NameWasChanged(UUID.randomUUID().toString(), now, "name", "name2");
+                NameWasChanged nameWasChanged2 = new NameWasChanged(UUID.randomUUID().toString(), now.plusHours(1), "name", "name3");
 
                 // When
                 unconditionallyPersist(inMemoryEventStore, "name1", nameDefined);
@@ -1240,9 +1240,9 @@ public class InMemoryEventStoreTest {
             void sort_by_time_desc_and_natural_ascending() {
                 // Given
                 LocalDateTime now = LocalDateTime.now();
-                NameDefined nameDefined = new NameDefined(UUID.randomUUID().toString(), now, "name");
-                NameWasChanged nameWasChanged1 = new NameWasChanged(UUID.randomUUID().toString(), now, "name2");
-                NameWasChanged nameWasChanged2 = new NameWasChanged(UUID.randomUUID().toString(), now.plusHours(1), "name3");
+                NameDefined nameDefined = new NameDefined(UUID.randomUUID().toString(), now, "name", "name");
+                NameWasChanged nameWasChanged1 = new NameWasChanged(UUID.randomUUID().toString(), now, "name", "name2");
+                NameWasChanged nameWasChanged2 = new NameWasChanged(UUID.randomUUID().toString(), now.plusHours(1), "name", "name3");
 
                 // When
                 unconditionallyPersist(inMemoryEventStore, "name1", nameDefined);
@@ -1262,9 +1262,9 @@ public class InMemoryEventStoreTest {
             void query_filter_by_time() {
                 // Given
                 LocalDateTime now = LocalDateTime.now();
-                NameDefined nameDefined = new NameDefined(UUID.randomUUID().toString(), now, "name");
-                NameWasChanged nameWasChanged1 = new NameWasChanged(UUID.randomUUID().toString(), now.plusHours(1), "name2");
-                NameWasChanged nameWasChanged2 = new NameWasChanged(UUID.randomUUID().toString(), now.plusHours(2), "name3");
+                NameDefined nameDefined = new NameDefined(UUID.randomUUID().toString(), now, "name", "name");
+                NameWasChanged nameWasChanged1 = new NameWasChanged(UUID.randomUUID().toString(), now.plusHours(1), "name", "name2");
+                NameWasChanged nameWasChanged2 = new NameWasChanged(UUID.randomUUID().toString(), now.plusHours(2), "name", "name3");
 
                 // When
                 unconditionallyPersist(inMemoryEventStore, "name1", Stream.of(nameDefined, nameWasChanged1));
@@ -1279,9 +1279,9 @@ public class InMemoryEventStoreTest {
             void query_filter_by_time_range_is_wider_than_persisted_time_range() {
                 // Given
                 LocalDateTime now = LocalDateTime.now();
-                NameDefined nameDefined = new NameDefined(UUID.randomUUID().toString(), now, "name");
-                NameWasChanged nameWasChanged1 = new NameWasChanged(UUID.randomUUID().toString(), now.plusHours(1), "name2");
-                NameWasChanged nameWasChanged2 = new NameWasChanged(UUID.randomUUID().toString(), now.plusHours(2), "name3");
+                NameDefined nameDefined = new NameDefined(UUID.randomUUID().toString(), now, "name", "name");
+                NameWasChanged nameWasChanged1 = new NameWasChanged(UUID.randomUUID().toString(), now.plusHours(1), "name", "name2");
+                NameWasChanged nameWasChanged2 = new NameWasChanged(UUID.randomUUID().toString(), now.plusHours(2), "name", "name3");
 
                 // When
                 unconditionallyPersist(inMemoryEventStore, "name1", Stream.of(nameDefined, nameWasChanged1));
@@ -1297,9 +1297,9 @@ public class InMemoryEventStoreTest {
             void query_filter_by_time_range_has_exactly_the_same_range_as_persisted_time_range_when_using_java_8() {
                 // Given
                 LocalDateTime now = LocalDateTime.now();
-                NameDefined nameDefined = new NameDefined(UUID.randomUUID().toString(), now, "name");
-                NameWasChanged nameWasChanged1 = new NameWasChanged(UUID.randomUUID().toString(), now.plusHours(1), "name2");
-                NameWasChanged nameWasChanged2 = new NameWasChanged(UUID.randomUUID().toString(), now.plusHours(2), "name3");
+                NameDefined nameDefined = new NameDefined(UUID.randomUUID().toString(), now, "name", "name");
+                NameWasChanged nameWasChanged1 = new NameWasChanged(UUID.randomUUID().toString(), now.plusHours(1), "name", "name2");
+                NameWasChanged nameWasChanged2 = new NameWasChanged(UUID.randomUUID().toString(), now.plusHours(2), "name", "name3");
 
                 // When
                 unconditionallyPersist(inMemoryEventStore, "name1", Stream.of(nameDefined, nameWasChanged1));
@@ -1315,9 +1315,9 @@ public class InMemoryEventStoreTest {
             void query_filter_by_time_range_has_exactly_the_same_range_as_persisted_time_range_when_using_java_11_and_above() {
                 // Given
                 LocalDateTime now = LocalDateTime.now(UTC);
-                NameDefined nameDefined = new NameDefined(UUID.randomUUID().toString(), now, "name");
-                NameWasChanged nameWasChanged1 = new NameWasChanged(UUID.randomUUID().toString(), now.plusHours(1), "name2");
-                NameWasChanged nameWasChanged2 = new NameWasChanged(UUID.randomUUID().toString(), now.plusHours(2), "name3");
+                NameDefined nameDefined = new NameDefined(UUID.randomUUID().toString(), now, "name", "name");
+                NameWasChanged nameWasChanged1 = new NameWasChanged(UUID.randomUUID().toString(), now.plusHours(1), "name", "name2");
+                NameWasChanged nameWasChanged2 = new NameWasChanged(UUID.randomUUID().toString(), now.plusHours(2), "name", "name3");
 
                 // When
                 unconditionallyPersist(inMemoryEventStore, "name1", Stream.of(nameDefined, nameWasChanged1));
@@ -1332,9 +1332,9 @@ public class InMemoryEventStoreTest {
             void query_filter_by_time_range_has_a_range_smaller_as_persisted_time_range() {
                 // Given
                 LocalDateTime now = LocalDateTime.now();
-                NameDefined nameDefined = new NameDefined(UUID.randomUUID().toString(), now, "name");
-                NameWasChanged nameWasChanged1 = new NameWasChanged(UUID.randomUUID().toString(), now.plusHours(1), "name2");
-                NameWasChanged nameWasChanged2 = new NameWasChanged(UUID.randomUUID().toString(), now.plusHours(2), "name3");
+                NameDefined nameDefined = new NameDefined(UUID.randomUUID().toString(), now, "name", "name");
+                NameWasChanged nameWasChanged1 = new NameWasChanged(UUID.randomUUID().toString(), now.plusHours(1), "name", "name2");
+                NameWasChanged nameWasChanged2 = new NameWasChanged(UUID.randomUUID().toString(), now.plusHours(2), "name", "name3");
 
                 // When
                 unconditionallyPersist(inMemoryEventStore, "name1", Stream.of(nameDefined, nameWasChanged1));
@@ -1362,9 +1362,9 @@ public class InMemoryEventStoreTest {
         void count_without_any_filter_returns_all_the_count_of_all_events_in_the_event_store() {
             // Given
             LocalDateTime now = LocalDateTime.now();
-            DomainEvent event1 = new NameDefined(UUID.randomUUID().toString(), now, "John Doe");
-            DomainEvent event2 = new NameWasChanged(UUID.randomUUID().toString(), now, "Jan Doe");
-            DomainEvent event3 = new NameDefined(UUID.randomUUID().toString(), now, "Hello Doe");
+            DomainEvent event1 = new NameDefined(UUID.randomUUID().toString(), now, "name", "John Doe");
+            DomainEvent event2 = new NameWasChanged(UUID.randomUUID().toString(), now, "name", "Jan Doe");
+            DomainEvent event3 = new NameDefined(UUID.randomUUID().toString(), now, "name", "Hello Doe");
             unconditionallyPersist(inMemoryEventStore, "name", Stream.of(event1, event2, event3));
 
             // When
@@ -1378,9 +1378,9 @@ public class InMemoryEventStoreTest {
         void count_with_filter_returns_only_events_that_matches_the_filter() {
             // Given
             LocalDateTime now = LocalDateTime.now();
-            DomainEvent event1 = new NameDefined(UUID.randomUUID().toString(), now, "John Doe");
-            DomainEvent event2 = new NameWasChanged(UUID.randomUUID().toString(), now, "Jan Doe");
-            DomainEvent event3 = new NameDefined(UUID.randomUUID().toString(), now, "Hello Doe");
+            DomainEvent event1 = new NameDefined(UUID.randomUUID().toString(), now, "name", "John Doe");
+            DomainEvent event2 = new NameWasChanged(UUID.randomUUID().toString(), now, "name", "Jan Doe");
+            DomainEvent event3 = new NameDefined(UUID.randomUUID().toString(), now, "name", "Hello Doe");
             unconditionallyPersist(inMemoryEventStore, "name", Stream.of(event1, event2, event3));
 
             // When
@@ -1414,9 +1414,9 @@ public class InMemoryEventStoreTest {
         void returns_true_when_there_are_events_in_the_event_store_and_filter_is_all() {
             // Given
             LocalDateTime now = LocalDateTime.now();
-            DomainEvent event1 = new NameDefined(UUID.randomUUID().toString(), now, "John Doe");
-            DomainEvent event2 = new NameWasChanged(UUID.randomUUID().toString(), now, "Jan Doe");
-            DomainEvent event3 = new NameDefined(UUID.randomUUID().toString(), now, "Hello Doe");
+            DomainEvent event1 = new NameDefined(UUID.randomUUID().toString(), now, "name", "John Doe");
+            DomainEvent event2 = new NameWasChanged(UUID.randomUUID().toString(), now, "name", "Jan Doe");
+            DomainEvent event3 = new NameDefined(UUID.randomUUID().toString(), now, "name", "Hello Doe");
             unconditionallyPersist(inMemoryEventStore, "name", Stream.of(event1, event2, event3));
 
             // When
@@ -1439,9 +1439,9 @@ public class InMemoryEventStoreTest {
         void returns_true_when_there_are_matching_events_in_the_event_store_and_filter_not_all() {
             // Given
             LocalDateTime now = LocalDateTime.now();
-            DomainEvent event1 = new NameDefined(UUID.randomUUID().toString(), now, "John Doe");
-            DomainEvent event2 = new NameWasChanged(UUID.randomUUID().toString(), now, "Jan Doe");
-            DomainEvent event3 = new NameDefined(UUID.randomUUID().toString(), now, "Hello Doe");
+            DomainEvent event1 = new NameDefined(UUID.randomUUID().toString(), now, "name", "John Doe");
+            DomainEvent event2 = new NameWasChanged(UUID.randomUUID().toString(), now, "name", "Jan Doe");
+            DomainEvent event3 = new NameDefined(UUID.randomUUID().toString(), now, "name", "Hello Doe");
             unconditionallyPersist(inMemoryEventStore, "name", Stream.of(event1, event2, event3));
 
             // When
@@ -1455,8 +1455,8 @@ public class InMemoryEventStoreTest {
         void returns_false_when_there_events_in_the_event_store_that_doesnt_match_filter() {
             // Given
             LocalDateTime now = LocalDateTime.now();
-            DomainEvent event1 = new NameDefined(UUID.randomUUID().toString(), now, "John Doe");
-            DomainEvent event2 = new NameDefined(UUID.randomUUID().toString(), now, "Hello Doe");
+            DomainEvent event1 = new NameDefined(UUID.randomUUID().toString(), now, "name", "John Doe");
+            DomainEvent event2 = new NameDefined(UUID.randomUUID().toString(), now, "name", "Hello Doe");
             unconditionallyPersist(inMemoryEventStore, "name", Stream.of(event1, event2));
 
             // When

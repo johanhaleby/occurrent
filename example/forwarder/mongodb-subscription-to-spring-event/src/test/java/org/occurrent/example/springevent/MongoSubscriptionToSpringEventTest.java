@@ -85,8 +85,8 @@ public class MongoSubscriptionToSpringEventTest {
     void publishes_events_to_spring_event_publisher() {
         // Given
         LocalDateTime now = LocalDateTime.now();
-        NameDefined nameDefined = new NameDefined(UUID.randomUUID().toString(), now, "name");
-        NameWasChanged nameWasChanged = new NameWasChanged(UUID.randomUUID().toString(), now, "another name");
+        NameDefined nameDefined = new NameDefined(UUID.randomUUID().toString(), now, "name", "name");
+        NameWasChanged nameWasChanged = new NameWasChanged(UUID.randomUUID().toString(), now, "name", "another name");
 
         // When
         mongoEventStore.write("1", 0, serialize(nameDefined, nameWasChanged));

@@ -116,9 +116,9 @@ public class CatchupSubscriptionModelTest {
     void catchup_subscription_reads_historic_events() {
         // Given
         LocalDateTime now = LocalDateTime.now();
-        NameDefined nameDefined1 = new NameDefined(UUID.randomUUID().toString(), now, "name1");
-        NameDefined nameDefined2 = new NameDefined(UUID.randomUUID().toString(), now.plusSeconds(2), "name2");
-        NameWasChanged nameWasChanged1 = new NameWasChanged(UUID.randomUUID().toString(), now.plusSeconds(10), "name3");
+        NameDefined nameDefined1 = new NameDefined(UUID.randomUUID().toString(), now, "name", "name1");
+        NameDefined nameDefined2 = new NameDefined(UUID.randomUUID().toString(), now.plusSeconds(2), "name", "name2");
+        NameWasChanged nameWasChanged1 = new NameWasChanged(UUID.randomUUID().toString(), now.plusSeconds(10), "name", "name3");
 
         mongoEventStore.write("1", 0, serialize(nameDefined1));
         mongoEventStore.write("2", 0, serialize(nameDefined2));
@@ -137,9 +137,9 @@ public class CatchupSubscriptionModelTest {
     void catchup_subscription_reads_historic_events_with_filter() {
         // Given
         LocalDateTime now = LocalDateTime.now();
-        NameDefined nameDefined1 = new NameDefined(UUID.randomUUID().toString(), now, "name1");
-        NameDefined nameDefined2 = new NameDefined(UUID.randomUUID().toString(), now.plusSeconds(2), "name2");
-        NameWasChanged nameWasChanged1 = new NameWasChanged(UUID.randomUUID().toString(), now.plusSeconds(10), "name3");
+        NameDefined nameDefined1 = new NameDefined(UUID.randomUUID().toString(), now, "name", "name1");
+        NameDefined nameDefined2 = new NameDefined(UUID.randomUUID().toString(), now.plusSeconds(2), "name", "name2");
+        NameWasChanged nameWasChanged1 = new NameWasChanged(UUID.randomUUID().toString(), now.plusSeconds(10), "name", "name3");
 
         mongoEventStore.write("1", 0, serialize(nameDefined1));
         mongoEventStore.write("2", 0, serialize(nameDefined2));
@@ -164,9 +164,9 @@ public class CatchupSubscriptionModelTest {
         String eventId1 = UUID.randomUUID().toString();
         String eventId2 = UUID.randomUUID().toString();
         String eventId3 = UUID.randomUUID().toString();
-        NameDefined nameDefined1 = new NameDefined(eventId1, now, "name1");
-        NameDefined nameDefined2 = new NameDefined(eventId2, now.plusSeconds(2), "name2");
-        NameWasChanged nameWasChanged1 = new NameWasChanged(eventId3, now.plusSeconds(10), "name3");
+        NameDefined nameDefined1 = new NameDefined(eventId1, now, "name", "name1");
+        NameDefined nameDefined2 = new NameDefined(eventId2, now.plusSeconds(2), "name", "name2");
+        NameWasChanged nameWasChanged1 = new NameWasChanged(eventId3, now.plusSeconds(10), "name", "name3");
 
         mongoEventStore.write("1", 0, serialize(nameDefined1));
         mongoEventStore.write("2", 0, serialize(nameDefined2));
@@ -189,11 +189,11 @@ public class CatchupSubscriptionModelTest {
     void catchup_subscription_reads_historic_events_and_then_switches_to_new_events() throws InterruptedException {
         // Given
         LocalDateTime now = LocalDateTime.now();
-        NameDefined nameDefined1 = new NameDefined(UUID.randomUUID().toString(), now, "name1");
-        NameDefined nameDefined2 = new NameDefined(UUID.randomUUID().toString(), now.plusSeconds(2), "name2");
-        NameDefined nameDefined3 = new NameDefined(UUID.randomUUID().toString(), now.plusSeconds(6), "name5");
-        NameDefined nameDefined4 = new NameDefined(UUID.randomUUID().toString(), now.plusSeconds(7), "name6");
-        NameWasChanged nameWasChanged1 = new NameWasChanged(UUID.randomUUID().toString(), now.plusSeconds(10), "name3");
+        NameDefined nameDefined1 = new NameDefined(UUID.randomUUID().toString(), now, "name", "name1");
+        NameDefined nameDefined2 = new NameDefined(UUID.randomUUID().toString(), now.plusSeconds(2), "name", "name2");
+        NameDefined nameDefined3 = new NameDefined(UUID.randomUUID().toString(), now.plusSeconds(6), "name", "name5");
+        NameDefined nameDefined4 = new NameDefined(UUID.randomUUID().toString(), now.plusSeconds(7), "name", "name6");
+        NameWasChanged nameWasChanged1 = new NameWasChanged(UUID.randomUUID().toString(), now.plusSeconds(10), "name", "name3");
 
         mongoEventStore.write("1", 0, serialize(nameDefined1));
         mongoEventStore.write("2", 0, serialize(nameDefined2));
@@ -237,10 +237,10 @@ public class CatchupSubscriptionModelTest {
     void catchup_subscription_continues_where_it_left_off_when_not_using_filter() {
         // Given
         LocalDateTime now = LocalDateTime.now();
-        NameDefined nameDefined1 = new NameDefined(UUID.randomUUID().toString(), now, "name1");
-        NameDefined nameDefined2 = new NameDefined(UUID.randomUUID().toString(), now.plusSeconds(2), "name2");
-        NameDefined nameDefined3 = new NameDefined(UUID.randomUUID().toString(), now.plusSeconds(6), "name5");
-        NameWasChanged nameWasChanged1 = new NameWasChanged(UUID.randomUUID().toString(), now.plusSeconds(10), "name3");
+        NameDefined nameDefined1 = new NameDefined(UUID.randomUUID().toString(), now, "name", "name1");
+        NameDefined nameDefined2 = new NameDefined(UUID.randomUUID().toString(), now.plusSeconds(2), "name", "name2");
+        NameDefined nameDefined3 = new NameDefined(UUID.randomUUID().toString(), now.plusSeconds(6), "name", "name5");
+        NameWasChanged nameWasChanged1 = new NameWasChanged(UUID.randomUUID().toString(), now.plusSeconds(10), "name", "name3");
 
         mongoEventStore.write("1", 0, serialize(nameDefined1));
         mongoEventStore.write("2", 0, serialize(nameDefined2));
@@ -286,10 +286,10 @@ public class CatchupSubscriptionModelTest {
     void catchup_subscription_continues_where_it_left_off_when_using_filter() {
         // Given
         LocalDateTime now = LocalDateTime.now();
-        NameDefined nameDefined1 = new NameDefined(UUID.randomUUID().toString(), now, "name1");
-        NameDefined nameDefined2 = new NameDefined(UUID.randomUUID().toString(), now.plusSeconds(2), "name2");
-        NameDefined nameDefined3 = new NameDefined(UUID.randomUUID().toString(), now.plusSeconds(6), "name5");
-        NameDefined nameDefined4 = new NameDefined(UUID.randomUUID().toString(), now.plusSeconds(10), "name3");
+        NameDefined nameDefined1 = new NameDefined(UUID.randomUUID().toString(), now, "name", "name1");
+        NameDefined nameDefined2 = new NameDefined(UUID.randomUUID().toString(), now.plusSeconds(2), "name", "name2");
+        NameDefined nameDefined3 = new NameDefined(UUID.randomUUID().toString(), now.plusSeconds(6), "name", "name5");
+        NameDefined nameDefined4 = new NameDefined(UUID.randomUUID().toString(), now.plusSeconds(10), "name", "name3");
 
         mongoEventStore.write("1", 0, serialize(nameDefined1));
         mongoEventStore.write("2", 0, serialize(nameDefined2));
@@ -335,10 +335,10 @@ public class CatchupSubscriptionModelTest {
     void catchup_subscription_continues_where_it_left_off_after_all_historic_events_have_been_consumed() {
         // Given
         LocalDateTime now = LocalDateTime.now();
-        NameDefined nameDefined1 = new NameDefined(UUID.randomUUID().toString(), now, "name1");
-        NameDefined nameDefined2 = new NameDefined(UUID.randomUUID().toString(), now.plusSeconds(2), "name2");
-        NameDefined nameDefined3 = new NameDefined(UUID.randomUUID().toString(), now.plusSeconds(6), "name5");
-        NameDefined nameDefined4 = new NameDefined(UUID.randomUUID().toString(), now.plusSeconds(10), "name3");
+        NameDefined nameDefined1 = new NameDefined(UUID.randomUUID().toString(), now, "name", "name1");
+        NameDefined nameDefined2 = new NameDefined(UUID.randomUUID().toString(), now.plusSeconds(2), "name", "name2");
+        NameDefined nameDefined3 = new NameDefined(UUID.randomUUID().toString(), now.plusSeconds(6), "name", "name5");
+        NameDefined nameDefined4 = new NameDefined(UUID.randomUUID().toString(), now.plusSeconds(10), "name", "name3");
 
         mongoEventStore.write("1", 0, serialize(nameDefined1));
         mongoEventStore.write("2", 0, serialize(nameDefined2));
@@ -393,10 +393,10 @@ public class CatchupSubscriptionModelTest {
     void catchup_subscription_restarts_from_beginning_of_time_when_position_is_not_persisted_during_catch_up_and_catch_up_fails() {
         // Given
         LocalDateTime now = LocalDateTime.now();
-        NameDefined nameDefined1 = new NameDefined(UUID.randomUUID().toString(), now, "name1");
-        NameDefined nameDefined2 = new NameDefined(UUID.randomUUID().toString(), now.plusSeconds(2), "name2");
-        NameDefined nameDefined3 = new NameDefined(UUID.randomUUID().toString(), now.plusSeconds(6), "name5");
-        NameWasChanged nameWasChanged1 = new NameWasChanged(UUID.randomUUID().toString(), now.plusSeconds(10), "name3");
+        NameDefined nameDefined1 = new NameDefined(UUID.randomUUID().toString(), now, "name", "name1");
+        NameDefined nameDefined2 = new NameDefined(UUID.randomUUID().toString(), now.plusSeconds(2), "name", "name2");
+        NameDefined nameDefined3 = new NameDefined(UUID.randomUUID().toString(), now.plusSeconds(6), "name", "name5");
+        NameWasChanged nameWasChanged1 = new NameWasChanged(UUID.randomUUID().toString(), now.plusSeconds(10), "name", "name3");
 
         mongoEventStore.write("1", 0, serialize(nameDefined1));
         mongoEventStore.write("2", 0, serialize(nameDefined2));
@@ -445,7 +445,7 @@ public class CatchupSubscriptionModelTest {
         LocalDateTime now = LocalDateTime.now();
 
         for (int i = 0; i < 100; i++) {
-            mongoEventStore.write(String.valueOf(i), 0, serialize(new NameDefined(UUID.randomUUID().toString(), now.plusMinutes(i), "name" + i)));
+            mongoEventStore.write(String.valueOf(i), 0, serialize(new NameDefined(UUID.randomUUID().toString(), now.plusMinutes(i), "name", "name" + i)));
         }
 
         AtomicInteger numberOfSavedPositions = new AtomicInteger();

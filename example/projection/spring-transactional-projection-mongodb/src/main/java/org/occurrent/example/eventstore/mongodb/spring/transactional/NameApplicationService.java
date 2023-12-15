@@ -46,20 +46,20 @@ public class NameApplicationService {
     }
 
 
-    public void defineName(UUID id, LocalDateTime time, String name) {
-        List<DomainEvent> events = Name.defineTheName(id.toString(), time, name);
-        eventStore.append(id, 0, events);
-        currentNameProjection.save(buildProjectionFromEvents(id, events));
+    public void defineName(UUID userId, LocalDateTime time, String name) {
+        List<DomainEvent> events = Name.defineTheName(UUID.randomUUID().toString(), time, userId.toString(), name);
+        eventStore.append(userId, 0, events);
+        currentNameProjection.save(buildProjectionFromEvents(userId, events));
     }
 
-    public void changeName(UUID id, LocalDateTime time, String name) {
-        EventStream<DomainEvent> eventStream = eventStore.loadEventStream(id);
+    public void changeName(UUID userId, LocalDateTime time, String name) {
+        EventStream<DomainEvent> eventStream = eventStore.loadEventStream(userId);
         List<DomainEvent> events = eventStream.eventList();
 
-        List<DomainEvent> newEvents = Name.changeName(events, UUID.randomUUID().toString(), time, name);
+        List<DomainEvent> newEvents = Name.changeName(events, UUID.randomUUID().toString(), time, userId.toString(), name);
 
-        eventStore.append(id, eventStream.version(), newEvents);
-        currentNameProjection.save(buildProjectionFromEvents(id, append(events, newEvents)));
+        eventStore.append(userId, eventStream.version(), newEvents);
+        currentNameProjection.save(buildProjectionFromEvents(userId, append(events, newEvents)));
     }
 
     private CurrentName buildProjectionFromEvents(UUID id, List<DomainEvent> domainEvents) {

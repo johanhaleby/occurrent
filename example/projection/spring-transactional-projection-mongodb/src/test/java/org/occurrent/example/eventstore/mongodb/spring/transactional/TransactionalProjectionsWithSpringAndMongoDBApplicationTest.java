@@ -68,15 +68,17 @@ public class TransactionalProjectionsWithSpringAndMongoDBApplicationTest {
     void write_events_and_projection_in_the_same_tx() {
         // Given
         LocalDateTime now = LocalDateTime.now();
-        UUID id = UUID.randomUUID();
+        UUID userId = UUID.randomUUID();
 
         // When
-        nameApplicationService.defineName(id, now, "John Doe");
+        nameApplicationService.defineName(userId, now, "John Doe");
 
         // Then
         assertAll(
-                () -> assertThat(currentNameProjection.findById(id.toString())).hasValue(new CurrentName(id.toString(), "John Doe")),
-                () -> assertThat(eventStore.loadEventStream(id).events()).containsExactly(new NameDefined(id.toString(), now, "John Doe"))
+                () -> assertThat(currentNameProjection.findById(userId.toString())).hasValue(new CurrentName(userId.toString(), "John Doe")),
+                () -> assertThat(eventStore.loadEventStream(userId).events())
+                        .usingElementComparatorIgnoringFields("eventId")
+                        .containsExactly(new NameDefined(UUID.randomUUID().toString(), now, userId.toString(), "John Doe"))
         );
     }
 
