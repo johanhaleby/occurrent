@@ -92,7 +92,9 @@ public class ReactiveTransactionalProjectionsWithSpringAndMongoDBApplicationTest
         // Then
         assertAll(
                 () -> assertThat(currentNameProjection.findById(userId.toString()).block()).isEqualTo(new CurrentName(userId.toString(), "John Doe")),
-                () -> Assertions.assertThat(requireNonNull(eventStore.loadEventStream(userId).block()).eventList().block()).containsExactly(new NameDefined(UUID.randomUUID().toString(), now, userId.toString(), "John Doe"))
+                () -> Assertions.assertThat(requireNonNull(eventStore.loadEventStream(userId).block()).eventList().block())
+                        .usingElementComparatorIgnoringFields("eventId")
+                        .containsExactly(new NameDefined(UUID.randomUUID().toString(), now, userId.toString(), "John Doe"))
         );
     }
 
