@@ -65,7 +65,7 @@ public class Name {
                 .filter(isInstanceOfNameDefined.or(isInstanceOfNameWasChanged))
                 .reduce("", (__, e) -> e.name(), (name1, name2) -> name2);
 
-        return changeNameFromCurrent(eventId, time, currentName, userId, newName);
+        return changeNameFromCurrent(eventId, time, userId, currentName, newName);
     }
 
 }
