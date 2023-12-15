@@ -136,7 +136,7 @@ public interface Decider<C, S, E> {
     }
 
     @NotNull
-    default Decision<S, E> decideOnStateWithSingleCommand(S state, C command) {
+    private Decision<S, E> decideOnStateWithSingleCommand(S state, C command) {
         List<E> newEvents = decide(command, state);
         S newState = fold(state, newEvents);
         return new Decision<>(newState, newEvents);
