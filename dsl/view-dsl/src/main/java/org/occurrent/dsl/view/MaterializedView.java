@@ -25,12 +25,19 @@ import java.util.function.Function;
 public interface MaterializedView<E> {
     void update(E event);
 
+    default <S, ID> void updateFromRepository(ID id, E event, View<S, E> view, ViewStateRepository<S, ID> repository) {
+        S currentState = repository.findById(id).orElse(view.initialState());
+        S updatedState = view.evolve(currentState, event);
+        repository.save(id, updatedState);
+    }
+
     static <S, E, ID> MaterializedView<E> create(Function<E, ID> idMapper, View<S, E> view, ViewStateRepository<S, ID> repository) {
-        return event -> {
-            ID id = idMapper.apply(event);
-            S currentState = repository.findById(id).orElse(view.initialState());
-            S updatedState = view.evolve(currentState, event);
-            repository.save(id, updatedState);
+        return new MaterializedView<>() {
+            @Override
+            public void update(E event) {
+                ID id = idMapper.apply(event);
+                updateFromRepository(id, event, view, repository);
+            }
         };
     }
 }

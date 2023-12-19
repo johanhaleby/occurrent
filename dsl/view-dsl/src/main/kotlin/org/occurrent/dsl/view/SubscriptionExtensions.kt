@@ -21,11 +21,18 @@ import org.occurrent.dsl.subscription.blocking.Subscriptions
 import org.occurrent.subscription.StartAt
 import org.occurrent.subscription.api.blocking.Subscription
 
-inline fun <reified E : Any> Subscriptions<E>.updateView(viewName: String, view: MaterializedView<E>, startAt: StartAt? = null): Subscription {
+inline fun <reified E : Any> Subscriptions<E>.updateView(viewName: String, startAt: StartAt? = null, crossinline updateFunction: (E) -> Unit): Subscription {
     val eventTypes: List<Class<out E>> = if (E::class.isSealed) {
         E::class.sealedSubclasses.map { it.java }.toList()
     } else {
         listOf(E::class.java)
     }
-    return subscribe(viewName, eventTypes = eventTypes, startAt = startAt, fn = view::update)
+    return subscribe(viewName, eventTypes = eventTypes, startAt = startAt, fn = { e ->
+        updateFunction(e)
+    })
 }
+
+inline fun <reified E : Any> Subscriptions<E>.updateView(viewName: String, materializedView: MaterializedView<E>, startAt: StartAt? = null): Subscription =
+    updateView(viewName, startAt) { e ->
+        materializedView.update(e)
+    }

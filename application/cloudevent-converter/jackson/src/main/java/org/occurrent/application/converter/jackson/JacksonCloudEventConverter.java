@@ -101,8 +101,7 @@ public class JacksonCloudEventConverter<T> implements CloudEventConverter<T> {
     public CloudEvent toCloudEvent(T domainEvent) {
         requireNonNull(domainEvent, "Domain event cannot be null");
         // @formatter:off
-        PojoCloudEventData<Map<String, Object>> cloudEventData = PojoCloudEventData.wrap(objectMapper.convertValue(domainEvent, new TypeReference<Map<String, Object>>() {
-        }), objectMapper::writeValueAsBytes);
+        PojoCloudEventData<Map<String, Object>> cloudEventData = PojoCloudEventData.wrap(objectMapper.convertValue(domainEvent, new TypeReference<>() {}), objectMapper::writeValueAsBytes);
         // @formatter:on
         return CloudEventBuilder.v1()
                 .withId(idMapper.apply(domainEvent))

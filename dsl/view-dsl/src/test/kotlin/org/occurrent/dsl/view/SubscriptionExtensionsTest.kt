@@ -72,7 +72,7 @@ class SubscriptionExtensionsTest {
         )
 
         // Then
-        val viewState = await untilCallTo { viewStateRepository.fetch("johan") } matches { name -> name == "Johan Haleby" }
+        val viewState = await untilCallTo { viewStateRepository.find("johan") } matches { name -> name == "Johan Haleby" }
         assertThat(viewState).isEqualTo("Johan Haleby")
     }
 }
