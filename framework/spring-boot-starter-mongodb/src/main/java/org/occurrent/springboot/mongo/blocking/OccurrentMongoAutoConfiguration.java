@@ -21,6 +21,7 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import com.mongodb.ReadConcern;
 import com.mongodb.TransactionOptions;
 import com.mongodb.WriteConcern;
+import jakarta.annotation.PostConstruct;
 import org.jetbrains.annotations.NotNull;
 import org.occurrent.application.converter.CloudEventConverter;
 import org.occurrent.application.converter.jackson.JacksonCloudEventConverter;
@@ -64,14 +65,14 @@ import java.util.Optional;
 import static org.occurrent.subscription.mongodb.spring.blocking.SpringMongoSubscriptionModelConfig.withConfig;
 
 /**
- * Occurrent Spring auto-configuration support for blocking MongoDB event store and subscriptions
+ * Occurrent Spring autoconfiguration support for blocking MongoDB event store and subscriptions
  */
 @Configuration
 @ConditionalOnClass({SpringMongoEventStore.class, SpringMongoSubscriptionModel.class})
 @EnableConfigurationProperties(OccurrentProperties.class)
 @AutoConfigureAfter(MongoAutoConfiguration.class)
 @Import(MongoDataAutoConfiguration.class)
-public class OccurrentMongoAutoConfiguration {
+public class OccurrentMongoAutoConfiguration<E> {
 
     @Bean
     @ConditionalOnMissingBean(MongoTransactionManager.class)
@@ -118,40 +119,40 @@ public class OccurrentMongoAutoConfiguration {
 
     @Bean
     @ConditionalOnMissingBean(CloudEventConverter.class)
-    public <T> CloudEventConverter<?> occurrentCloudEventConverter(Optional<ObjectMapper> objectMapper, OccurrentProperties occurrentProperties, Optional<CloudEventTypeMapper<T>> cloudEventTypeMapper) {
+    public CloudEventConverter<E> occurrentCloudEventConverter(Optional<ObjectMapper> objectMapper, OccurrentProperties occurrentProperties, Optional<CloudEventTypeMapper<E>> cloudEventTypeMapper) {
         ObjectMapper om = objectMapper.orElseGet(ObjectMapper::new);
-        CloudEventTypeMapper<T> cm = cloudEventTypeMapper.orElseGet(OccurrentMongoAutoConfiguration::newDefaultCloudEventTypeMapper);
-        return new JacksonCloudEventConverter.Builder<T>(om, occurrentProperties.getCloudEventConverter().getCloudEventSource())
+        CloudEventTypeMapper<E> cm = cloudEventTypeMapper.orElseGet(this::newDefaultCloudEventTypeMapper);
+        return new JacksonCloudEventConverter.Builder<E>(om, occurrentProperties.getCloudEventConverter().getCloudEventSource())
                 .typeMapper(cm)
                 .build();
     }
 
     @Bean
     @ConditionalOnMissingBean(CloudEventTypeMapper.class)
-    public CloudEventTypeMapper<?> occurrentTypeMapper() {
+    public CloudEventTypeMapper<E> occurrentTypeMapper() {
         return newDefaultCloudEventTypeMapper();
     }
 
     @NotNull
-    private static <T> CloudEventTypeMapper<T> newDefaultCloudEventTypeMapper() {
+    private CloudEventTypeMapper<E> newDefaultCloudEventTypeMapper() {
         return ReflectionCloudEventTypeMapper.qualified();
     }
 
     @Bean
     @ConditionalOnMissingBean(Subscriptions.class)
-    public <T> Subscriptions<?> occurrentSubscriptionDsl(Subscribable subscribable, CloudEventConverter<T> cloudEventConverter) {
+    public Subscriptions<E> occurrentSubscriptionDsl(Subscribable subscribable, CloudEventConverter<E> cloudEventConverter) {
         return new Subscriptions<>(subscribable, cloudEventConverter);
     }
 
     @Bean
     @ConditionalOnMissingBean(DomainEventQueries.class)
-    public <T> DomainEventQueries<?> occurrentDomainEventQueries(EventStoreQueries eventStoreQueries, CloudEventConverter<T> cloudEventConverter) {
+    public DomainEventQueries<E> occurrentDomainEventQueries(EventStoreQueries eventStoreQueries, CloudEventConverter<E> cloudEventConverter) {
         return new DomainEventQueries<>(eventStoreQueries, cloudEventConverter);
     }
 
     @Bean
     @ConditionalOnMissingBean(ApplicationService.class)
-    public ApplicationService<?> occurrentApplicationService(EventStore eventStore, CloudEventConverter<?> cloudEventConverter, OccurrentProperties occurrentProperties) {
+    public ApplicationService<E> occurrentApplicationService(EventStore eventStore, CloudEventConverter<E> cloudEventConverter, OccurrentProperties occurrentProperties) {
         boolean enableDefaultRetryStrategy = occurrentProperties.getApplicationService().isEnableDefaultRetryStrategy();
         return enableDefaultRetryStrategy ? new GenericApplicationService<>(eventStore, cloudEventConverter) : new GenericApplicationService<>(eventStore, cloudEventConverter, RetryStrategy.none());
     }
