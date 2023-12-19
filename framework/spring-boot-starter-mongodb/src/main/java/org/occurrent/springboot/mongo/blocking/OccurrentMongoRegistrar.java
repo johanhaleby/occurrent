@@ -17,18 +17,21 @@
 
 package org.occurrent.springboot.mongo.blocking;
 
+import org.jetbrains.annotations.NotNull;
 import org.springframework.beans.factory.support.BeanDefinitionRegistry;
-import org.springframework.beans.factory.support.GenericBeanDefinition;
+import org.springframework.beans.factory.support.RootBeanDefinition;
 import org.springframework.context.annotation.ImportBeanDefinitionRegistrar;
 import org.springframework.core.annotation.AnnotationAttributes;
 import org.springframework.core.type.AnnotationMetadata;
 
 import java.util.Objects;
 
+import static org.springframework.beans.factory.config.BeanDefinition.ROLE_SUPPORT;
+
 public class OccurrentMongoRegistrar implements ImportBeanDefinitionRegistrar {
 
     @Override
-    public void registerBeanDefinitions(AnnotationMetadata metadata, BeanDefinitionRegistry registry) {
+    public void registerBeanDefinitions(AnnotationMetadata metadata, @NotNull BeanDefinitionRegistry registry) {
         AnnotationAttributes attributes = AnnotationAttributes.fromMap(metadata.getAnnotationAttributes(EnableOccurrent.class.getName(), true));
         Class<?> eventT = null;
         try {
@@ -37,8 +40,10 @@ public class OccurrentMongoRegistrar implements ImportBeanDefinitionRegistrar {
             throw new RuntimeException(e);
         }
 
-        GenericBeanDefinition definition = new GenericBeanDefinition();
-        definition.setBeanClass(OccurrentMongoAutoConfiguration.class);
-        registry.registerBeanDefinition("occurrentAutoConfiguration", definition);
+        RootBeanDefinition definition = new RootBeanDefinition(OccurrentMongoAutoConfiguration.class);
+        definition.setSource(metadata);
+        definition.setRole(ROLE_SUPPORT);
+        definition.setLazyInit(false);
+        registry.registerBeanDefinition("occurrentMongoAutoConfiguration", definition);
     }
 }
