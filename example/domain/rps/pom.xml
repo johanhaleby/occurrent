@@ -32,6 +32,7 @@
         <module>pragmatic-model</module>
         <module>decider-model</module>
         <module>multiround-decider-model</module>
+        <module>decider-web</module>
     </modules>
     
 </project>
