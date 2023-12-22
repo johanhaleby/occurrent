@@ -3,7 +3,7 @@
 * Fixed bug in spring-boot-starter-mongodb module in which it didn't automatically configured MongoDB. 
 * Upgraded from Kotlin 1.9.20 to 1.9.21
 * Upgraded amqp-client from 5.16.0 to 5.20.0
-* Upgraded Spring Boot from 3.1.4 to 3.2.0
+* Upgraded Spring Boot from 3.1.4 to 3.2.1
 * Upgraded reactor from 3.5.10 to 3.6.0 
 * Upgraded Spring data MongoDB from 4.1.4 to 4.2.0 
 * Upgraded jobrunr from 6.3.2 to 6.3.3
