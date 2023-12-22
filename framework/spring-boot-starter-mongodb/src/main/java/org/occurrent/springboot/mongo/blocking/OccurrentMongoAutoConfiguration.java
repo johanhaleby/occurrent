@@ -49,11 +49,9 @@ import org.springframework.boot.autoconfigure.AutoConfiguration;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnBean;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnClass;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnMissingBean;
-import org.springframework.boot.autoconfigure.data.mongo.MongoDataAutoConfiguration;
 import org.springframework.boot.autoconfigure.mongo.MongoAutoConfiguration;
 import org.springframework.boot.context.properties.EnableConfigurationProperties;
 import org.springframework.context.annotation.Bean;
-import org.springframework.context.annotation.Import;
 import org.springframework.data.mongodb.MongoDatabaseFactory;
 import org.springframework.data.mongodb.MongoTransactionManager;
 import org.springframework.data.mongodb.core.MongoTemplate;
@@ -69,7 +67,7 @@ import static org.occurrent.subscription.mongodb.spring.blocking.SpringMongoSubs
 @AutoConfiguration(after = MongoAutoConfiguration.class)
 @ConditionalOnClass({SpringMongoEventStore.class, SpringMongoSubscriptionModel.class})
 @EnableConfigurationProperties(OccurrentProperties.class)
-@Import({MongoAutoConfiguration.class, MongoDataAutoConfiguration.class})
+//@Import({MongoAutoConfiguration.class, MongoDataAutoConfiguration.class})
 public class OccurrentMongoAutoConfiguration<E> {
 
     @Bean
