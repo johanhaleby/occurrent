@@ -31,7 +31,7 @@ import java.util.function.Function;
  * @param <ID> The id that uniquely identifies the state
  */
 public interface ViewStateRepository<S, ID> {
-    Optional<S> findById(@NotNull ID id);
+    Optional<@NotNull S> findById(@NotNull ID id);
 
     void save(@NotNull ID id, @NotNull S state);
 
