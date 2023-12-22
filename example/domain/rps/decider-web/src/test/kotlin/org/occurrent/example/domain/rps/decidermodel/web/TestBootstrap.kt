@@ -25,6 +25,8 @@ import org.springframework.boot.testcontainers.service.connection.ServiceConnect
 import org.springframework.boot.with
 import org.springframework.context.annotation.Bean
 import org.testcontainers.containers.MongoDBContainer
+import org.testcontainers.containers.wait.strategy.LogMessageWaitStrategy
+import org.testcontainers.containers.wait.strategy.WaitStrategy
 
 
 @TestConfiguration(proxyBeanMethods = false)
@@ -34,9 +36,7 @@ class TestBootstrap {
     @Bean
     @ServiceConnection
     @RestartScope
-    fun mongoDbContainer() = MongoDBContainer("mongo:4.2.8").apply {
-        portBindings = listOf("27017:27017")
-    }
+    fun mongoDbContainer(): MongoDBContainer = MongoDBContainer("mongo:4.2.8")
 }
 
 fun main(args: Array<String>) {

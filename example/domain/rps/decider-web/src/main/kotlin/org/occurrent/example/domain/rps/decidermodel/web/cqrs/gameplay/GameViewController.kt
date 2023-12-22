@@ -81,7 +81,7 @@ sealed interface GameReadModel {
 class GameViewController(private val mongoOperations: MongoOperations) {
 
     @GetMapping("/{gameId}")
-    fun game(@PathVariable("gameId") gameId: GameId): GameReadModel? = gameView.currentState(mongoOperations, gameId)
+    fun showGame(@PathVariable("gameId") gameId: GameId): GameReadModel? = gameView.currentState(mongoOperations, gameId)
 }
 
 private val gameView = view<GameReadModel?, GameEvent>(
