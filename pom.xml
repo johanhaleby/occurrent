@@ -71,7 +71,7 @@
         <maven.compiler.target>17</maven.compiler.target>
         <junit.version>5.10.1</junit.version>
         <test-containers.version>1.19.3</test-containers.version>
-        <kotlin.version>1.9.21</kotlin.version>
+        <kotlin.version>1.9.22</kotlin.version>
         <jackson.version>2.15.3</jackson.version>
         <cloudevents.version>2.5.0</cloudevents.version>
         <reactor.version>3.6.0</reactor.version>

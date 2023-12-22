@@ -1,7 +1,7 @@
 ### Changelog next version
 * spring-boot-starter-mongodb no longer autoconfigures itself by just importing the library in the classpath, instead you need to bootstrap by annotating your Spring Boot class with @EnableOccurrent.   
 * Fixed bug in spring-boot-starter-mongodb module in which it didn't automatically configured MongoDB. 
-* Upgraded from Kotlin 1.9.20 to 1.9.21
+* Upgraded from Kotlin 1.9.20 to 1.9.22
 * Upgraded amqp-client from 5.16.0 to 5.20.0
 * Upgraded Spring Boot from 3.1.4 to 3.2.1
 * Upgraded reactor from 3.5.10 to 3.6.0 
