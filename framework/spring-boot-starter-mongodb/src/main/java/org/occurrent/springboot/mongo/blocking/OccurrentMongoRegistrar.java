@@ -21,10 +21,7 @@ import org.jetbrains.annotations.NotNull;
 import org.springframework.beans.factory.support.BeanDefinitionRegistry;
 import org.springframework.beans.factory.support.RootBeanDefinition;
 import org.springframework.context.annotation.ImportBeanDefinitionRegistrar;
-import org.springframework.core.annotation.AnnotationAttributes;
 import org.springframework.core.type.AnnotationMetadata;
-
-import java.util.Objects;
 
 import static org.springframework.beans.factory.config.BeanDefinition.ROLE_SUPPORT;
 
@@ -32,13 +29,13 @@ public class OccurrentMongoRegistrar implements ImportBeanDefinitionRegistrar {
 
     @Override
     public void registerBeanDefinitions(AnnotationMetadata metadata, @NotNull BeanDefinitionRegistry registry) {
-        AnnotationAttributes attributes = AnnotationAttributes.fromMap(metadata.getAnnotationAttributes(EnableOccurrent.class.getName(), true));
-        Class<?> eventT = null;
-        try {
-            eventT = Class.forName(Objects.requireNonNull(attributes).getString("eventType"));
-        } catch (ClassNotFoundException e) {
-            throw new RuntimeException(e);
-        }
+//        AnnotationAttributes attributes = AnnotationAttributes.fromMap(metadata.getAnnotationAttributes(EnableOccurrent.class.getName(), true));
+//        Class<?> eventT = null;
+//        try {
+//            eventT = Class.forName(Objects.requireNonNull(attributes).getString("eventType"));
+//        } catch (ClassNotFoundException e) {
+//            throw new RuntimeException(e);
+//        }
 
         RootBeanDefinition definition = new RootBeanDefinition(OccurrentMongoAutoConfiguration.class);
         definition.setSource(metadata);
