@@ -46,6 +46,7 @@ import org.occurrent.subscription.mongodb.spring.blocking.SpringMongoLeaseCompet
 import org.occurrent.subscription.mongodb.spring.blocking.SpringMongoSubscriptionModel;
 import org.occurrent.subscription.mongodb.spring.blocking.SpringMongoSubscriptionPositionStorage;
 import org.springframework.boot.autoconfigure.AutoConfiguration;
+import org.springframework.boot.autoconfigure.condition.ConditionalOnBean;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnClass;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnMissingBean;
 import org.springframework.boot.autoconfigure.data.mongo.MongoDataAutoConfiguration;
@@ -116,16 +117,16 @@ public class OccurrentMongoAutoConfiguration<E> {
 
     @Bean
     @ConditionalOnMissingBean(CloudEventConverter.class)
-    public CloudEventConverter<E> occurrentCloudEventConverter(Optional<ObjectMapper> objectMapper, OccurrentProperties occurrentProperties, Optional<CloudEventTypeMapper<E>> cloudEventTypeMapper) {
+    @ConditionalOnBean(CloudEventTypeMapper.class)
+    public CloudEventConverter<E> occurrentCloudEventConverter(Optional<ObjectMapper> objectMapper, OccurrentProperties occurrentProperties, CloudEventTypeMapper<E> cloudEventTypeMapper) {
         ObjectMapper om = objectMapper.orElseGet(ObjectMapper::new);
-        CloudEventTypeMapper<E> cm = cloudEventTypeMapper.orElseGet(this::newDefaultCloudEventTypeMapper);
         return new JacksonCloudEventConverter.Builder<E>(om, occurrentProperties.getCloudEventConverter().getCloudEventSource())
-                .typeMapper(cm)
+                .typeMapper(cloudEventTypeMapper)
                 .build();
     }
 
     @Bean
-    @ConditionalOnMissingBean(CloudEventTypeMapper.class)
+    @ConditionalOnMissingBean({CloudEventTypeMapper.class, CloudEventConverter.class})
     public CloudEventTypeMapper<E> occurrentTypeMapper() {
         return newDefaultCloudEventTypeMapper();
     }
