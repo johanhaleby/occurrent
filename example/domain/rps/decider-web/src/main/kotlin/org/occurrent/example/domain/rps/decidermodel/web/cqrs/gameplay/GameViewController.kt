@@ -20,7 +20,6 @@ package org.occurrent.example.domain.rps.decidermodel.web.cqrs.gameplay
 import com.fasterxml.jackson.annotation.JsonInclude
 import com.fasterxml.jackson.annotation.JsonInclude.Include.NON_NULL
 import org.occurrent.dsl.subscription.blocking.Subscriptions
-import org.occurrent.dsl.view.currentState
 import org.occurrent.dsl.view.materialized
 import org.occurrent.dsl.view.updateView
 import org.occurrent.dsl.view.view
@@ -30,6 +29,7 @@ import org.occurrent.example.domain.rps.decidermodel.web.cqrs.gameplay.GameStatu
 import org.springframework.data.annotation.Id
 import org.springframework.data.annotation.TypeAlias
 import org.springframework.data.mongodb.core.MongoOperations
+import org.springframework.data.mongodb.core.findById
 import org.springframework.data.mongodb.core.mapping.Document
 import org.springframework.http.MediaType
 import org.springframework.stereotype.Component
@@ -74,7 +74,7 @@ sealed interface GameReadModel {
 class GameViewController(private val mongoOperations: MongoOperations) {
 
     @GetMapping("/{gameId}")
-    fun showGame(@PathVariable("gameId") gameId: GameId): GameReadModel? = gameView.currentState(mongoOperations, gameId)
+    fun showGame(@PathVariable("gameId") gameId: GameId): GameReadModel? = mongoOperations.findById(gameId)
 }
 
 private val gameView = view<GameReadModel?, GameEvent>(
