@@ -20,14 +20,8 @@ package org.occurrent.example.domain.rps.decidermodel.web.cqrs.gameplay
 import org.occurrent.application.service.blocking.ApplicationService
 import org.occurrent.dsl.decider.execute
 import org.occurrent.example.domain.rps.decidermodel.*
-import org.occurrent.example.domain.rps.decidermodel.HandGesture.ROCK
 import org.occurrent.example.domain.rps.decidermodel.web.common.loggerFor
-import org.springframework.hateoas.EntityModel
-import org.springframework.hateoas.IanaLinkRelations
 import org.springframework.hateoas.RepresentationModel
-import org.springframework.hateoas.server.mvc.andAffordances
-import org.springframework.hateoas.server.mvc.linkTo
-import org.springframework.hateoas.server.mvc.withRel
 import org.springframework.http.ResponseEntity
 import org.springframework.stereotype.Controller
 import org.springframework.web.bind.annotation.*
@@ -40,26 +34,28 @@ class GamePlayController(private val applicationService: ApplicationService<Game
     private val log = loggerFor<GamePlayController>()
 
 
+//    : ResponseEntity<EntityModel<PlayGameRepresentationModel>> {
     @PutMapping("{gameId}")
-    fun initializeNewGame(@PathVariable("gameId") gameId: GameId, @RequestParam playerId: PlayerId): ResponseEntity<EntityModel<PlayGameRepresentationModel>> {
+    fun initializeNewGame(@PathVariable("gameId") gameId: GameId, @RequestParam playerId: PlayerId) : ResponseEntity<Unit> {
         log.info("Initializing new game (gameId=$gameId)")
 
 //        val self = linkTo(methodOn(GameViewController::class.java).showGame(gameId) as Any).withSelfRel()
 //        val selfWithAffordances = self.andAffordance(afford(methodOn(GamePlayController::class.java).playGame(gameId, playerId, ROCK)))
 
 
-        val self = linkTo<GameViewController> { showGame(gameId) } withRel IanaLinkRelations.SELF
-        val selfWithAffordances = self andAffordances {
-            afford<GamePlayController> { playGame(gameId, playerId, ROCK) }
-        }
-
-        val model = EntityModel.of(PlayGameRepresentationModel())
-            .add(selfWithAffordances)
+//        val self = linkTo<GameViewController> { showGame(gameId) } withRel IanaLinkRelations.SELF
+//        val selfWithAffordances = self andAffordances {
+//            afford<GamePlayController> { playGame(gameId, playerId, ROCK) }
+//        }
+//
+//        val model = EntityModel.of(PlayGameRepresentationModel())
+//            .add(selfWithAffordances)
 
         val cmd = InitiateNewGame(gameId, Timestamp.now(), playerId)
         applicationService.execute(gameId, cmd, rps)
 
-        return ResponseEntity.ok().header("Location", "/games/$gameId").body(model)
+        return ResponseEntity.noContent().header("Location", "/games/$gameId").build()
+//        return ResponseEntity.ok().header("Location", "/games/$gameId").body(model)
     }
 
     @PostMapping("{gameId}/play")

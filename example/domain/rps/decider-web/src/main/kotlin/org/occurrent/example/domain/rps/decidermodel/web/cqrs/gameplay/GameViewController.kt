@@ -26,6 +26,7 @@ import org.occurrent.dsl.view.updateView
 import org.occurrent.dsl.view.view
 import org.occurrent.example.domain.rps.decidermodel.*
 import org.occurrent.example.domain.rps.decidermodel.web.common.loggerFor
+import org.occurrent.example.domain.rps.decidermodel.web.cqrs.gameplay.GameStatus.*
 import org.springframework.data.annotation.Id
 import org.springframework.data.annotation.TypeAlias
 import org.springframework.data.mongodb.core.MongoOperations
@@ -51,28 +52,20 @@ sealed interface GameReadModel {
     val status: GameStatus
 
     @TypeAlias("Initialized")
-    data class Initialized(override val gameId: GameId, val initializedBy: PlayerId) : GameReadModel {
-        override val status = GameStatus.Initialized
-    }
+    data class Initialized(override val gameId: GameId, val initializedBy: PlayerId, override val status: GameStatus) : GameReadModel
 
     @TypeAlias("Ongoing")
-    data class Ongoing(override val gameId: GameId, val firstMove: Move, val secondMove: Move? = null) : GameReadModel {
-        override val status = GameStatus.Ongoing
-    }
+    data class Ongoing(override val gameId: GameId, val firstMove: Move, val secondMove: Move? = null, override val status: GameStatus) : GameReadModel
 
     sealed interface Ended : GameReadModel {
         val firstMove: Move
         val secondMove: Move
 
         @TypeAlias("Tied")
-        data class Tied(override val gameId: GameId, override val firstMove: Move, override val secondMove: Move) : Ended {
-            override val status = GameStatus.Tied
-        }
+        data class Tied(override val gameId: GameId, override val firstMove: Move, override val secondMove: Move, override val status: GameStatus) : Ended
 
         @TypeAlias("Won")
-        data class Won(override val gameId: GameId, override val firstMove: Move, override val secondMove: Move, val winner: PlayerId) : Ended {
-            override val status = GameStatus.Won
-        }
+        data class Won(override val gameId: GameId, override val firstMove: Move, override val secondMove: Move, val winner: PlayerId, override val status: GameStatus) : Ended
     }
 }
 
@@ -88,10 +81,10 @@ private val gameView = view<GameReadModel?, GameEvent>(
     initialState = null,
     updateState = { game, e ->
         when (e) {
-            is NewGameInitiated -> GameReadModel.Initialized(e.gameId, e.playerId)
+            is NewGameInitiated -> GameReadModel.Initialized(e.gameId, e.playerId, Initialized)
             is GameStarted -> game
             is HandGestureShown -> when (game) {
-                is GameReadModel.Initialized -> GameReadModel.Ongoing(e.gameId, firstMove = Move(e.player, e.gesture))
+                is GameReadModel.Initialized -> GameReadModel.Ongoing(e.gameId, firstMove = Move(e.player, e.gesture), status = Ongoing)
                 is GameReadModel.Ongoing -> game.copy(secondMove = Move(e.player, e.gesture))
                 else -> game
             }
@@ -99,12 +92,12 @@ private val gameView = view<GameReadModel?, GameEvent>(
             is GameEnded -> game
             is GameTied -> {
                 val ongoingGame = game as GameReadModel.Ongoing
-                GameReadModel.Ended.Tied(e.gameId, ongoingGame.firstMove, ongoingGame.secondMove!!)
+                GameReadModel.Ended.Tied(e.gameId, ongoingGame.firstMove, ongoingGame.secondMove!!, Tied)
             }
 
             is GameWon -> {
                 val ongoingGame = game as GameReadModel.Ongoing
-                GameReadModel.Ended.Won(e.gameId, ongoingGame.firstMove, ongoingGame.secondMove!!, e.winner)
+                GameReadModel.Ended.Won(e.gameId, ongoingGame.firstMove, ongoingGame.secondMove!!, e.winner, Won)
             }
         }
     }
