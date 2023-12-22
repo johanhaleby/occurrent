@@ -17,6 +17,7 @@
 
 package org.occurrent.example.domain.rps.decidermodel.web
 
+import org.occurrent.example.domain.rps.decidermodel.web.common.loggerFor
 import org.springframework.boot.devtools.restart.RestartScope
 import org.springframework.boot.fromApplication
 import org.springframework.boot.test.context.TestConfiguration
@@ -28,11 +29,14 @@ import org.testcontainers.containers.MongoDBContainer
 
 @TestConfiguration(proxyBeanMethods = false)
 class TestBootstrap {
+    private val log = loggerFor<TestBootstrap>()
 
     @Bean
     @ServiceConnection
     @RestartScope
-    fun mongoDbContainer() = MongoDBContainer("mongo:4.2.8")
+    fun mongoDbContainer() = MongoDBContainer("mongo:4.2.8").apply {
+        portBindings = listOf("27017:27017")
+    }
 }
 
 fun main(args: Array<String>) {

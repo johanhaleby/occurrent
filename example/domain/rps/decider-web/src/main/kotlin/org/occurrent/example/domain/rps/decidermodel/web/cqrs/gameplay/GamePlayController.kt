@@ -23,10 +23,7 @@ import org.occurrent.example.domain.rps.decidermodel.*
 import org.springframework.http.MediaType.APPLICATION_JSON_VALUE
 import org.springframework.http.ResponseEntity
 import org.springframework.stereotype.Controller
-import org.springframework.web.bind.annotation.PathVariable
-import org.springframework.web.bind.annotation.PutMapping
-import org.springframework.web.bind.annotation.RequestMapping
-import org.springframework.web.bind.annotation.RequestParam
+import org.springframework.web.bind.annotation.*
 
 
 @Controller
@@ -41,7 +38,7 @@ class GamePlayController(private val applicationService: ApplicationService<Game
         return ResponseEntity.noContent().header("Location", "/games/$gameId").build()
     }
 
-    @PutMapping("{gameId}")
+    @PostMapping("{gameId}/play")
     fun playGame(@PathVariable("gameId") gameId: GameId, @RequestParam playerId: PlayerId, @RequestParam handGesture: HandGesture): ResponseEntity<Unit> {
         val cmd = MakeHandGesture(gameId, Timestamp.now(), playerId, handGesture)
         applicationService.execute(gameId, cmd, rps)

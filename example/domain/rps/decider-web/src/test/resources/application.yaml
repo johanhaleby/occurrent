@@ -1,5 +1,8 @@
-logging.level.org.springframework: DEBUG
+#logging.level.org.springframework: DEBUG
 spring:
+  data:
+    mongodb:
+      uuid-representation: standard # So that Spring MongoDB stores UUID's as strings
   threads:
     virtual:
       enabled: true

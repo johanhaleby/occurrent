@@ -32,7 +32,13 @@ inline fun <reified E : Any> Subscriptions<E>.updateView(viewName: String, start
     })
 }
 
-inline fun <reified E : Any> Subscriptions<E>.updateView(viewName: String, materializedView: MaterializedView<E>, startAt: StartAt? = null): Subscription =
+inline fun <reified E : Any> Subscriptions<E>.updateView(
+    viewName: String, materializedView: MaterializedView<E>, startAt: StartAt? = null,
+    crossinline doBeforeUpdate: (E) -> Unit = {},
+    crossinline doAfterUpdate: (E) -> Unit = {}
+): Subscription =
     updateView(viewName, startAt) { e ->
+        doBeforeUpdate(e)
         materializedView.update(e)
+        doAfterUpdate(e)
     }

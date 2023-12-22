@@ -17,6 +17,7 @@
 
 package org.occurrent.example.domain.rps.decidermodel.web
 
+import com.fasterxml.jackson.datatype.jsr310.JavaTimeModule
 import com.fasterxml.jackson.module.kotlin.jacksonObjectMapper
 import org.occurrent.application.converter.jackson.jacksonCloudEventConverter
 import org.occurrent.application.converter.typemapper.ReflectionCloudEventTypeMapper
@@ -27,18 +28,19 @@ import org.springframework.boot.runApplication
 import org.springframework.context.annotation.Bean
 import org.springframework.data.mongodb.repository.config.EnableMongoRepositories
 import java.net.URI
+import java.time.ZoneOffset
 import java.time.temporal.ChronoUnit.MILLIS
 
 
 @SpringBootApplication
 @EnableMongoRepositories
-@EnableOccurrent(eventType = GameEvent::class)
+@EnableOccurrent
 class Bootstrap {
     @Bean
     fun cloudEventConverter() = jacksonCloudEventConverter<GameEvent>(
-        objectMapper = jacksonObjectMapper(),
+        objectMapper = jacksonObjectMapper().registerModule(JavaTimeModule()),
         cloudEventSource = URI.create("urn:occurrent:rps"),
-        timeMapper = { e -> e.timestamp.toOffsetDateTime().truncatedTo(MILLIS) },
+        timeMapper = { e -> e.timestamp.toOffsetDateTime().withOffsetSameInstant(ZoneOffset.UTC).truncatedTo(MILLIS) },
         subjectMapper = { e -> e.gameId.toString() },
         typeMapper = ReflectionCloudEventTypeMapper.simple(GameEvent::class.java)
     )
