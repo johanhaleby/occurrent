@@ -21,11 +21,13 @@ import org.springframework.context.annotation.Import;
 
 import java.lang.annotation.*;
 
+/**
+ * Enable Occurrent autoconfiguration
+ */
 @Target(ElementType.TYPE)
 @Retention(RetentionPolicy.RUNTIME)
 @Documented
 @Inherited
 @Import(OccurrentMongoRegistrar.class)
 public @interface EnableOccurrent {
-   	Class<?> eventType();
 }

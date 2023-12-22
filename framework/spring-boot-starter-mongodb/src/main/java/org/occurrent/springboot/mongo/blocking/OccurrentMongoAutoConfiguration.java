@@ -66,11 +66,11 @@ import static org.occurrent.subscription.mongodb.spring.blocking.SpringMongoSubs
 /**
  * Occurrent Spring autoconfiguration support for blocking MongoDB event store and subscriptions
  */
-@Configuration
+@Configuration(proxyBeanMethods = false)
 @ConditionalOnClass({SpringMongoEventStore.class, SpringMongoSubscriptionModel.class})
 @EnableConfigurationProperties(OccurrentProperties.class)
 @AutoConfigureAfter(MongoAutoConfiguration.class)
-@Import(MongoDataAutoConfiguration.class)
+@Import({MongoAutoConfiguration.class, MongoDataAutoConfiguration.class})
 public class OccurrentMongoAutoConfiguration<E> {
 
     @Bean
