@@ -28,6 +28,6 @@ import java.lang.annotation.*;
 @Retention(RetentionPolicy.RUNTIME)
 @Documented
 @Inherited
-@Import(OccurrentMongoRegistrar.class)
+@Import(OccurrentMongoAutoConfiguration.class)
 public @interface EnableOccurrent {
 }
