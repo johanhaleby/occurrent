@@ -155,6 +155,8 @@ public class MongoLeaseCompetingConsumerStrategySupport {
     }
 
     private static void logDebug(String message, Object... params) {
-        log.debug(message, params);
+        if (log.isDebugEnabled()) {
+            log.debug(message, params);
+        }
     }
 }
