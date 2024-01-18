@@ -19,6 +19,7 @@ package org.occurrent.example.domain.rps.decidermodel.web.cqrs.gameplay
 
 import com.fasterxml.jackson.annotation.JsonInclude
 import com.fasterxml.jackson.annotation.JsonInclude.Include.NON_NULL
+import org.occurrent.dsl.subscription.blocking.EventMetadata
 import org.occurrent.dsl.subscription.blocking.Subscriptions
 import org.occurrent.dsl.view.materialized
 import org.occurrent.dsl.view.updateView
@@ -50,22 +51,23 @@ sealed interface GameReadModel {
     @get:Id
     val gameId: GameId
     val status: GameStatus
+    val streamVersion: Long
 
     @TypeAlias("Initialized")
-    data class Initialized(override val gameId: GameId, val initializedBy: PlayerId, override val status: GameStatus) : GameReadModel
+    data class Initialized(override val gameId: GameId, val initializedBy: PlayerId, override val status: GameStatus, override val streamVersion: Long) : GameReadModel
 
     @TypeAlias("Ongoing")
-    data class Ongoing(override val gameId: GameId, val firstMove: Move, val secondMove: Move? = null, override val status: GameStatus) : GameReadModel
+    data class Ongoing(override val gameId: GameId, val firstMove: Move, val secondMove: Move? = null, override val status: GameStatus, override val streamVersion: Long) : GameReadModel
 
     sealed interface Ended : GameReadModel {
         val firstMove: Move
         val secondMove: Move
 
         @TypeAlias("Tied")
-        data class Tied(override val gameId: GameId, override val firstMove: Move, override val secondMove: Move, override val status: GameStatus) : Ended
+        data class Tied(override val gameId: GameId, override val firstMove: Move, override val secondMove: Move, override val status: GameStatus, override val streamVersion: Long) : Ended
 
         @TypeAlias("Won")
-        data class Won(override val gameId: GameId, override val firstMove: Move, override val secondMove: Move, val winner: PlayerId, override val status: GameStatus) : Ended
+        data class Won(override val gameId: GameId, override val firstMove: Move, override val secondMove: Move, val winner: PlayerId, override val status: GameStatus, override val streamVersion: Long) : Ended
     }
 }
 
@@ -77,14 +79,18 @@ class GameViewController(private val mongoOperations: MongoOperations) {
     fun showGame(@PathVariable("gameId") gameId: GameId): GameReadModel? = mongoOperations.findById(gameId)
 }
 
-private val gameView = view<GameReadModel?, GameEvent>(
+private val gameView = view<GameReadModel?, Pair<EventMetadata, GameEvent>>(
     initialState = null,
-    updateState = { game, e ->
+    updateState = { game, (metadata, e) ->
         when (e) {
-            is NewGameInitiated -> GameReadModel.Initialized(e.gameId, e.playerId, Initialized)
+            is NewGameInitiated -> GameReadModel.Initialized(e.gameId, e.playerId, Initialized, metadata.streamVersion)
             is GameStarted -> game
             is HandGestureShown -> when (game) {
-                is GameReadModel.Initialized -> GameReadModel.Ongoing(e.gameId, firstMove = Move(e.player, e.gesture), status = Ongoing)
+                is GameReadModel.Initialized -> GameReadModel.Ongoing(
+                    e.gameId, firstMove = Move(e.player, e.gesture),
+                    status = Ongoing, streamVersion = metadata.streamVersion
+                )
+
                 is GameReadModel.Ongoing -> game.copy(secondMove = Move(e.player, e.gesture))
                 else -> game
             }
@@ -92,12 +98,12 @@ private val gameView = view<GameReadModel?, GameEvent>(
             is GameEnded -> game
             is GameTied -> {
                 val ongoingGame = game as GameReadModel.Ongoing
-                GameReadModel.Ended.Tied(e.gameId, ongoingGame.firstMove, ongoingGame.secondMove!!, Tied)
+                GameReadModel.Ended.Tied(e.gameId, ongoingGame.firstMove, ongoingGame.secondMove!!, Tied, streamVersion = metadata.streamVersion)
             }
 
             is GameWon -> {
                 val ongoingGame = game as GameReadModel.Ongoing
-                GameReadModel.Ended.Won(e.gameId, ongoingGame.firstMove, ongoingGame.secondMove!!, e.winner, Won)
+                GameReadModel.Ended.Won(e.gameId, ongoingGame.firstMove, ongoingGame.secondMove!!, e.winner, Won, streamVersion = metadata.streamVersion)
             }
         }
     }
@@ -110,7 +116,10 @@ private class UpdateGameViewWhenGamePlayed(subscriptions: Subscriptions<GameEven
     init {
         subscriptions.updateView(
             viewName = "gameView",
-            materializedView = gameView.materialized(mongoOperations) { e -> e.gameId }, doBeforeUpdate = { e ->
+            converter = { eventMetadata, gameEvent ->
+                eventMetadata to gameEvent
+            },
+            materializedView = gameView.materialized(mongoOperations) { (_, e) -> e.gameId }, doBeforeUpdate = { (_, e) ->
                 log.info("Updating game view for game ${e.gameId} based on ${e::class.simpleName}")
             })
     }

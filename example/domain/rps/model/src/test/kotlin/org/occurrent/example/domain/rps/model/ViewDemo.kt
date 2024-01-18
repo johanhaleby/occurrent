@@ -34,7 +34,7 @@ import java.util.concurrent.atomic.AtomicInteger
 class ViewDemo {
 
     @Test
-    fun `simple inmemory view`() {
+    fun `simple in-memory view`() {
         // Given
         val subscriptionModel = InMemorySubscriptionModel(RetryStrategy.none())
         val inMemoryEventStore = InMemoryEventStore(subscriptionModel)
@@ -43,7 +43,7 @@ class ViewDemo {
 
         val numberOfStartedGames = AtomicInteger()
         subscriptions(subscriptionModel, cloudEventConverter) {
-            subscribe<GameCreated> {
+            subscribe<GameCreated> { _ ->
                 numberOfStartedGames.incrementAndGet()
             }
         }

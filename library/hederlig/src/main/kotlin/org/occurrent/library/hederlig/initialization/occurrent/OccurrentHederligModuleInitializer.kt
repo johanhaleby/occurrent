@@ -51,7 +51,7 @@ class OccurrentModule<C : Any, E : Any, Q : Query<Any>>(
 
     init {
         handlers.subscriptionHandlers.forEach { subscriptionHandler ->
-            subscriptionDSL.subscribe(
+            subscriptionDSL.subscribe<E>(
                 subscriptionId = subscriptionHandler.type.simpleName!!,
                 eventType = subscriptionHandler.type.java
             ) { e ->

@@ -17,28 +17,50 @@
 
 package org.occurrent.dsl.view
 
+import org.occurrent.dsl.subscription.blocking.EventMetadata
 import org.occurrent.dsl.subscription.blocking.Subscriptions
 import org.occurrent.subscription.StartAt
 import org.occurrent.subscription.api.blocking.Subscription
 
-inline fun <reified E : Any> Subscriptions<E>.updateView(viewName: String, startAt: StartAt? = null, crossinline updateFunction: (E) -> Unit): Subscription {
+inline fun <reified E : Any> Subscriptions<E>.updateView(viewName: String, startAt: StartAt? = null, crossinline updateFunction: (EventMetadata, E) -> Unit): Subscription {
     val eventTypes: List<Class<out E>> = if (E::class.isSealed) {
         E::class.sealedSubclasses.map { it.java }.toList()
     } else {
         listOf(E::class.java)
     }
-    return subscribe(viewName, eventTypes = eventTypes, startAt = startAt, fn = { e ->
-        updateFunction(e)
+    return subscribe(viewName, eventTypes = eventTypes, startAt = startAt, fn = { metadata, e ->
+        updateFunction(metadata, e)
     })
 }
+
+inline fun <reified E : Any> Subscriptions<E>.updateView(viewName: String, startAt: StartAt? = null, crossinline updateFunction: (E) -> Unit): Subscription =
+    updateView(viewName, startAt) { _, e -> updateFunction(e) }
 
 inline fun <reified E : Any> Subscriptions<E>.updateView(
     viewName: String, materializedView: MaterializedView<E>, startAt: StartAt? = null,
     crossinline doBeforeUpdate: (E) -> Unit = {},
     crossinline doAfterUpdate: (E) -> Unit = {}
 ): Subscription =
-    updateView(viewName, startAt) { e ->
-        doBeforeUpdate(e)
-        materializedView.update(e)
-        doAfterUpdate(e)
+    updateView(
+        viewName,
+        converter = { _, e -> e },
+        startAt = startAt,
+        materializedView = materializedView,
+        doBeforeUpdate = doBeforeUpdate,
+        doAfterUpdate = doAfterUpdate
+    )
+
+inline fun <reified E : Any, reified E2 : Any> Subscriptions<E>.updateView(
+    viewName: String,
+    crossinline converter: (EventMetadata, E) -> E2,
+    materializedView: MaterializedView<E2>,
+    startAt: StartAt? = null,
+    crossinline doBeforeUpdate: (E2) -> Unit = { },
+    crossinline doAfterUpdate: (E2) -> Unit = { }
+): Subscription =
+    updateView(viewName, startAt) { metadata, e ->
+        val e2 = converter(metadata, e)
+        doBeforeUpdate(e2)
+        materializedView.update(e2)
+        doAfterUpdate(e2)
     }

@@ -62,7 +62,7 @@ class GamePlayController(private val applicationService: ApplicationService<Game
     fun playGame(@PathVariable("gameId") gameId: GameId, @RequestParam playerId: PlayerId, @RequestParam handGesture: HandGesture): ResponseEntity<Unit> {
         log.info("Playing game (gameId=$gameId)")
         val cmd = MakeHandGesture(gameId, Timestamp.now(), playerId, handGesture)
-        applicationService.execute(gameId, cmd, rps)
-        return ResponseEntity.noContent().header("Location", "/games/$gameId").build()
+        val writeResult = applicationService.execute(gameId, cmd, rps)
+        return ResponseEntity.noContent().header("Location", "/games/$gameId?version=${writeResult.newStreamVersion}").build()
     }
 }

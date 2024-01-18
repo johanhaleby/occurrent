@@ -18,7 +18,6 @@ package org.occurrent.eventstore.api.blocking
 
 import io.cloudevents.CloudEvent
 import org.occurrent.eventstore.api.SortBy
-import org.occurrent.eventstore.api.SortBy.SortDirection.ASCENDING
 import org.occurrent.filter.Filter
 import kotlin.streams.asSequence
 
@@ -30,5 +29,5 @@ fun EventStoreQueries.queryForSequence(
     filter: Filter = Filter.all(),
     skip: Int = 0,
     limit: Int = Int.MAX_VALUE,
-    sortBy: SortBy = SortBy.natural(ASCENDING)
+    sortBy: SortBy = TODO()
 ): Sequence<CloudEvent> = query(filter, skip, limit, sortBy).asSequence()
