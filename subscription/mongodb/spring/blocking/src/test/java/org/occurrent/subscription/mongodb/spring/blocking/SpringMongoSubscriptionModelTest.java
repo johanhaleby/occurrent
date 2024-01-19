@@ -697,6 +697,14 @@ public class SpringMongoSubscriptionModelTest {
             assertSubscriptionIsRestartedForException(exception);
         }
 
+        @Timeout(value = 20, unit = SECONDS)
+        @Test
+        void restarts_subscription_on_non_DataAccessException() {
+            var exception = new IllegalStateException("Cursor com.mongodb.client.internal.MongoChangeStreamCursorImpl@3ab4fcd8 is not longer open");
+
+            assertSubscriptionIsRestartedForException(exception);
+        }
+
         @SuppressWarnings("unchecked")
         private void assertSubscriptionIsRestartedForException(Exception exception) {
             // Given

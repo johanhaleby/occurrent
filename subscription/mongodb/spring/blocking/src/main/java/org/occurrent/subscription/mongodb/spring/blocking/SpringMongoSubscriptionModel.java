@@ -333,7 +333,8 @@ public class SpringMongoSubscriptionModel implements PositionAwareSubscriptionMo
                     log.debug("Cursor is no longer open for subscription {}, this may happen if you pause a subscription very soon after subscribing.", subscriptionId, throwable);
                 }
             } else {
-                log.error("An error occurred for subscription {}", subscriptionId, throwable);
+                log.error("An error occurred for subscription {}, will restart", subscriptionId, throwable);
+                restartInternalSubscription(subscriptionId, StartAt.subscriptionModelDefault());
             }
         });
     }

@@ -1,7 +1,8 @@
-### Changelog next version
+### 0.17.0
 * spring-boot-starter-mongodb no longer autoconfigures itself by just importing the library in the classpath, instead you need to bootstrap by annotating your Spring Boot class with @EnableOccurrent.   
-* Fixed bug in spring-boot-starter-mongodb module in which it didn't automatically configured MongoDB.
-* Domain event subscriptions now accepts metadata as the first parameter, besides just the event. The metadata currently contains the stream version and stream id, which can be useful when building projections. 
+* Fixed bug in spring-boot-starter-mongodb module in which it didn't automatically configure MongoDB.
+* Domain event subscriptions now accepts metadata as the first parameter, besides just the event. The metadata currently contains the stream version and stream id, which can be useful when building projections.
+* Fixed a bug in SpringMongoSubscriptionModel in which it didn't restart correctly on non DataAccessException's 
 * Upgraded from Kotlin 1.9.20 to 1.9.22
 * Upgraded amqp-client from 5.16.0 to 5.20.0
 * Upgraded Spring Boot from 3.1.4 to 3.2.1
