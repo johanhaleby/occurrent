@@ -4,6 +4,7 @@
 * Domain event subscriptions now accepts metadata as the first parameter, besides just the event. The metadata currently contains the stream version and stream id, which can be useful when building projections.
 * Fixed a bug in SpringMongoSubscriptionModel in which it didn't restart correctly on non DataAccessException's 
 * Introducing Decider support (experimental)
+* Fixed a rare ConcurrentModificationException issue in SpringMongoSubscriptionModel if the subscription model is shutdown while it's restarting 
 * Upgraded from Kotlin 1.9.20 to 1.9.22
 * Upgraded amqp-client from 5.16.0 to 5.20.0
 * Upgraded Spring Boot from 3.1.4 to 3.2.1

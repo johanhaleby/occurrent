@@ -320,7 +320,7 @@ public class SpringMongoSubscriptionPositionStorageTest {
 
         // When
         mongoEventStore.write("1", 0, serialize(nameDefined1));
-        // The subscription is async so we need to wait for it
+        // The subscription is async, so we need to wait for it
         await().atMost(ONE_SECOND).and().dontCatchUncaughtExceptions().untilAtomic(counter, equalTo(1));
         // Since an exception occurred we need to run the stream again, but first we need to close the old subscription
         subscriptionModel.shutdown();

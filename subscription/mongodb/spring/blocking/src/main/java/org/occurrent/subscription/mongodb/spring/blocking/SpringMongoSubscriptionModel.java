@@ -310,13 +310,13 @@ public class SpringMongoSubscriptionModel implements PositionAwareSubscriptionMo
                 Throwable cause = throwable.getCause();
                 if (cause instanceof MongoQueryException) {
                     log.warn("Caught {} ({}) for subscription {}, will restart!", MongoQueryException.class.getSimpleName(), cause.getMessage(), subscriptionId, throwable);
-                    restartInternalSubscription(subscriptionId, StartAt.subscriptionModelDefault());
+                    restartInternalSubscriptionInNewThread(subscriptionId, StartAt.subscriptionModelDefault());
                 } else if (cause instanceof MongoCommandException && ((MongoCommandException) cause).getErrorCode() == CHANGE_STREAM_HISTORY_LOST_ERROR_CODE) {
                     String restartMessage = restartSubscriptionsOnChangeStreamHistoryLost ? "will restart subscription from current time." :
                             "will not restart subscription! Consider remove the subscription from the durable storage or use a catch-up subscription to get up to speed if needed.";
                     if (restartSubscriptionsOnChangeStreamHistoryLost) {
                         log.warn("There was not enough oplog to resume subscription {}, {}", subscriptionId, restartMessage, throwable);
-                        restartInternalSubscription(subscriptionId, StartAt.now());
+                        restartInternalSubscriptionInNewThread(subscriptionId, StartAt.now());
                     } else {
                         log.error("There was not enough oplog to resume subscription {}, {}", subscriptionId, restartMessage, throwable);
                     }
@@ -326,7 +326,7 @@ public class SpringMongoSubscriptionModel implements PositionAwareSubscriptionMo
                     }
                 } else {
                     log.error("Error caught for subscription {}: {} {}. Will restart!", subscriptionId, cause.getClass().getName(), cause.getMessage(), throwable);
-                    restartInternalSubscription(subscriptionId, StartAt.subscriptionModelDefault());
+                    restartInternalSubscriptionInNewThread(subscriptionId, StartAt.subscriptionModelDefault());
                 }
             } else if (isCursorNoLongerOpen(throwable)) {
                 if (log.isDebugEnabled()) {
@@ -334,24 +334,28 @@ public class SpringMongoSubscriptionModel implements PositionAwareSubscriptionMo
                 }
             } else {
                 log.error("An error occurred for subscription {}, will restart", subscriptionId, throwable);
-                restartInternalSubscription(subscriptionId, StartAt.subscriptionModelDefault());
+                restartInternalSubscriptionInNewThread(subscriptionId, StartAt.subscriptionModelDefault());
             }
         });
     }
 
-    private void restartInternalSubscription(String subscriptionId, StartAt startAt) {
+    private void restartInternalSubscriptionInNewThread(String subscriptionId, StartAt startAt) {
         InternalSubscription internalSubscription = runningSubscriptions.get(subscriptionId);
         if (internalSubscription != null) {
-            new Thread(() -> {
-                // We restart from now!!
-                org.springframework.data.mongodb.core.messaging.Subscription oldSpringSubscription = internalSubscription.getSpringSubscription();
-                ChangeStreamRequest<Document> newChangeStreamRequestFromNow = internalSubscription.newChangeStreamRequest(startAt);
-                org.springframework.data.mongodb.core.messaging.Subscription newSpringSubscription = registerNewSpringSubscription(subscriptionId, newChangeStreamRequestFromNow);
-                internalSubscription.occurrentSubscription.changeSubscription(newSpringSubscription);
-                messageListenerContainer.remove(oldSpringSubscription);
-                log.info("Subscription {} successfully restarted", subscriptionId);
-            }).start();
+            new Thread(() -> restartSubscriptionInThisThread(subscriptionId, startAt, internalSubscription)).start();
         }
+    }
+
+    // This method is synchronized to avoid ConcurrentModificationException is the subscription model is shutdown
+    // at the same time as restarting the subscription.
+    private synchronized void restartSubscriptionInThisThread(String subscriptionId, StartAt startAt, InternalSubscription internalSubscription) {
+        // We restart from now!!
+        org.springframework.data.mongodb.core.messaging.Subscription oldSpringSubscription = internalSubscription.getSpringSubscription();
+        ChangeStreamRequest<Document> newChangeStreamRequestFromNow = internalSubscription.newChangeStreamRequest(startAt);
+        org.springframework.data.mongodb.core.messaging.Subscription newSpringSubscription = registerNewSpringSubscription(subscriptionId, newChangeStreamRequestFromNow);
+        internalSubscription.occurrentSubscription.changeSubscription(newSpringSubscription);
+        messageListenerContainer.remove(oldSpringSubscription);
+        log.info("Subscription {} successfully restarted", subscriptionId);
     }
 
     private static boolean isCursorNoLongerOpen(Throwable throwable) {
