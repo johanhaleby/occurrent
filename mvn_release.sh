@@ -7,8 +7,8 @@ echo "Starting to release Occurrent $releaseVersion"
 
 versionBeforeRelease=$(mvn help:evaluate -Dexpression=project.version -q -DforceStdout) && \
 
-mvn release:prepare -Prelease -DautoVersionSubmodules=true -Dtag="occurrent-${releaseVersion}" -DreleaseVersion="${releaseVersion}" -Dgpg.passphrase="${sonatypePassword}" && \
-mvn release:perform -Prelease -Dgpg.passphrase="${sonatypePassword}" && \
+mvn release:prepare -Prelease -DautoVersionSubmodules=true -Dtag="occurrent-${releaseVersion}" -DreleaseVersion="${releaseVersion}" -Darguments="-Dgpg.passphrase=${sonatypePassword}" && \
+mvn release:perform -Prelease -Darguments="-Dgpg.passphrase=${sonatypePassword}" && \
 
 echo "Release successful, will update version number for modules that were not included in release build." && \
 git pull --rebase # Note that we don't use && here because we may already be up-to-date, and if so, pull returns an "error".
