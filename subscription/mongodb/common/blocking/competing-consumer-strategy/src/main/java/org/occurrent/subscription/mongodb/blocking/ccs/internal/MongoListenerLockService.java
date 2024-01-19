@@ -95,12 +95,13 @@ class MongoListenerLockService {
             } catch (MongoCommandException e) {
                 final ErrorCategory errorCategory = ErrorCategory.fromErrorCode(e.getErrorCode());
 
-                logDebug("Caught {} - {} in acquireOrRefreshFor (errorCategory={}, subscriberId={}, subscriptionId={}, duplicate={})",
-                        e.getClass().getName(), e.getMessage(), errorCategory, subscriberId, subscriptionId, errorCategory.equals(DUPLICATE_KEY));
-
                 if (errorCategory.equals(DUPLICATE_KEY)) {
+                    // This happens frequently, so we don't log it
                     return Optional.empty();
                 }
+
+                logDebug("Caught {} - {} in acquireOrRefreshFor (errorCategory={}, subscriberId={}, subscriptionId={})",
+                        e.getClass().getName(), e.getMessage(), errorCategory, subscriberId, subscriptionId);
 
                 throw e;
             }
