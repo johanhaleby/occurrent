@@ -11,7 +11,7 @@
 * Upgraded Spring data MongoDB from 4.1.4 to 4.2.0 
 * Upgraded jobrunr from 6.3.2 to 6.3.3
 * Upgraded mongodb drivers from 4.10.2 to 4.11.1
-* Upgraded lettuce core from 6.2.6.RELEASE to 6.3.0.RELEASE
+* Upgraded lettuce core from 6.2.6.RELEASE to 6.3.1.RELEASE
 * Upgraded spring-aspects from 6.0.10 to 6.1.1
 * Upgraded jackson from 2.15.2 to 2.15.3
 
