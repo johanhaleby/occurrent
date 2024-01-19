@@ -1,7 +1,6 @@
 #!/bin/bash
 echo "!!!!!DON'T FORGET TO SWITCH TO JAVA 17!!!!!"
 read -r -p "Enter the version to release: " releaseVersion
-echo
 read -r -s -p "Enter sonatype password: " sonatypePassword
 echo "Starting to release Occurrent $releaseVersion"
 
