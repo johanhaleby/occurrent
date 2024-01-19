@@ -26,5 +26,6 @@
     </root>
 
     <logger name="org.testcontainers.shaded.org.zeroturnaround.exec.ProcessExecutor" level="off"/>
+    <logger name="org.mongodb.driver" level="WARN"/>
     <logger name="org.occurrent" level="DEBUG"/>
 </configuration>
