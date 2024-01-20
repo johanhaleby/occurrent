@@ -50,7 +50,7 @@ echo "!!!!!DON'T FORGET TO SWITCH TO JAVA 17!!!!!"
 read -r -e -s -p "Enter sonatype password: " sonatypePassword
 echo
 echo
-echo "Starting to release Occurrent $releaseVersion"
+echo "Starting to release Occurrent $releaseVersion (skip tests=$skipTests)"
 
 mavenArguments=-Dgpg.passphrase=${sonatypePassword} -DskipTests=${skipTests}"
 versionBeforeRelease=$(mvn help:evaluate -Dexpression=project.version -q -DforceStdout) && \
