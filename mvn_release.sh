@@ -45,8 +45,8 @@ if [ -z "${releaseVersion}" ]; then
     exit 1
 fi
 
-echo "Preparing release of Occurrent ${releaseVersion}"
 echo "!!!!!DON'T FORGET TO SWITCH TO JAVA 17!!!!!"
+echo "Preparing release of Occurrent ${releaseVersion} (skip tests=$skipTests)"
 read -r -e -s -p "Enter sonatype password: " sonatypePassword
 echo
 echo
