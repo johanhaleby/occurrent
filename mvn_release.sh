@@ -40,7 +40,7 @@ if [ "$#" -ne 0 ]; then
 	done
 fi
 
-if [ -z "${version}" ]; then
+if [ -z "${releaseVersion}" ]; then
     echo "$usage"
     exit 1
 fi
