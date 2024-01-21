@@ -28,6 +28,9 @@ You may need to restart the terminal/intellij for it to take effect. This comman
 colima ls -j | jq -r '.address'
 ```
 
+You can also try to read the instructions in [nordvpn.md](nordvpn.md), because Ryuk cannot connect to localhost when NordVPN is
+running with a certain kill switch enabled.
+
 If this doesn't work, try restarting the computer and run the stop/start command again (don't forget to restart intellij/terminal afterwards).
 If it still doesn't work, try:
 

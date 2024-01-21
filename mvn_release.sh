@@ -46,6 +46,7 @@ if [ -z "${releaseVersion}" ]; then
 fi
 
 echo "!!!!!DON'T FORGET TO SWITCH TO JAVA 17!!!!!"
+echo You may also need to disable "Stay invisible at the local network" in NordVPN, see nordvpn.md.
 echo "Preparing release of Occurrent ${releaseVersion} (skip tests=$skipTests)"
 read -r -e -s -p "Enter sonatype password: " sonatypePassword
 echo
