@@ -38,4 +38,4 @@ If it still doesn't work, try:
 5. `brew install colima`
 6. `colima start --vm-type vz --network-address`
 
-Restart computer if it doesn't work..
+Restart computer again if it doesn't work..
