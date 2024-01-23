@@ -15,4 +15,6 @@ java.net.SocketTimeoutException: Connect timed out
 	at java.base/java.lang.Thread.run(Thread.java:833)
 ```
 
-You can change this setting by loading up the NordVPN app, then goto Settings -> Kill Switch -> and disable "Stay invisible at the local network".
+You can change this setting by loading up the NordVPN app, then goto Settings -> Kill Switch -> and disable "Stay invisible at the local network" (ctrl+alt+k).
+
+If it still doesn't work, you may need to disconnect NordVPN, restart Rancher Desktop, restart Warp and then try again (sometimes a couple of times).
