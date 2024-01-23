@@ -313,7 +313,7 @@ public class SpringMongoSubscriptionModel implements PositionAwareSubscriptionMo
                     restartInternalSubscriptionInNewThread(subscriptionId, StartAt.subscriptionModelDefault());
                 } else if (cause instanceof MongoCommandException && ((MongoCommandException) cause).getErrorCode() == CHANGE_STREAM_HISTORY_LOST_ERROR_CODE) {
                     String restartMessage = restartSubscriptionsOnChangeStreamHistoryLost ? "will restart subscription from current time." :
-                            "will not restart subscription! Consider remove the subscription from the durable storage or use a catch-up subscription to get up to speed if needed.";
+                            "will not restart subscription! Consider removing the subscription from the durable storage or use a catch-up subscription to get up to speed if needed.";
                     if (restartSubscriptionsOnChangeStreamHistoryLost) {
                         log.warn("There was not enough oplog to resume subscription {}, {}", subscriptionId, restartMessage, throwable);
                         restartInternalSubscriptionInNewThread(subscriptionId, StartAt.now());
