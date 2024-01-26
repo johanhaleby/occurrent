@@ -1,3 +1,13 @@
+### Next version
+* Fixed issue in [Subscription DSL](https://occurrent.org/documentation#subscription-dsl) when using "subscribe" functions with a single event type different from the "base event type", i.e. this didn't work in previous version in Java:
+  ```java                
+  // GameEvent is the "base event type"
+  Subscriptions<GameEvent> subsctriptions = new Subscriptions<>(..);
+  
+  // GameStarted has GameEvent as parent, the following didn't compile in version 0.17.0 
+  subscriptions.subscribe("ikk", GameStarted.class, gameStarted -> System.out.println("gameStarted: " + gameStarted));
+  ```
+
 ### 0.17.0 (2024-01-19)
 * spring-boot-starter-mongodb no longer autoconfigures itself by just importing the library in the classpath, instead you need to bootstrap by annotating your Spring Boot class with @EnableOccurrent.   
 * Fixed bug in spring-boot-starter-mongodb module in which it didn't automatically configure MongoDB.

@@ -104,16 +104,18 @@ class Subscriptions<E : Any>(private val subscriptionModel: Subscribable, privat
     }
 
     @JvmOverloads
-    fun <E1 : E> subscribe(subscriptionId: String, eventType: Class<E>, startAt: StartAt? = null, fn: Consumer<E1>): Subscription {
+    fun <E1 : E> subscribe(subscriptionId: String, eventType: Class<E1>, startAt: StartAt? = null, fn: Consumer<E1>): Subscription {
         return subscribe(subscriptionId, listOf(eventType), startAt) { e : E ->
+            @Suppress("UNCHECKED_CAST")
             fn.accept(e as E1)
         }
     }
 
     @JvmOverloads
-    fun <E1 : E> subscribe(subscriptionId: String, eventType: Class<E>, startAt: StartAt? = null, fn: BiConsumer<EventMetadata, E>): Subscription {
+    fun <E1 : E> subscribe(subscriptionId: String, eventType: Class<E1>, startAt: StartAt? = null, fn: BiConsumer<EventMetadata, E1>): Subscription {
         return subscribe(subscriptionId, listOf(eventType), startAt) { metadata, e ->
-            fn.accept(metadata, e)
+            @Suppress("UNCHECKED_CAST")
+            fn.accept(metadata, e as E1)
         }
     }
 
