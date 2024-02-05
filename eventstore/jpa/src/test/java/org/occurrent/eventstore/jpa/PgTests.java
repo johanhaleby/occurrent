@@ -1,17 +1,12 @@
 package org.occurrent.eventstore.jpa;
 
-import static org.assertj.core.api.Assertions.assertThat;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
-import io.cloudevents.CloudEvent;
 import jakarta.persistence.EntityManager;
-import java.util.stream.Stream;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
-import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
 import org.occurrent.eventstore.api.blocking.EventStore;
-import org.occurrent.eventstore.api.blocking.EventStream;
 import org.occurrent.eventstore.jpa.batteries.CloudEventDao;
 import org.occurrent.eventstore.jpa.batteries.StreamEventDaoConverter;
 import org.occurrent.eventstore.jpa.batteries.TestEventLog;
@@ -47,7 +42,7 @@ import org.springframework.test.context.junit.jupiter.SpringExtension;
 // @RunWith(SpringJUnit4ClassRunner.class)
 @ContextConfiguration(classes = {PgConfig.class, RepositoryConfig.class})
 @ExtendWith(SpringExtension.class)
-class JpaEventStoreTests {
+class PgTests extends BaseTest {
 
   @Autowired EntityManager em;
   @Autowired TestEventLog log;
@@ -71,14 +66,19 @@ class JpaEventStoreTests {
   @AfterEach
   void cleanup() {}
 
-  @Test
-  void does_not_change_event_store_content_when_writing_an_empty_stream_of_events() {
-    // When
-    testHelper.persist("name", Stream.empty());
-
-    // Then
-    EventStream<CloudEvent> eventStream = eventStore.read("name");
-
-    assertThat(eventStream.isEmpty()).isTrue();
+  @Override
+  protected TestHelper testHelper() {
+    return testHelper;
   }
+
+  //  @Test
+  //  void does_not_change_event_store_content_when_writing_an_empty_stream_of_events() {
+  //    // When
+  //    testHelper.persist("name", Stream.empty());
+  //
+  //    // Then
+  //    EventStream<CloudEvent> eventStream = eventStore.read("name");
+  //
+  //    assertThat(eventStream.isEmpty()).isTrue();
+  //  }
 }
