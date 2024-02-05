@@ -15,7 +15,7 @@ import org.occurrent.eventstore.jpa.CloudEventDaoTraits;
 import org.springframework.data.jpa.domain.support.AuditingEntityListener;
 
 @Entity
-@Table(name = "cloud_events")
+@Table(name = "cloud_events2")
 @EntityListeners(AuditingEntityListener.class)
 @Getter
 @Setter

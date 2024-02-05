@@ -3,6 +3,7 @@ package org.occurrent.eventstore.jpa.utils;
 import jakarta.persistence.EntityManagerFactory;
 import javax.sql.DataSource;
 import org.occurrent.eventstore.jpa.batteries.CloudEventDao;
+import org.occurrent.eventstore.jpa.utils.pg.PgTestContainer;
 import org.springframework.context.annotation.*;
 import org.springframework.orm.jpa.JpaTransactionManager;
 import org.springframework.orm.jpa.LocalContainerEntityManagerFactoryBean;
@@ -20,12 +21,6 @@ import org.springframework.transaction.annotation.EnableTransactionManagement;
 @Configuration
 @EnableTransactionManagement
 public class OrmConfig {
-
-  @Bean("dataSource")
-  DataSource dataSource() {
-    return TestDb.dataSource();
-  }
-
   @Bean("entityManagerFactory")
   LocalContainerEntityManagerFactoryBean entityManagerFactory(DataSource dataSource) {
     HibernateJpaVendorAdapter vendorAdapter = new HibernateJpaVendorAdapter();

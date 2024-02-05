@@ -17,9 +17,15 @@ import org.occurrent.eventstore.jpa.batteries.StreamEventDaoConverter;
 import org.occurrent.eventstore.jpa.batteries.TestEventLog;
 import org.occurrent.eventstore.jpa.batteries.TestEventLogOperations;
 import org.occurrent.eventstore.jpa.utils.*;
+import org.occurrent.eventstore.jpa.utils.pg.PgConfig;
+import org.occurrent.eventstore.jpa.utils.pg.PgTestContainer;
 import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.boot.test.autoconfigure.jdbc.AutoConfigureTestDatabase;
+import org.springframework.boot.test.autoconfigure.orm.jpa.DataJpaTest;
 import org.springframework.test.context.ContextConfiguration;
 import org.springframework.test.context.junit.jupiter.SpringExtension;
+//import org.springframework.test.context.ContextConfiguration;
+//import org.springframework.test.context.junit.jupiter.SpringExtension;
 
 // @Testcontainers
 // @DataJpaTest
@@ -30,14 +36,15 @@ import org.springframework.test.context.junit.jupiter.SpringExtension;
 
 // @EnableAutoConfiguration
 // @ContextConfiguration(classes = TestConfig.class)
-// @DataJpaTest
-// @AutoConfigureTestDatabase(replace = AutoConfigureTestDatabase.Replace.NONE)
+ @DataJpaTest
+ @AutoConfigureTestDatabase(replace = AutoConfigureTestDatabase.Replace.NONE)
 
 // @ContextConfiguration(classes = TestConfig.class)
 // @RunWith(SpringJUnit4ClassRunner.class)
 // @SpringBootTest(classes = TestConfig.class)
-@ContextConfiguration(classes = RepositoryConfig.class)
+//@ContextConfiguration(classes = RepositoryConfig.class)
 // @RunWith(SpringJUnit4ClassRunner.class)
+ @ContextConfiguration(classes = {PgConfig.class, RepositoryConfig.class})
 @ExtendWith(SpringExtension.class)
 class JpaEventStoreTests {
 
@@ -56,7 +63,7 @@ class JpaEventStoreTests {
             .eventLogOperations(new TestEventLogOperations())
             .converter(new StreamEventDaoConverter(new ObjectMapper()))
             .build();
-    TestDb.initializeTables(em);
+    PgTestContainer.initializeTables(em);
     testHelper = new TestHelper(eventStore);
   }
 
