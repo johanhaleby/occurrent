@@ -2,7 +2,6 @@ package org.occurrent.eventstore.jpa.utils.pg;
 
 import jakarta.persistence.EntityManager;
 import javax.sql.DataSource;
-
 import org.springframework.boot.jdbc.DataSourceBuilder;
 import org.springframework.context.annotation.Bean;
 import org.testcontainers.containers.PostgreSQLContainer;
@@ -34,17 +33,17 @@ public class PgTestContainer {
             "jdbc:postgresql://%s:%s/%s?stringtype=unspecified",
             postgres.getHost(), postgres.getFirstMappedPort(), DB);
     return DataSourceBuilder.create()
-            .driverClassName(dcn)
-            .url(jdbcUrl)
-            .username(USER_NAME)
-            .password(PASSWORD)
-            .build();
-//    HikariConfig dataSourceProperties = new HikariConfig();
-//    dataSourceProperties.setDriverClassName(dcn);
-//    dataSourceProperties.setJdbcUrl(jdbcUrl);
-//    dataSourceProperties.setUsername(USER_NAME);
-//    dataSourceProperties.setPassword(PASSWORD);
-//    return new HikariDataSource(dataSourceProperties);
+        .driverClassName(dcn)
+        .url(jdbcUrl)
+        .username(USER_NAME)
+        .password(PASSWORD)
+        .build();
+    //    HikariConfig dataSourceProperties = new HikariConfig();
+    //    dataSourceProperties.setDriverClassName(dcn);
+    //    dataSourceProperties.setJdbcUrl(jdbcUrl);
+    //    dataSourceProperties.setUsername(USER_NAME);
+    //    dataSourceProperties.setPassword(PASSWORD);
+    //    return new HikariDataSource(dataSourceProperties);
   }
 
   static final String initTablesSql =
@@ -76,7 +75,7 @@ public class PgTestContainer {
     if (initComplete) {
       return;
     }
-//    em.createNativeQuery(initTablesSql).executeUpdate();
+    //    em.createNativeQuery(initTablesSql).executeUpdate();
     initComplete = true;
   }
 

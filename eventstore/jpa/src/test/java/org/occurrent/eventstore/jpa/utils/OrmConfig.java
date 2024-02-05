@@ -3,7 +3,6 @@ package org.occurrent.eventstore.jpa.utils;
 import jakarta.persistence.EntityManagerFactory;
 import javax.sql.DataSource;
 import org.occurrent.eventstore.jpa.batteries.CloudEventDao;
-import org.occurrent.eventstore.jpa.utils.pg.PgTestContainer;
 import org.springframework.context.annotation.*;
 import org.springframework.orm.jpa.JpaTransactionManager;
 import org.springframework.orm.jpa.LocalContainerEntityManagerFactoryBean;
