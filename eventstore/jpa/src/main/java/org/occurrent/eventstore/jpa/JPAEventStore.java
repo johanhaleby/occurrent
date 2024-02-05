@@ -28,7 +28,7 @@ import org.springframework.transaction.annotation.Transactional;
 public class JPAEventStore<T extends CloudEventDaoTraits>
     implements EventStore, EventStoreOperations, EventStoreQueries {
   private final EventLogOperations<T> eventLogOperations;
-  private final JPAEventLog<T> eventLog;
+  private final JPAEventLog<T, ?> eventLog;
   private final CloudEventConverter<T> converter;
 
   @Override

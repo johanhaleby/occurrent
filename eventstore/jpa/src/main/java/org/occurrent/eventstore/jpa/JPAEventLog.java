@@ -5,5 +5,5 @@ import org.springframework.data.jpa.repository.JpaSpecificationExecutor;
 import org.springframework.data.repository.NoRepositoryBean;
 
 @NoRepositoryBean
-public interface JPAEventLog<T extends CloudEventDaoTraits>
-    extends JpaRepository<T, Long>, JpaSpecificationExecutor<T> {}
+public interface JPAEventLog<T extends CloudEventDaoTraits, TKey>
+    extends JpaRepository<T, TKey>, JpaSpecificationExecutor<T> {}
