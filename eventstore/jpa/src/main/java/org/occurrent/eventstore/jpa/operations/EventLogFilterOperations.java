@@ -1,5 +1,6 @@
 package org.occurrent.eventstore.jpa.operations;
 
+import java.util.function.Supplier;
 import org.occurrent.filter.Filter;
 import org.springframework.data.jpa.domain.Specification;
 
@@ -31,12 +32,14 @@ public interface EventLogFilterOperations<T> extends EventLogConditionOperations
     return byAnyCondition(fieldNamePrefix, filter.condition());
   }
 
+  Supplier<IllegalArgumentException> emptyCompositionFilterException =
+      () -> new IllegalArgumentException("Expected composition filter to have at least one filter");
+
   default Specification<T> byFilter(String fieldNamePrefix, Filter.CompositionFilter filter) {
     var composed = filter.filters().stream().map(f -> byFilter(fieldNamePrefix, f));
-    // TODO: empty stream?
     return switch (filter.operator()) {
-      case AND -> composed.reduce(Specification::and).get();
-      case OR -> composed.reduce(Specification::or).get();
+      case AND -> composed.reduce(Specification::and).orElseThrow(emptyCompositionFilterException);
+      case OR -> composed.reduce(Specification::or).orElseThrow(emptyCompositionFilterException);
     };
   }
 }
