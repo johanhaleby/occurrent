@@ -4,7 +4,7 @@ import java.util.List;
 import org.occurrent.condition.Condition;
 import org.springframework.data.jpa.domain.Specification;
 
-public interface EventLogConditionOperations<T> {
+public interface EventLogConditionOperations<T> extends EventLogExpressionOperations<T> {
   private static Number convertToNumber(Object o) {
     // TODO: more robust?
     return (int) o;
@@ -26,19 +26,33 @@ public interface EventLogConditionOperations<T> {
     List<Condition<U>> operations = condition.operations();
     List<Specification<T>> specs =
         operations.stream().map(c -> byAnyCondition(fieldName, c)).toList();
-    switch (operationName) {
-      case AND:
-        // TODO: list might be empty
-        return specs.stream().reduce(Specification::and).get();
-      case OR:
-        // TODO: same as above
-        return specs.stream().reduce(Specification::or).get();
-      case NOT:
-        // TODO: same as above
-        return Specification.not(specs.stream().findFirst().get());
-      default:
-        throw new IllegalStateException("Unexpected value: " + operationName);
-    }
+    return switch (operationName) {
+      case AND ->
+          specs.stream()
+              .reduce(Specification::and)
+              .orElseThrow(
+                  () ->
+                      new IllegalArgumentException(
+                          "Expected multi operand condition to have at least 1 condition if the"
+                              + " operand is AND"));
+      case OR ->
+          specs.stream()
+              .reduce(Specification::or)
+              .orElseThrow(
+                  () ->
+                      new IllegalArgumentException(
+                          "Expected multi operand condition to have at least 1 condition if the"
+                              + " operand is OR"));
+      case NOT ->
+          Specification.not(
+              specs.stream()
+                  .findFirst()
+                  .orElseThrow(
+                      () ->
+                          new IllegalArgumentException(
+                              "Expected multi operand condition to have exactly 1 condition if the"
+                                  + " operand is NOT")));
+    };
   }
 
   default <U> Specification<T> bySingleCondition(
@@ -48,27 +62,24 @@ public interface EventLogConditionOperations<T> {
     U expectedVersion = fieldCondition.operand();
 
     return switch (singleOperandConditionName) {
-        // TODO: IDK That this uses fieldname quite the same way mongo does. Might need a more
-        // intricate design here...
-        // Specifically, field names can differ between JVM name and the table name. Might run into
-        // issues with that here
-        // Maybe need to pass field name to some other component for mapping. not sure
-      case EQ -> (root, query, builder) -> builder.equal(root.get(fieldName), expectedVersion);
+      case EQ ->
+          (root, query, builder) ->
+              builder.equal(expressFieldName(root, fieldName), expectedVersion);
       case LT ->
           (root, query, builder) ->
-              builder.lt(root.get(fieldName), convertToNumber(expectedVersion));
+              builder.lt(expressFieldName(root, fieldName), convertToNumber(expectedVersion));
       case GT ->
           (root, query, builder) ->
-              builder.gt(root.get(fieldName), convertToNumber(expectedVersion));
+              builder.gt(expressFieldName(root, fieldName), convertToNumber(expectedVersion));
       case LTE ->
           (root, query, builder) ->
-              builder.le(root.get(fieldName), convertToNumber(expectedVersion));
+              builder.le(expressFieldName(root, fieldName), convertToNumber(expectedVersion));
       case GTE ->
           (root, query, builder) ->
-              builder.ge(root.get(fieldName), convertToNumber(expectedVersion));
+              builder.ge(expressFieldName(root, fieldName), convertToNumber(expectedVersion));
       case NE ->
           (root, query, builder) ->
-              builder.notEqual(root.get(fieldName), convertToNumber(expectedVersion));
+              builder.notEqual(expressFieldName(root, fieldName), convertToNumber(expectedVersion));
     };
   }
 }

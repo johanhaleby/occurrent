@@ -7,30 +7,30 @@ import org.occurrent.eventstore.api.SortBy;
 import org.occurrent.eventstore.jpa.operations.EventLogOperations;
 
 public class TestEventLogOperations implements EventLogOperations<CloudEventDao> {
-  private static Expression<CloudEventDao> expressFieldName(
+  private static <Y> Expression<Y> expressFieldName(
       Root<CloudEventDao> root, FieldNames fieldName) {
     return root.get(fieldName.daoValue());
   }
 
   @Override
-  public Expression<CloudEventDao> expressStreamId(Root<CloudEventDao> root) {
+  public <Y> Expression<Y> expressStreamId(Root<CloudEventDao> root) {
     return expressFieldName(root, FieldNames.STREAM_ID);
   }
 
   @Override
-  public Expression<CloudEventDao> expressCloudEventId(Root<CloudEventDao> root) {
+  public <Y> Expression<Y> expressCloudEventId(Root<CloudEventDao> root) {
     return expressFieldName(root, FieldNames.CLOUD_EVENT_ID);
   }
 
   @Override
-  public Expression<CloudEventDao> expressCloudEventSource(Root<CloudEventDao> root) {
+  public <Y> Expression<Y> expressCloudEventSource(Root<CloudEventDao> root) {
     return expressFieldName(root, FieldNames.CLOUD_EVENT_SOURCE);
   }
 
   @Override
-  public Expression<CloudEventDao> expressFieldName(Root<CloudEventDao> root, String fieldName) {
+  public <Y> Expression<Y> expressFieldName(Root<CloudEventDao> root, String fieldName) {
     return FieldNames.fromStringSafe(fieldName)
-        .map(x -> expressFieldName(root, x))
+        .map(x -> TestEventLogOperations.<Y>expressFieldName(root, x))
         .orElseThrow(
             () ->
                 new IllegalArgumentException("Field name %s not represented in FIELD_NAMES enum"));
