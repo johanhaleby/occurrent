@@ -1,4 +1,4 @@
-package org.occurrent.eventstore.jpa.operations;
+package org.occurrent.eventstore.jpa.mixins;
 
 import jakarta.persistence.criteria.CriteriaBuilder;
 import jakarta.persistence.criteria.CriteriaQuery;
@@ -11,7 +11,14 @@ import java.util.stream.Stream;
 import org.occurrent.eventstore.api.SortBy;
 import org.springframework.data.jpa.domain.Specification;
 
-public interface EventLogSortingOperations<T> extends EventLogExpressionOperations<T> {
+/**
+ * Maps instances of {@link SortBy} to instances of {@link Specification}. This interface is
+ * completely implemented but consumers can override it if they desire.
+ *
+ * @param <T> the concrete type that the cloud event is stored at. This is a hibernate managed
+ *     entity.
+ */
+public interface EventLogSortingMixin<T> extends EventLogExpressionMixin<T> {
   @FunctionalInterface
   interface EventLogSort<T> {
     static <U> BinaryOperator<EventLogSort<U>> reducer() {

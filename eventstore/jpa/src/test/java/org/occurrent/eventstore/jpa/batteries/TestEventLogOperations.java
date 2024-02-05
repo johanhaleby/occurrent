@@ -4,7 +4,7 @@ import jakarta.persistence.criteria.Expression;
 import jakarta.persistence.criteria.Root;
 import java.util.List;
 import org.occurrent.eventstore.api.SortBy;
-import org.occurrent.eventstore.jpa.operations.EventLogOperations;
+import org.occurrent.eventstore.jpa.EventLogOperations;
 
 public class TestEventLogOperations implements EventLogOperations<CloudEventDao> {
   private static <Y> Expression<Y> expressFieldName(

@@ -1,10 +1,17 @@
-package org.occurrent.eventstore.jpa.operations;
+package org.occurrent.eventstore.jpa.mixins;
 
 import java.util.List;
 import org.occurrent.condition.Condition;
 import org.springframework.data.jpa.domain.Specification;
 
-public interface EventLogConditionOperations<T> extends EventLogExpressionOperations<T> {
+/**
+ * Maps instances of {@link Condition} to instances of {@link Specification}. This interface is
+ * completely implemented but consumers can override it if they desire.
+ *
+ * @param <T> the concrete type that the cloud event is stored at. This is a hibernate managed
+ *     entity.
+ */
+public interface EventLogConditionMixin<T> extends EventLogExpressionMixin<T> {
   private static Number convertToNumber(Object o) {
     // TODO: more robust?
     return (int) o;
