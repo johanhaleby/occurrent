@@ -12,7 +12,6 @@ import lombok.Getter;
 import lombok.Setter;
 import lombok.experimental.Accessors;
 import org.occurrent.eventstore.jpa.CloudEventDaoTraits;
-import org.springframework.data.annotation.Id;
 import org.springframework.data.jpa.domain.support.AuditingEntityListener;
 
 @Entity
@@ -24,7 +23,7 @@ import org.springframework.data.jpa.domain.support.AuditingEntityListener;
 @Builder
 @Accessors(fluent = true)
 public class CloudEventDao implements CloudEventDaoTraits {
-//  @org.springframework.data.annotation.Id
+  //  @org.springframework.data.annotation.Id
   @jakarta.persistence.Id
   @GeneratedValue(strategy = GenerationType.IDENTITY)
   private long id;

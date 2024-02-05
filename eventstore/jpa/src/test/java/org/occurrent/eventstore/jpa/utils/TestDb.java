@@ -26,9 +26,10 @@ public class TestDb {
     postgres.start();
   }
 
-  public static DataSource dataSource(){
+  public static DataSource dataSource() {
     var dcn = "org.postgresql.Driver";
-    var jdbcUrl =  String.format(
+    var jdbcUrl =
+        String.format(
             "jdbc:postgresql://%s:%s/%s?stringtype=unspecified",
             postgres.getHost(), postgres.getFirstMappedPort(), DB);
     HikariConfig dataSourceProperties = new HikariConfig();
