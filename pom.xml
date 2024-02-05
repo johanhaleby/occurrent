@@ -34,6 +34,7 @@
         <module>framework</module>
         <module>deadline</module>
         <module>library</module>
+        <module>eventstore/jpa</module>
     </modules>
 
     <name>Occurrent</name>
