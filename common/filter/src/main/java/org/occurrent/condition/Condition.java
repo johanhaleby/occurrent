@@ -17,6 +17,7 @@
 package org.occurrent.condition;
 
 import java.util.ArrayList;
+import java.util.Collection;
 import java.util.Collections;
 import java.util.List;
 import java.util.function.Function;
@@ -74,6 +75,24 @@ public sealed interface Condition<T> {
         public String toString() {
             return description;
         }
+    }
+
+    static <T> Condition<T> in(Collection<T> values) {
+        return new SingleOperandCondition<>(IN, values, String.format("in any of %s", t));
+    }
+
+    static <T> Condition<T> in(Collection<Condition<T>> values) {
+        return new SingleOperandCondition<>(IN, values, String.format("in any of %s", t));
+    }
+
+    static <T> Condition<T> in(T value, T... additionalValues) {
+        List<T> values = createList(value, additionalValues);
+        return new SingleOperandCondition<>(IN, values, String.format("in any of %s", t));
+    }
+
+    static <T> Condition<T> in(Condition<T> value, Condition<T>... additionalValues) {
+        List<Condition<T>> values = createList(value, additionalValues);
+        return new SingleOperandCondition<>(IN, values, String.format("in any of %s", t));
     }
 
     static <T> Condition<T> eq(T t) {
@@ -154,8 +173,18 @@ public sealed interface Condition<T> {
         return conditions;
     }
 
+    private static <T> List<T> createList(T firstCondition, T[] additionalConditions) {
+        if (additionalConditions == null || additionalConditions.length == 0) {
+            return List.of(firstCondition);
+        }
+        List<T> conditions = new ArrayList<>(1 + additionalConditions.length);
+        conditions.add(firstCondition);
+        Collections.addAll(conditions, additionalConditions);
+        return conditions;
+    }
+
     enum SingleOperandConditionName {
-        EQ, LT, GT, LTE, GTE, NE
+        EQ, LT, GT, LTE, GTE, NE, IN
     }
 
     enum MultiOperandConditionName {
