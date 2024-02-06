@@ -8,6 +8,7 @@ import io.cloudevents.core.builder.CloudEventBuilder;
 import java.nio.charset.StandardCharsets;
 import java.util.UUID;
 import lombok.AllArgsConstructor;
+import org.occurrent.cloudevents.OccurrentCloudEventExtension;
 import org.occurrent.eventstore.jpa.CloudEventConverter;
 
 @AllArgsConstructor
@@ -38,6 +39,8 @@ public class StreamEventDaoConverter implements CloudEventConverter<CloudEventDa
         .withSource(e.source())
         .withType(e.getClass().getSimpleName())
         .withTime(e.timestamp().atOffset(UTC))
+        .withExtension(OccurrentCloudEventExtension.STREAM_VERSION, e.streamRevision())
+        .withExtension(OccurrentCloudEventExtension.STREAM_ID, e.streamId())
         .withSubject(e.subject()) // Defined or WasChanged
         .withDataContentType(e.dataContentType())
         .withData(e.data().getBytes(StandardCharsets.UTF_8))

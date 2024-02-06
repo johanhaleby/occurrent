@@ -7,6 +7,7 @@ import io.cloudevents.CloudEvent;
 import io.cloudevents.core.builder.CloudEventBuilder;
 import java.net.URI;
 import java.util.HashMap;
+import java.util.List;
 import java.util.function.Function;
 import java.util.stream.Stream;
 import org.occurrent.domain.DomainEvent;
@@ -23,7 +24,11 @@ public abstract class TestOperations<T extends EventStore> {
     return eventStore.write(eventStreamId, events.map(convertDomainEventToCloudEvent()));
   }
 
-  URI NAME_SOURCE = URI.create("http://name");
+  protected WriteResult persist(String eventStreamId, List<DomainEvent> events) {
+    return persist(eventStreamId, events.stream());
+  }
+
+  public static URI NAME_SOURCE = URI.create("http://name");
 
   protected Function<DomainEvent, CloudEvent> convertDomainEventToCloudEvent() {
     return e ->

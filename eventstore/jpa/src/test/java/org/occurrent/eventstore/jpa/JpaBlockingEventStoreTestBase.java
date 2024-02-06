@@ -6,6 +6,7 @@ import static org.occurrent.cloudevents.OccurrentCloudEventExtension.*;
 import io.cloudevents.CloudEvent;
 import java.time.LocalDateTime;
 import java.util.*;
+import java.util.stream.Collectors;
 import java.util.stream.Stream;
 import org.junit.jupiter.api.*;
 import org.occurrent.domain.DomainEvent;
@@ -50,33 +51,29 @@ abstract class JpaBlockingEventStoreTestBase<T extends EventStore> extends TestO
     // When
     DomainEvent event1 = new NameDefined(UUID.randomUUID().toString(), now, "name", "John Doe");
     DomainEvent event2 = new NameWasChanged(UUID.randomUUID().toString(), now, "name", "Jan Doe");
-    persist("name", Stream.of(event1, event2));
+    persist("name", Stream.of(event1, event2).collect(Collectors.toList()));
 
     // Then
-    try {
-      EventStream<CloudEvent> eventStream = eventStore.read("name");
-      assertThat(eventStream.events().map(e -> e.getExtension(STREAM_ID))).containsOnly("name");
-    } catch (Throwable t) {
-      System.out.println(t);
-    }
+    EventStream<CloudEvent> eventStream = eventStore.read("name");
+    assertThat(eventStream.events().map(e -> e.getExtension(STREAM_ID))).containsOnly("name");
   }
 
-  //  @Test
-  //  void adds_stream_version_extension_to_each_event() {
-  //    // Given
-  //    LocalDateTime now = LocalDateTime.now();
-  //
-  //    // When
-  //    DomainEvent event1 = new NameDefined(UUID.randomUUID().toString(), now, "name", "John Doe");
-  //    DomainEvent event2 = new NameWasChanged(UUID.randomUUID().toString(), now, "name", "Jan
-  // Doe");
-  //    persist("name", Stream.of(event1, event2).collect(Collectors.toList()));
-  //
-  //    // Then
-  //    EventStream<CloudEvent> eventStream = eventStore.read("name");
-  //    assertThat(eventStream.events().map(e ->
-  // e.getExtension(STREAM_VERSION))).containsExactly(1L, 2L);
-  //  }
+  @Test
+  void adds_stream_version_extension_to_each_event() {
+    // Given
+    LocalDateTime now = LocalDateTime.now();
+
+    // When
+    DomainEvent event1 = new NameDefined(UUID.randomUUID().toString(), now, "name", "John Doe");
+    DomainEvent event2 = new NameWasChanged(UUID.randomUUID().toString(), now, "name", "Jan Doe");
+    persist("name", Stream.of(event1, event2).collect(Collectors.toList()));
+
+    // Then
+    EventStream<CloudEvent> eventStream = eventStore.read("name");
+    assertThat(eventStream.events().map(e -> e.getExtension(STREAM_VERSION)))
+        .containsExactly(1L, 2L);
+  }
+
   //
   //  @Test
   //  void does_not_change_event_store_content_when_writing_an_empty_stream_of_events() {

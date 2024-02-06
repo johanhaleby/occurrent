@@ -9,6 +9,7 @@ import java.util.UUID;
 import lombok.*;
 import lombok.experimental.Accessors;
 import org.occurrent.eventstore.jpa.CloudEventDaoTraits;
+import org.occurrent.eventstore.jpa.utils.TestOperations;
 import org.springframework.data.jpa.domain.support.AuditingEntityListener;
 
 @Entity
@@ -36,18 +37,19 @@ public class CloudEventDao implements CloudEventDaoTraits {
   private UUID eventUuid;
 
   // TODO - remove all @Transient tags and make the design actually good.
-  @Transient private URI source;
-  @Transient private String type;
+  @Transient private URI source = TestOperations.NAME_SOURCE;
+  @Transient private String type = "";
 
-  @Transient @Nullable private Instant timestamp;
-  @Transient @Nullable private String subject;
+  private Instant timestamp;
+
+  @Transient @Nullable private String subject = "";
 
   @Column(name = "data_content_type")
   @Transient
   @Nullable
-  private String dataContentType;
+  private String dataContentType = "";
 
-  @Transient private String data;
+  @Transient private String data = "";
 
   @Transient
   @Column(name = "data_schema")
@@ -56,5 +58,5 @@ public class CloudEventDao implements CloudEventDaoTraits {
 
   @Transient
   @Column(name = "spec_version")
-  private SpecVersion specVersion;
+  private SpecVersion specVersion = SpecVersion.V03;
 }

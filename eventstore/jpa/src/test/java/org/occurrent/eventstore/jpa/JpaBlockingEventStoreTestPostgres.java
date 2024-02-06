@@ -94,7 +94,7 @@ class JpaBlockingEventStoreTestPostgres
 
               -- "source" TEXT NOT NULL,
               -- "type" TEXT NOT NULL,
-              -- "timestamp" TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+              "timestamp" TIMESTAMPTZ NOT NULL DEFAULT NOW(),
               -- "subject" text,
               -- "data_content_type" text,
               -- "data" text,
