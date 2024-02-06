@@ -8,7 +8,7 @@ import org.junit.jupiter.api.Test;
 import org.occurrent.eventstore.api.blocking.EventStream;
 import org.occurrent.eventstore.jpa.utils.TestHelper;
 
-abstract class BaseTest {
+abstract class JpaBlockingEventStoreTest_Base {
   protected abstract TestHelper testHelper();
 
   @Test
