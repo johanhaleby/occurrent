@@ -36,7 +36,7 @@ public class CloudEventDao implements CloudEventDaoTraits {
   @Column(name = "event_uuid")
   private UUID eventUuid;
 
-  // TODO - remove all @Transient tags and make the design actually good.
+  // TODO - remove all @Transient tags and make sure the tests pass with however we store the data attribute
   @Transient private URI source = TestOperations.NAME_SOURCE;
   @Transient private String type = "";
 
@@ -49,7 +49,7 @@ public class CloudEventDao implements CloudEventDaoTraits {
   @Nullable
   private String dataContentType = "";
 
-  @Transient private String data = "";
+  private String data;
 
   @Transient
   @Column(name = "data_schema")

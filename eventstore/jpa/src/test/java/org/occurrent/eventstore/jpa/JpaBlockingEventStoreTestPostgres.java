@@ -4,6 +4,7 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import jakarta.persistence.EntityManagerFactory;
 import javax.sql.DataSource;
 import org.junit.jupiter.api.BeforeAll;
+import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.TestInstance;
 import org.junit.jupiter.api.extension.ExtendWith;
 import org.occurrent.eventstore.jpa.batteries.CloudEventDao;
@@ -72,6 +73,23 @@ class JpaBlockingEventStoreTestPostgres
         .build();
   }
 
+  private void execute(String... sqls) {
+    var em = emf.createEntityManager();
+    em.getTransaction().begin();
+
+    for (var sql : sqls) {
+      em.createNativeQuery(sql).executeUpdate();
+    }
+    em.getTransaction().commit();
+    em.close();
+  }
+
+  @BeforeEach
+  void truncate() {
+    var truncateSQL = "TRUNCATE TABLE \"public\".\"cloud_events\";";
+    execute(truncateSQL);
+  }
+
   @BeforeAll
   void create_table() {
     // https://medium.com/dandelion-tutorials/using-spring-data-jpa-for-integration-tests-without-spring-boot-starter-9f87877d098f
@@ -87,7 +105,7 @@ class JpaBlockingEventStoreTestPostgres
               "stream_id" TEXT NOT NULL,
               "event_uuid" UUID NOT NULL UNIQUE,
 
-              -- TODO uncomment these lines below and make the data design good
+              -- TODO uncomment these lines below 
               -- Should match the stuff in CloudEventDAO
               -- Should be queryable using the Occurrent DSL (no JPA filter errors)
 
@@ -97,18 +115,13 @@ class JpaBlockingEventStoreTestPostgres
               "timestamp" TIMESTAMPTZ NOT NULL DEFAULT NOW(),
               -- "subject" text,
               -- "data_content_type" text,
-              -- "data" text,
+              "data" text, --TODO - currently just storing in JSON. Probably wont play nicely with filters.
               -- "data_schema" text,
               -- "spec_version" text,
               CONSTRAINT "cloud-events-pk" PRIMARY KEY ("id")
           );
           """;
 
-    var em = emf.createEntityManager();
-    em.getTransaction().begin();
-    em.createNativeQuery(dropSql).executeUpdate();
-    em.createNativeQuery(sql).executeUpdate();
-    em.getTransaction().commit();
-    em.close();
+    execute(dropSql, sql);
   }
 }

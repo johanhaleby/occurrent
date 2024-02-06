@@ -1,8 +1,10 @@
 package org.occurrent.eventstore.jpa;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.junit.jupiter.api.Assertions.assertAll;
 import static org.occurrent.cloudevents.OccurrentCloudEventExtension.*;
 
+import com.fasterxml.jackson.databind.ObjectMapper;
 import io.cloudevents.CloudEvent;
 import java.time.LocalDateTime;
 import java.util.*;
@@ -10,6 +12,7 @@ import java.util.stream.Collectors;
 import java.util.stream.Stream;
 import org.junit.jupiter.api.*;
 import org.occurrent.domain.DomainEvent;
+import org.occurrent.domain.Name;
 import org.occurrent.domain.NameDefined;
 import org.occurrent.domain.NameWasChanged;
 import org.occurrent.eventstore.api.blocking.EventStore;
@@ -26,22 +29,10 @@ abstract class JpaBlockingEventStoreTestBase<T extends EventStore> extends TestO
   void reset_dependencies() {
     // Rebuild a new set of dependencies between each run
     // Not sure if this is necessary or not. Maybe we change to @beforeall?
-    this.dependencies = new TestDependencies<>(getNewEventStore());
+    this.dependencies = new TestDependencies<>(getNewEventStore(), new ObjectMapper());
     this.eventStore = dependencies.eventStore();
+    this.objectMapper = dependencies.objectMapper();
   }
-
-  @Test
-  void does_not_change_event_store_content_when_writing_an_empty_stream_of_events() {
-    // When
-    persist("name", Stream.empty());
-
-    // Then
-    EventStream<CloudEvent> eventStream = eventStore.read("name");
-
-    assertThat(eventStream.isEmpty()).isTrue();
-  }
-
-  //
 
   @Test
   void adds_stream_id_extension_to_each_event() {
@@ -74,64 +65,63 @@ abstract class JpaBlockingEventStoreTestBase<T extends EventStore> extends TestO
         .containsExactly(1L, 2L);
   }
 
+  @Test
+  void does_not_change_event_store_content_when_writing_an_empty_stream_of_events() {
+    // When
+    persist("name", Stream.empty());
+
+    // Then
+    EventStream<CloudEvent> eventStream = eventStore.read("name");
+
+    assertThat(eventStream.isEmpty()).isTrue();
+  }
+
+  //    @Test
+  //    void can_configure_query_options_for_native_mongo_event_store() {
+  //      // Given
+  //      EventStoreConfig eventStoreConfig = new
+  //   EventStoreConfig.Builder().timeRepresentation(TimeRepresentation.DATE).queryOptions(query ->
+  //   query.batchSize(10).noCursorTimeout(true)).build();
+  //      eventStore = newMongoEventStore(eventStoreConfig);
   //
-  //  @Test
-  //  void does_not_change_event_store_content_when_writing_an_empty_stream_of_events() {
-  //    // When
-  //    persist("name", Stream.empty());
+  //      LocalDateTime now = LocalDateTime.now();
+  //      List<DomainEvent> events =
+  //   Composition.chain(Name.defineTheName(UUID.randomUUID().toString(), now, "name", "Hello
+  // World"),
+  //   es -> Name.changeName(es, UUID.randomUUID().toString(), now, "name", "John Doe"));
   //
-  //    // Then
-  //    EventStream<CloudEvent> eventStream = eventStore.read("name");
+  //      // When
+  //      persist("name", WriteCondition.streamVersionEq(0), events);
   //
-  //    assertThat(eventStream.isEmpty()).isTrue();
-  //  }
+  //      // Then
+  //      EventStream<CloudEvent> eventStream = eventStore.read("name");
+  //      List<DomainEvent> readEvents = deserialize(eventStream.events());
   //
-  //  @Test
-  //  void can_configure_query_options_for_native_mongo_event_store() {
-  //    // Given
-  //    EventStoreConfig eventStoreConfig = new
-  // EventStoreConfig.Builder().timeRepresentation(TimeRepresentation.DATE).queryOptions(query ->
-  // query.batchSize(10).noCursorTimeout(true)).build();
-  //    eventStore = newMongoEventStore(eventStoreConfig);
-  //
-  //    LocalDateTime now = LocalDateTime.now();
-  //    List<DomainEvent> events =
-  // Composition.chain(Name.defineTheName(UUID.randomUUID().toString(), now, "name", "Hello World"),
-  // es -> Name.changeName(es, UUID.randomUUID().toString(), now, "name", "John Doe"));
-  //
-  //    // When
-  //    persist("name", WriteCondition.streamVersionEq(0), events);
-  //
-  //    // Then
-  //    EventStream<CloudEvent> eventStream = eventStore.read("name");
-  //    List<DomainEvent> readEvents = deserialize(eventStream.events());
-  //
-  //    assertAll(
-  //            () -> assertThat(eventStream.version()).isEqualTo(events.size()),
-  //            () -> assertThat(readEvents).hasSize(2),
-  //            () -> assertThat(readEvents).containsExactlyElementsOf(events)
-  //    );
-  //  }
-  //
-  //  @Test
-  //  void can_read_and_write_single_event_to_mongo_event_store() {
-  //    LocalDateTime now = LocalDateTime.now();
-  //
-  //    // When
-  //    List<DomainEvent> events = Name.defineTheName(UUID.randomUUID().toString(), now, "name",
-  // "John Doe");
-  //    persist("name", events);
-  //
-  //    // Then
-  //    EventStream<CloudEvent> eventStream = eventStore.read("name");
-  //    List<DomainEvent> readEvents = deserialize(eventStream.events());
-  //
-  //    assertAll(
-  //            () -> assertThat(eventStream.version()).isEqualTo(1),
-  //            () -> assertThat(readEvents).hasSize(1),
-  //            () -> assertThat(readEvents).containsExactlyElementsOf(events)
-  //    );
-  //  }
+  //      assertAll(
+  //              () -> assertThat(eventStream.version()).isEqualTo(events.size()),
+  //              () -> assertThat(readEvents).hasSize(2),
+  //              () -> assertThat(readEvents).containsExactlyElementsOf(events)
+  //      );
+  //    }
+
+  @Test
+  void can_read_and_write_single_event_to_event_store() {
+    LocalDateTime now = LocalDateTime.now();
+
+    // When
+    List<DomainEvent> events =
+        Name.defineTheName(UUID.randomUUID().toString(), now, "name", "John Doe");
+    persist("name", events);
+
+    // Then
+    EventStream<CloudEvent> eventStream = eventStore.read("name");
+    List<DomainEvent> readEvents = deserialize(eventStream.events());
+
+    assertAll(
+        () -> assertThat(eventStream.version()).isEqualTo(1),
+        () -> assertThat(readEvents).hasSize(1),
+        () -> assertThat(readEvents).containsExactlyElementsOf(events));
+  }
   //
   //  @Test
   //  void can_read_and_write_multiple_events_at_once_to_mongo_event_store() {

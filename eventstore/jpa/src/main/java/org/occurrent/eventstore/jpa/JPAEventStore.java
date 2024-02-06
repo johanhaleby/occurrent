@@ -100,12 +100,13 @@ public class JPAEventStore<T extends CloudEventDaoTraits>
 
   @Override
   public EventStream<CloudEvent> read(String streamId, int skip, int limit) {
-    var unused = eventLog.findAll();
-    var page =
-        eventLog.findAll(eventLogOperations.byStreamId(streamId), PageRequest.of(skip, limit));
-    var events = page.map(converter::toCloudEvent);
+    var events =
+        eventLog
+            .findAll(eventLogOperations.byStreamId(streamId), PageRequest.of(skip, limit))
+            .map(converter::toCloudEvent)
+            .stream();
     var currentRevision = this.count();
-    return new EventStreamImpl<>(streamId, currentRevision, events.stream());
+    return new EventStreamImpl<>(streamId, currentRevision, events);
   }
 
   @Override
