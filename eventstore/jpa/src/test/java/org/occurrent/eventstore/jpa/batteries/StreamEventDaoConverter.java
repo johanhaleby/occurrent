@@ -5,6 +5,7 @@ import static java.time.ZoneOffset.UTC;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import io.cloudevents.CloudEvent;
 import io.cloudevents.core.builder.CloudEventBuilder;
+import java.nio.charset.StandardCharsets;
 import java.util.UUID;
 import lombok.AllArgsConstructor;
 import org.occurrent.eventstore.jpa.CloudEventConverter;
@@ -26,7 +27,7 @@ public class StreamEventDaoConverter implements CloudEventConverter<CloudEventDa
         .dataContentType(e.getDataContentType())
         .dataSchema(e.getDataSchema())
         .specVersion(e.getSpecVersion())
-        .data(e.getData().toBytes())
+        .data(new String(e.getData().toBytes()))
         .build();
   }
 
@@ -39,7 +40,7 @@ public class StreamEventDaoConverter implements CloudEventConverter<CloudEventDa
         .withTime(e.timestamp().atOffset(UTC))
         .withSubject(e.subject()) // Defined or WasChanged
         .withDataContentType(e.dataContentType())
-        .withData(e.data())
+        .withData(e.data().getBytes(StandardCharsets.UTF_8))
         .build();
   }
 }
