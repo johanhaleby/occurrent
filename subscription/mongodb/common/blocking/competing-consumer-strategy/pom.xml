@@ -29,10 +29,6 @@
             <artifactId>retry</artifactId>
             <version>0.17.1-SNAPSHOT</version>
         </dependency>
-        <dependency>
-            <groupId>ch.qos.logback</groupId>
-            <artifactId>logback-classic</artifactId>
-        </dependency>
 
         <!-- Test -->
         <dependency>
