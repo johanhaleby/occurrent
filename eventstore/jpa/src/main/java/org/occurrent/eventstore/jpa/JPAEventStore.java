@@ -76,7 +76,7 @@ public class JPAEventStore<T extends CloudEventDaoTraits>
 
     try {
       eventLog.saveAll(daos);
-    }catch (DataIntegrityViolationException e){
+    } catch (DataIntegrityViolationException e) {
       throw new DuplicateCloudEventException(null, null, e.getMessage().trim(), e);
     }
     var newVersion = eventsAndRevisions.stream().map(x -> x.t1).max(Long::compareTo).get();

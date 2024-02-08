@@ -37,8 +37,9 @@ public class CloudEventDao implements CloudEventDaoTraits {
 
   // TODO - remove all @Transient tags and make sure the tests pass with however we store the data
   // attribute
-  private String source;
-  @Transient private String type = "";
+  @Convert(converter = URIConverter.class)
+  private URI source;
+  private String type;
 
   private Instant timestamp;
 

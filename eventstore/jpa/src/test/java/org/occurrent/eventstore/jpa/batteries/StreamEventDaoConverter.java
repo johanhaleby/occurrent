@@ -5,7 +5,6 @@ import static java.time.ZoneOffset.UTC;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import io.cloudevents.CloudEvent;
 import io.cloudevents.core.builder.CloudEventBuilder;
-import java.net.URI;
 import org.occurrent.cloudevents.OccurrentCloudEventExtension;
 import org.occurrent.eventstore.jpa.CloudEventConverter;
 
@@ -25,7 +24,7 @@ public class StreamEventDaoConverter implements CloudEventConverter<CloudEventDa
         .streamRevision(streamVersion)
         .streamId(streamId)
         .eventId(e.getId())
-        .source(e.getSource().toString())
+        .source(e.getSource())
         .type(e.toString())
         .timestamp(e.getTime().toInstant())
         .subject(e.getSubject())
@@ -40,7 +39,7 @@ public class StreamEventDaoConverter implements CloudEventConverter<CloudEventDa
   public CloudEvent toCloudEvent(CloudEventDao e) {
     return CloudEventBuilder.v1()
         .withId(e.eventId())
-        .withSource(URI.create(e.source()))
+        .withSource(e.source())
         .withType(e.getClass().getSimpleName())
         .withTime(e.timestamp().atOffset(UTC))
         .withExtension(OccurrentCloudEventExtension.STREAM_VERSION, e.streamRevision())

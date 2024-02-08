@@ -13,12 +13,12 @@ public enum FieldNames {
   STREAM_ID("StreamId", "streamId"),
   CLOUD_EVENT_ID("id", "eventId"),
   SUBJECT("subject", "subject"),
-  CLOUD_EVENT_SOURCE("CloudEventSource", "cloudEventSource"),
+  CLOUD_EVENT_SOURCE("source", "source"),
   TIMESTAMP("time", "timestamp"),
   TYPE("type", "type"),
   SPEC_VERSION("specversion", "specVersion"),
-  SOURCE("source", "source"),
-  ;
+//  SOURCE("source", "source"),
+;
   //  String SPEC_VERSION = "specversion";
   //  String ID = "id";
   //  String TYPE = "type";
