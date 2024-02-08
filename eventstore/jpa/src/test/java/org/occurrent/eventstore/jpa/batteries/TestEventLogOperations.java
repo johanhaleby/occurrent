@@ -3,10 +3,14 @@ package org.occurrent.eventstore.jpa.batteries;
 import jakarta.persistence.criteria.Expression;
 import jakarta.persistence.criteria.Root;
 import java.util.List;
+
+import org.occurrent.condition.Condition;
 import org.occurrent.eventstore.api.SortBy;
 import org.occurrent.eventstore.jpa.EventLogOperations;
+import org.occurrent.eventstore.jpa.EventLogOperationsDefaultImpl;
+import org.springframework.data.jpa.domain.Specification;
 
-public class TestEventLogOperations implements EventLogOperations<CloudEventDao> {
+public class TestEventLogOperations extends EventLogOperationsDefaultImpl<CloudEventDao> {
   private static <Y> Expression<Y> expressFieldName(
       Root<CloudEventDao> root, FieldNames fieldName) {
     return root.get(fieldName.daoValue());
@@ -45,5 +49,18 @@ public class TestEventLogOperations implements EventLogOperations<CloudEventDao>
           case DESCENDING ->
               List.of(criteriaBuilder.desc(expressFieldName(root, FieldNames.TIMESTAMP)));
         };
+  }
+
+  @Override
+  public  <U> Specification<CloudEventDao> bySingleCondition(
+          String fieldName, Condition.SingleOperandCondition<U> fieldCondition) {
+    if (fieldName.contains("data")) {
+      return super.bySingleCondition(fieldName, fieldCondition);
+    }
+
+    // https://stackoverflow.com/a/48492202
+    // Use a special override function to generate a specification that can use provider specific features
+    // In this case jsonb column from postgres
+    throw new RuntimeException("Hype!");
   }
 }

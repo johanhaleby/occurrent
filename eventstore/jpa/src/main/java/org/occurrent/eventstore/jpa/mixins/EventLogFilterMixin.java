@@ -12,10 +12,6 @@ import org.springframework.data.jpa.domain.Specification;
  *     entity.
  */
 public interface EventLogFilterMixin<T> extends EventLogConditionMixin<T> {
-  default Specification<T> byFilter(Filter filter) {
-    return byFilter(null, filter);
-  }
-
   default Specification<T> byFilter(String fieldNamePrefix, Filter filter) {
     if (filter instanceof Filter.All) {
       return all();
