@@ -10,7 +10,7 @@ import lombok.experimental.Accessors;
 @Getter
 @Accessors(fluent = true)
 public enum FieldNames {
-  STREAM_ID("StreamId", "streamId"),
+  STREAM_ID("streamid", "streamId"),
   CLOUD_EVENT_ID("id", "eventId"),
   SUBJECT("subject", "subject"),
   CLOUD_EVENT_SOURCE("source", "source"),
