@@ -36,7 +36,8 @@ public class CloudEventDao implements CloudEventDaoTraits {
   @Column(name = "event_uuid")
   private UUID eventUuid;
 
-  // TODO - remove all @Transient tags and make sure the tests pass with however we store the data attribute
+  // TODO - remove all @Transient tags and make sure the tests pass with however we store the data
+  // attribute
   @Transient private URI source = TestOperations.NAME_SOURCE;
   @Transient private String type = "";
 

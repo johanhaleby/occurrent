@@ -105,7 +105,7 @@ class JpaBlockingEventStoreTestPostgres
               "stream_id" TEXT NOT NULL,
               "event_uuid" UUID NOT NULL UNIQUE,
 
-              -- TODO uncomment these lines below 
+              -- TODO uncomment these lines below
               -- Should match the stuff in CloudEventDAO
               -- Should be queryable using the Occurrent DSL (no JPA filter errors)
 
