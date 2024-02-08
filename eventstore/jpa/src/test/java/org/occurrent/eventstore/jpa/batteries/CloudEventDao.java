@@ -39,6 +39,7 @@ public class CloudEventDao implements CloudEventDaoTraits {
   // attribute
   @Convert(converter = URIConverter.class)
   private URI source;
+
   private String type;
 
   private Instant timestamp;
