@@ -5,15 +5,16 @@ import static java.time.ZoneOffset.UTC;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import io.cloudevents.CloudEvent;
 import io.cloudevents.core.builder.CloudEventBuilder;
-import java.nio.charset.StandardCharsets;
 import java.util.UUID;
-import lombok.AllArgsConstructor;
 import org.occurrent.cloudevents.OccurrentCloudEventExtension;
 import org.occurrent.eventstore.jpa.CloudEventConverter;
 
-@AllArgsConstructor
 public class StreamEventDaoConverter implements CloudEventConverter<CloudEventDao> {
-  private final ObjectMapper mapper;
+  private final SerializingOperations serializingOperations;
+
+  public StreamEventDaoConverter(ObjectMapper mapper) {
+    this.serializingOperations = new SerializingOperations(mapper);
+  }
 
   @Override
   public CloudEventDao toDao(long streamVersion, String streamId, CloudEvent e) {
@@ -28,7 +29,7 @@ public class StreamEventDaoConverter implements CloudEventConverter<CloudEventDa
         .dataContentType(e.getDataContentType())
         .dataSchema(e.getDataSchema())
         .specVersion(e.getSpecVersion())
-        .data(new String(e.getData().toBytes()))
+        .data(serializingOperations.bytesToJson(e.getData().toBytes()))
         .build();
   }
 
@@ -43,7 +44,7 @@ public class StreamEventDaoConverter implements CloudEventConverter<CloudEventDa
         .withExtension(OccurrentCloudEventExtension.STREAM_ID, e.streamId())
         .withSubject(e.subject()) // Defined or WasChanged
         .withDataContentType(e.dataContentType())
-        .withData(e.data().getBytes(StandardCharsets.UTF_8))
+        .withData(serializingOperations.jsonToBytes(e.data()))
         .build();
   }
 }

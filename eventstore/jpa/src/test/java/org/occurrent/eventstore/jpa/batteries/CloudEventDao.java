@@ -1,10 +1,15 @@
 package org.occurrent.eventstore.jpa.batteries;
 
+import static org.occurrent.eventstore.jpa.utils.Sneaky.sneaky;
+
+import com.fasterxml.jackson.core.type.TypeReference;
+import com.fasterxml.jackson.databind.ObjectMapper;
 import io.cloudevents.SpecVersion;
 import io.cloudevents.lang.Nullable;
 import jakarta.persistence.*;
 import java.net.URI;
 import java.time.Instant;
+import java.util.Map;
 import java.util.UUID;
 import lombok.*;
 import lombok.experimental.Accessors;
@@ -50,7 +55,10 @@ public class CloudEventDao implements CloudEventDaoTraits {
   @Nullable
   private String dataContentType = "";
 
-  private String data;
+  //  @Type(JsonType.class)
+  @Convert(converter = MyConverter.class)
+  @Column(columnDefinition = "jsonb")
+  private Map<String, Object> data;
 
   @Transient
   @Column(name = "data_schema")
@@ -60,4 +68,19 @@ public class CloudEventDao implements CloudEventDaoTraits {
   @Transient
   @Column(name = "spec_version")
   private SpecVersion specVersion = SpecVersion.V03;
+}
+
+@Converter(autoApply = true)
+class MyConverter implements AttributeConverter<Map<String, Object>, String> {
+  private final ObjectMapper mapper = new ObjectMapper();
+
+  @Override
+  public String convertToDatabaseColumn(Map<String, Object> o) {
+    return sneaky(() -> mapper.writeValueAsString(o));
+  }
+
+  @Override
+  public Map<String, Object> convertToEntityAttribute(String s) {
+    return sneaky(() -> mapper.readValue(s, new TypeReference<>() {}));
+  }
 }

@@ -115,7 +115,7 @@ class JpaBlockingEventStoreTestPostgres
               "timestamp" TIMESTAMPTZ NOT NULL DEFAULT NOW(),
               -- "subject" text,
               -- "data_content_type" text,
-              "data" text, --TODO - currently just storing in JSON. Probably wont play nicely with filters.
+              "data" jsonb, --TODO - currently just storing in JSON. Probably wont play nicely with filters.
               -- "data_schema" text,
               -- "spec_version" text,
               CONSTRAINT "cloud-events-pk" PRIMARY KEY ("id")
