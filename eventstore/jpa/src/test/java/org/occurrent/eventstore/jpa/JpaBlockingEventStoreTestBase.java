@@ -3,6 +3,8 @@ package org.occurrent.eventstore.jpa;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.junit.jupiter.api.Assertions.assertAll;
 import static org.occurrent.cloudevents.OccurrentCloudEventExtension.*;
+import static org.occurrent.condition.Condition.eq;
+import static org.occurrent.filter.Filter.data;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
 import io.cloudevents.CloudEvent;
@@ -15,15 +17,16 @@ import org.occurrent.domain.DomainEvent;
 import org.occurrent.domain.Name;
 import org.occurrent.domain.NameDefined;
 import org.occurrent.domain.NameWasChanged;
-import org.occurrent.eventstore.api.blocking.EventStore;
 import org.occurrent.eventstore.api.blocking.EventStream;
 import org.occurrent.eventstore.jpa.utils.TestDependencies;
 import org.occurrent.eventstore.jpa.utils.TestOperations;
 
 @TestInstance(TestInstance.Lifecycle.PER_CLASS)
-abstract class JpaBlockingEventStoreTestBase<T extends EventStore> extends TestOperations<T> {
+abstract class JpaBlockingEventStoreTestBase<
+        T extends CloudEventDaoTraits, E extends JPAEventStore<T>>
+    extends TestOperations<T, E> {
 
-  abstract T getNewEventStore();
+  abstract E getNewEventStore();
 
   @BeforeEach
   void reset_dependencies() {
@@ -122,6 +125,7 @@ abstract class JpaBlockingEventStoreTestBase<T extends EventStore> extends TestO
         () -> assertThat(readEvents).hasSize(1),
         () -> assertThat(readEvents).containsExactlyElementsOf(events));
   }
+
   //
   //  @Test
   //  void can_read_and_write_multiple_events_at_once_to_mongo_event_store() {
@@ -1391,25 +1395,24 @@ abstract class JpaBlockingEventStoreTestBase<T extends EventStore> extends TestO
   // nameWasChanged2);
   //      }
   //
-  //      @Test
-  //      void query_filter_by_data() {
-  //        // Given
-  //        LocalDateTime now = LocalDateTime.now();
-  //        NameDefined nameDefined = new NameDefined(UUID.randomUUID().toString(), now, "name",
-  // "name");
-  //        NameWasChanged nameWasChanged1 = new NameWasChanged(UUID.randomUUID().toString(),
-  // now.plusHours(1), "name", "name2");
-  //        NameWasChanged nameWasChanged2 = new NameWasChanged(UUID.randomUUID().toString(),
-  // now.plusHours(2), "name", "name3");
-  //
-  //        // When
-  //        persist("name1", Stream.of(nameDefined, nameWasChanged1));
-  //        persist("name2", nameWasChanged2);
-  //
-  //        // Then
-  //        Stream<CloudEvent> events = eventStore.query(data("name", eq("name2")));
-  //        assertThat(deserialize(events)).containsExactly(nameWasChanged1);
-  //      }
+  @Test
+  void query_filter_by_data() {
+    // Given
+    LocalDateTime now = LocalDateTime.now();
+    NameDefined nameDefined = new NameDefined(UUID.randomUUID().toString(), now, "name", "name");
+    NameWasChanged nameWasChanged1 =
+        new NameWasChanged(UUID.randomUUID().toString(), now.plusHours(1), "name", "name2");
+    NameWasChanged nameWasChanged2 =
+        new NameWasChanged(UUID.randomUUID().toString(), now.plusHours(2), "name", "name3");
+
+    // When
+    persist("name1", Stream.of(nameDefined, nameWasChanged1));
+    persist("name2", nameWasChanged2);
+
+    // Then
+    Stream<CloudEvent> events = eventStore.query(data("name", eq("name2")));
+    assertThat(deserialize(events)).containsExactly(nameWasChanged1);
+  }
   //
   //      @Test
   //      void query_filter_by_subject() {

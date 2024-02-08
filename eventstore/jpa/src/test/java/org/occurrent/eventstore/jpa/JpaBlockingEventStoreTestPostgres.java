@@ -32,7 +32,7 @@ import org.testcontainers.junit.jupiter.Testcontainers;
 @Testcontainers
 @TestInstance(TestInstance.Lifecycle.PER_CLASS)
 class JpaBlockingEventStoreTestPostgres
-    extends JpaBlockingEventStoreTestBase<JPAEventStore<CloudEventDao>> {
+    extends JpaBlockingEventStoreTestBase<CloudEventDao, JPAEventStore<CloudEventDao>> {
   static final String USER_NAME = "user";
   static final String PASSWORD = "password";
   static final String DB = "db";

@@ -17,7 +17,10 @@ public interface EventLogFilterMixin<T> extends EventLogConditionMixin<T> {
       return all();
     }
     if (filter instanceof Filter.SingleConditionFilter scf) {
-      return byFilter(fieldNamePrefix, scf);
+      // return byFilter(fieldNamePrefix, scf);
+      // TODO: theres some concatenation that im missing here?
+      // var fieldName = fieldNamePrefix + "." + scf.fieldName();
+      return byFilter(scf.fieldName(), scf);
     }
     if (filter instanceof Filter.CompositionFilter cf) {
       return byFilter(fieldNamePrefix, cf);

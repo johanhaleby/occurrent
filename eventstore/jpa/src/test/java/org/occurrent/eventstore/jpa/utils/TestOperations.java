@@ -29,13 +29,14 @@ import org.occurrent.domain.NameDefined;
 import org.occurrent.domain.NameWasChanged;
 import org.occurrent.eventstore.api.WriteCondition;
 import org.occurrent.eventstore.api.WriteResult;
-import org.occurrent.eventstore.api.blocking.EventStore;
+import org.occurrent.eventstore.jpa.CloudEventDaoTraits;
+import org.occurrent.eventstore.jpa.JPAEventStore;
 
-public abstract class TestOperations<T extends EventStore> {
+public abstract class TestOperations<T extends CloudEventDaoTraits, E extends JPAEventStore<T>> {
   public static URI NAME_SOURCE = URI.create("http://name");
 
-  protected TestDependencies<T> dependencies;
-  protected T eventStore;
+  protected TestDependencies<T, E> dependencies;
+  protected E eventStore;
   protected ObjectMapper objectMapper;
 
   protected List<DomainEvent> deserialize(Stream<CloudEvent> events) {

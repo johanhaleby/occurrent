@@ -1,6 +1,8 @@
 package org.occurrent.eventstore.jpa.utils;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
-import org.occurrent.eventstore.api.blocking.EventStore;
+import org.occurrent.eventstore.jpa.CloudEventDaoTraits;
+import org.occurrent.eventstore.jpa.JPAEventStore;
 
-public record TestDependencies<T extends EventStore>(T eventStore, ObjectMapper objectMapper) {}
+public record TestDependencies<T extends CloudEventDaoTraits, E extends JPAEventStore<T>>(
+    E eventStore, ObjectMapper objectMapper) {}

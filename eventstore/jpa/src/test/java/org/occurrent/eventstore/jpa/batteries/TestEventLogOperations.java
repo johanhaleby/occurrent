@@ -52,14 +52,32 @@ public class TestEventLogOperations extends EventLogOperationsDefaultImpl<CloudE
   @Override
   public <U> Specification<CloudEventDao> bySingleCondition(
       String fieldName, Condition.SingleOperandCondition<U> fieldCondition) {
-    if (fieldName.contains("data")) {
+    if (null == fieldName) {
+      return super.bySingleCondition(null, fieldCondition);
+    }
+    if (!fieldName.contains("data")) {
       return super.bySingleCondition(fieldName, fieldCondition);
     }
 
+    var parts = fieldName.split("\\.");
+    if (parts.length != 2) {
+      throw new UnsupportedOperationException("Nope. Nopenopenope");
+    }
+
+    var jsonField = parts[1];
+
+    U expectedVersion = fieldCondition.operand();
+
     // https://stackoverflow.com/a/48492202
-    // Use a special override function to generate a specification that can use provider specific
-    // features
-    // In this case jsonb column from postgres
-    throw new RuntimeException("Hype!");
+    // https://medium.com/@bayern01kahn/spring-data-jpa-examples-querying-data-by-json-properties-in-postgressql-e88dd9eabee9
+    //    throw new RuntimeException("Hype!");
+    return (root, query, cb) -> {
+      return cb.equal(
+          cb.function(
+              "jsonb_extract_path_text", String.class, root.get("data"), cb.literal(jsonField)),
+          expectedVersion);
+      //      return builder.equal(builder.function("jsonb_extract_path_text", String.class,
+      // root.<String>get("data"), builder.literal(this.locale)), expectedVersion);
+    };
   }
 }
