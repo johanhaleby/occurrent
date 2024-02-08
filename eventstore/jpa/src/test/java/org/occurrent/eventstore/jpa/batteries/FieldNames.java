@@ -11,9 +11,23 @@ import lombok.experimental.Accessors;
 @Accessors(fluent = true)
 public enum FieldNames {
   STREAM_ID("StreamId", "streamId"),
-  CLOUD_EVENT_ID("CloudEventId", "cloud_event_id"),
-  CLOUD_EVENT_SOURCE("CloudEventSource", "cloud_event_source"),
-  TIMESTAMP("Timestamp", "timestamp");
+  CLOUD_EVENT_ID("id", "eventId"),
+  SUBJECT("subject", "subject"),
+  CLOUD_EVENT_SOURCE("CloudEventSource", "cloudEventSource"),
+  TIMESTAMP("time", "timestamp"),
+  TYPE("type", "type"),
+  SPEC_VERSION("specversion", "specVersion"),
+  SOURCE("source", "source"),
+  ;
+  //  String SPEC_VERSION = "specversion";
+  //  String ID = "id";
+  //  String TYPE = "type";
+  //  String TIME = "time";
+  //  String SOURCE = "source";
+  //  String SUBJECT = "subject";
+  //  String DATA_SCHEMA = "dataschema";
+  //  String DATA_CONTENT_TYPE = "datacontenttype";
+  //  String DATA = "data";
 
   private final String cloudEventValue;
   private final String daoValue;

@@ -4,7 +4,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.junit.jupiter.api.Assertions.assertAll;
 import static org.occurrent.cloudevents.OccurrentCloudEventExtension.*;
 import static org.occurrent.condition.Condition.eq;
-import static org.occurrent.filter.Filter.data;
+import static org.occurrent.filter.Filter.*;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
 import io.cloudevents.CloudEvent;
@@ -1413,47 +1413,46 @@ abstract class JpaBlockingEventStoreTestBase<
     Stream<CloudEvent> events = eventStore.query(data("name", eq("name2")));
     assertThat(deserialize(events)).containsExactly(nameWasChanged1);
   }
+
   //
-  //      @Test
-  //      void query_filter_by_subject() {
-  //        // Given
-  //        LocalDateTime now = LocalDateTime.now();
-  //        NameDefined nameDefined = new NameDefined(UUID.randomUUID().toString(), now, "name",
-  // "name");
-  //        NameWasChanged nameWasChanged1 = new NameWasChanged(UUID.randomUUID().toString(),
-  // now.plusHours(1), "name", "name2");
-  //        NameWasChanged nameWasChanged2 = new NameWasChanged(UUID.randomUUID().toString(),
-  // now.plusHours(2), "name", "name3");
+  //        @Test
+  //        void query_filter_by_subject() {
+  //          // Given
+  //          LocalDateTime now = LocalDateTime.now();
+  //          NameDefined nameDefined = new NameDefined(UUID.randomUUID().toString(), now, "name",
+  //   "name");
+  //          NameWasChanged nameWasChanged1 = new NameWasChanged(UUID.randomUUID().toString(),
+  //   now.plusHours(1), "name", "name2");
+  //          NameWasChanged nameWasChanged2 = new NameWasChanged(UUID.randomUUID().toString(),
+  //   now.plusHours(2), "name", "name3");
   //
-  //        // When
-  //        persist("name1", Stream.of(nameDefined, nameWasChanged1));
-  //        persist("name2", nameWasChanged2);
+  //          // When
+  //          persist("name1", Stream.of(nameDefined, nameWasChanged1));
+  //          persist("name2", nameWasChanged2);
   //
-  //        // Then
-  //        Stream<CloudEvent> events = eventStore.query(subject("WasChanged"));
-  //        assertThat(deserialize(events)).containsExactly(nameWasChanged1, nameWasChanged2);
-  //      }
+  //          // Then
+  //          Stream<CloudEvent> events = eventStore.query(subject("WasChanged"));
+  //          assertThat(deserialize(events)).containsExactly(nameWasChanged1, nameWasChanged2);
+  //        }
   //
-  //      @Test
-  //      void query_filter_by_cloud_event() {
-  //        // Given
-  //        LocalDateTime now = LocalDateTime.now();
-  //        NameDefined nameDefined = new NameDefined(UUID.randomUUID().toString(), now, "name",
-  // "name");
-  //        String eventId = UUID.randomUUID().toString();
-  //        NameWasChanged nameWasChanged1 = new NameWasChanged(eventId, now.plusHours(1), "name",
-  // "name2");
-  //        NameWasChanged nameWasChanged2 = new NameWasChanged(UUID.randomUUID().toString(),
-  // now.plusHours(2), "name", "name3");
-  //
-  //        // When
-  //        persist("name1", Stream.of(nameDefined, nameWasChanged1));
-  //        persist("name2", nameWasChanged2);
-  //
-  //        // Then
-  //        Stream<CloudEvent> events = eventStore.query(cloudEvent(eventId, NAME_SOURCE));
-  //        assertThat(deserialize(events)).containsExactly(nameWasChanged1);
-  //      }
+  @Test
+  void query_filter_by_cloud_event() {
+    // Given
+    LocalDateTime now = LocalDateTime.now();
+    NameDefined nameDefined = new NameDefined(UUID.randomUUID().toString(), now, "name", "name");
+    String eventId = UUID.randomUUID().toString();
+    NameWasChanged nameWasChanged1 = new NameWasChanged(eventId, now.plusHours(1), "name", "name2");
+    NameWasChanged nameWasChanged2 =
+        new NameWasChanged(UUID.randomUUID().toString(), now.plusHours(2), "name", "name3");
+
+    // When
+    persist("name1", Stream.of(nameDefined, nameWasChanged1));
+    persist("name2", nameWasChanged2);
+
+    // Then
+    Stream<CloudEvent> events = eventStore.query(cloudEvent(eventId, NAME_SOURCE));
+    assertThat(deserialize(events)).containsExactly(nameWasChanged1);
+  }
   //
   //      @Test
   //      void query_filter_by_type() {

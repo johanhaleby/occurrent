@@ -8,7 +8,6 @@ import static java.time.ZoneOffset.UTC;
 import static org.occurrent.functional.CheckedFunction.unchecked;
 import static org.occurrent.time.TimeConversion.toLocalDateTime;
 
-import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import io.cloudevents.CloudEvent;
@@ -18,7 +17,6 @@ import java.net.URI;
 import java.time.Instant;
 import java.time.LocalDateTime;
 import java.util.ArrayList;
-import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.function.Function;
@@ -31,6 +29,7 @@ import org.occurrent.eventstore.api.WriteCondition;
 import org.occurrent.eventstore.api.WriteResult;
 import org.occurrent.eventstore.jpa.CloudEventDaoTraits;
 import org.occurrent.eventstore.jpa.JPAEventStore;
+import org.occurrent.eventstore.jpa.batteries.SerializingOperations;
 
 public abstract class TestOperations<T extends CloudEventDaoTraits, E extends JPAEventStore<T>> {
   public static URI NAME_SOURCE = URI.create("http://name");
@@ -51,7 +50,7 @@ public abstract class TestOperations<T extends CloudEventDaoTraits, E extends JP
         // @formatter:on
         .map(
             event -> {
-              Instant instant = Instant.ofEpochMilli((long) event.get("time"));
+              Instant instant = Instant.ofEpochMilli((long) event.get("timestamp"));
               LocalDateTime time = LocalDateTime.ofInstant(instant, UTC);
               String eventId = (String) event.get("eventId");
               String name = (String) event.get("name");
@@ -120,20 +119,21 @@ public abstract class TestOperations<T extends CloudEventDaoTraits, E extends JP
   }
 
   protected byte[] serializeEvent(DomainEvent e) {
-    try {
-      var objectMapper = new ObjectMapper();
-      return objectMapper.writeValueAsBytes(
-          new HashMap<String, Object>() {
-            {
-              put("type", e.getClass().getSimpleName());
-              put("eventId", e.eventId());
-              put("name", e.name());
-              put("userId", e.userId());
-              put("time", e.timestamp());
-            }
-          });
-    } catch (JsonProcessingException jsonProcessingException) {
-      throw new RuntimeException(jsonProcessingException);
-    }
+    return SerializingOperations.defaultInstance.domainEventToBytes(e);
+    //    try {
+    //      var objectMapper = new ObjectMapper();
+    //      return objectMapper.writeValueAsBytes(
+    //          new HashMap<String, Object>() {
+    //            {
+    //              put("type", e.getClass().getSimpleName());
+    //              put("eventId", e.eventId());
+    //              put("name", e.name());
+    //              put("userId", e.userId());
+    //              put("time", e.timestamp());
+    //            }
+    //          });
+    //    } catch (JsonProcessingException jsonProcessingException) {
+    //      throw new RuntimeException(jsonProcessingException);
+    //    }
   }
 }
