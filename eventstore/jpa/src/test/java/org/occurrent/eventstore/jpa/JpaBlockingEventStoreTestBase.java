@@ -4,9 +4,9 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.AssertionsForClassTypes.catchThrowable;
 import static org.junit.jupiter.api.Assertions.assertAll;
 import static org.occurrent.cloudevents.OccurrentCloudEventExtension.*;
-import static org.occurrent.condition.Condition.eq;
+import static org.occurrent.condition.Condition.*;
 import static org.occurrent.domain.Composition.chain;
-import static org.occurrent.eventstore.api.WriteCondition.streamVersionEq;
+import static org.occurrent.eventstore.api.WriteCondition.*;
 import static org.occurrent.filter.Filter.*;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
@@ -22,6 +22,8 @@ import org.occurrent.domain.Name;
 import org.occurrent.domain.NameDefined;
 import org.occurrent.domain.NameWasChanged;
 import org.occurrent.eventstore.api.DuplicateCloudEventException;
+import org.occurrent.eventstore.api.WriteCondition;
+import org.occurrent.eventstore.api.WriteConditionNotFulfilledException;
 import org.occurrent.eventstore.api.WriteResult;
 import org.occurrent.eventstore.api.blocking.EventStream;
 import org.occurrent.eventstore.jpa.utils.TestDependencies;
@@ -749,12 +751,13 @@ abstract class JpaBlockingEventStoreTestBase<
     }
   }
 
-  //
-  //  @Nested
-  //  @DisplayName("Conditionally Write to Mongo Event Store")
-  //  class ConditionallyWriteToMongoEventStore {
-  //
-  //    LocalDateTime now = LocalDateTime.now();
+
+
+    @Nested
+    @DisplayName("Conditionally Write to Mongo Event Store")
+    class ConditionallyWriteToMongoEventStore {
+
+      LocalDateTime now = LocalDateTime.now();
   //
   //    @Nested
   //    @DisplayName("parallel writes")
@@ -790,460 +793,404 @@ abstract class JpaBlockingEventStoreTestBase<
   // 1.")));
   //      }
   //    }
-  //
-  //    @Nested
-  //    @DisplayName("eq")
-  //    class Eq {
-  //
-  //      @Test
-  //      void writes_events_when_stream_version_matches_expected_version() {
-  //        // When
-  //        DomainEvent event1 = new NameDefined(UUID.randomUUID().toString(), now, "name", "John
-  // Doe");
-  //        persist("name", event1);
-  //
-  //        DomainEvent event2 = new NameWasChanged(UUID.randomUUID().toString(), now, "name", "Jan
-  // Doe");
-  //        EventStream<CloudEvent> eventStream1 = eventStore.read("name");
-  //        persist(eventStream1.id(), streamVersionEq(eventStream1.version()), Stream.of(event2));
-  //
-  //        // Then
-  //        EventStream<CloudEvent> eventStream2 = eventStore.read("name");
-  //        assertThat(deserialize(eventStream2.events())).containsExactly(event1, event2);
-  //      }
-  //
-  //      @Test
-  //      void
-  // throws_write_condition_not_fulfilled_when_stream_version_does_not_match_expected_version() {
-  //        // Given
-  //        DomainEvent event1 = new NameDefined(UUID.randomUUID().toString(), now, "name", "John
-  // Doe");
-  //        persist("name", Stream.of(event1));
-  //
-  //        // When
-  //        DomainEvent event2 = new NameWasChanged(UUID.randomUUID().toString(), now, "name", "Jan
-  // Doe");
-  //        Throwable throwable = catchThrowable(() -> persist("name", streamVersionEq(10),
-  // Stream.of(event2)));
-  //
-  //        // Then
-  //        assertThat(throwable).isExactlyInstanceOf(WriteConditionNotFulfilledException.class)
-  //                .hasMessage("WriteCondition was not fulfilled. Expected version to be equal to
-  // 10 but was 1.");
-  //      }
-  //    }
-  //
-  //    @Nested
-  //    @DisplayName("ne")
-  //    class Ne {
-  //
-  //      @Test
-  //      void writes_events_when_stream_version_does_not_match_expected_version() {
-  //        // When
-  //        DomainEvent event1 = new NameDefined(UUID.randomUUID().toString(), now, "name", "John
-  // Doe");
-  //        persist("name", Stream.of(event1));
-  //
-  //        DomainEvent event2 = new NameWasChanged(UUID.randomUUID().toString(), now, "name", "Jan
-  // Doe");
-  //        EventStream<CloudEvent> eventStream1 = eventStore.read("name");
-  //        persist(eventStream1.id(), streamVersion(ne(20L)), Stream.of(event2));
-  //
-  //        // Then
-  //        EventStream<CloudEvent> eventStream2 = eventStore.read("name");
-  //        assertThat(deserialize(eventStream2.events())).containsExactly(event1, event2);
-  //      }
-  //
-  //      @Test
-  //      void throws_write_condition_not_fulfilled_when_stream_version_match_expected_version() {
-  //        // Given
-  //        DomainEvent event1 = new NameDefined(UUID.randomUUID().toString(), now, "name", "John
-  // Doe");
-  //        persist("name", Stream.of(event1));
-  //
-  //        // When
-  //        DomainEvent event2 = new NameWasChanged(UUID.randomUUID().toString(), now, "name", "Jan
-  // Doe");
-  //        Throwable throwable = catchThrowable(() -> persist("name", streamVersion(ne(1L)),
-  // Stream.of(event2)));
-  //
-  //        // Then
-  //        assertThat(throwable).isExactlyInstanceOf(WriteConditionNotFulfilledException.class)
-  //                .hasMessage("WriteCondition was not fulfilled. Expected version to not be equal
-  // to 1 but was 1.");
-  //      }
-  //    }
-  //
-  //    @Nested
-  //    @DisplayName("lt")
-  //    class Lt {
-  //
-  //      @Test
-  //      void writes_events_when_stream_version_is_less_than_expected_version() {
-  //        // When
-  //        DomainEvent event1 = new NameDefined(UUID.randomUUID().toString(), now, "name", "John
-  // Doe");
-  //        persist("name", Stream.of(event1));
-  //
-  //        DomainEvent event2 = new NameWasChanged(UUID.randomUUID().toString(), now, "name", "Jan
-  // Doe");
-  //        EventStream<CloudEvent> eventStream1 = eventStore.read("name");
-  //        persist(eventStream1.id(), streamVersion(lt(10L)), Stream.of(event2));
-  //
-  //        // Then
-  //        EventStream<CloudEvent> eventStream2 = eventStore.read("name");
-  //        assertThat(deserialize(eventStream2.events())).containsExactly(event1, event2);
-  //      }
-  //
-  //      @Test
-  //      void
-  // throws_write_condition_not_fulfilled_when_stream_version_is_greater_than_expected_version() {
-  //        // Given
-  //        DomainEvent event1 = new NameDefined(UUID.randomUUID().toString(), now, "name", "John
-  // Doe");
-  //        persist("name", Stream.of(event1));
-  //
-  //        // When
-  //        DomainEvent event2 = new NameWasChanged(UUID.randomUUID().toString(), now, "name", "Jan
-  // Doe");
-  //        Throwable throwable = catchThrowable(() -> persist("name", streamVersion(lt(0L)),
-  // Stream.of(event2)));
-  //
-  //        // Then
-  //        assertThat(throwable).isExactlyInstanceOf(WriteConditionNotFulfilledException.class)
-  //                .hasMessage("WriteCondition was not fulfilled. Expected version to be less than
-  // 0 but was 1.");
-  //      }
-  //
-  //      @Test
-  //      void
-  // throws_write_condition_not_fulfilled_when_stream_version_is_equal_to_expected_version() {
-  //        // Given
-  //        DomainEvent event1 = new NameDefined(UUID.randomUUID().toString(), now, "name", "John
-  // Doe");
-  //        persist("name", Stream.of(event1));
-  //
-  //        // When
-  //        DomainEvent event2 = new NameWasChanged(UUID.randomUUID().toString(), now, "name", "Jan
-  // Doe");
-  //        Throwable throwable = catchThrowable(() -> persist("name", streamVersion(lt(1L)),
-  // Stream.of(event2)));
-  //
-  //        // Then
-  //        assertThat(throwable).isExactlyInstanceOf(WriteConditionNotFulfilledException.class)
-  //                .hasMessage("WriteCondition was not fulfilled. Expected version to be less than
-  // 1 but was 1.");
-  //      }
-  //    }
-  //
-  //    @Nested
-  //    @DisplayName("gt")
-  //    class Gt {
-  //
-  //      @Test
-  //      void writes_events_when_stream_version_is_greater_than_expected_version() {
-  //        // When
-  //        DomainEvent event1 = new NameDefined(UUID.randomUUID().toString(), now, "name", "John
-  // Doe");
-  //        persist("name", Stream.of(event1));
-  //
-  //        DomainEvent event2 = new NameWasChanged(UUID.randomUUID().toString(), now, "name", "Jan
-  // Doe");
-  //        EventStream<CloudEvent> eventStream1 = eventStore.read("name");
-  //        persist(eventStream1.id(), streamVersion(gt(0L)), Stream.of(event2));
-  //
-  //        // Then
-  //        EventStream<CloudEvent> eventStream2 = eventStore.read("name");
-  //        assertThat(deserialize(eventStream2.events())).containsExactly(event1, event2);
-  //      }
-  //
-  //      @Test
-  //      void
-  // throws_write_condition_not_fulfilled_when_stream_version_is_less_than_expected_version() {
-  //        // Given
-  //        DomainEvent event1 = new NameDefined(UUID.randomUUID().toString(), now, "name", "John
-  // Doe");
-  //        persist("name", Stream.of(event1));
-  //
-  //        // When
-  //        DomainEvent event2 = new NameWasChanged(UUID.randomUUID().toString(), now, "name", "Jan
-  // Doe");
-  //        Throwable throwable = catchThrowable(() -> persist("name", streamVersion(gt(100L)),
-  // Stream.of(event2)));
-  //
-  //        // Then
-  //        assertThat(throwable).isExactlyInstanceOf(WriteConditionNotFulfilledException.class)
-  //                .hasMessage("WriteCondition was not fulfilled. Expected version to be greater
-  // than 100 but was 1.");
-  //      }
-  //
-  //      @Test
-  //      void
-  // throws_write_condition_not_fulfilled_when_stream_version_is_equal_to_expected_version() {
-  //        // Given
-  //        DomainEvent event1 = new NameDefined(UUID.randomUUID().toString(), now, "name", "John
-  // Doe");
-  //        persist("name", Stream.of(event1));
-  //
-  //        // When
-  //        DomainEvent event2 = new NameWasChanged(UUID.randomUUID().toString(), now, "name", "Jan
-  // Doe");
-  //        Throwable throwable = catchThrowable(() -> persist("name", streamVersion(gt(1L)),
-  // Stream.of(event2)));
-  //
-  //        // Then
-  //        assertThat(throwable).isExactlyInstanceOf(WriteConditionNotFulfilledException.class)
-  //                .hasMessage("WriteCondition was not fulfilled. Expected version to be greater
-  // than 1 but was 1.");
-  //      }
-  //    }
-  //
-  //    @Nested
-  //    @DisplayName("lte")
-  //    class Lte {
-  //
-  //      @Test
-  //      void writes_events_when_stream_version_is_less_than_expected_version() {
-  //        // When
-  //        DomainEvent event1 = new NameDefined(UUID.randomUUID().toString(), now, "name", "John
-  // Doe");
-  //        persist("name", Stream.of(event1));
-  //
-  //        DomainEvent event2 = new NameWasChanged(UUID.randomUUID().toString(), now, "name", "Jan
-  // Doe");
-  //        EventStream<CloudEvent> eventStream1 = eventStore.read("name");
-  //        persist(eventStream1.id(), streamVersion(lte(10L)), Stream.of(event2));
-  //
-  //        // Then
-  //        EventStream<CloudEvent> eventStream2 = eventStore.read("name");
-  //        assertThat(deserialize(eventStream2.events())).containsExactly(event1, event2);
-  //      }
-  //
-  //
-  //      @Test
-  //      void writes_events_when_stream_version_is_equal_to_expected_version() {
-  //        // When
-  //        DomainEvent event1 = new NameDefined(UUID.randomUUID().toString(), now, "name", "John
-  // Doe");
-  //        persist("name", Stream.of(event1));
-  //
-  //        DomainEvent event2 = new NameWasChanged(UUID.randomUUID().toString(), now, "name", "Jan
-  // Doe");
-  //        EventStream<CloudEvent> eventStream1 = eventStore.read("name");
-  //        persist(eventStream1.id(), streamVersion(lte(1L)), Stream.of(event2));
-  //
-  //        // Then
-  //        EventStream<CloudEvent> eventStream2 = eventStore.read("name");
-  //        assertThat(deserialize(eventStream2.events())).containsExactly(event1, event2);
-  //      }
-  //
-  //      @Test
-  //      void
-  // throws_write_condition_not_fulfilled_when_stream_version_is_greater_than_expected_version() {
-  //        // Given
-  //        DomainEvent event1 = new NameDefined(UUID.randomUUID().toString(), now, "name", "John
-  // Doe");
-  //        persist("name", Stream.of(event1));
-  //
-  //        // When
-  //        DomainEvent event2 = new NameWasChanged(UUID.randomUUID().toString(), now, "name", "Jan
-  // Doe");
-  //        Throwable throwable = catchThrowable(() -> persist("name", streamVersion(lte(0L)),
-  // Stream.of(event2)));
-  //
-  //        // Then
-  //        assertThat(throwable).isExactlyInstanceOf(WriteConditionNotFulfilledException.class)
-  //                .hasMessage("WriteCondition was not fulfilled. Expected version to be less than
-  // or equal to 0 but was 1.");
-  //      }
-  //    }
-  //
-  //    @Nested
-  //    @DisplayName("gte")
-  //    class Gte {
-  //
-  //      @Test
-  //      void writes_events_when_stream_version_is_greater_than_expected_version() {
-  //        // When
-  //        DomainEvent event1 = new NameDefined(UUID.randomUUID().toString(), now, "name", "John
-  // Doe");
-  //        persist("name", Stream.of(event1));
-  //
-  //        DomainEvent event2 = new NameWasChanged(UUID.randomUUID().toString(), now, "name", "Jan
-  // Doe");
-  //        EventStream<CloudEvent> eventStream1 = eventStore.read("name");
-  //        persist(eventStream1.id(), streamVersion(gte(0L)), Stream.of(event2));
-  //
-  //        // Then
-  //        EventStream<CloudEvent> eventStream2 = eventStore.read("name");
-  //        assertThat(deserialize(eventStream2.events())).containsExactly(event1, event2);
-  //      }
+      @Nested
+      @DisplayName("eq")
+      class Eq {
 
-  //      @Test
-  //      void writes_events_when_stream_version_is_equal_to_expected_version() {
-  //        // When
-  //        DomainEvent event1 = new NameDefined(UUID.randomUUID().toString(), now, "name", "John
-  // Doe");
-  //        persist("name", Stream.of(event1));
-  //
-  //        DomainEvent event2 = new NameWasChanged(UUID.randomUUID().toString(), now, "name", "Jan
-  // Doe");
-  //        EventStream<CloudEvent> eventStream1 = eventStore.read("name");
-  //        persist(eventStream1.id(), streamVersion(gte(0L)), Stream.of(event2));
-  //
-  //        // Then
-  //        EventStream<CloudEvent> eventStream2 = eventStore.read("name");
-  //        assertThat(deserialize(eventStream2.events())).containsExactly(event1, event2);
-  //      }
-  //
-  //      @Test
-  //      void
-  // throws_write_condition_not_fulfilled_when_stream_version_is_less_than_expected_version() {
-  //        // Given
-  //        DomainEvent event1 = new NameDefined(UUID.randomUUID().toString(), now, "name", "John
-  // Doe");
-  //        persist("name", Stream.of(event1));
-  //
-  //        // When
-  //        DomainEvent event2 = new NameWasChanged(UUID.randomUUID().toString(), now, "name", "Jan
-  // Doe");
-  //        Throwable throwable = catchThrowable(() -> persist("name", streamVersion(gte(100L)),
-  // Stream.of(event2)));
-  //
-  //        // Then
-  //        assertThat(throwable).isExactlyInstanceOf(WriteConditionNotFulfilledException.class)
-  //                .hasMessage("WriteCondition was not fulfilled. Expected version to be greater
-  // than or equal to 100 but was 1.");
-  //      }
-  //    }
-  //
-  //    @Nested
-  //    @DisplayName("and")
-  //    class And {
-  //
-  //      @Test
-  //      void writes_events_when_stream_version_is_when_all_conditions_match_and_expression() {
-  //        // When
-  //        DomainEvent event1 = new NameDefined(UUID.randomUUID().toString(), now, "name", "John
-  // Doe");
-  //        persist("name", Stream.of(event1));
-  //
-  //        DomainEvent event2 = new NameWasChanged(UUID.randomUUID().toString(), now, "name", "Jan
-  // Doe");
-  //        EventStream<CloudEvent> eventStream1 = eventStore.read("name");
-  //        persist(eventStream1.id(), streamVersion(and(gte(0L), lt(100L), ne(40L))),
-  // Stream.of(event2));
-  //
-  //        // Then
-  //        EventStream<CloudEvent> eventStream2 = eventStore.read("name");
-  //        assertThat(deserialize(eventStream2.events())).containsExactly(event1, event2);
-  //      }
-  //
-  //      @Test
-  //      void
-  // throws_write_condition_not_fulfilled_when_any_of_the_operations_in_the_and_expression_is_not_fulfilled() {
-  //        // Given
-  //        DomainEvent event1 = new NameDefined(UUID.randomUUID().toString(), now, "name", "John
-  // Doe");
-  //        persist("name", Stream.of(event1));
-  //
-  //        // When
-  //        DomainEvent event2 = new NameWasChanged(UUID.randomUUID().toString(), now, "name", "Jan
-  // Doe");
-  //        Throwable throwable = catchThrowable(() -> persist("name", streamVersion(and(gte(0L),
-  // lt(100L), ne(1L))), Stream.of(event2)));
-  //
-  //        // Then
-  //        assertThat(throwable).isExactlyInstanceOf(WriteConditionNotFulfilledException.class)
-  //                .hasMessage("WriteCondition was not fulfilled. Expected version to be greater
-  // than or equal to 0 and to be less than 100 and to not be equal to 1 but was 1.");
-  //      }
-  //    }
-  //
-  //    @Nested
-  //    @DisplayName("or")
-  //    class Or {
-  //
-  //      @Test
-  //      void writes_events_when_stream_version_is_when_any_condition_in_or_expression_matches() {
-  //        // When
-  //        DomainEvent event1 = new NameDefined(UUID.randomUUID().toString(), now, "name", "John
-  // Doe");
-  //        persist("name", Stream.of(event1));
-  //
-  //        DomainEvent event2 = new NameWasChanged(UUID.randomUUID().toString(), now, "name", "Jan
-  // Doe");
-  //        EventStream<CloudEvent> eventStream1 = eventStore.read("name");
-  //        persist(eventStream1.id(), streamVersion(or(gte(100L), lt(0L), ne(40L))),
-  // Stream.of(event2));
-  //
-  //        // Then
-  //        EventStream<CloudEvent> eventStream2 = eventStore.read("name");
-  //        assertThat(deserialize(eventStream2.events())).containsExactly(event1, event2);
-  //      }
-  //
-  //      @Test
-  //      void
-  // throws_write_condition_not_fulfilled_when_none_of_the_operations_in_the_and_expression_is_fulfilled() {
-  //        // Given
-  //        DomainEvent event1 = new NameDefined(UUID.randomUUID().toString(), now, "name", "John
-  // Doe");
-  //        persist("name", Stream.of(event1));
-  //
-  //        // When
-  //        DomainEvent event2 = new NameWasChanged(UUID.randomUUID().toString(), now, "name", "Jan
-  // Doe");
-  //        Throwable throwable = catchThrowable(() -> persist("name", streamVersion(or(gte(100L),
-  // lt(1L))), Stream.of(event2)));
-  //
-  //        // Then
-  //        assertThat(throwable).isExactlyInstanceOf(WriteConditionNotFulfilledException.class)
-  //                .hasMessage("WriteCondition was not fulfilled. Expected version to be greater
-  // than or equal to 100 or to be less than 1 but was 1.");
-  //      }
-  //    }
-  //
-  //    @Nested
-  //    @DisplayName("not")
-  //    class Not {
-  //
-  //      @Test
-  //      void writes_events_when_stream_version_is_not_matching_condition() {
-  //        // When
-  //        DomainEvent event1 = new NameDefined(UUID.randomUUID().toString(), now, "name", "John
-  // Doe");
-  //        persist("name", Stream.of(event1));
-  //
-  //        DomainEvent event2 = new NameWasChanged(UUID.randomUUID().toString(), now, "name", "Jan
-  // Doe");
-  //        EventStream<CloudEvent> eventStream1 = eventStore.read("name");
-  //        persist(eventStream1.id(), streamVersion(not(eq(100L))), Stream.of(event2));
-  //
-  //        // Then
-  //        EventStream<CloudEvent> eventStream2 = eventStore.read("name");
-  //        assertThat(deserialize(eventStream2.events())).containsExactly(event1, event2);
-  //      }
-  //
-  //      @Test
-  //      void
-  // throws_write_condition_not_fulfilled_when_condition_is_fulfilled_but_should_not_be_so() {
-  //        // Given
-  //        DomainEvent event1 = new NameDefined(UUID.randomUUID().toString(), now, "name", "John
-  // Doe");
-  //        persist("name", Stream.of(event1));
-  //
-  //        // When
-  //        DomainEvent event2 = new NameWasChanged(UUID.randomUUID().toString(), now, "name", "Jan
-  // Doe");
-  //        Throwable throwable = catchThrowable(() -> persist("name", streamVersion(not(eq(1L))),
-  // Stream.of(event2)));
-  //
-  //        // Then
-  //        assertThat(throwable).isExactlyInstanceOf(WriteConditionNotFulfilledException.class)
-  //                .hasMessage("WriteCondition was not fulfilled. Expected version not to be equal
-  // to 1 but was 1.");
-  //      }
-  //    }
+        @Test
+        void writes_events_when_stream_version_matches_expected_version() {
+          // When
+          DomainEvent event1 = new NameDefined(UUID.randomUUID().toString(), now, "name", "John Doe");
+          persist("name", event1);
+
+          DomainEvent event2 = new NameWasChanged(UUID.randomUUID().toString(), now, "name", "Jan Doe");
+          EventStream<CloudEvent> eventStream1 = eventStore.read("name");
+          persist(eventStream1.id(), streamVersionEq(eventStream1.version()), Stream.of(event2));
+
+          // Then
+          EventStream<CloudEvent> eventStream2 = eventStore.read("name");
+          assertThat(deserialize(eventStream2.events())).containsExactly(event1, event2);
+        }
+
+        @Test
+        void
+   throws_write_condition_not_fulfilled_when_stream_version_does_not_match_expected_version() {
+          // Given
+          DomainEvent event1 = new NameDefined(UUID.randomUUID().toString(), now, "name", "John Doe");
+          persist("name", Stream.of(event1));
+
+          // When
+          DomainEvent event2 = new NameWasChanged(UUID.randomUUID().toString(), now, "name", "Jan Doe");
+          Throwable throwable = catchThrowable(() -> persist("name", streamVersionEq(10),
+   Stream.of(event2)));
+
+          // Then
+          assertThat(throwable).isExactlyInstanceOf(WriteConditionNotFulfilledException.class)
+                  .hasMessage("WriteCondition was not fulfilled. Expected version to be equal to 10 but was 1.");
+        }
+      }
+
+      @Nested
+      @DisplayName("ne")
+      class Ne {
+
+        @Test
+        void writes_events_when_stream_version_does_not_match_expected_version() {
+          // When
+          DomainEvent event1 = new NameDefined(UUID.randomUUID().toString(), now, "name", "John Doe");
+          persist("name", Stream.of(event1));
+
+          DomainEvent event2 = new NameWasChanged(UUID.randomUUID().toString(), now, "name", "Jan Doe");
+          EventStream<CloudEvent> eventStream1 = eventStore.read("name");
+          persist(eventStream1.id(), WriteCondition.streamVersion(ne(20L)), Stream.of(event2));
+
+          // Then
+          EventStream<CloudEvent> eventStream2 = eventStore.read("name");
+          assertThat(deserialize(eventStream2.events())).containsExactly(event1, event2);
+        }
+
+        @Test
+        void throws_write_condition_not_fulfilled_when_stream_version_match_expected_version() {
+          // Given
+          DomainEvent event1 = new NameDefined(UUID.randomUUID().toString(), now, "name", "John Doe");
+          persist("name", Stream.of(event1));
+
+          // When
+          DomainEvent event2 = new NameWasChanged(UUID.randomUUID().toString(), now, "name", "Jan Doe");
+          Throwable throwable = catchThrowable(() -> persist("name", WriteCondition.streamVersion(ne(1L)),
+   Stream.of(event2)));
+
+          // Then
+          assertThat(throwable).isExactlyInstanceOf(WriteConditionNotFulfilledException.class)
+                  .hasMessage("WriteCondition was not fulfilled. Expected version to not be equal to 1 but was 1.");
+        }
+      }
+
+      @Nested
+      @DisplayName("lt")
+      class Lt {
+
+        @Test
+        void writes_events_when_stream_version_is_less_than_expected_version() {
+          // When
+          DomainEvent event1 = new NameDefined(UUID.randomUUID().toString(), now, "name", "John Doe");
+          persist("name", Stream.of(event1));
+
+          DomainEvent event2 = new NameWasChanged(UUID.randomUUID().toString(), now, "name", "Jan Doe");
+          EventStream<CloudEvent> eventStream1 = eventStore.read("name");
+          persist(eventStream1.id(), WriteCondition.streamVersion(lt(10L)), Stream.of(event2));
+
+          // Then
+          EventStream<CloudEvent> eventStream2 = eventStore.read("name");
+          assertThat(deserialize(eventStream2.events())).containsExactly(event1, event2);
+        }
+
+        @Test
+        void
+   throws_write_condition_not_fulfilled_when_stream_version_is_greater_than_expected_version() {
+          // Given
+          DomainEvent event1 = new NameDefined(UUID.randomUUID().toString(), now, "name", "John Doe");
+          persist("name", Stream.of(event1));
+
+          // When
+          DomainEvent event2 = new NameWasChanged(UUID.randomUUID().toString(), now, "name", "Jan Doe");
+          Throwable throwable = catchThrowable(() -> persist("name", WriteCondition.streamVersion(lt(0L)),
+   Stream.of(event2)));
+
+          // Then
+          assertThat(throwable).isExactlyInstanceOf(WriteConditionNotFulfilledException.class)
+                  .hasMessage("WriteCondition was not fulfilled. Expected version to be less than 0 but was 1.");
+        }
+
+        @Test
+        void
+   throws_write_condition_not_fulfilled_when_stream_version_is_equal_to_expected_version() {
+          // Given
+          DomainEvent event1 = new NameDefined(UUID.randomUUID().toString(), now, "name", "John Doe");
+          persist("name", Stream.of(event1));
+
+          // When
+          DomainEvent event2 = new NameWasChanged(UUID.randomUUID().toString(), now, "name", "Jan Doe");
+          Throwable throwable = catchThrowable(() -> persist("name", WriteCondition.streamVersion(lt(1L)),
+   Stream.of(event2)));
+
+          // Then
+          assertThat(throwable).isExactlyInstanceOf(WriteConditionNotFulfilledException.class)
+                  .hasMessage("WriteCondition was not fulfilled. Expected version to be less than 1 but was 1.");
+        }
+      }
+
+      @Nested
+      @DisplayName("gt")
+      class Gt {
+
+        @Test
+        void writes_events_when_stream_version_is_greater_than_expected_version() {
+          // When
+          DomainEvent event1 = new NameDefined(UUID.randomUUID().toString(), now, "name", "John Doe");
+          persist("name", Stream.of(event1));
+
+          DomainEvent event2 = new NameWasChanged(UUID.randomUUID().toString(), now, "name", "Jan Doe");
+          EventStream<CloudEvent> eventStream1 = eventStore.read("name");
+          persist(eventStream1.id(), WriteCondition.streamVersion(gt(0L)), Stream.of(event2));
+
+          // Then
+          EventStream<CloudEvent> eventStream2 = eventStore.read("name");
+          assertThat(deserialize(eventStream2.events())).containsExactly(event1, event2);
+        }
+
+        @Test
+        void
+   throws_write_condition_not_fulfilled_when_stream_version_is_less_than_expected_version() {
+          // Given
+          DomainEvent event1 = new NameDefined(UUID.randomUUID().toString(), now, "name", "John Doe");
+          persist("name", Stream.of(event1));
+
+          // When
+          DomainEvent event2 = new NameWasChanged(UUID.randomUUID().toString(), now, "name", "Jan Doe");
+          Throwable throwable = catchThrowable(() -> persist("name", WriteCondition.streamVersion(gt(100L)),
+   Stream.of(event2)));
+
+          // Then
+          assertThat(throwable).isExactlyInstanceOf(WriteConditionNotFulfilledException.class)
+                  .hasMessage("WriteCondition was not fulfilled. Expected version to be greater than 100 but was 1.");
+        }
+
+        @Test
+        void
+   throws_write_condition_not_fulfilled_when_stream_version_is_equal_to_expected_version() {
+          // Given
+          DomainEvent event1 = new NameDefined(UUID.randomUUID().toString(), now, "name", "John Doe");
+          persist("name", Stream.of(event1));
+
+          // When
+          DomainEvent event2 = new NameWasChanged(UUID.randomUUID().toString(), now, "name", "Jan Doe");
+          Throwable throwable = catchThrowable(() -> persist("name", WriteCondition.streamVersion(gt(1L)),
+   Stream.of(event2)));
+
+          // Then
+          assertThat(throwable).isExactlyInstanceOf(WriteConditionNotFulfilledException.class)
+                  .hasMessage("WriteCondition was not fulfilled. Expected version to be greater than 1 but was 1.");
+        }
+      }
+
+      @Nested
+      @DisplayName("lte")
+      class Lte {
+
+        @Test
+        void writes_events_when_stream_version_is_less_than_expected_version() {
+          // When
+          DomainEvent event1 = new NameDefined(UUID.randomUUID().toString(), now, "name", "John Doe");
+          persist("name", Stream.of(event1));
+
+          DomainEvent event2 = new NameWasChanged(UUID.randomUUID().toString(), now, "name", "Jan Doe");
+          EventStream<CloudEvent> eventStream1 = eventStore.read("name");
+          persist(eventStream1.id(), WriteCondition.streamVersion(lte(10L)), Stream.of(event2));
+
+          // Then
+          EventStream<CloudEvent> eventStream2 = eventStore.read("name");
+          assertThat(deserialize(eventStream2.events())).containsExactly(event1, event2);
+        }
+
+
+        @Test
+        void writes_events_when_stream_version_is_equal_to_expected_version() {
+          // When
+          DomainEvent event1 = new NameDefined(UUID.randomUUID().toString(), now, "name", "John Doe");
+          persist("name", Stream.of(event1));
+
+          DomainEvent event2 = new NameWasChanged(UUID.randomUUID().toString(), now, "name", "Jan Doe");
+          EventStream<CloudEvent> eventStream1 = eventStore.read("name");
+          persist(eventStream1.id(), WriteCondition.streamVersion(lte(1L)), Stream.of(event2));
+
+          // Then
+          EventStream<CloudEvent> eventStream2 = eventStore.read("name");
+          assertThat(deserialize(eventStream2.events())).containsExactly(event1, event2);
+        }
+
+        @Test
+        void
+   throws_write_condition_not_fulfilled_when_stream_version_is_greater_than_expected_version() {
+          // Given
+          DomainEvent event1 = new NameDefined(UUID.randomUUID().toString(), now, "name", "John Doe");
+          persist("name", Stream.of(event1));
+
+          // When
+          DomainEvent event2 = new NameWasChanged(UUID.randomUUID().toString(), now, "name", "Jan Doe");
+          Throwable throwable = catchThrowable(() -> persist("name", WriteCondition.streamVersion(lte(0L)),
+   Stream.of(event2)));
+
+          // Then
+          assertThat(throwable).isExactlyInstanceOf(WriteConditionNotFulfilledException.class)
+                  .hasMessage("WriteCondition was not fulfilled. Expected version to be less than or equal to 0 but was 1.");
+        }
+      }
+
+      @Nested
+      @DisplayName("gte")
+      class Gte {
+
+        @Test
+        void writes_events_when_stream_version_is_greater_than_expected_version() {
+          // When
+          DomainEvent event1 = new NameDefined(UUID.randomUUID().toString(), now, "name", "John Doe");
+          persist("name", Stream.of(event1));
+
+          DomainEvent event2 = new NameWasChanged(UUID.randomUUID().toString(), now, "name", "Jan Doe");
+          EventStream<CloudEvent> eventStream1 = eventStore.read("name");
+          persist(eventStream1.id(),WriteCondition.streamVersion(gte(0L)), Stream.of(event2));
+
+          // Then
+          EventStream<CloudEvent> eventStream2 = eventStore.read("name");
+          assertThat(deserialize(eventStream2.events())).containsExactly(event1, event2);
+        }
+
+        @Test
+        void writes_events_when_stream_version_is_equal_to_expected_version() {
+          // When
+          DomainEvent event1 = new NameDefined(UUID.randomUUID().toString(), now, "name", "John Doe");
+          persist("name", Stream.of(event1));
+
+          DomainEvent event2 = new NameWasChanged(UUID.randomUUID().toString(), now, "name", "Jan Doe");
+          EventStream<CloudEvent> eventStream1 = eventStore.read("name");
+          persist(eventStream1.id(),WriteCondition.streamVersion(gte(0L)), Stream.of(event2));
+
+          // Then
+          EventStream<CloudEvent> eventStream2 = eventStore.read("name");
+          assertThat(deserialize(eventStream2.events())).containsExactly(event1, event2);
+        }
+
+        @Test
+        void
+   throws_write_condition_not_fulfilled_when_stream_version_is_less_than_expected_version() {
+          // Given
+          DomainEvent event1 = new NameDefined(UUID.randomUUID().toString(), now, "name", "John Doe");
+          persist("name", Stream.of(event1));
+
+          // When
+          DomainEvent event2 = new NameWasChanged(UUID.randomUUID().toString(), now, "name", "Jan Doe");
+          Throwable throwable = catchThrowable(() -> persist("name",WriteCondition.streamVersion(gte(100L)),
+   Stream.of(event2)));
+
+          // Then
+          assertThat(throwable).isExactlyInstanceOf(WriteConditionNotFulfilledException.class)
+                  .hasMessage("WriteCondition was not fulfilled. Expected version to be greater than or equal to 100 but was 1.");
+        }
+      }
+
+      @Nested
+      @DisplayName("and")
+      class And {
+
+        @Test
+        void writes_events_when_stream_version_is_when_all_conditions_match_and_expression() {
+          // When
+          DomainEvent event1 = new NameDefined(UUID.randomUUID().toString(), now, "name", "John Doe");
+          persist("name", Stream.of(event1));
+
+          DomainEvent event2 = new NameWasChanged(UUID.randomUUID().toString(), now, "name", "Jan Doe");
+          EventStream<CloudEvent> eventStream1 = eventStore.read("name");
+          persist(eventStream1.id(),WriteCondition.streamVersion(and(gte(0L), lt(100L), ne(40L))),
+   Stream.of(event2));
+
+          // Then
+          EventStream<CloudEvent> eventStream2 = eventStore.read("name");
+          assertThat(deserialize(eventStream2.events())).containsExactly(event1, event2);
+        }
+
+        @Test
+        void
+   throws_write_condition_not_fulfilled_when_any_of_the_operations_in_the_and_expression_is_not_fulfilled() {
+          // Given
+          DomainEvent event1 = new NameDefined(UUID.randomUUID().toString(), now, "name", "John Doe");
+          persist("name", Stream.of(event1));
+
+          // When
+          DomainEvent event2 = new NameWasChanged(UUID.randomUUID().toString(), now, "name", "Jan Doe");
+          Throwable throwable = catchThrowable(() -> persist("name",WriteCondition.streamVersion(and(gte(0L),
+   lt(100L), ne(1L))), Stream.of(event2)));
+
+          // Then
+          assertThat(throwable).isExactlyInstanceOf(WriteConditionNotFulfilledException.class)
+                  .hasMessage("WriteCondition was not fulfilled. Expected version to be greater than or equal to 0 and to be less than 100 and to not be equal to 1 but was 1.");
+        }
+      }
+
+      @Nested
+      @DisplayName("or")
+      class Or {
+
+        @Test
+        void writes_events_when_stream_version_is_when_any_condition_in_or_expression_matches() {
+          // When
+          DomainEvent event1 = new NameDefined(UUID.randomUUID().toString(), now, "name", "John Doe");
+          persist("name", Stream.of(event1));
+
+          DomainEvent event2 = new NameWasChanged(UUID.randomUUID().toString(), now, "name", "Jan Doe");
+          EventStream<CloudEvent> eventStream1 = eventStore.read("name");
+          persist(eventStream1.id(),WriteCondition.streamVersion(or(gte(100L), lt(0L), ne(40L))),
+   Stream.of(event2));
+
+          // Then
+          EventStream<CloudEvent> eventStream2 = eventStore.read("name");
+          assertThat(deserialize(eventStream2.events())).containsExactly(event1, event2);
+        }
+
+        @Test
+        void
+   throws_write_condition_not_fulfilled_when_none_of_the_operations_in_the_and_expression_is_fulfilled() {
+          // Given
+          DomainEvent event1 = new NameDefined(UUID.randomUUID().toString(), now, "name", "John Doe");
+          persist("name", Stream.of(event1));
+
+          // When
+          DomainEvent event2 = new NameWasChanged(UUID.randomUUID().toString(), now, "name", "Jan Doe");
+          Throwable throwable = catchThrowable(() -> persist("name",WriteCondition.streamVersion(or(gte(100L),
+   lt(1L))), Stream.of(event2)));
+
+          // Then
+          assertThat(throwable).isExactlyInstanceOf(WriteConditionNotFulfilledException.class)
+                  .hasMessage("WriteCondition was not fulfilled. Expected version to be greater than or equal to 100 or to be less than 1 but was 1.");
+        }
+      }
+
+      @Nested
+      @DisplayName("not")
+      class Not {
+
+        @Test
+        void writes_events_when_stream_version_is_not_matching_condition() {
+          // When
+          DomainEvent event1 = new NameDefined(UUID.randomUUID().toString(), now, "name", "John Doe");
+          persist("name", Stream.of(event1));
+
+          DomainEvent event2 = new NameWasChanged(UUID.randomUUID().toString(), now, "name", "Jan Doe");
+          EventStream<CloudEvent> eventStream1 = eventStore.read("name");
+          persist(eventStream1.id(),WriteCondition.streamVersion(not(eq(100L))), Stream.of(event2));
+
+          // Then
+          EventStream<CloudEvent> eventStream2 = eventStore.read("name");
+          assertThat(deserialize(eventStream2.events())).containsExactly(event1, event2);
+        }
+
+        @Test
+        void
+   throws_write_condition_not_fulfilled_when_condition_is_fulfilled_but_should_not_be_so() {
+          // Given
+          DomainEvent event1 = new NameDefined(UUID.randomUUID().toString(), now, "name", "John Doe");
+          persist("name", Stream.of(event1));
+
+          // When
+          DomainEvent event2 = new NameWasChanged(UUID.randomUUID().toString(), now, "name", "Jan Doe");
+          Throwable throwable = catchThrowable(() -> persist("name",WriteCondition.streamVersion(not(eq(1L))),
+   Stream.of(event2)));
+
+          // Then
+          assertThat(throwable).isExactlyInstanceOf(WriteConditionNotFulfilledException.class)
+                  .hasMessage("WriteCondition was not fulfilled. Expected version not to be equal to 1 but was 1.");
+        }
+      }
   //
   //    @SuppressWarnings("ConstantConditions")
   //    @Nested
@@ -1949,114 +1896,5 @@ abstract class JpaBlockingEventStoreTestBase<
   //        }
   //      }
   //    }
-  //  }
-  //
-  //  private List<DomainEvent> deserialize(Stream<CloudEvent> events) {
-  //    return events
-  //            .map(CloudEvent::getData)
-  //            // @formatter:off
-  //            .map(unchecked(data -> objectMapper.readValue(data.toBytes(), new
-  // TypeReference<Map<String, Object>>() {})))
-  //            // @formatter:on
-  //            .map(event -> {
-  //              Instant instant = Instant.ofEpochMilli((long) event.get("time"));
-  //              LocalDateTime time = LocalDateTime.ofInstant(instant, UTC);
-  //              String eventId = (String) event.get("eventId");
-  //              String name = (String) event.get("name");
-  //              String userId = (String) event.get("userId");
-  //              return Match(event.get("type")).of(
-  //                      Case($(is(NameDefined.class.getSimpleName())), e -> new
-  // NameDefined(eventId, time, userId, name)),
-  //                      Case($(is(NameWasChanged.class.getSimpleName())), e -> new
-  // NameWasChanged(eventId, time, userId, name))
-  //              );
-  //            })
-  //            .collect(Collectors.toList());
-  //
-  //  }
-  //
-  //  @SuppressWarnings("unchecked")
-  //  private <T extends DomainEvent> T deserialize(CloudEvent event) {
-  //    return (T) deserialize(Stream.of(event)).get(0);
-  //  }
-  //
-  //  private void persist(String eventStreamId, CloudEvent event) {
-  //    eventStore.write(eventStreamId, Stream.of(event));
-  //  }
-  //
-  //  private void persist(String eventStreamId, WriteCondition writeCondition, DomainEvent event) {
-  //    List<DomainEvent> events = new ArrayList<>();
-  //    events.add(event);
-  //    persist(eventStreamId, writeCondition, events);
-  //  }
-  //
-  //  private void persist(String eventStreamId, WriteCondition writeCondition, List<DomainEvent>
-  // events) {
-  //    persist(eventStreamId, writeCondition, events.stream());
-  //  }
-  //
-  //  private void persist(String eventStreamId, WriteCondition writeCondition, Stream<DomainEvent>
-  // events) {
-  //    eventStore.write(eventStreamId, writeCondition,
-  // events.map(convertDomainEventToCloudEvent()));
-  //  }
-  //
-  //  private void persist(String eventStreamId, DomainEvent event) {
-  //    List<DomainEvent> events = new ArrayList<>();
-  //    events.add(event);
-  //    persist(eventStreamId, events);
-  //  }
-  //
-  //  private void persist(String eventStreamId, List<DomainEvent> events) {
-  //    persist(eventStreamId, events.stream());
-  //  }
-  //
-  //  private WriteResult persist(String eventStreamId, Stream<DomainEvent> events) {
-  //    return eventStore.write(eventStreamId, events.map(convertDomainEventToCloudEvent()));
-  //  }
-  //
-  //  private Function<DomainEvent, CloudEvent> convertDomainEventToCloudEvent() {
-  //    return e -> CloudEventBuilder.v1()
-  //            .withId(e.eventId())
-  //            .withSource(NAME_SOURCE)
-  //            .withType(e.getClass().getSimpleName())
-  //            .withTime(toLocalDateTime(e.timestamp()).atOffset(UTC))
-  //            .withSubject(e.getClass().getSimpleName().substring(4)) // Defined or WasChanged
-  //            .withDataContentType("application/json")
-  //            .withData(serializeEvent(e))
-  //            .build();
-  //  }
-  //
-  //  private byte[] serializeEvent(DomainEvent e) {
-  //    try {
-  //      return objectMapper.writeValueAsBytes(new HashMap<String, Object>() {{
-  //        put("type", e.getClass().getSimpleName());
-  //        put("eventId", e.eventId());
-  //        put("name", e.name());
-  //        put("userId", e.userId());
-  //        put("time", e.timestamp().getTime());
-  //      }});
-  //    } catch (JsonProcessingException jsonProcessingException) {
-  //      throw new RuntimeException(jsonProcessingException);
-  //    }
-  //  }
-  //
-  //  private MongoEventStore newMongoEventStore(TimeRepresentation timeRepresentation) {
-  //    return newMongoEventStore(new EventStoreConfig(timeRepresentation));
-  //  }
-  //
-  //  private MongoEventStore newMongoEventStore(EventStoreConfig eventStoreConfig) {
-  //    ConnectionString connectionString = new
-  // ConnectionString(mongoDBContainer.getReplicaSetUrl());
-  //    return new MongoEventStore(mongoClient, connectionString.getDatabase(), "events",
-  // eventStoreConfig);
-  //  }
-  //
-  //  private static void await(CyclicBarrier cyclicBarrier) {
-  //    try {
-  //      cyclicBarrier.await();
-  //    } catch (Exception e) {
-  //      throw new RuntimeException(e);
-  //    }
-  //  }
+    }
 }
