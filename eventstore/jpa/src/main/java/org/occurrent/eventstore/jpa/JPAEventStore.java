@@ -21,6 +21,7 @@ import org.occurrent.eventstore.api.blocking.EventStoreQueries;
 import org.occurrent.eventstore.api.blocking.EventStream;
 import org.occurrent.filter.Filter;
 import org.occurrent.functionalsupport.internal.FunctionalSupport;
+import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.data.domain.PageRequest;
 import org.springframework.transaction.annotation.Transactional;
 
@@ -73,7 +74,11 @@ public class JPAEventStore<T extends CloudEventDaoTraits>
       return new WriteResult(streamId, currentStreamVersion, currentStreamVersion);
     }
 
-    eventLog.saveAll(daos);
+    try {
+      eventLog.saveAll(daos);
+    }catch (DataIntegrityViolationException e){
+      throw new DuplicateCloudEventException(null, null, e.getMessage().trim(), e);
+    }
     var newVersion = eventsAndRevisions.stream().map(x -> x.t1).max(Long::compareTo).get();
     return new WriteResult(streamId, currentStreamVersion, newVersion);
   }

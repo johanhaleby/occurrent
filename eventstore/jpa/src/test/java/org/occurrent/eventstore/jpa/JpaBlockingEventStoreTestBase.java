@@ -1,25 +1,32 @@
 package org.occurrent.eventstore.jpa;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.AssertionsForClassTypes.catchThrowable;
 import static org.junit.jupiter.api.Assertions.assertAll;
 import static org.occurrent.cloudevents.OccurrentCloudEventExtension.*;
 import static org.occurrent.condition.Condition.eq;
+import static org.occurrent.domain.Composition.chain;
+import static org.occurrent.eventstore.api.WriteCondition.streamVersionEq;
 import static org.occurrent.filter.Filter.*;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.mongodb.MongoBulkWriteException;
 import io.cloudevents.CloudEvent;
 import java.time.LocalDateTime;
 import java.util.*;
 import java.util.stream.Collectors;
 import java.util.stream.Stream;
+import org.hibernate.exception.ConstraintViolationException;
 import org.junit.jupiter.api.*;
 import org.occurrent.domain.DomainEvent;
 import org.occurrent.domain.Name;
 import org.occurrent.domain.NameDefined;
 import org.occurrent.domain.NameWasChanged;
+import org.occurrent.eventstore.api.DuplicateCloudEventException;
 import org.occurrent.eventstore.api.blocking.EventStream;
 import org.occurrent.eventstore.jpa.utils.TestDependencies;
 import org.occurrent.eventstore.jpa.utils.TestOperations;
+import org.springframework.dao.DataIntegrityViolationException;
 
 @TestInstance(TestInstance.Lifecycle.PER_CLASS)
 abstract class JpaBlockingEventStoreTestBase<
@@ -126,173 +133,174 @@ abstract class JpaBlockingEventStoreTestBase<
         () -> assertThat(readEvents).containsExactlyElementsOf(events));
   }
 
-  //
-  //  @Test
-  //  void can_read_and_write_multiple_events_at_once_to_mongo_event_store() {
-  //    LocalDateTime now = LocalDateTime.now();
-  //    List<DomainEvent> events = chain(Name.defineTheName(UUID.randomUUID().toString(), now,
-  // "name", "Hello World"), es -> Name.changeName(es, UUID.randomUUID().toString(), now, "name",
-  // "John Doe"));
-  //
-  //    // When
-  //    persist("name", events);
-  //
-  //    // Then
-  //    EventStream<CloudEvent> eventStream = eventStore.read("name");
-  //    List<DomainEvent> readEvents = deserialize(eventStream.events());
-  //
-  //    assertAll(
-  //            () -> assertThat(eventStream.version()).isEqualTo(2),
-  //            () -> assertThat(readEvents).hasSize(2),
-  //            () -> assertThat(readEvents).containsExactlyElementsOf(events)
-  //    );
-  //  }
-  //
-  //  @Test
-  //  void can_read_and_write_multiple_events_at_different_occasions_to_mongo_event_store() {
-  //    LocalDateTime now = LocalDateTime.now();
-  //    NameDefined nameDefined = new NameDefined(UUID.randomUUID().toString(), now, "name",
-  // "name");
-  //    NameWasChanged nameWasChanged1 = new NameWasChanged(UUID.randomUUID().toString(),
-  // now.plusHours(1), "name", "name2");
-  //    NameWasChanged nameWasChanged2 = new NameWasChanged(UUID.randomUUID().toString(),
-  // now.plusHours(2), "name", "name3");
-  //
-  //    // When
-  //    persist("name", streamVersionEq(0), nameDefined);
-  //    persist("name", streamVersionEq(1), nameWasChanged1);
-  //    persist("name", streamVersionEq(2), nameWasChanged2);
-  //
-  //    // Then
-  //    EventStream<CloudEvent> eventStream = eventStore.read("name");
-  //    List<DomainEvent> readEvents = deserialize(eventStream.events());
-  //
-  //    assertAll(
-  //            () -> assertThat(eventStream.version()).isEqualTo(3),
-  //            () -> assertThat(readEvents).hasSize(3),
-  //            () -> assertThat(readEvents).containsExactly(nameDefined, nameWasChanged1,
-  // nameWasChanged2)
-  //    );
-  //  }
-  //
-  //  @Test
-  //  void can_read_events_with_skip_and_limit() {
-  //    LocalDateTime now = LocalDateTime.now();
-  //    NameDefined nameDefined = new NameDefined(UUID.randomUUID().toString(), now, "name",
-  // "name");
-  //    NameWasChanged nameWasChanged1 = new NameWasChanged(UUID.randomUUID().toString(),
-  // now.plusHours(1), "name", "name2");
-  //    NameWasChanged nameWasChanged2 = new NameWasChanged(UUID.randomUUID().toString(),
-  // now.plusHours(2), "name", "name3");
-  //
-  //    // When
-  //    persist("name", streamVersionEq(0), nameDefined);
-  //    persist("name", streamVersionEq(1), nameWasChanged1);
-  //    persist("name", streamVersionEq(2), nameWasChanged2);
-  //
-  //    // Then
-  //    EventStream<CloudEvent> eventStream = eventStore.read("name", 1, 1);
-  //    List<DomainEvent> readEvents = deserialize(eventStream.events());
-  //
-  //    assertAll(
-  //            () -> assertThat(eventStream.version()).isEqualTo(3),
-  //            () -> assertThat(readEvents).hasSize(1),
-  //            () -> assertThat(readEvents).containsExactly(nameWasChanged1)
-  //    );
-  //  }
-  //
-  //  @Test
-  //  void read_skew_is_not_allowed_for_native_implementation() {
-  //    LocalDateTime now = LocalDateTime.now();
-  //    NameDefined nameDefined = new NameDefined(UUID.randomUUID().toString(), now, "name",
-  // "name");
-  //    NameWasChanged nameWasChanged1 = new NameWasChanged(UUID.randomUUID().toString(),
-  // now.plusHours(1), "name", "name2");
-  //    NameWasChanged nameWasChanged2 = new NameWasChanged(UUID.randomUUID().toString(),
-  // now.plusHours(2), "name", "name3");
-  //
-  //    persist("name", streamVersionEq(0), nameDefined);
-  //    persist("name", streamVersionEq(1), nameWasChanged1);
-  //    // When
-  //    EventStream<CloudEvent> eventStream = eventStore.read("name");
-  //    persist("name", streamVersionEq(2), nameWasChanged2);
-  //
-  //    // Then
-  //    List<DomainEvent> readEvents = deserialize(eventStream.events());
-  //
-  //    assertAll(
-  //            () -> assertThat(eventStream.version()).isEqualTo(2),
-  //            () -> assertThat(readEvents).hasSize(2),
-  //            () -> assertThat(readEvents).containsExactly(nameDefined, nameWasChanged1)
-  //    );
-  //  }
-  //
-  //  @Test
-  //  void no_events_are_inserted_when_batch_contains_duplicate_events() {
-  //    LocalDateTime now = LocalDateTime.now();
-  //
-  //    NameDefined nameDefined = new NameDefined(UUID.randomUUID().toString(), now, "name",
-  // "name");
-  //    NameWasChanged nameWasChanged1 = new NameWasChanged(UUID.randomUUID().toString(),
-  // now.plusHours(1), "name", "name2");
-  //    NameWasChanged nameWasChanged2 = new NameWasChanged(UUID.randomUUID().toString(),
-  // now.plusHours(2), "name", "name4");
-  //
-  //    // When
-  //    Throwable throwable = catchThrowable(() -> persist("name", streamVersionEq(0),
-  // Stream.of(nameDefined, nameWasChanged1, nameWasChanged1, nameWasChanged2)));
-  //
-  //    // Then
-  //    EventStream<CloudEvent> eventStream = eventStore.read("name");
-  //    List<DomainEvent> readEvents = deserialize(eventStream.events());
-  //
-  //    assertAll(
-  //            () ->
-  // assertThat(throwable).isExactlyInstanceOf(DuplicateCloudEventException.class).hasCauseExactlyInstanceOf(MongoBulkWriteException.class),
-  //            () -> assertThat(eventStream.version()).isEqualTo(0),
-  //            () -> assertThat(readEvents).isEmpty()
-  //    );
-  //  }
+  @Test
+  void can_read_and_write_multiple_events_at_once_to_mongo_event_store() {
+    LocalDateTime now = LocalDateTime.now();
+    List<DomainEvent> events =
+        chain(
+            Name.defineTheName(UUID.randomUUID().toString(), now, "name", "Hello World"),
+            es -> Name.changeName(es, UUID.randomUUID().toString(), now, "name", "John Doe"));
 
-  //  @Test
-  //  void no_events_are_inserted_when_batch_contains_event_that_has_already_been_persisted() {
-  //    LocalDateTime now = LocalDateTime.now();
-  //
-  //    NameDefined nameDefined = new NameDefined(UUID.randomUUID().toString(), now, "name",
-  // "name");
-  //    NameWasChanged nameWasChanged1 = new NameWasChanged(UUID.randomUUID().toString(),
-  // now.plusHours(1), "name", "name2");
-  //    NameWasChanged nameWasChanged2 = new NameWasChanged(UUID.randomUUID().toString(),
-  // now.plusHours(2), "name", "name4");
-  //
-  //    persist("name", streamVersionEq(0), Stream.of(nameDefined, nameWasChanged1));
-  //
-  //    // When
-  //    Throwable throwable = catchThrowable(() -> persist("name", streamVersionEq(2),
-  // Stream.of(nameWasChanged2, nameWasChanged1)));
-  //
-  //    // Then
-  //    EventStream<CloudEvent> eventStream = eventStore.read("name");
-  //    List<DomainEvent> readEvents = deserialize(eventStream.events());
-  //
-  //
-  // assertThat(throwable).isExactlyInstanceOf(DuplicateCloudEventException.class).hasCauseExactlyInstanceOf(MongoBulkWriteException.class);
-  //    DuplicateCloudEventException duplicateCloudEventException = (DuplicateCloudEventException)
-  // throwable;
-  //    assertAll(
-  //            () ->
-  // assertThat(duplicateCloudEventException.getId()).isEqualTo(nameWasChanged1.eventId()),
-  //            () -> assertThat(duplicateCloudEventException.getSource()).isEqualTo(NAME_SOURCE),
-  //            () -> assertThat(duplicateCloudEventException.getDetails()).endsWith("Write errors:
-  // [BulkWriteError{index=1, code=11000, message='E11000 duplicate key error collection:
-  // test.events index: id_1_source_1 dup key: { id: \"" + nameWasChanged1.eventId() + "\", source:
-  // \"http://name\" }', details={}}]."),
-  //            () -> assertThat(throwable).hasMessageNotContaining("unknown"),
-  //            () -> assertThat(eventStream.version()).isEqualTo(2),
-  //            () -> assertThat(readEvents).containsExactly(nameDefined, nameWasChanged1)
-  //    );
-  //  }
-  //
+    // When
+    persist("name", events);
+
+    // Then
+    EventStream<CloudEvent> eventStream = eventStore.read("name");
+    List<DomainEvent> readEvents = deserialize(eventStream.events());
+
+    assertAll(
+        () -> assertThat(eventStream.version()).isEqualTo(2),
+        () -> assertThat(readEvents).hasSize(2),
+        () -> assertThat(readEvents).containsExactlyElementsOf(events));
+  }
+
+  @Test
+  void can_read_and_write_multiple_events_at_different_occasions_to_mongo_event_store() {
+    LocalDateTime now = LocalDateTime.now();
+    NameDefined nameDefined = new NameDefined(UUID.randomUUID().toString(), now, "name", "name");
+    NameWasChanged nameWasChanged1 =
+        new NameWasChanged(UUID.randomUUID().toString(), now.plusHours(1), "name", "name2");
+    NameWasChanged nameWasChanged2 =
+        new NameWasChanged(UUID.randomUUID().toString(), now.plusHours(2), "name", "name3");
+
+    // When
+    persist("name", streamVersionEq(0), nameDefined);
+    persist("name", streamVersionEq(1), nameWasChanged1);
+    persist("name", streamVersionEq(2), nameWasChanged2);
+
+    // Then
+    EventStream<CloudEvent> eventStream = eventStore.read("name");
+    List<DomainEvent> readEvents = deserialize(eventStream.events());
+
+    assertAll(
+        () -> assertThat(eventStream.version()).isEqualTo(3),
+        () -> assertThat(readEvents).hasSize(3),
+        () ->
+            assertThat(readEvents).containsExactly(nameDefined, nameWasChanged1, nameWasChanged2));
+  }
+
+  @Test
+  void can_read_events_with_skip_and_limit() {
+    LocalDateTime now = LocalDateTime.now();
+    NameDefined nameDefined = new NameDefined(UUID.randomUUID().toString(), now, "name", "name");
+    NameWasChanged nameWasChanged1 =
+        new NameWasChanged(UUID.randomUUID().toString(), now.plusHours(1), "name", "name2");
+    NameWasChanged nameWasChanged2 =
+        new NameWasChanged(UUID.randomUUID().toString(), now.plusHours(2), "name", "name3");
+
+    // When
+    persist("name", streamVersionEq(0), nameDefined);
+    persist("name", streamVersionEq(1), nameWasChanged1);
+    persist("name", streamVersionEq(2), nameWasChanged2);
+
+    // Then
+    EventStream<CloudEvent> eventStream = eventStore.read("name", 1, 1);
+    List<DomainEvent> readEvents = deserialize(eventStream.events());
+
+    assertAll(
+        () -> assertThat(eventStream.version()).isEqualTo(3),
+        () -> assertThat(readEvents).hasSize(1),
+        () -> assertThat(readEvents).containsExactly(nameWasChanged1));
+  }
+
+  @Test
+  void read_skew_is_not_allowed_for_native_implementation() {
+    LocalDateTime now = LocalDateTime.now();
+    NameDefined nameDefined = new NameDefined(UUID.randomUUID().toString(), now, "name", "name");
+    NameWasChanged nameWasChanged1 =
+        new NameWasChanged(UUID.randomUUID().toString(), now.plusHours(1), "name", "name2");
+    NameWasChanged nameWasChanged2 =
+        new NameWasChanged(UUID.randomUUID().toString(), now.plusHours(2), "name", "name3");
+
+    persist("name", streamVersionEq(0), nameDefined);
+    persist("name", streamVersionEq(1), nameWasChanged1);
+    // When
+    EventStream<CloudEvent> eventStream = eventStore.read("name");
+    persist("name", streamVersionEq(2), nameWasChanged2);
+
+    // Then
+    List<DomainEvent> readEvents = deserialize(eventStream.events());
+
+    assertAll(
+        () -> assertThat(eventStream.version()).isEqualTo(2),
+        () -> assertThat(readEvents).hasSize(2),
+        () -> assertThat(readEvents).containsExactly(nameDefined, nameWasChanged1));
+  }
+
+  @Test
+  void no_events_are_inserted_when_batch_contains_duplicate_events() {
+    LocalDateTime now = LocalDateTime.now();
+
+    NameDefined nameDefined = new NameDefined(UUID.randomUUID().toString(), now, "name", "name");
+    NameWasChanged nameWasChanged1 =
+        new NameWasChanged(UUID.randomUUID().toString(), now.plusHours(1), "name", "name2");
+    NameWasChanged nameWasChanged2 =
+        new NameWasChanged(UUID.randomUUID().toString(), now.plusHours(2), "name", "name4");
+
+    // When
+    Throwable throwable =
+        catchThrowable(
+            () ->
+                persist(
+                    "name",
+                    streamVersionEq(0),
+                    Stream.of(nameDefined, nameWasChanged1, nameWasChanged1, nameWasChanged2)));
+
+    // Then
+    EventStream<CloudEvent> eventStream = eventStore.read("name");
+    List<DomainEvent> readEvents = deserialize(eventStream.events());
+
+    assertAll(
+        () ->
+            assertThat(throwable)
+                .isExactlyInstanceOf(DuplicateCloudEventException.class)
+                .hasCauseExactlyInstanceOf(DataIntegrityViolationException.class),
+        () -> assertThat(eventStream.version()).isEqualTo(0),
+        () -> assertThat(readEvents).isEmpty());
+  }
+
+  @Test
+  void no_events_are_inserted_when_batch_contains_event_that_has_already_been_persisted() {
+    LocalDateTime now = LocalDateTime.now();
+
+    NameDefined nameDefined = new NameDefined(UUID.randomUUID().toString(), now, "name", "name");
+    NameWasChanged nameWasChanged1 =
+        new NameWasChanged(UUID.randomUUID().toString(), now.plusHours(1), "name", "name2");
+    NameWasChanged nameWasChanged2 =
+        new NameWasChanged(UUID.randomUUID().toString(), now.plusHours(2), "name", "name4");
+
+    persist("name", streamVersionEq(0), Stream.of(nameDefined, nameWasChanged1));
+
+    // When
+    Throwable throwable =
+        catchThrowable(
+            () -> persist("name", streamVersionEq(2), Stream.of(nameWasChanged2, nameWasChanged1)));
+
+    // Then
+    EventStream<CloudEvent> eventStream = eventStore.read("name");
+    List<DomainEvent> readEvents = deserialize(eventStream.events());
+
+    assertThat(throwable)
+        .isExactlyInstanceOf(DuplicateCloudEventException.class)
+        .hasCauseExactlyInstanceOf(DataIntegrityViolationException.class);
+    DuplicateCloudEventException duplicateCloudEventException =
+        (DuplicateCloudEventException) throwable;
+    assertAll(
+        () -> assertThat(duplicateCloudEventException.getId()).isEqualTo(nameWasChanged1.eventId()),
+        () -> assertThat(duplicateCloudEventException.getSource()).isEqualTo(NAME_SOURCE),
+        () ->
+            assertThat(duplicateCloudEventException.getDetails())
+                .endsWith(
+                    "Write errors: [BulkWriteError{index=1, code=11000, message='E11000 duplicate"
+                        + " key error collection: test.events index: id_1_source_1 dup key: { id:"
+                        + " \""
+                        + nameWasChanged1.eventId()
+                        + "\", source:\"http://name\" }', details={}}]."),
+        () -> assertThat(throwable).hasMessageNotContaining("unknown"),
+        () -> assertThat(eventStream.version()).isEqualTo(2),
+        () -> assertThat(readEvents).containsExactly(nameDefined, nameWasChanged1));
+  }
+
   //  @Test
   //  void
   // no_events_are_inserted_when_batch_contains_event_that_has_already_been_persisted_with_manual_unique_index() {
