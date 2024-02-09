@@ -6,7 +6,8 @@
   
   // GameStarted has GameEvent as parent, the following didn't compile in version 0.17.0 
   subscriptions.subscribe("ikk", GameStarted.class, gameStarted -> System.out.println("gameStarted: " + gameStarted));
-  ```
+  ```                                                                                 
+* Upgraded slf4j-api from 2.0.5 to 2.0.12
 
 ### 0.17.0 (2024-01-19)
 * spring-boot-starter-mongodb no longer autoconfigures itself by just importing the library in the classpath, instead you need to bootstrap by annotating your Spring Boot class with @EnableOccurrent.   
