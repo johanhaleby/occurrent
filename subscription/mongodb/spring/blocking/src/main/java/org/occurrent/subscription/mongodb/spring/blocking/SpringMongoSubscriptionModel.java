@@ -140,7 +140,7 @@ public class SpringMongoSubscriptionModel implements PositionAwareSubscriptionMo
             throw new IllegalArgumentException("Subscription " + subscriptionId + " is already defined.");
         }
 
-        // We wrap the creation of ChangeStreamRequestOptions in a supplier since since otherwise the "startAtSupplier"
+        // We wrap the creation of ChangeStreamRequestOptions in a supplier since otherwise the "startAtSupplier"
         // would be supplied only once, here, during initialization. When using a supplier here, the "startAtSupplier"
         // is called again when pausing and resuming a subscription. Take the case when a subscription is started with "StartAt.now()".
         // If we hadn't used a supplier and a subscription is paused and later resumed, it'll be resumed from the _initial_ "StartAt.now()" position,
