@@ -6,7 +6,8 @@
   
   // GameStarted has GameEvent as parent, the following didn't compile in version 0.17.0 
   subscriptions.subscribe("ikk", GameStarted.class, gameStarted -> System.out.println("gameStarted: " + gameStarted));
-  ```                                                                                 
+  ```
+* Using slf4j-api and not logback-classic in seUsing slf4j-api and not logback-classic in several modules that accidentally brought logback in a compile dependencyveral modules that accidentally brought logback in a compile dependency.                                                                                 
 * Upgraded slf4j-api from 2.0.5 to 2.0.12
 
 ### 0.17.0 (2024-01-19)
