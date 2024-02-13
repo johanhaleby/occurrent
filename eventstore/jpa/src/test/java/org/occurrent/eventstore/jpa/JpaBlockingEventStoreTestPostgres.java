@@ -34,7 +34,7 @@ import org.testcontainers.junit.jupiter.Testcontainers;
 @Testcontainers
 @TestInstance(TestInstance.Lifecycle.PER_CLASS)
 class JpaBlockingEventStoreTestPostgres
-    extends JpaBlockingEventStoreTestBase<CloudEventDao, JPAEventStore<CloudEventDao>> {
+    extends JpaBlockingEventStoreTestBase<CloudEventDao, JPAEventStore<Long, CloudEventDao>> {
   static final String USER_NAME = "user";
   static final String PASSWORD = "password";
   static final String DB = "db";
@@ -67,8 +67,8 @@ class JpaBlockingEventStoreTestPostgres
   @Autowired CloudEventDaoLog log;
 
   @Override
-  JPAEventStore<CloudEventDao> getNewEventStore() {
-    return JPAEventStore.<CloudEventDao>builder()
+  JPAEventStore<Long, CloudEventDao> getNewEventStore() {
+    return JPAEventStore.<Long, CloudEventDao>builder()
         .eventLog(log)
         .eventLogOperations(new PostgresOperations())
         .converter(new StreamEventDaoConverter(new ObjectMapper()))

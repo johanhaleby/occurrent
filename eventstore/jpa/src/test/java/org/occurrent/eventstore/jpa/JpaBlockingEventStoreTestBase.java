@@ -39,8 +39,7 @@ import org.occurrent.filter.Filter;
 import org.springframework.dao.DataIntegrityViolationException;
 
 @TestInstance(TestInstance.Lifecycle.PER_CLASS)
-abstract class JpaBlockingEventStoreTestBase<
-        T extends CloudEventDaoTraits, E extends JPAEventStore<T>>
+abstract class JpaBlockingEventStoreTestBase<T extends CloudEventDaoTraits<?>, E extends JPAEventStore<?, T>>
     extends TestOperations<T, E> {
 
   abstract E getNewEventStore();

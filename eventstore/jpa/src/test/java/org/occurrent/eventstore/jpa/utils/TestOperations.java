@@ -31,7 +31,7 @@ import org.occurrent.eventstore.jpa.CloudEventDaoTraits;
 import org.occurrent.eventstore.jpa.JPAEventStore;
 import org.occurrent.eventstore.jpa.batteries.SerializingOperations;
 
-public abstract class TestOperations<T extends CloudEventDaoTraits, E extends JPAEventStore<T>> {
+public abstract class TestOperations<T extends CloudEventDaoTraits<?>, E extends JPAEventStore<?, T>> {
   public static URI NAME_SOURCE = URI.create("http://name");
 
   protected TestDependencies<T, E> dependencies;

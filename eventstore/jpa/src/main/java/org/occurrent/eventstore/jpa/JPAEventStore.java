@@ -26,7 +26,7 @@ import org.springframework.data.domain.PageRequest;
 import org.springframework.transaction.annotation.Transactional;
 
 @Builder
-public class JPAEventStore<T extends CloudEventDaoTraits>
+public class JPAEventStore<TKey, T extends CloudEventDaoTraits<TKey>>
     implements EventStore, EventStoreOperations, EventStoreQueries {
   private final EventLogOperations<T> eventLogOperations;
   private final JPAEventLog<T, ?> eventLog;
@@ -145,6 +145,7 @@ public class JPAEventStore<T extends CloudEventDaoTraits>
     var dao = events.get(0);
     var updated = updateFunction.apply(converter.toCloudEvent(dao));
     var updatedDao = converter.toDao(dao.streamRevision(), dao.streamId(), updated);
+    updatedDao.setKey(dao.key());
     eventLog.save(updatedDao);
     return Optional.of(updated);
   }

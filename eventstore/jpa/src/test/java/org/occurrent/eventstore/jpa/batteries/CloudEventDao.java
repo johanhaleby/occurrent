@@ -26,7 +26,7 @@ import org.springframework.data.jpa.domain.support.AuditingEntityListener;
 @NoArgsConstructor
 @Builder
 @Accessors(fluent = true)
-public class CloudEventDao implements CloudEventDaoTraits {
+public class CloudEventDao implements CloudEventDaoTraits<Long> {
   //  @org.springframework.data.annotation.Id
   @jakarta.persistence.Id
   @GeneratedValue(strategy = GenerationType.IDENTITY)
@@ -68,4 +68,14 @@ public class CloudEventDao implements CloudEventDaoTraits {
 
   @Column(name = "spec_version")
   private SpecVersion specVersion = SpecVersion.V03;
+
+  @Override
+  public Long key() {
+    return id;
+  }
+
+  @Override
+  public void setKey(Long key) {
+    this.id = key;
+  }
 }
