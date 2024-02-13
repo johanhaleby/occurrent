@@ -106,20 +106,14 @@ class JpaBlockingEventStoreTestPostgres
               "stream_revision" BIGINT NOT NULL,
               "stream_id" TEXT NOT NULL,
               "event_id" text NOT NULL UNIQUE,
-
-              -- TODO uncomment these lines below
-              -- Should match the stuff in CloudEventDAO
-              -- Should be queryable using the Occurrent DSL (no JPA filter errors)
-
-
               "source" TEXT NOT NULL,
               "type" TEXT NOT NULL,
               "timestamp" TIMESTAMPTZ NOT NULL DEFAULT NOW(),
               "subject" text,
-              -- "data_content_type" text,
-              "data" jsonb, --TODO - currently just storing in JSON. Probably wont play nicely with filters.
-              -- "data_schema" text,
-              -- "spec_version" text,
+              "data_content_type" text,
+              "data" jsonb,
+              "data_schema" text,
+              "spec_version" text,
               CONSTRAINT "cloud-events-pk" PRIMARY KEY ("id")
           );
           """;

@@ -2,7 +2,13 @@ package org.occurrent.eventstore.jpa.batteries;
 
 import io.cloudevents.SpecVersion;
 import io.cloudevents.lang.Nullable;
-import jakarta.persistence.*;
+import jakarta.persistence.Column;
+import jakarta.persistence.Convert;
+import jakarta.persistence.Entity;
+import jakarta.persistence.EntityListeners;
+import jakarta.persistence.GeneratedValue;
+import jakarta.persistence.GenerationType;
+import jakarta.persistence.Table;
 import java.net.URI;
 import java.time.Instant;
 import java.util.Map;
@@ -47,7 +53,6 @@ public class CloudEventDao implements CloudEventDaoTraits {
   @Nullable private String subject;
 
   @Column(name = "data_content_type")
-  @Transient
   @Nullable
   private String dataContentType = "";
 
@@ -56,12 +61,11 @@ public class CloudEventDao implements CloudEventDaoTraits {
   @Column(columnDefinition = "jsonb")
   private Map<String, Object> data;
 
-  @Transient
   @Column(name = "data_schema")
   @Nullable
+  @Convert(converter = URIConverter.class)
   private URI dataSchema;
 
-  @Transient
   @Column(name = "spec_version")
   private SpecVersion specVersion = SpecVersion.V03;
 }

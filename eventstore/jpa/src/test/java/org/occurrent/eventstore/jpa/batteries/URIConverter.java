@@ -9,11 +9,17 @@ public class URIConverter implements AttributeConverter<URI, String> {
 
   @Override
   public String convertToDatabaseColumn(URI uri) {
+    if (uri == null) {
+      return null;
+    }
     return uri.toString();
   }
 
   @Override
-  public URI convertToEntityAttribute(String s) {
-    return URI.create(s);
+  public URI convertToEntityAttribute(String uri) {
+    if (uri == null) {
+      return null;
+    }
+    return URI.create(uri);
   }
 }
