@@ -1,6 +1,10 @@
 package org.occurrent.eventstore.jpa.mixins;
 
+import java.time.OffsetDateTime;
+import java.util.Comparator;
 import java.util.List;
+
+import jakarta.persistence.criteria.Expression;
 import org.occurrent.condition.Condition;
 import org.springframework.data.jpa.domain.Specification;
 
@@ -12,9 +16,19 @@ import org.springframework.data.jpa.domain.Specification;
  *     entity.
  */
 public interface EventLogConditionMixin<T> extends EventLogExpressionMixin<T> {
-  private static Number convertToNumber(Object o) {
-    // TODO: more robust?
-    return (int) o;
+  @FunctionalInterface
+  interface FunctionalCompare<T> extends Comparable<T>{
+    default int compareTo(T o){
+      return compare(o);
+    }
+    int compare(T o);
+  }
+  private static Comparable convertToComparable(Object o) {
+    if(o instanceof Comparable<?> c){
+      return c;
+    }
+
+    throw new IllegalArgumentException("Object is not comparable. %s".formatted(o.getClass().getSimpleName()));
   }
 
   default <U> Specification<T> byAnyCondition(String fieldName, Condition<U> condition) {
@@ -62,31 +76,28 @@ public interface EventLogConditionMixin<T> extends EventLogExpressionMixin<T> {
     };
   }
 
+  abstract class Testy implements Comparable<Testy>{
+
+  }
+
   default <U> Specification<T> bySingleCondition(
       String fieldName, Condition.SingleOperandCondition<U> fieldCondition) {
     Condition.SingleOperandConditionName singleOperandConditionName =
         fieldCondition.operandConditionName();
-    U expectedVersion = fieldCondition.operand();
-
-    return switch (singleOperandConditionName) {
-      case EQ ->
-          (root, query, builder) ->
-              builder.equal(expressFieldName(root, fieldName), expectedVersion);
-      case LT ->
-          (root, query, builder) ->
-              builder.lt(expressFieldName(root, fieldName), convertToNumber(expectedVersion));
-      case GT ->
-          (root, query, builder) ->
-              builder.gt(expressFieldName(root, fieldName), convertToNumber(expectedVersion));
-      case LTE ->
-          (root, query, builder) ->
-              builder.le(expressFieldName(root, fieldName), convertToNumber(expectedVersion));
-      case GTE ->
-          (root, query, builder) ->
-              builder.ge(expressFieldName(root, fieldName), convertToNumber(expectedVersion));
-      case NE ->
-          (root, query, builder) ->
-              builder.notEqual(expressFieldName(root, fieldName), convertToNumber(expectedVersion));
-    };
+    return ((root, query, builder) -> {
+      var value = fieldCondition.operand();
+      Comparable comparableValue = convertToComparable(fieldCondition.operand());
+      Expression fieldExpression = expressFieldName(root, fieldName);
+      return switch (singleOperandConditionName) {
+        //Can use regular value
+        case EQ -> builder.equal(fieldExpression, value);
+        case NE -> builder.notEqual(fieldExpression, value);
+        //Must convert value to Comparable<T>
+        case LT -> builder.lessThan(fieldExpression, comparableValue);
+        case GT -> builder.greaterThan(fieldExpression, comparableValue);
+        case LTE ->builder.lessThanOrEqualTo(fieldExpression, comparableValue);
+        case GTE ->builder.greaterThanOrEqualTo(fieldExpression, comparableValue);
+      };
+    });
   }
 }
