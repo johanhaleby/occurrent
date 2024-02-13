@@ -115,6 +115,7 @@ public abstract class TestOperations<T extends CloudEventDaoTraits, E extends JP
             .withTime(toLocalDateTime(e.timestamp()).atOffset(UTC))
             .withSubject(e.name())
             .withData(serializeEvent(e))
+            .withType(e.getClass().getSimpleName())
             .build();
   }
 
