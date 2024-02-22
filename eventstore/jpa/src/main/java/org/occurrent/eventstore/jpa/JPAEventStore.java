@@ -50,7 +50,7 @@ public class JPAEventStore<TKey, T extends CloudEventDaoTraits<TKey>>
       throw new IllegalArgumentException(WriteCondition.class.getSimpleName() + " cannot be null");
     }
 
-    var currentStreamVersion = eventLog.count(eventLogOperations.byStreamId(streamId));
+    val currentStreamVersion = eventLog.count(eventLogOperations.byStreamId(streamId));
 
     if (!isFulfilled(currentStreamVersion, writeCondition)) {
       throw new WriteConditionNotFulfilledException(
@@ -62,7 +62,7 @@ public class JPAEventStore<TKey, T extends CloudEventDaoTraits<TKey>>
               WriteCondition.class.getSimpleName(), writeCondition, currentStreamVersion));
     }
 
-    var eventsAndRevisions =
+    val eventsAndRevisions =
         zip(
                 LongStream.iterate(currentStreamVersion + 1, i -> i + 1).boxed(),
                 events,
@@ -109,7 +109,7 @@ public class JPAEventStore<TKey, T extends CloudEventDaoTraits<TKey>>
         throw e;
       }
     }
-    var newVersion = eventsAndRevisions.stream().map(x -> x.t1).max(Long::compareTo).get();
+    val newVersion = eventsAndRevisions.stream().map(x -> x.t1).max(Long::compareTo).get();
     return new WriteResult(streamId, currentStreamVersion, newVersion);
   }
 
@@ -135,12 +135,12 @@ public class JPAEventStore<TKey, T extends CloudEventDaoTraits<TKey>>
 
   @Override
   public EventStream<CloudEvent> read(String streamId, int skip, int limit) {
-    var events =
+    val events =
         eventLog
             .findAll(eventLogOperations.byStreamId(streamId), PageRequest.of(skip, limit))
             .map(converter::toCloudEvent)
             .stream();
-    var currentRevision = this.count();
+    val currentRevision = this.count();
     return new EventStreamImpl<>(streamId, currentRevision, events);
   }
 
@@ -168,7 +168,7 @@ public class JPAEventStore<TKey, T extends CloudEventDaoTraits<TKey>>
   @Override
   public Optional<CloudEvent> updateEvent(
       String cloudEventId, URI cloudEventSource, Function<CloudEvent, CloudEvent> updateFunction) {
-    var events =
+    val events =
         eventLog.findAll(
             eventLogOperations.byCloudEventIdAndSource(cloudEventId, cloudEventSource));
     if (events.isEmpty()) {
@@ -178,9 +178,9 @@ public class JPAEventStore<TKey, T extends CloudEventDaoTraits<TKey>>
       // TODO: more specific exception?
       throw new RuntimeException("Found more than 1 event.");
     }
-    var dao = events.get(0);
-    var updated = updateFunction.apply(converter.toCloudEvent(dao));
-    var updatedDao = converter.toDao(dao.streamRevision(), dao.streamId(), updated);
+    val dao = events.get(0);
+    val updated = updateFunction.apply(converter.toCloudEvent(dao));
+    val updatedDao = converter.toDao(dao.streamRevision(), dao.streamId(), updated);
     updatedDao.setKey(dao.key());
     eventLog.save(updatedDao);
     return Optional.of(updated);

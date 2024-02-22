@@ -17,17 +17,7 @@ public enum FieldNames {
   TIMESTAMP("time", "timestamp"),
   TYPE("type", "type"),
   SPEC_VERSION("specversion", "specVersion"),
-//  SOURCE("source", "source"),
 ;
-  //  String SPEC_VERSION = "specversion";
-  //  String ID = "id";
-  //  String TYPE = "type";
-  //  String TIME = "time";
-  //  String SOURCE = "source";
-  //  String SUBJECT = "subject";
-  //  String DATA_SCHEMA = "dataschema";
-  //  String DATA_CONTENT_TYPE = "datacontenttype";
-  //  String DATA = "data";
 
   private final String cloudEventValue;
   private final String daoValue;

@@ -122,20 +122,5 @@ public abstract class TestOperations<
 
   protected byte[] serializeEvent(DomainEvent e) {
     return SerializingOperations.defaultInstance.domainEventToBytes(e);
-    //    try {
-    //      var objectMapper = new ObjectMapper();
-    //      return objectMapper.writeValueAsBytes(
-    //          new HashMap<String, Object>() {
-    //            {
-    //              put("type", e.getClass().getSimpleName());
-    //              put("eventId", e.eventId());
-    //              put("name", e.name());
-    //              put("userId", e.userId());
-    //              put("time", e.timestamp());
-    //            }
-    //          });
-    //    } catch (JsonProcessingException jsonProcessingException) {
-    //      throw new RuntimeException(jsonProcessingException);
-    //    }
   }
 }

@@ -1,6 +1,8 @@
 package org.occurrent.eventstore.jpa;
 
 import java.net.URI;
+
+import lombok.val;
 import org.occurrent.eventstore.api.SortBy;
 import org.occurrent.eventstore.jpa.mixins.AllMixins;
 import org.occurrent.filter.Filter;
@@ -11,7 +13,7 @@ public abstract class EventLogOperationsDefaultImpl<T>
   @Override
   public Specification<T> sorted(Specification<T> originalSpec, SortBy sort) {
     return (root, query, builder) -> {
-      var orders = sorted(sort).apply(root, query, builder);
+      val orders = sorted(sort).apply(root, query, builder);
       query.orderBy(orders);
       return originalSpec.toPredicate(root, query, builder);
     };

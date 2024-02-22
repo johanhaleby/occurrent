@@ -7,6 +7,8 @@ import jakarta.persistence.criteria.Root;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.function.BinaryOperator;
+
+import lombok.val;
 import org.occurrent.eventstore.api.SortBy;
 import org.springframework.data.jpa.domain.Specification;
 
@@ -23,9 +25,9 @@ public interface EventLogSortingMixin<T> extends EventLogExpressionMixin<T> {
     static <U> BinaryOperator<EventLogSort<U>> reducer() {
       return (a, b) ->
           (root, query, criteriaBuilder) -> {
-            var aList = a.apply(root, query, criteriaBuilder);
-            var bList = b.apply(root, query, criteriaBuilder);
-            var retVal = new ArrayList<Order>();
+            val aList = a.apply(root, query, criteriaBuilder);
+            val bList = b.apply(root, query, criteriaBuilder);
+            val retVal = new ArrayList<Order>();
             retVal.addAll(aList);
             retVal.addAll(bList);
             return retVal;

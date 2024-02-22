@@ -2,6 +2,8 @@ package org.occurrent.eventstore.jpa.mixins;
 
 import jakarta.persistence.criteria.Expression;
 import java.util.List;
+
+import lombok.val;
 import org.occurrent.condition.Condition;
 import org.springframework.data.jpa.domain.Specification;
 
@@ -13,15 +15,6 @@ import org.springframework.data.jpa.domain.Specification;
  *     entity.
  */
 public interface EventLogConditionMixin<T> extends EventLogExpressionMixin<T> {
-  @FunctionalInterface
-  interface FunctionalCompare<T> extends Comparable<T> {
-    default int compareTo(T o) {
-      return compare(o);
-    }
-
-    int compare(T o);
-  }
-
   private static Comparable convertToComparable(Object o) {
     if (o instanceof Comparable<?> c) {
       return c;
@@ -83,18 +76,17 @@ public interface EventLogConditionMixin<T> extends EventLogExpressionMixin<T> {
     Condition.SingleOperandConditionName singleOperandConditionName =
         fieldCondition.operandConditionName();
     return ((root, query, builder) -> {
-      var value = fieldCondition.operand();
-      Comparable comparableValue = convertToComparable(fieldCondition.operand());
+      val value = fieldCondition.operand();
       Expression fieldExpression = expressFieldName(root, fieldName);
       return switch (singleOperandConditionName) {
           // Can use regular value
         case EQ -> builder.equal(fieldExpression, value);
         case NE -> builder.notEqual(fieldExpression, value);
           // Must convert value to Comparable<T>
-        case LT -> builder.lessThan(fieldExpression, comparableValue);
-        case GT -> builder.greaterThan(fieldExpression, comparableValue);
-        case LTE -> builder.lessThanOrEqualTo(fieldExpression, comparableValue);
-        case GTE -> builder.greaterThanOrEqualTo(fieldExpression, comparableValue);
+        case LT -> builder.lessThan(fieldExpression, convertToComparable(fieldCondition.operand()));
+        case GT -> builder.greaterThan(fieldExpression, convertToComparable(fieldCondition.operand()));
+        case LTE -> builder.lessThanOrEqualTo(fieldExpression, convertToComparable(fieldCondition.operand()));
+        case GTE -> builder.greaterThanOrEqualTo(fieldExpression, convertToComparable(fieldCondition.operand()));
       };
     });
   }

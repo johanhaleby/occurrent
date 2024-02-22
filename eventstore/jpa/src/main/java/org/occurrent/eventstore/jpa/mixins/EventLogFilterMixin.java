@@ -1,6 +1,8 @@
 package org.occurrent.eventstore.jpa.mixins;
 
 import java.util.function.Supplier;
+
+import lombok.val;
 import org.occurrent.filter.Filter;
 import org.springframework.data.jpa.domain.Specification;
 
@@ -19,7 +21,7 @@ public interface EventLogFilterMixin<T> extends EventLogConditionMixin<T> {
     if (filter instanceof Filter.SingleConditionFilter scf) {
       // return byFilter(fieldNamePrefix, scf);
       // TODO: theres some concatenation that im missing here?
-      // var fieldName = fieldNamePrefix + "." + scf.fieldName();
+      // val fieldName = fieldNamePrefix + "." + scf.fieldName();
       return byFilter(scf.fieldName(), scf);
     }
     if (filter instanceof Filter.CompositionFilter cf) {
@@ -42,7 +44,7 @@ public interface EventLogFilterMixin<T> extends EventLogConditionMixin<T> {
       () -> new IllegalArgumentException("Expected composition filter to have at least one filter");
 
   default Specification<T> byFilter(String fieldNamePrefix, Filter.CompositionFilter filter) {
-    var composed = filter.filters().stream().map(f -> byFilter(fieldNamePrefix, f));
+    val composed = filter.filters().stream().map(f -> byFilter(fieldNamePrefix, f));
     return switch (filter.operator()) {
       case AND -> composed.reduce(Specification::and).orElseThrow(emptyCompositionFilterException);
       case OR -> composed.reduce(Specification::or).orElseThrow(emptyCompositionFilterException);

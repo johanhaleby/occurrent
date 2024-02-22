@@ -11,12 +11,6 @@ import org.springframework.orm.jpa.vendor.HibernateJpaVendorAdapter;
 import org.springframework.transaction.PlatformTransactionManager;
 import org.springframework.transaction.annotation.EnableTransactionManagement;
 
-// @Configuration
-// @ComponentScan("org.occurrent.eventstore.jpa")
-// @EnableJpaRepositories("org.occurrent.eventstore.jpa")
-// @EnableTransactionManagement
-//// @Import(OrmConfig.class)
-
 @Configuration
 @EnableTransactionManagement
 public class OrmConfig {
