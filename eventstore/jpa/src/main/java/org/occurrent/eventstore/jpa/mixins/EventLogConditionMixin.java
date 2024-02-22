@@ -1,10 +1,7 @@
 package org.occurrent.eventstore.jpa.mixins;
 
-import java.time.OffsetDateTime;
-import java.util.Comparator;
-import java.util.List;
-
 import jakarta.persistence.criteria.Expression;
+import java.util.List;
 import org.occurrent.condition.Condition;
 import org.springframework.data.jpa.domain.Specification;
 
@@ -17,18 +14,21 @@ import org.springframework.data.jpa.domain.Specification;
  */
 public interface EventLogConditionMixin<T> extends EventLogExpressionMixin<T> {
   @FunctionalInterface
-  interface FunctionalCompare<T> extends Comparable<T>{
-    default int compareTo(T o){
+  interface FunctionalCompare<T> extends Comparable<T> {
+    default int compareTo(T o) {
       return compare(o);
     }
+
     int compare(T o);
   }
+
   private static Comparable convertToComparable(Object o) {
-    if(o instanceof Comparable<?> c){
+    if (o instanceof Comparable<?> c) {
       return c;
     }
 
-    throw new IllegalArgumentException("Object is not comparable. %s".formatted(o.getClass().getSimpleName()));
+    throw new IllegalArgumentException(
+        "Object is not comparable. %s".formatted(o.getClass().getSimpleName()));
   }
 
   default <U> Specification<T> byAnyCondition(String fieldName, Condition<U> condition) {
@@ -76,9 +76,7 @@ public interface EventLogConditionMixin<T> extends EventLogExpressionMixin<T> {
     };
   }
 
-  abstract class Testy implements Comparable<Testy>{
-
-  }
+  abstract class Testy implements Comparable<Testy> {}
 
   default <U> Specification<T> bySingleCondition(
       String fieldName, Condition.SingleOperandCondition<U> fieldCondition) {
@@ -89,14 +87,14 @@ public interface EventLogConditionMixin<T> extends EventLogExpressionMixin<T> {
       Comparable comparableValue = convertToComparable(fieldCondition.operand());
       Expression fieldExpression = expressFieldName(root, fieldName);
       return switch (singleOperandConditionName) {
-        //Can use regular value
+          // Can use regular value
         case EQ -> builder.equal(fieldExpression, value);
         case NE -> builder.notEqual(fieldExpression, value);
-        //Must convert value to Comparable<T>
+          // Must convert value to Comparable<T>
         case LT -> builder.lessThan(fieldExpression, comparableValue);
         case GT -> builder.greaterThan(fieldExpression, comparableValue);
-        case LTE ->builder.lessThanOrEqualTo(fieldExpression, comparableValue);
-        case GTE ->builder.greaterThanOrEqualTo(fieldExpression, comparableValue);
+        case LTE -> builder.lessThanOrEqualTo(fieldExpression, comparableValue);
+        case GTE -> builder.greaterThanOrEqualTo(fieldExpression, comparableValue);
       };
     });
   }

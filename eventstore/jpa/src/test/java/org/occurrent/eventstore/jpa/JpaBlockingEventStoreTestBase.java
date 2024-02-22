@@ -39,7 +39,8 @@ import org.occurrent.filter.Filter;
 import org.springframework.dao.DataIntegrityViolationException;
 
 @TestInstance(TestInstance.Lifecycle.PER_CLASS)
-abstract class JpaBlockingEventStoreTestBase<T extends CloudEventDaoTraits<?>, E extends JPAEventStore<?, T>>
+abstract class JpaBlockingEventStoreTestBase<
+        T extends CloudEventDaoTraits<?>, E extends JPAEventStore<?, T>>
     extends TestOperations<T, E> {
 
   abstract E getNewEventStore();
@@ -271,12 +272,9 @@ abstract class JpaBlockingEventStoreTestBase<T extends CloudEventDaoTraits<?>, E
         () -> assertThat(duplicateCloudEventException.getSource()).isEqualTo(NAME_SOURCE),
         () ->
             assertThat(duplicateCloudEventException.getDetails())
-                .endsWith(
-                    "Write errors: [BulkWriteError{index=1, code=11000, message='E11000 duplicate"
-                        + " key error collection: test.events index: id_1_source_1 dup key: { id:"
-                        + " \""
-                        + nameWasChanged1.eventId()
-                        + "\", source:\"http://name\" }', details={}}]."),
+                .startsWith(
+                    "could not execute statement [ERROR: duplicate key value violates unique"
+                        + " constraint"),
         () -> assertThat(throwable).hasMessageNotContaining("unknown"),
         () -> assertThat(eventStream.version()).isEqualTo(2),
         () -> assertThat(readEvents).containsExactly(nameDefined, nameWasChanged1));

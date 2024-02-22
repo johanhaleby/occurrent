@@ -9,10 +9,13 @@ import java.net.URI;
 import java.util.List;
 import java.util.Optional;
 import java.util.function.Function;
+import java.util.regex.Pattern;
 import java.util.stream.Collectors;
 import java.util.stream.LongStream;
 import java.util.stream.Stream;
 import lombok.Builder;
+import lombok.val;
+import org.hibernate.exception.ConstraintViolationException;
 import org.occurrent.condition.Condition;
 import org.occurrent.eventstore.api.*;
 import org.occurrent.eventstore.api.blocking.EventStore;
@@ -39,6 +42,7 @@ public class JPAEventStore<TKey, T extends CloudEventDaoTraits<TKey>>
 
   @Override
   @Transactional
+  @jakarta.transaction.Transactional
   public WriteResult write(
       String streamId, WriteCondition writeCondition, Stream<CloudEvent> events) {
 
@@ -77,7 +81,33 @@ public class JPAEventStore<TKey, T extends CloudEventDaoTraits<TKey>>
     try {
       eventLog.saveAll(daos);
     } catch (DataIntegrityViolationException e) {
-      throw new DuplicateCloudEventException(null, null, e.getMessage().trim(), e);
+      // TODO: gross. Move this to a mixin so it can be injected
+      if (e.getCause() != null && e.getCause() instanceof ConstraintViolationException cve) {
+        val regex = ".*Detail: Key\\s+\\(.*\\)=\\((.*)\\)\\s+already exists.*";
+        val pattern = Pattern.compile(regex);
+        //  Detail: Key (event_id)=(20d3bbf2-aa99-4fa0-b45a-98c48561dd47) already exists.] [insert
+        // into cloud_events
+        // (data,data_content_type,data_schema,event_id,source,spec_version,stream_id,stream_revision,subject,timestamp,type) values (?,?,?,?,?,?,?,?,?,?,?)]
+        val match = pattern.matcher(e.getMessage());
+        String problemUUID = null;
+        while (match.find()) {
+          problemUUID = match.group(1);
+        }
+        if (problemUUID != null) {
+          final String finalProblemUUID = problemUUID;
+          val eventOption =
+              eventsAndRevisions.stream()
+                  .map(x -> x.t2)
+                  .filter(x -> x.getId().equals(finalProblemUUID))
+                  .findAny();
+          if (eventOption.isPresent()) {
+            val event = eventOption.get();
+            throw new DuplicateCloudEventException(
+                event.getId(), event.getSource(), e.getMessage().trim(), e);
+          }
+        }
+        throw e;
+      }
     }
     var newVersion = eventsAndRevisions.stream().map(x -> x.t1).max(Long::compareTo).get();
     return new WriteResult(streamId, currentStreamVersion, newVersion);
@@ -115,16 +145,22 @@ public class JPAEventStore<TKey, T extends CloudEventDaoTraits<TKey>>
   }
 
   @Override
+  @Transactional
+  @jakarta.transaction.Transactional
   public void deleteEventStream(String streamId) {
     eventLog.delete(eventLogOperations.byStreamId(streamId));
   }
 
   @Override
+  @Transactional
+  @jakarta.transaction.Transactional
   public void deleteEvent(String cloudEventId, URI cloudEventSource) {
     eventLog.delete(eventLogOperations.byCloudEventIdAndSource(cloudEventId, cloudEventSource));
   }
 
   @Override
+  @Transactional
+  @jakarta.transaction.Transactional
   public void delete(Filter filter) {
     eventLog.delete(eventLogOperations.byFilter(filter));
   }

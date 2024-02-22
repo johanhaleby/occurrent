@@ -4,10 +4,9 @@ import jakarta.persistence.criteria.CriteriaBuilder;
 import jakarta.persistence.criteria.CriteriaQuery;
 import jakarta.persistence.criteria.Order;
 import jakarta.persistence.criteria.Root;
-import java.util.Collection;
+import java.util.ArrayList;
 import java.util.List;
 import java.util.function.BinaryOperator;
-import java.util.stream.Stream;
 import org.occurrent.eventstore.api.SortBy;
 import org.springframework.data.jpa.domain.Specification;
 
@@ -26,7 +25,10 @@ public interface EventLogSortingMixin<T> extends EventLogExpressionMixin<T> {
           (root, query, criteriaBuilder) -> {
             var aList = a.apply(root, query, criteriaBuilder);
             var bList = b.apply(root, query, criteriaBuilder);
-            return Stream.of(aList, bList).flatMap(Collection::stream).toList();
+            var retVal = new ArrayList<Order>();
+            retVal.addAll(aList);
+            retVal.addAll(bList);
+            return retVal;
           };
     }
 
@@ -70,13 +72,5 @@ public interface EventLogSortingMixin<T> extends EventLogExpressionMixin<T> {
             + SortBy.class.getSimpleName()
             + " instance: "
             + sort.getClass().getSimpleName());
-  }
-
-  default Specification<T> sorted(Specification<T> originalSpec, SortBy sort) {
-    return (root, query, builder) -> {
-      var orders = sorted(sort).apply(root, query, builder);
-      query.orderBy(orders);
-      return originalSpec.toPredicate(root, query, builder);
-    };
   }
 }
