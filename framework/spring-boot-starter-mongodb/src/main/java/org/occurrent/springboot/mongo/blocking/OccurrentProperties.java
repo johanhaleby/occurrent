@@ -99,6 +99,20 @@ public class OccurrentProperties {
          */
         private TimeRepresentation timeRepresentation = TimeRepresentation.DATE;
 
+        /**
+         * If the event store should be enabled (i.e. created as Spring Bean)
+         * <p>
+         * Typically you only want to disable this if you don't need an event store for this application,
+         * typically if another application are writing events to the store, and you only want to have subscriptions
+         * in this application.
+         * </p>
+         * <p>
+         * Note that settings this to {@code false} also disables the creation of an {@link org.occurrent.application.service.blocking.ApplicationService}
+         * and {@link org.occurrent.dsl.query.blocking.DomainEventQueries}.
+         * </p>
+         */
+        private boolean enabled = true;
+
         public String getCollection() {
             return collection;
         }
@@ -113,6 +127,14 @@ public class OccurrentProperties {
 
         public void setTimeRepresentation(TimeRepresentation timeRepresentation) {
             this.timeRepresentation = timeRepresentation;
+        }
+
+        public boolean isEnabled() {
+            return enabled;
+        }
+
+        public void setEnabled(boolean enabled) {
+            this.enabled = enabled;
         }
     }
 
@@ -130,6 +152,15 @@ public class OccurrentProperties {
          */
         private boolean restartOnChangeStreamHistoryLost = true;
 
+        /**
+         * Toggles whether subscriptions should be enabled (i.e. created and instantiated as Spring Bean).
+         * <p>
+         * Typically you only want to disable this if you don't need subscriptions or
+         * if you're subscriptions are running on another node.
+         * </p>
+         */
+        private boolean enabled = true;
+
         public String getCollection() {
             return collection;
         }
@@ -144,6 +175,14 @@ public class OccurrentProperties {
 
         public void setRestartOnChangeStreamHistoryLost(boolean restartOnChangeStreamHistoryLost) {
             this.restartOnChangeStreamHistoryLost = restartOnChangeStreamHistoryLost;
+        }
+
+        public boolean isEnabled() {
+            return enabled;
+        }
+
+        public void setEnabled(boolean enabled) {
+            this.enabled = enabled;
         }
     }
 

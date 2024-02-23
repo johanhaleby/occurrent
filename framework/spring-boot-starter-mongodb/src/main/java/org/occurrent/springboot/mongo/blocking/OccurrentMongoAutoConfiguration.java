@@ -49,6 +49,7 @@ import org.springframework.boot.autoconfigure.AutoConfiguration;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnBean;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnClass;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnMissingBean;
+import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.boot.autoconfigure.mongo.MongoAutoConfiguration;
 import org.springframework.boot.context.properties.EnableConfigurationProperties;
 import org.springframework.context.annotation.Bean;
@@ -67,17 +68,18 @@ import static org.occurrent.subscription.mongodb.spring.blocking.SpringMongoSubs
 @AutoConfiguration(after = MongoAutoConfiguration.class)
 @ConditionalOnClass({SpringMongoEventStore.class, SpringMongoSubscriptionModel.class})
 @EnableConfigurationProperties(OccurrentProperties.class)
-//@Import({MongoAutoConfiguration.class, MongoDataAutoConfiguration.class})
 public class OccurrentMongoAutoConfiguration<E> {
 
     @Bean
     @ConditionalOnMissingBean(MongoTransactionManager.class)
+    @ConditionalOnProperty(name = "occurrent.event-store.enabled", havingValue = "true", matchIfMissing = true)
     public MongoTransactionManager mongoTransactionManager(MongoDatabaseFactory dbFactory) {
         return new MongoTransactionManager(dbFactory, TransactionOptions.builder().readConcern(ReadConcern.MAJORITY).writeConcern(WriteConcern.MAJORITY).build());
     }
 
     @Bean
     @ConditionalOnMissingBean(EventStoreConfig.class)
+    @ConditionalOnProperty(name = "occurrent.event-store.enabled", havingValue = "true", matchIfMissing = true)
     public EventStoreConfig occurrentEventStoreConfig(MongoTransactionManager transactionManager, OccurrentProperties occurrentProperties) {
         EventStoreProperties eventStoreProperties = occurrentProperties.getEventStore();
         return new EventStoreConfig.Builder().eventStoreCollectionName(eventStoreProperties.getCollection()).transactionConfig(transactionManager).timeRepresentation(eventStoreProperties.getTimeRepresentation()).build();
@@ -85,18 +87,21 @@ public class OccurrentMongoAutoConfiguration<E> {
 
     @Bean
     @ConditionalOnMissingBean(SpringMongoEventStore.class)
+    @ConditionalOnProperty(name = "occurrent.event-store.enabled", havingValue = "true", matchIfMissing = true)
     public SpringMongoEventStore occurrentSpringMongoEventStore(MongoTemplate template, EventStoreConfig eventStoreConfig) {
         return new SpringMongoEventStore(template, eventStoreConfig);
     }
 
     @Bean
     @ConditionalOnMissingBean(SubscriptionPositionStorage.class)
+    @ConditionalOnProperty(name = "occurrent.subscription.enabled", havingValue = "true", matchIfMissing = true)
     public SubscriptionPositionStorage occurrentSubscriptionPositionStorage(MongoTemplate mongoTemplate, OccurrentProperties occurrentProperties) {
         return new SpringMongoSubscriptionPositionStorage(mongoTemplate, occurrentProperties.getSubscription().getCollection());
     }
 
     @Bean
     @ConditionalOnMissingBean(SpringMongoLeaseCompetingConsumerStrategy.class)
+    @ConditionalOnProperty(name = "occurrent.subscription.enabled", havingValue = "true", matchIfMissing = true)
     public SpringMongoLeaseCompetingConsumerStrategy occurrentCompetingConsumerStrategy(MongoTemplate mongoTemplate, List<CompetingConsumerListener> competingConsumerListeners) {
         SpringMongoLeaseCompetingConsumerStrategy strategy = SpringMongoLeaseCompetingConsumerStrategy.withDefaults(mongoTemplate);
         competingConsumerListeners.forEach(strategy::addListener);
@@ -105,6 +110,7 @@ public class OccurrentMongoAutoConfiguration<E> {
 
     @Bean
     @ConditionalOnMissingBean(SubscriptionModel.class)
+    @ConditionalOnProperty(name = "occurrent.subscription.enabled", havingValue = "true", matchIfMissing = true)
     public SubscriptionModel occurrentCompetingDurableSubscriptionModel(MongoTemplate mongoTemplate, SpringMongoLeaseCompetingConsumerStrategy competingConsumerStrategy, SubscriptionPositionStorage storage, OccurrentProperties occurrentProperties) {
         EventStoreProperties eventStoreProperties = occurrentProperties.getEventStore();
         SpringMongoSubscriptionModel mongoSubscriptionModel = new SpringMongoSubscriptionModel(mongoTemplate, withConfig(eventStoreProperties.getCollection(), eventStoreProperties.getTimeRepresentation())
@@ -136,18 +142,21 @@ public class OccurrentMongoAutoConfiguration<E> {
 
     @Bean
     @ConditionalOnMissingBean(Subscriptions.class)
+    @ConditionalOnProperty(name = "occurrent.subscription.enabled", havingValue = "true", matchIfMissing = true)
     public Subscriptions<E> occurrentSubscriptionDsl(Subscribable subscribable, CloudEventConverter<E> cloudEventConverter) {
         return new Subscriptions<>(subscribable, cloudEventConverter);
     }
 
     @Bean
     @ConditionalOnMissingBean(DomainEventQueries.class)
+    @ConditionalOnProperty(name = "occurrent.event-store.enabled", havingValue = "true", matchIfMissing = true)
     public DomainEventQueries<E> occurrentDomainEventQueries(EventStoreQueries eventStoreQueries, CloudEventConverter<E> cloudEventConverter) {
         return new DomainEventQueries<>(eventStoreQueries, cloudEventConverter);
     }
 
     @Bean
     @ConditionalOnMissingBean(ApplicationService.class)
+    @ConditionalOnProperty(name = "occurrent.event-store.enabled", havingValue = "true", matchIfMissing = true)
     public ApplicationService<E> occurrentApplicationService(EventStore eventStore, CloudEventConverter<E> cloudEventConverter, OccurrentProperties occurrentProperties) {
         boolean enableDefaultRetryStrategy = occurrentProperties.getApplicationService().isEnableDefaultRetryStrategy();
         return enableDefaultRetryStrategy ? new GenericApplicationService<>(eventStore, cloudEventConverter) : new GenericApplicationService<>(eventStore, cloudEventConverter, RetryStrategy.none());

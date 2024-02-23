@@ -9,6 +9,23 @@
   ```
 * Using slf4j-api and not logback-classic in several modules that accidentally brought logback in as a compile time dependency.                                                                                 
 * Upgraded slf4j-api from 2.0.5 to 2.0.12
+* In the `spring-boot-starter-mongodb` module, it's now possible to enable/disable the event store or subscriptions from the `application.yaml` file. For example, you can disable the event store like this:
+
+  ```yaml
+  occurrent:
+    event-store:
+      enabled: false # Disable the creation of an event store Spring bean
+  ```
+  
+  and the subscriptions like this:
+
+  ```yaml
+  occurrent:
+    subscriptions:
+      enabled: false # Disable the creation of beans related to subscriptions
+  ```                                                                        
+  
+  This is useful if you have an application where you only need the event store or only need the subscriptions.
 
 ### 0.17.0 (2024-01-19)
 * spring-boot-starter-mongodb no longer autoconfigures itself by just importing the library in the classpath, instead you need to bootstrap by annotating your Spring Boot class with @EnableOccurrent.   
