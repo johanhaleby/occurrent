@@ -117,7 +117,7 @@ public class CatchupSubscriptionModel implements SubscriptionModel, DelegatingSu
             firstStartAt = startAt;
         }
 
-        // We want to continue from the wrapping subscription if it has something stored in it's position storage.
+        // We want to continue from the wrapping subscription if it has something stored in its position storage.
         if (!isTimeBasedSubscriptionPosition(firstStartAt)) {
             return subscriptionModel.subscribe(subscriptionId, filter, firstStartAt, action);
         }
@@ -172,7 +172,7 @@ public class CatchupSubscriptionModel implements SubscriptionModel, DelegatingSu
         // which is not what we want! The reason for doing this with UseSubscriptionPositionInStorage (as opposed to just
         // PersistSubscriptionPositionDuringCatchupPhase) is that if using a "storage" at all in the config, is to accommodate
         // that the wrapping subscription continues from where we left off.
-        StartAt startAtSupplierToUse = StartAt.dynamic(this.<Supplier<StartAt>, UseSubscriptionPositionInStorage>returnIfSubscriptionPositionStorageConfigIs(UseSubscriptionPositionInStorage.class,
+        StartAt startAtToUse = StartAt.dynamic(this.<Supplier<StartAt>, UseSubscriptionPositionInStorage>returnIfSubscriptionPositionStorageConfigIs(UseSubscriptionPositionInStorage.class,
                 cfg -> () -> {
                     // It's important that we find the document inside the supplier so that we look up the latest resume token on retry
                     SubscriptionPosition position = cfg.storage().read(subscriptionId);
@@ -194,12 +194,12 @@ public class CatchupSubscriptionModel implements SubscriptionModel, DelegatingSu
             doIfSubscriptionPositionStorageConfigIs(UseSubscriptionPositionInStorage.class, cfg -> {
                 // Only store position if using storage and no position has been stored!
                 if (!cfg.storage().exists(subscriptionId)) {
-                    startAtSupplierToUse.get();
+                    startAtToUse.get();
                 }
             });
             subscription = new CancelledSubscription(subscriptionId);
         } else {
-            subscription = this.subscriptionModel.subscribe(subscriptionId, filter, startAtSupplierToUse, cloudEvent -> {
+            subscription = this.subscriptionModel.subscribe(subscriptionId, filter, startAtToUse, cloudEvent -> {
                 if (!cache.isCached(cloudEvent.getId())) {
                     action.accept(cloudEvent);
                 }
