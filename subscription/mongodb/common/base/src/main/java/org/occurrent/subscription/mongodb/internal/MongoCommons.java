@@ -109,7 +109,7 @@ public class MongoCommons {
                 BsonTimestamp operationTime = document.get(OPERATION_TIME, BsonTimestamp.class);
                 withStartPositionApplied = applyOperationTime.apply(t, operationTime);
             } else {
-                throw new IllegalArgumentException("Doesn't recognize subscription position " + changeStreamPosition + " as a valid MongoDB subscription position");
+                throw new IllegalArgumentException("Don't recognize subscription position " + changeStreamPosition + " as a valid MongoDB subscription position");
             }
         }
         return withStartPositionApplied;
