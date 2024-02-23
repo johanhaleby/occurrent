@@ -68,6 +68,49 @@ fun <T : Any> DomainEventQueries<T>.queryForSequence(
 }).asSequence()
 
 /**
+ * Query that returns a [Lis] instead of a [java.util.stream.Stream].
+ * @see DomainEventQueries.query
+ */
+fun <T : Any> DomainEventQueries<in T>.queryForList(
+    filter: Filter = Filter.all(),
+    skip: Int = 0,
+    limit: Int = Int.MAX_VALUE,
+    sortBy: SortBy = SortBy.natural(SortDirection.ASCENDING)
+): List<T> =
+    query<T>(filter, skip, limit, sortBy)
+        .map { it as T }
+        .toList()
+
+/**
+ * Query by type of domain event ([T]).
+ *
+ * @see DomainEventQueries.query
+ */
+fun <T : Any> DomainEventQueries<in T>.queryForList(
+    type: KClass<T>,
+    skip: Int = 0,
+    limit: Int = Int.MAX_VALUE,
+    sortBy: SortBy = SortBy.natural(SortDirection.ASCENDING)
+): List<T> = query(type.java, skip, limit, sortBy).toList()
+
+/**
+ * Query by type of domain event ([T]).
+ * @see DomainEventQueries.query
+ */
+fun <T : Any> DomainEventQueries<T>.queryForList(
+    type: KClass<out T>,
+    vararg additionalTypes: KClass<out T>,
+    skip: Int = 0,
+    limit: Int = Int.MAX_VALUE,
+    sortBy: SortBy = SortBy.natural(SortDirection.ASCENDING)
+): List<T> = (if (additionalTypes.isEmpty()) {
+    query(type.java, skip, limit, sortBy)
+} else {
+    val typeList = mutableListOf(type.java, *additionalTypes.map { it.java }.toTypedArray())
+    query(typeList, skip, limit, sortBy)
+}).toList()
+
+/**
  * Query for a single event (Kotlin equivalent to [DomainEventQueries.queryOne]).
  */
 inline fun <reified T : Any> DomainEventQueries<in T>.queryOne(

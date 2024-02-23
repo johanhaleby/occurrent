@@ -26,6 +26,7 @@
   ```                                                                        
   
   This is useful if you have an application where you only need the event store or only need the subscriptions.
+* Added `queryForList` Kotlin extension function to `EventStoreQueries` and `DomainEventQueries`. It works in a similar way as `queryForSequence`, but returns a `List` instead of a Kotlin `Sequence`.  
 
 ### 0.17.0 (2024-01-19)
 * spring-boot-starter-mongodb no longer autoconfigures itself by just importing the library in the classpath, instead you need to bootstrap by annotating your Spring Boot class with @EnableOccurrent.   

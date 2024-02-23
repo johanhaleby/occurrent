@@ -31,3 +31,14 @@ fun EventStoreQueries.queryForSequence(
     limit: Int = Int.MAX_VALUE,
     sortBy: SortBy = TODO()
 ): Sequence<CloudEvent> = query(filter, skip, limit, sortBy).asSequence()
+
+/**
+ * Query that returns a [List] instead of a [java.util.stream.Stream].
+ * @see EventStoreQueries.query
+ */
+fun EventStoreQueries.queryForList(
+    filter: Filter = Filter.all(),
+    skip: Int = 0,
+    limit: Int = Int.MAX_VALUE,
+    sortBy: SortBy = TODO()
+): List<CloudEvent> = query(filter, skip, limit, sortBy).toList()
