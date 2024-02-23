@@ -21,7 +21,7 @@
 
   ```yaml
   occurrent:
-    subscriptions:
+    subscription:
       enabled: false # Disable the creation of beans related to subscriptions
   ```                                                                        
   
