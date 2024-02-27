@@ -20,7 +20,7 @@
     <parent>
         <groupId>org.occurrent</groupId>
         <artifactId>framework</artifactId>
-        <version>0.17.2</version>
+        <version>0.17.3-SNAPSHOT</version>
     </parent>
     <modelVersion>4.0.0</modelVersion>
 
@@ -43,57 +43,57 @@
         <dependency>
             <groupId>org.occurrent</groupId>
             <artifactId>eventstore-mongodb-spring-blocking</artifactId>
-            <version>0.17.2</version>
+            <version>0.17.3-SNAPSHOT</version>
         </dependency>
         <dependency>
             <groupId>org.occurrent</groupId>
             <artifactId>subscription-dsl-blocking</artifactId>
-            <version>0.17.2</version>
+            <version>0.17.3-SNAPSHOT</version>
         </dependency>
         <dependency>
             <groupId>org.occurrent</groupId>
             <artifactId>subscription-mongodb-spring-blocking</artifactId>
-            <version>0.17.2</version>
+            <version>0.17.3-SNAPSHOT</version>
         </dependency>
         <dependency>
             <groupId>org.occurrent</groupId>
             <artifactId>subscription-mongodb-spring-blocking-position-storage</artifactId>
-            <version>0.17.2</version>
+            <version>0.17.3-SNAPSHOT</version>
         </dependency>
         <dependency>
             <groupId>org.occurrent</groupId>
             <artifactId>durable-subscription</artifactId>
-            <version>0.17.2</version>
+            <version>0.17.3-SNAPSHOT</version>
         </dependency>
         <dependency>
             <groupId>org.occurrent</groupId>
             <artifactId>competing-consumer-subscription</artifactId>
-            <version>0.17.2</version>
+            <version>0.17.3-SNAPSHOT</version>
         </dependency>
         <dependency>
             <groupId>org.occurrent</groupId>
             <artifactId>subscription-mongodb-spring-blocking-competing-consumer-strategy</artifactId>
-            <version>0.17.2</version>
+            <version>0.17.3-SNAPSHOT</version>
         </dependency>
         <dependency>
             <groupId>org.occurrent</groupId>
             <artifactId>application-service-blocking</artifactId>
-            <version>0.17.2</version>
+            <version>0.17.3-SNAPSHOT</version>
         </dependency>
         <dependency>
             <groupId>org.occurrent</groupId>
             <artifactId>command-composition</artifactId>
-            <version>0.17.2</version>
+            <version>0.17.3-SNAPSHOT</version>
         </dependency>
         <dependency>
             <groupId>org.occurrent</groupId>
             <artifactId>cloudevent-converter-jackson</artifactId>
-            <version>0.17.2</version>
+            <version>0.17.3-SNAPSHOT</version>
         </dependency>
         <dependency>
             <groupId>org.occurrent</groupId>
             <artifactId>query-dsl-blocking</artifactId>
-            <version>0.17.2</version>
+            <version>0.17.3-SNAPSHOT</version>
         </dependency>
     </dependencies>
 </project>
