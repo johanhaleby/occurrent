@@ -255,7 +255,7 @@ public class CompetingConsumerSubscriptionModel implements DelegatingSubscriptio
     @PreDestroy
     @Override
     public synchronized void shutdown() {
-        logDebug("Trying to resume CompetingConsumer subscription model");
+        logDebug("Trying to shutdown CompetingConsumer subscription model");
         delegate.shutdown();
         unregisterAllCompetingConsumers(cc -> competingConsumers.remove(cc.subscriptionIdAndSubscriberId));
         competingConsumerStrategy.removeListener(this);
