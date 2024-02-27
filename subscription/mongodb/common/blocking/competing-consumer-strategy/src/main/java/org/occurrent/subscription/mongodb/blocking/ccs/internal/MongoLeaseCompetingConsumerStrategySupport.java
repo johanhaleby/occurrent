@@ -97,6 +97,32 @@ public class MongoLeaseCompetingConsumerStrategySupport {
         Objects.requireNonNull(subscriberId, "Subscriber id cannot be null");
         logDebug("Unregistering consumer (subscriberId={}, subscriptionId={})", subscriberId, subscriptionId);
         Status status = competingConsumers.remove(new CompetingConsumer(subscriptionId, subscriberId));
+        releaseCompetingConsumer(collection, subscriptionId, subscriberId, status);
+    }
+
+    /**
+     * Remove the lock use by this
+     */
+    public void releaseCompetingConsumer(MongoCollection<BsonDocument> collection, String subscriptionId, String subscriberId) {
+        releaseCompetingConsumer(collection, subscriptionId, subscriberId, null);
+    }
+
+    private void releaseCompetingConsumer(MongoCollection<BsonDocument> collection, String subscriptionId, String subscriberId, Status suppliedStatus) {
+        Objects.requireNonNull(subscriptionId, "Subscription id cannot be null");
+        Objects.requireNonNull(subscriberId, "Subscriber id cannot be null");
+        logDebug("Releasing consumer (subscriberId={}, subscriptionId={}, suppliedStatus={})", subscriberId, subscriptionId, suppliedStatus);
+
+        final Status status;
+        if (suppliedStatus == null) {
+            status = competingConsumers.get(new CompetingConsumer(subscriptionId, subscriberId));
+        } else {
+            status = suppliedStatus;
+        }
+
+        if (status == null) {
+            logDebug("Failed to find consumer status (subscriberId={}, subscriptionId={})", subscriberId, subscriptionId);
+            return;
+        }
         MongoListenerLockService.remove(collection, retryStrategy, subscriptionId);
         if (status == Status.LOCK_ACQUIRED) {
             competingConsumerListeners.forEach(listener -> listener.onConsumeProhibited(subscriptionId, subscriberId));

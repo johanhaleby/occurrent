@@ -28,6 +28,16 @@ public interface CompetingConsumerStrategy {
      */
     void unregisterCompetingConsumer(String subscriptionId, String subscriberId);
 
+
+    /**
+     * Release a competing consumer, it'll no longer receive events. If this competing consumer currently has lock to receive events,
+     * the lock will be handed to another subscriber for the same subscription.
+     *
+     * @param subscriptionId The id of of the subscription
+     * @param subscriberId   The unique of of the subscriber
+     */
+    void releaseCompetingConsumer(String subscriptionId, String subscriberId);
+
     /**
      * Check whether a particular subscriber has the lock (access) to read events for the given subscription.
      *

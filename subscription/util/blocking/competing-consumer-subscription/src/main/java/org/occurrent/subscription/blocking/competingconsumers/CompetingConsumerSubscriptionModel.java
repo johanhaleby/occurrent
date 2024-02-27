@@ -228,17 +228,35 @@ public class CompetingConsumerSubscriptionModel implements DelegatingSubscriptio
      */
     @Override
     public synchronized void pauseSubscription(String subscriptionId) {
-        logDebug("Trying to pause CompetingConsumer subscription (subscriptionId={})", subscriptionId);
+        pauseSubscription(subscriptionId, true);
+    }
+
+    private synchronized void pauseSubscription(String subscriptionId, boolean pausedByUser) {
+        logDebug("Trying to pause CompetingConsumer subscription (subscriptionId={}, pausedByUser={})", subscriptionId, pausedByUser);
         if (isPaused(subscriptionId)) {
             throw new IllegalArgumentException("Subscription " + subscriptionId + " is already paused");
         }
-        findFirstCompetingConsumerMatching(competingConsumer -> competingConsumer.hasSubscriptionId(subscriptionId))
-                .filter(not(CompetingConsumer::isWaiting))
-                .ifPresent(competingConsumer -> {
-                    delegate.pauseSubscription(subscriptionId);
-                    competingConsumers.put(SubscriptionIdAndSubscriberId.from(competingConsumer), competingConsumer.registerPaused(true));
-                    competingConsumerStrategy.unregisterCompetingConsumer(competingConsumer.getSubscriptionId(), competingConsumer.getSubscriberId());
-                });
+        CompetingConsumer competingConsumer = findFirstCompetingConsumerMatching(cc -> cc.hasSubscriptionId(subscriptionId)).orElse(null);
+        if (competingConsumer == null) {
+            logDebug("Failed to find CompetingConsumer for subscription (subscriptionId={}, pausedByUser={})", subscriptionId, pausedByUser);
+        } else if (competingConsumer.isWaiting()) {
+            logDebug("CompetingConsumer in waiting state, will ignore (subscriptionId={}, subscriberId={}, pausedByUser={})", subscriptionId, competingConsumer.getSubscriberId(), pausedByUser);
+        } else {
+            delegate.pauseSubscription(subscriptionId);
+            competingConsumers.put(SubscriptionIdAndSubscriberId.from(competingConsumer), competingConsumer.registerPaused(pausedByUser));
+            if (pausedByUser) {
+                logDebug("Will unregister competing consumer because subscription was paused explicitly by user (subscriptionId={}, subscriberId={})", subscriptionId, competingConsumer.getSubscriberId());
+                // If subscription is paused by user explicitly, then the user needs to resume it again explicitly to start it.
+                // In these cases, we unregister the competing consumer. This means that it cannot be leader again until the subscription is
+                // resumed explicitly (it'll re-register the competing consumers).
+                competingConsumerStrategy.unregisterCompetingConsumer(competingConsumer.getSubscriptionId(), competingConsumer.getSubscriberId());
+            } else {
+                logDebug("Will release competing consumer because subscription was paused by system (subscriptionId={}, subscriberId={})", subscriptionId, competingConsumer.getSubscriberId());
+                // Subscription was not paused by the user, thus we just "release" the competing consumer so that it can re-gain leader status
+                // later without explicitly resuming the subscription.
+                competingConsumerStrategy.releaseCompetingConsumer(competingConsumer.getSubscriptionId(), competingConsumer.getSubscriberId());
+            }
+        }
     }
 
     /**
@@ -289,13 +307,13 @@ public class CompetingConsumerSubscriptionModel implements DelegatingSubscriptio
         SubscriptionIdAndSubscriberId subscriptionIdAndSubscriberId = SubscriptionIdAndSubscriberId.from(subscriptionId, subscriberId);
         CompetingConsumer competingConsumer = competingConsumers.get(subscriptionIdAndSubscriberId);
         if (competingConsumer == null) {
-            logDebug("CompetingConsumer couldn't be found onConsumeProhibited (subscriberId={}, subscriptionId={})", subscriberId, subscriptionId);
+            logDebug("CompetingConsumer couldn't be found when calling onConsumeProhibited (subscriberId={}, subscriptionId={})", subscriberId, subscriptionId);
             return;
         }
 
         if (competingConsumer.isRunning()) {
             logDebug("CompetingConsumer is running, will pause subscription and consumers (subscriberId={}, subscriptionId={})", subscriberId, subscriptionId);
-            pauseSubscription(subscriptionId);
+            pauseSubscription(subscriptionId, false);
             pauseConsumer(competingConsumer, false);
         } else if (competingConsumer.isPaused()) {
             logDebug("CompetingConsumer is paused (subscriberId={}, subscriptionId={})", subscriberId, subscriptionId);

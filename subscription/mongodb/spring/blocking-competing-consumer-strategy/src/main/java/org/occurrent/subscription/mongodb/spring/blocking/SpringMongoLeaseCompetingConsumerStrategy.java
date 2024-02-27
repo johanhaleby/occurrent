@@ -78,6 +78,11 @@ public class SpringMongoLeaseCompetingConsumerStrategy implements CompetingConsu
         withCompetingConsumerLocksCollectionDo(collection -> support.unregisterCompetingConsumer(collection, subscriptionId, subscriberId));
     }
 
+    @Override
+    public void releaseCompetingConsumer(String subscriptionId, String subscriberId) {
+        withCompetingConsumerLocksCollectionDo(collection -> support.releaseCompetingConsumer(collection, subscriptionId, subscriberId));
+    }
+
     /**
      * Check whether a particular subscriber has the lock (access) to read events for the given subscription.
      *
