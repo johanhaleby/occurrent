@@ -285,7 +285,7 @@ public class CompetingConsumerSubscriptionModel implements DelegatingSubscriptio
 
     @Override
     public synchronized void onConsumeProhibited(String subscriptionId, String subscriberId) {
-        logDebug("Consumption granted to CompetingConsumer (subscriberId={}, subscriptionId={})", subscriberId, subscriptionId);
+        logDebug("Consumption prohibited for CompetingConsumer (subscriberId={}, subscriptionId={})", subscriberId, subscriptionId);
         SubscriptionIdAndSubscriberId subscriptionIdAndSubscriberId = SubscriptionIdAndSubscriberId.from(subscriptionId, subscriberId);
         CompetingConsumer competingConsumer = competingConsumers.get(subscriptionIdAndSubscriberId);
         if (competingConsumer == null) {
