@@ -1,5 +1,5 @@
-### Changelog next version
-* Fixed issue in CompetingConsumerSubscriptionModel in which it failed to reacquire consumption rights in some cases where MongoDB connection was lost   
+### 0.17.2 (2024-02-27)
+* Fixed issue in CompetingConsumerSubscriptionModel in which it failed to reacquire consumption rights in some cases where MongoDB connection was lost.   
 
 ### 0.17.1 (2024-02-23)
 * Fixed issue in [Subscription DSL](https://occurrent.org/documentation#subscription-dsl) when using "subscribe" functions with a single event type different from the "base event type", i.e. this didn't work in previous version in Java:
