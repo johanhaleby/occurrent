@@ -31,4 +31,10 @@ public @interface Subscription {
      * The unique identifier of the subscription.
      */
     String id();
+
+    /**
+     * Specify event types to subscribe to. Useful if you want to for example to subscribe to two events, MyEvent1 and MyEvent2 and we want them to be received as "MyEvent" which may
+     * have other types.
+     */
+    Class<?>[] eventTypes() default {};
 }

@@ -97,8 +97,21 @@ class OccurrentAnnotationBeanPostProcessor implements BeanPostProcessor, Applica
 
             //noinspection OptionalGetWithoutIsPresent
             Class<E> specifiedEventType = (Class<E>) parameterTypes.stream().filter(not(EventMetadata.class::isAssignableFrom)).findFirst().get();
+            Class<?>[] eventTypesSpecifiedInAnnotation = subscription.eventTypes();
 
-            final List<Class<E>> domainEventTypesToSubscribeTo = getConcreteEventTypes(id, specifiedEventType);
+            final List<Class<E>> domainEventTypesToSubscribeTo;
+            if (eventTypesSpecifiedInAnnotation.length == 0) {
+                domainEventTypesToSubscribeTo = getConcreteEventTypes(id, specifiedEventType);
+            } else {
+                domainEventTypesToSubscribeTo = Arrays.stream(eventTypesSpecifiedInAnnotation)
+                        .flatMap(e -> getConcreteEventTypes(id, (Class<E>) e).stream())
+                        .peek(e -> {
+                            if (!specifiedEventType.isAssignableFrom(e)) {
+                                throw new IllegalStateException("Event type %s specified in the @Subscription annotation with id %s is not assignable from the event type specified in %s#%s(..).".formatted(e.getName(), id, bean.getClass().getName(), method.getName()));
+                            }
+                        })
+                        .toList();
+            }
 
             if (domainEventTypesToSubscribeTo.size() == 1) {
                 String cloudEventType = cloudEventTypeMapper.getCloudEventType(domainEventTypesToSubscribeTo.get(0));
