@@ -16,78 +16,56 @@
 
 package org.occurrent.example.domain.numberguessinggame.mongodb.spring.blocking.policy;
 
-import io.cloudevents.CloudEvent;
-import jakarta.annotation.PostConstruct;
-import org.occurrent.cloudevents.OccurrentExtensionGetter;
-import org.occurrent.eventstore.api.blocking.EventStoreQueries;
+import org.occurrent.annotations.Subscription;
+import org.occurrent.dsl.query.blocking.DomainEventQueries;
+import org.occurrent.dsl.subscription.blocking.EventMetadata;
 import org.occurrent.example.domain.numberguessinggame.model.domainevents.*;
-import org.occurrent.example.domain.numberguessinggame.mongodb.spring.blocking.infrastructure.Serialization;
 import org.occurrent.example.domain.numberguessinggame.mongodb.spring.blocking.policy.NumberGuessingGameCompleted.GuessedNumber;
-import org.occurrent.subscription.blocking.durable.DurableSubscriptionModel;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.amqp.core.TopicExchange;
 import org.springframework.amqp.rabbit.core.RabbitTemplate;
 import org.springframework.stereotype.Component;
 
-import java.time.Duration;
 import java.time.LocalDateTime;
 import java.util.Date;
 
 import static java.time.ZoneOffset.UTC;
 import static org.occurrent.condition.Condition.eq;
 import static org.occurrent.condition.Condition.lte;
-import static org.occurrent.filter.Filter.*;
-import static org.occurrent.subscription.OccurrentSubscriptionFilter.filter;
+import static org.occurrent.filter.Filter.streamVersion;
+import static org.occurrent.filter.Filter.subject;
 
 @Component
 class WhenGameEndedThenPublishIntegrationEvent {
     private static final Logger log = LoggerFactory.getLogger(WhenGameEndedThenPublishIntegrationEvent.class);
 
-    private final EventStoreQueries eventStoreQueries;
-    private final Serialization serialization;
-    private final DurableSubscriptionModel subscriptionModel;
+    private final DomainEventQueries<GameEvent> domainEventQueries;
     private final RabbitTemplate rabbitTemplate;
     private final TopicExchange numberGuessingGameTopic;
 
-    WhenGameEndedThenPublishIntegrationEvent(EventStoreQueries eventStoreQueries, Serialization serialization,
-                                             DurableSubscriptionModel subscriptionModel,
-                                             RabbitTemplate rabbitTemplate, TopicExchange numberGuessingGameTopic) {
-        this.eventStoreQueries = eventStoreQueries;
-        this.serialization = serialization;
-        this.subscriptionModel = subscriptionModel;
+    WhenGameEndedThenPublishIntegrationEvent(DomainEventQueries<GameEvent> domainEventQueries, RabbitTemplate rabbitTemplate, TopicExchange numberGuessingGameTopic) {
+        this.domainEventQueries = domainEventQueries;
         this.rabbitTemplate = rabbitTemplate;
         this.numberGuessingGameTopic = numberGuessingGameTopic;
     }
 
-    @PostConstruct
-    void startSubscription() {
-        subscriptionModel.subscribe(WhenGameEndedThenPublishIntegrationEvent.class.getSimpleName(), filter(type(NumberGuessingGameEnded.class.getSimpleName())), this::publishIntegrationEventWhenGameEnded
-                // We're only interested in events of type NumberGuessingGameEnded since then we know that
-                // we should publish the integration event
-        ).waitUntilStarted(Duration.ofSeconds(4));
-    }
-
-
-    private void publishIntegrationEventWhenGameEnded(CloudEvent cloudEvent) {
-        String gameId = cloudEvent.getSubject();
-        NumberGuessingGameCompleted numberGuessingGameCompleted = eventStoreQueries.query(subject(eq(gameId)).and(streamVersion(lte(OccurrentExtensionGetter.getStreamVersion(cloudEvent)))))
-                .map(serialization::deserialize)
+    @Subscription(id = "WhenGameEndedThenPublishIntegrationEvent")
+    void publishIntegrationEventWhenGameEnded(EventMetadata metadata, NumberGuessingGameEnded numberGuessingGameEnded) {
+        String gameId = numberGuessingGameEnded.gameId().toString();
+        long streamVersion = metadata.getStreamVersion();
+        NumberGuessingGameCompleted numberGuessingGameCompleted = domainEventQueries.query(subject(eq(gameId)).and(streamVersion(lte(streamVersion))))
                 .collect(NumberGuessingGameCompleted::new, (integrationEvent, gameEvent) -> {
-                    if (gameEvent instanceof NumberGuessingGameWasStarted) {
+                    if (gameEvent instanceof NumberGuessingGameWasStarted e) {
                         integrationEvent.setGameId(gameEvent.gameId().toString());
-                        NumberGuessingGameWasStarted e = (NumberGuessingGameWasStarted) gameEvent;
                         integrationEvent.setSecretNumberToGuess(e.secretNumberToGuess());
                         integrationEvent.setMaxNumberOfGuesses(e.maxNumberOfGuesses());
                         integrationEvent.setStartedAt(toDate(e.timestamp()));
-                    } else if (gameEvent instanceof PlayerGuessedANumberThatWasTooSmall) {
-                        PlayerGuessedANumberThatWasTooSmall e = (PlayerGuessedANumberThatWasTooSmall) gameEvent;
+                    } else if (gameEvent instanceof PlayerGuessedANumberThatWasTooSmall e) {
                         integrationEvent.addGuess(new GuessedNumber(e.playerId().toString(), e.guessedNumber(), toDate(e.timestamp())));
-                    } else if (gameEvent instanceof PlayerGuessedANumberThatWasTooBig) {
-                        PlayerGuessedANumberThatWasTooBig e = (PlayerGuessedANumberThatWasTooBig) gameEvent;
+                    } else if (gameEvent instanceof PlayerGuessedANumberThatWasTooBig e) {
                         integrationEvent.addGuess(new GuessedNumber(e.playerId().toString(), e.guessedNumber(), toDate(e.timestamp())));
-                    } else if (gameEvent instanceof PlayerGuessedTheRightNumber) {
-                        PlayerGuessedTheRightNumber e = (PlayerGuessedTheRightNumber) gameEvent;
+                    } else if (gameEvent instanceof PlayerGuessedTheRightNumber e) {
                         integrationEvent.addGuess(new GuessedNumber(e.playerId().toString(), e.guessedNumber(), toDate(e.timestamp())));
                         integrationEvent.setRightNumberWasGuessed(true);
                     } else if (gameEvent instanceof GuessingAttemptsExhausted) {

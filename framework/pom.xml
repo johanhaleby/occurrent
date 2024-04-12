@@ -29,5 +29,6 @@
 
     <modules>
         <module>spring-boot-starter-mongodb</module>
+        <module>annotations</module>
     </modules>
 </project>

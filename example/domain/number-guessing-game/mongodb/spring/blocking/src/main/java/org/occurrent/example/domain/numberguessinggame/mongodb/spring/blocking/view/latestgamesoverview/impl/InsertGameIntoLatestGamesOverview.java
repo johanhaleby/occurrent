@@ -16,12 +16,9 @@
 
 package org.occurrent.example.domain.numberguessinggame.mongodb.spring.blocking.view.latestgamesoverview.impl;
 
-import io.cloudevents.CloudEvent;
-import jakarta.annotation.PostConstruct;
 import org.bson.Document;
+import org.occurrent.annotations.Subscription;
 import org.occurrent.example.domain.numberguessinggame.model.domainevents.*;
-import org.occurrent.example.domain.numberguessinggame.mongodb.spring.blocking.infrastructure.Serialization;
-import org.occurrent.subscription.blocking.durable.DurableSubscriptionModel;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.dao.DuplicateKeyException;
@@ -32,7 +29,6 @@ import org.springframework.retry.annotation.Backoff;
 import org.springframework.retry.annotation.Retryable;
 import org.springframework.stereotype.Component;
 
-import java.time.Duration;
 import java.time.LocalDateTime;
 import java.util.Date;
 
@@ -45,29 +41,18 @@ import static org.springframework.data.mongodb.core.query.Query.query;
 class InsertGameIntoLatestGamesOverview {
     private static final Logger log = LoggerFactory.getLogger(InsertGameIntoLatestGamesOverview.class);
 
-    private final DurableSubscriptionModel subscription;
-    private final Serialization serialization;
     private final MongoOperations mongoOperations;
 
-    InsertGameIntoLatestGamesOverview(DurableSubscriptionModel subscription,
-                                      Serialization serialization, MongoOperations mongoOperations) {
-        this.subscription = subscription;
-        this.serialization = serialization;
+    InsertGameIntoLatestGamesOverview(MongoOperations mongoOperations) {
         this.mongoOperations = mongoOperations;
     }
 
-    @PostConstruct
-    void initializeSubscription() throws InterruptedException {
-        subscription.subscribe(InsertGameIntoLatestGamesOverview.class.getSimpleName(), this::insertGame)
-                .waitUntilStarted(Duration.ofSeconds(4));
-    }
-
+    @Subscription(id = "InsertGameIntoLatestGamesOverview")
     @Retryable(maxAttempts = 10, backoff = @Backoff(delay = 100, multiplier = 2, maxDelay = 5000))
-    void insertGame(CloudEvent cloudEvent) {
-        GameEvent gameEvent = serialization.deserialize(cloudEvent);
+    void insertGame(GameEvent gameEvent) {
+        log.info("Received event {}", gameEvent);
 
-        if (gameEvent instanceof NumberGuessingGameWasStarted) {
-            NumberGuessingGameWasStarted e = (NumberGuessingGameWasStarted) gameEvent;
+        if (gameEvent instanceof NumberGuessingGameWasStarted e) {
             Document game = new Document();
             game.put("_id", gameEvent.gameId().toString());
             game.put("startedAt", toDate(gameEvent.timestamp()));

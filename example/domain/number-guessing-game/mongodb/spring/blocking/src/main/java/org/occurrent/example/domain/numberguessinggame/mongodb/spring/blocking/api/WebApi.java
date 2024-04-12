@@ -17,11 +17,12 @@
 package org.occurrent.example.domain.numberguessinggame.mongodb.spring.blocking.api;
 
 import j2html.tags.ContainerTag;
+import org.occurrent.application.service.blocking.ApplicationService;
 import org.occurrent.example.domain.numberguessinggame.model.Guess;
 import org.occurrent.example.domain.numberguessinggame.model.MaxNumberOfGuesses;
 import org.occurrent.example.domain.numberguessinggame.model.NumberGuessingGame;
 import org.occurrent.example.domain.numberguessinggame.model.SecretNumberToGuess;
-import org.occurrent.example.domain.numberguessinggame.mongodb.spring.blocking.application.NumberGuessingGameApplicationService;
+import org.occurrent.example.domain.numberguessinggame.model.domainevents.GameEvent;
 import org.occurrent.example.domain.numberguessinggame.mongodb.spring.blocking.config.NumberGuessingGameConfig;
 import org.occurrent.example.domain.numberguessinggame.mongodb.spring.blocking.view.gamestatus.GameStatus;
 import org.occurrent.example.domain.numberguessinggame.mongodb.spring.blocking.view.gamestatus.WhatIsTheStatusOfGame;
@@ -49,13 +50,13 @@ public class WebApi {
 
     private final LatestGamesOverview latestGamesOverview;
     private final WhatIsTheStatusOfGame whatIsTheStatusOfGame;
-    private final NumberGuessingGameApplicationService applicationService;
+    private final ApplicationService<GameEvent> applicationService;
     private final int minNumberToGuess;
     private final int maxNumberToGuess;
     private final int maxNumberOfGuesses;
 
     WebApi(LatestGamesOverview latestGamesOverview, WhatIsTheStatusOfGame whatIsTheStatusOfGame,
-           NumberGuessingGameApplicationService applicationService, NumberGuessingGameConfig cfg) {
+           ApplicationService<GameEvent> applicationService, NumberGuessingGameConfig cfg) {
         this.latestGamesOverview = latestGamesOverview;
         this.whatIsTheStatusOfGame = whatIsTheStatusOfGame;
         this.applicationService = applicationService;
@@ -101,14 +102,14 @@ public class WebApi {
 
     @PostMapping
     ResponseEntity<?> createGame(@RequestParam("gameId") UUID gameId, @RequestParam("playerId") UUID playerId) {
-        applicationService.play(gameId, __ -> NumberGuessingGame.startNewGame(gameId, LocalDateTime.now(), playerId, SecretNumberToGuess.randomBetween(minNumberToGuess, maxNumberToGuess), MaxNumberOfGuesses.of(maxNumberOfGuesses)));
+        applicationService.execute(gameId, __ -> NumberGuessingGame.startNewGame(gameId, LocalDateTime.now(), playerId, SecretNumberToGuess.randomBetween(minNumberToGuess, maxNumberToGuess), MaxNumberOfGuesses.of(maxNumberOfGuesses)));
         return ResponseEntity.status(HttpStatus.SEE_OTHER).header(HttpHeaders.LOCATION, gameLocation(gameId, playerId)).build();
     }
 
     @PostMapping("/{gameId}")
     ResponseEntity<?> playGame(@PathVariable("gameId") UUID gameId, @RequestParam("playerId") UUID playerId,
                                @RequestParam("guess") int guess) {
-        applicationService.play(gameId, state -> NumberGuessingGame.guessNumber(state, gameId, LocalDateTime.now(), playerId, new Guess(guess)));
+        applicationService.execute(gameId, state -> NumberGuessingGame.guessNumber(state, gameId, LocalDateTime.now(), playerId, new Guess(guess)));
         return ResponseEntity.status(HttpStatus.SEE_OTHER).header(HttpHeaders.LOCATION, gameLocation(gameId, playerId)).build();
     }
 

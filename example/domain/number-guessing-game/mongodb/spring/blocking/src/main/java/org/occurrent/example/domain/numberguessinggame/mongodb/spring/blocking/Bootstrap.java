@@ -17,15 +17,10 @@
 package org.occurrent.example.domain.numberguessinggame.mongodb.spring.blocking;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
-import org.occurrent.eventstore.mongodb.spring.blocking.EventStoreConfig;
-import org.occurrent.eventstore.mongodb.spring.blocking.SpringMongoEventStore;
-import org.occurrent.example.domain.numberguessinggame.mongodb.spring.blocking.infrastructure.Serialization;
-import org.occurrent.mongodb.timerepresentation.TimeRepresentation;
-import org.occurrent.subscription.api.blocking.PositionAwareSubscriptionModel;
-import org.occurrent.subscription.api.blocking.SubscriptionPositionStorage;
-import org.occurrent.subscription.blocking.durable.DurableSubscriptionModel;
-import org.occurrent.subscription.mongodb.spring.blocking.SpringMongoSubscriptionModel;
-import org.occurrent.subscription.mongodb.spring.blocking.SpringMongoSubscriptionPositionStorage;
+import org.occurrent.application.converter.CloudEventConverter;
+import org.occurrent.example.domain.numberguessinggame.model.domainevents.GameEvent;
+import org.occurrent.example.domain.numberguessinggame.mongodb.spring.blocking.infrastructure.NumberGuessGameCloudEventConverter;
+import org.occurrent.springboot.mongo.blocking.EnableOccurrent;
 import org.springframework.amqp.core.TopicExchange;
 import org.springframework.amqp.rabbit.annotation.EnableRabbit;
 import org.springframework.amqp.support.converter.Jackson2JsonMessageConverter;
@@ -33,9 +28,6 @@ import org.springframework.amqp.support.converter.MessageConverter;
 import org.springframework.boot.SpringApplication;
 import org.springframework.boot.autoconfigure.SpringBootApplication;
 import org.springframework.context.annotation.Bean;
-import org.springframework.data.mongodb.MongoDatabaseFactory;
-import org.springframework.data.mongodb.MongoTransactionManager;
-import org.springframework.data.mongodb.core.MongoTemplate;
 import org.springframework.data.mongodb.repository.config.EnableMongoRepositories;
 import org.springframework.retry.annotation.EnableRetry;
 
@@ -48,48 +40,17 @@ import java.net.URI;
 @EnableRetry
 @EnableMongoRepositories
 @EnableRabbit
+@EnableOccurrent
 public class Bootstrap {
     private static final String NUMBER_GUESSING_GAME_TOPIC = "number-guessing-game";
-    private static final String EVENTS_COLLECTION_NAME = "events";
 
     public static void main(String[] args) {
         SpringApplication.run(Bootstrap.class, args);
     }
 
     @Bean
-    public MongoTransactionManager transactionManager(MongoDatabaseFactory dbFactory) {
-        return new MongoTransactionManager(dbFactory);
-    }
-
-    @Bean
-    public SpringMongoEventStore eventStore(MongoTemplate template, MongoTransactionManager transactionManager) {
-        EventStoreConfig eventStoreConfig = new EventStoreConfig.Builder().eventStoreCollectionName(EVENTS_COLLECTION_NAME).transactionConfig(transactionManager).timeRepresentation(TimeRepresentation.DATE).build();
-        return new SpringMongoEventStore(template, eventStoreConfig);
-    }
-
-    @Bean
-    public PositionAwareSubscriptionModel positionAwareSubscriptionModel(MongoTemplate mongoTemplate) {
-        return new SpringMongoSubscriptionModel(mongoTemplate, EVENTS_COLLECTION_NAME, TimeRepresentation.DATE);
-    }
-
-    @Bean
-    public SubscriptionPositionStorage storage(MongoTemplate mongoTemplate) {
-        return new SpringMongoSubscriptionPositionStorage(mongoTemplate, "subscriptions");
-    }
-
-    @Bean
-    public DurableSubscriptionModel durableSubscriptionModel(PositionAwareSubscriptionModel subscription, SubscriptionPositionStorage storage) {
-        return new DurableSubscriptionModel(subscription, storage);
-    }
-
-    @Bean
-    public ObjectMapper objectMapper() {
-        return new ObjectMapper();
-    }
-
-    @Bean
-    public Serialization serialization(ObjectMapper objectMapper) {
-        return new Serialization(objectMapper, URI.create("urn:occurrent:domain:numberguessinggame"));
+    public CloudEventConverter<GameEvent> cloudEventConverter(ObjectMapper objectMapper) {
+        return new NumberGuessGameCloudEventConverter(objectMapper, URI.create("urn:occurrent:domain:numberguessinggame"));
     }
 
     @Bean

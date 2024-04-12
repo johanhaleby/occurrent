@@ -21,6 +21,7 @@ import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import io.cloudevents.CloudEvent;
 import io.cloudevents.core.builder.CloudEventBuilder;
+import org.occurrent.application.converter.CloudEventConverter;
 import org.occurrent.example.domain.numberguessinggame.model.domainevents.*;
 
 import java.net.URI;
@@ -34,17 +35,33 @@ import java.util.UUID;
 import static java.time.ZoneOffset.UTC;
 import static java.util.Objects.requireNonNull;
 
-public class Serialization {
+public class NumberGuessGameCloudEventConverter implements CloudEventConverter<GameEvent> {
 
     private final ObjectMapper objectMapper;
     private final URI source;
 
-    public Serialization(ObjectMapper objectMapper, URI cloudEventSource) {
+    public NumberGuessGameCloudEventConverter(ObjectMapper objectMapper, URI cloudEventSource) {
         this.objectMapper = objectMapper;
         this.source = cloudEventSource;
     }
 
-    public GameEvent deserialize(CloudEvent c) {
+    @Override
+    public CloudEvent toCloudEvent(GameEvent e) {
+        byte[] data = toBytes(e);
+        var cloudEventBuilder = CloudEventBuilder.v1()
+                .withId(e.eventId().toString())
+                .withSource(source)
+                .withSubject(e.gameId().toString())
+                .withType(e.getClass().getSimpleName())
+                .withTime(e.timestamp().atOffset(UTC).truncatedTo(ChronoUnit.MILLIS));
+        if (data != null) {
+            cloudEventBuilder.withDataContentType("application/json").withData(data);
+        }
+        return cloudEventBuilder.build();
+    }
+
+    @Override
+    public GameEvent toDomainEvent(CloudEvent c) {
         UUID eventId = UUID.fromString(c.getId());
         UUID gameId = UUID.fromString(requireNonNull(c.getSubject()));
         LocalDateTime time = requireNonNull(c.getTime()).toLocalDateTime();
@@ -82,53 +99,43 @@ public class Serialization {
         return event;
     }
 
+    @Override
+    public String getCloudEventType(Class<? extends GameEvent> type) {
+        return type.getSimpleName();
+    }
+
     @SuppressWarnings("ConstantConditions")
     private Map<String, Object> deserializeData(CloudEvent c) {
         try {
-            return objectMapper.readValue(c.getData().toBytes(), new TypeReference<Map<String, Object>>() {
+            return objectMapper.readValue(c.getData().toBytes(), new TypeReference<>() {
             });
         } catch (Exception e) {
             throw new RuntimeException(e);
         }
     }
 
-    public CloudEvent serialize(GameEvent e) {
-        return CloudEventBuilder.v1()
-                .withId(e.eventId().toString())
-                .withSource(source)
-                .withSubject(e.gameId().toString())
-                .withType(e.getClass().getSimpleName())
-                .withTime(e.timestamp().atOffset(UTC).truncatedTo(ChronoUnit.MILLIS))
-                .withData(toBytes(e))
-                .build();
-    }
-
     private byte[] toBytes(GameEvent event) {
         final Map<String, Object> eventAsMap;
         if (event instanceof GuessingAttemptsExhausted || event instanceof NumberGuessingGameEnded) {
             eventAsMap = null;
-        } else if (event instanceof NumberGuessingGameWasStarted) {
-            NumberGuessingGameWasStarted e = (NumberGuessingGameWasStarted) event;
-            eventAsMap = new HashMap<String, Object>() {{
+        } else if (event instanceof NumberGuessingGameWasStarted e) {
+            eventAsMap = new HashMap<>() {{
                 put("startedBy", e.startedBy().toString());
                 put("secretNumberToGuess", e.secretNumberToGuess());
                 put("maxNumberOfGuesses", e.maxNumberOfGuesses());
             }};
-        } else if (event instanceof PlayerGuessedANumberThatWasTooBig) {
-            PlayerGuessedANumberThatWasTooBig e = (PlayerGuessedANumberThatWasTooBig) event;
-            eventAsMap = new HashMap<String, Object>() {{
+        } else if (event instanceof PlayerGuessedANumberThatWasTooBig e) {
+            eventAsMap = new HashMap<>() {{
                 put("playerId", e.playerId().toString());
                 put("guessedNumber", e.guessedNumber());
             }};
-        } else if (event instanceof PlayerGuessedANumberThatWasTooSmall) {
-            PlayerGuessedANumberThatWasTooSmall e = (PlayerGuessedANumberThatWasTooSmall) event;
-            eventAsMap = new HashMap<String, Object>() {{
+        } else if (event instanceof PlayerGuessedANumberThatWasTooSmall e) {
+            eventAsMap = new HashMap<>() {{
                 put("playerId", e.playerId().toString());
                 put("guessedNumber", e.guessedNumber());
             }};
-        } else if (event instanceof PlayerGuessedTheRightNumber) {
-            PlayerGuessedTheRightNumber e = (PlayerGuessedTheRightNumber) event;
-            eventAsMap = new HashMap<String, Object>() {{
+        } else if (event instanceof PlayerGuessedTheRightNumber e) {
+            eventAsMap = new HashMap<>() {{
                 put("playerId", e.playerId().toString());
                 put("guessedNumber", e.guessedNumber());
             }};

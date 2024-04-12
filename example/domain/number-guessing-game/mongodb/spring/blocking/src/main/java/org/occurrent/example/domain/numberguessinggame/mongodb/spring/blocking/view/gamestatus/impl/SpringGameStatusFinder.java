@@ -16,12 +16,8 @@
 
 package org.occurrent.example.domain.numberguessinggame.mongodb.spring.blocking.view.gamestatus.impl;
 
-import org.occurrent.eventstore.api.blocking.EventStoreQueries;
-import org.occurrent.example.domain.numberguessinggame.model.domainevents.NumberGuessingGameWasStarted;
-import org.occurrent.example.domain.numberguessinggame.model.domainevents.PlayerGuessedANumberThatWasTooBig;
-import org.occurrent.example.domain.numberguessinggame.model.domainevents.PlayerGuessedANumberThatWasTooSmall;
-import org.occurrent.example.domain.numberguessinggame.model.domainevents.PlayerGuessedTheRightNumber;
-import org.occurrent.example.domain.numberguessinggame.mongodb.spring.blocking.infrastructure.Serialization;
+import org.occurrent.dsl.query.blocking.DomainEventQueries;
+import org.occurrent.example.domain.numberguessinggame.model.domainevents.*;
 import org.occurrent.example.domain.numberguessinggame.mongodb.spring.blocking.view.gamestatus.GameStatus;
 import org.occurrent.example.domain.numberguessinggame.mongodb.spring.blocking.view.gamestatus.GameStatus.GuessAndTime;
 import org.occurrent.example.domain.numberguessinggame.mongodb.spring.blocking.view.gamestatus.WhatIsTheStatusOfGame;
@@ -37,32 +33,26 @@ import static org.occurrent.filter.Filter.subject;
 @Component
 class SpringGameStatusFinder implements WhatIsTheStatusOfGame {
 
-    private final EventStoreQueries queries;
-    private final Serialization serialization;
+    private final DomainEventQueries<GameEvent> queries;
 
-    SpringGameStatusFinder(EventStoreQueries queries, Serialization serialization) {
+    SpringGameStatusFinder(DomainEventQueries<GameEvent> queries) {
         this.queries = queries;
-        this.serialization = serialization;
     }
 
     @Override
     public Optional<GameStatus> findFor(UUID gameId) {
         return queries.query(subject(gameId.toString()))
-                .map(serialization::deserialize)
                 .collect(GameStatusBuilder::new,
                         (gameStatus, event) -> {
                             if (event instanceof NumberGuessingGameWasStarted) {
                                 gameStatus.gameId = event.gameId();
                                 gameStatus.secretNumber = ((NumberGuessingGameWasStarted) event).secretNumberToGuess();
                                 gameStatus.maxNumberOfGuesses = ((NumberGuessingGameWasStarted) event).maxNumberOfGuesses();
-                            } else if (event instanceof PlayerGuessedANumberThatWasTooSmall) {
-                                PlayerGuessedANumberThatWasTooSmall e = (PlayerGuessedANumberThatWasTooSmall) event;
+                            } else if (event instanceof PlayerGuessedANumberThatWasTooSmall e) {
                                 gameStatus.guesses.add(new GuessAndTime(e.guessedNumber(), e.timestamp()));
-                            } else if (event instanceof PlayerGuessedANumberThatWasTooBig) {
-                                PlayerGuessedANumberThatWasTooBig e = (PlayerGuessedANumberThatWasTooBig) event;
+                            } else if (event instanceof PlayerGuessedANumberThatWasTooBig e) {
                                 gameStatus.guesses.add(new GuessAndTime(e.guessedNumber(), e.timestamp()));
-                            } else if (event instanceof PlayerGuessedTheRightNumber) {
-                                PlayerGuessedTheRightNumber e = (PlayerGuessedTheRightNumber) event;
+                            } else if (event instanceof PlayerGuessedTheRightNumber e) {
                                 gameStatus.guesses.add(new GuessAndTime(e.guessedNumber(), e.timestamp()));
                             }
                         }, (gameStatus, gameStatus2) -> {
@@ -80,5 +70,4 @@ class SpringGameStatusFinder implements WhatIsTheStatusOfGame {
             return gameId == null ? Optional.empty() : Optional.of(new GameStatus(gameId, secretNumber, maxNumberOfGuesses, guesses));
         }
     }
-
 }

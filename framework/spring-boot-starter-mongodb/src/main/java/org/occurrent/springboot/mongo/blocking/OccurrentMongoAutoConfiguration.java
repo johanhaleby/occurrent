@@ -53,6 +53,7 @@ import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.boot.autoconfigure.mongo.MongoAutoConfiguration;
 import org.springframework.boot.context.properties.EnableConfigurationProperties;
 import org.springframework.context.annotation.Bean;
+import org.springframework.context.annotation.Conditional;
 import org.springframework.data.mongodb.MongoDatabaseFactory;
 import org.springframework.data.mongodb.MongoTransactionManager;
 import org.springframework.data.mongodb.core.MongoTemplate;
@@ -69,6 +70,11 @@ import static org.occurrent.subscription.mongodb.spring.blocking.SpringMongoSubs
 @ConditionalOnClass({SpringMongoEventStore.class, SpringMongoSubscriptionModel.class})
 @EnableConfigurationProperties(OccurrentProperties.class)
 public class OccurrentMongoAutoConfiguration<E> {
+
+    @Bean
+    OccurrentAnnotationBeanPostProcessor occurrentAnnotationBeanPostProcessor() {
+        return new OccurrentAnnotationBeanPostProcessor();
+    }
 
     @Bean
     @ConditionalOnMissingBean(MongoTransactionManager.class)
@@ -130,7 +136,7 @@ public class OccurrentMongoAutoConfiguration<E> {
     }
 
     @Bean
-    @ConditionalOnMissingBean({CloudEventTypeMapper.class, CloudEventConverter.class})
+    @Conditional(OnMissingCloudEventConverterAndCloudEventTypeMapperCondition.class)
     public CloudEventTypeMapper<E> occurrentTypeMapper() {
         return newDefaultCloudEventTypeMapper();
     }

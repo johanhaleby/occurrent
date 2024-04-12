@@ -19,7 +19,7 @@ package org.occurrent.example.domain.numberguessinggame.model.domainevents;
 import java.time.LocalDateTime;
 import java.util.UUID;
 
-public interface GameEvent {
+public sealed interface GameEvent permits GuessingAttemptsExhausted, NumberGuessingGameEnded, NumberGuessingGameWasStarted, PlayerGuessedANumberThatWasTooBig, PlayerGuessedANumberThatWasTooSmall, PlayerGuessedTheRightNumber {
 
     UUID eventId();
 
