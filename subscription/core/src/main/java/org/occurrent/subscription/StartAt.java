@@ -16,16 +16,19 @@
 
 package org.occurrent.subscription;
 
-import java.util.Objects;
+import java.util.Map;
 import java.util.StringJoiner;
+import java.util.function.Function;
 import java.util.function.Supplier;
+
+import static java.util.Objects.requireNonNull;
 
 /**
  * Specifies in which position a subscription should start when subscribing to it
  */
 public sealed interface StartAt {
 
-    StartAt get();
+    StartAt get(SubscriptionModelContext context);
 
     default boolean isNow() {
         return this instanceof Now;
@@ -33,6 +36,10 @@ public sealed interface StartAt {
 
     default boolean isDefault() {
         return this instanceof Default;
+    }
+
+    default boolean isDynamic() {
+        return this instanceof Dynamic;
     }
 
     final class Now implements StartAt {
@@ -45,7 +52,7 @@ public sealed interface StartAt {
         }
 
         @Override
-        public StartAt get() {
+        public StartAt get(SubscriptionModelContext ignored) {
             return this;
         }
     }
@@ -60,34 +67,35 @@ public sealed interface StartAt {
         }
 
         @Override
-        public StartAt get() {
+        public StartAt get(SubscriptionModelContext ignored) {
             return this;
         }
     }
 
     final class Dynamic implements StartAt {
-        public final Supplier<StartAt> supplier;
+        public final Function<SubscriptionModelContext, StartAt> function;
 
-        private Dynamic(Supplier<StartAt> supplier) {
-            Objects.requireNonNull(supplier, "StartAt supplier cannot be null");
-            this.supplier = supplier;
+        private Dynamic(Function<SubscriptionModelContext, StartAt> function) {
+            requireNonNull(function, "Dynamic StartAt function cannot be null");
+            this.function = function;
         }
 
         @Override
         public String toString() {
             return new StringJoiner(", ", Dynamic.class.getSimpleName() + "[", "]")
-                    .add("supplier=" + supplier)
+                    .add("supplier=" + function)
                     .toString();
         }
 
         @Override
-        public StartAt get() {
-            StartAt startAt = supplier.get();
+        public StartAt get(SubscriptionModelContext context) {
+            StartAt startAt = function.apply(context);
             if (startAt instanceof Dynamic) {
-                return startAt.get();
-            } else if (startAt == null) {
-                throw new IllegalArgumentException("Dynamic \"start at\" was null which is not supported.");
+                return startAt.get(context);
             }
+//            else if (startAt == null) {
+//                throw new IllegalArgumentException("Dynamic \"start at\" was null which is not supported.");
+//            }
             return startAt;
         }
     }
@@ -96,7 +104,7 @@ public sealed interface StartAt {
         public final SubscriptionPosition subscriptionPosition;
 
         private StartAtSubscriptionPosition(SubscriptionPosition subscriptionPosition) {
-            Objects.requireNonNull(subscriptionPosition, SubscriptionPosition.class.getSimpleName() + " cannot be null");
+            requireNonNull(subscriptionPosition, SubscriptionPosition.class.getSimpleName() + " cannot be null");
             this.subscriptionPosition = subscriptionPosition;
         }
 
@@ -106,7 +114,7 @@ public sealed interface StartAt {
         }
 
         @Override
-        public StartAt get() {
+        public StartAt get(SubscriptionModelContext ignored) {
             return this;
         }
     }
@@ -139,6 +147,25 @@ public sealed interface StartAt {
      * For example, it could return the latest subscription position from a subscription position storage.
      */
     static StartAt dynamic(Supplier<StartAt> supplier) {
+        return new Dynamic(__ -> supplier.get());
+    }
+
+    /**
+     * Create a "dynamic" start at position that may change during the life-cycle of a subscription model.
+     * For example, it could return the latest subscription position from a subscription position storage.
+     */
+    static StartAt dynamic(Function<SubscriptionModelContext, StartAt> supplier) {
         return new Dynamic(supplier);
+    }
+
+    record SubscriptionModelContext(Class<?> subscriptionModelType, Map<String, Object> subscriptionModelData) {
+        public SubscriptionModelContext {
+            requireNonNull(subscriptionModelType, "subscriptionModelType cannot be null");
+            requireNonNull(subscriptionModelData, "subscriptionModelData cannot be null");
+        }
+
+        public SubscriptionModelContext(Class<?> subscriptionModelType) {
+            this(subscriptionModelType, Map.of());
+        }
     }
 }

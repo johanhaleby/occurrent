@@ -22,6 +22,7 @@ import org.occurrent.eventstore.api.blocking.EventStoreQueries;
 import org.occurrent.filter.Filter;
 import org.occurrent.subscription.*;
 import org.occurrent.subscription.StartAt.StartAtSubscriptionPosition;
+import org.occurrent.subscription.StartAt.SubscriptionModelContext;
 import org.occurrent.subscription.api.blocking.*;
 import org.occurrent.subscription.blocking.durable.catchup.SubscriptionPositionStorageConfig.PersistSubscriptionPositionDuringCatchupPhase;
 import org.occurrent.subscription.blocking.durable.catchup.SubscriptionPositionStorageConfig.UseSubscriptionPositionInStorage;
@@ -113,6 +114,15 @@ public class CatchupSubscriptionModel implements SubscriptionModel, DelegatingSu
                 SubscriptionPosition subscriptionPosition = returnIfSubscriptionPositionStorageConfigIs(UseSubscriptionPositionInStorage.class, cfg -> cfg.storage().read(subscriptionId)).orElse(null);
                 return subscriptionPosition == null ? StartAt.subscriptionPosition(TimeBasedSubscriptionPosition.beginningOfTime()) : StartAt.subscriptionPosition(subscriptionPosition);
             });
+        } else if (startAt.isDynamic()) {
+            StartAt startAtGeneratedByDynamic = startAt.get(generateSubscriptionModelContext());
+            if (startAtGeneratedByDynamic == null) {
+                // We're not allowed to use start this subscription model, defer to parent!
+                runningCatchupSubscriptions.remove(subscriptionId);
+                return getDelegatedSubscriptionModelRecursively().subscribe(subscriptionId, filter, startAt, action);
+            } else {
+                firstStartAt = startAtGeneratedByDynamic;
+            }
         } else {
             firstStartAt = startAt;
         }
@@ -122,7 +132,7 @@ public class CatchupSubscriptionModel implements SubscriptionModel, DelegatingSu
             return subscriptionModel.subscribe(subscriptionId, filter, firstStartAt, action);
         }
 
-        SubscriptionPosition subscriptionPosition = ((StartAtSubscriptionPosition) firstStartAt.get()).subscriptionPosition;
+        SubscriptionPosition subscriptionPosition = ((StartAtSubscriptionPosition) firstStartAt.get(generateSubscriptionModelContext())).subscriptionPosition;
 
         final Filter timeFilter;
         if (isBeginningOfTime(subscriptionPosition)) {
@@ -194,7 +204,7 @@ public class CatchupSubscriptionModel implements SubscriptionModel, DelegatingSu
             doIfSubscriptionPositionStorageConfigIs(UseSubscriptionPositionInStorage.class, cfg -> {
                 // Only store position if using storage and no position has been stored!
                 if (!cfg.storage().exists(subscriptionId)) {
-                    startAtToUse.get();
+                    startAtToUse.get(generateSubscriptionModelContext());
                 }
             });
             subscription = new CancelledSubscription(subscriptionId);
@@ -207,6 +217,10 @@ public class CatchupSubscriptionModel implements SubscriptionModel, DelegatingSu
         }
 
         return subscription;
+    }
+
+    private static SubscriptionModelContext generateSubscriptionModelContext() {
+        return new SubscriptionModelContext(CatchupSubscriptionModel.class);
     }
 
     @Override
@@ -260,7 +274,7 @@ public class CatchupSubscriptionModel implements SubscriptionModel, DelegatingSu
     }
 
     public static boolean isTimeBasedSubscriptionPosition(StartAt startAt) {
-        StartAt start = startAt.get();
+        StartAt start = startAt.get(generateSubscriptionModelContext());
         if (!(start instanceof StartAtSubscriptionPosition)) {
             return false;
         }

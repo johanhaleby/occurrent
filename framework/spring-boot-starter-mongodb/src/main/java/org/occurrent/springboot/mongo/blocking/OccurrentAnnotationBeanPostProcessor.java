@@ -26,6 +26,9 @@ import org.occurrent.dsl.subscription.blocking.EventMetadata;
 import org.occurrent.dsl.subscription.blocking.Subscriptions;
 import org.occurrent.filter.Filter;
 import org.occurrent.subscription.StartAt;
+import org.occurrent.subscription.SubscriptionPosition;
+import org.occurrent.subscription.blocking.durable.catchup.CatchupSubscriptionModel;
+import org.occurrent.subscription.blocking.durable.catchup.TimeBasedSubscriptionPosition;
 import org.springframework.beans.BeansException;
 import org.springframework.beans.factory.config.BeanPostProcessor;
 import org.springframework.context.ApplicationContext;
@@ -152,16 +155,36 @@ class OccurrentAnnotationBeanPostProcessor implements BeanPostProcessor, Applica
             return Unit.INSTANCE;
         };
 
-        StartAt startAt = switch (subscription.startAt()) {
-            case BEGINNING_OF_TIME -> StartAt.subscriptionPosition();
-            case NOW -> null;
-        };
-
-        
-
+        StartAt startAt = generateStartAt(subscription);
 
         Subscriptions<E> subscribable = applicationContext.getBean(Subscriptions.class);
-        subscribable.subscribe(id, filter(filter), null, consumer).waitUntilStarted();
+        subscribable.subscribe(id, filter(filter), startAt, consumer).waitUntilStarted();
+    }
+
+    private static @NotNull StartAt generateStartAt(Subscription subscription) {
+        return switch (subscription.startAt()) {
+            case BEGINNING_OF_TIME -> switch (subscription.resumeBehavior()) {
+                case SAME_AS_START_AT -> StartAt.subscriptionPosition(TimeBasedSubscriptionPosition.beginningOfTime());
+//                case DEFAULT -> StartAt.dynamic(ctx -> {
+//                    Object subscriptionPosition = ctx.subscriptionModelData().get("subscriptionPosition");
+//                    if (subscriptionPosition instanceof SubscriptionPosition sp) {
+//                        // This means that the subscription model has recorded a subscription position,
+//                        // and it means that we should start from this position.
+//                        return StartAt.subscriptionPosition(sp);
+//                    } else {
+//                        // If no subscription position is persisted, we start from the "startAt" position
+//                        // defined in the annotation.
+//                        return subscription.startAt();
+//                    }
+//                });
+                case DEFAULT -> StartAt.subscriptionModelDefault();
+            };
+            case NOW -> StartAt.now();
+            case DEFAULT -> StartAt.dynamic(ctx -> {
+                boolean isCatchupSubscription = CatchupSubscriptionModel.class.isAssignableFrom(ctx.subscriptionModelType());
+                return isCatchupSubscription ? null : StartAt.subscriptionModelDefault();
+            });
+        };
     }
 
     private static <E> @NotNull List<Class<E>> getConcreteEventTypes(String subscriptionId, Class<E> specifiedEventType) {

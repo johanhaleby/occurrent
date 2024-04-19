@@ -19,6 +19,7 @@ package org.occurrent.subscription.mongodb.internal;
 import org.bson.*;
 import org.occurrent.subscription.StartAt;
 import org.occurrent.subscription.StartAt.StartAtSubscriptionPosition;
+import org.occurrent.subscription.StartAt.SubscriptionModelContext;
 import org.occurrent.subscription.StringBasedSubscriptionPosition;
 import org.occurrent.subscription.SubscriptionPosition;
 import org.occurrent.subscription.mongodb.MongoOperationTimeSubscriptionPosition;
@@ -82,8 +83,8 @@ public class MongoCommons {
         return subscriptionPositionDocument.get(OPERATION_TIME, BsonTimestamp.class);
     }
 
-    public static <T> T applyStartPosition(T t, BiFunction<T, BsonDocument, T> applyResumeToken, BiFunction<T, BsonTimestamp, T> applyOperationTime, StartAt startAt) {
-        StartAt startAtValue = startAt.get();
+    public static <T> T applyStartPosition(T t, BiFunction<T, BsonDocument, T> applyResumeToken, BiFunction<T, BsonTimestamp, T> applyOperationTime, StartAt startAt, SubscriptionModelContext ctx) {
+        StartAt startAtValue = startAt.get(ctx);
         if (startAtValue.isNow() || startAtValue.isDefault()) {
             return t;
         } else if (!(startAtValue instanceof StartAtSubscriptionPosition)) {

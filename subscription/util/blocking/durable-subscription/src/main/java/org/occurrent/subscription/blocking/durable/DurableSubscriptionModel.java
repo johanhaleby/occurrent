@@ -19,10 +19,12 @@ package org.occurrent.subscription.blocking.durable;
 import io.cloudevents.CloudEvent;
 import jakarta.annotation.PreDestroy;
 import org.occurrent.subscription.StartAt;
+import org.occurrent.subscription.StartAt.SubscriptionModelContext;
 import org.occurrent.subscription.SubscriptionFilter;
 import org.occurrent.subscription.SubscriptionPosition;
 import org.occurrent.subscription.api.blocking.*;
 
+import java.util.Map;
 import java.util.Objects;
 import java.util.function.Consumer;
 
@@ -79,8 +81,22 @@ public class DurableSubscriptionModel implements PositionAwareSubscriptionModel,
     public Subscription subscribe(String subscriptionId, SubscriptionFilter filter, StartAt startAt, Consumer<CloudEvent> action) {
         Objects.requireNonNull(startAt, StartAt.class.getSimpleName() + " supplier cannot be null");
 
+        StartAt startAtToUse = generateStartAtPositionFrom(subscriptionId, startAt);
+
+        return subscriptionModel.subscribe(subscriptionId, filter, startAtToUse, cloudEvent -> {
+                    action.accept(cloudEvent);
+                    if (config.persistCloudEventPositionPredicate.test(cloudEvent)) {
+                        SubscriptionPosition subscriptionPosition = getSubscriptionPositionOrThrowIAE(cloudEvent);
+                        storage.save(subscriptionId, subscriptionPosition);
+                    }
+                }
+        );
+    }
+
+    private StartAt generateStartAtPositionFrom(String subscriptionId, StartAt originalStartAt) {
         final StartAt startAtToUse;
-        if (startAt.isDefault()) {
+        if (originalStartAt.isDefault()) {
+            StartAt startAtIfNoSubscriptionFound = StartAt.subscriptionModelDefault();
             startAtToUse = StartAt.dynamic(() -> {
                 // It's important that we find the document inside the supplier so that we lookup the latest resume token on retry
                 SubscriptionPosition subscriptionPosition = storage.read(subscriptionId);
@@ -91,20 +107,30 @@ public class DurableSubscriptionModel implements PositionAwareSubscriptionModel,
                     }
                 }
 
-                return subscriptionPosition == null ? StartAt.subscriptionModelDefault() : StartAt.subscriptionPosition(subscriptionPosition);
+                return subscriptionPosition == null ? startAtIfNoSubscriptionFound : StartAt.subscriptionPosition(subscriptionPosition);
             });
-        } else {
-            startAtToUse = startAt;
-        }
+        } else if (originalStartAt.isDynamic()) {
+            startAtToUse = StartAt.dynamic(() -> {
+                var subscriptionModelContext = generateSubscriptionModelContext(subscriptionId);
+                var nextStartAt = originalStartAt.get(subscriptionModelContext);
+                return generateStartAtPositionFrom(subscriptionId, nextStartAt);
+            });
 
-        return subscriptionModel.subscribe(subscriptionId, filter, startAtToUse, cloudEvent -> {
-                    action.accept(cloudEvent);
-                    if (config.persistCloudEventPositionPredicate.test(cloudEvent)) {
-                        SubscriptionPosition subscriptionPosition = getSubscriptionPositionOrThrowIAE(cloudEvent);
-                        storage.save(subscriptionId, subscriptionPosition);
-                    }
-                }
-        );
+        } else {
+            startAtToUse = originalStartAt;
+        }
+        return startAtToUse;
+    }
+
+    private SubscriptionModelContext generateSubscriptionModelContext(String subscriptionId) {
+        SubscriptionPosition subscriptionPosition = storage.read(subscriptionId);
+        final Map<String, Object> data;
+        if (subscriptionPosition == null) {
+            data = Map.of();
+        } else {
+            data = Map.of("subscriptionPosition", subscriptionPosition);
+        }
+        return new SubscriptionModelContext(DurableSubscriptionModel.class, data);
     }
 
     @Override

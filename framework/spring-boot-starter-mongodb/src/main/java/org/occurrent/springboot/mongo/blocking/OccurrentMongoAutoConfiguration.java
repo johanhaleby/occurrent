@@ -42,6 +42,8 @@ import org.occurrent.subscription.api.blocking.SubscriptionModel;
 import org.occurrent.subscription.api.blocking.SubscriptionPositionStorage;
 import org.occurrent.subscription.blocking.competingconsumers.CompetingConsumerSubscriptionModel;
 import org.occurrent.subscription.blocking.durable.DurableSubscriptionModel;
+import org.occurrent.subscription.blocking.durable.catchup.CatchupSubscriptionModel;
+import org.occurrent.subscription.blocking.durable.catchup.CatchupSubscriptionModelConfig;
 import org.occurrent.subscription.mongodb.spring.blocking.SpringMongoLeaseCompetingConsumerStrategy;
 import org.occurrent.subscription.mongodb.spring.blocking.SpringMongoSubscriptionModel;
 import org.occurrent.subscription.mongodb.spring.blocking.SpringMongoSubscriptionPositionStorage;
@@ -61,6 +63,7 @@ import org.springframework.data.mongodb.core.MongoTemplate;
 import java.util.List;
 import java.util.Optional;
 
+import static org.occurrent.subscription.blocking.durable.catchup.SubscriptionPositionStorageConfig.useSubscriptionPositionStorage;
 import static org.occurrent.subscription.mongodb.spring.blocking.SpringMongoSubscriptionModelConfig.withConfig;
 
 /**
@@ -117,12 +120,16 @@ public class OccurrentMongoAutoConfiguration<E> {
     @Bean
     @ConditionalOnMissingBean(SubscriptionModel.class)
     @ConditionalOnProperty(name = "occurrent.subscription.enabled", havingValue = "true", matchIfMissing = true)
-    public SubscriptionModel occurrentCompetingDurableSubscriptionModel(MongoTemplate mongoTemplate, SpringMongoLeaseCompetingConsumerStrategy competingConsumerStrategy, SubscriptionPositionStorage storage, OccurrentProperties occurrentProperties) {
+    public SubscriptionModel occurrentCompetingDurableSubscriptionModel(MongoTemplate mongoTemplate, SpringMongoLeaseCompetingConsumerStrategy competingConsumerStrategy, SubscriptionPositionStorage storage,
+                                                                        OccurrentProperties occurrentProperties, EventStoreQueries eventStoreQueries) {
         EventStoreProperties eventStoreProperties = occurrentProperties.getEventStore();
         SpringMongoSubscriptionModel mongoSubscriptionModel = new SpringMongoSubscriptionModel(mongoTemplate, withConfig(eventStoreProperties.getCollection(), eventStoreProperties.getTimeRepresentation())
                 .restartSubscriptionsOnChangeStreamHistoryLost(occurrentProperties.getSubscription().isRestartOnChangeStreamHistoryLost()));
         DurableSubscriptionModel durableSubscriptionModel = new DurableSubscriptionModel(mongoSubscriptionModel, storage);
-        return new CompetingConsumerSubscriptionModel(durableSubscriptionModel, competingConsumerStrategy);
+        CatchupSubscriptionModel catchupSubscriptionModel = new CatchupSubscriptionModel(durableSubscriptionModel, eventStoreQueries,
+                new CatchupSubscriptionModelConfig(useSubscriptionPositionStorage(storage)
+                        .andPersistSubscriptionPositionDuringCatchupPhaseForEveryNEvents(1000)));
+        return new CompetingConsumerSubscriptionModel(catchupSubscriptionModel, competingConsumerStrategy);
     }
 
     @Bean

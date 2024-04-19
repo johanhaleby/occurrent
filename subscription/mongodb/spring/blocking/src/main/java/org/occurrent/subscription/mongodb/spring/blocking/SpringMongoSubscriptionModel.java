@@ -147,8 +147,9 @@ public class SpringMongoSubscriptionModel implements PositionAwareSubscriptionMo
         // and not the position the "StartAt.now()" position of when the subscription was resumed. This will lead to historic events being
         // replayed which is (most likely) not what the user expects.
         Function<StartAt, ChangeStreamRequestOptions> requestOptionsFunction = overridingStartAt -> {
+            var subscriptionModelContext = new StartAt.SubscriptionModelContext(SpringMongoSubscriptionModel.class);
             // TODO We should change builder::resumeAt to builder::startAtOperationTime once Spring adds support for it (see https://jira.spring.io/browse/DATAMONGO-2607)
-            ChangeStreamOptionsBuilder builder = MongoCommons.applyStartPosition(ChangeStreamOptions.builder(), ChangeStreamOptionsBuilder::startAfter, ChangeStreamOptionsBuilder::resumeAt, overridingStartAt == null ? startAt : overridingStartAt);
+            ChangeStreamOptionsBuilder builder = MongoCommons.applyStartPosition(ChangeStreamOptions.builder(), ChangeStreamOptionsBuilder::startAfter, ChangeStreamOptionsBuilder::resumeAt, overridingStartAt == null ? startAt : overridingStartAt, subscriptionModelContext);
             final ChangeStreamOptions changeStreamOptions = ApplyFilterToChangeStreamOptionsBuilder.applyFilter(timeRepresentation, filter, builder);
             return new ChangeStreamRequestOptions(null, eventCollection, changeStreamOptions);
         };

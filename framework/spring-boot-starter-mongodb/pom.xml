@@ -68,6 +68,11 @@
         </dependency>
         <dependency>
             <groupId>org.occurrent</groupId>
+            <artifactId>catchup-subscription</artifactId>
+            <version>0.17.3-SNAPSHOT</version>
+        </dependency>
+        <dependency>
+            <groupId>org.occurrent</groupId>
             <artifactId>competing-consumer-subscription</artifactId>
             <version>0.17.3-SNAPSHOT</version>
         </dependency>

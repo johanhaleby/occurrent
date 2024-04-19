@@ -65,7 +65,7 @@ public class CatchupSubscriptionModelConfig {
      */
     public CatchupSubscriptionModelConfig(int cacheSize, SubscriptionPositionStorageConfig subscriptionStorageConfig) {
         // We sort by time but fallback to stream version if time is the same for two events.
-        // While this is will _not_ sort the entire in database in insertion order, it at least guarantees
+        // While this will _not_ sort the entire in database in insertion order, it at least guarantees
         // order within a stream. Note that we can't do SortBy.time(ASCENDING).thenNatural(ASCENDING)
         // since for certain databases (MongoDB) this will prevent sorting from using a "time index" for queries
         // (see https://docs.mongodb.com/manual/reference/method/cursor.sort/#return-natural-order).

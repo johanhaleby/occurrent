@@ -7,7 +7,7 @@ spring:
   application:
     name: number-guessing-game
   rabbitmq:
-    addresses: amqp://localhost
+    addresses: amqp://parkster:parkster@localhost:5672
   data:
     mongodb:
       uri: mongodb://localhost/test

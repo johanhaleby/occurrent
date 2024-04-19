@@ -39,14 +39,14 @@ public @interface Subscription {
     Class<?>[] eventTypes() default {};
 
 
-    StartPosition startAt() default StartPosition.NOW;
+    StartPosition startAt() default StartPosition.DEFAULT;
 
     long startAtTimeEpoch() default -1;
 
     ResumeBehavior resumeBehavior() default ResumeBehavior.DEFAULT;
 
     enum StartPosition {
-        BEGINNING_OF_TIME, NOW
+        BEGINNING_OF_TIME, NOW, DEFAULT
     }
 
     enum ResumeBehavior {

@@ -22,6 +22,7 @@ import org.occurrent.filter.Filter;
 import org.occurrent.retry.RetryStrategy;
 import org.occurrent.subscription.OccurrentSubscriptionFilter;
 import org.occurrent.subscription.StartAt;
+import org.occurrent.subscription.StartAt.SubscriptionModelContext;
 import org.occurrent.subscription.SubscriptionFilter;
 import org.occurrent.subscription.api.blocking.Subscription;
 import org.occurrent.subscription.api.blocking.SubscriptionModel;
@@ -109,7 +110,7 @@ public class InMemorySubscriptionModel implements SubscriptionModel, Consumer<St
             throw new IllegalArgumentException(StartAt.class.getSimpleName() + " cannot be null");
         }
 
-        StartAt startAtToUse = startAt.get();
+        StartAt startAtToUse = startAt.get(new SubscriptionModelContext(InMemorySubscriptionModel.class));
         if (!startAtToUse.isNow() && !startAtToUse.isDefault()) {
             throw new IllegalArgumentException(InMemorySubscriptionModel.class.getSimpleName() + " only supports starting from 'now' and 'default' (StartAt.now() or StartAt.subscriptionModelDefault())");
         }

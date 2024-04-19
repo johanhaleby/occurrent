@@ -35,6 +35,7 @@ import org.occurrent.mongodb.spring.filterbsonfilterconversion.internal.FilterTo
 import org.occurrent.mongodb.timerepresentation.TimeRepresentation;
 import org.occurrent.retry.RetryStrategy;
 import org.occurrent.subscription.*;
+import org.occurrent.subscription.StartAt.SubscriptionModelContext;
 import org.occurrent.subscription.api.blocking.PositionAwareSubscriptionModel;
 import org.occurrent.subscription.api.blocking.Subscription;
 import org.occurrent.subscription.api.blocking.SubscriptionModel;
@@ -169,7 +170,8 @@ public class NativeMongoSubscriptionModel implements PositionAwareSubscriptionMo
     private void newInternalSubscription(String subscriptionId, SubscriptionFilter filter, StartAt startAt, Consumer<CloudEvent> action, CountDownLatch subscriptionStartedLatch) {
         List<Bson> pipeline = createPipeline(timeRepresentation, filter);
         ChangeStreamIterable<Document> changeStreamDocuments = eventCollection.watch(pipeline, Document.class);
-        ChangeStreamIterable<Document> changeStreamDocumentsAtPosition = MongoCommons.applyStartPosition(changeStreamDocuments, ChangeStreamIterable::startAfter, ChangeStreamIterable::startAtOperationTime, startAt.get());
+        SubscriptionModelContext subscriptionModelContext = new SubscriptionModelContext(NativeMongoSubscriptionModel.class);
+        ChangeStreamIterable<Document> changeStreamDocumentsAtPosition = MongoCommons.applyStartPosition(changeStreamDocuments, ChangeStreamIterable::startAfter, ChangeStreamIterable::startAtOperationTime, startAt.get(subscriptionModelContext), subscriptionModelContext);
         MongoChangeStreamCursor<ChangeStreamDocument<Document>> cursor = changeStreamDocumentsAtPosition.cursor();
 
         InternalSubscription internalSubscription = new InternalSubscription(cursor, startAt, action, filter, subscriptionStartedLatch);
