@@ -26,7 +26,7 @@ import org.occurrent.dsl.subscription.blocking.EventMetadata;
 import org.occurrent.dsl.subscription.blocking.Subscriptions;
 import org.occurrent.filter.Filter;
 import org.occurrent.subscription.StartAt;
-import org.occurrent.subscription.SubscriptionPosition;
+import org.occurrent.subscription.blocking.durable.DurableSubscriptionModel;
 import org.occurrent.subscription.blocking.durable.catchup.CatchupSubscriptionModel;
 import org.occurrent.subscription.blocking.durable.catchup.TimeBasedSubscriptionPosition;
 import org.springframework.beans.BeansException;
@@ -164,23 +164,28 @@ class OccurrentAnnotationBeanPostProcessor implements BeanPostProcessor, Applica
     private static @NotNull StartAt generateStartAt(Subscription subscription) {
         return switch (subscription.startAt()) {
             case BEGINNING_OF_TIME -> switch (subscription.resumeBehavior()) {
-                case SAME_AS_START_AT -> StartAt.subscriptionPosition(TimeBasedSubscriptionPosition.beginningOfTime());
-//                case DEFAULT -> StartAt.dynamic(ctx -> {
-//                    Object subscriptionPosition = ctx.subscriptionModelData().get("subscriptionPosition");
-//                    if (subscriptionPosition instanceof SubscriptionPosition sp) {
-//                        // This means that the subscription model has recorded a subscription position,
-//                        // and it means that we should start from this position.
-//                        return StartAt.subscriptionPosition(sp);
-//                    } else {
-//                        // If no subscription position is persisted, we start from the "startAt" position
-//                        // defined in the annotation.
-//                        return subscription.startAt();
-//                    }
-//                });
+                case SAME_AS_START_AT -> StartAt.dynamic(ctx -> {
+                    boolean isDurableSubscription = DurableSubscriptionModel.class.isAssignableFrom(ctx.subscriptionModelType());
+                    if (isDurableSubscription) {
+                        // Since we now know that we always start AND resume from the beginning of time for this subscription,
+                        // we don't need to store the position in a durable storage, because we will always stream all events
+                        // each time the subscription restarts anyway. Thus, we return null to instruct the DurableSubscriptionModel
+                        // to simply delegate to the parent subscription. Note that this works because the parent of the CatchupSubscriptionModel
+                        // is a DurableSubscriptionModel, so after the catch-up phase it'll hand over to the DurableSubscriptionModel.
+                        // Unfortunately the CatchupSubscriptionModel is configured to write the position when the catch-up phase is completed,
+                        // but it's harder to get around that.
+                        return null;
+                    } else {
+                        return StartAt.subscriptionPosition(TimeBasedSubscriptionPosition.beginningOfTime());
+                    }
+                });
                 case DEFAULT -> StartAt.subscriptionModelDefault();
             };
             case NOW -> StartAt.now();
             case DEFAULT -> StartAt.dynamic(ctx -> {
+                // By default, we don't want to run the "default" behavior of the CatchupSubscriptionModel, which is to
+                // start streaming from the beginning of time. We want to instruct the CatchupSubscriptionModel to simply
+                // delegate to the parent subscription, which is what we do if we return null.
                 boolean isCatchupSubscription = CatchupSubscriptionModel.class.isAssignableFrom(ctx.subscriptionModelType());
                 return isCatchupSubscription ? null : StartAt.subscriptionModelDefault();
             });

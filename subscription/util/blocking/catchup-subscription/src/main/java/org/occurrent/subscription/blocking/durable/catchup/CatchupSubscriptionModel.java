@@ -117,7 +117,7 @@ public class CatchupSubscriptionModel implements SubscriptionModel, DelegatingSu
         } else if (startAt.isDynamic()) {
             StartAt startAtGeneratedByDynamic = startAt.get(generateSubscriptionModelContext());
             if (startAtGeneratedByDynamic == null) {
-                // We're not allowed to use start this subscription model, defer to parent!
+                // We're not allowed to start this subscription model, defer to parent!
                 runningCatchupSubscriptions.remove(subscriptionId);
                 return getDelegatedSubscriptionModelRecursively().subscribe(subscriptionId, filter, startAt, action);
             } else {
@@ -129,6 +129,7 @@ public class CatchupSubscriptionModel implements SubscriptionModel, DelegatingSu
 
         // We want to continue from the wrapping subscription if it has something stored in its position storage.
         if (!isTimeBasedSubscriptionPosition(firstStartAt)) {
+            runningCatchupSubscriptions.remove(subscriptionId);
             return subscriptionModel.subscribe(subscriptionId, filter, firstStartAt, action);
         }
 

@@ -93,9 +93,6 @@ public sealed interface StartAt {
             if (startAt instanceof Dynamic) {
                 return startAt.get(context);
             }
-//            else if (startAt == null) {
-//                throw new IllegalArgumentException("Dynamic \"start at\" was null which is not supported.");
-//            }
             return startAt;
         }
     }

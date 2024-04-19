@@ -126,6 +126,10 @@ public class OccurrentMongoAutoConfiguration<E> {
         SpringMongoSubscriptionModel mongoSubscriptionModel = new SpringMongoSubscriptionModel(mongoTemplate, withConfig(eventStoreProperties.getCollection(), eventStoreProperties.getTimeRepresentation())
                 .restartSubscriptionsOnChangeStreamHistoryLost(occurrentProperties.getSubscription().isRestartOnChangeStreamHistoryLost()));
         DurableSubscriptionModel durableSubscriptionModel = new DurableSubscriptionModel(mongoSubscriptionModel, storage);
+        // TODO THINK ABOUT BACKWARD COMPATIBILTIY! ALla subscriptions med StartAt default kommer efter denna ändring att börja läsa från tidernas begynnelse (om det inte finns en position sparad).
+        // Det vill man nog inte. Vad händer om man gör subscribe "now"?! Kan vi komma på ett bättre sett, tex att Catchup INTE börjar läsa upp vid "default", utan endast om man explicit
+        // säger beginning of time?! Det är nog enda lösningen. Vid default med CatchupSubscriptionModel, delegera alltid till wrapped!!! Gör också så att även om man valt "beggingin of time" så ska den fortsätta
+        // från vad CatchupSubscriptionModel har skrivit ner (alltså om position är TimeBased), det är ju bara time-based i storage om man kraschat, och då vill man fortsätta därifrån.
         CatchupSubscriptionModel catchupSubscriptionModel = new CatchupSubscriptionModel(durableSubscriptionModel, eventStoreQueries,
                 new CatchupSubscriptionModelConfig(useSubscriptionPositionStorage(storage)
                         .andPersistSubscriptionPositionDuringCatchupPhaseForEveryNEvents(1000)));
