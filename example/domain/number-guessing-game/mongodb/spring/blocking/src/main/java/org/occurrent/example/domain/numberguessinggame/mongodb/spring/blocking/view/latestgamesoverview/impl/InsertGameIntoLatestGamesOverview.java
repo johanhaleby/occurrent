@@ -17,7 +17,7 @@
 package org.occurrent.example.domain.numberguessinggame.mongodb.spring.blocking.view.latestgamesoverview.impl;
 
 import org.bson.Document;
-import org.occurrent.annotations.Subscription;
+import org.occurrent.annotation.Subscription;
 import org.occurrent.example.domain.numberguessinggame.model.domainevents.*;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;

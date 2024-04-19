@@ -15,7 +15,7 @@
  *  limitations under the License.
  */
 
-package org.occurrent.annotations;
+package org.occurrent.annotation;
 
 import java.lang.annotation.*;
 
@@ -37,4 +37,19 @@ public @interface Subscription {
      * have other types.
      */
     Class<?>[] eventTypes() default {};
+
+
+    StartPosition startAt() default StartPosition.NOW;
+
+    long startAtTimeEpoch() default -1;
+
+    ResumeBehavior resumeBehavior() default ResumeBehavior.DEFAULT;
+
+    enum StartPosition {
+        BEGINNING_OF_TIME, NOW
+    }
+
+    enum ResumeBehavior {
+        SAME_AS_START_AT, DEFAULT
+    }
 }

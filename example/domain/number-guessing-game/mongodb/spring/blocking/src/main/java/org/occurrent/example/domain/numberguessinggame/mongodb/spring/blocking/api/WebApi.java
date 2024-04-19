@@ -29,6 +29,7 @@ import org.occurrent.example.domain.numberguessinggame.mongodb.spring.blocking.v
 import org.occurrent.example.domain.numberguessinggame.mongodb.spring.blocking.view.latestgamesoverview.GameOverview;
 import org.occurrent.example.domain.numberguessinggame.mongodb.spring.blocking.view.latestgamesoverview.GameOverview.GameState.Ended;
 import org.occurrent.example.domain.numberguessinggame.mongodb.spring.blocking.view.latestgamesoverview.LatestGamesOverview;
+import org.occurrent.example.domain.numberguessinggame.mongodb.spring.blocking.view.numberofstartedgames.NumberOfStartedGames;
 import org.springframework.http.HttpHeaders;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.MediaType;
@@ -51,15 +52,17 @@ public class WebApi {
     private final LatestGamesOverview latestGamesOverview;
     private final WhatIsTheStatusOfGame whatIsTheStatusOfGame;
     private final ApplicationService<GameEvent> applicationService;
+    private final NumberOfStartedGames numberOfStartedGames;
     private final int minNumberToGuess;
     private final int maxNumberToGuess;
     private final int maxNumberOfGuesses;
 
     WebApi(LatestGamesOverview latestGamesOverview, WhatIsTheStatusOfGame whatIsTheStatusOfGame,
-           ApplicationService<GameEvent> applicationService, NumberGuessingGameConfig cfg) {
+           ApplicationService<GameEvent> applicationService, NumberOfStartedGames numberOfStartedGames, NumberGuessingGameConfig cfg) {
         this.latestGamesOverview = latestGamesOverview;
         this.whatIsTheStatusOfGame = whatIsTheStatusOfGame;
         this.applicationService = applicationService;
+        this.numberOfStartedGames = numberOfStartedGames;
         this.minNumberToGuess = cfg.getMinNumberToGuess();
         this.maxNumberToGuess = cfg.getMaxNumberToGuess();
         this.maxNumberOfGuesses = cfg.getMaxNumberOfGuesses();
@@ -69,6 +72,7 @@ public class WebApi {
     String games() {
         return body(
                 h1("Number Guessing Game"),
+                p(div("Number of started games: %s".formatted(numberOfStartedGames.get()))),
                 generateGameOverview(latestGamesOverview),
                 form().withMethod("post").withAction("/games").with(
                         input().withName("gameId").withType("hidden").withValue(UUID.randomUUID().toString()),

@@ -17,7 +17,7 @@
 
 package org.occurrent.example.domain.numberguessinggame.mongodb.spring.blocking.policy;
 
-import org.occurrent.annotations.Subscription;
+import org.occurrent.annotation.Subscription;
 import org.occurrent.example.domain.numberguessinggame.model.domainevents.GameEvent;
 import org.occurrent.example.domain.numberguessinggame.model.domainevents.GuessingAttemptsExhausted;
 import org.occurrent.example.domain.numberguessinggame.model.domainevents.NumberGuessingGameWasStarted;

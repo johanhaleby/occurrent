@@ -20,11 +20,12 @@ package org.occurrent.springboot.mongo.blocking;
 import kotlin.Unit;
 import kotlin.jvm.functions.Function2;
 import org.jetbrains.annotations.NotNull;
-import org.occurrent.annotations.Subscription;
+import org.occurrent.annotation.Subscription;
 import org.occurrent.application.converter.CloudEventConverter;
 import org.occurrent.dsl.subscription.blocking.EventMetadata;
 import org.occurrent.dsl.subscription.blocking.Subscriptions;
 import org.occurrent.filter.Filter;
+import org.occurrent.subscription.StartAt;
 import org.springframework.beans.BeansException;
 import org.springframework.beans.factory.config.BeanPostProcessor;
 import org.springframework.context.ApplicationContext;
@@ -150,6 +151,14 @@ class OccurrentAnnotationBeanPostProcessor implements BeanPostProcessor, Applica
             }
             return Unit.INSTANCE;
         };
+
+        StartAt startAt = switch (subscription.startAt()) {
+            case BEGINNING_OF_TIME -> StartAt.subscriptionPosition();
+            case NOW -> null;
+        };
+
+        
+
 
         Subscriptions<E> subscribable = applicationContext.getBean(Subscriptions.class);
         subscribable.subscribe(id, filter(filter), null, consumer).waitUntilStarted();
