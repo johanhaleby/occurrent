@@ -107,7 +107,6 @@ public class CatchupSubscriptionModel implements SubscriptionModel, DelegatingSu
             throw new IllegalArgumentException("Unsupported!");
         }
 
-        runningCatchupSubscriptions.put(subscriptionId, true);
 
         final StartAt firstStartAt;
         if (startAt.isDefault()) {
@@ -119,7 +118,6 @@ public class CatchupSubscriptionModel implements SubscriptionModel, DelegatingSu
             StartAt startAtGeneratedByDynamic = startAt.get(generateSubscriptionModelContext());
             if (startAtGeneratedByDynamic == null) {
                 // We're not allowed to start this subscription model, defer to parent!
-                runningCatchupSubscriptions.remove(subscriptionId);
                 return getDelegatedSubscriptionModel().subscribe(subscriptionId, filter, startAt, action);
             } else {
                 firstStartAt = startAtGeneratedByDynamic;
@@ -130,47 +128,33 @@ public class CatchupSubscriptionModel implements SubscriptionModel, DelegatingSu
 
         // We want to continue from the wrapping subscription if it has something stored in its position storage.
         if (!isTimeBasedSubscriptionPosition(firstStartAt)) {
-            runningCatchupSubscriptions.remove(subscriptionId);
             return subscriptionModel.subscribe(subscriptionId, filter, firstStartAt, action);
         }
 
+        runningCatchupSubscriptions.put(subscriptionId, true);
+
         SubscriptionPosition subscriptionPosition = ((StartAtSubscriptionPosition) firstStartAt.get(generateSubscriptionModelContext())).subscriptionPosition;
 
-        final Filter timeFilter;
-        if (isBeginningOfTime(subscriptionPosition)) {
-            timeFilter = Filter.all();
-        } else {
-            OffsetDateTime offsetDateTime = OffsetDateTime.parse(subscriptionPosition.asString(), RFC_3339_DATE_TIME_FORMATTER);
-            timeFilter = time(gt(offsetDateTime));
-        }
+        Filter catchupFilter = deriveFilterToUseDuringCatchupPhase(filter, subscriptionPosition);
 
-        final long numberOfEventsBeforeStartingCatchupSubscription;
-        final Filter catchupFilter;
-        final Stream<CloudEvent> stream;
-        if (filter == null) {
-            catchupFilter = timeFilter;
-            numberOfEventsBeforeStartingCatchupSubscription = eventStoreQueries.count(catchupFilter);
-            stream = eventStoreQueries.query(catchupFilter, config.catchupPhaseSortBy);
-        } else {
-            Filter userSuppliedFilter = ((OccurrentSubscriptionFilter) filter).filter;
-            catchupFilter = timeFilter.and(userSuppliedFilter);
-            numberOfEventsBeforeStartingCatchupSubscription = eventStoreQueries.count(catchupFilter);
-            stream = eventStoreQueries.query(catchupFilter, config.catchupPhaseSortBy);
-        }
+        long numberOfEventsBeforeStartingCatchupSubscription = eventStoreQueries.count(catchupFilter);
 
         // Perform the catchup
-        runCatchupForStream(stream, subscriptionId, action, null);
+        runCatchupForStream(eventStoreQueries.query(catchupFilter, config.catchupPhaseSortBy), subscriptionId, action, null);
 
 
+        // Here we check if the delegated subscription model is allowed to execute. The reason for doing this is that
+        // in certain scenarios, such as when using the @Subscription annotation with settings {@code startAt=BEGINNING_OF_TIME} and
+        // {@code resume=SAME_AS_START_AT}, we instruct the DurableSubscriptionModel (which is typically the delegated subscription model here)
+        // to NOT store the position durably. This because we start at "beginning of time" and we also want to resume at
+        // "beginning of time" and thus we never need to store ANY subscription position (because we always start from "beginning of time"
+        // when application is rebooted). This allows for catching up in-memory projections/views/policies.  
         Class<? extends SubscriptionModel> delegatedSubscriptionModelType = getDelegatedSubscriptionModel().getClass();
         StartAt delegatedStartAt = startAt.get(new SubscriptionModelContext(delegatedSubscriptionModelType));
         final SubscriptionPosition globalSubscriptionPosition;
         if (delegatedStartAt == null) {
+            // The delegated subscription model is not allowed to subscribe, so we don't need to get the global position.
             globalSubscriptionPosition = null;
-            returnIfSubscriptionPositionStorageConfigIs(UseSubscriptionPositionInStorage.class, cfg -> {
-                cfg.storage().delete(subscriptionId);
-                return null;
-            });
         } else {
             // Here's the reason why we're forcing the wrapping subscription to be a PositionAwareBlockingSubscription.
             // This is in order to be 100% safe since we need to take events that are published meanwhile the EventStoreQuery
@@ -182,10 +166,21 @@ public class CatchupSubscriptionModel implements SubscriptionModel, DelegatingSu
         long numberOfEventsAfterCatchupSubscriptionCompleted = eventStoreQueries.count(catchupFilter);
         long numberOfEventsNotConsumed = numberOfEventsAfterCatchupSubscriptionCompleted - numberOfEventsBeforeStartingCatchupSubscription;
 
-        FixedSizeCache cache = new FixedSizeCache(config.cacheSize);
+        // We generate a cache so that events that are streamed at the same time as streaming the events missed
+        // during the catch-up phase are not streamed again.
+        FixedSizeCache catchupPhaseCache = new FixedSizeCache(config.cacheSize);
         if (numberOfEventsNotConsumed > 0) {
-            var cloudEvents = eventStoreQueries.query(catchupFilter, Math.toIntExact(numberOfEventsBeforeStartingCatchupSubscription), Math.toIntExact(numberOfEventsNotConsumed));
-            runCatchupForStream(cloudEvents, subscriptionId, action, cache);
+            var cloudEvents = eventStoreQueries.query(catchupFilter, Math.toIntExact(numberOfEventsBeforeStartingCatchupSubscription), Math.toIntExact(numberOfEventsNotConsumed), config.catchupPhaseSortBy);
+            runCatchupForStream(cloudEvents, subscriptionId, action, catchupPhaseCache);
+        }
+
+        // We check if the delegated subscription model is not allowed to subscribe. If so, we remove any temporary subscription position written during the catchup phase
+        // since we're now done with the catch-up.
+        if (delegatedStartAt == null) {
+            returnIfSubscriptionPositionStorageConfigIs(UseSubscriptionPositionInStorage.class, cfg -> {
+                cfg.storage().delete(subscriptionId);
+                return null;
+            });
         }
 
         final boolean subscriptionsWasCancelledOrShutdown;
@@ -196,9 +191,6 @@ public class CatchupSubscriptionModel implements SubscriptionModel, DelegatingSu
             // When runningCatchupSubscriptions doesn't contain the key at this stage it means that it has been explicitly cancelled.
             subscriptionsWasCancelledOrShutdown = true;
         }
-
-        // Be careful since the wrapping subscription has not yet saved the global position here...
-        // We need a durable cache in order to be 100% safe.
 
         // When the catch-up subscription is ready, we store the global position in the position storage so that subscriptions
         // that have not received _any_ new events during replay will start at the global position if the application is restarted.
@@ -217,37 +209,63 @@ public class CatchupSubscriptionModel implements SubscriptionModel, DelegatingSu
                             if ((position == null || isTimeBasedSubscriptionPosition(position)) && globalSubscriptionPosition != null) {
                                 position = cfg.storage().save(subscriptionId, globalSubscriptionPosition);
                             } else if (position == null) {
-                                // Position can still be null here if globalSubscriptionPosition is null, if so, we start at the "subscriptionModelDefault"
+                                // Position can still be null here if globalSubscriptionPosition is null, if so, we start at the "subscriptionModelDefault",
+                                // given that the delegated subscription model is allowed to subscribe (i.e. delegatedStartAt != null).
                                 return delegatedStartAt == null ? startAt : StartAt.subscriptionModelDefault();
                             }
                             return StartAt.subscriptionPosition(position);
                         })
                 .orElse(() -> {
                     if (globalSubscriptionPosition == null) {
+                        // We check if the delegated subscription model is allowed to subscribe (delegatedStartAt != null),
+                        // if so we instruct the subscription model to start from default, otherwise just return the original
+                        // startAt supplied by the user.
                         return delegatedStartAt == null ? startAt : StartAt.subscriptionModelDefault();
                     } else {
                         return StartAt.subscriptionPosition(globalSubscriptionPosition);
                     }
                 }));
 
+        return startDelegatedSubscription(subscriptionId, filter, action, subscriptionsWasCancelledOrShutdown, startAtToUse, catchupPhaseCache);
+    }
+
+    private Subscription startDelegatedSubscription(String subscriptionId, SubscriptionFilter filter, Consumer<CloudEvent> action, boolean subscriptionsWasCancelledOrShutdown, StartAt startAtToUse, FixedSizeCache catchupPhaseEventCache) {
         final Subscription subscription;
         if (subscriptionsWasCancelledOrShutdown) {
             doIfSubscriptionPositionStorageConfigIs(UseSubscriptionPositionInStorage.class, cfg -> {
-                // Only store position if using storage and no position has been stored!
+                // Only get position if using storage and no position has been stored!
                 if (!cfg.storage().exists(subscriptionId)) {
                     startAtToUse.get(generateSubscriptionModelContext());
                 }
             });
             subscription = new CancelledSubscription(subscriptionId);
         } else {
-            subscription = this.subscriptionModel.subscribe(subscriptionId, filter, startAtToUse, cloudEvent -> {
-                if (!cache.isCached(cloudEvent.getId())) {
+            subscription = getDelegatedSubscriptionModel().subscribe(subscriptionId, filter, startAtToUse, cloudEvent -> {
+                if (!catchupPhaseEventCache.isCached(cloudEvent.getId())) {
                     action.accept(cloudEvent);
                 }
             });
         }
-
         return subscription;
+    }
+
+    private static Filter deriveFilterToUseDuringCatchupPhase(SubscriptionFilter filter, SubscriptionPosition subscriptionPosition) {
+        final Filter timeFilter;
+        if (isBeginningOfTime(subscriptionPosition)) {
+            timeFilter = Filter.all();
+        } else {
+            OffsetDateTime offsetDateTime = OffsetDateTime.parse(subscriptionPosition.asString(), RFC_3339_DATE_TIME_FORMATTER);
+            timeFilter = time(gt(offsetDateTime));
+        }
+
+        final Filter catchupFilter;
+        if (filter == null) {
+            catchupFilter = timeFilter;
+        } else {
+            Filter userSuppliedFilter = ((OccurrentSubscriptionFilter) filter).filter;
+            catchupFilter = timeFilter.and(userSuppliedFilter);
+        }
+        return catchupFilter;
     }
 
     private void runCatchupForStream(Stream<CloudEvent> cloudEvents, String subscriptionId, Consumer<CloudEvent> action, @Nullable FixedSizeCache cache) {
