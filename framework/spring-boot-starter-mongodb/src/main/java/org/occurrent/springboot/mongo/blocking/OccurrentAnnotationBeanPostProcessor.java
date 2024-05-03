@@ -67,7 +67,6 @@ class OccurrentAnnotationBeanPostProcessor implements BeanPostProcessor, Applica
         return bean;
     }
 
-
     @SuppressWarnings("unchecked")
     private <E> void processSubscribeAnnotation(Object bean, Method method, Subscription subscription) {
         String id = subscription.id();
@@ -199,7 +198,7 @@ class OccurrentAnnotationBeanPostProcessor implements BeanPostProcessor, Applica
             Class<E>[] permittedSubclasses = (Class<E>[]) specifiedEventType.getPermittedSubclasses();
             domainEventTypesToSubscribeTo = Arrays.stream(permittedSubclasses).flatMap(c -> getConcreteEventTypes(subscriptionId, c).stream()).toList();
         } else if (specifiedEventType.isInterface() || specifiedEventType.isArray() || Modifier.isAbstract(specifiedEventType.getModifiers())) {
-            String msg = "You need cannot subscribe to a non-sealed interfaces or abstract types (problem is with %s). A concrete or sealed event type is required. You can also specify event types explicitly by using @Subscription(id = \"%s\", eventTypes = { MyEvent1.class, MyEvent2.class }))";
+            String msg = "You need cannot subscribe to a non-sealed interfaces or abstract types (problem is with %s). A concrete or sealed event type is required. You can also specify event types explicitly by using @Subscription(id = \"%s\", eventTypes = [MyEvent1.class, MyEvent2.class]))";
             throw new IllegalArgumentException(msg.formatted(specifiedEventType.getName(), subscriptionId));
         } else {
             domainEventTypesToSubscribeTo = List.of(specifiedEventType);
