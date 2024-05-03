@@ -231,13 +231,13 @@ public class CatchupSubscriptionModelTest {
         LocalDateTime now = LocalDateTime.now();
         NameDefined nameDefined1 = new NameDefined(UUID.randomUUID().toString(), now, "name", "name1");
         NameDefined nameDefined2 = new NameDefined(UUID.randomUUID().toString(), now.plusSeconds(2), "name", "name2");
-        NameDefined nameDefined3 = new NameDefined(UUID.randomUUID().toString(), now.plusSeconds(6), "name", "name5");
-        NameDefined nameDefined4 = new NameDefined(UUID.randomUUID().toString(), now.plusSeconds(7), "name", "name6");
-        NameWasChanged nameWasChanged1 = new NameWasChanged(UUID.randomUUID().toString(), now.plusSeconds(10), "name", "name3");
+        NameWasChanged nameChanged1 = new NameWasChanged(UUID.randomUUID().toString(), now.plusSeconds(10), "name", "name3");
+        NameDefined nameDefined3 = new NameDefined(UUID.randomUUID().toString(), now.plusSeconds(11), "name", "name5");
+        NameDefined nameDefined4 = new NameDefined(UUID.randomUUID().toString(), now.plusSeconds(12), "name", "name6");
 
         mongoEventStore.write("1", 0, serialize(nameDefined1));
         mongoEventStore.write("2", 0, serialize(nameDefined2));
-        mongoEventStore.write("1", 1, serialize(nameWasChanged1));
+        mongoEventStore.write("1", 1, serialize(nameChanged1));
 
         CopyOnWriteArrayList<CloudEvent> state = new CopyOnWriteArrayList<>();
 
@@ -268,7 +268,7 @@ public class CatchupSubscriptionModelTest {
 
         // Then
         await().atMost(FIVE_SECONDS).with().pollInterval(Duration.of(100, MILLIS)).untilAsserted(() ->
-                assertThat(state).hasSize(5).extracting(this::deserialize).containsExactly(nameDefined1, nameDefined2, nameWasChanged1, nameDefined3, nameDefined4));
+                assertThat(state).hasSize(5).extracting(this::deserialize).containsExactly(nameDefined1, nameDefined2, nameChanged1, nameDefined3, nameDefined4));
 
         thread.join();
     }
