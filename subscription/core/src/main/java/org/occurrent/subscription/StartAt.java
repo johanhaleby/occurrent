@@ -16,7 +16,6 @@
 
 package org.occurrent.subscription;
 
-import java.util.Map;
 import java.util.StringJoiner;
 import java.util.function.Function;
 import java.util.function.Supplier;
@@ -155,14 +154,9 @@ public sealed interface StartAt {
         return new Dynamic(supplier);
     }
 
-    record SubscriptionModelContext(Class<?> subscriptionModelType, Map<String, Object> subscriptionModelData) {
+    record SubscriptionModelContext(Class<?> subscriptionModelType) {
         public SubscriptionModelContext {
             requireNonNull(subscriptionModelType, "subscriptionModelType cannot be null");
-            requireNonNull(subscriptionModelData, "subscriptionModelData cannot be null");
-        }
-
-        public SubscriptionModelContext(Class<?> subscriptionModelType) {
-            this(subscriptionModelType, Map.of());
         }
     }
 }
