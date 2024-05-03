@@ -153,25 +153,18 @@ public class CatchupSubscriptionModelTest {
         CountDownLatch waitForNewEventsToBePublished = new CountDownLatch(1);
 
         new Thread(() -> {
-            try {
-                waitBeforePublishingNewEvents.await(1, TimeUnit.MINUTES);
-                mongoEventStore.write("3", 0, serialize(nameDefined3));
-                mongoEventStore.write("4", 0, serialize(nameDefined4));
-                waitForNewEventsToBePublished.countDown();
-            } catch (InterruptedException e) {
-                throw new RuntimeException(e);
-            }
+            awaitLatch(waitBeforePublishingNewEvents);
+            awaitLatch(waitBeforePublishingNewEvents);
+            mongoEventStore.write("3", 0, serialize(nameDefined3));
+            mongoEventStore.write("4", 0, serialize(nameDefined4));
+            waitForNewEventsToBePublished.countDown();
         }).start();
 
         // When
         subscription.subscribe(UUID.randomUUID().toString(), StartAt.subscriptionPosition(TimeBasedSubscriptionPosition.beginningOfTime()), e -> {
             if (state.size() == 1) {
                 waitBeforePublishingNewEvents.countDown();
-                try {
-                    waitForNewEventsToBePublished.await(1, TimeUnit.MINUTES);
-                } catch (InterruptedException ex) {
-                    throw new RuntimeException(ex);
-                }
+                awaitLatch(waitForNewEventsToBePublished);
             }
             state.add(e);
         }).waitUntilStarted();
