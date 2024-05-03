@@ -1,3 +1,6 @@
+### Changelog next version
+* Major improvements to CatchupSubscriptionModel, it now handles and includes events that have been written while the catch-up subscription phase runs. Also, the "idempotency cache" is only used while switching from catch-up to continuous mode, and not during the entire catch-up phase.   
+
 ### 0.17.2 (2024-02-27)
 * Fixed issue in CompetingConsumerSubscriptionModel in which it failed to reacquire consumption rights in some cases where MongoDB connection was lost.   
 

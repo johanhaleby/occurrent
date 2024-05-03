@@ -17,6 +17,7 @@
 package org.occurrent.subscription.blocking.durable.catchup;
 
 import io.cloudevents.CloudEvent;
+import jakarta.annotation.Nullable;
 import jakarta.annotation.PreDestroy;
 import org.occurrent.eventstore.api.blocking.EventStoreQueries;
 import org.occurrent.filter.Filter;
@@ -143,25 +144,37 @@ public class CatchupSubscriptionModel implements SubscriptionModel, DelegatingSu
             timeFilter = time(gt(offsetDateTime));
         }
 
+        final long numberOfEventsBeforeStartingCatchupSubscription;
+        final Filter catchupFilter;
+        final Stream<CloudEvent> stream;
+        if (filter == null) {
+            catchupFilter = timeFilter;
+            numberOfEventsBeforeStartingCatchupSubscription = eventStoreQueries.count(catchupFilter);
+            stream = eventStoreQueries.query(catchupFilter, config.catchupPhaseSortBy);
+        } else {
+            Filter userSuppliedFilter = ((OccurrentSubscriptionFilter) filter).filter;
+            catchupFilter = timeFilter.and(userSuppliedFilter);
+            numberOfEventsBeforeStartingCatchupSubscription = eventStoreQueries.count(catchupFilter);
+            stream = eventStoreQueries.query(catchupFilter, config.catchupPhaseSortBy);
+        }
+
+        // Perform the catchup
+        runCatchupForStream(stream, subscriptionId, action, null);
+
         // Here's the reason why we're forcing the wrapping subscription to be a PositionAwareBlockingSubscription.
         // This is in order to be 100% safe since we need to take events that are published meanwhile the EventStoreQuery
         // is executed. Thus, we need the global position of the subscription at the time of starting the query.
         SubscriptionPosition globalSubscriptionPosition = subscriptionModel.globalSubscriptionPosition();
 
-        FixedSizeCache cache = new FixedSizeCache(config.cacheSize);
-        final Stream<CloudEvent> stream;
-        if (filter == null) {
-            stream = eventStoreQueries.query(timeFilter, config.catchupPhaseSortBy);
-        } else {
-            Filter userSuppliedFilter = ((OccurrentSubscriptionFilter) filter).filter;
-            stream = eventStoreQueries.query(timeFilter.and(userSuppliedFilter), config.catchupPhaseSortBy);
-        }
+        // Here we check if new events have arrived during catchup phase, if so we stream/catch-up these events as well.
+        long numberOfEventsAfterCatchupSubscriptionCompleted = eventStoreQueries.count(catchupFilter);
+        long numberOfEventsNotConsumed = numberOfEventsAfterCatchupSubscriptionCompleted - numberOfEventsBeforeStartingCatchupSubscription;
 
-        stream.takeWhile(__ -> !shuttingDown && runningCatchupSubscriptions.containsKey(subscriptionId))
-                .peek(action)
-                .peek(e -> cache.put(e.getId()))
-                .filter(returnIfSubscriptionPositionStorageConfigIs(PersistSubscriptionPositionDuringCatchupPhase.class, PersistSubscriptionPositionDuringCatchupPhase::persistCloudEventPositionPredicate).orElse(__ -> false))
-                .forEach(e -> doIfSubscriptionPositionStorageConfigIs(PersistSubscriptionPositionDuringCatchupPhase.class, cfg -> cfg.storage().save(subscriptionId, TimeBasedSubscriptionPosition.from(e.getTime()))));
+        FixedSizeCache cache = new FixedSizeCache(config.cacheSize);
+        if (numberOfEventsNotConsumed > 0) {
+            var cloudEvents = eventStoreQueries.query(catchupFilter, Math.toIntExact(numberOfEventsBeforeStartingCatchupSubscription), Math.toIntExact(numberOfEventsNotConsumed));
+            runCatchupForStream(cloudEvents, subscriptionId, action, cache);
+        }
 
         final boolean subscriptionsWasCancelledOrShutdown;
         if (!shuttingDown && runningCatchupSubscriptions.containsKey(subscriptionId)) {
@@ -218,6 +231,17 @@ public class CatchupSubscriptionModel implements SubscriptionModel, DelegatingSu
         }
 
         return subscription;
+    }
+
+    private void runCatchupForStream(Stream<CloudEvent> cloudEvents, String subscriptionId, Consumer<CloudEvent> action, @Nullable FixedSizeCache cache) {
+        Stream<CloudEvent> takeWhile = cloudEvents.takeWhile(__ -> !shuttingDown && runningCatchupSubscriptions.containsKey(subscriptionId));
+        if (cache != null) {
+            takeWhile = takeWhile.peek(e -> cache.put(e.getId()));
+        }
+        takeWhile
+                .peek(action)
+                .filter(returnIfSubscriptionPositionStorageConfigIs(PersistSubscriptionPositionDuringCatchupPhase.class, PersistSubscriptionPositionDuringCatchupPhase::persistCloudEventPositionPredicate).orElse(__ -> false))
+                .forEach(e -> doIfSubscriptionPositionStorageConfigIs(PersistSubscriptionPositionDuringCatchupPhase.class, cfg -> cfg.storage().save(subscriptionId, TimeBasedSubscriptionPosition.from(e.getTime()))));
     }
 
     private static SubscriptionModelContext generateSubscriptionModelContext() {

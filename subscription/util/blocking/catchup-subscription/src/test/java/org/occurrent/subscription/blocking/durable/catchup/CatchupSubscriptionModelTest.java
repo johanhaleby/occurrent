@@ -25,10 +25,8 @@ import com.mongodb.client.MongoDatabase;
 import io.cloudevents.CloudEvent;
 import io.cloudevents.core.builder.CloudEventBuilder;
 import org.bson.Document;
-import org.junit.jupiter.api.AfterEach;
-import org.junit.jupiter.api.BeforeEach;
-import org.junit.jupiter.api.Test;
-import org.junit.jupiter.api.Timeout;
+import org.junit.jupiter.api.*;
+import org.junit.jupiter.api.DisplayNameGenerator.ReplaceUnderscores;
 import org.junit.jupiter.api.extension.RegisterExtension;
 import org.occurrent.domain.DomainEvent;
 import org.occurrent.domain.NameDefined;
@@ -73,6 +71,7 @@ import static org.occurrent.time.TimeConversion.toLocalDateTime;
 
 @Testcontainers
 @Timeout(15000)
+@DisplayNameGeneration(ReplaceUnderscores.class)
 public class CatchupSubscriptionModelTest {
 
     @Container
@@ -131,6 +130,54 @@ public class CatchupSubscriptionModelTest {
 
         // Then
         await().atMost(FIVE_SECONDS).with().pollInterval(Duration.of(20, MILLIS)).untilAsserted(() -> assertThat(state).hasSize(3));
+    }
+
+    @SuppressWarnings("ResultOfMethodCallIgnored")
+    @Test
+    void catchup_subscription_reads_events_that_were_persisted_during_catchup_phase() {
+        // Given
+        LocalDateTime now = LocalDateTime.now();
+        NameDefined nameDefined1 = new NameDefined(UUID.randomUUID().toString(), now, "name", "name1");
+        NameDefined nameDefined2 = new NameDefined(UUID.randomUUID().toString(), now.plusSeconds(2), "name", "name2");
+        NameDefined nameDefined3 = new NameDefined(UUID.randomUUID().toString(), now.plusSeconds(4), "johan", "haleby");
+        NameDefined nameDefined4 = new NameDefined(UUID.randomUUID().toString(), now.plusSeconds(5), "mattias", "haleby");
+        NameWasChanged nameWasChanged1 = new NameWasChanged(UUID.randomUUID().toString(), now.plusSeconds(10), "name", "name3");
+
+        mongoEventStore.write("1", 0, serialize(nameDefined1));
+        mongoEventStore.write("2", 0, serialize(nameDefined2));
+        mongoEventStore.write("1", 1, serialize(nameWasChanged1));
+
+        CopyOnWriteArrayList<CloudEvent> state = new CopyOnWriteArrayList<>();
+
+        CountDownLatch waitBeforePublishingNewEvents = new CountDownLatch(1);
+        CountDownLatch waitForNewEventsToBePublished = new CountDownLatch(1);
+
+        new Thread(() -> {
+            try {
+                waitBeforePublishingNewEvents.await(1, TimeUnit.MINUTES);
+                mongoEventStore.write("3", 0, serialize(nameDefined3));
+                mongoEventStore.write("4", 0, serialize(nameDefined4));
+                waitForNewEventsToBePublished.countDown();
+            } catch (InterruptedException e) {
+                throw new RuntimeException(e);
+            }
+        }).start();
+
+        // When
+        subscription.subscribe(UUID.randomUUID().toString(), StartAt.subscriptionPosition(TimeBasedSubscriptionPosition.beginningOfTime()), e -> {
+            if (state.size() == 1) {
+                waitBeforePublishingNewEvents.countDown();
+                try {
+                    waitForNewEventsToBePublished.await(1, TimeUnit.MINUTES);
+                } catch (InterruptedException ex) {
+                    throw new RuntimeException(ex);
+                }
+            }
+            state.add(e);
+        }).waitUntilStarted();
+
+        // Then
+        await().atMost(FIVE_SECONDS).with().pollInterval(Duration.of(20, MILLIS)).untilAsserted(() -> assertThat(state).hasSize(5));
     }
 
     @Test
