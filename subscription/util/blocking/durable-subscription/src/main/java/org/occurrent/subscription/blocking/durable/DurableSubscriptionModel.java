@@ -80,13 +80,10 @@ public class DurableSubscriptionModel implements PositionAwareSubscriptionModel,
     public Subscription subscribe(String subscriptionId, SubscriptionFilter filter, StartAt startAt, Consumer<CloudEvent> action) {
         Objects.requireNonNull(startAt, StartAt.class.getSimpleName() + " supplier cannot be null");
 
-        // TODO DEtta funkar inte!! DEn sparar ner positionen ändå, dvs vi får aldrig null!
-        // Detta är i kontexten då Catchup har lämnat över hit. Det beror på att den sätter en
-        // startAt position explicit
         StartAt startAtToUse = generateStartAtPositionFrom(subscriptionId, startAt);
         if (startAtToUse == null) {
             // We're not allowed to start this subscription, delegate to wrapped subscription instead
-            return getDelegatedSubscriptionModelRecursively().subscribe(subscriptionId, filter, startAt, action);
+            return getDelegatedSubscriptionModel().subscribe(subscriptionId, filter, startAt, action);
         }
 
         return subscriptionModel.subscribe(subscriptionId, filter, startAtToUse, cloudEvent -> {
