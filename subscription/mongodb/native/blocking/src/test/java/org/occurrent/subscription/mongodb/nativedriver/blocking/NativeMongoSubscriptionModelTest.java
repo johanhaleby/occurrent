@@ -81,7 +81,7 @@ import static org.occurrent.subscription.mongodb.MongoFilterSpecification.MongoB
 import static org.occurrent.time.TimeConversion.toLocalDateTime;
 
 @Testcontainers
-@Timeout(15000)
+@Timeout(15)
 public class NativeMongoSubscriptionModelTest {
 
     @Container

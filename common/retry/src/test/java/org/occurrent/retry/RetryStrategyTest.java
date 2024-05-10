@@ -39,7 +39,7 @@ public class RetryStrategyTest {
         );
     }
 
-    @Timeout(2000)
+    @Timeout(2)
     @Test
     void example_of_retry_executed_with_function_that_takes_retry_info() {
         // Given
@@ -336,7 +336,7 @@ public class RetryStrategyTest {
     @DisplayName("retry if")
     class RetryIfTest {
 
-        @Timeout(2000)
+        @Timeout(2)
         @Test
         void only_retries_if_retry_predicate_is_fulfilled() {
             // Given
@@ -356,7 +356,7 @@ public class RetryStrategyTest {
             );
         }
 
-        @Timeout(2000)
+        @Timeout(2)
         @Test
         void only_retries_if_retry_predicate_is_fulfilled_when_taking_throwable_into_account() {
             // Given
@@ -725,7 +725,7 @@ public class RetryStrategyTest {
             );
         }
 
-        @Timeout(2000)
+        @Timeout(2)
         @Test
         void on_before_retry_listener_retry_info_data_is_correct_when_finite_max_attempts_are_exceeded() {
             // Given
@@ -840,7 +840,7 @@ public class RetryStrategyTest {
             );
         }
 
-        @Timeout(2000)
+        @Timeout(2)
         @Test
         void on_after_retry_listener_retry_info_data_is_correct_when_finite_max_attempts_are_exceeded() {
             // Given

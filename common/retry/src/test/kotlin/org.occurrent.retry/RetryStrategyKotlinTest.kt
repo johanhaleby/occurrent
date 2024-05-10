@@ -26,7 +26,7 @@ import java.util.concurrent.atomic.AtomicInteger
 
 
 @DisplayNameGeneration(DisplayNameGenerator.Simple::class)
-@Timeout(2000)
+@Timeout(2)
 class RetryStrategyKotlinTest {
 
     @Test
