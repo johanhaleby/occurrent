@@ -35,7 +35,14 @@ import kotlin.reflect.KClass
  * associated with the event.
  */
 data class EventMetadata internal constructor(val data: Map<String, Any?>) {
+    /**
+     * The streamId of the event
+     */
     val streamId: String get() = data[OccurrentCloudEventExtension.STREAM_ID] as String
+
+    /**
+     * The version of the event in the stream
+     */
     val streamVersion: Long get() = data[OccurrentCloudEventExtension.STREAM_VERSION] as Long
 
     inline operator fun <reified T : Any?> get(key: String) = data[key] as T
@@ -105,7 +112,7 @@ class Subscriptions<E : Any>(private val subscriptionModel: Subscribable, privat
 
     @JvmOverloads
     fun <E1 : E> subscribe(subscriptionId: String, eventType: Class<E1>, startAt: StartAt? = null, fn: Consumer<E1>): Subscription {
-        return subscribe(subscriptionId, listOf(eventType), startAt) { e : E ->
+        return subscribe(subscriptionId, listOf(eventType), startAt) { e: E ->
             @Suppress("UNCHECKED_CAST")
             fn.accept(e as E1)
         }

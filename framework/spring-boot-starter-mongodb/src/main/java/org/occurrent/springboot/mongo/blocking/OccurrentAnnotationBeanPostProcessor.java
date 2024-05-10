@@ -58,6 +58,9 @@ import static java.util.function.Predicate.not;
 import static org.occurrent.filter.Filter.CompositionOperator.OR;
 import static org.occurrent.subscription.OccurrentSubscriptionFilter.filter;
 
+/**
+ * Implements support for the {@link Subscription} annotation in Spring Boot
+ */
 class OccurrentAnnotationBeanPostProcessor implements BeanPostProcessor, ApplicationContextAware {
 
     private ApplicationContext applicationContext;
@@ -173,7 +176,7 @@ class OccurrentAnnotationBeanPostProcessor implements BeanPostProcessor, Applica
     }
 
     private @NotNull StartAt generateStartAt(Subscription subscription) {
-        StartPositionToUse startPositionToUse = findStartPositionToUseOrThrow(subscription.id(), subscription.startAtISO8601(), subscription.startAtTimeEpoch(), subscription.startAt());
+        StartPositionToUse startPositionToUse = findStartPositionToUseOrThrow(subscription.id(), subscription.startAtISO8601(), subscription.startAtTimeEpochMs(), subscription.startAt());
         ResumeBehavior resumeBehavior = subscription.resumeBehavior();
         return generateStartAt(subscription.id(), startPositionToUse, resumeBehavior);
     }
