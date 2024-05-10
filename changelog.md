@@ -1,5 +1,15 @@
 ### Changelog next version
-* Major improvements to CatchupSubscriptionModel, it now handles and includes events that have been written while the catch-up subscription phase runs. Also, the "idempotency cache" is only used while switching from catch-up to continuous mode, and not during the entire catch-up phase.   
+* Major improvements to CatchupSubscriptionModel, it now handles and includes events that have been written while the catch-up subscription phase runs. Also, the "idempotency cache" is only used while switching from catch-up to continuous mode, and not during the entire catch-up phase.
+* Major changes to the `spring-boot-starter-mongodb` module. It now includes a `CatchupSubscriptionModel` which allows you to start subscriptions from an historic date more easily.
+* `StartAt.Dynamic(..)` now takes a `SubscriptionModelContext` as a parameter. This means that subscription models can add a "context" that can be useful for dynamic behavior. For example, you can prevent a certain subscription model to start (and instead delegate to its parent) if you return `null` as `StartAt` from a dynamic position.
+* Added annotation support for subscriptions when using the `spring-boot-starter-mongodb` module. You can now do: 
+  ```java
+  @Subscription(id = "mySubscription")
+  void mySubscription(MyDomainEvent event) {
+      System.out.println("Received event: " + event);
+  }  
+  ```
+  It also allows you to easily start the subscription from a moment in the past (such as beginning of time). See javadoc in `org.occurrent.annotation.Subscription` for more info. 
 
 ### 0.17.2 (2024-02-27)
 * Fixed issue in CompetingConsumerSubscriptionModel in which it failed to reacquire consumption rights in some cases where MongoDB connection was lost.   
