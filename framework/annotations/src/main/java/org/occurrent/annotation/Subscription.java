@@ -36,15 +36,15 @@ import java.lang.annotation.*;
  * &#64;Subscription(id = "mySubscription", startAt = StartPosition.BEGINNING_OF_TIME)
  * void mySubscription(MyDomainEvent event) { .. }
  * </pre>
- * This will stream all events from the beginning of time and then continue subscribing to new events continuously. If you like you can also start at an arbitrary date
+ * This will first replay all historic events from the beginning of time and then continue subscribing to new events continuously. You can also start at a specific date
  * by using {@link #startAtISO8601()} or {@link #startAtTimeEpochMs()}.
  * </p>
  * <p>
- * Note that the example above will <i>start</i> streaming events from the beginning of time, but when the application is restarted, it'll continue from the last received event
- * (i.e. the subscription will only stream all the events once and then continue normally). If you want a different behavior, configure a different {@link #resumeBehavior()}.
+ * Note that the example above will <i>start</i> replay historic events from the beginning of time when the subscription is started the first time. However, once the subscription is resumed,
+ * e.g. on application restart, it'll continue from the last received event. If you want a different behavior, configure a different {@link #resumeBehavior()}.
  * </p>
  * <p>
- * Note also that if if {@code MyDomainEvent} is a sealed interface/class, then all events implementing this interface/class will be received. If you want to receive only
+ * Note also that if {@code MyDomainEvent} is a sealed interface/class, then all events implementing this interface/class will be received. If you want to receive only
  * some of the events that implements this interface, see {@link #eventTypes()}.
  * </p>
  *
