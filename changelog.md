@@ -26,6 +26,15 @@
   ```java
   subscriptionModel.subscribe("myId", StartAtTime.beginningOfTime(), System.out::println);
   ```
+* Upgraded Spring Boot from 3.2.1 to 3.2.5
+* Upgraded Mongo sync driver 4.11.1 to 4.11.2
+* Upgraded jobrunr from 6.3.3 to 7.1.1
+* Upgraded project reactor from 3.6.0 to 3.6.5
+* Upgraded jackson from 2.15.3 to 2.15.4
+* Upgraded Kotlin from 1.9.22 to 1.9.23
+* Upgraded spring-data-mongodb from 4.2.0 to 4.2.5
+* Upgraded cloudevents from 2.5.0 to 3.0.0
+
 ### 0.17.2 (2024-02-27)
 * Fixed issue in CompetingConsumerSubscriptionModel in which it failed to reacquire consumption rights in some cases where MongoDB connection was lost.   
 

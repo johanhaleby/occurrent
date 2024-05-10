@@ -63,7 +63,7 @@ public class DocumentCloudEventWriter implements CloudEventWriterFactory<Documen
     }
 
     @Override
-    public CloudEventContextWriter withContextAttribute(String name, Number value) throws CloudEventRWException {
+    public CloudEventContextWriter withContextAttribute(String name, Integer value) throws CloudEventRWException {
         document.append(name, value);
         return this;
     }

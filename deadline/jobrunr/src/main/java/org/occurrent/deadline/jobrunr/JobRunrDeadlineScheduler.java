@@ -46,7 +46,7 @@ public class JobRunrDeadlineScheduler implements DeadlineScheduler {
 
     @Override
     public void cancel(String id) {
-        jobRequestScheduler.delete(id);
+        jobRequestScheduler.delete(generateUUIDFromString(id));
     }
 
     private static UUID generateUUIDFromString(String id) {
