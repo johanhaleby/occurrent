@@ -70,7 +70,7 @@ import static org.occurrent.subscription.blocking.durable.catchup.SubscriptionPo
 import static org.occurrent.time.TimeConversion.toLocalDateTime;
 
 @Testcontainers
-@Timeout(15000)
+@Timeout(15)
 @DisplayNameGeneration(ReplaceUnderscores.class)
 public class CatchupSubscriptionModelTest {
 
@@ -132,7 +132,27 @@ public class CatchupSubscriptionModelTest {
         await().atMost(FIVE_SECONDS).with().pollInterval(Duration.of(20, MILLIS)).untilAsserted(() -> assertThat(state).hasSize(3));
     }
 
-    @SuppressWarnings("ResultOfMethodCallIgnored")
+    @Test
+    void catchup_subscription_reads_historic_events_when_using_subscribeFromBeginningOfTime() {
+        // Given
+        LocalDateTime now = LocalDateTime.now();
+        NameDefined nameDefined1 = new NameDefined(UUID.randomUUID().toString(), now, "name", "name1");
+        NameDefined nameDefined2 = new NameDefined(UUID.randomUUID().toString(), now.plusSeconds(2), "name", "name2");
+        NameWasChanged nameWasChanged1 = new NameWasChanged(UUID.randomUUID().toString(), now.plusSeconds(10), "name", "name3");
+
+        mongoEventStore.write("1", 0, serialize(nameDefined1));
+        mongoEventStore.write("2", 0, serialize(nameDefined2));
+        mongoEventStore.write("1", 1, serialize(nameWasChanged1));
+
+        CopyOnWriteArrayList<CloudEvent> state = new CopyOnWriteArrayList<>();
+
+        // When
+        subscription.subscribeFromBeginningOfTime(UUID.randomUUID().toString(), state::add).waitUntilStarted();
+
+        // Then
+        await().atMost(FIVE_SECONDS).with().pollInterval(Duration.of(20, MILLIS)).untilAsserted(() -> assertThat(state).hasSize(3));
+    }
+
     @Test
     void catchup_subscription_reads_events_that_were_persisted_during_catchup_phase() {
         // Given
@@ -161,7 +181,7 @@ public class CatchupSubscriptionModelTest {
         }).start();
 
         // When
-        subscription.subscribe(UUID.randomUUID().toString(), StartAt.subscriptionPosition(TimeBasedSubscriptionPosition.beginningOfTime()), e -> {
+        subscription.subscribe(UUID.randomUUID().toString(), StartAtTime.beginningOfTime(), e -> {
             if (state.size() == 1) {
                 waitBeforePublishingNewEvents.countDown();
                 awaitLatch(waitForNewEventsToBePublished);
@@ -198,6 +218,30 @@ public class CatchupSubscriptionModelTest {
     }
 
     @Test
+    void catchup_subscription_reads_historic_events_with_filter_when_using_subscribeFromBeginningOfTime() {
+        // Given
+        LocalDateTime now = LocalDateTime.now();
+        NameDefined nameDefined1 = new NameDefined(UUID.randomUUID().toString(), now, "name", "name1");
+        NameDefined nameDefined2 = new NameDefined(UUID.randomUUID().toString(), now.plusSeconds(2), "name", "name2");
+        NameWasChanged nameWasChanged1 = new NameWasChanged(UUID.randomUUID().toString(), now.plusSeconds(10), "name", "name3");
+
+        mongoEventStore.write("1", 0, serialize(nameDefined1));
+        mongoEventStore.write("2", 0, serialize(nameDefined2));
+        mongoEventStore.write("1", 1, serialize(nameWasChanged1));
+
+        CopyOnWriteArrayList<CloudEvent> state = new CopyOnWriteArrayList<>();
+
+        // When
+        subscription.subscribeFromBeginningOfTime(UUID.randomUUID().toString(), filter(type(NameDefined.class.getName())), state::add).waitUntilStarted();
+
+        // Then
+        await().atMost(FIVE_SECONDS).with().pollInterval(Duration.of(20, MILLIS)).untilAsserted(() -> {
+            assertThat(state).hasSize(2);
+            assertThat(state).extracting(CloudEvent::getType).containsOnly(NameDefined.class.getName());
+        });
+    }
+
+    @Test
     void catchup_subscription_reads_historic_events_with_filter_using_custom_sort_by_during_catchup_phase() {
         // Given
         LocalDateTime now = LocalDateTime.now();
@@ -219,7 +263,7 @@ public class CatchupSubscriptionModelTest {
         subscription = newCatchupSubscription(database, eventCollection, TimeRepresentation.DATE, cfg);
 
         // When
-        subscription.subscribe(UUID.randomUUID().toString(), StartAt.subscriptionPosition(TimeBasedSubscriptionPosition.beginningOfTime()), state::add).waitUntilStarted();
+        subscription.subscribe(UUID.randomUUID().toString(), StartAtTime.beginningOfTime(), state::add).waitUntilStarted();
 
         // Then
         await().atMost(FIVE_SECONDS).with().pollInterval(Duration.of(20, MILLIS)).untilAsserted(() -> assertThat(state).extracting(CloudEvent::getId).containsExactly(eventId3, eventId2, eventId1));
@@ -350,7 +394,7 @@ public class CatchupSubscriptionModelTest {
 
         // When
 
-        subscription.subscribe(subscriptionId, filter(type(NameDefined.class.getName())), e -> {
+        subscription.subscribe(subscriptionId, filter(type(NameDefined.class.getName())), StartAtTime.beginningOfTime(), e -> {
             if (state.size() < 2) {
                 state.add(e);
             }
@@ -405,7 +449,7 @@ public class CatchupSubscriptionModelTest {
         subscription = catchupSupportingBlockingSubscription.get();
 
         // When
-        subscription.subscribe(subscriptionId, filter(type(NameDefined.class.getName())), e -> {
+        subscription.subscribe(subscriptionId, filter(type(NameDefined.class.getName())), StartAtTime.beginningOfTime(), e -> {
             if (state.size() < 2) {
                 state.add(e);
             }
@@ -430,7 +474,59 @@ public class CatchupSubscriptionModelTest {
     }
 
     @Test
-    void catchup_subscription_restarts_from_beginning_of_time_when_position_is_not_persisted_during_catch_up_and_catch_up_fails() {
+    void catchup_subscription_delegates_to_parent_when_position_is_not_persisted_during_catch_up_and_catch_up_fails_and_start_at_is_default() {
+        // Given
+        LocalDateTime now = LocalDateTime.now();
+        NameDefined nameDefined1 = new NameDefined(UUID.randomUUID().toString(), now, "name", "name1");
+        NameDefined nameDefined2 = new NameDefined(UUID.randomUUID().toString(), now.plusSeconds(2), "name", "name2");
+        NameDefined nameDefined3 = new NameDefined(UUID.randomUUID().toString(), now.plusSeconds(6), "name", "name5");
+        NameWasChanged nameWasChanged1 = new NameWasChanged(UUID.randomUUID().toString(), now.plusSeconds(10), "name", "name3");
+        NameWasChanged nameWasChanged2 = new NameWasChanged(UUID.randomUUID().toString(), now.plusSeconds(11), "name", "name10");
+
+        mongoEventStore.write("1", 0, serialize(nameDefined1));
+        mongoEventStore.write("2", 0, serialize(nameDefined2));
+        mongoEventStore.write("1", 1, serialize(nameWasChanged1));
+        mongoEventStore.write("3", 0, serialize(nameDefined3));
+
+        CountDownLatch cancelSubscriberLatch = new CountDownLatch(1);
+        CountDownLatch waitUntilCancelled = new CountDownLatch(1);
+        CountDownLatch waitUntilSecondEventProcessed = new CountDownLatch(1);
+        CopyOnWriteArrayList<CloudEvent> state = new CopyOnWriteArrayList<>();
+
+        String subscriptionId = UUID.randomUUID().toString();
+        new Thread(() -> {
+            awaitLatch(cancelSubscriberLatch);
+            subscription.shutdown();
+            waitUntilCancelled.countDown();
+        }).start();
+
+        // When
+        subscription = newCatchupSubscription(database, eventCollection, TimeRepresentation.DATE, new CatchupSubscriptionModelConfig(100));
+        subscription.subscribe(subscriptionId, StartAtTime.beginningOfTime(), e -> {
+            if (state.size() < 2) {
+                state.add(e);
+            }
+
+            if (state.size() == 2) {
+                cancelSubscriberLatch.countDown();
+                awaitLatch(waitUntilCancelled);
+                waitUntilSecondEventProcessed.countDown();
+            }
+        }).waitUntilStarted();
+
+        awaitLatch(waitUntilSecondEventProcessed);
+        subscription = newCatchupSubscription(database, eventCollection, TimeRepresentation.DATE, new CatchupSubscriptionModelConfig(100, useSubscriptionPositionStorage(storage).andPersistSubscriptionPositionDuringCatchupPhaseForEveryNEvents(1)));
+        subscription.subscribe(subscriptionId, state::add).waitUntilStarted();
+
+        mongoEventStore.write("1", 2, serialize(nameWasChanged2));
+
+        // Then
+        await().atMost(FIVE_SECONDS).with().pollInterval(Duration.of(100, MILLIS)).untilAsserted(() ->
+                assertThat(state).hasSize(3).extracting(this::deserialize).containsExactly(nameDefined1, nameDefined2, nameWasChanged2));
+    }
+
+    @Test
+    void catchup_starts_from_beginning_if_start_at_is_beginning_of_time_when_subscription_is_resumed_when_position_is_not_persisted_during_catch_up() {
         // Given
         LocalDateTime now = LocalDateTime.now();
         NameDefined nameDefined1 = new NameDefined(UUID.randomUUID().toString(), now, "name", "name1");
@@ -457,7 +553,7 @@ public class CatchupSubscriptionModelTest {
 
         // When
         subscription = newCatchupSubscription(database, eventCollection, TimeRepresentation.DATE, new CatchupSubscriptionModelConfig(100));
-        subscription.subscribe(subscriptionId, StartAt.subscriptionPosition(TimeBasedSubscriptionPosition.beginningOfTime()), e -> {
+        subscription.subscribe(subscriptionId, StartAtTime.beginningOfTime(), e -> {
             if (state.size() < 2) {
                 state.add(e);
             }
@@ -471,7 +567,58 @@ public class CatchupSubscriptionModelTest {
 
         awaitLatch(waitUntilSecondEventProcessed);
         subscription = newCatchupSubscription(database, eventCollection, TimeRepresentation.DATE, new CatchupSubscriptionModelConfig(100, useSubscriptionPositionStorage(storage).andPersistSubscriptionPositionDuringCatchupPhaseForEveryNEvents(1)));
-        subscription.subscribe(subscriptionId, state::add).waitUntilStarted();
+        subscription.subscribe(subscriptionId, StartAtTime.beginningOfTime(), state::add).waitUntilStarted();
+
+        // Then
+        await().atMost(FIVE_SECONDS).with().pollInterval(Duration.of(100, MILLIS)).untilAsserted(() ->
+                // Note that it's correct behavior that we expect 6 events here since the first subscription is not configured to store subscription position during catch-up => duplicates
+                assertThat(state).hasSize(6).extracting(this::deserialize).containsExactly(nameDefined1, nameDefined2, nameDefined1, nameDefined2, nameDefined3, nameWasChanged1));
+    }
+
+    @Test
+    void catchup_starts_from_beginning_if_start_at_is_beginning_of_time_when_subscription_is_resumed_when_position_is_persisted_during_catch_up() {
+        // Given
+        LocalDateTime now = LocalDateTime.now();
+        NameDefined nameDefined1 = new NameDefined(UUID.randomUUID().toString(), now, "name", "name1");
+        NameDefined nameDefined2 = new NameDefined(UUID.randomUUID().toString(), now.plusSeconds(2), "name", "name2");
+        NameDefined nameDefined3 = new NameDefined(UUID.randomUUID().toString(), now.plusSeconds(6), "name", "name5");
+        NameWasChanged nameWasChanged1 = new NameWasChanged(UUID.randomUUID().toString(), now.plusSeconds(10), "name", "name3");
+
+        mongoEventStore.write("1", 0, serialize(nameDefined1));
+        mongoEventStore.write("2", 0, serialize(nameDefined2));
+        mongoEventStore.write("1", 1, serialize(nameWasChanged1));
+        mongoEventStore.write("3", 0, serialize(nameDefined3));
+
+        CountDownLatch cancelSubscriberLatch = new CountDownLatch(1);
+        CountDownLatch waitUntilCancelled = new CountDownLatch(1);
+        CountDownLatch waitUntilSecondEventProcessed = new CountDownLatch(1);
+        CopyOnWriteArrayList<CloudEvent> state = new CopyOnWriteArrayList<>();
+
+        String subscriptionId = UUID.randomUUID().toString();
+        new Thread(() -> {
+            awaitLatch(cancelSubscriberLatch);
+            subscription.shutdown();
+            waitUntilCancelled.countDown();
+        }).start();
+
+        // When
+        CatchupSubscriptionModelConfig config = new CatchupSubscriptionModelConfig(100, useSubscriptionPositionStorage(storage).andPersistSubscriptionPositionDuringCatchupPhaseForEveryNEvents(1));
+        subscription = newCatchupSubscription(database, eventCollection, TimeRepresentation.DATE, config);
+        subscription.subscribe(subscriptionId, StartAtTime.beginningOfTime(), e -> {
+            if (state.size() < 2) {
+                state.add(e);
+            }
+
+            if (state.size() == 2) {
+                cancelSubscriberLatch.countDown();
+                awaitLatch(waitUntilCancelled);
+                waitUntilSecondEventProcessed.countDown();
+            }
+        }).waitUntilStarted();
+
+        awaitLatch(waitUntilSecondEventProcessed);
+        subscription = newCatchupSubscription(database, eventCollection, TimeRepresentation.DATE, config);
+        subscription.subscribe(subscriptionId, StartAtTime.beginningOfTime(), state::add).waitUntilStarted();
 
         // Then
         await().atMost(FIVE_SECONDS).with().pollInterval(Duration.of(100, MILLIS)).untilAsserted(() ->

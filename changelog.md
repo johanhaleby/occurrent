@@ -1,5 +1,5 @@
 ### Changelog next version
-* Major improvements to CatchupSubscriptionModel, it now handles and includes events that have been written while the catch-up subscription phase runs. Also, the "idempotency cache" is only used while switching from catch-up to continuous mode, and not during the entire catch-up phase.
+* Major improvements to `CatchupSubscriptionModel`, it now handles and includes events that have been written while the catch-up subscription phase runs. Also, the "idempotency cache" is only used while switching from catch-up to continuous mode, and not during the entire catch-up phase.
 * Major changes to the `spring-boot-starter-mongodb` module. It now includes a `CatchupSubscriptionModel` which allows you to start subscriptions from an historic date more easily.
 * `StartAt.Dynamic(..)` now takes a `SubscriptionModelContext` as a parameter. This means that subscription models can add a "context" that can be useful for dynamic behavior. For example, you can prevent a certain subscription model to start (and instead delegate to its parent) if you return `null` as `StartAt` from a dynamic position.
 * Added annotation support for subscriptions when using the `spring-boot-starter-mongodb` module. You can now do: 
@@ -9,8 +9,23 @@
       System.out.println("Received event: " + event);
   }  
   ```
-  It also allows you to easily start the subscription from a moment in the past (such as beginning of time). See javadoc in `org.occurrent.annotation.Subscription` for more info. 
-
+  It also allows you to easily start the subscription from a moment in the past (such as beginning of time). See javadoc in `org.occurrent.annotation.Subscription` for more info.
+* Added `org.occurrent.subscription.blocking.durable.catchup.StartAtTime` as a help to the `CatchupSubscriptionModel` to easier specify an `OffsetDateTime` or "beginning of time" when starting a subscription catchup subscription model. Before you had to do:
+  ```java
+  subscriptionModel.subscribe("myId", StartAt.subscriptionPosition(TimeBasedSubscriptionPosition.beginningOfTime()), System.out::println);
+  ```
+  but now you can do:
+  ```java
+  subscriptionModel.subscribe("myId", StartAtTime.beginningOfTime(), System.out::println);
+  ```                                                                                     
+  which is shorter. You're using Kotlin you can import `org.occurrent.subscription.blocking.durable.catchup.beginningOfTime` and do:
+  ```kotlin
+  subscriptionModel.subscribe("myId", StartAt.beginningOfTime(), ::println)
+  ```  
+* Changed the default behavior of `CatchupSubscriptionModel`. Before it replayed all historic events by default if no specific start at position was supplied, but now it delegates to the wrapped subscription and no historic events will be replayed. Instead, you need to explicitly specify `beggingOfTime` or an `OffsetDateTime` as the start position. For example:
+  ```java
+  subscriptionModel.subscribe("myId", StartAtTime.beginningOfTime(), System.out::println);
+  ```
 ### 0.17.2 (2024-02-27)
 * Fixed issue in CompetingConsumerSubscriptionModel in which it failed to reacquire consumption rights in some cases where MongoDB connection was lost.   
 

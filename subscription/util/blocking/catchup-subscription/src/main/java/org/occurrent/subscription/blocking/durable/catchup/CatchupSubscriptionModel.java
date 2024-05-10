@@ -46,11 +46,26 @@ import static org.occurrent.filter.Filter.time;
 import static org.occurrent.time.internal.RFC3339.RFC_3339_DATE_TIME_FORMATTER;
 
 /**
- * A {@link SubscriptionModel} that reads historic cloud events from the all event streams (see {@link EventStoreQueries#all()}) until caught up with the
+ * A {@link SubscriptionModel} that can read historic cloud events from the all event streams (see {@link EventStoreQueries#all()}) until caught up with the
  * {@link PositionAwareSubscriptionModel#globalSubscriptionPosition()} of the {@code subscription} (you probably want to narrow the historic set events of events
- * by using a {@link Filter} when subscribing). It'll automatically switch over to the supplied {@code subscription} when all history events are read and the subscription has caught-up.
- * <br>
- * <br>
+ * by using a {@link Filter} when subscribing). It'll automatically switch over to the wrapped {@code subscription model} when all history events are read and the subscription has caught-up.
+ * <br><b>Important:</b>&nbsp;The subscription model will only stream historic events if started with a {@link TimeBasedSubscriptionPosition}, by default (i.e. if {@code StartAt.subscriptionModelDefault() is used}),
+ * it'll NOT replay historic events, but instead delegate to the wrapped subscription model. Thus, to start the {@link CatchupSubscriptionModel} and make it replay historic events you can start it like this:
+ * <pre>
+ * var subscriptionModel = new CatchupSubscriptionModel(..);
+ * // All examples below are equivalent:
+ * subscriptionModel.subscribeFromBeginningOfTime("subscriptionId", e -> System.out.println("Event: " + e);
+ * subscriptionModel.subscribe("subscriptionId", StartAtTime.beginningOfTime(), e -> System.out.println("Event: " + e);
+ * subscriptionModel.subscribe("subscriptionId", StartAt.subscriptionPosition(TimeBasedSubscription.beginningOfTime()), e -> System.out.println("Event: " + e);
+ * </pre>
+ *
+ * If you're using Kotlin you can import the extension functions from {@code org.occurrent.subscription.blocking.durable.catchup.CatchupSubscriptionModelExtensions.kt} and do:
+ * <pre>
+ * subscriptionModel.subscribe("subscriptionId", StartAt.beginningOfTime()) { e ->
+ *      println("Event: $e")
+ * }
+ * </pre>
+ *
  * <p>
  * Note that the implementation uses an in-memory cache (default size is {@value #DEFAULT_CACHE_SIZE} but this can be configured using a {@link CatchupSubscriptionModelConfig})
  * to reduce the number of duplicate event when switching from historic events to the current cloud event position. It's highly recommended that the application logic is idempotent if the
@@ -100,6 +115,28 @@ public class CatchupSubscriptionModel implements SubscriptionModel, DelegatingSu
         this.config = config;
     }
 
+    /**
+     * Shortcut to start subscribing to events matching the supplied filter from begging of time. Same as doing:
+     *
+     * <pre>
+     * subscriptionModel.subscribe(&lt;subscriptionId&gt;, &lt;filter&gt;, StartAtTime.beginningOfTime(), &lt;action&gt;);
+     * </pre>
+     */
+    public Subscription subscribeFromBeginningOfTime(String subscriptionId, SubscriptionFilter filter, Consumer<CloudEvent> action) {
+        return subscribe(subscriptionId, filter, StartAtTime.beginningOfTime(), action);
+    }
+
+    /**
+     * Shortcut to start subscribing to <i>all</i> events from begging of time. Same as doing:
+     *
+     * <pre>
+     * subscriptionModel.subscribe(&lt;subscriptionId&gt;, StartAtTime.beginningOfTime(), &lt;action&gt;);
+     * </pre>
+     */
+    public Subscription subscribeFromBeginningOfTime(String subscriptionId, Consumer<CloudEvent> action) {
+        return subscribe(subscriptionId, StartAtTime.beginningOfTime(), action);
+    }
+
     @Override
     public Subscription subscribe(String subscriptionId, SubscriptionFilter filter, StartAt startAt, Consumer<CloudEvent> action) {
         Objects.requireNonNull(startAt, "Start at supplier cannot be null");
@@ -110,10 +147,14 @@ public class CatchupSubscriptionModel implements SubscriptionModel, DelegatingSu
 
         final StartAt firstStartAt;
         if (startAt.isDefault()) {
-            firstStartAt = StartAt.dynamic(() -> {
-                SubscriptionPosition subscriptionPosition = returnIfSubscriptionPositionStorageConfigIs(UseSubscriptionPositionInStorage.class, cfg -> cfg.storage().read(subscriptionId)).orElse(null);
-                return subscriptionPosition == null ? StartAt.subscriptionPosition(TimeBasedSubscriptionPosition.beginningOfTime()) : StartAt.subscriptionPosition(subscriptionPosition);
-            });
+            // By default, we check if there's a subscription position stored for this subscription, if so we resume from there, otherwise,
+            // delegate to the parent subscription model. 
+            SubscriptionPosition subscriptionPosition = returnIfSubscriptionPositionStorageConfigIs(UseSubscriptionPositionInStorage.class, cfg -> cfg.storage().read(subscriptionId)).orElse(null);
+            if (subscriptionPosition == null) {
+                return getDelegatedSubscriptionModel().subscribe(subscriptionId, filter, startAt, action);
+            } else {
+                firstStartAt = StartAt.subscriptionPosition(subscriptionPosition);
+            }
         } else if (startAt.isDynamic()) {
             StartAt startAtGeneratedByDynamic = startAt.get(generateSubscriptionModelContext());
             if (startAtGeneratedByDynamic == null) {
