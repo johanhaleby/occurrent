@@ -57,7 +57,7 @@ class JobRunrDeadlineManagerTest {
                         return (T) beans.get(type);
                     }
                 })
-                .useBackgroundJobServer(usingStandardBackgroundJobServerConfiguration().andPollIntervalInSeconds(5).andWorkerCount(2))
+                .useBackgroundJobServer(usingStandardBackgroundJobServerConfiguration().andPollIntervalInSeconds(1).andWorkerCount(2))
                 .initialize()
                 .getJobRequestScheduler();
         jobRunrDeadlineScheduler = new JobRunrDeadlineScheduler(jobRequestScheduler);
@@ -84,7 +84,7 @@ class JobRunrDeadlineManagerTest {
         assertAll(
                 () -> assertThat(consumedData.id).isEqualTo(deadlineId.toString()),
                 () -> assertThat(consumedData.category).isEqualTo("Something"),
-                () -> assertThat(consumedData.deadline.toDate()).isCloseTo(new Date(), 5000),
+                () -> assertThat(consumedData.deadline.toDate()).isCloseTo(new Date(), 2000),
                 () -> assertThat(consumedData.data.something).isEqualTo("something")
         );
     }
@@ -105,7 +105,7 @@ class JobRunrDeadlineManagerTest {
         assertAll(
                 () -> assertThat(consumedData.id).isEqualTo(deadlineId.toString()),
                 () -> assertThat(consumedData.category).isEqualTo("Something"),
-                () -> assertThat(consumedData.deadline.toDate()).isCloseTo(new Date(), 5000),
+                () -> assertThat(consumedData.deadline.toDate()).isCloseTo(new Date(), 2000),
                 () -> assertThat(consumedData.data).isEqualTo(new MyDTO("something"))
         );
     }
