@@ -37,7 +37,7 @@ import java.lang.annotation.*;
  * void mySubscription(MyDomainEvent event) { .. }
  * </pre>
  * This will first replay all historic events from the beginning of time and then continue subscribing to new events continuously. You can also start at a specific date
- * by using {@link #startAtISO8601()} or {@link #startAtTimeEpochMs()}.
+ * by using {@link #startAtISO8601()} or {@link #startAtTimeEpochMillis()}.
  * </p>
  * <p>
  * Note that the example above will <i>start</i> replay historic events from the beginning of time when the subscription is started the first time. However, once the subscription is resumed,
@@ -104,9 +104,9 @@ public @interface Subscription {
     StartPosition startAt() default StartPosition.DEFAULT;
 
     /**
-     * Specify the start position as time epoch ms.
+     * Specify the start position as time epoch milliseconds
      */
-    long startAtTimeEpochMs() default -1;
+    long startAtTimeEpochMillis() default -1;
 
     /**
      * Start a subscription from the specified ISO8601 date/time. Valid dates are e.g.

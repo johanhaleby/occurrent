@@ -176,7 +176,7 @@ class OccurrentAnnotationBeanPostProcessor implements BeanPostProcessor, Applica
     }
 
     private @NotNull StartAt generateStartAt(Subscription subscription) {
-        StartPositionToUse startPositionToUse = findStartPositionToUseOrThrow(subscription.id(), subscription.startAtISO8601(), subscription.startAtTimeEpochMs(), subscription.startAt());
+        StartPositionToUse startPositionToUse = findStartPositionToUseOrThrow(subscription.id(), subscription.startAtISO8601(), subscription.startAtTimeEpochMillis(), subscription.startAt());
         ResumeBehavior resumeBehavior = subscription.resumeBehavior();
         return generateStartAt(subscription.id(), startPositionToUse, resumeBehavior);
     }
