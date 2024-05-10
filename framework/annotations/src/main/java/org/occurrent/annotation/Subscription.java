@@ -51,7 +51,7 @@ import java.lang.annotation.*;
  * <h4>Metadata</h4>
  * <p>
  * Sometimes it can be useful to get the metadata associated with the received event. For this reason, you can add a parameter to the method annotated with
- * {@code &#64;Subscription} of type {@link org.occurrent.dsl.subscription.blocking.EventMetadata}. For example:
+ * {@code @Subscription} of type {@link org.occurrent.dsl.subscription.blocking.EventMetadata}. For example:
  * <pre lang="java">
  * &#64;Subscription(id = "mySubscription")
  * void mySubscription(MyDomainEvent event, EventMetadata metadata) {
