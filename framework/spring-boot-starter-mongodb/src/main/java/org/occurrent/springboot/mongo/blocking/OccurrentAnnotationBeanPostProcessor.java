@@ -21,11 +21,14 @@ import kotlin.Unit;
 import kotlin.jvm.functions.Function2;
 import org.jetbrains.annotations.NotNull;
 import org.occurrent.annotation.Subscription;
+import org.occurrent.annotation.Subscription.ResumeBehavior;
+import org.occurrent.annotation.Subscription.StartPosition;
 import org.occurrent.application.converter.CloudEventConverter;
 import org.occurrent.dsl.subscription.blocking.EventMetadata;
 import org.occurrent.dsl.subscription.blocking.Subscriptions;
 import org.occurrent.filter.Filter;
 import org.occurrent.subscription.StartAt;
+import org.occurrent.subscription.api.blocking.SubscriptionPositionStorage;
 import org.occurrent.subscription.blocking.durable.DurableSubscriptionModel;
 import org.occurrent.subscription.blocking.durable.catchup.CatchupSubscriptionModel;
 import org.occurrent.subscription.blocking.durable.catchup.TimeBasedSubscriptionPosition;
@@ -37,11 +40,20 @@ import org.springframework.core.annotation.AnnotationUtils;
 
 import java.lang.reflect.Method;
 import java.lang.reflect.Modifier;
+import java.time.Instant;
+import java.time.LocalDateTime;
+import java.time.OffsetDateTime;
+import java.time.ZoneOffset;
+import java.time.format.DateTimeFormatter;
+import java.time.format.DateTimeParseException;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.List;
+import java.util.Objects;
+import java.util.stream.Collectors;
 import java.util.stream.Stream;
 
+import static java.time.format.DateTimeFormatter.ISO_LOCAL_DATE_TIME;
 import static java.util.function.Predicate.not;
 import static org.occurrent.filter.Filter.CompositionOperator.OR;
 import static org.occurrent.subscription.OccurrentSubscriptionFilter.filter;
@@ -126,7 +138,6 @@ class OccurrentAnnotationBeanPostProcessor implements BeanPostProcessor, Applica
                         .toList();
                 filter = new Filter.CompositionFilter(OR, typeFilters);
             }
-            // Assuming 'myBean' is a bean that can be subscribed to, and it's available in the context
         } else {
             filter = Filter.all();
         }
@@ -135,9 +146,10 @@ class OccurrentAnnotationBeanPostProcessor implements BeanPostProcessor, Applica
         Function2<EventMetadata, E, Unit> consumer = (metadata, event) -> {
             final Object[] arguments;
             if (parameterTypes.size() == 1) {
-                // Subscription method only specified domain event
+                // Method annotated with @Subscription only specified domain event
                 arguments = new Object[]{event};
             } else {
+                // Method annotated with @Subscription specifies domain event and metadata
                 arguments = Stream.of(metadata, event).sorted((o1, o2) -> {
                     int index1 = parameterTypes.indexOf(o1.getClass());
                     int index2 = parameterTypes.indexOf(o2.getClass());
@@ -160,35 +172,145 @@ class OccurrentAnnotationBeanPostProcessor implements BeanPostProcessor, Applica
         subscribable.subscribe(id, filter(filter), startAt, consumer).waitUntilStarted();
     }
 
-    private static @NotNull StartAt generateStartAt(Subscription subscription) {
-        return switch (subscription.startAt()) {
-            case BEGINNING_OF_TIME -> switch (subscription.resumeBehavior()) {
+    private @NotNull StartAt generateStartAt(Subscription subscription) {
+        StartPositionToUse startPositionToUse = findStartPositionToUseOrThrow(subscription.id(), subscription.startAtISO8601(), subscription.startAtTimeEpoch(), subscription.startAt());
+        ResumeBehavior resumeBehavior = subscription.resumeBehavior();
+        return generateStartAt(subscription.id(), startPositionToUse, resumeBehavior);
+    }
+
+    private @NotNull StartAt generateStartAt(String subscriptionId, StartPositionToUse startPositionToUse, ResumeBehavior resumeBehavior) {
+        final StartAt startAt;
+        if (startPositionToUse instanceof StartPositionToUse.StartAtISO8601 iso8601) {
+            startAt = switch (resumeBehavior) {
                 case SAME_AS_START_AT -> StartAt.dynamic(ctx -> {
                     boolean isDurableSubscription = DurableSubscriptionModel.class.isAssignableFrom(ctx.subscriptionModelType());
                     if (isDurableSubscription) {
-                        // Since we now know that we always start AND resume from the beginning of time for this subscription,
+                        // Since we now know that we always start AND resume from the specified iso8601 for this subscription,
                         // we don't need to store the position in a durable storage, because we will always stream all events
                         // each time the subscription restarts anyway. Thus, we return null to instruct the DurableSubscriptionModel
-                        // to simply delegate to the parent subscription. Note that this works because the parent of the CatchupSubscriptionModel
-                        // is a DurableSubscriptionModel, so after the catch-up phase it'll hand over to the DurableSubscriptionModel.
-                        // Unfortunately the CatchupSubscriptionModel is configured to write the position when the catch-up phase is completed,
-                        // but it's harder to get around that.
+                        // to simply delegate to the parent subscription.
                         return null;
                     } else {
-                        return StartAt.subscriptionPosition(TimeBasedSubscriptionPosition.beginningOfTime());
+                        return StartAt.subscriptionPosition(TimeBasedSubscriptionPosition.from(iso8601.offsetDateTime()));
                     }
                 });
-                case DEFAULT -> StartAt.subscriptionModelDefault();
+                case DEFAULT -> StartAt.dynamic(() -> {
+                    // Here we want to start the given IS8601 date/time the first time the subscription is started,
+                    // but then return from the lastest stored subscription position. To figure this out, we load the
+                    // default SubscriptionPositionStorage bean and check if a subscription position exists for this subscription.
+                    // If it does, we know that it was not the first time the subscription was started, and thus we just let the
+                    // subscription model operate according to its default. Otherwise, we explicitly specify the ISO8601 date as
+                    // start date.
+                    SubscriptionPositionStorage subscriptionPositionStorage = applicationContext.getBean(SubscriptionPositionStorage.class);
+                    boolean subscriptionPositionExistsForSubscription = subscriptionPositionStorage.exists(subscriptionId);
+                    if (subscriptionPositionExistsForSubscription) {
+                        return StartAt.subscriptionModelDefault();
+                    } else {
+                        return StartAt.subscriptionPosition(TimeBasedSubscriptionPosition.from(iso8601.offsetDateTime()));
+                    }
+                });
             };
-            case NOW -> StartAt.now();
-            case DEFAULT -> StartAt.dynamic(ctx -> {
-                // By default, we don't want to run the "default" behavior of the CatchupSubscriptionModel, which is to
-                // start streaming from the beginning of time. We want to instruct the CatchupSubscriptionModel to simply
-                // delegate to the parent subscription, which is what we do if we return null.
-                boolean isCatchupSubscription = CatchupSubscriptionModel.class.isAssignableFrom(ctx.subscriptionModelType());
-                return isCatchupSubscription ? null : StartAt.subscriptionModelDefault();
-            });
-        };
+        } else if (startPositionToUse instanceof StartPositionToUse.StartAtTimeEpoch epoch) {
+            OffsetDateTime offsetDateTime = OffsetDateTime.ofInstant(Instant.ofEpochMilli(epoch.startAtTimeEpoch), ZoneOffset.UTC);
+            startAt = generateStartAt(subscriptionId, new StartPositionToUse.StartAtISO8601(offsetDateTime), resumeBehavior);
+        } else if (startPositionToUse instanceof StartPositionToUse.StartAtStartPosition startAtStartPosition) {
+            startAt = switch (startAtStartPosition.startPosition) {
+                case BEGINNING_OF_TIME -> switch (resumeBehavior) {
+                    case SAME_AS_START_AT -> StartAt.dynamic(ctx -> {
+                        boolean isDurableSubscription = DurableSubscriptionModel.class.isAssignableFrom(ctx.subscriptionModelType());
+                        if (isDurableSubscription) {
+                            // Since we now know that we always start AND resume from the beginning of time for this subscription,
+                            // we don't need to store the position in a durable storage, because we will always stream all events
+                            // each time the subscription restarts anyway. Thus, we return null to instruct the DurableSubscriptionModel
+                            // to simply delegate to the parent subscription.
+                            return null;
+                        } else {
+                            return StartAt.subscriptionPosition(TimeBasedSubscriptionPosition.beginningOfTime());
+                        }
+                    });
+                    case DEFAULT -> StartAt.subscriptionModelDefault();
+                };
+                case NOW -> StartAt.now();
+                case DEFAULT -> StartAt.dynamic(ctx -> {
+                    // By default, we don't want to run the "default" behavior of the CatchupSubscriptionModel, which is to
+                    // start streaming from the beginning of time. We want to instruct the CatchupSubscriptionModel to simply
+                    // delegate to the parent subscription, which is what we do if we return null.
+                    boolean isCatchupSubscription = CatchupSubscriptionModel.class.isAssignableFrom(ctx.subscriptionModelType());
+                    return isCatchupSubscription ? null : StartAt.subscriptionModelDefault();
+                });
+            };
+        } else {
+            throw new IllegalStateException("Internal error: Didn't recognize start position");
+        }
+
+        return startAt;
+    }
+
+    private static StartPositionToUse findStartPositionToUseOrThrow(String subscriptionId, String startAtISO8601, long startAtTimeEpoch, StartPosition startPosition) {
+        StartPositionToUse iso8601 = startAtISO8601.isBlank() ? null : new StartPositionToUse.StartAtISO8601(startAtISO8601);
+        StartPositionToUse epoch = startAtTimeEpoch < 0 ? null : new StartPositionToUse.StartAtTimeEpoch(startAtTimeEpoch);
+        // Next, we include the start position based on whether a time has also been explicitly defined
+        // (because StartPositionToUse is DEFAULT if not specified explicitly)
+        boolean timeExplicitlyDefined = iso8601 != null || epoch != null;
+        final StartPositionToUse startAtStartPosition;
+        if (timeExplicitlyDefined) {
+            startAtStartPosition = startPosition == StartPosition.DEFAULT ? null : new StartPositionToUse.StartAtStartPosition(startPosition);
+        } else {
+            startAtStartPosition = new StartPositionToUse.StartAtStartPosition(startPosition);
+        }
+        var definedStartPositions = Stream.of(iso8601, epoch, startAtStartPosition).filter(Objects::nonNull).toList();
+
+        if (definedStartPositions.isEmpty()) {
+            throw new IllegalArgumentException("You need to specify at least one valid start position for subscription '%s'.".formatted(subscriptionId));
+        } else if (definedStartPositions.size() > 1) {
+            String startPositionNames = definedStartPositions.stream().map(position -> {
+                if (position instanceof StartPositionToUse.StartAtISO8601) {
+                    return "startAtISO8601";
+                } else if (position instanceof StartPositionToUse.StartAtTimeEpoch) {
+                    return "startAtTimeEpoch";
+                } else {
+                    return "startAt";
+                }
+            }).collect(Collectors.joining(" and "));
+            throw new IllegalArgumentException("You can only specify one start position for subscription '%s', both %s are defined.".formatted(subscriptionId, startPositionNames));
+        } else {
+            return definedStartPositions.get(0);
+        }
+    }
+
+    private sealed interface StartPositionToUse {
+        record StartAtISO8601(OffsetDateTime offsetDateTime) implements StartPositionToUse {
+
+            StartAtISO8601(String iso8601) {
+                this(toOffsetDateTime(iso8601));
+            }
+
+            static OffsetDateTime toOffsetDateTime(String iso8601) {
+                try {
+                    // Attempt to parse as OffsetDateTime directly which will fail if timezone is missing
+                    return OffsetDateTime.parse(iso8601.trim(), DateTimeFormatter.ISO_OFFSET_DATE_TIME);
+                } catch (DateTimeParseException e) {
+                    // Parsing failed, parse as LocalDateTime and convert to OffsetDateTime with default zone
+                    LocalDateTime localDateTime = LocalDateTime.parse(iso8601.trim(), ISO_LOCAL_DATE_TIME);
+                    try {
+                        return localDateTime.atOffset(ZoneOffset.UTC);
+                    } catch (DateTimeParseException ex) {
+                        throw new IllegalArgumentException("Invalid ISO8601 format: '" + iso8601 + "'", e);
+                    }
+                }
+            }
+        }
+
+        record StartAtTimeEpoch(long startAtTimeEpoch) implements StartPositionToUse {
+            public StartAtTimeEpoch {
+                if (startAtTimeEpoch < 0) {
+                    throw new IllegalArgumentException("startAtTimeEpoch cannot be negative");
+                }
+            }
+        }
+
+        record StartAtStartPosition(StartPosition startPosition) implements StartPositionToUse {
+        }
     }
 
     private static <E> @NotNull List<Class<E>> getConcreteEventTypes(String subscriptionId, Class<E> specifiedEventType) {
