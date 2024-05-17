@@ -231,7 +231,21 @@ class OccurrentAnnotationBeanPostProcessor implements BeanPostProcessor, Applica
                             return StartAt.subscriptionPosition(TimeBasedSubscriptionPosition.beginningOfTime());
                         }
                     });
-                    case DEFAULT -> StartAt.subscriptionModelDefault();
+                    case DEFAULT -> {
+                        // Here we want to start the beginning of time the first time the subscription is started,
+                        // but then return from the lastest stored subscription position. To figure this out, we load the
+                        // default SubscriptionPositionStorage bean and check if a subscription position exists for this subscription.
+                        // If it does, we know that it was not the first time the subscription was started, and thus we just let the
+                        // subscription model operate according to its default. Otherwise, we explicitly specify "beginning of time" as
+                        // start date.
+                        SubscriptionPositionStorage subscriptionPositionStorage = applicationContext.getBean(SubscriptionPositionStorage.class);
+                        boolean subscriptionPositionExistsForSubscription = subscriptionPositionStorage.exists(subscriptionId);
+                        if (subscriptionPositionExistsForSubscription) {
+                            yield StartAt.subscriptionModelDefault();
+                        } else {
+                            yield StartAt.subscriptionPosition(TimeBasedSubscriptionPosition.beginningOfTime());
+                        }
+                    }
                 };
                 case NOW -> StartAt.now();
                 case DEFAULT -> StartAt.dynamic(ctx -> {

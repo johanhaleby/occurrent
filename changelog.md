@@ -1,5 +1,6 @@
 ### Next version
-* Made OccurrentAnnotationBeanPostProcessor a static bean in OccurrentMongoAutoConfiguration to avoid Spring warning logs when booting up 
+* Made OccurrentAnnotationBeanPostProcessor a static bean in OccurrentMongoAutoConfiguration to avoid Spring warning logs when booting up
+* Fixed a bug in OccurrentAnnotationBeanPostProcessor that caused `@Subscription(id="myId", startAt = BEGINNING_OF_TIME)` not to replay events from the beginning of time
 
 ### 0.18.0 (2024-05-17)
 * Major improvements to `CatchupSubscriptionModel`, it now handles and includes events that have been written while the catch-up subscription phase runs. Also, the "idempotency cache" is only used while switching from catch-up to continuous mode, and not during the entire catch-up phase.
