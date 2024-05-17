@@ -180,9 +180,11 @@ public class InMemorySubscriptionModel implements SubscriptionModel, Consumer<St
     }
 
     @Override
-    public void start() {
+    public void start(boolean resumeSubscriptionsAutomatically) {
         running = true;
-        pausedSubscriptions.clear();
+        if (resumeSubscriptionsAutomatically) {
+            pausedSubscriptions.clear();
+        }
     }
 
     @Override

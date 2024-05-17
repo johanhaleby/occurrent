@@ -16,6 +16,7 @@
 
 package org.occurrent.subscription;
 
+import java.util.Objects;
 import java.util.StringJoiner;
 import java.util.function.Function;
 import java.util.function.Supplier;
@@ -157,6 +158,10 @@ public sealed interface StartAt {
     record SubscriptionModelContext(Class<?> subscriptionModelType) {
         public SubscriptionModelContext {
             requireNonNull(subscriptionModelType, "subscriptionModelType cannot be null");
+        }
+
+        public boolean hasSubscriptionModelType(Class<?> subscriptionModelType) {
+            return Objects.equals(this.subscriptionModelType, subscriptionModelType);
         }
     }
 }

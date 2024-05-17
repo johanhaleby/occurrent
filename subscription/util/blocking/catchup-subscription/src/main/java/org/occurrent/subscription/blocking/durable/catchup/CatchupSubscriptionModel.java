@@ -330,8 +330,8 @@ public class CatchupSubscriptionModel implements SubscriptionModel, DelegatingSu
     }
 
     @Override
-    public void start() {
-        getDelegatedSubscriptionModel().start();
+    public void start(boolean resumeSubscriptionsAutomatically) {
+        getDelegatedSubscriptionModel().start(resumeSubscriptionsAutomatically);
     }
 
     @Override

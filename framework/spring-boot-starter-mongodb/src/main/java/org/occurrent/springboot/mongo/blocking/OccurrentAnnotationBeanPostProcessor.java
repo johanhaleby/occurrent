@@ -29,6 +29,7 @@ import org.occurrent.dsl.subscription.blocking.Subscriptions;
 import org.occurrent.filter.Filter;
 import org.occurrent.subscription.StartAt;
 import org.occurrent.subscription.api.blocking.SubscriptionPositionStorage;
+import org.occurrent.subscription.blocking.competingconsumers.CompetingConsumerSubscriptionModel;
 import org.occurrent.subscription.blocking.durable.DurableSubscriptionModel;
 import org.occurrent.subscription.blocking.durable.catchup.CatchupSubscriptionModel;
 import org.occurrent.subscription.blocking.durable.catchup.TimeBasedSubscriptionPosition;
@@ -186,6 +187,13 @@ class OccurrentAnnotationBeanPostProcessor implements BeanPostProcessor, Applica
         if (startPositionToUse instanceof StartPositionToUse.StartAtISO8601 iso8601) {
             startAt = switch (resumeBehavior) {
                 case SAME_AS_START_AT -> StartAt.dynamic(ctx -> {
+                    boolean isCompetingConsumerSubscription = CompetingConsumerSubscriptionModel.class.isAssignableFrom(ctx.subscriptionModelType());
+                    if (isCompetingConsumerSubscription) {
+                        // Since we now know that we always start AND resume from the beginning of time for this subscription,
+                        // we don't want the competing consumer to kick in. This is because the subscription will be in-memory only.
+                        return null;
+                    }
+
                     boolean isDurableSubscription = DurableSubscriptionModel.class.isAssignableFrom(ctx.subscriptionModelType());
                     if (isDurableSubscription) {
                         // Since we now know that we always start AND resume from the specified iso8601 for this subscription,
@@ -220,6 +228,13 @@ class OccurrentAnnotationBeanPostProcessor implements BeanPostProcessor, Applica
             startAt = switch (startAtStartPosition.startPosition) {
                 case BEGINNING_OF_TIME -> switch (resumeBehavior) {
                     case SAME_AS_START_AT -> StartAt.dynamic(ctx -> {
+                        boolean isCompetingConsumerSubscription = CompetingConsumerSubscriptionModel.class.isAssignableFrom(ctx.subscriptionModelType());
+                        if (isCompetingConsumerSubscription) {
+                            // Since we now know that we always start AND resume from the beginning of time for this subscription,
+                            // we don't want the competing consumer to kick in. This is because the subscription will be in-memory only.
+                            return null;
+                        }
+
                         boolean isDurableSubscription = DurableSubscriptionModel.class.isAssignableFrom(ctx.subscriptionModelType());
                         if (isDurableSubscription) {
                             // Since we now know that we always start AND resume from the beginning of time for this subscription,

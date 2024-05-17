@@ -267,10 +267,12 @@ public class SpringMongoSubscriptionModel implements PositionAwareSubscriptionMo
     // SmartLifecycle
 
     @Override
-    public synchronized void start() {
+    public synchronized void start(boolean resumeSubscriptionsAutomatically) {
         if (!shutdown) {
             messageListenerContainer.start();
-            pausedSubscriptions.forEach((subscriptionId, __) -> resumeSubscription(subscriptionId).waitUntilStarted());
+            if (resumeSubscriptionsAutomatically) {
+                pausedSubscriptions.forEach((subscriptionId, __) -> resumeSubscription(subscriptionId).waitUntilStarted());
+            }
         }
     }
 
@@ -280,6 +282,11 @@ public class SpringMongoSubscriptionModel implements PositionAwareSubscriptionMo
             runningSubscriptions.forEach((subscriptionId, __) -> pauseSubscription(subscriptionId));
             stopMessageListenerContainer();
         }
+    }
+
+    @Override
+    public void start() {
+        start(true);
     }
 
     @Override
@@ -389,8 +396,7 @@ public class SpringMongoSubscriptionModel implements PositionAwareSubscriptionMo
         @Override
         public boolean equals(Object o) {
             if (this == o) return true;
-            if (!(o instanceof InternalSubscription)) return false;
-            InternalSubscription that = (InternalSubscription) o;
+            if (!(o instanceof InternalSubscription that)) return false;
             return Objects.equals(occurrentSubscription, that.occurrentSubscription) && Objects.equals(changeStreamRequestBuilder, that.changeStreamRequestBuilder);
         }
 

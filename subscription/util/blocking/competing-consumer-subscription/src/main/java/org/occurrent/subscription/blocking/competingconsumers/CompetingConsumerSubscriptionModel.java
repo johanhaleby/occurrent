@@ -3,15 +3,14 @@ package org.occurrent.subscription.blocking.competingconsumers;
 import io.cloudevents.CloudEvent;
 import jakarta.annotation.PreDestroy;
 import org.occurrent.subscription.StartAt;
+import org.occurrent.subscription.StartAt.SubscriptionModelContext;
 import org.occurrent.subscription.SubscriptionFilter;
 import org.occurrent.subscription.api.blocking.*;
 import org.occurrent.subscription.api.blocking.CompetingConsumerStrategy.CompetingConsumerListener;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
-import java.util.Objects;
-import java.util.Optional;
-import java.util.UUID;
+import java.util.*;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ConcurrentMap;
 import java.util.function.Consumer;
@@ -53,6 +52,8 @@ public class CompetingConsumerSubscriptionModel implements DelegatingSubscriptio
     private final CompetingConsumerStrategy competingConsumerStrategy;
 
     private final ConcurrentMap<SubscriptionIdAndSubscriberId, CompetingConsumer> competingConsumers = new ConcurrentHashMap<>();
+    // A set that hold which subscriptions whose StartAt position have indicated that they should not use the competing consumer model
+    private final Set<String> nonCompetingConsumersSubscriptions = Collections.newSetFromMap(new ConcurrentHashMap<>());
 
     public CompetingConsumerSubscriptionModel(SubscriptionModel subscriptionModel, CompetingConsumerStrategy strategy) {
         requireNonNull(subscriptionModel, "Subscription model cannot be null");
@@ -75,27 +76,18 @@ public class CompetingConsumerSubscriptionModel implements DelegatingSubscriptio
         Objects.requireNonNull(subscriberId, "SubscriberId cannot be null");
         Objects.requireNonNull(subscriptionId, "SubscriptionId cannot be null");
 
-        logDebug("Starting CompetingConsumer subscription (subscriberId={}, subscriptionId={})", subscriberId, subscriptionId);
-
-        SubscriptionIdAndSubscriberId subscriptionIdAndSubscriberId = SubscriptionIdAndSubscriberId.from(subscriptionId, subscriberId);
-        final CompetingConsumerSubscription competingConsumerSubscription;
-        if (competingConsumerStrategy.registerCompetingConsumer(subscriptionId, subscriberId)) {
-            logDebug("Successfully registered CompetingConsumer subscription (subscriberId={}, subscriptionId={})", subscriberId, subscriptionId);
-            Subscription subscription = delegate.subscribe(subscriptionId, filter, startAt, action);
-            competingConsumerSubscription = new CompetingConsumerSubscription(subscriptionId, subscriberId, subscription);
-            competingConsumers.put(subscriptionIdAndSubscriberId, new CompetingConsumer(subscriptionIdAndSubscriberId, new CompetingConsumerState.Running()));
+        final Subscription subscription;
+        if (startAt.get(new SubscriptionModelContext(CompetingConsumerSubscriptionModel.class)) == null) {
+            nonCompetingConsumersSubscriptions.add(subscriptionId);
+            // We're not allowed to start the competing consumer subscription, just delegate to parent.
+            // One reason for this might be if we're starting a non-durable in-memory subscription on multiple nodes.
+            // Then typically you want all nodes to receive all events, and thus there's no need for a  CompetingConsumerSubscription.
+            subscription = getDelegatedSubscriptionModel().subscribe(subscriptionId, filter, startAt, action);
         } else {
-            logDebug("CompetingConsumer already registered, overriding to Waiting (subscriberId={}, subscriptionId={})", subscriberId, subscriptionId);
-            competingConsumers.put(subscriptionIdAndSubscriberId, new CompetingConsumer(subscriptionIdAndSubscriberId, new CompetingConsumerState.Waiting(() -> {
-                logDebug("Starting delegated CompetingConsumer subscription after waiting (subscriberId={}, subscriptionId={})", subscriberId, subscriptionId);
-                if (!delegate.isRunning()) {
-                    delegate.start();
-                }
-                return delegate.subscribe(subscriptionId, filter, startAt, action);
-            })));
-            competingConsumerSubscription = new CompetingConsumerSubscription(subscriptionId, subscriberId);
+            subscription = startCompetingConsumerSubscription(subscriberId, subscriptionId, filter, startAt, action);
         }
-        return competingConsumerSubscription;
+
+        return subscription;
     }
 
     /**
@@ -138,29 +130,35 @@ public class CompetingConsumerSubscriptionModel implements DelegatingSubscriptio
      * @see SubscriptionModelLifeCycle#start()
      */
     @Override
-    public synchronized void start() {
+    public synchronized void start(boolean resumeSubscriptionsAutomatically) {
         logDebug("Starting CompetingConsumer subscription model");
         if (isRunning()) {
             throw new IllegalStateException(CompetingConsumerSubscriptionModel.class.getSimpleName() + " is already started");
         }
 
+        if (!nonCompetingConsumersSubscriptions.isEmpty()) {
+            delegate.start(false); // This will automatically start all paused subscriptions (including those in nonCompetingConsumersSubscriptions)
+            nonCompetingConsumersSubscriptions.forEach(delegate::resumeSubscription);
+        }
 
-        // Note that we deliberately don't start the delegate subscription model here!!
-        // This is because we're not sure that we have the lock. It'll the underlying SM be started
-        // automatically if required (since it's instructed to do so in the Waiting state supplier).
-        competingConsumers.values().stream()
-                .filter(not(CompetingConsumer::isRunning))
-                .forEach(cc -> {
-                            logDebug("Starting CompetingConsumer subscription (subscriberId={}, subscriptionId={}, state={})", cc.getSubscriberId(), cc.getSubscriptionId(), cc.state.getClass().getSimpleName());
-                            // Only change state if we have permission to consume
-                            if (cc.isWaiting()) {
-                                // Registering a competing consumer will start the subscription automatically if lock was acquired
-                                competingConsumerStrategy.registerCompetingConsumer(cc.getSubscriptionId(), cc.getSubscriberId());
-                            } else if (cc.isPaused()) {
-                                resumeSubscription(cc.getSubscriptionId());
+        if (!resumeSubscriptionsAutomatically) {
+            // Note that we deliberately don't start the delegated subscription model here!!
+            // This is because we're not sure that we have the lock. The underlying SM will be started
+            // automatically if required (since it's instructed to do so in the Waiting state supplier).
+            competingConsumers.values().stream()
+                    .filter(not(CompetingConsumer::isRunning))
+                    .forEach(cc -> {
+                                logDebug("Starting CompetingConsumer subscription (subscriberId={}, subscriptionId={}, state={})", cc.getSubscriberId(), cc.getSubscriptionId(), cc.state.getClass().getSimpleName());
+                                // Only change state if we have permission to consume
+                                if (cc.isWaiting()) {
+                                    // Registering a competing consumer will start the subscription automatically if lock was acquired
+                                    competingConsumerStrategy.registerCompetingConsumer(cc.getSubscriptionId(), cc.getSubscriberId());
+                                } else if (cc.isPaused()) {
+                                    resumeSubscription(cc.getSubscriptionId());
+                                }
                             }
-                        }
-                );
+                    );
+        }
     }
 
     /**
@@ -196,6 +194,11 @@ public class CompetingConsumerSubscriptionModel implements DelegatingSubscriptio
         if (isRunning(subscriptionId)) {
             throw new IllegalArgumentException("Subscription " + subscriptionId + " is not paused");
         }
+
+        if (nonCompetingConsumersSubscriptions.contains(subscriptionId)) {
+            return delegate.resumeSubscription(subscriptionId);
+        }
+
         return findFirstCompetingConsumerMatching(competingConsumer -> competingConsumer.hasSubscriptionId(subscriptionId))
                 .map(competingConsumer -> {
                     final Subscription subscription;
@@ -231,30 +234,60 @@ public class CompetingConsumerSubscriptionModel implements DelegatingSubscriptio
         pauseSubscription(subscriptionId, true);
     }
 
+    private CompetingConsumerSubscription startCompetingConsumerSubscription(String subscriberId, String subscriptionId, SubscriptionFilter filter, StartAt startAt, Consumer<CloudEvent> action) {
+        logDebug("Starting CompetingConsumer subscription (subscriberId={}, subscriptionId={})", subscriberId, subscriptionId);
+
+        SubscriptionIdAndSubscriberId subscriptionIdAndSubscriberId = SubscriptionIdAndSubscriberId.from(subscriptionId, subscriberId);
+        final CompetingConsumerSubscription competingConsumerSubscription;
+        if (competingConsumerStrategy.registerCompetingConsumer(subscriptionId, subscriberId)) {
+            logDebug("Successfully registered CompetingConsumer subscription (subscriberId={}, subscriptionId={})", subscriberId, subscriptionId);
+            Subscription subscription = delegate.subscribe(subscriptionId, filter, startAt, action);
+            competingConsumerSubscription = new CompetingConsumerSubscription(subscriptionId, subscriberId, subscription);
+            competingConsumers.put(subscriptionIdAndSubscriberId, new CompetingConsumer(subscriptionIdAndSubscriberId, new CompetingConsumerState.Running()));
+        } else {
+            logDebug("CompetingConsumer already registered, overriding to Waiting (subscriberId={}, subscriptionId={})", subscriberId, subscriptionId);
+            competingConsumers.put(subscriptionIdAndSubscriberId, new CompetingConsumer(subscriptionIdAndSubscriberId, new CompetingConsumerState.Waiting(() -> {
+                logDebug("Starting delegated CompetingConsumer subscription after waiting (subscriberId={}, subscriptionId={})", subscriberId, subscriptionId);
+                if (!delegate.isRunning()) {
+                    delegate.start();
+                }
+                return delegate.subscribe(subscriptionId, filter, startAt, action);
+            })));
+            competingConsumerSubscription = new CompetingConsumerSubscription(subscriptionId, subscriberId);
+        }
+        return competingConsumerSubscription;
+    }
+
+
     private synchronized void pauseSubscription(String subscriptionId, boolean pausedByUser) {
         logDebug("Trying to pause CompetingConsumer subscription (subscriptionId={}, pausedByUser={})", subscriptionId, pausedByUser);
         if (isPaused(subscriptionId)) {
             throw new IllegalArgumentException("Subscription " + subscriptionId + " is already paused");
         }
-        CompetingConsumer competingConsumer = findFirstCompetingConsumerMatching(cc -> cc.hasSubscriptionId(subscriptionId)).orElse(null);
-        if (competingConsumer == null) {
-            logDebug("Failed to find CompetingConsumer for subscription (subscriptionId={}, pausedByUser={})", subscriptionId, pausedByUser);
-        } else if (competingConsumer.isWaiting()) {
-            logDebug("CompetingConsumer in waiting state, will ignore (subscriptionId={}, subscriberId={}, pausedByUser={})", subscriptionId, competingConsumer.getSubscriberId(), pausedByUser);
-        } else {
+
+        if (nonCompetingConsumersSubscriptions.contains(subscriptionId)) {
             delegate.pauseSubscription(subscriptionId);
-            competingConsumers.put(SubscriptionIdAndSubscriberId.from(competingConsumer), competingConsumer.registerPaused(pausedByUser));
-            if (pausedByUser) {
-                logDebug("Will unregister competing consumer because subscription was paused explicitly by user (subscriptionId={}, subscriberId={})", subscriptionId, competingConsumer.getSubscriberId());
-                // If subscription is paused by user explicitly, then the user needs to resume it again explicitly to start it.
-                // In these cases, we unregister the competing consumer. This means that it cannot be leader again until the subscription is
-                // resumed explicitly (it'll re-register the competing consumers).
-                competingConsumerStrategy.unregisterCompetingConsumer(competingConsumer.getSubscriptionId(), competingConsumer.getSubscriberId());
+        } else {
+            CompetingConsumer competingConsumer = findFirstCompetingConsumerMatching(cc -> cc.hasSubscriptionId(subscriptionId)).orElse(null);
+            if (competingConsumer == null) {
+                logDebug("Failed to find CompetingConsumer for subscription (subscriptionId={}, pausedByUser={})", subscriptionId, pausedByUser);
+            } else if (competingConsumer.isWaiting()) {
+                logDebug("CompetingConsumer in waiting state, will ignore (subscriptionId={}, subscriberId={}, pausedByUser={})", subscriptionId, competingConsumer.getSubscriberId(), pausedByUser);
             } else {
-                logDebug("Will release competing consumer because subscription was paused by system (subscriptionId={}, subscriberId={})", subscriptionId, competingConsumer.getSubscriberId());
-                // Subscription was not paused by the user, thus we just "release" the competing consumer so that it can re-gain leader status
-                // later without explicitly resuming the subscription.
-                competingConsumerStrategy.releaseCompetingConsumer(competingConsumer.getSubscriptionId(), competingConsumer.getSubscriberId());
+                delegate.pauseSubscription(subscriptionId);
+                competingConsumers.put(SubscriptionIdAndSubscriberId.from(competingConsumer), competingConsumer.registerPaused(pausedByUser));
+                if (pausedByUser) {
+                    logDebug("Will unregister competing consumer because subscription was paused explicitly by user (subscriptionId={}, subscriberId={})", subscriptionId, competingConsumer.getSubscriberId());
+                    // If subscription is paused by user explicitly, then the user needs to resume it again explicitly to start it.
+                    // In these cases, we unregister the competing consumer. This means that it cannot be leader again until the subscription is
+                    // resumed explicitly (it'll re-register the competing consumers).
+                    competingConsumerStrategy.unregisterCompetingConsumer(competingConsumer.getSubscriptionId(), competingConsumer.getSubscriberId());
+                } else {
+                    logDebug("Will release competing consumer because subscription was paused by system (subscriptionId={}, subscriberId={})", subscriptionId, competingConsumer.getSubscriberId());
+                    // Subscription was not paused by the user, thus we just "release" the competing consumer so that it can re-gain leader status
+                    // later without explicitly resuming the subscription.
+                    competingConsumerStrategy.releaseCompetingConsumer(competingConsumer.getSubscriptionId(), competingConsumer.getSubscriberId());
+                }
             }
         }
     }
@@ -275,6 +308,7 @@ public class CompetingConsumerSubscriptionModel implements DelegatingSubscriptio
     public synchronized void shutdown() {
         logDebug("Trying to shutdown CompetingConsumer subscription model");
         delegate.shutdown();
+        nonCompetingConsumersSubscriptions.clear();
         unregisterAllCompetingConsumers(cc -> competingConsumers.remove(cc.subscriptionIdAndSubscriberId));
         competingConsumerStrategy.removeListener(this);
         competingConsumerStrategy.shutdown();

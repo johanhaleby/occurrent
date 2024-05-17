@@ -476,6 +476,99 @@ class CompetingConsumerSubscriptionModelTest {
         await("waiting for all events").atMost(5, SECONDS).untilAsserted(() -> assertThat(cloudEvents.stream().map(t -> ((CloudEvent) t.toArray()[1]).getId())).containsExactly("1", "2", "3", "4", "5"));
     }
 
+    @Test
+    void when_CompetingConsumerSubscriptionModel_is_blocked_by_StartAt_then_it_will_delegate_to_parent() {
+        // Given
+        CopyOnWriteArrayList<CloudEvent> cloudEvents = new CopyOnWriteArrayList<>();
+
+        competingConsumerSubscriptionModel1 = new CompetingConsumerSubscriptionModel(springSubscriptionModel1, loggingStrategy("1", mongoTemplate));
+        competingConsumerSubscriptionModel2 = new CompetingConsumerSubscriptionModel(springSubscriptionModel2, loggingStrategy("2", mongoTemplate));
+
+        String subscriptionId = UUID.randomUUID().toString();
+        // Here we tell that the CompetingConsumerSubscriptionModel should not be used
+        StartAt dynamic = StartAt.dynamic(ctx -> ctx.hasSubscriptionModelType(CompetingConsumerSubscriptionModel.class) ? null : StartAt.subscriptionModelDefault());
+        competingConsumerSubscriptionModel1.subscribe(subscriptionId, dynamic, cloudEvents::add).waitUntilStarted();
+        competingConsumerSubscriptionModel2.subscribe(subscriptionId, dynamic, cloudEvents::add).waitUntilStarted();
+
+        NameDefined nameDefined = new NameDefined("eventId", LocalDateTime.of(2021, 2, 26, 14, 15, 16), "name", "my name");
+
+        // When
+        eventStore.write("streamId", serialize(nameDefined));
+
+        // Then
+        await().untilAsserted(() -> assertThat(cloudEvents).hasSize(2));
+    }
+
+    @Test
+    void it_is_possible_to_stop_and_start_a_CompetingConsumerSubscriptionModel_when_some_subscriptions_are_blocked() {
+        // Given
+        CopyOnWriteArrayList<CloudEvent> cloudEventsSubscription1 = new CopyOnWriteArrayList<>();
+        CopyOnWriteArrayList<CloudEvent> cloudEventsSubscription2 = new CopyOnWriteArrayList<>();
+
+        competingConsumerSubscriptionModel1 = new CompetingConsumerSubscriptionModel(springSubscriptionModel1, loggingStrategy("1", mongoTemplate));
+        competingConsumerSubscriptionModel2 = new CompetingConsumerSubscriptionModel(springSubscriptionModel2, loggingStrategy("2", mongoTemplate));
+
+        String subscriptionId1 = UUID.randomUUID().toString();
+        String subscriptionId2 = UUID.randomUUID().toString();
+        // Here we tell that the CompetingConsumerSubscriptionModel should not be used
+        StartAt dynamic = StartAt.dynamic(ctx -> ctx.hasSubscriptionModelType(CompetingConsumerSubscriptionModel.class) ? null : StartAt.subscriptionModelDefault());
+        competingConsumerSubscriptionModel1.subscribe(subscriptionId1, dynamic, cloudEventsSubscription1::add).waitUntilStarted();
+        competingConsumerSubscriptionModel2.subscribe(subscriptionId1, dynamic, cloudEventsSubscription1::add).waitUntilStarted();
+
+        competingConsumerSubscriptionModel1.subscribe(subscriptionId2, cloudEventsSubscription2::add).waitUntilStarted();
+        competingConsumerSubscriptionModel2.subscribe(subscriptionId2, cloudEventsSubscription2::add).waitUntilStarted();
+
+        NameDefined nameDefined = new NameDefined("eventId", LocalDateTime.of(2021, 2, 26, 14, 15, 16), "name", "my name");
+
+        // When
+        competingConsumerSubscriptionModel1.stop();
+        competingConsumerSubscriptionModel2.stop();
+
+        competingConsumerSubscriptionModel1.start();
+        competingConsumerSubscriptionModel2.start();
+
+        eventStore.write("streamId", serialize(nameDefined));
+
+        // Then
+        await().untilAsserted(() -> assertThat(cloudEventsSubscription1).hasSize(2));
+        await().untilAsserted(() -> assertThat(cloudEventsSubscription2).hasSize(1));
+    }
+
+    @Test
+    void it_is_possible_to_pause_and_resume_a_CompetingConsumerSubscriptionModel_when_some_subscriptions_are_blocked() {
+        // Given
+        CopyOnWriteArrayList<CloudEvent> cloudEventsSubscription1 = new CopyOnWriteArrayList<>();
+        CopyOnWriteArrayList<CloudEvent> cloudEventsSubscription2 = new CopyOnWriteArrayList<>();
+
+        competingConsumerSubscriptionModel1 = new CompetingConsumerSubscriptionModel(springSubscriptionModel1, loggingStrategy("1", mongoTemplate));
+        competingConsumerSubscriptionModel2 = new CompetingConsumerSubscriptionModel(springSubscriptionModel2, loggingStrategy("2", mongoTemplate));
+
+        String subscriptionId1 = UUID.randomUUID().toString();
+        String subscriptionId2 = UUID.randomUUID().toString();
+        // Here we tell that the CompetingConsumerSubscriptionModel should not be used
+        StartAt dynamic = StartAt.dynamic(ctx -> ctx.hasSubscriptionModelType(CompetingConsumerSubscriptionModel.class) ? null : StartAt.subscriptionModelDefault());
+        competingConsumerSubscriptionModel1.subscribe(subscriptionId1, dynamic, cloudEventsSubscription1::add).waitUntilStarted();
+        competingConsumerSubscriptionModel2.subscribe(subscriptionId1, dynamic, cloudEventsSubscription1::add).waitUntilStarted();
+
+        competingConsumerSubscriptionModel1.subscribe(subscriptionId2, cloudEventsSubscription2::add).waitUntilStarted();
+        competingConsumerSubscriptionModel2.subscribe(subscriptionId2, cloudEventsSubscription2::add).waitUntilStarted();
+
+        NameDefined nameDefined = new NameDefined("eventId", LocalDateTime.of(2021, 2, 26, 14, 15, 16), "name", "my name");
+
+        // When
+        competingConsumerSubscriptionModel1.pauseSubscription(subscriptionId1);
+        competingConsumerSubscriptionModel2.pauseSubscription(subscriptionId2);
+
+        competingConsumerSubscriptionModel1.resumeSubscription(subscriptionId1);
+        competingConsumerSubscriptionModel2.resumeSubscription(subscriptionId2);
+
+        eventStore.write("streamId", serialize(nameDefined));
+
+        // Then
+        await().untilAsserted(() -> assertThat(cloudEventsSubscription1).hasSize(2));
+        await().untilAsserted(() -> assertThat(cloudEventsSubscription2).hasSize(1));
+    }
+    
     private Stream<CloudEvent> serialize(DomainEvent e) {
         return Stream.of(CloudEventBuilder.v1()
                 .withId(e.eventId())

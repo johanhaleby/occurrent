@@ -12,11 +12,23 @@ public interface SubscriptionModelLifeCycle {
     void stop();
 
     /**
-     * Start a subscription model if it as previously stopped
+     * Start a subscription model if it as previously stopped and resume all subscriptions.
      *
      * @see #stop()
+     * @see #start(boolean)
      */
-    void start();
+    default void start() {
+        start(true);
+    }
+
+    /**
+     * Start a subscription model if it as previously stopped
+     *
+     * @param resumeSubscriptionsAutomatically Whether to automatically resume all subscriptions when starting. If <code>false</code>, then the subscriptions must be resumed manually using {@link #resumeSubscription(String).
+     * @see #stop()
+     * @see #start(boolean)
+     */
+    void start(boolean resumeSubscriptionsAutomatically);
 
     /**
      * @return {@code true} if the subscription model is running, {@code false} otherwise.

@@ -131,8 +131,8 @@ public class DurableSubscriptionModel implements PositionAwareSubscriptionModel,
     }
 
     @Override
-    public void start() {
-        getDelegatedSubscriptionModel().start();
+    public void start(boolean resumeSubscriptionsAutomatically) {
+        getDelegatedSubscriptionModel().start(resumeSubscriptionsAutomatically);
     }
 
     @Override

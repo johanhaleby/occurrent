@@ -273,10 +273,12 @@ public class NativeMongoSubscriptionModel implements PositionAwareSubscriptionMo
     }
 
     @Override
-    public synchronized void start() {
+    public synchronized void start(boolean resumeSubscriptionsAutomatically) {
         if (!shutdown) {
             running = true;
-            pausedSubscriptions.forEach((subscriptionId, internalSubscription) -> resumeSubscription(subscriptionId).waitUntilStarted());
+            if (resumeSubscriptionsAutomatically) {
+                pausedSubscriptions.forEach((subscriptionId, internalSubscription) -> resumeSubscription(subscriptionId).waitUntilStarted());
+            }
         }
     }
 
