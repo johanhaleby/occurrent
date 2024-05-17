@@ -75,7 +75,7 @@ import static org.occurrent.subscription.mongodb.spring.blocking.SpringMongoSubs
 public class OccurrentMongoAutoConfiguration<E> {
 
     @Bean
-    OccurrentAnnotationBeanPostProcessor occurrentAnnotationBeanPostProcessor() {
+    static OccurrentAnnotationBeanPostProcessor occurrentAnnotationBeanPostProcessor() {
         return new OccurrentAnnotationBeanPostProcessor();
     }
 
