@@ -59,11 +59,6 @@ public class CompetingConsumerSubscription implements Subscription {
     }
 
     @Override
-    public void waitUntilStarted() {
-        getSubscription().ifPresent(Subscription::waitUntilStarted);
-    }
-
-    @Override
     public boolean waitUntilStarted(Duration timeout) {
         return getSubscription().map(s -> s.waitUntilStarted(timeout)).orElse(true);
     }

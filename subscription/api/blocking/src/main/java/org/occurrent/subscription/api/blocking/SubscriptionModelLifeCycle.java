@@ -24,7 +24,7 @@ public interface SubscriptionModelLifeCycle {
     /**
      * Start a subscription model if it as previously stopped
      *
-     * @param resumeSubscriptionsAutomatically Whether to automatically resume all subscriptions when starting. If <code>false</code>, then the subscriptions must be resumed manually using {@link #resumeSubscription(String).
+     * @param resumeSubscriptionsAutomatically Whether to automatically resume all subscriptions when starting. If <code>false</code>, then the subscriptions must be resumed manually using {@link #resumeSubscription(String)}.
      * @see #stop()
      * @see #start(boolean)
      */

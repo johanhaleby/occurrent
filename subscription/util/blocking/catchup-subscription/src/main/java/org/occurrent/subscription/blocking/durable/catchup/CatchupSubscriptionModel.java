@@ -34,8 +34,10 @@ import java.util.LinkedHashMap;
 import java.util.Map;
 import java.util.Objects;
 import java.util.Optional;
+import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ConcurrentMap;
+import java.util.concurrent.Future;
 import java.util.function.Consumer;
 import java.util.function.Function;
 import java.util.function.Supplier;
@@ -58,7 +60,7 @@ import static org.occurrent.time.internal.RFC3339.RFC_3339_DATE_TIME_FORMATTER;
  * subscriptionModel.subscribe("subscriptionId", StartAtTime.beginningOfTime(), e -> System.out.println("Event: " + e);
  * subscriptionModel.subscribe("subscriptionId", StartAt.subscriptionPosition(TimeBasedSubscription.beginningOfTime()), e -> System.out.println("Event: " + e);
  * </pre>
- *
+ * <p>
  * If you're using Kotlin you can import the extension functions from {@code org.occurrent.subscription.blocking.durable.catchup.CatchupSubscriptionModelExtensions.kt} and do:
  * <pre>
  * subscriptionModel.subscribe("subscriptionId", StartAt.beginningOfTime()) { e ->
@@ -172,6 +174,11 @@ public class CatchupSubscriptionModel implements SubscriptionModel, DelegatingSu
             return subscriptionModel.subscribe(subscriptionId, filter, firstStartAt, action);
         }
 
+        Future<Subscription> subscriptionCompletableFuture = CompletableFuture.supplyAsync(() -> startCatchupSubscription(subscriptionId, filter, startAt, action, firstStartAt));
+        return new CatchupSubscription(subscriptionId, subscriptionCompletableFuture);
+    }
+
+    private Subscription startCatchupSubscription(String subscriptionId, SubscriptionFilter filter, StartAt startAt, Consumer<CloudEvent> action, StartAt firstStartAt) {
         runningCatchupSubscriptions.put(subscriptionId, true);
 
         SubscriptionPosition subscriptionPosition = ((StartAtSubscriptionPosition) firstStartAt.get(generateSubscriptionModelContext())).subscriptionPosition;
@@ -441,21 +448,11 @@ public class CatchupSubscriptionModel implements SubscriptionModel, DelegatingSu
         }
     }
 
-    private static class CancelledSubscription implements Subscription {
-        private final String subscriptionId;
-
-        public CancelledSubscription(String subscriptionId) {
-            this.subscriptionId = subscriptionId;
-        }
+    private record CancelledSubscription(String subscriptionId) implements Subscription {
 
         @Override
         public String id() {
             return subscriptionId;
-        }
-
-        @Override
-        public void waitUntilStarted() {
-
         }
 
         @Override

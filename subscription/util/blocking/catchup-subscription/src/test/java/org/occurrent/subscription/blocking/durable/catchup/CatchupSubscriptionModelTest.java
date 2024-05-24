@@ -644,7 +644,7 @@ public class CatchupSubscriptionModelTest {
             }
         };
 
-        subscription = newCatchupSubscription(database, eventCollection, TimeRepresentation.DATE, new CatchupSubscriptionModelConfig(100, useSubscriptionPositionStorage(this.storage).andPersistSubscriptionPositionDuringCatchupPhaseForEveryNEvents(10)));
+        subscription = newCatchupSubscription(database, eventCollection, TimeRepresentation.DATE, new CatchupSubscriptionModelConfig(100, useSubscriptionPositionStorage(storage).andPersistSubscriptionPositionDuringCatchupPhaseForEveryNEvents(10)));
 
         CopyOnWriteArrayList<CloudEvent> state = new CopyOnWriteArrayList<>();
 

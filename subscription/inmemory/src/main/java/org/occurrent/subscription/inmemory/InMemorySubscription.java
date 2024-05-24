@@ -19,6 +19,8 @@ package org.occurrent.subscription.inmemory;
 import io.cloudevents.CloudEvent;
 import org.occurrent.filter.Filter;
 import org.occurrent.retry.RetryStrategy;
+import org.occurrent.subscription.DurationToTimeoutConverter;
+import org.occurrent.subscription.DurationToTimeoutConverter.Timeout;
 import org.occurrent.subscription.api.blocking.Subscription;
 
 import java.time.Duration;
@@ -61,18 +63,10 @@ public class InMemorySubscription implements Subscription, Runnable {
     }
 
     @Override
-    public void waitUntilStarted() {
-        try {
-            started.await();
-        } catch (InterruptedException e) {
-            throw new RuntimeException(e);
-        }
-    }
-
-    @Override
     public boolean waitUntilStarted(Duration timeout) {
+        Timeout safeTimeout = DurationToTimeoutConverter.convertDurationToTimeout(timeout);
         try {
-            return started.await(timeout.toMillis(), MILLISECONDS);
+            return started.await(safeTimeout.timeout(), safeTimeout.timeUnit());
         } catch (InterruptedException e) {
             throw new RuntimeException(e);
         }

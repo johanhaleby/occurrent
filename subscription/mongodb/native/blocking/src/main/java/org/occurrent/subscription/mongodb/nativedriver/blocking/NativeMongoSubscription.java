@@ -16,12 +16,13 @@
 
 package org.occurrent.subscription.mongodb.nativedriver.blocking;
 
+import org.occurrent.subscription.DurationToTimeoutConverter;
+import org.occurrent.subscription.DurationToTimeoutConverter.Timeout;
 import org.occurrent.subscription.api.blocking.Subscription;
 
 import java.time.Duration;
 import java.util.Objects;
 import java.util.concurrent.CountDownLatch;
-import java.util.concurrent.TimeUnit;
 
 public class NativeMongoSubscription implements Subscription {
     public final String subscriptionId;
@@ -60,18 +61,10 @@ public class NativeMongoSubscription implements Subscription {
     }
 
     @Override
-    public void waitUntilStarted() {
-        try {
-            subscriptionStartedLatch.await();
-        } catch (InterruptedException e) {
-            throw new RuntimeException(e);
-        }
-    }
-
-    @Override
     public boolean waitUntilStarted(Duration timeout) {
+        Timeout safeTimeout = DurationToTimeoutConverter.convertDurationToTimeout(timeout);
         try {
-            return subscriptionStartedLatch.await(timeout.toMillis(), TimeUnit.MILLISECONDS);
+            return subscriptionStartedLatch.await(safeTimeout.timeout(), safeTimeout.timeUnit());
         } catch (InterruptedException e) {
             throw new RuntimeException(e);
         }

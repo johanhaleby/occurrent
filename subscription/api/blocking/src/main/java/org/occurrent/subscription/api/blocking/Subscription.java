@@ -17,6 +17,7 @@
 package org.occurrent.subscription.api.blocking;
 
 import java.time.Duration;
+import java.time.temporal.ChronoUnit;
 
 /**
  * Represents a unique subscription to a subscription. Subscriptions are typically started in a background thread
@@ -32,7 +33,9 @@ public interface Subscription {
     /**
      * Synchronous, <strong>blocking</strong> call returns once the {@link Subscription} has started.
      */
-    void waitUntilStarted();
+    default void waitUntilStarted() {
+        waitUntilStarted(ChronoUnit.FOREVER.getDuration());
+    }
 
     /**
      * Synchronous, <strong>blocking</strong> call returns once the {@link Subscription} has started or

@@ -3,7 +3,9 @@
 * Fixed a bug in OccurrentAnnotationBeanPostProcessor that caused `@Subscription(id="myId", startAt = BEGINNING_OF_TIME)` not to replay events from the beginning of time
 * CompetingConsumerSubscriptionModel supports delegating to parent subscription model if the `StartAt` position returns `null`. This means that the CompetingConsumerSubscriptionModel can be bypassed for certain subscriptions. This is useful if you have an in-memory subscription on multiple nodes with a `CompetingConsumerSubscriptionModel`. 
 * Added an overloaded method to SubscriptionModelLifeCycle (implemented by most SubscriptionModels) start allows you to start a subscription model without automatically starting all paused subscriptions. This method is called `start` and takes a boolean that tells if all subscriptions should be automatically started when the subscription model starts.
-* When using "in-memory" subscriptions, by doing `@Subscription(id="myId", startAt = BEGINNING_OF_TIME, resumeBehavior = SAME_AS_START)`, the subscription will be started on all nodes even when a CompetingConsumerSubscriptionModel is used. 
+* When using "in-memory" subscriptions, by doing e.g. `@Subscription(id="myId", startAt = BEGINNING_OF_TIME, resumeBehavior = SAME_AS_START)`, the subscription will be started on all nodes even when a CompetingConsumerSubscriptionModel is used.
+* The waitUntilStarted() method in the Subscription interface is now a default method.
+* CatchupSubscriptionModel subscriptions are now started in a background thread by default. Call the "waitUntilStarted()" on the Subscription to make is synchronous. 
 
 ### 0.18.0 (2024-05-17)
 * Major improvements to `CatchupSubscriptionModel`, it now handles and includes events that have been written while the catch-up subscription phase runs. Also, the "idempotency cache" is only used while switching from catch-up to continuous mode, and not during the entire catch-up phase.

@@ -16,13 +16,15 @@
 
 package org.occurrent.subscription.mongodb.spring.blocking;
 
+import org.occurrent.subscription.DurationToTimeoutConverter;
 import org.occurrent.subscription.api.blocking.Subscription;
 
 import java.time.Duration;
-import java.time.temporal.ChronoUnit;
 import java.util.Objects;
 import java.util.StringJoiner;
 import java.util.concurrent.atomic.AtomicReference;
+
+import static java.util.concurrent.TimeUnit.MILLISECONDS;
 
 public class SpringMongoSubscription implements Subscription {
 
@@ -41,17 +43,13 @@ public class SpringMongoSubscription implements Subscription {
     }
 
     @Override
-    public void waitUntilStarted() {
-        waitUntilStarted(Duration.of(100000, ChronoUnit.DAYS)); // "Forever" :)
-    }
-
-    @Override
     public boolean waitUntilStarted(Duration timeout) {
+        long timeoutMillis = DurationToTimeoutConverter.convertDurationToTimeout(timeout, MILLISECONDS).timeout();
         boolean continueWaiting = true;
         final long startTime = System.currentTimeMillis();
         while (!shutdown && continueWaiting) {
             final long currentTime = System.currentTimeMillis();
-            if ((currentTime - startTime) >= timeout.toMillis()) {
+            if ((currentTime - startTime) >= timeoutMillis) {
                 return false;
             }
             try {
