@@ -59,6 +59,7 @@ import static org.occurrent.eventstore.api.SortBy.SortDirection.ASCENDING;
 import static org.occurrent.eventstore.mongodb.internal.MongoExceptionTranslator.translateException;
 import static org.occurrent.eventstore.mongodb.internal.OccurrentCloudEventMongoDocumentMapper.convertToCloudEvent;
 import static org.occurrent.eventstore.mongodb.internal.OccurrentCloudEventMongoDocumentMapper.convertToDocument;
+import static org.occurrent.functionalsupport.internal.FunctionalSupport.autoClose;
 import static org.occurrent.functionalsupport.internal.FunctionalSupport.mapWithIndex;
 import static org.occurrent.mongodb.spring.sortconversion.internal.SortConverter.convertToSpringSort;
 import static org.springframework.data.domain.Sort.Direction.DESC;
@@ -369,7 +370,7 @@ public class SpringMongoEventStore implements EventStore, EventStoreOperations, 
         }
 
         Sort sort = convertToSpringSort(sortBy);
-        return mongoTemplate.stream(query.with(sort), Document.class, eventStoreCollectionName);
+        return autoClose(mongoTemplate.stream(query.with(sort), Document.class, eventStoreCollectionName));
     }
 
     // Initialization

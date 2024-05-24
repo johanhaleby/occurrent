@@ -29,6 +29,29 @@ import java.util.stream.StreamSupport;
  */
 public class FunctionalSupport {
 
+    /**
+     * Autocloses a stream by converting it to an iterable
+     */
+    public static <T> Stream<T> autoClose(Stream<T> stream) {
+        Iterator<T> iterator = stream.iterator();
+        Iterable<T> autoclosingIterable = () -> new Iterator<>() {
+            @Override
+            public boolean hasNext() {
+                boolean hasNext = iterator.hasNext();
+                if (!hasNext) {
+                    stream.close();
+                }
+                return hasNext;
+            }
+
+            @Override
+            public T next() {
+                return iterator.next();
+            }
+        };
+        return iteratorToFiniteStream(autoclosingIterable.iterator(), stream.isParallel());
+    }
+
     public static <A, T> Stream<T> mapWithIndex(Stream<A> stream, long startIndex, Function<Pair<Long, A>, T> fn) {
         return zip(LongStream.iterate(startIndex + 1, i -> i + 1).boxed(), stream, Pair::new).map(fn);
     }
@@ -51,7 +74,7 @@ public class FunctionalSupport {
         return iteratorToFiniteStream(iteratorC, parallel);
     }
 
-    private static <T> Stream<T> iteratorToFiniteStream(Iterator<T> iterator, boolean parallel) {
+    public static <T> Stream<T> iteratorToFiniteStream(Iterator<T> iterator, boolean parallel) {
         final Iterable<T> iterable = () -> iterator;
         return StreamSupport.stream(iterable.spliterator(), parallel);
     }
