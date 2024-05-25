@@ -1,0 +1,12 @@
+number-guessing-game:
+  min-number-to-guess: 1
+  max-number-to-guess: 20
+  max-number-of-guesses: 5
+
+spring:
+  application:
+    name: number-guessing-game
+
+server:
+  # Enabled graceful shutdown
+  shutdown: graceful
