@@ -21,6 +21,7 @@
 * Upgraded kotlinx-collections-immutable-jvm from 0.3.4 to 0.3.7
 * Upgraded arrow-core from 1.2.1 to 1.2.4
 * Upgraded jetbrains annotations from 22.0.0 to 24.1.0
+* Upgraded logback-classic from 1.4.14 to 1.5.6
 
 ### 0.18.0 (2024-05-17)
 * Major improvements to `CatchupSubscriptionModel`, it now handles and includes events that have been written while the catch-up subscription phase runs. Also, the "idempotency cache" is only used while switching from catch-up to continuous mode, and not during the entire catch-up phase.
