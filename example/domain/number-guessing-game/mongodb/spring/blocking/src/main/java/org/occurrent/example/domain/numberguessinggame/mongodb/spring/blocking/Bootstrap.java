@@ -21,10 +21,6 @@ import org.occurrent.application.converter.CloudEventConverter;
 import org.occurrent.example.domain.numberguessinggame.model.domainevents.GameEvent;
 import org.occurrent.example.domain.numberguessinggame.mongodb.spring.blocking.infrastructure.NumberGuessGameCloudEventConverter;
 import org.occurrent.springboot.mongo.blocking.EnableOccurrent;
-import org.springframework.amqp.core.TopicExchange;
-import org.springframework.amqp.rabbit.annotation.EnableRabbit;
-import org.springframework.amqp.support.converter.Jackson2JsonMessageConverter;
-import org.springframework.amqp.support.converter.MessageConverter;
 import org.springframework.boot.SpringApplication;
 import org.springframework.boot.autoconfigure.SpringBootApplication;
 import org.springframework.context.annotation.Bean;
@@ -39,10 +35,8 @@ import java.net.URI;
 @SpringBootApplication
 @EnableRetry
 @EnableMongoRepositories
-@EnableRabbit
 @EnableOccurrent
 public class Bootstrap {
-    private static final String NUMBER_GUESSING_GAME_TOPIC = "number-guessing-game";
 
     public static void main(String[] args) {
         SpringApplication.run(Bootstrap.class, args);
@@ -51,15 +45,5 @@ public class Bootstrap {
     @Bean
     public CloudEventConverter<GameEvent> cloudEventConverter(ObjectMapper objectMapper) {
         return new NumberGuessGameCloudEventConverter(objectMapper, URI.create("urn:occurrent:domain:numberguessinggame"));
-    }
-
-    @Bean
-    public MessageConverter amqpMessageConverter(ObjectMapper objectMapper) {
-        return new Jackson2JsonMessageConverter(objectMapper);
-    }
-
-    @Bean
-    TopicExchange numberGuessingGameTopic() {
-        return new TopicExchange(NUMBER_GUESSING_GAME_TOPIC);
     }
 }
