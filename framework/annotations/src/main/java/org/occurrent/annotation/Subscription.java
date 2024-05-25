@@ -133,6 +133,8 @@ public @interface Subscription {
      */
     ResumeBehavior resumeBehavior() default ResumeBehavior.DEFAULT;
 
+    WaitUntilStarted waitUntilStarted() default WaitUntilStarted.DEFAULT;
+
     /**
      * A set of predefined start positions
      */
@@ -168,5 +170,11 @@ public @interface Subscription {
          * then on application restart, it'll continue from the last received event (the subscription position (checkpoint) for the subscription) on restart.
          */
         DEFAULT
+    }
+
+    enum WaitUntilStarted {
+        DEFAULT,
+        TRUE,
+        FALSE
     }
 }

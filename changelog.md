@@ -7,6 +7,7 @@
 * The waitUntilStarted() method in the Subscription interface is now a default method.
 * CatchupSubscriptionModel subscriptions are now started in a background thread by default. Call the "waitUntilStarted()" on the Subscription to make is synchronous.
 * The java.util.Stream returned from SpringMongoEventStore is now automatically closed when the last element is consumed.
+* Added ability to specify whether the subscription should "waitUntilStarted" in the Subscriptions DSL. 
 
 ### 0.18.0 (2024-05-17)
 * Major improvements to `CatchupSubscriptionModel`, it now handles and includes events that have been written while the catch-up subscription phase runs. Also, the "idempotency cache" is only used while switching from catch-up to continuous mode, and not during the entire catch-up phase.

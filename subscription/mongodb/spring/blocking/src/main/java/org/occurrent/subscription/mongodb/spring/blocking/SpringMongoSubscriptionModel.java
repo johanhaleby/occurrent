@@ -305,7 +305,7 @@ public class SpringMongoSubscriptionModel implements PositionAwareSubscriptionMo
         try {
             boolean success = countDownLatch.await(10, TimeUnit.SECONDS);
             if (!success) {
-                log.warn("Failed to stop " + SpringMongoSubscriptionModel.class.getSimpleName() + " after 10 seconds");
+                log.warn("Failed to stop {} after 10 seconds", SpringMongoSubscriptionModel.class.getSimpleName());
             }
         } catch (InterruptedException e) {
             Thread.currentThread().interrupt();

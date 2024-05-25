@@ -23,6 +23,7 @@ import org.jetbrains.annotations.NotNull;
 import org.occurrent.annotation.Subscription;
 import org.occurrent.annotation.Subscription.ResumeBehavior;
 import org.occurrent.annotation.Subscription.StartPosition;
+import org.occurrent.annotation.Subscription.WaitUntilStarted;
 import org.occurrent.application.converter.CloudEventConverter;
 import org.occurrent.dsl.subscription.blocking.EventMetadata;
 import org.occurrent.dsl.subscription.blocking.Subscriptions;
@@ -35,8 +36,10 @@ import org.occurrent.subscription.blocking.durable.catchup.CatchupSubscriptionMo
 import org.occurrent.subscription.blocking.durable.catchup.TimeBasedSubscriptionPosition;
 import org.springframework.beans.BeansException;
 import org.springframework.beans.factory.config.BeanPostProcessor;
+import org.springframework.boot.context.event.ApplicationStartedEvent;
 import org.springframework.context.ApplicationContext;
 import org.springframework.context.ApplicationContextAware;
+import org.springframework.context.event.EventListener;
 import org.springframework.core.annotation.AnnotationUtils;
 
 import java.lang.reflect.Method;
@@ -47,10 +50,8 @@ import java.time.OffsetDateTime;
 import java.time.ZoneOffset;
 import java.time.format.DateTimeFormatter;
 import java.time.format.DateTimeParseException;
-import java.util.ArrayList;
-import java.util.Arrays;
-import java.util.List;
-import java.util.Objects;
+import java.util.*;
+import java.util.concurrent.ConcurrentHashMap;
 import java.util.stream.Collectors;
 import java.util.stream.Stream;
 
@@ -65,6 +66,7 @@ import static org.occurrent.subscription.OccurrentSubscriptionFilter.filter;
 class OccurrentAnnotationBeanPostProcessor implements BeanPostProcessor, ApplicationContextAware {
 
     private ApplicationContext applicationContext;
+    private final Set<Runnable> subscriptionsToStartAfterAppliationServiceHasStarted = Collections.newSetFromMap(new ConcurrentHashMap<>());
 
     @Override
     public void setApplicationContext(@NotNull ApplicationContext applicationContext) throws BeansException {
@@ -170,16 +172,44 @@ class OccurrentAnnotationBeanPostProcessor implements BeanPostProcessor, Applica
             return Unit.INSTANCE;
         };
 
-        StartAt startAt = generateStartAt(subscription);
-
-        Subscriptions<E> subscribable = applicationContext.getBean(Subscriptions.class);
-        subscribable.subscribe(id, filter(filter), startAt, consumer).waitUntilStarted();
-    }
-
-    private @NotNull StartAt generateStartAt(Subscription subscription) {
         StartPositionToUse startPositionToUse = findStartPositionToUseOrThrow(subscription.id(), subscription.startAtISO8601(), subscription.startAtTimeEpochMillis(), subscription.startAt());
         ResumeBehavior resumeBehavior = subscription.resumeBehavior();
-        return generateStartAt(subscription.id(), startPositionToUse, resumeBehavior);
+        StartAt startAt = generateStartAt(subscription.id(), startPositionToUse, resumeBehavior);
+
+        boolean shouldWaitUntilStarted = shouldWaitUntilStarted(startPositionToUse, subscription.waitUntilStarted());
+        Subscriptions<E> subscribable = applicationContext.getBean(Subscriptions.class);
+        // We need to do this because certain operations deadlocks
+        // (e.g. catchup subscriptions when it tries to catchup, and we use waitUntilStarted)
+        if (shouldWaitUntilStarted) {
+            subscribable.subscribe(id, filter(filter), startAt, true, consumer);
+
+        } else {
+            subscriptionsToStartAfterAppliationServiceHasStarted.add(() -> {
+                // Subscriptions waitUntilStarted måste vara configurable!! Det är pga att den gör waitUntilStarted som det hänger sig!!
+                // Sen hade det hängt sig ändå, om vi kallat på subscriptionModelSubscription.waitUntilStarted() för CatchupSubscription.
+                // Ta reda på varför i CatchupSubscription.waitUntilStarted()!
+                subscribable.subscribe(id, filter(filter), startAt, false, consumer);
+            });
+        }
+    }
+
+    // TODO Also check resume behavior if subscription exists!
+    private static boolean shouldWaitUntilStarted(StartPositionToUse startPositionToUse, WaitUntilStarted waitUntilStarted) {
+        return switch (waitUntilStarted) {
+            case DEFAULT -> {
+                if (startPositionToUse instanceof StartPositionToUse.StartAtISO8601 || startPositionToUse instanceof StartPositionToUse.StartAtTimeEpoch) {
+                    yield false;
+                } else {
+                    StartPositionToUse.StartAtStartPosition startPosition = (StartPositionToUse.StartAtStartPosition) startPositionToUse;
+                    yield switch (startPosition.startPosition) {
+                        case BEGINNING_OF_TIME -> false;
+                        case NOW, DEFAULT -> true;
+                    };
+                }
+            }
+            case TRUE -> true;
+            case FALSE -> false;
+        };
     }
 
     private @NotNull StartAt generateStartAt(String subscriptionId, StartPositionToUse startPositionToUse, ResumeBehavior resumeBehavior) {
@@ -308,6 +338,19 @@ class OccurrentAnnotationBeanPostProcessor implements BeanPostProcessor, Applica
         } else {
             return definedStartPositions.get(0);
         }
+    }
+
+
+    // This is executed when application context has started,
+    // but before the app is ready (ApplicationReadyEvent) to serve requests.
+    // This is important, because we need to have started the subscriptions before
+    // the application serves the requests (at least if they are started with "waitUntilStarted").
+    // OBS! Detta stämmer inte!?! Kolla LogWhenPlayerFailed! DEn borde ha waitUntilStarted, dvs den borde isf
+    // blocka innan requests händer
+
+    @EventListener(ApplicationStartedEvent.class)
+    void startSubscriptionsAfterApplicationStarted() {
+        subscriptionsToStartAfterAppliationServiceHasStarted.forEach(Runnable::run);
     }
 
     private sealed interface StartPositionToUse {
