@@ -8,6 +8,19 @@
 * CatchupSubscriptionModel subscriptions are now started in a background thread by default. Call the "waitUntilStarted()" on the Subscription to make is synchronous.
 * The java.util.Stream returned from SpringMongoEventStore is now automatically closed when the last element is consumed.
 * Added ability to specify whether the subscription should "waitUntilStarted" in the Subscriptions DSL. 
+* Upgraded Spring Boot from 3.2.5 to 3.3.0
+* Upgraded Kotlin from 1.9.23 to 2.0.0
+* Upgraded Mongo sync driver from 4.11.2 to 5.1.0
+* Upgraded Jackson from 2.15.4 to 2.17.1
+* Upgraded reactor from 3.6.5 to 3.6.6
+* Upgraded jobrunr from 7.1.1 to 7.1.2
+* Upgraded amqp-client from 5.20.0 to 5.21.0
+* Upgraded spring-aspects from 6.1.1 to 6.1.8
+* Upgraded spring-retry from 2.0.3 to 2.0.6
+* Upgraded spring-hateoas from 2.2.0 to 2.3.0
+* Upgraded kotlinx-collections-immutable-jvm from 0.3.4 to 0.3.7
+* Upgraded arrow-core from 1.2.1 to 1.2.4
+* Upgraded jetbrains annotations from 22.0.0 to 24.1.0
 
 ### 0.18.0 (2024-05-17)
 * Major improvements to `CatchupSubscriptionModel`, it now handles and includes events that have been written while the catch-up subscription phase runs. Also, the "idempotency cache" is only used while switching from catch-up to continuous mode, and not during the entire catch-up phase.
