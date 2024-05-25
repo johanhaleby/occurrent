@@ -22,17 +22,9 @@ import org.springframework.boot.test.context.TestConfiguration;
 import org.springframework.boot.testcontainers.service.connection.ServiceConnection;
 import org.springframework.context.annotation.Bean;
 import org.testcontainers.containers.MongoDBContainer;
-import org.testcontainers.containers.RabbitMQContainer;
 
 @TestConfiguration(proxyBeanMethods = false)
 public class TestBootstrap {
-
-    @Bean
-    @ServiceConnection(name = "rabbitmq")
-    public RabbitMQContainer rabbitMQContainer() {
-        return new RabbitMQContainer("rabbitmq:3.12.12");
-    }
-
 
     @Bean
     @ServiceConnection(name = "mongodb")
