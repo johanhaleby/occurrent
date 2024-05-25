@@ -59,7 +59,7 @@ public class FunctionalSupport {
     public static <A, B, C> Stream<C> zip(Stream<A> streamA, Stream<B> streamB, BiFunction<A, B, C> zipper) {
         final Iterator<A> iteratorA = streamA.iterator();
         final Iterator<B> iteratorB = streamB.iterator();
-        final Iterator<C> iteratorC = new Iterator<C>() {
+        final Iterator<C> iteratorC = new Iterator<>() {
             @Override
             public boolean hasNext() {
                 return iteratorA.hasNext() && iteratorB.hasNext();
