@@ -49,7 +49,7 @@ public class FunctionalSupport {
                 return iterator.next();
             }
         };
-        return iteratorToFiniteStream(autoclosingIterable.iterator(), stream.isParallel());
+        return iteratorToFiniteStream(autoclosingIterable.iterator(), stream.isParallel()).onClose(stream::close);
     }
 
     public static <A, T> Stream<T> mapWithIndex(Stream<A> stream, long startIndex, Function<Pair<Long, A>, T> fn) {
