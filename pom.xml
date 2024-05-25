@@ -70,17 +70,17 @@
         <maven.compiler.target>17</maven.compiler.target>
         <junit.version>5.10.1</junit.version>
         <test-containers.version>1.19.3</test-containers.version>
-        <kotlin.version>1.9.23</kotlin.version>
-        <jackson.version>2.15.4</jackson.version>
+        <kotlin.version>2.0.0</kotlin.version>
+        <jackson.version>2.17.1</jackson.version>
         <cloudevents.version>3.0.0</cloudevents.version>
-        <reactor.version>3.6.5</reactor.version>
-        <spring-data-mongodb.version>4.2.0</spring-data-mongodb.version>
-        <spring-boot.version>3.2.5</spring-boot.version>
-        <mongo.version>4.11.2</mongo.version>
+        <reactor.version>3.6.6</reactor.version>
+        <spring-data-mongodb.version>4.3.0</spring-data-mongodb.version>
+        <spring-boot.version>3.3.0</spring-boot.version>
+        <mongo.version>5.1.0</mongo.version>
         <dokka.version>1.9.20</dokka.version>
         <sundrio.version>0.100.3</sundrio.version>
         <awaitility.version>4.2.1</awaitility.version>
-        <jobrunr.version>7.1.1</jobrunr.version>
+        <jobrunr.version>7.1.2</jobrunr.version>
     </properties>
 
 
@@ -154,7 +154,7 @@
             <dependency>
                 <groupId>com.rabbitmq</groupId>
                 <artifactId>amqp-client</artifactId>
-                <version>5.20.0</version>
+                <version>5.21.0</version>
             </dependency>
             <dependency>
                 <groupId>jakarta.annotation</groupId>
@@ -190,7 +190,7 @@
             <dependency>
                 <groupId>org.springframework</groupId>
                 <artifactId>spring-aspects</artifactId>
-                <version>6.1.1</version>
+                <version>6.1.8</version>
             </dependency>
             <dependency>
                 <groupId>org.springframework.boot</groupId>
@@ -220,7 +220,7 @@
             <dependency>
                 <groupId>org.springframework.retry</groupId>
                 <artifactId>spring-retry</artifactId>
-                <version>2.0.3</version>
+                <version>2.0.6</version>
                 <exclusions>
                     <exclusion>
                         <groupId>org.springframework</groupId>
@@ -231,7 +231,7 @@
             <dependency>
                 <groupId>org.springframework.hateoas</groupId>
                 <artifactId>spring-hateoas</artifactId>
-                <version>2.2.0</version>
+                <version>2.3.0</version>
             </dependency>
             <dependency>
                 <groupId>org.springframework.boot</groupId>
@@ -258,7 +258,7 @@
             <dependency>
                 <groupId>org.jetbrains.kotlinx</groupId>
                 <artifactId>kotlinx-collections-immutable-jvm</artifactId>
-                <version>0.3.4</version>
+                <version>0.3.7</version>
                 <exclusions>
                     <exclusion>
                         <groupId>org.jetbrains.kotlin</groupId>
@@ -271,7 +271,7 @@
             <dependency>
                 <groupId>io.arrow-kt</groupId>
                 <artifactId>arrow-core</artifactId>
-                <version>1.2.1</version>
+                <version>1.2.4</version>
             </dependency>
 
             <!-- Redis -->
@@ -283,7 +283,7 @@
             <dependency>
                 <groupId>io.lettuce</groupId>
                 <artifactId>lettuce-core</artifactId>
-                <version>6.3.1.RELEASE</version>
+                <version>6.3.2.RELEASE</version>
             </dependency>
             <!-- Mongo -->
             <dependency>
@@ -313,8 +313,8 @@
             </dependency>
             <dependency>
                 <groupId>org.jetbrains</groupId>
-                <artifactId>annotations</artifactId>
-                <version>22.0.0</version>
+                    <artifactId>annotations</artifactId>
+                <version>24.1.0</version>
             </dependency>
             <dependency>
                 <groupId>org.jobrunr</groupId>
