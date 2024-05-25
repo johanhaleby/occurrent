@@ -143,14 +143,21 @@ class Subscriptions<E : Any>(private val subscriptionModel: Subscribable, privat
 
     fun subscribe(subscriptionId: String, vararg eventTypes: KClass<out E>, startAt: StartAt? = null, fn: (EventMetadata, E) -> Unit): Subscription {
         val filter = subscriptionFilterFromEventTypes(eventTypes)
-        return subscribe(subscriptionId, filter, startAt, fn)
+        return subscribe(subscriptionId, filter, startAt, true, fn)
     }
 
     fun subscribe(subscriptionId: String, filter: OccurrentSubscriptionFilter = OccurrentSubscriptionFilter.filter(Filter.all()), startAt: StartAt? = null, fn: (E) -> Unit): Subscription {
         return subscribe(subscriptionId, filter, startAt) { _, e -> fn(e) }
     }
 
-    fun subscribe(subscriptionId: String, filter: OccurrentSubscriptionFilter = OccurrentSubscriptionFilter.filter(Filter.all()), startAt: StartAt? = null, fn: (EventMetadata, E) -> Unit): Subscription {
+    @JvmOverloads
+    fun subscribe(
+        subscriptionId: String,
+        filter: OccurrentSubscriptionFilter = OccurrentSubscriptionFilter.filter(Filter.all()),
+        startAt: StartAt? = null,
+        waitUntilStarted: Boolean = true,
+        fn: (EventMetadata, E) -> Unit
+    ): Subscription {
         val consumer: (CloudEvent) -> Unit = { cloudEvent ->
             val event = cloudEventConverter[cloudEvent]
             val metadataMap = cloudEvent.extensionNames.associateWith { extensionName -> cloudEvent.getExtension(extensionName) }
@@ -165,7 +172,9 @@ class Subscriptions<E : Any>(private val subscriptionModel: Subscribable, privat
         }
 
         return subscription.apply {
-            waitUntilStarted()
+            if (waitUntilStarted) {
+                waitUntilStarted()
+            }
         }
     }
 
