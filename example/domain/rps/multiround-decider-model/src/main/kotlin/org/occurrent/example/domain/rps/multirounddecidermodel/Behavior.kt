@@ -88,7 +88,7 @@ private object GameLogic {
     private fun playRound(gameId: GameId, timestamp: Timestamp, roundNumber: RoundNumber, firstHandGesture: PlayerHandGesture, secondHandGesture: PlayerHandGesture): List<GameEvent> {
         val handGestureShown = HandGestureShown(gameId, timestamp, secondHandGesture.playerId, secondHandGesture.handGesture)
         val roundResultEvent = when {
-            firstHandGesture hasSameHandGesture secondHandGesture -> RoundTied(gameId, timestamp, roundNumber)
+            firstHandGesture isSameHandGestureAs secondHandGesture -> RoundTied(gameId, timestamp, roundNumber)
             firstHandGesture beats secondHandGesture -> RoundWon(gameId, timestamp, roundNumber, firstHandGesture.playerId)
             else -> RoundWon(gameId, timestamp, roundNumber, secondHandGesture.playerId)
         }
@@ -129,7 +129,7 @@ private object GameLogic {
     }
 
     private infix fun PlayerHandGesture.beats(other: PlayerHandGesture): Boolean = this.handGesture.beats(other.handGesture)
-    private infix fun PlayerHandGesture.hasSameHandGesture(other: PlayerHandGesture): Boolean = this.handGesture == other.handGesture
+    private infix fun PlayerHandGesture.isSameHandGestureAs(other: PlayerHandGesture): Boolean = this.handGesture == other.handGesture
 
     private infix fun HandGesture.beats(other: HandGesture): Boolean = when {
         this == ROCK && other == SCISSORS -> true
