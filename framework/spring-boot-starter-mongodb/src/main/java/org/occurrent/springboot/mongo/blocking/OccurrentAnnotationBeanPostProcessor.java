@@ -36,11 +36,10 @@ import org.occurrent.subscription.blocking.durable.catchup.CatchupSubscriptionMo
 import org.occurrent.subscription.blocking.durable.catchup.TimeBasedSubscriptionPosition;
 import org.springframework.beans.BeansException;
 import org.springframework.beans.factory.config.BeanPostProcessor;
-import org.springframework.boot.context.event.ApplicationStartedEvent;
 import org.springframework.context.ApplicationContext;
 import org.springframework.context.ApplicationContextAware;
-import org.springframework.context.event.EventListener;
 import org.springframework.core.annotation.AnnotationUtils;
+import org.springframework.data.mongodb.core.MongoOperations;
 
 import java.lang.reflect.Method;
 import java.lang.reflect.Modifier;
@@ -50,8 +49,10 @@ import java.time.OffsetDateTime;
 import java.time.ZoneOffset;
 import java.time.format.DateTimeFormatter;
 import java.time.format.DateTimeParseException;
-import java.util.*;
-import java.util.concurrent.ConcurrentHashMap;
+import java.util.ArrayList;
+import java.util.Arrays;
+import java.util.List;
+import java.util.Objects;
 import java.util.stream.Collectors;
 import java.util.stream.Stream;
 
@@ -66,7 +67,6 @@ import static org.occurrent.subscription.OccurrentSubscriptionFilter.filter;
 class OccurrentAnnotationBeanPostProcessor implements BeanPostProcessor, ApplicationContextAware {
 
     private ApplicationContext applicationContext;
-    private final Set<Runnable> subscriptionsToStartAfterAppliationServiceHasStarted = Collections.newSetFromMap(new ConcurrentHashMap<>());
 
     @Override
     public void setApplicationContext(@NotNull ApplicationContext applicationContext) throws BeansException {
@@ -178,19 +178,13 @@ class OccurrentAnnotationBeanPostProcessor implements BeanPostProcessor, Applica
 
         boolean shouldWaitUntilStarted = shouldWaitUntilStarted(startPositionToUse, subscription.startupMode());
         Subscriptions<E> subscribable = applicationContext.getBean(Subscriptions.class);
-        // We need to do this because certain operations deadlocks
-        // (e.g. catchup subscriptions when it tries to catchup, and we use waitUntilStarted)
-        if (shouldWaitUntilStarted) {
-            subscribable.subscribe(id, filter(filter), startAt, true, consumer);
 
-        } else {
-            subscriptionsToStartAfterAppliationServiceHasStarted.add(() -> {
-                // Subscriptions waitUntilStarted måste vara configurable!! Det är pga att den gör waitUntilStarted som det hänger sig!!
-                // Sen hade det hängt sig ändå, om vi kallat på subscriptionModelSubscription.waitUntilStarted() för CatchupSubscription.
-                // Ta reda på varför i CatchupSubscription.waitUntilStarted()!
-                subscribable.subscribe(id, filter(filter), startAt, false, consumer);
-            });
-        }
+        // These are workarounds for https://github.com/spring-projects/spring-framework/issues/32904
+        applicationContext.getBean(MongoOperations.class);
+        applicationContext.getBean("springApplicationAdminRegistrar");
+        // End workarounds
+
+        subscribable.subscribe(id, filter(filter), startAt, shouldWaitUntilStarted, consumer);
     }
 
     // TODO Also check resume behavior if subscription exists!
@@ -338,19 +332,6 @@ class OccurrentAnnotationBeanPostProcessor implements BeanPostProcessor, Applica
         } else {
             return definedStartPositions.get(0);
         }
-    }
-
-
-    // This is executed when application context has started,
-    // but before the app is ready (ApplicationReadyEvent) to serve requests.
-    // This is important, because we need to have started the subscriptions before
-    // the application serves the requests (at least if they are started with "waitUntilStarted").
-    // OBS! Detta stämmer inte!?! Kolla LogWhenPlayerFailed! DEn borde ha waitUntilStarted, dvs den borde isf
-    // blocka innan requests händer
-
-    @EventListener(ApplicationStartedEvent.class)
-    void startSubscriptionsAfterApplicationStarted() {
-        subscriptionsToStartAfterAppliationServiceHasStarted.forEach(Runnable::run);
     }
 
     private sealed interface StartPositionToUse {
