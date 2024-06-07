@@ -23,7 +23,7 @@ import org.jetbrains.annotations.NotNull;
 import org.occurrent.annotation.Subscription;
 import org.occurrent.annotation.Subscription.ResumeBehavior;
 import org.occurrent.annotation.Subscription.StartPosition;
-import org.occurrent.annotation.Subscription.WaitUntilStarted;
+import org.occurrent.annotation.Subscription.StartupMode;
 import org.occurrent.application.converter.CloudEventConverter;
 import org.occurrent.dsl.subscription.blocking.EventMetadata;
 import org.occurrent.dsl.subscription.blocking.Subscriptions;
@@ -176,7 +176,7 @@ class OccurrentAnnotationBeanPostProcessor implements BeanPostProcessor, Applica
         ResumeBehavior resumeBehavior = subscription.resumeBehavior();
         StartAt startAt = generateStartAt(subscription.id(), startPositionToUse, resumeBehavior);
 
-        boolean shouldWaitUntilStarted = shouldWaitUntilStarted(startPositionToUse, subscription.waitUntilStarted());
+        boolean shouldWaitUntilStarted = shouldWaitUntilStarted(startPositionToUse, subscription.startupMode());
         Subscriptions<E> subscribable = applicationContext.getBean(Subscriptions.class);
         // We need to do this because certain operations deadlocks
         // (e.g. catchup subscriptions when it tries to catchup, and we use waitUntilStarted)
@@ -194,8 +194,8 @@ class OccurrentAnnotationBeanPostProcessor implements BeanPostProcessor, Applica
     }
 
     // TODO Also check resume behavior if subscription exists!
-    private static boolean shouldWaitUntilStarted(StartPositionToUse startPositionToUse, WaitUntilStarted waitUntilStarted) {
-        return switch (waitUntilStarted) {
+    private static boolean shouldWaitUntilStarted(StartPositionToUse startPositionToUse, StartupMode startupMode) {
+        return switch (startupMode) {
             case DEFAULT -> {
                 if (startPositionToUse instanceof StartPositionToUse.StartAtISO8601 || startPositionToUse instanceof StartPositionToUse.StartAtTimeEpoch) {
                     yield false;
@@ -207,8 +207,8 @@ class OccurrentAnnotationBeanPostProcessor implements BeanPostProcessor, Applica
                     };
                 }
             }
-            case TRUE -> true;
-            case FALSE -> false;
+            case WAIT_UNTIL_STARTED -> true;
+            case BACKGROUND -> false;
         };
     }
 

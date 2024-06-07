@@ -17,7 +17,6 @@
 
 package org.occurrent.example.domain.numberguessinggame.mongodb.spring.blocking.policy;
 
-import jakarta.annotation.PostConstruct;
 import org.occurrent.annotation.Subscription;
 import org.occurrent.example.domain.numberguessinggame.model.domainevents.PlayerGuessedANumberThatWasTooSmall;
 import org.slf4j.Logger;
@@ -26,30 +25,19 @@ import org.springframework.stereotype.Component;
 
 import static org.occurrent.annotation.Subscription.ResumeBehavior.SAME_AS_START_AT;
 import static org.occurrent.annotation.Subscription.StartPosition.BEGINNING_OF_TIME;
-import static org.occurrent.annotation.Subscription.WaitUntilStarted.TRUE;
+import static org.occurrent.annotation.Subscription.StartupMode.WAIT_UNTIL_STARTED;
 
 @Component
-public class LogWhenTooSmallGuess {
-    private static final Logger log = LoggerFactory.getLogger(LogWhenTooSmallGuess.class);
-
-    @PostConstruct
-    void gkdfd() {
-        log.info("started LogWhenTooSmallGuess");
-    }
+public class LogWhenGuessTooSmall {
+    private static final Logger log = LoggerFactory.getLogger(LogWhenGuessTooSmall.class);
 
     @Subscription(
-            id = "LogWhenTooSmallGuess",
+            id = "LogWhenGuessTooSmall",
             startAt = BEGINNING_OF_TIME,
             resumeBehavior = SAME_AS_START_AT,
-            waitUntilStarted = TRUE
+            startupMode = WAIT_UNTIL_STARTED
     )
-    void logWhenGameStartsAndEnds2(PlayerGuessedANumberThatWasTooSmall e) {
+    void logWhenGuessWasTooSmall(PlayerGuessedANumberThatWasTooSmall e) {
         log.info("Player {} guessed a too small number in game {}", e.playerId(), e.gameId());
-        try {
-            Thread.sleep(1000);
-        } catch (InterruptedException ex) {
-            throw new RuntimeException(ex);
-        }
     }
-
 }
