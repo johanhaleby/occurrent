@@ -73,14 +73,14 @@
         <kotlin.version>2.0.0</kotlin.version>
         <jackson.version>2.17.1</jackson.version>
         <cloudevents.version>3.0.0</cloudevents.version>
-        <reactor.version>3.6.6</reactor.version>
-        <spring-data-mongodb.version>4.3.0</spring-data-mongodb.version>
-        <spring-boot.version>3.3.0</spring-boot.version>
-        <mongo.version>5.1.0</mongo.version>
+        <reactor.version>3.6.7</reactor.version>
+        <spring-data-mongodb.version>4.3.1</spring-data-mongodb.version>
+        <spring-boot.version>3.3.1</spring-boot.version>
+        <mongo.version>5.1.1</mongo.version>
         <dokka.version>1.9.20</dokka.version>
         <sundrio.version>0.100.3</sundrio.version>
         <awaitility.version>4.2.1</awaitility.version>
-        <jobrunr.version>7.1.2</jobrunr.version>
+        <jobrunr.version>7.2.1</jobrunr.version>
     </properties>
 
 
@@ -190,7 +190,7 @@
             <dependency>
                 <groupId>org.springframework</groupId>
                 <artifactId>spring-aspects</artifactId>
-                <version>6.1.8</version>
+                <version>6.1.10</version>
             </dependency>
             <dependency>
                 <groupId>org.springframework.boot</groupId>
