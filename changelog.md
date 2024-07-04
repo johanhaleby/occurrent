@@ -1,3 +1,6 @@
+### 0.19.1
+* Ignoring NoSuchBeanDefinitionException when getting the springApplicationAdminRegistrar bean when working around https://github.com/spring-projects/spring-framework/issues/32904
+
 ### 0.19.0 (2024-05-17)
 * Made OccurrentAnnotationBeanPostProcessor a static bean in OccurrentMongoAutoConfiguration to avoid Spring warning logs when booting up
 * Fixed a bug in OccurrentAnnotationBeanPostProcessor that caused `@Subscription(id="myId", startAt = BEGINNING_OF_TIME)` not to replay events from the beginning of time

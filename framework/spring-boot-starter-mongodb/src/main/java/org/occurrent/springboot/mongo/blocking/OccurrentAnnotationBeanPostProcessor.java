@@ -35,6 +35,7 @@ import org.occurrent.subscription.blocking.durable.DurableSubscriptionModel;
 import org.occurrent.subscription.blocking.durable.catchup.CatchupSubscriptionModel;
 import org.occurrent.subscription.blocking.durable.catchup.TimeBasedSubscriptionPosition;
 import org.springframework.beans.BeansException;
+import org.springframework.beans.factory.NoSuchBeanDefinitionException;
 import org.springframework.beans.factory.config.BeanPostProcessor;
 import org.springframework.context.ApplicationContext;
 import org.springframework.context.ApplicationContextAware;
@@ -181,7 +182,10 @@ class OccurrentAnnotationBeanPostProcessor implements BeanPostProcessor, Applica
 
         // These are workarounds for https://github.com/spring-projects/spring-framework/issues/32904
         applicationContext.getBean(MongoOperations.class);
-        applicationContext.getBean("springApplicationAdminRegistrar");
+        try {
+            applicationContext.getBean("springApplicationAdminRegistrar");
+        } catch (NoSuchBeanDefinitionException ignored) {
+        }
         // End workarounds
 
         subscribable.subscribe(id, filter(filter), startAt, shouldWaitUntilStarted, consumer);
