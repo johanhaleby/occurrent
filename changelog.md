@@ -1,7 +1,7 @@
-### 0.19.1
+### 0.19.1 (2024-07-04)
 * Ignoring NoSuchBeanDefinitionException when getting the springApplicationAdminRegistrar bean when working around https://github.com/spring-projects/spring-framework/issues/32904
 
-### 0.19.0 (2024-05-17)
+### 0.19.0 (2024-06-27)
 * Made OccurrentAnnotationBeanPostProcessor a static bean in OccurrentMongoAutoConfiguration to avoid Spring warning logs when booting up
 * Fixed a bug in OccurrentAnnotationBeanPostProcessor that caused `@Subscription(id="myId", startAt = BEGINNING_OF_TIME)` not to replay events from the beginning of time
 * CompetingConsumerSubscriptionModel supports delegating to parent subscription model if the `StartAt` position returns `null`. This means that the CompetingConsumerSubscriptionModel can be bypassed for certain subscriptions. This is useful if you have an in-memory subscription on multiple nodes with a `CompetingConsumerSubscriptionModel`. 
