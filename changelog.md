@@ -1,5 +1,6 @@
 ### Changelog next version
 * `OccurrentAnnotationBeanPostProcessor` is only applied if `occurrent.subscription.enabled` property is missing or is `true`
+* Added ability to disable the creation a default instance of an `ApplicationService` when using the `spring-boot-starter-mongodb` module by specifying `occurrent.application-service.enabled=false`. 
 
 ### 0.19.1 (2024-07-04)
 * Ignoring NoSuchBeanDefinitionException when getting the springApplicationAdminRegistrar bean when working around https://github.com/spring-projects/spring-framework/issues/32904

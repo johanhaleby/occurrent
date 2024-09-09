@@ -58,6 +58,8 @@ public class OccurrentProperties {
          */
         private boolean enableDefaultRetryStrategy = true;
 
+        private boolean enabled;
+
         public boolean isEnableDefaultRetryStrategy() {
             return enableDefaultRetryStrategy;
         }
@@ -65,6 +67,15 @@ public class OccurrentProperties {
         public void setEnableDefaultRetryStrategy(boolean enableDefaultRetryStrategy) {
             this.enableDefaultRetryStrategy = enableDefaultRetryStrategy;
         }
+
+        public boolean isEnabled() {
+            return enabled;
+        }
+
+        public void setEnabled(boolean enabled) {
+            this.enabled = enabled;
+        }
+
     }
 
     public static class CloudEventConverterProperties {
