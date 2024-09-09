@@ -71,7 +71,7 @@
         <junit.version>5.10.1</junit.version>
         <test-containers.version>1.19.3</test-containers.version>
         <kotlin.version>2.0.0</kotlin.version>
-        <jackson.version>2.17.1</jackson.version>
+        <jackson.version>2.17.2</jackson.version>
         <cloudevents.version>3.0.0</cloudevents.version>
         <reactor.version>3.6.7</reactor.version>
         <spring-data-mongodb.version>4.3.1</spring-data-mongodb.version>
