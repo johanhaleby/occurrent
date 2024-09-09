@@ -1,3 +1,6 @@
+### Changelog next version
+* `OccurrentAnnotationBeanPostProcessor` is only applied if `occurrent.subscription.enabled` property is missing or is `true`
+
 ### 0.19.1 (2024-07-04)
 * Ignoring NoSuchBeanDefinitionException when getting the springApplicationAdminRegistrar bean when working around https://github.com/spring-projects/spring-framework/issues/32904
 
