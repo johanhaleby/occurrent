@@ -79,7 +79,7 @@
         <mongo.version>5.1.1</mongo.version>
         <dokka.version>1.9.20</dokka.version>
         <sundrio.version>0.100.3</sundrio.version>
-        <awaitility.version>4.2.1</awaitility.version>
+        <awaitility.version>4.2.2</awaitility.version>
         <jobrunr.version>7.2.1</jobrunr.version>
     </properties>
 
