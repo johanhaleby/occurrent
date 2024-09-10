@@ -19,7 +19,7 @@
     <parent>
         <artifactId>occurrent</artifactId>
         <groupId>org.occurrent</groupId>
-        <version>0.19.2</version>
+        <version>0.19.3-SNAPSHOT</version>
     </parent>
     <packaging>pom</packaging>
     <modules>
