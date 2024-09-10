@@ -9,6 +9,7 @@
 * Upgraded project reactor from 3.6.7 to 3.6.9
 * Upgraded spring-boot from 3.3.1 to 3.3.3
 * Upgraded spring-data-mongodb from 4.3.1 to 4.3.3
+* Upgraded kotlinx-html-jvm from 0.7.2 to 0.11.0
 
 ### 0.19.1 (2024-07-04)
 * Ignoring NoSuchBeanDefinitionException when getting the springApplicationAdminRegistrar bean when working around https://github.com/spring-projects/spring-framework/issues/32904
