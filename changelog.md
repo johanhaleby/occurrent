@@ -1,4 +1,4 @@
-### Changelog next version
+### 0.19.2 (2024-09-10)
 * `OccurrentAnnotationBeanPostProcessor` is only applied if `occurrent.subscription.enabled` property is missing or is `true`.
 * Added ability to disable the creation a default instance of an `ApplicationService` when using the `spring-boot-starter-mongodb` module by specifying `occurrent.application-service.enabled=false`. 
 * Upgraded cloudevents from 3.0.0 to 4.0.1
