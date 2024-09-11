@@ -19,9 +19,7 @@ package org.occurrent.dsl.query.blocking
 
 import com.fasterxml.jackson.databind.ObjectMapper
 import org.assertj.core.api.Assertions.assertThat
-import org.junit.jupiter.api.BeforeEach
-import org.junit.jupiter.api.Test
-import org.junit.jupiter.api.assertAll
+import org.junit.jupiter.api.*
 import org.occurrent.application.composition.command.composeCommands
 import org.occurrent.application.composition.command.partial
 import org.occurrent.application.converter.CloudEventConverter
@@ -41,6 +39,7 @@ import org.occurrent.filter.Filter.type
 import java.net.URI
 import java.time.LocalDateTime
 
+@DisplayNameGeneration(DisplayNameGenerator.Simple::class)
 class DomainEventQueriesKotlinTest {
 
     private lateinit var applicationService: ApplicationService<DomainEvent>
@@ -87,7 +86,7 @@ class DomainEventQueriesKotlinTest {
         )
 
         // When
-        val events = domainEventQueries.queryForSequence(type("NameWasChanged"), SortBy.natural(ASCENDING)).toList()
+        val events = domainEventQueries.queryForSequence(type(NameWasChanged::class.qualifiedName), SortBy.natural(ASCENDING)).toList()
 
         // Then
         assertAll(
@@ -129,7 +128,7 @@ class DomainEventQueriesKotlinTest {
         )
 
         // When
-        val events = domainEventQueries.queryForList(type("NameWasChanged"), SortBy.natural(ASCENDING))
+        val events = domainEventQueries.queryForList(type(NameWasChanged::class.qualifiedName), SortBy.natural(ASCENDING))
 
         // Then
         assertAll(
