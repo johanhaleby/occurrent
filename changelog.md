@@ -1,3 +1,10 @@
+### Changelog next version
+* Added two kotlin extension functions to DomainEventQueries:
+  1. `queryForList` that just takes a filter and a "SortBy"
+  2. `queryForSequence` that just takes a filter and a "SortBy" 
+  
+  The reason for this is to avoid ambiguity with other extension function when only specifying these values. 
+
 ### 0.19.2 (2024-09-10)
 * `OccurrentAnnotationBeanPostProcessor` is only applied if `occurrent.subscription.enabled` property is missing or is `true`.
 * Added ability to disable the creation a default instance of an `ApplicationService` when using the `spring-boot-starter-mongodb` module by specifying `occurrent.application-service.enabled=false`. 

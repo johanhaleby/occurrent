@@ -29,6 +29,19 @@ import kotlin.streams.asSequence
  */
 fun <T : Any> DomainEventQueries<in T>.queryForSequence(
     filter: Filter = Filter.all(),
+    sortBy: SortBy = SortBy.natural(SortDirection.ASCENDING)
+): Sequence<T> =
+    query<T>(filter, sortBy)
+        .map { it as T }
+        .asSequence()
+
+
+/**
+ * Query that returns a [Sequence] instead of a [java.util.stream.Stream].
+ * @see DomainEventQueries.query
+ */
+fun <T : Any> DomainEventQueries<in T>.queryForSequence(
+    filter: Filter = Filter.all(),
     skip: Int = 0,
     limit: Int = Int.MAX_VALUE,
     sortBy: SortBy = SortBy.natural(SortDirection.ASCENDING)
@@ -66,6 +79,18 @@ fun <T : Any> DomainEventQueries<T>.queryForSequence(
     val typeList = mutableListOf(type.java, *additionalTypes.map { it.java }.toTypedArray())
     query(typeList, skip, limit, sortBy)
 }).asSequence()
+
+/**
+ * Query that returns a [Lis] instead of a [java.util.stream.Stream].
+ * @see DomainEventQueries.query
+ */
+fun <T : Any> DomainEventQueries<in T>.queryForList(
+    filter: Filter = Filter.all(),
+    sortBy: SortBy = SortBy.natural(SortDirection.ASCENDING)
+): List<T> =
+    query<T>(filter, sortBy)
+        .map { it as T }
+        .toList()
 
 /**
  * Query that returns a [Lis] instead of a [java.util.stream.Stream].

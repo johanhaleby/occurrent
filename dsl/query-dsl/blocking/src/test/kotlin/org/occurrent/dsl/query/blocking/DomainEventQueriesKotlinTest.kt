@@ -34,6 +34,7 @@ import org.occurrent.domain.Name
 import org.occurrent.domain.NameDefined
 import org.occurrent.domain.NameWasChanged
 import org.occurrent.eventstore.api.SortBy
+import org.occurrent.eventstore.api.SortBy.SortDirection.ASCENDING
 import org.occurrent.eventstore.api.SortBy.SortDirection.DESCENDING
 import org.occurrent.eventstore.inmemory.InMemoryEventStore
 import org.occurrent.filter.Filter.type
@@ -75,6 +76,27 @@ class DomainEventQueriesKotlinTest {
     }
 
     @Test
+    fun queryForSequenceWithFilterAndSortBy() {
+        // Given
+        val time = LocalDateTime.now()
+        applicationService.execute(
+            "stream", composeCommands(
+                Name::defineName.partial("eventId1", time, "name", "Some Doe"),
+                Name::changeName.partial("eventId2", time, "name", "Jane Doe")
+            )
+        )
+
+        // When
+        val events = domainEventQueries.queryForSequence(type("NameWasChanged"), SortBy.natural(ASCENDING)).toList()
+
+        // Then
+        assertAll(
+            { assertThat(events).hasSize(1) },
+            { assertThat(events.stream().findFirst()).hasValue(NameWasChanged("eventId2", time, "name", "Jane Doe")) }
+        )
+    }
+
+    @Test
     fun queryForList() {
         // Given
         val time = LocalDateTime.now()
@@ -87,6 +109,27 @@ class DomainEventQueriesKotlinTest {
 
         // When
         val events = domainEventQueries.queryForList(skip = 1).toList()
+
+        // Then
+        assertAll(
+            { assertThat(events).hasSize(1) },
+            { assertThat(events.stream().findFirst()).hasValue(NameWasChanged("eventId2", time, "name", "Jane Doe")) }
+        )
+    }
+
+    @Test
+    fun queryForListWithFilterAndSortBy() {
+        // Given
+        val time = LocalDateTime.now()
+        applicationService.execute(
+            "stream", composeCommands(
+                Name::defineName.partial("eventId1", time, "name", "Some Doe"),
+                Name::changeName.partial("eventId2", time, "name", "Jane Doe")
+            )
+        )
+
+        // When
+        val events = domainEventQueries.queryForList(type("NameWasChanged"), SortBy.natural(ASCENDING))
 
         // Then
         assertAll(
