@@ -1,4 +1,4 @@
-### Changelog next version
+### 0.19.4 (2024-09-27)
 * Added better debug logging
 * Improved queryOne performance in DomainEventQueries
 * Fixed issue in Kotlin extensions for EventStoreQueries which made them unusable
