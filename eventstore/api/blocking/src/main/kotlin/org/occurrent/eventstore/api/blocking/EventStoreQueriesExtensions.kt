@@ -29,7 +29,7 @@ fun EventStoreQueries.queryForSequence(
     filter: Filter = Filter.all(),
     skip: Int = 0,
     limit: Int = Int.MAX_VALUE,
-    sortBy: SortBy = TODO()
+    sortBy: SortBy = SortBy.unsorted()
 ): Sequence<CloudEvent> = query(filter, skip, limit, sortBy).asSequence()
 
 /**
@@ -40,5 +40,5 @@ fun EventStoreQueries.queryForList(
     filter: Filter = Filter.all(),
     skip: Int = 0,
     limit: Int = Int.MAX_VALUE,
-    sortBy: SortBy = TODO()
+    sortBy: SortBy = SortBy.unsorted()
 ): List<CloudEvent> = query(filter, skip, limit, sortBy).toList()
