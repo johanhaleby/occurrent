@@ -144,7 +144,7 @@ public class DomainEventQueriesTest {
         ));
 
         // When
-        NameDefined event = domainEventQueries.<NameDefined>queryOne(type(NameDefined.class.getName()));
+        NameDefined event = domainEventQueries.queryOne(type(NameDefined.class.getName()));
 
         // Then
         assertThat(event).isEqualTo(new NameDefined("eventId1", time, "name", "Some Doe"));
@@ -233,6 +233,7 @@ public class DomainEventQueriesTest {
 
         // When
         List<DomainEvent> events = domainEventQueries.query(NameWasChanged.class, NameDefined.class).collect(Collectors.toList());
+        
 
         // Then
         assertAll(
