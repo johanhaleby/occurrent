@@ -22,7 +22,7 @@
     <groupId>org.occurrent</groupId>
     <artifactId>occurrent</artifactId>
     <packaging>pom</packaging>
-    <version>0.19.4-SNAPSHOT</version>
+    <version>0.19.4</version>
     <modules>
         <module>test-support</module>
         <module>eventstore</module>
@@ -61,7 +61,7 @@
         <connection>scm:git:https://github.com/johanhaleby/occurrent.git</connection>
         <developerConnection>scm:git:ssh://git@github.com/johanhaleby/occurrent.git</developerConnection>
         <url>https://github.com/johanhaleby/occurrent.git</url>
-        <tag>HEAD</tag>
+        <tag>occurrent-0.19.4</tag>
     </scm>
 
     <properties>
