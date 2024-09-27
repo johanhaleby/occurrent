@@ -25,10 +25,7 @@ import org.occurrent.eventstore.api.blocking.EventStoreQueries;
 import org.occurrent.filter.Filter;
 
 import java.util.*;
-import java.util.stream.Collectors;
 import java.util.stream.Stream;
-
-import static org.occurrent.eventstore.api.SortBy.SortDirection.ASCENDING;
 
 /**
  * A wrapper around {@link EventStoreQueries} that maps the result of a query into your domain event type using a {@link CloudEventConverter}.
@@ -83,7 +80,7 @@ public class DomainEventQueries<T> {
      * @return The cloud event matching the specified type or {@code null}
      */
     public <E extends T> E queryOne(Class<E> type, int skip, int limit) {
-        return queryOne(type, skip, limit, SortBy.natural(ASCENDING));
+        return queryOne(type, skip, limit, SortBy.unsorted());
     }
 
     /**
@@ -227,7 +224,7 @@ public class DomainEventQueries<T> {
         final List<T> list = new ArrayList<>();
         list.add((T) type);
         if (types != null && types.length > 0) {
-            list.addAll(Arrays.stream(types).map(t -> (T) t).collect(Collectors.toList()));
+            list.addAll(Arrays.stream(types).map(t -> (T) t).toList());
         }
         return query((Collection<Class<? extends T>>) list);
     }

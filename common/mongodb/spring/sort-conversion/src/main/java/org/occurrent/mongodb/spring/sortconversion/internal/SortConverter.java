@@ -21,10 +21,11 @@ public class SortConverter {
      */
     public static Sort convertToSpringSort(SortBy sortBy) {
         final Sort sort;
-        if (sortBy instanceof SortBy.NaturalImpl) {
+        if (sortBy instanceof SortBy.Unsorted) {
+            sort = Sort.unsorted();
+        } else if (sortBy instanceof SortBy.NaturalImpl) {
             sort = Sort.by(toDirection(((SortBy.NaturalImpl) sortBy).direction), NATURAL);
-        } else if (sortBy instanceof SortBy.SingleFieldImpl) {
-            SortBy.SingleFieldImpl singleField = (SortBy.SingleFieldImpl) sortBy;
+        } else if (sortBy instanceof SortBy.SingleFieldImpl singleField) {
             sort = Sort.by(toDirection(singleField.direction), singleField.fieldName);
         } else if (sortBy instanceof SortBy.MultipleSortStepsImpl) {
             sort = ((SortBy.MultipleSortStepsImpl) sortBy).steps.stream()

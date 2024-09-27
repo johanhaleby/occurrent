@@ -20,6 +20,13 @@ import static org.occurrent.eventstore.api.SortBy.SortDirection.DESCENDING;
  */
 public sealed interface SortBy {
     /**
+     * Use unsorted search order.
+     */
+    static Unsorted unsorted() {
+        return new Unsorted();
+    }
+
+    /**
      * Sort by natural order in the supplied direction. This is typically the insertion order,
      * but it could also be undefined for certain datastores.
      *
@@ -76,6 +83,9 @@ public sealed interface SortBy {
      */
     static SingleField field(String fieldName, SortDirection direction) {
         return new SingleFieldImpl(fieldName, direction);
+    }
+
+    final class Unsorted implements SortBy {
     }
 
     sealed interface Natural extends SortBy {

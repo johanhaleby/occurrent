@@ -1,6 +1,8 @@
 ### Changelog next version
 * Added better debug logging
 * Improved queryOne performance in DomainEventQueries
+* Fixed issue in Kotlin extensions for EventStoreQueries which made them unusable
+* Introduced `SortBy.unsorted()` which is now the default sort specification used when no one is specified explicitly in queries
 
 ### 0.19.3 (2024-09-11)
 * Added two kotlin extension functions to DomainEventQueries:

@@ -1434,6 +1434,24 @@ public class SpringMongoEventStoreTest {
         class SortTest {
 
             @Test
+            void sort_by_unsorted() {
+                // Given
+                LocalDateTime now = LocalDateTime.now();
+                NameDefined nameDefined = new NameDefined(UUID.randomUUID().toString(), now, "name", "name");
+                NameWasChanged nameWasChanged1 = new NameWasChanged(UUID.randomUUID().toString(), now.plusHours(-2), "name", "name2");
+                NameWasChanged nameWasChanged2 = new NameWasChanged(UUID.randomUUID().toString(), now.plusHours(1), "name", "name3");
+
+                // When
+                persist("name3", nameWasChanged1);
+                persist("name2", nameWasChanged2);
+                persist("name1", nameDefined);
+
+                // Then
+                Stream<CloudEvent> events = eventStore.all(SortBy.unsorted());
+                assertThat(deserialize(events)).containsExactly(nameWasChanged1, nameWasChanged2, nameDefined);
+            }
+
+            @Test
             void sort_by_natural_asc() {
                 // Given
                 LocalDateTime now = LocalDateTime.now();

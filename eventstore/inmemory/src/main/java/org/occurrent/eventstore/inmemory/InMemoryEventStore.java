@@ -256,6 +256,12 @@ public class InMemoryEventStore implements EventStore, EventStoreOperations, Eve
 
         final Stream<CloudEvent> streamToSort;
         final Map<CloudEvent, Integer> cloudEventPositionCache;
+
+        if (sortBy instanceof SortBy.Unsorted) {
+            // Use natural ascending by default
+            sortBy = SortBy.natural(ASCENDING);
+        }
+
         if (sortBy instanceof NaturalImpl) {
             SortDirection order = ((NaturalImpl) sortBy).direction;
             if (order == ASCENDING) {

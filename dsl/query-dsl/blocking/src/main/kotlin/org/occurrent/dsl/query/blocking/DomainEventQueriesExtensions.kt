@@ -18,7 +18,6 @@
 package org.occurrent.dsl.query.blocking
 
 import org.occurrent.eventstore.api.SortBy
-import org.occurrent.eventstore.api.SortBy.SortDirection
 import org.occurrent.filter.Filter
 import kotlin.reflect.KClass
 import kotlin.streams.asSequence
@@ -29,7 +28,7 @@ import kotlin.streams.asSequence
  */
 fun <T : Any> DomainEventQueries<in T>.queryForSequence(
     filter: Filter = Filter.all(),
-    sortBy: SortBy = SortBy.natural(SortDirection.ASCENDING)
+    sortBy: SortBy = SortBy.unsorted()
 ): Sequence<T> =
     query<T>(filter, sortBy)
         .map { it as T }
@@ -44,7 +43,7 @@ fun <T : Any> DomainEventQueries<in T>.queryForSequence(
     filter: Filter = Filter.all(),
     skip: Int = 0,
     limit: Int = Int.MAX_VALUE,
-    sortBy: SortBy = SortBy.natural(SortDirection.ASCENDING)
+    sortBy: SortBy = SortBy.unsorted()
 ): Sequence<T> =
     query<T>(filter, skip, limit, sortBy)
         .map { it as T }
@@ -59,7 +58,7 @@ fun <T : Any> DomainEventQueries<in T>.queryForSequence(
     type: KClass<T>,
     skip: Int = 0,
     limit: Int = Int.MAX_VALUE,
-    sortBy: SortBy = SortBy.natural(SortDirection.ASCENDING)
+    sortBy: SortBy = SortBy.unsorted()
 ): Sequence<T> =
     query(type.java, skip, limit, sortBy).asSequence()
 
@@ -72,7 +71,7 @@ fun <T : Any> DomainEventQueries<T>.queryForSequence(
     vararg additionalTypes: KClass<out T>,
     skip: Int = 0,
     limit: Int = Int.MAX_VALUE,
-    sortBy: SortBy = SortBy.natural(SortDirection.ASCENDING)
+    sortBy: SortBy = SortBy.unsorted()
 ): Sequence<T> = (if (additionalTypes.isEmpty()) {
     query(type.java, skip, limit, sortBy)
 } else {
@@ -86,7 +85,7 @@ fun <T : Any> DomainEventQueries<T>.queryForSequence(
  */
 fun <T : Any> DomainEventQueries<in T>.queryForList(
     filter: Filter = Filter.all(),
-    sortBy: SortBy = SortBy.natural(SortDirection.ASCENDING)
+    sortBy: SortBy = SortBy.unsorted()
 ): List<T> =
     query<T>(filter, sortBy)
         .map { it as T }
@@ -100,7 +99,7 @@ fun <T : Any> DomainEventQueries<in T>.queryForList(
     filter: Filter = Filter.all(),
     skip: Int = 0,
     limit: Int = Int.MAX_VALUE,
-    sortBy: SortBy = SortBy.natural(SortDirection.ASCENDING)
+    sortBy: SortBy = SortBy.unsorted()
 ): List<T> =
     query<T>(filter, skip, limit, sortBy)
         .map { it as T }
@@ -115,7 +114,7 @@ fun <T : Any> DomainEventQueries<in T>.queryForList(
     type: KClass<T>,
     skip: Int = 0,
     limit: Int = Int.MAX_VALUE,
-    sortBy: SortBy = SortBy.natural(SortDirection.ASCENDING)
+    sortBy: SortBy = SortBy.unsorted()
 ): List<T> = query(type.java, skip, limit, sortBy).toList()
 
 /**
@@ -127,7 +126,7 @@ fun <T : Any> DomainEventQueries<T>.queryForList(
     vararg additionalTypes: KClass<out T>,
     skip: Int = 0,
     limit: Int = Int.MAX_VALUE,
-    sortBy: SortBy = SortBy.natural(SortDirection.ASCENDING)
+    sortBy: SortBy = SortBy.unsorted()
 ): List<T> = (if (additionalTypes.isEmpty()) {
     query(type.java, skip, limit, sortBy)
 } else {
@@ -141,7 +140,7 @@ fun <T : Any> DomainEventQueries<T>.queryForList(
 inline fun <reified T : Any> DomainEventQueries<in T>.queryOne(
     skip: Int = 0,
     limit: Int = Int.MAX_VALUE,
-    sortBy: SortBy = SortBy.natural(SortDirection.ASCENDING)
+    sortBy: SortBy = SortBy.unsorted()
 ): T? = queryOne(T::class.java, skip, limit, sortBy)
 
 /**
@@ -151,5 +150,5 @@ fun <T : Any> DomainEventQueries<in T>.queryOne(
     type: KClass<T>,
     skip: Int = 0,
     limit: Int = Int.MAX_VALUE,
-    sortBy: SortBy = SortBy.natural(SortDirection.ASCENDING)
+    sortBy: SortBy = SortBy.unsorted()
 ): T? = queryOne(type.java, skip, limit, sortBy)

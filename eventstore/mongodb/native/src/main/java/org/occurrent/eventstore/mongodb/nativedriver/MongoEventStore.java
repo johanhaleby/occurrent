@@ -163,8 +163,14 @@ public class MongoEventStore implements EventStore, EventStoreOperations, EventS
         }
 
         Bson sort = convertToMongoDBSort(sortBy);
+        final FindIterable<Document> documentsWithSkipAndLimitAndSort;
+        if (sort == null) {
+            documentsWithSkipAndLimitAndSort = documentsWithoutSkipAndLimit;
+        } else {
+            documentsWithSkipAndLimitAndSort = documentsWithSkipAndLimit.sort(sort);
+        }
 
-        return StreamSupport.stream(queryOptions.apply(documentsWithSkipAndLimit.sort(sort)).spliterator(), false);
+        return StreamSupport.stream(queryOptions.apply(documentsWithSkipAndLimitAndSort).spliterator(), false);
     }
 
     @Override
@@ -340,7 +346,9 @@ public class MongoEventStore implements EventStore, EventStoreOperations, EventS
 
     private static Bson convertToMongoDBSort(SortBy sortBy) {
         final Bson sort;
-        if (sortBy instanceof NaturalImpl) {
+        if (sortBy instanceof Unsorted) {
+            sort = null;
+        } else if (sortBy instanceof NaturalImpl) {
             sort = ((NaturalImpl) sortBy).direction == ASCENDING ? ascending(NATURAL) : descending(NATURAL);
         } else if (sortBy instanceof SingleFieldImpl singleField) {
             sort = singleField.direction == ASCENDING ? ascending(singleField.fieldName) : descending(singleField.fieldName);
