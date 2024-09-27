@@ -23,7 +23,6 @@ import org.occurrent.filter.Filter;
 import java.util.stream.Stream;
 
 import static java.util.Objects.requireNonNull;
-import static org.occurrent.eventstore.api.SortBy.SortDirection.ASCENDING;
 
 /**
  * Additional querying capabilities that may be supported by an {@link EventStore} implementation that is not typically part of a
@@ -72,7 +71,7 @@ public interface EventStoreQueries {
      * @return All cloud events matching the specified filter
      */
     default Stream<CloudEvent> query(Filter filter, int skip, int limit) {
-        return query(filter, skip, limit, SortBy.natural(ASCENDING));
+        return query(filter, skip, limit, SortBy.unsorted());
     }
 
     /**

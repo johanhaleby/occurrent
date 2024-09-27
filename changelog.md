@@ -1,3 +1,6 @@
+### 0.19.5 (2024-09-27)
+* Fixed so that blocking and reactive EventStoreQueries really uses `SortBy.unsorted()` by default as was intended in the previous release.
+
 ### 0.19.4 (2024-09-27)
 * Added better debug logging
 * Improved queryOne performance in DomainEventQueries

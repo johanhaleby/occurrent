@@ -23,7 +23,6 @@ import reactor.core.publisher.Flux;
 import reactor.core.publisher.Mono;
 
 import static java.util.Objects.requireNonNull;
-import static org.occurrent.eventstore.api.SortBy.SortDirection.ASCENDING;
 
 /**
  * Additional querying capabilities that may be supported by an {@link EventStore} implementation that is not typically part of a
@@ -33,7 +32,7 @@ public interface EventStoreQueries {
 
     /**
      * Note that it's recommended to create an index on the "time" field in the event store in order to make
-     * {@link SortBy#TIME_ASC} and {@link SortBy#TIME_DESC} efficient.
+     * {@link SortBy} efficient.
      *
      * @return All cloud events matching the specified filter, skip, limit and sort by <code>sortBy</code>.
      */
@@ -73,7 +72,7 @@ public interface EventStoreQueries {
      * @return All cloud events matching the specified filter
      */
     default Flux<CloudEvent> query(Filter filter, int skip, int limit) {
-        return query(filter, skip, limit, SortBy.natural(ASCENDING));
+        return query(filter, skip, limit, SortBy.unsorted());
     }
 
     /**
