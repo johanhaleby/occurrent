@@ -56,7 +56,7 @@ public class DomainEventQueries<T> {
      * @return All cloud events matching the specified filter, skip, limit and sort by <code>sortBy</code>.
      */
     public <E extends T> E queryOne(Filter filter) {
-        return this.<E>toDomainEvents(eventStoreQueries.query(filter)).findFirst().orElse(null);
+        return this.<E>toDomainEvents(eventStoreQueries.query(filter, 0, 1)).findFirst().orElse(null);
     }
 
     /**
@@ -65,7 +65,7 @@ public class DomainEventQueries<T> {
      * @return The cloud event matching the specified type or {@code null}
      */
     public <E extends T> E queryOne(Class<E> type) {
-        return query(type).findFirst().orElse(null);
+        return query(type, 0, 1).findFirst().orElse(null);
     }
 
     /**
@@ -74,7 +74,7 @@ public class DomainEventQueries<T> {
      * @return The cloud event matching the specified type or {@code null}
      */
     public <E extends T> E queryOne(Class<E> type, SortBy sortBy) {
-        return queryOne(type, 0, Integer.MAX_VALUE, sortBy);
+        return queryOne(type, 0, 1, sortBy);
     }
 
     /**
@@ -93,7 +93,8 @@ public class DomainEventQueries<T> {
      */
     public <E extends T> E queryOne(Class<E> type, int skip, int limit, SortBy sortBy) {
         Objects.requireNonNull(type, "type cannot be null");
-        return (E) query(Filter.type(cloudEventConverter.getCloudEventType(type)), skip, limit, sortBy).findFirst().orElse(null);
+        CloudEvent cloudEvent = eventStoreQueries.query(Filter.type(cloudEventConverter.getCloudEventType(type)), skip, limit, sortBy).findFirst().orElse(null);
+        return toDomainEvent(cloudEvent);
     }
 
     /**
@@ -310,6 +311,13 @@ public class DomainEventQueries<T> {
     @SuppressWarnings("unchecked")
     private <E extends T> Stream<E> toDomainEvents(Stream<CloudEvent> stream) {
         return stream.map(cloudEventConverter::toDomainEvent).map(t -> (E) t);
+    }
+
+    private <E extends T> E toDomainEvent(CloudEvent cloudEvent) {
+        if (cloudEvent == null) {
+            return null;
+        }
+        return (E) cloudEventConverter.toDomainEvent(cloudEvent);
     }
 
     @Nullable

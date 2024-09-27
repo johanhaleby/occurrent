@@ -19,6 +19,8 @@ package org.occurrent.dsl.query.blocking;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
 import org.junit.jupiter.api.BeforeEach;
+import org.junit.jupiter.api.DisplayNameGeneration;
+import org.junit.jupiter.api.DisplayNameGenerator.ReplaceUnderscores;
 import org.junit.jupiter.api.Test;
 import org.occurrent.application.converter.CloudEventConverter;
 import org.occurrent.application.converter.jackson.JacksonCloudEventConverter;
@@ -46,6 +48,7 @@ import static org.occurrent.application.composition.command.partial.PartialFunct
 import static org.occurrent.eventstore.api.SortBy.SortDirection.DESCENDING;
 import static org.occurrent.filter.Filter.type;
 
+@DisplayNameGeneration(ReplaceUnderscores.class)
 public class DomainEventQueriesTest {
 
     private ApplicationService<DomainEvent> applicationService;
@@ -83,7 +86,7 @@ public class DomainEventQueriesTest {
     }
 
     @Test
-    void queryWithAllFilter() {
+    void query_with_all_filter() {
         // Given
         LocalDateTime time = LocalDateTime.now();
 
@@ -106,7 +109,7 @@ public class DomainEventQueriesTest {
     }
 
     @Test
-    void queryBasedOnType() {
+    void query_based_on_type() {
         // Given
         LocalDateTime time = LocalDateTime.now();
 
@@ -127,8 +130,9 @@ public class DomainEventQueriesTest {
         );
     }
 
+
     @Test
-    void queryOne() {
+    void query_one() {
         // Given
         LocalDateTime time = LocalDateTime.now();
 
@@ -147,7 +151,33 @@ public class DomainEventQueriesTest {
     }
 
     @Test
-    void queryBasedOnClassType() {
+    void query_one_when_multiple_events_match_then_the_first_is_returned() {
+        // Given
+        LocalDateTime time = LocalDateTime.now();
+
+        applicationService.execute("stream1", toStreamCommand(
+                composeCommands(
+                        partial(Name::defineName, "eventId1", time, "name", "Some Doe"),
+                        partial(Name::changeName, "eventId2", time, "name", "Jane Doe")
+                )
+        ));
+
+        applicationService.execute("stream2", toStreamCommand(
+                composeCommands(
+                        partial(Name::defineName, "eventId3", time, "name", "Another Doe"),
+                        partial(Name::changeName, "eventId4", time, "name", "Jane2 Doe")
+                )
+        ));
+
+        // When
+        NameDefined event = domainEventQueries.queryOne(type(NameDefined.class.getName()));
+
+        // Then
+        assertThat(event).isEqualTo(new NameDefined("eventId1", time, "name", "Some Doe"));
+    }
+
+    @Test
+    void query_based_on_class_type() {
         // Given
         LocalDateTime time = LocalDateTime.now();
 
@@ -169,7 +199,7 @@ public class DomainEventQueriesTest {
     }
 
     @Test
-    void queryOneBasedOnClassType() {
+    void query_one_based_on_class_type() {
         // Given
         LocalDateTime time = LocalDateTime.now();
 
@@ -189,7 +219,7 @@ public class DomainEventQueriesTest {
     }
 
     @Test
-    void queryBasedOnVarArgClassType() {
+    void query_based_on_var_arg_class_type() {
         // Given
         LocalDateTime time = LocalDateTime.now();
 
@@ -212,7 +242,7 @@ public class DomainEventQueriesTest {
     }
 
     @Test
-    void queryBasedOCollectionClassType() {
+    void query_based_o_collection_class_type() {
         // Given
         LocalDateTime time = LocalDateTime.now();
 
@@ -235,7 +265,7 @@ public class DomainEventQueriesTest {
     }
 
     @Test
-    void queryOneBasedOnClassTypeAndSortBy() {
+    void query_one_based_on_class_type_and_sort_by() {
         // Given
         LocalDateTime time = LocalDateTime.now();
 

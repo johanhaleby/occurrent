@@ -1,3 +1,7 @@
+### Changelog next version
+* Added better debug logging
+* Improved queryOne performance in DomainEventQueries
+
 ### 0.19.3 (2024-09-11)
 * Added two kotlin extension functions to DomainEventQueries:
   1. `queryForList` that just takes a filter and a "SortBy"
