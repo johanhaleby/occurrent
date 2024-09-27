@@ -140,6 +140,8 @@ public class SpringMongoSubscriptionModel implements PositionAwareSubscriptionMo
             throw new IllegalArgumentException("Subscription " + subscriptionId + " is already defined.");
         }
 
+        logDebug("Subscribing ({})", subscriptionId);
+
         // We wrap the creation of ChangeStreamRequestOptions in a supplier since otherwise the "startAtSupplier"
         // would be supplied only once, here, during initialization. When using a supplier here, the "startAtSupplier"
         // is called again when pausing and resuming a subscription. Take the case when a subscription is started with "StartAt.now()".
@@ -178,6 +180,7 @@ public class SpringMongoSubscriptionModel implements PositionAwareSubscriptionMo
         Function<StartAt, ChangeStreamRequest<Document>> requestBuilder = sa -> new ChangeStreamRequest<>(listener, requestOptionsFunction.apply(sa));
         final org.springframework.data.mongodb.core.messaging.Subscription subscription = registerNewSpringSubscription(subscriptionId, requestBuilder.apply(null));
         SpringMongoSubscription springMongoSubscription = new SpringMongoSubscription(subscriptionId, subscription);
+        logDebug("MessageListenerContainer running (subscriptionId={}): {}", subscriptionId, messageListenerContainer.isRunning());
         if (messageListenerContainer.isRunning()) {
             runningSubscriptions.put(subscriptionId, new InternalSubscription(springMongoSubscription, requestBuilder));
         } else {
@@ -188,8 +191,11 @@ public class SpringMongoSubscriptionModel implements PositionAwareSubscriptionMo
 
     @Override
     public void cancelSubscription(String subscriptionId) {
+        logDebug("Cancelling subscription for {}", subscriptionId);
         InternalSubscription subscription = runningSubscriptions.remove(subscriptionId);
-        if (subscription != null) {
+        if (subscription == null) {
+            logDebug("Subscription {} not found when cancelling", subscriptionId);
+        } else {
             messageListenerContainer.remove(subscription.getSpringSubscription());
         }
     }
@@ -197,6 +203,7 @@ public class SpringMongoSubscriptionModel implements PositionAwareSubscriptionMo
     @PreDestroy
     @Override
     public synchronized void shutdown() {
+        logDebug("Shutting down subscription model");
         shutdown = true;
         runningSubscriptions.forEach((__, internalSubscription) -> internalSubscription.shutdown());
         runningSubscriptions.clear();
@@ -229,6 +236,7 @@ public class SpringMongoSubscriptionModel implements PositionAwareSubscriptionMo
 
     @Override
     public synchronized void pauseSubscription(String subscriptionId) {
+        logDebug("Pausing subscription for {}", subscriptionId);
         InternalSubscription internalSubscription = runningSubscriptions.remove(subscriptionId);
         if (internalSubscription == null) {
             throw new IllegalArgumentException("Subscription " + subscriptionId + " isn't running.");
@@ -239,12 +247,14 @@ public class SpringMongoSubscriptionModel implements PositionAwareSubscriptionMo
 
     @Override
     public synchronized Subscription resumeSubscription(String subscriptionId) {
+        logDebug("Resuming subscription for {}", subscriptionId);
         InternalSubscription internalSubscription = pausedSubscriptions.remove(subscriptionId);
         if (internalSubscription == null) {
             throw new IllegalArgumentException("Subscription " + subscriptionId + " isn't paused.");
         }
 
         if (!messageListenerContainer.isRunning()) {
+            logDebug("Subscription was not running, will start (subscriptionId={})", subscriptionId);
             messageListenerContainer.start();
         }
 
@@ -268,6 +278,7 @@ public class SpringMongoSubscriptionModel implements PositionAwareSubscriptionMo
 
     @Override
     public synchronized void start(boolean resumeSubscriptionsAutomatically) {
+        logDebug("Starting subscription model (resumeSubscriptionsAutomatically={}, shutdown={})", resumeSubscriptionsAutomatically, shutdown);
         if (!shutdown) {
             messageListenerContainer.start();
             if (resumeSubscriptionsAutomatically) {
@@ -278,6 +289,7 @@ public class SpringMongoSubscriptionModel implements PositionAwareSubscriptionMo
 
     @Override
     public synchronized void stop() {
+        logDebug("Stopping subscription model (shutdown={})", shutdown);
         if (!shutdown) {
             runningSubscriptions.forEach((subscriptionId, __) -> pauseSubscription(subscriptionId));
             stopMessageListenerContainer();
@@ -300,6 +312,7 @@ public class SpringMongoSubscriptionModel implements PositionAwareSubscriptionMo
     }
 
     private void stopMessageListenerContainer() {
+        logDebug("Stopping MessageListenerContainer");
         CountDownLatch countDownLatch = new CountDownLatch(1);
         messageListenerContainer.stop(countDownLatch::countDown);
         try {
@@ -313,6 +326,7 @@ public class SpringMongoSubscriptionModel implements PositionAwareSubscriptionMo
     }
 
     private org.springframework.data.mongodb.core.messaging.Subscription registerNewSpringSubscription(String subscriptionId, ChangeStreamRequest<Document> documentChangeStreamRequest) {
+        logDebug("registerNewSpringSubscription for subscription {}", subscriptionId);
         return messageListenerContainer.register(documentChangeStreamRequest, Document.class, throwable -> {
             if (throwable instanceof DataAccessException) {
                 Throwable cause = throwable.getCause();
@@ -348,8 +362,11 @@ public class SpringMongoSubscriptionModel implements PositionAwareSubscriptionMo
     }
 
     private void restartInternalSubscriptionInNewThread(String subscriptionId, StartAt startAt) {
+        logDebug("restartInternalSubscriptionInNewThread for subscription {}", subscriptionId);
         InternalSubscription internalSubscription = runningSubscriptions.get(subscriptionId);
-        if (internalSubscription != null) {
+        if (internalSubscription == null) {
+            logDebug("Couldn't find internalSubscription in restartInternalSubscriptionInNewThread for subscription {}", subscriptionId);
+        } else {
             new Thread(() -> restartSubscriptionInThisThread(subscriptionId, startAt, internalSubscription)).start();
         }
     }
@@ -419,6 +436,12 @@ public class SpringMongoSubscriptionModel implements PositionAwareSubscriptionMo
                     .add("occurrentSubscription=" + occurrentSubscription)
                     .add("changeStreamRequestBuilder=" + changeStreamRequestBuilder)
                     .toString();
+        }
+    }
+
+    private static void logDebug(String message, Object... params) {
+        if (log.isDebugEnabled()) {
+            log.debug(message, params);
         }
     }
 }

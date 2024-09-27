@@ -20,6 +20,7 @@ package org.occurrent.subscription.mongodb.blocking.ccs.internal;
 import com.mongodb.client.MongoCollection;
 import org.bson.BsonDocument;
 import org.occurrent.retry.RetryStrategy;
+import org.occurrent.retry.RetryStrategy.Retry;
 import org.occurrent.retry.internal.RetryImpl;
 import org.occurrent.subscription.api.blocking.CompetingConsumerStrategy.CompetingConsumerListener;
 import org.slf4j.Logger;
@@ -68,8 +69,25 @@ public class MongoLeaseCompetingConsumerStrategySupport {
         }
     }
 
+
     public MongoLeaseCompetingConsumerStrategySupport scheduleRefresh(Function<Consumer<MongoCollection<BsonDocument>>, Runnable> fn) {
-        scheduledRefresh.scheduleInBackground(() -> retryStrategy.execute(() -> fn.apply(this::refreshOrAcquireLease).run()), leaseTime);
+        final RetryStrategy retryStrategyToUse;
+        if (retryStrategy instanceof Retry retry) {
+            retryStrategyToUse = retry.onError((info, t) -> {
+                final String retryMessage;
+                if (info.isRetryable()) {
+                    long millisToNextRetry = info.getBackoffBeforeNextRetryAttempt().orElse(Duration.ZERO).toMillis();
+                    retryMessage = "will retry in %d ms".formatted(millisToNextRetry);
+                } else {
+                    retryMessage = "will not retry again";
+                }
+                logDebug("Failed to execute scheduleRefresh due to {} - {} ({})", t.getClass().getName(), t.getMessage(), retryMessage, t);
+            });
+        } else {
+            retryStrategyToUse = retryStrategy;
+        }
+
+        scheduledRefresh.scheduleInBackground(() -> retryStrategyToUse.execute(() -> fn.apply(this::refreshOrAcquireLease).run()), leaseTime);
         return this;
     }
 

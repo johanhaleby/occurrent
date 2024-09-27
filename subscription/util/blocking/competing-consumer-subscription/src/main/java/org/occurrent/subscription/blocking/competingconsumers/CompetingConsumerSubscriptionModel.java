@@ -196,9 +196,11 @@ public class CompetingConsumerSubscriptionModel implements DelegatingSubscriptio
         }
 
         if (nonCompetingConsumersSubscriptions.contains(subscriptionId)) {
+            logDebug("Subscription was a non-competing consumer subscription, will delegate to {} (subscriptionId={})", delegate.getClass().getName(), subscriptionId);
             return delegate.resumeSubscription(subscriptionId);
         }
 
+        logDebug("Finding first competing consumer that matches the subscription (subscriptionId={})", subscriptionId);
         return findFirstCompetingConsumerMatching(competingConsumer -> competingConsumer.hasSubscriptionId(subscriptionId))
                 .map(competingConsumer -> {
                     final Subscription subscription;

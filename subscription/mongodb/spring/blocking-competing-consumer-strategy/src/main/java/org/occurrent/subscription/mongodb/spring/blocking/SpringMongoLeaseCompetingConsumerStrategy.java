@@ -192,7 +192,7 @@ public class SpringMongoLeaseCompetingConsumerStrategy implements CompetingConsu
         public Builder collectionName(String collectionName) {
             Objects.requireNonNull(collectionName, "Collection name cannot be null");
             String collectionNameToUse = collectionName.trim();
-            if (collectionNameToUse.equals("")) {
+            if (collectionNameToUse.isEmpty()) {
                 throw new IllegalArgumentException("Collection name cannot be empty");
             }
             this.collectionName = collectionNameToUse;
