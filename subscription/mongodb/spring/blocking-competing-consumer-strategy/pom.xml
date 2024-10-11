@@ -3,7 +3,7 @@
     <parent>
         <artifactId>subscription-mongodb-spring</artifactId>
         <groupId>org.occurrent</groupId>
-        <version>0.19.6-SNAPSHOT</version>
+        <version>0.19.6</version>
     </parent>
     <modelVersion>4.0.0</modelVersion>
 
@@ -21,22 +21,22 @@
         <dependency>
             <groupId>org.occurrent</groupId>
             <artifactId>subscription-mongodb-spring-common</artifactId>
-            <version>0.19.6-SNAPSHOT</version>
+            <version>0.19.6</version>
         </dependency>
         <dependency>
             <groupId>org.occurrent</groupId>
             <artifactId>subscription-mongodb-common-blocking-competing-consumer-strategy</artifactId>
-            <version>0.19.6-SNAPSHOT</version>
+            <version>0.19.6</version>
         </dependency>
         <dependency>
             <groupId>org.occurrent</groupId>
             <artifactId>subscription-api-blocking</artifactId>
-            <version>0.19.6-SNAPSHOT</version>
+            <version>0.19.6</version>
         </dependency>
         <dependency>
             <groupId>org.occurrent</groupId>
             <artifactId>retry</artifactId>
-            <version>0.19.6-SNAPSHOT</version>
+            <version>0.19.6</version>
         </dependency>
         <dependency>
             <groupId>jakarta.annotation</groupId>
@@ -47,19 +47,19 @@
         <dependency>
             <groupId>org.occurrent</groupId>
             <artifactId>subscription-mongodb-spring-blocking</artifactId>
-            <version>0.19.6-SNAPSHOT</version>
+            <version>0.19.6</version>
             <scope>test</scope>
         </dependency>
         <dependency>
             <groupId>org.occurrent</groupId>
             <artifactId>eventstore-mongodb-spring-blocking</artifactId>
-            <version>0.19.6-SNAPSHOT</version>
+            <version>0.19.6</version>
             <scope>test</scope>
         </dependency>
         <dependency>
             <groupId>org.occurrent</groupId>
             <artifactId>test-support</artifactId>
-            <version>0.19.6-SNAPSHOT</version>
+            <version>0.19.6</version>
             <scope>test</scope>
         </dependency>
         <dependency>
