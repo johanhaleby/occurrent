@@ -1,4 +1,4 @@
-### Changelog next version
+### 0.19.6 (2024-10-11)
 * Fixed so that inserting events with "any" WriteCondition never fails even if more than two threads are writing events to the same stream at the same time. (Fixed in MongoEventStore and SpringMongoEventStore)   
 
 ### 0.19.5 (2024-09-27)
