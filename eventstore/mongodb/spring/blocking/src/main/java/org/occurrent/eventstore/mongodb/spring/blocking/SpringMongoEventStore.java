@@ -36,6 +36,7 @@ import org.occurrent.eventstore.mongodb.internal.StreamVersionDiff;
 import org.occurrent.filter.Filter;
 import org.occurrent.mongodb.spring.filterqueryconversion.internal.FilterConverter;
 import org.occurrent.mongodb.timerepresentation.TimeRepresentation;
+import org.occurrent.retry.RetryStrategy;
 import org.springframework.dao.DataAccessException;
 import org.springframework.data.domain.Sort;
 import org.springframework.data.mongodb.core.MongoTemplate;
@@ -147,17 +148,9 @@ public class SpringMongoEventStore implements EventStore, EventStoreOperations, 
             return new StreamVersionDiff(currentStreamVersion, newStreamVersion);
         };
 
-        StreamVersionDiff streamVersion;
-        try {
-            streamVersion = transactionTemplate.execute(writeLogic);
-        } catch (WriteConditionNotFulfilledException e) {
-            if (writeCondition.isAnyStreamVersion()) {
-                // See comments on "convertCloudEventsToDocuments" above
-                streamVersion = transactionTemplate.execute(writeLogic);
-            } else {
-                throw e;
-            }
-        }
+        StreamVersionDiff streamVersion = RetryStrategy.retry()
+                .retryIf(__ -> writeCondition.isAnyStreamVersion())
+                .execute(() -> transactionTemplate.execute(writeLogic));
         return new WriteResult(streamId, streamVersion.oldStreamVersion, streamVersion.newStreamVersion);
     }
 

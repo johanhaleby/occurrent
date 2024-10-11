@@ -765,6 +765,56 @@ class MongoEventStoreTest {
                 // Then
                 Awaitility.await().atMost(4, SECONDS).untilAsserted(() -> assertThat(exception).hasValue(new WriteConditionNotFulfilledException("name", 1, writeCondition, "WriteCondition was not fulfilled. Expected version to be equal to 0 but was 1.")));
             }
+
+            @EnabledOnOs(MAC)
+            @RepeatedIfExceptionsTest(repeats = 5, suspend = 200,  minSuccess = 5)
+            void parallel_writes_to_event_store_does_not_throw_WriteConditionNotFulfilledException_when_write_condition_is_any() {
+                // Given
+                CyclicBarrier cyclicBarrier = new CyclicBarrier(3);
+                WriteCondition writeCondition = WriteCondition.anyStreamVersion();
+                AtomicReference<Throwable> exception = new AtomicReference<>();
+
+                // When
+                new Thread(() -> {
+                    NameWasChanged event = new NameWasChanged(UUID.randomUUID().toString(), now, "name", "Ikk Doe");
+                    try {
+                        await(cyclicBarrier);
+                        persist("name", writeCondition, event);
+                    } catch (Exception e) {
+                        exception.set(e);
+                    }
+                }).start();
+
+                new Thread(() -> {
+                    NameWasChanged event = new NameWasChanged(UUID.randomUUID().toString(), now, "name", "Ikkster Doe");
+                    try {
+                        await(cyclicBarrier);
+                        persist("name", writeCondition, event);
+                    } catch (Exception e) {
+                        exception.set(e);
+                    }
+                }).start();
+
+                new Thread(() -> {
+                    NameWasChanged event = new NameWasChanged(UUID.randomUUID().toString(), now, "name", "Ikkster Doe2");
+                    try {
+                        await(cyclicBarrier);
+                        persist("name", writeCondition, event);
+                    } catch (Exception e) {
+                        exception.set(e);
+                    }
+                }).start();
+
+                // Then
+                Awaitility.await().atMost(4, SECONDS).untilAsserted(() -> {
+                    EventStream<CloudEvent> eventStream = eventStore.read("name");
+                    assertThat(deserialize(eventStream.events()))
+                            .extracting(it -> (NameWasChanged) it)
+                            .extracting(NameWasChanged::name)
+                            .contains("Ikk Doe", "Ikkster Doe", "Ikkster Doe2");
+                });
+                assertThat(exception.get()).isNull();
+            }
         }
 
         @Nested

@@ -37,18 +37,17 @@ import org.occurrent.eventstore.api.blocking.EventStream;
 import org.occurrent.eventstore.mongodb.internal.MongoExceptionTranslator.WriteContext;
 import org.occurrent.eventstore.mongodb.internal.StreamVersionDiff;
 import org.occurrent.filter.Filter;
-import org.occurrent.functionalsupport.internal.FunctionalSupport.Pair;
 import org.occurrent.mongodb.spring.filterbsonfilterconversion.internal.FilterToBsonFilterConverter;
 import org.occurrent.mongodb.timerepresentation.TimeRepresentation;
+import org.occurrent.retry.RetryStrategy;
 
 import java.net.URI;
 import java.util.List;
 import java.util.Objects;
 import java.util.Optional;
+import java.util.function.BiFunction;
 import java.util.function.Function;
 import java.util.function.Supplier;
-import java.util.stream.Collectors;
-import java.util.stream.LongStream;
 import java.util.stream.Stream;
 import java.util.stream.StreamSupport;
 
@@ -65,7 +64,7 @@ import static org.occurrent.eventstore.api.WriteCondition.anyStreamVersion;
 import static org.occurrent.eventstore.mongodb.internal.MongoExceptionTranslator.translateException;
 import static org.occurrent.eventstore.mongodb.internal.OccurrentCloudEventMongoDocumentMapper.convertToCloudEvent;
 import static org.occurrent.eventstore.mongodb.internal.OccurrentCloudEventMongoDocumentMapper.convertToDocument;
-import static org.occurrent.functionalsupport.internal.FunctionalSupport.zip;
+import static org.occurrent.functionalsupport.internal.FunctionalSupport.mapWithIndex;
 
 /**
  * This is an {@link EventStore} that stores events in MongoDB using the "native" synchronous java driver MongoDB.
@@ -184,32 +183,53 @@ public class MongoEventStore implements EventStore, EventStoreOperations, EventS
             throw new IllegalArgumentException(WriteCondition.class.getSimpleName() + " cannot be null");
         }
 
-        try (ClientSession clientSession = mongoClient.startSession()) {
-            StreamVersionDiff streamVersionDiff = clientSession.withTransaction(() -> {
-                long currentStreamVersion = currentStreamVersion(streamId, clientSession);
-
-                if (!isFulfilled(currentStreamVersion, writeCondition)) {
-                    throw new WriteConditionNotFulfilledException(streamId, currentStreamVersion, writeCondition, String.format("%s was not fulfilled. Expected version %s but was %s.", WriteCondition.class.getSimpleName(), writeCondition, currentStreamVersion));
-                }
-
-                List<Document> cloudEventDocuments = zip(LongStream.iterate(currentStreamVersion + 1, i -> i + 1).boxed(), events, Pair::new)
-                        .map(pair -> convertToDocument(timeRepresentation, streamId, pair.t1, pair.t2))
-                        .collect(Collectors.toList());
-
-                if (cloudEventDocuments.isEmpty()) {
-                    return StreamVersionDiff.of(currentStreamVersion, currentStreamVersion);
-                } else {
-                    try {
-                        eventCollection.insertMany(clientSession, cloudEventDocuments);
-                    } catch (MongoException e) {
-                        throw translateException(new WriteContext(streamId, currentStreamVersion, writeCondition), e);
-                    }
-                    final long newStreamVersion = cloudEventDocuments.get(cloudEventDocuments.size() - 1).getLong(STREAM_VERSION);
-                    return StreamVersionDiff.of(currentStreamVersion, newStreamVersion);
-                }
-            }, transactionOptions);
-            return new WriteResult(streamId, streamVersionDiff.oldStreamVersion, streamVersionDiff.newStreamVersion);
+        // This is an (ugly) hack to fix problems when write condition is "any" and we have parallel writes
+        // to the same stream. This will cause MongoDB to throw an exception since we're in a transaction.
+        // But in this case we should just retry since if the user has specified "any" as stream version
+        // he/she will expect that the events are just written to the event store and WriteConditionNotFulfilledException
+        // should not be thrown. Since the write method takes a "Stream" of events we can't simply retry since,
+        // on the first retry, the stream would already have been consumed. Thus, we preemptively convert the "events"
+        // stream into a list when write condition is any. This way, we can retry without errors.
+        final BiFunction<Stream<CloudEvent>, Long, List<Document>> convertCloudEventsToDocuments;
+        if (writeCondition.isAnyStreamVersion()) {
+            List<CloudEvent> cached = events.toList();
+            convertCloudEventsToDocuments = (cloudEvents, currentStreamVersion) -> convertCloudEventsToDocuments(streamId, cached.stream(), currentStreamVersion);
+        } else {
+            convertCloudEventsToDocuments = (cloudEvents, currentStreamVersion) -> convertCloudEventsToDocuments(streamId, cloudEvents, currentStreamVersion);
         }
+
+        Supplier<WriteResult> writeEvents = () -> {
+            try (ClientSession clientSession = mongoClient.startSession()) {
+                StreamVersionDiff streamVersionDiff = clientSession.withTransaction(() -> {
+                    long currentStreamVersion = currentStreamVersion(streamId, clientSession);
+
+                    if (!isFulfilled(currentStreamVersion, writeCondition)) {
+                        throw new WriteConditionNotFulfilledException(streamId, currentStreamVersion, writeCondition, String.format("%s was not fulfilled. Expected version %s but was %s.", WriteCondition.class.getSimpleName(), writeCondition, currentStreamVersion));
+                    }
+
+                    List<Document> cloudEventDocuments = convertCloudEventsToDocuments.apply(events, currentStreamVersion);
+
+                    if (cloudEventDocuments.isEmpty()) {
+                        return StreamVersionDiff.of(currentStreamVersion, currentStreamVersion);
+                    } else {
+                        try {
+                            eventCollection.insertMany(clientSession, cloudEventDocuments);
+                        } catch (MongoException e) {
+                            throw translateException(new WriteContext(streamId, currentStreamVersion, writeCondition), e);
+                        }
+                        final long newStreamVersion = cloudEventDocuments.get(cloudEventDocuments.size() - 1).getLong(STREAM_VERSION);
+                        return StreamVersionDiff.of(currentStreamVersion, newStreamVersion);
+                    }
+                }, transactionOptions);
+                return new WriteResult(streamId, streamVersionDiff.oldStreamVersion, streamVersionDiff.newStreamVersion);
+            }
+        };
+
+        return RetryStrategy.retry().retryIf(__ -> writeCondition.isAnyStreamVersion()).execute(writeEvents);
+    }
+
+    private List<Document> convertCloudEventsToDocuments(String streamId, Stream<CloudEvent> cloudEvents, long currentStreamVersion) {
+        return mapWithIndex(cloudEvents, currentStreamVersion, pair -> convertToDocument(timeRepresentation, streamId, pair.t1, pair.t2)).toList();
     }
 
     private static boolean isFulfilled(long currentStreamVersion, WriteCondition writeCondition) {

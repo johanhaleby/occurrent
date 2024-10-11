@@ -1,3 +1,6 @@
+### Changelog next version
+* Fixed so that inserting events with "any" WriteCondition never fails even if more than two threads are writing events to the same stream at the same time. (Fixed in MongoEventStore and SpringMongoEventStore)   
+
 ### 0.19.5 (2024-09-27)
 * Fixed so that blocking and reactive EventStoreQueries really uses `SortBy.unsorted()` by default as was intended in the previous release.
 
