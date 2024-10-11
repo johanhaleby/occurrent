@@ -149,7 +149,7 @@ public class SpringMongoEventStore implements EventStore, EventStoreOperations, 
         };
 
         StreamVersionDiff streamVersion = RetryStrategy.retry()
-                .retryIf(__ -> writeCondition.isAnyStreamVersion())
+                .retryIf(e -> e instanceof WriteConditionNotFulfilledException && writeCondition.isAnyStreamVersion())
                 .execute(() -> transactionTemplate.execute(writeLogic));
         return new WriteResult(streamId, streamVersion.oldStreamVersion, streamVersion.newStreamVersion);
     }

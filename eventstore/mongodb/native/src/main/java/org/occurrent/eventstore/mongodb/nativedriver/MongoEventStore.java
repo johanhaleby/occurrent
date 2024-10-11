@@ -225,7 +225,7 @@ public class MongoEventStore implements EventStore, EventStoreOperations, EventS
             }
         };
 
-        return RetryStrategy.retry().retryIf(__ -> writeCondition.isAnyStreamVersion()).execute(writeEvents);
+        return RetryStrategy.retry().retryIf(e -> e instanceof WriteConditionNotFulfilledException && writeCondition.isAnyStreamVersion()).execute(writeEvents);
     }
 
     private List<Document> convertCloudEventsToDocuments(String streamId, Stream<CloudEvent> cloudEvents, long currentStreamVersion) {
