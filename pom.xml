@@ -75,7 +75,7 @@
         <cloudevents.version>4.0.1</cloudevents.version>
         <reactor.version>3.6.9</reactor.version>
         <spring-data-mongodb.version>4.3.3</spring-data-mongodb.version>
-        <spring-boot.version>3.3.4</spring-boot.version>
+        <spring-boot.version>3.3.5</spring-boot.version>
         <mongo.version>5.1.4</mongo.version>
         <dokka.version>1.9.20</dokka.version>
         <sundrio.version>0.100.3</sundrio.version>
