@@ -80,7 +80,7 @@
         <dokka.version>1.9.20</dokka.version>
         <sundrio.version>0.100.3</sundrio.version>
         <awaitility.version>4.2.2</awaitility.version>
-        <jobrunr.version>7.2.3</jobrunr.version>
+        <jobrunr.version>7.3.1</jobrunr.version>
     </properties>
 
 
