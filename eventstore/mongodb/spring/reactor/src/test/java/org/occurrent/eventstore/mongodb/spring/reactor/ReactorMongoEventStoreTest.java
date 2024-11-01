@@ -27,10 +27,8 @@ import io.cloudevents.core.data.PojoCloudEventData;
 import io.github.artsok.RepeatedIfExceptionsTest;
 import org.awaitility.Awaitility;
 import org.bson.Document;
-import org.junit.jupiter.api.BeforeEach;
-import org.junit.jupiter.api.DisplayName;
-import org.junit.jupiter.api.Nested;
-import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.*;
+import org.junit.jupiter.api.DisplayNameGenerator.ReplaceUnderscores;
 import org.junit.jupiter.api.condition.EnabledForJreRange;
 import org.junit.jupiter.api.condition.EnabledOnJre;
 import org.junit.jupiter.api.condition.EnabledOnOs;
@@ -94,6 +92,7 @@ import static org.springframework.data.mongodb.core.query.Query.query;
 
 @SuppressWarnings("SameParameterValue")
 @Testcontainers
+@DisplayNameGeneration(ReplaceUnderscores.class)
 public class ReactorMongoEventStoreTest {
 
     @Container
@@ -823,6 +822,41 @@ public class ReactorMongoEventStoreTest {
             }
         }
 
+        @Nested
+        @DisplayName("in")
+        class In {
+        
+            @Test
+            void writes_events_when_stream_version_matches_expected_version() {
+                // When
+                DomainEvent event1 = new NameDefined(UUID.randomUUID().toString(), now, "name", "John Doe");
+                persist("name", event1).block();
+
+                DomainEvent event2 = new NameWasChanged(UUID.randomUUID().toString(), now, "name", "Jan Doe");
+
+                eventStore.read("name").flatMap(eventStream1 -> persist(eventStream1.id(), WriteCondition.streamVersion(in(eventStream1.version(), eventStream1.version() + 1)), event2)).block();
+
+                // Then
+                Mono<EventStream<CloudEvent>> eventStream2 = eventStore.read("name");
+                assertThat(deserialize(eventStream2).events).containsExactly(event1, event2);
+            }
+
+            @Test
+            void throws_write_condition_not_fulfilled_when_stream_version_does_not_match_expected_version() {
+                // Given
+                DomainEvent event1 = new NameDefined(UUID.randomUUID().toString(), now, "name", "John Doe");
+                persist("name", event1).block();
+
+                // When
+                DomainEvent event2 = new NameWasChanged(UUID.randomUUID().toString(), now, "name", "Jan Doe");
+                Throwable throwable = catchThrowable(() -> persist("name", WriteCondition.streamVersion(in(10L, 11L)), event2).block());
+
+                // Then
+                assertThat(throwable).isExactlyInstanceOf(WriteConditionNotFulfilledException.class)
+                        .hasMessage("WriteCondition was not fulfilled. Expected version in any of (10,11) but was 1.");
+            }
+        }
+        
         @Nested
         @DisplayName("ne")
         class Ne {

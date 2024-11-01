@@ -23,12 +23,13 @@ import org.occurrent.condition.Condition.SingleOperandCondition;
 import org.occurrent.condition.Condition.SingleOperandConditionName;
 
 import java.net.URI;
+import java.util.Collection;
 import java.util.List;
 import java.util.Objects;
 import java.util.Set;
-import java.util.function.Predicate;
 import java.util.stream.Stream;
 
+import static java.util.function.Predicate.isEqual;
 import static org.occurrent.condition.Condition.SingleOperandConditionName.EQ;
 import static org.occurrent.condition.Condition.SingleOperandConditionName.NE;
 import static org.occurrent.filter.Filter.*;
@@ -45,16 +46,11 @@ public class ConditionMatcher {
             Condition.MultiOperandConditionName operationName = operation.operationName();
             List<Condition<T>> operations = operation.operations();
             Stream<Boolean> filters = operations.stream().map(c -> matchesCondition(cloudEvent, fieldName, c));
-            switch (operationName) {
-                case AND:
-                    return filters.allMatch(Predicate.isEqual(true));
-                case OR:
-                    return filters.anyMatch(Predicate.isEqual(true));
-                case NOT:
-                    return filters.allMatch(Predicate.isEqual(false));
-                default:
-                    throw new IllegalStateException("Unexpected value: " + operationName);
-            }
+            return switch (operationName) {
+                case AND -> filters.allMatch(isEqual(true));
+                case OR -> filters.anyMatch(isEqual(true));
+                case NOT -> filters.allMatch(isEqual(false));
+            };
         } else if (condition instanceof SingleOperandCondition<T> singleOperandCondition) {
             T expected = singleOperandCondition.operand();
             SingleOperandConditionName singleOperandConditionName = singleOperandCondition.operandConditionName();
@@ -68,24 +64,19 @@ public class ConditionMatcher {
                 Comparable<Object> expectedComparable = toComparable(expected, "Expected value must implement " + Comparable.class.getName() + " in order to be used in Filter's");
                 Comparable<Object> actualComparable = toComparable(actual, "Value in CloudEvent must implement " + Comparable.class.getName() + " in order to be used in Filter's");
                 int comparisonResult = actualComparable.compareTo(expectedComparable);
-                switch (singleOperandConditionName) {
-                    case LT:
-                        matches = comparisonResult < 0;
-                        break;
-                    case GT:
-                        matches = comparisonResult > 0;
-                        break;
-                    case LTE:
-                        matches = comparisonResult <= 0;
-                        break;
-                    case GTE:
-                        matches = comparisonResult >= 0;
-                        break;
-                    default:
-                        throw new IllegalStateException("Unexpected value: " + singleOperandConditionName);
-                }
+                matches = switch (singleOperandConditionName) {
+                    case LT -> comparisonResult < 0;
+                    case GT -> comparisonResult > 0;
+                    case LTE -> comparisonResult <= 0;
+                    case GTE -> comparisonResult >= 0;
+                    default -> throw new IllegalStateException("Unexpected value: " + singleOperandConditionName);
+                };
             }
             return matches;
+        } else if (condition instanceof Condition.InOperandCondition<T> inOperandCondition) {
+            Object actual = extractValue(cloudEvent, fieldName);
+            Collection<T> operand = inOperandCondition.operand();
+            return operand.stream().anyMatch(it -> Objects.equals(it, actual));
         } else {
             throw new IllegalArgumentException("Unsupported condition: " + condition.getClass());
         }

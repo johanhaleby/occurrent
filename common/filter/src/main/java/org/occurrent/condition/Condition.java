@@ -16,10 +16,7 @@
 
 package org.occurrent.condition;
 
-import java.util.ArrayList;
-import java.util.Collection;
-import java.util.Collections;
-import java.util.List;
+import java.util.*;
 import java.util.function.Function;
 import java.util.stream.Collectors;
 
@@ -58,6 +55,25 @@ public sealed interface Condition<T> {
         }
     }
 
+    record InOperandCondition<T>(Collection<T> operand, String description) implements Condition<T> {
+
+        public InOperandCondition {
+            requireNonNull(operand, "Operand cannot be null");
+            requireNonNull(description, "Description cannot be null");
+        }
+
+        @Override
+        public <T2> Condition<T2> map(Function<T, T2> fn) {
+            requireNonNull(fn, "Mapping function cannot be null");
+            return new InOperandCondition<>(operand.stream().map(fn).toList(), description);
+        }
+
+        @Override
+        public String toString() {
+            return description;
+        }
+    }
+
     record MultiOperandCondition<T>(MultiOperandConditionName operationName, List<Condition<T>> operations, String description) implements Condition<T> {
 
         public MultiOperandCondition {
@@ -78,21 +94,14 @@ public sealed interface Condition<T> {
     }
 
     static <T> Condition<T> in(Collection<T> values) {
-        return new SingleOperandCondition<>(IN, values, String.format("in any of %s", t));
+        String join = values.stream().map(Objects::toString).collect(Collectors.joining(","));
+        return new InOperandCondition<>(values, String.format("in any of (%s)", join));
     }
 
-    static <T> Condition<T> in(Collection<Condition<T>> values) {
-        return new SingleOperandCondition<>(IN, values, String.format("in any of %s", t));
-    }
-
+    @SafeVarargs
     static <T> Condition<T> in(T value, T... additionalValues) {
         List<T> values = createList(value, additionalValues);
-        return new SingleOperandCondition<>(IN, values, String.format("in any of %s", t));
-    }
-
-    static <T> Condition<T> in(Condition<T> value, Condition<T>... additionalValues) {
-        List<Condition<T>> values = createList(value, additionalValues);
-        return new SingleOperandCondition<>(IN, values, String.format("in any of %s", t));
+        return in(values);
     }
 
     static <T> Condition<T> eq(T t) {
@@ -184,7 +193,7 @@ public sealed interface Condition<T> {
     }
 
     enum SingleOperandConditionName {
-        EQ, LT, GT, LTE, GTE, NE, IN
+        EQ, LT, GT, LTE, GTE, NE
     }
 
     enum MultiOperandConditionName {
