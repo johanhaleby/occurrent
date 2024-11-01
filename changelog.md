@@ -1,4 +1,4 @@
-### Next version
+### 0.19.7 (2024-11-01)
 * Implemented "in" conditions so you can now do e.g. `subscriptionModel.subscribe("id", OccurrentSubscriptionFilter.filter(Filter.streamVersion(Condition.in(12L, 14L))`. There's also a Kotlin extension function, `isIn`, which can be imported from `org.occurrent.condition.isIn`.
 * Upgraded kotlin from 2.0.20 to 2.0.21
 * Upgraded spring-boot from 3.3.3 to 3.3.5
