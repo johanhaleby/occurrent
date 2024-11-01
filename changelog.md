@@ -2,6 +2,7 @@
 * Implemented "in" conditions so you can now do e.g. `subscriptionModel.subscribe("id", OccurrentSubscriptionFilter.filter(Filter.streamVersion(Condition.in(12L, 14L))`. There's also a Kotlin extension function, `isIn`, which can be imported from `org.occurrent.condition.isIn`.
 * Upgraded kotlin from 2.0.20 to 2.0.21
 * Upgraded spring-boot from 3.3.3 to 3.3.5
+* Upgraded spring-data-mongodb from 4.3.3 to 4.3.5
 
 ### 0.19.6 (2024-10-11)
 * Fixed so that inserting events with "any" WriteCondition never fails even if more than two threads are writing events to the same stream at the same time. (Fixed in MongoEventStore and SpringMongoEventStore)   
