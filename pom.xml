@@ -397,7 +397,7 @@
             <dependency>
                 <groupId>net.jqwik</groupId>
                 <artifactId>jqwik</artifactId>
-                <version>1.8.0</version>
+                <version>1.9.1</version>
             </dependency>
             <dependency>
                 <groupId>io.github.artsok</groupId>
