@@ -23,6 +23,7 @@ import org.occurrent.condition.Condition.MultiOperandCondition;
 import org.occurrent.condition.Condition.SingleOperandCondition;
 import org.occurrent.condition.Condition.SingleOperandConditionName;
 
+import java.util.Collection;
 import java.util.List;
 
 /**
@@ -35,36 +36,25 @@ public class ConditionConverter {
             Condition.MultiOperandConditionName operationName = operation.operationName();
             List<Condition<T>> operations = operation.operations();
             Bson[] filters = operations.stream().map(c -> convertConditionToBsonCriteria(fieldName, c)).toArray(Bson[]::new);
-            switch (operationName) {
-                case AND:
-                    return Filters.and(filters);
-                case OR:
-                    return Filters.or(filters);
-                case NOT:
-                    return Filters.not(filters[0]);
-                default:
-                    throw new IllegalStateException("Unexpected value: " + operationName);
-            }
-        } else if (condition instanceof SingleOperandCondition) {
-            SingleOperandCondition<T> singleOperandCondition = (SingleOperandCondition<T>) condition;
-            T expectedVersion = singleOperandCondition.operand();
+            return switch (operationName) {
+                case AND -> Filters.and(filters);
+                case OR -> Filters.or(filters);
+                case NOT -> Filters.not(filters[0]);
+            };
+        } else if (condition instanceof SingleOperandCondition<T> singleOperandCondition) {
+            T operand = singleOperandCondition.operand();
             SingleOperandConditionName singleOperandConditionName = singleOperandCondition.operandConditionName();
-            switch (singleOperandConditionName) {
-                case EQ:
-                    return Filters.eq(fieldName, expectedVersion);
-                case LT:
-                    return Filters.lt(fieldName, expectedVersion);
-                case GT:
-                    return Filters.gt(fieldName, expectedVersion);
-                case LTE:
-                    return Filters.lte(fieldName, expectedVersion);
-                case GTE:
-                    return Filters.gte(fieldName, expectedVersion);
-                case NE:
-                    return Filters.ne(fieldName, expectedVersion);
-                default:
-                    throw new IllegalStateException("Unexpected value: " + singleOperandConditionName);
-            }
+            return switch (singleOperandConditionName) {
+                case EQ -> Filters.eq(fieldName, operand);
+                case LT -> Filters.lt(fieldName, operand);
+                case GT -> Filters.gt(fieldName, operand);
+                case LTE -> Filters.lte(fieldName, operand);
+                case GTE -> Filters.gte(fieldName, operand);
+                case NE -> Filters.ne(fieldName, operand);
+            };
+        } else if (condition instanceof Condition.InOperandCondition<T> inOperandCondition) {
+            Collection<T> operand = inOperandCondition.operand();
+            return Filters.in(fieldName, operand);
         } else {
             throw new IllegalArgumentException("Unsupported condition: " + condition.getClass());
         }

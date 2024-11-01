@@ -21,6 +21,7 @@ import org.occurrent.condition.Condition.MultiOperandCondition;
 import org.occurrent.condition.Condition.SingleOperandCondition;
 import org.springframework.data.mongodb.core.query.Criteria;
 
+import java.util.Collection;
 import java.util.List;
 
 /**
@@ -33,35 +34,25 @@ public class ConditionToCriteriaConverter {
             Condition.MultiOperandConditionName operationName = operation.operationName();
             List<Condition<T>> operations = operation.operations();
             Criteria[] criteria = operations.stream().map(c -> convertConditionToCriteria(fieldName, c)).toArray(Criteria[]::new);
-            switch (operationName) {
-                case AND:
-                    return new Criteria().andOperator(criteria);
-                case OR:
-                    return new Criteria().orOperator(criteria);
-                case NOT:
-                    return new Criteria().norOperator(criteria);
-                default:
-                    throw new IllegalStateException("Unexpected value: " + operationName);
-            }
+            return switch (operationName) {
+                case AND -> new Criteria().andOperator(criteria);
+                case OR -> new Criteria().orOperator(criteria);
+                case NOT -> new Criteria().norOperator(criteria);
+            };
         } else if (condition instanceof SingleOperandCondition<T> singleOperandCondition) {
             T value = singleOperandCondition.operand();
             Condition.SingleOperandConditionName singleOperandConditionName = singleOperandCondition.operandConditionName();
-            switch (singleOperandConditionName) {
-                case EQ:
-                    return Criteria.where(fieldName).is(value);
-                case LT:
-                    return Criteria.where(fieldName).lt(value);
-                case GT:
-                    return Criteria.where(fieldName).gt(value);
-                case LTE:
-                    return Criteria.where(fieldName).lte(value);
-                case GTE:
-                    return Criteria.where(fieldName).gte(value);
-                case NE:
-                    return Criteria.where(fieldName).ne(value);
-                default:
-                    throw new IllegalStateException("Unexpected value: " + singleOperandConditionName);
-            }
+            return switch (singleOperandConditionName) {
+                case EQ -> Criteria.where(fieldName).is(value);
+                case LT -> Criteria.where(fieldName).lt(value);
+                case GT -> Criteria.where(fieldName).gt(value);
+                case LTE -> Criteria.where(fieldName).lte(value);
+                case GTE -> Criteria.where(fieldName).gte(value);
+                case NE -> Criteria.where(fieldName).ne(value);
+            };
+        } else if (condition instanceof Condition.InOperandCondition<T> inOperandCondition) {
+            Collection<T> operand = inOperandCondition.operand();
+            return Criteria.where(fieldName).in(operand);
         } else {
             throw new IllegalArgumentException("Unsupported condition: " + condition.getClass());
         }

@@ -841,6 +841,41 @@ public class SpringMongoEventStoreTest {
         }
 
         @Nested
+        @DisplayName("in")
+        class In {
+
+            @Test
+            void writes_events_when_stream_version_matches_expected_version() {
+                // When
+                DomainEvent event1 = new NameDefined(UUID.randomUUID().toString(), now, "name", "John Doe");
+                persist("name", event1);
+
+                DomainEvent event2 = new NameWasChanged(UUID.randomUUID().toString(), now, "name", "Jan Doe");
+                EventStream<CloudEvent> eventStream1 = eventStore.read("name");
+                persist(eventStream1.id(), WriteCondition.streamVersion(in(eventStream1.version(), eventStream1.version() + 1)), Stream.of(event2));
+
+                // Then
+                EventStream<CloudEvent> eventStream2 = eventStore.read("name");
+                assertThat(deserialize(eventStream2.events())).containsExactly(event1, event2);
+            }
+
+            @Test
+            void throws_write_condition_not_fulfilled_when_stream_version_does_not_match_expected_version() {
+                // Given
+                DomainEvent event1 = new NameDefined(UUID.randomUUID().toString(), now, "name", "John Doe");
+                persist("name", event1);
+
+                // When
+                DomainEvent event2 = new NameWasChanged(UUID.randomUUID().toString(), now, "name", "Jan Doe");
+                Throwable throwable = catchThrowable(() -> persist("name", WriteCondition.streamVersion(in(10L, 12L)), Stream.of(event2)));
+
+                // Then
+                assertThat(throwable).isExactlyInstanceOf(WriteConditionNotFulfilledException.class)
+                        .hasMessage("WriteCondition was not fulfilled. Expected version in any of (10,12) but was 1.");
+            }
+        }
+
+        @Nested
         @DisplayName("ne")
         class Ne {
 

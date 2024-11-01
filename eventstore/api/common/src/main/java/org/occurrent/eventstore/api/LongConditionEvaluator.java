@@ -17,11 +17,9 @@
 package org.occurrent.eventstore.api;
 
 import org.occurrent.condition.Condition;
-import org.occurrent.condition.Condition.MultiOperandCondition;
-import org.occurrent.condition.Condition.MultiOperandConditionName;
-import org.occurrent.condition.Condition.SingleOperandCondition;
-import org.occurrent.condition.Condition.SingleOperandConditionName;
+import org.occurrent.condition.Condition.*;
 
+import java.util.Collection;
 import java.util.Objects;
 import java.util.stream.Stream;
 
@@ -36,35 +34,25 @@ public class LongConditionEvaluator {
         if (condition instanceof MultiOperandCondition<Long> operation) {
             MultiOperandConditionName operationName = operation.operationName();
             Stream<Condition<Long>> operations = operation.operations().stream();
-            switch (operationName) {
-                case AND:
-                    return operations.allMatch(c -> evaluate(c, value));
-                case OR:
-                    return operations.anyMatch(c -> evaluate(c, value));
-                case NOT:
-                    return operations.noneMatch(c -> evaluate(c, value));
-                default:
-                    throw new IllegalStateException("Unexpected value: " + operationName);
-            }
+            return switch (operationName) {
+                case AND -> operations.allMatch(c -> evaluate(c, value));
+                case OR -> operations.anyMatch(c -> evaluate(c, value));
+                case NOT -> operations.noneMatch(c -> evaluate(c, value));
+            };
         } else if (condition instanceof SingleOperandCondition<Long> singleOperandCondition) {
             long operand = singleOperandCondition.operand();
             SingleOperandConditionName singleOperandConditionName = singleOperandCondition.operandConditionName();
-            switch (singleOperandConditionName) {
-                case EQ:
-                    return value == operand;
-                case LT:
-                    return value < operand;
-                case GT:
-                    return value > operand;
-                case LTE:
-                    return value <= operand;
-                case GTE:
-                    return value >= operand;
-                case NE:
-                    return value != operand;
-                default:
-                    throw new IllegalStateException("Unexpected value: " + singleOperandConditionName);
-            }
+            return switch (singleOperandConditionName) {
+                case EQ -> value == operand;
+                case LT -> value < operand;
+                case GT -> value > operand;
+                case LTE -> value <= operand;
+                case GTE -> value >= operand;
+                case NE -> value != operand;
+            };
+        } else if (condition instanceof InOperandCondition<Long> inOperandCondition) {
+            Collection<Long> longs = inOperandCondition.operand();
+            return longs.contains(value);
         } else {
             throw new IllegalArgumentException("Unsupported condition: " + condition.getClass());
         }

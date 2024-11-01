@@ -59,7 +59,7 @@ class RockPaperScissorsTest {
 
         @Nested
         @DisplayName("but not started")
-        inner class NotStarted {
+        inner class ButNotStarted {
 
             @Test
             fun `then it's not possible to create the game again`() {
@@ -76,7 +76,7 @@ class RockPaperScissorsTest {
 
             @Nested
             @DisplayName("and first player makes a hand gesture")
-            inner class FirstPlayerGesture {
+            inner class AndFirstPlayerMakesAHandGesture {
 
                 @Test
                 fun `then game is started`() {
@@ -116,7 +116,7 @@ class RockPaperScissorsTest {
             inner class FirstPlayerGesture {
 
                 @Test
-                fun `then the rules prevents it`() {
+                fun `then the rules prevents it`() { 
                     // Given
                     val c = MakeHandGesture(GameId.randomUUID(), Timestamp.now(), PlayerId.randomUUID(), ROCK)
 

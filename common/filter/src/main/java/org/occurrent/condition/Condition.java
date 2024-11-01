@@ -16,9 +16,7 @@
 
 package org.occurrent.condition;
 
-import java.util.ArrayList;
-import java.util.Collections;
-import java.util.List;
+import java.util.*;
 import java.util.function.Function;
 import java.util.stream.Collectors;
 
@@ -57,6 +55,25 @@ public sealed interface Condition<T> {
         }
     }
 
+    record InOperandCondition<T>(Collection<T> operand, String description) implements Condition<T> {
+
+        public InOperandCondition {
+            requireNonNull(operand, "Operand cannot be null");
+            requireNonNull(description, "Description cannot be null");
+        }
+
+        @Override
+        public <T2> Condition<T2> map(Function<T, T2> fn) {
+            requireNonNull(fn, "Mapping function cannot be null");
+            return new InOperandCondition<>(operand.stream().map(fn).toList(), description);
+        }
+
+        @Override
+        public String toString() {
+            return description;
+        }
+    }
+
     record MultiOperandCondition<T>(MultiOperandConditionName operationName, List<Condition<T>> operations, String description) implements Condition<T> {
 
         public MultiOperandCondition {
@@ -74,6 +91,17 @@ public sealed interface Condition<T> {
         public String toString() {
             return description;
         }
+    }
+
+    static <T> Condition<T> in(Collection<T> values) {
+        String join = values.stream().map(Objects::toString).collect(Collectors.joining(","));
+        return new InOperandCondition<>(values, String.format("in any of (%s)", join));
+    }
+
+    @SafeVarargs
+    static <T> Condition<T> in(T value, T... additionalValues) {
+        List<T> values = createList(value, additionalValues);
+        return in(values);
     }
 
     static <T> Condition<T> eq(T t) {
@@ -151,6 +179,16 @@ public sealed interface Condition<T> {
         conditions.add(firstCondition);
         conditions.add(secondCondition);
         Collections.addAll(conditions, additionalConditionsToUse);
+        return conditions;
+    }
+
+    private static <T> List<T> createList(T firstCondition, T[] additionalConditions) {
+        if (additionalConditions == null || additionalConditions.length == 0) {
+            return List.of(firstCondition);
+        }
+        List<T> conditions = new ArrayList<>(1 + additionalConditions.length);
+        conditions.add(firstCondition);
+        Collections.addAll(conditions, additionalConditions);
         return conditions;
     }
 
