@@ -76,7 +76,7 @@
         <reactor.version>3.6.9</reactor.version>
         <spring-data-mongodb.version>4.3.5</spring-data-mongodb.version>
         <spring-boot.version>3.3.5</spring-boot.version>
-        <mongo.version>5.1.4</mongo.version>
+        <mongo.version>5.2.0</mongo.version>
         <dokka.version>1.9.20</dokka.version>
         <sundrio.version>0.100.3</sundrio.version>
         <awaitility.version>4.2.2</awaitility.version>
