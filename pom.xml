@@ -73,7 +73,7 @@
         <kotlin.version>2.0.21</kotlin.version>
         <jackson.version>2.17.2</jackson.version>
         <cloudevents.version>4.0.1</cloudevents.version>
-        <reactor.version>3.6.9</reactor.version>
+        <reactor.version>3.6.11</reactor.version>
         <spring-data-mongodb.version>4.3.5</spring-data-mongodb.version>
         <spring-boot.version>3.3.5</spring-boot.version>
         <mongo.version>5.2.0</mongo.version>
