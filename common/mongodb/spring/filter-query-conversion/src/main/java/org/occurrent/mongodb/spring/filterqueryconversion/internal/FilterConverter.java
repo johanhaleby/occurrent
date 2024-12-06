@@ -59,8 +59,7 @@ public class FilterConverter {
             Condition<?> conditionToUse = SpecialFilterHandling.resolveSpecialCases(timeRepresentation, scf);
             String fieldName = fieldNameOf(fieldNamePrefix, scf.fieldName());
             criteria = ConditionToCriteriaConverter.convertConditionToCriteria(fieldName, conditionToUse);
-        } else if (filter instanceof CompositionFilter) {
-            CompositionFilter cf = (CompositionFilter) filter;
+        } else if (filter instanceof CompositionFilter cf) {
             Criteria[] composedCriteria = cf.filters().stream().map(f -> FilterConverter.convertFilterToCriteria(fieldNamePrefix, timeRepresentation, f)).toArray(Criteria[]::new);
             Criteria c = new Criteria();
             switch (cf.operator()) {
