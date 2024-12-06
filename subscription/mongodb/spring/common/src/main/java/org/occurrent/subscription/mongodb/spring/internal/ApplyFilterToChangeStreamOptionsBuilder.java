@@ -45,7 +45,7 @@ public class ApplyFilterToChangeStreamOptionsBuilder {
         if (filter == null) {
             changeStreamOptions = changeStreamOptionsBuilder.build();
         } else if (filter instanceof OccurrentSubscriptionFilter) {
-            Filter occurrentFilter = ((OccurrentSubscriptionFilter) filter).filter;
+            Filter occurrentFilter = ((OccurrentSubscriptionFilter) filter).filter();
             Criteria criteria = convertFilterToCriteria(FULL_DOCUMENT, timeRepresentation, occurrentFilter);
             changeStreamOptions = changeStreamOptionsBuilder.filter(newAggregation(match(criteria))).build();
         } else if (filter instanceof MongoJsonFilterSpecification) {

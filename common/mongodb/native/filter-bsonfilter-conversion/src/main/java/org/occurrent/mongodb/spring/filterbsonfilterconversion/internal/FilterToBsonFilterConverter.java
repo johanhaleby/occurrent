@@ -59,19 +59,12 @@ public class FilterToBsonFilterConverter {
             Condition<?> conditionToUse = resolveSpecialCases(timeRepresentation, scf);
             String fieldName = fieldNameOf(fieldNamePrefix, scf.fieldName());
             criteria = convertConditionToBsonCriteria(fieldName, conditionToUse);
-        } else if (filter instanceof CompositionFilter) {
-            CompositionFilter cf = (CompositionFilter) filter;
+        } else if (filter instanceof CompositionFilter cf) {
             Bson[] composedBson = cf.filters().stream().map(f -> innerConvert(fieldNamePrefix, timeRepresentation, f)).toArray(Bson[]::new);
-            switch (cf.operator()) {
-                case AND:
-                    criteria = Filters.and(composedBson);
-                    break;
-                case OR:
-                    criteria = Filters.or(composedBson);
-                    break;
-                default:
-                    throw new IllegalStateException("Unexpected value: " + cf.operator());
-            }
+            criteria = switch (cf.operator()) {
+                case AND -> Filters.and(composedBson);
+                case OR -> Filters.or(composedBson);
+            };
         } else {
             throw new IllegalStateException("Unexpected filter: " + filter.getClass().getName());
         }

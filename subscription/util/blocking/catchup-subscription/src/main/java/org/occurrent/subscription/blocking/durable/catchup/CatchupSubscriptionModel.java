@@ -310,7 +310,7 @@ public class CatchupSubscriptionModel implements SubscriptionModel, DelegatingSu
         if (filter == null) {
             catchupFilter = timeFilter;
         } else {
-            Filter userSuppliedFilter = ((OccurrentSubscriptionFilter) filter).filter;
+            Filter userSuppliedFilter = ((OccurrentSubscriptionFilter) filter).filter();
             catchupFilter = timeFilter.and(userSuppliedFilter);
         }
         return catchupFilter;

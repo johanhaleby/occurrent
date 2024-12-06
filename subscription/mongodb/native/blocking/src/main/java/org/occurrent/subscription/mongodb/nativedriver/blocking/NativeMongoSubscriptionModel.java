@@ -202,7 +202,7 @@ public class NativeMongoSubscriptionModel implements PositionAwareSubscriptionMo
         if (filter == null) {
             pipeline = Collections.emptyList();
         } else if (filter instanceof OccurrentSubscriptionFilter) {
-            Filter occurrentFilter = ((OccurrentSubscriptionFilter) filter).filter;
+            Filter occurrentFilter = ((OccurrentSubscriptionFilter) filter).filter();
             Bson bson = FilterToBsonFilterConverter.convertFilterToBsonFilter(MongoFilterSpecification.FULL_DOCUMENT, timeRepresentation, occurrentFilter);
             pipeline = Collections.singletonList(match(bson));
         } else if (filter instanceof MongoFilterSpecification.MongoJsonFilterSpecification) {

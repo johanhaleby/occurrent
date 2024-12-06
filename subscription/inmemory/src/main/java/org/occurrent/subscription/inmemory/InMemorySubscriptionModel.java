@@ -166,7 +166,7 @@ public class InMemorySubscriptionModel implements SubscriptionModel, Consumer<St
         if (filter == null) {
             f = Filter.all();
         } else if (filter instanceof OccurrentSubscriptionFilter) {
-            f = ((OccurrentSubscriptionFilter) filter).filter;
+            f = ((OccurrentSubscriptionFilter) filter).filter();
         } else {
             throw new IllegalArgumentException(InMemorySubscriptionModel.class.getSimpleName() + " only support filters of type " + OccurrentSubscriptionFilter.class.getName());
         }
