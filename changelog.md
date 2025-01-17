@@ -1,5 +1,6 @@
 ### Changelog next version
-* Converted `org.occurrent.subscription.OccurrentSubscriptionFilter` from a Java class to a record. This means that the `public final` filter instance field is now a record property. So if you ever used `occurrentSubscriptionFilter.filter` to access the underluying filter, you now need to do `occurrentSubscriptionFilter.filter()` instead.  
+* Converted `org.occurrent.subscription.OccurrentSubscriptionFilter` from a Java class to a record. This means that the `public final` filter instance field is now a record property. So if you ever used `occurrentSubscriptionFilter.filter` to access the underlying filter, you now need to do `occurrentSubscriptionFilter.filter()` instead.
+* Fixed a bug in MongoLeaseCompetingConsumerStrategySupport in which it was not marked a running on start. This could affect retries of certain competing consumer errors.
 
 ### 0.19.7 (2024-11-01)
 * Implemented "in" conditions so you can now do e.g. `subscriptionModel.subscribe("id", OccurrentSubscriptionFilter.filter(Filter.streamVersion(Condition.in(12L, 14L))`. There's also a Kotlin extension function, `isIn`, which can be imported from `org.occurrent.condition.isIn`.

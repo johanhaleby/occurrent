@@ -59,6 +59,7 @@ public class MongoLeaseCompetingConsumerStrategySupport {
         this.clock = clock;
         this.leaseTime = leaseTime;
         this.scheduledRefresh = ScheduledRefresh.auto();
+        this.running = true;
         this.competingConsumerListeners = Collections.newSetFromMap(new ConcurrentHashMap<>());
         this.competingConsumers = new ConcurrentHashMap<>();
 
