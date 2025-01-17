@@ -1,7 +1,14 @@
 ### Changelog next version
 * Converted `org.occurrent.subscription.OccurrentSubscriptionFilter` from a Java class to a record. This means that the `public final` filter instance field is now a record property. So if you ever used `occurrentSubscriptionFilter.filter` to access the underlying filter, you now need to do `occurrentSubscriptionFilter.filter()` instead.
 * Fixed a bug in MongoLeaseCompetingConsumerStrategySupport in which it was not marked a running on start. This could affect retries of certain competing consumer errors.
-* Adding equals/hashcode and toString to SpringMongoSubscriptionModel, this is useful in certain debug logging scenarios 
+* Adding equals/hashcode and toString to SpringMongoSubscriptionModel, this is useful in certain debug logging scenarios
+* Upgraded spring-boot from 3.3.5 to 3.4.1
+* Upgraded spring-data-mongodb from 4.3.5 to 4.4.2
+* Upgraded mongodb-driver-sync from 5.2.0 to 5.3.0
+* Upgraded jobrunr from 7.3.1 to 7.3.2
+* Upgraded project reactor from 3.6.11 to 3.7.2
+* Upgraded kotlin from 2.0.21 to 2.1.0
+* Upgraded jackson from 2.17.2 to 2.18.2
 
 ### 0.19.7 (2024-11-01)
 * Implemented "in" conditions so you can now do e.g. `subscriptionModel.subscribe("id", OccurrentSubscriptionFilter.filter(Filter.streamVersion(Condition.in(12L, 14L))`. There's also a Kotlin extension function, `isIn`, which can be imported from `org.occurrent.condition.isIn`.
