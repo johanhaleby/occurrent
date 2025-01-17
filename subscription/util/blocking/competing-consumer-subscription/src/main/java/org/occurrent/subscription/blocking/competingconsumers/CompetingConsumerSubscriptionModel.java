@@ -192,6 +192,7 @@ public class CompetingConsumerSubscriptionModel implements DelegatingSubscriptio
     public synchronized Subscription resumeSubscription(String subscriptionId) {
         logDebug("Trying to resume CompetingConsumer subscription (subscriptionId={})", subscriptionId);
         if (isRunning(subscriptionId)) {
+            logDebug("Subscription already is running, cannot resume (subscriptionId={}, delegate={})", subscriptionId, delegate.toString());
             throw new IllegalArgumentException("Subscription " + subscriptionId + " is not paused");
         }
 

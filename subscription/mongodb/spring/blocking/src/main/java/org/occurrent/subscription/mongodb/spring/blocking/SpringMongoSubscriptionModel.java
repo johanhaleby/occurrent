@@ -444,4 +444,31 @@ public class SpringMongoSubscriptionModel implements PositionAwareSubscriptionMo
             log.debug(message, params);
         }
     }
+
+
+    @Override
+    public boolean equals(Object o) {
+        if (!(o instanceof SpringMongoSubscriptionModel that)) return false;
+        return restartSubscriptionsOnChangeStreamHistoryLost == that.restartSubscriptionsOnChangeStreamHistoryLost && shutdown == that.shutdown && Objects.equals(eventCollection, that.eventCollection) && Objects.equals(messageListenerContainer, that.messageListenerContainer) && Objects.equals(runningSubscriptions, that.runningSubscriptions) && Objects.equals(pausedSubscriptions, that.pausedSubscriptions) && timeRepresentation == that.timeRepresentation && Objects.equals(mongoOperations, that.mongoOperations) && Objects.equals(retryStrategy, that.retryStrategy);
+    }
+
+    @Override
+    public int hashCode() {
+        return Objects.hash(eventCollection, messageListenerContainer, runningSubscriptions, pausedSubscriptions, timeRepresentation, mongoOperations, retryStrategy, restartSubscriptionsOnChangeStreamHistoryLost, shutdown);
+    }
+
+    @Override
+    public String toString() {
+        return new StringJoiner(", ", SpringMongoSubscriptionModel.class.getSimpleName() + "[", "]")
+                .add("eventCollection='" + eventCollection + "'")
+                .add("messageListenerContainer=" + messageListenerContainer)
+                .add("runningSubscriptions=" + runningSubscriptions)
+                .add("pausedSubscriptions=" + pausedSubscriptions)
+                .add("timeRepresentation=" + timeRepresentation)
+                .add("mongoOperations=" + mongoOperations)
+                .add("retryStrategy=" + retryStrategy)
+                .add("restartSubscriptionsOnChangeStreamHistoryLost=" + restartSubscriptionsOnChangeStreamHistoryLost)
+                .add("shutdown=" + shutdown)
+                .toString();
+    }
 }
