@@ -19,7 +19,7 @@
     <parent>
         <artifactId>subscription-mongodb</artifactId>
         <groupId>org.occurrent</groupId>
-        <version>0.19.8</version>
+        <version>0.19.9-SNAPSHOT</version>
     </parent>
     <packaging>pom</packaging>
     <artifactId>subscription-mongodb-native</artifactId>
