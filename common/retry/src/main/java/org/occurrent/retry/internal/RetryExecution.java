@@ -107,7 +107,7 @@ public class RetryExecution {
                         retry.onAfterRetryListener.accept(new AfterRetryInfoImpl(retryInfoWithPreviousBackoff, new ResultOfRetryAttempt.Failed(e), currentBackoff), lastError);
                     }
                     try {
-                        long backoffMillis = ((RetryInfo) nextRetryInfo).getBackoff().toMillis();
+                        long backoffMillis = nextRetryInfo.getBackoff().toMillis();
                         if (backoffMillis > 0) {
                             Thread.sleep(backoffMillis);
                         }
