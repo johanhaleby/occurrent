@@ -36,6 +36,7 @@ import org.occurrent.eventstore.mongodb.internal.StreamVersionDiff;
 import org.occurrent.filter.Filter;
 import org.occurrent.mongodb.spring.filterqueryconversion.internal.FilterConverter;
 import org.occurrent.mongodb.timerepresentation.TimeRepresentation;
+import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.dao.DuplicateKeyException;
 import org.springframework.data.domain.Sort;
 import org.springframework.data.mongodb.UncategorizedMongoDbException;
@@ -170,6 +171,7 @@ public class ReactorMongoEventStore implements EventStore, EventStoreOperations,
     private Flux<Document> insertAll(String streamId, long streamVersion, WriteCondition writeCondition, Collection<Document> documents) {
         return mongoTemplate.insert(documents, eventStoreCollectionName)
                 .onErrorMap(DuplicateKeyException.class, Throwable::getCause)
+                .onErrorMap(DataIntegrityViolationException.class, Throwable::getCause)
                 .onErrorMap(MongoException.class, e -> MongoExceptionTranslator.translateException(new WriteContext(streamId, streamVersion, writeCondition), e))
                 .onErrorMap(UncategorizedMongoDbException.class, e -> {
                     if (e.getCause() instanceof MongoException) {

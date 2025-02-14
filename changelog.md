@@ -1,6 +1,7 @@
 ### 0.19.9 (2025-02-14)
 * Added toString() to subscription models for better debug output
-* Fixed issue in `MongoListenerLockService` (used by competing subscription models) in which two subscribers could "race" to catch the lease one more time unnecessarily.
+* Fixed issue in `MongoListenerLockService` (used by competing subscription models) in which two subscribers could "race" to catch the lease one more time unnecessarily
+* Translating DataIntegrityViolationException's correctly to WriteConditionNotFulfilledException during write conflicts in `ReactorMongoEventStore`  
 * Upgraded spring-boot from 3.4.1 to 3.4.2
 * Upgraded spring-data-mongodb from 4.4.2 to 4.4.3
 * Upgraded mongodb-driver-sync from 5.3.0 to 5.3.1
