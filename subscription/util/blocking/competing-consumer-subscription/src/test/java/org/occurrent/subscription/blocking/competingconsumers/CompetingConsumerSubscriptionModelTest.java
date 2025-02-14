@@ -589,12 +589,9 @@ class CompetingConsumerSubscriptionModelTest {
         competingConsumerSubscriptionModel1.subscribe(subsciberId, subscriptionId, null, StartAt.subscriptionModelDefault(), cloudEvents::add).waitUntilStarted();
 
         NameDefined nameDefined = new NameDefined("eventId", LocalDateTime.of(2021, 2, 26, 14, 15, 16), "name", "my name");
-        CompetingConsumerSubscriptionModel.SubscriptionIdAndSubscriberId subscriptionIdAndSubscriberId = new CompetingConsumerSubscriptionModel.SubscriptionIdAndSubscriberId(subscriptionId, subsciberId);
-        CompetingConsumerSubscriptionModel.CompetingConsumer competingConsumer = new CompetingConsumerSubscriptionModel.CompetingConsumer(subscriptionIdAndSubscriberId, new CompetingConsumerSubscriptionModel.CompetingConsumerState.Running());
 
         // When
         competingConsumerSubscriptionModel1.onConsumeProhibited(subscriptionId, subsciberId);
-//        competingConsumerSubscriptionModel1.pauseConsumer(competingConsumer, false);
         competingConsumerSubscriptionModel1.resumeSubscription(subscriptionId);
         eventStore.write("streamId", serialize(nameDefined));
 

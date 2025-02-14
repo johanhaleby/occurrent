@@ -379,7 +379,7 @@ public class CompetingConsumerSubscriptionModel implements DelegatingSubscriptio
         competingConsumers.put(subscriptionIdAndSubscriberId, cc.registerPaused(pausedByUser));
     }
 
-    record SubscriptionIdAndSubscriberId(String subscriptionId, String subscriberId) {
+    private record SubscriptionIdAndSubscriberId(String subscriptionId, String subscriberId) {
 
         private static SubscriptionIdAndSubscriberId from(String subscriptionId, String subscriberId) {
             return new SubscriptionIdAndSubscriberId(subscriptionId, subscriberId);
@@ -391,7 +391,7 @@ public class CompetingConsumerSubscriptionModel implements DelegatingSubscriptio
     }
 
 
-    record CompetingConsumer(SubscriptionIdAndSubscriberId subscriptionIdAndSubscriberId, CompetingConsumerState state) {
+    private record CompetingConsumer(SubscriptionIdAndSubscriberId subscriptionIdAndSubscriberId, CompetingConsumerState state) {
 
         boolean hasId(String subscriptionId, String subscriberId) {
             return hasSubscriptionId(subscriptionId) && Objects.equals(getSubscriberId(), subscriberId);
