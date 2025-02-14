@@ -5,6 +5,7 @@
 * Upgraded spring-data-mongodb from 4.4.2 to 4.4.3
 * Upgraded mongodb-driver-sync from 5.3.0 to 5.3.1
 * Upgraded jobrunr from 7.3.2 to 7.4.0
+* Upgraded kotlin from 2.1.0 to 2.1.10
 
 ### 0.19.8 (2025-01-17)
 * Converted `org.occurrent.subscription.OccurrentSubscriptionFilter` from a Java class to a record. This means that the `public final` filter instance field is now a record property. So if you ever used `occurrentSubscriptionFilter.filter` to access the underlying filter, you now need to do `occurrentSubscriptionFilter.filter()` instead.
