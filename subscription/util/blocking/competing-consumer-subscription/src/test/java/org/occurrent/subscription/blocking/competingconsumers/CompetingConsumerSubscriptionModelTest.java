@@ -151,9 +151,8 @@ class CompetingConsumerSubscriptionModelTest {
         // Given
         CopyOnWriteArrayList<CloudEvent> cloudEvents = new CopyOnWriteArrayList<>();
 
-        SpringMongoLeaseCompetingConsumerStrategy springMongoLeaseCompetingConsumerStrategy = new SpringMongoLeaseCompetingConsumerStrategy.Builder(mongoTemplate).leaseTime(Duration.ofSeconds(1)).build();
-        competingConsumerSubscriptionModel1 = new CompetingConsumerSubscriptionModel(springSubscriptionModel1, loggingStrategy("1", springMongoLeaseCompetingConsumerStrategy));
-        competingConsumerSubscriptionModel2 = new CompetingConsumerSubscriptionModel(springSubscriptionModel2, loggingStrategy("2", springMongoLeaseCompetingConsumerStrategy));
+        competingConsumerSubscriptionModel1 = new CompetingConsumerSubscriptionModel(springSubscriptionModel1, loggingStrategy("1", new SpringMongoLeaseCompetingConsumerStrategy.Builder(mongoTemplate).leaseTime(Duration.ofSeconds(1)).build()));
+        competingConsumerSubscriptionModel2 = new CompetingConsumerSubscriptionModel(springSubscriptionModel2, loggingStrategy("2", new SpringMongoLeaseCompetingConsumerStrategy.Builder(mongoTemplate).leaseTime(Duration.ofSeconds(1)).build()));
 
         String subscriberId1 = "Subscriber1";
         String subscriberId2 = "Subscriber2";
@@ -171,8 +170,7 @@ class CompetingConsumerSubscriptionModelTest {
         // Here we simulate that consumption has been prohibited, i.e. the subscriber has lost the lock to the subscription.
         // It should regain it again automatically after one second though (because "leaseTime" is set to 1 second so the
         // competing consumer will try to regain lock after this amount of time if it's lost).
-        springMongoLeaseCompetingConsumerStrategy.releaseCompetingConsumer(subscriptionId, subscriberId1);
-        competingConsumerSubscriptionModel1.onConsumeProhibited(subscriptionId, subscriberId1);
+        new SpringMongoLeaseCompetingConsumerStrategy.Builder(mongoTemplate).leaseTime(Duration.ofSeconds(1)).build().releaseCompetingConsumer(subscriptionId, subscriberId1);
 
         eventStore.write("streamId", serialize(nameWasChanged));
 
