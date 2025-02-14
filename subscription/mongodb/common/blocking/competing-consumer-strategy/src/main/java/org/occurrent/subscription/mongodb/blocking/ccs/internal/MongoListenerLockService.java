@@ -108,8 +108,11 @@ class MongoListenerLockService {
         });
     }
 
-    static DeleteResult remove(MongoCollection<BsonDocument> collection, RetryStrategy retryStrategy, String subscriptionId) {
-        return retryStrategy.execute(() -> collection.deleteOne(eq("_id", subscriptionId)));
+    static DeleteResult remove(MongoCollection<BsonDocument> collection, RetryStrategy retryStrategy, String subscriptionId, String subscriberId) {
+        return retryStrategy.execute(() -> {
+            logDebug("Before removing lock (subscriptionId={})", subscriptionId);
+            return collection.deleteOne(and(eq("_id", subscriptionId), eq("subscriberId", subscriberId)));
+        });
     }
 
     static boolean commit(MongoCollection<BsonDocument> collection, Clock clock, RetryStrategy retryStrategy, Duration leaseTime, String subscriptionId, String subscriberId) throws LostLockException {

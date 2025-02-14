@@ -243,6 +243,7 @@ public class SpringMongoSubscriptionModel implements PositionAwareSubscriptionMo
         }
         messageListenerContainer.remove(internalSubscription.getSpringSubscription());
         pausedSubscriptions.put(subscriptionId, internalSubscription);
+        logDebug("Subscription {} paused", subscriptionId);
     }
 
     @Override
@@ -261,6 +262,7 @@ public class SpringMongoSubscriptionModel implements PositionAwareSubscriptionMo
         org.springframework.data.mongodb.core.messaging.Subscription newSubscription = registerNewSpringSubscription(subscriptionId, internalSubscription.newChangeStreamRequest());
         InternalSubscription newInternalSubscription = internalSubscription.copy(newSubscription);
         runningSubscriptions.put(subscriptionId, newInternalSubscription);
+        logDebug("Subscription {} resumed", subscriptionId);
         return new SpringMongoSubscription(subscriptionId, newSubscription);
     }
 

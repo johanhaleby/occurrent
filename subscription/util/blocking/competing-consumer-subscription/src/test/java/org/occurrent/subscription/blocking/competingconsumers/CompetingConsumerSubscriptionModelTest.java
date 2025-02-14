@@ -87,8 +87,12 @@ class CompetingConsumerSubscriptionModelTest {
 
     @AfterEach
     void shutdown() {
-        competingConsumerSubscriptionModel1.shutdown();
-        competingConsumerSubscriptionModel2.shutdown();
+        if (competingConsumerSubscriptionModel1 != null) {
+            competingConsumerSubscriptionModel1.shutdown();
+        }
+        if (competingConsumerSubscriptionModel2 != null) {
+            competingConsumerSubscriptionModel2.shutdown();
+        }
         springSubscriptionModel1.shutdown();
         springSubscriptionModel2.shutdown();
     }
@@ -143,16 +147,19 @@ class CompetingConsumerSubscriptionModelTest {
     }
 
     @Test
-    void same_consumer_can_resume_subscription_is_paused_by_system_because_consumption_prohibited() {
+    void same_consumer_can_resume_when_subscription_is_paused_by_system_because_consumption_prohibited() {
         // Given
         CopyOnWriteArrayList<CloudEvent> cloudEvents = new CopyOnWriteArrayList<>();
 
-        competingConsumerSubscriptionModel1 = new CompetingConsumerSubscriptionModel(springSubscriptionModel1, loggingStrategy("1", new SpringMongoLeaseCompetingConsumerStrategy.Builder(mongoTemplate).leaseTime(Duration.ofSeconds(1)).build()));
-        competingConsumerSubscriptionModel2 = new CompetingConsumerSubscriptionModel(springSubscriptionModel2, loggingStrategy("2", new SpringMongoLeaseCompetingConsumerStrategy.Builder(mongoTemplate).leaseTime(Duration.ofSeconds(1)).build()));
+        SpringMongoLeaseCompetingConsumerStrategy springMongoLeaseCompetingConsumerStrategy = new SpringMongoLeaseCompetingConsumerStrategy.Builder(mongoTemplate).leaseTime(Duration.ofSeconds(1)).build();
+        competingConsumerSubscriptionModel1 = new CompetingConsumerSubscriptionModel(springSubscriptionModel1, loggingStrategy("1", springMongoLeaseCompetingConsumerStrategy));
+        competingConsumerSubscriptionModel2 = new CompetingConsumerSubscriptionModel(springSubscriptionModel2, loggingStrategy("2", springMongoLeaseCompetingConsumerStrategy));
 
-        String subscriberId = UUID.randomUUID().toString();
-        String subscriptionId = UUID.randomUUID().toString();
-        competingConsumerSubscriptionModel1.subscribe(subscriberId, subscriptionId, null, StartAt.subscriptionModelDefault(), cloudEvents::add).waitUntilStarted();
+        String subscriberId1 = "Subscriber1";
+        String subscriberId2 = "Subscriber2";
+        String subscriptionId = "MySubscription";
+        competingConsumerSubscriptionModel1.subscribe(subscriberId1, subscriptionId, null, StartAt.subscriptionModelDefault(), cloudEvents::add).waitUntilStarted();
+        competingConsumerSubscriptionModel2.subscribe(subscriberId2, subscriptionId, null, StartAt.subscriptionModelDefault(), cloudEvents::add).waitUntilStarted();
 
         NameDefined nameDefined = new NameDefined("eventId1", LocalDateTime.of(2021, 2, 26, 14, 15, 16), "name", "my name");
         NameWasChanged nameWasChanged = new NameWasChanged("eventId2", LocalDateTime.of(2021, 2, 26, 14, 15, 16), "name", "my name");
@@ -164,7 +171,8 @@ class CompetingConsumerSubscriptionModelTest {
         // Here we simulate that consumption has been prohibited, i.e. the subscriber has lost the lock to the subscription.
         // It should regain it again automatically after one second though (because "leaseTime" is set to 1 second so the
         // competing consumer will try to regain lock after this amount of time if it's lost).
-        competingConsumerSubscriptionModel1.onConsumeProhibited(subscriptionId, subscriberId);
+        springMongoLeaseCompetingConsumerStrategy.releaseCompetingConsumer(subscriptionId, subscriberId1);
+        competingConsumerSubscriptionModel1.onConsumeProhibited(subscriptionId, subscriberId1);
 
         eventStore.write("streamId", serialize(nameWasChanged));
 
@@ -568,7 +576,34 @@ class CompetingConsumerSubscriptionModelTest {
         await().untilAsserted(() -> assertThat(cloudEventsSubscription1).hasSize(2));
         await().untilAsserted(() -> assertThat(cloudEventsSubscription2).hasSize(1));
     }
-    
+
+    @Test
+    void only_one_consumer_receives_event_when_starting543543() throws InterruptedException {
+        // Given
+        CopyOnWriteArrayList<CloudEvent> cloudEvents = new CopyOnWriteArrayList<>();
+
+        competingConsumerSubscriptionModel1 = new CompetingConsumerSubscriptionModel(springSubscriptionModel1, loggingStrategy("1", mongoTemplate));
+
+        String subscriptionId = "MySubscription";
+        String subsciberId = "subsciberId";
+        competingConsumerSubscriptionModel1.subscribe(subsciberId, subscriptionId, null, StartAt.subscriptionModelDefault(), cloudEvents::add).waitUntilStarted();
+
+        NameDefined nameDefined = new NameDefined("eventId", LocalDateTime.of(2021, 2, 26, 14, 15, 16), "name", "my name");
+        CompetingConsumerSubscriptionModel.SubscriptionIdAndSubscriberId subscriptionIdAndSubscriberId = new CompetingConsumerSubscriptionModel.SubscriptionIdAndSubscriberId(subscriptionId, subsciberId);
+        CompetingConsumerSubscriptionModel.CompetingConsumer competingConsumer = new CompetingConsumerSubscriptionModel.CompetingConsumer(subscriptionIdAndSubscriberId, new CompetingConsumerSubscriptionModel.CompetingConsumerState.Running());
+
+        // When
+        competingConsumerSubscriptionModel1.onConsumeProhibited(subscriptionId, subsciberId);
+//        competingConsumerSubscriptionModel1.pauseConsumer(competingConsumer, false);
+        competingConsumerSubscriptionModel1.resumeSubscription(subscriptionId);
+        eventStore.write("streamId", serialize(nameDefined));
+
+        // Then
+        Thread.sleep(1000);
+        assertThat(cloudEvents).hasSize(1);
+    }
+
+
     private Stream<CloudEvent> serialize(DomainEvent e) {
         return Stream.of(CloudEventBuilder.v1()
                 .withId(e.eventId())

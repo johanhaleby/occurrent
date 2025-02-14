@@ -166,7 +166,7 @@ public class CompetingConsumerSubscriptionModel implements DelegatingSubscriptio
      */
     @Override
     public boolean isRunning() {
-        return delegate.isRunning();
+        return getDelegatedSubscriptionModel().isRunning();
     }
 
     /**
@@ -174,7 +174,7 @@ public class CompetingConsumerSubscriptionModel implements DelegatingSubscriptio
      */
     @Override
     public boolean isRunning(String subscriptionId) {
-        return delegate.isRunning(subscriptionId);
+        return getDelegatedSubscriptionModel().isRunning(subscriptionId);
     }
 
     /**
@@ -278,7 +278,7 @@ public class CompetingConsumerSubscriptionModel implements DelegatingSubscriptio
                 logDebug("CompetingConsumer in waiting state, will ignore (subscriptionId={}, subscriberId={}, pausedByUser={})", subscriptionId, competingConsumer.getSubscriberId(), pausedByUser);
             } else {
                 delegate.pauseSubscription(subscriptionId);
-                competingConsumers.put(SubscriptionIdAndSubscriberId.from(competingConsumer), competingConsumer.registerPaused(pausedByUser));
+                pauseConsumer(competingConsumer, pausedByUser);
                 if (pausedByUser) {
                     logDebug("Will unregister competing consumer because subscription was paused explicitly by user (subscriptionId={}, subscriberId={})", subscriptionId, competingConsumer.getSubscriberId());
                     // If subscription is paused by user explicitly, then the user needs to resume it again explicitly to start it.
@@ -350,12 +350,17 @@ public class CompetingConsumerSubscriptionModel implements DelegatingSubscriptio
 
         if (competingConsumer.isRunning()) {
             logDebug("CompetingConsumer is running, will pause subscription and consumers (subscriberId={}, subscriptionId={})", subscriberId, subscriptionId);
+            // We pause the entire subscription. The reason for this is that we don't want this instance to subscribe to any events at all.
+            // If we don't do this, events will still be sent to the instance. Also, we make use of the "subscription position" when resuming the
+            // subscription later. If we had not paused the subscription this could happen:
+            // 1. Subscriber 1 loses lock
+            // 2. An event is published (A)
+            // 3. Subscriber 2 doesn't have lock yet
+            // 4. When we detect that no one has the lock, we resume the subscriber (say Subscriber 2), but now it's too late because we've missed A.
+            // This also make sense since there can only be one subscription with the same id for the same CatchupSubscriptionModel instance.
             pauseSubscription(subscriptionId, false);
-            pauseConsumer(competingConsumer, false);
         } else if (competingConsumer.isPaused()) {
-            logDebug("CompetingConsumer is paused (subscriberId={}, subscriptionId={})", subscriberId, subscriptionId);
-            CompetingConsumerState.Paused paused = (CompetingConsumerState.Paused) competingConsumer.state;
-            pauseConsumer(competingConsumer, paused.pausedByUser);
+            logDebug("CompetingConsumer is already paused, won't do anything (subscriberId={}, subscriptionId={})", subscriberId, subscriptionId);
         } else {
             logDebug("CompetingConsumer is neither running nor paused, won't do anything (subscriberId={}, subscriptionId={}, state={})", subscriberId, subscriptionId, competingConsumer.state.getClass().getSimpleName());
         }
@@ -368,13 +373,13 @@ public class CompetingConsumerSubscriptionModel implements DelegatingSubscriptio
         return ((CompetingConsumerState.Waiting) cc.state).startSubscription();
     }
 
-    private void pauseConsumer(CompetingConsumer cc, boolean pausedByUser) {
+    void pauseConsumer(CompetingConsumer cc, boolean pausedByUser) {
         logDebug("Pausing CompetingConsumer (subscriberId={}, subscriptionId={}, pausedByUser={})", cc.getSubscriberId(), cc.getSubscriptionId(), pausedByUser);
-        SubscriptionIdAndSubscriberId subscriptionIdAndSubscriberId = SubscriptionIdAndSubscriberId.from(cc.getSubscriptionId(), cc.getSubscriberId());
+        SubscriptionIdAndSubscriberId subscriptionIdAndSubscriberId = SubscriptionIdAndSubscriberId.from(cc);
         competingConsumers.put(subscriptionIdAndSubscriberId, cc.registerPaused(pausedByUser));
     }
 
-    private record SubscriptionIdAndSubscriberId(String subscriptionId, String subscriberId) {
+    record SubscriptionIdAndSubscriberId(String subscriptionId, String subscriberId) {
 
         private static SubscriptionIdAndSubscriberId from(String subscriptionId, String subscriberId) {
             return new SubscriptionIdAndSubscriberId(subscriptionId, subscriberId);
@@ -386,7 +391,7 @@ public class CompetingConsumerSubscriptionModel implements DelegatingSubscriptio
     }
 
 
-    private record CompetingConsumer(SubscriptionIdAndSubscriberId subscriptionIdAndSubscriberId, CompetingConsumerState state) {
+    record CompetingConsumer(SubscriptionIdAndSubscriberId subscriptionIdAndSubscriberId, CompetingConsumerState state) {
 
         boolean hasId(String subscriptionId, String subscriberId) {
             return hasSubscriptionId(subscriptionId) && Objects.equals(getSubscriberId(), subscriberId);
@@ -433,7 +438,7 @@ public class CompetingConsumerSubscriptionModel implements DelegatingSubscriptio
         }
     }
 
-    private sealed interface CompetingConsumerState {
+    sealed interface CompetingConsumerState {
 
         boolean hasPermissionToConsume();
 

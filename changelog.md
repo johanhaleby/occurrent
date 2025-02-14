@@ -1,5 +1,6 @@
 ### Next version
 * Added toString() to subscription models for better debug output
+* Fixed issue in `MongoListenerLockService` (used by competing subscription models) in which two subscribers could "race" to catch the lease one more time unnecessarily.   
 
 ### 0.19.8 (2025-01-17)
 * Converted `org.occurrent.subscription.OccurrentSubscriptionFilter` from a Java class to a record. This means that the `public final` filter instance field is now a record property. So if you ever used `occurrentSubscriptionFilter.filter` to access the underlying filter, you now need to do `occurrentSubscriptionFilter.filter()` instead.

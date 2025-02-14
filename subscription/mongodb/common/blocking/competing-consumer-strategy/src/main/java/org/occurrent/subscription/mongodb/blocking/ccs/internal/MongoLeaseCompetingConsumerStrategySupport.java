@@ -29,10 +29,10 @@ import org.slf4j.LoggerFactory;
 import java.time.Clock;
 import java.time.Duration;
 import java.util.Collections;
-import java.util.Map;
 import java.util.Objects;
 import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.ConcurrentMap;
 import java.util.function.Consumer;
 import java.util.function.Function;
 
@@ -48,7 +48,7 @@ public class MongoLeaseCompetingConsumerStrategySupport {
     private final Clock clock;
     private final Duration leaseTime;
     private final ScheduledRefresh scheduledRefresh;
-    private final Map<CompetingConsumer, Status> competingConsumers;
+    private final ConcurrentMap<CompetingConsumer, Status> competingConsumers;
     private final Set<CompetingConsumerListener> competingConsumerListeners;
     private final RetryStrategy retryStrategy;
 
@@ -142,9 +142,12 @@ public class MongoLeaseCompetingConsumerStrategySupport {
             logDebug("Failed to find consumer status (subscriberId={}, subscriptionId={})", subscriberId, subscriptionId);
             return;
         }
-        MongoListenerLockService.remove(collection, retryStrategy, subscriptionId);
+        MongoListenerLockService.remove(collection, retryStrategy, subscriptionId, subscriberId);
         if (status == Status.LOCK_ACQUIRED) {
+            logDebug("Lock status was {}, will invoke onConsumeProhibited for listeners (subscriberId={}, subscriptionId={})", status, subscriberId, subscriptionId);
             competingConsumerListeners.forEach(listener -> listener.onConsumeProhibited(subscriptionId, subscriberId));
+        } else {
+            logDebug("Lock status was {}, will NOT invoke onConsumeProhibited for listeners (subscriberId={}, subscriptionId={})", status, subscriberId, subscriptionId);
         }
     }
 
