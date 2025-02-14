@@ -1,3 +1,6 @@
+### Next version
+* Upgraded logback from 1.5.6 to 1.5.16
+
 ### 0.19.9 (2025-02-14)
 * Added toString() to subscription models for better debug output
 * Fixed issue in `MongoListenerLockService` (used by competing subscription models) in which two subscribers could "race" to catch the lease one more time unnecessarily
