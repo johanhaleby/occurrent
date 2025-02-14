@@ -29,6 +29,7 @@ import org.occurrent.subscription.api.blocking.SubscriptionModel;
 import org.occurrent.subscription.internal.ExecutorShutdown;
 
 import java.util.List;
+import java.util.StringJoiner;
 import java.util.concurrent.*;
 import java.util.function.Consumer;
 import java.util.function.Supplier;
@@ -218,5 +219,18 @@ public class InMemorySubscriptionModel implements SubscriptionModel, Consumer<St
             throw new IllegalArgumentException("Subscription " + subscriptionId + " is not running");
         }
         pausedSubscriptions.put(subscriptionId, true);
+    }
+
+    @Override
+    public String toString() {
+        return new StringJoiner(", ", InMemorySubscriptionModel.class.getSimpleName() + "[", "]")
+                .add("subscriptions=" + subscriptions)
+                .add("pausedSubscriptions=" + pausedSubscriptions)
+                .add("cloudEventDispatcher=" + cloudEventDispatcher)
+                .add("retryStrategy=" + retryStrategy)
+                .add("queueSupplier=" + queueSupplier)
+                .add("shutdown=" + shutdown)
+                .add("running=" + running)
+                .toString();
     }
 }

@@ -512,4 +512,14 @@ public class CompetingConsumerSubscriptionModel implements DelegatingSubscriptio
             log.debug(message, params);
         }
     }
+
+    @Override
+    public String toString() {
+        return new StringJoiner(", ", CompetingConsumerSubscriptionModel.class.getSimpleName() + "[", "]")
+                .add("delegate=" + delegate)
+                .add("competingConsumerStrategy=" + competingConsumerStrategy)
+                .add("competingConsumers=" + competingConsumers)
+                .add("nonCompetingConsumersSubscriptions=" + nonCompetingConsumersSubscriptions)
+                .toString();
+    }
 }

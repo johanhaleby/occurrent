@@ -25,6 +25,7 @@ import org.occurrent.subscription.SubscriptionPosition;
 import org.occurrent.subscription.api.blocking.*;
 
 import java.util.Objects;
+import java.util.StringJoiner;
 import java.util.function.Consumer;
 
 import static java.util.Objects.requireNonNull;
@@ -186,5 +187,14 @@ public class DurableSubscriptionModel implements PositionAwareSubscriptionModel,
     @Override
     public PositionAwareSubscriptionModel getDelegatedSubscriptionModel() {
         return subscriptionModel;
+    }
+
+    @Override
+    public String toString() {
+        return new StringJoiner(", ", DurableSubscriptionModel.class.getSimpleName() + "[", "]")
+                .add("subscriptionModel=" + subscriptionModel)
+                .add("storage=" + storage)
+                .add("config=" + config)
+                .toString();
     }
 }

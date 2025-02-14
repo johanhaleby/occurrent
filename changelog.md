@@ -1,3 +1,6 @@
+### Next version
+* Added toString() to subscription models for better debug output
+
 ### 0.19.8 (2025-01-17)
 * Converted `org.occurrent.subscription.OccurrentSubscriptionFilter` from a Java class to a record. This means that the `public final` filter instance field is now a record property. So if you ever used `occurrentSubscriptionFilter.filter` to access the underlying filter, you now need to do `occurrentSubscriptionFilter.filter()` instead.
 * Fixed a bug in MongoLeaseCompetingConsumerStrategySupport in which it was not marked a running on start. This could affect retries of certain competing consumer errors.

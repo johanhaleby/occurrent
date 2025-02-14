@@ -30,10 +30,7 @@ import org.occurrent.subscription.blocking.durable.catchup.SubscriptionPositionS
 
 import java.time.Duration;
 import java.time.OffsetDateTime;
-import java.util.LinkedHashMap;
-import java.util.Map;
-import java.util.Objects;
-import java.util.Optional;
+import java.util.*;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ConcurrentMap;
@@ -459,5 +456,16 @@ public class CatchupSubscriptionModel implements SubscriptionModel, DelegatingSu
         public boolean waitUntilStarted(Duration timeout) {
             return true;
         }
+    }
+
+    @Override
+    public String toString() {
+        return new StringJoiner(", ", CatchupSubscriptionModel.class.getSimpleName() + "[", "]")
+                .add("subscriptionModel=" + subscriptionModel)
+                .add("eventStoreQueries=" + eventStoreQueries)
+                .add("config=" + config)
+                .add("runningCatchupSubscriptions=" + runningCatchupSubscriptions)
+                .add("shuttingDown=" + shuttingDown)
+                .toString();
     }
 }

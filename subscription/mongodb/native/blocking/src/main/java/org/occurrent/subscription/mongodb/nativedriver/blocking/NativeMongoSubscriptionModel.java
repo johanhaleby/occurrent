@@ -53,6 +53,7 @@ import java.time.Duration;
 import java.util.Collections;
 import java.util.List;
 import java.util.Objects;
+import java.util.StringJoiner;
 import java.util.concurrent.*;
 import java.util.function.Consumer;
 import java.util.function.Predicate;
@@ -393,5 +394,21 @@ public class NativeMongoSubscriptionModel implements PositionAwareSubscriptionMo
                 log.error("Failed to cancel subscription, this might happen if Mongo connection has been shutdown", e);
             }
         }
+    }
+
+    @Override
+    public String toString() {
+        return new StringJoiner(", ", NativeMongoSubscriptionModel.class.getSimpleName() + "[", "]")
+                .add("eventCollection=" + eventCollection)
+                .add("runningSubscriptions=" + runningSubscriptions)
+                .add("pausedSubscriptions=" + pausedSubscriptions)
+                .add("timeRepresentation=" + timeRepresentation)
+                .add("cloudEventDispatcher=" + cloudEventDispatcher)
+                .add("retryStrategy=" + retryStrategy)
+                .add("database=" + database)
+                .add("shutdown=" + shutdown)
+                .add("running=" + running)
+                .add("NOT_SHUTDOWN=" + NOT_SHUTDOWN)
+                .toString();
     }
 }
