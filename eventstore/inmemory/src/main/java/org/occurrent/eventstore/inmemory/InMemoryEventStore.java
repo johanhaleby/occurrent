@@ -35,8 +35,10 @@ import org.occurrent.filter.Filter;
 import org.occurrent.functionalsupport.internal.FunctionalSupport.Pair;
 
 import java.net.URI;
+import java.time.OffsetDateTime;
 import java.util.*;
 import java.util.Map.Entry;
+import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.atomic.AtomicLong;
 import java.util.concurrent.atomic.AtomicReference;
 import java.util.function.Consumer;
@@ -49,6 +51,7 @@ import java.util.stream.StreamSupport;
 
 import static io.cloudevents.core.v1.CloudEventV1.*;
 import static java.util.Comparator.comparing;
+import static java.util.Comparator.nullsFirst;
 import static java.util.Objects.requireNonNull;
 import static java.util.Spliterators.spliteratorUnknownSize;
 import static java.util.function.Predicate.not;
@@ -67,7 +70,7 @@ import static org.occurrent.inmemory.filtermatching.FilterMatcher.matchesFilter;
 public class InMemoryEventStore implements EventStore, EventStoreOperations, EventStoreQueries {
 
     // We cannot use ConcurrentMap since it doesn't maintain insertion order
-    private final Map<String, List<CloudEvent>> state = Collections.synchronizedMap(new LinkedHashMap<>());
+    private final Map<String, CopyOnWriteArrayList<CloudEvent>> state = Collections.synchronizedMap(new LinkedHashMap<>());
 
     private final Consumer<Stream<CloudEvent>> listener;
 
@@ -122,16 +125,16 @@ public class InMemoryEventStore implements EventStore, EventStoreOperations, Eve
                 List<CloudEvent> cloudEvents = applyOccurrentCloudEventExtension(cloudEventStream, streamId, 0);
                 newCloudEvents.set(cloudEvents);
                 validateNoDuplicateEventExists(cloudEvents);
-                return cloudEvents;
+                return new CopyOnWriteArrayList<>(cloudEvents);
             } else if (currentEvents != null && isConditionFulfilledBy(writeCondition, currentStreamVersion)) {
                 List<CloudEvent> eventList = new ArrayList<>(currentEvents);
                 List<CloudEvent> newEvents = applyOccurrentCloudEventExtension(cloudEventStream, streamId, currentStreamVersion);
                 eventList.addAll(newEvents);
                 validateNoDuplicateEventExists(eventList);
                 newCloudEvents.set(newEvents);
-                return eventList;
+                return new CopyOnWriteArrayList<>(eventList);
             } else {
-                throw new WriteConditionNotFulfilledException(streamId, currentStreamVersion, writeCondition, String.format("%s was not fulfilled. Expected version %s but was %s.", WriteCondition.class.getSimpleName(), writeCondition.toString(), currentStreamVersion));
+                throw new WriteConditionNotFulfilledException(streamId, currentStreamVersion, writeCondition, String.format("%s was not fulfilled. Expected version %s but was %s.", WriteCondition.class.getSimpleName(), writeCondition, currentStreamVersion));
             }
         });
 
@@ -181,11 +184,10 @@ public class InMemoryEventStore implements EventStore, EventStoreOperations, Eve
             return true;
         }
 
-        if (!(writeCondition instanceof StreamVersionWriteCondition)) {
+        if (!(writeCondition instanceof StreamVersionWriteCondition c)) {
             return false;
         }
 
-        StreamVersionWriteCondition c = (StreamVersionWriteCondition) writeCondition;
         return LongConditionEvaluator.evaluate(c.condition(), version);
     }
 
@@ -205,7 +207,7 @@ public class InMemoryEventStore implements EventStore, EventStoreOperations, Eve
         }
 
         state.computeIfPresent(streamId, (__, events) -> {
-            List<CloudEvent> newEvents = events.stream().filter(cloudEventMatchesInput.negate()).collect(Collectors.toList());
+            CopyOnWriteArrayList<CloudEvent> newEvents = events.stream().filter(cloudEventMatchesInput.negate()).collect(Collectors.toCollection(CopyOnWriteArrayList::new));
             if (newEvents.isEmpty()) {
                 return null;
             }
@@ -220,7 +222,7 @@ public class InMemoryEventStore implements EventStore, EventStoreOperations, Eve
     @Override
     public void delete(Filter filter) {
         requireNonNull(filter, "Filter cannot be null");
-        state.replaceAll((streamId, cloudEvents) -> cloudEvents.stream().filter(not(cloudEvent -> matchesFilter(cloudEvent, filter))).collect(Collectors.toList()));
+        state.replaceAll((streamId, cloudEvents) -> cloudEvents.stream().filter(not(cloudEvent -> matchesFilter(cloudEvent, filter))).collect(Collectors.toCollection(CopyOnWriteArrayList::new)));
     }
 
     @Override
@@ -240,7 +242,7 @@ public class InMemoryEventStore implements EventStore, EventStoreOperations, Eve
                             } else {
                                 return cloudEvent;
                             }
-                        }).collect(Collectors.toList())))
+                        }).collect(Collectors.toCollection(CopyOnWriteArrayList::new))))
                 .flatMap(events -> events.stream().filter(cloudEventPredicate).findFirst());
     }
 
@@ -337,8 +339,7 @@ public class InMemoryEventStore implements EventStore, EventStoreOperations, Eve
         @Override
         public boolean equals(Object o) {
             if (this == o) return true;
-            if (!(o instanceof EventStreamImpl)) return false;
-            EventStreamImpl that = (EventStreamImpl) o;
+            if (!(o instanceof EventStreamImpl that)) return false;
             return version == that.version &&
                     Objects.equals(streamId, that.streamId) &&
                     Objects.equals(events, that.events);
@@ -415,41 +416,19 @@ public class InMemoryEventStore implements EventStore, EventStoreOperations, Eve
 
     private static Comparator<CloudEvent> toComparator(SingleFieldImpl singleField) {
         String fieldName = singleField.fieldName;
-        final Comparator<CloudEvent> comparator;
-        switch (fieldName) {
-            case TIME:
-                comparator = comparing(CloudEvent::getTime);
-                break;
-            case STREAM_VERSION:
-                comparator = comparing(OccurrentExtensionGetter::getStreamVersion);
-                break;
-            case STREAM_ID:
-                comparator = comparing(OccurrentExtensionGetter::getStreamId);
-                break;
-            case ID:
-                comparator = comparing(CloudEvent::getId);
-                break;
-            case SOURCE:
-                comparator = comparing(CloudEvent::getSource);
-                break;
-            case SUBJECT:
-                comparator = comparing(CloudEvent::getSubject);
-                break;
-            case TYPE:
-                comparator = comparing(CloudEvent::getType);
-                break;
-            case SPECVERSION:
-                comparator = comparing(CloudEvent::getSpecVersion);
-                break;
-            case DATACONTENTTYPE:
-                comparator = comparing(CloudEvent::getDataContentType);
-                break;
-            case DATASCHEMA:
-                comparator = comparing(CloudEvent::getDataSchema);
-                break;
-            default:
-                throw new IllegalStateException("Unexpected value: " + fieldName);
-        }
+        final Comparator<CloudEvent> comparator = switch (fieldName) {
+            case TIME -> comparing(CloudEvent::getTime, nullsFirst(OffsetDateTime::compareTo));
+            case STREAM_VERSION -> comparing(OccurrentExtensionGetter::getStreamVersion);
+            case STREAM_ID -> comparing(OccurrentExtensionGetter::getStreamId);
+            case ID -> comparing(CloudEvent::getId);
+            case SOURCE -> comparing(CloudEvent::getSource);
+            case SUBJECT -> comparing(CloudEvent::getSubject, nullsFirst(String::compareTo));
+            case TYPE -> comparing(CloudEvent::getType);
+            case SPECVERSION -> comparing(CloudEvent::getSpecVersion);
+            case DATACONTENTTYPE -> comparing(CloudEvent::getDataContentType, nullsFirst(String::compareTo));
+            case DATASCHEMA -> comparing(CloudEvent::getDataSchema, nullsFirst(URI::compareTo));
+            default -> throw new IllegalStateException("Unexpected value: " + fieldName);
+        };
 
         if (singleField.direction == ASCENDING) {
             return comparator;

@@ -1,6 +1,7 @@
 ### Next version
 * Upgraded logback from 1.5.6 to 1.5.16
 * Fixed issue in CompetingConsumerSubscriptionModel in which the model could be started automatically if consumption was granted, even though it was explicitly stopped
+* Fixed ConcurrentModificationException's that could occur when doing queries and writing at the same time to an `InMemoryEventStore` instance 
 
 ### 0.19.9 (2025-02-14)
 * Added toString() to subscription models for better debug output
