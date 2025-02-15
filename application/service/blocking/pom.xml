@@ -19,7 +19,7 @@
     <parent>
         <artifactId>application-service</artifactId>
         <groupId>org.occurrent</groupId>
-        <version>0.19.10-SNAPSHOT</version>
+        <version>0.19.10</version>
     </parent>
     <modelVersion>4.0.0</modelVersion>
 
@@ -29,17 +29,17 @@
         <dependency>
             <groupId>org.occurrent</groupId>
             <artifactId>eventstore-api-blocking</artifactId>
-            <version>0.19.10-SNAPSHOT</version>
+            <version>0.19.10</version>
         </dependency>
         <dependency>
             <groupId>org.occurrent</groupId>
             <artifactId>cloudevent-converter-api</artifactId>
-            <version>0.19.10-SNAPSHOT</version>
+            <version>0.19.10</version>
         </dependency>
         <dependency>
             <groupId>org.occurrent</groupId>
             <artifactId>retry</artifactId>
-            <version>0.19.10-SNAPSHOT</version>
+            <version>0.19.10</version>
         </dependency>
         <dependency>
             <groupId>org.jetbrains.kotlin</groupId>
@@ -51,13 +51,13 @@
         <dependency>
             <groupId>org.occurrent</groupId>
             <artifactId>command-composition</artifactId>
-            <version>0.19.10-SNAPSHOT</version>
+            <version>0.19.10</version>
             <scope>test</scope>
         </dependency>
         <dependency>
             <groupId>org.occurrent</groupId>
             <artifactId>eventstore-inmemory</artifactId>
-            <version>0.19.10-SNAPSHOT</version>
+            <version>0.19.10</version>
             <scope>test</scope>
         </dependency>
         <dependency>
@@ -78,7 +78,7 @@
         <dependency>
             <groupId>org.occurrent</groupId>
             <artifactId>test-support</artifactId>
-            <version>0.19.10-SNAPSHOT</version>
+            <version>0.19.10</version>
             <scope>test</scope>
         </dependency>
         <dependency>
@@ -89,7 +89,7 @@
         <dependency>
             <groupId>org.occurrent</groupId>
             <artifactId>cloudevent-converter-generic</artifactId>
-            <version>0.19.10-SNAPSHOT</version>
+            <version>0.19.10</version>
             <scope>test</scope>
         </dependency>
     </dependencies>
