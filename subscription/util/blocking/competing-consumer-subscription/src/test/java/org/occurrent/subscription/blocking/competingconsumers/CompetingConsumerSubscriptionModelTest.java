@@ -8,6 +8,7 @@ import io.cloudevents.CloudEvent;
 import io.cloudevents.core.builder.CloudEventBuilder;
 import io.github.artsok.RepeatedIfExceptionsTest;
 import org.assertj.core.groups.Tuple;
+import org.jetbrains.annotations.Nullable;
 import org.junit.jupiter.api.*;
 import org.junit.jupiter.api.DisplayNameGenerator.ReplaceUnderscores;
 import org.junit.jupiter.api.extension.RegisterExtension;
@@ -48,6 +49,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.groups.Tuple.tuple;
 import static org.awaitility.Awaitility.await;
 import static org.occurrent.functional.CheckedFunction.unchecked;
+import static org.occurrent.subscription.mongodb.blocking.ccs.internal.MongoLeaseCompetingConsumerStrategySupport.DEFAULT_COMPETING_CONSUMER_LOCKS_COLLECTION;
 import static org.occurrent.time.TimeConversion.toLocalDateTime;
 
 @Testcontainers
@@ -541,6 +543,43 @@ class CompetingConsumerSubscriptionModelTest {
     }
 
     @Test
+    void it_is_possible_to_stop_and_start_a_CompetingConsumerSubscriptionModel_when_some_subscriptions_are_blocked_and_lease_time_is_low() throws InterruptedException {
+        // Given
+        CopyOnWriteArrayList<CloudEvent> cloudEventsSubscription1 = new CopyOnWriteArrayList<>();
+        CopyOnWriteArrayList<CloudEvent> cloudEventsSubscription2 = new CopyOnWriteArrayList<>();
+
+        competingConsumerSubscriptionModel1 = new CompetingConsumerSubscriptionModel(springSubscriptionModel1, loggingStrategy("1", mongoTemplate, Duration.ofMillis(500)));
+        competingConsumerSubscriptionModel2 = new CompetingConsumerSubscriptionModel(springSubscriptionModel2, loggingStrategy("2", mongoTemplate, Duration.ofMillis(500)));
+
+        String subscriberId1 = "SubscriberId1";
+        String subscriberId2 = "SubscriberId2";
+        String subscriptionId1 = "SubscriptionId1";
+        String subscriptionId2 = "SubscriptionId2";
+        competingConsumerSubscriptionModel1.subscribe(subscriberId1, subscriptionId1, null, StartAt.subscriptionModelDefault(), cloudEventsSubscription1::add).waitUntilStarted();
+        competingConsumerSubscriptionModel2.subscribe(subscriberId2, subscriptionId1, null, StartAt.subscriptionModelDefault(), cloudEventsSubscription1::add).waitUntilStarted();
+
+        competingConsumerSubscriptionModel1.subscribe(subscriptionId2, cloudEventsSubscription2::add).waitUntilStarted();
+        competingConsumerSubscriptionModel2.subscribe(subscriptionId2, cloudEventsSubscription2::add).waitUntilStarted();
+
+        NameDefined nameDefined = new NameDefined("eventId", LocalDateTime.of(2021, 2, 26, 14, 15, 16), "name", "my name");
+
+        // When
+        competingConsumerSubscriptionModel1.stop();
+        competingConsumerSubscriptionModel2.stop();
+
+        competingConsumerSubscriptionModel1.start();
+        competingConsumerSubscriptionModel2.start();
+
+        eventStore.write("streamId", serialize(nameDefined));
+
+        // Then
+        await().failFast("cloudEventsSubscription1 should never have more than 1 event", () -> cloudEventsSubscription1.size() > 1)
+               .untilAsserted(() -> assertThat(cloudEventsSubscription1).hasSize(1));
+        await().failFast("cloudEventsSubscription2 should never have more than 1 event", () -> cloudEventsSubscription2.size() > 1)
+               .untilAsserted(() -> assertThat(cloudEventsSubscription2).hasSize(1));
+    }
+
+    @Test
     void it_is_possible_to_pause_and_resume_a_CompetingConsumerSubscriptionModel_when_some_subscriptions_are_blocked() {
         // Given
         CopyOnWriteArrayList<CloudEvent> cloudEventsSubscription1 = new CopyOnWriteArrayList<>();
@@ -576,26 +615,96 @@ class CompetingConsumerSubscriptionModelTest {
     }
 
     @Test
-    void only_one_consumer_receives_event_when_starting543543() throws InterruptedException {
+    void can_resume_after_consume_prohibited() {
         // Given
         CopyOnWriteArrayList<CloudEvent> cloudEvents = new CopyOnWriteArrayList<>();
 
         competingConsumerSubscriptionModel1 = new CompetingConsumerSubscriptionModel(springSubscriptionModel1, loggingStrategy("1", mongoTemplate));
 
         String subscriptionId = "MySubscription";
-        String subsciberId = "subsciberId";
-        competingConsumerSubscriptionModel1.subscribe(subsciberId, subscriptionId, null, StartAt.subscriptionModelDefault(), cloudEvents::add).waitUntilStarted();
+        String subscriberId = "subscriberId";
+        competingConsumerSubscriptionModel1.subscribe(subscriberId, subscriptionId, null, StartAt.subscriptionModelDefault(), cloudEvents::add).waitUntilStarted();
 
         NameDefined nameDefined = new NameDefined("eventId", LocalDateTime.of(2021, 2, 26, 14, 15, 16), "name", "my name");
 
         // When
-        competingConsumerSubscriptionModel1.onConsumeProhibited(subscriptionId, subsciberId);
+        competingConsumerSubscriptionModel1.onConsumeProhibited(subscriptionId, subscriberId);
         competingConsumerSubscriptionModel1.resumeSubscription(subscriptionId);
         eventStore.write("streamId", serialize(nameDefined));
 
         // Then
-        Thread.sleep(1000);
-        assertThat(cloudEvents).hasSize(1);
+        await().untilAsserted(() -> assertThat(cloudEvents).hasSize(1));
+    }
+
+    @Test
+    void can_resume_after_consume_prohibited_when_subscription_has_multiple_consumers() {
+        // Given
+        CopyOnWriteArrayList<CloudEvent> cloudEvents = new CopyOnWriteArrayList<>();
+
+        competingConsumerSubscriptionModel1 = new CompetingConsumerSubscriptionModel(springSubscriptionModel1, loggingStrategy("1", mongoTemplate));
+        competingConsumerSubscriptionModel2 = new CompetingConsumerSubscriptionModel(springSubscriptionModel2, loggingStrategy("2", mongoTemplate));
+
+        String subscriptionId1 = "MySubscription1";
+        String subscriberId1 = "subscriberId1";
+        String subscriptionId2 = "MySubscription2";
+        String subscriberId2 = "subscriberId2";
+        competingConsumerSubscriptionModel1.subscribe(subscriberId1, subscriptionId1, null, StartAt.subscriptionModelDefault(), cloudEvents::add).waitUntilStarted();
+        competingConsumerSubscriptionModel1.subscribe(subscriberId2, subscriptionId2, null, StartAt.subscriptionModelDefault(), cloudEvents::add).waitUntilStarted();
+        competingConsumerSubscriptionModel2.subscribe(UUID.randomUUID().toString(), subscriptionId1, null, StartAt.subscriptionModelDefault(), cloudEvents::add).waitUntilStarted();
+
+        NameDefined nameDefined = new NameDefined("eventId", LocalDateTime.of(2021, 2, 26, 14, 15, 16), "name", "my name");
+
+        // When
+        competingConsumerSubscriptionModel1.onConsumeProhibited(subscriptionId1, subscriberId1);
+        eventStore.write("streamId", serialize(nameDefined));
+
+        // Then
+        await().untilAsserted(() -> assertThat(cloudEvents).hasSize(1));
+    }
+
+    @Test
+    void can_resume_after_lock_document_removed() {
+        // Given
+        CopyOnWriteArrayList<CloudEvent> cloudEvents = new CopyOnWriteArrayList<>();
+
+        competingConsumerSubscriptionModel1 = new CompetingConsumerSubscriptionModel(springSubscriptionModel1, loggingStrategy("1", mongoTemplate));
+
+        String subscriptionId1 = "MySubscription1";
+        String subscriberId1 = "subscriberId1";
+        competingConsumerSubscriptionModel1.subscribe(subscriberId1, subscriptionId1, null, StartAt.subscriptionModelDefault(), cloudEvents::add).waitUntilStarted();
+
+        NameDefined nameDefined = new NameDefined("eventId", LocalDateTime.of(2021, 2, 26, 14, 15, 16), "name", "my name");
+
+        mongoTemplate.getCollection(DEFAULT_COMPETING_CONSUMER_LOCKS_COLLECTION).drop();
+
+        // When
+        eventStore.write("streamId", serialize(nameDefined));
+
+        // Then
+        await().untilAsserted(() -> assertThat(cloudEvents).hasSize(1));
+    }
+
+
+    @Test
+    void on_consume_granted_is_idempotent_when_already_running() {
+        // Given
+        CopyOnWriteArrayList<CloudEvent> cloudEvents = new CopyOnWriteArrayList<>();
+
+        competingConsumerSubscriptionModel1 = new CompetingConsumerSubscriptionModel(springSubscriptionModel1, loggingStrategy("1", mongoTemplate));
+
+        String subscriptionId1 = "MySubscription1";
+        String subscriberId1 = "subscriberId1";
+        competingConsumerSubscriptionModel1.subscribe(subscriberId1, subscriptionId1, null, StartAt.subscriptionModelDefault(), cloudEvents::add).waitUntilStarted();
+
+        NameDefined nameDefined = new NameDefined("eventId", LocalDateTime.of(2021, 2, 26, 14, 15, 16), "name", "my name");
+
+        // When
+        competingConsumerSubscriptionModel1.onConsumeGranted(subscriptionId1, subscriberId1);
+        competingConsumerSubscriptionModel1.onConsumeGranted(subscriptionId1, subscriberId1);
+        eventStore.write("streamId", serialize(nameDefined));
+
+        // Then
+        await().untilAsserted(() -> assertThat(cloudEvents).hasSize(1));
     }
 
 
@@ -612,7 +721,15 @@ class CompetingConsumerSubscriptionModelTest {
     }
 
     private static SpringMongoLeaseCompetingConsumerStrategy loggingStrategy(String name, MongoTemplate mongoTemplate) {
-        return loggingStrategy(name, SpringMongoLeaseCompetingConsumerStrategy.withDefaults(mongoTemplate));
+        return loggingStrategy(name, mongoTemplate, null);
+    }
+
+    private static SpringMongoLeaseCompetingConsumerStrategy loggingStrategy(String name, MongoTemplate mongoTemplate, @Nullable Duration leaseTime) {
+        SpringMongoLeaseCompetingConsumerStrategy.Builder builder = new SpringMongoLeaseCompetingConsumerStrategy.Builder(mongoTemplate);
+        if (leaseTime != null) {
+            builder.leaseTime(leaseTime);
+        }
+        return loggingStrategy(name, builder.build());
     }
 
     private static SpringMongoLeaseCompetingConsumerStrategy loggingStrategy(String name, SpringMongoLeaseCompetingConsumerStrategy strategy) {

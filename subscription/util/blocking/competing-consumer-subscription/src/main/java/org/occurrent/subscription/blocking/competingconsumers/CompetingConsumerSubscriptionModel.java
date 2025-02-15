@@ -13,6 +13,7 @@ import org.slf4j.LoggerFactory;
 import java.util.*;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ConcurrentMap;
+import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.function.Consumer;
 import java.util.function.Predicate;
 import java.util.function.Supplier;
@@ -50,6 +51,8 @@ public class CompetingConsumerSubscriptionModel implements DelegatingSubscriptio
 
     private final SubscriptionModel delegate;
     private final CompetingConsumerStrategy competingConsumerStrategy;
+
+    private final AtomicBoolean stoppedByUser = new AtomicBoolean(false);
 
     private final ConcurrentMap<SubscriptionIdAndSubscriberId, CompetingConsumer> competingConsumers = new ConcurrentHashMap<>();
     // A set that hold which subscriptions whose StartAt position have indicated that they should not use the competing consumer model
@@ -119,6 +122,7 @@ public class CompetingConsumerSubscriptionModel implements DelegatingSubscriptio
             return;
         }
 
+        stoppedByUser.set(true);
         delegate.stop();
         unregisterAllCompetingConsumers(cc -> {
             logDebug("Stopped CompetingConsumer subscription (subscriberId={}, subscriptionId={})", cc.getSubscriberId(), cc.getSubscriptionId());
@@ -136,12 +140,13 @@ public class CompetingConsumerSubscriptionModel implements DelegatingSubscriptio
             throw new IllegalStateException(CompetingConsumerSubscriptionModel.class.getSimpleName() + " is already started");
         }
 
+        stoppedByUser.set(false);
         if (!nonCompetingConsumersSubscriptions.isEmpty()) {
             delegate.start(false); // This will automatically start all paused subscriptions (including those in nonCompetingConsumersSubscriptions)
             nonCompetingConsumersSubscriptions.forEach(delegate::resumeSubscription);
         }
 
-        if (!resumeSubscriptionsAutomatically) {
+        if (resumeSubscriptionsAutomatically) {
             // Note that we deliberately don't start the delegated subscription model here!!
             // This is because we're not sure that we have the lock. The underlying SM will be started
             // automatically if required (since it's instructed to do so in the Waiting state supplier).
@@ -327,7 +332,11 @@ public class CompetingConsumerSubscriptionModel implements DelegatingSubscriptio
         }
 
         if (competingConsumer.isWaiting()) {
-            startWaitingConsumer(competingConsumer);
+            if (stoppedByUser.get()) {
+                logDebug("Won't start waiting consumer because subscription model was explicitly stopped by user (subscriberId={}, subscriptionId={})", subscriberId, subscriptionId);
+            } else {
+                startWaitingConsumer(competingConsumer);
+            }
         } else if (competingConsumer.isPaused()) {
             CompetingConsumerState.Paused state = (CompetingConsumerState.Paused) competingConsumer.state;
             if (state.pausedByUser) {

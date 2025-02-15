@@ -11,6 +11,7 @@ import org.springframework.data.mongodb.core.MongoOperations;
 import java.time.Clock;
 import java.time.Duration;
 import java.util.Objects;
+import java.util.StringJoiner;
 import java.util.function.Consumer;
 import java.util.function.Function;
 
@@ -230,5 +231,14 @@ public class SpringMongoLeaseCompetingConsumerStrategy implements CompetingConsu
                             }));
             return new SpringMongoLeaseCompetingConsumerStrategy(mongoOperations, collectionNameToUse, support);
         }
+    }
+
+    @Override
+    public String toString() {
+        return new StringJoiner(", ", SpringMongoLeaseCompetingConsumerStrategy.class.getSimpleName() + "[", "]")
+                .add("mongoOperations=" + mongoOperations)
+                .add("support=" + support)
+                .add("collectionName='" + collectionName + "'")
+                .toString();
     }
 }
