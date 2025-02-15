@@ -259,7 +259,11 @@ public class CompetingConsumerSubscriptionModel implements DelegatingSubscriptio
                 if (!delegate.isRunning()) {
                     delegate.start();
                 }
-                return delegate.subscribe(subscriptionId, filter, startAt, action);
+                if (delegate.isPaused(subscriptionId)) {
+                    return delegate.resumeSubscription(subscriptionId);
+                } else {
+                    return delegate.subscribe(subscriptionId, filter, startAt, action);
+                }
             })));
             competingConsumerSubscription = new CompetingConsumerSubscription(subscriptionId, subscriberId);
         }

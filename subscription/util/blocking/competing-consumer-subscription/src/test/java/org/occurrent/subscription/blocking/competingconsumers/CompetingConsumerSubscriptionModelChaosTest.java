@@ -137,14 +137,14 @@ class CompetingConsumerSubscriptionModelChaosTest {
                 int millis = ThreadLocalRandom.current().nextInt(1500, 5000);
                 sleep(millis);
                 if (millis % 2 == 0) {
-                    if (competingConsumerSubscriptionModel1.isRunning()) {
+                    if (competingConsumerSubscriptionModel1.isRunning(subscriptionId)) {
                         pause(subscriptionId, competingConsumerSubscriptionModel1);
                     }
                     if (competingConsumerSubscriptionModel2.isPaused(subscriptionId)) {
                         resume(subscriptionId, competingConsumerSubscriptionModel2);
                     }
                 } else {
-                    if (competingConsumerSubscriptionModel2.isRunning()) {
+                    if (competingConsumerSubscriptionModel2.isRunning(subscriptionId)) {
                         pause(subscriptionId, competingConsumerSubscriptionModel2);
                     }
                     if (competingConsumerSubscriptionModel1.isPaused(subscriptionId)) {
