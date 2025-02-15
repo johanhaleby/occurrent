@@ -99,13 +99,13 @@ public class MongoLeaseCompetingConsumerStrategySupport {
         CompetingConsumer competingConsumer = new CompetingConsumer(subscriptionId, subscriberId);
         Status oldStatus = competingConsumers.get(competingConsumer);
         boolean acquired = MongoListenerLockService.acquireOrRefreshFor(collection, clock, retryStrategy, leaseTime, subscriptionId, subscriberId).isPresent();
-        logDebug("oldStatus={} acquired lock={} (subscriberId={}, subscriptionId={})", oldStatus, acquired, subscriberId, subscriptionId);
+        logDebug("registerCompetingConsumer: oldStatus={} acquired lock={} (subscriberId={}, subscriptionId={})", oldStatus, acquired, subscriberId, subscriptionId);
         competingConsumers.put(competingConsumer, acquired ? Status.LOCK_ACQUIRED : Status.LOCK_NOT_ACQUIRED);
         if (oldStatus != Status.LOCK_ACQUIRED && acquired) {
-            logDebug("Consumption granted (subscriberId={}, subscriptionId={})", subscriberId, subscriptionId);
+            logDebug("registerCompetingConsumer: Consumption granted (subscriberId={}, subscriptionId={})", subscriberId, subscriptionId);
             competingConsumerListeners.forEach(listener -> listener.onConsumeGranted(subscriptionId, subscriberId));
         } else if (oldStatus == Status.LOCK_ACQUIRED && !acquired) {
-            logDebug("Consumption prohibited (subscriberId={}, subscriptionId={})", subscriberId, subscriptionId);
+            logDebug("registerCompetingConsumer: Consumption prohibited (subscriberId={}, subscriptionId={})", subscriberId, subscriptionId);
             competingConsumerListeners.forEach(listener -> listener.onConsumeProhibited(subscriptionId, subscriberId));
         }
         return acquired;
