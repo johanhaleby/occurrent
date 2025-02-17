@@ -82,6 +82,6 @@ public class OccurrentCloudEventMongoDocumentMapper {
 
         CloudEvent cloudEvent = DocumentCloudEventReader.toCloudEvent(document);
         // When converting to JSON (document.toJson()) the stream version is interpreted as an int in Jackson, we convert it manually to long afterwards.
-        return CloudEventBuilder.v1(cloudEvent).withExtension(OccurrentCloudEventExtension.STREAM_VERSION, document.getLong(OccurrentCloudEventExtension.STREAM_VERSION)).build();
+        return CloudEventBuilder.v1(cloudEvent).withExtension(OccurrentCloudEventExtension.STREAM_VERSION, document.get(OccurrentCloudEventExtension.STREAM_VERSION, Number.class).longValue()).build();
     }
 }
