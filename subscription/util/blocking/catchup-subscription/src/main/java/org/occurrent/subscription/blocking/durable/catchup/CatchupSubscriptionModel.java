@@ -345,7 +345,7 @@ public class CatchupSubscriptionModel implements SubscriptionModel, DelegatingSu
 
     @Override
     public boolean isRunning(String subscriptionId) {
-        return getDelegatedSubscriptionModel().isRunning();
+        return getDelegatedSubscriptionModel().isRunning(subscriptionId);
     }
 
     @Override
