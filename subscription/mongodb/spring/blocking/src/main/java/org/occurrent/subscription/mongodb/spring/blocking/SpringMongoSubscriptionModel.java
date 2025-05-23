@@ -190,7 +190,7 @@ public class SpringMongoSubscriptionModel implements PositionAwareSubscriptionMo
     }
 
     @Override
-    public void cancelSubscription(String subscriptionId) {
+    public synchronized void cancelSubscription(String subscriptionId) {
         logDebug("Cancelling subscription for {}", subscriptionId);
         InternalSubscription subscription = runningSubscriptions.remove(subscriptionId);
         if (subscription == null) {
