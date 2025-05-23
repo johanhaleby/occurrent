@@ -23,5 +23,7 @@ dist/
 nbdist/
 .nb-gradle/
 
+.approval_tests_temp
+
 # JQWik
 .jqwik-database
