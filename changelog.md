@@ -1,3 +1,6 @@
+### Next version
+* Forward isRunning(String subscriptionId) to the proper method in CatchupSubscriptionModel (thanks to David Göransson for PR). This fixes a hairy issue with subscription restart logic after MongoDB downtime. 
+
 ### 0.19.10 (2025-02-15)
 * Upgraded logback from 1.5.6 to 1.5.16
 * Fixed issue in CompetingConsumerSubscriptionModel in which the model could be started automatically if consumption was granted, even though it was explicitly stopped
@@ -21,7 +24,7 @@
 * Adding equals/hashcode and toString to SpringMongoSubscriptionModel, this is useful in certain debug logging scenarios
 * Upgraded spring-boot from 3.3.5 to 3.4.1
 * Upgraded spring-data-mongodb from 4.3.5 to 4.4.2
-* Upgraded mongodb-driver-sync from 5.2.0 to 5.3.0
+* Upgraded mongodb-driver-sync from 5.2.0 to 5.3.0d
 * Upgraded jobrunr from 7.3.1 to 7.3.2
 * Upgraded project reactor from 3.6.11 to 3.7.2
 * Upgraded kotlin from 2.0.21 to 2.1.0
