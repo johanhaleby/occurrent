@@ -3,10 +3,10 @@
     <parent>
         <groupId>org.occurrent</groupId>
         <artifactId>occurrent</artifactId>
-        <version>0.19.11</version>
+        <version>0.19.12-SNAPSHOT</version>
     </parent>
     <artifactId>occurrent-bom</artifactId>
-    <version>0.19.11</version>
+    <version>0.19.12-SNAPSHOT</version>
     <packaging>pom</packaging>
     <name>Occurrent BOM</name>
     <description>Centralized dependencyManagement for the Occurrent project</description>
@@ -22,7 +22,7 @@
         <connection>scm:git:https://github.com/johanhaleby/occurrent.git</connection>
         <developerConnection>scm:git:ssh://git@github.com/johanhaleby/occurrent.git</developerConnection>
         <url>https://github.com/johanhaleby/occurrent.git</url>
-        <tag>occurrent-0.19.11</tag>
+        <tag>HEAD</tag>
     </scm>
     <distributionManagement>
         <repository>
@@ -84,302 +84,302 @@
             <dependency>
                 <groupId>org.occurrent</groupId>
                 <artifactId>cloudevents-extension</artifactId>
-                <version>0.19.11</version>
+                <version>0.19.12-SNAPSHOT</version>
             </dependency>
             <dependency>
                 <groupId>org.occurrent</groupId>
                 <artifactId>filter</artifactId>
-                <version>0.19.11</version>
+                <version>0.19.12-SNAPSHOT</version>
             </dependency>
             <dependency>
                 <groupId>org.occurrent</groupId>
                 <artifactId>functional-support</artifactId>
-                <version>0.19.11</version>
+                <version>0.19.12-SNAPSHOT</version>
             </dependency>
             <dependency>
                 <groupId>org.occurrent</groupId>
                 <artifactId>eventstore-api-common</artifactId>
-                <version>0.19.11</version>
+                <version>0.19.12-SNAPSHOT</version>
             </dependency>
             <dependency>
                 <groupId>org.occurrent</groupId>
                 <artifactId>eventstore-api-blocking</artifactId>
-                <version>0.19.11</version>
+                <version>0.19.12-SNAPSHOT</version>
             </dependency>
             <dependency>
                 <groupId>org.occurrent</groupId>
                 <artifactId>eventstore-api-reactor</artifactId>
-                <version>0.19.11</version>
+                <version>0.19.12-SNAPSHOT</version>
             </dependency>
             <dependency>
                 <groupId>org.occurrent</groupId>
                 <artifactId>inmemory-filter-matching</artifactId>
-                <version>0.19.11</version>
+                <version>0.19.12-SNAPSHOT</version>
             </dependency>
             <dependency>
                 <groupId>org.occurrent</groupId>
                 <artifactId>eventstore-inmemory</artifactId>
-                <version>0.19.11</version>
+                <version>0.19.12-SNAPSHOT</version>
             </dependency>
             <dependency>
                 <groupId>org.occurrent</groupId>
                 <artifactId>time</artifactId>
-                <version>0.19.11</version>
+                <version>0.19.12-SNAPSHOT</version>
             </dependency>
             <dependency>
                 <groupId>org.occurrent</groupId>
                 <artifactId>mongodb-timerepresentation</artifactId>
-                <version>0.19.11</version>
+                <version>0.19.12-SNAPSHOT</version>
             </dependency>
             <dependency>
                 <groupId>org.occurrent</groupId>
                 <artifactId>eventstore-mongodb-common</artifactId>
-                <version>0.19.11</version>
+                <version>0.19.12-SNAPSHOT</version>
             </dependency>
             <dependency>
                 <groupId>org.occurrent</groupId>
                 <artifactId>mongodb-specialfilterhandling</artifactId>
-                <version>0.19.11</version>
+                <version>0.19.12-SNAPSHOT</version>
             </dependency>
             <dependency>
                 <groupId>org.occurrent</groupId>
                 <artifactId>mongodb-native-filter-bsonfilter-conversion</artifactId>
-                <version>0.19.11</version>
+                <version>0.19.12-SNAPSHOT</version>
             </dependency>
             <dependency>
                 <groupId>org.occurrent</groupId>
                 <artifactId>retry</artifactId>
-                <version>0.19.11</version>
+                <version>0.19.12-SNAPSHOT</version>
             </dependency>
             <dependency>
                 <groupId>org.occurrent</groupId>
                 <artifactId>eventstore-mongodb-native</artifactId>
-                <version>0.19.11</version>
+                <version>0.19.12-SNAPSHOT</version>
             </dependency>
             <dependency>
                 <groupId>org.occurrent</groupId>
                 <artifactId>mongodb-spring-filter-query-conversion</artifactId>
-                <version>0.19.11</version>
+                <version>0.19.12-SNAPSHOT</version>
             </dependency>
             <dependency>
                 <groupId>org.occurrent</groupId>
                 <artifactId>mongodb-spring-sort-conversion</artifactId>
-                <version>0.19.11</version>
+                <version>0.19.12-SNAPSHOT</version>
             </dependency>
             <dependency>
                 <groupId>org.occurrent</groupId>
                 <artifactId>eventstore-mongodb-spring-blocking</artifactId>
-                <version>0.19.11</version>
+                <version>0.19.12-SNAPSHOT</version>
             </dependency>
             <dependency>
                 <groupId>org.occurrent</groupId>
                 <artifactId>eventstore-mongodb-spring-reactor</artifactId>
-                <version>0.19.11</version>
+                <version>0.19.12-SNAPSHOT</version>
             </dependency>
             <dependency>
                 <groupId>org.occurrent</groupId>
                 <artifactId>subscription-core</artifactId>
-                <version>0.19.11</version>
+                <version>0.19.12-SNAPSHOT</version>
             </dependency>
             <dependency>
                 <groupId>org.occurrent</groupId>
                 <artifactId>subscription-mongodb-base</artifactId>
-                <version>0.19.11</version>
+                <version>0.19.12-SNAPSHOT</version>
             </dependency>
             <dependency>
                 <groupId>org.occurrent</groupId>
                 <artifactId>subscription-api-blocking</artifactId>
-                <version>0.19.11</version>
+                <version>0.19.12-SNAPSHOT</version>
             </dependency>
             <dependency>
                 <groupId>org.occurrent</groupId>
                 <artifactId>subscription-mongodb-native-blocking</artifactId>
-                <version>0.19.11</version>
+                <version>0.19.12-SNAPSHOT</version>
             </dependency>
             <dependency>
                 <groupId>org.occurrent</groupId>
                 <artifactId>subscription-mongodb-common-blocking-competing-consumer-strategy</artifactId>
-                <version>0.19.11</version>
+                <version>0.19.12-SNAPSHOT</version>
             </dependency>
             <dependency>
                 <groupId>org.occurrent</groupId>
                 <artifactId>subscription-api-reactor</artifactId>
-                <version>0.19.11</version>
+                <version>0.19.12-SNAPSHOT</version>
             </dependency>
             <dependency>
                 <groupId>org.occurrent</groupId>
                 <artifactId>subscription-mongodb-spring-common</artifactId>
-                <version>0.19.11</version>
+                <version>0.19.12-SNAPSHOT</version>
             </dependency>
             <dependency>
                 <groupId>org.occurrent</groupId>
                 <artifactId>subscription-mongodb-spring-reactor</artifactId>
-                <version>0.19.11</version>
+                <version>0.19.12-SNAPSHOT</version>
             </dependency>
             <dependency>
                 <groupId>org.occurrent</groupId>
                 <artifactId>subscription-mongodb-spring-reactor-position-storage</artifactId>
-                <version>0.19.11</version>
+                <version>0.19.12-SNAPSHOT</version>
             </dependency>
             <dependency>
                 <groupId>org.occurrent</groupId>
                 <artifactId>subscription-mongodb-spring-blocking</artifactId>
-                <version>0.19.11</version>
+                <version>0.19.12-SNAPSHOT</version>
             </dependency>
             <dependency>
                 <groupId>org.occurrent</groupId>
                 <artifactId>subscription-util-predicates</artifactId>
-                <version>0.19.11</version>
+                <version>0.19.12-SNAPSHOT</version>
             </dependency>
             <dependency>
                 <groupId>org.occurrent</groupId>
                 <artifactId>durable-subscription</artifactId>
-                <version>0.19.11</version>
+                <version>0.19.12-SNAPSHOT</version>
             </dependency>
             <dependency>
                 <groupId>org.occurrent</groupId>
                 <artifactId>subscription-mongodb-spring-blocking-position-storage</artifactId>
-                <version>0.19.11</version>
+                <version>0.19.12-SNAPSHOT</version>
             </dependency>
             <dependency>
                 <groupId>org.occurrent</groupId>
                 <artifactId>subscription-mongodb-spring-blocking-competing-consumer-strategy</artifactId>
-                <version>0.19.11</version>
+                <version>0.19.12-SNAPSHOT</version>
             </dependency>
             <dependency>
                 <groupId>org.occurrent</groupId>
                 <artifactId>subscription-mongodb-native-blocking-position-storage</artifactId>
-                <version>0.19.11</version>
+                <version>0.19.12-SNAPSHOT</version>
             </dependency>
             <dependency>
                 <groupId>org.occurrent</groupId>
                 <artifactId>subscription-mongodb-native-blocking-competing-consumer-strategy</artifactId>
-                <version>0.19.11</version>
+                <version>0.19.12-SNAPSHOT</version>
             </dependency>
             <dependency>
                 <groupId>org.occurrent</groupId>
                 <artifactId>subscription-redis-spring-blocking-position-storage</artifactId>
-                <version>0.19.11</version>
+                <version>0.19.12-SNAPSHOT</version>
             </dependency>
             <dependency>
                 <groupId>org.occurrent</groupId>
                 <artifactId>reactor-durable-subscription</artifactId>
-                <version>0.19.11</version>
+                <version>0.19.12-SNAPSHOT</version>
             </dependency>
             <dependency>
                 <groupId>org.occurrent</groupId>
                 <artifactId>catchup-subscription</artifactId>
-                <version>0.19.11</version>
+                <version>0.19.12-SNAPSHOT</version>
             </dependency>
             <dependency>
                 <groupId>org.occurrent</groupId>
                 <artifactId>competing-consumer-subscription</artifactId>
-                <version>0.19.11</version>
+                <version>0.19.12-SNAPSHOT</version>
             </dependency>
             <dependency>
                 <groupId>org.occurrent</groupId>
                 <artifactId>subscription-inmemory</artifactId>
-                <version>0.19.11</version>
+                <version>0.19.12-SNAPSHOT</version>
             </dependency>
             <dependency>
                 <groupId>org.occurrent</groupId>
                 <artifactId>cloudevent-converter-api</artifactId>
-                <version>0.19.11</version>
+                <version>0.19.12-SNAPSHOT</version>
             </dependency>
             <dependency>
                 <groupId>org.occurrent</groupId>
                 <artifactId>command-composition</artifactId>
-                <version>0.19.11</version>
+                <version>0.19.12-SNAPSHOT</version>
             </dependency>
             <dependency>
                 <groupId>org.occurrent</groupId>
                 <artifactId>cloudevent-type-mapper-api</artifactId>
-                <version>0.19.11</version>
+                <version>0.19.12-SNAPSHOT</version>
             </dependency>
             <dependency>
                 <groupId>org.occurrent</groupId>
                 <artifactId>cloudevent-converter-generic</artifactId>
-                <version>0.19.11</version>
+                <version>0.19.12-SNAPSHOT</version>
             </dependency>
             <dependency>
                 <groupId>org.occurrent</groupId>
                 <artifactId>application-service-blocking</artifactId>
-                <version>0.19.11</version>
+                <version>0.19.12-SNAPSHOT</version>
             </dependency>
             <dependency>
                 <groupId>org.occurrent</groupId>
                 <artifactId>cloudevent-converter-xstream</artifactId>
-                <version>0.19.11</version>
+                <version>0.19.12-SNAPSHOT</version>
             </dependency>
             <dependency>
                 <groupId>org.occurrent</groupId>
                 <artifactId>cloudevent-type-mapper-reflection</artifactId>
-                <version>0.19.11</version>
+                <version>0.19.12-SNAPSHOT</version>
             </dependency>
             <dependency>
                 <groupId>org.occurrent</groupId>
                 <artifactId>cloudevent-converter-jackson</artifactId>
-                <version>0.19.11</version>
+                <version>0.19.12-SNAPSHOT</version>
             </dependency>
             <dependency>
                 <groupId>org.occurrent</groupId>
                 <artifactId>subscription-dsl-blocking</artifactId>
-                <version>0.19.11</version>
+                <version>0.19.12-SNAPSHOT</version>
             </dependency>
             <dependency>
                 <groupId>org.occurrent</groupId>
                 <artifactId>module-dsl-blocking</artifactId>
-                <version>0.19.11</version>
+                <version>0.19.12-SNAPSHOT</version>
             </dependency>
             <dependency>
                 <groupId>org.occurrent</groupId>
                 <artifactId>query-dsl-blocking</artifactId>
-                <version>0.19.11</version>
+                <version>0.19.12-SNAPSHOT</version>
             </dependency>
             <dependency>
                 <groupId>org.occurrent</groupId>
                 <artifactId>decider</artifactId>
-                <version>0.19.11</version>
+                <version>0.19.12-SNAPSHOT</version>
             </dependency>
             <dependency>
                 <groupId>org.occurrent</groupId>
                 <artifactId>decider-arrow</artifactId>
-                <version>0.19.11</version>
+                <version>0.19.12-SNAPSHOT</version>
             </dependency>
             <dependency>
                 <groupId>org.occurrent</groupId>
                 <artifactId>view-dsl</artifactId>
-                <version>0.19.11</version>
+                <version>0.19.12-SNAPSHOT</version>
             </dependency>
             <dependency>
                 <groupId>org.occurrent</groupId>
                 <artifactId>annotations</artifactId>
-                <version>0.19.11</version>
+                <version>0.19.12-SNAPSHOT</version>
             </dependency>
             <dependency>
                 <groupId>org.occurrent</groupId>
                 <artifactId>spring-boot-starter-mongodb</artifactId>
-                <version>0.19.11</version>
+                <version>0.19.12-SNAPSHOT</version>
             </dependency>
             <dependency>
                 <groupId>org.occurrent</groupId>
                 <artifactId>deadline-api-blocking</artifactId>
-                <version>0.19.11</version>
+                <version>0.19.12-SNAPSHOT</version>
             </dependency>
             <dependency>
                 <groupId>org.occurrent</groupId>
                 <artifactId>deadline-jobrunr</artifactId>
-                <version>0.19.11</version>
+                <version>0.19.12-SNAPSHOT</version>
             </dependency>
             <dependency>
                 <groupId>org.occurrent</groupId>
                 <artifactId>deadline-inmemory</artifactId>
-                <version>0.19.11</version>
+                <version>0.19.12-SNAPSHOT</version>
             </dependency>
             <dependency>
                 <groupId>org.occurrent</groupId>
                 <artifactId>hederlig</artifactId>
-                <version>0.19.11</version>
+                <version>0.19.12-SNAPSHOT</version>
             </dependency>
         </dependencies>
     </dependencyManagement>
