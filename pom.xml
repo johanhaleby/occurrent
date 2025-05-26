@@ -570,6 +570,7 @@
                         <extensions>true</extensions>
                         <configuration>
                             <publishingServerId>central</publishingServerId>
+                            <autoPublish>true</autoPublish>
                             <excludeArtifacts>
                                 <excludeArtifact>test-support</excludeArtifact>
                                 <!-- Examples -->
