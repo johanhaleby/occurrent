@@ -1,4 +1,4 @@
-### Next version
+### 0.19.11 (2025-05-26)
 * Forward isRunning(String subscriptionId) to the proper method in CatchupSubscriptionModel (thanks to David Göransson for PR). This fixes a hairy issue with subscription restart logic after MongoDB downtime. 
 
 ### 0.19.10 (2025-02-15)
