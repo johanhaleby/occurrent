@@ -56,8 +56,12 @@ echo "Starting to release Occurrent $releaseVersion (skip tests=$skipTests)"
 mavenArguments="-Dgpg.passphrase=${sonatypePassword} -DskipTests=${skipTests}"
 versionBeforeRelease=$(mvn help:evaluate -Dexpression=project.version -q -DforceStdout) && \
 mvn release:prepare -Prelease -DautoVersionSubmodules=true -Dtag="occurrent-${releaseVersion}" -DreleaseVersion="${releaseVersion}" -Darguments="${mavenArguments}" && \
-mvn release:perform -Prelease -Darguments="${mavenArguments}"
+mvn release:perform -Prelease -Darguments="-Dgpg.passphrase=${sonatypePassword} -Dmaven.test.skip=true" && \
+git checkout occurrent-${releaseVersion} && \
+mvn deploy -Prelease -DskipTests=true
 mavenReleaseStatus=$?
+
+git checkout master
 
 if [ $mavenReleaseStatus -eq 0 ]; then
   echo "Release successful, will update version number for modules that were not included in release build." && \

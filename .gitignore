@@ -24,6 +24,7 @@ nbdist/
 .nb-gradle/
 
 .approval_tests_temp
+.flattened-pom.xml
 
 # JQWik
 .jqwik-database
