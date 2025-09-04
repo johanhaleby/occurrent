@@ -29,7 +29,7 @@
         <dependency>
             <groupId>org.occurrent</groupId>
             <artifactId>eventstore-api-common</artifactId>
-            <version>0.19.12-SNAPSHOT</version>
+            <version>${project.version}</version>
         </dependency>
         <dependency>
             <groupId>org.jetbrains.kotlin</groupId>

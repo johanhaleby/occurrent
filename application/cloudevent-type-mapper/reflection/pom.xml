@@ -30,7 +30,7 @@
         <dependency>
             <groupId>org.occurrent</groupId>
             <artifactId>cloudevent-type-mapper-api</artifactId>
-            <version>0.19.12-SNAPSHOT</version>
+            <version>${project.version}</version>
         </dependency>
 
         <!-- Test -->
@@ -47,7 +47,7 @@
         <dependency>
             <groupId>org.occurrent</groupId>
             <artifactId>test-support</artifactId>
-            <version>0.19.12-SNAPSHOT</version>
+            <version>${project.version}</version>
             <scope>test</scope>
         </dependency>
     </dependencies>

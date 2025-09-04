@@ -30,7 +30,7 @@
         <dependency>
             <groupId>org.occurrent</groupId>
             <artifactId>time</artifactId>
-            <version>0.19.12-SNAPSHOT</version>
+            <version>${project.version}</version>
         </dependency>
     </dependencies>
 </project>
