@@ -6,7 +6,6 @@
         <version>${revision}</version>
     </parent>
     <artifactId>occurrent-bom</artifactId>
-    <version>0.19.12-SNAPSHOT</version>
     <packaging>pom</packaging>
     <name>Occurrent BOM</name>
     <description>Centralized dependencyManagement for the Occurrent project</description>
