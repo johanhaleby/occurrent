@@ -3,7 +3,7 @@
     <parent>
         <groupId>org.occurrent</groupId>
         <artifactId>occurrent</artifactId>
-        <version>0.19.12-SNAPSHOT</version>
+        <version>${revision}</version>
     </parent>
     <artifactId>occurrent-bom</artifactId>
     <version>0.19.12-SNAPSHOT</version>

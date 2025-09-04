@@ -22,7 +22,7 @@
     <groupId>org.occurrent</groupId>
     <artifactId>occurrent</artifactId>
     <packaging>pom</packaging>
-    <version>0.19.12-SNAPSHOT</version>
+    <version>${revision}</version>
     <modules>
         <module>test-support</module>
         <module>eventstore</module>
@@ -66,6 +66,7 @@
     </scm>
 
     <properties>
+        <revision>0.19.12-SNAPSHOT</revision>
         <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
         <maven.compiler.source>17</maven.compiler.source>
         <maven.compiler.target>17</maven.compiler.target>

@@ -20,7 +20,7 @@
     <parent>
         <artifactId>example-number-guessing-game-es-mongodb-spring</artifactId>
         <groupId>org.occurrent</groupId>
-        <version>0.19.12-SNAPSHOT</version>
+        <version>${revision}</version>
     </parent>
     <modelVersion>4.0.0</modelVersion>
 
@@ -69,7 +69,7 @@
         <dependency>
             <groupId>org.springframework.boot</groupId>
             <artifactId>spring-boot-devtools</artifactId>
-            <scope>optional</scope>
+            <optional>true</optional>
         </dependency>
 
         <!-- Test -->
