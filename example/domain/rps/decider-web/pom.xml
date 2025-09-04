@@ -40,22 +40,22 @@
         <dependency>
             <groupId>org.occurrent</groupId>
             <artifactId>decider</artifactId>
-            <version>0.19.12-SNAPSHOT</version>
+            <version>${project.version}</version>
         </dependency>
         <dependency>
             <groupId>org.occurrent</groupId>
             <artifactId>example-rps-decider-model</artifactId>
-            <version>0.19.12-SNAPSHOT</version>
+            <version>${project.version}</version>
         </dependency>
         <dependency>
             <groupId>org.occurrent</groupId>
             <artifactId>spring-boot-starter-mongodb</artifactId>
-            <version>0.19.12-SNAPSHOT</version>
+            <version>${project.version}</version>
         </dependency>
         <dependency>
             <groupId>org.occurrent</groupId>
             <artifactId>view-dsl</artifactId>
-            <version>0.19.12-SNAPSHOT</version>
+            <version>${project.version}</version>
         </dependency>
         <dependency>
             <groupId>org.jetbrains.kotlin</groupId>

@@ -17,22 +17,22 @@
         <dependency>
             <groupId>org.occurrent</groupId>
             <artifactId>subscription-mongodb-base</artifactId>
-            <version>0.19.12-SNAPSHOT</version>
+            <version>${project.version}</version>
         </dependency>
         <dependency>
             <groupId>org.occurrent</groupId>
             <artifactId>subscription-mongodb-common-blocking-competing-consumer-strategy</artifactId>
-            <version>0.19.12-SNAPSHOT</version>
+            <version>${project.version}</version>
         </dependency>
         <dependency>
             <groupId>org.occurrent</groupId>
             <artifactId>subscription-api-blocking</artifactId>
-            <version>0.19.12-SNAPSHOT</version>
+            <version>${project.version}</version>
         </dependency>
         <dependency>
             <groupId>org.occurrent</groupId>
             <artifactId>retry</artifactId>
-            <version>0.19.12-SNAPSHOT</version>
+            <version>${project.version}</version>
         </dependency>
         <dependency>
             <groupId>jakarta.annotation</groupId>
@@ -43,19 +43,19 @@
         <dependency>
             <groupId>org.occurrent</groupId>
             <artifactId>subscription-mongodb-native-blocking</artifactId>
-            <version>0.19.12-SNAPSHOT</version>
+            <version>${project.version}</version>
             <scope>test</scope>
         </dependency>
         <dependency>
             <groupId>org.occurrent</groupId>
             <artifactId>eventstore-mongodb-native</artifactId>
-            <version>0.19.12-SNAPSHOT</version>
+            <version>${project.version}</version>
             <scope>test</scope>
         </dependency>
         <dependency>
             <groupId>org.occurrent</groupId>
             <artifactId>test-support</artifactId>
-            <version>0.19.12-SNAPSHOT</version>
+            <version>${project.version}</version>
             <scope>test</scope>
         </dependency>
         <dependency>

@@ -34,7 +34,7 @@
         <dependency>
             <groupId>org.occurrent</groupId>
             <artifactId>decider</artifactId>
-            <version>0.19.12-SNAPSHOT</version>
+            <version>${project.version}</version>
         </dependency>
 
         <!-- Test -->
