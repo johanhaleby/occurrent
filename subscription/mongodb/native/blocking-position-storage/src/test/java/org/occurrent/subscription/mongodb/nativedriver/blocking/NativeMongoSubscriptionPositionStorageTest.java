@@ -111,7 +111,7 @@ public class NativeMongoSubscriptionPositionStorageTest {
     }
 
     @AfterEach
-    void shutdown() throws InterruptedException {
+    void shutdown() {
         subscriptionModel.shutdown();
         mongoClient.close();
     }

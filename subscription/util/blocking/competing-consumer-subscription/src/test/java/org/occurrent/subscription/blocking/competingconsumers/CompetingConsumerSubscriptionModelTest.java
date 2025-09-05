@@ -543,7 +543,7 @@ class CompetingConsumerSubscriptionModelTest {
     }
 
     @Test
-    void it_is_possible_to_stop_and_start_a_CompetingConsumerSubscriptionModel_when_some_subscriptions_are_blocked_and_lease_time_is_low() throws InterruptedException {
+    void it_is_possible_to_stop_and_start_a_CompetingConsumerSubscriptionModel_when_some_subscriptions_are_blocked_and_lease_time_is_low() {
         // Given
         CopyOnWriteArrayList<CloudEvent> cloudEventsSubscription1 = new CopyOnWriteArrayList<>();
         CopyOnWriteArrayList<CloudEvent> cloudEventsSubscription2 = new CopyOnWriteArrayList<>();

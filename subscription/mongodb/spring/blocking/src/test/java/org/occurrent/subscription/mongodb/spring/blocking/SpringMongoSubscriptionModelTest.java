@@ -416,7 +416,7 @@ public class SpringMongoSubscriptionModelTest {
         }
 
         @Test
-        void blocking_spring_subscription_allows_stopping_and_starting_all_subscriptions_when_not_waiting_for_stopped() throws InterruptedException {
+        void blocking_spring_subscription_allows_stopping_and_starting_all_subscriptions_when_not_waiting_for_stopped() {
             // Given
             LocalDateTime now = LocalDateTime.now();
             CopyOnWriteArrayList<CloudEvent> state = new CopyOnWriteArrayList<>();
