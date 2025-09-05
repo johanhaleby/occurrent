@@ -17,7 +17,6 @@
 package org.occurrent.example.eventstore.mongodb.spring.changestreamedprojections;
 
 import org.junit.jupiter.api.Test;
-import org.occurrent.example.eventstore.mongodb.spring.subscriptionprojections.CurrentName;
 import org.occurrent.example.eventstore.mongodb.spring.subscriptionprojections.CurrentNameProjection;
 import org.occurrent.example.eventstore.mongodb.spring.subscriptionprojections.NameApplicationService;
 import org.occurrent.example.eventstore.mongodb.spring.subscriptionprojections.SubscriptionProjectionsWithSpringAndMongoDBApplication;

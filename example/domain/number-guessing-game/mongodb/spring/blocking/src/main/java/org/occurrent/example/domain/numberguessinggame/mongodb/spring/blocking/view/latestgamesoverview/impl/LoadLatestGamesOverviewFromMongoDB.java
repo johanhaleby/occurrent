@@ -23,7 +23,6 @@ import org.springframework.data.domain.Sort;
 import org.springframework.data.mongodb.core.MongoTemplate;
 import org.springframework.data.mongodb.core.query.Criteria;
 import org.springframework.data.mongodb.core.query.Query;
-import org.springframework.data.util.StreamUtils;
 import org.springframework.stereotype.Component;
 
 import java.time.LocalDateTime;
