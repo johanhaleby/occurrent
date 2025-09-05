@@ -80,7 +80,7 @@ fun <T : Any> DomainEventQueries<T>.queryForSequence(
 }).asSequence()
 
 /**
- * Query that returns a [Lis] instead of a [java.util.stream.Stream].
+ * Query that returns a [List] instead of a [java.util.stream.Stream].
  * @see DomainEventQueries.query
  */
 fun <T : Any> DomainEventQueries<in T>.queryForList(
@@ -92,7 +92,7 @@ fun <T : Any> DomainEventQueries<in T>.queryForList(
         .toList()
 
 /**
- * Query that returns a [Lis] instead of a [java.util.stream.Stream].
+ * Query that returns a [List] instead of a [java.util.stream.Stream].
  * @see DomainEventQueries.query
  */
 fun <T : Any> DomainEventQueries<in T>.queryForList(
