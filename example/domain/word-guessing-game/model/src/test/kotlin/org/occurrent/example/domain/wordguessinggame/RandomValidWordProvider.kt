@@ -22,7 +22,7 @@ import net.jqwik.api.Arbitrary
 
 object RandomValidWordProvider {
     
-    private val dash = '-'
+    private const val DASH = '-'
 
     fun provideValidRandomWords(limitWordLength: IntRange = 3..15, allowDash: Boolean = true): Arbitrary<String> =
             Arbitraries.strings()
@@ -34,13 +34,13 @@ object RandomValidWordProvider {
                         if (allowDash) {
                             arbitrary
                                     // Allow dash character
-                                    .withChars(dash)
+                                    .withChars(DASH)
                                     // No consecutive dashes
-                                    .filter { wordToGuess -> !wordToGuess.contains(dash) }
+                                    .filter { wordToGuess -> !wordToGuess.contains(DASH) }
                                     // Word cannot start with dash
-                                    .map { wordToGuess -> if (wordToGuess.startsWith(dash)) wordToGuess.replaceFirst(dash, ('A'..'Z').random()) else wordToGuess }
+                                    .map { wordToGuess -> if (wordToGuess.startsWith(DASH)) wordToGuess.replaceFirst(DASH, ('A'..'Z').random()) else wordToGuess }
                                     // Word cannot end with dash
-                                    .map { wordToGuess -> if (wordToGuess.endsWith(dash)) wordToGuess.replaceRange(wordToGuess.length - 2, wordToGuess.length - 1, ('A'..'Z').random().toString()) else wordToGuess }
+                                    .map { wordToGuess -> if (wordToGuess.endsWith(DASH)) wordToGuess.replaceRange(wordToGuess.length - 2, wordToGuess.length - 1, ('A'..'Z').random().toString()) else wordToGuess }
                         } else {
                             arbitrary
                         }
