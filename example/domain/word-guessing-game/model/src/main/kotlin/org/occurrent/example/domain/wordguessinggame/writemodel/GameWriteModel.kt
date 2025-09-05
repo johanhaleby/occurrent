@@ -81,7 +81,7 @@ data class WordList(val category: WordCategory, val words: List<Word>) : Sequenc
             val duplicateWords = words.groupBy { it.value.uppercase(Locale.getDefault()) }
                     .filterValues { it.size > 1 }
                     .values
-                    .joinToString { wordList -> wordList.map(Word::value).joinToString() }
+                    .joinToString { wordList -> wordList.joinToString(transform = Word::value) }
             throw IllegalArgumentException("Duplicate words in the same category is not allowed: $duplicateWords")
         }
 
