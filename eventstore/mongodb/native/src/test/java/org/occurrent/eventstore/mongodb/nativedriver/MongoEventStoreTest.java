@@ -1432,7 +1432,7 @@ class MongoEventStoreTest {
             }
 
             @Test
-            void query_filter_by_data_schema() throws IOException {
+            void query_filter_by_data_schema() {
                 // Given
                 LocalDateTime now = LocalDateTime.now();
                 NameDefined nameDefined = new NameDefined(UUID.randomUUID().toString(), now, "name", "name");

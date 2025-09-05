@@ -252,7 +252,7 @@ public class InMemorySubscriptionModelTest {
         }
 
         @Test
-        void inmemory_subscription_model_allows_stopping_and_starting_all_subscriptions() throws InterruptedException {
+        void inmemory_subscription_model_allows_stopping_and_starting_all_subscriptions() {
             // Given
             LocalDateTime now = LocalDateTime.now();
             CopyOnWriteArrayList<CloudEvent> state = new CopyOnWriteArrayList<>();
