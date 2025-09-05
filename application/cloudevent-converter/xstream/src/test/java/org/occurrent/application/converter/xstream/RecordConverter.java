@@ -42,7 +42,7 @@ public final class RecordConverter implements Converter {
     private static final MethodHandle MH_GET_TYPE;
     private static final MethodHandles.Lookup LOOKUP;
 
-    protected final Mapper mapper;
+    private final Mapper mapper;
 
     public RecordConverter(Mapper mapper) {
         this.mapper = mapper;
