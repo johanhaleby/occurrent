@@ -31,7 +31,7 @@ public class TestBootstrap {
     @Bean
     @ServiceConnection
     public static MongoDBContainer mongoDBContainer() {
-        return new MongoDBContainer("mongo:7.0.9");
+        return new MongoDBContainer("mongo:" + System.getProperty("test.mongo.version"));
     }
 
     public static void main(String[] args) {

@@ -94,7 +94,7 @@ public class SpringMongoEventStoreTest {
     private static final URI NAME_SOURCE = URI.create("http://name");
 
     static {
-        mongoDBContainer = new MongoDBContainer("mongo:4.2.8");
+        mongoDBContainer = new MongoDBContainer("mongo:" + System.getProperty("test.mongo.version"));
         List<String> ports = new ArrayList<>();
         ports.add("27017:27017");
         mongoDBContainer.withReuse(true).setPortBindings(ports);
