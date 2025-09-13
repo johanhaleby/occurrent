@@ -32,7 +32,6 @@ object NameWithSequenceCommand {
             when (e) {
                 is NameDefined -> e.name()
                 is NameWasChanged -> e.name()
-                else -> throw IllegalStateException()
             }
         }
 
