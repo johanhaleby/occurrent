@@ -62,7 +62,6 @@
         <connection>scm:git:https://github.com/johanhaleby/occurrent.git</connection>
         <developerConnection>scm:git:ssh://git@github.com/johanhaleby/occurrent.git</developerConnection>
         <url>https://github.com/johanhaleby/occurrent.git</url>
-        <tag>HEAD</tag>
     </scm>
 
     <properties>
@@ -610,14 +609,6 @@
                                 <excludeArtifact>example-domain-word-guessing-game-es-mongodb-spring</excludeArtifact>
                                 <excludeArtifact>example-domain-word-guessing-game-es-mongodb-spring-blocking</excludeArtifact>
                             </excludeArtifacts>
-                        </configuration>
-                    </plugin>
-                    <plugin>
-                        <groupId>org.apache.maven.plugins</groupId>
-                        <artifactId>maven-release-plugin</artifactId>
-                        <version>3.1.1</version>
-                        <configuration>
-                            <goals>clean verify</goals> <!-- Avoids triggering 'deploy' -->
                         </configuration>
                     </plugin>
                     <plugin>
