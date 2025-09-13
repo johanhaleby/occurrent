@@ -58,7 +58,8 @@ class CompetingConsumerSubscriptionModelTest {
     private static final Logger log = LoggerFactory.getLogger(CompetingConsumerSubscriptionModelTest.class);
 
     @Container
-    private static final MongoDBContainer mongoDBContainer = new MongoDBContainer("mongo:4.2.8").withReuse(true);
+    private static final MongoDBContainer mongoDBContainer =
+            new MongoDBContainer("mongo:" + System.getProperty("test.mongo.version")).withReuse(true);
 
     @RegisterExtension
     FlushMongoDBExtension flushMongoDBExtension = new FlushMongoDBExtension(new ConnectionString(mongoDBContainer.getReplicaSetUrl()));
@@ -578,7 +579,7 @@ class CompetingConsumerSubscriptionModelTest {
         await().failFast("cloudEventsSubscription2 should never have more than 1 event", () -> cloudEventsSubscription2.size() > 1)
                .untilAsserted(() -> assertThat(cloudEventsSubscription2).hasSize(1));
     }
-    
+
     @Test
     void consumption_is_resumed_after_prohibited_when_lease_time_is_low() {
         // Given

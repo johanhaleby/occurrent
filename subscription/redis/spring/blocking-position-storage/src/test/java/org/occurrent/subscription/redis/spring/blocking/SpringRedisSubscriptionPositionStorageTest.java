@@ -75,7 +75,8 @@ import static org.hamcrest.Matchers.equalTo;
 class SpringRedisSubscriptionPositionStorageTest {
 
     @Container
-    private static final MongoDBContainer mongoDBContainer = new MongoDBContainer("mongo:4.2.8").withReuse(true);
+    private static final MongoDBContainer mongoDBContainer =
+            new MongoDBContainer("mongo:" + System.getProperty("test.mongo.version")).withReuse(true);
     @Container
     private static final GenericContainer<?> redisContainer = new GenericContainer<>("redis:5.0.3-alpine").withExposedPorts(6379);
 

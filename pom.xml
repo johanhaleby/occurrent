@@ -82,6 +82,7 @@
         <awaitility.version>4.2.2</awaitility.version>
         <jobrunr.version>7.4.0</jobrunr.version>
         <maven-javadoc-plugin.version>3.5.0</maven-javadoc-plugin.version>
+        <integration-tests.mongo.version>4.2.8</integration-tests.mongo.version>
     </properties>
 
 
@@ -546,6 +547,17 @@
                 </plugin>
             </plugins>
         </pluginManagement>
+        <plugins>
+            <plugin>
+                <groupId>org.apache.maven.plugins</groupId>
+                <artifactId>maven-surefire-plugin</artifactId>
+                <configuration>
+                    <systemPropertyVariables>
+                        <test.mongo.version>${integration-tests.mongo.version}</test.mongo.version>
+                    </systemPropertyVariables>
+                </configuration>
+            </plugin>
+        </plugins>
     </build>
 
     <profiles>
