@@ -77,7 +77,6 @@
                     <args>
                         <arg>-Xjsr305=strict</arg>
                     </args>
-                    <jvmTarget>17</jvmTarget>
                 </configuration>
             </plugin>
         </plugins>

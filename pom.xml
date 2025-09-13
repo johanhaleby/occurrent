@@ -69,6 +69,7 @@
         <revision>0.0.0-SNAPSHOT</revision>
         <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
         <maven.compiler.release>17</maven.compiler.release>
+        <kotlin.compiler.jvmTarget>${maven.compiler.release}</kotlin.compiler.jvmTarget>
         <junit.version>5.11.3</junit.version>
         <test-containers.version>1.20.3</test-containers.version>
         <kotlin.version>2.1.10</kotlin.version>
