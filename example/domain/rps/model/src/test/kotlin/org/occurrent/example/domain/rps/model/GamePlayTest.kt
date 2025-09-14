@@ -598,22 +598,22 @@ private fun compose(vararg command: GameCommand): Sequence<GameEvent> = command.
 }.asSequence()
 
 // Extension functions to better support sequences in assertj
-private fun <T> ObjectAssert<Sequence<T>>.containsOnly(vararg elements: T?) = satisfies { seq ->
+private fun <T> ObjectAssert<Sequence<T>>.containsOnly(vararg elements: T?) = satisfies({ seq ->
     assertThat(seq.toList()).containsOnly(*elements)
-}
+})
 
-private fun <T> ObjectAssert<Sequence<T>>.containsExactly(vararg elements: T?) = satisfies { seq ->
+private fun <T> ObjectAssert<Sequence<T>>.containsExactly(vararg elements: T?) = satisfies({ seq ->
     assertThat(seq.toList()).containsExactly(*elements)
-}
+})
 
-private fun <T> ObjectAssert<Sequence<T>>.contains(vararg elements: T?) = satisfies { seq ->
+private fun <T> ObjectAssert<Sequence<T>>.contains(vararg elements: T?) = satisfies({ seq ->
     assertThat(seq.toList()).contains(*elements)
-}
+})
 
-private fun <T> ObjectAssert<Sequence<T>>.doesNotContain(vararg elements: T?) = satisfies { seq ->
+private fun <T> ObjectAssert<Sequence<T>>.doesNotContain(vararg elements: T?) = satisfies({ seq ->
     assertThat(seq.toList()).doesNotContain(*elements)
-}
+})
 
-private fun <T> ObjectAssert<Sequence<T>>.hasSize(size: Int) = satisfies { seq ->
+private fun <T> ObjectAssert<Sequence<T>>.hasSize(size: Int) = satisfies({ seq ->
     assertThat(seq.toList()).hasSize(size)
-}
+})
