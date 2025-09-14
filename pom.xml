@@ -77,7 +77,7 @@
         <cloudevents.version>4.0.1</cloudevents.version>
         <reactor-bom.version>2024.0.3</reactor-bom.version>
         <spring-boot.version>3.4.2</spring-boot.version>
-        <mongo.version>5.3.1</mongo.version>
+        <mongo.version>5.4.0</mongo.version>
         <dokka.version>2.0.0</dokka.version>
         <awaitility.version>4.2.2</awaitility.version>
         <jobrunr.version>7.4.0</jobrunr.version>
