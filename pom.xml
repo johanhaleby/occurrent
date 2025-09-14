@@ -75,7 +75,7 @@
         <kotlin.version>2.1.10</kotlin.version>
         <jackson.version>2.18.2</jackson.version>
         <cloudevents.version>4.0.1</cloudevents.version>
-        <reactor.version>3.7.3</reactor.version>
+        <reactor-bom.version>2024.0.3</reactor-bom.version>
         <spring-data-mongodb.version>4.4.3</spring-data-mongodb.version>
         <spring-boot.version>3.4.2</spring-boot.version>
         <mongo.version>5.3.1</mongo.version>
@@ -125,8 +125,10 @@
             </dependency>
             <dependency>
                 <groupId>io.projectreactor</groupId>
-                <artifactId>reactor-core</artifactId>
-                <version>${reactor.version}</version>
+                <artifactId>reactor-bom</artifactId>
+                <version>${reactor-bom.version}</version>
+                <type>pom</type>
+                <scope>import</scope>
             </dependency>
             <dependency>
                 <groupId>com.rabbitmq</groupId>
@@ -325,11 +327,6 @@
                 <groupId>org.junit.jupiter</groupId>
                 <artifactId>junit-jupiter-params</artifactId>
                 <version>${junit.version}</version>
-            </dependency>
-            <dependency>
-                <groupId>io.projectreactor</groupId>
-                <artifactId>reactor-test</artifactId>
-                <version>${reactor.version}</version>
             </dependency>
             <dependency>
                 <groupId>org.testcontainers</groupId>
