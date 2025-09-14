@@ -164,8 +164,10 @@
             <!-- Arrow -->
             <dependency>
                 <groupId>io.arrow-kt</groupId>
-                <artifactId>arrow-core</artifactId>
+                <artifactId>arrow-stack</artifactId>
                 <version>1.2.4</version>
+                <type>pom</type>
+                <scope>import</scope>
             </dependency>
 
             <!-- Spring -->
