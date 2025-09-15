@@ -139,16 +139,9 @@
                 <artifactId>jakarta.annotation-api</artifactId>
                 <version>2.1.1</version>
             </dependency>
-            <!-- Spring -->
-            <dependency>
-                <groupId>org.springframework.boot</groupId>
-                <artifactId>spring-boot-dependencies</artifactId>
-                <version>${spring-boot.version}</version>
-                <type>pom</type>
-                <scope>import</scope>
-            </dependency>
 
             <!-- Kotlin -->
+            <!-- Keep Kotlin BOM above Spring Boot BOM, otherwise Maven will take Kotlin version from Spring Boot -->
             <dependency>
                 <groupId>org.jetbrains.kotlin</groupId>
                 <artifactId>kotlin-bom</artifactId>
@@ -173,6 +166,15 @@
                 <groupId>io.arrow-kt</groupId>
                 <artifactId>arrow-core</artifactId>
                 <version>1.2.4</version>
+            </dependency>
+
+            <!-- Spring -->
+            <dependency>
+                <groupId>org.springframework.boot</groupId>
+                <artifactId>spring-boot-dependencies</artifactId>
+                <version>${spring-boot.version}</version>
+                <type>pom</type>
+                <scope>import</scope>
             </dependency>
 
             <!-- Mongo -->
