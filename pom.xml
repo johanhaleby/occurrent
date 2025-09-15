@@ -77,7 +77,6 @@
         <cloudevents.version>4.0.1</cloudevents.version>
         <reactor-bom.version>2024.0.3</reactor-bom.version>
         <spring-boot.version>3.4.2</spring-boot.version>
-        <spring-data-bom.version>2024.1.2</spring-data-bom.version>
         <mongo.version>5.3.1</mongo.version>
         <dokka.version>2.0.0</dokka.version>
         <awaitility.version>4.2.2</awaitility.version>
@@ -145,13 +144,6 @@
                 <groupId>org.springframework.boot</groupId>
                 <artifactId>spring-boot-dependencies</artifactId>
                 <version>${spring-boot.version}</version>
-                <type>pom</type>
-                <scope>import</scope>
-            </dependency>
-            <dependency>
-                <groupId>org.springframework.data</groupId>
-                <artifactId>spring-data-bom</artifactId>
-                <version>${spring-data-bom.version}</version>
                 <type>pom</type>
                 <scope>import</scope>
             </dependency>
