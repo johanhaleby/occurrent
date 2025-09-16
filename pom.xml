@@ -428,6 +428,12 @@
                             <goal>flatten</goal>
                         </goals>
                     </execution>
+                    <execution>
+                        <id>flatten.clean</id>
+                        <goals>
+                            <goal>clean</goal>
+                        </goals>
+                    </execution>
                 </executions>
             </plugin>
             <plugin>
