@@ -305,6 +305,11 @@
                     <version>3.0.0</version>
                 </plugin>
                 <plugin>
+                    <groupId>org.codehaus.mojo</groupId>
+                    <artifactId>flatten-maven-plugin</artifactId>
+                    <version>1.7.2</version>
+                </plugin>
+                <plugin>
                     <!-- See https://github.com/Kotlin/dokka#using-the-maven-plugin for more examples-->
                     <groupId>org.jetbrains.dokka</groupId>
                     <artifactId>dokka-maven-plugin</artifactId>
