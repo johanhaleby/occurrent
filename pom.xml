@@ -402,6 +402,18 @@
         </pluginManagement>
         <plugins>
             <plugin>
+                <artifactId>maven-install-plugin</artifactId>
+                <configuration>
+                    <skip>${is.pom.module}</skip>
+                </configuration>
+            </plugin>
+            <plugin>
+                <artifactId>maven-deploy-plugin</artifactId>
+                <configuration>
+                    <skip>${is.pom.module}</skip>
+                </configuration>
+            </plugin>
+            <plugin>
                 <groupId>org.codehaus.mojo</groupId>
                 <artifactId>flatten-maven-plugin</artifactId>
                 <configuration>
@@ -438,6 +450,21 @@
             <activation>
                 <activeByDefault>true</activeByDefault>
             </activation>
+        </profile>
+        <profile>
+            <id>skip-pom-modules-deployment</id>
+            <activation>
+                <file>
+                    <exists>pom.xml</exists>
+                </file>
+                <property>
+                    <name>packaging</name>
+                    <value>pom</value>
+                </property>
+            </activation>
+            <properties>
+                <is.pom.module>true</is.pom.module>
+            </properties>
         </profile>
         <profile>
             <id>release</id>
