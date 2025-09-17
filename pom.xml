@@ -427,44 +427,6 @@
                         <configuration>
                             <publishingServerId>central</publishingServerId>
                             <autoPublish>true</autoPublish>
-                            <excludeArtifacts>
-                                <excludeArtifact>test-support</excludeArtifact>
-                                <!-- Examples -->
-                                <excludeArtifact>example</excludeArtifact>
-                                <excludeArtifact>example-projection</excludeArtifact>
-                                <excludeArtifact>example-projection-spring-adhoc-evenstore-mongodb-queries</excludeArtifact>
-                                <excludeArtifact>example-projection-spring-reactor-transactional-projection-mongodb</excludeArtifact>
-                                <excludeArtifact>example-projection-spring-changedstreamed-mongodb-projections</excludeArtifact>
-                                <excludeArtifact>example-projection-spring-transactional-projection-mongodb</excludeArtifact>
-                                <excludeArtifact>example-forwarder</excludeArtifact>
-                                <excludeArtifact>example-forwarder-mongodb-subscription-to-spring-event</excludeArtifact>
-                                <excludeArtifact>example-domain</excludeArtifact>
-                                <excludeArtifact>example-mastermind</excludeArtifact>
-                                <excludeArtifact>example-number-guessing-game</excludeArtifact>
-                                <excludeArtifact>example-number-guessing-game-model</excludeArtifact>
-                                <excludeArtifact>example-number-guessing-game-es-mongodb</excludeArtifact>
-                                <excludeArtifact>example-number-guessing-game-es-mongodb-native</excludeArtifact>
-                                <excludeArtifact>example-number-guessing-game-es-mongodb-spring</excludeArtifact>
-                                <excludeArtifact>example-number-guessing-game-es-mongodb-spring-blocking</excludeArtifact>
-                                <excludeArtifact>example-rps</excludeArtifact>
-                                <excludeArtifact>example-rps-decider-model</excludeArtifact>
-                                <excludeArtifact>example-rps-decider-web</excludeArtifact>
-                                <excludeArtifact>example-rps-model</excludeArtifact>
-                                <excludeArtifact>example-rps-multiround-decider-model</excludeArtifact>
-                                <excludeArtifact>example-pragmatic-rps-model</excludeArtifact>
-                                <excludeArtifact>example-uno</excludeArtifact>
-                                <excludeArtifact>example-uno-model</excludeArtifact>
-                                <excludeArtifact>example-uno-es-mongodb</excludeArtifact>
-                                <excludeArtifact>example-uno-es-mongodb-common</excludeArtifact>
-                                <excludeArtifact>example-uno-es-mongodb-native</excludeArtifact>
-                                <excludeArtifact>example-uno-es-mongodb-spring</excludeArtifact>
-                                <excludeArtifact>example-uno-es-mongodb-spring-blocking</excludeArtifact>
-                                <excludeArtifact>example-domain-word-guessing-game</excludeArtifact>
-                                <excludeArtifact>example-domain-word-guessing-game-model</excludeArtifact>
-                                <excludeArtifact>example-domain-word-guessing-game-es-mongodb</excludeArtifact>
-                                <excludeArtifact>example-domain-word-guessing-game-es-mongodb-spring</excludeArtifact>
-                                <excludeArtifact>example-domain-word-guessing-game-es-mongodb-spring-blocking</excludeArtifact>
-                            </excludeArtifacts>
                         </configuration>
                     </plugin>
                     <plugin>
