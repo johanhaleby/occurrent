@@ -24,8 +24,8 @@ public class SafeExceptionRethrower {
         return null;
     }
 
+    @SuppressWarnings("unchecked")
     private static <T extends Throwable> void safeRethrow0(Throwable t) throws T {
-        //noinspection ConstantConditions,unchecked
         throw (T) t;
     }
 }

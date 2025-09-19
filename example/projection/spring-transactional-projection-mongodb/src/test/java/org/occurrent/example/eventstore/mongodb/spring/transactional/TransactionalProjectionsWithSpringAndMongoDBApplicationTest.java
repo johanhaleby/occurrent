@@ -77,7 +77,7 @@ public class TransactionalProjectionsWithSpringAndMongoDBApplicationTest {
         assertAll(
                 () -> assertThat(currentNameProjection.findById(userId.toString())).hasValue(new CurrentName(userId.toString(), "John Doe")),
                 () -> assertThat(eventStore.loadEventStream(userId).events())
-                        .usingElementComparatorIgnoringFields("eventId")
+                        .usingRecursiveFieldByFieldElementComparatorIgnoringFields("eventId")
                         .containsExactly(new NameDefined(UUID.randomUUID().toString(), now, userId.toString(), "John Doe"))
         );
     }

@@ -295,7 +295,6 @@ public class ReactorMongoEventStore implements EventStore, EventStoreOperations,
     public Mono<Long> count(Filter filter) {
         requireNonNull(filter, "Filter cannot be null");
         if (filter instanceof Filter.All) {
-            //noinspection NullableProblems
             return mongoTemplate.createMono(eventStoreCollectionName, MongoCollection::estimatedDocumentCount);
         } else {
             final Query query = queryOptions.apply(FilterConverter.convertFilterToQuery(timeRepresentation, filter));

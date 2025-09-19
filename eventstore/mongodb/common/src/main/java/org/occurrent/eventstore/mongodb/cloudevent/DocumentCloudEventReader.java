@@ -75,8 +75,8 @@ public class DocumentCloudEventReader implements CloudEventReader {
             }
 
             // Switch on types document support
-            if (extension.getValue() instanceof Number) {
-                writer.withContextAttribute(extension.getKey(), (Number) extension.getValue());
+            if (extension.getValue() instanceof Integer) {
+                writer.withContextAttribute(extension.getKey(), (Integer) extension.getValue());
             } else if (extension.getValue() instanceof Boolean) {
                 writer.withContextAttribute(extension.getKey(), (Boolean) extension.getValue());
             } else {
@@ -109,12 +109,10 @@ public class DocumentCloudEventReader implements CloudEventReader {
     @SuppressWarnings("unchecked")
     private static CloudEventData convertJsonData(Object data) {
         final CloudEventData ceData;
-        if (data instanceof Document) {
+        if (data instanceof Document document) {
             // Best case, it's a document
-            Document document = (Document) data;
             ceData = PojoCloudEventData.wrap(document, DocumentCloudEventReader::convertDocumentToBytes);
-        } else if (data instanceof String) {
-            String json = ((String) data);
+        } else if (data instanceof String json) {
             if (json.trim().startsWith(JSON_OBJECT_PREFIX)) {
                 ceData = PojoCloudEventData.wrap(Document.parse((String) data), DocumentCloudEventReader::convertDocumentToBytes);
             } else {
@@ -122,8 +120,7 @@ public class DocumentCloudEventReader implements CloudEventReader {
             }
         } else if (data instanceof Map) {
             ceData = PojoCloudEventData.wrap(new Document((Map<String, Object>) data), DocumentCloudEventReader::convertDocumentToBytes);
-        } else if (data instanceof byte[]) {
-            byte[] byteArray = (byte[]) data;
+        } else if (data instanceof byte[] byteArray) {
             String json = new String(byteArray, UTF_8);
             if (json.trim().startsWith(JSON_OBJECT_PREFIX)) {
                 ceData = PojoCloudEventData.wrap(Document.parse(json), DocumentCloudEventReader::convertDocumentToBytes);

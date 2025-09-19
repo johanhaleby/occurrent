@@ -239,7 +239,6 @@ public class SpringMongoEventStore implements EventStore, EventStoreOperations, 
     public long count(Filter filter) {
         requireNonNull(filter, "Filter cannot be null");
         if (filter instanceof Filter.All) {
-            //noinspection ConstantConditions
             return mongoTemplate.execute(eventStoreCollectionName, MongoCollection::estimatedDocumentCount);
         } else {
             final Query query = queryOptions.apply(FilterConverter.convertFilterToQuery(timeRepresentation, filter));

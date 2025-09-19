@@ -29,7 +29,7 @@ public class CurrentName {
     private String id;
     private String name;
 
-    @SuppressWarnings("MethodNameSameAsClassName")
+    @SuppressWarnings("unused")
     CurrentName() {
     }
 

@@ -16,7 +16,6 @@
 
 package org.occurrent.example.eventstore.mongodb.spring.reactor.transactional;
 
-import org.assertj.core.api.Assertions;
 import org.junit.jupiter.api.AfterAll;
 import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.Test;
@@ -92,8 +91,8 @@ public class ReactiveTransactionalProjectionsWithSpringAndMongoDBApplicationTest
         // Then
         assertAll(
                 () -> assertThat(currentNameProjection.findById(userId.toString()).block()).isEqualTo(new CurrentName(userId.toString(), "John Doe")),
-                () -> Assertions.assertThat(requireNonNull(eventStore.loadEventStream(userId).block()).eventList().block())
-                        .usingElementComparatorIgnoringFields("eventId")
+                () -> assertThat(requireNonNull(eventStore.loadEventStream(userId).block()).eventList().block())
+                        .usingRecursiveFieldByFieldElementComparatorIgnoringFields("eventId")
                         .containsExactly(new NameDefined(UUID.randomUUID().toString(), now, userId.toString(), "John Doe"))
         );
     }
@@ -111,7 +110,7 @@ public class ReactiveTransactionalProjectionsWithSpringAndMongoDBApplicationTest
         // Then
         assertAll(
                 () -> assertThat(currentNameProjection.findById(userId.toString()).block()).isEqualTo(new CurrentName(userId.toString(), "John Doe")),
-                () -> Assertions.assertThat(requireNonNull(eventStore.loadEventStream(userId).block()).eventList().block())
+                () -> assertThat(requireNonNull(eventStore.loadEventStream(userId).block()).eventList().block())
                         .extracting("name")
                         .containsExactly("Jane Doe", "John Doe")
         );

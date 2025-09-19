@@ -46,7 +46,6 @@ object WordHintCharacterRevelation {
             return emptyList()
         }
 
-        @Suppress("UnnecessaryVariable")
         val revealCharacters = (0 until actualNumberOfCharactersToReveal).map {
             val index = potentialIndicesToReveal.indices.random()
             val indexOfCharacterToReveal = potentialIndicesToReveal[index]
