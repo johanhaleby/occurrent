@@ -1,4 +1,4 @@
-### 0.19.12
+### 0.19.12 (2025-09-19)
 * Internal changes including lots of changes to the build pipeline
 
 ### 0.19.11 (2025-05-26)
