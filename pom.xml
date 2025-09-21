@@ -488,6 +488,43 @@
                             <autoPublish>true</autoPublish>
                             <excludeArtifacts>
                                 <excludeArtifact>test-support</excludeArtifact>
+
+                                <!-- empty aggregate parent POMs not needed with enabled flattening -->
+                                <excludeArtifact>application-service</excludeArtifact>
+                                <excludeArtifact>application</excludeArtifact>
+                                <excludeArtifact>cloudevent-converter</excludeArtifact>
+                                <excludeArtifact>cloudevent-type-mapper</excludeArtifact>
+                                <excludeArtifact>common</excludeArtifact>
+                                <excludeArtifact>deadline-api</excludeArtifact>
+                                <excludeArtifact>deadline</excludeArtifact>
+                                <excludeArtifact>dsl</excludeArtifact>
+                                <excludeArtifact>eventstore-api</excludeArtifact>
+                                <excludeArtifact>eventstore-mongodb-spring</excludeArtifact>
+                                <excludeArtifact>eventstore-mongodb</excludeArtifact>
+                                <excludeArtifact>eventstore</excludeArtifact>
+                                <excludeArtifact>framework</excludeArtifact>
+                                <excludeArtifact>inmemory</excludeArtifact>
+                                <excludeArtifact>library</excludeArtifact>
+                                <excludeArtifact>module-dsl</excludeArtifact>
+                                <excludeArtifact>mongodb-native</excludeArtifact>
+                                <excludeArtifact>mongodb-spring</excludeArtifact>
+                                <excludeArtifact>mongodb</excludeArtifact>
+                                <excludeArtifact>occurrent</excludeArtifact>
+                                <excludeArtifact>query-dsl</excludeArtifact>
+                                <excludeArtifact>subscription-api</excludeArtifact>
+                                <excludeArtifact>subscription-dsl</excludeArtifact>
+                                <excludeArtifact>subscription-mongodb-common-blocking</excludeArtifact>
+                                <excludeArtifact>subscription-mongodb-common</excludeArtifact>
+                                <excludeArtifact>subscription-mongodb-native</excludeArtifact>
+                                <excludeArtifact>subscription-mongodb-spring</excludeArtifact>
+                                <excludeArtifact>subscription-mongodb</excludeArtifact>
+                                <excludeArtifact>subscription-redis-spring</excludeArtifact>
+                                <excludeArtifact>subscription-redis</excludeArtifact>
+                                <excludeArtifact>subscription-util-blocking</excludeArtifact>
+                                <excludeArtifact>subscription-util-reactor</excludeArtifact>
+                                <excludeArtifact>subscription-util</excludeArtifact>
+                                <excludeArtifact>subscription</excludeArtifact>
+
                                 <!-- Examples -->
                                 <excludeArtifact>example</excludeArtifact>
                                 <excludeArtifact>example-projection</excludeArtifact>
