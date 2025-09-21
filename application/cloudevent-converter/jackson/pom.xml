@@ -24,6 +24,8 @@
     <modelVersion>4.0.0</modelVersion>
 
     <artifactId>cloudevent-converter-jackson</artifactId>
+
+    <name>${mavenProjectName}</name>
     <description>CloudEvent Converter for Jackson</description>
 
     <dependencies>

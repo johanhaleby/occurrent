@@ -25,6 +25,8 @@
 
     <artifactId>inmemory-filter-matching</artifactId>
 
+    <name>${mavenProjectName}</name>
+
     <dependencies>
         <dependency>
             <groupId>org.occurrent</groupId>

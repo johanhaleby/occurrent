@@ -25,6 +25,8 @@
 
     <artifactId>eventstore-mongodb-common</artifactId>
 
+    <name>${mavenProjectName}</name>
+
     <dependencies>
         <dependency>
             <groupId>org.mongodb</groupId>

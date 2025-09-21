@@ -9,6 +9,8 @@
 
     <artifactId>subscription-mongodb-spring-blocking-competing-consumer-strategy</artifactId>
 
+    <name>${mavenProjectName}</name>
+
     <dependencies>
         <dependency>
             <groupId>org.springframework.data</groupId>

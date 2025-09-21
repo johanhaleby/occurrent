@@ -37,7 +37,7 @@
         <module>bom</module>
     </modules>
 
-    <name>Occurrent</name>
+    <name>${mavenProjectName}</name>
     <description>Event Sourcing Utilities for the JVM based on the CloudEvents specification</description>
     <url>https://occurrent.org</url>
 
@@ -65,6 +65,8 @@
     </scm>
 
     <properties>
+        <mavenProjectName>Occurrent</mavenProjectName>
+
         <!--use '-Drevision=...' when invoking Maven to assign required version-->
         <revision>0.0.0-SNAPSHOT</revision>
         <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>

@@ -25,6 +25,7 @@
 
     <artifactId>eventstore-mongodb-spring-reactor</artifactId>
 
+    <name>${mavenProjectName}</name>
 
     <dependencies>
         <dependency>

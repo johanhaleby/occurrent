@@ -25,6 +25,8 @@
 
     <artifactId>mongodb-spring-filter-query-conversion</artifactId>
 
+    <name>${mavenProjectName}</name>
+
     <dependencies>
         <dependency>
             <groupId>org.springframework.data</groupId>

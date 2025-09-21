@@ -25,6 +25,7 @@
 
     <artifactId>mongodb-timerepresentation</artifactId>
 
+    <name>${mavenProjectName}</name>
 
     <dependencies>
         <dependency>

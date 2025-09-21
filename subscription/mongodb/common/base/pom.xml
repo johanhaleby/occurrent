@@ -25,6 +25,8 @@
 
     <artifactId>subscription-mongodb-base</artifactId>
 
+    <name>${mavenProjectName}</name>
+
     <dependencies>
         <dependency>
             <groupId>org.mongodb</groupId>

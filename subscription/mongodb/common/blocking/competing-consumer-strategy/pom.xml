@@ -9,6 +9,8 @@
 
     <artifactId>subscription-mongodb-common-blocking-competing-consumer-strategy</artifactId>
 
+    <name>${mavenProjectName}</name>
+
     <dependencies>
         <dependency>
             <groupId>org.mongodb</groupId>

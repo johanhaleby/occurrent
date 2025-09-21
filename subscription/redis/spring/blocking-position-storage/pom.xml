@@ -25,6 +25,8 @@
 
     <artifactId>subscription-redis-spring-blocking-position-storage</artifactId>
 
+    <name>${mavenProjectName}</name>
+
     <dependencies>
         <dependency>
             <groupId>org.springframework.data</groupId>

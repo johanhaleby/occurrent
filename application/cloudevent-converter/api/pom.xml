@@ -25,6 +25,8 @@
 
     <artifactId>cloudevent-converter-api</artifactId>
 
+    <name>${mavenProjectName}</name>
+
     <dependencies>
         <dependency>
             <groupId>io.cloudevents</groupId>

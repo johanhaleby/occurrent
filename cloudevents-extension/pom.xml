@@ -25,6 +25,8 @@
 
     <artifactId>cloudevents-extension</artifactId>
 
+    <name>${mavenProjectName}</name>
+
     <dependencies>
         <dependency>
             <groupId>io.cloudevents</groupId>

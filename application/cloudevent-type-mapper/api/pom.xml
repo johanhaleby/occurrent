@@ -26,6 +26,8 @@
 
     <artifactId>cloudevent-type-mapper-api</artifactId>
 
+    <name>${mavenProjectName}</name>
+
     <dependencies>
         <dependency>
             <groupId>org.jetbrains.kotlin</groupId>

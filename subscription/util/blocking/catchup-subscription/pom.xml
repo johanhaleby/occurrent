@@ -23,6 +23,8 @@
     </parent>
     <modelVersion>4.0.0</modelVersion>
 
+    <name>${mavenProjectName}</name>
+
     <artifactId>catchup-subscription</artifactId>
     <dependencies>
         <dependency>

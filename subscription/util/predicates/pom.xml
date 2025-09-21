@@ -25,6 +25,8 @@
 
     <artifactId>subscription-util-predicates</artifactId>
 
+    <name>${mavenProjectName}</name>
+
     <dependencies>
         <dependency>
             <groupId>io.cloudevents</groupId>

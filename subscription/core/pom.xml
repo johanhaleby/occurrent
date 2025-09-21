@@ -25,6 +25,8 @@
 
     <artifactId>subscription-core</artifactId>
 
+    <name>${mavenProjectName}</name>
+
     <dependencies>
         <dependency>
             <groupId>io.cloudevents</groupId>

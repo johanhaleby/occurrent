@@ -25,6 +25,8 @@
 
     <artifactId>eventstore-api-reactor</artifactId>
 
+    <name>${mavenProjectName}</name>
+
     <dependencies>
         <dependency>
             <groupId>org.occurrent</groupId>

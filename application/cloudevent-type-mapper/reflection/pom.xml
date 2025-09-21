@@ -26,6 +26,8 @@
 
     <artifactId>cloudevent-type-mapper-reflection</artifactId>
 
+    <name>${mavenProjectName}</name>
+
     <dependencies>
         <dependency>
             <groupId>org.occurrent</groupId>

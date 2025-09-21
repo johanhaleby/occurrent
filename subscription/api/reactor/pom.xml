@@ -25,6 +25,7 @@
 
     <artifactId>subscription-api-reactor</artifactId>
 
+    <name>${mavenProjectName}</name>
 
     <dependencies>
         <dependency>

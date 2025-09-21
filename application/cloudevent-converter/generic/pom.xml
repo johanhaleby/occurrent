@@ -25,6 +25,8 @@
 
     <artifactId>cloudevent-converter-generic</artifactId>
 
+    <name>${mavenProjectName}</name>
+
     <dependencies>
         <dependency>
             <groupId>org.occurrent</groupId>

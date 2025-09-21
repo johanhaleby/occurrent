@@ -26,6 +26,8 @@
 
     <artifactId>query-dsl-blocking</artifactId>
 
+    <name>${mavenProjectName}</name>
+
     <dependencies>
         <dependency>
             <groupId>org.occurrent</groupId>

@@ -25,6 +25,7 @@
 
     <artifactId>subscription-mongodb-spring-common</artifactId>
 
+    <name>${mavenProjectName}</name>
 
     <dependencies>
         <dependency>
