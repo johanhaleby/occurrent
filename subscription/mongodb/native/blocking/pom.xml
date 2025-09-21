@@ -25,6 +25,8 @@
 
     <artifactId>subscription-mongodb-native-blocking</artifactId>
 
+    <name>${mavenProjectName}</name>
+
     <dependencies>
         <dependency>
             <groupId>org.mongodb</groupId>

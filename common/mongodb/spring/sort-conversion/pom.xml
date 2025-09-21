@@ -9,6 +9,7 @@
 
     <artifactId>mongodb-spring-sort-conversion</artifactId>
 
+    <name>${mavenProjectName}</name>
 
     <dependencies>
         <dependency>

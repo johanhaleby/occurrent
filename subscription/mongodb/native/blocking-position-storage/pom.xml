@@ -25,6 +25,8 @@
 
     <artifactId>subscription-mongodb-native-blocking-position-storage</artifactId>
 
+    <name>${mavenProjectName}</name>
+
     <dependencies>
         <dependency>
             <groupId>org.occurrent</groupId>

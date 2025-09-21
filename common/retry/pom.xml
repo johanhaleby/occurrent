@@ -25,6 +25,8 @@
 
     <artifactId>retry</artifactId>
 
+    <name>${mavenProjectName}</name>
+
     <dependencies>
         <dependency>
             <groupId>org.jetbrains.kotlin</groupId>

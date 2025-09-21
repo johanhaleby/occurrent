@@ -26,6 +26,8 @@
 
     <artifactId>spring-boot-starter-mongodb</artifactId>
 
+    <name>${mavenProjectName}</name>
+
     <dependencies>
         <!-- Spring -->
         <dependency>

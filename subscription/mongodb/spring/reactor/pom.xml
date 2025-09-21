@@ -25,6 +25,8 @@
 
     <artifactId>subscription-mongodb-spring-reactor</artifactId>
 
+    <name>${mavenProjectName}</name>
+
     <dependencies>
         <dependency>
             <groupId>org.occurrent</groupId>

@@ -25,6 +25,8 @@
 
     <artifactId>time</artifactId>
 
+    <name>${mavenProjectName}</name>
+
     <dependencies>
         <!-- Test -->
         <dependency>

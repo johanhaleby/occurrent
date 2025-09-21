@@ -25,6 +25,8 @@
 
     <artifactId>eventstore-mongodb-native</artifactId>
 
+    <name>${mavenProjectName}</name>
+
     <dependencies>
         <dependency>
             <groupId>org.occurrent</groupId>

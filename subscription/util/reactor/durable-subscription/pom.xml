@@ -25,6 +25,8 @@
 
     <artifactId>reactor-durable-subscription</artifactId>
 
+    <name>${mavenProjectName}</name>
+
     <dependencies>
         <dependency>
             <groupId>org.occurrent</groupId>

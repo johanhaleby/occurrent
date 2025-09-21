@@ -25,6 +25,8 @@
 
     <artifactId>mongodb-native-filter-bsonfilter-conversion</artifactId>
 
+    <name>${mavenProjectName}</name>
+
     <dependencies>
         <dependency>
             <groupId>org.occurrent</groupId>

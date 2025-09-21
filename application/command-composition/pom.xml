@@ -25,6 +25,7 @@
 
     <artifactId>command-composition</artifactId>
 
+    <name>${mavenProjectName}</name>
 
     <dependencies>
         <dependency>

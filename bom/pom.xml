@@ -8,8 +8,6 @@
     <artifactId>occurrent-bom</artifactId>
     <packaging>pom</packaging>
     <name>Occurrent BOM</name>
-    <description>Centralized dependencyManagement for the Occurrent project</description>
-    <url>https://occurrent.org</url>
     <licenses>
         <license>
             <name>Apache 2.0</name>
