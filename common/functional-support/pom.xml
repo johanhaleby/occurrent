@@ -25,5 +25,6 @@
 
     <artifactId>functional-support</artifactId>
 
+    <name>${mavenProjectName}</name>
 
 </project>

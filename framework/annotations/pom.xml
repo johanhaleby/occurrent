@@ -25,5 +25,6 @@
 
     <artifactId>annotations</artifactId>
 
+    <name>${mavenProjectName}</name>
 
 </project>
