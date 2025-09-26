@@ -53,8 +53,12 @@ echo
 echo
 echo "Starting to release Occurrent $releaseVersion (skip tests=$skipTests)"
 
-mvn deploy -Prelease -DskipTests=true -Drevision=${releaseVersion}
+mvn deploy -Prelease -DskipTests=${skipTests} -Drevision=${releaseVersion}
 mavenReleaseStatus=$?
+
+if [ $mavenReleaseStatus -eq 0 ]; then
+	git tag -a "occurrent-${releaseVersion}" -m "Released Occurrent ${releaseVersion}" && git push origin "occurrent-${releaseVersion}"
+fi	
 
 git checkout master
 
