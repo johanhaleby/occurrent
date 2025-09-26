@@ -47,10 +47,12 @@ fi
 
 echo "!!!!!DON'T FORGET TO SWITCH TO JAVA 17!!!!!"
 echo You may also need to disable "Stay invisible at the local network" in NordVPN, see nordvpn.md.
-echo "Preparing release of Occurrent ${releaseVersion} (skip tests=$skipTests)"
-read -r -e -s -p "Enter sonatype password: " sonatypePassword
 echo
-echo
+read -r -p "Do you want to proceed (y/N)? " REPLY
+case "$REPLY" in
+  [yY]) echo "Proceeding...";;
+  *)    echo "Aborted."; exit 1;;
+esac
 echo "Starting to release Occurrent $releaseVersion (skip tests=$skipTests)"
 
 mvn deploy -Prelease -DskipTests=${skipTests} -Drevision=${releaseVersion}
