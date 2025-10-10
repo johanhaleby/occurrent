@@ -26,6 +26,7 @@ import org.occurrent.retry.RetryStrategy.DontRetry;
 
 import java.time.Duration;
 import java.util.Iterator;
+import java.util.concurrent.TimeUnit;
 import java.util.function.Consumer;
 import java.util.function.Function;
 import java.util.function.Predicate;
@@ -145,9 +146,8 @@ public class RetryExecution {
                     long backoffMillis = currentBackoff.toMillis();
                     if (backoffMillis > 0) {
                         try {
-                            Thread.sleep(backoffMillis);
+                            TimeUnit.MILLISECONDS.sleep(backoffMillis);
                         } catch (InterruptedException ie) {
-                            Thread.currentThread().interrupt(); // optional but nicer
                             throw new RuntimeException(e);
                         }
                     }
