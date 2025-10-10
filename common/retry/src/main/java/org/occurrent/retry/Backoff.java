@@ -16,12 +16,15 @@
 
 package org.occurrent.retry;
 
+import org.jspecify.annotations.NullMarked;
+
 import java.time.Duration;
 import java.util.Objects;
 
 /**
  * Retry strategy to use if the action throws an exception.
  */
+@NullMarked
 public sealed interface Backoff {
 
     /**

@@ -17,6 +17,8 @@
 
 package org.occurrent.retry.internal;
 
+import org.jspecify.annotations.NullMarked;
+import org.jspecify.annotations.Nullable;
 import org.occurrent.retry.*;
 
 import java.util.Objects;
@@ -39,6 +41,7 @@ import static org.occurrent.retry.MaxAttempts.Infinite.infinite;
  *     <li>No error listener (will retry silently)</li>
  * </ul>
  */
+@NullMarked
 public final class RetryImpl implements RetryStrategy.Retry {
     // @formatter:off
     private static final BiConsumer<ErrorInfo, Throwable> NOOP_ERROR_LISTENER = (__, ___) -> {};
@@ -56,9 +59,9 @@ public final class RetryImpl implements RetryStrategy.Retry {
     final BiConsumer<RetryableErrorInfo, Throwable> onRetryableErrorListener;
     final Function<Throwable, Throwable> errorMapper;
 
-    private RetryImpl(Backoff backoff, MaxAttempts maxAttempts, Function<Throwable, Throwable> errorMapper, Predicate<Throwable> retryPredicate, BiConsumer<ErrorInfo, Throwable> errorListener,
-                      BiConsumer<BeforeRetryInfo, Throwable> onBeforeRetryListener, BiConsumer<AfterRetryInfo, Throwable> onAfterRetryListener,
-                      BiConsumer<RetryableErrorInfo, Throwable> onRetryableErrorListener) {
+    private RetryImpl(Backoff backoff, MaxAttempts maxAttempts, Function<Throwable, Throwable> errorMapper, Predicate<Throwable> retryPredicate, @Nullable BiConsumer<ErrorInfo, Throwable> errorListener,
+                      @Nullable BiConsumer<BeforeRetryInfo, Throwable> onBeforeRetryListener, @Nullable BiConsumer<AfterRetryInfo, Throwable> onAfterRetryListener,
+                      @Nullable BiConsumer<RetryableErrorInfo, Throwable> onRetryableErrorListener) {
         Objects.requireNonNull(backoff, Backoff.class.getSimpleName() + " cannot be null");
         Objects.requireNonNull(maxAttempts, MaxAttempts.class.getSimpleName() + " cannot be null");
         Objects.requireNonNull(retryPredicate, "Retry predicate cannot be null");
@@ -111,6 +114,7 @@ public final class RetryImpl implements RetryStrategy.Retry {
         return new RetryImpl(backoff, maxAttempts, errorMapper, retryPredicate, errorListener, onBeforeRetryListener, onAfterRetryListener, onRetryableErrorListener);
     }
 
+    @NullMarked
     @Override
     @SuppressWarnings("unchecked")
     public <E extends Throwable> Retry mapError(Class<E> type, Function<? super E, ? extends Throwable> mapper) {

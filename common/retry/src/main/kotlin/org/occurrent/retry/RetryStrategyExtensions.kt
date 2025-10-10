@@ -46,4 +46,5 @@ package org.occurrent.retry
  *
  * after having imported `org.occurrent.retry.exec`.
  */
-fun <T> RetryStrategy.exec(fn: (RetryInfo) -> T): T = execute { retryInfo -> fn(retryInfo)}
+@Suppress("UNCHECKED_CAST")
+fun <T> RetryStrategy.exec(fn: (RetryInfo) -> T): T = execute { retryInfo -> fn(retryInfo) } as T

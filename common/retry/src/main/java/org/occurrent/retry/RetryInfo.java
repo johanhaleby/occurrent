@@ -1,10 +1,13 @@
 package org.occurrent.retry;
 
+import org.jspecify.annotations.NullMarked;
+
 import java.time.Duration;
 
 /**
  * Contains useful information of the state of the retry
  */
+@NullMarked
 public interface RetryInfo {
     /**
      * @return The count of the <i>current</i> retry, {@code 0} if first <i>attempt</i>, but <i>1</i> for the first <i>retry attempt</i> etc.

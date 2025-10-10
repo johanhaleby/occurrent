@@ -17,12 +17,15 @@
 
 package org.occurrent.retry;
 
+import org.jspecify.annotations.NullMarked;
+
 import java.time.Duration;
 import java.util.Optional;
 
 /**
  * Contains useful information of the state of the retry after a retry attempt
  */
+@NullMarked
 public interface AfterRetryInfo extends RetryInfo {
 
     /**

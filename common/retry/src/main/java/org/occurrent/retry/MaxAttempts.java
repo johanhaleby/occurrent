@@ -1,5 +1,8 @@
 package org.occurrent.retry;
 
+import org.jspecify.annotations.NullMarked;
+
+@NullMarked
 public sealed interface MaxAttempts {
 
     record Limit(int limit) implements MaxAttempts {

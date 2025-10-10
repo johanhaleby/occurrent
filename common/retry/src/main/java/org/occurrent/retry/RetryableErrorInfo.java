@@ -17,11 +17,14 @@
 
 package org.occurrent.retry;
 
+import org.jspecify.annotations.NullMarked;
+
 import java.time.Duration;
 
 /**
  * Contains useful information of the state of the error
  */
+@NullMarked
 public interface RetryableErrorInfo extends RetryInfo {
 
     /**
