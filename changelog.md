@@ -1,3 +1,27 @@
+### Next version
+* Improvements to view-dsl (`org.occurrent:view-dsl`)  
+  1. The `update` method in `org.occurrent.dsl.view.MaterializedView` now takes a `RetryStrategy` so that updates can be retried
+  2. Calling the kotlin extension function `materialized` on a `org.occurrent.dsl.view.View` now takes a `org.occurrent.dsl.view.SpringMongoViewConfig` that allows you to configure how to handle `DuplicateKeyException` and `OptimisticLockingFailureException` thrown by Spring Repositories or `MongoOperations`.
+     By default, `DuplicateKeyException` is ignored and `OptimisticLockingFailureException`'s are retried with exponential backoff between 100 ms to 5s. This can be configured, for example:  
+     ```kotlin
+     @Document(collection = "name-state")
+     @TypeAlias("NameState")
+     data class NameState(@Id val userId: String, val name: String, @Version val version: Long? = null)
+     
+     val mongoOperations = .. 
+     val nameView = view<NameState?, DomainEvent>(null) { s, e ->
+                 when (e) {
+                     is NameDefined -> NameState(e.userId(), e.name)
+                     is NameWasChanged -> s!!.copy(name = e.name)
+                 }
+             }      
+     val config = SpringMongoViewConfig.config(duplicateKeyHandling = ignore(), optimisticLockingHandling = rethrow())                          
+     val materializedNameView = nameView.materialized(mongoOperations, config, DomainEvent::userId)
+     // Now you can do this to update the view in the MongoDB database from an event
+     val e = NameChangedEvent(..)
+     materializedNameView.update(e)
+     ``` 
+
 ### 0.19.12 (2025-09-26)
 * Internal changes including lots of changes to the build pipeline
 

@@ -265,6 +265,11 @@
                 <type>pom</type>
                 <scope>import</scope>
             </dependency>
+            <dependency>
+                   <groupId>io.github.serpro69</groupId>
+                   <artifactId>kotlin-faker</artifactId>
+                   <version>2.0.0-rc.11</version>
+               </dependency>
         </dependencies>
     </dependencyManagement>
 
