@@ -17,6 +17,7 @@
 package org.occurrent.subscription.blocking.durable.catchup;
 
 import io.cloudevents.CloudEvent;
+import org.jspecify.annotations.NullMarked;
 import org.occurrent.subscription.api.blocking.SubscriptionPositionStorage;
 import org.occurrent.subscription.util.predicate.EveryN;
 
@@ -26,6 +27,7 @@ import java.util.function.Predicate;
 /**
  * Configures if and how subscription position persistence should be handled during the catch-up phase.
  */
+@NullMarked
 public sealed interface SubscriptionPositionStorageConfig {
 
     /**

@@ -26,8 +26,8 @@ import com.rabbitmq.client.ConnectionFactory;
 import io.cloudevents.CloudEvent;
 import io.javalin.Javalin;
 import org.bson.Document;
-import org.jetbrains.annotations.NotNull;
-import org.jetbrains.annotations.Nullable;
+import org.jspecify.annotations.NonNull;
+import org.jspecify.annotations.Nullable;
 import org.occurrent.eventstore.api.blocking.EventStoreQueries;
 import org.occurrent.eventstore.mongodb.nativedriver.EventStoreConfig;
 import org.occurrent.eventstore.mongodb.nativedriver.MongoEventStore;
@@ -175,7 +175,7 @@ public class Bootstrap {
         }
     }
 
-    @NotNull
+    @NonNull
     private static WhatIsTheStatusOfGame initializeWhatIsTheStatusOfGame(MongoEventStore mongoEventStore, Serialization serialization) {
         return gameId -> mongoEventStore.query(subject(gameId.toString()))
                 .map(serialization::deserialize)
@@ -245,7 +245,7 @@ public class Bootstrap {
         return toStream(strings).anyMatch(c -> c.equals(collectionName));
     }
 
-    @NotNull
+    @NonNull
     private static <T> Stream<T> toStream(Iterable<T> ts) {
         return StreamSupport.stream(ts.spliterator(), false);
     }

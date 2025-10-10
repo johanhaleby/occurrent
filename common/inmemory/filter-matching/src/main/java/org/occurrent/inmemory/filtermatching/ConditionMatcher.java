@@ -17,6 +17,7 @@
 package org.occurrent.inmemory.filtermatching;
 
 import io.cloudevents.CloudEvent;
+import org.jspecify.annotations.NullMarked;
 import org.occurrent.condition.Condition;
 import org.occurrent.condition.Condition.MultiOperandCondition;
 import org.occurrent.condition.Condition.SingleOperandCondition;
@@ -37,6 +38,7 @@ import static org.occurrent.filter.Filter.*;
 /**
  * Check if a condition matches a certain cloud event
  */
+@NullMarked
 public class ConditionMatcher {
 
     private static final Set<String> ATTRIBUTE_NAMES = Set.of(SPEC_VERSION, ID, TYPE, TIME, SOURCE, SUBJECT, DATA_SCHEMA, DATA_CONTENT_TYPE);

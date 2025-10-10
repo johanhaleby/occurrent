@@ -17,6 +17,7 @@
 package org.occurrent.inmemory.filtermatching;
 
 import io.cloudevents.CloudEvent;
+import org.jspecify.annotations.NullMarked;
 import org.occurrent.filter.Filter;
 import org.occurrent.filter.Filter.CompositionFilter;
 
@@ -28,6 +29,7 @@ import static org.occurrent.filter.Filter.SingleConditionFilter;
 /**
  * Check if a cloud event matching a given filter
  */
+@NullMarked
 public class FilterMatcher {
 
     public static boolean matchesFilter(CloudEvent cloudEvent, Filter filter) {
@@ -38,22 +40,14 @@ public class FilterMatcher {
         final boolean matches;
         if (filter instanceof All) {
             matches = true;
-        } else if (filter instanceof SingleConditionFilter) {
-            SingleConditionFilter scf = (SingleConditionFilter) filter;
+        } else if (filter instanceof SingleConditionFilter scf) {
             matches = ConditionMatcher.matchesCondition(cloudEvent, scf.fieldName(), scf.condition());
-        } else if (filter instanceof CompositionFilter) {
-            CompositionFilter cf = (CompositionFilter) filter;
+        } else if (filter instanceof CompositionFilter cf) {
             Predicate<Filter> matchingPredicate = f -> matchesFilter(cloudEvent, f);
-            switch (cf.operator()) {
-                case AND:
-                    matches = cf.filters().stream().allMatch(matchingPredicate);
-                    break;
-                case OR:
-                    matches = cf.filters().stream().anyMatch(matchingPredicate);
-                    break;
-                default:
-                    throw new IllegalArgumentException("Unrecognized composition operator: " + cf.operator().getClass().getName());
-            }
+            matches = switch (cf.operator()) {
+                case AND -> cf.filters().stream().allMatch(matchingPredicate);
+                case OR -> cf.filters().stream().anyMatch(matchingPredicate);
+            };
         } else {
             throw new IllegalArgumentException("Unrecognized filter: " + filter.getClass().getName());
         }

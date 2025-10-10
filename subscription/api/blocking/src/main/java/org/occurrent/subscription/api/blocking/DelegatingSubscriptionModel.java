@@ -16,12 +16,15 @@
 
 package org.occurrent.subscription.api.blocking;
 
+import org.jspecify.annotations.NullMarked;
+
 /**
  * A delegating subscription model is a subscription model that wraps another subscription model
  * and delegates to it when {@code subscribe} methods are called. Sometimes it's useful to get the underlying
  * subscription model (mainly for testing purposes), since it may support more features than the {@code DelegatingSubscriptionModel} instance,
  * such as implementing {@link SubscriptionModelLifeCycle}.
  */
+@NullMarked
 public interface DelegatingSubscriptionModel {
 
     /**

@@ -17,6 +17,7 @@
 
 package org.occurrent.subscription.blocking.durable.catchup;
 
+import org.jspecify.annotations.NullMarked;
 import org.occurrent.subscription.DurationToTimeoutConverter;
 import org.occurrent.subscription.DurationToTimeoutConverter.Timeout;
 import org.occurrent.subscription.api.blocking.Subscription;
@@ -27,6 +28,7 @@ import org.slf4j.event.Level;
 import java.time.Duration;
 import java.util.concurrent.Future;
 
+@NullMarked
 record CatchupSubscription(String id, Future<Subscription> delegatedSubscription) implements Subscription {
     private static final Logger log = LoggerFactory.getLogger(CatchupSubscription.class);
 

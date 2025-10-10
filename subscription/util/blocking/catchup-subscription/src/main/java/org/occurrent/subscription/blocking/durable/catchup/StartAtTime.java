@@ -17,6 +17,9 @@
 
 package org.occurrent.subscription.blocking.durable.catchup;
 
+import org.jspecify.annotations.NullMarked;
+import org.occurrent.subscription.StartAt;
+
 import java.time.OffsetDateTime;
 
 
@@ -26,12 +29,13 @@ import java.time.OffsetDateTime;
  * If you're using Kotlin, use the extension functions in {@code org.occurrent.subscription.blocking.durable.catchup.CatchupSubscriptionModelExtensions.kt} file instead.
  * </p>
  */
+@NullMarked
 public class StartAtTime {
-    public static org.occurrent.subscription.StartAt beginningOfTime() {
-        return org.occurrent.subscription.StartAt.subscriptionPosition(TimeBasedSubscriptionPosition.beginningOfTime());
+    public static StartAt beginningOfTime() {
+        return StartAt.subscriptionPosition(TimeBasedSubscriptionPosition.beginningOfTime());
     }
 
-    public static org.occurrent.subscription.StartAt offsetDateTime(OffsetDateTime offsetDateTime) {
-        return org.occurrent.subscription.StartAt.subscriptionPosition(TimeBasedSubscriptionPosition.from(offsetDateTime));
+    public static StartAt offsetDateTime(OffsetDateTime offsetDateTime) {
+        return StartAt.subscriptionPosition(TimeBasedSubscriptionPosition.from(offsetDateTime));
     }
 }

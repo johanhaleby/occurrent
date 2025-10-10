@@ -17,9 +17,11 @@
 
 package org.occurrent.retry.internal;
 
+import org.jspecify.annotations.Nullable;
+
 public class SafeExceptionRethrower {
 
-    public static <T> T safeRethrow(Throwable t) {
+    public static <T> @Nullable T safeRethrow(Throwable t) {
         SafeExceptionRethrower.safeRethrow0(t);
         return null;
     }

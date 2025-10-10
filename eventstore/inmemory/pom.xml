@@ -42,6 +42,11 @@
             <groupId>io.cloudevents</groupId>
             <artifactId>cloudevents-core</artifactId>
         </dependency>
+        <dependency>
+            <groupId>org.jspecify</groupId>
+            <artifactId>jspecify</artifactId>
+            <optional>true</optional>
+        </dependency>
         <!-- Test -->
         <dependency>
             <groupId>com.fasterxml.jackson.core</groupId>

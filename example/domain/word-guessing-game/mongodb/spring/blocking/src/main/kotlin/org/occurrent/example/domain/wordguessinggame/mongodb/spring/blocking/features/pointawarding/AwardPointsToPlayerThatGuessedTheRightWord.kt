@@ -38,7 +38,7 @@ class AwardPointsToPlayerThatGuessedTheRightWord(
     operator fun invoke(playerGuessedTheRightWord: PlayerGuessedTheRightWord) {
         val gameId = playerGuessedTheRightWord.gameId
         val playerId = playerGuessedTheRightWord.playerId
-        val gameWasStarted = domainEventQueries.queryOne<GameWasStarted>(streamId(gameId.toString()).and(type(GameWasStarted::class.eventType())))
+        val gameWasStarted = domainEventQueries.queryOne<GameWasStarted>(streamId(gameId.toString()).and(type(GameWasStarted::class.eventType())))!!
         applicationService.execute("points:$gameId") { events: Sequence<GameEvent> ->
             val eventList = events.toList()
             val totalNumberGuessesForPlayerInGame = eventList.count { event -> event is PlayerGuessedTheWrongWord && event.playerId == playerGuessedTheRightWord.playerId } + 1

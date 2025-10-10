@@ -17,6 +17,8 @@
 package org.occurrent.application.service.blocking.generic;
 
 import io.cloudevents.CloudEvent;
+import org.jspecify.annotations.NullMarked;
+import org.jspecify.annotations.Nullable;
 import org.occurrent.application.converter.CloudEventConverter;
 import org.occurrent.application.service.blocking.ApplicationService;
 import org.occurrent.eventstore.api.WriteConditionNotFulfilledException;
@@ -27,6 +29,7 @@ import org.occurrent.retry.RetryStrategy;
 import org.occurrent.retry.RetryStrategy.Retry;
 
 import java.time.Duration;
+import java.util.Collections;
 import java.util.List;
 import java.util.Objects;
 import java.util.function.Consumer;
@@ -40,6 +43,7 @@ import java.util.stream.Stream;
  *
  * @param <T> The type of the event to store. Normally this would be your custom "DomainEvent" class, but it could also be {@link CloudEvent}.
  */
+@NullMarked
 public class GenericApplicationService<T> implements ApplicationService<T> {
 
     private final EventStore eventStore;
@@ -65,7 +69,7 @@ public class GenericApplicationService<T> implements ApplicationService<T> {
      * @param eventStore          The event store to use
      * @param cloudEventConverter The cloud event converter
      */
-    public GenericApplicationService(EventStore eventStore, CloudEventConverter<T> cloudEventConverter, RetryStrategy retryStrategy) {
+    public GenericApplicationService(@Nullable EventStore eventStore, @Nullable CloudEventConverter<T> cloudEventConverter, @Nullable RetryStrategy retryStrategy) {
         if (eventStore == null) throw new IllegalArgumentException(EventStore.class.getSimpleName() + " cannot be null");
         if (cloudEventConverter == null) throw new IllegalArgumentException(CloudEventConverter.class.getSimpleName() + " cannot be null");
         if (retryStrategy == null) throw new IllegalArgumentException(RetryStrategy.class.getSimpleName() + " cannot be null");
@@ -75,10 +79,12 @@ public class GenericApplicationService<T> implements ApplicationService<T> {
     }
 
     @Override
-    public WriteResult execute(String streamId, Function<Stream<T>, Stream<T>> functionThatCallsDomainModel, Consumer<Stream<T>> sideEffect) {
+    public WriteResult execute(String streamId, Function<Stream<T>, Stream<T>> functionThatCallsDomainModel, @Nullable Consumer<Stream<T>> sideEffect) {
         Objects.requireNonNull(streamId, "Stream id cannot be null");
         Objects.requireNonNull(functionThatCallsDomainModel, "Function that calls domain model cannot be null");
+        // @formatter:off
         record Tuple<T1, T2>(T1 v1, T2 v2) {}
+        // @formatter:on
 
         Tuple<WriteResult, List<T>> result = retryStrategy.execute(() -> {
             // Read all events from the event store for a particular stream
@@ -91,7 +97,7 @@ public class GenericApplicationService<T> implements ApplicationService<T> {
 
             // We need to convert the new domain event stream into a list in order to be able to call side effects with new events
             // if side effect is defined
-            final List<T> newEventsAsList = sideEffect == null ? null : newDomainEvents.collect(Collectors.toList());
+            final List<T> newEventsAsList = sideEffect == null ? Collections.emptyList() : newDomainEvents.collect(Collectors.toList());
 
             // Convert to cloud events and write the new events to the event store
             Stream<CloudEvent> newEvents = cloudEventConverter.toCloudEvents(sideEffect == null ? newDomainEvents : newEventsAsList.stream());

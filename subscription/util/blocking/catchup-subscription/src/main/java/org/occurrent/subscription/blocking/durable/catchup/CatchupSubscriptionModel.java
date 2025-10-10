@@ -17,8 +17,9 @@
 package org.occurrent.subscription.blocking.durable.catchup;
 
 import io.cloudevents.CloudEvent;
-import jakarta.annotation.Nullable;
 import jakarta.annotation.PreDestroy;
+import org.jspecify.annotations.NullMarked;
+import org.jspecify.annotations.Nullable;
 import org.occurrent.eventstore.api.blocking.EventStoreQueries;
 import org.occurrent.filter.Filter;
 import org.occurrent.subscription.*;
@@ -77,6 +78,7 @@ import static org.occurrent.time.internal.RFC3339.RFC_3339_DATE_TIME_FORMATTER;
  * how often this should happen in the {@link CatchupSubscriptionModelConfig}.
  * </p>
  */
+@NullMarked
 public class CatchupSubscriptionModel implements SubscriptionModel, DelegatingSubscriptionModel {
 
     private static final int DEFAULT_CACHE_SIZE = 100;
@@ -137,10 +139,10 @@ public class CatchupSubscriptionModel implements SubscriptionModel, DelegatingSu
     }
 
     @Override
-    public Subscription subscribe(String subscriptionId, SubscriptionFilter filter, StartAt startAt, Consumer<CloudEvent> action) {
+    public Subscription subscribe(String subscriptionId, @Nullable SubscriptionFilter filter, @Nullable StartAt startAt, Consumer<CloudEvent> action) {
         Objects.requireNonNull(startAt, "Start at supplier cannot be null");
         if (filter != null && !(filter instanceof OccurrentSubscriptionFilter)) {
-            throw new IllegalArgumentException("Unsupported!");
+            throw new IllegalArgumentException("Only OccurrentSubscriptionFilter is supported!");
         }
 
 
@@ -175,10 +177,11 @@ public class CatchupSubscriptionModel implements SubscriptionModel, DelegatingSu
         return new CatchupSubscription(subscriptionId, subscriptionCompletableFuture);
     }
 
-    private Subscription startCatchupSubscription(String subscriptionId, SubscriptionFilter filter, StartAt startAt, Consumer<CloudEvent> action, StartAt firstStartAt) {
+    private Subscription startCatchupSubscription(String subscriptionId, @Nullable SubscriptionFilter filter, StartAt startAt, Consumer<CloudEvent> action, StartAt firstStartAt) {
         runningCatchupSubscriptions.put(subscriptionId, true);
 
-        SubscriptionPosition subscriptionPosition = ((StartAtSubscriptionPosition) firstStartAt.get(generateSubscriptionModelContext())).subscriptionPosition;
+        StartAt nextStartAt = firstStartAt.get(generateSubscriptionModelContext());
+        SubscriptionPosition subscriptionPosition = ((StartAtSubscriptionPosition) Objects.requireNonNull(nextStartAt)).subscriptionPosition;
 
         Filter catchupFilter = deriveFilterToUseDuringCatchupPhase(filter, subscriptionPosition);
 
@@ -274,7 +277,7 @@ public class CatchupSubscriptionModel implements SubscriptionModel, DelegatingSu
         return startDelegatedSubscription(subscriptionId, filter, action, subscriptionsWasCancelledOrShutdown, startAtToUse, catchupPhaseCache);
     }
 
-    private Subscription startDelegatedSubscription(String subscriptionId, SubscriptionFilter filter, Consumer<CloudEvent> action, boolean subscriptionsWasCancelledOrShutdown, StartAt startAtToUse, FixedSizeCache catchupPhaseEventCache) {
+    private Subscription startDelegatedSubscription(String subscriptionId, @Nullable SubscriptionFilter filter, Consumer<CloudEvent> action, boolean subscriptionsWasCancelledOrShutdown, StartAt startAtToUse, FixedSizeCache catchupPhaseEventCache) {
         final Subscription subscription;
         if (subscriptionsWasCancelledOrShutdown) {
             doIfSubscriptionPositionStorageConfigIs(UseSubscriptionPositionInStorage.class, cfg -> {
@@ -294,7 +297,7 @@ public class CatchupSubscriptionModel implements SubscriptionModel, DelegatingSu
         return subscription;
     }
 
-    private static Filter deriveFilterToUseDuringCatchupPhase(SubscriptionFilter filter, SubscriptionPosition subscriptionPosition) {
+    private static Filter deriveFilterToUseDuringCatchupPhase(@Nullable SubscriptionFilter filter, SubscriptionPosition subscriptionPosition) {
         final Filter timeFilter;
         if (isBeginningOfTime(subscriptionPosition)) {
             timeFilter = Filter.all();
@@ -412,7 +415,7 @@ public class CatchupSubscriptionModel implements SubscriptionModel, DelegatingSu
     }
 
     private static class FixedSizeCache {
-        private final LinkedHashMap<String, String> cacheContent;
+        private final LinkedHashMap<String, @Nullable String> cacheContent;
 
         FixedSizeCache(int size) {
             cacheContent = new LinkedHashMap<>() {
@@ -432,7 +435,7 @@ public class CatchupSubscriptionModel implements SubscriptionModel, DelegatingSu
         }
     }
 
-    private <T, C extends SubscriptionPositionStorageConfig> Optional<T> returnIfSubscriptionPositionStorageConfigIs(Class<C> cls, Function<C, T> fn) {
+    private <T, C extends SubscriptionPositionStorageConfig> Optional<@Nullable T> returnIfSubscriptionPositionStorageConfigIs(Class<C> cls, Function<C, @Nullable T> fn) {
         if (cls.isInstance(config.subscriptionStorageConfig)) {
             return Optional.ofNullable(fn.apply(cls.cast(config.subscriptionStorageConfig)));
         }

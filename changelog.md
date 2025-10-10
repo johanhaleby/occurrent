@@ -23,6 +23,7 @@
      ```
   3. Serveral new overloaded evolve methods to make it easier to evolve the view from multiple events and not just one. Also, new kotlin extension functions for this defined in `org.occurrent.dsl.view.ViewExtensions.kt`.  
  * Replaced recursive retry logic with iterative loop in the `retry` module
+ * Migrated from jetbrains annotations to jspecify and introduce jspecify to almost all modules and API's (and fixed some bugs detected while introducing JSpecify)
 
 ### 0.19.12 (2025-09-26)
 * Internal changes including lots of changes to the build pipeline

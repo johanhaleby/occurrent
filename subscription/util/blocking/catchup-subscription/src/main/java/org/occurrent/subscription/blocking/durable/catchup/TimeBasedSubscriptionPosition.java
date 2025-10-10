@@ -16,6 +16,7 @@
 
 package org.occurrent.subscription.blocking.durable.catchup;
 
+import org.jspecify.annotations.NullMarked;
 import org.occurrent.subscription.SubscriptionPosition;
 
 import java.time.Instant;
@@ -25,6 +26,7 @@ import java.time.ZoneOffset;
 import static java.util.Objects.requireNonNull;
 import static org.occurrent.time.internal.RFC3339.RFC_3339_DATE_TIME_FORMATTER;
 
+@NullMarked
 public class TimeBasedSubscriptionPosition implements SubscriptionPosition {
 
     private static final OffsetDateTime BEGINNING_OF_TIME = Instant.EPOCH.atOffset(ZoneOffset.UTC);

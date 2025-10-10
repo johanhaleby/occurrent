@@ -43,8 +43,7 @@ public final class PositionAwareCloudEvent implements CloudEvent {
         this.subscriptionPosition = subscriptionPosition;
     }
 
-    @Nullable
-    public CloudEventData getData() {
+    public @Nullable CloudEventData getData() {
         return cloudEvent.getData();
     }
 
@@ -64,28 +63,23 @@ public final class PositionAwareCloudEvent implements CloudEvent {
         return cloudEvent.getSource();
     }
 
-    @Nullable
-    public String getDataContentType() {
+    public @Nullable String getDataContentType() {
         return cloudEvent.getDataContentType();
     }
 
-    @Nullable
-    public URI getDataSchema() {
+    public @Nullable URI getDataSchema() {
         return cloudEvent.getDataSchema();
     }
 
-    @Nullable
-    public String getSubject() {
+    public @Nullable String getSubject() {
         return cloudEvent.getSubject();
     }
 
-    @Nullable
-    public OffsetDateTime getTime() {
+    public @Nullable OffsetDateTime getTime() {
         return cloudEvent.getTime();
     }
 
-    @Nullable
-    public Object getAttribute(String attributeName) throws IllegalArgumentException {
+    public @Nullable Object getAttribute(String attributeName) throws IllegalArgumentException {
         return cloudEvent.getAttribute(attributeName);
     }
 
@@ -93,8 +87,7 @@ public final class PositionAwareCloudEvent implements CloudEvent {
         return cloudEvent.getAttributeNames();
     }
 
-    @Nullable
-    public Object getExtension(String extensionName) {
+    public @Nullable Object getExtension(String extensionName) {
         return cloudEvent.getExtension(extensionName);
     }
 

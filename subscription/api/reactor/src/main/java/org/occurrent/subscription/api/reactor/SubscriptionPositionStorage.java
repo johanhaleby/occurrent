@@ -16,6 +16,7 @@
 
 package org.occurrent.subscription.api.reactor;
 
+import org.jspecify.annotations.NullMarked;
 import org.occurrent.subscription.StartAt;
 import org.occurrent.subscription.SubscriptionPosition;
 import reactor.core.publisher.Mono;
@@ -26,6 +27,7 @@ import reactor.core.publisher.Mono;
  * This subscriptions can continue where they left off by passing the {@link SubscriptionPosition} provided by {@link #read(String)}
  * to a {@link PositionAwareSubscriptionModel} when the application is restarted etc.
  */
+@NullMarked
 public interface SubscriptionPositionStorage {
 
     /**

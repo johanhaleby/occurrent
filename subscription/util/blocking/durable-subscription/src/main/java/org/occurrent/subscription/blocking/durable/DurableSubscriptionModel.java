@@ -18,6 +18,8 @@ package org.occurrent.subscription.blocking.durable;
 
 import io.cloudevents.CloudEvent;
 import jakarta.annotation.PreDestroy;
+import org.jspecify.annotations.NullMarked;
+import org.jspecify.annotations.Nullable;
 import org.occurrent.subscription.StartAt;
 import org.occurrent.subscription.StartAt.SubscriptionModelContext;
 import org.occurrent.subscription.SubscriptionFilter;
@@ -42,6 +44,7 @@ import static org.occurrent.subscription.util.predicate.EveryN.everyEvent;
  * Note that this implementation stores the subscription position after _every_ action. If you have a lot of events and duplication is not
  * that much of a deal, consider changing this behavior by supplying an instance of {@link DurableSubscriptionModelConfig}.
  */
+@NullMarked
 public class DurableSubscriptionModel implements PositionAwareSubscriptionModel, DelegatingSubscriptionModel {
 
     private final PositionAwareSubscriptionModel subscriptionModel;
@@ -78,7 +81,7 @@ public class DurableSubscriptionModel implements PositionAwareSubscriptionModel,
     }
 
     @Override
-    public Subscription subscribe(String subscriptionId, SubscriptionFilter filter, StartAt startAt, Consumer<CloudEvent> action) {
+    public Subscription subscribe(String subscriptionId, @Nullable SubscriptionFilter filter, @Nullable StartAt startAt, Consumer<CloudEvent> action) {
         Objects.requireNonNull(startAt, StartAt.class.getSimpleName() + " supplier cannot be null");
 
         StartAt startAtToUse = generateStartAtPositionFrom(subscriptionId, startAt);
@@ -97,6 +100,7 @@ public class DurableSubscriptionModel implements PositionAwareSubscriptionModel,
         );
     }
 
+    @Nullable
     private StartAt generateStartAtPositionFrom(String subscriptionId, StartAt originalStartAt) {
         final StartAt startAtToUse;
         if (originalStartAt.isDefault()) {
@@ -179,6 +183,7 @@ public class DurableSubscriptionModel implements PositionAwareSubscriptionModel,
         subscriptionModel.shutdown();
     }
 
+    @Nullable
     @Override
     public SubscriptionPosition globalSubscriptionPosition() {
         return subscriptionModel.globalSubscriptionPosition();

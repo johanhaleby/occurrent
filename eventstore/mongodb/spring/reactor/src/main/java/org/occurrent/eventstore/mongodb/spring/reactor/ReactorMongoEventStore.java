@@ -23,6 +23,8 @@ import com.mongodb.reactivestreams.client.MongoCollection;
 import io.cloudevents.CloudEvent;
 import org.bson.Document;
 import org.bson.conversions.Bson;
+import org.jspecify.annotations.NullMarked;
+import org.jspecify.annotations.NullUnmarked;
 import org.occurrent.cloudevents.OccurrentExtensionGetter;
 import org.occurrent.eventstore.api.*;
 import org.occurrent.eventstore.api.reactor.EventStore;
@@ -66,6 +68,7 @@ import static org.springframework.data.mongodb.core.query.Criteria.where;
  * Spring's {@link ReactiveMongoTemplate} that is based on <a href="https://projectreactor.io/">project reactor</a>.
  * It also supports the {@link EventStoreOperations} and {@link EventStoreQueries} contracts.
  */
+@NullMarked
 public class ReactorMongoEventStore implements EventStore, EventStoreOperations, EventStoreQueries {
 
     private static final String ID = "_id";
@@ -187,11 +190,10 @@ public class ReactorMongoEventStore implements EventStore, EventStoreOperations,
             return true;
         }
 
-        if (!(writeCondition instanceof WriteCondition.StreamVersionWriteCondition)) {
+        if (!(writeCondition instanceof WriteCondition.StreamVersionWriteCondition c)) {
             throw new IllegalArgumentException("Invalid " + WriteCondition.class.getSimpleName() + ": " + writeCondition);
         }
 
-        WriteCondition.StreamVersionWriteCondition c = (WriteCondition.StreamVersionWriteCondition) writeCondition;
         return LongConditionEvaluator.evaluate(c.condition(), streamVersion);
     }
 
@@ -221,7 +223,7 @@ public class ReactorMongoEventStore implements EventStore, EventStoreOperations,
         return mongoTemplate.collectionExists(eventStoreCollectionName).flatMap(exists -> exists ? Mono.empty() : mongoTemplate.createCollection(eventStoreCollectionName));
     }
 
-    public static Mono<EventStream<CloudEvent>> convertToCloudEvent(TimeRepresentation timeRepresentation, Mono<EventStreamImpl> eventStream) {
+    private static Mono<EventStream<CloudEvent>> convertToCloudEvent(TimeRepresentation timeRepresentation, Mono<EventStreamImpl> eventStream) {
         return eventStream.map(es -> es.map(document -> convertToCloudEvent(timeRepresentation, document)));
     }
 
@@ -313,6 +315,7 @@ public class ReactorMongoEventStore implements EventStore, EventStoreOperations,
         }
     }
 
+    @NullUnmarked
     private static class EventStreamImpl implements EventStream<Document> {
         private String id;
         private long version;

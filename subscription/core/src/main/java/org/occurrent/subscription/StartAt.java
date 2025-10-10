@@ -16,6 +16,9 @@
 
 package org.occurrent.subscription;
 
+import org.jspecify.annotations.NullMarked;
+import org.jspecify.annotations.Nullable;
+
 import java.util.Objects;
 import java.util.StringJoiner;
 import java.util.function.Function;
@@ -26,8 +29,10 @@ import static java.util.Objects.requireNonNull;
 /**
  * Specifies in which position a subscription should start when subscribing to it
  */
+@NullMarked
 public sealed interface StartAt {
 
+    @Nullable
     StartAt get(SubscriptionModelContext context);
 
     default boolean isNow() {

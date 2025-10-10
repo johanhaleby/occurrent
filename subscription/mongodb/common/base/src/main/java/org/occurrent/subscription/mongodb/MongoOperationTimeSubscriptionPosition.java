@@ -19,6 +19,7 @@ package org.occurrent.subscription.mongodb;
 import org.bson.BsonTimestamp;
 import org.bson.BsonValue;
 import org.bson.Document;
+import org.jspecify.annotations.NullMarked;
 import org.occurrent.subscription.SubscriptionPosition;
 
 import java.util.Objects;
@@ -28,6 +29,7 @@ import java.util.StringJoiner;
  * A {@link SubscriptionPosition} implementation for MongoDB that provides the operation time
  * that consumers may decide which to use when continuing the stream.
  */
+@NullMarked
 public class MongoOperationTimeSubscriptionPosition implements SubscriptionPosition {
     public final BsonTimestamp operationTime;
 

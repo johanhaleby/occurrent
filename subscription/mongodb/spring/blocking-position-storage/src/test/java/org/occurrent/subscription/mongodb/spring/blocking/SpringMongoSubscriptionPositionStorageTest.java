@@ -25,6 +25,7 @@ import io.cloudevents.CloudEvent;
 import io.cloudevents.core.builder.CloudEventBuilder;
 import io.github.artsok.RepeatedIfExceptionsTest;
 import org.bson.Document;
+import org.jspecify.annotations.NullMarked;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -150,6 +151,7 @@ public class SpringMongoSubscriptionPositionStorageTest {
         SpringMongoSubscriptionPositionStorage storage = new SpringMongoSubscriptionPositionStorage(mongoTemplate, RESUME_TOKEN_COLLECTION) {
 
             @Override
+            @NullMarked
             void persistDocumentStreamPosition(String subscriptionId, Document document) {
                 if (counter.getAndIncrement() == 0) {
                     throw new IllegalStateException("expected");

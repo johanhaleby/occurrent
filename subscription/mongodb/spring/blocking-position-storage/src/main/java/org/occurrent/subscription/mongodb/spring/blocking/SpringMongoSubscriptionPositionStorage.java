@@ -20,14 +20,14 @@ import jakarta.annotation.PreDestroy;
 import org.bson.BsonTimestamp;
 import org.bson.BsonValue;
 import org.bson.Document;
+import org.jspecify.annotations.NullMarked;
+import org.jspecify.annotations.Nullable;
 import org.occurrent.retry.RetryStrategy;
 import org.occurrent.subscription.SubscriptionPosition;
 import org.occurrent.subscription.api.blocking.SubscriptionPositionStorage;
 import org.occurrent.subscription.mongodb.MongoOperationTimeSubscriptionPosition;
 import org.occurrent.subscription.mongodb.MongoResumeTokenSubscriptionPosition;
 import org.occurrent.subscription.mongodb.internal.MongoCommons;
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
 import org.springframework.data.mongodb.core.MongoOperations;
 import org.springframework.data.mongodb.core.query.Update;
 
@@ -43,8 +43,8 @@ import static org.springframework.data.mongodb.core.query.Query.query;
 /**
  * A Spring implementation of {@link SubscriptionPositionStorage} that stores {@link SubscriptionPosition} in MongoDB.
  */
+@NullMarked
 public class SpringMongoSubscriptionPositionStorage implements SubscriptionPositionStorage {
-    private static final Logger log = LoggerFactory.getLogger(SpringMongoSubscriptionPositionStorage.class);
 
     private final MongoOperations mongoOperations;
     private final String subscriptionPositionCollection;
@@ -80,9 +80,10 @@ public class SpringMongoSubscriptionPositionStorage implements SubscriptionPosit
         this.retryStrategy = retryStrategy;
     }
 
+    @Nullable
     @Override
     public SubscriptionPosition read(String subscriptionId) {
-        Supplier<SubscriptionPosition> read = () -> {
+        Supplier<@Nullable SubscriptionPosition> read = () -> {
             Document document = mongoOperations.findOne(query(where(ID).is(subscriptionId)), Document.class, subscriptionPositionCollection);
             if (document == null) {
                 return null;
@@ -108,7 +109,7 @@ public class SpringMongoSubscriptionPositionStorage implements SubscriptionPosit
             return subscriptionPosition;
         };
 
-        return executeWithRetry(save, __ -> !shutdown, retryStrategy).get();
+        return requireNonNull(executeWithRetry(save, __ -> !shutdown, retryStrategy).get());
     }
 
     @Override
@@ -120,7 +121,7 @@ public class SpringMongoSubscriptionPositionStorage implements SubscriptionPosit
     @Override
     public boolean exists(String subscriptionId) {
         Supplier<Boolean> exists = () -> mongoOperations.exists(query(where(ID).is(subscriptionId)), subscriptionPositionCollection);
-        return executeWithRetry(exists, __ -> !shutdown, retryStrategy).get();
+        return Boolean.TRUE.equals(executeWithRetry(exists, __ -> !shutdown, retryStrategy).get());
     }
 
     private void persistResumeTokenStreamPosition(String subscriptionId, BsonValue resumeToken) {

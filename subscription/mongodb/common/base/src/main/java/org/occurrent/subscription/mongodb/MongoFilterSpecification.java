@@ -18,6 +18,7 @@ package org.occurrent.subscription.mongodb;
 
 import com.mongodb.client.model.Filters;
 import org.bson.conversions.Bson;
+import org.jspecify.annotations.NullMarked;
 import org.occurrent.subscription.SubscriptionFilter;
 
 import java.util.function.BiFunction;
@@ -28,6 +29,7 @@ import static com.mongodb.client.model.Aggregates.match;
  * Add filters when subscribing to a MongoDB subscription if you're only interested in specify changes.
  * These filters will be applied at the database level so they're efficient.
  */
+@NullMarked
 public class MongoFilterSpecification implements SubscriptionFilter {
 
     public static final String FULL_DOCUMENT = "fullDocument";

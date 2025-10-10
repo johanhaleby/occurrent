@@ -19,6 +19,8 @@ package org.occurrent.subscription.mongodb.blocking.ccs.internal;
 
 import com.mongodb.client.MongoCollection;
 import org.bson.BsonDocument;
+import org.jspecify.annotations.NullMarked;
+import org.jspecify.annotations.Nullable;
 import org.occurrent.retry.RetryStrategy;
 import org.occurrent.retry.RetryStrategy.Retry;
 import org.occurrent.retry.internal.RetryImpl;
@@ -39,6 +41,7 @@ import java.util.function.Function;
 /**
  * Common operations for MongoDB lease-based competing consumer strategies
  */
+@NullMarked
 public class MongoLeaseCompetingConsumerStrategySupport {
     private static final Logger log = LoggerFactory.getLogger(MongoLeaseCompetingConsumerStrategySupport.class);
 
@@ -126,7 +129,7 @@ public class MongoLeaseCompetingConsumerStrategySupport {
         releaseCompetingConsumer(collection, subscriptionId, subscriberId, null);
     }
 
-    private void releaseCompetingConsumer(MongoCollection<BsonDocument> collection, String subscriptionId, String subscriberId, Status suppliedStatus) {
+    private void releaseCompetingConsumer(MongoCollection<BsonDocument> collection, String subscriptionId, String subscriberId, @Nullable Status suppliedStatus) {
         Objects.requireNonNull(subscriptionId, "Subscription id cannot be null");
         Objects.requireNonNull(subscriberId, "Subscriber id cannot be null");
         logDebug("Releasing consumer (subscriberId={}, subscriptionId={}, suppliedStatus={})", subscriberId, subscriptionId, suppliedStatus);
@@ -202,7 +205,7 @@ public class MongoLeaseCompetingConsumerStrategySupport {
         LOCK_ACQUIRED, LOCK_NOT_ACQUIRED
     }
 
-    private static void logDebug(String message, Object... params) {
+    private static void logDebug(String message, @Nullable Object... params) {
         if (log.isDebugEnabled()) {
             log.debug(message, params);
         }

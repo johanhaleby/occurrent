@@ -1,9 +1,10 @@
 package org.occurrent.application.service.blocking;
 
+import org.jspecify.annotations.NullMarked;
+
 import java.util.List;
 import java.util.Objects;
 import java.util.function.Consumer;
-import java.util.stream.Collectors;
 import java.util.stream.Stream;
 
 /**
@@ -13,6 +14,7 @@ import java.util.stream.Stream;
  *
  * @param <T> The type of your domain event
  */
+@NullMarked
 public interface PolicySideEffect<T> extends Consumer<Stream<T>> {
 
     /**
@@ -93,7 +95,7 @@ public interface PolicySideEffect<T> extends Consumer<Stream<T>> {
      */
     default <E extends T> PolicySideEffect<T> andThenExecuteAnotherPolicy(Class<E> eventType, Consumer<E> policy) {
         return stream -> {
-            List<T> list = stream.collect(Collectors.toList());
+            List<T> list = stream.toList();
             accept(list.stream());
             PolicySideEffect<T> secondPolicy = executePolicy(eventType, policy);
             secondPolicy.accept(list.stream());

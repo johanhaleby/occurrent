@@ -16,6 +16,8 @@
 
 package org.occurrent.subscription;
 
+import org.jspecify.annotations.NonNull;
+
 /**
  * Represents the position for a subscription. Note that this is not the same as a CloudEvent position in an event stream.
  * Rather the subscription position is the position for a particular subscriber that streams events from a subscription.
@@ -28,5 +30,6 @@ package org.occurrent.subscription;
  * </p>
  */
 public interface SubscriptionPosition {
+    @NonNull
     String asString();
 }

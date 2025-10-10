@@ -1,11 +1,14 @@
 package org.occurrent.subscription.internal;
 
+import org.jspecify.annotations.NullMarked;
+
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.TimeUnit;
 
 /**
  * Utility functions for shutting down executor services.
  */
+@NullMarked
 public class ExecutorShutdown {
 
     /**

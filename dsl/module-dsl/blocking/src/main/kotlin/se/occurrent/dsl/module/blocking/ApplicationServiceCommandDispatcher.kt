@@ -21,11 +21,11 @@ import org.occurrent.application.service.blocking.execute
 import kotlin.reflect.KClass
 
 
-class ApplicationServiceCommandDispatcher<C : Any, E>(applicationService: ApplicationService<E>) : CommandDispatcher<C, ApplicationServiceCommandBuilder<C, E>> {
+class ApplicationServiceCommandDispatcher<C : Any, E : Any>(applicationService: ApplicationService<E>) : CommandDispatcher<C, ApplicationServiceCommandBuilder<C, E>> {
     private val builder = ApplicationServiceCommandBuilder<C, E>(applicationService)
 
     companion object {
-        fun <C : Any, E> dispatchTo(applicationService: ApplicationService<E>): ApplicationServiceCommandDispatcher<C, E> = ApplicationServiceCommandDispatcher(applicationService)
+        fun <C : Any, E : Any> dispatchTo(applicationService: ApplicationService<E>): ApplicationServiceCommandDispatcher<C, E> = ApplicationServiceCommandDispatcher(applicationService)
     }
 
     override fun dispatch(command: C): Boolean {
@@ -41,7 +41,7 @@ class ApplicationServiceCommandDispatcher<C : Any, E>(applicationService: Applic
     override fun builder(): ApplicationServiceCommandBuilder<C, E> = builder
 }
 
-class ApplicationServiceCommandBuilder<C : Any, E>(val applicationService: ApplicationService<E>) {
+class ApplicationServiceCommandBuilder<C : Any, E : Any>(val applicationService: ApplicationService<E>) {
     val dispatchers = mutableMapOf<KClass<out C>, (C) -> Unit>()
 
     inline fun <reified CMD : C> command(crossinline commandHandler: (CMD) -> Unit) {

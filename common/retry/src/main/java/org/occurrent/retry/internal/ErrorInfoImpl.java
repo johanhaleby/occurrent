@@ -17,7 +17,7 @@
 
 package org.occurrent.retry.internal;
 
-import org.jetbrains.annotations.Nullable;
+import org.jspecify.annotations.Nullable;
 import org.occurrent.retry.ErrorInfo;
 import org.occurrent.retry.RetryInfo;
 

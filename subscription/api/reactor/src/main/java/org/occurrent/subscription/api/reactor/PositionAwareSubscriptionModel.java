@@ -17,6 +17,7 @@
 package org.occurrent.subscription.api.reactor;
 
 import io.cloudevents.CloudEvent;
+import org.jspecify.annotations.NullMarked;
 import org.occurrent.subscription.PositionAwareCloudEvent;
 import org.occurrent.subscription.SubscriptionPosition;
 import reactor.core.publisher.Mono;
@@ -26,6 +27,7 @@ import reactor.core.publisher.Mono;
  * This is useful for subscriptions that want to persist the position for a given event if the event store doesn't
  * maintain the position for subscriptions automatically.
  */
+@NullMarked
 public interface PositionAwareSubscriptionModel extends SubscriptionModel {
 
     /**

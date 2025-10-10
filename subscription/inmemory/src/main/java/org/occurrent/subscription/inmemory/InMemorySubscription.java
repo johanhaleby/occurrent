@@ -17,6 +17,7 @@
 package org.occurrent.subscription.inmemory;
 
 import io.cloudevents.CloudEvent;
+import org.jspecify.annotations.NullMarked;
 import org.occurrent.filter.Filter;
 import org.occurrent.retry.RetryStrategy;
 import org.occurrent.subscription.DurationToTimeoutConverter;
@@ -37,6 +38,7 @@ import static org.occurrent.retry.internal.RetryExecution.executeWithRetry;
 /**
  * An in-memory subscription
  */
+@NullMarked
 public class InMemorySubscription implements Subscription, Runnable {
     private final String id;
     private final BlockingQueue<CloudEvent> queue;

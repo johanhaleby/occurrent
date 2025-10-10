@@ -1,5 +1,7 @@
 package org.occurrent.subscription.api.blocking;
 
+import org.jspecify.annotations.NullMarked;
+
 /**
  * The contract for competing consumer strategies. A competing consumer strategy is used with a "competing consumer subscription model" to allow for
  * <a href="https://www.enterpriseintegrationpatterns.com/patterns/messaging/CompetingConsumers.html">competing consumers</a> (i.e. concurrent message processing).
@@ -8,6 +10,7 @@ package org.occurrent.subscription.api.blocking;
  * If one subscriber crashes, the {@code CompetingConsumerStrategy} implementation, will notify the {@code CompetingConsumerSubscriptionModel} (which implements the
  * {@link CompetingConsumerListener} interface) that another subscriber may take over. This is typically done by (distributed) leader election.
  */
+@NullMarked
 public interface CompetingConsumerStrategy {
 
     /**

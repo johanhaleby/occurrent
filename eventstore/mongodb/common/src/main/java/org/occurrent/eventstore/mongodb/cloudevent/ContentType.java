@@ -1,8 +1,10 @@
 package org.occurrent.eventstore.mongodb.cloudevent;
 
+import org.jspecify.annotations.Nullable;
+
 class ContentType {
 
-    public static boolean isJson(Object contentTypeObject) {
+    public static boolean isJson(@Nullable Object contentTypeObject) {
         if (contentTypeObject == null) {
             // An undefined content-type means application/json according to the cloud event spec
             return true;
@@ -13,7 +15,7 @@ class ContentType {
         return contentType.contains("/json") || contentType.contains("+json");
     }
 
-    public static boolean isText(Object contentTypeObject) {
+    public static boolean isText(@Nullable Object contentTypeObject) {
         if (contentTypeObject == null) {
             // An undefined content-type means application/json according to the cloud event spec
             return false;

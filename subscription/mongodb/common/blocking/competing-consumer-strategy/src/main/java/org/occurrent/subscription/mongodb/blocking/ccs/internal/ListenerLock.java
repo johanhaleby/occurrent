@@ -18,9 +18,11 @@
 package org.occurrent.subscription.mongodb.blocking.ccs.internal;
 
 import org.bson.BsonNumber;
+import org.jspecify.annotations.NullMarked;
 
 import java.util.Objects;
 
+@NullMarked
 class ListenerLock {
     private final long version;
 

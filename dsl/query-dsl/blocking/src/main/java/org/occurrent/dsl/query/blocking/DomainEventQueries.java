@@ -18,7 +18,8 @@
 package org.occurrent.dsl.query.blocking;
 
 import io.cloudevents.CloudEvent;
-import org.jetbrains.annotations.Nullable;
+import org.jspecify.annotations.NullMarked;
+import org.jspecify.annotations.Nullable;
 import org.occurrent.application.converter.CloudEventConverter;
 import org.occurrent.eventstore.api.SortBy;
 import org.occurrent.eventstore.api.blocking.EventStoreQueries;
@@ -32,6 +33,7 @@ import java.util.stream.Stream;
  *
  * @param <T> The type of your event
  */
+@NullMarked
 public class DomainEventQueries<T> {
 
     private final EventStoreQueries eventStoreQueries;
@@ -52,6 +54,7 @@ public class DomainEventQueries<T> {
      *
      * @return All cloud events matching the specified filter, skip, limit and sort by <code>sortBy</code>.
      */
+    @Nullable
     public <E extends T> E queryOne(Filter filter) {
         return this.<E>toDomainEvents(eventStoreQueries.query(filter, 0, 1)).findFirst().orElse(null);
     }
@@ -61,6 +64,7 @@ public class DomainEventQueries<T> {
      *
      * @return The cloud event matching the specified type or {@code null}
      */
+    @Nullable
     public <E extends T> E queryOne(Class<E> type) {
         return query(type, 0, 1).findFirst().orElse(null);
     }
@@ -79,6 +83,7 @@ public class DomainEventQueries<T> {
      *
      * @return The cloud event matching the specified type or {@code null}
      */
+    @Nullable
     public <E extends T> E queryOne(Class<E> type, int skip, int limit) {
         return queryOne(type, skip, limit, SortBy.unsorted());
     }
@@ -88,6 +93,7 @@ public class DomainEventQueries<T> {
      *
      * @return The cloud event matching the specified type or {@code null}
      */
+    @Nullable
     public <E extends T> E queryOne(Class<E> type, int skip, int limit, SortBy sortBy) {
         Objects.requireNonNull(type, "type cannot be null");
         CloudEvent cloudEvent = eventStoreQueries.query(Filter.type(cloudEventConverter.getCloudEventType(type)), skip, limit, sortBy).findFirst().orElse(null);
@@ -220,7 +226,7 @@ public class DomainEventQueries<T> {
      */
     @SuppressWarnings("unchecked")
     @SafeVarargs
-    public final Stream<T> query(Class<? extends T> type, Class<? extends T>... types) {
+    public final Stream<T> query(Class<? extends T> type, @Nullable Class<? extends T>... types) {
         final List<T> list = new ArrayList<>();
         list.add((T) type);
         if (types != null && types.length > 0) {
@@ -310,15 +316,16 @@ public class DomainEventQueries<T> {
         return stream.map(cloudEventConverter::toDomainEvent).map(t -> (E) t);
     }
 
-    private <E extends T> E toDomainEvent(CloudEvent cloudEvent) {
+    @SuppressWarnings("unchecked")
+    @Nullable
+    private <E extends T> E toDomainEvent(@Nullable CloudEvent cloudEvent) {
         if (cloudEvent == null) {
             return null;
         }
         return (E) cloudEventConverter.toDomainEvent(cloudEvent);
     }
 
-    @Nullable
-    private Filter createFilterFrom(Collection<Class<? extends T>> types) {
+    private @Nullable Filter createFilterFrom(Collection<Class<? extends T>> types) {
         return (types == null ? Stream.<Class<? extends T>>empty() : types.stream())
                 .map(type -> Filter.type(cloudEventConverter.getCloudEventType(type)))
                 .reduce(Filter::or)

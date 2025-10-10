@@ -25,6 +25,7 @@ import com.mongodb.client.MongoDatabase;
 import io.cloudevents.CloudEvent;
 import io.cloudevents.core.builder.CloudEventBuilder;
 import org.bson.Document;
+import org.jspecify.annotations.NullMarked;
 import org.junit.jupiter.api.*;
 import org.junit.jupiter.api.DisplayNameGenerator.ReplaceUnderscores;
 import org.junit.jupiter.api.extension.RegisterExtension;
@@ -637,7 +638,9 @@ public class CatchupSubscriptionModelTest {
         }
 
         AtomicInteger numberOfSavedPositions = new AtomicInteger();
+
         storage = new NativeMongoSubscriptionPositionStorage(database, "storage") {
+            @NullMarked
             @Override
             public SubscriptionPosition save(String subscriptionId, SubscriptionPosition subscriptionPosition) {
                 numberOfSavedPositions.incrementAndGet();

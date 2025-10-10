@@ -16,6 +16,8 @@
 
 package org.occurrent.eventstore.mongodb.spring.blocking;
 
+import org.jspecify.annotations.NullMarked;
+import org.jspecify.annotations.NullUnmarked;
 import org.occurrent.eventstore.api.blocking.EventStoreQueries;
 import org.occurrent.mongodb.timerepresentation.TimeRepresentation;
 import org.springframework.data.domain.Sort;
@@ -32,6 +34,7 @@ import static java.util.Objects.requireNonNull;
 /**
  * Configuration for the blocking Spring java driver for MongoDB EventStore
  */
+@NullMarked
 public class EventStoreConfig {
     private static final Function<Query, Query> DEFAULT_QUERY_OPTIONS_FUNCTION = Function.identity();
     private static final Function<Query, Query> DEFAULT_READ_OPTIONS_FUNCTION = Function.identity();
@@ -61,8 +64,8 @@ public class EventStoreConfig {
         this.eventStoreCollectionName = eventStoreCollectionName;
         this.transactionTemplate = transactionTemplate;
         this.timeRepresentation = timeRepresentation;
-        this.queryOptions = queryOptions == null ? DEFAULT_QUERY_OPTIONS_FUNCTION : queryOptions;
-        this.readOptions = readOptions == null ? DEFAULT_READ_OPTIONS_FUNCTION : readOptions;
+        this.queryOptions = queryOptions;
+        this.readOptions = readOptions;
     }
 
     @Override
@@ -89,6 +92,7 @@ public class EventStoreConfig {
                 .toString();
     }
 
+    @NullUnmarked
     public static final class Builder {
         private String eventStoreCollectionName;
         private TransactionTemplate transactionTemplate;
@@ -100,6 +104,7 @@ public class EventStoreConfig {
          * @param eventStoreCollectionName The collection in which the events are persisted
          * @return A same {@code Builder instance}
          */
+        @NullMarked
         public Builder eventStoreCollectionName(String eventStoreCollectionName) {
             this.eventStoreCollectionName = eventStoreCollectionName;
             return this;
@@ -109,6 +114,8 @@ public class EventStoreConfig {
          * @param transactionTemplate The transaction template responsible to starting MongoDB transactions
          * @return A same {@code Builder instance}
          */
+
+        @NullMarked
         public Builder transactionConfig(TransactionTemplate transactionTemplate) {
             this.transactionTemplate = transactionTemplate;
             return this;
@@ -118,6 +125,7 @@ public class EventStoreConfig {
          * @param mongoTransactionManager Create a {@link TransactionTemplate} from the supplied {@code mongoTransactionManager}
          * @return A same {@code Builder instance}
          */
+        @NullMarked
         public Builder transactionConfig(MongoTransactionManager mongoTransactionManager) {
             this.transactionTemplate = new TransactionTemplate(mongoTransactionManager);
             return this;
@@ -127,6 +135,7 @@ public class EventStoreConfig {
          * @param timeRepresentation How time should be represented in the database
          * @return A same {@code Builder instance}
          */
+        @NullMarked
         public Builder timeRepresentation(TimeRepresentation timeRepresentation) {
             this.timeRepresentation = timeRepresentation;
             return this;
@@ -158,6 +167,7 @@ public class EventStoreConfig {
          * @param readOptions The read options function to use, it cannot return null.
          * @return A same {@code Builder instance}
          */
+        @NullMarked
         public Builder readOptions(Function<Query, Query> readOptions) {
             this.readOptions = readOptions;
             return this;

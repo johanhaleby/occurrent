@@ -26,19 +26,19 @@ import kotlin.streams.asStream
 /**
  * Extension function to [ApplicationService] that allows working with Kotlin sequences
  */
-fun <T> ApplicationService<T>.execute(streamId: UUID, functionThatCallsDomainModel: (Sequence<T>) -> Sequence<T>): WriteResult =
+fun <T : Any> ApplicationService<T>.execute(streamId: UUID, functionThatCallsDomainModel: (Sequence<T>) -> Sequence<T>): WriteResult =
     execute(streamId, functionThatCallsDomainModel, null)
 
 /**
  * Extension function to [ApplicationService] that allows working with Kotlin sequences
  */
-fun <T> ApplicationService<T>.execute(streamId: String, functionThatCallsDomainModel: (Sequence<T>) -> Sequence<T>): WriteResult =
+fun <T : Any> ApplicationService<T>.execute(streamId: String, functionThatCallsDomainModel: (Sequence<T>) -> Sequence<T>): WriteResult =
     execute(streamId, functionThatCallsDomainModel, null)
 
 /**
  * Extension function to [ApplicationService] that allows working with Kotlin sequences
  */
-fun <T> ApplicationService<T>.execute(
+fun <T : Any> ApplicationService<T>.execute(
     streamId: UUID, functionThatCallsDomainModel: (Sequence<T>) -> Sequence<T>,
     sideEffects: ((Sequence<T>) -> Unit)? = null
 ): WriteResult =
@@ -47,7 +47,7 @@ fun <T> ApplicationService<T>.execute(
 /**
  * Extension function to [ApplicationService] that allows working with Kotlin sequences
  */
-fun <T> ApplicationService<T>.execute(streamId: String, functionThatCallsDomainModel: (Sequence<T>) -> Sequence<T>, sideEffects: ((Sequence<T>) -> Unit)? = null): WriteResult =
+fun <T : Any> ApplicationService<T>.execute(streamId: String, functionThatCallsDomainModel: (Sequence<T>) -> Sequence<T>, sideEffects: ((Sequence<T>) -> Unit)? = null): WriteResult =
     execute(streamId, { streamOfEvents ->
         functionThatCallsDomainModel(streamOfEvents.asSequence()).asStream()
     }, sideEffects?.toStreamSideEffect())
@@ -57,7 +57,7 @@ fun <T> ApplicationService<T>.execute(streamId: String, functionThatCallsDomainM
  * Extension function to [ApplicationService] that allows working with [List]
  */
 @JvmName("executeList")
-fun <T> ApplicationService<T>.execute(streamId: String, functionThatCallsDomainModel: (List<T>) -> List<T>) : WriteResult {
+fun <T : Any> ApplicationService<T>.execute(streamId: String, functionThatCallsDomainModel: (List<T>) -> List<T>): WriteResult {
     val f = Function<Stream<T>, Stream<T>> { eventStream: Stream<T> ->
         val currentEvents: List<T> = eventStream.toList()
         val newEvents: Stream<T> = functionThatCallsDomainModel.invoke(currentEvents).stream()
@@ -65,8 +65,9 @@ fun <T> ApplicationService<T>.execute(streamId: String, functionThatCallsDomainM
     }
     return execute(streamId, f)
 }
+
 @JvmName("executeList")
-fun <T> ApplicationService<T>.execute(streamId: UUID, functionThatCallsDomainModel: (List<T>) -> List<T>) : WriteResult = execute(streamId.toString(), functionThatCallsDomainModel)
+fun <T : Any> ApplicationService<T>.execute(streamId: UUID, functionThatCallsDomainModel: (List<T>) -> List<T>): WriteResult = execute(streamId.toString(), functionThatCallsDomainModel)
 
 private fun <T> ((Sequence<T>) -> Unit).toStreamSideEffect(): (Stream<T>) -> Unit {
     return { streamOfEvents -> this(streamOfEvents.asSequence()) }

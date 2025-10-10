@@ -4,6 +4,8 @@ import com.mongodb.client.MongoCollection;
 import com.mongodb.client.MongoDatabase;
 import jakarta.annotation.PreDestroy;
 import org.bson.BsonDocument;
+import org.jspecify.annotations.NullMarked;
+import org.jspecify.annotations.NullUnmarked;
 import org.occurrent.retry.RetryStrategy;
 import org.occurrent.subscription.api.blocking.CompetingConsumerStrategy;
 import org.occurrent.subscription.mongodb.blocking.ccs.internal.MongoLeaseCompetingConsumerStrategySupport;
@@ -20,6 +22,7 @@ import static org.occurrent.subscription.mongodb.blocking.ccs.internal.MongoLeas
  * receive events for a particular subscription. A background thread is created to update the lease periodically. Use the {@link Builder} or the {@link #withDefaults(MongoDatabase)} method
  * to get started. Note that this strategy is typically used together with a {@code CompetingConsumerSubscriptionModel}.
  */
+@NullMarked
 public class NativeMongoLeaseCompetingConsumerStrategy implements CompetingConsumerStrategy {
 
     private final MongoCollection<BsonDocument> collection;
@@ -122,6 +125,7 @@ public class NativeMongoLeaseCompetingConsumerStrategy implements CompetingConsu
     /**
      * A builder for creating a {@code NativeMongoLeaseCompetingConsumerStrategy} with custom settings.
      */
+    @NullUnmarked
     public static final class Builder {
         private final MongoCollection<BsonDocument> collection;
         private Clock clock;
@@ -132,6 +136,7 @@ public class NativeMongoLeaseCompetingConsumerStrategy implements CompetingConsu
         /**
          * @param db The mongodb database to use. Will assume that the collection name is {@value MongoLeaseCompetingConsumerStrategySupport#DEFAULT_COMPETING_CONSUMER_LOCKS_COLLECTION}.
          */
+        @NullMarked
         public Builder(MongoDatabase db) {
             this(db, DEFAULT_COMPETING_CONSUMER_LOCKS_COLLECTION);
         }
@@ -139,6 +144,8 @@ public class NativeMongoLeaseCompetingConsumerStrategy implements CompetingConsu
         /**
          * @param db The mongodb database to use and the name of the collection that will store the lease information for subscribers.
          */
+
+        @NullMarked
         public Builder(MongoDatabase db, String collectionName) {
             this(Objects.requireNonNull(db, MongoDatabase.class.getSimpleName() + " cannot be null").getCollection(Objects.requireNonNull(collectionName, "Collection name cannot be null"), BsonDocument.class));
         }
@@ -146,6 +153,7 @@ public class NativeMongoLeaseCompetingConsumerStrategy implements CompetingConsu
         /**
          * @param collection The mongodb collection to use.
          */
+        @NullMarked
         public Builder(MongoCollection<BsonDocument> collection) {
             Objects.requireNonNull(collection, MongoCollection.class.getSimpleName() + " cannot be null");
             this.collection = collection;
@@ -157,6 +165,7 @@ public class NativeMongoLeaseCompetingConsumerStrategy implements CompetingConsu
          * @param clock The clock
          * @return The same builder instance.
          */
+        @NullMarked
         public Builder clock(Clock clock) {
             Objects.requireNonNull(clock, Clock.class.getSimpleName() + " cannot be null");
             this.clock = clock;
@@ -169,6 +178,7 @@ public class NativeMongoLeaseCompetingConsumerStrategy implements CompetingConsu
          * @param leaseTime The lease time.
          * @return The same builder instance.
          */
+        @NullMarked
         public Builder leaseTime(Duration leaseTime) {
             Objects.requireNonNull(leaseTime, "Lease time cannot be null");
             this.leaseTime = leaseTime;
@@ -181,6 +191,7 @@ public class NativeMongoLeaseCompetingConsumerStrategy implements CompetingConsu
          * @param retryStrategy The retry strategy to use.
          * @return The same builder instance.
          */
+        @NullMarked
         public Builder retryStrategy(RetryStrategy retryStrategy) {
             Objects.requireNonNull(retryStrategy, RetryStrategy.class.getSimpleName() + " cannot be null");
             this.retryStrategy = retryStrategy;
@@ -192,6 +203,7 @@ public class NativeMongoLeaseCompetingConsumerStrategy implements CompetingConsu
          *
          * @return A new instance of {@code NativeMongoLeaseCompetingConsumerStrategy}.
          */
+        @NullMarked
         public NativeMongoLeaseCompetingConsumerStrategy build() {
             Clock clockToUse = clock == null ? Clock.systemUTC() : clock;
             Duration leaseTimeToUse = leaseTime == null ? DEFAULT_LEASE_TIME : leaseTime;

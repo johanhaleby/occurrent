@@ -26,6 +26,7 @@ import io.cloudevents.rw.CloudEventRWException;
 import io.cloudevents.rw.CloudEventWriter;
 import io.cloudevents.rw.CloudEventWriterFactory;
 import org.bson.Document;
+import org.jspecify.annotations.NullMarked;
 
 import java.time.OffsetDateTime;
 import java.util.Map;
@@ -34,6 +35,7 @@ import static java.nio.charset.StandardCharsets.UTF_8;
 import static org.occurrent.eventstore.mongodb.cloudevent.ContentType.isJson;
 import static org.occurrent.eventstore.mongodb.cloudevent.ContentType.isText;
 
+@NullMarked
 public class DocumentCloudEventWriter implements CloudEventWriterFactory<DocumentCloudEventWriter, Document>, CloudEventWriter<Document> {
 
     private final Document document;

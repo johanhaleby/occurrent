@@ -27,6 +27,8 @@ import com.mongodb.client.result.UpdateResult;
 import io.cloudevents.CloudEvent;
 import org.bson.Document;
 import org.bson.conversions.Bson;
+import org.jspecify.annotations.NullMarked;
+import org.jspecify.annotations.Nullable;
 import org.occurrent.cloudevents.OccurrentExtensionGetter;
 import org.occurrent.condition.Condition;
 import org.occurrent.eventstore.api.*;
@@ -70,6 +72,7 @@ import static org.occurrent.functionalsupport.internal.FunctionalSupport.mapWith
  * This is an {@link EventStore} that stores events in MongoDB using the "native" synchronous java driver MongoDB.
  * It also supports the {@link EventStoreOperations} and {@link EventStoreQueries} contracts.
  */
+@NullMarked
 public class MongoEventStore implements EventStore, EventStoreOperations, EventStoreQueries {
     private static final String ID = "_id";
     private static final String NATURAL = "$natural";
@@ -133,7 +136,7 @@ public class MongoEventStore implements EventStore, EventStoreOperations, EventS
         return new EventStreamImpl<>(streamId, currentStreamVersion, documentStream);
     }
 
-    private long currentStreamVersion(String streamId, ClientSession clientSession) {
+    private long currentStreamVersion(String streamId, @Nullable ClientSession clientSession) {
         Bson streamIdFilter = streamIdEqualTo(streamId);
         final FindIterable<Document> documents;
         if (clientSession == null) {
@@ -364,6 +367,7 @@ public class MongoEventStore implements EventStore, EventStoreOperations, EventS
         return and(eq("id", cloudEventId), eq("source", cloudEventSource.toString()));
     }
 
+    @Nullable
     private static Bson convertToMongoDBSort(SortBy sortBy) {
         final Bson sort;
         if (sortBy instanceof Unsorted) {

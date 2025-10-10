@@ -2,6 +2,8 @@ package org.occurrent.subscription.blocking.competingconsumers;
 
 import io.cloudevents.CloudEvent;
 import jakarta.annotation.PreDestroy;
+import org.jspecify.annotations.NullMarked;
+import org.jspecify.annotations.Nullable;
 import org.occurrent.subscription.StartAt;
 import org.occurrent.subscription.StartAt.SubscriptionModelContext;
 import org.occurrent.subscription.SubscriptionFilter;
@@ -46,6 +48,7 @@ import static java.util.function.Predicate.not;
  * <p>
  * If the above code is executed on multiple nodes/processes, then only <i>one</i> subscriber will receive events.
  */
+@NullMarked
 public class CompetingConsumerSubscriptionModel implements DelegatingSubscriptionModel, SubscriptionModel, SubscriptionModelLifeCycle, CompetingConsumerListener {
     private static final Logger log = LoggerFactory.getLogger(CompetingConsumerSubscriptionModel.class);
 
@@ -97,7 +100,7 @@ public class CompetingConsumerSubscriptionModel implements DelegatingSubscriptio
      * @see SubscriptionModel#subscribe(String, SubscriptionFilter, StartAt, Consumer)
      */
     @Override
-    public Subscription subscribe(String subscriptionId, SubscriptionFilter filter, StartAt startAt, Consumer<CloudEvent> action) {
+    public Subscription subscribe(String subscriptionId, @Nullable SubscriptionFilter filter, @Nullable StartAt startAt, Consumer<CloudEvent> action) {
         return subscribe(UUID.randomUUID().toString(), subscriptionId, filter, startAt, action);
     }
 

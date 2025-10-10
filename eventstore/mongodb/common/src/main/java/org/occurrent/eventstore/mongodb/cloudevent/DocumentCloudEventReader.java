@@ -25,6 +25,7 @@ import io.cloudevents.core.data.PojoCloudEventData;
 import io.cloudevents.rw.*;
 import org.bson.Document;
 import org.bson.types.Binary;
+import org.jspecify.annotations.NullMarked;
 
 import java.util.Map;
 import java.util.Objects;
@@ -33,6 +34,7 @@ import java.util.Set;
 import static java.nio.charset.StandardCharsets.UTF_8;
 import static org.occurrent.eventstore.mongodb.cloudevent.ContentType.isJson;
 
+@NullMarked
 public class DocumentCloudEventReader implements CloudEventReader {
     private static final String CONTENT_TYPE_ATTRIBUTE_NAME = "datacontenttype";
     private static final String DATA_ATTRIBUTE_NAME = "data";

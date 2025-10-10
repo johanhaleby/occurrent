@@ -24,6 +24,8 @@ import jakarta.annotation.PreDestroy;
 import org.bson.BsonDocument;
 import org.bson.BsonTimestamp;
 import org.bson.Document;
+import org.jspecify.annotations.NullMarked;
+import org.jspecify.annotations.Nullable;
 import org.occurrent.mongodb.timerepresentation.TimeRepresentation;
 import org.occurrent.retry.RetryStrategy;
 import org.occurrent.subscription.PositionAwareCloudEvent;
@@ -72,6 +74,7 @@ import static org.occurrent.subscription.mongodb.spring.blocking.SpringMongoSubs
  * This Subscription doesn't maintain the subscription position, you need to store it yourself in order to continue the stream
  * from where it's left off on application restart/crash etc.
  */
+@NullMarked
 public class SpringMongoSubscriptionModel implements PositionAwareSubscriptionModel, SmartLifecycle {
     private static final Logger log = LoggerFactory.getLogger(SpringMongoSubscriptionModel.class);
 
@@ -148,7 +151,7 @@ public class SpringMongoSubscriptionModel implements PositionAwareSubscriptionMo
         // If we hadn't used a supplier and a subscription is paused and later resumed, it'll be resumed from the _initial_ "StartAt.now()" position,
         // and not the position the "StartAt.now()" position of when the subscription was resumed. This will lead to historic events being
         // replayed which is (most likely) not what the user expects.
-        Function<StartAt, ChangeStreamRequestOptions> requestOptionsFunction = overridingStartAt -> {
+        Function<@Nullable StartAt, ChangeStreamRequestOptions> requestOptionsFunction = overridingStartAt -> {
             var subscriptionModelContext = new StartAt.SubscriptionModelContext(SpringMongoSubscriptionModel.class);
             // TODO We should change builder::resumeAt to builder::startAtOperationTime once Spring adds support for it (see https://jira.spring.io/browse/DATAMONGO-2607)
             ChangeStreamOptionsBuilder builder = MongoCommons.applyStartPosition(ChangeStreamOptions.builder(), ChangeStreamOptionsBuilder::startAfter, ChangeStreamOptionsBuilder::resumeAt, overridingStartAt == null ? startAt : overridingStartAt, subscriptionModelContext);
@@ -177,7 +180,7 @@ public class SpringMongoSubscriptionModel implements PositionAwareSubscriptionMo
                     });
         };
 
-        Function<StartAt, ChangeStreamRequest<Document>> requestBuilder = sa -> new ChangeStreamRequest<>(listener, requestOptionsFunction.apply(sa));
+        Function<@Nullable StartAt, ChangeStreamRequest<Document>> requestBuilder = sa -> new ChangeStreamRequest<>(listener, requestOptionsFunction.apply(sa));
         final org.springframework.data.mongodb.core.messaging.Subscription subscription = registerNewSpringSubscription(subscriptionId, requestBuilder.apply(null));
         SpringMongoSubscription springMongoSubscription = new SpringMongoSubscription(subscriptionId, subscription);
         logDebug("MessageListenerContainer running (subscriptionId={}): {}", subscriptionId, messageListenerContainer.isRunning());
@@ -213,7 +216,7 @@ public class SpringMongoSubscriptionModel implements PositionAwareSubscriptionMo
     }
 
     @Override
-    public SubscriptionPosition globalSubscriptionPosition() {
+    public @Nullable SubscriptionPosition globalSubscriptionPosition() {
         // Note that we increase the "increment" by 1 in order to not clash with an existing event in the event store.
         // This is so that we can avoid duplicates in certain rare cases when replaying events.
         BsonTimestamp currentOperationTime;
@@ -391,14 +394,7 @@ public class SpringMongoSubscriptionModel implements PositionAwareSubscriptionMo
 
     // Model that hold both the spring subscription and the change stream request so that we can pause the subscription
     // (by removing it and starting it again)
-    private static class InternalSubscription {
-        private final SpringMongoSubscription occurrentSubscription;
-        private final Function<StartAt, ChangeStreamRequest<Document>> changeStreamRequestBuilder;
-
-        private InternalSubscription(SpringMongoSubscription subscription, Function<StartAt, ChangeStreamRequest<Document>> changeStreamRequestBuilder) {
-            this.occurrentSubscription = subscription;
-            this.changeStreamRequestBuilder = changeStreamRequestBuilder;
-        }
+    private record InternalSubscription(SpringMongoSubscription occurrentSubscription, Function<@Nullable StartAt, ChangeStreamRequest<Document>> changeStreamRequestBuilder) {
 
         InternalSubscription copy(org.springframework.data.mongodb.core.messaging.Subscription springSubscription) {
             return new InternalSubscription(new SpringMongoSubscription(occurrentSubscription.id(), springSubscription), changeStreamRequestBuilder);
@@ -425,11 +421,6 @@ public class SpringMongoSubscriptionModel implements PositionAwareSubscriptionMo
 
         void shutdown() {
             occurrentSubscription.shutdown();
-        }
-
-        @Override
-        public int hashCode() {
-            return Objects.hash(occurrentSubscription, changeStreamRequestBuilder);
         }
 
         @Override

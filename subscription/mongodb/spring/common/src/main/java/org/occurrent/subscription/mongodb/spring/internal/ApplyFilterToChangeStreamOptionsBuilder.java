@@ -20,6 +20,8 @@ import com.mongodb.MongoClientSettings;
 import org.bson.BsonDocument;
 import org.bson.Document;
 import org.bson.conversions.Bson;
+import org.jspecify.annotations.NullMarked;
+import org.jspecify.annotations.Nullable;
 import org.occurrent.filter.Filter;
 import org.occurrent.mongodb.timerepresentation.TimeRepresentation;
 import org.occurrent.subscription.OccurrentSubscriptionFilter;
@@ -38,9 +40,10 @@ import static org.occurrent.subscription.mongodb.MongoFilterSpecification.FULL_D
 import static org.springframework.data.mongodb.core.aggregation.Aggregation.match;
 import static org.springframework.data.mongodb.core.aggregation.Aggregation.newAggregation;
 
+@NullMarked
 public class ApplyFilterToChangeStreamOptionsBuilder {
 
-    public static ChangeStreamOptions applyFilter(TimeRepresentation timeRepresentation, SubscriptionFilter filter, ChangeStreamOptionsBuilder changeStreamOptionsBuilder) {
+    public static ChangeStreamOptions applyFilter(TimeRepresentation timeRepresentation, @Nullable SubscriptionFilter filter, ChangeStreamOptionsBuilder changeStreamOptionsBuilder) {
         final ChangeStreamOptions changeStreamOptions;
         if (filter == null) {
             changeStreamOptions = changeStreamOptionsBuilder.build();

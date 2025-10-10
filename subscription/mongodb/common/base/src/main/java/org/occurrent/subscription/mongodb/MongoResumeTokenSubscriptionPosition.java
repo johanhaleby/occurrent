@@ -19,6 +19,7 @@ package org.occurrent.subscription.mongodb;
 import org.bson.BsonDocument;
 import org.bson.BsonValue;
 import org.bson.Document;
+import org.jspecify.annotations.NullMarked;
 import org.occurrent.subscription.SubscriptionPosition;
 
 import java.util.Objects;
@@ -28,6 +29,7 @@ import java.util.StringJoiner;
  * A {@link SubscriptionPosition} implementation for MongoDB that provides a resumeToken
  * that consumers may decide which to use when continuing the stream.
  */
+@NullMarked
 public class MongoResumeTokenSubscriptionPosition implements SubscriptionPosition {
     public final BsonDocument resumeToken;
 

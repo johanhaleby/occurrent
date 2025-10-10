@@ -19,6 +19,8 @@ package org.occurrent.eventstore.inmemory;
 import io.cloudevents.CloudEvent;
 import io.cloudevents.SpecVersion;
 import io.cloudevents.core.builder.CloudEventBuilder;
+import org.jspecify.annotations.NullMarked;
+import org.jspecify.annotations.Nullable;
 import org.occurrent.cloudevents.OccurrentCloudEventExtension;
 import org.occurrent.cloudevents.OccurrentExtensionGetter;
 import org.occurrent.eventstore.api.*;
@@ -67,6 +69,7 @@ import static org.occurrent.inmemory.filtermatching.FilterMatcher.matchesFilter;
  * This is an {@link EventStore} that stores events in-memory. This is mainly useful for testing
  * and/or demo purposes. It also supports the {@link EventStoreOperations} contract.
  */
+@NullMarked
 public class InMemoryEventStore implements EventStore, EventStoreOperations, EventStoreQueries {
 
     // We cannot use ConcurrentMap since it doesn't maintain insertion order
@@ -92,7 +95,7 @@ public class InMemoryEventStore implements EventStore, EventStoreOperations, Eve
      *
      * @param listener A listener that will be invoked after events have been written to the datastore (synchronously!)
      */
-    public InMemoryEventStore(Consumer<Stream<CloudEvent>> listener) {
+    public InMemoryEventStore(@Nullable Consumer<Stream<CloudEvent>> listener) {
         if (listener == null) {
             throw new IllegalArgumentException("listener cannot be null");
         }
@@ -115,7 +118,7 @@ public class InMemoryEventStore implements EventStore, EventStoreOperations, Eve
         requireTrue(writeCondition != null, WriteCondition.class.getSimpleName() + " cannot be null");
         Stream<CloudEvent> cloudEventStream = events.peek(e -> requireTrue(e.getSpecVersion() == SpecVersion.V1, "Spec version needs to be " + SpecVersion.V1));
 
-        final AtomicReference<List<CloudEvent>> newCloudEvents = new AtomicReference<>();
+        final AtomicReference<@Nullable List<CloudEvent>> newCloudEvents = new AtomicReference<>();
         final AtomicLong currentStreamVersionContainer = new AtomicLong();
         state.compute(streamId, (__, currentEvents) -> {
             long currentStreamVersion = calculateStreamVersion(currentEvents);
@@ -235,6 +238,7 @@ public class InMemoryEventStore implements EventStore, EventStoreOperations, Eve
                         events.stream().map(cloudEvent -> {
                             if (cloudEventPredicate.test(cloudEvent)) {
                                 CloudEvent updatedCloudEvent = updateFunction.apply(cloudEvent);
+                                //noinspection ConstantValue
                                 if (updatedCloudEvent == null) {
                                     throw new IllegalArgumentException("It's not allowed to return a null CloudEvent from the update function.");
                                 }
@@ -384,13 +388,14 @@ public class InMemoryEventStore implements EventStore, EventStoreOperations, Eve
     }
 
     @SuppressWarnings("ConstantConditions")
-    private static long calculateStreamVersion(List<CloudEvent> events) {
+    private static long calculateStreamVersion(@Nullable List<CloudEvent> events) {
         if (events == null || events.isEmpty()) {
             return 0;
         }
         return (long) events.get(events.size() - 1).getExtension(STREAM_VERSION);
     }
 
+    @Nullable
     private static Comparator<CloudEvent> toComparator(Map<CloudEvent, Integer> cloudEventPositionCache, SortBy sortBy) {
         final Comparator<CloudEvent> comparator;
         if (sortBy instanceof NaturalImpl) {

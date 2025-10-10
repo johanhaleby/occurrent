@@ -17,6 +17,7 @@
 package org.occurrent.eventstore.api.blocking;
 
 import io.cloudevents.CloudEvent;
+import org.jspecify.annotations.NullMarked;
 import org.occurrent.eventstore.api.DuplicateCloudEventException;
 import org.occurrent.eventstore.api.WriteCondition;
 import org.occurrent.eventstore.api.WriteConditionNotFulfilledException;
@@ -30,6 +31,7 @@ import static org.occurrent.eventstore.api.WriteCondition.streamVersionEq;
 /**
  * Event stores that supports conditional writes to an event stream should implement this interface.
  */
+@NullMarked
 public interface ConditionallyWriteToEventStream {
 
     /**

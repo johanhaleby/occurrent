@@ -1,8 +1,11 @@
 package org.occurrent.subscription.api.blocking;
 
+import org.jspecify.annotations.NullMarked;
+
 /**
  * Defines life-cycle methods for subscription models and subscriptions.
  */
+@NullMarked
 public interface SubscriptionModelLifeCycle {
 
     /**

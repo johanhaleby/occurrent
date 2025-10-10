@@ -16,6 +16,7 @@
 
 package org.occurrent.subscription.mongodb.nativedriver.blocking;
 
+import org.jspecify.annotations.NullMarked;
 import org.occurrent.subscription.DurationToTimeoutConverter;
 import org.occurrent.subscription.DurationToTimeoutConverter.Timeout;
 import org.occurrent.subscription.api.blocking.Subscription;
@@ -24,6 +25,7 @@ import java.time.Duration;
 import java.util.Objects;
 import java.util.concurrent.CountDownLatch;
 
+@NullMarked
 public class NativeMongoSubscription implements Subscription {
     public final String subscriptionId;
     final CountDownLatch subscriptionStartedLatch;

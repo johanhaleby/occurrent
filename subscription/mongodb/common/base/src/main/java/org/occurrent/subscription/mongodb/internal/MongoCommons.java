@@ -17,6 +17,7 @@
 package org.occurrent.subscription.mongodb.internal;
 
 import org.bson.*;
+import org.jspecify.annotations.Nullable;
 import org.occurrent.subscription.StartAt;
 import org.occurrent.subscription.StartAt.StartAtSubscriptionPosition;
 import org.occurrent.subscription.StartAt.SubscriptionModelContext;
@@ -83,9 +84,9 @@ public class MongoCommons {
         return subscriptionPositionDocument.get(OPERATION_TIME, BsonTimestamp.class);
     }
 
-    public static <T> T applyStartPosition(T t, BiFunction<T, BsonDocument, T> applyResumeToken, BiFunction<T, BsonTimestamp, T> applyOperationTime, StartAt startAt, SubscriptionModelContext ctx) {
-        StartAt startAtValue = startAt.get(ctx);
-        if (startAtValue.isNow() || startAtValue.isDefault()) {
+    public static <T> T applyStartPosition(T t, BiFunction<T, BsonDocument, T> applyResumeToken, BiFunction<T, BsonTimestamp, T> applyOperationTime, @Nullable StartAt startAt, SubscriptionModelContext ctx) {
+        StartAt startAtValue = startAt == null ? null : startAt.get(ctx);
+        if (startAtValue == null || startAtValue.isNow() || startAtValue.isDefault()) {
             return t;
         } else if (!(startAtValue instanceof StartAtSubscriptionPosition)) {
             throw new IllegalArgumentException("Unrecognized " + StartAt.class.getSimpleName() + " implementation: " + startAtValue.getClass().getName());

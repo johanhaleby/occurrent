@@ -17,6 +17,8 @@
 package org.occurrent.subscription.api.reactor;
 
 import io.cloudevents.CloudEvent;
+import org.jspecify.annotations.NullMarked;
+import org.jspecify.annotations.Nullable;
 import org.occurrent.subscription.StartAt;
 import org.occurrent.subscription.SubscriptionFilter;
 import org.occurrent.subscription.SubscriptionPosition;
@@ -27,6 +29,7 @@ import reactor.core.publisher.Flux;
  * and react to these events. Typically a subscription will forward the event to another piece of infrastructure such as
  * a message bus or to create views from the events (such as projections, sagas, snapshots etc).
  */
+@NullMarked
 public interface SubscriptionModel {
 
     /**
@@ -36,7 +39,7 @@ public interface SubscriptionModel {
      *
      * @return A {@link Flux} with cloud events.
      */
-    Flux<CloudEvent> subscribe(SubscriptionFilter filter, StartAt startAt);
+    Flux<CloudEvent> subscribe(@Nullable SubscriptionFilter filter, StartAt startAt);
 
     /**
      * Stream events from the event store as they arrive but filter only events that matches the <code>filter</code>.

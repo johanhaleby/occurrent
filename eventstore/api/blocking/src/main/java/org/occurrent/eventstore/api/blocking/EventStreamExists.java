@@ -16,9 +16,12 @@
 
 package org.occurrent.eventstore.api.blocking;
 
+import org.jspecify.annotations.NullMarked;
+
 /**
  * Interface the is implemented by event stores that supports checking whether or not an event stream exists.
  */
+@NullMarked
 public interface EventStreamExists {
     /**
      * Check whether or not an event stream exists

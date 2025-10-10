@@ -17,6 +17,8 @@
 
 package org.occurrent.subscription;
 
+import org.jspecify.annotations.NullMarked;
+
 import java.time.Duration;
 import java.time.temporal.ChronoUnit;
 import java.util.concurrent.TimeUnit;
@@ -25,6 +27,7 @@ import java.util.function.Supplier;
 /**
  * A utility class that can safely convert a {@link java.time.Duration} to a {@code timeout} and {@link java.util.concurrent.TimeUnit}.
  */
+@NullMarked
 public class DurationToTimeoutConverter {
 
     public record Timeout(long timeout, TimeUnit timeUnit) {

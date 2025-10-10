@@ -23,6 +23,8 @@ import jakarta.annotation.PreDestroy;
 import org.bson.BsonTimestamp;
 import org.bson.BsonValue;
 import org.bson.Document;
+import org.jspecify.annotations.NullMarked;
+import org.jspecify.annotations.Nullable;
 import org.occurrent.retry.RetryStrategy;
 import org.occurrent.subscription.SubscriptionPosition;
 import org.occurrent.subscription.api.blocking.SubscriptionPositionStorage;
@@ -41,6 +43,7 @@ import static org.occurrent.subscription.mongodb.internal.MongoCommons.*;
 /**
  * A native sync Java MongoDB implementation of {@link SubscriptionPositionStorage} that stores {@link SubscriptionPosition} in MongoDB.
  */
+@NullMarked
 public class NativeMongoSubscriptionPositionStorage implements SubscriptionPositionStorage {
 
     private final MongoCollection<Document> subscriptionPositionCollection;
@@ -95,18 +98,22 @@ public class NativeMongoSubscriptionPositionStorage implements SubscriptionPosit
 
     @Override
     public SubscriptionPosition read(String subscriptionId) {
-        Supplier<SubscriptionPosition> read = () -> {
+        Supplier<@Nullable SubscriptionPosition> read = () -> {
             Document document = subscriptionPositionCollection.find(eq(ID, subscriptionId), Document.class).first();
+            final SubscriptionPosition position;
             if (document == null) {
-                return null;
+                position = null;
+            } else {
+                position = calculateSubscriptionPositionFromMongoStreamPositionDocument(document);
             }
 
-            return calculateSubscriptionPositionFromMongoStreamPositionDocument(document);
+            return position;
         };
-        return executeWithRetry(read, __ -> !shutdown, retryStrategy).get();
+        return requireNonNull(executeWithRetry(read, __ -> !shutdown, retryStrategy).get());
     }
 
     @Override
+    @NullMarked
     public SubscriptionPosition save(String subscriptionId, SubscriptionPosition subscriptionPosition) {
         Supplier<SubscriptionPosition> save = () -> {
             if (subscriptionPosition instanceof MongoResumeTokenSubscriptionPosition) {
@@ -121,7 +128,7 @@ public class NativeMongoSubscriptionPositionStorage implements SubscriptionPosit
             return subscriptionPosition;
         };
 
-        return executeWithRetry(save, __ -> !shutdown, retryStrategy).get();
+        return requireNonNull(executeWithRetry(save, __ -> !shutdown, retryStrategy).get());
     }
 
     @Override
@@ -133,7 +140,7 @@ public class NativeMongoSubscriptionPositionStorage implements SubscriptionPosit
     @Override
     public boolean exists(String subscriptionId) {
         Supplier<Boolean> exists = () -> subscriptionPositionCollection.find(eq(ID, subscriptionId)).first() != null;
-        return executeWithRetry(exists, __ -> !shutdown, retryStrategy).get();
+        return requireNonNull(executeWithRetry(exists, __ -> !shutdown, retryStrategy).get());
     }
 
     private void persistResumeTokenSubscriptionPosition(String subscriptionId, BsonValue resumeToken) {

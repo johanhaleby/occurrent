@@ -30,6 +30,8 @@ import org.bson.BsonDocument;
 import org.bson.BsonTimestamp;
 import org.bson.Document;
 import org.bson.conversions.Bson;
+import org.jspecify.annotations.NullMarked;
+import org.jspecify.annotations.Nullable;
 import org.occurrent.filter.Filter;
 import org.occurrent.mongodb.spring.filterbsonfilterconversion.internal.FilterToBsonFilterConverter;
 import org.occurrent.mongodb.timerepresentation.TimeRepresentation;
@@ -74,6 +76,7 @@ import static org.occurrent.subscription.mongodb.internal.MongoCommons.cannotFin
  * or use the {@code DurableSubscriptionModel} utility from the {@code org.occurrent:durable-subscription}
  * module.
  */
+@NullMarked
 public class NativeMongoSubscriptionModel implements PositionAwareSubscriptionModel {
     private static final Logger log = LoggerFactory.getLogger(NativeMongoSubscriptionModel.class);
 
@@ -198,7 +201,7 @@ public class NativeMongoSubscriptionModel implements PositionAwareSubscriptionMo
         }
     }
 
-    private static List<Bson> createPipeline(TimeRepresentation timeRepresentation, SubscriptionFilter filter) {
+    private static List<Bson> createPipeline(TimeRepresentation timeRepresentation, @Nullable SubscriptionFilter filter) {
         final List<Bson> pipeline;
         if (filter == null) {
             pipeline = Collections.emptyList();
@@ -249,6 +252,7 @@ public class NativeMongoSubscriptionModel implements PositionAwareSubscriptionMo
     }
 
     @Override
+    @Nullable
     public SubscriptionPosition globalSubscriptionPosition() {
         BsonTimestamp currentOperationTime;
         try {

@@ -21,6 +21,9 @@ import com.mongodb.client.FindIterable;
 import io.cloudevents.CloudEvent;
 import org.bson.Document;
 import org.bson.conversions.Bson;
+import org.jspecify.annotations.NullMarked;
+import org.jspecify.annotations.NullUnmarked;
+import org.jspecify.annotations.Nullable;
 import org.occurrent.mongodb.timerepresentation.TimeRepresentation;
 
 import java.util.Objects;
@@ -30,6 +33,7 @@ import java.util.function.Function;
 /**
  * Configuration for the synchronous java driver MongoDB EventStore
  */
+@NullMarked
 public class EventStoreConfig {
     private static final Function<FindIterable<Document>, FindIterable<Document>> DEFAULT_QUERY_OPTIONS_FUNCTION = Function.identity();
 
@@ -59,19 +63,15 @@ public class EventStoreConfig {
      * @see #EventStoreConfig(TimeRepresentation, TransactionOptions)
      * @see TimeRepresentation
      */
-    public EventStoreConfig(TimeRepresentation timeRepresentation, TransactionOptions transactionOptions) {
+    public EventStoreConfig(TimeRepresentation timeRepresentation, @Nullable TransactionOptions transactionOptions) {
         this(timeRepresentation, transactionOptions, DEFAULT_QUERY_OPTIONS_FUNCTION);
     }
 
-    private EventStoreConfig(TimeRepresentation timeRepresentation, TransactionOptions transactionOptions, Function<FindIterable<Document>, FindIterable<Document>> queryOptions) {
+    private EventStoreConfig(TimeRepresentation timeRepresentation, @Nullable TransactionOptions transactionOptions, Function<FindIterable<Document>, FindIterable<Document>> queryOptions) {
         Objects.requireNonNull(timeRepresentation, "Time representation cannot be null");
-        if (transactionOptions == null) {
-            this.transactionOptions = TransactionOptions.builder().build();
-        } else {
-            this.transactionOptions = transactionOptions;
-        }
+        this.transactionOptions = Objects.requireNonNullElseGet(transactionOptions, () -> TransactionOptions.builder().build());
         this.timeRepresentation = timeRepresentation;
-        this.queryOptions = queryOptions == null ? DEFAULT_QUERY_OPTIONS_FUNCTION : queryOptions;
+        this.queryOptions = queryOptions;
     }
 
     @Override
@@ -96,6 +96,7 @@ public class EventStoreConfig {
                 .toString();
     }
 
+    @NullUnmarked
     public static final class Builder {
         private TransactionOptions transactionOptions;
         private TimeRepresentation timeRepresentation;
@@ -105,6 +106,7 @@ public class EventStoreConfig {
          * @param transactionOptions The default {@link TransactionOptions} that the event store will use when starting transactions. May be <code>null</code>.
          * @return The builder instance
          */
+        @NullMarked
         public Builder transactionOptions(TransactionOptions transactionOptions) {
             this.transactionOptions = transactionOptions;
             return this;
@@ -114,6 +116,7 @@ public class EventStoreConfig {
          * @param timeRepresentation Configure how the event store should represent time in MongoDB
          * @return The builder instance
          */
+        @NullMarked
         public Builder timeRepresentation(TimeRepresentation timeRepresentation) {
             this.timeRepresentation = timeRepresentation;
             return this;
@@ -129,11 +132,13 @@ public class EventStoreConfig {
          * @param queryOptions The query options function to use, it cannot return null.
          * @return A same {@code Builder instance}
          */
+        @NullMarked
         public Builder queryOptions(Function<FindIterable<Document>, FindIterable<Document>> queryOptions) {
             this.queryOptions = queryOptions;
             return this;
         }
 
+        @NullMarked
         public EventStoreConfig build() {
             return new EventStoreConfig(timeRepresentation, transactionOptions, queryOptions);
         }

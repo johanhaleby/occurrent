@@ -21,7 +21,7 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import com.mongodb.ReadConcern;
 import com.mongodb.TransactionOptions;
 import com.mongodb.WriteConcern;
-import org.jetbrains.annotations.NotNull;
+import org.jspecify.annotations.NonNull;
 import org.occurrent.application.converter.CloudEventConverter;
 import org.occurrent.application.converter.jackson.JacksonCloudEventConverter;
 import org.occurrent.application.converter.typemapper.CloudEventTypeMapper;
@@ -149,7 +149,7 @@ public class OccurrentMongoAutoConfiguration<E> {
         return newDefaultCloudEventTypeMapper();
     }
 
-    @NotNull
+    @NonNull
     private CloudEventTypeMapper<E> newDefaultCloudEventTypeMapper() {
         return ReflectionCloudEventTypeMapper.qualified();
     }

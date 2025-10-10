@@ -20,6 +20,7 @@ import com.mongodb.client.result.UpdateResult;
 import org.bson.BsonDocument;
 import org.bson.BsonTimestamp;
 import org.bson.Document;
+import org.jspecify.annotations.NullMarked;
 import org.occurrent.subscription.SubscriptionPosition;
 import org.occurrent.subscription.api.reactor.SubscriptionPositionStorage;
 import org.occurrent.subscription.mongodb.MongoOperationTimeSubscriptionPosition;
@@ -39,6 +40,7 @@ import static org.springframework.data.mongodb.core.query.Query.query;
 /**
  * A Spring implementation of {@link SubscriptionPositionStorage} that stores {@link SubscriptionPosition} in MongoDB.
  */
+@NullMarked
 public class ReactorSubscriptionPositionStorage implements SubscriptionPositionStorage {
 
     private final ReactiveMongoOperations mongo;

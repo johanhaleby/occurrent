@@ -1,6 +1,8 @@
 package org.occurrent.subscription.api.blocking;
 
 import io.cloudevents.CloudEvent;
+import org.jspecify.annotations.NullMarked;
+import org.jspecify.annotations.Nullable;
 import org.occurrent.subscription.StartAt;
 import org.occurrent.subscription.SubscriptionFilter;
 
@@ -14,6 +16,7 @@ import java.util.function.Consumer;
  * <p>
  * A blocking subscription model also you to create and manage subscriptions that'll use blocking IO.
  */
+@NullMarked
 public interface Subscribable {
 
     /**
@@ -24,7 +27,7 @@ public interface Subscribable {
      * @param startAt        The position to start the subscription from
      * @param action         This action will be invoked for each cloud event that is stored in the EventStore.
      */
-    Subscription subscribe(String subscriptionId, SubscriptionFilter filter, StartAt startAt, Consumer<CloudEvent> action);
+    Subscription subscribe(String subscriptionId, @Nullable SubscriptionFilter filter, StartAt startAt, Consumer<CloudEvent> action);
 
     /**
      * Start listening to cloud events persisted to the event store at the supplied start position.

@@ -28,6 +28,7 @@ import com.mongodb.client.result.UpdateResult;
 import org.bson.BsonDocument;
 import org.bson.Document;
 import org.bson.conversions.Bson;
+import org.jspecify.annotations.NullMarked;
 import org.occurrent.retry.RetryStrategy;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -47,6 +48,7 @@ import static com.mongodb.client.model.Updates.set;
 import static java.util.Arrays.asList;
 import static java.util.Collections.singletonList;
 
+@NullMarked
 class MongoListenerLockService {
     private static final Logger log = LoggerFactory.getLogger(MongoListenerLockService.class);
 

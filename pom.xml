@@ -16,7 +16,8 @@
   ~ limitations under the License.
   -->
 
-<project xmlns="http://maven.apache.org/POM/4.0.0" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 http://maven.apache.org/xsd/maven-4.0.0.xsd">
+<project xmlns="http://maven.apache.org/POM/4.0.0" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+         xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 http://maven.apache.org/xsd/maven-4.0.0.xsd">
     <modelVersion>4.0.0</modelVersion>
 
     <groupId>org.occurrent</groupId>
@@ -189,11 +190,13 @@
                 <type>pom</type>
                 <scope>import</scope>
             </dependency>
+
             <dependency>
-                <groupId>org.jetbrains</groupId>
-                <artifactId>annotations</artifactId>
-                <version>26.0.1</version>
+                <groupId>org.jspecify</groupId>
+                <artifactId>jspecify</artifactId>
+                <version>1.0.0</version>
             </dependency>
+            
             <dependency>
                 <groupId>org.jobrunr</groupId>
                 <artifactId>jobrunr</artifactId>
@@ -266,10 +269,10 @@
                 <scope>import</scope>
             </dependency>
             <dependency>
-                   <groupId>io.github.serpro69</groupId>
-                   <artifactId>kotlin-faker</artifactId>
-                   <version>2.0.0-rc.11</version>
-               </dependency>
+                <groupId>io.github.serpro69</groupId>
+                <artifactId>kotlin-faker</artifactId>
+                <version>2.0.0-rc.11</version>
+            </dependency>
         </dependencies>
     </dependencyManagement>
 
@@ -535,12 +538,17 @@
                                 <!-- Examples -->
                                 <excludeArtifact>example</excludeArtifact>
                                 <excludeArtifact>example-projection</excludeArtifact>
-                                <excludeArtifact>example-projection-spring-adhoc-evenstore-mongodb-queries</excludeArtifact>
-                                <excludeArtifact>example-projection-spring-reactor-transactional-projection-mongodb</excludeArtifact>
-                                <excludeArtifact>example-projection-spring-changedstreamed-mongodb-projections</excludeArtifact>
-                                <excludeArtifact>example-projection-spring-transactional-projection-mongodb</excludeArtifact>
+                                <excludeArtifact>example-projection-spring-adhoc-evenstore-mongodb-queries
+                                </excludeArtifact>
+                                <excludeArtifact>example-projection-spring-reactor-transactional-projection-mongodb
+                                </excludeArtifact>
+                                <excludeArtifact>example-projection-spring-changedstreamed-mongodb-projections
+                                </excludeArtifact>
+                                <excludeArtifact>example-projection-spring-transactional-projection-mongodb
+                                </excludeArtifact>
                                 <excludeArtifact>example-forwarder</excludeArtifact>
-                                <excludeArtifact>example-forwarder-mongodb-subscription-to-spring-event</excludeArtifact>
+                                <excludeArtifact>example-forwarder-mongodb-subscription-to-spring-event
+                                </excludeArtifact>
                                 <excludeArtifact>example-domain</excludeArtifact>
                                 <excludeArtifact>example-mastermind</excludeArtifact>
                                 <excludeArtifact>example-number-guessing-game</excludeArtifact>
@@ -548,7 +556,8 @@
                                 <excludeArtifact>example-number-guessing-game-es-mongodb</excludeArtifact>
                                 <excludeArtifact>example-number-guessing-game-es-mongodb-native</excludeArtifact>
                                 <excludeArtifact>example-number-guessing-game-es-mongodb-spring</excludeArtifact>
-                                <excludeArtifact>example-number-guessing-game-es-mongodb-spring-blocking</excludeArtifact>
+                                <excludeArtifact>example-number-guessing-game-es-mongodb-spring-blocking
+                                </excludeArtifact>
                                 <excludeArtifact>example-rps</excludeArtifact>
                                 <excludeArtifact>example-rps-decider-model</excludeArtifact>
                                 <excludeArtifact>example-rps-decider-web</excludeArtifact>
@@ -566,7 +575,8 @@
                                 <excludeArtifact>example-domain-word-guessing-game-model</excludeArtifact>
                                 <excludeArtifact>example-domain-word-guessing-game-es-mongodb</excludeArtifact>
                                 <excludeArtifact>example-domain-word-guessing-game-es-mongodb-spring</excludeArtifact>
-                                <excludeArtifact>example-domain-word-guessing-game-es-mongodb-spring-blocking</excludeArtifact>
+                                <excludeArtifact>example-domain-word-guessing-game-es-mongodb-spring-blocking
+                                </excludeArtifact>
                             </excludeArtifacts>
                         </configuration>
                     </plugin>

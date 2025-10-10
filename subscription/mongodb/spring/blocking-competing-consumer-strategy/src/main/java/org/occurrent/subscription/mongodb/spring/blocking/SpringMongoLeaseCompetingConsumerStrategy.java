@@ -3,6 +3,9 @@ package org.occurrent.subscription.mongodb.spring.blocking;
 import com.mongodb.client.MongoCollection;
 import jakarta.annotation.PreDestroy;
 import org.bson.BsonDocument;
+import org.jspecify.annotations.NullMarked;
+import org.jspecify.annotations.NullUnmarked;
+import org.jspecify.annotations.Nullable;
 import org.occurrent.retry.RetryStrategy;
 import org.occurrent.subscription.api.blocking.CompetingConsumerStrategy;
 import org.occurrent.subscription.mongodb.blocking.ccs.internal.MongoLeaseCompetingConsumerStrategySupport;
@@ -23,6 +26,7 @@ import static org.occurrent.subscription.mongodb.blocking.ccs.internal.MongoLeas
  * receive events for a particular subscription. A background thread is created to update the lease periodically. Use the {@link Builder} or the {@link #withDefaults(MongoOperations)} method
  * to get started. Note that this strategy is typically used together with a {@code CompetingConsumerSubscriptionModel}.
  */
+@NullMarked
 public class SpringMongoLeaseCompetingConsumerStrategy implements CompetingConsumerStrategy {
 
     private final MongoOperations mongoOperations;
@@ -123,11 +127,13 @@ public class SpringMongoLeaseCompetingConsumerStrategy implements CompetingConsu
         });
     }
 
-    private <T> T withCompetingConsumerLocksCollectionReturn(Function<MongoCollection<BsonDocument>, T> fn) {
+    @Nullable
+    private <T> T withCompetingConsumerLocksCollectionReturn(Function<MongoCollection<BsonDocument>, @Nullable T> fn) {
         return staticallyWithCompetingConsumerLocksCollectionReturn(mongoOperations, collectionName, fn);
     }
 
-    private static <T> T staticallyWithCompetingConsumerLocksCollectionReturn(MongoOperations mongoOperations, String collectionName, Function<MongoCollection<BsonDocument>, T> fn) {
+    @Nullable
+    private static <T> T staticallyWithCompetingConsumerLocksCollectionReturn(MongoOperations mongoOperations, String collectionName, Function<MongoCollection<BsonDocument>, @Nullable T> fn) {
         return mongoOperations.execute(db -> {
             MongoCollection<BsonDocument> collection = db.getCollection(collectionName, BsonDocument.class);
             return fn.apply(collection);
@@ -146,6 +152,7 @@ public class SpringMongoLeaseCompetingConsumerStrategy implements CompetingConsu
     /**
      * A builder for creating a {@code SpringMongoLeaseCompetingConsumerStrategy} with custom settings.
      */
+    @NullUnmarked
     public static final class Builder {
         private final MongoOperations mongoOperations;
         private Clock clock;
@@ -158,6 +165,7 @@ public class SpringMongoLeaseCompetingConsumerStrategy implements CompetingConsu
          *
          * @param mongoOperations The Spring {@link MongoOperations} instance that should be used to store the lease information for the subscribers.
          */
+        @NullMarked
         public Builder(MongoOperations mongoOperations) {
             Objects.requireNonNull(mongoOperations, MongoOperations.class.getSimpleName() + " cannot be null");
             this.mongoOperations = mongoOperations;
@@ -169,6 +177,7 @@ public class SpringMongoLeaseCompetingConsumerStrategy implements CompetingConsu
          * @param clock The clock
          * @return The same builder instance.
          */
+        @NullMarked
         public Builder clock(Clock clock) {
             Objects.requireNonNull(clock, Clock.class.getSimpleName() + " cannot be null");
             this.clock = clock;
@@ -181,6 +190,7 @@ public class SpringMongoLeaseCompetingConsumerStrategy implements CompetingConsu
          * @param leaseTime The lease time.
          * @return The same builder instance.
          */
+        @NullMarked
         public Builder leaseTime(Duration leaseTime) {
             Objects.requireNonNull(leaseTime, "Lease time cannot be null");
             this.leaseTime = leaseTime;
@@ -190,6 +200,7 @@ public class SpringMongoLeaseCompetingConsumerStrategy implements CompetingConsu
         /**
          * @param collectionName The mongodb collection to use.
          */
+        @NullMarked
         public Builder collectionName(String collectionName) {
             Objects.requireNonNull(collectionName, "Collection name cannot be null");
             String collectionNameToUse = collectionName.trim();
@@ -207,6 +218,7 @@ public class SpringMongoLeaseCompetingConsumerStrategy implements CompetingConsu
          * @param retryStrategy The retry strategy to use.
          * @return The same builder instance.
          */
+        @NullMarked
         public Builder retryStrategy(RetryStrategy retryStrategy) {
             Objects.requireNonNull(retryStrategy, RetryStrategy.class.getSimpleName() + " cannot be null");
             this.retryStrategy = retryStrategy;
@@ -218,6 +230,7 @@ public class SpringMongoLeaseCompetingConsumerStrategy implements CompetingConsu
          *
          * @return A new instance of {@code SpringMongoLeaseCompetingConsumerStrategy}.
          */
+        @NullMarked
         public SpringMongoLeaseCompetingConsumerStrategy build() {
             Clock clockToUse = clock == null ? Clock.systemUTC() : clock;
             Duration leaseTimeToUse = leaseTime == null ? DEFAULT_LEASE_TIME : leaseTime;

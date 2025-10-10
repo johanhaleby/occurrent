@@ -1,5 +1,6 @@
 package org.occurrent.subscription.mongodb.spring.blocking;
 
+import org.jspecify.annotations.NullMarked;
 import org.occurrent.mongodb.timerepresentation.TimeRepresentation;
 import org.occurrent.retry.RetryStrategy;
 import org.springframework.data.mongodb.core.messaging.DefaultMessageListenerContainer;
@@ -15,6 +16,7 @@ import static java.util.Objects.requireNonNull;
 /**
  * Configuration for the {@code SpringSubscriptionModel}.
  */
+@NullMarked
 public class SpringMongoSubscriptionModelConfig {
 
     final String eventCollection;
@@ -89,7 +91,7 @@ public class SpringMongoSubscriptionModelConfig {
     /**
      * Specify the executor to use for this subscription model. Under the hood the {@link SpringMongoSubscriptionModel} will use this executor when initializing the {@link DefaultMessageListenerContainer}
      * to listen to events written MongoDB. By default a {@link ThreadPoolTaskExecutor} will be used with queue size {@code 0}, which effectively will make behave as unbounded {@link Executors#newCachedThreadPool()}.
-     *
+     * <br/><br/>
      * Note that if you're using a non-spring implementation, for example an {@link ExecutorService}, you need to shut it down your self after {@link SpringMongoSubscriptionModel} is shutdown.
      *
      * @param executor The executor to use

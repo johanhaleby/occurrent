@@ -17,6 +17,7 @@
 package org.occurrent.eventstore.api.blocking;
 
 import io.cloudevents.CloudEvent;
+import org.jspecify.annotations.NullMarked;
 import org.occurrent.filter.Filter;
 
 import java.net.URI;
@@ -27,6 +28,7 @@ import java.util.function.Function;
  * Additional operations that may be supported by an {@link EventStore} implementation that is not typically part of a
  * "transactional" use case.
  */
+@NullMarked
 public interface EventStoreOperations {
 
     /**

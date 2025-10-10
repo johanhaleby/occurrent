@@ -21,7 +21,7 @@ import com.mongodb.client.model.ReplaceOptions;
 import io.cloudevents.CloudEvent;
 import org.bson.Document;
 import org.bson.conversions.Bson;
-import org.jetbrains.annotations.NotNull;
+import org.jspecify.annotations.NonNull;
 import org.occurrent.example.domain.numberguessinggame.model.domainevents.*;
 import org.occurrent.subscription.api.blocking.SubscriptionModel;
 
@@ -42,7 +42,7 @@ public class InsertGameIntoLatestGamesOverview {
         subscription.subscribe(InsertGameIntoLatestGamesOverview.class.getSimpleName(), insertGame(latestGamesOverviewCollection, deserialize));
     }
 
-    @NotNull
+    @NonNull
     private static Consumer<CloudEvent> insertGame(MongoCollection<Document> latestGamesOverviewCollection, Function<CloudEvent, GameEvent> deserialize) {
         return cloudEvent -> {
             GameEvent gameEvent = deserialize.apply(cloudEvent);

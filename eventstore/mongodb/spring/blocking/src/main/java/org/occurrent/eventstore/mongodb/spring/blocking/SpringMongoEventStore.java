@@ -23,6 +23,8 @@ import com.mongodb.client.model.Indexes;
 import io.cloudevents.CloudEvent;
 import io.cloudevents.core.v1.CloudEventV1;
 import org.bson.Document;
+import org.jspecify.annotations.NullMarked;
+import org.jspecify.annotations.NullUnmarked;
 import org.occurrent.cloudevents.OccurrentExtensionGetter;
 import org.occurrent.condition.Condition;
 import org.occurrent.eventstore.api.*;
@@ -71,6 +73,7 @@ import static org.springframework.data.mongodb.core.query.Criteria.where;
  * This is an {@link EventStore} that stores events in MongoDB using Spring's {@link MongoTemplate}.
  * It also supports the {@link EventStoreOperations} and {@link EventStoreQueries} contracts.
  */
+@NullMarked
 public class SpringMongoEventStore implements EventStore, EventStoreOperations, EventStoreQueries {
 
     private static final String ID = "_id";
@@ -222,7 +225,7 @@ public class SpringMongoEventStore implements EventStore, EventStoreOperations, 
             return Optional.of(updatedCloudEvent);
         };
 
-        return transactionTemplate.execute(__ -> logic.apply(updateFunction));
+        return requireNonNull(transactionTemplate.execute(__ -> logic.apply(updateFunction)));
     }
 
     // Queries
@@ -250,6 +253,7 @@ public class SpringMongoEventStore implements EventStore, EventStoreOperations, 
         return mapWithIndex(cloudEvents, currentStreamVersion, pair -> convertToDocument(timeRepresentation, streamId, pair.t1, pair.t2)).toList();
     }
 
+    @NullUnmarked
     // Data structures etc
     private static class EventStreamImpl<T> implements EventStream<T> {
         private String _id;

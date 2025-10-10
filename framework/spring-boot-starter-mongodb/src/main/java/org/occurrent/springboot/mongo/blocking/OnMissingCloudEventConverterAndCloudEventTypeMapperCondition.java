@@ -17,7 +17,7 @@
 
 package org.occurrent.springboot.mongo.blocking;
 
-import org.jetbrains.annotations.NotNull;
+import org.jspecify.annotations.NonNull;
 import org.occurrent.application.converter.CloudEventConverter;
 import org.occurrent.application.converter.typemapper.CloudEventTypeMapper;
 import org.springframework.beans.factory.config.ConfigurableListableBeanFactory;
@@ -40,7 +40,7 @@ import org.springframework.core.type.AnnotatedTypeMetadata;
 class OnMissingCloudEventConverterAndCloudEventTypeMapperCondition implements Condition {
 
     @Override
-    public boolean matches(ConditionContext context, @NotNull AnnotatedTypeMetadata metadata) {
+    public boolean matches(ConditionContext context, @NonNull AnnotatedTypeMetadata metadata) {
         ConfigurableListableBeanFactory beanFactory = context.getBeanFactory();
         //noinspection DataFlowIssue
         boolean cloudEventTypeMapperMissing = beanFactory.getBeanNamesForType(CloudEventTypeMapper.class).length == 0;

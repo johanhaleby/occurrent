@@ -18,6 +18,7 @@
 package org.occurrent.subscription.mongodb.blocking.ccs.internal;
 
 
+import org.jspecify.annotations.NullMarked;
 import org.occurrent.subscription.internal.ExecutorShutdown;
 
 import java.time.Duration;
@@ -33,6 +34,7 @@ import static java.util.concurrent.TimeUnit.SECONDS;
  *
  * @see #auto()
  */
+@NullMarked
 class ScheduledRefresh {
     private final ScheduledExecutorService executor = Executors.newSingleThreadScheduledExecutor();
     private final BiConsumer<Duration, Scheduler> scheduleIt;
@@ -77,15 +79,7 @@ class ScheduledRefresh {
         ExecutorShutdown.shutdownSafely(executor, 5, SECONDS);
     }
 
-    static class Scheduler {
-
-        private final ScheduledExecutorService executor;
-        private final Runnable refresh;
-
-        private Scheduler(ScheduledExecutorService executor, Runnable refresh) {
-            this.executor = executor;
-            this.refresh = refresh;
-        }
+    record Scheduler(ScheduledExecutorService executor, Runnable refresh) {
 
         void fixedRate(Duration initialDelay, Duration period) {
             executor.scheduleAtFixedRate(refresh,

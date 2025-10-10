@@ -18,6 +18,8 @@ package org.occurrent.subscription.inmemory;
 
 import io.cloudevents.CloudEvent;
 import jakarta.annotation.PreDestroy;
+import org.jspecify.annotations.NullMarked;
+import org.jspecify.annotations.Nullable;
 import org.occurrent.filter.Filter;
 import org.occurrent.retry.RetryStrategy;
 import org.occurrent.subscription.OccurrentSubscriptionFilter;
@@ -38,6 +40,7 @@ import java.util.stream.Stream;
 /**
  * An in-memory subscription model
  */
+@NullMarked
 public class InMemorySubscriptionModel implements SubscriptionModel, Consumer<Stream<CloudEvent>> {
 
     private final ConcurrentMap<String, InMemorySubscription> subscriptions;
@@ -112,7 +115,7 @@ public class InMemorySubscriptionModel implements SubscriptionModel, Consumer<St
         }
 
         StartAt startAtToUse = startAt.get(new SubscriptionModelContext(InMemorySubscriptionModel.class));
-        if (!startAtToUse.isNow() && !startAtToUse.isDefault()) {
+        if (startAtToUse == null || (!startAtToUse.isNow() && !startAtToUse.isDefault())) {
             throw new IllegalArgumentException(InMemorySubscriptionModel.class.getSimpleName() + " only supports starting from 'now' and 'default' (StartAt.now() or StartAt.subscriptionModelDefault())");
         }
 
@@ -162,7 +165,7 @@ public class InMemorySubscriptionModel implements SubscriptionModel, Consumer<St
         ExecutorShutdown.shutdownSafely(cloudEventDispatcher, 5, TimeUnit.SECONDS);
     }
 
-    private static Filter getFilter(SubscriptionFilter filter) {
+    private static Filter getFilter(@Nullable SubscriptionFilter filter) {
         final Filter f;
         if (filter == null) {
             f = Filter.all();

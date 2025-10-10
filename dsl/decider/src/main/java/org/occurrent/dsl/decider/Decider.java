@@ -17,8 +17,8 @@
 
 package org.occurrent.dsl.decider;
 
-import org.jetbrains.annotations.NotNull;
-import org.jetbrains.annotations.Nullable;
+import org.jspecify.annotations.NonNull;
+import org.jspecify.annotations.Nullable;
 
 import java.util.ArrayList;
 import java.util.Collections;
@@ -36,22 +36,22 @@ import java.util.function.Predicate;
 public interface Decider<C, S, E> {
     S initialState();
 
-    @NotNull
-    List<E> decide(@NotNull C command, S state);
+    @NonNull
+    List<E> decide(@NonNull C command, S state);
 
-    S evolve(S state, @NotNull E event);
+    S evolve(S state, @NonNull E event);
 
     default boolean isTerminal(S state) {
         return false;
     }
 
-    @NotNull
+    @NonNull
     @SuppressWarnings("unchecked")
     default Decision<S, E> decideOnEvents(List<E> events, C command, C... additionalCommands) {
         return decideOnEvents(events, toList(command, additionalCommands));
     }
 
-    @NotNull
+    @NonNull
     default Decision<S, E> decideOnEvents(List<E> events, List<C> commands) {
         Decision<S, E> decision = new Decision<>(initialState(), events);
         for (C command : commands) {
@@ -66,35 +66,33 @@ public interface Decider<C, S, E> {
         return new Decision<>(decision.state, newEvents);
     }
 
-    @NotNull
+    @NonNull
     @SuppressWarnings("unchecked")
     default List<E> decideOnEventsAndReturnEvents(List<E> events, C command, C... additionalCommands) {
         return decideOnEvents(events, command, additionalCommands).events;
     }
 
-    @Nullable
     @SuppressWarnings("unchecked")
-    default S decideOnEventsAndReturnState(List<E> events, C command, C... additionalCommands) {
+    default @Nullable S decideOnEventsAndReturnState(List<E> events, C command, C... additionalCommands) {
         return decideOnEvents(events, command, additionalCommands).state;
     }
 
-    @NotNull
+    @NonNull
     default List<E> decideOnEventsAndReturnEvents(List<E> events, List<C> commands) {
         return decideOnEvents(events, commands).events;
     }
 
-    @Nullable
-    default S decideOnEventsAndReturnState(List<E> events, List<C> commands) {
+    default @Nullable S decideOnEventsAndReturnState(List<E> events, List<C> commands) {
         return decideOnEvents(events, commands).state;
     }
 
-    @NotNull
+    @NonNull
     @SuppressWarnings("unchecked")
     default Decision<S, E> decideOnState(S state, C command, C... additionalCommands) {
         return decideOnState(state, toList(command, additionalCommands));
     }
 
-    @NotNull
+    @NonNull
     default Decision<S, E> decideOnState(S state, List<C> commands) {
         Decision<S, E> decision = new Decision<>(state, List.of());
         for (C command : commands) {
@@ -106,28 +104,26 @@ public interface Decider<C, S, E> {
         return decision;
     }
 
-    @NotNull
+    @NonNull
     default List<E> decideOnStateAndReturnEvents(S state, List<C> commands) {
         return decideOnState(state, commands).events;
     }
 
-    @Nullable
-    default S decideOnStateAndReturnState(S state, List<C> commands) {
+    default @Nullable S decideOnStateAndReturnState(S state, List<C> commands) {
         return decideOnState(state, commands).state;
     }
 
-    @NotNull
+    @NonNull
     @SuppressWarnings("unchecked")
     default List<E> decideOnStateAndReturnEvents(S state, C command, C... additionalCommands) {
         return decideOnState(state, command, additionalCommands).events;
     }
 
-    @Nullable
-    default S decideOnStateAndReturnState(S state, C command, C... additionalCommands) {
+    default @Nullable S decideOnStateAndReturnState(S state, C command, C... additionalCommands) {
         return decideOnState(state, command, additionalCommands).state;
     }
 
-    @NotNull
+    @NonNull
     private Decision<S, E> decideOnEventsWithSingleCommand(List<E> events, C command) {
         S currentState = fold(initialState(), events);
         List<E> newEvents = decide(command, currentState);
@@ -135,16 +131,14 @@ public interface Decider<C, S, E> {
         return new Decision<>(newState, newEvents);
     }
 
-    @NotNull
+    @NonNull
     private Decision<S, E> decideOnStateWithSingleCommand(S state, C command) {
         List<E> newEvents = decide(command, state);
         S newState = fold(state, newEvents);
         return new Decision<>(newState, newEvents);
     }
 
-
-    @Nullable
-    private S fold(S state, List<E> events) {
+    private @Nullable S fold(S state, List<E> events) {
         for (E event : events) {
             state = evolve(state, event);
             if (isTerminal(state)) {
@@ -154,7 +148,7 @@ public interface Decider<C, S, E> {
         return state;
     }
 
-    @NotNull
+    @NonNull
     private static <C> List<C> toList(C command, C[] additionalCommands) {
         List<C> commands = new ArrayList<>();
         commands.add(command);
@@ -167,12 +161,12 @@ public interface Decider<C, S, E> {
     record Decision<S, E>(S state, List<E> events) {
     }
 
-    static <C, S, E> Decider<C, S, E> create(S initialState, @NotNull BiFunction<C, S, List<E>> decide, @NotNull BiFunction<S, E, S> evolve) {
+    static <C, S, E> Decider<C, S, E> create(S initialState, @NonNull BiFunction<C, S, List<E>> decide, @NonNull BiFunction<S, E, S> evolve) {
         return create(initialState, decide, evolve, __ -> false);
     }
 
-    static <C, S, E> Decider<C, S, E> create(S initialState, @NotNull BiFunction<C, S, List<E>> decide, @NotNull BiFunction<S, E, S> evolve,
-                                             @NotNull Predicate<S> isTerminal) {
+    static <C, S, E> Decider<C, S, E> create(S initialState, @NonNull BiFunction<C, S, List<E>> decide, @NonNull BiFunction<S, E, S> evolve,
+                                             @NonNull Predicate<S> isTerminal) {
 
         return new Decider<>() {
             @Override
@@ -180,15 +174,15 @@ public interface Decider<C, S, E> {
                 return initialState;
             }
 
-            @NotNull
+            @NonNull
             @Override
-            public List<E> decide(@NotNull C command, S state) {
+            public List<E> decide(@NonNull C command, S state) {
                 return decide.apply(command, state);
             }
 
-            @NotNull
+            @NonNull
             @Override
-            public S evolve(S state, @NotNull E event) {
+            public S evolve(S state, @NonNull E event) {
                 return evolve.apply(state, event);
             }
 

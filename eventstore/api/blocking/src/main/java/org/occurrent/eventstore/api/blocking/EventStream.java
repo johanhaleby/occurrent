@@ -16,6 +16,8 @@
 
 package org.occurrent.eventstore.api.blocking;
 
+import org.jspecify.annotations.NullMarked;
+
 import java.util.Iterator;
 import java.util.List;
 import java.util.function.Function;
@@ -25,6 +27,7 @@ import java.util.stream.Stream;
 /**
  * Represents an event stream.
  */
+@NullMarked
 public interface EventStream<T> extends Iterable<T> {
 
     /**
@@ -72,7 +75,7 @@ public interface EventStream<T> extends Iterable<T> {
      * @return A new {@link EventStream} where events are converted to {@code T2}.
      */
     default <T2> EventStream<T2> map(Function<T, T2> fn) {
-        return new EventStream<T2>() {
+        return new EventStream<>() {
 
             @Override
             public Iterator<T2> iterator() {

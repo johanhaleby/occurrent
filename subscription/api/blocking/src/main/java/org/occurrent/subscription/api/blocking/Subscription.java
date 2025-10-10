@@ -16,6 +16,8 @@
 
 package org.occurrent.subscription.api.blocking;
 
+import org.jspecify.annotations.NullMarked;
+
 import java.time.Duration;
 import java.time.temporal.ChronoUnit;
 
@@ -23,6 +25,7 @@ import java.time.temporal.ChronoUnit;
  * Represents a unique subscription to a subscription. Subscriptions are typically started in a background thread
  * and you may wish to wait ({@link #waitUntilStarted(Duration)} for them to start before continuing.
  */
+@NullMarked
 public interface Subscription {
 
     /**

@@ -16,6 +16,8 @@
 
 package org.occurrent.retry.internal;
 
+import org.jspecify.annotations.NullMarked;
+import org.jspecify.annotations.Nullable;
 import org.occurrent.retry.AfterRetryInfo.ResultOfRetryAttempt;
 import org.occurrent.retry.Backoff;
 import org.occurrent.retry.MaxAttempts;
@@ -34,13 +36,14 @@ import java.util.stream.Stream;
 /**
  * Internal class for executing functions with retry capability. Never use this class directly from your own code!
  */
+@NullMarked
 public class RetryExecution {
 
-    public static <T1> Supplier<T1> executeWithRetry(Supplier<T1> supplier, Predicate<Throwable> shutdownPredicate, RetryStrategy retryStrategy) {
-        return () -> executeWithRetry((Function<RetryInfo, T1>) __ -> supplier.get(), shutdownPredicate, retryStrategy).apply(null);
+    public static <T1> Supplier<@Nullable T1> executeWithRetry(Supplier<@Nullable T1> supplier, Predicate<Throwable> shutdownPredicate, RetryStrategy retryStrategy) {
+        return () -> executeWithRetry((Function<RetryInfo, @Nullable T1>) __ -> supplier.get(), shutdownPredicate, retryStrategy).apply(null);
     }
 
-    public static <T1> Function<RetryInfo, T1> executeWithRetry(Function<RetryInfo, T1> function, Predicate<Throwable> shutdownPredicate, RetryStrategy retryStrategy) {
+    public static <T1> Function<RetryInfo, @Nullable T1> executeWithRetry(Function<RetryInfo, @Nullable T1> function, Predicate<Throwable> shutdownPredicate, RetryStrategy retryStrategy) {
         if (retryStrategy instanceof DontRetry) {
             return function;
         }
@@ -56,7 +59,7 @@ public class RetryExecution {
         return executeWithRetry(runnable, retry, convertToDelayStream(retry.backoff));
     }
 
-    public static <T1> Consumer<T1> executeWithRetry(Consumer<T1> fn, Predicate<Throwable> shutdownPredicate, RetryStrategy retryStrategy) {
+    public static <T1> Consumer<T1> executeWithRetry(Consumer<@Nullable T1> fn, Predicate<Throwable> shutdownPredicate, RetryStrategy retryStrategy) {
         if (retryStrategy instanceof DontRetry) {
             return fn;
         }
@@ -74,15 +77,15 @@ public class RetryExecution {
         return () -> executeWithRetry(runnableConsumer, retry, delay).accept(null);
     }
 
-    private static <T1> Consumer<T1> executeWithRetry(Consumer<T1> fn, RetryImpl retry, Iterator<Long> delay) {
+    private static <T1> Consumer<T1> executeWithRetry(Consumer<@Nullable T1> fn, RetryImpl retry, Iterator<Long> delay) {
         return t1 -> executeWithRetry(retryInfo -> {
             fn.accept(t1);
             return null;
         }, retry, delay).apply(null);
     }
 
-    private static <T1> Function<RetryInfo, T1> executeWithRetry(
-            Function<RetryInfo, T1> fn,
+    private static <T1> Function<RetryInfo, @Nullable T1> executeWithRetry(
+            Function<RetryInfo, @Nullable T1> fn,
             RetryImpl retry,
             Iterator<Long> delay
     ) {
@@ -161,7 +164,7 @@ public class RetryExecution {
     }
 
     private static RetryInfoImpl evolveRetryInfo(RetryImpl retry, Iterator<Long> delay, int attempt) {
-        Long backoffMillis = delay.next();
+        long backoffMillis = delay.next();
         Duration backoffDuration = backoffMillis == 0 ? Duration.ZERO : Duration.ofMillis(backoffMillis);
         return new RetryInfoImpl(attempt, attempt - 1, retry.maxAttempts, backoffDuration);
     }

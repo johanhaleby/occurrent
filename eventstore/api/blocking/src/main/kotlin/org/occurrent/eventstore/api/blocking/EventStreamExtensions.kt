@@ -21,4 +21,4 @@ import kotlin.streams.asSequence
 /**
  * Simply a convenience function that allows you to get the events as a [Sequence]
  */
-fun <T> EventStream<T>.eventSequence() = events().asSequence()
+fun <T : Any> EventStream<T>.eventSequence() = events().asSequence()

@@ -16,6 +16,7 @@
 
 package org.occurrent.subscription;
 
+import org.jspecify.annotations.NullMarked;
 import org.occurrent.filter.Filter;
 
 import java.util.Objects;
@@ -23,6 +24,7 @@ import java.util.Objects;
 /**
  * An implementation of {@code SubscriptionFilter} for Occurrent {@link Filter}'s.
  */
+@NullMarked
 public record OccurrentSubscriptionFilter(Filter filter) implements SubscriptionFilter {
 
     public OccurrentSubscriptionFilter {

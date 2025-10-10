@@ -19,7 +19,7 @@ package org.occurrent.springboot.mongo.blocking;
 
 import kotlin.Unit;
 import kotlin.jvm.functions.Function2;
-import org.jetbrains.annotations.NotNull;
+import org.jspecify.annotations.NonNull;
 import org.occurrent.annotation.Subscription;
 import org.occurrent.annotation.Subscription.ResumeBehavior;
 import org.occurrent.annotation.Subscription.StartPosition;
@@ -70,12 +70,12 @@ class OccurrentAnnotationBeanPostProcessor implements BeanPostProcessor, Applica
     private ApplicationContext applicationContext;
 
     @Override
-    public void setApplicationContext(@NotNull ApplicationContext applicationContext) throws BeansException {
+    public void setApplicationContext(@NonNull ApplicationContext applicationContext) throws BeansException {
         this.applicationContext = applicationContext;
     }
 
     @Override
-    public Object postProcessBeforeInitialization(Object bean, @NotNull String beanName) throws BeansException {
+    public Object postProcessBeforeInitialization(Object bean, @NonNull String beanName) throws BeansException {
         Class<?> managedBeanClass = bean.getClass();
         for (Method method : managedBeanClass.getDeclaredMethods()) {
             Subscription subscription = AnnotationUtils.findAnnotation(method, Subscription.class);
@@ -210,7 +210,7 @@ class OccurrentAnnotationBeanPostProcessor implements BeanPostProcessor, Applica
         };
     }
 
-    private @NotNull StartAt generateStartAt(String subscriptionId, StartPositionToUse startPositionToUse, ResumeBehavior resumeBehavior) {
+    private @NonNull StartAt generateStartAt(String subscriptionId, StartPositionToUse startPositionToUse, ResumeBehavior resumeBehavior) {
         final StartAt startAt;
         if (startPositionToUse instanceof StartPositionToUse.StartAtISO8601 iso8601) {
             startAt = switch (resumeBehavior) {
@@ -373,7 +373,7 @@ class OccurrentAnnotationBeanPostProcessor implements BeanPostProcessor, Applica
         }
     }
 
-    private static <E> @NotNull List<Class<E>> getConcreteEventTypes(String subscriptionId, Class<E> specifiedEventType) {
+    private static <E> @NonNull List<Class<E>> getConcreteEventTypes(String subscriptionId, Class<E> specifiedEventType) {
         final List<Class<E>> domainEventTypesToSubscribeTo;
         if (specifiedEventType.isSealed()) {
             //noinspection unchecked

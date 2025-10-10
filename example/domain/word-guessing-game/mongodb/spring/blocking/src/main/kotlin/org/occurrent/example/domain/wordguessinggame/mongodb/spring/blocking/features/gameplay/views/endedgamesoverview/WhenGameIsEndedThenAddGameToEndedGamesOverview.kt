@@ -47,7 +47,7 @@ class WhenGameIsEndedThenAddGameToEndedGamesOverview {
         subscriptions.subscribe<GameWasWon, GameWasLost>("WhenGameIsEndedThenAddGameToGameEndedOverview") { e ->
             log.info("${e::class.eventType()} - will update ended games overview")
             val gameId = e.gameId
-            val gameWasStarted = domainEventQueries.queryOne<GameWasStarted>(streamId(gameId.toString()).and(type(GameWasStarted::class.eventType())))
+            val gameWasStarted = domainEventQueries.queryOne<GameWasStarted>(streamId(gameId.toString()).and(type(GameWasStarted::class.eventType())))!!
             val endedGameOverview = when (e) {
                 is GameWasWon -> WonGameOverview(
                     gameId,

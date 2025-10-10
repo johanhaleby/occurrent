@@ -25,6 +25,7 @@ import com.mongodb.client.model.Filters;
 import io.cloudevents.CloudEvent;
 import io.cloudevents.core.builder.CloudEventBuilder;
 import org.bson.Document;
+import org.jspecify.annotations.NullMarked;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -143,6 +144,7 @@ public class NativeMongoSubscriptionPositionStorageTest {
 
         NativeMongoSubscriptionPositionStorage storage = new NativeMongoSubscriptionPositionStorage(database.getCollection(TIMESTAMP_TOKEN_COLLECTION)) {
 
+            @NullMarked
             @Override
             void persistDocumentSubscriptionPosition(String subscriptionId, Document document) {
                 if (counter.getAndIncrement() == 0) {

@@ -16,11 +16,14 @@
 
 package org.occurrent.subscription;
 
+import org.jspecify.annotations.NullMarked;
+
 import java.util.Objects;
 
 /**
  * A simple {@link SubscriptionPosition} that is backed by a fixed String
  */
+@NullMarked
 public class StringBasedSubscriptionPosition implements SubscriptionPosition {
     private final String value;
 

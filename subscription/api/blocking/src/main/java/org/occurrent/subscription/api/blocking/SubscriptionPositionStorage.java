@@ -16,9 +16,11 @@
 
 package org.occurrent.subscription.api.blocking;
 
+import org.jspecify.annotations.NonNull;
+import org.jspecify.annotations.NullMarked;
+import org.jspecify.annotations.Nullable;
 import org.occurrent.subscription.StartAt;
 import org.occurrent.subscription.SubscriptionPosition;
-
 
 /**
  * A {@code ReactorSubscriptionPositionStorage} provides means to read and write the subscription position to storage.
@@ -44,13 +46,15 @@ public interface SubscriptionPositionStorage {
      * </pre>
      *
      * @param subscriptionId The id of the subscription whose position to find
-     * @return A Mono with the {@link SubscriptionPosition} data point for the supplied subscriptionId
+     * @return A {@link SubscriptionPosition} data point for the supplied subscriptionId
      */
-    SubscriptionPosition read(String subscriptionId);
+    @Nullable
+    SubscriptionPosition read(@NonNull String subscriptionId);
 
     /*
      * Save the subscription position for the supplied subscriptionId to storage and then return it for easier chaining.
      */
+    @NullMarked
     SubscriptionPosition save(String subscriptionId, SubscriptionPosition subscriptionPosition);
 
     /**
@@ -58,6 +62,7 @@ public interface SubscriptionPositionStorage {
      *
      * @param subscriptionId The id of the subscription to delete the {@link SubscriptionPosition} for.
      */
+    @NullMarked
     void delete(String subscriptionId);
 
     /**
@@ -66,5 +71,6 @@ public interface SubscriptionPositionStorage {
      * @param subscriptionId The id of the subscription to check.
      * @return <code>true</code> if storage contains a subscription position for the stream id, <code>false</code> otherwise.
      */
+    @NullMarked
     boolean exists(String subscriptionId);
 }

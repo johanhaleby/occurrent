@@ -17,6 +17,8 @@
 package org.occurrent.subscription.reactor.durable;
 
 import io.cloudevents.CloudEvent;
+import org.jspecify.annotations.NullMarked;
+import org.jspecify.annotations.Nullable;
 import org.occurrent.subscription.StartAt;
 import org.occurrent.subscription.SubscriptionFilter;
 import org.occurrent.subscription.SubscriptionPosition;
@@ -40,6 +42,7 @@ import static org.occurrent.subscription.PositionAwareCloudEvent.getSubscription
  * Note that this implementation stores the subscription position after _every_ action. If you have a lot of events and duplication is not
  * that much of a deal, consider changing this behavior by supplying an instance of {@link ReactorDurableSubscriptionModelConfig}.
  */
+@NullMarked
 public class ReactorDurableSubscriptionModel {
     private static final Logger log = LoggerFactory.getLogger(ReactorDurableSubscriptionModel.class);
     private final PositionAwareSubscriptionModel subscription;
@@ -107,10 +110,10 @@ public class ReactorDurableSubscriptionModel {
      * @param action         This action will be invoked for each cloud event that is stored in the EventStore.
      * @return A stream of {@link CloudEvent}'s. The subscription position of the cloud event will already have been persisted when consumed by this stream so use <code>action</code> to perform side-effects.
      */
-    public Mono<Void> subscribe(String subscriptionId, SubscriptionFilter filter, Function<CloudEvent, Mono<Void>> action) {
+    public Mono<Void> subscribe(String subscriptionId, @Nullable SubscriptionFilter filter, Function<CloudEvent, Mono<Void>> action) {
         requireNonNull(subscriptionId, "Subscription id cannot be null");
         return findStartAtForSubscription(subscriptionId)
-                .doOnNext(startAt -> log.info("Starting subscription {} from subscription position {}", subscriptionId, startAt.toString()))
+                .doOnNext(startAt -> log.info("Starting subscription {} from subscription position {}", subscriptionId, startAt))
                 .flatMapMany(startAt -> subscription.subscribe(filter, startAt))
                 .flatMap(cloudEventWithStreamPosition -> action.apply(cloudEventWithStreamPosition).thenReturn(cloudEventWithStreamPosition))
                 .filter(config.persistCloudEventPositionPredicate)

@@ -17,6 +17,7 @@
 package org.occurrent.eventstore.api.blocking;
 
 import io.cloudevents.CloudEvent;
+import org.jspecify.annotations.NullMarked;
 import org.occurrent.eventstore.api.SortBy;
 import org.occurrent.filter.Filter;
 
@@ -28,6 +29,7 @@ import static java.util.Objects.requireNonNull;
  * Additional querying capabilities that may be supported by an {@link EventStore} implementation that is not typically part of a
  * "transactional" use case.
  */
+@NullMarked
 public interface EventStoreQueries {
 
     /**

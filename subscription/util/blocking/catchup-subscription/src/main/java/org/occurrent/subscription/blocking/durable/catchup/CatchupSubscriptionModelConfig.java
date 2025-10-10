@@ -16,6 +16,7 @@
 
 package org.occurrent.subscription.blocking.durable.catchup;
 
+import org.jspecify.annotations.NullMarked;
 import org.occurrent.eventstore.api.SortBy;
 import org.occurrent.eventstore.api.blocking.EventStoreQueries;
 import org.occurrent.subscription.api.blocking.Subscription;
@@ -28,6 +29,7 @@ import static org.occurrent.filter.Filter.TIME;
 /**
  * Configuration for {@link CatchupSubscriptionModel}
  */
+@NullMarked
 public class CatchupSubscriptionModelConfig {
 
     public final int cacheSize;

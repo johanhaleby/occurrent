@@ -1,6 +1,8 @@
 package org.occurrent.application.service.blocking;
 
 import io.cloudevents.CloudEvent;
+import org.jspecify.annotations.NullMarked;
+import org.jspecify.annotations.Nullable;
 import org.occurrent.eventstore.api.WriteResult;
 
 import java.util.Objects;
@@ -16,6 +18,7 @@ import java.util.stream.Stream;
  *
  * @param <T> The type of the event to store. Normally this would be your custom "DomainEvent" class but it could also be {@link CloudEvent}.
  */
+@NullMarked
 public interface ApplicationService<T> {
 
     /**
@@ -37,7 +40,7 @@ public interface ApplicationService<T> {
      *                                     if required.
      * @param sideEffect                   Side-effects that are executed <i>after</i> the events have been written to the event store.
      */
-    WriteResult execute(String streamId, Function<Stream<T>, Stream<T>> functionThatCallsDomainModel, Consumer<Stream<T>> sideEffect);
+    WriteResult execute(String streamId, Function<Stream<T>, Stream<T>> functionThatCallsDomainModel, @Nullable Consumer<Stream<T>> sideEffect);
 
 
     /**

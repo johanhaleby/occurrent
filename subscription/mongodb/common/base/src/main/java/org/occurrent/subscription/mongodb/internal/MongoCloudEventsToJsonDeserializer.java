@@ -20,6 +20,7 @@ import com.mongodb.client.model.changestream.ChangeStreamDocument;
 import com.mongodb.client.model.changestream.OperationType;
 import io.cloudevents.CloudEvent;
 import org.bson.Document;
+import org.jspecify.annotations.NullMarked;
 import org.occurrent.eventstore.mongodb.internal.OccurrentCloudEventMongoDocumentMapper;
 import org.occurrent.mongodb.timerepresentation.TimeRepresentation;
 
@@ -27,6 +28,7 @@ import java.util.Optional;
 
 import static com.mongodb.client.model.changestream.OperationType.INSERT;
 
+@NullMarked
 public class MongoCloudEventsToJsonDeserializer {
 
     public static final String ID = "_id";

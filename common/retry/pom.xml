@@ -33,6 +33,11 @@
             <artifactId>kotlin-stdlib</artifactId>
             <optional>true</optional>
         </dependency>
+        <dependency>
+            <groupId>org.jspecify</groupId>
+            <artifactId>jspecify</artifactId>
+            <optional>true</optional>
+        </dependency>
 
         <dependency>
             <groupId>org.junit.jupiter</groupId>

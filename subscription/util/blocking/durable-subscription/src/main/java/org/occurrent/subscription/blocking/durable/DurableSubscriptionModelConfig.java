@@ -17,6 +17,7 @@
 package org.occurrent.subscription.blocking.durable;
 
 import io.cloudevents.CloudEvent;
+import org.jspecify.annotations.NullMarked;
 import org.occurrent.subscription.util.predicate.EveryN;
 
 import java.util.Objects;
@@ -26,6 +27,7 @@ import java.util.function.Predicate;
 /**
  * Config class for {@link DurableSubscriptionModel}.
  */
+@NullMarked
 public class DurableSubscriptionModelConfig {
 
     public final Predicate<CloudEvent> persistCloudEventPositionPredicate;

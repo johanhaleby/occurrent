@@ -19,6 +19,8 @@ package org.occurrent.subscription.mongodb.spring.reactor;
 import com.mongodb.MongoCommandException;
 import io.cloudevents.CloudEvent;
 import org.bson.Document;
+import org.jspecify.annotations.NullMarked;
+import org.jspecify.annotations.Nullable;
 import org.occurrent.mongodb.timerepresentation.TimeRepresentation;
 import org.occurrent.subscription.PositionAwareCloudEvent;
 import org.occurrent.subscription.StartAt;
@@ -52,6 +54,7 @@ import static org.occurrent.subscription.mongodb.internal.MongoCommons.cannotFin
  * that includes the subscription position. Use {@link PositionAwareCloudEvent#getSubscriptionPositionOrThrowIAE(CloudEvent)}
  * to get the subscription position.
  */
+@NullMarked
 public class ReactorMongoSubscriptionModel implements PositionAwareSubscriptionModel {
     private static final Logger log = LoggerFactory.getLogger(ReactorMongoSubscriptionModel.class);
 
@@ -73,14 +76,14 @@ public class ReactorMongoSubscriptionModel implements PositionAwareSubscriptionM
     }
 
     @Override
-    public Flux<CloudEvent> subscribe(SubscriptionFilter filter, StartAt startAt) {
+    public Flux<CloudEvent> subscribe(@Nullable SubscriptionFilter filter, StartAt startAt) {
         // TODO We should change builder::resumeAt to builder::startAtOperationTime once Spring adds support for it (see https://jira.spring.io/browse/DATAMONGO-2607)
         ChangeStreamOptionsBuilder builder = MongoCommons.applyStartPosition(ChangeStreamOptions.builder(), ChangeStreamOptionsBuilder::startAfter, ChangeStreamOptionsBuilder::resumeAt, startAt, new SubscriptionModelContext(ReactorMongoSubscriptionModel.class));
         final ChangeStreamOptions changeStreamOptions = ApplyFilterToChangeStreamOptionsBuilder.applyFilter(timeRepresentation, filter, builder);
         Flux<ChangeStreamEvent<Document>> changeStream = mongo.changeStream(eventCollection, changeStreamOptions, Document.class);
         return changeStream
                 .flatMap(changeEvent ->
-                        MongoCloudEventsToJsonDeserializer.deserializeToCloudEvent(changeEvent.getRaw(), timeRepresentation)
+                        MongoCloudEventsToJsonDeserializer.deserializeToCloudEvent(requireNonNull(changeEvent.getRaw()), timeRepresentation)
                                 .map(cloudEvent -> new PositionAwareCloudEvent(cloudEvent, new MongoResumeTokenSubscriptionPosition(requireNonNull(changeEvent.getResumeToken()).asDocument())))
                                 .map(Mono::just)
                                 .orElse(Mono.empty()));

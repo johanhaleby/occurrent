@@ -17,6 +17,8 @@
 package org.occurrent.subscription.redis.spring.blocking;
 
 import jakarta.annotation.PreDestroy;
+import org.jspecify.annotations.NullMarked;
+import org.jspecify.annotations.Nullable;
 import org.occurrent.retry.RetryStrategy;
 import org.occurrent.subscription.StringBasedSubscriptionPosition;
 import org.occurrent.subscription.SubscriptionPosition;
@@ -32,6 +34,7 @@ import static org.occurrent.retry.internal.RetryExecution.executeWithRetry;
 /**
  * A Spring implementation of {@link SubscriptionPositionStorage} that stores {@link SubscriptionPosition} in Redis.
  */
+@NullMarked
 public class SpringRedisSubscriptionPositionStorage implements SubscriptionPositionStorage {
 
     private final RedisOperations<String, String> redis;
@@ -63,9 +66,10 @@ public class SpringRedisSubscriptionPositionStorage implements SubscriptionPosit
         this.redis = redis;
     }
 
+    @Nullable
     @Override
     public SubscriptionPosition read(String subscriptionId) {
-        Supplier<SubscriptionPosition> read = () -> {
+        Supplier<@Nullable SubscriptionPosition> read = () -> {
             String subscriptionPosition = redis.opsForValue().get(subscriptionId);
             if (subscriptionPosition == null) {
                 return null;
@@ -87,7 +91,7 @@ public class SpringRedisSubscriptionPositionStorage implements SubscriptionPosit
             return subscriptionPosition;
         };
 
-        return executeWithRetry(save, __ -> !shutdown, retryStrategy).get();
+        return requireNonNull(executeWithRetry(save, __ -> !shutdown, retryStrategy).get());
     }
 
     @Override
@@ -101,7 +105,7 @@ public class SpringRedisSubscriptionPositionStorage implements SubscriptionPosit
             Boolean result = redis.hasKey(subscriptionId);
             return result != null && result;
         };
-        return executeWithRetry(exists, __ -> !shutdown, retryStrategy).get();
+        return Boolean.TRUE.equals(executeWithRetry(exists, __ -> !shutdown, retryStrategy).get());
     }
 
     @PreDestroy

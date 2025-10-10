@@ -17,8 +17,8 @@
 
 package org.occurrent.dsl.view;
 
-import org.jetbrains.annotations.NotNull;
-import org.jetbrains.annotations.Nullable;
+import org.jspecify.annotations.NonNull;
+import org.jspecify.annotations.Nullable;
 
 import java.util.Arrays;
 import java.util.List;
@@ -44,7 +44,7 @@ public interface View<S, E> {
      * @param event The event
      * @return The evolved state
      */
-    S evolve(@Nullable S state, @NotNull E event);
+    S evolve(@Nullable S state, @NonNull E event);
 
     /**
      * Evolve initial state from events
@@ -52,7 +52,7 @@ public interface View<S, E> {
      * @return The evolved state
      */
     @SuppressWarnings("unchecked")
-    default S evolve(@NotNull E event, @NotNull E event2, @NotNull E... moreEvents) {
+    default S evolve(@NonNull E event, @NonNull E event2, @NonNull E... moreEvents) {
         return evolve(initialState(), event, event2, moreEvents);
     }
 
@@ -62,11 +62,11 @@ public interface View<S, E> {
      * @return The state
      */
     @SuppressWarnings("unchecked")
-    default S evolve(S state, @NotNull E event, @NotNull E event2, @NotNull E... moreEvents) {
+    default S evolve(S state, @NonNull E event, @NonNull E event2, @NonNull E... moreEvents) {
         return evolve(state, Stream.concat(Stream.of(event, event2), Arrays.stream(moreEvents)));
     }
 
-    default S evolve(S state, @NotNull List<E> events) {
+    default S evolve(S state, @NonNull List<E> events) {
         return evolve(state, events.stream());
     }
 
@@ -75,11 +75,11 @@ public interface View<S, E> {
      *
      * @return The evolved state
      */
-    default S evolve(@NotNull List<E> events) {
+    default S evolve(@NonNull List<E> events) {
         return evolve(initialState(), events.stream());
     }
 
-    default S evolve(S state, @NotNull Stream<E> events) {
+    default S evolve(S state, @NonNull Stream<E> events) {
         return events.sequential().reduce(state, this::evolve, (left, right) -> right);
     }
 
@@ -88,11 +88,11 @@ public interface View<S, E> {
      *
      * @return The evolved state
      */
-    default S evolve(@NotNull Stream<E> events) {
+    default S evolve(@NonNull Stream<E> events) {
         return evolve(initialState(), events);
     }
 
-    static <S, E> View<S, E> create(S initialState, @NotNull BiFunction<S, E, S> evolve) {
+    static <S, E> View<S, E> create(S initialState, @NonNull BiFunction<S, E, S> evolve) {
         return new View<>() {
             @Override
             public S initialState() {
@@ -100,7 +100,7 @@ public interface View<S, E> {
             }
 
             @Override
-            public S evolve(S state, @NotNull E event) {
+            public S evolve(S state, @NonNull E event) {
                 return evolve.apply(state, event);
             }
         };

@@ -17,6 +17,7 @@
 package org.occurrent.eventstore.api.blocking;
 
 import io.cloudevents.CloudEvent;
+import org.jspecify.annotations.NullMarked;
 import org.occurrent.eventstore.api.WriteResult;
 
 import java.util.Objects;
@@ -25,6 +26,7 @@ import java.util.stream.Stream;
 /**
  * An interface that should be implemented by event streams that supports writing events to a stream without specifying a write condition.
  */
+@NullMarked
 public interface UnconditionallyWriteToEventStream {
 
     /**
