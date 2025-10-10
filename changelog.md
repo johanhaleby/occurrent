@@ -21,6 +21,7 @@
      val e = NameChangedEvent(..)
      materializedNameView.update(e)
      ```
+  3. Serveral new overloaded evolve methods to make it easier to evolve the view from multiple events and not just one. Also, new kotlin extension functions for this defined in `org.occurrent.dsl.view.ViewExtensions.kt`.  
  * Replaced recursive retry logic with iterative loop in the `retry` module
 
 ### 0.19.12 (2025-09-26)

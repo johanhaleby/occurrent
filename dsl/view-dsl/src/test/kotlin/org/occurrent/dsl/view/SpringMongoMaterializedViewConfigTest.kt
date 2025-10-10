@@ -29,16 +29,15 @@ import org.occurrent.domain.NameDefined
 import org.occurrent.domain.NameWasChanged
 import org.occurrent.dsl.view.DuplicateKeyHandling.Companion.ignore
 import org.occurrent.dsl.view.SpringMongoViewConfig.Companion.config
+import org.occurrent.dsl.view.testsupport.NameState
+import org.occurrent.dsl.view.testsupport.nameChanged
+import org.occurrent.dsl.view.testsupport.nameDefined
 import org.occurrent.testsupport.mongodb.FlushMongoDBExtension
 import org.springframework.dao.DuplicateKeyException
 import org.springframework.dao.OptimisticLockingFailureException
-import org.springframework.data.annotation.Id
-import org.springframework.data.annotation.TypeAlias
-import org.springframework.data.annotation.Version
 import org.springframework.data.mongodb.core.MongoOperations
 import org.springframework.data.mongodb.core.MongoTemplate
 import org.springframework.data.mongodb.core.findById
-import org.springframework.data.mongodb.core.mapping.Document
 import org.testcontainers.containers.MongoDBContainer
 import org.testcontainers.junit.jupiter.Container
 import org.testcontainers.junit.jupiter.Testcontainers
@@ -253,9 +252,6 @@ class SpringMongoMaterializedViewConfigTest {
         }
     }
 
-    private fun nameDefined(userId: String = UUID.randomUUID().toString(), name: String) = NameDefined(UUID.randomUUID().toString(), Date(), userId, name)
-    private fun nameChanged(userId: String, name: String) = NameWasChanged(UUID.randomUUID().toString(), Date(), userId, name)
-
     private fun materializedView(config: SpringMongoViewConfig): MaterializedView<DomainEvent> = nameView.materialized(mongoOperations, config, DomainEvent::userId)
 
     private fun saveState(userId: String = UUID.randomUUID().toString(), name: String = randomName(), version: Long? = null): NameState = mongoOperations.save(NameState(userId, name, version))
@@ -265,6 +261,3 @@ class SpringMongoMaterializedViewConfigTest {
 }
 
 
-@Document(collection = "name-state")
-@TypeAlias("NameState")
-data class NameState(@Id val userId: String, val name: String, @Version val version: Long? = null)
