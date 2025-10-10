@@ -7,7 +7,6 @@ on:
 
 jobs:
   build:
-
     runs-on: ubuntu-latest
 
     strategy:
@@ -19,13 +18,20 @@ jobs:
       - name: Set up JDK ${{ matrix.java }}
         uses: actions/setup-java@main
         with:
-          distribution: "adopt"
+          distribution: temurin
           java-version: ${{ matrix.java }}
+
+      - name: Enable Testcontainers reuse on this runner
+        run: |
+          echo "testcontainers.reuse.enable=true" > "$HOME/.testcontainers.properties"
+          cat "$HOME/.testcontainers.properties"
+
       - name: Cache Maven packages
         uses: actions/cache@main
         with:
           path: ~/.m2
           key: ${{ runner.os }}-m2-${{ hashFiles('**/pom.xml') }}
           restore-keys: ${{ runner.os }}-m2
+
       - name: Build with Maven
         run: mvn -B package --file pom.xml
