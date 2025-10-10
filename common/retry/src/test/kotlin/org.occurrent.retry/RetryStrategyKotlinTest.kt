@@ -24,7 +24,6 @@ import java.time.Duration
 import java.util.concurrent.CopyOnWriteArrayList
 import java.util.concurrent.atomic.AtomicInteger
 
-
 @DisplayNameGeneration(DisplayNameGenerator.Simple::class)
 @Timeout(2)
 class RetryStrategyKotlinTest {

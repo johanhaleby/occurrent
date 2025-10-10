@@ -45,7 +45,7 @@ public class RetryExecution {
             return function;
         }
         RetryImpl retry = applyShutdownPredicate(shutdownPredicate, retryStrategy);
-        return executeWithRetry(function, retry, convertToDelayStream(retry.backoff), 1, null, Duration.ZERO);
+        return executeWithRetry(function, retry, convertToDelayStream(retry.backoff));
     }
 
     public static Runnable executeWithRetry(Runnable runnable, Predicate<Throwable> shutdownPredicate, RetryStrategy retryStrategy) {
@@ -78,48 +78,83 @@ public class RetryExecution {
         return t1 -> executeWithRetry(retryInfo -> {
             fn.accept(t1);
             return null;
-        }, retry, delay, 1, null, Duration.ZERO).apply(null);
+        }, retry, delay).apply(null);
     }
 
-    private static <T1> Function<RetryInfo, T1> executeWithRetry(Function<RetryInfo, T1> fn, RetryImpl retry, Iterator<Long> delay, int attempt, Throwable lastError, Duration previousBackoff) {
-        return (RetryInfo) -> {
-            var nextRetryInfo = evolveRetryInfo(retry, delay, attempt);
-            var retryInfoWithPreviousBackoff = nextRetryInfo.withBackoff(previousBackoff);
-            boolean currentAttemptIsARetryAttempt = lastError != null;
+    private static <T1> Function<RetryInfo, T1> executeWithRetry(
+            Function<RetryInfo, T1> fn,
+            RetryImpl retry,
+            Iterator<Long> delay
+    ) {
+        return (ignored) -> {
+            int currentAttempt = 1;
+            Throwable lastErr = null;
+            Duration prevBackoff = Duration.ZERO;
 
-            if (currentAttemptIsARetryAttempt) {
-                retry.onBeforeRetryListener.accept(new BeforeRetryInfoImpl(retryInfoWithPreviousBackoff), lastError);
-            }
+            for (; ; ) {
+                var nextRetryInfo = evolveRetryInfo(retry, delay, currentAttempt);
+                var retryInfoWithPrevBackoff = nextRetryInfo.withBackoff(prevBackoff);
+                boolean isRetryAttempt = lastErr != null;
 
-            try {
-                T1 result = fn.apply(retryInfoWithPreviousBackoff);
-                if (currentAttemptIsARetryAttempt) {
-                    retry.onAfterRetryListener.accept(new AfterRetryInfoImpl(retryInfoWithPreviousBackoff, new ResultOfRetryAttempt.Success(), null), lastError);
+                if (isRetryAttempt) {
+                    retry.onBeforeRetryListener.accept(new BeforeRetryInfoImpl(retryInfoWithPrevBackoff), lastErr);
                 }
-                return result;
-            } catch (Throwable e) {
-                Duration currentBackoff = nextRetryInfo.getBackoff();
-                boolean shouldRetryAgain = !isExhausted(attempt, retry.maxAttempts) && retry.retryPredicate.test(e);
-                retry.errorListener.accept(new ErrorInfoImpl(retryInfoWithPreviousBackoff, shouldRetryAgain ? currentBackoff : null, shouldRetryAgain), e);
-                if (shouldRetryAgain) {
-                    retry.onRetryableErrorListener.accept(new RetryableErrorInfoImpl(retryInfoWithPreviousBackoff, currentBackoff), e);
-                    if (currentAttemptIsARetryAttempt) {
-                        retry.onAfterRetryListener.accept(new AfterRetryInfoImpl(retryInfoWithPreviousBackoff, new ResultOfRetryAttempt.Failed(e), currentBackoff), lastError);
+
+                try {
+                    T1 result = fn.apply(retryInfoWithPrevBackoff);
+                    if (isRetryAttempt) {
+                        retry.onAfterRetryListener.accept(
+                                new AfterRetryInfoImpl(retryInfoWithPrevBackoff, new ResultOfRetryAttempt.Success(), null),
+                                lastErr
+                        );
                     }
-                    try {
-                        long backoffMillis = nextRetryInfo.getBackoff().toMillis();
-                        if (backoffMillis > 0) {
-                            Thread.sleep(backoffMillis);
+                    return result;
+                } catch (Throwable e) {
+                    var currentBackoff = nextRetryInfo.getBackoff();
+                    boolean shouldRetryAgain =
+                            !isExhausted(currentAttempt, retry.maxAttempts) && retry.retryPredicate.test(e);
+
+                    retry.errorListener.accept(
+                            new ErrorInfoImpl(retryInfoWithPrevBackoff, shouldRetryAgain ? currentBackoff : null, shouldRetryAgain),
+                            e
+                    );
+
+                    if (!shouldRetryAgain) {
+                        if (isRetryAttempt) {
+                            retry.onAfterRetryListener.accept(
+                                    new AfterRetryInfoImpl(retryInfoWithPrevBackoff, new ResultOfRetryAttempt.Failed(e), null),
+                                    lastErr
+                            );
                         }
-                    } catch (InterruptedException interruptedException) {
-                        throw new RuntimeException(e);
+                        return SafeExceptionRethrower.safeRethrow(retry.errorMapper.apply(e));
                     }
-                    return executeWithRetry(fn, retry, delay, attempt + 1, e, currentBackoff).apply(nextRetryInfo);
-                } else {
-                    if (currentAttemptIsARetryAttempt) {
-                        retry.onAfterRetryListener.accept(new AfterRetryInfoImpl(retryInfoWithPreviousBackoff, new ResultOfRetryAttempt.Failed(e), null), lastError);
+
+                    retry.onRetryableErrorListener.accept(
+                            new RetryableErrorInfoImpl(retryInfoWithPrevBackoff, currentBackoff),
+                            e
+                    );
+
+                    if (isRetryAttempt) {
+                        retry.onAfterRetryListener.accept(
+                                new AfterRetryInfoImpl(retryInfoWithPrevBackoff, new ResultOfRetryAttempt.Failed(e), currentBackoff),
+                                lastErr
+                        );
                     }
-                    return SafeExceptionRethrower.safeRethrow(retry.errorMapper.apply(e));
+
+                    long backoffMillis = currentBackoff.toMillis();
+                    if (backoffMillis > 0) {
+                        try {
+                            Thread.sleep(backoffMillis);
+                        } catch (InterruptedException ie) {
+                            Thread.currentThread().interrupt(); // optional but nicer
+                            throw new RuntimeException(e);
+                        }
+                    }
+
+                    // advance state and continue
+                    currentAttempt++;
+                    lastErr = e;
+                    prevBackoff = currentBackoff;
                 }
             }
         };

@@ -20,7 +20,8 @@
      // Now you can do this to update the view in the MongoDB database from an event
      val e = NameChangedEvent(..)
      materializedNameView.update(e)
-     ``` 
+     ```
+ * Replaced recursive retry logic with iterative loop in the `retry` module
 
 ### 0.19.12 (2025-09-26)
 * Internal changes including lots of changes to the build pipeline
