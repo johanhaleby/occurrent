@@ -16,8 +16,8 @@
 
 package org.occurrent.retry;
 
+import org.jspecify.annotations.NonNull;
 import org.jspecify.annotations.NullMarked;
-import org.jspecify.annotations.Nullable;
 import org.occurrent.retry.internal.RetryImpl;
 
 import java.time.Duration;
@@ -43,7 +43,6 @@ import static org.occurrent.retry.internal.RetryExecution.executeWithRetry;
  * </pre>
  * </p>
  */
-@NullMarked
 public interface RetryStrategy {
     /**
      * Create a retry strategy that performs retries if exceptions are caught.
@@ -51,6 +50,7 @@ public interface RetryStrategy {
      * @return {@link RetryImpl}
      * @see RetryImpl
      */
+    @NonNull
     static Retry retry() {
         return new RetryImpl();
     }
@@ -61,6 +61,7 @@ public interface RetryStrategy {
      * @return {@link DontRetry}
      * @see DontRetry
      */
+    @NonNull
     static DontRetry none() {
         return DontRetry.INSTANCE;
     }
@@ -77,6 +78,7 @@ public interface RetryStrategy {
      * @param multiplier Multiplier between retries
      * @return A retry strategy with exponential backoff
      */
+    @NullMarked
     static Retry exponentialBackoff(Duration initial, Duration max, double multiplier) {
         return RetryStrategy.retry().backoff(Backoff.exponential(initial, max, multiplier));
     }
@@ -91,6 +93,7 @@ public interface RetryStrategy {
      * @param duration The duration to wait before retry
      * @return A retry strategy with fixed backoff
      */
+    @NullMarked
     static Retry fixed(Duration duration) {
         return RetryStrategy.retry().backoff(Backoff.fixed(duration));
     }
@@ -105,6 +108,7 @@ public interface RetryStrategy {
      * @param millis The number of millis to wait before retry
      * @return A retry strategy with fixed backoff
      */
+    @NullMarked
     static Retry fixed(long millis) {
         return RetryStrategy.retry().backoff(Backoff.fixed(millis));
     }
@@ -116,8 +120,7 @@ public interface RetryStrategy {
      * @param function A function that takes {@link RetryInfo} and returns the result
      * @return The result of the supplier, if successful.
      */
-    @Nullable
-    default <T> T execute(Function<RetryInfo, @Nullable T> function) {
+    default <T> T execute(Function<RetryInfo, T> function) {
         Objects.requireNonNull(function, Supplier.class.getSimpleName() + " cannot be null");
         return executeWithRetry(function, __ -> true, this).apply(null);
     }
@@ -129,8 +132,7 @@ public interface RetryStrategy {
      * @param supplier The supplier to execute
      * @return The result of the supplier, if successful.
      */
-    @Nullable
-    default <T> T execute(Supplier<@Nullable T> supplier) {
+    default <T> T execute(Supplier<T> supplier) {
         Objects.requireNonNull(supplier, Supplier.class.getSimpleName() + " cannot be null");
         return executeWithRetry(supplier, __ -> true, this).get();
     }
@@ -161,6 +163,7 @@ public interface RetryStrategy {
         }
     }
 
+    @NullMarked
     interface Retry extends RetryStrategy {
         /**
          * Configure the backoff settings for the retry strategy.
