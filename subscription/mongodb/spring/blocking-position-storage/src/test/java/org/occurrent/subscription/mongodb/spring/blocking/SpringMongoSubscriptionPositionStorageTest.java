@@ -25,10 +25,10 @@ import io.cloudevents.CloudEvent;
 import io.cloudevents.core.builder.CloudEventBuilder;
 import io.github.artsok.RepeatedIfExceptionsTest;
 import org.bson.Document;
+import org.jspecify.annotations.NonNull;
 import org.jspecify.annotations.NullMarked;
-import org.junit.jupiter.api.AfterEach;
-import org.junit.jupiter.api.BeforeEach;
-import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.*;
+import org.junit.jupiter.api.DisplayNameGenerator.Simple;
 import org.junit.jupiter.api.extension.RegisterExtension;
 import org.occurrent.domain.DomainEvent;
 import org.occurrent.domain.NameDefined;
@@ -85,6 +85,8 @@ import static org.occurrent.subscription.mongodb.MongoFilterSpecification.FULL_D
 import static org.occurrent.subscription.mongodb.MongoFilterSpecification.MongoBsonFilterSpecification.filter;
 import static org.occurrent.time.TimeConversion.toLocalDateTime;
 
+@Timeout(20)
+@DisplayNameGeneration(Simple.class)
 @Testcontainers
 public class SpringMongoSubscriptionPositionStorageTest {
 
@@ -183,22 +185,25 @@ public class SpringMongoSubscriptionPositionStorageTest {
         SubscriptionPositionStorage storage = new SubscriptionPositionStorage() {
 
             @Override
-            public SubscriptionPosition read(String subscriptionId) {
+            public SubscriptionPosition read(@NonNull String subscriptionId) {
                 return null;
             }
 
             @Override
+            @NullMarked
             public SubscriptionPosition save(String subscriptionId, SubscriptionPosition subscriptionPosition) {
                 numberOfWritesToBlockingSubscriptionStorage.incrementAndGet();
                 return subscriptionPosition;
             }
 
             @Override
+            @NullMarked
             public void delete(String subscriptionId) {
 
             }
 
             @Override
+            @NullMarked
             public boolean exists(String subscriptionId) {
                 return false;
             }
@@ -231,22 +236,25 @@ public class SpringMongoSubscriptionPositionStorageTest {
         SubscriptionPositionStorage storage = new SubscriptionPositionStorage() {
 
             @Override
-            public SubscriptionPosition read(String subscriptionId) {
+            public SubscriptionPosition read(@NonNull String subscriptionId) {
                 return null;
             }
 
             @Override
+            @NullMarked
             public SubscriptionPosition save(String subscriptionId, SubscriptionPosition subscriptionPosition) {
                 numberOfWritesToBlockingSubscriptionStorage.incrementAndGet();
                 return subscriptionPosition;
             }
 
             @Override
+            @NullMarked
             public void delete(String subscriptionId) {
 
             }
 
             @Override
+            @NullMarked
             public boolean exists(String subscriptionId) {
                 return false;
             }

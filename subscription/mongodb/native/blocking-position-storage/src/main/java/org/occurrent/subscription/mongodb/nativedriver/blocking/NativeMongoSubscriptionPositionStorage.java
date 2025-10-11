@@ -97,6 +97,7 @@ public class NativeMongoSubscriptionPositionStorage implements SubscriptionPosit
 
 
     @Override
+    @Nullable
     public SubscriptionPosition read(String subscriptionId) {
         Supplier<@Nullable SubscriptionPosition> read = () -> {
             Document document = subscriptionPositionCollection.find(eq(ID, subscriptionId), Document.class).first();
@@ -109,7 +110,7 @@ public class NativeMongoSubscriptionPositionStorage implements SubscriptionPosit
 
             return position;
         };
-        return requireNonNull(executeWithRetry(read, __ -> !shutdown, retryStrategy).get());
+        return executeWithRetry(read, __ -> !shutdown, retryStrategy).get();
     }
 
     @Override

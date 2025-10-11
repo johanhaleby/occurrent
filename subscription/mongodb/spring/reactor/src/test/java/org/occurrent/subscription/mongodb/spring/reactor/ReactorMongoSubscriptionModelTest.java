@@ -68,6 +68,8 @@ import static org.hamcrest.Matchers.is;
 import static org.occurrent.functional.CheckedFunction.unchecked;
 import static org.occurrent.time.TimeConversion.toLocalDateTime;
 
+@Timeout(20)
+@DisplayNameGeneration(DisplayNameGenerator.Simple.class)
 @Testcontainers
 public class ReactorMongoSubscriptionModelTest {
 

@@ -105,42 +105,25 @@ public class RetryExecution {
                 try {
                     T1 result = fn.apply(retryInfoWithPrevBackoff);
                     if (isRetryAttempt) {
-                        retry.onAfterRetryListener.accept(
-                                new AfterRetryInfoImpl(retryInfoWithPrevBackoff, new ResultOfRetryAttempt.Success(), null),
-                                lastErr
-                        );
+                        retry.onAfterRetryListener.accept(new AfterRetryInfoImpl(retryInfoWithPrevBackoff, new ResultOfRetryAttempt.Success(), null), lastErr);
                     }
                     return result;
                 } catch (Throwable e) {
                     var currentBackoff = nextRetryInfo.getBackoff();
-                    boolean shouldRetryAgain =
-                            !isExhausted(currentAttempt, retry.maxAttempts) && retry.retryPredicate.test(e);
+                    boolean shouldRetryAgain = !isExhausted(currentAttempt, retry.maxAttempts) && retry.retryPredicate.test(e);
 
-                    retry.errorListener.accept(
-                            new ErrorInfoImpl(retryInfoWithPrevBackoff, shouldRetryAgain ? currentBackoff : null, shouldRetryAgain),
-                            e
-                    );
+                    retry.errorListener.accept(new ErrorInfoImpl(retryInfoWithPrevBackoff, shouldRetryAgain ? currentBackoff : null, shouldRetryAgain), e);
 
                     if (!shouldRetryAgain) {
                         if (isRetryAttempt) {
-                            retry.onAfterRetryListener.accept(
-                                    new AfterRetryInfoImpl(retryInfoWithPrevBackoff, new ResultOfRetryAttempt.Failed(e), null),
-                                    lastErr
-                            );
+                            retry.onAfterRetryListener.accept(new AfterRetryInfoImpl(retryInfoWithPrevBackoff, new ResultOfRetryAttempt.Failed(e), null), lastErr);
                         }
                         return SafeExceptionRethrower.safeRethrow(retry.errorMapper.apply(e));
                     }
-
-                    retry.onRetryableErrorListener.accept(
-                            new RetryableErrorInfoImpl(retryInfoWithPrevBackoff, currentBackoff),
-                            e
-                    );
+                    retry.onRetryableErrorListener.accept(new RetryableErrorInfoImpl(retryInfoWithPrevBackoff, currentBackoff), e);
 
                     if (isRetryAttempt) {
-                        retry.onAfterRetryListener.accept(
-                                new AfterRetryInfoImpl(retryInfoWithPrevBackoff, new ResultOfRetryAttempt.Failed(e), currentBackoff),
-                                lastErr
-                        );
+                        retry.onAfterRetryListener.accept(new AfterRetryInfoImpl(retryInfoWithPrevBackoff, new ResultOfRetryAttempt.Failed(e), currentBackoff), lastErr);
                     }
 
                     long backoffMillis = currentBackoff.toMillis();

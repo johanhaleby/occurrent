@@ -22,40 +22,10 @@ import org.occurrent.subscription.DurationToTimeoutConverter.Timeout;
 import org.occurrent.subscription.api.blocking.Subscription;
 
 import java.time.Duration;
-import java.util.Objects;
 import java.util.concurrent.CountDownLatch;
 
 @NullMarked
-public class NativeMongoSubscription implements Subscription {
-    public final String subscriptionId;
-    final CountDownLatch subscriptionStartedLatch;
-
-    NativeMongoSubscription(String subscriptionId, CountDownLatch subscriptionStartedLatch) {
-        this.subscriptionId = subscriptionId;
-        this.subscriptionStartedLatch = subscriptionStartedLatch;
-    }
-
-    @Override
-    public boolean equals(Object o) {
-        if (this == o) return true;
-        if (!(o instanceof NativeMongoSubscription)) return false;
-        NativeMongoSubscription that = (NativeMongoSubscription) o;
-        return Objects.equals(subscriptionId, that.subscriptionId) &&
-                Objects.equals(subscriptionStartedLatch, that.subscriptionStartedLatch);
-    }
-
-    @Override
-    public int hashCode() {
-        return Objects.hash(subscriptionId, subscriptionStartedLatch);
-    }
-
-    @Override
-    public String toString() {
-        return "NativeMongoDBSubscription{" +
-                "subscriptionId='" + subscriptionId + '\'' +
-                ", subscriptionStartedLatch=" + subscriptionStartedLatch +
-                '}';
-    }
+public record NativeMongoSubscription(String subscriptionId, CountDownLatch subscriptionStartedLatch) implements Subscription {
 
     @Override
     public String id() {

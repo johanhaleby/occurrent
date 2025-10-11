@@ -26,9 +26,8 @@ import io.cloudevents.CloudEvent;
 import io.cloudevents.core.builder.CloudEventBuilder;
 import org.bson.Document;
 import org.jspecify.annotations.NullMarked;
-import org.junit.jupiter.api.AfterEach;
-import org.junit.jupiter.api.BeforeEach;
-import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.*;
+import org.junit.jupiter.api.DisplayNameGenerator.Simple;
 import org.junit.jupiter.api.extension.RegisterExtension;
 import org.occurrent.domain.DomainEvent;
 import org.occurrent.domain.NameDefined;
@@ -82,6 +81,8 @@ import static org.occurrent.subscription.mongodb.MongoFilterSpecification.MongoB
 import static org.occurrent.time.TimeConversion.toLocalDateTime;
 
 @SuppressWarnings("ConstantConditions")
+@Timeout(20)
+@DisplayNameGeneration(Simple.class)
 @Testcontainers
 public class NativeMongoSubscriptionPositionStorageTest {
 
@@ -280,9 +281,7 @@ public class NativeMongoSubscriptionPositionStorageTest {
         NameWasChanged nameWasChanged1 = new NameWasChanged(UUID.randomUUID().toString(), now.plusSeconds(3), "name", "name3");
         NameWasChanged nameWasChanged2 = new NameWasChanged(UUID.randomUUID().toString(), now.plusSeconds(4), "name2", "name4");
 
-        subscriptionModel.subscribe(subscriberId, filter().id(Filters::eq, nameDefined2.eventId()).type(Filters::eq, NameDefined.class.getName()), state::add
-        )
-                .waitUntilStarted();
+        subscriptionModel.subscribe(subscriberId, filter().id(Filters::eq, nameDefined2.eventId()).type(Filters::eq, NameDefined.class.getName()), state::add).waitUntilStarted();
 
         // When
         mongoEventStore.write("1", 0, serialize(nameDefined1));

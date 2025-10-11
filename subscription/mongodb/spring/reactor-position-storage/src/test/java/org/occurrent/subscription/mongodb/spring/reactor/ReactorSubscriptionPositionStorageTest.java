@@ -23,8 +23,7 @@ import com.mongodb.reactivestreams.client.MongoClients;
 import io.cloudevents.CloudEvent;
 import io.cloudevents.core.builder.CloudEventBuilder;
 import io.github.artsok.RepeatedIfExceptionsTest;
-import org.junit.jupiter.api.AfterEach;
-import org.junit.jupiter.api.BeforeEach;
+import org.junit.jupiter.api.*;
 import org.junit.jupiter.api.extension.RegisterExtension;
 import org.occurrent.domain.DomainEvent;
 import org.occurrent.domain.NameDefined;
@@ -60,6 +59,8 @@ import static org.occurrent.functional.CheckedFunction.unchecked;
 import static org.occurrent.functional.Not.not;
 import static org.occurrent.time.TimeConversion.toLocalDateTime;
 
+@Timeout(20)
+@DisplayNameGeneration(DisplayNameGenerator.Simple.class)
 @Testcontainers
 public class ReactorSubscriptionPositionStorageTest {
 
