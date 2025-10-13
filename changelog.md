@@ -24,6 +24,13 @@
   3. Several new overloaded evolve methods to make it easier to evolve the view from multiple events and not just one. Also, new kotlin extension functions for this defined in `org.occurrent.dsl.view.ViewExtensions.kt`.  
  * Replaced recursive retry logic with iterative loop in the `retry` module
  * Migrated from jetbrains annotations to jspecify and introduce jspecify to almost all modules and API's (and fixed some bugs detected while introducing JSpecify)
+ * Upgraded spring-boot from 3.4.2 to 3.5.6
+ * Upgraded spring-data-mongodb from 4.4.2 to 4.4.3
+ * Upgraded mongodb-driver-sync from 5.3.1 to 5.6.1
+ * Upgraded jobrunr from 7.4.0 to 8.1.0
+ * Upgraded kotlin from 2.1.10 to 2.2.20
+ * Upgraded project reactor from 2024.0.3 to 2024.0.10 
+ * Upgraded jackson from 2.18.2 to 2.19.2 
 
 ### 0.19.12 (2025-09-26)
 * Internal changes including lots of changes to the build pipeline
