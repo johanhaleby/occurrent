@@ -1,4 +1,4 @@
-### Next version
+### 0.19.13 (2025-10-13)
 * Improvements to view-dsl (`org.occurrent:view-dsl`)  
   1. The `update` method in `org.occurrent.dsl.view.MaterializedView` now takes a `RetryStrategy` so that updates can be retried
   2. Calling the kotlin extension function `materialized` on a `org.occurrent.dsl.view.View` now takes a `org.occurrent.dsl.view.SpringMongoViewConfig` that allows you to configure how to handle `DuplicateKeyException` and `OptimisticLockingFailureException` thrown by Spring Repositories or `MongoOperations`.
