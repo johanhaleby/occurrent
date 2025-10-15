@@ -47,7 +47,7 @@ public interface Subscribable {
      * @param filter         The filter to use to limit which events that are of interest from the EventStore.
      * @param action         This action will be invoked for each cloud event that is stored in the EventStore.
      */
-    default Subscription subscribe(String subscriptionId, SubscriptionFilter filter, Consumer<CloudEvent> action) {
+    default Subscription subscribe(String subscriptionId, @Nullable SubscriptionFilter filter, Consumer<CloudEvent> action) {
         return subscribe(subscriptionId, filter, StartAt.subscriptionModelDefault(), action);
     }
 
