@@ -1,3 +1,7 @@
+### Next version
+* Added additional `@Nullable` annotation to a method in blocking `SubscriptionFilter` that could lead to errors when passing null (thanks to Kirill Gavrilov for PR)
+* Changed the build so that Kotlin sources are included in the release to maven central
+
 ### 0.19.13 (2025-10-13)
 * Improvements to view-dsl (`org.occurrent:view-dsl`)  
   1. The `update` method in `org.occurrent.dsl.view.MaterializedView` now takes a `RetryStrategy` so that updates can be retried
