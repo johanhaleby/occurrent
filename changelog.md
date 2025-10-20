@@ -1,4 +1,4 @@
-### Next version
+### 0.19.14 (2025-10-20)
 * Added additional `@Nullable` annotation to a method in blocking `SubscriptionFilter` that could lead to errors when passing null (thanks to Kirill Gavrilov for PR)
 * Changed the build so that Kotlin sources are included in the release to maven central
 
