@@ -19,10 +19,6 @@ package org.occurrent.eventstore.jpa.springdata;
 import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.ObjectMapper;
-import com.mongodb.ConnectionString;
-import com.mongodb.MongoBulkWriteException;
-import com.mongodb.client.MongoClient;
-import com.mongodb.client.MongoClients;
 import io.cloudevents.CloudEvent;
 import io.cloudevents.core.builder.CloudEventBuilder;
 import io.cloudevents.core.data.PojoCloudEventData;
@@ -34,19 +30,15 @@ import org.junit.jupiter.api.DisplayNameGenerator.ReplaceUnderscores;
 import org.junit.jupiter.api.condition.EnabledForJreRange;
 import org.junit.jupiter.api.condition.EnabledOnJre;
 import org.junit.jupiter.api.condition.EnabledOnOs;
-import org.junit.jupiter.api.extension.ExtendWith;
-import org.junit.jupiter.api.extension.RegisterExtension;
 import org.occurrent.cloudevents.OccurrentCloudEventExtension;
 import org.occurrent.domain.*;
 import org.occurrent.eventstore.api.*;
 import org.occurrent.eventstore.api.blocking.EventStream;
 import org.occurrent.filter.Filter;
 import org.occurrent.functional.CheckedFunction;
-import org.occurrent.testsupport.mongodb.FlushMongoDBExtension;
 import org.occurrent.time.TimeConversion;
 import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.test.annotation.DirtiesContext;
-import org.springframework.test.context.junit.jupiter.SpringExtension;
 import org.springframework.test.context.junit.jupiter.SpringJUnitConfig;
 
 import java.net.URI;
@@ -65,7 +57,6 @@ import static io.vavr.API.*;
 import static io.vavr.Predicates.is;
 import static java.nio.charset.StandardCharsets.UTF_8;
 import static java.time.ZoneOffset.UTC;
-import static java.util.Objects.requireNonNull;
 import static java.util.concurrent.TimeUnit.SECONDS;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.catchThrowable;
@@ -78,14 +69,12 @@ import static org.occurrent.condition.Condition.*;
 import static org.occurrent.eventstore.api.SortBy.SortDirection.ASCENDING;
 import static org.occurrent.eventstore.api.SortBy.SortDirection.DESCENDING;
 import static org.occurrent.filter.Filter.*;
-import static org.occurrent.time.TimeConversion.offsetDateTimeFrom;
 
 @SuppressWarnings("SameParameterValue")
 @DirtiesContext(classMode = DirtiesContext.ClassMode.AFTER_EACH_TEST_METHOD)
 @SpringJUnitConfig(TestJpaConfig.class)
 @DisplayNameGeneration(ReplaceUnderscores.class)
 public class SpringDataJpaEventStoreTest {
-
 
     private static final URI NAME_SOURCE = URI.create("http://name");
 
@@ -122,7 +111,7 @@ public class SpringDataJpaEventStoreTest {
     @Test
     void can_read_and_write_multiple_events_at_once_to_mongo_spring_blocking_event_store() {
         LocalDateTime now = LocalDateTime.now();
-        List<DomainEvent> events = Composition.chain(Name.defineTheName(UUID.randomUUID().toString(),now, "name", "Hello World"), es -> Name.changeName(es, UUID.randomUUID().toString(), now, "name", "John Doe"));
+        List<DomainEvent> events = Composition.chain(Name.defineTheName(UUID.randomUUID().toString(), now, "name", "Hello World"), es -> Name.changeName(es, UUID.randomUUID().toString(), now, "name", "John Doe"));
 
         // When
         persist("name", WriteCondition.streamVersionEq(0), events);
@@ -198,7 +187,7 @@ public class SpringDataJpaEventStoreTest {
     @Test
     void stream_version_is_not_updated_when_event_insertion_fails() {
         LocalDateTime now = LocalDateTime.now();
-        List<DomainEvent> events = Composition.chain(Name.defineTheName(UUID.randomUUID().toString(),now, "name", "Hello World"), es -> Name.changeName(es, UUID.randomUUID().toString(), now, "name", "John Doe"));
+        List<DomainEvent> events = Composition.chain(Name.defineTheName(UUID.randomUUID().toString(), now, "name", "Hello World"), es -> Name.changeName(es, UUID.randomUUID().toString(), now, "name", "John Doe"));
 
         persist("name", WriteCondition.streamVersionEq(0), events);
 
@@ -210,7 +199,7 @@ public class SpringDataJpaEventStoreTest {
         List<DomainEvent> readEvents = deserialize(eventStream.events());
 
         assertAll(
-                () -> assertThat(throwable).isExactlyInstanceOf(DuplicateCloudEventException.class).hasCauseExactlyInstanceOf(MongoBulkWriteException.class),
+                () -> assertThat(throwable).isExactlyInstanceOf(DuplicateCloudEventException.class).hasCauseExactlyInstanceOf(DataIntegrityViolationException.class),
                 () -> assertThat(eventStream.version()).isEqualTo(events.size()),
                 () -> assertThat(readEvents).hasSize(2),
                 () -> assertThat(readEvents).containsExactlyElementsOf(events)
@@ -442,7 +431,7 @@ public class SpringDataJpaEventStoreTest {
             List<DomainEvent> readEvents = deserialize(eventStream.events());
 
             assertAll(
-                    () -> assertThat(throwable).isExactlyInstanceOf(DuplicateCloudEventException.class).hasCauseExactlyInstanceOf(MongoBulkWriteException.class),
+                    () -> assertThat(throwable).isExactlyInstanceOf(DuplicateCloudEventException.class).hasCauseExactlyInstanceOf(DataIntegrityViolationException.class),
                     () -> assertThat(eventStream.version()).isEqualTo(0),
                     () -> assertThat(readEvents).isEmpty()
             );
@@ -466,7 +455,7 @@ public class SpringDataJpaEventStoreTest {
             List<DomainEvent> readEvents = deserialize(eventStream.events());
 
             assertAll(
-                    () -> assertThat(throwable).isExactlyInstanceOf(DuplicateCloudEventException.class).hasCauseExactlyInstanceOf(MongoBulkWriteException.class),
+                    () -> assertThat(throwable).isExactlyInstanceOf(DuplicateCloudEventException.class).hasCauseExactlyInstanceOf(DataIntegrityViolationException.class),
                     () -> assertThat(eventStream.version()).isEqualTo(2),
                     () -> assertThat(readEvents).hasSize(2),
                     () -> assertThat(readEvents).containsExactly(nameDefined, nameWasChanged1)
@@ -1415,7 +1404,7 @@ public class SpringDataJpaEventStoreTest {
                     .withId(UUID.randomUUID().toString())
                     .withSource(URI.create("http://something"))
                     .withType("something")
-                    .withTime(offsetDateTimeFrom(LocalDateTime.now(), ZoneId.of("Europe/Stockholm")))
+                    .withTime(TimeConversion.offsetDateTimeFrom(LocalDateTime.now(), ZoneId.of("Europe/Stockholm")))
                     .withSubject("subject")
                     .withDataSchema(URI.create("urn:myschema"))
                     .withDataContentType("text/plain")
@@ -1664,7 +1653,7 @@ public class SpringDataJpaEventStoreTest {
 
                 // Then
                 Stream<CloudEvent> events = eventStore.query(time(and(gte(OffsetDateTime.of(now, UTC)), lte(OffsetDateTime.of(now.plusHours(2), UTC)))));
-                assertThat(deserialize(events)).containsExactly(nameDefined, nameWasChanged1); // nameWasChanged2 _should_ be included but it's not due to string comparison instead of date
+                assertThat(deserialize(events)).containsExactly(nameWasChanged1, nameWasChanged2);
             }
 
             @Disabled
@@ -1703,7 +1692,7 @@ public class SpringDataJpaEventStoreTest {
                 persist("name2", nameWasChanged2);
 
                 // Then
-                Stream<CloudEvent> events = eventStore.query(time(lt(OffsetDateTime.of(now.plusHours(2), UTC))));
+                Stream<CloudEvent> events = eventStore.query(time(lt(OffsetDateTime.of(now.plusHours(1), UTC))));
                 assertThat(deserialize(events)).containsExactly(nameDefined, nameWasChanged1);
             }
 
