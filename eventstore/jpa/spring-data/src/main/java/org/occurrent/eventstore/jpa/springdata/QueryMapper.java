@@ -1,9 +1,6 @@
 package org.occurrent.eventstore.jpa.springdata;
 
-import jakarta.persistence.criteria.CriteriaBuilder;
-import jakarta.persistence.criteria.Expression;
-import jakarta.persistence.criteria.Predicate;
-import jakarta.persistence.criteria.Root;
+import jakarta.persistence.criteria.*;
 import org.occurrent.condition.Condition;
 import org.occurrent.eventstore.api.SortBy;
 import org.occurrent.filter.Filter;
@@ -12,6 +9,7 @@ import org.springframework.data.jpa.domain.Specification;
 import org.springframework.stereotype.Component;
 
 import java.net.URI;
+import java.util.Arrays;
 import java.util.List;
 
 /**
@@ -44,14 +42,11 @@ class QueryMapper {
     }
 
     Expression<?> mapFieldName(Root<CloudEventEntity> root, String fieldName) {
-        return switch (fieldName) {
-            case "id" -> root.get("eventId");
-            case "datacontenttype" -> root.get("dataContentType");
-            case "dataschema" -> root.get("dataSchema");
-            case "streamid" -> root.get("stream").get("name");
-            case "streamversion" -> root.get("streamPosition");
-            default -> root.get(fieldName);
-        };
+        return Arrays.stream(mapFieldName(fieldName)
+                        .split("\\."))
+                .reduce((Path<?>) root,
+                        Path::get,
+                        (a, b) -> b);
     }
 
     @SuppressWarnings({"rawtypes", "unchecked"})
