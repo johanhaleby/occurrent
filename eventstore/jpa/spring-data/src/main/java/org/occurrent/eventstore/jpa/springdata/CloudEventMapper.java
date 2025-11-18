@@ -4,7 +4,7 @@ import io.cloudevents.CloudEvent;
 import org.springframework.stereotype.Component;
 
 @Component
-public class CloudEventMapper {
+class CloudEventMapper {
 
     public CloudEventEntity toEntity(CloudEvent aEvent) {
         if (aEvent == null) {

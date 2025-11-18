@@ -5,7 +5,7 @@ import jakarta.persistence.*;
 import java.util.UUID;
 
 @Entity
-public class CloudEventAttributeEntity {
+class CloudEventAttributeEntity {
 
     @Id
     @Column(name = "id", nullable = false)

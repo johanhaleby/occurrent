@@ -21,7 +21,7 @@ import java.util.List;
  * - SortBy
  */
 @Component
-public class QueryMapper {
+class QueryMapper {
 
     public Specification<CloudEventEntity> mapFilter(Filter aFilter) {
         if (aFilter instanceof Filter.All) {

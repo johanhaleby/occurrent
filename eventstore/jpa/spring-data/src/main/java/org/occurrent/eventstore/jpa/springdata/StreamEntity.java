@@ -10,7 +10,7 @@ import java.util.UUID;
         indexes = {
                 @Index(name = "idx_event_stream_name", columnList = "name", unique = true)
         })
-public class StreamEntity {
+class StreamEntity {
 
     @Id
     @GeneratedValue

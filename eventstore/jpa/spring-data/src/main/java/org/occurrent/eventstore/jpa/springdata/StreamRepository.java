@@ -7,7 +7,7 @@ import java.util.Optional;
 import java.util.UUID;
 
 @Repository
-public interface StreamRepository extends JpaRepository<StreamEntity, UUID> {
+interface StreamRepository extends JpaRepository<StreamEntity, UUID> {
 
     Optional<StreamEntity> getByName(String name);
 

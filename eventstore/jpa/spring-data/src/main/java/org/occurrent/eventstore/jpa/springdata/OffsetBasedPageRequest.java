@@ -9,7 +9,7 @@ import java.util.Objects;
 /**
  * Adapted from <a href="https://stackoverflow.com/a/36365522">Stack Overflow</a>
  */
-public class OffsetBasedPageRequest implements Pageable, Serializable {
+class OffsetBasedPageRequest implements Pageable, Serializable {
 
     private static final long serialVersionUID = -25822477129613575L;
 

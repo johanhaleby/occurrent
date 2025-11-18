@@ -23,7 +23,7 @@ import static org.occurrent.cloudevents.OccurrentCloudEventExtension.STREAM_VERS
                 @Index(name = "U_cloud_event_event_id_source", columnList = "event_id, source", unique = true),
                 @Index(name = "U_cloud_event_stream_position", columnList = "stream_id, stream_position", unique = true),
         })
-public class CloudEventEntity implements CloudEvent {
+class CloudEventEntity implements CloudEvent {
 
     @Id
     @GeneratedValue

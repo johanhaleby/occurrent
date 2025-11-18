@@ -11,7 +11,7 @@ import java.util.Optional;
 import java.util.UUID;
 
 @Repository
-public interface CloudEventRepository extends JpaRepository<CloudEventEntity, UUID>,
+interface CloudEventRepository extends JpaRepository<CloudEventEntity, UUID>,
         JpaSpecificationExecutor<CloudEventEntity> {
     List<CloudEventEntity> findByStream(StreamEntity stream, Pageable aPageable);
 

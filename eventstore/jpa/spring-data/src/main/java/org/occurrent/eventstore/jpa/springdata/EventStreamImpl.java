@@ -6,7 +6,7 @@ import org.occurrent.eventstore.api.blocking.EventStream;
 import java.util.List;
 import java.util.stream.Stream;
 
-public record EventStreamImpl(
+record EventStreamImpl(
         String streamId,
         long streamVersion,
         List<CloudEvent> _events
