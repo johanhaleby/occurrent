@@ -5,12 +5,12 @@ import io.cloudevents.CloudEventData;
 import io.cloudevents.SpecVersion;
 import io.cloudevents.core.data.BytesCloudEventData;
 import jakarta.persistence.*;
+import org.springframework.data.domain.AfterDomainEventPublication;
+import org.springframework.data.domain.DomainEvents;
 
 import java.net.URI;
 import java.time.OffsetDateTime;
-import java.util.Map;
-import java.util.Set;
-import java.util.UUID;
+import java.util.*;
 
 import static org.occurrent.cloudevents.OccurrentCloudEventExtension.STREAM_ID;
 import static org.occurrent.cloudevents.OccurrentCloudEventExtension.STREAM_VERSION;
@@ -68,6 +68,9 @@ class CloudEventEntity implements CloudEvent {
     @OneToMany(mappedBy = "cloudEvent")
     @MapKey(name = "attributeName")
     private Map<String, CloudEventAttributeEntity> attributes;
+
+    @Transient
+    private boolean isNew = false;
 
     public UUID getPK() {
         return id;
@@ -191,5 +194,28 @@ class CloudEventEntity implements CloudEvent {
     @Override
     public Set<String> getExtensionNames() {
         return Set.of(STREAM_ID, STREAM_VERSION);
+    }
+
+    /*
+     * Subscription Support.
+     */
+
+    @PrePersist
+    public void markNew() {
+        isNew = true;
+    }
+
+    /**
+     * When spring-data ask for the domain event, disclose the fact that we
+     * just have been created as a domain event.
+     */
+    @DomainEvents
+    public Collection<CloudEvent> domainEvents() {
+        return isNew ? List.of((CloudEvent) this) : List.of();
+    }
+
+    @AfterDomainEventPublication
+    public void afterPublish() {
+        isNew = false; // reset
     }
 }

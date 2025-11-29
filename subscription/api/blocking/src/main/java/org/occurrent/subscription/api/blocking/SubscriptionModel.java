@@ -23,7 +23,7 @@ package org.occurrent.subscription.api.blocking;
  * A subscription may be used to create read models (such as views, projections, sagas, snapshots etc) or
  * forward the event to another piece of infrastructure such as a message bus or other eventing infrastructure.
  * <p>
- * A blocking subscription model also you to create and manage subscriptions that'll use blocking IO.
+ * A blocking subscription model allows you to create and manage subscriptions that'll use blocking IO.
  */
 public interface SubscriptionModel extends Subscribable, SubscriptionModelLifeCycle {
 }

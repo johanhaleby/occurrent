@@ -32,6 +32,7 @@
         <module>redis</module>
         <module>util</module>
         <module>inmemory</module>
+        <module>jpa</module>
     </modules>
 
 </project>
