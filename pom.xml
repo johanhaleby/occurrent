@@ -80,6 +80,7 @@
         <cloudevents.version>4.0.1</cloudevents.version>
         <reactor-bom.version>2024.0.10</reactor-bom.version>
         <spring-boot.version>3.5.6</spring-boot.version>
+        <sping-modulith.version>1.4.5</sping-modulith.version>
         <mongo.version>5.6.1</mongo.version>
         <dokka.version>2.0.0</dokka.version>
         <awaitility.version>4.2.2</awaitility.version>
@@ -180,6 +181,14 @@
                 <version>${spring-boot.version}</version>
                 <type>pom</type>
                 <scope>import</scope>
+            </dependency>
+
+            <dependency>
+                <groupId>org.springframework.modulith</groupId>
+                <artifactId>spring-modulith-bom</artifactId>
+                <version>${sping-modulith.version}</version>
+                <scope>import</scope>
+                <type>pom</type>
             </dependency>
 
             <!-- Mongo -->
