@@ -1118,7 +1118,7 @@ Depend on `org.occurrent:deadline-jobrunr:0.15.0` to get the JobRunr implementat
   convert to and from cloud events and your custom domain events. This is why both `CloudEventConverter` and `ApplicationService` takes a generic type parameter, `T`, 
   which is the type of your custom domain event. Note that the application service is not yet implemented for the reactive event store.
   The application service also contains a way to execute side-effects after the events are written to the event store. This is useful for executing 
-  synchronous policies after the events are written to the event store. If policies write the the same database as your event store,  you start a transaction
+  synchronous policies after the events are written to the event store. If policies write the same database as your event store,  you start a transaction
   and write both policies and events in the same transaction!         
   There are also Kotlin extension functions for the application service and policies in the `org.occurrent:application-service-blocking` module.
 * Added utilities, `org.occurrent:command-composition` for to easier do command composition when calling an application service.
