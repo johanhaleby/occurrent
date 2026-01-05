@@ -1,4 +1,4 @@
-# 7. Unify stream and DCB concurrency using global per event position and head document gating
+# 7. Unify stream and DCB concurrency using global per event position and consistency checkpoints
 
 Date: 2026-01-05
 
@@ -19,13 +19,15 @@ Dynamic Consistency Boundary (DCB) style preconditions require evaluation of whe
 
 Earlier considerations included implementing DCB by writing all DCB events to a single default streamId (for example `occurrent:dcb`) and relying on the existing streamVersion mechanism. This was rejected because it introduces unnecessary contention and serializes unrelated boundaries.
 
-We also considered whether to remove streamVersion entirely and rely solely on global position and streamId plus position based reads. While possible, it would change semantics and requires explicit atomic gating for stream concurrency as well. Because DCB already requires an atomic gate, the system can be unified by adopting the same gating primitive for stream, DCB, and future custom approaches.
+We also considered whether to remove streamVersion entirely and rely solely on global position and streamId plus position based reads. While possible, it would change semantics and requires explicit atomic enforcement for stream concurrency as well. Because DCB already requires an atomic enforcement mechanism, the system can be unified by adopting the same primitive for stream, DCB, and future custom approaches.
 
 Occurrent already has a `count(streamId)` API. Therefore streamVersion does not need to be treated as an accurate stream size indicator and may contain gaps.
 
 To preserve backward compatibility for consumers expecting a streamVersion, Occurrent may expose a streamVersion value even if the underlying storage uses a global position. This ADR decides to treat streamVersion as a compatibility field that may be derived from global position when reading.
 
 CloudEvents constraints prevent representing tags as a list in CloudEvents context attributes. Therefore tags are persisted as indexed metadata in MongoDB, derived from domain events during CloudEvent creation or from CloudEvent extensions, and used for DCB query evaluation.
+
+Finally, DCB is treated as an internal datastore mechanism, and callers may choose different query keys (for example tags, subject, streamid, or custom keys) as long as these resolve deterministically to the same consistency keys used for conditional write enforcement.
 
 ## Decision
 
@@ -34,10 +36,11 @@ CloudEvents constraints prevent representing tags as a list in CloudEvents conte
    - Allocate `position` in ranges per write batch using an atomic counter increment by `n` where `n` is the number of events to insert.
    - Assign each inserted event document a distinct `position`.
 
-2. Unify conditional write enforcement for stream based writes, DCB writes, and custom approaches using a head document gating mechanism.
-   - Maintain head documents keyed by a "consistency key" derived from the write condition.
+2. Unify conditional write enforcement for stream based writes, DCB writes, and custom approaches using consistency checkpoints.
+   - Maintain checkpoint documents keyed by a "consistency key" derived from the write condition.
    - A write condition resolves to one or more consistency keys.
-   - Each consistency key maps to a head document containing at least `lastPosition`.
+   - Each consistency key maps to a checkpoint document containing at least `lastPosition`.
+   - The same mechanism is used for streamid, tags, subject, and any other supported query key. Streamid is not a special case.
 
 3. Maintain backward compatibility for streamVersion by allowing gaps and by deriving streamVersion from `position` during reads when needed.
    - StreamVersion is no longer treated as a contiguous per stream counter.
@@ -54,6 +57,12 @@ CloudEvents constraints prevent representing tags as a list in CloudEvents conte
    - Support `AllOf` composition for cases where multiple preconditions must hold.
    - The datastore enforcement algorithm remains identical regardless of whether conditions represent stream based, DCB based, or custom keys.
 
+6. Introduce a constructor supplied, composable `ConsistencyKeyExtractor` used by the datastore to derive consistency keys from `WriteCondition`.
+   - The extractor is used only for determining which checkpoint documents to update as part of conditional writes.
+   - The extractor is not used for reading or querying events.
+   - The extractor returns a sorted, de duplicated set of keys to ensure deterministic checkpoint update ordering and to avoid deadlocks.
+   - The extractor itself should be composable by unioning keys from multiple extractors and or condition variants.
+
 ## Consequences
 
 Positive:
@@ -63,12 +72,14 @@ Positive:
 - Stream based reads remain supported and can order by `position`.
 - StreamVersion remains available for backward compatibility without requiring contiguous numbering.
 - Tag queries become efficient through MongoDB multikey indexes on the tag array.
+- Streamid is treated the same as any other query key at the datastore enforcement layer.
 
 Negative:
-- Introduces head documents and conditional updates per write, increasing write amplification relative to a pure append model.
-- Requires careful ordering of head updates to avoid deadlocks and a retry strategy for transient transaction failures.
+- Introduces checkpoint documents and conditional updates per write, increasing write amplification relative to a pure append model.
+- Requires careful ordering of checkpoint updates to avoid deadlocks and a retry strategy for transient transaction failures.
 - Adds additional indexes (`position`, tags) and corresponding storage overhead.
 - StreamVersion no longer implies event count or contiguity, and callers must rely on `count(streamId)` for stream size.
+- Additional components are introduced (for example `ConsistencyKeyExtractor`) that must remain deterministic and stable to ensure correct enforcement.
 
 ## Algorithm
 
@@ -82,8 +93,8 @@ Events collection documents:
 - `tags`: array of strings, derived metadata used for DCB queries and indexing.
 - other existing fields such as time, id, type, subject, etc.
 
-Head documents (separate collection):
-- `_id`: `"head:" + key`
+Consistency checkpoint documents (separate collection):
+- `_id`: `"checkpoint:" + key`
 - `lastPosition`: long
 
 Counter document:
@@ -91,25 +102,27 @@ Counter document:
 - `value`: long
 
 Suggested indexes:
-- unique `{ pos: 1 }`
-- `{ streamId: 1, pos: 1 }` for ordered stream reads
-- `{ tags: 1, pos: 1 }` or `{ tags: 1 }` plus `{ pos: 1 }` for DCB queries
-- optional discriminator index if heads share the same collection
+- unique `{ position: 1 }`
+- `{ streamid: 1, position: 1 }` for ordered stream reads
+- `{ tags: 1, position: 1 }` or `{ tags: 1 }` plus `{ position: 1 }` for DCB queries
+- optional indexes for additional supported query keys (for example `{ subject: 1, position: 1 }`)
 
 ### Condition to consistency keys mapping
 
-Define a function `keys(condition)` that returns a set of consistency keys:
-- `StreamVersionCondition` uses one key, for example `"stream:" + streamId`.
-  - This makes stream concurrency a special case of the same gating mechanism.
-- `DcbCondition(query, afterPos)` maps to one key per tag in the query for common DCB usage.
-  - For example `"tag:" + tagValue`.
+Define a function `keys(condition)` that returns a set of consistency keys. The datastore uses a `ConsistencyKeyExtractor` for this purpose.
+
+Examples:
+- `StreamVersionCondition` uses one key, for example `"stream:" + streamid` where `streamid` is taken from the CloudEvent extension attribute.
+- `DcbCondition(query, afterPos)` maps to one key per boundary identifier in the query for common DCB usage.
+  - For tags, for example `"tag:" + tagValue`.
+  - For subject, for example `"subject:" + subjectValue`.
   - If query includes type, include it in the key such as `"type:" + type + "|tag:" + tagValue"`.
 - `AllOf` returns the union of keys of each subcondition.
 - Custom approaches may define their own key mapping as long as they can be indexed and resolved deterministically for the write.
 
 ### Pseudo code
 
-The write operation appends to a target streamId while enforcing arbitrary write conditions via head gating.
+The write operation appends to a target streamid while enforcing arbitrary write conditions via consistency checkpoints.
 
 Inputs:
 - `streamid`: target stream to which events are appended
@@ -118,17 +131,17 @@ Inputs:
 
 Auxiliary:
 - `allocatePositions(n)` allocates a range `[start..end]` by atomically incrementing the counter by `n`.
-- `afterPos(condition)` returns the maximum `after` constraint implied by the condition.
+- `extractAfter(condition)` returns the maximum `after` constraint implied by the condition.
   - For DCB, this is `condition.afterPos`.
   - For stream based, this can be derived from the caller's provided token or treated as `null` if not used.
-- `resolveKeys(streamId, condition)` returns sorted list of consistency keys.
-- `updateHead(key, expectedAfter, newLastPos)` conditionally updates head doc.
+- `consistencyKeyExtractor.extractKeys(condition)` returns a sorted set of consistency keys.
+- `updateCheckpoint(key, expectedAfter, newLastPosition)` conditionally updates a checkpoint document.
 - `insertEvents(docs)` inserts event documents.
 
 Pseudo code:
 
 ```
-write(streamId, condition, events):
+write(streamid, condition, events):
   docs = materialize(events)
   if docs is empty:
     return success
@@ -136,27 +149,27 @@ write(streamId, condition, events):
   // allocate global positions once per batch
   (start, end) = allocatePositions(docs.size)
   for i in 0..docs.size-1:
-    docs[i].pos = start + i
-    docs[i].streamId = streamId
-    // streamVersion is stored for compatibility but not treated as contiguous
-    docs[i].streamVersion = docs[i].pos
+    docs[i].position = start + i
+    docs[i].streamid = streamid
+    // streamversion is stored for compatibility but not treated as contiguous
+    docs[i].streamversion = docs[i].position
     docs[i].tags = deriveTags(docs[i])  // derived and stored as array for indexing
 
-  keys = resolveKeys(streamId, condition)  // deterministic order
+  keys = consistencyKeyExtractor.extractKeys(condition)  // deterministic order and de duplication
   expectedAfter = extractAfter(condition)  // may be null
 
   beginTransaction()
 
-    // head gating
+    // consistency checkpoint enforcement
     for key in keys:
-      headId = "head:" + key
+      checkpointId = "checkpoint:" + key
 
-      // ensure head exists, and enforce precondition:
-      // - if expectedAfter is null, treat as unconstrained and always advance head
-      // - otherwise only advance head if head.lastPosition <= expectedAfter
+      // ensure checkpoint exists, and enforce precondition:
+      // - if expectedAfter is null, treat as unconstrained and always advance checkpoint
+      // - otherwise only advance checkpoint if checkpoint.lastPosition <= expectedAfter
       matched = updateOne(
-        filter = { _id: headId, kind: "head", lastPosition: (expectedAfter == null ? any : { $lte: expectedAfter }) },
-        update = { $set: { lastPosition: end }, $setOnInsert: { kind: "head" } },
+        filter = { _id: checkpointId, lastPosition: (expectedAfter == null ? any : { $lte: expectedAfter }) },
+        update = { $set: { lastPosition: end } },
         upsert = true
       )
       if matched == 0:
@@ -168,7 +181,7 @@ write(streamId, condition, events):
 
   commitTransaction()
 
-  return WriteResult(streamId, oldToken, newToken)
+  return WriteResult(streamid, oldToken, newToken)
 ```
 
 Notes:
@@ -176,7 +189,7 @@ Notes:
   - For stream operations, use the latest observed `position` as the token.
   - For DCB reads, use the global high water mark `position`.
 - Deadlock avoidance:
-  - Always update head docs in sorted key order.
+  - Always update checkpoint documents in sorted key order.
 - Retry strategy:
   - On transient transaction errors, retry the whole transaction.
   - Position allocation may occur outside the transaction, allowing gaps when retries occur.
@@ -185,7 +198,7 @@ Notes:
 
 Stream read:
 - Query by `streamid` ordered by `position` ascending.
-- For compatibility, return `streamVersion = pos` if needed.
+- For compatibility, return `streamversion = position` if needed.
 
 DCB read:
 - Query by tags and or type combined with `position` ordering and optional `after` lower bound.
@@ -196,3 +209,102 @@ DCB read:
 - StreamVersion is retained for compatibility, but it is not treated as contiguous and may contain gaps.
 - Accurate stream sizing is provided by the existing `count(streamId)` method.
 - Using `position` as streamVersion aligns the concurrency token concept across stream, DCB, and custom approaches, and avoids needing a separate per stream counter if unification is desired.
+
+### allocatePositions implementation
+
+```
+import org.springframework.data.annotation.Id;
+import org.springframework.data.mongodb.core.FindAndModifyOptions;
+import org.springframework.data.mongodb.core.MongoTemplate;
+import org.springframework.data.mongodb.core.query.Criteria;
+import org.springframework.data.mongodb.core.query.Query;
+import org.springframework.data.mongodb.core.query.Update;
+
+import static java.util.Objects.requireNonNull;
+
+public final class GlobalPositionAllocator {
+
+    public record PositionRange(long start, long end) {
+        public PositionRange {
+            if (start > end) {
+                throw new IllegalArgumentException("start must be <= end");
+            }
+        }
+        public long size() {
+            return end - start + 1;
+        }
+    }
+
+    public static final class CounterDoc {
+        @Id
+        private String id;
+        private long value;
+
+        // Needed by Spring Data
+        public CounterDoc() {
+        }
+
+        public CounterDoc(String id, long value) {
+            this.id = id;
+            this.value = value;
+        }
+
+        public String getId() {
+            return id;
+        }
+
+        public long getValue() {
+            return value;
+        }
+    }
+
+    private final MongoTemplate mongoTemplate;
+    private final String countersCollection;
+    private final String counterId;
+
+    public GlobalPositionAllocator(MongoTemplate mongoTemplate) {
+        this(mongoTemplate, "occurrent_counters", "globalPosition");
+    }
+
+    public GlobalPositionAllocator(MongoTemplate mongoTemplate, String countersCollection, String counterId) {
+        this.mongoTemplate = requireNonNull(mongoTemplate, "mongoTemplate");
+        this.countersCollection = requireNonNull(countersCollection, "countersCollection");
+        this.counterId = requireNonNull(counterId, "counterId");
+    }
+
+    /**
+     * Allocates a contiguous range of global positions for a batch of size n.
+     * Uses one atomic write: findAndModify($inc).
+     *
+     * Note: gaps are possible if you allocate outside a transaction and the later write aborts.
+     */
+    public PositionRange allocatePositions(int n) {
+        if (n <= 0) {
+            throw new IllegalArgumentException("n must be > 0");
+        }
+
+        Query query = new Query(Criteria.where("_id").is(counterId));
+        Update update = new Update().inc("value", (long) n);
+
+        FindAndModifyOptions options = FindAndModifyOptions.options()
+                .returnNew(true)
+                .upsert(true);
+
+        CounterDoc updated = mongoTemplate.findAndModify(
+                query,
+                update,
+                options,
+                CounterDoc.class,
+                countersCollection
+        );
+
+        if (updated == null) {
+            throw new IllegalStateException("findAndModify returned null unexpectedly");
+        }
+
+        long end = updated.getValue();
+        long start = end - n + 1L;
+        return new PositionRange(start, end);
+    }
+}
+```
