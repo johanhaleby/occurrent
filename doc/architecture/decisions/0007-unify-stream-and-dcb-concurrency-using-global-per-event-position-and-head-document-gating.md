@@ -210,6 +210,31 @@ DCB read:
 - Accurate stream sizing is provided by the existing `count(streamId)` method.
 - Using `position` as streamVersion aligns the concurrency token concept across stream, DCB, and custom approaches, and avoids needing a separate per stream counter if unification is desired.
 
+### Consistency keys for DCB
+
+For DCB, a "consistency key" identifies the consistency boundary that must be protected by a consistency checkpoint. A `DcbCondition` resolves to one or more consistency keys, and the write must successfully advance the checkpoint for each key.
+
+The most common approach is to derive one key per tag:
+
+- Key format: `tag:<tagValue>`
+- Checkpoint document id: `checkpoint:tag:<tagValue>`
+
+Examples:
+- Event tags: `["user:123", "course:432"]`
+- Boundary per user: keys = `["tag:user:123"]`
+- Boundary per user and course: keys = `["tag:user:123", "tag:course:432"]`
+
+Tag order must not matter. Tags are treated as a set when deriving keys, and the resulting key set is always sorted and de duplicated to ensure deterministic checkpoint update ordering and to reduce deadlock risk. For example, `["user:123", "course:432"]` and `["course:432", "user:123"]` resolve to the same key set.
+
+If additional precision is needed, keys may be namespaced by CloudEvent type:
+
+- Key format: `type:<type>|tag:<tagValue>`
+
+Alternative query primitives can be used as long as they map deterministically to keys:
+
+- Subject based boundary: `subject:<subjectValue>`
+- Any custom boundary must define a stable, canonical key format and ensure appropriate indexes exist for the corresponding query.
+
 ### allocatePositions implementation
 
 ```
@@ -305,6 +330,86 @@ public final class GlobalPositionAllocator {
         long end = updated.getValue();
         long start = end - n + 1L;
         return new PositionRange(start, end);
+    }
+}
+```
+
+### updateCheckpoint implementation
+
+```
+import com.mongodb.client.result.UpdateResult;
+import org.bson.BsonValue;
+import org.springframework.data.mongodb.core.MongoTemplate;
+import org.springframework.data.mongodb.core.query.Criteria;
+import org.springframework.data.mongodb.core.query.Query;
+import org.springframework.data.mongodb.core.query.Update;
+
+import static java.util.Objects.requireNonNull;
+
+public final class ConsistencyCheckpointStore {
+
+    public static final String ID = "_id";
+    public static final String LAST_POSITION = "lastPosition";
+
+    private final MongoTemplate mongoTemplate;
+    private final String checkpointsCollection;
+
+    public ConsistencyCheckpointStore(MongoTemplate mongoTemplate, String checkpointsCollection) {
+        this.mongoTemplate = requireNonNull(mongoTemplate, "mongoTemplate");
+        this.checkpointsCollection = requireNonNull(checkpointsCollection, "checkpointsCollection");
+    }
+
+    /**
+     * Advances checkpoint "checkpoint:{key}" to {@code newLastPosition} if allowed by {@code expectedAfter}.
+     *
+     * Semantics:
+     * - If expectedAfter == null: always advance (or create) the checkpoint.
+     * - If expectedAfter != null: advance only if checkpoint.lastPosition <= expectedAfter,
+     *   treating a missing checkpoint as lastPosition == 0 (i.e. allowed).
+     *
+     * Returns true if the checkpoint was advanced or inserted, false if the precondition was not fulfilled.
+     *
+     * Notes:
+     * - Call this inside the same Mongo transaction as your event inserts.
+     * - Concurrent upserts for a never-before-seen key can throw DuplicateKeyException; retry the transaction.
+     */
+    public boolean updateCheckpoint(String key, Long expectedAfter, long newLastPosition) {
+        requireNonNull(key, "key");
+        if (newLastPosition <= 0) {
+            throw new IllegalArgumentException("newLastPosition must be > 0");
+        }
+
+        String checkpointId = "checkpoint:" + key;
+
+        Criteria idCriteria = Criteria.where(ID).is(checkpointId);
+
+        Query query;
+        if (expectedAfter == null) {
+            // Unconstrained: always advance the checkpoint.
+            query = new Query(idCriteria);
+        } else {
+            // Constrained: allow if lastPosition <= expectedAfter, or if the doc does not exist yet.
+            Criteria allowedByAfter = new Criteria().orOperator(
+                    Criteria.where(LAST_POSITION).lte(expectedAfter),
+                    Criteria.where(LAST_POSITION).exists(false)
+            );
+            query = new Query(new Criteria().andOperator(idCriteria, allowedByAfter));
+        }
+
+        Update update = new Update()
+                .set(LAST_POSITION, newLastPosition)
+                // Optional metadata you might want:
+                .setOnInsert("kind", "checkpoint")
+                .setOnInsert("key", key);
+
+        UpdateResult result = mongoTemplate.updateFirst(query, update, checkpointsCollection);
+
+        // Success if we matched and updated an existing doc, or we inserted a new one via upsert.
+        // With Spring Data, an upsert sets upsertedId; matchedCount stays 0 in that case.
+        long matched = result.getMatchedCount();
+        BsonValue upsertedId = result.getUpsertedId();
+
+        return matched > 0 || upsertedId != null;
     }
 }
 ```
