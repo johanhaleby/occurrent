@@ -4,7 +4,7 @@ Date: 2026-01-05
 
 ## Status
 
-Accepted
+Rejected (see [ADR 8](0008-stream-first-eventstore-api-with-dcb-via-applicationservice-using-global-position-and-consistency-checkpoints.md))
 
 ## Context
 
