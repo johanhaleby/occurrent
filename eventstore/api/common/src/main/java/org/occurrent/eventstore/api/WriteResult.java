@@ -17,11 +17,14 @@
 
 package org.occurrent.eventstore.api;
 
+import org.jspecify.annotations.NullMarked;
+
 import java.util.Objects;
 
 /**
  * The result of a write operation to the event store.
  */
+@NullMarked
 public record WriteResult(String streamId, long oldStreamVersion, long newStreamVersion) {
 
     public WriteResult {
