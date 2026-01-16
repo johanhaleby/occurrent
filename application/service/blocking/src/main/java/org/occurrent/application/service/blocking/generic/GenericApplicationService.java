@@ -21,10 +21,12 @@ import org.jspecify.annotations.NullMarked;
 import org.jspecify.annotations.Nullable;
 import org.occurrent.application.converter.CloudEventConverter;
 import org.occurrent.application.service.blocking.ApplicationService;
+import org.occurrent.eventstore.api.StreamReadFilter;
 import org.occurrent.eventstore.api.WriteConditionNotFulfilledException;
 import org.occurrent.eventstore.api.WriteResult;
 import org.occurrent.eventstore.api.blocking.EventStore;
 import org.occurrent.eventstore.api.blocking.EventStream;
+import org.occurrent.eventstore.api.blocking.ReadEventStreamWithFilter;
 import org.occurrent.retry.RetryStrategy;
 import org.occurrent.retry.RetryStrategy.Retry;
 
@@ -69,26 +71,35 @@ public class GenericApplicationService<T> implements ApplicationService<T> {
      * @param eventStore          The event store to use
      * @param cloudEventConverter The cloud event converter
      */
-    public GenericApplicationService(@Nullable EventStore eventStore, @Nullable CloudEventConverter<T> cloudEventConverter, @Nullable RetryStrategy retryStrategy) {
+    @SuppressWarnings("ConstantValue")
+    public GenericApplicationService(EventStore eventStore, CloudEventConverter<T> cloudEventConverter, RetryStrategy retryStrategy) {
         if (eventStore == null) throw new IllegalArgumentException(EventStore.class.getSimpleName() + " cannot be null");
         if (cloudEventConverter == null) throw new IllegalArgumentException(CloudEventConverter.class.getSimpleName() + " cannot be null");
         if (retryStrategy == null) throw new IllegalArgumentException(RetryStrategy.class.getSimpleName() + " cannot be null");
+
         this.eventStore = eventStore;
         this.cloudEventConverter = cloudEventConverter;
         this.retryStrategy = retryStrategy;
     }
 
+
     @Override
-    public WriteResult execute(String streamId, Function<Stream<T>, Stream<T>> functionThatCallsDomainModel, @Nullable Consumer<Stream<T>> sideEffect) {
+    public WriteResult execute(String streamId, @Nullable StreamReadFilter filter, Function<Stream<T>, Stream<T>> functionThatCallsDomainModel, @Nullable Consumer<Stream<T>> sideEffect) {
         Objects.requireNonNull(streamId, "Stream id cannot be null");
         Objects.requireNonNull(functionThatCallsDomainModel, "Function that calls domain model cannot be null");
+
+        boolean isStreamReadFilterCompatibleEventStore = eventStore instanceof ReadEventStreamWithFilter;
+        if (!isStreamReadFilterCompatibleEventStore && filter != null) {
+            throw new UnsupportedOperationException("The provided EventStore implementation does not support reading with a StreamReadFilter. EventStore must implement ReadEventStreamWithFilter in order to use filters when reading.");
+        }
+
         // @formatter:off
         record Tuple<T1, T2>(T1 v1, T2 v2) {}
         // @formatter:on
 
         Tuple<WriteResult, List<T>> result = retryStrategy.execute(() -> {
             // Read all events from the event store for a particular stream
-            EventStream<CloudEvent> eventStream = eventStore.read(streamId);
+            EventStream<CloudEvent> eventStream = filter == null ? eventStore.read(streamId) : ((ReadEventStreamWithFilter) eventStore).read(streamId, filter);
             // Convert the cloud events into domain events
             Stream<T> eventsInStream = cloudEventConverter.toDomainEvents(eventStream.events());
 
@@ -112,7 +123,7 @@ public class GenericApplicationService<T> implements ApplicationService<T> {
         return result.v1;
     }
 
-    private static <T> Stream<T> emptyStreamIfNull(Stream<T> stream) {
+    private static <T> Stream<T> emptyStreamIfNull(@Nullable Stream<T> stream) {
         return stream == null ? Stream.empty() : stream;
     }
 

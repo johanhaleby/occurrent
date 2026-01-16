@@ -17,20 +17,16 @@
 package org.occurrent.application.service.blocking.generic;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
-import org.junit.jupiter.api.BeforeEach;
-import org.junit.jupiter.api.DisplayName;
-import org.junit.jupiter.api.Nested;
-import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.*;
+import org.junit.jupiter.api.DisplayNameGenerator.ReplaceUnderscores;
 import org.occurrent.application.converter.CloudEventConverter;
 import org.occurrent.application.converter.generic.GenericCloudEventConverter;
 import org.occurrent.application.service.blocking.ApplicationService;
 import org.occurrent.application.service.blocking.PolicySideEffect;
 import org.occurrent.application.service.blocking.generic.support.CountNumberOfNamesDefinedPolicy;
 import org.occurrent.application.service.blocking.generic.support.WhenNameDefinedThenCountAverageSizeOfNamePolicy;
-import org.occurrent.domain.DomainEvent;
-import org.occurrent.domain.DomainEventConverter;
-import org.occurrent.domain.Name;
-import org.occurrent.domain.NameDefined;
+import org.occurrent.domain.*;
+import org.occurrent.eventstore.api.StreamReadFilter;
 import org.occurrent.eventstore.api.WriteConditionNotFulfilledException;
 import org.occurrent.eventstore.api.WriteResult;
 import org.occurrent.eventstore.inmemory.InMemoryEventStore;
@@ -47,6 +43,7 @@ import static org.occurrent.application.composition.command.CommandConversion.to
 import static org.occurrent.application.service.blocking.PolicySideEffect.executePolicy;
 
 @DisplayName("generic application service")
+@DisplayNameGeneration(ReplaceUnderscores.class)
 public class GenericApplicationServiceTest {
 
     private ApplicationService<DomainEvent> applicationService;
@@ -74,6 +71,28 @@ public class GenericApplicationServiceTest {
         assertAll(
                 () -> assertThat(writeResult.streamId()).isEqualTo(streamId.toString()),
                 () -> assertThat(writeResult.newStreamVersion()).isEqualTo(1L)
+        );
+    }
+
+    @Test
+    void supports_stream_read_filter() {
+        // Given
+        String streamId = UUID.randomUUID().toString();
+        var initialEvent = cloudEventConverter.toCloudEvents(Stream.of(
+                new NameDefined(UUID.randomUUID().toString(), LocalDateTime.now(), "name", "Johan"),
+                new NameWasChanged(UUID.randomUUID().toString(), LocalDateTime.now(), "name", "Mattias"))
+        );
+        eventStore.write(streamId, initialEvent);
+
+        // When
+        WriteResult writeResult = applicationService.execute(streamId,
+                StreamReadFilter.type(NameDefined.class.getName()),
+                toStreamCommand(events -> Name.changeName(events, UUID.randomUUID().toString(), LocalDateTime.now(), "name", "New Name")));
+
+        // Then
+        assertAll(
+                () -> assertThat(writeResult.streamId()).isEqualTo(streamId),
+                () -> assertThat(writeResult.newStreamVersion()).isEqualTo(3L)
         );
     }
 
