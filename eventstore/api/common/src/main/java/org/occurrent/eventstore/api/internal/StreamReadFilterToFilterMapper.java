@@ -18,6 +18,7 @@
 package org.occurrent.eventstore.api.internal;
 
 import org.jspecify.annotations.NullMarked;
+import org.jspecify.annotations.Nullable;
 import org.occurrent.condition.Condition;
 import org.occurrent.eventstore.api.StreamReadFilter;
 import org.occurrent.eventstore.api.StreamReadFilter.AttributeFilter;
@@ -40,20 +41,24 @@ public final class StreamReadFilterToFilterMapper {
 
     private StreamReadFilterToFilterMapper() {
     }
-
     /**
      * Map {@link StreamReadFilter} into {@link Filter}.
      * <p>
      * Note: This does not apply the streamId constraint. The caller typically does:
      * Filter.streamId(streamId).and(StreamReadFilterToFilterMapper.map(streamReadFilter))
      */
-    public static Filter map(StreamReadFilter filter) {
-        requireNonNull(filter, "StreamReadFilter cannot be null");
-        return mapInternal(filter);
+    public static Filter map(String streamId, @Nullable StreamReadFilter filter) {
+        requireNonNull(streamId, "streamId cannot be null");
+        Filter streamIdFilter = Filter.streamId(streamId);
+        if (filter == null) {
+            return streamIdFilter;
+        }
+        return streamIdFilter.and(mapInternal(filter));
     }
 
     @SuppressWarnings({"unchecked", "rawtypes"})
-    private static Filter mapInternal(StreamReadFilter filter) {
+    public static Filter mapInternal(StreamReadFilter filter) {
+        requireNonNull(filter, "StreamReadFilter cannot be null");
         if (filter instanceof AttributeFilter<?> af) {
             return Filter.filter(af.attributeName(), (Condition) af.condition());
         }

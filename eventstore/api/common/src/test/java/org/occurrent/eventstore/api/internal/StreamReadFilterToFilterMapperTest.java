@@ -28,7 +28,6 @@ import java.time.ZoneOffset;
 import java.util.List;
 
 import static org.assertj.core.api.Assertions.assertThat;
-import static org.assertj.core.api.Assertions.catchThrowable;
 import static org.occurrent.condition.Condition.eq;
 
 @DisplayName("StreamReadFilterToFilterMapper")
@@ -36,166 +35,182 @@ import static org.occurrent.condition.Condition.eq;
 class StreamReadFilterToFilterMapperTest {
 
     @Nested
-    @DisplayName("when filter is null")
-    class When_filter_is_null {
+    @DisplayName("map")
+    class MapPublic {
 
         @Test
-        void rejects_null_filter() {
+        void adds_stream_id_to_stream_read_filter_when_stream_read_filter_is_not_null() {
             // Given
+            var input = StreamReadFilter.type("MyType");
 
             // When
-            var thrown = catchThrowable(() -> StreamReadFilterToFilterMapper.map(null));
+            var mapped = StreamReadFilterToFilterMapper.map("myStreamId", input);
 
             // Then
-            assertThat(thrown)
-                    .isInstanceOf(NullPointerException.class)
-                    .hasMessageContaining("StreamReadFilter cannot be null");
+            assertThat(mapped).isEqualTo(Filter.streamId("myStreamId").and(Filter.type("MyType")));
+        }
+
+        @Test
+        void returns_only__stream_id_filter_when_stream_read_filter_is_null() {
+            // Given
+            var input = StreamReadFilter.type("MyType");
+
+            // When
+            var mapped = StreamReadFilterToFilterMapper.map("myStreamId", input);
+
+            // Then
+            assertThat(mapped).isEqualTo(Filter.streamId("myStreamId").and(Filter.type("MyType")));
         }
     }
 
     @Nested
-    @DisplayName("when filter is a single predicate")
-    class When_filter_is_a_single_predicate {
+    @DisplayName("mapInternal")
+    class MapInternal {
 
-        @Test
-        void maps_attribute_filter_to_filter_single_condition() {
-            // Given
-            var input = StreamReadFilter.attribute(StreamReadFilter.TYPE, eq("MyType"));
+        @Nested
+        @DisplayName("when filter is a single predicate")
+        class When_filter_is_a_single_predicate {
 
-            // When
-            var mapped = StreamReadFilterToFilterMapper.map(input);
+            @Test
+            void maps_attribute_filter_to_filter_single_condition() {
+                // Given
+                var input = StreamReadFilter.attribute(StreamReadFilter.TYPE, eq("MyType"));
 
-            // Then
-            assertThat(mapped).isEqualTo(Filter.type("MyType"));
+                // When
+                var mapped = StreamReadFilterToFilterMapper.mapInternal(input);
+
+                // Then
+                assertThat(mapped).isEqualTo(Filter.type("MyType"));
+            }
+
+            @Test
+            void maps_extension_filter_to_filter_single_condition() {
+                // Given
+                var input = StreamReadFilter.extension("x-trace-id", eq("t1"));
+
+                // When
+                var mapped = StreamReadFilterToFilterMapper.mapInternal(input);
+
+                // Then
+                assertThat(mapped).isEqualTo(Filter.filter("x-trace-id", eq("t1")));
+            }
+
+            @Test
+            void maps_data_filter_to_filter_data_predicate() {
+                // Given
+                var input = StreamReadFilter.data("order.id", eq("123"));
+
+                // When
+                var mapped = StreamReadFilterToFilterMapper.mapInternal(input);
+
+                // Then
+                assertThat(mapped).isEqualTo(Filter.data("order.id", eq("123")));
+            }
+
+            @Test
+            void preserves_time_condition_values_without_using_system_defaults() {
+                // Given
+                var boundaryInstant = OffsetDateTime.of(2026, 1, 1, 0, 0, 0, 0, ZoneOffset.UTC);
+                var input = StreamReadFilter.time(eq(boundaryInstant));
+
+                // When
+                var mapped = StreamReadFilterToFilterMapper.mapInternal(input);
+
+                // Then
+                assertThat(mapped).isEqualTo(Filter.time(eq(boundaryInstant)));
+            }
+
+            @Test
+            void maps_source_convenience_to_equivalent_filter_source() {
+                // Given
+                var uri = URI.create("urn:test");
+                var input = StreamReadFilter.source(uri);
+
+                // When
+                var mapped = StreamReadFilterToFilterMapper.mapInternal(input);
+
+                // Then
+                assertThat(mapped).isEqualTo(Filter.source(uri));
+            }
         }
 
-        @Test
-        void maps_extension_filter_to_filter_single_condition() {
-            // Given
-            var input = StreamReadFilter.extension("x-trace-id", eq("t1"));
+        @Nested
+        @DisplayName("when filter is composite")
+        class When_filter_is_composite {
 
-            // When
-            var mapped = StreamReadFilterToFilterMapper.map(input);
+            @Test
+            void maps_and_composition_to_filter_and_composition() {
+                // Given
+                var input = StreamReadFilter.type("A").and(StreamReadFilter.subject("S"));
 
-            // Then
-            assertThat(mapped).isEqualTo(Filter.filter("x-trace-id", eq("t1")));
-        }
+                // When
+                var mapped = StreamReadFilterToFilterMapper.mapInternal(input);
 
-        @Test
-        void maps_data_filter_to_filter_data_predicate() {
-            // Given
-            var input = StreamReadFilter.data("order.id", eq("123"));
+                // Then
+                assertThat(mapped).isEqualTo(Filter.type("A").and(Filter.subject("S")));
+            }
 
-            // When
-            var mapped = StreamReadFilterToFilterMapper.map(input);
+            @Test
+            void maps_or_composition_to_filter_or_composition() {
+                // Given
+                var input = StreamReadFilter.type("A").or(StreamReadFilter.type("B"));
 
-            // Then
-            assertThat(mapped).isEqualTo(Filter.data("order.id", eq("123")));
-        }
+                // When
+                var mapped = StreamReadFilterToFilterMapper.mapInternal(input);
 
-        @Test
-        void preserves_time_condition_values_without_using_system_defaults() {
-            // Given
-            var boundaryInstant = OffsetDateTime.of(2026, 1, 1, 0, 0, 0, 0, ZoneOffset.UTC);
-            var input = StreamReadFilter.time(eq(boundaryInstant));
+                // Then
+                assertThat(mapped).isEqualTo(Filter.type("A").or(Filter.type("B")));
+            }
 
-            // When
-            var mapped = StreamReadFilterToFilterMapper.map(input);
+            @Test
+            void preserves_filter_order_in_composition() {
+                // Given
+                var first = StreamReadFilter.type("A");
+                var second = StreamReadFilter.subject("S");
+                var input = first.and(second);
 
-            // Then
-            assertThat(mapped).isEqualTo(Filter.time(eq(boundaryInstant)));
-        }
+                // When
+                var mapped = StreamReadFilterToFilterMapper.mapInternal(input);
 
-        @Test
-        void maps_source_convenience_to_equivalent_filter_source() {
-            // Given
-            var uri = URI.create("urn:test");
-            var input = StreamReadFilter.source(uri);
+                // Then
+                assertThat(mapped)
+                        .isEqualTo(new Filter.CompositionFilter(
+                                Filter.CompositionOperator.AND,
+                                List.of(Filter.type("A"), Filter.subject("S"))
+                        ));
+            }
 
-            // When
-            var mapped = StreamReadFilterToFilterMapper.map(input);
+            @Test
+            void preserves_duplicates_in_composition() {
+                // Given
+                var input = StreamReadFilter.type("A").and(StreamReadFilter.type("A"));
 
-            // Then
-            assertThat(mapped).isEqualTo(Filter.source(uri));
-        }
-    }
+                // When
+                var mapped = StreamReadFilterToFilterMapper.mapInternal(input);
 
-    @Nested
-    @DisplayName("when filter is composite")
-    class When_filter_is_composite {
+                // Then
+                assertThat(mapped)
+                        .isEqualTo(new Filter.CompositionFilter(
+                                Filter.CompositionOperator.AND,
+                                List.of(Filter.type("A"), Filter.type("A"))
+                        ));
+            }
 
-        @Test
-        void maps_and_composition_to_filter_and_composition() {
-            // Given
-            var input = StreamReadFilter.type("A").and(StreamReadFilter.subject("S"));
+            @Test
+            void mapping_is_deterministic_for_same_input() throws Throwable {
+                // Given
+                var input = StreamReadFilter.type("A")
+                        .and(StreamReadFilter.subject("S"))
+                        .or(StreamReadFilter.data("x", eq("1")));
 
-            // When
-            var mapped = StreamReadFilterToFilterMapper.map(input);
+                // When
+                ThrowingSupplier<Filter> map = () -> StreamReadFilterToFilterMapper.mapInternal(input);
+                var first = map.get();
+                var second = map.get();
 
-            // Then
-            assertThat(mapped).isEqualTo(Filter.type("A").and(Filter.subject("S")));
-        }
-
-        @Test
-        void maps_or_composition_to_filter_or_composition() {
-            // Given
-            var input = StreamReadFilter.type("A").or(StreamReadFilter.type("B"));
-
-            // When
-            var mapped = StreamReadFilterToFilterMapper.map(input);
-
-            // Then
-            assertThat(mapped).isEqualTo(Filter.type("A").or(Filter.type("B")));
-        }
-
-        @Test
-        void preserves_filter_order_in_composition() {
-            // Given
-            var first = StreamReadFilter.type("A");
-            var second = StreamReadFilter.subject("S");
-            var input = first.and(second);
-
-            // When
-            var mapped = StreamReadFilterToFilterMapper.map(input);
-
-            // Then
-            assertThat(mapped)
-                    .isEqualTo(new Filter.CompositionFilter(
-                            Filter.CompositionOperator.AND,
-                            List.of(Filter.type("A"), Filter.subject("S"))
-                    ));
-        }
-
-        @Test
-        void preserves_duplicates_in_composition() {
-            // Given
-            var input = StreamReadFilter.type("A").and(StreamReadFilter.type("A"));
-
-            // When
-            var mapped = StreamReadFilterToFilterMapper.map(input);
-
-            // Then
-            assertThat(mapped)
-                    .isEqualTo(new Filter.CompositionFilter(
-                            Filter.CompositionOperator.AND,
-                            List.of(Filter.type("A"), Filter.type("A"))
-                    ));
-        }
-
-        @Test
-        void mapping_is_deterministic_for_same_input() throws Throwable {
-            // Given
-            var input = StreamReadFilter.type("A")
-                    .and(StreamReadFilter.subject("S"))
-                    .or(StreamReadFilter.data("x", eq("1")));
-
-            // When
-            ThrowingSupplier<Filter> map = () -> StreamReadFilterToFilterMapper.map(input);
-            var first = map.get();
-            var second = map.get();
-
-            // Then
-            assertThat(first).isEqualTo(second);
+                // Then
+                assertThat(first).isEqualTo(second);
+            }
         }
     }
 }

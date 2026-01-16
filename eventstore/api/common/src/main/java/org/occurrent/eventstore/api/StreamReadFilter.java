@@ -26,7 +26,6 @@ import java.time.OffsetDateTime;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.List;
-import java.util.Set;
 
 import static java.util.Objects.requireNonNull;
 import static org.occurrent.condition.Condition.eq;
@@ -34,7 +33,8 @@ import static org.occurrent.eventstore.api.StreamReadFilter.CompositionOperator.
 import static org.occurrent.eventstore.api.StreamReadFilter.CompositionOperator.OR;
 
 /**
- * Filter DSL intended for reading events from a single stream (where streamId is provided by the API).
+ * Filter DSL intended for reading events from a single stream.
+ *
  * <p>
  * Differences vs {@link Filter}:
  * - No "all" variant (use overloads without a filter instead).
@@ -109,7 +109,6 @@ public sealed interface StreamReadFilter permits StreamReadFilter.AttributeFilte
     static <T> StreamReadFilter data(String path, Condition<T> condition) {
         return new DataFilter<>(path, condition);
     }
-
 
     default StreamReadFilter and(StreamReadFilter other, StreamReadFilter... more) {
         return compose(AND, this, other, more);
@@ -205,11 +204,5 @@ public sealed interface StreamReadFilter permits StreamReadFilter.AttributeFilte
 
     static StreamReadFilter extension(String name, String value) {
         return extension(name, eq(value));
-    }
-
-    static StreamReadFilter extensionStringIn(String name, Set<String> values) {
-        requireNonNull(values, "values cannot be null");
-        // Users can also use Condition.in(...) directly if they prefer.
-        return extension(name, org.occurrent.condition.Condition.in(values));
     }
 }
