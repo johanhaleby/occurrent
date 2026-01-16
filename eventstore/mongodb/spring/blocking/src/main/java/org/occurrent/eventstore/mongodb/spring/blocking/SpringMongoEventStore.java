@@ -352,7 +352,7 @@ public class SpringMongoEventStore implements EventStore, EventStoreOperations, 
         Query query = Query.query(streamIdEqualToCriteria(streamId).and(STREAM_VERSION).lte(currentStreamVersion));
 
         if (streamReadFilter != null) {
-            Filter filter = StreamReadFilterToFilterMapper.mapInternal(streamReadFilter);
+            Filter filter = StreamReadFilterToFilterMapper.map(streamReadFilter);
             var criteria = FilterConverter.convertFilterToCriteria(null, timeRepresentation, filter);
             query.addCriteria(criteria);
         }

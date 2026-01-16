@@ -44,7 +44,7 @@ class StreamReadFilterToFilterMapperTest {
             var input = StreamReadFilter.type("MyType");
 
             // When
-            var mapped = StreamReadFilterToFilterMapper.map("myStreamId", input);
+            var mapped = StreamReadFilterToFilterMapper.mapWithStreamId("myStreamId", input);
 
             // Then
             assertThat(mapped).isEqualTo(Filter.streamId("myStreamId").and(Filter.type("MyType")));
@@ -56,7 +56,7 @@ class StreamReadFilterToFilterMapperTest {
             var input = StreamReadFilter.type("MyType");
 
             // When
-            var mapped = StreamReadFilterToFilterMapper.map("myStreamId", input);
+            var mapped = StreamReadFilterToFilterMapper.mapWithStreamId("myStreamId", input);
 
             // Then
             assertThat(mapped).isEqualTo(Filter.streamId("myStreamId").and(Filter.type("MyType")));
@@ -77,7 +77,7 @@ class StreamReadFilterToFilterMapperTest {
                 var input = StreamReadFilter.attribute(StreamReadFilter.TYPE, eq("MyType"));
 
                 // When
-                var mapped = StreamReadFilterToFilterMapper.mapInternal(input);
+                var mapped = StreamReadFilterToFilterMapper.map(input);
 
                 // Then
                 assertThat(mapped).isEqualTo(Filter.type("MyType"));
@@ -89,7 +89,7 @@ class StreamReadFilterToFilterMapperTest {
                 var input = StreamReadFilter.extension("x-trace-id", eq("t1"));
 
                 // When
-                var mapped = StreamReadFilterToFilterMapper.mapInternal(input);
+                var mapped = StreamReadFilterToFilterMapper.map(input);
 
                 // Then
                 assertThat(mapped).isEqualTo(Filter.filter("x-trace-id", eq("t1")));
@@ -101,7 +101,7 @@ class StreamReadFilterToFilterMapperTest {
                 var input = StreamReadFilter.data("order.id", eq("123"));
 
                 // When
-                var mapped = StreamReadFilterToFilterMapper.mapInternal(input);
+                var mapped = StreamReadFilterToFilterMapper.map(input);
 
                 // Then
                 assertThat(mapped).isEqualTo(Filter.data("order.id", eq("123")));
@@ -114,7 +114,7 @@ class StreamReadFilterToFilterMapperTest {
                 var input = StreamReadFilter.time(eq(boundaryInstant));
 
                 // When
-                var mapped = StreamReadFilterToFilterMapper.mapInternal(input);
+                var mapped = StreamReadFilterToFilterMapper.map(input);
 
                 // Then
                 assertThat(mapped).isEqualTo(Filter.time(eq(boundaryInstant)));
@@ -127,7 +127,7 @@ class StreamReadFilterToFilterMapperTest {
                 var input = StreamReadFilter.source(uri);
 
                 // When
-                var mapped = StreamReadFilterToFilterMapper.mapInternal(input);
+                var mapped = StreamReadFilterToFilterMapper.map(input);
 
                 // Then
                 assertThat(mapped).isEqualTo(Filter.source(uri));
@@ -144,7 +144,7 @@ class StreamReadFilterToFilterMapperTest {
                 var input = StreamReadFilter.type("A").and(StreamReadFilter.subject("S"));
 
                 // When
-                var mapped = StreamReadFilterToFilterMapper.mapInternal(input);
+                var mapped = StreamReadFilterToFilterMapper.map(input);
 
                 // Then
                 assertThat(mapped).isEqualTo(Filter.type("A").and(Filter.subject("S")));
@@ -156,7 +156,7 @@ class StreamReadFilterToFilterMapperTest {
                 var input = StreamReadFilter.type("A").or(StreamReadFilter.type("B"));
 
                 // When
-                var mapped = StreamReadFilterToFilterMapper.mapInternal(input);
+                var mapped = StreamReadFilterToFilterMapper.map(input);
 
                 // Then
                 assertThat(mapped).isEqualTo(Filter.type("A").or(Filter.type("B")));
@@ -170,7 +170,7 @@ class StreamReadFilterToFilterMapperTest {
                 var input = first.and(second);
 
                 // When
-                var mapped = StreamReadFilterToFilterMapper.mapInternal(input);
+                var mapped = StreamReadFilterToFilterMapper.map(input);
 
                 // Then
                 assertThat(mapped)
@@ -186,7 +186,7 @@ class StreamReadFilterToFilterMapperTest {
                 var input = StreamReadFilter.type("A").and(StreamReadFilter.type("A"));
 
                 // When
-                var mapped = StreamReadFilterToFilterMapper.mapInternal(input);
+                var mapped = StreamReadFilterToFilterMapper.map(input);
 
                 // Then
                 assertThat(mapped)
@@ -204,7 +204,7 @@ class StreamReadFilterToFilterMapperTest {
                         .or(StreamReadFilter.data("x", eq("1")));
 
                 // When
-                ThrowingSupplier<Filter> map = () -> StreamReadFilterToFilterMapper.mapInternal(input);
+                ThrowingSupplier<Filter> map = () -> StreamReadFilterToFilterMapper.map(input);
                 var first = map.get();
                 var second = map.get();
 

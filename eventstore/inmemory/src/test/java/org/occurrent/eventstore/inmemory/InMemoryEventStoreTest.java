@@ -252,6 +252,88 @@ public class InMemoryEventStoreTest {
     }
 
     @Nested
+    @DisplayName("stream read filter")
+    class StreamReadFilterTest {
+
+        @Test
+        void can_read_and_write_multiple_events_at_different_occasions() {
+            InMemoryEventStore inMemoryEventStore = new InMemoryEventStore();
+            LocalDateTime now = LocalDateTime.now();
+            NameDefined nameDefined = new NameDefined(UUID.randomUUID().toString(), now, "name", "name");
+            NameWasChanged nameWasChanged1 = new NameWasChanged(UUID.randomUUID().toString(), now.plusHours(1), "name", "name2");
+            NameWasChanged nameWasChanged2 = new NameWasChanged(UUID.randomUUID().toString(), now.plusHours(2), "name", "name3");
+
+            // When
+            conditionallyPersist(inMemoryEventStore, "name", WriteCondition.streamVersionEq(0), Stream.of(nameDefined));
+            conditionallyPersist(inMemoryEventStore, "name", WriteCondition.streamVersionEq(1), Stream.of(nameWasChanged1));
+            conditionallyPersist(inMemoryEventStore, "name", WriteCondition.streamVersionEq(2), Stream.of(nameWasChanged2));
+
+            // Then
+            EventStream<CloudEvent> eventStream = inMemoryEventStore.read("name", StreamReadFilter.type(in(NameDefined.class.getName(), NameWasChanged.class.getName())));
+            List<DomainEvent> readEvents = eventStream.events().map(deserialize(objectMapper)).toList();
+
+            assertAll(
+                    () -> assertThat(eventStream.version()).isEqualTo(3),
+                    () -> assertThat(readEvents).hasSize(3),
+                    () -> assertThat(readEvents).containsExactly(nameDefined, nameWasChanged1, nameWasChanged2)
+            );
+        }
+
+        @Test
+        void can_read_only_events_of_a_certain_type() {
+            InMemoryEventStore inMemoryEventStore = new InMemoryEventStore();
+            LocalDateTime now = LocalDateTime.now();
+            NameDefined nameDefined = new NameDefined(UUID.randomUUID().toString(), now, "name", "name");
+            NameWasChanged nameWasChanged1 = new NameWasChanged(UUID.randomUUID().toString(), now.plusHours(1), "name", "name2");
+            NameWasChanged nameWasChanged2 = new NameWasChanged(UUID.randomUUID().toString(), now.plusHours(2), "name", "name3");
+
+            // When
+            unconditionallyPersist(inMemoryEventStore, "name", nameDefined);
+            unconditionallyPersist(inMemoryEventStore, "name", nameWasChanged1);
+            unconditionallyPersist(inMemoryEventStore, "name", nameWasChanged2);
+
+            // Then
+            EventStream<CloudEvent> eventStream = inMemoryEventStore.read("name", StreamReadFilter.type(in(NameWasChanged.class.getName())));
+            List<DomainEvent> readEvents = eventStream.events().map(deserialize(objectMapper)).toList();
+
+            assertAll(
+                    () -> assertThat(eventStream.version()).isEqualTo(3),
+                    () -> assertThat(readEvents).hasSize(2),
+                    () -> assertThat(readEvents).containsExactly(nameWasChanged1, nameWasChanged2)
+            );
+        }
+
+        @Test
+        void can_write_new_events_to_stream_read_using_stream_read_filter() {
+            // Given
+            InMemoryEventStore inMemoryEventStore = new InMemoryEventStore();
+            LocalDateTime now = LocalDateTime.now();
+
+            // When
+            DomainEvent event1 = new NameDefined(UUID.randomUUID().toString(), now, "name", "John Doe");
+            DomainEvent event2 = new NameWasChanged(UUID.randomUUID().toString(), now, "name", "Jan Doe");
+            DomainEvent event3 = new NameWasChanged(UUID.randomUUID().toString(), now, "name", "Jan Doe2");
+            DomainEvent event4 = new NameWasChanged(UUID.randomUUID().toString(), now, "name", "Jan Doe3");
+
+            conditionallyPersist(inMemoryEventStore, "name", WriteCondition.streamVersionEq(0), Stream.of(event1));
+            conditionallyPersist(inMemoryEventStore, "name", WriteCondition.streamVersionEq(1), Stream.of(event2));
+            conditionallyPersist(inMemoryEventStore, "name", WriteCondition.streamVersionEq(2), Stream.of(event3));
+
+            EventStream<CloudEvent> eventStream = inMemoryEventStore.read("name", StreamReadFilter.type(in(NameWasChanged.class.getSimpleName())));
+
+            WriteResult writeResult = conditionallyPersist(inMemoryEventStore, "name", WriteCondition.streamVersionEq(eventStream.version()), Stream.of(event4));
+
+            // Then
+            assertAll(
+                    () -> assertThat(writeResult.streamId()).isEqualTo("name"),
+                    () -> assertThat(writeResult.oldStreamVersion()).isEqualTo(3L),
+                    () -> assertThat(writeResult.newStreamVersion()).isEqualTo(4L)
+            );
+        }
+    }
+
+
+    @Nested
     @DisplayName("exists")
     class Exists {
 
@@ -286,7 +368,7 @@ public class InMemoryEventStoreTest {
             // Given
             CopyOnWriteArrayList<DomainEvent> events = new CopyOnWriteArrayList<>();
 
-            InMemoryEventStore inMemoryEventStore = new InMemoryEventStore(stream -> events.addAll(stream.map(deserialize(objectMapper)).collect(Collectors.toList())));
+            InMemoryEventStore inMemoryEventStore = new InMemoryEventStore(stream -> events.addAll(stream.map(deserialize(objectMapper)).toList()));
 
             // When
             unconditionallyPersist(inMemoryEventStore, "name", Stream.empty());
@@ -300,7 +382,7 @@ public class InMemoryEventStoreTest {
             // Given
             CopyOnWriteArrayList<DomainEvent> events = new CopyOnWriteArrayList<>();
 
-            InMemoryEventStore inMemoryEventStore = new InMemoryEventStore(stream -> events.addAll(stream.map(deserialize(objectMapper)).collect(Collectors.toList())));
+            InMemoryEventStore inMemoryEventStore = new InMemoryEventStore(stream -> events.addAll(stream.map(deserialize(objectMapper)).toList()));
             LocalDateTime now = LocalDateTime.now();
 
             DomainEvent event1 = new NameDefined(UUID.randomUUID().toString(), now, "name", "John Doe");
@@ -318,7 +400,7 @@ public class InMemoryEventStoreTest {
             // Given
             CopyOnWriteArrayList<DomainEvent> events = new CopyOnWriteArrayList<>();
 
-            InMemoryEventStore inMemoryEventStore = new InMemoryEventStore(stream -> events.addAll(stream.map(deserialize(objectMapper)).collect(Collectors.toList())));
+            InMemoryEventStore inMemoryEventStore = new InMemoryEventStore(stream -> events.addAll(stream.map(deserialize(objectMapper)).toList()));
             LocalDateTime now = LocalDateTime.now();
 
             DomainEvent event1 = new NameDefined(UUID.randomUUID().toString(), now, "name", "John Doe");
@@ -1515,8 +1597,8 @@ public class InMemoryEventStoreTest {
         return inMemoryEventStore.write(eventStreamId, events.map(convertDomainEventToCloudEvent(objectMapper)));
     }
 
-    private void conditionallyPersist(EventStore inMemoryEventStore, String eventStreamId, WriteCondition writeCondition, Stream<DomainEvent> events) {
-        inMemoryEventStore.write(eventStreamId, writeCondition, events.map(convertDomainEventToCloudEvent(objectMapper)));
+    private WriteResult conditionallyPersist(EventStore inMemoryEventStore, String eventStreamId, WriteCondition writeCondition, Stream<DomainEvent> events) {
+        return inMemoryEventStore.write(eventStreamId, writeCondition, events.map(convertDomainEventToCloudEvent(objectMapper)));
     }
 
     private static Function<DomainEvent, CloudEvent> convertDomainEventToCloudEvent(ObjectMapper objectMapper) {

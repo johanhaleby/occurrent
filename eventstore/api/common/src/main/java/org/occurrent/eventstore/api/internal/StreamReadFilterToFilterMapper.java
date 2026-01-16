@@ -47,17 +47,17 @@ public final class StreamReadFilterToFilterMapper {
      * Note: This does not apply the streamId constraint. The caller typically does:
      * Filter.streamId(streamId).and(StreamReadFilterToFilterMapper.map(streamReadFilter))
      */
-    public static Filter map(String streamId, @Nullable StreamReadFilter filter) {
+    public static Filter mapWithStreamId(String streamId, @Nullable StreamReadFilter filter) {
         requireNonNull(streamId, "streamId cannot be null");
         Filter streamIdFilter = Filter.streamId(streamId);
         if (filter == null) {
             return streamIdFilter;
         }
-        return streamIdFilter.and(mapInternal(filter));
+        return streamIdFilter.and(map(filter));
     }
 
     @SuppressWarnings({"unchecked", "rawtypes"})
-    public static Filter mapInternal(StreamReadFilter filter) {
+    public static Filter map(StreamReadFilter filter) {
         requireNonNull(filter, "StreamReadFilter cannot be null");
         if (filter instanceof AttributeFilter<?> af) {
             return Filter.filter(af.attributeName(), (Condition) af.condition());
@@ -75,7 +75,7 @@ public final class StreamReadFilterToFilterMapper {
 
             List<Filter> mapped = new ArrayList<>(cf.filters().size());
             for (StreamReadFilter f : cf.filters()) {
-                mapped.add(mapInternal(f));
+                mapped.add(map(f));
             }
 
             Filter.CompositionOperator op = cf.operator() == StreamReadFilter.CompositionOperator.AND
