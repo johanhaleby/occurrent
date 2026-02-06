@@ -53,13 +53,13 @@ class StreamReadFilterToFilterMapperTest {
         @Test
         void returns_only__stream_id_filter_when_stream_read_filter_is_null() {
             // Given
-            var input = StreamReadFilter.type("MyType");
+            StreamReadFilter input = null;
 
             // When
             var mapped = StreamReadFilterToFilterMapper.mapWithStreamId("myStreamId", input);
 
             // Then
-            assertThat(mapped).isEqualTo(Filter.streamId("myStreamId").and(Filter.type("MyType")));
+            assertThat(mapped).isEqualTo(Filter.streamId("myStreamId"));
         }
     }
 

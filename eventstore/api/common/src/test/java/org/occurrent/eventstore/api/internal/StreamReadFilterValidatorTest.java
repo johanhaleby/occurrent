@@ -36,6 +36,25 @@ import static org.occurrent.condition.Condition.eq;
 class StreamReadFilterValidatorTest {
 
     @Nested
+    @DisplayName("when creating StreamReadFilter using factory methods")
+    class FactoryValidation {
+
+        @Test
+        void rejects_forbidden_attribute_name_when_creating_filter() {
+            Throwable thrown = catchThrowable(() -> StreamReadFilter.attribute(OccurrentCloudEventExtension.STREAM_ID, eq("x")));
+            assertThat(thrown).isInstanceOf(IllegalArgumentException.class)
+                    .hasMessageContaining("StreamReadFilter must not constrain attribute");
+        }
+
+        @Test
+        void rejects_forbidden_extension_name_when_creating_filter() {
+            Throwable thrown = catchThrowable(() -> StreamReadFilter.extension(OccurrentCloudEventExtension.STREAM_VERSION, eq("1")));
+            assertThat(thrown).isInstanceOf(IllegalArgumentException.class)
+                    .hasMessageContaining("StreamReadFilter must not constrain extension");
+        }
+    }
+
+    @Nested
     @DisplayName("when filter is null")
     class When_filter_is_null {
 
@@ -118,7 +137,7 @@ class StreamReadFilterValidatorTest {
         @DisplayName("rejects forbidden names supplied via attribute")
         void rejects_forbidden_names_supplied_via_attribute(String forbiddenName) {
             // Given
-            var filter = StreamReadFilter.attribute(forbiddenName, eq("x"));
+            var filter = new StreamReadFilter.AttributeFilter<>(forbiddenName, eq("x"));
 
             // When
             var thrown = catchThrowable(() -> StreamReadFilterValidator.validate(filter));
@@ -134,7 +153,7 @@ class StreamReadFilterValidatorTest {
         @DisplayName("rejects forbidden names supplied via extension")
         void rejects_forbidden_names_supplied_via_extension(String forbiddenName) {
             // Given
-            var filter = StreamReadFilter.extension(forbiddenName, eq("x"));
+            var filter = new StreamReadFilter.ExtensionFilter<>(forbiddenName, eq("x"));
 
             // When
             var thrown = catchThrowable(() -> StreamReadFilterValidator.validate(filter));
@@ -151,7 +170,7 @@ class StreamReadFilterValidatorTest {
             var previous = Locale.getDefault();
             Locale.setDefault(new Locale("tr", "TR"));
             try {
-                var filter = StreamReadFilter.extension("  " + OccurrentCloudEventExtension.STREAM_ID.toUpperCase(Locale.ROOT) + "  ", eq("x"));
+                var filter = new StreamReadFilter.ExtensionFilter<>("  " + OccurrentCloudEventExtension.STREAM_ID.toUpperCase(Locale.ROOT) + "  ", eq("x"));
 
                 // When
                 var thrown = catchThrowable(() -> StreamReadFilterValidator.validate(filter));
@@ -198,7 +217,7 @@ class StreamReadFilterValidatorTest {
         void rejects_forbidden_name_nested_in_composition() {
             // Given
             var filter = StreamReadFilter.type("MyEventType")
-                    .and(StreamReadFilter.extension(OccurrentCloudEventExtension.STREAM_VERSION, eq("1")));
+                    .and(new StreamReadFilter.ExtensionFilter<>(OccurrentCloudEventExtension.STREAM_VERSION, eq("1")));
 
             // When
             var thrown = catchThrowable(() -> StreamReadFilterValidator.validate(filter));

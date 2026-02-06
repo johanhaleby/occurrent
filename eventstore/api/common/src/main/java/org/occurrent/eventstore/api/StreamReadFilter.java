@@ -18,6 +18,7 @@
 package org.occurrent.eventstore.api;
 
 import io.cloudevents.SpecVersion;
+import org.occurrent.cloudevents.OccurrentCloudEventExtension;
 import org.occurrent.condition.Condition;
 import org.occurrent.filter.Filter;
 
@@ -26,6 +27,7 @@ import java.time.OffsetDateTime;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.List;
+import java.util.Locale;
 
 import static java.util.Objects.requireNonNull;
 import static org.occurrent.condition.Condition.eq;
@@ -99,10 +101,12 @@ public sealed interface StreamReadFilter permits StreamReadFilter.AttributeFilte
 
 
     static <T> StreamReadFilter attribute(String name, Condition<T> condition) {
+        validateNotReservedOccurrentStreamField(name, "attribute");
         return new AttributeFilter<>(name, condition);
     }
 
     static <T> StreamReadFilter extension(String name, Condition<T> condition) {
+        validateNotReservedOccurrentStreamField(name, "extension");
         return new ExtensionFilter<>(name, condition);
     }
 
@@ -204,5 +208,22 @@ public sealed interface StreamReadFilter permits StreamReadFilter.AttributeFilte
 
     static StreamReadFilter extension(String name, String value) {
         return extension(name, eq(value));
+    }
+
+    private static void validateNotReservedOccurrentStreamField(String name, String kind) {
+        requireNonNull(name, kind + " name cannot be null");
+        String normalizedName = normalize(name);
+        String streamIdName = normalize(OccurrentCloudEventExtension.STREAM_ID);
+        String streamVersionName = normalize(OccurrentCloudEventExtension.STREAM_VERSION);
+        if (normalizedName.equals(streamIdName) || normalizedName.equals(streamVersionName)) {
+            throw new IllegalArgumentException(
+                    "StreamReadFilter must not constrain " + kind + " '" + normalizedName + "'. " +
+                            "streamId is provided by the stream read API, and streamVersion is derived from stream history."
+            );
+        }
+    }
+
+    private static String normalize(String value) {
+        return value.trim().toLowerCase(Locale.ROOT);
     }
 }
