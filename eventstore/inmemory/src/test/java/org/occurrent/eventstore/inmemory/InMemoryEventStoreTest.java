@@ -330,6 +330,17 @@ public class InMemoryEventStoreTest {
                     () -> assertThat(writeResult.newStreamVersion()).isEqualTo(4L)
             );
         }
+
+        @Test
+        void rejects_stream_version_in_stream_read_filter() {
+            InMemoryEventStore inMemoryEventStore = new InMemoryEventStore();
+            unconditionallyPersist(inMemoryEventStore, "name", new NameDefined(UUID.randomUUID().toString(), LocalDateTime.now(), "name", "name"));
+
+            Throwable throwable = catchThrowable(() -> inMemoryEventStore.read("name", StreamReadFilter.extension(STREAM_VERSION, eq(1L))));
+
+            assertThat(throwable).isExactlyInstanceOf(IllegalArgumentException.class)
+                    .hasMessageContaining("StreamReadFilter must not constrain extension");
+        }
     }
 
 

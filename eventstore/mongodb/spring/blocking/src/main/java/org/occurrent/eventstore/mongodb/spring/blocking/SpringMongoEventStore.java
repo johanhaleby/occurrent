@@ -32,6 +32,7 @@ import org.occurrent.eventstore.api.*;
 import org.occurrent.eventstore.api.WriteCondition.StreamVersionWriteCondition;
 import org.occurrent.eventstore.api.blocking.*;
 import org.occurrent.eventstore.api.internal.StreamReadFilterToFilterMapper;
+import org.occurrent.eventstore.api.internal.StreamReadFilterValidator;
 import org.occurrent.eventstore.mongodb.internal.MongoExceptionTranslator.WriteContext;
 import org.occurrent.eventstore.mongodb.internal.StreamVersionDiff;
 import org.occurrent.filter.Filter;
@@ -352,6 +353,7 @@ public class SpringMongoEventStore implements EventStore, EventStoreOperations, 
         Query query = Query.query(streamIdEqualToCriteria(streamId).and(STREAM_VERSION).lte(currentStreamVersion));
 
         if (streamReadFilter != null) {
+            StreamReadFilterValidator.validate(streamReadFilter);
             Filter filter = StreamReadFilterToFilterMapper.map(streamReadFilter);
             var criteria = FilterConverter.convertFilterToCriteria(null, timeRepresentation, filter);
             query.addCriteria(criteria);

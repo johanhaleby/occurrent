@@ -437,6 +437,16 @@ public class SpringMongoEventStoreTest {
                     () -> assertThat(writeResult.newStreamVersion()).isEqualTo(4L)
             );
         }
+
+        @Test
+        void rejects_stream_version_in_stream_read_filter() {
+            persist("name", WriteCondition.streamVersionEq(0), new NameDefined(UUID.randomUUID().toString(), LocalDateTime.now(), "name", "name"));
+
+            Throwable throwable = catchThrowable(() -> eventStore.read("name", StreamReadFilter.extension(OccurrentCloudEventExtension.STREAM_VERSION, eq(1L))));
+
+            assertThat(throwable).isExactlyInstanceOf(IllegalArgumentException.class)
+                    .hasMessageContaining("StreamReadFilter must not constrain extension");
+        }
     }
 
     @Nested
@@ -1983,4 +1993,3 @@ public class SpringMongoEventStoreTest {
         }
     }
 }
-

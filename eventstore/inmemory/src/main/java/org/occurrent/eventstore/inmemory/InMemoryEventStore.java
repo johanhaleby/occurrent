@@ -31,6 +31,7 @@ import org.occurrent.eventstore.api.SortBy.SortDirection;
 import org.occurrent.eventstore.api.WriteCondition.StreamVersionWriteCondition;
 import org.occurrent.eventstore.api.blocking.*;
 import org.occurrent.eventstore.api.internal.StreamReadFilterToFilterMapper;
+import org.occurrent.eventstore.api.internal.StreamReadFilterValidator;
 import org.occurrent.filter.Filter;
 import org.occurrent.functionalsupport.internal.FunctionalSupport.Pair;
 
@@ -322,16 +323,20 @@ public class InMemoryEventStore implements EventStore, EventStoreOperations, Eve
         if (filter == null) {
             eventsAfterFilter = events;
         } else {
+            StreamReadFilterValidator.validate(filter);
             Filter readFilter = StreamReadFilterToFilterMapper.map(filter);
             eventsAfterFilter = events.stream().filter(cloudEvent -> matchesFilter(cloudEvent, readFilter)).toList();
         }
-        
+
         if (skip == 0 && limit == Integer.MAX_VALUE) {
             streamVersionAndEvents = new StreamVersionAndEvents(streamVersion, eventsAfterFilter);
         } else {
-            streamVersionAndEvents = new StreamVersionAndEvents(streamVersion, events.subList(skip, limit));
+            int fromIndex = Math.min(skip, eventsAfterFilter.size());
+            long requestedToIndex = (long) fromIndex + (long) limit;
+            int toIndex = (int) Math.min(requestedToIndex, eventsAfterFilter.size());
+            streamVersionAndEvents = new StreamVersionAndEvents(streamVersion, eventsAfterFilter.subList(fromIndex, toIndex));
         }
-        
+
         return new EventStreamImpl(streamId, streamVersionAndEvents.version, streamVersionAndEvents.events);
     }
 
