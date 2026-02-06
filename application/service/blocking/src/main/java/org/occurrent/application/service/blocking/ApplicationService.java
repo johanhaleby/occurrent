@@ -41,9 +41,7 @@ public interface ApplicationService<T> {
      *                                     if required.
      * @param sideEffect                   Side-effects that are executed <i>after</i> the events have been written to the event store.
      */
-    default WriteResult execute(String streamId, Function<Stream<T>, Stream<T>> functionThatCallsDomainModel, @Nullable Consumer<Stream<T>> sideEffect) {
-        return execute(streamId, null, functionThatCallsDomainModel, sideEffect);
-    }
+    WriteResult execute(String streamId, Function<Stream<T>, Stream<T>> functionThatCallsDomainModel, @Nullable Consumer<Stream<T>> sideEffect);
 
     /**
      * Execute a function that loads the events from the event store and apply them to the {@code functionThatCallsDomainModel} and
@@ -65,7 +63,12 @@ public interface ApplicationService<T> {
      *                                     if required.
      * @param sideEffect                   Side-effects that are executed <i>after</i> the events have been written to the event store.
      */
-    WriteResult execute(String streamId, @Nullable StreamReadFilter filter, Function<Stream<T>, Stream<T>> functionThatCallsDomainModel, @Nullable Consumer<Stream<T>> sideEffect);
+    default WriteResult execute(String streamId, @Nullable StreamReadFilter filter, Function<Stream<T>, Stream<T>> functionThatCallsDomainModel, @Nullable Consumer<Stream<T>> sideEffect) {
+        if (filter == null) {
+            return execute(streamId, functionThatCallsDomainModel, sideEffect);
+        }
+        throw new UnsupportedOperationException("This ApplicationService implementation does not support StreamReadFilter. Override execute(streamId, filter, functionThatCallsDomainModel, sideEffect) to add support.");
+    }
 
     /**
      * Convenience function that lets you specify {@code streamId} as a {@code UUID} instead of a {@code String}. Simply delegates to {@link #execute(String, Function, Consumer)}.

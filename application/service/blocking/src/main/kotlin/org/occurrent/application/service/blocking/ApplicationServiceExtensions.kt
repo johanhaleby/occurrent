@@ -76,13 +76,13 @@ fun <T : Any> ApplicationService<T>.execute(streamId: String, functionThatCallsD
         val newEvents: Stream<T> = functionThatCallsDomainModel.invoke(currentEvents).stream()
         newEvents
     }
-    return execute(streamId, f, sideEffects?.toStreamSideEffect())
+    return execute(streamId, f, sideEffects?.toStreamSideEffectFromList())
 }
 
 private fun <T> ((Sequence<T>) -> Unit).toStreamSideEffect(): (Stream<T>) -> Unit {
     return { streamOfEvents -> this(streamOfEvents.asSequence()) }
 }
 
-private fun <T> ((List<T>) -> Unit).toStreamSideEffect(): (Stream<T>) -> Unit {
+private fun <T> ((List<T>) -> Unit).toStreamSideEffectFromList(): (Stream<T>) -> Unit {
     return { streamOfEvents -> this(streamOfEvents.toList()) }
 }

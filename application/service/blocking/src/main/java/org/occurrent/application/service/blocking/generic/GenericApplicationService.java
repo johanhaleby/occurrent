@@ -84,6 +84,11 @@ public class GenericApplicationService<T> implements ApplicationService<T> {
 
 
     @Override
+    public WriteResult execute(String streamId, Function<Stream<T>, Stream<T>> functionThatCallsDomainModel, @Nullable Consumer<Stream<T>> sideEffect) {
+        return execute(streamId, null, functionThatCallsDomainModel, sideEffect);
+    }
+
+    @Override
     public WriteResult execute(String streamId, @Nullable StreamReadFilter filter, Function<Stream<T>, Stream<T>> functionThatCallsDomainModel, @Nullable Consumer<Stream<T>> sideEffect) {
         Objects.requireNonNull(streamId, "Stream id cannot be null");
         Objects.requireNonNull(functionThatCallsDomainModel, "Function that calls domain model cannot be null");
