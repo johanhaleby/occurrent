@@ -1,4 +1,4 @@
-# 1. Introduce optional capability interface for filtered stream reads
+# 11. Introduce optional capability interface for filtered stream reads
 
 Date: 2026-01-16
 
