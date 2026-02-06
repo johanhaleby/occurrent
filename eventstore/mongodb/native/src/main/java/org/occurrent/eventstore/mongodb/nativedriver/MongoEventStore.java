@@ -36,6 +36,9 @@ import org.occurrent.eventstore.api.blocking.EventStore;
 import org.occurrent.eventstore.api.blocking.EventStoreOperations;
 import org.occurrent.eventstore.api.blocking.EventStoreQueries;
 import org.occurrent.eventstore.api.blocking.EventStream;
+import org.occurrent.eventstore.api.blocking.ReadEventStreamWithFilter;
+import org.occurrent.eventstore.api.internal.StreamReadFilterToFilterMapper;
+import org.occurrent.eventstore.api.internal.StreamReadFilterValidator;
 import org.occurrent.eventstore.mongodb.internal.MongoExceptionTranslator.WriteContext;
 import org.occurrent.eventstore.mongodb.internal.StreamVersionDiff;
 import org.occurrent.filter.Filter;
@@ -73,7 +76,7 @@ import static org.occurrent.functionalsupport.internal.FunctionalSupport.mapWith
  * It also supports the {@link EventStoreOperations} and {@link EventStoreQueries} contracts.
  */
 @NullMarked
-public class MongoEventStore implements EventStore, EventStoreOperations, EventStoreQueries {
+public class MongoEventStore implements EventStore, EventStoreOperations, EventStoreQueries, ReadEventStreamWithFilter {
     private static final String ID = "_id";
     private static final String NATURAL = "$natural";
 
@@ -120,11 +123,19 @@ public class MongoEventStore implements EventStore, EventStoreOperations, EventS
 
     @Override
     public EventStream<CloudEvent> read(String streamId, int skip, int limit) {
-        EventStream<Document> eventStream = readEventStream(streamId, skip, limit);
+        EventStream<Document> eventStream = readEventStream(streamId, null, skip, limit);
         return eventStream.map(document -> convertToCloudEvent(timeRepresentation, document));
     }
 
-    private EventStreamImpl<Document> readEventStream(String streamId, int skip, int limit) {
+    @Override
+    public EventStream<CloudEvent> read(String streamId, StreamReadFilter filter, int skip, int limit) {
+        requireNonNull(streamId, "Stream id cannot be null");
+        requireNonNull(filter, "filter cannot be null");
+        EventStream<Document> eventStream = readEventStream(streamId, filter, skip, limit);
+        return eventStream.map(document -> convertToCloudEvent(timeRepresentation, document));
+    }
+
+    private EventStreamImpl<Document> readEventStream(String streamId, @Nullable StreamReadFilter streamReadFilter, int skip, int limit) {
         long currentStreamVersion = currentStreamVersion(streamId, null);
         if (currentStreamVersion == 0) {
             return new EventStreamImpl<>(streamId, 0, Stream.empty());
@@ -132,7 +143,14 @@ public class MongoEventStore implements EventStore, EventStoreOperations, EventS
 
         // We use "lte" currentStreamVersion so that we don't have the start transactions on read. This means that even
         // if another thread has inserted more events after we've read "currentStreamVersion" it doesn't matter.
-        Stream<Document> documentStream = readCloudEvents(streamIdAndStreamVersionLessThanOrEqualTo(streamId, currentStreamVersion), skip, limit, SortBy.streamVersion(ASCENDING));
+        Bson query = streamIdAndStreamVersionLessThanOrEqualTo(streamId, currentStreamVersion);
+        if (streamReadFilter != null) {
+            StreamReadFilterValidator.validate(streamReadFilter);
+            Filter mapped = StreamReadFilterToFilterMapper.map(streamReadFilter);
+            Bson streamReadBsonFilter = FilterToBsonFilterConverter.convertFilterToBsonFilter(timeRepresentation, mapped);
+            query = and(query, streamReadBsonFilter);
+        }
+        Stream<Document> documentStream = readCloudEvents(query, skip, limit, SortBy.streamVersion(ASCENDING));
         return new EventStreamImpl<>(streamId, currentStreamVersion, documentStream);
     }
 
