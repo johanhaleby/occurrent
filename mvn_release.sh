@@ -62,7 +62,7 @@ if [ $mavenReleaseStatus -eq 0 ]; then
 	git tag -a "occurrent-${releaseVersion}" -m "Released Occurrent ${releaseVersion}" && git push origin "occurrent-${releaseVersion}"
 fi	
 
-git checkout master
+git checkout main
 
 if [ $mavenReleaseStatus -ne 0 ]; then
   echo "Maven release of Occurrent $releaseVersion failed"
