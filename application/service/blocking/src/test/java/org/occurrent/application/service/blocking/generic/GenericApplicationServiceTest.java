@@ -34,14 +34,17 @@ import org.occurrent.eventstore.inmemory.InMemoryEventStore;
 import java.time.LocalDateTime;
 import java.util.UUID;
 import java.util.concurrent.atomic.AtomicInteger;
+import java.util.concurrent.atomic.AtomicReference;
 import java.util.stream.Stream;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.catchThrowable;
 import static org.junit.jupiter.api.Assertions.assertAll;
 import static org.occurrent.application.composition.command.CommandConversion.toStreamCommand;
+import static org.occurrent.application.service.blocking.ApplicationService.filter;
 import static org.occurrent.application.service.blocking.PolicySideEffect.executePolicy;
 
+@SuppressWarnings("removal")
 @DisplayName("generic application service")
 @DisplayNameGeneration(ReplaceUnderscores.class)
 public class GenericApplicationServiceTest {
@@ -75,24 +78,25 @@ public class GenericApplicationServiceTest {
     }
 
     @Test
-    void supports_stream_read_filter() {
+    void supports_execute_options() {
         // Given
         String streamId = UUID.randomUUID().toString();
-        var initialEvent = cloudEventConverter.toCloudEvents(Stream.of(
+        var initialEvents = cloudEventConverter.toCloudEvents(Stream.of(
                 new NameDefined(UUID.randomUUID().toString(), LocalDateTime.now(), "name", "Johan"),
                 new NameWasChanged(UUID.randomUUID().toString(), LocalDateTime.now(), "name", "Mattias"))
         );
-        eventStore.write(streamId, initialEvent);
-
+        eventStore.write(streamId, initialEvents);
+        AtomicReference<String> sideEffectPayload = new AtomicReference<>("not-called");
         // When
         WriteResult writeResult = applicationService.execute(streamId,
-                StreamReadFilter.type(NameDefined.class.getName()),
+                filter(StreamReadFilter.type(NameDefined.class.getName())).sideEffect(events -> sideEffectPayload.set(events.findFirst().map(DomainEvent::name).orElse("empty"))),
                 toStreamCommand(events -> Name.changeName(events, UUID.randomUUID().toString(), LocalDateTime.now(), "name", "New Name")));
 
         // Then
         assertAll(
                 () -> assertThat(writeResult.streamId()).isEqualTo(streamId),
-                () -> assertThat(writeResult.newStreamVersion()).isEqualTo(3L)
+                () -> assertThat(writeResult.newStreamVersion()).isEqualTo(3L),
+                () -> assertThat(sideEffectPayload.get()).isEqualTo("New Name")
         );
     }
 
