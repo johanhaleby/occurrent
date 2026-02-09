@@ -25,12 +25,16 @@ import org.bson.Document;
 import org.bson.conversions.Bson;
 import org.jspecify.annotations.NullMarked;
 import org.jspecify.annotations.NullUnmarked;
+import org.jspecify.annotations.Nullable;
 import org.occurrent.cloudevents.OccurrentExtensionGetter;
 import org.occurrent.eventstore.api.*;
 import org.occurrent.eventstore.api.reactor.EventStore;
 import org.occurrent.eventstore.api.reactor.EventStoreOperations;
 import org.occurrent.eventstore.api.reactor.EventStoreQueries;
 import org.occurrent.eventstore.api.reactor.EventStream;
+import org.occurrent.eventstore.api.reactor.ReadEventStreamWithFilter;
+import org.occurrent.eventstore.api.internal.StreamReadFilterToFilterMapper;
+import org.occurrent.eventstore.api.internal.StreamReadFilterValidator;
 import org.occurrent.eventstore.mongodb.internal.MongoExceptionTranslator;
 import org.occurrent.eventstore.mongodb.internal.MongoExceptionTranslator.WriteContext;
 import org.occurrent.eventstore.mongodb.internal.OccurrentCloudEventMongoDocumentMapper;
@@ -69,7 +73,7 @@ import static org.springframework.data.mongodb.core.query.Criteria.where;
  * It also supports the {@link EventStoreOperations} and {@link EventStoreQueries} contracts.
  */
 @NullMarked
-public class ReactorMongoEventStore implements EventStore, EventStoreOperations, EventStoreQueries {
+public class ReactorMongoEventStore implements EventStore, EventStoreOperations, EventStoreQueries, ReadEventStreamWithFilter {
 
     private static final String ID = "_id";
 
@@ -137,17 +141,32 @@ public class ReactorMongoEventStore implements EventStore, EventStoreOperations,
 
     @Override
     public Mono<EventStream<CloudEvent>> read(String streamId, int skip, int limit) {
-        Mono<EventStreamImpl> eventStream = readEventStream(streamId, skip, limit);
+        Mono<EventStreamImpl> eventStream = readEventStream(streamId, null, skip, limit);
+        return convertToCloudEvent(timeRepresentation, eventStream);
+    }
+
+    @Override
+    public Mono<EventStream<CloudEvent>> read(String streamId, StreamReadFilter filter, int skip, int limit) {
+        requireNonNull(streamId, "Stream id cannot be null");
+        requireNonNull(filter, "filter cannot be null");
+        Mono<EventStreamImpl> eventStream = readEventStream(streamId, filter, skip, limit);
         return convertToCloudEvent(timeRepresentation, eventStream);
     }
 
     // Read
-    private Mono<EventStreamImpl> readEventStream(String streamId, int skip, int limit) {
+    private Mono<EventStreamImpl> readEventStream(String streamId, @Nullable StreamReadFilter streamReadFilter, int skip, int limit) {
         return currentStreamVersion(streamId)
                 .flatMap(currentStreamVersion -> {
                     // We use "lte" currentStreamVersion so that we don't have the start transactions on read. This means that even
                     // if another thread has inserted more events after we've read "currentStreamVersion" it doesn't matter.
-                    Flux<Document> cloudEventDocuments = readCloudEvents(readOptions.apply(streamIdAndStreamVersionLessThanOrEqualTo(streamId, currentStreamVersion)), skip, limit, SortBy.streamVersion(ASCENDING));
+                    Query query = streamIdAndStreamVersionLessThanOrEqualTo(streamId, currentStreamVersion);
+                    if (streamReadFilter != null) {
+                        StreamReadFilterValidator.validate(streamReadFilter);
+                        Filter mapped = StreamReadFilterToFilterMapper.map(streamReadFilter);
+                        Criteria criteria = FilterConverter.convertFilterToCriteria(null, timeRepresentation, mapped);
+                        query.addCriteria(criteria);
+                    }
+                    Flux<Document> cloudEventDocuments = readCloudEvents(readOptions.apply(query), skip, limit, SortBy.streamVersion(ASCENDING));
                     return Mono.just(new EventStreamImpl(streamId, currentStreamVersion, cloudEventDocuments));
                 })
                 .switchIfEmpty(Mono.fromSupplier(() -> new EventStreamImpl(streamId, 0, Flux.empty())));

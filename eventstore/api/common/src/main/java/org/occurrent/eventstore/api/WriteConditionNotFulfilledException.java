@@ -16,6 +16,8 @@
 
 package org.occurrent.eventstore.api;
 
+import org.jspecify.annotations.NullMarked;
+
 import java.util.Objects;
 import java.util.StringJoiner;
 
@@ -25,6 +27,7 @@ import java.util.StringJoiner;
  * this is effectively the same as an optimistic locking exception and a retry is appropriate. For more advanced
  * write conditions this may not be the case though.
  */
+@NullMarked
 public class WriteConditionNotFulfilledException extends RuntimeException {
     public final String eventStreamId;
     public final long eventStreamVersion;

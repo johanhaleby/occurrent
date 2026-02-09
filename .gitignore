@@ -28,3 +28,6 @@ nbdist/
 
 # JQWik
 .jqwik-database
+
+# Local task tracking
+tasks/

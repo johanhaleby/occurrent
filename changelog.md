@@ -1,3 +1,45 @@
+### Changelog next version
+
+* Added `StreamReadFilter` support for stream reads with validation of reserved stream fields (`streamid`, `streamversion`).
+  This is useful when:
+    * Your command only depends on a subset of events in a stream (for example one or two event types), and reading the full stream adds unnecessary IO and deserialization work.
+    * You want to keep command handling code readable when combining stream filtering and post-write side-effects.
+    * You want to gradually adopt filtered stream reads without changing existing write/concurrency semantics.
+    * This is a read optimization, not a correctness feature. If your invariant depends on all events, do not filter away relevant events.
+  * New filter type: `org.occurrent.eventstore.api.StreamReadFilter`
+  * New optional capability interface for blocking event stores:
+    `org.occurrent.eventstore.api.blocking.ReadEventStreamWithFilter`
+  * New optional capability interface for reactor event stores:
+    `org.occurrent.eventstore.api.reactor.ReadEventStreamWithFilter`
+  * Implemented support in:
+    * `InMemoryEventStore`
+    * `SpringMongoEventStore`
+    * `MongoEventStore` (native)
+    * `ReactorMongoEventStore`
+* Added `ApplicationService.ExecuteOptions<T>` to simplify API usage and reduce overload pressure.
+  * New entrypoints:
+    * `execute(String streamId, ExecuteOptions<T> options, Function<Stream<T>, Stream<T>> fn)`
+    * `execute(UUID streamId, ExecuteOptions<T> options, Function<Stream<T>, Stream<T>> fn)`
+  * New static builders:
+    * `ApplicationService.filter(StreamReadFilter)`
+    * `ApplicationService.sideEffect(Consumer<Stream<T>>)`
+  * Example:
+    ```java
+    WriteResult result = applicationService.execute(
+            streamId,
+            ApplicationService.filter(StreamReadFilter.type("com.acme.NameDefined"))
+                    .sideEffect(newEvents -> newEvents.forEach(this::publish)),
+            domainFn
+    );
+    ```
+* Deprecated legacy `ApplicationService` overloads in favor of `ExecuteOptions`:
+  * `execute(String, Function<Stream<T>, Stream<T>>, Consumer<Stream<T>>)`
+  * `execute(String, StreamReadFilter, Function<Stream<T>, Stream<T>>, Consumer<Stream<T>>)`
+  * `execute(UUID, Function<Stream<T>, Stream<T>>, Consumer<Stream<T>>)`
+  * `execute(UUID, StreamReadFilter, Function<Stream<T>, Stream<T>>, Consumer<Stream<T>>)`
+  * `execute(String, StreamReadFilter, Function<Stream<T>, Stream<T>>)`
+  * `execute(UUID, StreamReadFilter, Function<Stream<T>, Stream<T>>)`
+
 ### 0.19.14 (2025-10-20)
 * Added additional `@Nullable` annotation to a method in blocking `SubscriptionFilter` that could lead to errors when passing null (thanks to Kirill Gavrilov for PR)
 * Changed the build so that Kotlin sources are included in the release to maven central

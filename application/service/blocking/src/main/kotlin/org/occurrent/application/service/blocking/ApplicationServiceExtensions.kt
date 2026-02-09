@@ -58,17 +58,31 @@ fun <T : Any> ApplicationService<T>.execute(streamId: String, functionThatCallsD
  */
 @JvmName("executeList")
 fun <T : Any> ApplicationService<T>.execute(streamId: String, functionThatCallsDomainModel: (List<T>) -> List<T>): WriteResult {
-    val f = Function<Stream<T>, Stream<T>> { eventStream: Stream<T> ->
-        val currentEvents: List<T> = eventStream.toList()
-        val newEvents: Stream<T> = functionThatCallsDomainModel.invoke(currentEvents).stream()
-        newEvents
-    }
-    return execute(streamId, f)
+    return execute(streamId, functionThatCallsDomainModel, null)
 }
 
 @JvmName("executeList")
 fun <T : Any> ApplicationService<T>.execute(streamId: UUID, functionThatCallsDomainModel: (List<T>) -> List<T>): WriteResult = execute(streamId.toString(), functionThatCallsDomainModel)
 
+@JvmName("executeList")
+fun <T : Any> ApplicationService<T>.execute(streamId: UUID, functionThatCallsDomainModel: (List<T>) -> List<T>, sideEffects: ((List<T>) -> Unit)? = null): WriteResult {
+    return execute(streamId.toString(), functionThatCallsDomainModel, sideEffects)
+}
+
+@JvmName("executeList")
+fun <T : Any> ApplicationService<T>.execute(streamId: String, functionThatCallsDomainModel: (List<T>) -> List<T>, sideEffects: ((List<T>) -> Unit)? = null): WriteResult {
+    val f = Function<Stream<T>, Stream<T>> { eventStream: Stream<T> ->
+        val currentEvents: List<T> = eventStream.toList()
+        val newEvents: Stream<T> = functionThatCallsDomainModel.invoke(currentEvents).stream()
+        newEvents
+    }
+    return execute(streamId, f, sideEffects?.toStreamSideEffectFromList())
+}
+
 private fun <T> ((Sequence<T>) -> Unit).toStreamSideEffect(): (Stream<T>) -> Unit {
     return { streamOfEvents -> this(streamOfEvents.asSequence()) }
+}
+
+private fun <T> ((List<T>) -> Unit).toStreamSideEffectFromList(): (Stream<T>) -> Unit {
+    return { streamOfEvents -> this(streamOfEvents.toList()) }
 }

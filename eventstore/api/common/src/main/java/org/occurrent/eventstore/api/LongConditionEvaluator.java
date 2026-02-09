@@ -16,6 +16,7 @@
 
 package org.occurrent.eventstore.api;
 
+import org.jspecify.annotations.NullMarked;
 import org.occurrent.condition.Condition;
 import org.occurrent.condition.Condition.*;
 
@@ -26,6 +27,7 @@ import java.util.stream.Stream;
 /**
  * Evaluates {@link Condition} of type {@link Long} to {@code true} or {@code false}.
  */
+@NullMarked
 public class LongConditionEvaluator {
 
     public static boolean evaluate(Condition<Long> condition, long value) {

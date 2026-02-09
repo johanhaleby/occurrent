@@ -448,6 +448,94 @@ class MongoEventStoreTest {
         }
     }
 
+    @Nested
+    @DisplayName("stream read filter")
+    class StreamReadFilterTest {
+
+        @Test
+        void can_read_and_write_multiple_events_at_different_occasions() {
+            LocalDateTime now = LocalDateTime.now();
+            NameDefined nameDefined = new NameDefined(UUID.randomUUID().toString(), now, "name", "name");
+            NameWasChanged nameWasChanged1 = new NameWasChanged(UUID.randomUUID().toString(), now.plusHours(1), "name", "name2");
+            NameWasChanged nameWasChanged2 = new NameWasChanged(UUID.randomUUID().toString(), now.plusHours(2), "name", "name3");
+
+            // When
+            persist("name", streamVersionEq(0), nameDefined);
+            persist("name", streamVersionEq(1), nameWasChanged1);
+            persist("name", streamVersionEq(2), nameWasChanged2);
+
+            // Then
+            EventStream<CloudEvent> eventStream = eventStore.read("name", StreamReadFilter.type(in(NameDefined.class.getSimpleName(), NameWasChanged.class.getSimpleName())));
+            List<DomainEvent> readEvents = deserialize(eventStream.events());
+
+            assertAll(
+                    () -> assertThat(eventStream.version()).isEqualTo(3),
+                    () -> assertThat(readEvents).hasSize(3),
+                    () -> assertThat(readEvents).containsExactly(nameDefined, nameWasChanged1, nameWasChanged2)
+            );
+        }
+
+        @Test
+        void can_read_only_events_of_a_certain_type() {
+            LocalDateTime now = LocalDateTime.now();
+            NameDefined nameDefined = new NameDefined(UUID.randomUUID().toString(), now, "name", "name");
+            NameWasChanged nameWasChanged1 = new NameWasChanged(UUID.randomUUID().toString(), now.plusHours(1), "name", "name2");
+            NameWasChanged nameWasChanged2 = new NameWasChanged(UUID.randomUUID().toString(), now.plusHours(2), "name", "name3");
+
+            // When
+            persist("name", streamVersionEq(0), nameDefined);
+            persist("name", streamVersionEq(1), nameWasChanged1);
+            persist("name", streamVersionEq(2), nameWasChanged2);
+
+            // Then
+            EventStream<CloudEvent> eventStream = eventStore.read("name", StreamReadFilter.type(in(NameWasChanged.class.getSimpleName())));
+            List<DomainEvent> readEvents = deserialize(eventStream.events());
+
+            assertAll(
+                    () -> assertThat(eventStream.version()).isEqualTo(3),
+                    () -> assertThat(readEvents).hasSize(2),
+                    () -> assertThat(readEvents).containsExactly(nameWasChanged1, nameWasChanged2)
+            );
+        }
+
+        @Test
+        void can_write_new_events_to_stream_read_using_stream_read_filter() {
+            // Given
+            LocalDateTime now = LocalDateTime.now();
+
+            // When
+            DomainEvent event1 = new NameDefined(UUID.randomUUID().toString(), now, "name", "John Doe");
+            DomainEvent event2 = new NameWasChanged(UUID.randomUUID().toString(), now, "name", "Jan Doe");
+            DomainEvent event3 = new NameWasChanged(UUID.randomUUID().toString(), now, "name", "Jan Doe2");
+            DomainEvent event4 = new NameWasChanged(UUID.randomUUID().toString(), now, "name", "Jan Doe3");
+
+            persist("name", streamVersionEq(0), event1);
+            persist("name", streamVersionEq(1), event2);
+            persist("name", streamVersionEq(2), event3);
+
+            EventStream<CloudEvent> eventStream = eventStore.read("name", StreamReadFilter.type(in(NameWasChanged.class.getSimpleName())));
+
+            WriteResult writeResult = eventStore.write("name", streamVersionEq(eventStream.version()), Stream.of(event4).map(convertDomainEventToCloudEvent()));
+
+            // Then
+            assertAll(
+                    () -> assertThat(writeResult.streamId()).isEqualTo("name"),
+                    () -> assertThat(writeResult.oldStreamVersion()).isEqualTo(3L),
+                    () -> assertThat(writeResult.newStreamVersion()).isEqualTo(4L)
+            );
+        }
+
+        @Test
+        void rejects_stream_version_in_stream_read_filter() {
+            persist("name", streamVersionEq(0), new NameDefined(UUID.randomUUID().toString(), LocalDateTime.now(), "name", "name"));
+
+            Throwable throwable = catchThrowable(() -> eventStore.read("name", StreamReadFilter.extension(STREAM_VERSION, eq(1L))));
+
+            assertThat(throwable).isExactlyInstanceOf(IllegalArgumentException.class)
+                    .hasMessageContaining("StreamReadFilter must not constrain extension");
+        }
+    }
+
 
     @SuppressWarnings("ConstantConditions")
     @Nested

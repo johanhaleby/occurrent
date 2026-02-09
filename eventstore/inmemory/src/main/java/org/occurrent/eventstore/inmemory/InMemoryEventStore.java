@@ -29,10 +29,9 @@ import org.occurrent.eventstore.api.SortBy.NaturalImpl;
 import org.occurrent.eventstore.api.SortBy.SingleFieldImpl;
 import org.occurrent.eventstore.api.SortBy.SortDirection;
 import org.occurrent.eventstore.api.WriteCondition.StreamVersionWriteCondition;
-import org.occurrent.eventstore.api.blocking.EventStore;
-import org.occurrent.eventstore.api.blocking.EventStoreOperations;
-import org.occurrent.eventstore.api.blocking.EventStoreQueries;
-import org.occurrent.eventstore.api.blocking.EventStream;
+import org.occurrent.eventstore.api.blocking.*;
+import org.occurrent.eventstore.api.internal.StreamReadFilterToFilterMapper;
+import org.occurrent.eventstore.api.internal.StreamReadFilterValidator;
 import org.occurrent.filter.Filter;
 import org.occurrent.functionalsupport.internal.FunctionalSupport.Pair;
 
@@ -70,7 +69,7 @@ import static org.occurrent.inmemory.filtermatching.FilterMatcher.matchesFilter;
  * and/or demo purposes. It also supports the {@link EventStoreOperations} contract.
  */
 @NullMarked
-public class InMemoryEventStore implements EventStore, EventStoreOperations, EventStoreQueries {
+public class InMemoryEventStore implements EventStore, EventStoreOperations, EventStoreQueries, ReadEventStreamWithFilter {
 
     // We cannot use ConcurrentMap since it doesn't maintain insertion order
     private final Map<String, CopyOnWriteArrayList<CloudEvent>> state = Collections.synchronizedMap(new LinkedHashMap<>());
@@ -104,13 +103,7 @@ public class InMemoryEventStore implements EventStore, EventStoreOperations, Eve
 
     @Override
     public EventStream<CloudEvent> read(String streamId, int skip, int limit) {
-        List<CloudEvent> events = state.get(streamId);
-        if (events == null) {
-            return new EventStreamImpl(streamId, 0, Collections.emptyList());
-        } else if (skip == 0 && limit == Integer.MAX_VALUE) {
-            return new EventStreamImpl(streamId, calculateStreamVersion(events), events);
-        }
-        return new EventStreamImpl(streamId, calculateStreamVersion(events), events.subList(skip, limit));
+        return read(streamId, null, skip, limit);
     }
 
     @Override
@@ -312,6 +305,39 @@ public class InMemoryEventStore implements EventStore, EventStoreOperations, Eve
     @Override
     public boolean exists(Filter filter) {
         return count(filter) > 0;
+    }
+
+    @Override
+    public EventStream<CloudEvent> read(String streamId, @Nullable StreamReadFilter filter, int skip, int limit) {
+        List<CloudEvent> events = state.get(streamId);
+        record StreamVersionAndEvents(long version, List<CloudEvent> events) {
+        }
+
+        final StreamVersionAndEvents streamVersionAndEvents;
+        if (events == null) {
+            return new EventStreamImpl(streamId, 0, Collections.emptyList());
+        }
+
+        var streamVersion = calculateStreamVersion(events);
+        List<CloudEvent> eventsAfterFilter;
+        if (filter == null) {
+            eventsAfterFilter = events;
+        } else {
+            StreamReadFilterValidator.validate(filter);
+            Filter readFilter = StreamReadFilterToFilterMapper.map(filter);
+            eventsAfterFilter = events.stream().filter(cloudEvent -> matchesFilter(cloudEvent, readFilter)).toList();
+        }
+
+        if (skip == 0 && limit == Integer.MAX_VALUE) {
+            streamVersionAndEvents = new StreamVersionAndEvents(streamVersion, eventsAfterFilter);
+        } else {
+            int fromIndex = Math.min(skip, eventsAfterFilter.size());
+            long requestedToIndex = (long) fromIndex + (long) limit;
+            int toIndex = (int) Math.min(requestedToIndex, eventsAfterFilter.size());
+            streamVersionAndEvents = new StreamVersionAndEvents(streamVersion, eventsAfterFilter.subList(fromIndex, toIndex));
+        }
+
+        return new EventStreamImpl(streamId, streamVersionAndEvents.version, streamVersionAndEvents.events);
     }
 
     private static class EventStreamImpl implements EventStream<CloudEvent> {

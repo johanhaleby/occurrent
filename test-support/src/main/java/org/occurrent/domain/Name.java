@@ -52,7 +52,7 @@ public class Name {
         if (Objects.equals(currentName, "John Doe")) {
             throw new IllegalArgumentException("Cannot change name from John Doe since this is the ultimate name");
         } else if (currentName.isEmpty()) {
-            throw new IllegalArgumentException("Cannot change name this it is currently undefined");
+            throw new IllegalArgumentException("Cannot change name because it is currently undefined");
         }
         return Collections.singletonList(new NameWasChanged(eventId, TimeConversion.toDate(time), userId, newName));
     }

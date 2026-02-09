@@ -1,6 +1,7 @@
 package org.occurrent.eventstore.api;
 
 import io.cloudevents.core.v1.CloudEventV1;
+import org.jspecify.annotations.NullMarked;
 import org.occurrent.cloudevents.OccurrentCloudEventExtension;
 
 import java.util.*;
@@ -18,6 +19,7 @@ import static org.occurrent.eventstore.api.SortBy.SortDirection.DESCENDING;
  * var allEvents = eventStoreQueries.all(SortBy.time(DESCENDING));
  * </pre>
  */
+@NullMarked
 public sealed interface SortBy {
     /**
      * Use unsorted search order.
