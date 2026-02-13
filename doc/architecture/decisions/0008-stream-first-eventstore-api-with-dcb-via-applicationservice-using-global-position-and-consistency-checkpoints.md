@@ -339,6 +339,15 @@ Checkpoint document:
 
 Each write transaction advances all involved checkpoints if and only if the precondition token allows it.
 
+So:
+
+If a write condition is "I’m updating user 123" (query = Subject("user:123")), then the transaction advances one checkpoint document:
+* checkpoint:subject:user:123
+
+If your write condition is "I’m updating something that must be consistent with user 123 and course 431" (query = AllOf(Subject("user:123"), Subject("course:431"))), then the transaction advances two checkpoint documents atomically:
+  * checkpoint:subject:user:123
+  * checkpoint:subject:course:431
+
 ## StreamIdGenerator for DCB ApplicationService (consistent hashing)
 
 Goal:
