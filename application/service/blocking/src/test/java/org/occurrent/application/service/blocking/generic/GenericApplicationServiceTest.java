@@ -26,7 +26,6 @@ import org.occurrent.application.service.blocking.PolicySideEffect;
 import org.occurrent.application.service.blocking.generic.support.CountNumberOfNamesDefinedPolicy;
 import org.occurrent.application.service.blocking.generic.support.WhenNameDefinedThenCountAverageSizeOfNamePolicy;
 import org.occurrent.domain.*;
-import org.occurrent.eventstore.api.StreamReadFilter;
 import org.occurrent.eventstore.api.WriteConditionNotFulfilledException;
 import org.occurrent.eventstore.api.WriteResult;
 import org.occurrent.eventstore.inmemory.InMemoryEventStore;
@@ -43,6 +42,7 @@ import static org.junit.jupiter.api.Assertions.assertAll;
 import static org.occurrent.application.composition.command.CommandConversion.toStreamCommand;
 import static org.occurrent.application.service.blocking.ApplicationService.filter;
 import static org.occurrent.application.service.blocking.PolicySideEffect.executePolicy;
+import static org.occurrent.eventstore.api.StreamReadFilter.type;
 
 @SuppressWarnings("removal")
 @DisplayName("generic application service")
@@ -89,7 +89,7 @@ public class GenericApplicationServiceTest {
         AtomicReference<String> sideEffectPayload = new AtomicReference<>("not-called");
         // When
         WriteResult writeResult = applicationService.execute(streamId,
-                filter(StreamReadFilter.type(NameDefined.class.getName())).sideEffect(events -> sideEffectPayload.set(events.findFirst().map(DomainEvent::name).orElse("empty"))),
+                filter(type(NameDefined.class.getName())).sideEffect(events -> sideEffectPayload.set(events.findFirst().map(DomainEvent::name).orElse("empty"))),
                 toStreamCommand(events -> Name.changeName(events, UUID.randomUUID().toString(), LocalDateTime.now(), "name", "New Name")));
 
         // Then
