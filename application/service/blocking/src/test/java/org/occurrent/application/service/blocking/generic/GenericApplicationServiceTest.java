@@ -17,20 +17,31 @@
 package org.occurrent.application.service.blocking.generic;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
+import io.cloudevents.CloudEvent;
+import io.cloudevents.core.builder.CloudEventBuilder;
 import org.junit.jupiter.api.*;
 import org.junit.jupiter.api.DisplayNameGenerator.ReplaceUnderscores;
 import org.occurrent.application.converter.CloudEventConverter;
 import org.occurrent.application.converter.generic.GenericCloudEventConverter;
 import org.occurrent.application.service.blocking.ApplicationService;
+import org.occurrent.application.service.blocking.ExecuteFilter;
 import org.occurrent.application.service.blocking.PolicySideEffect;
 import org.occurrent.application.service.blocking.generic.support.CountNumberOfNamesDefinedPolicy;
 import org.occurrent.application.service.blocking.generic.support.WhenNameDefinedThenCountAverageSizeOfNamePolicy;
 import org.occurrent.domain.*;
 import org.occurrent.eventstore.api.WriteConditionNotFulfilledException;
 import org.occurrent.eventstore.api.WriteResult;
+import org.occurrent.eventstore.api.blocking.ConditionallyWriteToEventStream;
+import org.occurrent.eventstore.api.blocking.EventStore;
+import org.occurrent.eventstore.api.blocking.EventStream;
+import org.occurrent.eventstore.api.blocking.ReadEventStream;
+import org.occurrent.eventstore.api.blocking.UnconditionallyWriteToEventStream;
 import org.occurrent.eventstore.inmemory.InMemoryEventStore;
+import org.occurrent.eventstore.api.WriteCondition;
 
+import java.net.URI;
 import java.time.LocalDateTime;
+import java.time.ZoneOffset;
 import java.util.UUID;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicReference;
@@ -42,7 +53,6 @@ import static org.junit.jupiter.api.Assertions.assertAll;
 import static org.occurrent.application.composition.command.CommandConversion.toStreamCommand;
 import static org.occurrent.application.service.blocking.ExecuteOptions.options;
 import static org.occurrent.application.service.blocking.PolicySideEffect.executePolicy;
-import static org.occurrent.eventstore.api.StreamReadFilter.type;
 
 @SuppressWarnings("removal")
 @DisplayName("generic application service")
@@ -81,6 +91,8 @@ public class GenericApplicationServiceTest {
     void supports_execute_options() {
         // Given
         String streamId = UUID.randomUUID().toString();
+        cloudEventConverter = customCloudEventConverter();
+        applicationService = new GenericApplicationService<>(eventStore, cloudEventConverter);
         var initialEvents = cloudEventConverter.toCloudEvents(Stream.of(
                 new NameDefined(UUID.randomUUID().toString(), LocalDateTime.now(), "name", "Johan"),
                 new NameWasChanged(UUID.randomUUID().toString(), LocalDateTime.now(), "name", "Mattias"))
@@ -89,7 +101,7 @@ public class GenericApplicationServiceTest {
         AtomicReference<String> sideEffectPayload = new AtomicReference<>("not-called");
         // When
         WriteResult writeResult = applicationService.execute(streamId,
-                options().filter(type(NameDefined.class.getName())).sideEffect(events -> sideEffectPayload.set(events.findFirst().map(DomainEvent::name).orElse("empty"))),
+                options().filter(ExecuteFilter.type(NameDefined.class)).sideEffect(events -> sideEffectPayload.set(events.findFirst().map(DomainEvent::name).orElse("empty"))),
                 toStreamCommand(events -> Name.changeName(events, UUID.randomUUID().toString(), LocalDateTime.now(), "name", "New Name")));
 
         // Then
@@ -98,6 +110,63 @@ public class GenericApplicationServiceTest {
                 () -> assertThat(writeResult.newStreamVersion()).isEqualTo(3L),
                 () -> assertThat(sideEffectPayload.get()).isEqualTo("New Name")
         );
+    }
+
+    @Test
+    void supports_execute_filter_as_direct_execute_argument() {
+        // Given
+        String streamId = UUID.randomUUID().toString();
+        cloudEventConverter = customCloudEventConverter();
+        applicationService = new GenericApplicationService<>(eventStore, cloudEventConverter);
+        eventStore.write(streamId, cloudEventConverter.toCloudEvents(Stream.of(
+                new NameDefined(UUID.randomUUID().toString(), LocalDateTime.now(), "name", "Johan"),
+                new NameWasChanged(UUID.randomUUID().toString(), LocalDateTime.now(), "name", "Mattias"))
+        ));
+
+        // When
+        WriteResult writeResult = applicationService.execute(streamId, ExecuteFilter.type(NameDefined.class),
+                toStreamCommand(events -> Name.changeName(events, UUID.randomUUID().toString(), LocalDateTime.now(), "name", "New Name")));
+
+        // Then
+        assertThat(writeResult.newStreamVersion()).isEqualTo(3L);
+    }
+
+    @Test
+    void supports_excluding_types_using_execute_filter() {
+        // Given
+        String streamId = UUID.randomUUID().toString();
+        cloudEventConverter = customCloudEventConverter();
+        applicationService = new GenericApplicationService<>(eventStore, cloudEventConverter);
+        eventStore.write(streamId, cloudEventConverter.toCloudEvents(Stream.of(
+                new NameDefined(UUID.randomUUID().toString(), LocalDateTime.now(), "name", "Johan"),
+                new NameWasChanged(UUID.randomUUID().toString(), LocalDateTime.now(), "name", "Mattias"))
+        ));
+        AtomicReference<String> observedName = new AtomicReference<>("not-called");
+
+        // When
+        applicationService.execute(streamId,
+                options().filter(ExecuteFilter.excludeTypes(NameWasChanged.class)).sideEffect(events -> observedName.set(events.findFirst().map(DomainEvent::name).orElse("empty"))),
+                toStreamCommand(events -> Name.changeName(events, UUID.randomUUID().toString(), LocalDateTime.now(), "name", "New Name")));
+
+        // Then
+        assertThat(observedName.get()).isEqualTo("New Name");
+    }
+
+    @Test
+    void throws_when_execute_filter_is_used_with_event_store_that_does_not_support_filtered_reads() {
+        // Given
+        cloudEventConverter = customCloudEventConverter();
+        applicationService = new GenericApplicationService<>(new EventStoreWithoutFilterSupport(eventStore), cloudEventConverter);
+
+        // When
+        Throwable throwable = catchThrowable(() -> applicationService.execute(UUID.randomUUID().toString(),
+                ExecuteFilter.type(NameDefined.class),
+                toStreamCommand(events -> Name.changeName(events, UUID.randomUUID().toString(), LocalDateTime.now(), "name", "New Name"))));
+
+        // Then
+        assertThat(throwable)
+                .isExactlyInstanceOf(UnsupportedOperationException.class)
+                .hasMessageContaining("does not support reading with a StreamReadFilter");
     }
 
     @Nested
@@ -244,6 +313,76 @@ public class GenericApplicationServiceTest {
 
             // Then
             assertThat(throwable).isExactlyInstanceOf(WriteConditionNotFulfilledException.class);
+        }
+    }
+
+    private CloudEventConverter<DomainEvent> customCloudEventConverter() {
+        ObjectMapper objectMapper = new ObjectMapper();
+        return new GenericCloudEventConverter<DomainEvent>(
+                cloudEvent -> {
+                    try {
+                        return switch (cloudEvent.getType()) {
+                            case "name-defined-v1" -> objectMapper.readValue(cloudEvent.getData().toBytes(), NameDefined.class);
+                            case "name-was-changed-v1" -> objectMapper.readValue(cloudEvent.getData().toBytes(), NameWasChanged.class);
+                            default -> throw new IllegalArgumentException("Unsupported event type " + cloudEvent.getType());
+                        };
+                    } catch (Exception e) {
+                        throw new RuntimeException(e);
+                    }
+                },
+                event -> {
+                    try {
+                        return CloudEventBuilder.v1()
+                                .withId(event.eventId())
+                                .withSource(URI.create("http://name"))
+                                .withType(customCloudEventType(event.getClass()))
+                                .withTime(event.timestamp().toInstant().atOffset(ZoneOffset.UTC))
+                                .withSubject(event.name())
+                                .withDataContentType("application/json")
+                                .withData(objectMapper.writeValueAsBytes(event))
+                                .build();
+                    } catch (Exception e) {
+                        throw new RuntimeException(e);
+                    }
+                },
+                GenericApplicationServiceTest::customCloudEventType
+        );
+    }
+
+    private static String customCloudEventType(Class<? extends DomainEvent> eventType) {
+        if (eventType.equals(NameDefined.class)) {
+            return "name-defined-v1";
+        } else if (eventType.equals(NameWasChanged.class)) {
+            return "name-was-changed-v1";
+        }
+        return eventType.getName();
+    }
+
+    private static final class EventStoreWithoutFilterSupport implements EventStore {
+        private final InMemoryEventStore delegate;
+
+        private EventStoreWithoutFilterSupport(InMemoryEventStore delegate) {
+            this.delegate = delegate;
+        }
+
+        @Override
+        public EventStream<CloudEvent> read(String streamId, int skip, int limit) {
+            return delegate.read(streamId, skip, limit);
+        }
+
+        @Override
+        public WriteResult write(String streamId, WriteCondition writeCondition, Stream<CloudEvent> events) {
+            return ((ConditionallyWriteToEventStream) delegate).write(streamId, writeCondition, events);
+        }
+
+        @Override
+        public WriteResult write(String streamId, Stream<CloudEvent> events) {
+            return ((UnconditionallyWriteToEventStream) delegate).write(streamId, events);
+        }
+
+        @Override
+        public boolean exists(String streamId) {
+            return delegate.exists(streamId);
         }
     }
 }

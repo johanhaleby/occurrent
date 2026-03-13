@@ -39,6 +39,21 @@ class ExecuteOptionsTest {
         }
 
         @Test
+        void options_execute_filter_retains_execute_filter_and_clears_plain_filter() {
+            // Given
+            var executeFilter = ExecuteFilter.<DomainEvent>type(NameDefined.class);
+
+            // When
+            var executeOptions = ExecuteOptions.<DomainEvent>options().filter(executeFilter);
+
+            // Then
+            assertAll(
+                    () -> assertThat(executeOptions.executeFilter()).isEqualTo(executeFilter),
+                    () -> assertThat(executeOptions.filter()).isNull()
+            );
+        }
+
+        @Test
         void options_side_effect_retains_side_effect() {
             // Given
             var observedNames = new ArrayList<String>();

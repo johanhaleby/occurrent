@@ -76,6 +76,79 @@ class ExecuteOptionsExtensionsTest {
                 { assertThat(observedEvents).containsExactly("Ada", "Lovelace") }
             )
         }
+
+        @Test
+        fun `filter helper accepts execute filter without explicit event type`() {
+            // Given
+            val executeFilter = ExecuteFilters.type<NameDefined>()
+
+            // When
+            val executeOptions = org.occurrent.application.service.blocking.filter(executeFilter)
+
+            // Then
+            assertThat(executeOptions.executeFilter()).isEqualTo(executeFilter)
+        }
+    }
+
+    @Nested
+    @DisplayName("when using typed execute filters")
+    inner class WhenUsingTypedExecuteFilters {
+
+        @Test
+        fun `type helper resolves cloud event type through execute filter`() {
+            // Given
+
+            // When
+            val filter = ExecuteFilters.type<NameDefined>().resolve { eventType ->
+                when (eventType) {
+                    NameDefined::class.java -> "name-defined-v1"
+                    else -> eventType.name
+                }
+            }
+
+            // Then
+            assertThat(filter).isEqualTo(StreamReadFilter.type("name-defined-v1"))
+        }
+
+        @Test
+        fun `include types with kclass varargs resolves all types`() {
+            // Given
+
+            // When
+            val filter = ExecuteFilters.includeTypes(NameDefined::class, NameWasChanged::class).resolve { eventType ->
+                when (eventType) {
+                    NameDefined::class.java -> "name-defined-v1"
+                    NameWasChanged::class.java -> "name-was-changed-v1"
+                    else -> eventType.name
+                }
+            }
+
+            // Then
+            assertThat(filter).isEqualTo(StreamReadFilter.type(org.occurrent.condition.Condition.`in`("name-defined-v1", "name-was-changed-v1")))
+        }
+
+        @Test
+        fun `exclude types with kclass varargs resolves all types`() {
+            // Given
+
+            // When
+            val filter = ExecuteFilters.excludeTypes(NameDefined::class, NameWasChanged::class).resolve { eventType ->
+                when (eventType) {
+                    NameDefined::class.java -> "name-defined-v1"
+                    NameWasChanged::class.java -> "name-was-changed-v1"
+                    else -> eventType.name
+                }
+            }
+
+            // Then
+            assertThat(filter).isEqualTo(
+                StreamReadFilter.type(
+                    org.occurrent.condition.Condition.not(
+                        org.occurrent.condition.Condition.`in`("name-defined-v1", "name-was-changed-v1")
+                    )
+                )
+            )
+        }
     }
 
     @Nested

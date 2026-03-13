@@ -18,7 +18,7 @@ package org.occurrent.example.domain.uno.es.spring.blocking
 import com.fasterxml.jackson.databind.ObjectMapper
 import com.fasterxml.jackson.module.kotlin.jacksonObjectMapper
 import org.occurrent.application.converter.CloudEventConverter
-import org.occurrent.application.service.blocking.execute
+import org.occurrent.application.service.blocking.executeSequence
 import org.occurrent.application.service.blocking.generic.GenericApplicationService
 import org.occurrent.eventstore.api.WriteConditionNotFulfilledException
 import org.occurrent.eventstore.api.blocking.EventStoreQueries
@@ -119,7 +119,7 @@ class UnoApplicationService(private val applicationService: OccurrentApplication
     @Transactional
     @Retryable(include = [WriteConditionNotFulfilledException::class], maxAttempts = 5, backoff = Backoff(delay = 100, multiplier = 2.0, maxDelay = 1000))
     fun execute(gameId: GameId, domainFunction: (Sequence<Event>) -> (Sequence<Event>)) =
-        applicationService.execute(gameId.toString(), domainFunction)
+        applicationService.executeSequence(gameId.toString(), domainFunction)
 }
 
 /**

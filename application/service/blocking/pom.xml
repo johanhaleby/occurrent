@@ -41,6 +41,11 @@
         </dependency>
         <dependency>
             <groupId>org.occurrent</groupId>
+            <artifactId>cloudevent-type-mapper-api</artifactId>
+            <version>${project.version}</version>
+        </dependency>
+        <dependency>
+            <groupId>org.occurrent</groupId>
             <artifactId>retry</artifactId>
             <version>${project.version}</version>
         </dependency>

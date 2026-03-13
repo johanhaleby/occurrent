@@ -19,7 +19,7 @@ package org.occurrent.example.domain.uno.es
 import com.fasterxml.jackson.module.kotlin.jacksonObjectMapper
 import com.mongodb.client.MongoClients
 import org.occurrent.application.composition.command.partial
-import org.occurrent.application.service.blocking.execute
+import org.occurrent.application.service.blocking.executeSequence
 import org.occurrent.application.service.blocking.generic.GenericApplicationService
 import org.occurrent.eventstore.mongodb.nativedriver.EventStoreConfig
 import org.occurrent.eventstore.mongodb.nativedriver.MongoEventStore
@@ -77,7 +77,7 @@ fun main() {
             Uno::play.partial(Timestamp.now(), 0, DigitCard(Four, Green))
     )
     commands.forEach { command ->
-        applicationService.execute(gameId, command)
+        applicationService.executeSequence(gameId, command)
     }
 
     sleep(1000) // Allow progress tracker some time to process all events before exiting

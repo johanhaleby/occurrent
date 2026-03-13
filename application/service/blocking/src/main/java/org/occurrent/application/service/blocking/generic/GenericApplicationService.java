@@ -21,6 +21,7 @@ import org.jspecify.annotations.NullMarked;
 import org.jspecify.annotations.Nullable;
 import org.occurrent.application.converter.CloudEventConverter;
 import org.occurrent.application.service.blocking.ApplicationService;
+import org.occurrent.application.service.blocking.ExecuteFilter;
 import org.occurrent.application.service.blocking.ExecuteOptions;
 import org.occurrent.eventstore.api.StreamReadFilter;
 import org.occurrent.eventstore.api.WriteConditionNotFulfilledException;
@@ -89,7 +90,7 @@ public class GenericApplicationService<E> implements ApplicationService<E> {
         Objects.requireNonNull(executeOptions, "ExecuteOptions cannot be null");
         Objects.requireNonNull(functionThatCallsDomainModel, "Function that calls domain model cannot be null");
 
-        StreamReadFilter filter = executeOptions.filter();
+        StreamReadFilter filter = resolveFilter(executeOptions);
         Consumer<Stream<E>> sideEffect = executeOptions.sideEffect();
 
         boolean isStreamReadFilterCompatibleEventStore = eventStore instanceof ReadEventStreamWithFilter;
@@ -129,6 +130,14 @@ public class GenericApplicationService<E> implements ApplicationService<E> {
 
     private static <T> Stream<T> emptyStreamIfNull(@Nullable Stream<T> stream) {
         return stream == null ? Stream.empty() : stream;
+    }
+
+    private @Nullable StreamReadFilter resolveFilter(ExecuteOptions<E> executeOptions) {
+        ExecuteFilter<? extends E> executeFilter = executeOptions.executeFilter();
+        if (executeFilter != null) {
+            return executeFilter.resolve(cloudEventConverter::getCloudEventType);
+        }
+        return executeOptions.filter();
     }
 
     /**

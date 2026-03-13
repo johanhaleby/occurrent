@@ -35,7 +35,7 @@
 * Deprecated legacy `ApplicationService` overloads in favor of `ExecuteOptions`:
   * `execute(String, Function<Stream<T>, Stream<T>>, Consumer<Stream<T>>)`
   * `execute(UUID, Function<Stream<T>, Stream<T>>, Consumer<Stream<T>>)`
-* Kotlin `ApplicationService` helpers now have explicit collection-oriented names and direct-import `ExecuteOptions` helper functions:
+* Kotlin `ApplicationService` helpers now use explicit collection-oriented names and direct-import `ExecuteOptions` helper functions:
   * New Kotlin helpers:
     * `executeSequence(...)`
     * `executeList(...)`
@@ -68,12 +68,56 @@
         guessWord(events, timeOfGuess, playerId, word)
     }
     ```
+* Added application-service-level typed filter conveniences for `ExecuteOptions` and `ApplicationService`.
+  * New type:
+    * `ExecuteFilter<T>`
+  * Java can now express filtered reads in terms of domain event classes instead of raw CloudEvent type strings:
+    ```java
+    WriteResult result = applicationService.execute(
+            streamId,
+            ExecuteOptions.<DomainEvent>options()
+                    .filter(ExecuteFilter.type(NameDefined.class))
+                    .sideEffect(newEvents -> newEvents.forEach(this::publish)),
+            domainFn
+    );
+    ```
+  * Java also supports direct execute-filter convenience overloads:
+    ```java
+    WriteResult result = applicationService.execute(
+            streamId,
+            ExecuteFilter.excludeTypes(NameWasChanged.class, NameDefined.class),
+            domainFn
+    );
+    ```
+  * Kotlin can now use reified type helpers:
+    ```kotlin
+    applicationService.executeSequence(
+        streamId,
+        options().filter(ExecuteFilters.type<NameDefined>())
+    ) { events ->
+        handle(events)
+    }
+    ```
+    and namespaced multi-type helpers:
+    ```kotlin
+    applicationService.executeSequence(
+        streamId,
+        ExecuteFilters.excludeTypes(NameDefined::class, NameWasChanged::class)
+    ) { events ->
+        handle(events)
+    }
+    ```
+  * Kotlin typed execute-filter helpers now live under `ExecuteFilters` to keep `ApplicationService` clean and preserve stronger typing for multi-type filters.
+  * Earlier top-level Kotlin typed filter helpers such as `type<MyEvent>()`, `excludeTypes<A, B>()`, and `includeTypes<A, B>()` are deprecated in favor of the namespaced `ExecuteFilters` API.
+  * These helpers resolve domain event classes through `CloudEventTypeGetter` / `CloudEventConverter`, not through `Class.getName()`.
+  * `StreamReadFilter` itself remains unchanged because it is shared with event store APIs that do not know about `CloudEventConverter`.
 
 #### Breaking changes
 
-* Kotlin `ApplicationService.execute(...)` collection extensions are deprecated in favor of:
+* Kotlin collection-oriented `ApplicationService` extensions are exposed as:
   * `executeSequence(...)`
   * `executeList(...)`
+* The shorter Kotlin `execute(...)` collection aliases are not part of the final 0.20.0 API.
 
 #### Why this changed
 
@@ -110,6 +154,7 @@ applicationService.executeSequence(
 ```
 
 Read more in [ADR 12](doc/architecture/decisions/0012-avoid-kotlin-extension-name-collisions-with-java-applicationservice-members.md).
+Read more about Kotlin typed execute-filter namespacing in [ADR 13](doc/architecture/decisions/0013-namespace-kotlin-typed-execute-filters-under-executefilters.md).
 
 ### 0.19.14 (2025-10-20)
 * Added additional `@Nullable` annotation to a method in blocking `SubscriptionFilter` that could lead to errors when passing null (thanks to Kirill Gavrilov for PR)

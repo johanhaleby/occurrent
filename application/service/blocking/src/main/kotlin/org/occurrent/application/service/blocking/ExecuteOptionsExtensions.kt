@@ -27,6 +27,34 @@ fun options(): ExecuteOptions<Any> = ExecuteOptions.options()
 fun filter(filter: StreamReadFilter): ExecuteOptions<Any> = options().filter(filter)
 
 /**
+ * Create [ExecuteOptions] containing the supplied [ExecuteFilter].
+ *
+ * This helper exists so Kotlin code can start directly with `filter(...)`
+ * when the filter is expressed in terms of domain event classes.
+ *
+ * Type inference is expected to come from the surrounding expression, typically
+ * an `executeSequence(...)` or `executeList(...)` call.
+ */
+fun <E : Any> filter(filter: ExecuteFilter<out E>): ExecuteOptions<E> = ExecuteOptions.withExecuteFilter(filter)
+
+/**
+ * Return new [ExecuteOptions] that use the supplied [ExecuteFilter].
+ *
+ * This Kotlin extension exists so `options().filter(ExecuteFilters.type<MyEvent>())` can infer
+ * the surrounding application service event type from context.
+ */
+@JvmName("filterExecuteFilter")
+fun <T : Any> ExecuteOptions<in T>.filter(filter: ExecuteFilter<out T>): ExecuteOptions<T> {
+    val sideEffect = sideEffect()
+    val executeOptions = ExecuteOptions.withExecuteFilter(filter)
+    return if (sideEffect == null) {
+        executeOptions
+    } else {
+        executeOptions.sideEffect(sideEffect as Consumer<Stream<T>>)
+    }
+}
+
+/**
  * Create [ExecuteOptions] with a typed [sideEffect] that is invoked for events
  * matching [E].
  *
@@ -138,32 +166,11 @@ inline fun <E : Any, reified E_SPECIFIC : E> ExecuteOptions<E>.sideEffectOnSeque
 ): ExecuteOptions<E> =
     addSideEffect(Consumer { stream -> sideEffect(stream.asSequence().filterIsInstance<E_SPECIFIC>()) })
 
-/**
- * Deprecated alias for [sideEffectOnList].
- */
-@Deprecated(
-    message = "Use sideEffectOnList(sideEffect) to avoid ambiguity with Java Stream-based sideEffect.",
-    replaceWith = ReplaceWith("this.sideEffectOnList(sideEffect)")
-)
-@JvmName("deprecatedSideEffectList")
-inline fun <E : Any, reified E_SPECIFIC : E> ExecuteOptions<E>.sideEffect(
-    noinline sideEffect: (List<E_SPECIFIC>) -> Unit
-): ExecuteOptions<E> =
-    sideEffectOnList(sideEffect)
-
-/**
- * Deprecated alias for [sideEffectOnSequence].
- */
-@Deprecated(
-    message = "Use sideEffectOnSequence(sideEffect) to avoid ambiguity with Java Stream-based sideEffect.",
-    replaceWith = ReplaceWith("this.sideEffectOnSequence(sideEffect)")
-)
-@JvmName("deprecatedSideEffectSequence")
-inline fun <E : Any, reified E_SPECIFIC : E> ExecuteOptions<E>.sideEffect(
-    noinline sideEffect: (Sequence<E_SPECIFIC>) -> Unit
-): ExecuteOptions<E> =
-    sideEffectOnSequence(sideEffect)
-
+// These receiver overloads intentionally keep a star-projected ExecuteOptions receiver.
+// Kotlin callers often start from `options()` before a shared `T` is known, and the typed
+// side-effect lambdas plus the surrounding execute call establish that type later. Tightening
+// the receiver to `ExecuteOptions<in T>` looks nicer on paper, but it reintroduces overload
+// ambiguity with the top-level `sideEffect(...)` builders in this file.
 /**
  * Append two typed side effects to this [ExecuteOptions].
  */
@@ -261,6 +268,9 @@ inline fun <T : Any, reified E1 : T, reified E2 : T, reified E3 : T, reified E4 
 @PublishedApi
 @Suppress("UNCHECKED_CAST")
 internal fun <E : Any> ExecuteOptions<*>.addSideEffect(sideEffect: Consumer<Stream<E>>): ExecuteOptions<E> {
+    // The star-projected receiver is intentional: this helper is the bridge that turns an
+    // as-yet-untyped Kotlin options chain into a concrete `ExecuteOptions<E>` once `E` has
+    // been inferred from the appended side effect or the surrounding execute call.
     val existingSideEffect = this.sideEffect() as Consumer<Stream<E>>?
     val composedSideEffect = if (existingSideEffect == null) {
         sideEffect
@@ -273,10 +283,13 @@ internal fun <E : Any> ExecuteOptions<*>.addSideEffect(sideEffect: Consumer<Stre
     }
 
     val filter = filter()
-    return if (filter == null) {
+    val executeFilter = executeFilter()
+    return if (executeFilter != null) {
+        ExecuteOptions.options<E>().filter(executeFilter as ExecuteFilter<out E>).sideEffect<E>(composedSideEffect)
+    } else if (filter == null) {
         ExecuteOptions.options<E>().sideEffect<E>(composedSideEffect)
     } else {
-        ExecuteOptions.options<E>().filter<E>(filter).sideEffect<E>(composedSideEffect)
+        ExecuteOptions.options<E>().filter(filter).sideEffect<E>(composedSideEffect)
     }
 }
 
@@ -288,6 +301,9 @@ internal fun <T : Any, E_SPECIFIC : T> ExecuteOptions<*>.addTypedSideEffect(
     eventType: Class<E_SPECIFIC>,
     sideEffect: (E_SPECIFIC) -> Unit
 ): ExecuteOptions<T> =
+    // The star-projected receiver is intentional for the same reason as addSideEffect:
+    // this helper rebuilds a typed options chain from an options instance whose concrete
+    // event type may still be unresolved at the call site.
     addSideEffect(PolicySideEffect.executePolicy(eventType, Consumer(sideEffect)))
 
 /**

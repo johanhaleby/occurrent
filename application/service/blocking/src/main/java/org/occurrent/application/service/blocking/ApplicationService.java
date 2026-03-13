@@ -84,6 +84,17 @@ public interface ApplicationService<E> {
 
     /**
      * Execute a function that loads events from the event store and applies them to the domain model using {@link ExecuteOptions}.
+     * <p>
+     * Typical usage is to combine a read filter and a synchronous side effect:
+     * <pre>{@code
+     * applicationService.execute(
+     *         streamId,
+     *         ExecuteOptions.<DomainEvent>options()
+     *                 .filter(ExecuteFilter.type(NameDefined.class))
+     *                 .sideEffect(newEvents -> newEvents.forEach(this::publish)),
+     *         domainFn
+     * );
+     * }</pre>
      *
      * @param streamId                     The id of the stream to load events from and also write the events returned from {@code functionThatCallsDomainModel} to.
      * @param executeOptions               Options that control stream read filtering and optional side-effects.
@@ -92,11 +103,44 @@ public interface ApplicationService<E> {
     WriteResult execute(String streamId, ExecuteOptions<E> executeOptions, Function<Stream<E>, Stream<E>> functionThatCallsDomainModel);
 
     /**
+     * Execute a function that loads events from the event store and applies them to the domain model using an
+     * {@link ExecuteFilter} that resolves domain event classes to CloudEvent types at execution time.
+     * <p>
+     * This is a convenience overload for the common case where only a typed filter is needed:
+     * <pre>{@code
+     * applicationService.execute(
+     *         streamId,
+     *         ExecuteFilter.excludeTypes(NameDefined.class, NameWasChanged.class),
+     *         domainFn
+     * );
+     * }</pre>
+     *
+     * @param streamId                     The id of the stream to load events from and also write the events returned from {@code functionThatCallsDomainModel} to.
+     * @param executeFilter                Application-service-level filter that is resolved through the configured CloudEvent converter.
+     * @param functionThatCallsDomainModel A <i>pure</i> function that calls the domain model.
+     */
+    default WriteResult execute(String streamId, ExecuteFilter<? extends E> executeFilter, Function<Stream<E>, Stream<E>> functionThatCallsDomainModel) {
+        Objects.requireNonNull(streamId, "Stream id cannot be null");
+        Objects.requireNonNull(executeFilter, "ExecuteFilter cannot be null");
+        Objects.requireNonNull(functionThatCallsDomainModel, "functionThatCallsDomainModel cannot be null");
+        return execute(streamId, ExecuteOptions.<E>options().filter(executeFilter), functionThatCallsDomainModel);
+    }
+
+    /**
      * Convenience function that lets you specify {@code streamId} as a {@code UUID} instead of a {@code String}.
      */
     default WriteResult execute(UUID streamId, ExecuteOptions<E> executeOptions, Function<Stream<E>, Stream<E>> functionThatCallsDomainModel) {
         Objects.requireNonNull(streamId, "Stream id cannot be null");
         return execute(streamId.toString(), executeOptions, functionThatCallsDomainModel);
+    }
+
+    /**
+     * Convenience function that lets you specify {@code streamId} as a {@code UUID} instead of a {@code String}
+     * when using an {@link ExecuteFilter}.
+     */
+    default WriteResult execute(UUID streamId, ExecuteFilter<? extends E> executeFilter, Function<Stream<E>, Stream<E>> functionThatCallsDomainModel) {
+        Objects.requireNonNull(streamId, "Stream id cannot be null");
+        return execute(streamId.toString(), executeFilter, functionThatCallsDomainModel);
     }
 
     /**
