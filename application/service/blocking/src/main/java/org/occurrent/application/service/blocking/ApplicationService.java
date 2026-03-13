@@ -17,84 +17,10 @@ import java.util.stream.Stream;
  * Combine it with command composition ({@code org.occurrent:command-composition:<version>}) to solve
  * an even more wide-range of use cases. See <a href="https://occurrent.org/documentation#commands">command documentation</a> for more information.
  *
- * @param <T> The type of the event to store. Normally this would be your custom "DomainEvent" class but it could also be {@link CloudEvent}.
+ * @param <E> The type of the event to store. Normally this would be your custom "DomainEvent" class but it could also be {@link CloudEvent}.
  */
 @NullMarked
-public interface ApplicationService<T> {
-
-    /**
-     * Options used when executing a command in {@link ApplicationService}.
-     * <p>
-     * Use this record to configure:
-     * <ul>
-     *     <li>a {@link StreamReadFilter} that limits which events are read before command execution</li>
-     *     <li>an optional side-effect that is invoked after events have been written</li>
-     * </ul>
-     * <p>
-     * A typical usage pattern is:
-     * <pre>{@code
-     * applicationService.execute(streamId,
-     *         ApplicationService.filter(myFilter).sideEffect(mySideEffect),
-     *         functionThatCallsDomainModel);
-     * }</pre>
-     *
-     * @param <T> The event type consumed by the side-effect stream.
-     */
-    record ExecuteOptions<T>(@Nullable StreamReadFilter filter, @Nullable Consumer<Stream<T>> sideEffect) {
-        /**
-         * Create empty options, i.e. no read filter and no side-effect.
-         */
-        public static <T> ExecuteOptions<T> empty() {
-            return new ExecuteOptions<>(null, null);
-        }
-
-        /**
-         * Set stream read filter.
-         * <p>
-         * Note that the generic type parameter may change when chaining since the side-effect type is established
-         * once {@link #sideEffect(Consumer)} is provided.
-         *
-         * @param filter The filter to use when reading the stream.
-         * @param <U>    The side-effect event type for the returned options.
-         * @return New options with filter applied.
-         */
-        public <U> ExecuteOptions<U> filter(StreamReadFilter filter) {
-            return new ExecuteOptions<>(Objects.requireNonNull(filter, "filter cannot be null"), null);
-        }
-
-        /**
-         * Set side-effect to invoke after successful writes.
-         *
-         * @param sideEffect Side-effect that receives the newly produced domain events.
-         * @param <U>        The side-effect event type for the returned options.
-         * @return New options with side-effect applied.
-         */
-        public <U> ExecuteOptions<U> sideEffect(Consumer<Stream<U>> sideEffect) {
-            return new ExecuteOptions<>(filter, Objects.requireNonNull(sideEffect, "sideEffect cannot be null"));
-        }
-    }
-
-    /**
-     * Create {@link ExecuteOptions} with a stream read filter.
-     *
-     * @param filter The filter to use when reading the stream.
-     * @param <T>    The side-effect event type to be used if {@link ExecuteOptions#sideEffect(Consumer)} is chained.
-     * @return Filtered execute options.
-     */
-    static <T> ExecuteOptions<T> filter(StreamReadFilter filter) {
-        return ExecuteOptions.<T>empty().filter(filter);
-    }
-
-    /**
-     * Create {@link ExecuteOptions} with a side-effect.
-     *
-     * @param sideEffect Side-effect that receives the newly produced domain events.
-     * @param <T>        The side-effect event type.
-     * @return Execute options configured with side-effect.
-     */
-    static <T> ExecuteOptions<T> sideEffect(Consumer<Stream<T>> sideEffect) {
-        return ExecuteOptions.<T>empty().sideEffect(sideEffect);
-    }
+public interface ApplicationService<E> {
 
     /**
      * Execute a function that loads the events from the event store and apply them to the {@code functionThatCallsDomainModel} and
@@ -117,7 +43,13 @@ public interface ApplicationService<T> {
      * @deprecated Use {@link #execute(String, ExecuteOptions, Function)}.
      */
     @Deprecated(forRemoval = true)
-    WriteResult execute(String streamId, Function<Stream<T>, Stream<T>> functionThatCallsDomainModel, @Nullable Consumer<Stream<T>> sideEffect);
+    default WriteResult execute(String streamId, Function<Stream<E>, Stream<E>> functionThatCallsDomainModel, @Nullable Consumer<Stream<E>> sideEffect) {
+        Objects.requireNonNull(streamId, "Stream id cannot be null");
+        Objects.requireNonNull(functionThatCallsDomainModel, "functionThatCallsDomainModel cannot be null");
+
+        final ExecuteOptions<E> options = ExecuteOptions.options().sideEffect(sideEffect);
+        return execute(streamId, options, functionThatCallsDomainModel);
+    }
 
     /**
      * Execute a function that loads the events from the event store and apply them to the {@code functionThatCallsDomainModel} and
@@ -141,11 +73,13 @@ public interface ApplicationService<T> {
      * @deprecated Use {@link #execute(String, ExecuteOptions, Function)}.
      */
     @Deprecated(forRemoval = true)
-    default WriteResult execute(String streamId, @Nullable StreamReadFilter filter, Function<Stream<T>, Stream<T>> functionThatCallsDomainModel, @Nullable Consumer<Stream<T>> sideEffect) {
-        if (filter == null) {
-            return execute(streamId, functionThatCallsDomainModel, sideEffect);
-        }
-        throw new UnsupportedOperationException("This ApplicationService implementation does not support StreamReadFilter. Override execute(streamId, filter, functionThatCallsDomainModel, sideEffect) to add support.");
+    default WriteResult execute(String streamId, @Nullable StreamReadFilter filter, Function<Stream<E>, Stream<E>> functionThatCallsDomainModel, @Nullable Consumer<Stream<E>> sideEffect) {
+        Objects.requireNonNull(streamId, "Stream id cannot be null");
+        Objects.requireNonNull(functionThatCallsDomainModel, "functionThatCallsDomainModel cannot be null");
+
+        // Delegate to the single method that implementors must provide.
+        final ExecuteOptions<E> options = ExecuteOptions.options().filter(filter).sideEffect(sideEffect);
+        return execute(streamId, options, functionThatCallsDomainModel);
     }
 
     /**
@@ -155,15 +89,12 @@ public interface ApplicationService<T> {
      * @param executeOptions               Options that control stream read filtering and optional side-effects.
      * @param functionThatCallsDomainModel A <i>pure</i> function that calls the domain model.
      */
-    default WriteResult execute(String streamId, ExecuteOptions<T> executeOptions, Function<Stream<T>, Stream<T>> functionThatCallsDomainModel) {
-        Objects.requireNonNull(executeOptions, "Execute options cannot be null");
-        return execute(streamId, executeOptions.filter(), functionThatCallsDomainModel, executeOptions.sideEffect());
-    }
+    WriteResult execute(String streamId, ExecuteOptions<E> executeOptions, Function<Stream<E>, Stream<E>> functionThatCallsDomainModel);
 
     /**
      * Convenience function that lets you specify {@code streamId} as a {@code UUID} instead of a {@code String}.
      */
-    default WriteResult execute(UUID streamId, ExecuteOptions<T> executeOptions, Function<Stream<T>, Stream<T>> functionThatCallsDomainModel) {
+    default WriteResult execute(UUID streamId, ExecuteOptions<E> executeOptions, Function<Stream<E>, Stream<E>> functionThatCallsDomainModel) {
         Objects.requireNonNull(streamId, "Stream id cannot be null");
         return execute(streamId.toString(), executeOptions, functionThatCallsDomainModel);
     }
@@ -179,7 +110,7 @@ public interface ApplicationService<T> {
      * @deprecated Use {@link #execute(UUID, ExecuteOptions, Function)}.
      */
     @Deprecated(forRemoval = true)
-    default WriteResult execute(UUID streamId, Function<Stream<T>, Stream<T>> functionThatCallsDomainModel, Consumer<Stream<T>> sideEffect) {
+    default WriteResult execute(UUID streamId, Function<Stream<E>, Stream<E>> functionThatCallsDomainModel, Consumer<Stream<E>> sideEffect) {
         Objects.requireNonNull(streamId, "Stream id cannot be null");
         return execute(streamId.toString(), functionThatCallsDomainModel, sideEffect);
     }
@@ -196,7 +127,7 @@ public interface ApplicationService<T> {
      * @deprecated Use {@link #execute(UUID, ExecuteOptions, Function)}.
      */
     @Deprecated(forRemoval = true)
-    default WriteResult execute(UUID streamId, StreamReadFilter filter, Function<Stream<T>, Stream<T>> functionThatCallsDomainModel, Consumer<Stream<T>> sideEffect) {
+    default WriteResult execute(UUID streamId, StreamReadFilter filter, Function<Stream<E>, Stream<E>> functionThatCallsDomainModel, Consumer<Stream<E>> sideEffect) {
         Objects.requireNonNull(streamId, "Stream id cannot be null");
         return execute(streamId.toString(), filter, functionThatCallsDomainModel, sideEffect);
     }
@@ -216,8 +147,8 @@ public interface ApplicationService<T> {
      * @param functionThatCallsDomainModel A <i>pure</i> function that calls the domain model. Use partial application ({@code org.occurrent:command-composition:<version>})
      *                                     if required.
      */
-    default WriteResult execute(String streamId, Function<Stream<T>, Stream<T>> functionThatCallsDomainModel) {
-        return execute(streamId, functionThatCallsDomainModel, null);
+    default WriteResult execute(String streamId, Function<Stream<E>, Stream<E>> functionThatCallsDomainModel) {
+        return execute(streamId, ExecuteOptions.empty(), functionThatCallsDomainModel);
     }
 
     /**
@@ -228,7 +159,7 @@ public interface ApplicationService<T> {
      *                                     if required.
      * @see #execute(String, Function)
      */
-    default WriteResult execute(UUID streamId, Function<Stream<T>, Stream<T>> functionThatCallsDomainModel) {
+    default WriteResult execute(UUID streamId, Function<Stream<E>, Stream<E>> functionThatCallsDomainModel) {
         Objects.requireNonNull(streamId, "Stream id cannot be null");
         return execute(streamId.toString(), functionThatCallsDomainModel);
     }

@@ -23,17 +23,21 @@ import org.junit.jupiter.api.Assertions.assertAll
 import org.junit.jupiter.api.BeforeEach
 import org.junit.jupiter.api.DisplayName
 import org.junit.jupiter.api.Test
-import org.occurrent.application.composition.command.composeCommands
-import org.occurrent.application.composition.command.partial
 import org.occurrent.application.converter.CloudEventConverter
 import org.occurrent.application.converter.generic.GenericCloudEventConverter
-import org.occurrent.application.service.blocking.execute
+import org.occurrent.application.service.blocking.executeList
+import org.occurrent.application.service.blocking.executeSequence
+import org.occurrent.application.service.blocking.filter
+import org.occurrent.application.service.blocking.options
+import org.occurrent.application.service.blocking.sideEffect
 import org.occurrent.domain.DomainEvent
 import org.occurrent.domain.DomainEventConverter
-import org.occurrent.domain.Name
+import org.occurrent.domain.NameDefined
+import org.occurrent.domain.NameWasChanged
+import org.occurrent.eventstore.api.StreamReadFilter
 import org.occurrent.eventstore.inmemory.InMemoryEventStore
 import java.time.LocalDateTime
-import java.util.*
+import java.util.UUID
 
 @DisplayName("generic application service - kotlin")
 class GenericApplicationServiceKotlinTest {
@@ -59,12 +63,13 @@ class GenericApplicationServiceKotlinTest {
         val time = LocalDateTime.now()
 
         // When
-        val writeResult = applicationService.execute(
-            streamId, composeCommands(
-                Name::defineName.partial("eventId1", time, "name", "Some Doe"),
-                Name::changeName.partial("eventId2", time, "name", "Jane Doe")
+        val writeResult = applicationService.executeSequence(streamId) {
+            sequenceOf(
+                NameDefined("eventId1", time, "name", "Some Doe"),
+                NameWasChanged("eventId2", time, "name", "Jane Doe")
             )
-        )
+        }
+
         // Then
         assertAll(
             { assertThat(writeResult.streamId()).isEqualTo(streamId) },
@@ -78,20 +83,21 @@ class GenericApplicationServiceKotlinTest {
         val streamId = UUID.randomUUID().toString()
         val time = LocalDateTime.now()
 
-        applicationService.execute(
-            streamId, composeCommands(
-                Name::defineName.partial("eventId1", time, "name", "Some Doe"),
-                Name::changeName.partial("eventId2", time, "name", "Jane Doe")
+        applicationService.executeSequence(streamId) {
+            sequenceOf(
+                NameDefined("eventId1", time, "name", "Some Doe"),
+                NameWasChanged("eventId2", time, "name", "Jane Doe")
             )
-        )
+        }
 
         // When
-        val writeResult = applicationService.execute(
-            streamId, composeCommands(
-                Name::changeName.partial("eventId3", time, "name", "Hello"),
-                Name::changeName.partial("eventId4", time, "name", "World")
+        val writeResult = applicationService.executeSequence(streamId) {
+            sequenceOf(
+                NameWasChanged("eventId3", time, "name", "Hello"),
+                NameWasChanged("eventId4", time, "name", "World")
             )
-        )
+        }
+
         // Then
         assertAll(
             { assertThat(writeResult.streamId()).isEqualTo(streamId) },
@@ -99,4 +105,102 @@ class GenericApplicationServiceKotlinTest {
         )
     }
 
+    @Test
+    fun execute_sequence_infers_sequence_without_explicit_lambda_type() {
+        // Given
+        val streamId = UUID.randomUUID().toString()
+        val time = LocalDateTime.now()
+        val sideEffects = mutableListOf<String>()
+
+        // When
+        val writeResult = applicationService.executeSequence(
+            streamId,
+            sideEffect(
+                { event: NameDefined -> sideEffects += "defined:${event.name()}" },
+                { event: NameWasChanged -> sideEffects += "changed:${event.name()}" }
+            )
+        ) {
+            sequenceOf(
+                NameDefined("eventId1", time, "name", "Some Doe"),
+                NameWasChanged("eventId2", time, "name", "Jane Doe")
+            )
+        }
+
+        // Then
+        assertAll(
+            { assertThat(writeResult.newStreamVersion()).isEqualTo(2L) },
+            { assertThat(sideEffects).containsExactly("defined:Some Doe", "changed:Jane Doe") }
+        )
+    }
+
+    @Test
+    fun execute_sequence_accepts_options_helper_without_explicit_event_type() {
+        // Given
+        val streamId = UUID.randomUUID().toString()
+        val time = LocalDateTime.now()
+        val sideEffects = mutableListOf<String>()
+
+        // When
+        applicationService.executeSequence(
+            streamId,
+            options().sideEffect(
+                { event: NameDefined -> sideEffects += "defined:${event.name()}" },
+                { event: NameWasChanged -> sideEffects += "changed:${event.name()}" }
+            )
+        ) {
+            sequenceOf(
+                NameDefined("eventId1", time, "name", "Some Doe"),
+                NameWasChanged("eventId2", time, "name", "Jane Doe")
+            )
+        }
+
+        // Then
+        assertThat(sideEffects).containsExactly("defined:Some Doe", "changed:Jane Doe")
+    }
+
+    @Test
+    fun execute_list_infers_list_without_explicit_lambda_type() {
+        // Given
+        val streamId = UUID.randomUUID().toString()
+        val time = LocalDateTime.now()
+
+        // When
+        val writeResult = applicationService.executeList(streamId) {
+            listOf(
+                NameDefined("eventId1", time, "name", "Some Doe"),
+                NameWasChanged("eventId2", time, "name", "Jane Doe")
+            )
+        }
+
+        // Then
+        assertThat(writeResult.newStreamVersion()).isEqualTo(2L)
+    }
+
+    @Test
+    fun execute_sequence_accepts_filter_helper_with_direct_imported_side_effect() {
+        // Given
+        val streamId = UUID.randomUUID().toString()
+        val time = LocalDateTime.now()
+        val sideEffects = mutableListOf<String>()
+
+        // When
+        val writeResult = applicationService.executeSequence(
+            streamId,
+            filter(StreamReadFilter.type(NameDefined::class.java.name)).sideEffect(
+                { event: NameDefined -> sideEffects += "defined:${event.name()}" },
+                { event: NameWasChanged -> sideEffects += "changed:${event.name()}" }
+            )
+        ) {
+            sequenceOf(
+                NameDefined("eventId1", time, "name", "Some Doe"),
+                NameWasChanged("eventId2", time, "name", "Jane Doe")
+            )
+        }
+
+        // Then
+        assertAll(
+            { assertThat(writeResult.newStreamVersion()).isEqualTo(2L) },
+            { assertThat(sideEffects).containsExactly("defined:Some Doe", "changed:Jane Doe") }
+        )
+    }
 }

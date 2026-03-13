@@ -12,10 +12,10 @@ import java.util.stream.Stream;
  * the event store in a synchronous fashion (if you want async policies then use a subscription instead).
  * A policy is expected to a take one domain event of a specific type ({@code E}) and return void (i.e. a `Consumer<E>`).
  *
- * @param <T> The type of your domain event
+ * @param <E> The type of your domain event
  */
 @NullMarked
-public interface PolicySideEffect<T> extends Consumer<Stream<T>> {
+public interface PolicySideEffect<E> extends Consumer<Stream<E>> {
 
     /**
      * Execute a single policy, for example let's say you have this policy:
@@ -43,11 +43,11 @@ public interface PolicySideEffect<T> extends Consumer<Stream<T>> {
      *
      * @param eventType The type of the domain event
      * @param policy    The policy
-     * @param <T>       The type of your domain events
-     * @param <E>       The specific event type that the policy is interested in
+     * @param <E>       The type of your domain events
+     * @param <E_SPECIFIC>       The specific event type that the policy is interested in
      * @return A {@link PolicySideEffect}, which is a {@code Consumer<Stream<T>>} that allows composing policies.
      */
-    static <T, E extends T> PolicySideEffect<T> executePolicy(Class<E> eventType, Consumer<E> policy) {
+    static <E, E_SPECIFIC extends E> PolicySideEffect<E> executePolicy(Class<E_SPECIFIC> eventType, Consumer<E_SPECIFIC> policy) {
         Objects.requireNonNull(eventType, "Event type cannot be null");
         Objects.requireNonNull(policy, "Policy cannot be null");
         return stream -> stream
@@ -90,14 +90,14 @@ public interface PolicySideEffect<T> extends Consumer<Stream<T>> {
      *
      * @param eventType The type of the domain event
      * @param policy    The policy
-     * @param <E>       The specific event type that the policy is interested in
+     * @param <E_SPECIFIC>       The specific event type that the policy is interested in
      * @return A {@link PolicySideEffect}, which is a {@code Consumer<Stream<T>>} that allows composing policies.
      */
-    default <E extends T> PolicySideEffect<T> andThenExecuteAnotherPolicy(Class<E> eventType, Consumer<E> policy) {
+    default <E_SPECIFIC extends E> PolicySideEffect<E> andThenExecuteAnotherPolicy(Class<E_SPECIFIC> eventType, Consumer<E_SPECIFIC> policy) {
         return stream -> {
-            List<T> list = stream.toList();
+            List<E> list = stream.toList();
             accept(list.stream());
-            PolicySideEffect<T> secondPolicy = executePolicy(eventType, policy);
+            PolicySideEffect<E> secondPolicy = executePolicy(eventType, policy);
             secondPolicy.accept(list.stream());
         };
     }

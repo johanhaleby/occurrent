@@ -17,7 +17,7 @@
 package org.occurrent.example.domain.wordguessinggame.mongodb.spring.blocking.features.pointawarding
 
 import org.occurrent.application.service.blocking.ApplicationService
-import org.occurrent.application.service.blocking.execute
+import org.occurrent.application.service.blocking.executeSequence
 import org.occurrent.dsl.query.blocking.DomainEventQueries
 import org.occurrent.example.domain.wordguessinggame.event.*
 import org.occurrent.example.domain.wordguessinggame.writemodel.BasisForPointAwarding
@@ -39,7 +39,7 @@ class AwardPointsToPlayerThatGuessedTheRightWord(
         val gameId = playerGuessedTheRightWord.gameId
         val playerId = playerGuessedTheRightWord.playerId
         val gameWasStarted = domainEventQueries.queryOne<GameWasStarted>(streamId(gameId.toString()).and(type(GameWasStarted::class.eventType())))!!
-        applicationService.execute("points:$gameId") { events: Sequence<GameEvent> ->
+        applicationService.executeSequence("points:$gameId") { events ->
             val eventList = events.toList()
             val totalNumberGuessesForPlayerInGame = eventList.count { event -> event is PlayerGuessedTheWrongWord && event.playerId == playerGuessedTheRightWord.playerId } + 1
             val basis = BasisForPointAwarding(gameId, gameWasStarted.startedBy, playerId, totalNumberGuessesForPlayerInGame)

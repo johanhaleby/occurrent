@@ -32,7 +32,7 @@ import org.occurrent.application.composition.command.composeCommands
 import org.occurrent.application.composition.command.partial
 import org.occurrent.application.converter.CloudEventConverter
 import org.occurrent.application.converter.jackson.JacksonCloudEventConverter
-import org.occurrent.application.service.blocking.execute
+import org.occurrent.application.service.blocking.executeList
 import org.occurrent.application.service.blocking.generic.GenericApplicationService
 import org.occurrent.eventstore.inmemory.InMemoryEventStore
 import java.net.URI
@@ -55,7 +55,7 @@ class ApplicationServiceDemo {
         val gameId = GameId.random()
 
         // When
-        applicationService.execute(gameId.value) { events: List<GameEvent> ->
+        applicationService.executeList(gameId.value) { events ->
             listOf(RPS.create(events, gameId, Timestamp.now(), GameCreatorId.random()))
         }
 
@@ -74,13 +74,13 @@ class ApplicationServiceDemo {
         val gameId = GameId.random()
 
         // When
-        applicationService.execute(
+        applicationService.executeList(
             gameId.value,
             composeCommands(
                 { events: List<GameEvent> ->
                     listOf(RPS.create(events, gameId, Timestamp.now(), GameCreatorId.random()))
                 },
-                { events ->
+                { events: List<GameEvent> ->
                     listOf(RPS.join(events, Timestamp.now(), PlayerId.random()))
                 })
         )
@@ -102,7 +102,7 @@ class ApplicationServiceDemo {
         val gameId = GameId.random()
 
         // When
-        applicationService.execute(
+        applicationService.executeList(
             gameId.value,
             composeCommands(
                 RPS::create.partial(gameId, Timestamp.now(), GameCreatorId.random()).toList(),
@@ -127,7 +127,7 @@ class ApplicationServiceDemo {
         val gameId = GameId.random()
 
         // When
-        applicationService.execute(
+        applicationService.executeList(
             gameId.value,
             RPS::create.partial(gameId, Timestamp.now(), GameCreatorId.random()).toList() andThen
                     RPS::join.partial(Timestamp.now(), PlayerId.random()).toList()
@@ -152,7 +152,7 @@ class ApplicationServiceDemo {
         val playerId2 = PlayerId.random()
 
         // When
-        applicationService.execute(
+        applicationService.executeList(
             gameId.value,
             composeCommands(
                 RPS::create.partial(gameId, Timestamp.now(), GameCreatorId.random()).toList(),

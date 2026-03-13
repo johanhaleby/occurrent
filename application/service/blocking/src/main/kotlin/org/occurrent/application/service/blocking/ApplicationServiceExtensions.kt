@@ -17,72 +17,162 @@
 package org.occurrent.application.service.blocking
 
 import org.occurrent.eventstore.api.WriteResult
-import java.util.*
+import java.util.UUID
 import java.util.function.Function
 import java.util.stream.Stream
 import kotlin.streams.asSequence
 import kotlin.streams.asStream
 
 /**
- * Extension function to [ApplicationService] that allows working with Kotlin sequences
+ * Execute a domain function that works with Kotlin [Sequence] instead of Java [Stream].
+ *
+ * This is the preferred Kotlin API when the domain model naturally consumes and
+ * returns lazy event sequences.
  */
-fun <T : Any> ApplicationService<T>.execute(streamId: UUID, functionThatCallsDomainModel: (Sequence<T>) -> Sequence<T>): WriteResult =
-    execute(streamId, functionThatCallsDomainModel, null)
+fun <E : Any> ApplicationService<E>.executeSequence(streamId: String, functionThatCallsDomainModel: (Sequence<E>) -> Sequence<E>): WriteResult =
+    executeSequence(streamId, ExecuteOptions.empty(), functionThatCallsDomainModel)
 
 /**
- * Extension function to [ApplicationService] that allows working with Kotlin sequences
+ * Variant of [executeSequence] that accepts a [UUID] stream identifier.
  */
-fun <T : Any> ApplicationService<T>.execute(streamId: String, functionThatCallsDomainModel: (Sequence<T>) -> Sequence<T>): WriteResult =
-    execute(streamId, functionThatCallsDomainModel, null)
+fun <E : Any> ApplicationService<E>.executeSequence(streamId: UUID, functionThatCallsDomainModel: (Sequence<E>) -> Sequence<E>): WriteResult =
+    executeSequence(streamId.toString(), functionThatCallsDomainModel)
 
 /**
- * Extension function to [ApplicationService] that allows working with Kotlin sequences
+ * Execute a domain function that works with Kotlin [Sequence] and additional [ExecuteOptions].
+ *
+ * This is the preferred Kotlin entrypoint when command execution needs a
+ * [org.occurrent.eventstore.api.StreamReadFilter], post-write side effects, or both.
  */
-fun <T : Any> ApplicationService<T>.execute(
-    streamId: UUID, functionThatCallsDomainModel: (Sequence<T>) -> Sequence<T>,
-    sideEffects: ((Sequence<T>) -> Unit)? = null
-): WriteResult =
-    execute(streamId.toString(), functionThatCallsDomainModel, sideEffects)
-
-/**
- * Extension function to [ApplicationService] that allows working with Kotlin sequences
- */
-fun <T : Any> ApplicationService<T>.execute(streamId: String, functionThatCallsDomainModel: (Sequence<T>) -> Sequence<T>, sideEffects: ((Sequence<T>) -> Unit)? = null): WriteResult =
-    execute(streamId, { streamOfEvents ->
+fun <E : Any> ApplicationService<E>.executeSequence(streamId: String, options: ExecuteOptions<E>, functionThatCallsDomainModel: (Sequence<E>) -> Sequence<E>): WriteResult =
+    execute(streamId, options) { streamOfEvents ->
         functionThatCallsDomainModel(streamOfEvents.asSequence()).asStream()
-    }, sideEffects?.toStreamSideEffect())
-
+    }
 
 /**
- * Extension function to [ApplicationService] that allows working with [List]
+ * Variant of [executeSequence] that accepts a [UUID] stream identifier and [ExecuteOptions].
  */
-@JvmName("executeList")
-fun <T : Any> ApplicationService<T>.execute(streamId: String, functionThatCallsDomainModel: (List<T>) -> List<T>): WriteResult {
-    return execute(streamId, functionThatCallsDomainModel, null)
-}
+fun <E : Any> ApplicationService<E>.executeSequence(streamId: UUID, options: ExecuteOptions<E>, functionThatCallsDomainModel: (Sequence<E>) -> Sequence<E>): WriteResult =
+    executeSequence(streamId.toString(), options, functionThatCallsDomainModel)
 
-@JvmName("executeList")
-fun <T : Any> ApplicationService<T>.execute(streamId: UUID, functionThatCallsDomainModel: (List<T>) -> List<T>): WriteResult = execute(streamId.toString(), functionThatCallsDomainModel)
+/**
+ * Execute a domain function that works with Kotlin [List] instead of Java [Stream].
+ *
+ * Use this when the domain model expects all previously stored events to be
+ * materialized eagerly before making decisions.
+ */
+fun <E : Any> ApplicationService<E>.executeList(streamId: String, functionThatCallsDomainModel: (List<E>) -> List<E>): WriteResult =
+    executeList(streamId, ExecuteOptions.empty(), functionThatCallsDomainModel)
 
-@JvmName("executeList")
-fun <T : Any> ApplicationService<T>.execute(streamId: UUID, functionThatCallsDomainModel: (List<T>) -> List<T>, sideEffects: ((List<T>) -> Unit)? = null): WriteResult {
-    return execute(streamId.toString(), functionThatCallsDomainModel, sideEffects)
-}
+/**
+ * Variant of [executeList] that accepts a [UUID] stream identifier.
+ */
+fun <E : Any> ApplicationService<E>.executeList(streamId: UUID, functionThatCallsDomainModel: (List<E>) -> List<E>): WriteResult =
+    executeList(streamId.toString(), functionThatCallsDomainModel)
 
-@JvmName("executeList")
-fun <T : Any> ApplicationService<T>.execute(streamId: String, functionThatCallsDomainModel: (List<T>) -> List<T>, sideEffects: ((List<T>) -> Unit)? = null): WriteResult {
-    val f = Function<Stream<T>, Stream<T>> { eventStream: Stream<T> ->
-        val currentEvents: List<T> = eventStream.toList()
-        val newEvents: Stream<T> = functionThatCallsDomainModel.invoke(currentEvents).stream()
-        newEvents
+/**
+ * Execute a domain function that works with Kotlin [List] and additional [ExecuteOptions].
+ *
+ * The current stream is fully materialized into a list before
+ * [functionThatCallsDomainModel] is invoked.
+ */
+fun <E : Any> ApplicationService<E>.executeList(streamId: String, options: ExecuteOptions<E>, functionThatCallsDomainModel: (List<E>) -> List<E>): WriteResult {
+    val f = Function<Stream<E>, Stream<E>> { eventStream: Stream<E> ->
+        val currentEvents: List<E> = eventStream.toList()
+        functionThatCallsDomainModel.invoke(currentEvents).stream()
     }
-    return execute(streamId, f, sideEffects?.toStreamSideEffectFromList())
+    return execute(streamId, options, f)
 }
 
-private fun <T> ((Sequence<T>) -> Unit).toStreamSideEffect(): (Stream<T>) -> Unit {
-    return { streamOfEvents -> this(streamOfEvents.asSequence()) }
-}
+/**
+ * Variant of [executeList] that accepts a [UUID] stream identifier and [ExecuteOptions].
+ */
+fun <E : Any> ApplicationService<E>.executeList(streamId: UUID, options: ExecuteOptions<E>, functionThatCallsDomainModel: (List<E>) -> List<E>): WriteResult =
+    executeList(streamId.toString(), options, functionThatCallsDomainModel)
 
-private fun <T> ((List<T>) -> Unit).toStreamSideEffectFromList(): (Stream<T>) -> Unit {
-    return { streamOfEvents -> this(streamOfEvents.toList()) }
-}
+/**
+ * Deprecated Kotlin alias for the old sequence-based `execute(...)` extension.
+ *
+ * Use [executeSequence] instead to avoid ambiguity with Java's stream-based
+ * `ApplicationService.execute(...)` members.
+ */
+@Deprecated(
+    message = "Use executeSequence(streamId, functionThatCallsDomainModel) to avoid ambiguity with Java Stream-based execute.",
+    replaceWith = ReplaceWith("this.executeSequence(streamId, functionThatCallsDomainModel)")
+)
+fun <E : Any> ApplicationService<E>.execute(streamId: String, functionThatCallsDomainModel: (Sequence<E>) -> Sequence<E>): WriteResult =
+    executeSequence(streamId, functionThatCallsDomainModel)
+
+/**
+ * Deprecated Kotlin alias for the old sequence-based `execute(...)` extension that accepts a [UUID].
+ */
+@Deprecated(
+    message = "Use executeSequence(streamId, functionThatCallsDomainModel) to avoid ambiguity with Java Stream-based execute.",
+    replaceWith = ReplaceWith("this.executeSequence(streamId, functionThatCallsDomainModel)")
+)
+fun <E : Any> ApplicationService<E>.execute(streamId: UUID, functionThatCallsDomainModel: (Sequence<E>) -> Sequence<E>): WriteResult =
+    executeSequence(streamId, functionThatCallsDomainModel)
+
+/**
+ * Deprecated Kotlin alias for the old sequence-based `execute(...)` extension with [ExecuteOptions].
+ */
+@Deprecated(
+    message = "Use executeSequence(streamId, options, functionThatCallsDomainModel) to avoid ambiguity with Java Stream-based execute.",
+    replaceWith = ReplaceWith("this.executeSequence(streamId, options, functionThatCallsDomainModel)")
+)
+fun <E : Any> ApplicationService<E>.execute(streamId: String, options: ExecuteOptions<E>, functionThatCallsDomainModel: (Sequence<E>) -> Sequence<E>): WriteResult =
+    executeSequence(streamId, options, functionThatCallsDomainModel)
+
+/**
+ * Deprecated Kotlin alias for the old sequence-based `execute(...)` extension with [UUID] and [ExecuteOptions].
+ */
+@Deprecated(
+    message = "Use executeSequence(streamId, options, functionThatCallsDomainModel) to avoid ambiguity with Java Stream-based execute.",
+    replaceWith = ReplaceWith("this.executeSequence(streamId, options, functionThatCallsDomainModel)")
+)
+fun <E : Any> ApplicationService<E>.execute(streamId: UUID, options: ExecuteOptions<E>, functionThatCallsDomainModel: (Sequence<E>) -> Sequence<E>): WriteResult =
+    executeSequence(streamId, options, functionThatCallsDomainModel)
+
+/**
+ * Deprecated Kotlin alias for the old list-based `execute(...)` extension.
+ */
+@Deprecated(
+    message = "Use executeList(streamId, functionThatCallsDomainModel) to avoid ambiguity with Java Stream-based execute.",
+    replaceWith = ReplaceWith("this.executeList(streamId, functionThatCallsDomainModel)")
+)
+@JvmName("deprecatedExecuteList")
+fun <E : Any> ApplicationService<E>.execute(streamId: String, functionThatCallsDomainModel: (List<E>) -> List<E>): WriteResult =
+    executeList(streamId, functionThatCallsDomainModel)
+
+/**
+ * Deprecated Kotlin alias for the old list-based `execute(...)` extension that accepts a [UUID].
+ */
+@Deprecated(
+    message = "Use executeList(streamId, functionThatCallsDomainModel) to avoid ambiguity with Java Stream-based execute.",
+    replaceWith = ReplaceWith("this.executeList(streamId, functionThatCallsDomainModel)")
+)
+@JvmName("deprecatedExecuteList")
+fun <E : Any> ApplicationService<E>.execute(streamId: UUID, functionThatCallsDomainModel: (List<E>) -> List<E>): WriteResult =
+    executeList(streamId, functionThatCallsDomainModel)
+
+/**
+ * Deprecated Kotlin alias for the old list-based `execute(...)` extension with [ExecuteOptions].
+ */
+@Deprecated(
+    message = "Use executeList(streamId, options, functionThatCallsDomainModel) to avoid ambiguity with Java Stream-based execute.",
+    replaceWith = ReplaceWith("this.executeList(streamId, options, functionThatCallsDomainModel)")
+)
+@JvmName("deprecatedExecuteListWithOptions")
+fun <E : Any> ApplicationService<E>.execute(streamId: String, options: ExecuteOptions<E>, functionThatCallsDomainModel: (List<E>) -> List<E>): WriteResult =
+    executeList(streamId, options, functionThatCallsDomainModel)
+
+/**
+ * Deprecated Kotlin alias for the old list-based `execute(...)` extension with [UUID] and [ExecuteOptions].
+ */
+@Deprecated(
+    message = "Use executeList(streamId, options, functionThatCallsDomainModel) to avoid ambiguity with Java Stream-based execute.",
+    replaceWith = ReplaceWith("this.executeList(streamId, options, functionThatCallsDomainModel)")
+)
+@JvmName("deprecatedExecuteListWithOptions")
+fun <E : Any> ApplicationService<E>.execute(streamId: UUID, options: ExecuteOptions<E>, functionThatCallsDomainModel: (List<E>) -> List<E>): WriteResult =
+    executeList(streamId, options, functionThatCallsDomainModel)

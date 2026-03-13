@@ -17,8 +17,8 @@
 package org.occurrent.example.domain.wordguessinggame.mongodb.spring.blocking.features.gameplay.usecases
 
 import org.occurrent.application.service.blocking.ApplicationService
-import org.occurrent.application.service.blocking.execute
-import org.occurrent.application.service.blocking.executePolicy
+import org.occurrent.application.service.blocking.executeSequence
+import org.occurrent.application.service.blocking.sideEffect
 import org.occurrent.eventstore.api.WriteConditionNotFulfilledException
 import org.occurrent.example.domain.wordguessinggame.event.GameEvent
 import org.occurrent.example.domain.wordguessinggame.mongodb.spring.blocking.features.wordhint.RevealInitialCharactersInWordHintAfterGameIsStarted
@@ -29,7 +29,7 @@ import org.springframework.stereotype.Service
 import org.springframework.transaction.annotation.Transactional
 
 @Service
-class StartGame constructor(
+class StartGame(
     private val applicationService: ApplicationService<GameEvent>,
     private val revealInitialCharactersInWordHintAfterGameIsStarted: RevealInitialCharactersInWordHintAfterGameIsStarted
 ) {
@@ -37,8 +37,11 @@ class StartGame constructor(
     @Transactional
     @Retryable(include = [WriteConditionNotFulfilledException::class], maxAttempts = 5, backoff = Backoff(delay = 100, multiplier = 2.0, maxDelay = 1000))
     operator fun invoke(gameId: GameId, startTime: Timestamp, startedBy: PlayerId, wordList: WordList) {
-        applicationService.execute(gameId, { events ->
+        applicationService.executeSequence(
+            gameId,
+            sideEffect(revealInitialCharactersInWordHintAfterGameIsStarted::invoke)
+        ) { events ->
             startGame(events, gameId, startTime, startedBy, wordList, MaxNumberOfGuessesPerPlayer, MaxNumberOfGuessesTotal)
-        }, executePolicy(revealInitialCharactersInWordHintAfterGameIsStarted::invoke))
+        }
     }
 }

@@ -40,7 +40,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.catchThrowable;
 import static org.junit.jupiter.api.Assertions.assertAll;
 import static org.occurrent.application.composition.command.CommandConversion.toStreamCommand;
-import static org.occurrent.application.service.blocking.ApplicationService.filter;
+import static org.occurrent.application.service.blocking.ExecuteOptions.options;
 import static org.occurrent.application.service.blocking.PolicySideEffect.executePolicy;
 import static org.occurrent.eventstore.api.StreamReadFilter.type;
 
@@ -89,7 +89,7 @@ public class GenericApplicationServiceTest {
         AtomicReference<String> sideEffectPayload = new AtomicReference<>("not-called");
         // When
         WriteResult writeResult = applicationService.execute(streamId,
-                filter(type(NameDefined.class.getName())).sideEffect(events -> sideEffectPayload.set(events.findFirst().map(DomainEvent::name).orElse("empty"))),
+                options().filter(type(NameDefined.class.getName())).sideEffect(events -> sideEffectPayload.set(events.findFirst().map(DomainEvent::name).orElse("empty"))),
                 toStreamCommand(events -> Name.changeName(events, UUID.randomUUID().toString(), LocalDateTime.now(), "name", "New Name")));
 
         // Then

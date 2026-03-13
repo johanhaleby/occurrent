@@ -16,29 +16,100 @@
     * `SpringMongoEventStore`
     * `MongoEventStore` (native)
     * `ReactorMongoEventStore`
-* Added `ApplicationService.ExecuteOptions<T>` to simplify API usage and reduce overload pressure.
-  * New entrypoints:
+* Added `ExecuteOptions<T>` to simplify API usage and reduce overload pressure.
+  * New entry points:
     * `execute(String streamId, ExecuteOptions<T> options, Function<Stream<T>, Stream<T>> fn)`
     * `execute(UUID streamId, ExecuteOptions<T> options, Function<Stream<T>, Stream<T>> fn)`
-  * New static builders:
-    * `ApplicationService.filter(StreamReadFilter)`
-    * `ApplicationService.sideEffect(Consumer<Stream<T>>)`
+  * New builder entrypoint:
+    * `ExecuteOptions.options()`
   * Example:
     ```java
     WriteResult result = applicationService.execute(
             streamId,
-            ApplicationService.filter(StreamReadFilter.type("com.acme.NameDefined"))
+            ExecuteOptions.<DomainEvent>options()
+                    .filter(StreamReadFilter.type("com.acme.NameDefined"))
                     .sideEffect(newEvents -> newEvents.forEach(this::publish)),
             domainFn
     );
     ```
 * Deprecated legacy `ApplicationService` overloads in favor of `ExecuteOptions`:
   * `execute(String, Function<Stream<T>, Stream<T>>, Consumer<Stream<T>>)`
-  * `execute(String, StreamReadFilter, Function<Stream<T>, Stream<T>>, Consumer<Stream<T>>)`
   * `execute(UUID, Function<Stream<T>, Stream<T>>, Consumer<Stream<T>>)`
-  * `execute(UUID, StreamReadFilter, Function<Stream<T>, Stream<T>>, Consumer<Stream<T>>)`
-  * `execute(String, StreamReadFilter, Function<Stream<T>, Stream<T>>)`
-  * `execute(UUID, StreamReadFilter, Function<Stream<T>, Stream<T>>)`
+* Kotlin `ApplicationService` helpers now have explicit collection-oriented names and direct-import `ExecuteOptions` helper functions:
+  * New Kotlin helpers:
+    * `executeSequence(...)`
+    * `executeList(...)`
+    * `options()`
+    * `filter(...)`
+    * `sideEffect(...)`
+    * `sideEffectOnSequence(...)`
+    * `sideEffectOnList(...)`
+  * You can now write either:
+    ```kotlin
+    applicationService.executeSequence(
+        gameId,
+        options().sideEffect(
+            revealCharacterInWordHintAfterPlayerGuessedTheWrongWord::invoke,
+            awardPointsToPlayerThatGuessedTheRightWord::invoke
+        )
+    ) { events ->
+        guessWord(events, timeOfGuess, playerId, word)
+    }
+    ```
+    or:
+    ```kotlin
+    applicationService.executeSequence(
+        gameId,
+        sideEffect(
+            revealCharacterInWordHintAfterPlayerGuessedTheWrongWord::invoke,
+            awardPointsToPlayerThatGuessedTheRightWord::invoke
+        )
+    ) { events ->
+        guessWord(events, timeOfGuess, playerId, word)
+    }
+    ```
+
+#### Breaking changes
+
+* Kotlin `ApplicationService.execute(...)` collection extensions are deprecated in favor of:
+  * `executeSequence(...)`
+  * `executeList(...)`
+
+#### Why this changed
+
+* Kotlin prefers Java members over extension functions during overload resolution.
+* That caused Kotlin call sites to bind to the Java `Stream`-based `execute(...)` overloads instead of the intended Kotlin `Sequence` or `List` extensions.
+* The symptom was confusing code and compiler errors, for example in `MakeGuess.kt`, where Kotlin users could be forced to add explicit lambda parameter types such as `events: Sequence<GameEvent>` just to make the intended overload resolve.
+* We explicitly avoided introducing a second options type or hiding Java members from Kotlin, because this is an open source library used by third parties and the Java API should stay predictable.
+* We also explicitly chose not to add Java `executeList(...)` in this change. Doing so would increase API surface without solving the Kotlin overload-resolution problem that motivated these changes.
+
+Before:
+```kotlin
+applicationService.execute(
+    gameId,
+    options<GameEvent>().sideEffect(
+        revealCharacterInWordHintAfterPlayerGuessedTheWrongWord::invoke,
+        awardPointsToPlayerThatGuessedTheRightWord::invoke
+    )
+) { events: Sequence<GameEvent> ->
+    guessWord(events, timeOfGuess, playerId, word)
+}
+```
+
+After:
+```kotlin
+applicationService.executeSequence(
+    gameId,
+    options().sideEffect(
+        revealCharacterInWordHintAfterPlayerGuessedTheWrongWord::invoke,
+        awardPointsToPlayerThatGuessedTheRightWord::invoke
+    )
+) { events ->
+    guessWord(events, timeOfGuess, playerId, word)
+}
+```
+
+Read more in [ADR 12](doc/architecture/decisions/0012-avoid-kotlin-extension-name-collisions-with-java-applicationservice-members.md).
 
 ### 0.19.14 (2025-10-20)
 * Added additional `@Nullable` annotation to a method in blocking `SubscriptionFilter` that could lead to errors when passing null (thanks to Kirill Gavrilov for PR)
