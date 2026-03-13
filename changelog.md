@@ -110,7 +110,7 @@
   * Kotlin typed execute-filter helpers now live under `ExecuteFilters` to keep `ApplicationService` clean and preserve stronger typing for multi-type filters.
   * Earlier top-level Kotlin typed filter helpers such as `type<MyEvent>()`, `excludeTypes<A, B>()`, and `includeTypes<A, B>()` are deprecated in favor of the namespaced `ExecuteFilters` API.
   * These helpers resolve domain event classes through `CloudEventTypeGetter` / `CloudEventConverter`, not through `Class.getName()`.
-  * `StreamReadFilter` itself remains unchanged because it is shared with event store APIs that do not know about `CloudEventConverter`.
+  * Upgraded kotlin from 2.2.20 to 2.3.10
 
 #### Breaking changes
 
