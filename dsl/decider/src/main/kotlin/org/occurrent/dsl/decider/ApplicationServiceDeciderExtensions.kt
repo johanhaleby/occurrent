@@ -18,7 +18,7 @@
 package org.occurrent.dsl.decider
 
 import org.occurrent.application.service.blocking.ApplicationService
-import org.occurrent.application.service.blocking.execute
+import org.occurrent.application.service.blocking.executeList
 import org.occurrent.eventstore.api.WriteResult
 import java.util.*
 import java.util.concurrent.atomic.AtomicReference
@@ -28,7 +28,7 @@ import java.util.concurrent.atomic.AtomicReference
 fun <C, S, E : Any> ApplicationService<E>.execute(streamId: UUID, command: C, decider: Decider<C, S, E>): WriteResult = execute(streamId.toString(), command, decider)
 fun <C, S, E : Any> ApplicationService<E>.execute(streamId: String, command: C, decider: Decider<C, S, E>): WriteResult = execute(streamId, listOf(command), decider)
 fun <C, S, E : Any> ApplicationService<E>.execute(streamId: UUID, commands: List<C>, decider: Decider<C, S, E>): WriteResult = execute(streamId.toString(), commands, decider)
-fun <C, S, E : Any> ApplicationService<E>.execute(streamId: String, commands: List<C>, decider: Decider<C, S, E>): WriteResult = execute(streamId) { events: List<E> ->
+fun <C, S, E : Any> ApplicationService<E>.execute(streamId: String, commands: List<C>, decider: Decider<C, S, E>): WriteResult = executeList(streamId) { events: List<E> ->
     decider.decideOnEventsAndReturnEvents(events, commands)
 }
 
@@ -38,7 +38,7 @@ fun <C, S, E : Any> ApplicationService<E>.executeAndReturnDecision(streamId: UUI
 fun <C, S, E : Any> ApplicationService<E>.executeAndReturnDecision(streamId: String, command: C, decider: Decider<C, S, E>): Decider.Decision<S, E> = executeAndReturnDecision(streamId, listOf(command), decider)
 fun <C, S, E : Any> ApplicationService<E>.executeAndReturnDecision(streamId: String, commands: List<C>, decider: Decider<C, S, E>): Decider.Decision<S, E> {
     val cheat = AtomicReference<Decider.Decision<S, E>>()
-    execute(streamId) { events: List<E> ->
+    executeList(streamId) { events: List<E> ->
         val decision: Decider.Decision<S, E> = decider.decideOnEvents(events, commands)
         cheat.set(decision)
         decision.events
