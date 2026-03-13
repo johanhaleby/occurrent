@@ -24,7 +24,7 @@ import org.awaitility.kotlin.withPollInterval
 import org.junit.jupiter.api.Test
 import org.occurrent.application.composition.command.partial
 import org.occurrent.application.converter.generic.GenericCloudEventConverter
-import org.occurrent.application.service.blocking.execute
+import org.occurrent.application.service.blocking.executeList
 import org.occurrent.application.service.blocking.generic.GenericApplicationService
 import org.occurrent.command.ChangeName
 import org.occurrent.command.DefineName
@@ -60,8 +60,8 @@ class MultipleCommandDispatchersTest {
             }
             commands { cmd ->
                 when (cmd) {
-                    is DefineName -> applicationService.execute(cmd.commandId(), Name::defineNameFromCommand.partial(cmd))
-                    is ChangeName -> applicationService.execute(cmd.commandId(), Name::changeNameFromCommand.partial(cmd))
+                    is DefineName -> applicationService.executeList(cmd.commandId(), Name::defineNameFromCommand.partial(cmd))
+                    is ChangeName -> applicationService.executeList(cmd.commandId(), Name::changeNameFromCommand.partial(cmd))
                 }
             }
             subscriptions(subscriptionModel) {
