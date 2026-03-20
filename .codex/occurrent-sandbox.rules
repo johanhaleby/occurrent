@@ -1,0 +1,6 @@
+prefix_rule(pattern=["mvn", "-q", "-pl"], decision="allow")
+prefix_rule(pattern=["mvn", "-q", "-Dtest"], decision="allow")
+prefix_rule(pattern=["mvn", "-q", "-DskipTests", "compile"], decision="allow")
+prefix_rule(pattern=["mvn", "-q", "-DskipTests", "test-compile"], decision="allow")
+prefix_rule(pattern=["mvn", "-q", "test"], decision="allow")
+prefix_rule(pattern=["mvn", "-q", "clean", "test"], decision="allow")
