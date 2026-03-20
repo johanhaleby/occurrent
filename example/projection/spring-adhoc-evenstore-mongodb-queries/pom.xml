@@ -45,12 +45,13 @@
             <version>${project.version}</version>
         </dependency>
         <dependency>
-            <groupId>io.vavr</groupId>
-            <artifactId>vavr</artifactId>
+            <groupId>tools.jackson.core</groupId>
+            <artifactId>jackson-databind</artifactId>
+            <version>${jackson3.version}</version>
         </dependency>
         <dependency>
-            <groupId>com.fasterxml.jackson.datatype</groupId>
-            <artifactId>jackson-datatype-jsr310</artifactId>
+            <groupId>io.vavr</groupId>
+            <artifactId>vavr</artifactId>
         </dependency>
 
         <!-- Test -->

@@ -16,8 +16,11 @@
 
 package org.occurrent.example.springevent;
 
-import com.fasterxml.jackson.databind.ObjectMapper;
-import com.fasterxml.jackson.databind.jsontype.impl.LaissezFaireSubTypeValidator;
+import org.occurrent.application.converter.CloudEventConverter;
+import org.occurrent.application.converter.jackson3.JacksonCloudEventConverter;
+import org.occurrent.application.converter.typemapper.ReflectionCloudEventTypeMapper;
+import org.occurrent.domain.DomainEvent;
+import tools.jackson.databind.ObjectMapper;
 import com.mongodb.ConnectionString;
 import com.mongodb.client.MongoClient;
 import com.mongodb.client.MongoClients;
@@ -35,7 +38,7 @@ import org.springframework.boot.autoconfigure.SpringBootApplication;
 import org.springframework.context.annotation.Bean;
 import org.springframework.data.mongodb.core.ReactiveMongoOperations;
 
-import static com.fasterxml.jackson.databind.ObjectMapper.DefaultTyping.EVERYTHING;
+import java.net.URI;
 
 /**
  * Bootstrap the application
@@ -82,10 +85,13 @@ public class ForwardEventsFromMongoDBToSpringApplication {
 
     @Bean
     public ObjectMapper objectMapper() {
-        ObjectMapper objectMapper = new ObjectMapper();
-        // Configure jackson to add type information to each serialized object
-        // Allows deserializing interfaces such as DomainEvent
-        objectMapper.activateDefaultTyping(new LaissezFaireSubTypeValidator(), EVERYTHING);
-        return objectMapper;
+        return new ObjectMapper();
+    }
+
+    @Bean
+    public CloudEventConverter<DomainEvent> domainEventConverter(ObjectMapper objectMapper) {
+        return new JacksonCloudEventConverter.Builder<DomainEvent>(objectMapper, URI.create("http://name"))
+                .typeMapper(ReflectionCloudEventTypeMapper.simple(DomainEvent.class))
+                .build();
     }
 }

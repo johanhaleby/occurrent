@@ -16,7 +16,7 @@
 
 package org.occurrent.example.eventstore.mongodb.spring.projections.adhoc;
 
-import com.fasterxml.jackson.databind.ObjectMapper;
+import tools.jackson.databind.ObjectMapper;
 import io.cloudevents.CloudEventAttributes;
 import io.cloudevents.core.builder.CloudEventBuilder;
 import org.occurrent.eventstore.api.blocking.EventStore;

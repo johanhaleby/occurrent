@@ -20,31 +20,23 @@ package org.occurrent.application.converter.jackson;
 import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import io.cloudevents.CloudEvent;
-import io.cloudevents.CloudEventData;
-import io.cloudevents.core.builder.CloudEventBuilder;
-import io.cloudevents.core.data.PojoCloudEventData;
 import org.occurrent.application.converter.CloudEventConverter;
+import org.occurrent.application.converter.internal.CloudEventConverterSupport;
+import org.occurrent.application.converter.internal.CloudEventConverterSupport.ThrowingBiFunction;
 import org.occurrent.application.converter.typemapper.CloudEventTypeMapper;
-import org.occurrent.application.converter.typemapper.ReflectionCloudEventTypeMapper;
 
-import java.io.IOException;
-import java.io.UncheckedIOException;
 import java.net.URI;
 import java.time.OffsetDateTime;
 import java.util.Map;
-import java.util.UUID;
 import java.util.function.Function;
 
-import static java.time.ZoneOffset.UTC;
-import static java.util.Objects.requireNonNull;
-
 /**
- * An {@link CloudEventConverter} that uses a Jackson {@link ObjectMapper} to serialize a domain event to JSON (content type {@value #DEFAULT_CONTENT_TYPE}) that is used as data in a {@link CloudEvent}.
+ * An {@link CloudEventConverter} that uses a Jackson {@link ObjectMapper} to serialize a domain event to JSON (content type {@value #DEFAULT_CONTENT_TYPE}) that is used as data in a {@link io.cloudevents.CloudEvent}.
  *
  * @param <T> The type of your domain event(s) to convert
  */
 public class JacksonCloudEventConverter<T> implements CloudEventConverter<T> {
-    static final String DEFAULT_CONTENT_TYPE = "application/json";
+    static final String DEFAULT_CONTENT_TYPE = CloudEventConverterSupport.DEFAULT_CONTENT_TYPE;
 
     private final ObjectMapper objectMapper;
     private final URI cloudEventSource;
@@ -76,19 +68,13 @@ public class JacksonCloudEventConverter<T> implements CloudEventConverter<T> {
     }
 
     private JacksonCloudEventConverter(ObjectMapper objectMapper, URI cloudEventSource, Function<T, String> idMapper, CloudEventTypeMapper<T> cloudEventTypeMapper, Function<T, OffsetDateTime> timeMapper, Function<T, String> subjectMapper, String contentType) {
-        requireNonNull(objectMapper, ObjectMapper.class.getSimpleName() + " cannot be null");
-        requireNonNull(cloudEventSource, "cloudEventSource cannot be null");
-        requireNonNull(idMapper, "idMapper cannot be null");
-        requireNonNull(cloudEventTypeMapper, CloudEventTypeMapper.class.getSimpleName() + " cannot be null");
-        requireNonNull(timeMapper, "timeMapper cannot be null");
-        requireNonNull(subjectMapper, "subjectMapper cannot be null");
-        this.objectMapper = objectMapper;
-        this.cloudEventSource = cloudEventSource;
-        this.idMapper = idMapper;
-        this.timeMapper = timeMapper;
-        this.subjectMapper = subjectMapper;
+        this.objectMapper = java.util.Objects.requireNonNull(objectMapper, ObjectMapper.class.getSimpleName() + " cannot be null");
+        this.cloudEventSource = java.util.Objects.requireNonNull(cloudEventSource, "cloudEventSource cannot be null");
+        this.idMapper = java.util.Objects.requireNonNull(idMapper, "idMapper cannot be null");
+        this.cloudEventTypeMapper = java.util.Objects.requireNonNull(cloudEventTypeMapper, CloudEventTypeMapper.class.getSimpleName() + " cannot be null");
+        this.timeMapper = java.util.Objects.requireNonNull(timeMapper, "timeMapper cannot be null");
+        this.subjectMapper = java.util.Objects.requireNonNull(subjectMapper, "subjectMapper cannot be null");
         this.contentType = contentType;
-        this.cloudEventTypeMapper = cloudEventTypeMapper;
     }
 
     /**
@@ -99,19 +85,18 @@ public class JacksonCloudEventConverter<T> implements CloudEventConverter<T> {
      */
     @Override
     public CloudEvent toCloudEvent(T domainEvent) {
-        requireNonNull(domainEvent, "Domain event cannot be null");
-        // @formatter:off
-        PojoCloudEventData<Map<String, Object>> cloudEventData = PojoCloudEventData.wrap(objectMapper.convertValue(domainEvent, new TypeReference<>() {}), objectMapper::writeValueAsBytes);
-        // @formatter:on
-        return CloudEventBuilder.v1()
-                .withId(idMapper.apply(domainEvent))
-                .withSource(cloudEventSource)
-                .withType(cloudEventTypeMapper.getCloudEventType(domainEvent))
-                .withTime(timeMapper.apply(domainEvent))
-                .withSubject(subjectMapper.apply(domainEvent))
-                .withDataContentType(contentType)
-                .withData(cloudEventData)
-                .build();
+        return CloudEventConverterSupport.toCloudEvent(
+                domainEvent,
+                cloudEventSource,
+                idMapper,
+                cloudEventTypeMapper,
+                timeMapper,
+                subjectMapper,
+                contentType,
+                value -> objectMapper.convertValue(value, new TypeReference<>() {
+                }),
+                objectMapper::writeValueAsBytes
+        );
     }
 
     /**
@@ -120,26 +105,11 @@ public class JacksonCloudEventConverter<T> implements CloudEventConverter<T> {
      * @param cloudEvent The cloud event to convert
      * @return A <code>domainEvent</code> converted from a {@link CloudEvent}.
      */
-    @SuppressWarnings("unchecked")
     @Override
     public T toDomainEvent(CloudEvent cloudEvent) {
-        CloudEventData data = cloudEvent.getData();
-
-        final Class<T> domainEventType = cloudEventTypeMapper.getDomainEventType(cloudEvent.getType());
-
-        final T domainEvent;
-        if (data instanceof PojoCloudEventData && ((PojoCloudEventData<Object>) data).getValue() instanceof Map) {
-            Map<String, Object> value = (Map<String, Object>) ((PojoCloudEventData<?>) data).getValue();
-            domainEvent = objectMapper.convertValue(value, domainEventType);
-        } else {
-            try {
-                domainEvent = objectMapper.readValue(requireNonNull(data, "cloud event data cannot be null").toBytes(), domainEventType);
-            } catch (IOException e) {
-                throw new UncheckedIOException(e);
-            }
-        }
-
-        return domainEvent;
+        ThrowingBiFunction<Map<String, Object>, Class<T>, T> fromMap = (value, type) -> objectMapper.convertValue(value, type);
+        ThrowingBiFunction<byte[], Class<T>, T> fromBytes = objectMapper::readValue;
+        return CloudEventConverterSupport.toDomainEvent(cloudEvent, cloudEventTypeMapper, fromMap, fromBytes);
     }
 
     @Override
@@ -209,20 +179,19 @@ public class JacksonCloudEventConverter<T> implements CloudEventConverter<T> {
         }
     }
 
-
     static <T> Function<T, String> defaultIdMapperFunction() {
-        return __ -> UUID.randomUUID().toString();
+        return CloudEventConverterSupport.defaultIdMapperFunction();
     }
 
     static <T> CloudEventTypeMapper<T> defaultTypeMapper() {
-        return ReflectionCloudEventTypeMapper.qualified();
+        return CloudEventConverterSupport.defaultTypeMapper();
     }
 
     static <T> Function<T, OffsetDateTime> defaultTimeMapperFunction() {
-        return __ -> OffsetDateTime.now(UTC);
+        return CloudEventConverterSupport.defaultTimeMapperFunction();
     }
 
     static <T> Function<T, String> defaultSubjectMapperFunction() {
-        return __ -> null;
+        return CloudEventConverterSupport.defaultSubjectMapperFunction();
     }
 }

@@ -16,7 +16,7 @@
 
 package org.occurrent.example.domain.numberguessinggame.mongodb.spring.blocking;
 
-import com.fasterxml.jackson.databind.ObjectMapper;
+import tools.jackson.databind.ObjectMapper;
 import org.occurrent.application.converter.CloudEventConverter;
 import org.occurrent.example.domain.numberguessinggame.model.domainevents.GameEvent;
 import org.occurrent.example.domain.numberguessinggame.mongodb.spring.blocking.infrastructure.NumberGuessGameCloudEventConverter;

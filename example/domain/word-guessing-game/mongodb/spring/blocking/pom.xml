@@ -37,7 +37,7 @@
         </dependency>
         <dependency>
             <groupId>org.springframework.boot</groupId>
-            <artifactId>spring-boot-starter-web</artifactId>
+            <artifactId>spring-boot-starter-webmvc</artifactId>
         </dependency>
         <dependency>
             <groupId>org.springframework.retry</groupId>
@@ -52,7 +52,7 @@
             <artifactId>kotlin-stdlib</artifactId>
         </dependency>
         <dependency>
-            <groupId>com.fasterxml.jackson.module</groupId>
+            <groupId>tools.jackson.module</groupId>
             <artifactId>jackson-module-kotlin</artifactId>
         </dependency>
         <dependency>

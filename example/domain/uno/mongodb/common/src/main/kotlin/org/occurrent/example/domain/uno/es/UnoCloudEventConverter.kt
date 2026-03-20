@@ -16,8 +16,8 @@
 
 package org.occurrent.example.domain.uno.es
 
-import com.fasterxml.jackson.databind.ObjectMapper
-import com.fasterxml.jackson.module.kotlin.readValue
+import tools.jackson.databind.ObjectMapper
+import tools.jackson.module.kotlin.readValue
 import io.cloudevents.CloudEvent
 import io.cloudevents.core.builder.CloudEventBuilder
 import org.occurrent.application.converter.CloudEventConverter

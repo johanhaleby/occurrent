@@ -16,7 +16,7 @@
 
 package org.occurrent.example.domain.uno.es
 
-import com.fasterxml.jackson.module.kotlin.jacksonObjectMapper
+import tools.jackson.module.kotlin.jacksonObjectMapper
 import com.mongodb.client.MongoClients
 import org.occurrent.application.composition.command.partial
 import org.occurrent.application.service.blocking.executeSequence

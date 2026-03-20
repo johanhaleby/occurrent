@@ -17,10 +17,8 @@
 
 package org.occurrent.example.domain.rps.decidermodel.web
 
-import com.fasterxml.jackson.datatype.jsr310.JavaTimeModule
-import com.fasterxml.jackson.module.kotlin.jacksonObjectMapper
 import org.occurrent.application.converter.CloudEventConverter
-import org.occurrent.application.converter.jackson.jacksonCloudEventConverter
+import org.occurrent.application.converter.jackson3.jacksonCloudEventConverter
 import org.occurrent.application.converter.typemapper.ReflectionCloudEventTypeMapper
 import org.occurrent.example.domain.rps.decidermodel.GameEvent
 import org.occurrent.springboot.mongo.blocking.EnableOccurrent
@@ -29,6 +27,7 @@ import org.springframework.boot.runApplication
 import org.springframework.context.annotation.Bean
 import org.springframework.hateoas.config.EnableHypermediaSupport
 import org.springframework.hateoas.config.EnableHypermediaSupport.HypermediaType.HAL
+import tools.jackson.module.kotlin.jacksonObjectMapper
 import java.net.URI
 import java.time.ZoneOffset
 import java.time.temporal.ChronoUnit.MILLIS
@@ -40,7 +39,7 @@ class Bootstrap {
 
     @Bean
     fun cloudEventConverter() : CloudEventConverter<GameEvent> = jacksonCloudEventConverter<GameEvent>(
-        objectMapper = jacksonObjectMapper().registerModule(JavaTimeModule()),
+        objectMapper = jacksonObjectMapper(),
         cloudEventSource = URI.create("urn:occurrent:rps"),
         timeMapper = { e -> e.timestamp.toOffsetDateTime().withOffsetSameInstant(ZoneOffset.UTC).truncatedTo(MILLIS) },
         subjectMapper = { e -> e.gameId.toString() },

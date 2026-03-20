@@ -321,9 +321,15 @@
                 <artifactId>cloudevent-type-mapper-reflection</artifactId>
                 <version>${project.version}</version>
             </dependency>
+            <!-- Jackson-backed CloudEvent converter lanes and starter -->
             <dependency>
                 <groupId>org.occurrent</groupId>
                 <artifactId>cloudevent-converter-jackson</artifactId>
+                <version>${project.version}</version>
+            </dependency>
+            <dependency>
+                <groupId>org.occurrent</groupId>
+                <artifactId>cloudevent-converter-jackson3</artifactId>
                 <version>${project.version}</version>
             </dependency>
             <dependency>

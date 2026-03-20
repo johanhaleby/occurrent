@@ -16,9 +16,9 @@
 
 package org.occurrent.example.domain.numberguessinggame.mongodb.nativedriver;
 
-import com.fasterxml.jackson.core.JsonProcessingException;
-import com.fasterxml.jackson.core.type.TypeReference;
-import com.fasterxml.jackson.databind.ObjectMapper;
+import tools.jackson.core.JacksonException;
+import tools.jackson.core.type.TypeReference;
+import tools.jackson.databind.ObjectMapper;
 import io.cloudevents.CloudEvent;
 import io.cloudevents.core.builder.CloudEventBuilder;
 import org.occurrent.example.domain.numberguessinggame.model.domainevents.*;
@@ -142,7 +142,7 @@ public class Serialization {
 
         try {
             return objectMapper.writeValueAsBytes(eventAsMap);
-        } catch (JsonProcessingException jsonProcessingException) {
+        } catch (JacksonException jsonProcessingException) {
             throw new RuntimeException(jsonProcessingException);
         }
     }

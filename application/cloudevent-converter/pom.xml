@@ -25,8 +25,10 @@
     <modules>
         <module>api</module>
         <module>generic</module>
+        <module>core</module>
         <module>xstream</module>
         <module>jackson</module>
+        <module>jackson3</module>
     </modules>
     <modelVersion>4.0.0</modelVersion>
 

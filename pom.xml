@@ -76,10 +76,12 @@
         <junit.version>5.11.3</junit.version>
         <test-containers.version>1.20.3</test-containers.version>
         <kotlin.version>2.3.10</kotlin.version>
-        <jackson.version>2.19.2</jackson.version>
+        <jackson2.version>2.19.2</jackson2.version>
+        <jackson3.version>3.0.4</jackson3.version>
         <cloudevents.version>4.0.1</cloudevents.version>
         <reactor-bom.version>2024.0.10</reactor-bom.version>
-        <spring-boot.version>3.5.6</spring-boot.version>
+        <spring-boot.version>4.0.4</spring-boot.version>
+        <spring-retry.version>2.0.12</spring-retry.version>
         <mongo.version>5.6.1</mongo.version>
         <dokka.version>2.0.0</dokka.version>
         <awaitility.version>4.2.2</awaitility.version>
@@ -95,13 +97,6 @@
                 <groupId>io.cloudevents</groupId>
                 <artifactId>cloudevents-bom</artifactId>
                 <version>${cloudevents.version}</version>
-                <type>pom</type>
-                <scope>import</scope>
-            </dependency>
-            <dependency>
-                <groupId>com.fasterxml.jackson</groupId>
-                <artifactId>jackson-bom</artifactId>
-                <version>${jackson.version}</version>
                 <type>pom</type>
                 <scope>import</scope>
             </dependency>
@@ -202,6 +197,11 @@
                 <artifactId>jobrunr</artifactId>
                 <version>${jobrunr.version}</version>
             </dependency>
+            <dependency>
+                <groupId>org.springframework.retry</groupId>
+                <artifactId>spring-retry</artifactId>
+                <version>${spring-retry.version}</version>
+            </dependency>
 
             <!-- Test -->
             <dependency>
@@ -228,7 +228,7 @@
             <dependency>
                 <groupId>ch.qos.logback</groupId>
                 <artifactId>logback-classic</artifactId>
-                <version>1.5.16</version>
+                <version>1.5.32</version>
             </dependency>
             <dependency>
                 <groupId>io.vavr</groupId>

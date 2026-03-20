@@ -39,6 +39,10 @@
             <groupId>org.springframework.boot</groupId>
             <artifactId>spring-boot-autoconfigure</artifactId>
         </dependency>
+        <dependency>
+            <groupId>org.springframework.boot</groupId>
+            <artifactId>spring-boot-mongodb</artifactId>
+        </dependency>
         <!-- Generate configuration metadata file automatically, see https://docs.spring.io/spring-boot/docs/current/reference/html/configuration-metadata.html#configuration-metadata.annotation-processor -->
         <dependency>
             <groupId>org.springframework.boot</groupId>
@@ -101,6 +105,22 @@
             <groupId>org.occurrent</groupId>
             <artifactId>cloudevent-converter-jackson</artifactId>
             <version>${project.version}</version>
+            <exclusions>
+                <exclusion>
+                    <groupId>com.fasterxml.jackson.core</groupId>
+                    <artifactId>jackson-annotations</artifactId>
+                </exclusion>
+            </exclusions>
+        </dependency>
+        <dependency>
+            <groupId>org.occurrent</groupId>
+            <artifactId>cloudevent-converter-jackson3</artifactId>
+            <version>${project.version}</version>
+        </dependency>
+        <dependency>
+            <groupId>com.fasterxml.jackson.core</groupId>
+            <artifactId>jackson-annotations</artifactId>
+            <version>2.21</version>
         </dependency>
         <dependency>
             <groupId>org.occurrent</groupId>
@@ -111,6 +131,13 @@
             <groupId>org.occurrent</groupId>
             <artifactId>annotations</artifactId>
             <version>${project.version}</version>
+        </dependency>
+
+        <!-- Test -->
+        <dependency>
+            <groupId>org.springframework.boot</groupId>
+            <artifactId>spring-boot-starter-test</artifactId>
+            <scope>test</scope>
         </dependency>
     </dependencies>
 </project>

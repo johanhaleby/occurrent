@@ -16,7 +16,7 @@
 
 package org.occurrent.example.eventstore.mongodb.spring.subscriptionprojections;
 
-import com.fasterxml.jackson.databind.ObjectMapper;
+import tools.jackson.databind.ObjectMapper;
 import io.cloudevents.CloudEvent;
 import org.occurrent.domain.DomainEvent;
 import org.springframework.stereotype.Component;

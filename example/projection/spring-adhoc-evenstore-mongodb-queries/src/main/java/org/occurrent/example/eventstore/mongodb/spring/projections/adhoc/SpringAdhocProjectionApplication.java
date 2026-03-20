@@ -16,7 +16,7 @@
 
 package org.occurrent.example.eventstore.mongodb.spring.projections.adhoc;
 
-import com.fasterxml.jackson.databind.ObjectMapper;
+import tools.jackson.databind.ObjectMapper;
 import org.occurrent.eventstore.api.blocking.EventStore;
 import org.occurrent.eventstore.mongodb.spring.blocking.EventStoreConfig;
 import org.occurrent.eventstore.mongodb.spring.blocking.SpringMongoEventStore;

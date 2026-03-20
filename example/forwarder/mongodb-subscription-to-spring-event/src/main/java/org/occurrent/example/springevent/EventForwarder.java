@@ -16,11 +16,10 @@
 
 package org.occurrent.example.springevent;
 
-import com.fasterxml.jackson.databind.ObjectMapper;
 import jakarta.annotation.PostConstruct;
 import jakarta.annotation.PreDestroy;
+import org.occurrent.application.converter.CloudEventConverter;
 import org.occurrent.domain.DomainEvent;
-import org.occurrent.functional.CheckedFunction;
 import org.occurrent.subscription.reactor.durable.ReactorDurableSubscriptionModel;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -29,7 +28,6 @@ import org.springframework.stereotype.Component;
 import reactor.core.Disposable;
 import reactor.core.publisher.Mono;
 
-import java.util.Objects;
 import java.util.concurrent.atomic.AtomicReference;
 
 @Component
@@ -38,15 +36,15 @@ public class EventForwarder {
 
     private static final String SUBSCRIBER_ID = "test-app";
     private final ReactorDurableSubscriptionModel subscriptionModel;
-    private final ObjectMapper objectMapper;
+    private final CloudEventConverter<DomainEvent> domainEventConverter;
     private final ApplicationEventPublisher eventPublisher;
     private final AtomicReference<Disposable> subscription;
 
     public EventForwarder(ReactorDurableSubscriptionModel subscriptionModel,
-                          ObjectMapper objectMapper,
+                          CloudEventConverter<DomainEvent> domainEventConverter,
                           ApplicationEventPublisher eventPublisher) {
         this.subscriptionModel = subscriptionModel;
-        this.objectMapper = objectMapper;
+        this.domainEventConverter = domainEventConverter;
         this.eventPublisher = eventPublisher;
         this.subscription = new AtomicReference<>();
     }
@@ -55,9 +53,8 @@ public class EventForwarder {
     void startEventStreaming() {
         log.info("Subscribing with id {}", SUBSCRIBER_ID);
         Disposable disposable = subscriptionModel.subscribe(SUBSCRIBER_ID,
-                event -> Mono.just(event)
-                        .map(cloudEvent -> Objects.requireNonNull(cloudEvent.getData()))
-                        .map(CheckedFunction.unchecked(cloudEventData -> objectMapper.readValue(cloudEventData.toBytes(), DomainEvent.class)))
+                cloudEvent -> Mono.just(cloudEvent)
+                        .map(domainEventConverter::toDomainEvent)
                         .doOnNext(eventPublisher::publishEvent)
                         .then())
                 .subscribe();

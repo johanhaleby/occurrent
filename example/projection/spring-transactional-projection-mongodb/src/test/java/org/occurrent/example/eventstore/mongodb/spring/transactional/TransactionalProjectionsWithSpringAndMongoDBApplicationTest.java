@@ -18,6 +18,7 @@ package org.occurrent.example.eventstore.mongodb.spring.transactional;
 
 import org.junit.jupiter.api.Test;
 import org.mockito.Mock;
+import org.mockito.junit.jupiter.MockitoExtension;
 import org.occurrent.domain.DomainEvent;
 import org.occurrent.domain.NameDefined;
 import org.occurrent.eventstore.api.blocking.EventStream;
@@ -37,9 +38,11 @@ import static org.assertj.core.api.Assertions.catchThrowable;
 import static org.junit.jupiter.api.Assertions.assertAll;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.BDDMockito.given;
+import org.junit.jupiter.api.extension.ExtendWith;
 
 @SpringBootTest(classes = TransactionalProjectionsWithSpringAndMongoDBApplication.class)
 @Testcontainers
+@ExtendWith(MockitoExtension.class)
 public class TransactionalProjectionsWithSpringAndMongoDBApplicationTest {
 
     @Container

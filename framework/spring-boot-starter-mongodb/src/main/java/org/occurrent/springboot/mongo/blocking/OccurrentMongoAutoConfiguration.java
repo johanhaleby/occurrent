@@ -17,13 +17,11 @@
 
 package org.occurrent.springboot.mongo.blocking;
 
-import com.fasterxml.jackson.databind.ObjectMapper;
 import com.mongodb.ReadConcern;
 import com.mongodb.TransactionOptions;
 import com.mongodb.WriteConcern;
 import org.jspecify.annotations.NonNull;
 import org.occurrent.application.converter.CloudEventConverter;
-import org.occurrent.application.converter.jackson.JacksonCloudEventConverter;
 import org.occurrent.application.converter.typemapper.CloudEventTypeMapper;
 import org.occurrent.application.converter.typemapper.ReflectionCloudEventTypeMapper;
 import org.occurrent.application.service.blocking.ApplicationService;
@@ -52,16 +50,16 @@ import org.springframework.boot.autoconfigure.condition.ConditionalOnBean;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnClass;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnMissingBean;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
-import org.springframework.boot.autoconfigure.mongo.MongoAutoConfiguration;
+import org.springframework.boot.mongodb.autoconfigure.MongoAutoConfiguration;
 import org.springframework.boot.context.properties.EnableConfigurationProperties;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Conditional;
+import org.springframework.context.annotation.Import;
 import org.springframework.data.mongodb.MongoDatabaseFactory;
 import org.springframework.data.mongodb.MongoTransactionManager;
 import org.springframework.data.mongodb.core.MongoTemplate;
 
 import java.util.List;
-import java.util.Optional;
 
 import static org.occurrent.subscription.blocking.durable.catchup.SubscriptionPositionStorageConfig.useSubscriptionPositionStorage;
 import static org.occurrent.subscription.mongodb.spring.blocking.SpringMongoSubscriptionModelConfig.withConfig;
@@ -72,6 +70,7 @@ import static org.occurrent.subscription.mongodb.spring.blocking.SpringMongoSubs
 @AutoConfiguration(after = MongoAutoConfiguration.class)
 @ConditionalOnClass({SpringMongoEventStore.class, SpringMongoSubscriptionModel.class})
 @EnableConfigurationProperties(OccurrentProperties.class)
+@Import({Jackson2CloudEventConverterConfiguration.class, Jackson3CloudEventConverterConfiguration.class})
 public class OccurrentMongoAutoConfiguration<E> {
 
     @Bean
@@ -131,16 +130,6 @@ public class OccurrentMongoAutoConfiguration<E> {
                 new CatchupSubscriptionModelConfig(useSubscriptionPositionStorage(storage)
                         .andPersistSubscriptionPositionDuringCatchupPhaseForEveryNEvents(1000)));
         return new CompetingConsumerSubscriptionModel(catchupSubscriptionModel, competingConsumerStrategy);
-    }
-
-    @Bean
-    @ConditionalOnMissingBean(CloudEventConverter.class)
-    @ConditionalOnBean(CloudEventTypeMapper.class)
-    public CloudEventConverter<E> occurrentCloudEventConverter(Optional<ObjectMapper> objectMapper, OccurrentProperties occurrentProperties, CloudEventTypeMapper<E> cloudEventTypeMapper) {
-        ObjectMapper om = objectMapper.orElseGet(ObjectMapper::new);
-        return new JacksonCloudEventConverter.Builder<E>(om, occurrentProperties.getCloudEventConverter().getCloudEventSource())
-                .typeMapper(cloudEventTypeMapper)
-                .build();
     }
 
     @Bean

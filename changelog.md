@@ -1,5 +1,32 @@
 ### Changelog next version
 
+* Upgraded the Spring Boot line from `3.5.x` to `4.0.4`.
+  * The Spring Boot starter has been updated for Boot 4 while retaining the existing Spring-facing API:
+    * `@EnableOccurrent` is unchanged.
+    * Existing `occurrent.*` property names are unchanged.
+    * The starter still uses the same opt-in model, i.e. depending on the starter alone does not activate Occurrent beans.
+  * Spring Boot 4-related starter updates include:
+    * support for both Jackson 2 and Jackson 3 converter in `spring-boot-starter-mongodb`
+    * updated starter validation coverage for custom converter precedence, Jackson 2 mapper wiring, Jackson 3 mapper wiring, and the default path
+* Added a Jackson 3-native converter artifact: `org.occurrent:cloudevent-converter-jackson3`.
+  * This is the intended default choice for new code on the Boot 4 stack.
+  * The Jackson 3 path uses the `tools.jackson.*` packages.
+  * The new Jackson 3 converter shares the same CloudEvent conversion semantics as the Jackson 2 converter through a common internal converter core.
+* Kept the existing Jackson 2 converter artifact `org.occurrent:cloudevent-converter-jackson` as a compatibility lane.
+  * Existing public APIs that already expose Jackson 2 types continue to work.
+  * The Jackson 2 lane remains available for migration compatibility, while the Jackson 3 lane is the forward-looking path.
+* Split dependency management so Jackson 2 and Jackson 3 are resolved intentionally rather than through one shared root override.
+  * Jackson 2 compatibility modules continue to resolve Jackson 2.
+  * Jackson 3-native modules resolve Jackson 3 locally where needed.
+  * The BOM now publishes both converter lanes alongside the upgraded Spring Boot starter.
+* Migrated the example reactor to the Boot 4 / Jackson 3 path.
+  * This includes both starter-based examples and manually wired Spring applications.
+  * Remaining example usage of `activateDefaultTyping(...)` has been removed in favor of explicit CloudEvent converter wiring.
+  * One adhoc projection example now uses a local ISO `LocalDateTime` serializer/deserializer instead of the unavailable Jackson 3 `jsr310` artifact.
+* Upgrade guidance:
+  * New applications should prefer `cloudevent-converter-jackson3`.
+  * Existing applications that already depend on the Jackson 2 converter API can continue using `cloudevent-converter-jackson` while migrating incrementally.
+  * If you previously relied on Jackson default typing in example-style setups, prefer explicit CloudEvent converter configuration or Jackson 3 builder-based configuration instead.
 * Added `StreamReadFilter` support for stream reads with validation of reserved stream fields (`streamid`, `streamversion`).
   This is useful when:
     * Your command only depends on a subset of events in a stream (for example one or two event types), and reading the full stream adds unnecessary IO and deserialization work.
@@ -114,6 +141,9 @@
 
 #### Breaking changes
 
+* The Jackson 2 compatibility lane remains available for now, but the new Jackson 3-native converter artifact is the intended path forward.
+  * Keep using `cloudevent-converter-jackson` only if you need the legacy `com.fasterxml.jackson.*` API surface for an existing codebase.
+  * New Spring Boot applications should prefer the Boot 4 / Jackson 3 stack and the new `cloudevent-converter-jackson3` artifact.
 * Kotlin collection-oriented `ApplicationService` extensions are exposed as:
   * `executeSequence(...)`
   * `executeList(...)`

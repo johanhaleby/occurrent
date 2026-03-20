@@ -16,13 +16,12 @@
 
 package org.occurrent.example.domain.numberguessinggame.mongodb.spring.blocking.infrastructure;
 
-import com.fasterxml.jackson.core.JsonProcessingException;
-import com.fasterxml.jackson.core.type.TypeReference;
-import com.fasterxml.jackson.databind.ObjectMapper;
 import io.cloudevents.CloudEvent;
 import io.cloudevents.core.builder.CloudEventBuilder;
 import org.occurrent.application.converter.CloudEventConverter;
 import org.occurrent.example.domain.numberguessinggame.model.domainevents.*;
+import tools.jackson.core.type.TypeReference;
+import tools.jackson.databind.ObjectMapper;
 
 import java.net.URI;
 import java.time.LocalDateTime;
@@ -147,10 +146,6 @@ public class NumberGuessGameCloudEventConverter implements CloudEventConverter<G
             return null;
         }
 
-        try {
-            return objectMapper.writeValueAsBytes(eventAsMap);
-        } catch (JsonProcessingException jsonProcessingException) {
-            throw new RuntimeException(jsonProcessingException);
-        }
+        return objectMapper.writeValueAsBytes(eventAsMap);
     }
 }

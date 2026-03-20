@@ -48,8 +48,9 @@
             <version>${project.version}</version>
         </dependency>
         <dependency>
-            <groupId>com.rabbitmq</groupId>
-            <artifactId>amqp-client</artifactId>
+            <groupId>tools.jackson.core</groupId>
+            <artifactId>jackson-databind</artifactId>
+            <version>${jackson3.version}</version>
         </dependency>
         <dependency>
             <groupId>io.javalin</groupId>
@@ -64,8 +65,8 @@
             <artifactId>logback-classic</artifactId>
         </dependency>
         <dependency>
-            <groupId>com.fasterxml.jackson.core</groupId>
-            <artifactId>jackson-databind</artifactId>
+            <groupId>com.rabbitmq</groupId>
+            <artifactId>amqp-client</artifactId>
         </dependency>
         <dependency>
             <groupId>org.jspecify</groupId>

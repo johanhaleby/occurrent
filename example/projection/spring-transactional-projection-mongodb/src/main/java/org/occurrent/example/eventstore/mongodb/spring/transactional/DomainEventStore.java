@@ -16,9 +16,11 @@
 
 package org.occurrent.example.eventstore.mongodb.spring.transactional;
 
-import com.fasterxml.jackson.databind.ObjectMapper;
 import io.cloudevents.CloudEvent;
-import io.cloudevents.core.builder.CloudEventBuilder;
+import org.occurrent.application.converter.CloudEventConverter;
+import org.occurrent.application.converter.jackson3.JacksonCloudEventConverter;
+import org.occurrent.application.converter.typemapper.ReflectionCloudEventTypeMapper;
+import tools.jackson.databind.ObjectMapper;
 import org.occurrent.domain.DomainEvent;
 import org.occurrent.eventstore.api.blocking.EventStore;
 import org.occurrent.eventstore.api.blocking.EventStream;
@@ -27,10 +29,10 @@ import org.springframework.stereotype.Component;
 import java.net.URI;
 import java.util.List;
 import java.util.UUID;
+import java.util.function.Function;
 import java.util.stream.Stream;
 
 import static java.time.ZoneOffset.UTC;
-import static org.occurrent.functional.CheckedFunction.unchecked;
 import static org.occurrent.time.TimeConversion.toLocalDateTime;
 
 @Component
@@ -53,20 +55,21 @@ public class DomainEventStore {
     }
 
     private Stream<CloudEvent> serialize(UUID id, List<DomainEvent> events) {
+        CloudEventConverter<DomainEvent> cloudEventConverter = converter(__ -> id.toString());
         return events.stream()
-                .map(e -> CloudEventBuilder.v1()
-                        .withId(id.toString())
-                        .withSource(URI.create("http://name"))
-                        .withType(e.getClass().getSimpleName())
-                        .withTime(toLocalDateTime(e.timestamp()).atOffset(UTC))
-                        .withSubject(e.name())
-                        .withDataContentType("application/json")
-                        .withData(unchecked(objectMapper::writeValueAsBytes).apply(e))
-                        .build());
+                .map(cloudEventConverter::toCloudEvent);
     }
 
-    @SuppressWarnings("ConstantConditions")
     private DomainEvent deserialize(CloudEvent cloudEvent) {
-        return unchecked((byte[] json) -> objectMapper.readValue(json, DomainEvent.class)).apply(cloudEvent.getData().toBytes());
+        return converter(DomainEvent::eventId).toDomainEvent(cloudEvent);
+    }
+
+    CloudEventConverter<DomainEvent> converter(Function<DomainEvent, String> idMapper) {
+        return new JacksonCloudEventConverter.Builder<DomainEvent>(objectMapper, URI.create("http://name"))
+                .idMapper(idMapper)
+                .typeMapper(ReflectionCloudEventTypeMapper.simple(DomainEvent.class))
+                .subjectMapper(DomainEvent::name)
+                .timeMapper(event -> toLocalDateTime(event.timestamp()).atOffset(UTC))
+                .build();
     }
 }

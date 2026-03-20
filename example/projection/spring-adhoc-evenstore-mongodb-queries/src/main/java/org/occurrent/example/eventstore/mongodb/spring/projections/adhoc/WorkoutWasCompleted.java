@@ -16,10 +16,14 @@
 
 package org.occurrent.example.eventstore.mongodb.spring.projections.adhoc;
 
-import com.fasterxml.jackson.databind.annotation.JsonDeserialize;
-import com.fasterxml.jackson.databind.annotation.JsonSerialize;
-import com.fasterxml.jackson.datatype.jsr310.deser.LocalDateTimeDeserializer;
-import com.fasterxml.jackson.datatype.jsr310.ser.LocalDateTimeSerializer;
+import tools.jackson.databind.annotation.JsonDeserialize;
+import tools.jackson.databind.annotation.JsonSerialize;
+import tools.jackson.core.JsonGenerator;
+import tools.jackson.core.JacksonException;
+import tools.jackson.databind.DeserializationContext;
+import tools.jackson.databind.SerializationContext;
+import tools.jackson.databind.deser.std.StdDeserializer;
+import tools.jackson.databind.ser.std.StdSerializer;
 
 import java.time.LocalDateTime;
 import java.util.Objects;
@@ -32,8 +36,8 @@ public class WorkoutWasCompleted {
     private final String completedBy;
     private final String activity;
 
-    @JsonSerialize(using = LocalDateTimeSerializer.class)
-    @JsonDeserialize(using = LocalDateTimeDeserializer.class)
+    @JsonSerialize(using = LocalDateTimeIsoSerializer.class)
+    @JsonDeserialize(using = LocalDateTimeIsoDeserializer.class)
     private final LocalDateTime completedAt;
 
     public WorkoutWasCompleted(UUID workoutId, LocalDateTime completedAt, String activity, String completedBy) {
@@ -90,5 +94,27 @@ public class WorkoutWasCompleted {
                 ", activity='" + activity + '\'' +
                 ", completedAt=" + completedAt +
                 '}';
+    }
+
+    private static final class LocalDateTimeIsoSerializer extends StdSerializer<LocalDateTime> {
+        private LocalDateTimeIsoSerializer() {
+            super(LocalDateTime.class);
+        }
+
+        @Override
+        public void serialize(LocalDateTime value, JsonGenerator gen, SerializationContext provider) throws JacksonException {
+            gen.writeString(value.toString());
+        }
+    }
+
+    private static final class LocalDateTimeIsoDeserializer extends StdDeserializer<LocalDateTime> {
+        private LocalDateTimeIsoDeserializer() {
+            super(LocalDateTime.class);
+        }
+
+        @Override
+        public LocalDateTime deserialize(tools.jackson.core.JsonParser p, DeserializationContext ctxt) throws JacksonException {
+            return LocalDateTime.parse(p.getValueAsString());
+        }
     }
 }

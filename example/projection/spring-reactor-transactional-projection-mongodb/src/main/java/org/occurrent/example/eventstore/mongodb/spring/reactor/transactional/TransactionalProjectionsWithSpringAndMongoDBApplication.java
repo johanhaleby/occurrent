@@ -16,7 +16,7 @@
 
 package org.occurrent.example.eventstore.mongodb.spring.reactor.transactional;
 
-import com.fasterxml.jackson.databind.ObjectMapper;
+import tools.jackson.databind.ObjectMapper;
 import jakarta.annotation.PostConstruct;
 import org.occurrent.eventstore.api.reactor.EventStore;
 import org.occurrent.eventstore.mongodb.spring.reactor.EventStoreConfig;

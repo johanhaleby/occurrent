@@ -45,6 +45,16 @@
             <version>${project.version}</version>
         </dependency>
         <dependency>
+            <groupId>org.occurrent</groupId>
+            <artifactId>cloudevent-converter-jackson3</artifactId>
+            <version>${project.version}</version>
+        </dependency>
+        <dependency>
+            <groupId>tools.jackson.core</groupId>
+            <artifactId>jackson-databind</artifactId>
+            <version>${jackson3.version}</version>
+        </dependency>
+        <dependency>
             <groupId>io.vavr</groupId>
             <artifactId>vavr</artifactId>
         </dependency>

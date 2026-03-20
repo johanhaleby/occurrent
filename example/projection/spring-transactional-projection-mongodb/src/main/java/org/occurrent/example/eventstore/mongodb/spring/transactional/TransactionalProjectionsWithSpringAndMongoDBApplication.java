@@ -16,8 +16,7 @@
 
 package org.occurrent.example.eventstore.mongodb.spring.transactional;
 
-import com.fasterxml.jackson.databind.ObjectMapper;
-import com.fasterxml.jackson.databind.jsontype.impl.LaissezFaireSubTypeValidator;
+import tools.jackson.databind.ObjectMapper;
 import jakarta.annotation.PostConstruct;
 import org.occurrent.eventstore.api.blocking.EventStore;
 import org.occurrent.eventstore.mongodb.spring.blocking.EventStoreConfig;
@@ -31,8 +30,6 @@ import org.springframework.data.mongodb.MongoTransactionManager;
 import org.springframework.data.mongodb.core.MongoOperations;
 import org.springframework.data.mongodb.core.MongoTemplate;
 import org.springframework.data.mongodb.repository.config.EnableMongoRepositories;
-
-import static com.fasterxml.jackson.databind.ObjectMapper.DefaultTyping.EVERYTHING;
 
 /**
  * Bootstrap the application
@@ -57,11 +54,7 @@ public class TransactionalProjectionsWithSpringAndMongoDBApplication {
 
     @Bean
     public ObjectMapper objectMapper() {
-        ObjectMapper objectMapper = new ObjectMapper();
-        // Configure jackson to add type information to each serialized object
-        // Allows deserializing interfaces such as DomainEvent
-        objectMapper.activateDefaultTyping(new LaissezFaireSubTypeValidator(), EVERYTHING);
-        return objectMapper;
+        return new ObjectMapper();
     }
 
     @PostConstruct

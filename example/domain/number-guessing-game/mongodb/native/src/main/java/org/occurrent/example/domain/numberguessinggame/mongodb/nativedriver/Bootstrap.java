@@ -16,7 +16,7 @@
 
 package org.occurrent.example.domain.numberguessinggame.mongodb.nativedriver;
 
-import com.fasterxml.jackson.databind.ObjectMapper;
+import tools.jackson.databind.ObjectMapper;
 import com.mongodb.client.*;
 import com.mongodb.client.model.Filters;
 import com.rabbitmq.client.AMQP.BasicProperties;
