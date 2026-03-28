@@ -1,31 +1,33 @@
-### Changelog next version
+### 0.20.0 (2026-03-28)
+
+#### Highlights
+
+* Added Spring Boot 4 support in the MongoDB starter while keeping the Spring-facing API stable (`@EnableOccurrent`, `occurrent.*` properties, and the existing opt-in model are unchanged).
+* Added a new Jackson 3-native converter artifact, `org.occurrent:cloudevent-converter-jackson3`, as the preferred choice for new Boot 4 applications.
+* Added `StreamReadFilter` and optional `ReadEventStreamWithFilter` capabilities for filtered stream reads.
+* Added filtered read support to `ApplicationService` through `ExecuteOptions<T>`, with side effects and overload reduction as supporting API cleanup.
+* Finalized the Kotlin `ApplicationService` and typed-filter naming cleanup around `executeSequence(...)`, `executeList(...)`, and `ExecuteFilters`.
 
 * Upgraded the Spring Boot line from `3.5.x` to `4.0.4`.
-  * The Spring Boot starter has been updated for Boot 4 while retaining the existing Spring-facing API:
-    * `@EnableOccurrent` is unchanged.
-    * Existing `occurrent.*` property names are unchanged.
-    * The starter still uses the same opt-in model, i.e. depending on the starter alone does not activate Occurrent beans.
-  * Spring Boot 4-related starter updates include:
-    * support for both Jackson 2 and Jackson 3 converter in `spring-boot-starter-mongodb`
-    * updated starter validation coverage for custom converter precedence, Jackson 2 mapper wiring, Jackson 3 mapper wiring, and the default path
+  * The MongoDB starter now supports both Jackson 2 and Jackson 3 converter wiring on Boot 4.
+  * The starter now picks a user-provided `CloudEventConverter` first, otherwise Jackson 3 when a Jackson 3 `ObjectMapper` is present, and otherwise Jackson 2 as the fallback.
 * Added a Jackson 3-native converter artifact: `org.occurrent:cloudevent-converter-jackson3`.
   * This is the intended default choice for new code on the Boot 4 stack.
   * The Jackson 3 path uses the `tools.jackson.*` packages.
   * The new Jackson 3 converter shares the same CloudEvent conversion semantics as the Jackson 2 converter through a common internal converter core.
 * Kept the existing Jackson 2 converter artifact `org.occurrent:cloudevent-converter-jackson` as a compatibility lane.
   * Existing public APIs that already expose Jackson 2 types continue to work.
-  * The Jackson 2 lane remains available for migration compatibility, while the Jackson 3 lane is the forward-looking path.
+  * Existing applications can stay on `cloudevent-converter-jackson` while migrating incrementally.
 * Split dependency management so Jackson 2 and Jackson 3 are resolved intentionally rather than through one shared root override.
   * Jackson 2 compatibility modules continue to resolve Jackson 2.
   * Jackson 3-native modules resolve Jackson 3 locally where needed.
   * The BOM now publishes both converter lanes alongside the upgraded Spring Boot starter.
 * Migrated the example reactor to the Boot 4 / Jackson 3 path.
   * This includes both starter-based examples and manually wired Spring applications.
-  * Remaining example usage of `activateDefaultTyping(...)` has been removed in favor of explicit CloudEvent converter wiring.
   * One adhoc projection example now uses a local ISO `LocalDateTime` serializer/deserializer instead of the unavailable Jackson 3 `jsr310` artifact.
 * Upgrade guidance:
   * New applications should prefer `cloudevent-converter-jackson3`.
-  * Existing applications that already depend on the Jackson 2 converter API can continue using `cloudevent-converter-jackson` while migrating incrementally.
+  * Existing applications that already depend on the Jackson 2 converter API can continue using `cloudevent-converter-jackson`.
   * If you previously relied on Jackson default typing in example-style setups, prefer explicit CloudEvent converter configuration or Jackson 3 builder-based configuration instead.
 * Added `StreamReadFilter` support for stream reads with validation of reserved stream fields (`streamid`, `streamversion`).
   This is useful when:
@@ -43,7 +45,9 @@
     * `SpringMongoEventStore`
     * `MongoEventStore` (native)
     * `ReactorMongoEventStore`
-* Added `ExecuteOptions<T>` to simplify API usage and reduce overload pressure.
+* Added `ExecuteOptions<T>` to bring filtered reads and side effects into the main `ApplicationService` API.
+  * The main new capability is `.filter(...)`, which lets execute flows read only the relevant events from a stream.
+  * The options object also reduces overload pressure by grouping filtering and side-effect configuration in one place.
   * New entry points:
     * `execute(String streamId, ExecuteOptions<T> options, Function<Stream<T>, Stream<T>> fn)`
     * `execute(UUID streamId, ExecuteOptions<T> options, Function<Stream<T>, Stream<T>> fn)`
@@ -59,7 +63,7 @@
             domainFn
     );
     ```
-* Deprecated legacy `ApplicationService` overloads in favor of `ExecuteOptions`:
+* Deprecated legacy `ApplicationService` side-effect overloads in favor of `ExecuteOptions`:
   * `execute(String, Function<Stream<T>, Stream<T>>, Consumer<Stream<T>>)`
   * `execute(UUID, Function<Stream<T>, Stream<T>>, Consumer<Stream<T>>)`
 * Kotlin `ApplicationService` helpers now use explicit collection-oriented names and direct-import `ExecuteOptions` helper functions:
@@ -141,13 +145,21 @@
 
 #### Breaking changes
 
-* The Jackson 2 compatibility lane remains available for now, but the new Jackson 3-native converter artifact is the intended path forward.
-  * Keep using `cloudevent-converter-jackson` only if you need the legacy `com.fasterxml.jackson.*` API surface for an existing codebase.
-  * New Spring Boot applications should prefer the Boot 4 / Jackson 3 stack and the new `cloudevent-converter-jackson3` artifact.
-* Kotlin collection-oriented `ApplicationService` extensions are exposed as:
-  * `executeSequence(...)`
-  * `executeList(...)`
-* The shorter Kotlin `execute(...)` collection aliases are not part of the final 0.20.0 API.
+* Upgrading to the Boot 4 path means Jackson 3 is now the preferred lane for new applications.
+  * New Spring Boot applications should use `org.occurrent:cloudevent-converter-jackson3`.
+  * The Jackson 3 lane uses the `tools.jackson.*` packages.
+  * If your existing code depends on Occurrent APIs that expose `com.fasterxml.jackson.*`, stay on `org.occurrent:cloudevent-converter-jackson` until you migrate.
+* Kotlin collection-oriented `ApplicationService` extensions are exposed as `executeSequence(...)` and `executeList(...)`.
+  * The shorter Kotlin `execute(...)` collection aliases are not part of the final `0.20.0` API.
+  * Migration summary:
+    * Before: `applicationService.execute(...) { events: Sequence<T> -> ... }`
+    * After: `applicationService.executeSequence(...) { events -> ... }`
+    * Before: `applicationService.execute(...) { events: List<T> -> ... }`
+    * After: `applicationService.executeList(...) { events -> ... }`
+* Kotlin typed execute-filter helpers are namespaced under `ExecuteFilters`.
+  * Migration summary:
+    * Before: `type<MyEvent>()`, `excludeTypes<A, B>()`, `includeTypes<A, B>()`
+    * After: `ExecuteFilters.type<MyEvent>()`, `ExecuteFilters.excludeTypes(A::class, B::class)`, `ExecuteFilters.includeTypes(A::class, B::class)`
 
 #### Why this changed
 
