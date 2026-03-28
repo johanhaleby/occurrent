@@ -70,7 +70,7 @@ import static org.occurrent.subscription.mongodb.spring.blocking.SpringMongoSubs
 @AutoConfiguration(after = MongoAutoConfiguration.class)
 @ConditionalOnClass({SpringMongoEventStore.class, SpringMongoSubscriptionModel.class})
 @EnableConfigurationProperties(OccurrentProperties.class)
-@Import({Jackson2CloudEventConverterConfiguration.class, Jackson3CloudEventConverterConfiguration.class})
+@Import(Jackson3CloudEventConverterConfiguration.class)
 public class OccurrentMongoAutoConfiguration<E> {
 
     @Bean

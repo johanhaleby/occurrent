@@ -1,3 +1,14 @@
+### Next version
+
+* Made `org.occurrent:spring-boot-starter-mongodb` Jackson 3-only for its built-in CloudEvent converter autoconfiguration.
+  * The starter no longer brings in the Jackson 2 converter lane by default.
+  * If you want to keep using `org.occurrent:cloudevent-converter-jackson`, define your own `CloudEventConverter` bean explicitly.
+  * Starter behavior is now:
+    * user-provided `CloudEventConverter` wins
+    * otherwise the starter configures a Jackson 3 converter
+    * if no Jackson 3 `ObjectMapper` bean exists, the starter creates a default Jackson 3 mapper internally
+  * The starter still includes the Jackson annotations dependency required by the Jackson 3 lane.
+
 ### 0.20.0 (2026-03-28)
 
 #### Highlights

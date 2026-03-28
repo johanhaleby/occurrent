@@ -20,7 +20,6 @@ package org.occurrent.springboot.mongo.blocking;
 import org.occurrent.application.converter.CloudEventConverter;
 import org.occurrent.application.converter.jackson3.JacksonCloudEventConverter;
 import org.occurrent.application.converter.typemapper.CloudEventTypeMapper;
-import org.springframework.boot.autoconfigure.condition.ConditionalOnBean;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnMissingBean;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
@@ -29,7 +28,6 @@ import tools.jackson.databind.ObjectMapper;
 import java.util.Optional;
 
 @Configuration(proxyBeanMethods = false)
-@ConditionalOnBean(type = "tools.jackson.databind.ObjectMapper")
 class Jackson3CloudEventConverterConfiguration {
 
     @Bean

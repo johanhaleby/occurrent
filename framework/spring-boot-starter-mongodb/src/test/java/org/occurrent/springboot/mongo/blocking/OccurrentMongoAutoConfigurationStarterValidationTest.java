@@ -17,7 +17,6 @@
 
 package org.occurrent.springboot.mongo.blocking;
 
-import com.fasterxml.jackson.databind.ObjectMapper;
 import io.cloudevents.CloudEvent;
 import io.cloudevents.core.builder.CloudEventBuilder;
 import org.junit.jupiter.api.Test;
@@ -103,11 +102,10 @@ class OccurrentMongoAutoConfigurationStarterValidationTest {
     }
 
     @Test
-    void user_jackson2_mapper_creates_jackson2_converter() {
-        contextRunner.withBean(ObjectMapper.class, ObjectMapper::new).run(context -> {
+    void default_path_creates_jackson3_converter() {
+        contextRunner.run(context -> {
             assertThat(context).hasSingleBean(CloudEventConverter.class);
-            assertThat(context.getBean(CloudEventConverter.class).getClass().getName()).startsWith("org.occurrent.application.converter.jackson.");
-            assertThat(context.getBean(CloudEventConverter.class).getClass().getName()).doesNotContain("jackson3");
+            assertThat(context.getBean(CloudEventConverter.class).getClass().getName()).startsWith("org.occurrent.application.converter.jackson3.");
 
             CloudEventConverter<TestEvent> converter = context.getBean(CloudEventConverter.class);
             CloudEvent cloudEvent = converter.toCloudEvent(sampleEvent());
@@ -119,11 +117,10 @@ class OccurrentMongoAutoConfigurationStarterValidationTest {
     }
 
     @Test
-    void default_path_creates_jackson2_converter() {
-        contextRunner.run(context -> {
+    void user_jackson3_mapper_still_creates_jackson3_converter() {
+        contextRunner.withBean(tools.jackson.databind.ObjectMapper.class, tools.jackson.databind.ObjectMapper::new).run(context -> {
             assertThat(context).hasSingleBean(CloudEventConverter.class);
-            assertThat(context.getBean(CloudEventConverter.class).getClass().getName()).startsWith("org.occurrent.application.converter.jackson.");
-            assertThat(context.getBean(CloudEventConverter.class).getClass().getName()).doesNotContain("jackson3");
+            assertThat(context.getBean(CloudEventConverter.class).getClass().getName()).startsWith("org.occurrent.application.converter.jackson3.");
 
             CloudEventConverter<TestEvent> converter = context.getBean(CloudEventConverter.class);
             CloudEvent cloudEvent = converter.toCloudEvent(sampleEvent());
