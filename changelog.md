@@ -1,3 +1,9 @@
+### 0.20.2 (2026-03-29)
+
+* Made the default `CloudEventConverter` in `org.occurrent:spring-boot-starter-mongodb` behave as a fallback bean.
+  * Custom `CloudEventConverter` beans provided by applications or composed support libraries now take precedence also when Occurrent is enabled indirectly through another `@Enable...` annotation.
+  * This fixes duplicate `CloudEventConverter` conflicts such as `occurrentCloudEventConverter` vs `cloudEventConverter` in `occurrent-support`-based setups.
+
 ### 0.20.1 (2026-03-29)
 
 * Made `org.occurrent:spring-boot-starter-mongodb` Jackson 3-only for its built-in CloudEvent converter autoconfiguration.

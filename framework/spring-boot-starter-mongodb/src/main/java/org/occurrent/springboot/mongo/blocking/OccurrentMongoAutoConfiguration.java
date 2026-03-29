@@ -54,6 +54,7 @@ import org.springframework.boot.mongodb.autoconfigure.MongoAutoConfiguration;
 import org.springframework.boot.context.properties.EnableConfigurationProperties;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Conditional;
+import org.springframework.context.annotation.Fallback;
 import org.springframework.context.annotation.Import;
 import org.springframework.data.mongodb.MongoDatabaseFactory;
 import org.springframework.data.mongodb.MongoTransactionManager;
@@ -133,6 +134,7 @@ public class OccurrentMongoAutoConfiguration<E> {
     }
 
     @Bean
+    @Fallback
     @Conditional(OnMissingCloudEventConverterAndCloudEventTypeMapperCondition.class)
     public CloudEventTypeMapper<E> occurrentTypeMapper() {
         return newDefaultCloudEventTypeMapper();

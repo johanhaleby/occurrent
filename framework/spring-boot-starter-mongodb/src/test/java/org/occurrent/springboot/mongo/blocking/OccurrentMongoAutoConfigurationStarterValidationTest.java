@@ -27,6 +27,7 @@ import org.springframework.boot.autoconfigure.AutoConfigurations;
 import org.springframework.boot.test.context.runner.ApplicationContextRunner;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
+import org.springframework.context.annotation.Import;
 import org.springframework.data.mongodb.MongoDatabaseFactory;
 import org.springframework.data.mongodb.core.MongoTemplate;
 
@@ -79,6 +80,19 @@ class OccurrentMongoAutoConfigurationStarterValidationTest {
         contextRunner.withBean(CloudEventConverter.class, () -> cloudEventConverter).run(context -> {
             assertThat(context).hasSingleBean(CloudEventConverter.class);
             assertThat(context.getBean(CloudEventConverter.class)).isSameAs(cloudEventConverter);
+
+            CloudEvent cloudEvent = context.getBean(CloudEventConverter.class).toCloudEvent(sampleEvent());
+            assertThat(cloudEvent.getSource()).isEqualTo(URI.create("urn:custom"));
+            assertThat(cloudEvent.getType()).isEqualTo("custom-type");
+        });
+    }
+
+    @Test
+    void library_provided_cloud_event_converter_takes_precedence_when_enable_occurrent_is_composed() {
+        contextRunner.withUserConfiguration(ComposedLibraryConfiguration.class).run(context -> {
+            assertThat(context).hasBean("occurrentCloudEventConverter");
+            assertThat(context).hasBean("cloudEventConverter");
+            assertThat(context.getBean(CloudEventConverter.class)).isSameAs(context.getBean("cloudEventConverter"));
 
             CloudEvent cloudEvent = context.getBean(CloudEventConverter.class).toCloudEvent(sampleEvent());
             assertThat(cloudEvent.getSource()).isEqualTo(URI.create("urn:custom"));
@@ -154,6 +168,39 @@ class OccurrentMongoAutoConfigurationStarterValidationTest {
         CloudEventTypeMapper testEventCloudEventTypeMapper() {
             return ReflectionCloudEventTypeMapper.qualified();
         }
+    }
+
+    @Configuration(proxyBeanMethods = false)
+    @Import(ComposedLibraryOccurrentConfiguration.class)
+    static class ComposedLibraryConfiguration {
+        @Bean
+        CloudEventConverter<TestEvent> cloudEventConverter() {
+            return new CloudEventConverter<>() {
+                @Override
+                public CloudEvent toCloudEvent(TestEvent domainEvent) {
+                    return CloudEventBuilder.v1()
+                            .withId("library-" + domainEvent.eventId())
+                            .withSource(URI.create("urn:custom"))
+                            .withType("custom-type")
+                            .build();
+                }
+
+                @Override
+                public TestEvent toDomainEvent(CloudEvent cloudEvent) {
+                    throw new AssertionError("not expected");
+                }
+
+                @Override
+                public String getCloudEventType(Class<? extends TestEvent> type) {
+                    return "custom-type";
+                }
+            };
+        }
+    }
+
+    @Configuration(proxyBeanMethods = false)
+    @EnableOccurrent
+    static class ComposedLibraryOccurrentConfiguration {
     }
 
     record TestEvent(UUID eventId, Date timestamp, String name, String subject) {

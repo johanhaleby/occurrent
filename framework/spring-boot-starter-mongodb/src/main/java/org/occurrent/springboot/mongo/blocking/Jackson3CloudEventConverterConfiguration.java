@@ -23,6 +23,7 @@ import org.occurrent.application.converter.typemapper.CloudEventTypeMapper;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnMissingBean;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
+import org.springframework.context.annotation.Fallback;
 import tools.jackson.databind.ObjectMapper;
 
 import java.util.Optional;
@@ -31,6 +32,7 @@ import java.util.Optional;
 class Jackson3CloudEventConverterConfiguration {
 
     @Bean
+    @Fallback
     @ConditionalOnMissingBean(CloudEventConverter.class)
     public <E> CloudEventConverter<E> occurrentCloudEventConverter(Optional<ObjectMapper> objectMapper, OccurrentProperties occurrentProperties, CloudEventTypeMapper<E> cloudEventTypeMapper) {
         ObjectMapper om = objectMapper.orElseGet(ObjectMapper::new);
