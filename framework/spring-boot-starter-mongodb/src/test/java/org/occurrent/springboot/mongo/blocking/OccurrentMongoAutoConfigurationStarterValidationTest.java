@@ -101,6 +101,30 @@ class OccurrentMongoAutoConfigurationStarterValidationTest {
     }
 
     @Test
+    void library_provided_cloud_event_converter_takes_precedence_when_enable_occurrent_is_composed_and_no_type_mapper_is_defined() {
+        new ApplicationContextRunner()
+                .withConfiguration(AutoConfigurations.of(OccurrentMongoAutoConfiguration.class))
+                .withUserConfiguration(EnabledOccurrentConfiguration.class, ComposedLibraryConfiguration.class)
+                .withBean(MongoDatabaseFactory.class, () -> mock(MongoDatabaseFactory.class))
+                .withBean(MongoTemplate.class, () -> mock(MongoTemplate.class))
+                .withPropertyValues(
+                        "occurrent.event-store.enabled=false",
+                        "occurrent.subscription.enabled=false",
+                        "occurrent.cloud-event-converter.cloud-event-source=urn:occurrent:test"
+                )
+                .run(context -> {
+                    assertThat(context).hasBean("occurrentCloudEventConverter");
+                    assertThat(context).hasBean("cloudEventConverter");
+                    assertThat(context.getBean(CloudEventConverter.class)).isSameAs(context.getBean("cloudEventConverter"));
+                    assertThat(context).doesNotHaveBean(CloudEventTypeMapper.class);
+
+                    CloudEvent cloudEvent = context.getBean(CloudEventConverter.class).toCloudEvent(sampleEvent());
+                    assertThat(cloudEvent.getSource()).isEqualTo(URI.create("urn:custom"));
+                    assertThat(cloudEvent.getType()).isEqualTo("custom-type");
+                });
+    }
+
+    @Test
     void user_jackson3_mapper_creates_jackson3_converter() {
         contextRunner.withBean(tools.jackson.databind.ObjectMapper.class, tools.jackson.databind.ObjectMapper::new).run(context -> {
             assertThat(context).hasSingleBean(CloudEventConverter.class);

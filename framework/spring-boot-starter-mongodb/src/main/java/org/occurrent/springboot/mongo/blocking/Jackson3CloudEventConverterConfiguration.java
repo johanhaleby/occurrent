@@ -20,10 +20,12 @@ package org.occurrent.springboot.mongo.blocking;
 import org.occurrent.application.converter.CloudEventConverter;
 import org.occurrent.application.converter.jackson3.JacksonCloudEventConverter;
 import org.occurrent.application.converter.typemapper.CloudEventTypeMapper;
+import org.occurrent.application.converter.typemapper.ReflectionCloudEventTypeMapper;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnMissingBean;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 import org.springframework.context.annotation.Fallback;
+import org.springframework.context.annotation.Lazy;
 import tools.jackson.databind.ObjectMapper;
 
 import java.util.Optional;
@@ -32,12 +34,16 @@ import java.util.Optional;
 class Jackson3CloudEventConverterConfiguration {
 
     @Bean
+    // Keep the fallback converter lazy so composed libraries can supply their own
+    // CloudEventConverter without forcing the starter's default bean to instantiate.
+    @Lazy
     @Fallback
     @ConditionalOnMissingBean(CloudEventConverter.class)
-    public <E> CloudEventConverter<E> occurrentCloudEventConverter(Optional<ObjectMapper> objectMapper, OccurrentProperties occurrentProperties, CloudEventTypeMapper<E> cloudEventTypeMapper) {
+    public <E> CloudEventConverter<E> occurrentCloudEventConverter(Optional<ObjectMapper> objectMapper, OccurrentProperties occurrentProperties, Optional<CloudEventTypeMapper<E>> cloudEventTypeMapper) {
         ObjectMapper om = objectMapper.orElseGet(ObjectMapper::new);
+        CloudEventTypeMapper<E> typeMapper = cloudEventTypeMapper.orElseGet(ReflectionCloudEventTypeMapper::qualified);
         return new JacksonCloudEventConverter.Builder<E>(om, occurrentProperties.getCloudEventConverter().getCloudEventSource())
-                .typeMapper(cloudEventTypeMapper)
+                .typeMapper(typeMapper)
                 .build();
     }
 }

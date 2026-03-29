@@ -56,6 +56,7 @@ import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Conditional;
 import org.springframework.context.annotation.Fallback;
 import org.springframework.context.annotation.Import;
+import org.springframework.context.annotation.Lazy;
 import org.springframework.data.mongodb.MongoDatabaseFactory;
 import org.springframework.data.mongodb.MongoTransactionManager;
 import org.springframework.data.mongodb.core.MongoTemplate;
@@ -134,6 +135,7 @@ public class OccurrentMongoAutoConfiguration<E> {
     }
 
     @Bean
+    @Lazy
     @Fallback
     @Conditional(OnMissingCloudEventConverterAndCloudEventTypeMapperCondition.class)
     public CloudEventTypeMapper<E> occurrentTypeMapper() {

@@ -1,3 +1,10 @@
+### 0.20.3 (2026-03-29)
+
+* Completed the Spring Boot starter fallback fix for composed `CloudEventConverter` setups.
+  * The starter's fallback `CloudEventConverter` no longer requires a `CloudEventTypeMapper` bean to exist and now falls back to `ReflectionCloudEventTypeMapper.qualified()` when needed.
+  * The fallback converter and fallback type mapper are now lazy, so they are not pre-instantiated when a library or application already provides its own converter.
+  * This fixes startup failures in composed support-library setups where `occurrentCloudEventConverter` was still created and failed before a custom converter could take effect.
+
 ### 0.20.2 (2026-03-29)
 
 * Made the default `CloudEventConverter` in `org.occurrent:spring-boot-starter-mongodb` behave as a fallback bean.
