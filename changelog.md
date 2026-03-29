@@ -1,4 +1,4 @@
-### Next version
+### 0.20.1 (2026-03-29)
 
 * Made `org.occurrent:spring-boot-starter-mongodb` Jackson 3-only for its built-in CloudEvent converter autoconfiguration.
   * The starter no longer brings in the Jackson 2 converter lane by default.
