@@ -47,9 +47,9 @@ import org.occurrent.time.TimeConversion;
 import org.springframework.data.mongodb.MongoTransactionManager;
 import org.springframework.data.mongodb.core.MongoTemplate;
 import org.springframework.data.mongodb.core.SimpleMongoClientDatabaseFactory;
-import org.testcontainers.containers.MongoDBContainer;
 import org.testcontainers.junit.jupiter.Container;
 import org.testcontainers.junit.jupiter.Testcontainers;
+import org.testcontainers.mongodb.MongoDBContainer;
 
 import java.net.URI;
 import java.time.Instant;
@@ -94,7 +94,8 @@ public class SpringMongoEventStoreTest {
     private static final URI NAME_SOURCE = URI.create("http://name");
 
     static {
-        mongoDBContainer = new MongoDBContainer("mongo:" + System.getProperty("test.mongo.version"));
+        mongoDBContainer = new MongoDBContainer("mongo:" + System.getProperty("test.mongo.version"))
+                .withReplicaSet();
         List<String> ports = new ArrayList<>();
         ports.add("27017:27017");
         mongoDBContainer.withReuse(true).setPortBindings(ports);
@@ -424,10 +425,10 @@ public class SpringMongoEventStoreTest {
             persist("name", WriteCondition.streamVersionEq(0), event1);
             persist("name", WriteCondition.streamVersionEq(1), event2);
             persist("name", WriteCondition.streamVersionEq(2), event3);
-            
+
 
             EventStream<CloudEvent> eventStream = eventStore.read("name", StreamReadFilter.type(in(NameWasChanged.class.getSimpleName())));
-            
+
             WriteResult writeResult = persist("name", WriteCondition.streamVersionEq(eventStream.version()), event4);
 
             // Then

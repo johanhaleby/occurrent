@@ -50,9 +50,9 @@ import org.occurrent.testsupport.mongodb.FlushMongoDBExtension;
 import org.springframework.data.mongodb.MongoTransactionManager;
 import org.springframework.data.mongodb.core.MongoTemplate;
 import org.springframework.data.mongodb.core.SimpleMongoClientDatabaseFactory;
-import org.testcontainers.containers.MongoDBContainer;
 import org.testcontainers.junit.jupiter.Container;
 import org.testcontainers.junit.jupiter.Testcontainers;
+import org.testcontainers.mongodb.MongoDBContainer;
 
 import java.net.URI;
 import java.time.Duration;
@@ -92,7 +92,9 @@ public class SpringMongoSubscriptionPositionStorageTest {
 
     @Container
     private static final MongoDBContainer mongoDBContainer =
-            new MongoDBContainer("mongo:" + System.getProperty("test.mongo.version")).withReuse(true);
+            new MongoDBContainer("mongo:" + System.getProperty("test.mongo.version"))
+                    .withReplicaSet()
+                    .withReuse(true);
     private static final String RESUME_TOKEN_COLLECTION = "ack";
 
     @RegisterExtension

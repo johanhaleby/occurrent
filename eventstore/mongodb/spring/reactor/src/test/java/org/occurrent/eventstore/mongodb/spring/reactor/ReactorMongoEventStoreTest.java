@@ -47,9 +47,9 @@ import org.springframework.data.mongodb.ReactiveMongoTransactionManager;
 import org.springframework.data.mongodb.core.ReactiveMongoTemplate;
 import org.springframework.data.mongodb.core.SimpleReactiveMongoDatabaseFactory;
 import org.springframework.transaction.reactive.TransactionalOperator;
-import org.testcontainers.containers.MongoDBContainer;
 import org.testcontainers.junit.jupiter.Container;
 import org.testcontainers.junit.jupiter.Testcontainers;
+import org.testcontainers.mongodb.MongoDBContainer;
 import reactor.core.publisher.Flux;
 import reactor.core.publisher.Mono;
 import reactor.core.scheduler.Schedulers;
@@ -100,7 +100,8 @@ public class ReactorMongoEventStoreTest {
     private static final URI NAME_SOURCE = URI.create("http://name");
 
     static {
-        mongoDBContainer = new MongoDBContainer("mongo:" + System.getProperty("test.mongo.version"));
+        mongoDBContainer = new MongoDBContainer("mongo:" + System.getProperty("test.mongo.version"))
+                .withReplicaSet();
         List<String> ports = new ArrayList<>();
         ports.add("27017:27017");
         mongoDBContainer.withReuse(true);
