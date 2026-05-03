@@ -38,9 +38,9 @@ import org.springframework.dao.OptimisticLockingFailureException
 import org.springframework.data.mongodb.core.MongoOperations
 import org.springframework.data.mongodb.core.MongoTemplate
 import org.springframework.data.mongodb.core.findById
-import org.testcontainers.containers.MongoDBContainer
 import org.testcontainers.junit.jupiter.Container
 import org.testcontainers.junit.jupiter.Testcontainers
+import org.testcontainers.mongodb.MongoDBContainer
 import java.util.*
 import java.util.concurrent.CyclicBarrier
 import java.util.concurrent.ExecutionException

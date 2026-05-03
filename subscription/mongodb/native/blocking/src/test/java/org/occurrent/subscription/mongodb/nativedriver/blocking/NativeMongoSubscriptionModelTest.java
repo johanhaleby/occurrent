@@ -41,9 +41,9 @@ import org.occurrent.subscription.OccurrentSubscriptionFilter;
 import org.occurrent.subscription.internal.ExecutorShutdown;
 import org.occurrent.subscription.mongodb.MongoFilterSpecification.MongoJsonFilterSpecification;
 import org.occurrent.testsupport.mongodb.FlushMongoDBExtension;
-import org.testcontainers.containers.MongoDBContainer;
 import org.testcontainers.junit.jupiter.Container;
 import org.testcontainers.junit.jupiter.Testcontainers;
+import org.testcontainers.mongodb.MongoDBContainer;
 
 import java.net.URI;
 import java.time.Duration;
@@ -86,7 +86,9 @@ public class NativeMongoSubscriptionModelTest {
 
     @Container
     private static final MongoDBContainer mongoDBContainer =
-            new MongoDBContainer("mongo:" + System.getProperty("test.mongo.version")).withReuse(true);
+            new MongoDBContainer("mongo:" + System.getProperty("test.mongo.version"))
+                    .withReuse(true)
+                    .withReplicaSet();
 
     @RegisterExtension
     FlushMongoDBExtension flushMongoDBExtension = new FlushMongoDBExtension(new ConnectionString(mongoDBContainer.getReplicaSetUrl()));
@@ -127,7 +129,7 @@ public class NativeMongoSubscriptionModelTest {
 
         // When
         Throwable throwable = catchThrowable(() -> subscriptionModel.subscribe(subscriptionId, __ -> System.out.println("hello")).waitUntilStarted());
-        
+
         // Then
         assertThat(throwable).isExactlyInstanceOf(IllegalArgumentException.class).hasMessage("Subscription " + subscriptionId + " is already defined.");
     }
@@ -277,7 +279,7 @@ public class NativeMongoSubscriptionModelTest {
             assertThat(state).extracting(CloudEvent::getId, CloudEvent::getType).containsOnly(tuple(nameDefined2.eventId(), NameDefined.class.getName()));
         }
     }
-    
+
     @Nested
     @DisplayName("Lifecycle")
     class LifeCycleTest {

@@ -45,9 +45,9 @@ import org.occurrent.subscription.api.blocking.SubscriptionPositionStorage;
 import org.occurrent.subscription.blocking.durable.DurableSubscriptionModel;
 import org.occurrent.subscription.mongodb.MongoFilterSpecification.MongoJsonFilterSpecification;
 import org.occurrent.testsupport.mongodb.FlushMongoDBExtension;
-import org.testcontainers.containers.MongoDBContainer;
 import org.testcontainers.junit.jupiter.Container;
 import org.testcontainers.junit.jupiter.Testcontainers;
+import org.testcontainers.mongodb.MongoDBContainer;
 
 import java.net.URI;
 import java.time.Duration;
@@ -88,7 +88,9 @@ public class NativeMongoSubscriptionPositionStorageTest {
 
     @Container
     private static final MongoDBContainer mongoDBContainer =
-            new MongoDBContainer("mongo:" + System.getProperty("test.mongo.version")).withReuse(true);
+            new MongoDBContainer("mongo:" + System.getProperty("test.mongo.version"))
+                    .withReplicaSet()
+                    .withReuse(true);
     private static final String TIMESTAMP_TOKEN_COLLECTION = "subscriptions";
 
     @RegisterExtension
