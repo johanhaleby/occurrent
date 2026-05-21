@@ -29,5 +29,5 @@ nbdist/
 # JQWik
 .jqwik-database
 
-# Local task tracking
-tasks/
+# Local durable context
+.context/
