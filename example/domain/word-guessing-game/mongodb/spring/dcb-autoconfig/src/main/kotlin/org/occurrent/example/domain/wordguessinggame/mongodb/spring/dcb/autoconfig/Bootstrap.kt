@@ -21,24 +21,13 @@ import org.occurrent.application.service.blocking.dcb.DcbApplicationService
 import org.occurrent.application.service.blocking.dcb.GenericDcbApplicationService
 import org.occurrent.application.service.blocking.dcb.TagGenerator
 import org.occurrent.dsl.decider.Decider
-import org.occurrent.dsl.decider.decider
 import org.occurrent.eventstore.api.dcb.DcbEventStore
 import org.occurrent.example.domain.wordguessinggame.event.GameEvent
-import org.occurrent.example.domain.wordguessinggame.event.GameWasLost
-import org.occurrent.example.domain.wordguessinggame.event.GameWasStarted
-import org.occurrent.example.domain.wordguessinggame.event.GameWasWon
-import org.occurrent.example.domain.wordguessinggame.event.NumberOfGuessesWasExhaustedForPlayer
-import org.occurrent.example.domain.wordguessinggame.event.PlayerGuessedTheRightWord
-import org.occurrent.example.domain.wordguessinggame.event.PlayerGuessedTheWrongWord
 import org.occurrent.example.domain.wordguessinggame.mongodb.spring.dcb.autoconfig.features.GameCloudEventConverter
 import org.occurrent.example.domain.wordguessinggame.mongodb.spring.dcb.autoconfig.features.dcb.GameEventTagGenerator
-import org.occurrent.example.domain.wordguessinggame.writemodel.GameId
-import org.occurrent.example.domain.wordguessinggame.writemodel.MaxNumberOfGuessesPerPlayer
-import org.occurrent.example.domain.wordguessinggame.writemodel.MaxNumberOfGuessesTotal
-import org.occurrent.example.domain.wordguessinggame.writemodel.PlayerId
-import org.occurrent.example.domain.wordguessinggame.writemodel.Timestamp
-import org.occurrent.example.domain.wordguessinggame.writemodel.Word
-import org.occurrent.example.domain.wordguessinggame.writemodel.WordList
+import org.occurrent.example.domain.wordguessinggame.mongodb.spring.dcb.autoconfig.features.gameplay.decider.WordGuessingGameCommand
+import org.occurrent.example.domain.wordguessinggame.mongodb.spring.dcb.autoconfig.features.gameplay.decider.WordGuessingGameState
+import org.occurrent.example.domain.wordguessinggame.mongodb.spring.dcb.autoconfig.features.gameplay.decider.wordGuessingGameDecider as createWordGuessingGameDecider
 import org.occurrent.springboot.mongo.blocking.EnableOccurrent
 import org.springframework.boot.autoconfigure.SpringBootApplication
 import org.springframework.boot.runApplication
@@ -49,14 +38,19 @@ import org.springframework.context.annotation.Primary
 import org.springframework.retry.annotation.EnableRetry
 import tools.jackson.module.kotlin.jacksonObjectMapper
 import java.net.URI
-import java.util.UUID
 
 @SpringBootApplication
 @ComponentScan(
     excludeFilters = [
         ComponentScan.Filter(
             type = FilterType.REGEX,
-            pattern = ["org\\.occurrent\\.example\\.domain\\.wordguessinggame\\.mongodb\\.spring\\.dcb\\.autoconfig\\.features\\..*"]
+            pattern = [
+                "org\\.occurrent\\.example\\.domain\\.wordguessinggame\\.mongodb\\.spring\\.dcb\\.autoconfig\\.features\\.gameplay\\.views\\..*",
+                "org\\.occurrent\\.example\\.domain\\.wordguessinggame\\.mongodb\\.spring\\.dcb\\.autoconfig\\.features\\.gameplay\\.website\\..*",
+                "org\\.occurrent\\.example\\.domain\\.wordguessinggame\\.mongodb\\.spring\\.dcb\\.autoconfig\\.features\\.wordhint\\..*",
+                "org\\.occurrent\\.example\\.domain\\.wordguessinggame\\.mongodb\\.spring\\.dcb\\.autoconfig\\.features\\.pointawarding\\..*",
+                "org\\.occurrent\\.example\\.domain\\.wordguessinggame\\.mongodb\\.spring\\.dcb\\.autoconfig\\.features\\.emailwinner\\..*"
+            ]
         )
     ]
 )
@@ -87,125 +81,9 @@ class Bootstrap {
 
     @Bean
     fun wordGuessingGameDecider(): Decider<WordGuessingGameCommand, WordGuessingGameState, GameEvent> =
-        decider(
-            initialState = WordGuessingGameState.NotStarted,
-            decide = { command, state -> decide(command, state) },
-            evolve = { state, event -> evolve(state, event) },
-            isTerminal = { state -> state is WordGuessingGameState.Ended }
-        )
+        createWordGuessingGameDecider()
 }
 
 fun main(args: Array<String>) {
     runApplication<Bootstrap>(*args)
 }
-
-sealed interface WordGuessingGameCommand {
-    data class StartGame(
-        val gameId: GameId,
-        val timestamp: Timestamp,
-        val startedBy: PlayerId,
-        val wordList: WordList
-    ) : WordGuessingGameCommand
-
-    data class GuessWord(
-        val timestamp: Timestamp,
-        val playerId: PlayerId,
-        val word: Word
-    ) : WordGuessingGameCommand
-}
-
-sealed interface WordGuessingGameState {
-    data object NotStarted : WordGuessingGameState
-
-    data class Ongoing(
-        val gameId: GameId,
-        val wordToGuess: String,
-        val maxNumberOfGuessesPerPlayer: Int,
-        val maxNumberOfGuessesTotal: Int,
-        val guesses: List<Guess> = emptyList()
-    ) : WordGuessingGameState {
-        fun numberOfGuessesFor(playerId: PlayerId): Int = guesses.count { it.playerId == playerId }
-        fun isMaxNumberOfGuessesExceededFor(playerId: PlayerId): Boolean = numberOfGuessesFor(playerId) == maxNumberOfGuessesPerPlayer
-        fun isLastGuessFor(playerId: PlayerId): Boolean = numberOfGuessesFor(playerId) + 1 == maxNumberOfGuessesPerPlayer
-        fun isLastGuessForGame(): Boolean = guesses.size == maxNumberOfGuessesTotal - 1
-        fun isRightGuess(word: Word): Boolean = word.value.equals(wordToGuess, ignoreCase = true)
-    }
-
-    data object Ended : WordGuessingGameState
-}
-
-data class Guess(val playerId: PlayerId, val timestamp: Timestamp, val word: String)
-
-private fun decide(command: WordGuessingGameCommand, state: WordGuessingGameState): List<GameEvent> =
-    when (command) {
-        is WordGuessingGameCommand.StartGame -> {
-            check(state is WordGuessingGameState.NotStarted) { "Cannot start game ${command.gameId} since it has already been started" }
-            val wordToGuess = command.wordList.words.random()
-            listOf(
-                GameWasStarted(
-                    eventId = UUID.randomUUID(),
-                    timestamp = command.timestamp,
-                    gameId = command.gameId,
-                    startedBy = command.startedBy,
-                    category = command.wordList.category.value,
-                    wordToGuess = wordToGuess.value,
-                    maxNumberOfGuessesPerPlayer = MaxNumberOfGuessesPerPlayer.value,
-                    maxNumberOfGuessesTotal = MaxNumberOfGuessesTotal.value
-                )
-            )
-        }
-
-        is WordGuessingGameCommand.GuessWord -> {
-            check(state is WordGuessingGameState.Ongoing) { "Cannot guess word for a game that is not ongoing" }
-            require(!state.isMaxNumberOfGuessesExceededFor(command.playerId)) {
-                "Number of guessing attempts exhausted for player ${command.playerId}."
-            }
-
-            if (state.isRightGuess(command.word)) {
-                listOf(
-                    PlayerGuessedTheRightWord(UUID.randomUUID(), command.timestamp, state.gameId, command.playerId, command.word.value),
-                    GameWasWon(UUID.randomUUID(), command.timestamp, state.gameId, command.playerId)
-                )
-            } else {
-                buildList {
-                    add(PlayerGuessedTheWrongWord(UUID.randomUUID(), command.timestamp, state.gameId, command.playerId, command.word.value))
-                    if (state.isLastGuessFor(command.playerId)) {
-                        add(NumberOfGuessesWasExhaustedForPlayer(UUID.randomUUID(), command.timestamp, state.gameId, command.playerId))
-                    }
-                    if (state.isLastGuessForGame()) {
-                        add(GameWasLost(UUID.randomUUID(), command.timestamp, state.gameId))
-                    }
-                }
-            }
-        }
-    }
-
-private fun evolve(state: WordGuessingGameState, event: GameEvent): WordGuessingGameState =
-    when (event) {
-        is GameWasStarted -> WordGuessingGameState.Ongoing(
-            gameId = event.gameId,
-            wordToGuess = event.wordToGuess,
-            maxNumberOfGuessesPerPlayer = event.maxNumberOfGuessesPerPlayer,
-            maxNumberOfGuessesTotal = event.maxNumberOfGuessesTotal
-        )
-
-        is PlayerGuessedTheWrongWord -> state.withOngoingGame {
-            copy(guesses = guesses + Guess(event.playerId, event.timestamp, event.guessedWord))
-        }
-
-        is PlayerGuessedTheRightWord -> state.withOngoingGame {
-            copy(guesses = guesses + Guess(event.playerId, event.timestamp, event.guessedWord))
-        }
-
-        is NumberOfGuessesWasExhaustedForPlayer -> state
-        is GameWasWon -> WordGuessingGameState.Ended
-        is GameWasLost -> WordGuessingGameState.Ended
-        else -> state
-    }
-
-private fun WordGuessingGameState.withOngoingGame(block: WordGuessingGameState.Ongoing.() -> WordGuessingGameState): WordGuessingGameState =
-    if (this is WordGuessingGameState.Ongoing) {
-        block()
-    } else {
-        error("Invalid state: Expected ${WordGuessingGameState.Ongoing::class.simpleName}, was ${this::class.simpleName}")
-    }

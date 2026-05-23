@@ -26,5 +26,5 @@ class TestBootstrap {
 
     @Bean
     @ServiceConnection
-    fun mongoDbContainer(): MongoDBContainer = MongoDBContainer("mongo:4.2.8")
+    fun mongoDbContainer(): MongoDBContainer = MongoDBContainer("mongo:4.2.8").withReplicaSet()
 }
