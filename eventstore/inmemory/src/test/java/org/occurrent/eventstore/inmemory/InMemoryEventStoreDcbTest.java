@@ -114,6 +114,17 @@ class InMemoryEventStoreDcbTest {
         assertThat(eventStore.read(tagsAllOf("name:2")).events()).hasSize(1);
     }
 
+    @Test
+    void delete_all_resets_dcb_sequence() {
+        InMemoryEventStore eventStore = new InMemoryEventStore();
+        eventStore.append("dcb:partition:0", List.of(taggedEvent("NameDefined", "name:1")));
+
+        eventStore.deleteAll();
+
+        assertThat(eventStore.read(all()).lastSequencePosition()).isZero();
+        assertThat(eventStore.append("dcb:partition:0", List.of(taggedEvent("NameDefined", "name:1"))).firstSequencePosition()).isEqualTo(1);
+    }
+
     private static CloudEvent taggedEvent(String type, String... tags) {
         return DcbCloudEvents.withTags(event(type), Set.of(tags));
     }

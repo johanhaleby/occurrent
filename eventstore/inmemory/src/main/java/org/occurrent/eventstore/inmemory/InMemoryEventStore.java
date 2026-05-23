@@ -358,9 +358,12 @@ public class InMemoryEventStore implements EventStore, EventStoreOperations, Eve
     }
 
     public void deleteAll() {
-        state.clear();
-        insertionOrderByEventKey.clear();
-        insertionSequence.set(0);
+        synchronized (state) {
+            state.clear();
+            insertionOrderByEventKey.clear();
+            insertionSequence.set(0);
+            nextDcbPosition.set(1);
+        }
     }
 
     @Override
