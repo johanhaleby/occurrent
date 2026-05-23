@@ -41,6 +41,16 @@
         </dependency>
         <dependency>
             <groupId>org.occurrent</groupId>
+            <artifactId>application-service-blocking</artifactId>
+            <version>${project.version}</version>
+        </dependency>
+        <dependency>
+            <groupId>org.occurrent</groupId>
+            <artifactId>decider</artifactId>
+            <version>${project.version}</version>
+        </dependency>
+        <dependency>
+            <groupId>org.occurrent</groupId>
             <artifactId>subscription-api-blocking</artifactId>
             <version>${project.version}</version>
         </dependency>
