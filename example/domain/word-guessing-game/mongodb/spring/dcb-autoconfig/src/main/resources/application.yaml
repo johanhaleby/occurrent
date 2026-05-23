@@ -1,0 +1,20 @@
+spring:
+  application:
+    name: word-guessing-game-dcb-autoconfig
+  data:
+    mongodb:
+      uri: mongodb://localhost:27017/word-guessing-game-dcb-autoconfig
+      uuid-representation: standard
+  lifecycle:
+    timeout-per-shutdown-phase: 30s
+  threads:
+    virtual:
+      enabled: true
+
+server:
+  shutdown: graceful
+
+occurrent:
+  event-store:
+    capabilities:
+      - dcb
