@@ -19,6 +19,7 @@ import org.assertj.core.api.Assertions.assertThat
 import org.awaitility.Awaitility.await
 import org.junit.jupiter.api.Test
 import org.occurrent.application.converter.CloudEventConverter
+import org.occurrent.cloudevents.OccurrentExtensionGetter
 import org.occurrent.dsl.dcb.blocking.queryForList
 import org.occurrent.eventstore.api.dcb.DcbCloudEvents
 import org.occurrent.eventstore.api.dcb.DcbEventStore
@@ -120,6 +121,12 @@ class AnnotationPoliciesAndDcbReadPathsTest {
 
         assertThat(points.playerId).isEqualTo(playerId)
         assertThat(points.points).isEqualTo(3)
+        assertThat(cloudEvents(GameDcbQueries.pointsDecisionContext(gameId)).filter { GameDcbTags.points(gameId) in DcbCloudEvents.getTags(it) })
+            .allSatisfy { cloudEvent ->
+                assertThat(DcbCloudEvents.getPosition(cloudEvent)).isGreaterThan(0)
+                assertThat(OccurrentExtensionGetter.getStreamId(cloudEvent)).startsWith("dcb:partition:")
+                assertThat(OccurrentExtensionGetter.getStreamVersion(cloudEvent)).isGreaterThan(0)
+            }
         assertThat(wonGame.pointsAwardedToWinner).isEqualTo(3)
         assertThat(ongoingGamesQuery.execute(10).map { it.gameId }.toList()).doesNotContain(gameId)
         assertThat(endedGamesOverviewQuery.execute(10).map { it.gameId }.toList()).contains(gameId)
@@ -157,6 +164,9 @@ class AnnotationPoliciesAndDcbReadPathsTest {
     private inline fun <reified E : GameEvent> events(query: DcbQuery): List<E> =
         eventStore.queryForList(query, cloudEventConverter).filterIsInstance<E>()
 
+    private fun cloudEvents(query: DcbQuery): List<io.cloudevents.CloudEvent> =
+        eventStore.read(query).events()
+
     private fun cloudEventTags(query: DcbQuery): List<Set<String>> =
-        eventStore.read(query).events().map(DcbCloudEvents::getTags)
+        cloudEvents(query).map(DcbCloudEvents::getTags)
 }

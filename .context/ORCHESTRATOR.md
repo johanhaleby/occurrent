@@ -276,3 +276,9 @@ Release scripts:
   - Verification passed:
     - `rtk mvn -q -pl dsl/dcb-dsl/blocking -am test`
     - `rtk mvn -q -pl eventstore/mongodb/spring/blocking,dsl/dcb-dsl/blocking -am test`
+- DCB word-guessing T13 end-to-end verification completed on 2026-05-23:
+  - Added explicit DCB-only stream API rejection checks in both new example modules.
+  - Strengthened end-to-end assertions so DCB-written gameplay/points events prove DCB tags, DCB positions, and Occurrent `streamid`/`streamversion` storage metadata exist.
+  - Full two-module Spring/Testcontainers verification exposed a manual-module retry gap: live policy appends can race command appends and Mongo translates transient `WriteConflict` to `DataIntegrityViolationException`. Manual `StartGame` and `MakeGuess` now retry that exception, matching the autoconfig module.
+  - Ergonomics notes were recorded in `.context/notes/dcb-word-guessing-ergonomics.md`: DCB decider helpers are good after T9, but tag/query/tag-generator boilerplate remains duplicated; live subscription tests need eventual assertions and subscriptions started before commands; annotation metadata is workable, with remaining broad type subscription plus in-handler tag filtering friction.
+  - Verification passed: `rtk mvn -q -f example/domain/word-guessing-game/mongodb/spring/pom.xml -pl dcb,dcb-autoconfig -am test`.
