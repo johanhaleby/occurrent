@@ -320,7 +320,7 @@ public class SpringMongoEventStore implements EventStore, EventStoreOperations, 
         return requireNonNull(transactionTemplate.execute(transactionStatus -> {
             long firstPosition = reserveDcbPositions(eventsToAppend.size());
             long lastPosition = firstPosition + eventsToAppend.size() - 1;
-            long currentStreamVersion = eventStoreCapabilities.contains(STREAM) ? currentStreamVersion(streamId) : firstPosition - 1;
+            long currentStreamVersion = currentStreamVersion(streamId);
             if (condition != null) {
                 updateCheckpoints(condition, lastPosition);
             }
