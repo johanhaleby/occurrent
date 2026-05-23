@@ -30,6 +30,7 @@
         <module>blocking</module>
         <module>reactor</module>
         <module>common</module>
+        <module>dcb</module>
     </modules>
 
 </project>

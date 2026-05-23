@@ -36,6 +36,11 @@
         </dependency>
         <dependency>
             <groupId>org.occurrent</groupId>
+            <artifactId>eventstore-api-dcb</artifactId>
+            <version>${project.version}</version>
+        </dependency>
+        <dependency>
+            <groupId>org.occurrent</groupId>
             <artifactId>eventstore-mongodb-common</artifactId>
             <version>${project.version}</version>
         </dependency>

@@ -29,6 +29,7 @@ import org.occurrent.eventstore.api.SortBy.NaturalImpl;
 import org.occurrent.eventstore.api.SortBy.SingleFieldImpl;
 import org.occurrent.eventstore.api.WriteCondition.StreamVersionWriteCondition;
 import org.occurrent.eventstore.api.blocking.*;
+import org.occurrent.eventstore.api.dcb.*;
 import org.occurrent.eventstore.api.internal.StreamReadFilterToFilterMapper;
 import org.occurrent.eventstore.api.internal.StreamReadFilterValidator;
 import org.occurrent.filter.Filter;
@@ -67,10 +68,11 @@ import static org.occurrent.inmemory.filtermatching.FilterMatcher.matchesFilter;
  * and/or demo purposes. It also supports the {@link EventStoreOperations} contract.
  */
 @NullMarked
-public class InMemoryEventStore implements EventStore, EventStoreOperations, EventStoreQueries, ReadEventStreamWithFilter {
+public class InMemoryEventStore implements EventStore, EventStoreOperations, EventStoreQueries, ReadEventStreamWithFilter, DcbEventStore {
 
     // We cannot use ConcurrentMap since it doesn't maintain insertion order
     private final Map<String, CopyOnWriteArrayList<CloudEvent>> state = Collections.synchronizedMap(new LinkedHashMap<>());
+    private final AtomicLong nextDcbPosition = new AtomicLong(1);
 
     // Global, monotonically increasing insertion order assigned to each event at write time, keyed by the
     // event's "id + source" (the same uniqueness key used by validateNoDuplicateEventExists). This is what
@@ -190,9 +192,124 @@ public class InMemoryEventStore implements EventStore, EventStoreOperations, Eve
         return cloudEventId + cloudEventSource;
     }
 
+    private static List<CloudEvent> applyDcbAndOccurrentMetadata(Stream<CloudEvent> events, String streamId, long streamVersion, long dcbPosition) {
+        AtomicLong streamVersionCounter = new AtomicLong(streamVersion + 1);
+        AtomicLong dcbPositionCounter = new AtomicLong(dcbPosition);
+        return events
+                .map(event -> DcbCloudEvents.withPosition(event, dcbPositionCounter.getAndIncrement()))
+                .map(event -> modifyCloudEvent(e -> e.withExtension(new OccurrentCloudEventExtension(streamId, streamVersionCounter.getAndIncrement()))).apply(event))
+                .collect(Collectors.toList());
+    }
+
     @Override
     public WriteResult write(String streamId, Stream<CloudEvent> events) {
         return write(streamId, WriteCondition.anyStreamVersion(), events);
+    }
+
+    @Override
+    public DcbEventStream read(DcbQuery query, DcbReadOptions options) {
+        requireNonNull(query, "Query cannot be null");
+        requireNonNull(options, "Read options cannot be null");
+
+        synchronized (state) {
+            long highWatermark = nextDcbPosition.get() - 1;
+            long afterSequencePosition = options.afterSequencePosition().orElse(0);
+            List<CloudEvent> matchingEvents = allEvents()
+                    .filter(event -> dcbPosition(event) > afterSequencePosition)
+                    .filter(event -> dcbPosition(event) <= highWatermark)
+                    .filter(event -> matches(event, query))
+                    .toList();
+            return new DcbEventStream(matchingEvents, highWatermark);
+        }
+    }
+
+    @Override
+    public DcbAppendResult append(String streamId, List<CloudEvent> events) {
+        return appendDcb(streamId, events, null);
+    }
+
+    @Override
+    public DcbAppendResult append(String streamId, List<CloudEvent> events, DcbAppendCondition condition) {
+        requireNonNull(condition, "Append condition cannot be null");
+        return appendDcb(streamId, events, condition);
+    }
+
+    private DcbAppendResult appendDcb(String streamId, List<CloudEvent> events, @Nullable DcbAppendCondition condition) {
+        requireNonNull(streamId, "Stream id cannot be null");
+        List<CloudEvent> eventsToAppend = validateDcbEvents(events);
+
+        List<CloudEvent> addedEvents;
+        DcbAppendResult result;
+        synchronized (state) {
+            if (condition != null) {
+                long afterSequencePosition = condition.afterSequencePosition().orElse(0);
+                boolean fulfilled = allEvents()
+                        .filter(event -> dcbPosition(event) > afterSequencePosition)
+                        .noneMatch(event -> matches(event, condition.failIfEventsMatch()));
+                long currentPosition = nextDcbPosition.get() - 1;
+                if (!fulfilled) {
+                    throw new DcbAppendConditionNotFulfilledException(condition, currentPosition, "Append condition was not fulfilled.");
+                }
+            }
+
+            CopyOnWriteArrayList<CloudEvent> currentEvents = state.get(streamId);
+            long currentStreamVersion = calculateStreamVersion(currentEvents);
+            addedEvents = applyDcbAndOccurrentMetadata(eventsToAppend.stream(), streamId, currentStreamVersion, nextDcbPosition.get());
+
+            List<CloudEvent> eventList = currentEvents == null ? new ArrayList<>() : new ArrayList<>(currentEvents);
+            eventList.addAll(addedEvents);
+            List<CloudEvent> allEvents = allEvents().collect(Collectors.toCollection(ArrayList::new));
+            allEvents.addAll(addedEvents);
+            validateNoDuplicateEventExists(allEvents);
+            state.put(streamId, new CopyOnWriteArrayList<>(eventList));
+            nextDcbPosition.addAndGet(addedEvents.size());
+            long firstPosition = dcbPosition(addedEvents.get(0));
+            long lastPosition = dcbPosition(addedEvents.get(addedEvents.size() - 1));
+            result = new DcbAppendResult(firstPosition, lastPosition, addedEvents.size());
+        }
+
+        listener.accept(addedEvents.stream());
+        return result;
+    }
+
+    private Stream<CloudEvent> allEvents() {
+        return state.values().stream().flatMap(List::stream);
+    }
+
+    private static List<CloudEvent> validateDcbEvents(List<CloudEvent> events) {
+        requireNonNull(events, "Events cannot be null");
+        List<CloudEvent> copy = List.copyOf(events);
+        if (copy.isEmpty()) {
+            throw new IllegalArgumentException("Events cannot be empty");
+        }
+        return copy.stream()
+                .peek(event -> requireTrue(event.getSpecVersion() == SpecVersion.V1, "Spec version needs to be " + SpecVersion.V1))
+                .map(event -> DcbCloudEvents.withTags(event, DcbCloudEvents.getTags(event)))
+                .toList();
+    }
+
+    private static boolean matches(CloudEvent event, DcbQuery query) {
+        if (query.matchAll()) {
+            return true;
+        }
+        return query.items().stream().anyMatch(item -> matches(event, item));
+    }
+
+    private static boolean matches(CloudEvent event, DcbQueryItem item) {
+        boolean typeMatches = item.types().isEmpty() || item.types().contains(event.getType());
+        boolean tagsMatch = DcbCloudEvents.getTags(event).containsAll(item.tags());
+        return typeMatches && tagsMatch;
+    }
+
+    private static long dcbPosition(CloudEvent event) {
+        Object position = event.getExtension(DcbCloudEvents.POSITION);
+        if (position instanceof Number number) {
+            return number.longValue();
+        }
+        if (position instanceof String string) {
+            return Long.parseLong(string);
+        }
+        return 0;
     }
 
     @Override

@@ -1,12 +1,12 @@
 # Occurrent Orchestrator Memory
 
-Last updated: 2026-05-22
+Last updated: 2026-05-23
 
 ## Current State
 
 Phase 1 initial exploration is complete and ready for user confirmation. This file did not exist at session start, so the first repository map was built from code-review-graph, Maven metadata, representative source reads, ADRs, CI config, `.context/lessons.md`, recent Git history, and read-only subagent exploration.
 
-No production or test code has been changed during exploration.
+DCB support is currently implemented on branch `johan/dcb-support`.
 
 One read-only conventions/history subagent timed out and was closed; its scope was covered by local history, ADRs, tests, and `.context/lessons.md`.
 
@@ -154,6 +154,10 @@ CloudEvents are the storage boundary. Domain event serialization/deserialization
 - Historical bug-fix themes from Git history include competing consumer locks/reacquisition, catchup subscription position handling, in-memory concurrent modification during query/write, retry for `any` writes, EventStoreQueries sorting defaults, and annotation processing start behavior.
 - Catch-up to live handover invariant (ADR 0014): `CatchupSubscriptionModel` reconciles events written during the bulk replay via the delta query using `SortBy.natural(DESCENDING)` + `limit` (insertion order), NOT the time-based `catchupPhaseSortBy`. Selecting by time is loss-prone under clock skew (a during-replay event with a backdated `time` sorts before the boundary and is missed by both the delta and the live resume). Do not "tidy" the delta sort back to `catchupPhaseSortBy`. The global position is still captured AFTER the bulk replay (fresh token, avoids oplog ageing); the bulk replay keeps `catchupPhaseSortBy` and its time index. `SortBy.natural` in `InMemoryEventStore` now means GLOBAL insertion order (a write-time `insertionSequence`/`insertionOrderByEventKey`), matching MongoDB `$natural`; `query`'s natural handling is unified through the instance `toComparator`. Two known pre-existing residuals tracked as follow-ups: `InMemoryEventStore.query` returns a lazy stream iterated outside the `state` lock (CME risk under concurrent write), and the catch-up delta's net-count arithmetic loses events if events are deleted during the replay.
 - code-review-graph exists but is structurally weak for architecture boundaries in this repo: it reports many file-based communities, no cross-community edges, and test-dominated flows. Use it first for inventory/impact as requested, but verify module boundaries from Maven/source.
+- DCB support deliberately shares the existing CloudEvent storage boundary instead of creating a parallel event model. DCB metadata is represented as CloudEvent extensions (`dcbtags`, `dcbposition`) so normal subscriptions and CloudEvent consumers can continue to see DCB-written events.
+- Mongo DCB position reservation is backed by a separate position collection, but event documents are inserted into the existing event-store collection with normal Occurrent stream metadata. DCB appends are transactional and rely on `MongoTemplate` session synchronization being `ALWAYS`.
+- Mongo DCB reads capture a high-watermark before querying and bound matching reads to `dcbposition > afterSequencePosition && dcbposition <= highWatermark`, then return that same high-watermark. This prevents callers from skipping matching events that commit between the query and high-watermark read.
+- DCB append-condition concurrency is subtle. The Spring Mongo implementation first checks for actual matching events after the caller's position, then updates conservative checkpoint keys (`all`, `tag:<tag>`, and type-only keys) to detect racing appends.
 
 ## Build And Verification
 
@@ -172,6 +176,7 @@ Local focused Maven patterns:
 - Focused module package: `rtk mvn -pl <module-path> -am package`
 - Focused test class: `rtk mvn -pl <module-path> -am -Dtest=<TestClass> test`
 - Kotlin/generic API changes should usually run at least `rtk mvn -pl <module-path> -am test-compile` plus focused tests.
+- DCB touched-module verification: `rtk mvn -q -pl eventstore/api/dcb,eventstore/inmemory,eventstore/mongodb/spring/blocking,application/service/blocking,subscription/mongodb/spring/blocking -am test`
 
 Release scripts:
 - `mvn_local_snapshot.sh` runs release-profile local install with `-Drevision=...` and optional skip tests.
@@ -194,3 +199,23 @@ Release scripts:
 - Treat Maven module boundaries and source ownership as definitive architecture boundaries; use code-review-graph as supporting inventory/impact tooling because its current graph is file-community heavy.
 - Initial durable memory should be written before user confirmation because future compaction/session recovery depends on it.
 - No code changes are allowed during Phase 1 exploration except this durable orchestration memory file.
+- ADR 0014 accepts DCB as an explicit optional capability that shares CloudEvent storage with stream-based Occurrent. Separate `DcbEvent`/`SequencedDcbEvent` wrappers and separate DCB Mongo stores were rejected because they would create a parallel ecosystem for subscriptions and other CloudEvent consumers.
+- DCB API surface added as `eventstore-api-dcb`: `DcbEventStore`, `DcbQuery`, `DcbQueryItem`, `DcbReadOptions`, `DcbCloudEvents`, `DcbEventStream`, `DcbAppendCondition`, `DcbAppendResult`, and `DcbAppendConditionNotFulfilledException`.
+- DCB query semantics for v1: query items are OR-combined; within one item, type matching is any-of and tag matching is all-of. Read options and append conditions use exclusive `afterSequencePosition` (`sequencePosition > afterSequencePosition`).
+- DCB events store explicit tags only in the `dcbtags` CloudEvent extension. Matching must not inspect CloudEvent payload data for tags.
+- DCB v1 implementations were added by having `InMemoryEventStore` and `SpringMongoEventStore` implement `DcbEventStore`. Existing stream writes/read APIs remain available side-by-side with DCB append/read.
+- Blocking DCB application service added under `application/service/blocking/dcb`: `DcbApplicationService`, `GenericDcbApplicationService`, `TagGenerator`, `DcbStreamIdGenerator`, and `PartitionedDcbStreamIdGenerator`. It reads a DCB query, converts current CloudEvents to domain events, runs the domain function, tags new CloudEvents via `DcbCloudEvents.withTags`, and appends to a generated backing stream id with `failIfEventsMatch(query, lastSequencePosition)`.
+- `$learning` was used with strategic checkpoints while implementing the API, in-memory store, Mongo store, and app service. No `TODO(human)` markers remain.
+
+## DCB Work Completed
+
+- ADR: `doc/architecture/decisions/0014-introduce-dcb-as-shared-cloudevent-capability.md`.
+- API tests: `DcbApiTest`.
+- In-memory tests: `InMemoryEventStoreDcbTest` covers type/tag reads, exclusive after-position semantics, append condition success/failure, empty append rejection, duplicate CloudEvent rejection, and no payload tag inspection.
+- Spring Mongo tests: `SpringMongoEventStoreDcbTest` covers type/tag reads, append condition failure, duplicate CloudEvent behavior without position advancement for pre-validation failures, and no payload tag inspection.
+- Spring Mongo tests also cover OR query item semantics with tag-all matching and rollback when insertion fails after reserving a position.
+- Spring Mongo tests also cover stale same-query append conditions failing without advancing the next committed DCB position.
+- Application service tests: `GenericDcbApplicationServiceTest` covers read-decide-append with generated tags, no-op domain functions, and retry from a fresh DCB read when an append condition detects a conflict.
+- Subscription compatibility test: `SpringMongoSubscriptionModelTest#blocking_spring_subscription_calls_listener_for_dcb_written_event` confirms DCB appends written to shared Mongo storage are delivered as ordinary CloudEvents to the existing subscription model.
+- Simplify pass completed after implementation. Only small cleanup was applied: decoded DCB tags now reuse canonical validation, the partitioned stream-id generator validates inputs, and one application-service collector expression was simplified.
+- Public DCB API Javadoc review comments were addressed on 2026-05-23. Newly added DCB API/application-service files now use 2026 copyright headers and brief Javadoc explaining the purpose of DCB queries, tags, append conditions, CloudEvent metadata, storage stream id generation, and the DCB application service.
