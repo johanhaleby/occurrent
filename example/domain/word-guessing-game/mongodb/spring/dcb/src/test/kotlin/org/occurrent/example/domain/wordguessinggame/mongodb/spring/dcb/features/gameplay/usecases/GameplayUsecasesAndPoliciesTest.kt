@@ -19,6 +19,7 @@ import org.assertj.core.api.Assertions.assertThat
 import org.awaitility.Awaitility.await
 import org.junit.jupiter.api.Test
 import org.occurrent.application.converter.CloudEventConverter
+import org.occurrent.cloudevents.OccurrentExtensionGetter
 import org.occurrent.dsl.dcb.blocking.queryForList
 import org.occurrent.eventstore.api.dcb.DcbCloudEvents
 import org.occurrent.eventstore.api.dcb.DcbEventStore
@@ -77,8 +78,13 @@ class GameplayUsecasesAndPoliciesTest {
 
         startGame(gameId, Date(), startedBy, wordList())
         val gameWasStarted = eventuallySingle<GameWasStarted>(GameDcbQueries.gameplay(gameId))
-        assertThat(cloudEventTags(GameDcbQueries.gameplay(gameId)))
-            .allSatisfy { tags -> assertThat(tags).contains(GameDcbTags.game(gameId), GameDcbTags.gameplay(gameId)) }
+        assertThat(cloudEvents(GameDcbQueries.gameplay(gameId)))
+            .allSatisfy { cloudEvent ->
+                assertThat(DcbCloudEvents.getTags(cloudEvent)).contains(GameDcbTags.game(gameId), GameDcbTags.gameplay(gameId))
+                assertThat(DcbCloudEvents.getPosition(cloudEvent)).isGreaterThan(0)
+                assertThat(OccurrentExtensionGetter.getStreamId(cloudEvent)).startsWith("dcb:partition:")
+                assertThat(OccurrentExtensionGetter.getStreamVersion(cloudEvent)).isGreaterThan(0)
+            }
 
         val initialHints = eventuallyAtLeast<CharacterInWordHintWasRevealed>(GameDcbQueries.wordHintDecisionContext(gameId), 1)
         assertThat(cloudEventTags(GameDcbQueries.wordHintDecisionContext(gameId)).filter { GameDcbTags.wordHint(gameId) in it })
@@ -128,6 +134,9 @@ class GameplayUsecasesAndPoliciesTest {
     private inline fun <reified E : GameEvent> events(query: org.occurrent.eventstore.api.dcb.DcbQuery): List<E> =
         eventStore.queryForList(query, cloudEventConverter).filterIsInstance<E>()
 
+    private fun cloudEvents(query: org.occurrent.eventstore.api.dcb.DcbQuery): List<io.cloudevents.CloudEvent> =
+        eventStore.read(query).events()
+
     private fun cloudEventTags(query: org.occurrent.eventstore.api.dcb.DcbQuery): List<Set<String>> =
-        eventStore.read(query).events().map(DcbCloudEvents::getTags)
+        cloudEvents(query).map(DcbCloudEvents::getTags)
 }
