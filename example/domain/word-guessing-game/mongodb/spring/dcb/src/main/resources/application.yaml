@@ -1,0 +1,8 @@
+spring:
+  application:
+    name: word-guessing-game-mongodb-spring-dcb
+  lifecycle:
+    timeout-per-shutdown-phase: 20s
+
+server:
+  shutdown: graceful
