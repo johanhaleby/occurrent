@@ -192,7 +192,7 @@ public class InMemoryEventStore implements EventStore, EventStoreOperations, Eve
             List<CloudEvent> matchingEvents = allEvents()
                     .filter(event -> dcbPosition(event) > afterSequencePosition)
                     .filter(event -> dcbPosition(event) <= highWatermark)
-                    .filter(event -> matches(event, query))
+                    .filter(event -> DcbCloudEvents.matches(event, query))
                     .toList();
             return new DcbEventStream(matchingEvents, highWatermark);
         }
@@ -220,7 +220,7 @@ public class InMemoryEventStore implements EventStore, EventStoreOperations, Eve
                 long afterSequencePosition = condition.afterSequencePosition().orElse(0);
                 boolean fulfilled = allEvents()
                         .filter(event -> dcbPosition(event) > afterSequencePosition)
-                        .noneMatch(event -> matches(event, condition.failIfEventsMatch()));
+                        .noneMatch(event -> DcbCloudEvents.matches(event, condition.failIfEventsMatch()));
                 long currentPosition = nextDcbPosition.get() - 1;
                 if (!fulfilled) {
                     throw new DcbAppendConditionNotFulfilledException(condition, currentPosition, "Append condition was not fulfilled.");
@@ -263,29 +263,8 @@ public class InMemoryEventStore implements EventStore, EventStoreOperations, Eve
                 .toList();
     }
 
-    private static boolean matches(CloudEvent event, DcbQuery query) {
-        if (query.matchAll()) {
-            return true;
-        }
-        return query.items().stream().anyMatch(item -> matches(event, item));
-    }
-
-    private static boolean matches(CloudEvent event, DcbQueryItem item) {
-        boolean typeMatches = item.types().isEmpty() || item.types().contains(event.getType());
-        boolean tagsMatch = DcbCloudEvents.getTags(event).containsAll(item.tags());
-        boolean excludedTypeMatches = item.excludedTypes().contains(event.getType());
-        return typeMatches && tagsMatch && !excludedTypeMatches;
-    }
-
     private static long dcbPosition(CloudEvent event) {
-        Object position = event.getExtension(DcbCloudEvents.POSITION);
-        if (position instanceof Number number) {
-            return number.longValue();
-        }
-        if (position instanceof String string) {
-            return Long.parseLong(string);
-        }
-        return 0;
+        return DcbCloudEvents.getPosition(event);
     }
 
     @Override

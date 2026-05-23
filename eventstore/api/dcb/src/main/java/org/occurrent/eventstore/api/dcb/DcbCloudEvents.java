@@ -87,6 +87,43 @@ public final class DcbCloudEvents {
     }
 
     /**
+     * Reads the DCB sequence position from a CloudEvent, or {@code 0} when it has no DCB position.
+     */
+    public static long getPosition(CloudEvent cloudEvent) {
+        requireNonNull(cloudEvent, "CloudEvent cannot be null");
+        Object position = cloudEvent.getExtension(POSITION);
+        if (position == null) {
+            return 0;
+        }
+        if (position instanceof Number number) {
+            return number.longValue();
+        }
+        if (position instanceof String string) {
+            return Long.parseLong(string);
+        }
+        throw new IllegalArgumentException("DCB position extension must be a Number or String");
+    }
+
+    /**
+     * Returns whether {@code cloudEvent} matches the supplied DCB query.
+     */
+    public static boolean matches(CloudEvent cloudEvent, DcbQuery query) {
+        requireNonNull(cloudEvent, "CloudEvent cannot be null");
+        requireNonNull(query, "Query cannot be null");
+        if (query.matchAll()) {
+            return true;
+        }
+        return query.items().stream().anyMatch(item -> matches(cloudEvent, item));
+    }
+
+    private static boolean matches(CloudEvent cloudEvent, DcbQueryItem item) {
+        boolean typeMatches = item.types().isEmpty() || item.types().contains(cloudEvent.getType());
+        boolean tagsMatch = getTags(cloudEvent).containsAll(item.tags());
+        boolean excludedTypeMatches = item.excludedTypes().contains(cloudEvent.getType());
+        return typeMatches && tagsMatch && !excludedTypeMatches;
+    }
+
+    /**
      * Strips, validates, de-duplicates, and sorts DCB tags into their canonical set form.
      */
     public static Set<String> canonicalizeTags(Collection<String> tags) {
