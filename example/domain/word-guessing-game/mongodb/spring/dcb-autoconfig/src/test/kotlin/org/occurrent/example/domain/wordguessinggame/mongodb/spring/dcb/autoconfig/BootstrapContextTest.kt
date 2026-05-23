@@ -17,6 +17,7 @@
 package org.occurrent.example.domain.wordguessinggame.mongodb.spring.dcb.autoconfig
 
 import org.assertj.core.api.Assertions.assertThat
+import org.assertj.core.api.Assertions.assertThatThrownBy
 import org.junit.jupiter.api.Test
 import org.occurrent.application.service.blocking.ApplicationService
 import org.occurrent.application.service.blocking.dcb.DcbApplicationService
@@ -47,5 +48,17 @@ class BootstrapContextTest {
         assertThat(applicationContext.getBeansOfType(DomainEventQueries::class.java)).isEmpty()
         assertThat(applicationContext.getBeansOfType(DcbApplicationService::class.java)).hasSize(1)
         assertThat(applicationContext.getBeansOfType(Decider::class.java)).hasSize(1)
+    }
+
+    @Test
+    fun `dcb-only autoconfig rejects stream event store APIs`() {
+        val eventStore = applicationContext.getBean(SpringMongoEventStore::class.java)
+
+        assertThatThrownBy { eventStore.read("game-stream") }
+            .isInstanceOf(UnsupportedOperationException::class.java)
+            .hasMessage("STREAM capability is not enabled for this SpringMongoEventStore")
+        assertThatThrownBy { eventStore.exists("game-stream") }
+            .isInstanceOf(UnsupportedOperationException::class.java)
+            .hasMessage("STREAM capability is not enabled for this SpringMongoEventStore")
     }
 }
