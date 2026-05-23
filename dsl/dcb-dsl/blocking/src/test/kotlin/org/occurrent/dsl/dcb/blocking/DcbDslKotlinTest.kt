@@ -30,6 +30,8 @@ import org.occurrent.application.converter.jackson.JacksonCloudEventConverter
 import org.occurrent.domain.DomainEvent
 import org.occurrent.domain.NameDefined
 import org.occurrent.domain.NameWasChanged
+import org.occurrent.dsl.subscription.blocking.EventMetadata
+import org.occurrent.dsl.subscription.blocking.subscriptions
 import org.occurrent.eventstore.api.dcb.DcbCloudEvents
 import org.occurrent.eventstore.api.dcb.DcbQuery
 import org.occurrent.eventstore.api.dcb.DcbReadOptions
@@ -124,10 +126,31 @@ class DcbDslKotlinTest {
 
     @Test
     fun dcb_subscription_metadata_exposes_stream_and_dcb_metadata() {
-        val metadata = CopyOnWriteArrayList<DcbEventMetadata>()
+        val metadata = CopyOnWriteArrayList<EventMetadata>()
 
         subscriptionModel.subscribeDcb("subscription", cloudEventConverter, DcbQuery.tagsAllOf("name:1")) { eventMetadata, _ ->
             metadata.add(eventMetadata)
+        }
+
+        append(listOf("tenant:1", "name:1"), NameDefined("eventId1", time, "name", "Some Doe"))
+
+        await().untilAsserted {
+            assertThat(metadata).hasSize(1)
+            assertThat(metadata[0].streamId).isEqualTo("dcb:partition:0")
+            assertThat(metadata[0].streamVersion).isEqualTo(1)
+            assertThat(metadata[0].dcbPosition).isEqualTo(1)
+            assertThat(metadata[0].dcbTags).containsExactlyInAnyOrder("name:1", "tenant:1")
+        }
+    }
+
+    @Test
+    fun normal_subscription_metadata_can_read_dcb_metadata_when_dcb_extensions_are_imported() {
+        val metadata = CopyOnWriteArrayList<EventMetadata>()
+
+        subscriptions(subscriptionModel, cloudEventConverter) {
+            subscribe("subscription") { eventMetadata: EventMetadata, _: DomainEvent ->
+                metadata.add(eventMetadata)
+            }
         }
 
         append("name:1", NameDefined("eventId1", time, "name", "Some Doe"))
@@ -141,9 +164,34 @@ class DcbDslKotlinTest {
         }
     }
 
+    @Test
+    fun normal_subscription_metadata_reports_missing_dcb_metadata_for_stream_events() {
+        val metadata = CopyOnWriteArrayList<EventMetadata>()
+
+        subscriptions(subscriptionModel, cloudEventConverter) {
+            subscribe("subscription") { eventMetadata: EventMetadata, _: DomainEvent ->
+                metadata.add(eventMetadata)
+            }
+        }
+
+        writeStreamEvent(NameDefined("eventId1", time, "name", "Stream Doe"))
+
+        await().untilAsserted {
+            assertThat(metadata).hasSize(1)
+            assertThat(metadata[0].streamId).isEqualTo("stream")
+            assertThat(metadata[0].streamVersion).isEqualTo(1)
+            assertThat(metadata[0].dcbPosition).isNull()
+            assertThat(metadata[0].dcbTags).isEmpty()
+        }
+    }
+
     private fun append(tag: String, vararg events: DomainEvent) {
+        append(listOf(tag), *events)
+    }
+
+    private fun append(tags: List<String>, vararg events: DomainEvent) {
         val cloudEvents: List<CloudEvent> = cloudEventConverter.toCloudEvents(Stream.of(*events))
-            .map { event -> DcbCloudEvents.withTags(event, listOf(tag)) }
+            .map { event -> DcbCloudEvents.withTags(event, tags) }
             .toList()
         eventStore.append("dcb:partition:0", cloudEvents)
     }
