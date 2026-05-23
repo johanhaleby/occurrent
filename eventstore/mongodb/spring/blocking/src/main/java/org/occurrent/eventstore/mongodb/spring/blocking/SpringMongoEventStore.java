@@ -351,7 +351,7 @@ public class SpringMongoEventStore implements EventStore, EventStoreOperations, 
         if (mongoTemplate.exists(toDcbMongoQuery(condition.failIfEventsMatch(), afterSequencePosition, Long.MAX_VALUE), eventStoreCollectionName)) {
             throw new DcbAppendConditionNotFulfilledException(condition, currentDcbPosition(), "Append condition was not fulfilled.");
         }
-        if (eventsToAppend.stream().noneMatch(event -> matches(event, condition.failIfEventsMatch()))) {
+        if (eventsToAppend.stream().noneMatch(event -> DcbCloudEvents.matches(event, condition.failIfEventsMatch()))) {
             return;
         }
         for (String key : checkpointKeys(condition.failIfEventsMatch())) {
@@ -514,20 +514,6 @@ public class SpringMongoEventStore implements EventStore, EventStoreOperations, 
             criteria.add(where(DCB_TAGS_INDEX_FIELD).is(tag));
         }
         return new Criteria().andOperator(criteria);
-    }
-
-    private static boolean matches(CloudEvent event, DcbQuery query) {
-        if (query.matchAll()) {
-            return true;
-        }
-        return query.items().stream().anyMatch(item -> matches(event, item));
-    }
-
-    private static boolean matches(CloudEvent event, DcbQueryItem item) {
-        boolean typeMatches = item.types().isEmpty() || item.types().contains(event.getType());
-        boolean tagsMatch = DcbCloudEvents.getTags(event).containsAll(item.tags());
-        boolean excludedTypeMatches = item.excludedTypes().contains(event.getType());
-        return typeMatches && tagsMatch && !excludedTypeMatches;
     }
 
     private static Criteria streamIdEqualToCriteria(String streamId) {

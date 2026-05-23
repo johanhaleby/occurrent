@@ -111,6 +111,62 @@ class DcbApiTest {
         io.cloudevents.CloudEvent event = DcbCloudEvents.withPosition(cloudEvent(), 42);
 
         assertThat(event.getExtension(DcbCloudEvents.POSITION)).isEqualTo(42L);
+        assertThat(DcbCloudEvents.getPosition(event)).isEqualTo(42);
+    }
+
+    @Test
+    void cloud_event_helper_rejects_malformed_position() {
+        io.cloudevents.CloudEvent event = CloudEventBuilder.v1(cloudEvent()).withExtension(DcbCloudEvents.POSITION, true).build();
+
+        assertThatThrownBy(() -> DcbCloudEvents.getPosition(event))
+                .isExactlyInstanceOf(IllegalArgumentException.class)
+                .hasMessage("DCB position extension must be a Number or String");
+    }
+
+    @Test
+    void cloud_event_helper_matches_dcb_queries() {
+        io.cloudevents.CloudEvent event = DcbCloudEvents.withTags(cloudEvent("NameDefined"), List.of("name:1", "tenant:1"));
+
+        assertThat(DcbCloudEvents.matches(event, DcbQuery.all())).isTrue();
+        assertThat(DcbCloudEvents.matches(event, DcbQuery.type("NameDefined"))).isTrue();
+        assertThat(DcbCloudEvents.matches(event, DcbQuery.tagsAllOf("name:1", "tenant:1"))).isTrue();
+        assertThat(DcbCloudEvents.matches(event, DcbQuery.tagsAllOfExcludingTypes(List.of("name:1"), List.of("NameWasChanged")))).isTrue();
+        assertThat(DcbCloudEvents.matches(event, DcbQuery.tagsAllOfExcludingTypes(List.of("name:1"), List.of("NameDefined")))).isFalse();
+        assertThat(DcbCloudEvents.matches(event, DcbQuery.type("NameWasChanged"))).isFalse();
+        assertThat(DcbCloudEvents.matches(event, DcbQuery.tagsAllOf("name:1", "tenant:2"))).isFalse();
+    }
+
+    @Test
+    void cloud_event_helper_matches_any_query_item() {
+        io.cloudevents.CloudEvent event = DcbCloudEvents.withTags(cloudEvent("OrderPlaced"), List.of("order:1"));
+
+        DcbQuery query = DcbQuery.fromItems(List.of(
+                DcbQueryItem.tagsAllOf(List.of("name:1")),
+                DcbQueryItem.types(List.of("OrderPlaced"))));
+
+        assertThat(DcbCloudEvents.matches(event, query)).isTrue();
+    }
+
+    @Test
+    void cloud_event_helper_matches_type_tags_and_excluded_types_together() {
+        io.cloudevents.CloudEvent event = DcbCloudEvents.withTags(cloudEvent("NameDefined"), List.of("name:1", "tenant:1"));
+
+        assertThat(DcbCloudEvents.matches(event, DcbQuery.typeAndTagsAllOfExcludingTypes(
+                List.of("NameDefined"),
+                List.of("name:1", "tenant:1"),
+                List.of("NameWasChanged")))).isTrue();
+        assertThat(DcbCloudEvents.matches(event, DcbQuery.typeAndTagsAllOfExcludingTypes(
+                List.of("NameWasChanged"),
+                List.of("name:1", "tenant:1"),
+                List.of("NameImported")))).isFalse();
+        assertThat(DcbCloudEvents.matches(event, DcbQuery.typeAndTagsAllOfExcludingTypes(
+                List.of("NameDefined"),
+                List.of("name:1", "tenant:2"),
+                List.of("NameWasChanged")))).isFalse();
+        assertThat(DcbCloudEvents.matches(DcbCloudEvents.withTags(cloudEvent("NameImported"), List.of("name:1", "tenant:1")), DcbQuery.typeAndTagsAllOfExcludingTypes(
+                List.of("NameDefined"),
+                List.of("name:1", "tenant:1"),
+                List.of("NameImported")))).isFalse();
     }
 
     @Test
@@ -124,10 +180,14 @@ class DcbApiTest {
     }
 
     private static io.cloudevents.CloudEvent cloudEvent() {
+        return cloudEvent("type");
+    }
+
+    private static io.cloudevents.CloudEvent cloudEvent(String type) {
         return CloudEventBuilder.v1()
                 .withId("id")
                 .withSource(URI.create("urn:test"))
-                .withType("type")
+                .withType(type)
                 .withData("{}".getBytes(UTF_8))
                 .build();
     }
