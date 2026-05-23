@@ -22,6 +22,7 @@ import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.DisplayNameGenerator.ReplaceUnderscores;
 
 import java.net.URI;
+import java.util.Arrays;
 import java.util.List;
 import java.util.Set;
 
@@ -42,6 +43,50 @@ class DcbApiTest {
     @Test
     void query_item_requires_type_or_tag() {
         assertThatThrownBy(() -> new DcbQueryItem(Set.of(), Set.of()))
+                .isExactlyInstanceOf(IllegalArgumentException.class)
+                .hasMessage("A query item must contain at least one type or tag");
+    }
+
+    @Test
+    void existing_query_item_factories_use_empty_excluded_types() {
+        assertThat(DcbQueryItem.types(List.of("NameDefined")).excludedTypes()).isEmpty();
+        assertThat(DcbQueryItem.tagsAllOf(List.of("name:1")).excludedTypes()).isEmpty();
+        assertThat(DcbQueryItem.typeAndTagsAllOf(List.of("NameDefined"), List.of("name:1")).excludedTypes()).isEmpty();
+    }
+
+    @Test
+    void query_item_can_exclude_event_types() {
+        DcbQueryItem item = DcbQueryItem.tagsAllOfExcludingTypes(
+                List.of(" name:1 "),
+                List.of("NameSnapshot", " NameSnapshot ", "NameImported"));
+
+        assertThat(item.types()).isEmpty();
+        assertThat(item.tags()).containsExactly("name:1");
+        assertThat(item.excludedTypes()).containsExactlyInAnyOrder("NameImported", "NameSnapshot");
+        assertThat(DcbQuery.tagsAllOfExcludingTypes(List.of("name:1"), List.of("NameSnapshot")).items().get(0).excludedTypes())
+                .containsExactly("NameSnapshot");
+    }
+
+    @Test
+    void query_item_rejects_invalid_excluded_types() {
+        assertThatThrownBy(() -> DcbQueryItem.tagsAllOfExcludingTypes(List.of("name:1"), List.of(" ")))
+                .isExactlyInstanceOf(IllegalArgumentException.class)
+                .hasMessage("Excluded types cannot contain blank values");
+        assertThatThrownBy(() -> DcbQueryItem.tagsAllOfExcludingTypes(List.of("name:1"), Arrays.asList("NameDefined", null)))
+                .isExactlyInstanceOf(NullPointerException.class)
+                .hasMessage("Excluded type cannot be null");
+    }
+
+    @Test
+    void query_item_rejects_overlapping_included_and_excluded_types() {
+        assertThatThrownBy(() -> DcbQueryItem.typeAndTagsAllOfExcludingTypes(List.of("NameDefined"), List.of("name:1"), List.of("NameDefined")))
+                .isExactlyInstanceOf(IllegalArgumentException.class)
+                .hasMessage("Types and excluded types cannot overlap");
+    }
+
+    @Test
+    void query_item_rejects_excluded_types_without_positive_selector() {
+        assertThatThrownBy(() -> new DcbQueryItem(Set.of(), Set.of(), Set.of("NameDefined")))
                 .isExactlyInstanceOf(IllegalArgumentException.class)
                 .hasMessage("A query item must contain at least one type or tag");
     }

@@ -75,6 +75,56 @@ class InMemoryEventStoreDcbTest {
     }
 
     @Test
+    void reads_tagged_events_except_excluded_types() {
+        InMemoryEventStore eventStore = new InMemoryEventStore();
+        eventStore.append("dcb:partition:0", List.of(
+                taggedEvent("NameDefined", "name:1"),
+                taggedEvent("NameSnapshot", "name:1"),
+                taggedEvent("OrderPlaced", "order:1")));
+
+        DcbEventStream eventStream = eventStore.read(tagsAllOfExcludingTypes(List.of("name:1"), List.of("NameSnapshot")));
+
+        assertThat(eventStream.events())
+                .extracting(CloudEvent::getType)
+                .containsExactly("NameDefined");
+    }
+
+    @Test
+    void reads_type_and_tagged_events_except_excluded_types() {
+        InMemoryEventStore eventStore = new InMemoryEventStore();
+        eventStore.append("dcb:partition:0", List.of(
+                taggedEvent("NameDefined", "name:1"),
+                taggedEvent("NameChanged", "name:1"),
+                taggedEvent("OrderPlaced", "name:1")));
+
+        DcbEventStream eventStream = eventStore.read(typeAndTagsAllOfExcludingTypes(
+                List.of("NameDefined", "NameChanged"),
+                List.of("name:1"),
+                List.of("OrderPlaced")));
+
+        assertThat(eventStream.events())
+                .extracting(CloudEvent::getType)
+                .containsExactly("NameDefined", "NameChanged");
+    }
+
+    @Test
+    void applies_excluded_types_per_query_item() {
+        InMemoryEventStore eventStore = new InMemoryEventStore();
+        eventStore.append("dcb:partition:0", List.of(
+                taggedEvent("NameSnapshot", "name:1"),
+                taggedEvent("NameDefined", "name:1"),
+                taggedEvent("OrderPlaced", "order:1")));
+
+        DcbEventStream eventStream = eventStore.read(fromItems(List.of(
+                DcbQueryItem.tagsAllOfExcludingTypes(List.of("name:1"), List.of("NameSnapshot")),
+                DcbQueryItem.tagsAllOf(List.of("order:1")))));
+
+        assertThat(eventStream.events())
+                .extracting(CloudEvent::getType)
+                .containsExactly("NameDefined", "OrderPlaced");
+    }
+
+    @Test
     void rejects_append_when_matching_event_exists_after_condition_position() {
         InMemoryEventStore eventStore = new InMemoryEventStore();
         eventStore.append("dcb:partition:0", List.of(taggedEvent("NameDefined", "name:1")));
@@ -86,6 +136,39 @@ class InMemoryEventStoreDcbTest {
                 "dcb:partition:0",
                 List.of(taggedEvent("NameChanged", "name:1")),
                 failIfEventsMatch(tagsAllOf("name:1"), readModel.lastSequencePosition())))
+                .isExactlyInstanceOf(DcbAppendConditionNotFulfilledException.class);
+    }
+
+    @Test
+    void append_condition_ignores_excluded_event_types_after_condition_position() {
+        InMemoryEventStore eventStore = new InMemoryEventStore();
+        eventStore.append("dcb:partition:0", List.of(taggedEvent("NameDefined", "name:1")));
+        DcbQuery query = tagsAllOfExcludingTypes(List.of("name:1"), List.of("NameSnapshot"));
+        DcbEventStream readModel = eventStore.read(query);
+
+        eventStore.append("dcb:partition:0", List.of(taggedEvent("NameSnapshot", "name:1")));
+
+        DcbAppendResult result = eventStore.append(
+                "dcb:partition:0",
+                List.of(taggedEvent("NameChanged", "name:1")),
+                failIfEventsMatch(query, readModel.lastSequencePosition()));
+
+        assertThat(result.firstSequencePosition()).isEqualTo(3);
+    }
+
+    @Test
+    void append_condition_rejects_non_excluded_event_types_after_condition_position() {
+        InMemoryEventStore eventStore = new InMemoryEventStore();
+        eventStore.append("dcb:partition:0", List.of(taggedEvent("NameDefined", "name:1")));
+        DcbQuery query = tagsAllOfExcludingTypes(List.of("name:1"), List.of("NameSnapshot"));
+        DcbEventStream readModel = eventStore.read(query);
+
+        eventStore.append("dcb:partition:0", List.of(taggedEvent("NameChanged", "name:1")));
+
+        assertThatThrownBy(() -> eventStore.append(
+                "dcb:partition:0",
+                List.of(taggedEvent("NameImported", "name:1")),
+                failIfEventsMatch(query, readModel.lastSequencePosition())))
                 .isExactlyInstanceOf(DcbAppendConditionNotFulfilledException.class);
     }
 

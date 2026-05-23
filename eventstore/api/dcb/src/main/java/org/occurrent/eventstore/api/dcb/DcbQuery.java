@@ -31,8 +31,8 @@ import static java.util.stream.Collectors.toUnmodifiableSet;
  * Query that selects CloudEvents by DCB metadata.
  * <p>
  * A query either matches all DCB events or consists of one or more query items. Each
- * item contributes an alternative match, while tags inside an item are matched as an
- * all-of boundary.
+ * item contributes an alternative match. Inside an item, types are matched as any-of,
+ * tags as all-of, and excluded types as none-of.
  */
 @NullMarked
 public record DcbQuery(boolean matchAll, List<DcbQueryItem> items) {
@@ -81,6 +81,22 @@ public record DcbQuery(boolean matchAll, List<DcbQueryItem> items) {
      */
     public static DcbQuery typeAndTagsAllOf(Collection<String> types, Collection<String> tags) {
         return fromItems(List.of(DcbQueryItem.typeAndTagsAllOf(types, tags)));
+    }
+
+    /**
+     * Creates a query that matches events containing all supplied DCB tags except
+     * events whose CloudEvent type is excluded.
+     */
+    public static DcbQuery tagsAllOfExcludingTypes(Collection<String> tags, Collection<String> excludedTypes) {
+        return fromItems(List.of(DcbQueryItem.tagsAllOfExcludingTypes(tags, excludedTypes)));
+    }
+
+    /**
+     * Creates a query that matches any of the supplied CloudEvent types and all supplied
+     * DCB tags, except events whose CloudEvent type is excluded.
+     */
+    public static DcbQuery typeAndTagsAllOfExcludingTypes(Collection<String> types, Collection<String> tags, Collection<String> excludedTypes) {
+        return fromItems(List.of(DcbQueryItem.typeAndTagsAllOfExcludingTypes(types, tags, excludedTypes)));
     }
 
     private static Set<String> combine(String first, String[] additional) {

@@ -28,20 +28,31 @@ import static java.util.stream.Collectors.toUnmodifiableSet;
  * One alternative inside a {@link DcbQuery}.
  * <p>
  * {@code types} match CloudEvent types as any-of. {@code tags} match DCB tags as
- * all-of, which is how an item expresses one Dynamic Consistency Boundary.
+ * all-of. {@code excludedTypes} removes matching events whose CloudEvent type is
+ * present in that set.
  */
 @NullMarked
-public record DcbQueryItem(Set<String> types, Set<String> tags) {
+public record DcbQueryItem(Set<String> types, Set<String> tags, Set<String> excludedTypes) {
+
+    public DcbQueryItem(Set<String> types, Set<String> tags) {
+        this(types, tags, Set.of());
+    }
 
     public DcbQueryItem {
         requireNonNull(types, "Types cannot be null");
         requireNonNull(tags, "Tags cannot be null");
+        requireNonNull(excludedTypes, "Excluded types cannot be null");
         types = copyWithoutNulls(types, "Type cannot be null");
         tags = copyWithoutNulls(tags, "Tag cannot be null");
+        excludedTypes = copyWithoutNulls(excludedTypes, "Excluded type cannot be null");
         types = stripAndValidate(types, "Types");
         tags = stripAndValidate(tags, "Tags");
+        excludedTypes = stripAndValidate(excludedTypes, "Excluded types");
         if (types.isEmpty() && tags.isEmpty()) {
             throw new IllegalArgumentException("A query item must contain at least one type or tag");
+        }
+        if (types.stream().anyMatch(excludedTypes::contains)) {
+            throw new IllegalArgumentException("Types and excluded types cannot overlap");
         }
     }
 
@@ -49,24 +60,41 @@ public record DcbQueryItem(Set<String> types, Set<String> tags) {
      * Creates an item that matches any of the supplied CloudEvent types.
      */
     public static DcbQueryItem types(Collection<String> types) {
-        return new DcbQueryItem(Set.copyOf(types), Set.of());
+        return new DcbQueryItem(copyWithoutNulls(types, "Type cannot be null"), Set.of());
     }
 
     /**
      * Creates an item that matches events containing all supplied DCB tags.
      */
     public static DcbQueryItem tagsAllOf(Collection<String> tags) {
-        return new DcbQueryItem(Set.of(), Set.copyOf(tags));
+        return new DcbQueryItem(Set.of(), copyWithoutNulls(tags, "Tag cannot be null"));
     }
 
     /**
      * Creates an item that matches any supplied CloudEvent type and all supplied DCB tags.
      */
     public static DcbQueryItem typeAndTagsAllOf(Collection<String> types, Collection<String> tags) {
-        return new DcbQueryItem(Set.copyOf(types), Set.copyOf(tags));
+        return new DcbQueryItem(copyWithoutNulls(types, "Type cannot be null"), copyWithoutNulls(tags, "Tag cannot be null"));
+    }
+
+    /**
+     * Creates an item that matches events containing all supplied DCB tags except
+     * events whose CloudEvent type is excluded.
+     */
+    public static DcbQueryItem tagsAllOfExcludingTypes(Collection<String> tags, Collection<String> excludedTypes) {
+        return new DcbQueryItem(Set.of(), copyWithoutNulls(tags, "Tag cannot be null"), copyWithoutNulls(excludedTypes, "Excluded type cannot be null"));
+    }
+
+    /**
+     * Creates an item that matches any supplied CloudEvent type and all supplied DCB tags,
+     * except events whose CloudEvent type is excluded.
+     */
+    public static DcbQueryItem typeAndTagsAllOfExcludingTypes(Collection<String> types, Collection<String> tags, Collection<String> excludedTypes) {
+        return new DcbQueryItem(copyWithoutNulls(types, "Type cannot be null"), copyWithoutNulls(tags, "Tag cannot be null"), copyWithoutNulls(excludedTypes, "Excluded type cannot be null"));
     }
 
     private static Set<String> copyWithoutNulls(Collection<String> values, String nullMessage) {
+        requireNonNull(values, "Values cannot be null");
         return values.stream()
                 .map(value -> requireNonNull(value, nullMessage))
                 .collect(toUnmodifiableSet());

@@ -209,6 +209,7 @@ Release scripts:
 - ADR 0014 accepts DCB as an explicit optional capability that shares CloudEvent storage with stream-based Occurrent. Separate `DcbEvent`/`SequencedDcbEvent` wrappers and separate DCB Mongo stores were rejected because they would create a parallel ecosystem for subscriptions and other CloudEvent consumers.
 - DCB API surface added as `eventstore-api-dcb`: `DcbEventStore`, `DcbQuery`, `DcbQueryItem`, `DcbReadOptions`, `DcbCloudEvents`, `DcbEventStream`, `DcbAppendCondition`, `DcbAppendResult`, and `DcbAppendConditionNotFulfilledException`.
 - DCB query semantics for v1: query items are OR-combined; within one item, type matching is any-of and tag matching is all-of. Read options and append conditions use exclusive `afterSequencePosition` (`sequencePosition > afterSequencePosition`).
+- DCB query items now also support per-item excluded CloudEvent types. Within one item, included types are any-of, tags are all-of, and excluded types are none-of. Included/excluded type overlap is rejected, and excluded-only items remain invalid.
 - DCB events store explicit tags only in the `dcbtags` CloudEvent extension. Matching must not inspect CloudEvent payload data for tags.
 - DCB v1 implementations were added by having `InMemoryEventStore` and `SpringMongoEventStore` implement `DcbEventStore`. Existing stream writes/read APIs remain available side-by-side with DCB append/read.
 - Blocking DCB application service added under `application/service/blocking/dcb`: `DcbApplicationService`, `GenericDcbApplicationService`, `TagGenerator`, `DcbStreamIdGenerator`, and `PartitionedDcbStreamIdGenerator`. It reads a DCB query, converts current CloudEvents to domain events, runs the domain function, tags new CloudEvents via `DcbCloudEvents.withTags`, and appends to a generated backing stream id with `failIfEventsMatch(query, lastSequencePosition)`.
@@ -241,3 +242,13 @@ Release scripts:
     - `rtk mvn -q -pl eventstore/mongodb/spring/blocking,eventstore/inmemory,framework/spring-boot-starter-mongodb -am -Dtest=SpringMongoEventStoreCapabilityTest,InMemoryEventStoreDcbTest,OccurrentMongoAutoConfigurationCharacterizationTest -Dsurefire.failIfNoSpecifiedTests=false test`
     - `rtk mvn -q -pl eventstore/api/dcb,eventstore/inmemory,eventstore/mongodb/spring/blocking,application/service/blocking,subscription/mongodb/spring/blocking -am test`
     - `rtk mvn -q -pl framework/spring-boot-starter-mongodb -am test`
+- DCB `excludingTypes` support completed on 2026-05-23:
+  - `DcbQueryItem` gained `excludedTypes` while keeping the two-argument constructor for source compatibility.
+  - Added minimal factories for tag/tag+type queries with excluded types.
+  - In-memory and Spring Mongo DCB matching now apply excluded types to reads and append-condition checks.
+  - Spring Mongo checkpoint updates now skip checkpoint advancement when the events being appended do not match the append-condition query after exclusions.
+  - ADR 0014 was updated with the refined query semantics.
+  - Verification passed:
+    - `rtk mvn -q -pl eventstore/api/dcb,eventstore/inmemory,eventstore/mongodb/spring/blocking -am -Dtest=DcbApiTest,InMemoryEventStoreDcbTest,SpringMongoEventStoreDcbTest -Dsurefire.failIfNoSpecifiedTests=false test`
+    - `rtk mvn -q -pl eventstore/api/dcb,eventstore/inmemory,eventstore/mongodb/spring/blocking -am test`
+    - `rtk mvn -q -pl eventstore/api/dcb,eventstore/inmemory,eventstore/mongodb/spring/blocking,application/service/blocking,subscription/mongodb/spring/blocking -am test`
