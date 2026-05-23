@@ -20,8 +20,8 @@ import org.occurrent.application.converter.CloudEventConverter
 import org.occurrent.dsl.dcb.blocking.queryForSequence
 import org.occurrent.dsl.subscription.blocking.Subscriptions
 import org.occurrent.eventstore.api.dcb.DcbEventStore
-import org.occurrent.eventstore.api.dcb.DcbQuery
 import org.occurrent.example.domain.wordguessinggame.event.*
+import org.occurrent.example.domain.wordguessinggame.mongodb.spring.dcb.features.dcb.GameDcbQueries
 import org.occurrent.example.domain.wordguessinggame.mongodb.spring.dcb.support.loggerFor
 import org.occurrent.example.domain.wordguessinggame.readmodel.LostGameOverview
 import org.occurrent.example.domain.wordguessinggame.readmodel.WonGameOverview
@@ -52,7 +52,7 @@ class WhenGameIsEndedThenAddGameToEndedGamesOverview {
             log.info("${e::class.eventType()} - will update ended games overview")
             val gameId = e.gameId
             val gameWasStarted = eventStore
-                .queryForSequence(DcbQuery.typeAndTagsAllOf(setOf(GameWasStarted::class.eventType()), setOf("game:$gameId")), cloudEventConverter)
+                .queryForSequence(GameDcbQueries.event<GameWasStarted>(gameId), cloudEventConverter)
                 .filterIsInstance<GameWasStarted>()
                 .first()
             val endedGameOverview = when (e) {
