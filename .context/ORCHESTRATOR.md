@@ -107,6 +107,7 @@ General:
 - Apache 2 license headers are common in source files.
 - Static factories/builders are preferred for fluent public APIs.
 - Changelog (`changelog.md`): unreleased changes go under the heading `### Changelog next version`, NOT under a versioned `### X.Y.Z (date)` section. A version number and date are assigned only at release time, when the maintainer renames that heading. Never invent a version/date for pending work.
+- Update `changelog.md` after every change that affects code behavior, public API, build/runtime behavior, or notable user-facing capability. Small documentation-only edits do not need changelog entries.
 
 Kotlin API conventions:
 - Avoid Kotlin extension names that collide with Java members. ADR 0012 says collection-based Kotlin `ApplicationService` helpers use explicit names like `executeSequence` and `executeList`.
@@ -266,3 +267,12 @@ Release scripts:
   - Verification passed:
     - `rtk mvn -q -pl eventstore/api/dcb,dsl/dcb-dsl/blocking -am test`
     - `rtk mvn -q -pl eventstore/api/dcb,eventstore/inmemory,eventstore/mongodb/spring/blocking,application/service/blocking,subscription/mongodb/spring/blocking,dsl/dcb-dsl/blocking -am test`
+- DCB metadata integration completed on 2026-05-23:
+  - `dcb-dsl-blocking` now reuses the existing subscription DSL `EventMetadata` for `subscribeDcb` metadata callbacks instead of exposing a separate `DcbEventMetadata` type.
+  - The DCB DSL module adds Kotlin extension properties `EventMetadata.dcbPosition` and `EventMetadata.dcbTags`; missing DCB position is represented as `null`, while missing tags are an empty set.
+  - `EventMetadata` construction is public so opt-in DSL modules can create the shared metadata type without duplicating it.
+  - DCB-written events still carry Occurrent `streamid` and `streamversion`, including Spring Mongo DCB-only mode. DCB-only disables stream APIs/indexes but not the CloudEvent storage metadata.
+  - ADR 0016 was updated with the metadata reuse decision.
+  - Verification passed:
+    - `rtk mvn -q -pl dsl/dcb-dsl/blocking -am test`
+    - `rtk mvn -q -pl eventstore/mongodb/spring/blocking,dsl/dcb-dsl/blocking -am test`

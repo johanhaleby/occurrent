@@ -27,6 +27,7 @@ import org.junit.jupiter.api.DisplayNameGeneration;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.DisplayNameGenerator.ReplaceUnderscores;
 import org.junit.jupiter.api.extension.RegisterExtension;
+import org.occurrent.cloudevents.OccurrentExtensionGetter;
 import org.occurrent.eventstore.api.SortBy;
 import org.occurrent.eventstore.api.StreamReadFilter;
 import org.occurrent.eventstore.api.WriteCondition;
@@ -232,6 +233,18 @@ class SpringMongoEventStoreCapabilityTest {
         assertThat(both.read("dcb:partition:0").version()).isEqualTo(1);
         assertThat(both.read("dcb:partition:1").events()).extracting(CloudEvent::getType).containsExactly("OrderPlaced");
         assertThat(both.read("dcb:partition:1").version()).isEqualTo(1);
+    }
+
+    @Test
+    void dcb_only_events_still_have_occurrent_stream_metadata() {
+        SpringMongoEventStore dcbOnly = new SpringMongoEventStore(mongoTemplate, eventStoreConfig(DCB).build());
+        dcbOnly.append("dcb:partition:0", List.of(taggedEvent("NameDefined", "name:1"), taggedEvent("NameChanged", "name:1")));
+
+        List<CloudEvent> events = dcbOnly.read(tagsAllOf("name:1")).events();
+
+        assertThat(events).hasSize(2);
+        assertThat(events).extracting(OccurrentExtensionGetter::getStreamId).containsExactly("dcb:partition:0", "dcb:partition:0");
+        assertThat(events).extracting(OccurrentExtensionGetter::getStreamVersion).containsExactly(1L, 2L);
     }
 
     @Test
