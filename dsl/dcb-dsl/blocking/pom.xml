@@ -46,6 +46,11 @@
         </dependency>
         <dependency>
             <groupId>org.occurrent</groupId>
+            <artifactId>subscription-dsl-blocking</artifactId>
+            <version>${project.version}</version>
+        </dependency>
+        <dependency>
+            <groupId>org.occurrent</groupId>
             <artifactId>subscription-core</artifactId>
             <version>${project.version}</version>
         </dependency>

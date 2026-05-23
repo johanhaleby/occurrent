@@ -27,14 +27,17 @@ import org.occurrent.application.converter.jackson.JacksonCloudEventConverter;
 import org.occurrent.domain.DomainEvent;
 import org.occurrent.domain.NameDefined;
 import org.occurrent.domain.NameWasChanged;
+import org.occurrent.dsl.subscription.blocking.EventMetadata;
 import org.occurrent.eventstore.api.dcb.DcbCloudEvents;
 import org.occurrent.eventstore.api.dcb.DcbQuery;
 import org.occurrent.eventstore.api.dcb.DcbReadOptions;
 import org.occurrent.eventstore.inmemory.InMemoryEventStore;
+import org.occurrent.subscription.inmemory.InMemorySubscriptionModel;
 
 import java.net.URI;
 import java.time.LocalDateTime;
 import java.util.List;
+import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.stream.Stream;
 
 import static org.assertj.core.api.Assertions.assertThat;
@@ -89,6 +92,27 @@ class DcbDomainEventQueriesTest {
         assertThat(eventStream.events()).containsExactly(nameDefined);
         assertThat(eventStream.stream()).containsExactly(nameDefined);
         assertThat(eventStream.lastSequencePosition()).isEqualTo(2);
+    }
+
+    @Test
+    void java_callers_can_subscribe_to_dcb_events_with_regular_event_metadata() {
+        InMemorySubscriptionModel subscriptionModel = new InMemorySubscriptionModel();
+        InMemoryEventStore eventStoreWithSubscriptions = new InMemoryEventStore(subscriptionModel);
+        CopyOnWriteArrayList<EventMetadata> metadata = new CopyOnWriteArrayList<>();
+
+        DcbSubscriptionsKt.subscribeDcbWithMetadata(subscriptionModel, "subscription", cloudEventConverter, DcbQuery.tagsAllOf("name:1"), null, true, (eventMetadata, event) -> {
+            metadata.add(eventMetadata);
+            return kotlin.Unit.INSTANCE;
+        });
+
+        List<CloudEvent> cloudEvents = cloudEventConverter.toCloudEvents(Stream.of(new NameDefined("eventId1", time, "name", "Some Doe")))
+                .map(event -> DcbCloudEvents.withTags(event, List.of("name:1")))
+                .toList();
+        eventStoreWithSubscriptions.append("dcb:partition:0", cloudEvents);
+
+        assertThat(metadata).hasSize(1);
+        assertThat(metadata.get(0).getStreamId()).isEqualTo("dcb:partition:0");
+        assertThat(metadata.get(0).getStreamVersion()).isEqualTo(1);
     }
 
     private void append(String tag, DomainEvent... events) {
