@@ -19,7 +19,7 @@ package org.occurrent.dsl.dcb.blocking
 import io.cloudevents.CloudEvent
 import org.occurrent.application.converter.CloudEventConverter
 import org.occurrent.application.converter.get
-import org.occurrent.cloudevents.OccurrentCloudEventExtension
+import org.occurrent.dsl.subscription.blocking.EventMetadata
 import org.occurrent.eventstore.api.dcb.DcbCloudEvents
 import org.occurrent.eventstore.api.dcb.DcbQuery
 import org.occurrent.filter.Filter
@@ -29,31 +29,16 @@ import org.occurrent.subscription.api.blocking.Subscribable
 import org.occurrent.subscription.api.blocking.Subscription
 
 /**
- * Metadata associated with a DCB-tagged event delivered through a live subscription.
+ * The DCB sequence position of an event, or `null` when the event has no DCB position.
+ *
+ * Events delivered by `subscribeDcb` are DCB-tagged and therefore have a non-null position.
  */
-data class DcbEventMetadata internal constructor(val data: Map<String, Any?>) {
-    /**
-     * The Occurrent storage stream id of the event.
-     */
-    val streamId: String get() = data[OccurrentCloudEventExtension.STREAM_ID] as String
+val EventMetadata.dcbPosition: Long? get() = positionOrNull(data[DcbCloudEvents.POSITION])
 
-    /**
-     * The version of the event in its Occurrent storage stream.
-     */
-    val streamVersion: Long get() = data[OccurrentCloudEventExtension.STREAM_VERSION] as Long
-
-    /**
-     * The DCB sequence position of the event.
-     */
-    val dcbPosition: Long get() = position(data[DcbCloudEvents.POSITION])
-
-    /**
-     * The canonical DCB tags of the event.
-     */
-    val dcbTags: Set<String> get() = tags(data[DcbCloudEvents.TAGS])
-
-    inline operator fun <reified T : Any?> get(key: String) = data[key] as T
-}
+/**
+ * The canonical DCB tags of an event, or an empty set when the event has no DCB tags.
+ */
+val EventMetadata.dcbTags: Set<String> get() = tags(data[DcbCloudEvents.TAGS])
 
 /**
  * Subscribes to live DCB-tagged events that match [query].
@@ -74,6 +59,9 @@ fun <E : Any> Subscribable.subscribeDcb(
 
 /**
  * Subscribes to live DCB-tagged events that match [query], including DCB metadata in the callback.
+ *
+ * The callback receives the regular subscription DSL [EventMetadata]. Import [dcbPosition] and [dcbTags]
+ * from this package to read DCB-specific metadata from it.
  */
 @JvmOverloads
 @JvmName("subscribeDcbWithMetadata")
@@ -83,12 +71,12 @@ fun <E : Any> Subscribable.subscribeDcb(
     query: DcbQuery = DcbQuery.all(),
     startAt: StartAt? = null,
     waitUntilStarted: Boolean = true,
-    fn: (DcbEventMetadata, E) -> Unit
+    fn: (EventMetadata, E) -> Unit
 ): Subscription {
     val consumer: (CloudEvent) -> Unit = { cloudEvent ->
         if (DcbCloudEvents.getPosition(cloudEvent) > 0 && DcbCloudEvents.matches(cloudEvent, query)) {
             val event = cloudEventConverter[cloudEvent]
-            val metadata = DcbEventMetadata(cloudEvent.extensionNames.associateWith { extensionName -> cloudEvent.getExtension(extensionName) })
+            val metadata = EventMetadata(cloudEvent.extensionNames.associateWith { extensionName -> cloudEvent.getExtension(extensionName) })
             fn(metadata, event)
         }
     }
@@ -113,8 +101,8 @@ private fun tags(value: Any?): Set<String> = when (value) {
     else -> throw IllegalArgumentException("DCB tags extension must be a String")
 }
 
-private fun position(value: Any?): Long = when (value) {
-    null -> 0
+private fun positionOrNull(value: Any?): Long? = when (value) {
+    null -> null
     is Number -> value.toLong()
     is String -> value.toLong()
     else -> throw IllegalArgumentException("DCB position extension must be a Number or String")

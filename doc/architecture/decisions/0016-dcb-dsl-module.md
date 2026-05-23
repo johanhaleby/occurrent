@@ -35,6 +35,8 @@ The module also provides live subscription helpers:
 
 These helpers subscribe to DCB-tagged CloudEvents and then apply exact `DcbQuery` matching in process. They are subscription conveniences, not DCB reads. They do not provide a DCB high-watermark, append-condition semantics, or replay consistency beyond the configured subscription model.
 
+The DCB subscription helpers reuse the existing subscription DSL `EventMetadata` instead of introducing a separate DCB metadata type. The DCB module adds opt-in Kotlin extension properties for `dcbPosition` and `dcbTags`. This keeps one metadata object for live CloudEvent delivery while avoiding a DCB dependency in the regular subscription DSL.
+
 The existing DSLs remain unchanged:
 
 - `DomainEventQueries` remains the stream/general CloudEvent query DSL.
@@ -44,6 +46,8 @@ The existing DSLs remain unchanged:
 
 DCB query matching is shared through the DCB API so stores and DSL subscriptions use the same type, tag, OR-item, and excluded-type semantics.
 
+DCB-written events keep Occurrent `streamid` and `streamversion` metadata, even when the store is configured with only the DCB capability. DCB-only disables stream APIs and stream indexes, but it does not change the CloudEvent shape written to storage.
+
 ## Consequences
 
 Positive:
@@ -51,6 +55,7 @@ Positive:
 - Stream-based users do not get new DCB dependencies or methods.
 - DCB users get small helpers that preserve DCB concepts instead of hiding the sequence position.
 - Live DCB subscriptions are convenient while staying honest about their consistency model.
+- DCB and regular subscription callbacks can use the same metadata type.
 - Shared query matching reduces the risk of drift between stores and subscription helpers.
 
 Negative:
@@ -58,3 +63,4 @@ Negative:
 - Users must add another module when they want DCB DSL helpers.
 - There are now separate helper entry points for stream/general CloudEvent queries and DCB queries.
 - DCB subscription helpers may receive a broader set of CloudEvents from the underlying subscription model and filter them in process.
+- `dcb-dsl-blocking` depends on `subscription-dsl-blocking` to reuse `EventMetadata`.
