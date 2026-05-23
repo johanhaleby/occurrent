@@ -273,7 +273,8 @@ public class InMemoryEventStore implements EventStore, EventStoreOperations, Eve
     private static boolean matches(CloudEvent event, DcbQueryItem item) {
         boolean typeMatches = item.types().isEmpty() || item.types().contains(event.getType());
         boolean tagsMatch = DcbCloudEvents.getTags(event).containsAll(item.tags());
-        return typeMatches && tagsMatch;
+        boolean excludedTypeMatches = item.excludedTypes().contains(event.getType());
+        return typeMatches && tagsMatch && !excludedTypeMatches;
     }
 
     private static long dcbPosition(CloudEvent event) {
