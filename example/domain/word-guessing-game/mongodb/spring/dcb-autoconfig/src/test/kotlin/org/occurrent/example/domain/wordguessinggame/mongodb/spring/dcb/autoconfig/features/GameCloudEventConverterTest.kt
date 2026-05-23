@@ -15,7 +15,7 @@ import org.occurrent.example.domain.wordguessinggame.event.PlayerGuessedTheWrong
 import org.occurrent.example.domain.wordguessinggame.event.PlayerWasAwardedPointsForGuessingTheRightWord
 import org.occurrent.example.domain.wordguessinggame.event.PlayerWasNotAwardedAnyPointsForGuessingTheRightWord
 import org.occurrent.example.domain.wordguessinggame.event.ReasonForNotBeingAwardedPoints.PlayerCreatedListOfWords
-import tools.jackson.databind.ObjectMapper
+import tools.jackson.module.kotlin.jacksonObjectMapper
 import java.net.URI
 import java.util.Date
 import java.util.UUID
@@ -26,7 +26,7 @@ class GameCloudEventConverterTest {
     private val gameSource = URI.create("urn:word-guessing-game:game")
     private val wordHintSource = URI.create("urn:word-guessing-game:word-hint")
     private val pointsSource = URI.create("urn:word-guessing-game:points")
-    private val converter = GameCloudEventConverter(ObjectMapper(), gameSource, wordHintSource, pointsSource)
+    private val converter = GameCloudEventConverter(jacksonObjectMapper(), gameSource, wordHintSource, pointsSource)
     private val eventId = UUID.fromString("00000000-0000-0000-0000-000000000001")
     private val gameId = UUID.fromString("00000000-0000-0000-0000-000000000002")
     private val playerId = UUID.fromString("00000000-0000-0000-0000-000000000003")
