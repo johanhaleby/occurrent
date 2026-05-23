@@ -16,11 +16,13 @@
 package org.occurrent.example.domain.wordguessinggame.mongodb.spring.dcb
 
 import org.assertj.core.api.Assertions.assertThat
+import org.assertj.core.api.Assertions.assertThatThrownBy
 import org.junit.jupiter.api.Test
 import org.occurrent.application.service.blocking.ApplicationService
 import org.occurrent.application.service.blocking.dcb.DcbApplicationService
 import org.occurrent.dsl.subscription.blocking.Subscriptions
 import org.occurrent.eventstore.api.dcb.DcbEventStore
+import org.occurrent.eventstore.mongodb.spring.blocking.SpringMongoEventStore
 import org.occurrent.example.domain.wordguessinggame.event.GameEvent
 import org.springframework.beans.factory.annotation.Autowired
 import org.springframework.boot.test.context.SpringBootTest
@@ -33,12 +35,25 @@ class BootstrapContextTest {
     @Autowired
     private lateinit var context: ApplicationContext
 
+    @Autowired
+    private lateinit var eventStore: SpringMongoEventStore
+
     @Test
     fun `manual DCB bootstrap exposes DCB infrastructure without stream application service`() {
         assertThat(context.getBeanNamesForType(DcbEventStore::class.java)).isNotEmpty()
         assertThat(context.getBeanNamesForGenericType(DcbApplicationService::class.java)).isNotEmpty()
         assertThat(context.getBeanNamesForGenericType(Subscriptions::class.java)).isNotEmpty()
         assertThat(context.getBeanNamesForGenericType(ApplicationService::class.java)).isEmpty()
+    }
+
+    @Test
+    fun `manual DCB bootstrap rejects stream event store APIs`() {
+        assertThatThrownBy { eventStore.read("game-stream") }
+            .isInstanceOf(UnsupportedOperationException::class.java)
+            .hasMessage("STREAM capability is not enabled for this SpringMongoEventStore")
+        assertThatThrownBy { eventStore.exists("game-stream") }
+            .isInstanceOf(UnsupportedOperationException::class.java)
+            .hasMessage("STREAM capability is not enabled for this SpringMongoEventStore")
     }
 
     private fun ApplicationContext.getBeanNamesForGenericType(type: Class<*>): Array<String> =
