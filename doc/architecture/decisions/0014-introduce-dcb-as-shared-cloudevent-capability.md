@@ -38,6 +38,11 @@ DCB metadata is represented in two forms:
 
 DCB matching uses indexed metadata and CloudEvent extensions, never payload inspection.
 
+DCB query items are OR-combined. Within one query item, included CloudEvent types
+match as any-of, DCB tags match as all-of, and excluded CloudEvent types match as
+none-of. Excluded types refine a positive selector; an item with only exclusions is
+not a valid DCB query item.
+
 The first implementation provides:
 
 - blocking DCB API,
