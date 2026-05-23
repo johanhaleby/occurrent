@@ -22,9 +22,15 @@ import org.junit.jupiter.api.Test;
 import org.occurrent.application.converter.CloudEventConverter;
 import org.occurrent.application.converter.typemapper.CloudEventTypeMapper;
 import org.occurrent.application.converter.typemapper.ReflectionCloudEventTypeMapper;
+import org.occurrent.application.service.blocking.ApplicationService;
+import org.occurrent.dsl.query.blocking.DomainEventQueries;
 import org.occurrent.eventstore.mongodb.spring.blocking.EventStoreConfig;
 import org.occurrent.eventstore.mongodb.spring.blocking.SpringMongoEventStore;
 import org.occurrent.eventstore.mongodb.spring.blocking.SpringMongoEventStoreCapability;
+import org.occurrent.subscription.api.blocking.DelegatingSubscriptionModel;
+import org.occurrent.subscription.api.blocking.SubscriptionModel;
+import org.occurrent.subscription.blocking.durable.DurableSubscriptionModel;
+import org.occurrent.subscription.blocking.durable.catchup.CatchupSubscriptionModel;
 import org.springframework.boot.autoconfigure.AutoConfigurations;
 import org.springframework.boot.test.context.runner.ApplicationContextRunner;
 import org.springframework.context.annotation.Bean;
@@ -129,6 +135,28 @@ class OccurrentMongoAutoConfigurationCharacterizationTest {
 
             assertThat(properties.getEventStore().getCapabilities()).containsExactly(SpringMongoEventStoreCapability.DCB);
         });
+    }
+
+    @Test
+    void dcb_only_does_not_auto_configure_stream_application_helpers_or_subscription_catchup() {
+        contextRunner
+                .withPropertyValues(
+                        "occurrent.event-store.enabled=true",
+                        "occurrent.subscription.enabled=true",
+                        "occurrent.event-store.capabilities=dcb"
+                )
+                .withBean(SpringMongoEventStore.class, () -> mock(SpringMongoEventStore.class))
+                .run(context -> {
+                    assertThat(context).doesNotHaveBean(ApplicationService.class);
+                    assertThat(context).doesNotHaveBean(DomainEventQueries.class);
+                    assertThat(context).hasSingleBean(SubscriptionModel.class);
+
+                    SubscriptionModel subscriptionModel = context.getBean(SubscriptionModel.class);
+                    assertThat(subscriptionModel).isInstanceOf(DelegatingSubscriptionModel.class);
+                    assertThat(((DelegatingSubscriptionModel) subscriptionModel).getDelegatedSubscriptionModel())
+                            .isInstanceOf(DurableSubscriptionModel.class)
+                            .isNotInstanceOf(CatchupSubscriptionModel.class);
+                });
     }
 
     @Test

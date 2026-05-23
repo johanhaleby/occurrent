@@ -160,6 +160,9 @@ CloudEvents are the storage boundary. Domain event serialization/deserialization
 - DCB append-condition concurrency is subtle. The Spring Mongo implementation first checks for actual matching events after the caller's position, then updates conservative checkpoint keys (`all`, `tag:<tag>`, and type-only keys) to detect racing appends.
 - Spring Mongo capability mode is now part of `EventStoreConfig`: `STREAM`, `DCB`, or both. Capabilities control index/support-collection creation and runtime API guards, not the CloudEvent document format.
 - Occurrent only creates missing Mongo indexes/collections for enabled capabilities; it never removes indexes. Operators should create newly required indexes out-of-band before enabling a capability on large production collections.
+- DCB-only Mongo writes must still assign per-storage-stream Occurrent stream versions. Those versions are required if an operator later enables `STREAM` and reads DCB partition streams through the stream API.
+- Spring Boot DCB-only auto-configuration must not expose stream application helpers (`ApplicationService`, `DomainEventQueries`) or wrap subscriptions in `CatchupSubscriptionModel`, because catchup depends on stream query APIs. Plain change-stream subscriptions remain available.
+- In-memory `deleteAll()` must reset DCB sequence state as well as event state, otherwise an empty store can report stale DCB high-watermarks after deletion.
 
 ## Build And Verification
 
@@ -226,8 +229,13 @@ Release scripts:
   - Added `SpringMongoEventStoreCapability` with `STREAM` and `DCB`.
   - `EventStoreConfig.Builder` accepts a non-empty capability set or varargs; default is `{STREAM}`.
   - `SpringMongoEventStore` always creates the event collection and CloudEvent id/source unique index, creates stream or DCB indexes/support collections only when enabled, and fails fast when callers invoke a disabled API family.
-  - DCB-only appends still write normal CloudEvents with Occurrent stream metadata; stream versions are derived from reserved DCB positions when the stream index is disabled.
+  - DCB-only appends still write normal CloudEvents with Occurrent stream metadata; stream versions are always per-storage-stream so DCB partition streams remain readable if `STREAM` is enabled later.
   - Spring Boot property binding supports omitted/default `stream`, `dcb`, and `stream,dcb`, and auto-configured `EventStoreConfig` propagation is covered by tests.
   - ADR: `doc/architecture/decisions/0015-spring-mongo-event-store-capabilities.md`.
   - Tests added: `SpringMongoEventStoreCapabilityTest` plus Spring Boot auto-configuration characterization tests for capability binding/propagation.
   - Test-automator coverage review initially found gaps in guard coverage, auto-config propagation, and index option assertions; those gaps were fixed before final verification.
+  - Branch review found and fixed three follow-up issues: DCB-only Mongo stream versions were made per-stream, DCB-only Spring Boot no longer auto-configures stream application helpers/catchup subscriptions, and in-memory `deleteAll()` now resets DCB sequence state.
+  - Review-fix verification passed:
+    - `rtk mvn -q -pl eventstore/mongodb/spring/blocking,eventstore/inmemory,framework/spring-boot-starter-mongodb -am -Dtest=SpringMongoEventStoreCapabilityTest,InMemoryEventStoreDcbTest,OccurrentMongoAutoConfigurationCharacterizationTest -Dsurefire.failIfNoSpecifiedTests=false test`
+    - `rtk mvn -q -pl eventstore/api/dcb,eventstore/inmemory,eventstore/mongodb/spring/blocking,application/service/blocking,subscription/mongodb/spring/blocking -am test`
+    - `rtk mvn -q -pl framework/spring-boot-starter-mongodb -am test`

@@ -223,11 +223,15 @@ class SpringMongoEventStoreCapabilityTest {
     void dcb_to_stream_and_dcb_preserves_dcb_reads_and_enables_stream_reads_of_dcb_events() {
         SpringMongoEventStore dcbOnly = new SpringMongoEventStore(mongoTemplate, eventStoreConfig(DCB).build());
         dcbOnly.append("dcb:partition:0", List.of(taggedEvent("NameDefined", "name:1")));
+        dcbOnly.append("dcb:partition:1", List.of(taggedEvent("OrderPlaced", "order:1")));
 
         SpringMongoEventStore both = new SpringMongoEventStore(mongoTemplate, eventStoreConfig(STREAM, DCB).build());
 
         assertThat(both.read(tagsAllOf("name:1")).events()).extracting(CloudEvent::getType).containsExactly("NameDefined");
         assertThat(both.read("dcb:partition:0").events()).extracting(CloudEvent::getType).containsExactly("NameDefined");
+        assertThat(both.read("dcb:partition:0").version()).isEqualTo(1);
+        assertThat(both.read("dcb:partition:1").events()).extracting(CloudEvent::getType).containsExactly("OrderPlaced");
+        assertThat(both.read("dcb:partition:1").version()).isEqualTo(1);
     }
 
     @Test

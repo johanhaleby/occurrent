@@ -63,6 +63,7 @@ import org.springframework.data.mongodb.core.MongoTemplate;
 
 import java.util.List;
 
+import static org.occurrent.eventstore.mongodb.spring.blocking.SpringMongoEventStoreCapability.STREAM;
 import static org.occurrent.subscription.blocking.durable.catchup.SubscriptionPositionStorageConfig.useSubscriptionPositionStorage;
 import static org.occurrent.subscription.mongodb.spring.blocking.SpringMongoSubscriptionModelConfig.withConfig;
 
@@ -133,10 +134,13 @@ public class OccurrentMongoAutoConfiguration<E> {
         SpringMongoSubscriptionModel mongoSubscriptionModel = new SpringMongoSubscriptionModel(mongoTemplate, withConfig(eventStoreProperties.getCollection(), eventStoreProperties.getTimeRepresentation())
                 .restartSubscriptionsOnChangeStreamHistoryLost(occurrentProperties.getSubscription().isRestartOnChangeStreamHistoryLost()));
         DurableSubscriptionModel durableSubscriptionModel = new DurableSubscriptionModel(mongoSubscriptionModel, storage);
-        CatchupSubscriptionModel catchupSubscriptionModel = new CatchupSubscriptionModel(durableSubscriptionModel, eventStoreQueries,
-                new CatchupSubscriptionModelConfig(useSubscriptionPositionStorage(storage)
-                        .andPersistSubscriptionPositionDuringCatchupPhaseForEveryNEvents(1000)));
-        return new CompetingConsumerSubscriptionModel(catchupSubscriptionModel, competingConsumerStrategy);
+        SubscriptionModel subscriptionModel = durableSubscriptionModel;
+        if (eventStoreProperties.getCapabilities().contains(STREAM)) {
+            subscriptionModel = new CatchupSubscriptionModel(durableSubscriptionModel, eventStoreQueries,
+                    new CatchupSubscriptionModelConfig(useSubscriptionPositionStorage(storage)
+                            .andPersistSubscriptionPositionDuringCatchupPhaseForEveryNEvents(1000)));
+        }
+        return new CompetingConsumerSubscriptionModel(subscriptionModel, competingConsumerStrategy);
     }
 
     @Bean
@@ -161,6 +165,7 @@ public class OccurrentMongoAutoConfiguration<E> {
 
     @Bean
     @ConditionalOnMissingBean(DomainEventQueries.class)
+    @Conditional(OnStreamEventStoreCapabilityCondition.class)
     @ConditionalOnProperty(name = "occurrent.event-store.enabled", havingValue = "true", matchIfMissing = true)
     public DomainEventQueries<E> occurrentDomainEventQueries(EventStoreQueries eventStoreQueries, CloudEventConverter<E> cloudEventConverter) {
         return new DomainEventQueries<>(eventStoreQueries, cloudEventConverter);
@@ -168,6 +173,7 @@ public class OccurrentMongoAutoConfiguration<E> {
 
     @Bean
     @ConditionalOnMissingBean(ApplicationService.class)
+    @Conditional(OnStreamEventStoreCapabilityCondition.class)
     @ConditionalOnProperty(name = {"occurrent.event-store.enabled", "occurrent.application-service.enabled"}, havingValue = "true", matchIfMissing = true)
     public ApplicationService<E> occurrentApplicationService(EventStore eventStore, CloudEventConverter<E> cloudEventConverter, OccurrentProperties occurrentProperties) {
         boolean enableDefaultRetryStrategy = occurrentProperties.getApplicationService().isEnableDefaultRetryStrategy();
