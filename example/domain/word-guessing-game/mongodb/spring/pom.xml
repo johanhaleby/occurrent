@@ -10,8 +10,25 @@
     <artifactId>example-domain-word-guessing-game-es-mongodb-spring</artifactId>
     <packaging>pom</packaging>
 
+    <dependencyManagement>
+        <dependencies>
+            <dependency>
+                <groupId>org.testcontainers</groupId>
+                <artifactId>junit-jupiter</artifactId>
+                <version>1.21.4</version>
+            </dependency>
+            <dependency>
+                <groupId>org.testcontainers</groupId>
+                <artifactId>mongodb</artifactId>
+                <version>1.21.4</version>
+            </dependency>
+        </dependencies>
+    </dependencyManagement>
+
     <modules>
         <module>blocking</module>
+        <module>dcb</module>
+        <module>dcb-autoconfig</module>
     </modules>
     
 </project>
