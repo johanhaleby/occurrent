@@ -30,6 +30,7 @@
         <module>subscription-dsl</module>
         <module>module-dsl</module>
         <module>query-dsl</module>
+        <module>dcb-dsl</module>
         <module>decider</module>
         <module>decider-arrow</module>
         <module>view-dsl</module>
