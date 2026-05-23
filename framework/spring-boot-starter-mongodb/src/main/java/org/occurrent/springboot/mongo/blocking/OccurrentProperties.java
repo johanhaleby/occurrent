@@ -19,11 +19,15 @@ package org.occurrent.springboot.mongo.blocking;
 
 import org.occurrent.application.service.blocking.generic.GenericApplicationService;
 import org.occurrent.eventstore.api.WriteConditionNotFulfilledException;
+import org.occurrent.eventstore.mongodb.spring.blocking.SpringMongoEventStoreCapability;
 import org.occurrent.mongodb.timerepresentation.TimeRepresentation;
 import org.occurrent.retry.RetryStrategy;
 import org.springframework.boot.context.properties.ConfigurationProperties;
 
 import java.net.URI;
+import java.util.Set;
+
+import static org.occurrent.eventstore.mongodb.spring.blocking.SpringMongoEventStoreCapability.STREAM;
 
 @ConfigurationProperties(prefix = "occurrent")
 public class OccurrentProperties {
@@ -111,6 +115,14 @@ public class OccurrentProperties {
         private TimeRepresentation timeRepresentation = TimeRepresentation.DATE;
 
         /**
+         * The event-store capabilities to enable.
+         * <p>
+         * Defaults to stream-based event sourcing. Add {@link SpringMongoEventStoreCapability#DCB}
+         * to enable Dynamic Consistency Boundary infrastructure and APIs.
+         */
+        private Set<SpringMongoEventStoreCapability> capabilities = Set.of(STREAM);
+
+        /**
          * If the event store should be enabled (i.e. created as Spring Bean)
          * <p>
          * Typically you only want to disable this if you don't need an event store for this application,
@@ -138,6 +150,14 @@ public class OccurrentProperties {
 
         public void setTimeRepresentation(TimeRepresentation timeRepresentation) {
             this.timeRepresentation = timeRepresentation;
+        }
+
+        public Set<SpringMongoEventStoreCapability> getCapabilities() {
+            return capabilities;
+        }
+
+        public void setCapabilities(Set<SpringMongoEventStoreCapability> capabilities) {
+            this.capabilities = capabilities;
         }
 
         public boolean isEnabled() {
