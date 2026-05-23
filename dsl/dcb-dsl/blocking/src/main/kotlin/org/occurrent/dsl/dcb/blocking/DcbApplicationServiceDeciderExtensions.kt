@@ -1,0 +1,97 @@
+/*
+ * Copyright 2026 Johan Haleby
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ *        http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+
+package org.occurrent.dsl.dcb.blocking
+
+import org.occurrent.application.service.blocking.dcb.DcbApplicationService
+import org.occurrent.dsl.decider.Decider
+import org.occurrent.eventstore.api.dcb.DcbAppendResult
+import org.occurrent.eventstore.api.dcb.DcbQuery
+import java.util.Optional
+import java.util.concurrent.atomic.AtomicReference
+import java.util.stream.Stream
+
+/**
+ * Execute a decider command where [query] is the DCB decision boundary,
+ * equivalent to the stream id in stream-based decider helpers.
+ */
+fun <C, S, E : Any> DcbApplicationService<E>.execute(
+    query: DcbQuery,
+    command: C,
+    decider: Decider<C, S, E>
+): Optional<DcbAppendResult> = execute(query, listOf(command), decider)
+
+/**
+ * Execute decider commands in order where [query] is the DCB decision boundary.
+ */
+fun <C, S, E : Any> DcbApplicationService<E>.execute(
+    query: DcbQuery,
+    commands: List<C>,
+    decider: Decider<C, S, E>
+): Optional<DcbAppendResult> =
+    execute(query) { events: Stream<E> ->
+        decider.decideOnEventsAndReturnEvents(events.toList(), commands).stream()
+    }
+
+/**
+ * Execute a command and return the folded state plus the new events decided for [query].
+ */
+fun <C, S, E : Any> DcbApplicationService<E>.executeAndReturnDecision(
+    query: DcbQuery,
+    command: C,
+    decider: Decider<C, S, E>
+): Decider.Decision<S, E> = executeAndReturnDecision(query, listOf(command), decider)
+
+/**
+ * Execute commands and return the folded state plus the new events decided for [query].
+ */
+fun <C, S, E : Any> DcbApplicationService<E>.executeAndReturnDecision(
+    query: DcbQuery,
+    commands: List<C>,
+    decider: Decider<C, S, E>
+): Decider.Decision<S, E> {
+    val decision = AtomicReference<Decider.Decision<S, E>>()
+    execute(query) { events: Stream<E> ->
+        val result = decider.decideOnEvents(events.toList(), commands)
+        decision.set(result)
+        result.events.stream()
+    }
+    return decision.get()
+}
+
+/**
+ * Execute a command and return the folded state after the decision.
+ */
+fun <C, S, E : Any> DcbApplicationService<E>.executeAndReturnState(query: DcbQuery, command: C, decider: Decider<C, S, E>): S =
+    executeAndReturnDecision(query, command, decider).state
+
+/**
+ * Execute commands and return the folded state after the decision.
+ */
+fun <C, S, E : Any> DcbApplicationService<E>.executeAndReturnState(query: DcbQuery, commands: List<C>, decider: Decider<C, S, E>): S =
+    executeAndReturnDecision(query, commands, decider).state
+
+/**
+ * Execute a command and return the new events decided for [query].
+ */
+fun <C, S, E : Any> DcbApplicationService<E>.executeAndReturnEvents(query: DcbQuery, command: C, decider: Decider<C, S, E>): List<E> =
+    executeAndReturnDecision(query, command, decider).events
+
+/**
+ * Execute commands and return the new events decided for [query].
+ */
+fun <C, S, E : Any> DcbApplicationService<E>.executeAndReturnEvents(query: DcbQuery, commands: List<C>, decider: Decider<C, S, E>): List<E> =
+    executeAndReturnDecision(query, commands, decider).events

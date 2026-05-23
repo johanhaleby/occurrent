@@ -56,6 +56,7 @@
   * Kotlin live subscription extension on `Subscribable`: `subscribeDcb`.
   * DCB subscription helpers subscribe to CloudEvents and post-filter DCB-tagged events by `DcbQuery`; they are live subscription conveniences, not DCB-consistent reads.
   * DCB subscription metadata callbacks reuse the existing `EventMetadata` type and expose DCB metadata through Kotlin extension properties: `dcbPosition` and `dcbTags`.
+  * Kotlin decider extensions on `DcbApplicationService` mirror the stream decider helpers while using `DcbQuery` as the decision boundary.
 * Added ADRs for the DCB design:
   * [ADR 14](doc/architecture/decisions/0014-introduce-dcb-as-shared-cloudevent-capability.md)
   * [ADR 15](doc/architecture/decisions/0015-spring-mongo-event-store-capabilities.md)
