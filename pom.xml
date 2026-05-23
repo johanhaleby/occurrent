@@ -585,6 +585,10 @@
                                 <excludeArtifact>example-domain-word-guessing-game-es-mongodb-spring</excludeArtifact>
                                 <excludeArtifact>example-domain-word-guessing-game-es-mongodb-spring-blocking
                                 </excludeArtifact>
+                                <excludeArtifact>example-domain-word-guessing-game-es-mongodb-spring-dcb
+                                </excludeArtifact>
+                                <excludeArtifact>example-domain-word-guessing-game-es-mongodb-spring-dcb-autoconfig
+                                </excludeArtifact>
                             </excludeArtifacts>
                         </configuration>
                     </plugin>
