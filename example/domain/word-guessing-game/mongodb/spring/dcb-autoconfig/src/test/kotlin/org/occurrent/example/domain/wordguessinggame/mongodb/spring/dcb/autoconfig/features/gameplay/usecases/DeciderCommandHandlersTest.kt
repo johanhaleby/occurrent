@@ -17,15 +17,20 @@
 package org.occurrent.example.domain.wordguessinggame.mongodb.spring.dcb.autoconfig.features.gameplay.usecases
 
 import org.assertj.core.api.Assertions.assertThat
+import org.awaitility.Awaitility.await
 import org.junit.jupiter.api.Test
 import org.occurrent.application.converter.CloudEventConverter
+import org.occurrent.dsl.dcb.blocking.queryForList
 import org.occurrent.eventstore.api.dcb.DcbCloudEvents
 import org.occurrent.eventstore.api.dcb.DcbEventStore
+import org.occurrent.eventstore.api.dcb.DcbQuery
+import org.occurrent.example.domain.wordguessinggame.event.CharacterInWordHintWasRevealed
 import org.occurrent.example.domain.wordguessinggame.event.GameEvent
 import org.occurrent.example.domain.wordguessinggame.event.GameWasStarted
 import org.occurrent.example.domain.wordguessinggame.event.GameWasWon
 import org.occurrent.example.domain.wordguessinggame.event.PlayerGuessedTheRightWord
 import org.occurrent.example.domain.wordguessinggame.event.PlayerGuessedTheWrongWord
+import org.occurrent.example.domain.wordguessinggame.event.PlayerWasAwardedPointsForGuessingTheRightWord
 import org.occurrent.example.domain.wordguessinggame.mongodb.spring.dcb.autoconfig.Bootstrap
 import org.occurrent.example.domain.wordguessinggame.mongodb.spring.dcb.autoconfig.TestBootstrap
 import org.occurrent.example.domain.wordguessinggame.mongodb.spring.dcb.autoconfig.features.dcb.GameDcbQueries
@@ -36,6 +41,7 @@ import org.occurrent.example.domain.wordguessinggame.writemodel.WordList
 import org.springframework.beans.factory.annotation.Autowired
 import org.springframework.boot.test.context.SpringBootTest
 import org.springframework.context.annotation.Import
+import java.time.Duration
 import java.util.Date
 import java.util.UUID
 
@@ -61,6 +67,7 @@ class DeciderCommandHandlersTest {
         val startedBy = UUID.randomUUID()
 
         startGame(gameId, Date(1), startedBy, wordList())
+        eventuallyAtLeast<CharacterInWordHintWasRevealed>(GameDcbQueries.wordHintDecisionContext(gameId), 1)
 
         val cloudEvents = readGameplayCloudEvents(gameId)
         val events = cloudEvents.toDomainEvents()
@@ -82,8 +89,10 @@ class DeciderCommandHandlersTest {
         val gameId = UUID.randomUUID()
         val playerId = UUID.randomUUID()
         startGame(gameId, Date(1), UUID.randomUUID(), wordList())
+        val initialHints = eventuallyAtLeast<CharacterInWordHintWasRevealed>(GameDcbQueries.wordHintDecisionContext(gameId), 1)
 
         makeGuess(gameId, Date(2), playerId, Word("wrong"))
+        eventuallyAtLeast<CharacterInWordHintWasRevealed>(GameDcbQueries.wordHintDecisionContext(gameId), initialHints.size + 1)
         makeGuess(gameId, Date(3), playerId, Word("wrong"))
 
         val events = readGameplayCloudEvents(gameId).toDomainEvents()
@@ -101,9 +110,11 @@ class DeciderCommandHandlersTest {
         val gameId = UUID.randomUUID()
         val playerId = UUID.randomUUID()
         startGame(gameId, Date(1), UUID.randomUUID(), wordList())
+        eventuallyAtLeast<CharacterInWordHintWasRevealed>(GameDcbQueries.wordHintDecisionContext(gameId), 1)
         val wordToGuess = readGameplayCloudEvents(gameId).toDomainEvents().filterIsInstance<GameWasStarted>().single().wordToGuess
 
         makeGuess(gameId, Date(2), playerId, Word(wordToGuess))
+        eventuallySingle<PlayerWasAwardedPointsForGuessingTheRightWord>(GameDcbQueries.pointsDecisionContext(gameId))
 
         val cloudEvents = readGameplayCloudEvents(gameId)
         val events = cloudEvents.toDomainEvents()
@@ -122,6 +133,19 @@ class DeciderCommandHandlersTest {
 
     private fun List<io.cloudevents.CloudEvent>.toDomainEvents(): List<GameEvent> =
         cloudEventConverter.toDomainEvents(stream()).toList()
+
+    private inline fun <reified E : GameEvent> eventuallySingle(query: DcbQuery): E =
+        await().atMost(Duration.ofSeconds(10)).untilAsserted {
+            assertThat(events<E>(query)).hasSize(1)
+        }.let { events<E>(query).single() }
+
+    private inline fun <reified E : GameEvent> eventuallyAtLeast(query: DcbQuery, size: Int): List<E> =
+        await().atMost(Duration.ofSeconds(10)).untilAsserted {
+            assertThat(events<E>(query)).hasSizeGreaterThanOrEqualTo(size)
+        }.let { events<E>(query) }
+
+    private inline fun <reified E : GameEvent> events(query: DcbQuery): List<E> =
+        dcbEventStore.queryForList(query, cloudEventConverter).filterIsInstance<E>()
 
     private fun wordList(): WordList = WordList(
         WordCategory("test"),
