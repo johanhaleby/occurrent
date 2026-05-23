@@ -15,33 +15,23 @@
   ~ limitations under the License.
   -->
 
-<project xmlns="http://maven.apache.org/POM/4.0.0" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 http://maven.apache.org/xsd/maven-4.0.0.xsd">
+<project xmlns="http://maven.apache.org/POM/4.0.0" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+         xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 http://maven.apache.org/xsd/maven-4.0.0.xsd">
     <parent>
-        <artifactId>eventstore</artifactId>
+        <artifactId>eventstore-api</artifactId>
         <groupId>org.occurrent</groupId>
         <version>${revision}</version>
     </parent>
     <modelVersion>4.0.0</modelVersion>
 
-    <artifactId>eventstore-inmemory</artifactId>
+    <artifactId>eventstore-api-dcb</artifactId>
 
     <name>${mavenProjectName}</name>
 
     <dependencies>
         <dependency>
-            <groupId>org.occurrent</groupId>
-            <artifactId>eventstore-api-blocking</artifactId>
-            <version>${project.version}</version>
-        </dependency>
-        <dependency>
-            <groupId>org.occurrent</groupId>
-            <artifactId>eventstore-api-dcb</artifactId>
-            <version>${project.version}</version>
-        </dependency>
-        <dependency>
-            <groupId>org.occurrent</groupId>
-            <artifactId>inmemory-filter-matching</artifactId>
-            <version>${project.version}</version>
+            <groupId>io.cloudevents</groupId>
+            <artifactId>cloudevents-api</artifactId>
         </dependency>
         <dependency>
             <groupId>io.cloudevents</groupId>
@@ -52,12 +42,8 @@
             <artifactId>jspecify</artifactId>
             <optional>true</optional>
         </dependency>
+
         <!-- Test -->
-        <dependency>
-            <groupId>com.fasterxml.jackson.core</groupId>
-            <artifactId>jackson-databind</artifactId>
-            <scope>test</scope>
-        </dependency>
         <dependency>
             <groupId>org.junit.jupiter</groupId>
             <artifactId>junit-jupiter-engine</artifactId>
@@ -68,12 +54,5 @@
             <artifactId>assertj-core</artifactId>
             <scope>test</scope>
         </dependency>
-        <dependency>
-            <groupId>org.occurrent</groupId>
-            <artifactId>test-support</artifactId>
-            <version>${project.version}</version>
-            <scope>test</scope>
-        </dependency>
     </dependencies>
-
 </project>
