@@ -15,8 +15,6 @@
  */
 package org.occurrent.example.domain.wordguessinggame.mongodb.spring.dcb
 
-import org.occurrent.example.domain.wordguessinggame.mongodb.spring.dcb.features.gameplay.usecases.MakeGuess
-import org.occurrent.example.domain.wordguessinggame.mongodb.spring.dcb.features.gameplay.usecases.StartGame
 import org.springframework.boot.test.context.TestConfiguration
 import org.springframework.boot.testcontainers.service.connection.ServiceConnection
 import org.springframework.context.annotation.Bean
@@ -28,10 +26,4 @@ class TestBootstrap {
     @Bean
     @ServiceConnection
     fun mongoDbContainer(): MongoDBContainer = MongoDBContainer("mongo:4.2.8").withReplicaSet()
-
-    @Bean
-    fun startGame(): StartGame = StartGame { _, _, _, _ -> }
-
-    @Bean
-    fun makeGuess(): MakeGuess = MakeGuess { _, _, _, _ -> }
 }
