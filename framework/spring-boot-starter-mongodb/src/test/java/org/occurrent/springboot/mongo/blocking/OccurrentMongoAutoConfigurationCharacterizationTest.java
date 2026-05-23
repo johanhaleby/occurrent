@@ -22,6 +22,9 @@ import org.junit.jupiter.api.Test;
 import org.occurrent.application.converter.CloudEventConverter;
 import org.occurrent.application.converter.typemapper.CloudEventTypeMapper;
 import org.occurrent.application.converter.typemapper.ReflectionCloudEventTypeMapper;
+import org.occurrent.eventstore.mongodb.spring.blocking.EventStoreConfig;
+import org.occurrent.eventstore.mongodb.spring.blocking.SpringMongoEventStore;
+import org.occurrent.eventstore.mongodb.spring.blocking.SpringMongoEventStoreCapability;
 import org.springframework.boot.autoconfigure.AutoConfigurations;
 import org.springframework.boot.test.context.runner.ApplicationContextRunner;
 import org.springframework.context.annotation.Bean;
@@ -60,6 +63,7 @@ class OccurrentMongoAutoConfigurationCharacterizationTest {
 
             OccurrentProperties properties = context.getBean(OccurrentProperties.class);
             assertThat(properties.getEventStore().getCollection()).isEqualTo("events-v2");
+            assertThat(properties.getEventStore().getCapabilities()).containsExactly(SpringMongoEventStoreCapability.STREAM);
             assertThat(properties.getSubscription().getCollection()).isEqualTo("subscriptions-v2");
             assertThat(properties.getCloudEventConverter().getCloudEventSource()).isEqualTo(URI.create("urn:occurrent:test"));
             assertThat(properties.getApplicationService().isEnableDefaultRetryStrategy()).isFalse();
@@ -97,11 +101,68 @@ class OccurrentMongoAutoConfigurationCharacterizationTest {
     }
 
     @Test
+    void binds_composed_event_store_capabilities() {
+        contextRunner.withPropertyValues("occurrent.event-store.capabilities=stream,dcb").run(context -> {
+            OccurrentProperties properties = context.getBean(OccurrentProperties.class);
+
+            assertThat(properties.getEventStore().getCapabilities())
+                    .containsExactlyInAnyOrder(SpringMongoEventStoreCapability.STREAM, SpringMongoEventStoreCapability.DCB);
+        });
+    }
+
+    @Test
+    void propagates_default_capabilities_to_auto_configured_event_store_config() {
+        eventStoreConfigContextRunner().run(context -> {
+            EventStoreConfig eventStoreConfig = context.getBean(EventStoreConfig.class);
+
+            assertThat(eventStoreConfig.eventStoreCapabilities).containsExactly(SpringMongoEventStoreCapability.STREAM);
+        });
+    }
+
+    @Test
+    void propagates_composed_capabilities_to_auto_configured_event_store_config() {
+        eventStoreConfigContextRunner()
+                .withPropertyValues("occurrent.event-store.capabilities=stream,dcb")
+                .run(context -> {
+                    EventStoreConfig eventStoreConfig = context.getBean(EventStoreConfig.class);
+
+                    assertThat(eventStoreConfig.eventStoreCapabilities)
+                            .containsExactlyInAnyOrder(SpringMongoEventStoreCapability.STREAM, SpringMongoEventStoreCapability.DCB);
+                });
+    }
+
+    @Test
+    void propagates_dcb_only_capability_to_auto_configured_event_store_config() {
+        eventStoreConfigContextRunner()
+                .withPropertyValues("occurrent.event-store.capabilities=dcb")
+                .run(context -> {
+                    EventStoreConfig eventStoreConfig = context.getBean(EventStoreConfig.class);
+
+                    assertThat(eventStoreConfig.eventStoreCapabilities).containsExactly(SpringMongoEventStoreCapability.DCB);
+                });
+    }
+
+    @Test
+    void binds_dcb_only_event_store_capability() {
+        contextRunner.withPropertyValues("occurrent.event-store.capabilities=dcb").run(context -> {
+            OccurrentProperties properties = context.getBean(OccurrentProperties.class);
+
+            assertThat(properties.getEventStore().getCapabilities()).containsExactly(SpringMongoEventStoreCapability.DCB);
+        });
+    }
+
+    @Test
     void dependency_alone_does_not_activate_occurrents() {
         new ApplicationContextRunner().run(context -> {
             assertThat(context).doesNotHaveBean(CloudEventConverter.class);
             assertThat(context).doesNotHaveBean(OccurrentProperties.class);
         });
+    }
+
+    private ApplicationContextRunner eventStoreConfigContextRunner() {
+        return contextRunner
+                .withPropertyValues("occurrent.event-store.enabled=true")
+                .withBean(SpringMongoEventStore.class, () -> mock(SpringMongoEventStore.class));
     }
 
     @Configuration(proxyBeanMethods = false)

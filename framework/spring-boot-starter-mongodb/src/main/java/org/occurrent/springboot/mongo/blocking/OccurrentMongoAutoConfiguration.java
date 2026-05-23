@@ -93,7 +93,12 @@ public class OccurrentMongoAutoConfiguration<E> {
     @ConditionalOnProperty(name = "occurrent.event-store.enabled", havingValue = "true", matchIfMissing = true)
     public EventStoreConfig occurrentEventStoreConfig(MongoTransactionManager transactionManager, OccurrentProperties occurrentProperties) {
         EventStoreProperties eventStoreProperties = occurrentProperties.getEventStore();
-        return new EventStoreConfig.Builder().eventStoreCollectionName(eventStoreProperties.getCollection()).transactionConfig(transactionManager).timeRepresentation(eventStoreProperties.getTimeRepresentation()).build();
+        return new EventStoreConfig.Builder()
+                .eventStoreCollectionName(eventStoreProperties.getCollection())
+                .transactionConfig(transactionManager)
+                .timeRepresentation(eventStoreProperties.getTimeRepresentation())
+                .eventStoreCapabilities(eventStoreProperties.getCapabilities())
+                .build();
     }
 
     @Bean
