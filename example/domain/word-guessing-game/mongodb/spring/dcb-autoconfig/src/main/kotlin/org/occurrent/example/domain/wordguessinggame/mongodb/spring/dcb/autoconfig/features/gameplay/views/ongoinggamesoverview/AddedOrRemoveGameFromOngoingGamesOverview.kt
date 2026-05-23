@@ -16,51 +16,57 @@
 
 package org.occurrent.example.domain.wordguessinggame.mongodb.spring.dcb.autoconfig.features.gameplay.views.ongoinggamesoverview
 
-import org.occurrent.dsl.subscription.blocking.Subscriptions
+import org.occurrent.annotation.Subscription
+import org.occurrent.dsl.dcb.blocking.dcbPosition
+import org.occurrent.dsl.dcb.blocking.dcbTags
+import org.occurrent.dsl.subscription.blocking.EventMetadata
 import org.occurrent.example.domain.wordguessinggame.event.GameEvent
 import org.occurrent.example.domain.wordguessinggame.event.GameWasLost
 import org.occurrent.example.domain.wordguessinggame.event.GameWasStarted
 import org.occurrent.example.domain.wordguessinggame.event.GameWasWon
+import org.occurrent.example.domain.wordguessinggame.mongodb.spring.dcb.autoconfig.features.dcb.GameDcbTags
 import org.occurrent.example.domain.wordguessinggame.mongodb.spring.dcb.autoconfig.support.loggerFor
 import org.occurrent.example.domain.wordguessinggame.readmodel.OngoingGameOverview
-import org.springframework.beans.factory.annotation.Autowired
-import org.springframework.context.annotation.Bean
-import org.springframework.context.annotation.Configuration
 import org.springframework.data.mongodb.core.MongoOperations
 import org.springframework.data.mongodb.core.query.Criteria.where
 import org.springframework.data.mongodb.core.query.Query.query
 import org.springframework.data.mongodb.core.query.isEqualTo
 import org.springframework.data.mongodb.core.remove
+import org.springframework.stereotype.Component
+import java.util.UUID
 
-@Configuration
-class AddedOrRemoveGameFromOngoingGamesOverview {
+@Component
+class AddedOrRemoveGameFromOngoingGamesOverview(private val mongo: MongoOperations) {
     private val log = loggerFor<AddedOrRemoveGameFromOngoingGamesOverview>()
 
-    @Autowired
-    lateinit var subscriptions: Subscriptions<GameEvent>
-
-    @Autowired
-    lateinit var mongo: MongoOperations
-
-    @Bean
-    fun whenGameWasStartedThenAddGameToOngoingGamesOverview() =
-        subscriptions.subscribe<GameWasStarted>("WhenGameWasStartedThenAddGameToOngoingGamesOverview") { gameWasStarted ->
-            log.info("Adding game ${gameWasStarted.gameId} to ongoing games view")
-            val ongoingGameOverview = gameWasStarted.run {
-                OngoingGameOverview(gameId, category, startedBy, timestamp).toDTO()
-            }
-            mongo.insert(ongoingGameOverview)
+    @Subscription(id = "WhenGameWasStartedThenAddGameToOngoingGamesOverview")
+    fun whenGameWasStartedThenAddGameToOngoingGamesOverview(gameWasStarted: GameWasStarted, metadata: EventMetadata) {
+        if (!metadata.belongsToGame(gameWasStarted.gameId)) {
+            return
         }
-
-    @Bean
-    fun whenGameIsEndedThenRemoveGameFromOngoingGamesOverview() =
-        subscriptions.subscribe<GameWasWon, GameWasLost>("WhenGameIsEndedThenRemoveGameFromOngoingGamesOverview") { e ->
-            val gameId = when (e) {
-                is GameWasWon -> e.gameId
-                is GameWasLost -> e.gameId
-                else -> throw IllegalStateException("Internal error")
-            }
-            log.info("Removing game $gameId from ongoing games view since ${e.type}")
-            mongo.remove<OngoingGameOverviewMongoDTO>(query(where("_id").isEqualTo(gameId.toString())))
+        requireNotNull(metadata.dcbPosition) { "Expected DCB position for ${gameWasStarted.type}" }
+        log.info("Adding game ${gameWasStarted.gameId} to ongoing games view")
+        val ongoingGameOverview = gameWasStarted.run {
+            OngoingGameOverview(gameId, category, startedBy, timestamp).toDTO()
         }
+        mongo.save(ongoingGameOverview)
+    }
+
+    @Subscription(id = "WhenGameIsEndedThenRemoveGameFromOngoingGamesOverview", eventTypes = [GameWasWon::class, GameWasLost::class])
+    fun whenGameIsEndedThenRemoveGameFromOngoingGamesOverview(e: GameEvent, metadata: EventMetadata) {
+        val gameId = when (e) {
+            is GameWasWon -> e.gameId
+            is GameWasLost -> e.gameId
+            else -> throw IllegalStateException("Internal error")
+        }
+        if (!metadata.belongsToGame(gameId)) {
+            return
+        }
+        requireNotNull(metadata.dcbPosition) { "Expected DCB position for ${e.type}" }
+        log.info("Removing game $gameId from ongoing games view since ${e.type}")
+        mongo.remove<OngoingGameOverviewMongoDTO>(query(where("_id").isEqualTo(gameId.toString())))
+    }
+
+    private fun EventMetadata.belongsToGame(gameId: UUID): Boolean =
+        dcbTags.contains(GameDcbTags.game(gameId))
 }

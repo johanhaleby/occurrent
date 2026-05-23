@@ -16,65 +16,66 @@
 
 package org.occurrent.example.domain.wordguessinggame.mongodb.spring.dcb.autoconfig.features.gameplay.views.endedgamesoverview
 
+import org.occurrent.annotation.Subscription
 import org.occurrent.application.converter.CloudEventConverter
+import org.occurrent.dsl.dcb.blocking.dcbPosition
+import org.occurrent.dsl.dcb.blocking.dcbTags
 import org.occurrent.dsl.dcb.blocking.queryForSequence
-import org.occurrent.dsl.subscription.blocking.Subscriptions
+import org.occurrent.dsl.subscription.blocking.EventMetadata
 import org.occurrent.eventstore.api.dcb.DcbEventStore
-import org.occurrent.eventstore.api.dcb.DcbQuery
 import org.occurrent.example.domain.wordguessinggame.event.*
+import org.occurrent.example.domain.wordguessinggame.mongodb.spring.dcb.autoconfig.features.dcb.GameDcbQueries
+import org.occurrent.example.domain.wordguessinggame.mongodb.spring.dcb.autoconfig.features.dcb.GameDcbTags
 import org.occurrent.example.domain.wordguessinggame.mongodb.spring.dcb.autoconfig.support.loggerFor
 import org.occurrent.example.domain.wordguessinggame.readmodel.LostGameOverview
 import org.occurrent.example.domain.wordguessinggame.readmodel.WonGameOverview
-import org.springframework.beans.factory.annotation.Autowired
-import org.springframework.context.annotation.Bean
-import org.springframework.context.annotation.Configuration
 import org.springframework.data.mongodb.core.MongoOperations
+import org.springframework.stereotype.Component
+import java.util.UUID
 
-@Configuration
-class WhenGameIsEndedThenAddGameToEndedGamesOverview {
+@Component
+class WhenGameIsEndedThenAddGameToEndedGamesOverview(
+    private val mongo: MongoOperations,
+    private val eventStore: DcbEventStore,
+    private val cloudEventConverter: CloudEventConverter<GameEvent>
+) {
     private val log = loggerFor<WhenGameIsEndedThenAddGameToEndedGamesOverview>()
 
-    @Autowired
-    private lateinit var subscriptions: Subscriptions<GameEvent>
-
-    @Autowired
-    private lateinit var mongo: MongoOperations
-
-    @Autowired
-    private lateinit var eventStore: DcbEventStore
-
-    @Autowired
-    private lateinit var cloudEventConverter: CloudEventConverter<GameEvent>
-
-    @Bean
-    fun whenGameIsEndedThenAddGameToEndedGamesOverviewPolicy() =
-        subscriptions.subscribe<GameWasWon, GameWasLost>("WhenGameIsEndedThenAddGameToGameEndedOverview") { e ->
-            log.info("${e::class.eventType()} - will update ended games overview")
-            val gameId = e.gameId
-            val gameWasStarted = eventStore
-                .queryForSequence(DcbQuery.typeAndTagsAllOf(setOf(GameWasStarted::class.eventType()), setOf("game:$gameId")), cloudEventConverter)
-                .filterIsInstance<GameWasStarted>()
-                .first()
-            val endedGameOverview = when (e) {
-                is GameWasWon -> WonGameOverview(
-                    gameId,
-                    gameWasStarted.category,
-                    gameWasStarted.startedBy,
-                    gameWasStarted.timestamp,
-                    e.timestamp,
-                    gameWasStarted.wordToGuess,
-                    e.winnerId
-                )
-                is GameWasLost -> LostGameOverview(
-                    gameId,
-                    gameWasStarted.category,
-                    gameWasStarted.startedBy,
-                    gameWasStarted.timestamp,
-                    e.timestamp,
-                    gameWasStarted.wordToGuess
-                )
-                else -> throw IllegalStateException("Internal error")
-            }.toDTO()
-            mongo.insert(endedGameOverview)
+    @Subscription(id = "WhenGameIsEndedThenAddGameToGameEndedOverview", eventTypes = [GameWasWon::class, GameWasLost::class])
+    fun whenGameIsEndedThenAddGameToEndedGamesOverviewPolicy(e: GameEvent, metadata: EventMetadata) {
+        if (!metadata.belongsToGame(e.gameId)) {
+            return
         }
+        requireNotNull(metadata.dcbPosition) { "Expected DCB position for ${e.type}" }
+        log.info("${e::class.eventType()} - will update ended games overview")
+        val gameId = e.gameId
+        val gameWasStarted = eventStore
+            .queryForSequence(GameDcbQueries.event<GameWasStarted>(gameId), cloudEventConverter)
+            .filterIsInstance<GameWasStarted>()
+            .first()
+        val endedGameOverview = when (e) {
+            is GameWasWon -> WonGameOverview(
+                gameId,
+                gameWasStarted.category,
+                gameWasStarted.startedBy,
+                gameWasStarted.timestamp,
+                e.timestamp,
+                gameWasStarted.wordToGuess,
+                e.winnerId
+            )
+            is GameWasLost -> LostGameOverview(
+                gameId,
+                gameWasStarted.category,
+                gameWasStarted.startedBy,
+                gameWasStarted.timestamp,
+                e.timestamp,
+                gameWasStarted.wordToGuess
+            )
+            else -> throw IllegalStateException("Internal error")
+        }.toDTO()
+        mongo.save(endedGameOverview)
+    }
+
+    private fun EventMetadata.belongsToGame(gameId: UUID): Boolean =
+        dcbTags.contains(GameDcbTags.game(gameId))
 }
