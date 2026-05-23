@@ -45,11 +45,7 @@ import java.net.URI
         ComponentScan.Filter(
             type = FilterType.REGEX,
             pattern = [
-                "org\\.occurrent\\.example\\.domain\\.wordguessinggame\\.mongodb\\.spring\\.dcb\\.autoconfig\\.features\\.gameplay\\.views\\..*",
-                "org\\.occurrent\\.example\\.domain\\.wordguessinggame\\.mongodb\\.spring\\.dcb\\.autoconfig\\.features\\.gameplay\\.website\\..*",
-                "org\\.occurrent\\.example\\.domain\\.wordguessinggame\\.mongodb\\.spring\\.dcb\\.autoconfig\\.features\\.wordhint\\..*",
-                "org\\.occurrent\\.example\\.domain\\.wordguessinggame\\.mongodb\\.spring\\.dcb\\.autoconfig\\.features\\.pointawarding\\..*",
-                "org\\.occurrent\\.example\\.domain\\.wordguessinggame\\.mongodb\\.spring\\.dcb\\.autoconfig\\.features\\.emailwinner\\..*"
+                "org\\.occurrent\\.example\\.domain\\.wordguessinggame\\.mongodb\\.spring\\.dcb\\.autoconfig\\.features\\.gameplay\\.website\\..*"
             ]
         )
     ]
