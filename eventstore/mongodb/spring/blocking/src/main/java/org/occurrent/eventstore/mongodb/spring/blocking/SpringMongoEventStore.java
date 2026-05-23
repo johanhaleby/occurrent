@@ -67,6 +67,8 @@ import static org.occurrent.eventstore.api.SortBy.SortDirection.ASCENDING;
 import static org.occurrent.eventstore.mongodb.internal.MongoExceptionTranslator.translateException;
 import static org.occurrent.eventstore.mongodb.internal.OccurrentCloudEventMongoDocumentMapper.convertToCloudEvent;
 import static org.occurrent.eventstore.mongodb.internal.OccurrentCloudEventMongoDocumentMapper.convertToDocument;
+import static org.occurrent.eventstore.mongodb.spring.blocking.SpringMongoEventStoreCapability.DCB;
+import static org.occurrent.eventstore.mongodb.spring.blocking.SpringMongoEventStoreCapability.STREAM;
 import static org.occurrent.functionalsupport.internal.FunctionalSupport.autoClose;
 import static org.occurrent.functionalsupport.internal.FunctionalSupport.mapWithIndex;
 import static org.occurrent.mongodb.spring.sortconversion.internal.SortConverter.convertToSpringSort;
@@ -77,6 +79,11 @@ import static org.springframework.data.mongodb.core.query.Criteria.where;
 /**
  * This is an {@link EventStore} that stores events in MongoDB using Spring's {@link MongoTemplate}.
  * It also supports the {@link EventStoreOperations} and {@link EventStoreQueries} contracts.
+ * <p>
+ * By default, only stream-based event-store operations are enabled. Configure
+ * {@link EventStoreConfig.Builder#eventStoreCapabilities(Set)} to enable DCB, or to enable both stream and DCB
+ * operations. Occurrent creates missing indexes for enabled capabilities, but it never removes indexes automatically.
+ * For large production collections, create new indexes out-of-band before enabling a new capability.
  */
 @NullMarked
 public class SpringMongoEventStore implements EventStore, EventStoreOperations, EventStoreQueries, ReadEventStreamWithFilter, DcbEventStore {
@@ -95,6 +102,7 @@ public class SpringMongoEventStore implements EventStore, EventStoreOperations, 
     private final TransactionTemplate transactionTemplate;
     private final Function<Query, Query> queryOptions;
     private final Function<Query, Query> readOptions;
+    private final Set<SpringMongoEventStoreCapability> eventStoreCapabilities;
 
     /**
      * Create a new instance of {@code SpringBlockingMongoEventStore}
@@ -113,11 +121,13 @@ public class SpringMongoEventStore implements EventStore, EventStoreOperations, 
         this.timeRepresentation = config.timeRepresentation;
         this.queryOptions = config.queryOptions;
         this.readOptions = config.readOptions;
-        initializeEventStore(eventStoreCollectionName, dcbPositionCollectionName, dcbCheckpointCollectionName, mongoTemplate);
+        this.eventStoreCapabilities = config.eventStoreCapabilities;
+        initializeEventStore(eventStoreCollectionName, dcbPositionCollectionName, dcbCheckpointCollectionName, eventStoreCapabilities, mongoTemplate);
     }
 
     @Override
     public EventStream<CloudEvent> read(String streamId, int skip, int limit) {
+        requireStreamCapability();
         final EventStream<Document> eventStream = readEventStream(streamId, null, skip, limit);
         return requireNonNull(eventStream).map(document -> convertToCloudEvent(timeRepresentation, document));
     }
@@ -125,6 +135,7 @@ public class SpringMongoEventStore implements EventStore, EventStoreOperations, 
     @SuppressWarnings("ConstantConditions")
     @Override
     public WriteResult write(String streamId, WriteCondition writeCondition, Stream<CloudEvent> events) {
+        requireStreamCapability();
         if (writeCondition == null) {
             throw new IllegalArgumentException(WriteCondition.class.getSimpleName() + " cannot be null");
         }
@@ -177,6 +188,7 @@ public class SpringMongoEventStore implements EventStore, EventStoreOperations, 
 
     @Override
     public DcbEventStream read(DcbQuery query, DcbReadOptions options) {
+        requireDcbCapability();
         requireNonNull(query, "Query cannot be null");
         requireNonNull(options, "Read options cannot be null");
 
@@ -191,22 +203,26 @@ public class SpringMongoEventStore implements EventStore, EventStoreOperations, 
 
     @Override
     public DcbAppendResult append(String streamId, List<CloudEvent> events) {
+        requireDcbCapability();
         return appendDcb(streamId, events, null);
     }
 
     @Override
     public DcbAppendResult append(String streamId, List<CloudEvent> events, DcbAppendCondition condition) {
+        requireDcbCapability();
         requireNonNull(condition, "Append condition cannot be null");
         return appendDcb(streamId, events, condition);
     }
 
     @Override
     public boolean exists(String streamId) {
+        requireStreamCapability();
         return mongoTemplate.exists(queryOptions.apply(streamIdEqualTo(streamId)), eventStoreCollectionName);
     }
 
     @Override
     public boolean exists(Filter filter) {
+        requireStreamCapability();
         requireNonNull(filter, "Filter cannot be null");
         if (filter instanceof Filter.All) {
             return count() > 0;
@@ -218,6 +234,7 @@ public class SpringMongoEventStore implements EventStore, EventStoreOperations, 
 
     @Override
     public void deleteEventStream(String streamId) {
+        requireStreamCapability();
         requireNonNull(streamId, "Stream id cannot be null");
 
         transactionTemplate.executeWithoutResult(
@@ -227,6 +244,7 @@ public class SpringMongoEventStore implements EventStore, EventStoreOperations, 
 
     @Override
     public void deleteEvent(String cloudEventId, URI cloudEventSource) {
+        requireStreamCapability();
         requireNonNull(cloudEventId, "Cloud event id cannot be null");
         requireNonNull(cloudEventSource, "Cloud event source cannot be null");
 
@@ -235,6 +253,7 @@ public class SpringMongoEventStore implements EventStore, EventStoreOperations, 
 
     @Override
     public void delete(Filter filter) {
+        requireStreamCapability();
         requireNonNull(filter, "Filter cannot be null");
         final Query query = FilterConverter.convertFilterToQuery(timeRepresentation, filter);
         mongoTemplate.remove(query, eventStoreCollectionName);
@@ -242,6 +261,7 @@ public class SpringMongoEventStore implements EventStore, EventStoreOperations, 
 
     @Override
     public Optional<CloudEvent> updateEvent(String cloudEventId, URI cloudEventSource, Function<CloudEvent, CloudEvent> updateFunction) {
+        requireStreamCapability();
         Function<Function<CloudEvent, CloudEvent>, Optional<CloudEvent>> logic = (fn) -> {
             Query cloudEventQuery = cloudEventIdEqualTo(cloudEventId, cloudEventSource);
             Document document = mongoTemplate.findOne(cloudEventQuery, Document.class, eventStoreCollectionName);
@@ -269,6 +289,7 @@ public class SpringMongoEventStore implements EventStore, EventStoreOperations, 
     // Queries
     @Override
     public Stream<CloudEvent> query(Filter filter, int skip, int limit, SortBy sortBy) {
+        requireStreamCapability();
         requireNonNull(filter, Filter.class.getSimpleName() + " cannot be null");
         requireNonNull(sortBy, SortBy.class.getSimpleName() + " cannot be null");
         final Query query = queryOptions.apply(FilterConverter.convertFilterToQuery(timeRepresentation, filter));
@@ -278,6 +299,7 @@ public class SpringMongoEventStore implements EventStore, EventStoreOperations, 
 
     @Override
     public long count(Filter filter) {
+        requireStreamCapability();
         requireNonNull(filter, "Filter cannot be null");
         if (filter instanceof Filter.All) {
             return mongoTemplate.execute(eventStoreCollectionName, MongoCollection::estimatedDocumentCount);
@@ -296,9 +318,9 @@ public class SpringMongoEventStore implements EventStore, EventStoreOperations, 
         List<CloudEvent> eventsToAppend = validateDcbEvents(events);
 
         return requireNonNull(transactionTemplate.execute(transactionStatus -> {
-            long currentStreamVersion = currentStreamVersion(streamId);
             long firstPosition = reserveDcbPositions(eventsToAppend.size());
             long lastPosition = firstPosition + eventsToAppend.size() - 1;
+            long currentStreamVersion = eventStoreCapabilities.contains(STREAM) ? currentStreamVersion(streamId) : firstPosition - 1;
             if (condition != null) {
                 updateCheckpoints(condition, lastPosition);
             }
@@ -382,6 +404,7 @@ public class SpringMongoEventStore implements EventStore, EventStoreOperations, 
 
     @Override
     public EventStream<CloudEvent> read(String streamId, StreamReadFilter filter, int skip, int limit) {
+        requireStreamCapability();
         requireNonNull(streamId, "Stream id cannot be null");
         requireNonNull(filter, "filter cannot be null");
         final EventStream<Document> eventStream = readEventStream(streamId, filter, skip, limit);
@@ -535,29 +558,48 @@ public class SpringMongoEventStore implements EventStore, EventStoreOperations, 
     }
 
     // Initialization
-    private static void initializeEventStore(String eventStoreCollectionName, String dcbPositionCollectionName, String dcbCheckpointCollectionName, MongoTemplate mongoTemplate) {
+    private static void initializeEventStore(String eventStoreCollectionName, String dcbPositionCollectionName, String dcbCheckpointCollectionName, Set<SpringMongoEventStoreCapability> eventStoreCapabilities, MongoTemplate mongoTemplate) {
         if (!mongoTemplate.collectionExists(eventStoreCollectionName)) {
             mongoTemplate.createCollection(eventStoreCollectionName);
         }
-        if (!mongoTemplate.collectionExists(dcbPositionCollectionName)) {
+        boolean dcbEnabled = eventStoreCapabilities.contains(DCB);
+        if (dcbEnabled && !mongoTemplate.collectionExists(dcbPositionCollectionName)) {
             mongoTemplate.createCollection(dcbPositionCollectionName);
         }
-        if (!mongoTemplate.collectionExists(dcbCheckpointCollectionName)) {
+        if (dcbEnabled && !mongoTemplate.collectionExists(dcbCheckpointCollectionName)) {
             mongoTemplate.createCollection(dcbCheckpointCollectionName);
         }
 
         MongoCollection<Document> eventStoreCollection = mongoTemplate.getCollection(eventStoreCollectionName);
         // Cloud spec defines id + source must be unique!
         eventStoreCollection.createIndex(Indexes.compoundIndex(Indexes.ascending(CloudEventV1.ID), Indexes.ascending(CloudEventV1.SOURCE)), new IndexOptions().unique(true));
-        // Create a streamId + streamVersion ascending index (note that we don't need to index stream id separately since it's covered by this compound index)
-        // Note also that this index supports sorting both ascending and descending since MongoDB can traverse an index in both directions.
-        eventStoreCollection.createIndex(Indexes.compoundIndex(Indexes.ascending(STREAM_ID), Indexes.ascending(STREAM_VERSION)), new IndexOptions().unique(true));
-        eventStoreCollection.createIndex(Indexes.ascending(DcbCloudEvents.POSITION), new IndexOptions().unique(true).sparse(true));
-        eventStoreCollection.createIndex(Indexes.ascending(DCB_TAGS_INDEX_FIELD));
+        if (eventStoreCapabilities.contains(STREAM)) {
+            // Create a streamId + streamVersion ascending index (note that we don't need to index stream id separately since it's covered by this compound index)
+            // Note also that this index supports sorting both ascending and descending since MongoDB can traverse an index in both directions.
+            eventStoreCollection.createIndex(Indexes.compoundIndex(Indexes.ascending(STREAM_ID), Indexes.ascending(STREAM_VERSION)), new IndexOptions().unique(true));
+        }
+        if (dcbEnabled) {
+            eventStoreCollection.createIndex(Indexes.ascending(DcbCloudEvents.POSITION), new IndexOptions().unique(true).sparse(true));
+            eventStoreCollection.createIndex(Indexes.ascending(DCB_TAGS_INDEX_FIELD));
+        }
 
         // SessionSynchronization need to be "ALWAYS" in order for TransactionTemplate to work with mongo template!
         // See https://docs.spring.io/spring-data/mongodb/docs/current/reference/html/#mongo.transactions.transaction-template
         mongoTemplate.setSessionSynchronization(ALWAYS);
+    }
+
+    private void requireStreamCapability() {
+        requireCapability(STREAM);
+    }
+
+    private void requireDcbCapability() {
+        requireCapability(DCB);
+    }
+
+    private void requireCapability(SpringMongoEventStoreCapability capability) {
+        if (!eventStoreCapabilities.contains(capability)) {
+            throw new UnsupportedOperationException(capability + " capability is not enabled for this SpringMongoEventStore");
+        }
     }
 
     private static Query cloudEventIdEqualTo(String cloudEventId, URI cloudEventSource) {
