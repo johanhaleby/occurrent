@@ -1,6 +1,6 @@
 # Occurrent Orchestrator Memory
 
-Last updated: 2026-05-23
+Last updated: 2026-05-24
 
 ## Current State
 
@@ -282,3 +282,8 @@ Release scripts:
   - Full two-module Spring/Testcontainers verification exposed a manual-module retry gap: live policy appends can race command appends and Mongo translates transient `WriteConflict` to `DataIntegrityViolationException`. Manual `StartGame` and `MakeGuess` now retry that exception, matching the autoconfig module.
   - Ergonomics notes were recorded in `.context/notes/dcb-word-guessing-ergonomics.md`: DCB decider helpers are good after T9, but tag/query/tag-generator boilerplate remains duplicated; live subscription tests need eventual assertions and subscriptions started before commands; annotation metadata is workable, with remaining broad type subscription plus in-handler tag filtering friction.
   - Verification passed: `rtk mvn -q -f example/domain/word-guessing-game/mongodb/spring/pom.xml -pl dcb,dcb-autoconfig -am test`.
+- DCB word-guessing T14 final review completed on 2026-05-24:
+  - code-review-graph change analysis flagged high branch risk due to the broad DCB/example diff, so final review focused on the required DCB DSL helper, manual example, autoconfig/annotation/decider example, DCB-only stream API rejection, and metadata assertion surfaces.
+  - Coverage review found the required tests present: DCB decider helper unit tests, helper/converter tests in both modules, manual command/read integration tests, autoconfig decider/annotation integration tests, DCB-only stream API rejection assertions, and DCB tag/position plus `streamid`/`streamversion` metadata assertions.
+  - Simplify pass over touched DCB DSL and example modules found no worthwhile behavior-preserving source simplification. The duplicated manual/autoconfig helper and policy code remains intentional example-local duplication.
+  - Reviewer pass found no correctness/API/test/maintainability issues requiring code changes. The only documentation gap was a missing changelog note for the two new word-guessing examples; it was added.
