@@ -43,6 +43,14 @@ The Spring Boot starter exposes this as:
 - `occurrent.event-store.capabilities=dcb`
 - `occurrent.event-store.capabilities=stream,dcb`
 
+Spring Boot application-service auto-configuration follows the same capability set:
+
+- If `STREAM` is enabled, the starter may create the regular stream-based `ApplicationService`.
+- If `DCB` is enabled, the starter may create `DcbApplicationService`.
+- If both capabilities are enabled, both application services may be created.
+
+DCB application-service auto-configuration requires a user-provided `TagGenerator` bean, because tags are domain-specific. Occurrent does not infer DCB tags from CloudEvent payloads. The existing `occurrent.application-service.enabled` and `occurrent.application-service.enable-default-retry-strategy` properties apply to both stream and DCB application services.
+
 Occurrent only creates missing indexes and collections. It never drops indexes or collections automatically.
 
 Compatibility when changing capabilities:
@@ -69,6 +77,7 @@ Positive:
 
 - Stream-only users keep the smallest MongoDB setup by default.
 - DCB remains opt-in and can be composed with stream support.
+- Spring Boot applications get application-service beans that match their enabled event-store capabilities.
 - Capability changes are explicit and documented.
 - DCB-written events can later be read through stream APIs because they are still stored as normal CloudEvents with stream metadata.
 
@@ -76,5 +85,6 @@ Negative:
 
 - Users must understand that enabling a capability may create indexes on startup.
 - Historical stream events need an explicit backfill before they participate in DCB reads.
+- DCB Spring Boot applications must provide a `TagGenerator` bean before the starter can create a `DcbApplicationService`.
 - Index cleanup is manual and requires operational care.
 - Runtime guards are needed because the class still implements both Java interfaces.

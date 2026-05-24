@@ -46,7 +46,8 @@ class BootstrapContextTest {
         assertThat(applicationContext.getBeansOfType(Subscriptions::class.java)).hasSize(1)
         assertThat(applicationContext.getBeansOfType(ApplicationService::class.java)).isEmpty()
         assertThat(applicationContext.getBeansOfType(DomainEventQueries::class.java)).isEmpty()
-        assertThat(applicationContext.getBeansOfType(DcbApplicationService::class.java)).hasSize(1)
+        assertThat(applicationContext.getBeansOfType(DcbApplicationService::class.java))
+            .containsOnlyKeys("occurrentDcbApplicationService")
         assertThat(applicationContext.getBeansOfType(Decider::class.java)).hasSize(1)
     }
 

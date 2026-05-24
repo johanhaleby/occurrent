@@ -17,11 +17,8 @@
 package org.occurrent.example.domain.wordguessinggame.mongodb.spring.dcb.autoconfig
 
 import org.occurrent.application.converter.CloudEventConverter
-import org.occurrent.application.service.blocking.dcb.DcbApplicationService
-import org.occurrent.application.service.blocking.dcb.GenericDcbApplicationService
 import org.occurrent.application.service.blocking.dcb.TagGenerator
 import org.occurrent.dsl.decider.Decider
-import org.occurrent.eventstore.api.dcb.DcbEventStore
 import org.occurrent.example.domain.wordguessinggame.event.GameEvent
 import org.occurrent.example.domain.wordguessinggame.mongodb.spring.dcb.autoconfig.features.GameCloudEventConverter
 import org.occurrent.example.domain.wordguessinggame.mongodb.spring.dcb.autoconfig.features.dcb.GameEventTagGenerator
@@ -66,14 +63,6 @@ class Bootstrap {
 
     @Bean
     fun gameEventTagGenerator(): TagGenerator<GameEvent> = GameEventTagGenerator()
-
-    @Bean
-    fun dcbApplicationService(
-        dcbEventStore: DcbEventStore,
-        cloudEventConverter: CloudEventConverter<GameEvent>,
-        gameEventTagGenerator: TagGenerator<GameEvent>
-    ): DcbApplicationService<GameEvent> =
-        GenericDcbApplicationService(dcbEventStore, cloudEventConverter, gameEventTagGenerator)
 
     @Bean
     fun wordGuessingGameDecider(): Decider<WordGuessingGameCommand, WordGuessingGameState, GameEvent> =
