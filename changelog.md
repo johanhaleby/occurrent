@@ -42,6 +42,7 @@
 * Added two DCB word-guessing MongoDB Spring examples.
   * `example-domain-word-guessing-game-es-mongodb-spring-dcb` shows manual DCB wiring with explicit DCB queries, tags, application-service usage, and live durable subscriptions.
   * `example-domain-word-guessing-game-es-mongodb-spring-dcb-autoconfig` shows Spring Boot auto-configuration, `@EnableOccurrent`, DCB-only event-store capabilities, annotation subscriptions, and DCB decider command handling.
+  * The DCB autoconfig example uses the starter-provided Jackson 3 `CloudEventConverter` with a domain-specific `ReflectionCloudEventTypeMapper`, instead of a custom converter.
   * Both examples assert DCB-only stream API rejection while keeping DCB-written events observable as normal CloudEvents with DCB and Occurrent storage metadata.
 * Added ADRs for the DCB design:
   * [ADR 14](doc/architecture/decisions/0014-introduce-dcb-as-shared-cloudevent-capability.md)

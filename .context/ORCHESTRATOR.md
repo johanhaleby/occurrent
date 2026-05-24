@@ -294,3 +294,7 @@ Release scripts:
   - Verification passed:
     - `rtk mvn -q -pl framework/spring-boot-starter-mongodb -am test`
     - `rtk mvn -q -f example/domain/word-guessing-game/mongodb/spring/pom.xml -pl dcb-autoconfig -am test`
+- DCB word-guessing autoconfig converter cleanup completed on 2026-05-24:
+  - Removed the example-local `GameCloudEventConverter` and its converter-specific test.
+  - `Bootstrap` now exposes a `CloudEventTypeMapper<GameEvent>` using `ReflectionCloudEventTypeMapper.simple(GameEvent::class.java)` and a built-in Jackson 3 `CloudEventConverter` configured with domain source, subject, and millisecond-truncated event timestamps.
+  - Verification passed: `rtk mvn -q -f example/domain/word-guessing-game/mongodb/spring/pom.xml -pl dcb-autoconfig -am test`.
