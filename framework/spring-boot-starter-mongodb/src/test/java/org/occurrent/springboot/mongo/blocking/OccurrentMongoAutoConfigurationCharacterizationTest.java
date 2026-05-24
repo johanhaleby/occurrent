@@ -23,6 +23,8 @@ import org.occurrent.application.converter.CloudEventConverter;
 import org.occurrent.application.converter.typemapper.CloudEventTypeMapper;
 import org.occurrent.application.converter.typemapper.ReflectionCloudEventTypeMapper;
 import org.occurrent.application.service.blocking.ApplicationService;
+import org.occurrent.application.service.blocking.dcb.DcbApplicationService;
+import org.occurrent.application.service.blocking.dcb.TagGenerator;
 import org.occurrent.dsl.query.blocking.DomainEventQueries;
 import org.occurrent.eventstore.mongodb.spring.blocking.EventStoreConfig;
 import org.occurrent.eventstore.mongodb.spring.blocking.SpringMongoEventStore;
@@ -40,6 +42,7 @@ import org.springframework.data.mongodb.core.MongoTemplate;
 
 import java.net.URI;
 import java.util.Date;
+import java.util.Set;
 import java.util.UUID;
 
 import static org.assertj.core.api.Assertions.assertThat;
@@ -180,6 +183,71 @@ class OccurrentMongoAutoConfigurationCharacterizationTest {
     }
 
     @Test
+    void stream_capability_auto_configures_stream_application_service_only_by_default() {
+        eventStoreConfigContextRunner().run(context -> {
+            assertThat(context).hasSingleBean(ApplicationService.class);
+            assertThat(context).doesNotHaveBean(DcbApplicationService.class);
+        });
+    }
+
+    @Test
+    void dcb_capability_auto_configures_dcb_application_service_when_tag_generator_exists() {
+        eventStoreConfigContextRunner()
+                .withPropertyValues("occurrent.event-store.capabilities=dcb")
+                .withBean(TagGenerator.class, () -> tagsForTestEvent())
+                .run(context -> {
+                    assertThat(context).doesNotHaveBean(ApplicationService.class);
+                    assertThat(context).hasSingleBean(DcbApplicationService.class);
+                });
+    }
+
+    @Test
+    void stream_and_dcb_capabilities_auto_configure_both_application_services_when_tag_generator_exists() {
+        eventStoreConfigContextRunner()
+                .withPropertyValues("occurrent.event-store.capabilities=stream,dcb")
+                .withBean(TagGenerator.class, () -> tagsForTestEvent())
+                .run(context -> {
+                    assertThat(context).hasSingleBean(ApplicationService.class);
+                    assertThat(context).hasSingleBean(DcbApplicationService.class);
+                });
+    }
+
+    @Test
+    void dcb_capability_does_not_auto_configure_dcb_application_service_without_tag_generator() {
+        eventStoreConfigContextRunner()
+                .withPropertyValues("occurrent.event-store.capabilities=dcb")
+                .run(context -> {
+                    assertThat(context).doesNotHaveBean(ApplicationService.class);
+                    assertThat(context).doesNotHaveBean(DcbApplicationService.class);
+                });
+    }
+
+    @Test
+    void custom_dcb_application_service_is_not_replaced() {
+        DcbApplicationService customApplicationService = mock(DcbApplicationService.class);
+
+        eventStoreConfigContextRunner()
+                .withPropertyValues("occurrent.event-store.capabilities=dcb")
+                .withBean(TagGenerator.class, () -> tagsForTestEvent())
+                .withBean(DcbApplicationService.class, () -> customApplicationService)
+                .run(context -> assertThat(context.getBean(DcbApplicationService.class)).isSameAs(customApplicationService));
+    }
+
+    @Test
+    void disabling_application_service_disables_stream_and_dcb_application_services() {
+        eventStoreConfigContextRunner()
+                .withPropertyValues(
+                        "occurrent.event-store.capabilities=stream,dcb",
+                        "occurrent.application-service.enabled=false"
+                )
+                .withBean(TagGenerator.class, () -> tagsForTestEvent())
+                .run(context -> {
+                    assertThat(context).doesNotHaveBean(ApplicationService.class);
+                    assertThat(context).doesNotHaveBean(DcbApplicationService.class);
+                });
+    }
+
+    @Test
     void dependency_alone_does_not_activate_occurrents() {
         new ApplicationContextRunner().run(context -> {
             assertThat(context).doesNotHaveBean(CloudEventConverter.class);
@@ -191,6 +259,10 @@ class OccurrentMongoAutoConfigurationCharacterizationTest {
         return contextRunner
                 .withPropertyValues("occurrent.event-store.enabled=true")
                 .withBean(SpringMongoEventStore.class, () -> mock(SpringMongoEventStore.class));
+    }
+
+    private TagGenerator<TestEvent> tagsForTestEvent() {
+        return event -> Set.of(event.subject());
     }
 
     @Configuration(proxyBeanMethods = false)

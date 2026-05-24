@@ -25,11 +25,15 @@ import org.occurrent.application.converter.CloudEventConverter;
 import org.occurrent.application.converter.typemapper.CloudEventTypeMapper;
 import org.occurrent.application.converter.typemapper.ReflectionCloudEventTypeMapper;
 import org.occurrent.application.service.blocking.ApplicationService;
+import org.occurrent.application.service.blocking.dcb.DcbApplicationService;
+import org.occurrent.application.service.blocking.dcb.GenericDcbApplicationService;
+import org.occurrent.application.service.blocking.dcb.TagGenerator;
 import org.occurrent.application.service.blocking.generic.GenericApplicationService;
 import org.occurrent.dsl.query.blocking.DomainEventQueries;
 import org.occurrent.dsl.subscription.blocking.Subscriptions;
 import org.occurrent.eventstore.api.blocking.EventStore;
 import org.occurrent.eventstore.api.blocking.EventStoreQueries;
+import org.occurrent.eventstore.api.dcb.DcbEventStore;
 import org.occurrent.eventstore.mongodb.spring.blocking.EventStoreConfig;
 import org.occurrent.eventstore.mongodb.spring.blocking.SpringMongoEventStore;
 import org.occurrent.retry.RetryStrategy;
@@ -45,8 +49,11 @@ import org.occurrent.subscription.blocking.durable.catchup.CatchupSubscriptionMo
 import org.occurrent.subscription.mongodb.spring.blocking.SpringMongoLeaseCompetingConsumerStrategy;
 import org.occurrent.subscription.mongodb.spring.blocking.SpringMongoSubscriptionModel;
 import org.occurrent.subscription.mongodb.spring.blocking.SpringMongoSubscriptionPositionStorage;
+import org.springframework.beans.factory.config.BeanFactoryPostProcessor;
+import org.springframework.beans.factory.config.ConfigurableListableBeanFactory;
+import org.springframework.beans.factory.support.BeanDefinitionRegistry;
+import org.springframework.beans.factory.support.RootBeanDefinition;
 import org.springframework.boot.autoconfigure.AutoConfiguration;
-import org.springframework.boot.autoconfigure.condition.ConditionalOnBean;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnClass;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnMissingBean;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
@@ -178,5 +185,37 @@ public class OccurrentMongoAutoConfiguration<E> {
     public ApplicationService<E> occurrentApplicationService(EventStore eventStore, CloudEventConverter<E> cloudEventConverter, OccurrentProperties occurrentProperties) {
         boolean enableDefaultRetryStrategy = occurrentProperties.getApplicationService().isEnableDefaultRetryStrategy();
         return enableDefaultRetryStrategy ? new GenericApplicationService<>(eventStore, cloudEventConverter) : new GenericApplicationService<>(eventStore, cloudEventConverter, RetryStrategy.none());
+    }
+
+    @Bean
+    @Conditional(OnDcbEventStoreCapabilityCondition.class)
+    @ConditionalOnProperty(name = {"occurrent.event-store.enabled", "occurrent.application-service.enabled"}, havingValue = "true", matchIfMissing = true)
+    static BeanFactoryPostProcessor occurrentDcbApplicationServiceRegistrar() {
+        return beanFactory -> {
+            if (!(beanFactory instanceof BeanDefinitionRegistry registry)) {
+                return;
+            }
+            boolean hasDcbApplicationService = beanFactory.getBeanNamesForType(DcbApplicationService.class, false, false).length > 0;
+            boolean hasTagGenerator = beanFactory.getBeanNamesForType(TagGenerator.class, false, false).length > 0;
+            if (hasDcbApplicationService || !hasTagGenerator) {
+                return;
+            }
+            RootBeanDefinition beanDefinition = new RootBeanDefinition(DcbApplicationService.class);
+            beanDefinition.setInstanceSupplier(() -> createDcbApplicationService(beanFactory));
+            registry.registerBeanDefinition("occurrentDcbApplicationService", beanDefinition);
+        };
+    }
+
+    @SuppressWarnings({"rawtypes", "unchecked"})
+    private static DcbApplicationService<?> createDcbApplicationService(ConfigurableListableBeanFactory beanFactory) {
+        DcbEventStore eventStore = beanFactory.getBean(DcbEventStore.class);
+        CloudEventConverter cloudEventConverter = beanFactory.getBean(CloudEventConverter.class);
+        TagGenerator tagGenerator = beanFactory.getBean(TagGenerator.class);
+        OccurrentProperties occurrentProperties = beanFactory.getBean(OccurrentProperties.class);
+        boolean enableDefaultRetryStrategy = occurrentProperties.getApplicationService().isEnableDefaultRetryStrategy();
+        if (enableDefaultRetryStrategy) {
+            return new GenericDcbApplicationService<>(eventStore, cloudEventConverter, tagGenerator);
+        }
+        return new GenericDcbApplicationService<>(eventStore, cloudEventConverter, tagGenerator, RetryStrategy.none());
     }
 }
