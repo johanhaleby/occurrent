@@ -165,6 +165,7 @@ CloudEvents are the storage boundary. Domain event serialization/deserialization
 - Occurrent only creates missing Mongo indexes/collections for enabled capabilities; it never removes indexes. Operators should create newly required indexes out-of-band before enabling a capability on large production collections.
 - DCB-only Mongo writes must still assign per-storage-stream Occurrent stream versions. Those versions are required if an operator later enables `STREAM` and reads DCB partition streams through the stream API.
 - Spring Boot DCB-only auto-configuration must not expose stream application helpers (`ApplicationService`, `DomainEventQueries`) or wrap subscriptions in `CatchupSubscriptionModel`, because catchup depends on stream query APIs. Plain change-stream subscriptions remain available.
+- Spring Boot DCB application-service auto-configuration is registered with a `BeanFactoryPostProcessor`, not plain `@ConditionalOnBean(TagGenerator.class)`, because the latter can evaluate before user `@Bean` tag generators are visible in real Boot application contexts.
 - In-memory `deleteAll()` must reset DCB sequence state as well as event state, otherwise an empty store can report stale DCB high-watermarks after deletion.
 
 ## Build And Verification
@@ -287,3 +288,11 @@ Release scripts:
   - Coverage review found the required tests present: DCB decider helper unit tests, helper/converter tests in both modules, manual command/read integration tests, autoconfig decider/annotation integration tests, DCB-only stream API rejection assertions, and DCB tag/position plus `streamid`/`streamversion` metadata assertions.
   - Simplify pass over touched DCB DSL and example modules found no worthwhile behavior-preserving source simplification. The duplicated manual/autoconfig helper and policy code remains intentional example-local duplication.
   - Reviewer pass found no correctness/API/test/maintainability issues requiring code changes. The only documentation gap was a missing changelog note for the two new word-guessing examples; it was added.
+- Spring Boot DCB application-service auto-configuration completed on 2026-05-24:
+  - `occurrent.event-store.capabilities` now controls auto-configured application services as well as event-store infrastructure: `{STREAM}` creates the classic stream `ApplicationService`, `{DCB}` with a user `TagGenerator` creates `DcbApplicationService`, and `{STREAM, DCB}` with a user `TagGenerator` creates both.
+  - `occurrent.application-service.enabled=false` disables both stream and DCB application services, and `enable-default-retry-strategy=false` switches both to `RetryStrategy.none()`.
+  - The starter does not auto-create `TagGenerator`; DCB tags remain domain-specific.
+  - The word-guessing DCB autoconfig example now relies on starter-created `occurrentDcbApplicationService` instead of a local manual bean.
+  - Verification passed:
+    - `rtk mvn -q -pl framework/spring-boot-starter-mongodb -am test`
+    - `rtk mvn -q -f example/domain/word-guessing-game/mongodb/spring/pom.xml -pl dcb-autoconfig -am test`
