@@ -23,6 +23,8 @@
   * The backward-compatible default is `{STREAM}`.
   * Spring Boot property: `occurrent.event-store.capabilities=stream`, `dcb`, or `stream,dcb`.
   * `SpringMongoEventStore` now creates indexes/support collections based on enabled capabilities and fails fast when callers invoke a disabled API family.
+  * The Spring Boot starter now auto-configures application services from the same capability set: stream `ApplicationService` for `STREAM`, `DcbApplicationService` for `DCB`, and both for `stream,dcb`.
+  * DCB application-service auto-configuration requires a user-provided `TagGenerator` bean, since DCB tags are domain-specific.
   * Occurrent creates missing indexes/collections only. It never removes indexes or collections automatically.
 * Added DCB query excluded-type support.
   * `DcbQueryItem` now has `excludedTypes`.
