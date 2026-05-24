@@ -17,10 +17,12 @@
 package org.occurrent.example.domain.wordguessinggame.mongodb.spring.dcb.autoconfig
 
 import org.occurrent.application.converter.CloudEventConverter
+import org.occurrent.application.converter.jackson3.jacksonCloudEventConverter
+import org.occurrent.application.converter.typemapper.CloudEventTypeMapper
+import org.occurrent.application.converter.typemapper.ReflectionCloudEventTypeMapper
 import org.occurrent.application.service.blocking.dcb.TagGenerator
 import org.occurrent.dsl.decider.Decider
 import org.occurrent.example.domain.wordguessinggame.event.GameEvent
-import org.occurrent.example.domain.wordguessinggame.mongodb.spring.dcb.autoconfig.features.GameCloudEventConverter
 import org.occurrent.example.domain.wordguessinggame.mongodb.spring.dcb.autoconfig.features.dcb.GameEventTagGenerator
 import org.occurrent.example.domain.wordguessinggame.mongodb.spring.dcb.autoconfig.features.gameplay.decider.WordGuessingGameCommand
 import org.occurrent.example.domain.wordguessinggame.mongodb.spring.dcb.autoconfig.features.gameplay.decider.WordGuessingGameState
@@ -31,10 +33,11 @@ import org.springframework.boot.runApplication
 import org.springframework.context.annotation.Bean
 import org.springframework.context.annotation.ComponentScan
 import org.springframework.context.annotation.FilterType
-import org.springframework.context.annotation.Primary
 import org.springframework.retry.annotation.EnableRetry
-import tools.jackson.module.kotlin.jacksonObjectMapper
+import tools.jackson.databind.ObjectMapper
 import java.net.URI
+import java.time.ZoneOffset.UTC
+import java.time.temporal.ChronoUnit.MILLIS
 
 @SpringBootApplication
 @ComponentScan(
@@ -52,13 +55,16 @@ import java.net.URI
 class Bootstrap {
 
     @Bean
-    @Primary
-    fun cloudEventConverter(): CloudEventConverter<GameEvent> =
-        GameCloudEventConverter(
-            objectMapper = jacksonObjectMapper(),
-            gameSource = URI.create("urn:occurrent:word-guessing-game:game"),
-            wordHintSource = URI.create("urn:occurrent:word-guessing-game:word-hint"),
-            pointsSource = URI.create("urn:occurrent:word-guessing-game:points")
+    fun gameEventCloudEventTypeMapper(): CloudEventTypeMapper<GameEvent> = ReflectionCloudEventTypeMapper.simple(GameEvent::class.java)
+
+    @Bean
+    fun cloudEventConverter(objectMapper: ObjectMapper, typeMapper: CloudEventTypeMapper<GameEvent>): CloudEventConverter<GameEvent> =
+        jacksonCloudEventConverter(
+            objectMapper = objectMapper,
+            cloudEventSource = URI.create("urn:occurrent:word-guessing-game"),
+            typeMapper = typeMapper,
+            timeMapper = { it.timestamp.toInstant().atOffset(UTC).truncatedTo(MILLIS) },
+            subjectMapper = { it.gameId.toString() }
         )
 
     @Bean
