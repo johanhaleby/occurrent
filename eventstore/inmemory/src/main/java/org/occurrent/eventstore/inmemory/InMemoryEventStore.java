@@ -243,12 +243,16 @@ public class InMemoryEventStore implements EventStore, EventStoreOperations, Eve
     public void deleteAll() {
         state.clear();
         insertionOrderByEventKey.clear();
+        insertionSequence.set(0);
     }
 
     @Override
     public void delete(Filter filter) {
         requireNonNull(filter, "Filter cannot be null");
-        state.replaceAll((streamId, cloudEvents) -> cloudEvents.stream().filter(not(cloudEvent -> matchesFilter(cloudEvent, filter))).collect(Collectors.toCollection(CopyOnWriteArrayList::new)));
+        state.replaceAll((streamId, cloudEvents) -> {
+            cloudEvents.stream().filter(cloudEvent -> matchesFilter(cloudEvent, filter)).forEach(removed -> insertionOrderByEventKey.remove(insertionKey(removed)));
+            return cloudEvents.stream().filter(not(cloudEvent -> matchesFilter(cloudEvent, filter))).collect(Collectors.toCollection(CopyOnWriteArrayList::new));
+        });
     }
 
     @Override
