@@ -17,12 +17,11 @@
 package org.occurrent.example.domain.wordguessinggame.mongodb.spring.dcb.autoconfig.features.gameplay.views.endedgamesoverview
 
 import org.occurrent.annotation.Subscription
-import org.occurrent.application.converter.CloudEventConverter
 import org.occurrent.dsl.dcb.blocking.dcbPosition
 import org.occurrent.dsl.dcb.blocking.dcbTags
 import org.occurrent.dsl.dcb.blocking.queryForSequence
+import org.occurrent.dsl.query.blocking.DomainEventQueries
 import org.occurrent.dsl.subscription.blocking.EventMetadata
-import org.occurrent.eventstore.api.dcb.DcbEventStore
 import org.occurrent.example.domain.wordguessinggame.event.*
 import org.occurrent.example.domain.wordguessinggame.mongodb.spring.dcb.autoconfig.features.dcb.GameDcbQueries
 import org.occurrent.example.domain.wordguessinggame.mongodb.spring.dcb.autoconfig.features.dcb.GameDcbTags
@@ -36,8 +35,7 @@ import java.util.UUID
 @Component
 class WhenGameIsEndedThenAddGameToEndedGamesOverview(
     private val mongo: MongoOperations,
-    private val eventStore: DcbEventStore,
-    private val cloudEventConverter: CloudEventConverter<GameEvent>
+    private val domainEventQueries: DomainEventQueries<GameEvent>
 ) {
     private val log = loggerFor<WhenGameIsEndedThenAddGameToEndedGamesOverview>()
 
@@ -49,8 +47,8 @@ class WhenGameIsEndedThenAddGameToEndedGamesOverview(
         requireNotNull(metadata.dcbPosition) { "Expected DCB position for ${e.type}" }
         log.info("${e::class.eventType()} - will update ended games overview")
         val gameId = e.gameId
-        val gameWasStarted = eventStore
-            .queryForSequence(GameDcbQueries.event<GameWasStarted>(gameId), cloudEventConverter)
+        val gameWasStarted = domainEventQueries
+            .queryForSequence(GameDcbQueries.event<GameWasStarted>(gameId))
             .filterIsInstance<GameWasStarted>()
             .first()
         val endedGameOverview = when (e) {

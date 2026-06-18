@@ -164,7 +164,7 @@ CloudEvents are the storage boundary. Domain event serialization/deserialization
 - Spring Mongo capability mode is now part of `EventStoreConfig`: `STREAM`, `DCB`, or both. Capabilities control index/support-collection creation and runtime API guards, not the CloudEvent document format.
 - Occurrent only creates missing Mongo indexes/collections for enabled capabilities; it never removes indexes. Operators should create newly required indexes out-of-band before enabling a capability on large production collections.
 - DCB-only Mongo writes must still assign per-storage-stream Occurrent stream versions. Those versions are required if an operator later enables `STREAM` and reads DCB partition streams through the stream API.
-- Spring Boot DCB-only auto-configuration must not expose stream application helpers (`ApplicationService`, `DomainEventQueries`) or wrap subscriptions in `CatchupSubscriptionModel`, because catchup depends on stream query APIs. Plain change-stream subscriptions remain available.
+- Spring Boot DCB-only auto-configuration must not expose stream `ApplicationService` or wrap subscriptions in `CatchupSubscriptionModel`, because those depend on stream APIs. It should still expose `DomainEventQueries` so opt-in DCB query helpers can reuse the configured converter; normal stream query methods remain guarded by the event-store capability.
 - Spring Boot DCB application-service auto-configuration is registered with a `BeanFactoryPostProcessor`, not plain `@ConditionalOnBean(TagGenerator.class)`, because the latter can evaluate before user `@Bean` tag generators are visible in real Boot application contexts.
 - In-memory `deleteAll()` must reset DCB sequence state as well as event state, otherwise an empty store can report stale DCB high-watermarks after deletion.
 
@@ -256,14 +256,14 @@ Release scripts:
     - `rtk mvn -q -pl eventstore/api/dcb,eventstore/inmemory,eventstore/mongodb/spring/blocking,application/service/blocking,subscription/mongodb/spring/blocking -am test`
 - DCB DSL module completed on 2026-05-23:
   - Added opt-in blocking module `dsl/dcb-dsl/blocking` with artifact `dcb-dsl-blocking`.
-  - Added static Java helpers `DcbDomainEventQueries` and result type `DcbDomainEventStream` under `org.occurrent.dsl.dcb.blocking`. The API is intentionally smaller than `DomainEventQueries`: callers pass `DcbEventStore`, `CloudEventConverter`, `DcbQuery`, and optional `DcbReadOptions`; `queryWithPosition(...)` exposes the DCB high-watermark/last sequence position.
-  - Added Kotlin DCB query extensions directly on `DcbEventStore`: `queryForSequence`, `queryForList`, and `queryWithPosition`.
+- Added static Java helpers `DcbDomainEventQueries` and result type `DcbDomainEventStream` under `org.occurrent.dsl.dcb.blocking`. The API is intentionally smaller than `DomainEventQueries`: callers pass `DomainEventQueries<E>`, `DcbQuery`, and optional `DcbReadOptions`; the helper reuses the wrapped converter and verifies that the wrapped query implementation supports `DcbEventStore`. `queryWithPosition(...)` exposes the DCB high-watermark/last sequence position.
+- Added Kotlin DCB query extensions on `DomainEventQueries<E>`: `queryForSequence`, `queryForList`, and `queryWithPosition`.
   - Added live DCB subscription extension `Subscribable.subscribeDcb(...)`. The helper subscribes broadly to CloudEvents and then requires `dcbposition > 0` plus exact `DcbQuery` matching in process. This avoids subscription-model-specific behavior for missing `dcbposition` and keeps the API honest: it is live CloudEvent delivery of DCB-tagged events, not a DCB-consistent read.
   - Shared DCB query matching was centralized in `DcbCloudEvents.matches(...)`; `DcbCloudEvents.getPosition(...)` now reads numeric/string DCB positions and returns `0` for non-DCB events.
   - In-memory and Spring Mongo DCB append/read internals now reuse the shared matcher, reducing semantic drift for types, tags, OR items, and excluded types.
   - ADR: `doc/architecture/decisions/0016-dcb-dsl-module.md`.
   - Test-automator coverage review found useful gaps around non-DCB event exclusion in DCB subscriptions and typed position overloads; those were fixed before final verification.
-  - A follow-up simplify pass removed the stateful `DcbDomainEventQueries` wrapper shape and `DcbSubscriptions` scope object. The resulting public shape is static Java helpers, Kotlin extensions on existing core types, and no reproduction of the existing stream query/subscription DSLs.
+  - A follow-up simplify pass removed the stateful `DcbDomainEventQueries` wrapper shape and `DcbSubscriptions` scope object. The resulting public shape is static Java helpers, Kotlin extensions on `DomainEventQueries`/existing subscription types, and no reproduction of the existing stream query/subscription DSLs.
   - Review-agent finding fixed: `DcbCloudEvents.getPosition(...)` now returns `0` only when `dcbposition` is absent and throws when the extension is present with an unsupported type.
   - Verification passed:
     - `rtk mvn -q -pl eventstore/api/dcb,dsl/dcb-dsl/blocking -am test`

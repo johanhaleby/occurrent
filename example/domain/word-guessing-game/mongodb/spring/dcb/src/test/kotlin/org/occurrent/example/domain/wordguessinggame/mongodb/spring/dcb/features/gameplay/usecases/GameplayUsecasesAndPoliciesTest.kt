@@ -21,6 +21,7 @@ import org.junit.jupiter.api.Test
 import org.occurrent.application.converter.CloudEventConverter
 import org.occurrent.cloudevents.OccurrentExtensionGetter
 import org.occurrent.dsl.dcb.blocking.queryForList
+import org.occurrent.dsl.query.blocking.DomainEventQueries
 import org.occurrent.eventstore.api.dcb.DcbCloudEvents
 import org.occurrent.eventstore.api.dcb.DcbEventStore
 import org.occurrent.example.domain.wordguessinggame.event.CharacterInWordHintWasRevealed
@@ -60,6 +61,9 @@ class GameplayUsecasesAndPoliciesTest {
 
     @Autowired
     private lateinit var cloudEventConverter: CloudEventConverter<GameEvent>
+
+    @Autowired
+    private lateinit var domainEventQueries: DomainEventQueries<GameEvent>
 
     @Autowired
     private lateinit var revealInitialCharacters: RevealInitialCharactersInWordHintAfterGameIsStarted
@@ -132,7 +136,7 @@ class GameplayUsecasesAndPoliciesTest {
         }.let { events<E>(query) }
 
     private inline fun <reified E : GameEvent> events(query: org.occurrent.eventstore.api.dcb.DcbQuery): List<E> =
-        eventStore.queryForList(query, cloudEventConverter).filterIsInstance<E>()
+        domainEventQueries.queryForList(query).filterIsInstance<E>()
 
     private fun cloudEvents(query: org.occurrent.eventstore.api.dcb.DcbQuery): List<io.cloudevents.CloudEvent> =
         eventStore.read(query).events()
