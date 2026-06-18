@@ -43,6 +43,12 @@ import java.util.List;
 import java.util.Optional;
 import java.util.UUID;
 import java.util.concurrent.CopyOnWriteArrayList;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import java.util.concurrent.Future;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicReference;
 import java.util.function.Function;
 import java.util.stream.Collectors;
 import java.util.stream.Stream;
@@ -1015,6 +1021,47 @@ public class InMemoryEventStoreTest {
         @BeforeEach
         void create_event_store() {
             inMemoryEventStore = new InMemoryEventStore();
+        }
+
+        @Test
+        void query_consumed_concurrently_with_writes_to_new_streams_does_not_throw_and_returns_consistent_result() throws Exception {
+            // Given
+            LocalDateTime now = LocalDateTime.now();
+            int numberOfWrites = 500;
+            CountDownLatch writerStarted = new CountDownLatch(1);
+            AtomicReference<Throwable> readerFailure = new AtomicReference<>();
+            ExecutorService executor = Executors.newSingleThreadExecutor();
+
+            // When
+            Future<?> writer = executor.submit(() -> {
+                writerStarted.countDown();
+                for (int i = 0; i < numberOfWrites; i++) {
+                    NameDefined nameDefined = new NameDefined(UUID.randomUUID().toString(), now.plusSeconds(i), "name" + i, "name" + i);
+                    unconditionallyPersist(inMemoryEventStore, "stream" + i, nameDefined);
+                }
+            });
+
+            // Consume the lazily evaluated query stream (sort/skip/limit happen on the terminal operation)
+            // while the writer keeps structurally modifying the backing map.
+            assertThat(writerStarted.await(10, TimeUnit.SECONDS)).as("Writer thread should start within 10 seconds").isTrue();
+            while (!writer.isDone()) {
+                try {
+                    List<CloudEvent> result = inMemoryEventStore.query(Filter.all(), 0, Integer.MAX_VALUE, SortBy.natural(DESCENDING)).collect(Collectors.toList());
+                    // The snapshot must be internally consistent: no duplicate events from an in-flight write.
+                    assertThat(result).doesNotHaveDuplicates();
+                } catch (Throwable t) {
+                    readerFailure.set(t);
+                    break;
+                }
+            }
+
+            writer.get(60, TimeUnit.SECONDS);
+            executor.shutdownNow();
+
+            // Then
+            assertThat(readerFailure.get()).as("Concurrent query must not fail while writes happen").isNull();
+            List<CloudEvent> finalResult = inMemoryEventStore.query(Filter.all(), 0, Integer.MAX_VALUE, SortBy.natural(DESCENDING)).collect(Collectors.toList());
+            assertThat(finalResult).hasSize(numberOfWrites);
         }
 
         @Test

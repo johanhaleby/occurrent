@@ -5,6 +5,10 @@
   * The delta now reconciles events written during the replay by insertion order (`SortBy.natural` descending with a limit) instead of the time-based `skip`, so a clock-skewed event is still among the newest events and is delivered. It also reads only the recent tail instead of walking the whole backlog, so it is faster on large stores, and it removes a spurious duplicate the old reconciliation produced.
   * `InMemoryEventStore` now makes `SortBy.natural` reflect global insertion order, matching MongoDB's `$natural`, so the catch-up reconciliation behaves the same on both stores.
   * See [ADR 14](doc/architecture/decisions/0014-reconcile-catchup-events-by-insertion-order-to-avoid-loss-under-clock-skew.md).
+* Fixed a `ConcurrentModificationException` that could occur when consuming a stream returned by `InMemoryEventStore.query(..)` while another thread writes to the store.
+  * The returned stream was lazy, so its sort, skip, and limit ran after the query lock was released. A concurrent `write(..)` modifies the backing map at that point, which could throw or expose an in-flight stream.
+  * `query(..)` now snapshots the per-stream event lists while holding the lock and filters and sorts on that snapshot afterwards, so the lock is no longer held during filtering.
+  * This matters more now because the `CatchupSubscriptionModel` delta reconciliation above queries with `SortBy.natural` descending, so the in-memory store can be read concurrently with writes during a catch-up.
 
 ### 0.20.3 (2026-03-29)
 

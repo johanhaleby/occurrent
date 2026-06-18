@@ -282,10 +282,15 @@ public class InMemoryEventStore implements EventStore, EventStoreOperations, Eve
         Objects.requireNonNull(filter, Filter.class.getSimpleName() + " cannot be null");
         Objects.requireNonNull(sortBy, SortBy.class.getSimpleName() + " cannot be null");
 
-        Stream<CloudEvent> stream;
+        // Snapshot the per-stream event lists under the lock, then filter and sort outside it. The stream returned
+        // to the caller is consumed lazily, so iterating state.values() outside the lock could race with a concurrent
+        // write() that structurally modifies the backing map and throw ConcurrentModificationException. Each value is
+        // a CopyOnWriteArrayList that write() replaces atomically, so iterating a snapshotted reference stays safe.
+        final List<CopyOnWriteArrayList<CloudEvent>> snapshot;
         synchronized (state) {
-            stream = state.values().stream().flatMap(List::stream).filter(cloudEvent -> matchesFilter(cloudEvent, filter));
+            snapshot = new ArrayList<>(state.values());
         }
+        Stream<CloudEvent> stream = snapshot.stream().flatMap(List::stream).filter(cloudEvent -> matchesFilter(cloudEvent, filter));
 
         if (sortBy instanceof SortBy.Unsorted) {
             // Use natural ascending by default
