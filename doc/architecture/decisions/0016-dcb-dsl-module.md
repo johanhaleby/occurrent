@@ -20,12 +20,12 @@ Add a separate opt-in blocking module:
 - Artifact: `dcb-dsl-blocking`
 - Package: `org.occurrent.dsl.dcb.blocking`
 
-The module provides DCB domain query helpers over `DcbEventStore` and `CloudEventConverter`.
+The module provides DCB domain query helpers over `DomainEventQueries`. This lets DCB callers reuse the same configured query DSL and `CloudEventConverter` as regular domain queries, while the helper verifies that the wrapped query implementation also supports `DcbEventStore`.
 
 The query API is deliberately smaller than `DomainEventQueries`:
 
-- Java callers use static helpers on `DcbDomainEventQueries`.
-- Kotlin callers use extension functions on `DcbEventStore`.
+- Java callers use static helpers on `DcbDomainEventQueries` and pass `DomainEventQueries<E>`.
+- Kotlin callers use extension functions on `DomainEventQueries<E>`.
 - `query(...)` returns a `Stream<E>`, `Sequence<E>`, or `List<E>` depending on the helper.
 - `queryWithPosition(...)` returns `DcbDomainEventStream<E>` when callers need the observed DCB sequence position.
 
@@ -51,7 +51,7 @@ The helpers will live in `dcb-dsl-blocking`, not in the stream decider DSL. This
 
 The existing DSLs remain unchanged:
 
-- `DomainEventQueries` remains the stream/general CloudEvent query DSL.
+- `DomainEventQueries` remains the general domain query DSL and is also the composition point for opt-in DCB query helpers.
 - `Subscriptions` remains the general CloudEvent subscription DSL.
 - `EventStoreOperations` remains a general CloudEvent administration API.
 - `Module` does not grow DCB entry points in this iteration.

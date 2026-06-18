@@ -172,7 +172,7 @@ public class OccurrentMongoAutoConfiguration<E> {
 
     @Bean
     @ConditionalOnMissingBean(DomainEventQueries.class)
-    @Conditional(OnStreamEventStoreCapabilityCondition.class)
+    @Conditional(OnDomainEventQueriesCapabilityCondition.class)
     @ConditionalOnProperty(name = "occurrent.event-store.enabled", havingValue = "true", matchIfMissing = true)
     public DomainEventQueries<E> occurrentDomainEventQueries(EventStoreQueries eventStoreQueries, CloudEventConverter<E> cloudEventConverter) {
         return new DomainEventQueries<>(eventStoreQueries, cloudEventConverter);

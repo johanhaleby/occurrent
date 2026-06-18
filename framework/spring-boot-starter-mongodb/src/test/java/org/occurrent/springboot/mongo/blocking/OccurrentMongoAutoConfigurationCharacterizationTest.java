@@ -141,7 +141,7 @@ class OccurrentMongoAutoConfigurationCharacterizationTest {
     }
 
     @Test
-    void dcb_only_does_not_auto_configure_stream_application_helpers_or_subscription_catchup() {
+    void dcb_only_auto_configures_domain_event_queries_but_not_stream_application_service_or_subscription_catchup() {
         contextRunner
                 .withPropertyValues(
                         "occurrent.event-store.enabled=true",
@@ -151,7 +151,7 @@ class OccurrentMongoAutoConfigurationCharacterizationTest {
                 .withBean(SpringMongoEventStore.class, () -> mock(SpringMongoEventStore.class))
                 .run(context -> {
                     assertThat(context).doesNotHaveBean(ApplicationService.class);
-                    assertThat(context).doesNotHaveBean(DomainEventQueries.class);
+                    assertThat(context).hasSingleBean(DomainEventQueries.class);
                     assertThat(context).hasSingleBean(SubscriptionModel.class);
 
                     SubscriptionModel subscriptionModel = context.getBean(SubscriptionModel.class);

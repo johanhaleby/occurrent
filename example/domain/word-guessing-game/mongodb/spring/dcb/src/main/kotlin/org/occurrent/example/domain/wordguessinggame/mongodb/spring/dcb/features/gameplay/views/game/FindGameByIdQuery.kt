@@ -16,9 +16,8 @@
 
 package org.occurrent.example.domain.wordguessinggame.mongodb.spring.dcb.features.gameplay.views.game
 
-import org.occurrent.application.converter.CloudEventConverter
 import org.occurrent.dsl.dcb.blocking.queryForSequence
-import org.occurrent.eventstore.api.dcb.DcbEventStore
+import org.occurrent.dsl.query.blocking.DomainEventQueries
 import org.occurrent.example.domain.wordguessinggame.event.GameEvent
 import org.occurrent.example.domain.wordguessinggame.mongodb.spring.dcb.features.dcb.GameDcbQueries
 import org.occurrent.example.domain.wordguessinggame.readmodel.GameReadModel
@@ -27,8 +26,8 @@ import org.springframework.stereotype.Component
 import java.util.*
 
 @Component
-class FindGameByIdQuery(private val eventStore: DcbEventStore, private val cloudEventConverter: CloudEventConverter<GameEvent>) {
+class FindGameByIdQuery(private val domainEventQueries: DomainEventQueries<GameEvent>) {
 
     fun execute(gameId: UUID): GameReadModel? =
-        eventStore.queryForSequence(GameDcbQueries.allGameEvents(gameId), cloudEventConverter).assembleGameReadModelFromDomainEvents()
+        domainEventQueries.queryForSequence(GameDcbQueries.allGameEvents(gameId)).assembleGameReadModelFromDomainEvents()
 }

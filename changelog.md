@@ -24,6 +24,7 @@
   * Spring Boot property: `occurrent.event-store.capabilities=stream`, `dcb`, or `stream,dcb`.
   * `SpringMongoEventStore` now creates indexes/support collections based on enabled capabilities and fails fast when callers invoke a disabled API family.
   * The Spring Boot starter now auto-configures application services from the same capability set: stream `ApplicationService` for `STREAM`, `DcbApplicationService` for `DCB`, and both for `stream,dcb`.
+  * DCB-only Spring Boot auto-configuration also exposes `DomainEventQueries` so DCB query DSL extensions can reuse the starter-provided converter while stream application services remain disabled.
   * DCB application-service auto-configuration requires a user-provided `TagGenerator` bean, since DCB tags are domain-specific.
   * Occurrent creates missing indexes/collections only. It never removes indexes or collections automatically.
 * Added DCB query excluded-type support.
@@ -34,7 +35,8 @@
 * Added a blocking DCB DSL module.
   * New module: `org.occurrent:dcb-dsl-blocking`.
   * Java helpers: `DcbDomainEventQueries` and `DcbDomainEventStream`.
-  * Kotlin query extensions on `DcbEventStore`: `queryForSequence`, `queryForList`, and `queryWithPosition`.
+  * Java and Kotlin DCB query helpers compose with `DomainEventQueries`, reusing its configured `CloudEventConverter` and wrapped query implementation instead of requiring callers to pass a `DcbEventStore` directly.
+  * Kotlin query extensions on `DomainEventQueries`: `queryForSequence`, `queryForList`, and `queryWithPosition`.
   * Kotlin live subscription extension on `Subscribable`: `subscribeDcb`.
   * DCB subscription helpers subscribe to CloudEvents and post-filter DCB-tagged events by `DcbQuery`; they are live subscription conveniences, not DCB-consistent reads.
   * DCB subscription metadata callbacks reuse the existing `EventMetadata` type and expose DCB metadata through Kotlin extension properties: `dcbPosition` and `dcbTags`.
