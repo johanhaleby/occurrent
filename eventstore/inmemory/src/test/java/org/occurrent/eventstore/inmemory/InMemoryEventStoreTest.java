@@ -1381,6 +1381,33 @@ public class InMemoryEventStoreTest {
                 Stream<CloudEvent> events = inMemoryEventStore.all(SortBy.time(DESCENDING).thenNatural(ASCENDING));
                 assertThat(events.map(deserialize(objectMapper))).containsExactly(nameWasChanged2, nameDefined, nameWasChanged1);
             }
+
+            @Test
+            void sort_by_natural_asc_uses_global_insertion_order_across_streams() {
+                // Timestamps are intentionally out of insertion order to distinguish natural
+                // (insertion) ordering from time ordering. Insertion order is eventA, eventB, eventC.
+                // eventC's timestamp is earlier than eventB's, so a time-based sort would give a
+                // different result. The per-stream grouping that existed before the fix would yield
+                // A, C, B (grouping A and C as stream "s1" together). Global insertion order is A, B, C.
+                LocalDateTime now = LocalDateTime.now();
+                NameDefined eventA = new NameDefined(UUID.randomUUID().toString(), now, "s1", "A");
+                NameDefined eventB = new NameDefined(UUID.randomUUID().toString(), now.plusSeconds(5), "s2", "B");
+                // eventC goes back in time (skewed clock) yet it is inserted last into s1
+                NameWasChanged eventC = new NameWasChanged(UUID.randomUUID().toString(), now.minusSeconds(3), "s1", "C");
+
+                // Write A to s1, B to a new s2, then C appended to the existing s1
+                unconditionallyPersist(inMemoryEventStore, "s1", eventA);
+                unconditionallyPersist(inMemoryEventStore, "s2", eventB);
+                unconditionallyPersist(inMemoryEventStore, "s1", Stream.of(eventC));
+
+                // Ascending natural order must reflect global insertion order: A, B, C
+                Stream<CloudEvent> ascEvents = inMemoryEventStore.all(SortBy.natural(ASCENDING));
+                assertThat(ascEvents.map(deserialize(objectMapper))).containsExactly(eventA, eventB, eventC);
+
+                // And descending must be the exact reverse: C, B, A
+                Stream<CloudEvent> descEvents = inMemoryEventStore.all(SortBy.natural(DESCENDING));
+                assertThat(descEvents.map(deserialize(objectMapper))).containsExactly(eventC, eventB, eventA);
+            }
         }
 
         @Nested

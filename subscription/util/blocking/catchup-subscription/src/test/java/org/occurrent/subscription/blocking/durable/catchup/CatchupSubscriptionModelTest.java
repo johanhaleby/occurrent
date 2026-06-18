@@ -198,6 +198,57 @@ public class CatchupSubscriptionModelTest {
     }
 
     @Test
+    void catchup_subscription_does_not_lose_events_with_skewed_timestamps_written_during_catchup_phase() {
+        // Three historic events with well-separated timestamps so the catch-up phase takes
+        // long enough for the latch interleave to work.
+        LocalDateTime now = LocalDateTime.now();
+        NameDefined nameDefined1 = new NameDefined(UUID.randomUUID().toString(), now, "name", "name1");
+        NameDefined nameDefined2 = new NameDefined(UUID.randomUUID().toString(), now.plusSeconds(2), "name", "name2");
+        NameWasChanged nameWasChanged1 = new NameWasChanged(UUID.randomUUID().toString(), now.plusSeconds(10), "name", "name3");
+
+        mongoEventStore.write("1", 0, serialize(nameDefined1));
+        mongoEventStore.write("2", 0, serialize(nameDefined2));
+        mongoEventStore.write("1", 1, serialize(nameWasChanged1));
+
+        // skewedEvent has a CloudEvent time EARLIER than the first replayed event so it
+        // sorts before the replay cursor's already-passed position in a time-based sort.
+        // The bug caused the delta re-query (which used time-based skip) to skip it, and
+        // the live subscription's resume position also sat past it, so it was silently lost.
+        NameDefined skewedEvent = new NameDefined(UUID.randomUUID().toString(), now.minusSeconds(30), "skewed", "skewed");
+
+        CopyOnWriteArrayList<CloudEvent> state = new CopyOnWriteArrayList<>();
+
+        CountDownLatch waitBeforePublishingSkewedEvent = new CountDownLatch(1);
+        CountDownLatch waitForSkewedEventToBePublished = new CountDownLatch(1);
+
+        new Thread(() -> {
+            awaitLatch(waitBeforePublishingSkewedEvent);
+            // Write the skewed event while the catch-up replay is in progress
+            mongoEventStore.write("skewed-stream", 0, serialize(skewedEvent));
+            waitForSkewedEventToBePublished.countDown();
+        }).start();
+
+        // Subscribe from beginning of time, then pause the replay after the first event so the
+        // skewed-timestamp event is written during the catch-up phase.
+        subscription.subscribe(UUID.randomUUID().toString(), StartAtTime.beginningOfTime(), e -> {
+            if (state.size() == 1) {
+                waitBeforePublishingSkewedEvent.countDown();
+                awaitLatch(waitForSkewedEventToBePublished);
+            }
+            state.add(e);
+        }).waitUntilStarted();
+
+        // Every distinct event id must be delivered. At-least-once means duplicates are allowed,
+        // but no event must be missing, especially the skewed one.
+        String skewedId = skewedEvent.eventId();
+        String id1 = nameDefined1.eventId();
+        String id2 = nameDefined2.eventId();
+        String id3 = nameWasChanged1.eventId();
+        await().atMost(FIVE_SECONDS).with().pollInterval(Duration.of(20, MILLIS)).untilAsserted(() ->
+                assertThat(state).extracting(CloudEvent::getId).contains(id1, id2, id3, skewedId));
+    }
+
+    @Test
     void catchup_subscription_reads_historic_events_with_filter() {
         // Given
         LocalDateTime now = LocalDateTime.now();

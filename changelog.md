@@ -1,3 +1,11 @@
+### Changelog next version
+
+* Fixed a silent event loss in `CatchupSubscriptionModel` at the handover from the catch-up phase to the live subscription.
+  * An event written during the catch-up replay whose CloudEvent `time` was earlier than the replay cursor (a writer with a clock running behind) could be skipped by the delta reconciliation and also sit below the live subscription's resume position, so no delivery path saw it. Since it was a miss and not a duplicate, idempotent consumers could not recover it.
+  * The delta now reconciles events written during the replay by insertion order (`SortBy.natural` descending with a limit) instead of the time-based `skip`, so a clock-skewed event is still among the newest events and is delivered. It also reads only the recent tail instead of walking the whole backlog, so it is faster on large stores, and it removes a spurious duplicate the old reconciliation produced.
+  * `InMemoryEventStore` now makes `SortBy.natural` reflect global insertion order, matching MongoDB's `$natural`, so the catch-up reconciliation behaves the same on both stores.
+  * See [ADR 14](doc/architecture/decisions/0014-reconcile-catchup-events-by-insertion-order-to-avoid-loss-under-clock-skew.md).
+
 ### 0.20.3 (2026-03-29)
 
 * Completed the Spring Boot starter fallback fix for composed `CloudEventConverter` setups.

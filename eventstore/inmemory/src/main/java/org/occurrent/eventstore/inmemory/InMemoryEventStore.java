@@ -27,7 +27,6 @@ import org.occurrent.eventstore.api.*;
 import org.occurrent.eventstore.api.SortBy.MultipleSortStepsImpl;
 import org.occurrent.eventstore.api.SortBy.NaturalImpl;
 import org.occurrent.eventstore.api.SortBy.SingleFieldImpl;
-import org.occurrent.eventstore.api.SortBy.SortDirection;
 import org.occurrent.eventstore.api.WriteCondition.StreamVersionWriteCondition;
 import org.occurrent.eventstore.api.blocking.*;
 import org.occurrent.eventstore.api.internal.StreamReadFilterToFilterMapper;
@@ -39,6 +38,7 @@ import java.net.URI;
 import java.time.OffsetDateTime;
 import java.util.*;
 import java.util.Map.Entry;
+import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.atomic.AtomicLong;
 import java.util.concurrent.atomic.AtomicReference;
@@ -48,13 +48,11 @@ import java.util.function.Predicate;
 import java.util.stream.Collectors;
 import java.util.stream.LongStream;
 import java.util.stream.Stream;
-import java.util.stream.StreamSupport;
 
 import static io.cloudevents.core.v1.CloudEventV1.*;
 import static java.util.Comparator.comparing;
 import static java.util.Comparator.nullsFirst;
 import static java.util.Objects.requireNonNull;
-import static java.util.Spliterators.spliteratorUnknownSize;
 import static java.util.function.Predicate.not;
 import static java.util.stream.Collectors.groupingBy;
 import static org.occurrent.cloudevents.OccurrentCloudEventExtension.STREAM_ID;
@@ -73,6 +71,15 @@ public class InMemoryEventStore implements EventStore, EventStoreOperations, Eve
 
     // We cannot use ConcurrentMap since it doesn't maintain insertion order
     private final Map<String, CopyOnWriteArrayList<CloudEvent>> state = Collections.synchronizedMap(new LinkedHashMap<>());
+
+    // Global, monotonically increasing insertion order assigned to each event at write time, keyed by the
+    // event's "id + source" (the same uniqueness key used by validateNoDuplicateEventExists). This is what
+    // SortBy.natural relies on so that "natural order" means *global* insertion order (matching MongoDB's
+    // $natural), rather than the per-stream grouping that results from iterating "state". Sequences are
+    // assigned inside the "state.compute" critical section in write(...), so they reflect the actual
+    // serialized insertion order across all streams.
+    private final AtomicLong insertionSequence = new AtomicLong();
+    private final Map<String, Long> insertionOrderByEventKey = new ConcurrentHashMap<>();
 
     private final Consumer<Stream<CloudEvent>> listener;
 
@@ -121,6 +128,7 @@ public class InMemoryEventStore implements EventStore, EventStoreOperations, Eve
                 List<CloudEvent> cloudEvents = applyOccurrentCloudEventExtension(cloudEventStream, streamId, 0);
                 newCloudEvents.set(cloudEvents);
                 validateNoDuplicateEventExists(cloudEvents);
+                assignInsertionOrder(cloudEvents);
                 return new CopyOnWriteArrayList<>(cloudEvents);
             } else if (currentEvents != null && isConditionFulfilledBy(writeCondition, currentStreamVersion)) {
                 List<CloudEvent> eventList = new ArrayList<>(currentEvents);
@@ -128,6 +136,7 @@ public class InMemoryEventStore implements EventStore, EventStoreOperations, Eve
                 eventList.addAll(newEvents);
                 validateNoDuplicateEventExists(eventList);
                 newCloudEvents.set(newEvents);
+                assignInsertionOrder(newEvents);
                 return new CopyOnWriteArrayList<>(eventList);
             } else {
                 throw new WriteConditionNotFulfilledException(streamId, currentStreamVersion, writeCondition, String.format("%s was not fulfilled. Expected version %s but was %s.", WriteCondition.class.getSimpleName(), writeCondition, currentStreamVersion));
@@ -165,6 +174,22 @@ public class InMemoryEventStore implements EventStore, EventStoreOperations, Eve
                 .collect(Collectors.toList());
     }
 
+    // Must be called from inside the "state.compute" critical section so that sequence numbers reflect the
+    // serialized insertion order across all streams.
+    private void assignInsertionOrder(List<CloudEvent> events) {
+        for (CloudEvent event : events) {
+            insertionOrderByEventKey.put(insertionKey(event), insertionSequence.getAndIncrement());
+        }
+    }
+
+    private static String insertionKey(CloudEvent cloudEvent) {
+        return insertionKey(cloudEvent.getId(), cloudEvent.getSource());
+    }
+
+    private static String insertionKey(String cloudEventId, URI cloudEventSource) {
+        return cloudEventId + cloudEventSource;
+    }
+
     @Override
     public WriteResult write(String streamId, Stream<CloudEvent> events) {
         return write(streamId, WriteCondition.anyStreamVersion(), events);
@@ -190,7 +215,10 @@ public class InMemoryEventStore implements EventStore, EventStoreOperations, Eve
     @Override
     public void deleteEventStream(String streamId) {
         requireNonNull(streamId, "StreamId cannot be null");
-        state.remove(streamId);
+        CopyOnWriteArrayList<CloudEvent> removed = state.remove(streamId);
+        if (removed != null) {
+            removed.forEach(event -> insertionOrderByEventKey.remove(insertionKey(event)));
+        }
     }
 
     @Override
@@ -209,16 +237,22 @@ public class InMemoryEventStore implements EventStore, EventStoreOperations, Eve
             }
             return newEvents;
         });
+        insertionOrderByEventKey.remove(insertionKey(cloudEventId, cloudEventSource));
     }
 
     public void deleteAll() {
         state.clear();
+        insertionOrderByEventKey.clear();
+        insertionSequence.set(0);
     }
 
     @Override
     public void delete(Filter filter) {
         requireNonNull(filter, "Filter cannot be null");
-        state.replaceAll((streamId, cloudEvents) -> cloudEvents.stream().filter(not(cloudEvent -> matchesFilter(cloudEvent, filter))).collect(Collectors.toCollection(CopyOnWriteArrayList::new)));
+        state.replaceAll((streamId, cloudEvents) -> {
+            cloudEvents.stream().filter(cloudEvent -> matchesFilter(cloudEvent, filter)).forEach(removed -> insertionOrderByEventKey.remove(insertionKey(removed)));
+            return cloudEvents.stream().filter(not(cloudEvent -> matchesFilter(cloudEvent, filter))).collect(Collectors.toCollection(CopyOnWriteArrayList::new));
+        });
     }
 
     @Override
@@ -253,46 +287,14 @@ public class InMemoryEventStore implements EventStore, EventStoreOperations, Eve
             stream = state.values().stream().flatMap(List::stream).filter(cloudEvent -> matchesFilter(cloudEvent, filter));
         }
 
-        final Stream<CloudEvent> streamToSort;
-        final Map<CloudEvent, Integer> cloudEventPositionCache;
-
         if (sortBy instanceof SortBy.Unsorted) {
             // Use natural ascending by default
             sortBy = SortBy.natural(ASCENDING);
         }
 
-        if (sortBy instanceof NaturalImpl) {
-            SortDirection order = ((NaturalImpl) sortBy).direction;
-            if (order == ASCENDING) {
-                return stream.skip(skip).limit(limit);
-            } else {
-                Iterator<CloudEvent> cloudEventIterator = stream.collect(Collectors.toCollection(LinkedList::new)).descendingIterator();
-                return StreamSupport.stream(spliteratorUnknownSize(cloudEventIterator, Spliterator.ORDERED), false).skip(skip).limit(limit);
-            }
-        } else if (isMultipleSortStepsContainingNaturalOrder(sortBy)) {
-            cloudEventPositionCache = stream.collect(LinkedHashMap::new, (cache, event) -> cache.put(event, cache.size()), LinkedHashMap::putAll);
-            streamToSort = cloudEventPositionCache.keySet().stream();
-        } else {
-            streamToSort = stream;
-            cloudEventPositionCache = Collections.emptyMap();
-        }
-
-        Comparator<CloudEvent> comparator = toComparator(cloudEventPositionCache, sortBy);
-        final Stream<CloudEvent> streamToUse;
-        if (comparator == null) {
-            streamToUse = streamToSort;
-        } else {
-            streamToUse = streamToSort.sorted(comparator);
-        }
-
+        Comparator<CloudEvent> comparator = toComparator(sortBy);
+        final Stream<CloudEvent> streamToUse = comparator == null ? stream : stream.sorted(comparator);
         return streamToUse.skip(skip).limit(limit);
-    }
-
-    private static boolean isMultipleSortStepsContainingNaturalOrder(SortBy sortBy) {
-        if (sortBy instanceof MultipleSortStepsImpl) {
-            return ((MultipleSortStepsImpl) sortBy).steps.stream().anyMatch(NaturalImpl.class::isInstance);
-        }
-        return false;
     }
 
     @Override
@@ -422,20 +424,20 @@ public class InMemoryEventStore implements EventStore, EventStoreOperations, Eve
     }
 
     @Nullable
-    private static Comparator<CloudEvent> toComparator(Map<CloudEvent, Integer> cloudEventPositionCache, SortBy sortBy) {
+    private Comparator<CloudEvent> toComparator(SortBy sortBy) {
         final Comparator<CloudEvent> comparator;
         if (sortBy instanceof NaturalImpl) {
-            Comparator<CloudEvent> temp = Comparator.comparingInt(cloudEventPositionCache::get);
-            if (((NaturalImpl) sortBy).direction == DESCENDING) {
-                comparator = temp.reversed();
-            } else {
-                comparator = temp;
-            }
+            // "Natural" order is global insertion order (see insertionOrderByEventKey), so it matches MongoDB's
+            // $natural and is monotonic with insertion regardless of the events' "time", both standalone and as
+            // a tie-breaker step. This is what the CatchupSubscriptionModel relies on to reconcile events written
+            // during the catch-up phase.
+            Comparator<CloudEvent> byInsertionOrder = comparing((CloudEvent cloudEvent) -> insertionOrderByEventKey.getOrDefault(insertionKey(cloudEvent), Long.MAX_VALUE));
+            comparator = ((NaturalImpl) sortBy).direction == DESCENDING ? byInsertionOrder.reversed() : byInsertionOrder;
         } else if (sortBy instanceof SingleFieldImpl) {
-            comparator = toComparator((SingleFieldImpl) sortBy);
+            comparator = singleFieldComparator((SingleFieldImpl) sortBy);
         } else if (sortBy instanceof MultipleSortStepsImpl) {
             comparator = ((MultipleSortStepsImpl) sortBy).steps.stream()
-                    .map(step -> toComparator(cloudEventPositionCache, step))
+                    .map(this::toComparator)
                     .filter(Objects::nonNull)
                     .reduce(Comparator::thenComparing)
                     .orElse(null);
@@ -445,7 +447,7 @@ public class InMemoryEventStore implements EventStore, EventStoreOperations, Eve
         return comparator;
     }
 
-    private static Comparator<CloudEvent> toComparator(SingleFieldImpl singleField) {
+    private static Comparator<CloudEvent> singleFieldComparator(SingleFieldImpl singleField) {
         String fieldName = singleField.fieldName;
         final Comparator<CloudEvent> comparator = switch (fieldName) {
             case TIME -> comparing(CloudEvent::getTime, nullsFirst(OffsetDateTime::compareTo));
