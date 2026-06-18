@@ -1,3 +1,10 @@
+### 0.20.4 (2026-06-18)
+
+* Fixed a `ConcurrentModificationException` that could occur when consuming a stream returned by `InMemoryEventStore.query(..)` while another thread writes to the store.
+  * The returned stream was lazy, so its sort, skip, and limit ran after the query lock was released. A concurrent `write(..)` modifies the backing map at that point, which could throw or expose an in-flight stream.
+  * `query(..)` now snapshots the matching events while holding the lock, like `count(..)` already did, and then sorts, skips, and limits on that snapshot.
+  * This matters more now because `CatchupSubscriptionModel` delta reconciliation queries with `SortBy.natural(DESCENDING)`, so the in-memory store can be read concurrently with writes during a catch-up.
+
 ### 0.20.3 (2026-03-29)
 
 * Completed the Spring Boot starter fallback fix for composed `CloudEventConverter` setups.
