@@ -20,6 +20,7 @@ import io.cloudevents.CloudEvent;
 import jakarta.annotation.PreDestroy;
 import org.jspecify.annotations.NullMarked;
 import org.jspecify.annotations.Nullable;
+import org.occurrent.eventstore.api.SortBy;
 import org.occurrent.eventstore.api.blocking.EventStoreQueries;
 import org.occurrent.filter.Filter;
 import org.occurrent.subscription.*;
@@ -204,9 +205,12 @@ public class CatchupSubscriptionModel implements SubscriptionModel, DelegatingSu
             // The delegated subscription model is not allowed to subscribe, so we don't need to get the global position.
             globalSubscriptionPosition = null;
         } else {
-            // Here's the reason why we're forcing the wrapping subscription to be a PositionAwareBlockingSubscription.
-            // This is in order to be 100% safe since we need to take events that are published meanwhile the EventStoreQuery
-            // is executed. Thus, we need the global position of the subscription at the time of starting the query.
+            // We force the wrapping subscription to be a PositionAwareSubscriptionModel so that we can capture
+            // where the live subscription should resume. This position is captured *after* the bulk replay so it
+            // stays fresh: capturing it before a long replay would risk the resume token ageing out of the
+            // database change stream (e.g. MongoDB's oplog) before the handover, making the live subscription
+            // unresumable. Events written during the replay are not covered by this position (they were written
+            // before it). They are reconciled separately by the insertion-order delta below.
             globalSubscriptionPosition = subscriptionModel.globalSubscriptionPosition();
         }
 
@@ -218,8 +222,18 @@ public class CatchupSubscriptionModel implements SubscriptionModel, DelegatingSu
         // during the catch-up phase are not streamed again.
         FixedSizeCache catchupPhaseCache = new FixedSizeCache(config.cacheSize);
         if (numberOfEventsNotConsumed > 0) {
-            var cloudEvents = eventStoreQueries.query(catchupFilter, Math.toIntExact(numberOfEventsBeforeStartingCatchupSubscription), Math.toIntExact(numberOfEventsNotConsumed), config.catchupPhaseSortBy);
-            runCatchupForStream(cloudEvents, subscriptionId, action, catchupPhaseCache);
+            // The events written during the catch-up phase are, by definition, the most-recently-inserted events.
+            // We fetch exactly them by reading the newest "numberOfEventsNotConsumed" events in *insertion order*
+            // (SortBy.natural, descending + limit, no skip) and then reversing them back to insertion order for
+            // delivery. Selecting by insertion order rather than the configurable, time-based catchupPhaseSortBy
+            // is what makes this reconciliation loss-free under clock skew: a during-catch-up event whose "time"
+            // is earlier than the replay cursor's already-passed position would otherwise sort before the
+            // already-processed boundary (missed here) and sit below the live subscription's resume position
+            // (missed there too), and would be silently lost. Reading the newest N in insertion order also reads
+            // only the recent tail instead of skipping the whole backlog, which matters on large event stores.
+            List<CloudEvent> eventsWrittenDuringCatchup = new ArrayList<>(eventStoreQueries.query(catchupFilter, 0, Math.toIntExact(numberOfEventsNotConsumed), SortBy.natural(SortBy.SortDirection.DESCENDING)).toList());
+            Collections.reverse(eventsWrittenDuringCatchup);
+            runCatchupForStream(eventsWrittenDuringCatchup.stream(), subscriptionId, action, catchupPhaseCache);
         }
 
         // We check if the delegated subscription model is not allowed to subscribe. If so, we remove any temporary subscription position written during the catchup phase
