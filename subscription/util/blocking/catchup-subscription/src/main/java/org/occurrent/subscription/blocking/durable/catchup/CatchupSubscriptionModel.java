@@ -43,6 +43,7 @@ import java.util.function.Supplier;
 import java.util.stream.Stream;
 
 import static org.occurrent.condition.Condition.gt;
+import static org.occurrent.eventstore.api.SortBy.SortDirection.DESCENDING;
 import static org.occurrent.filter.Filter.time;
 import static org.occurrent.time.internal.RFC3339.RFC_3339_DATE_TIME_FORMATTER;
 
@@ -238,7 +239,7 @@ public class CatchupSubscriptionModel implements SubscriptionModel, DelegatingSu
             // already-processed boundary (missed here) and sit below the live subscription's resume position
             // (missed there too), and would be silently lost. Reading the newest N in insertion order also reads
             // only the recent tail instead of skipping the whole backlog, which matters on large event stores.
-            List<CloudEvent> eventsWrittenDuringCatchup = new ArrayList<>(eventStoreQueries.query(catchupFilter, 0, Math.toIntExact(numberOfEventsNotConsumed), SortBy.natural(SortBy.SortDirection.DESCENDING)).toList());
+            List<CloudEvent> eventsWrittenDuringCatchup = new ArrayList<>(eventStoreQueries.query(catchupFilter, 0, Math.toIntExact(numberOfEventsNotConsumed), SortBy.natural(DESCENDING)).toList());
             Collections.reverse(eventsWrittenDuringCatchup);
             runCatchupForStream(eventsWrittenDuringCatchup.stream(), subscriptionId, action, catchupPhaseCache);
         }
