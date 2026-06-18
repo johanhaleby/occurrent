@@ -1,4 +1,4 @@
-### Changelog next version
+### 0.20.4 (2026-06-18)
 
 * Fixed a silent event loss in `CatchupSubscriptionModel` at the handover from the catch-up phase to the live subscription.
   * An event written during the catch-up replay whose CloudEvent `time` was earlier than the replay cursor (a writer with a clock running behind) could be skipped by the delta reconciliation and also sit below the live subscription's resume position, so no delivery path saw it. Since it was a miss and not a duplicate, idempotent consumers could not recover it.
