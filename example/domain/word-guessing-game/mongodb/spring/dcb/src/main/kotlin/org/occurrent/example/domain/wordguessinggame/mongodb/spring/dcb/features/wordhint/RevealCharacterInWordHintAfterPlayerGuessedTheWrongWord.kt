@@ -15,11 +15,10 @@
  */
 package org.occurrent.example.domain.wordguessinggame.mongodb.spring.dcb.features.wordhint
 
-import org.occurrent.application.converter.CloudEventConverter
 import org.occurrent.application.service.blocking.dcb.DcbApplicationService
 import org.occurrent.dsl.dcb.blocking.queryForList
+import org.occurrent.dsl.query.blocking.DomainEventQueries
 import org.occurrent.dsl.subscription.blocking.Subscriptions
-import org.occurrent.eventstore.api.dcb.DcbEventStore
 import org.occurrent.example.domain.wordguessinggame.event.CharacterInWordHintWasRevealed
 import org.occurrent.example.domain.wordguessinggame.event.GameEvent
 import org.occurrent.example.domain.wordguessinggame.event.GameWasStarted
@@ -39,8 +38,7 @@ import kotlin.streams.asStream
 @Configuration
 class RevealCharacterInWordHintAfterPlayerGuessedTheWrongWord(
     private val applicationService: DcbApplicationService<GameEvent>,
-    private val eventStore: DcbEventStore,
-    private val cloudEventConverter: CloudEventConverter<GameEvent>,
+    private val domainEventQueries: DomainEventQueries<GameEvent>,
     private val subscriptions: Subscriptions<GameEvent>
 ) {
 
@@ -53,8 +51,8 @@ class RevealCharacterInWordHintAfterPlayerGuessedTheWrongWord(
     @Retryable(backoff = Backoff(delay = 100, multiplier = 2.0, maxDelay = 1000))
     operator fun invoke(playerGuessedTheWrongWord: PlayerGuessedTheWrongWord) {
         val gameId = playerGuessedTheWrongWord.gameId
-        val wrongGuessCount = eventStore
-            .queryForList(GameDcbQueries.gameplay(gameId), cloudEventConverter)
+        val wrongGuessCount = domainEventQueries
+            .queryForList(GameDcbQueries.gameplay(gameId))
             .filterIsInstance<PlayerGuessedTheWrongWord>()
             .size
 

@@ -16,10 +16,9 @@
 
 package org.occurrent.example.domain.wordguessinggame.mongodb.spring.dcb.features.gameplay.views.endedgamesoverview
 
-import org.occurrent.application.converter.CloudEventConverter
 import org.occurrent.dsl.dcb.blocking.queryForSequence
+import org.occurrent.dsl.query.blocking.DomainEventQueries
 import org.occurrent.dsl.subscription.blocking.Subscriptions
-import org.occurrent.eventstore.api.dcb.DcbEventStore
 import org.occurrent.example.domain.wordguessinggame.event.*
 import org.occurrent.example.domain.wordguessinggame.mongodb.spring.dcb.features.dcb.GameDcbQueries
 import org.occurrent.example.domain.wordguessinggame.mongodb.spring.dcb.support.loggerFor
@@ -41,18 +40,15 @@ class WhenGameIsEndedThenAddGameToEndedGamesOverview {
     private lateinit var mongo: MongoOperations
 
     @Autowired
-    private lateinit var eventStore: DcbEventStore
-
-    @Autowired
-    private lateinit var cloudEventConverter: CloudEventConverter<GameEvent>
+    private lateinit var domainEventQueries: DomainEventQueries<GameEvent>
 
     @Bean
     fun whenGameIsEndedThenAddGameToEndedGamesOverviewPolicy() =
         subscriptions.subscribe<GameWasWon, GameWasLost>("WhenGameIsEndedThenAddGameToGameEndedOverview") { e ->
             log.info("${e::class.eventType()} - will update ended games overview")
             val gameId = e.gameId
-            val gameWasStarted = eventStore
-                .queryForSequence(GameDcbQueries.event<GameWasStarted>(gameId), cloudEventConverter)
+            val gameWasStarted = domainEventQueries
+                .queryForSequence(GameDcbQueries.event<GameWasStarted>(gameId))
                 .filterIsInstance<GameWasStarted>()
                 .first()
             val endedGameOverview = when (e) {

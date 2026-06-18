@@ -16,8 +16,7 @@
 
 package org.occurrent.dsl.dcb.blocking
 
-import org.occurrent.application.converter.CloudEventConverter
-import org.occurrent.eventstore.api.dcb.DcbEventStore
+import org.occurrent.dsl.query.blocking.DomainEventQueries
 import org.occurrent.eventstore.api.dcb.DcbQuery
 import org.occurrent.eventstore.api.dcb.DcbReadOptions
 import kotlin.streams.asSequence
@@ -27,33 +26,30 @@ import kotlin.streams.asSequence
  *
  * @see DcbDomainEventQueries.query
  */
-fun <T : Any> DcbEventStore.queryForSequence(
+fun <T : Any> DomainEventQueries<T>.queryForSequence(
     query: DcbQuery,
-    cloudEventConverter: CloudEventConverter<T>,
     options: DcbReadOptions = DcbReadOptions.fromBeginning()
 ): Sequence<T> =
-    DcbDomainEventQueries.query(this, cloudEventConverter, query, options).asSequence()
+    DcbDomainEventQueries.query(this, query, options).asSequence()
 
 /**
  * Query that returns a [List] instead of a [java.util.stream.Stream].
  *
  * @see DcbDomainEventQueries.query
  */
-fun <T : Any> DcbEventStore.queryForList(
+fun <T : Any> DomainEventQueries<T>.queryForList(
     query: DcbQuery,
-    cloudEventConverter: CloudEventConverter<T>,
     options: DcbReadOptions = DcbReadOptions.fromBeginning()
 ): List<T> =
-    DcbDomainEventQueries.query(this, cloudEventConverter, query, options).toList()
+    DcbDomainEventQueries.query(this, query, options).toList()
 
 /**
  * Query and keep the DCB sequence position returned by the read.
  *
  * @see DcbDomainEventQueries.queryWithPosition
  */
-fun <T : Any> DcbEventStore.queryWithPosition(
+fun <T : Any> DomainEventQueries<T>.queryWithPosition(
     query: DcbQuery,
-    cloudEventConverter: CloudEventConverter<T>,
     options: DcbReadOptions = DcbReadOptions.fromBeginning()
 ): DcbDomainEventStream<T> =
-    DcbDomainEventQueries.queryWithPosition(this, cloudEventConverter, query, options)
+    DcbDomainEventQueries.queryWithPosition(this, query, options)

@@ -74,6 +74,7 @@ public class DomainEventQueries<T> {
      *
      * @return The cloud event matching the specified type or {@code null}
      */
+    @Nullable
     public <E extends T> E queryOne(Class<E> type, SortBy sortBy) {
         return queryOne(type, 0, 1, sortBy);
     }
