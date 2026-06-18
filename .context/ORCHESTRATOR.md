@@ -104,6 +104,7 @@ General:
 - Public APIs usually validate nulls/invalid arguments eagerly with `Objects.requireNonNull` or `IllegalArgumentException`.
 - Apache 2 license headers are common in source files.
 - Static factories/builders are preferred for fluent public APIs.
+- Changelog (`changelog.md`): unreleased changes go under the heading `### Changelog next version`, NOT under a versioned `### X.Y.Z (date)` section. A version number and date are assigned only at release time, when the maintainer renames that heading. Never invent a version/date for pending work.
 
 Kotlin API conventions:
 - Avoid Kotlin extension names that collide with Java members. ADR 0012 says collection-based Kotlin `ApplicationService` helpers use explicit names like `executeSequence` and `executeList`.
@@ -151,6 +152,7 @@ CloudEvents are the storage boundary. Domain event serialization/deserialization
 - Spring Boot/Jackson 3 fallback converter/type mapper behavior was recently changed and fixed (`Make starter auto-configure Jackson 3 only`, `Make default converter beans fall back`, `Fix lazy fallback converter for 0.20.3`).
 - Kotlin extension/generic API ergonomics have a history of regressions. Recent fixes include execute extension usage and Kotlin name collision ADRs.
 - Historical bug-fix themes from Git history include competing consumer locks/reacquisition, catchup subscription position handling, in-memory concurrent modification during query/write, retry for `any` writes, EventStoreQueries sorting defaults, and annotation processing start behavior.
+- Catch-up to live handover invariant (ADR 0014): `CatchupSubscriptionModel` reconciles events written during the bulk replay via the delta query using `SortBy.natural(DESCENDING)` + `limit` (insertion order), NOT the time-based `catchupPhaseSortBy`. Selecting by time is loss-prone under clock skew (a during-replay event with a backdated `time` sorts before the boundary and is missed by both the delta and the live resume). Do not "tidy" the delta sort back to `catchupPhaseSortBy`. The global position is still captured AFTER the bulk replay (fresh token, avoids oplog ageing); the bulk replay keeps `catchupPhaseSortBy` and its time index. `SortBy.natural` in `InMemoryEventStore` now means GLOBAL insertion order (a write-time `insertionSequence`/`insertionOrderByEventKey`), matching MongoDB `$natural`; `query`'s natural handling is unified through the instance `toComparator`. Two known pre-existing residuals tracked as follow-ups: `InMemoryEventStore.query` returns a lazy stream iterated outside the `state` lock (CME risk under concurrent write), and the catch-up delta's net-count arithmetic loses events if events are deleted during the replay.
 - code-review-graph exists but is structurally weak for architecture boundaries in this repo: it reports many file-based communities, no cross-community edges, and test-dominated flows. Use it first for inventory/impact as requested, but verify module boundaries from Maven/source.
 
 ## Build And Verification
