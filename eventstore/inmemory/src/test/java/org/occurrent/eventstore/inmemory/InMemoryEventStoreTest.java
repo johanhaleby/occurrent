@@ -47,6 +47,7 @@ import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.Future;
+import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicReference;
 import java.util.function.Function;
 import java.util.stream.Collectors;
@@ -1042,7 +1043,7 @@ public class InMemoryEventStoreTest {
 
             // Consume the lazily evaluated query stream (sort/skip/limit happen on the terminal operation)
             // while the writer keeps structurally modifying the backing map.
-            writerStarted.await();
+            assertThat(writerStarted.await(10, TimeUnit.SECONDS)).as("Writer thread should start within 10 seconds").isTrue();
             while (!writer.isDone()) {
                 try {
                     List<CloudEvent> result = inMemoryEventStore.query(Filter.all(), 0, Integer.MAX_VALUE, SortBy.natural(DESCENDING)).collect(Collectors.toList());
@@ -1054,7 +1055,7 @@ public class InMemoryEventStoreTest {
                 }
             }
 
-            writer.get();
+            writer.get(60, TimeUnit.SECONDS);
             executor.shutdownNow();
 
             // Then
