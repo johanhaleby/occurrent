@@ -74,6 +74,13 @@ import static org.occurrent.time.internal.RFC3339.RFC_3339_DATE_TIME_FORMATTER;
  * </p>
  * <br>
  * <p>
+ * Delivery is at-least-once. Events written while the catch-up phase runs are reconciled and delivered, including events whose {@code time} is clock-skewed earlier than the replay cursor.
+ * This reconciliation assumes the set of events matching the filter only grows while catching up, which holds for append-only stores. If events are deleted from the store while a catch-up
+ * replay is running, the reconciliation can under-count and miss some events written during that replay. Avoid deleting events that match a running catch-up subscription's filter until it
+ * has caught up.
+ * </p>
+ * <br>
+ * <p>
  * Also note that the if a the subscription crashes during catch-up mode it'll continue where it left-off on restart, given the no specific `StartAt` position is supplied (i.e. if {@code StartAt.subscriptionModelDefault() is used}).
  * For this to work, the subscription must store the subscription position in a {@link SubscriptionPositionStorage} implementation periodically. It's possible to configure
  * how often this should happen in the {@link CatchupSubscriptionModelConfig}.
