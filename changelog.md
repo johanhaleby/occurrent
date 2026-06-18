@@ -1,4 +1,4 @@
-### 0.20.4 (2026-06-18)
+### Changelog next version
 
 * Fixed a `ConcurrentModificationException` that could occur when consuming a stream returned by `InMemoryEventStore.query(..)` while another thread writes to the store.
   * The returned stream was lazy, so its sort, skip, and limit ran after the query lock was released. A concurrent `write(..)` modifies the backing map at that point, which could throw or expose an in-flight stream.
