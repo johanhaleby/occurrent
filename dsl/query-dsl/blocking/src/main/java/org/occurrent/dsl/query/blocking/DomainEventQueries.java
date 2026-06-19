@@ -50,6 +50,14 @@ public class DomainEventQueries<T> {
     }
 
     /**
+     * The underlying {@link EventStoreQueries} this instance reads from. Useful for capabilities layered on top of
+     * the event store, such as DCB queries when the store also implements {@code DcbEventStore}.
+     */
+    public EventStoreQueries eventStoreQueries() {
+        return eventStoreQueries;
+    }
+
+    /**
      * Note that it's recommended to create an index the fields you're sorting on in order to make them efficient.
      *
      * @return All cloud events matching the specified filter, skip, limit and sort by <code>sortBy</code>.
@@ -312,8 +320,12 @@ public class DomainEventQueries<T> {
         return toDomainEvents(eventStoreQueries.query(filter));
     }
 
+    /**
+     * Convert a stream of {@link CloudEvent}s into domain events using the configured {@link CloudEventConverter}.
+     * Useful when you already have CloudEvents (for example from a DCB read) and want them as domain events.
+     */
     @SuppressWarnings("unchecked")
-    private <E extends T> Stream<E> toDomainEvents(Stream<CloudEvent> stream) {
+    public <E extends T> Stream<E> toDomainEvents(Stream<CloudEvent> stream) {
         return stream.map(cloudEventConverter::toDomainEvent).map(t -> (E) t);
     }
 
