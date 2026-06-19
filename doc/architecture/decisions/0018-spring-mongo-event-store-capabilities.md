@@ -1,4 +1,4 @@
-# 15. Spring Mongo Event Store Capabilities
+# 18. Spring Mongo Event Store Capabilities
 
 Date: 2026-05-23
 
