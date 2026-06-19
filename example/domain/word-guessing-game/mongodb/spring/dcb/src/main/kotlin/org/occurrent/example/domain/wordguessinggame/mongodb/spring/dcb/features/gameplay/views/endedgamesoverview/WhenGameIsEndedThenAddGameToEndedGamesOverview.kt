@@ -16,8 +16,8 @@
 
 package org.occurrent.example.domain.wordguessinggame.mongodb.spring.dcb.features.gameplay.views.endedgamesoverview
 
+import org.occurrent.dsl.dcb.blocking.DcbDomainEventQueries
 import org.occurrent.dsl.dcb.blocking.queryForSequence
-import org.occurrent.dsl.query.blocking.DomainEventQueries
 import org.occurrent.dsl.subscription.blocking.Subscriptions
 import org.occurrent.example.domain.wordguessinggame.event.*
 import org.occurrent.example.domain.wordguessinggame.mongodb.spring.dcb.features.dcb.GameDcbQueries
@@ -40,7 +40,7 @@ class WhenGameIsEndedThenAddGameToEndedGamesOverview {
     private lateinit var mongo: MongoOperations
 
     @Autowired
-    private lateinit var domainEventQueries: DomainEventQueries<GameEvent>
+    private lateinit var domainEventQueries: DcbDomainEventQueries<GameEvent>
 
     @Bean
     fun whenGameIsEndedThenAddGameToEndedGamesOverviewPolicy() =

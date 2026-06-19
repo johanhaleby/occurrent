@@ -19,6 +19,7 @@ import org.occurrent.application.converter.CloudEventConverter
 import org.occurrent.application.service.blocking.dcb.DcbApplicationService
 import org.occurrent.application.service.blocking.dcb.GenericDcbApplicationService
 import org.occurrent.application.service.blocking.dcb.TagGenerator
+import org.occurrent.dsl.dcb.blocking.DcbDomainEventQueries
 import org.occurrent.dsl.query.blocking.DomainEventQueries
 import org.occurrent.dsl.subscription.blocking.Subscriptions
 import org.occurrent.eventstore.mongodb.spring.blocking.EventStoreConfig
@@ -90,6 +91,10 @@ class Bootstrap : WebMvcConfigurer {
     @Bean
     fun queryDsl(eventStore: SpringMongoEventStore, converter: CloudEventConverter<GameEvent>) =
         DomainEventQueries(eventStore, converter)
+
+    @Bean
+    fun dcbQueryDsl(domainEventQueries: DomainEventQueries<GameEvent>) =
+        DcbDomainEventQueries(domainEventQueries)
 
     @Bean
     fun objectMapper(): ObjectMapper = jacksonObjectMapper()

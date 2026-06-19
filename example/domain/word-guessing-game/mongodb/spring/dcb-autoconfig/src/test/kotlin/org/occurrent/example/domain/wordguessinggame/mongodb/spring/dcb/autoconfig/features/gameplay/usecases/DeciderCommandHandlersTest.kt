@@ -20,8 +20,8 @@ import org.assertj.core.api.Assertions.assertThat
 import org.awaitility.Awaitility.await
 import org.junit.jupiter.api.Test
 import org.occurrent.application.converter.CloudEventConverter
+import org.occurrent.dsl.dcb.blocking.DcbDomainEventQueries
 import org.occurrent.dsl.dcb.blocking.queryForList
-import org.occurrent.dsl.query.blocking.DomainEventQueries
 import org.occurrent.eventstore.api.dcb.DcbCloudEvents
 import org.occurrent.eventstore.api.dcb.DcbEventStore
 import org.occurrent.eventstore.api.dcb.DcbQuery
@@ -63,7 +63,7 @@ class DeciderCommandHandlersTest {
     private lateinit var cloudEventConverter: CloudEventConverter<GameEvent>
 
     @Autowired
-    private lateinit var domainEventQueries: DomainEventQueries<GameEvent>
+    private lateinit var domainEventQueries: DcbDomainEventQueries<GameEvent>
 
     @Test
     fun `starts game through decider command path`() {
