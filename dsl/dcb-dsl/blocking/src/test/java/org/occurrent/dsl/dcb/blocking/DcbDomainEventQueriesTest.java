@@ -43,8 +43,6 @@ import java.util.stream.Stream;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.awaitility.Awaitility.await;
-import static org.occurrent.dsl.dcb.blocking.DcbDomainEventQueries.query;
-import static org.occurrent.dsl.dcb.blocking.DcbDomainEventQueries.queryWithPosition;
 
 @DisplayNameGeneration(ReplaceUnderscores.class)
 class DcbDomainEventQueriesTest {
@@ -52,6 +50,7 @@ class DcbDomainEventQueriesTest {
     private InMemoryEventStore eventStore;
     private CloudEventConverter<DomainEvent> cloudEventConverter;
     private DomainEventQueries<DomainEvent> domainEventQueries;
+    private DcbDomainEventQueries<DomainEvent> dcbQueries;
     private LocalDateTime time;
 
     @BeforeEach
@@ -59,6 +58,7 @@ class DcbDomainEventQueriesTest {
         eventStore = new InMemoryEventStore();
         cloudEventConverter = new JacksonCloudEventConverter.Builder<DomainEvent>(new ObjectMapper(), URI.create("urn:test")).idMapper(DomainEvent::eventId).build();
         domainEventQueries = new DomainEventQueries<>(eventStore, cloudEventConverter);
+        dcbQueries = new DcbDomainEventQueries<>(domainEventQueries);
         time = LocalDateTime.now();
     }
 
@@ -68,7 +68,7 @@ class DcbDomainEventQueriesTest {
         NameWasChanged nameWasChanged = new NameWasChanged("eventId2", time, "name", "Jane Doe");
         append("name:1", nameDefined, nameWasChanged);
 
-        List<DomainEvent> events = query(domainEventQueries, DcbQuery.tagsAllOf("name:1")).toList();
+        List<DomainEvent> events = dcbQueries.query(DcbQuery.tagsAllOf("name:1")).toList();
 
         assertThat(events).containsExactly(nameDefined, nameWasChanged);
     }
@@ -80,7 +80,7 @@ class DcbDomainEventQueriesTest {
         append("name:1", nameDefined);
         append("name:1", nameWasChanged);
 
-        List<DomainEvent> events = query(domainEventQueries, DcbQuery.tagsAllOf("name:1"), DcbReadOptions.afterSequencePosition(1)).toList();
+        List<DomainEvent> events = dcbQueries.query(DcbQuery.tagsAllOf("name:1"), DcbReadOptions.afterSequencePosition(1)).toList();
 
         assertThat(events).containsExactly(nameWasChanged);
     }
@@ -91,7 +91,7 @@ class DcbDomainEventQueriesTest {
         append("name:1", nameDefined);
         append("other:1", new NameWasChanged("eventId2", time, "name", "Jane Doe"));
 
-        DcbDomainEventStream<DomainEvent> eventStream = queryWithPosition(domainEventQueries, DcbQuery.tagsAllOf("name:1"));
+        DcbDomainEventStream<DomainEvent> eventStream = dcbQueries.queryWithPosition(DcbQuery.tagsAllOf("name:1"));
 
         assertThat(eventStream.events()).containsExactly(nameDefined);
         assertThat(eventStream.stream()).containsExactly(nameDefined);

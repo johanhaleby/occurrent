@@ -19,8 +19,8 @@ package org.occurrent.example.domain.wordguessinggame.mongodb.spring.dcb.autocon
 import org.occurrent.annotation.Subscription
 import org.occurrent.dsl.dcb.blocking.dcbPosition
 import org.occurrent.dsl.dcb.blocking.dcbTags
+import org.occurrent.dsl.dcb.blocking.DcbDomainEventQueries
 import org.occurrent.dsl.dcb.blocking.queryForSequence
-import org.occurrent.dsl.query.blocking.DomainEventQueries
 import org.occurrent.dsl.subscription.blocking.EventMetadata
 import org.occurrent.example.domain.wordguessinggame.event.*
 import org.occurrent.example.domain.wordguessinggame.mongodb.spring.dcb.autoconfig.features.dcb.GameDcbQueries
@@ -35,7 +35,7 @@ import java.util.UUID
 @Component
 class WhenGameIsEndedThenAddGameToEndedGamesOverview(
     private val mongo: MongoOperations,
-    private val domainEventQueries: DomainEventQueries<GameEvent>
+    private val domainEventQueries: DcbDomainEventQueries<GameEvent>
 ) {
     private val log = loggerFor<WhenGameIsEndedThenAddGameToEndedGamesOverview>()
 

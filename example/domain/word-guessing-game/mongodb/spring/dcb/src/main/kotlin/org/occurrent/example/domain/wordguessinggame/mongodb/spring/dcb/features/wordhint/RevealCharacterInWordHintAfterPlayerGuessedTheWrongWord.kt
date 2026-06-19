@@ -16,8 +16,8 @@
 package org.occurrent.example.domain.wordguessinggame.mongodb.spring.dcb.features.wordhint
 
 import org.occurrent.application.service.blocking.dcb.DcbApplicationService
+import org.occurrent.dsl.dcb.blocking.DcbDomainEventQueries
 import org.occurrent.dsl.dcb.blocking.queryForList
-import org.occurrent.dsl.query.blocking.DomainEventQueries
 import org.occurrent.dsl.subscription.blocking.Subscriptions
 import org.occurrent.example.domain.wordguessinggame.event.CharacterInWordHintWasRevealed
 import org.occurrent.example.domain.wordguessinggame.event.GameEvent
@@ -38,7 +38,7 @@ import kotlin.streams.asStream
 @Configuration
 class RevealCharacterInWordHintAfterPlayerGuessedTheWrongWord(
     private val applicationService: DcbApplicationService<GameEvent>,
-    private val domainEventQueries: DomainEventQueries<GameEvent>,
+    private val domainEventQueries: DcbDomainEventQueries<GameEvent>,
     private val subscriptions: Subscriptions<GameEvent>
 ) {
 
