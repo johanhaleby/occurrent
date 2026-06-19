@@ -19,8 +19,8 @@ import org.occurrent.annotation.Subscription
 import org.occurrent.application.service.blocking.dcb.DcbApplicationService
 import org.occurrent.dsl.dcb.blocking.dcbPosition
 import org.occurrent.dsl.dcb.blocking.dcbTags
+import org.occurrent.dsl.dcb.blocking.DcbDomainEventQueries
 import org.occurrent.dsl.dcb.blocking.queryForList
-import org.occurrent.dsl.query.blocking.DomainEventQueries
 import org.occurrent.dsl.subscription.blocking.EventMetadata
 import org.occurrent.example.domain.wordguessinggame.event.CharacterInWordHintWasRevealed
 import org.occurrent.example.domain.wordguessinggame.event.GameEvent
@@ -42,7 +42,7 @@ import kotlin.streams.asStream
 @Component
 class RevealCharacterInWordHintAfterPlayerGuessedTheWrongWord(
     private val applicationService: DcbApplicationService<GameEvent>,
-    private val domainEventQueries: DomainEventQueries<GameEvent>
+    private val domainEventQueries: DcbDomainEventQueries<GameEvent>
 ) {
 
     @Subscription(id = "WhenPlayerGuessedTheWrongWordThenRevealCharacterInWordHintPolicy")

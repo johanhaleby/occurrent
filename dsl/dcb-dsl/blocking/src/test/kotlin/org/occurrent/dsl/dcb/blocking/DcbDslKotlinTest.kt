@@ -50,6 +50,7 @@ class DcbDslKotlinTest {
     private lateinit var subscriptionModel: InMemorySubscriptionModel
     private lateinit var cloudEventConverter: CloudEventConverter<DomainEvent>
     private lateinit var domainEventQueries: DomainEventQueries<DomainEvent>
+    private lateinit var dcbQueries: DcbDomainEventQueries<DomainEvent>
     private lateinit var time: LocalDateTime
 
     @BeforeEach
@@ -58,6 +59,7 @@ class DcbDslKotlinTest {
         eventStore = InMemoryEventStore(subscriptionModel)
         cloudEventConverter = JacksonCloudEventConverter.Builder<DomainEvent>(ObjectMapper(), URI.create("urn:test")).idMapper(DomainEvent::eventId).build()
         domainEventQueries = DomainEventQueries(eventStore, cloudEventConverter)
+        dcbQueries = DcbDomainEventQueries(domainEventQueries)
         time = LocalDateTime.now()
     }
 
@@ -72,9 +74,9 @@ class DcbDslKotlinTest {
         val nameWasChanged = NameWasChanged("eventId2", time, "name", "Jane Doe")
         append("name:1", nameDefined, nameWasChanged)
 
-        assertThat(domainEventQueries.queryForSequence(DcbQuery.tagsAllOf("name:1")).toList()).containsExactly(nameDefined, nameWasChanged)
-        assertThat(domainEventQueries.queryForList(DcbQuery.type(NameDefined::class.qualifiedName!!))).containsExactly(nameDefined)
-        assertThat(domainEventQueries.queryForList(DcbQuery.tagsAllOf("name:1"), DcbReadOptions.afterSequencePosition(1))).containsExactly(nameWasChanged)
+        assertThat(dcbQueries.queryForSequence(DcbQuery.tagsAllOf("name:1")).toList()).containsExactly(nameDefined, nameWasChanged)
+        assertThat(dcbQueries.queryForList(DcbQuery.type(NameDefined::class.qualifiedName!!))).containsExactly(nameDefined)
+        assertThat(dcbQueries.queryForList(DcbQuery.tagsAllOf("name:1"), DcbReadOptions.afterSequencePosition(1))).containsExactly(nameWasChanged)
     }
 
     @Test
@@ -83,7 +85,7 @@ class DcbDslKotlinTest {
         append("other:1", NameWasChanged("eventId2", time, "name", "Jane Doe"))
         append("name:1", nameDefined)
 
-        val eventStream = domainEventQueries.queryWithPosition(DcbQuery.type(NameDefined::class.qualifiedName!!))
+        val eventStream = dcbQueries.queryWithPosition(DcbQuery.type(NameDefined::class.qualifiedName!!))
 
         assertThat(eventStream.events()).containsExactly(nameDefined)
         assertThat(eventStream.lastSequencePosition()).isEqualTo(2)
