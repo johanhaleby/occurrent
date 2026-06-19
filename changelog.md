@@ -67,9 +67,9 @@
   * The DCB autoconfig example uses the starter-provided Jackson 3 `CloudEventConverter` with a domain-specific `ReflectionCloudEventTypeMapper`, instead of a custom converter.
   * Both examples assert DCB-only stream API rejection while keeping DCB-written events observable as normal CloudEvents with DCB and Occurrent storage metadata.
 * Added ADRs for the DCB design:
-  * [ADR 14](doc/architecture/decisions/0014-introduce-dcb-as-shared-cloudevent-capability.md)
-  * [ADR 15](doc/architecture/decisions/0015-spring-mongo-event-store-capabilities.md)
-  * [ADR 16](doc/architecture/decisions/0016-dcb-dsl-module.md)
+  * [ADR 17](doc/architecture/decisions/0017-introduce-dcb-as-shared-cloudevent-capability.md)
+  * [ADR 18](doc/architecture/decisions/0018-spring-mongo-event-store-capabilities.md)
+  * [ADR 19](doc/architecture/decisions/0019-dcb-dsl-module.md)
 
 #### Notes
 

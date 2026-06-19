@@ -1,4 +1,4 @@
-# 14. Introduce DCB as shared CloudEvent capability
+# 17. Introduce DCB as shared CloudEvent capability
 
 Date: 2026-05-22
 
