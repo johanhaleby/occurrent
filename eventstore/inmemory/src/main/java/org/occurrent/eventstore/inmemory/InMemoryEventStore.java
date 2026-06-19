@@ -261,6 +261,7 @@ public class InMemoryEventStore implements EventStore, EventStoreOperations, Eve
             List<CloudEvent> allEvents = allEvents().collect(Collectors.toCollection(ArrayList::new));
             allEvents.addAll(addedEvents);
             validateNoDuplicateEventExists(allEvents);
+            assignInsertionOrder(addedEvents);
             state.put(streamId, new CopyOnWriteArrayList<>(eventList));
             nextDcbPosition.addAndGet(addedEvents.size());
             long firstPosition = dcbPosition(addedEvents.get(0));

@@ -22,6 +22,8 @@ import org.junit.jupiter.api.DisplayNameGeneration;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.DisplayNameGenerator.ReplaceUnderscores;
 import org.occurrent.eventstore.api.DuplicateCloudEventException;
+import org.occurrent.eventstore.api.SortBy;
+import org.occurrent.eventstore.api.WriteCondition;
 import org.occurrent.eventstore.api.dcb.*;
 
 import java.net.URI;
@@ -29,10 +31,12 @@ import java.time.OffsetDateTime;
 import java.util.List;
 import java.util.Set;
 import java.util.UUID;
+import java.util.stream.Stream;
 
 import static java.nio.charset.StandardCharsets.UTF_8;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
+import static org.occurrent.eventstore.api.SortBy.SortDirection.ASCENDING;
 import static org.occurrent.eventstore.api.dcb.DcbAppendCondition.failIfEventsMatch;
 import static org.occurrent.eventstore.api.dcb.DcbQuery.*;
 
@@ -52,6 +56,21 @@ class InMemoryEventStoreDcbTest {
         assertThat(eventStore.read(tagsAllOf("name:1")).events())
                 .extracting(CloudEvent::getType)
                 .containsExactly("NameDefined");
+    }
+
+    @Test
+    void dcb_appends_participate_in_global_natural_insertion_order() {
+        InMemoryEventStore eventStore = new InMemoryEventStore();
+
+        // Interleave DCB appends with a regular stream write. Natural order must follow the order things were
+        // written, regardless of which write path produced them.
+        eventStore.append("dcb:partition:0", List.of(taggedEvent("NameDefined", "name:1")));
+        eventStore.write("stream:1", WriteCondition.streamVersionEq(0), Stream.of(event("OrderPlaced")));
+        eventStore.append("dcb:partition:0", List.of(taggedEvent("NameChanged", "name:1")));
+
+        assertThat(eventStore.all(SortBy.natural(ASCENDING)))
+                .extracting(CloudEvent::getType)
+                .containsExactly("NameDefined", "OrderPlaced", "NameChanged");
     }
 
     @Test
