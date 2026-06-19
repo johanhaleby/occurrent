@@ -36,6 +36,6 @@ class OnDomainEventQueriesCapabilityCondition implements Condition {
         Set<SpringMongoEventStoreCapability> capabilities = Binder.get(context.getEnvironment())
                 .bind("occurrent.event-store.capabilities", Bindable.setOf(SpringMongoEventStoreCapability.class))
                 .orElse(Set.of(STREAM));
-        return capabilities.stream().anyMatch(capability -> capability == STREAM || capability == DCB);
+        return capabilities.contains(STREAM) || capabilities.contains(DCB);
     }
 }

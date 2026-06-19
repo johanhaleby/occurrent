@@ -136,7 +136,7 @@ public class EventStoreConfig {
 
         /**
          * @param mongoTransactionManager Create a {@link TransactionTemplate} from the supplied {@code mongoTransactionManager}
-         * @return A same {@code Builder instance}
+         * @return The same {@code Builder} instance.
          */
         @NullMarked
         public Builder transactionConfig(MongoTransactionManager mongoTransactionManager) {
@@ -146,7 +146,7 @@ public class EventStoreConfig {
 
         /**
          * @param timeRepresentation How time should be represented in the database
-         * @return A same {@code Builder instance}
+         * @return The same {@code Builder} instance.
          */
         @NullMarked
         public Builder timeRepresentation(TimeRepresentation timeRepresentation) {
@@ -162,7 +162,7 @@ public class EventStoreConfig {
          * the actual query or sort order.
          *
          * @param queryOptions The query options function to use, it cannot return null.
-         * @return A same {@code Builder instance}
+         * @return The same {@code Builder} instance.
          */
         public Builder queryOptions(Function<Query, Query> queryOptions) {
             this.queryOptions = queryOptions;
@@ -178,7 +178,7 @@ public class EventStoreConfig {
          * the actual query or sort order.
          *
          * @param readOptions The read options function to use, it cannot return null.
-         * @return A same {@code Builder instance}
+         * @return The same {@code Builder} instance.
          */
         @NullMarked
         public Builder readOptions(Function<Query, Query> readOptions) {
@@ -193,7 +193,7 @@ public class EventStoreConfig {
          * to enable Dynamic Consistency Boundary indexes, support collections, and API operations.
          *
          * @param eventStoreCapabilities The non-empty capability set to enable.
-         * @return A same {@code Builder instance}
+         * @return The same {@code Builder} instance.
          */
         @NullMarked
         public Builder eventStoreCapabilities(Set<SpringMongoEventStoreCapability> eventStoreCapabilities) {
@@ -213,7 +213,7 @@ public class EventStoreConfig {
          *
          * @param eventStoreCapability The first capability to enable.
          * @param additionalEventStoreCapabilities Additional capabilities to enable.
-         * @return A same {@code Builder instance}
+         * @return The same {@code Builder} instance.
          */
         @NullMarked
         public Builder eventStoreCapabilities(SpringMongoEventStoreCapability eventStoreCapability, SpringMongoEventStoreCapability... additionalEventStoreCapabilities) {
