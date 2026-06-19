@@ -22,9 +22,9 @@ import org.jspecify.annotations.NullMarked;
  * Sequence-position result from a successful DCB append.
  *
  * <p>DCB sequence positions are global to the event store, start at 1, and are strictly increasing (monotonic). A
- * successful append is assigned a contiguous block of positions ({@code firstSequencePosition}..{@code lastSequencePosition}).
- * Positions across separate appends may contain gaps (for example a failed or concurrently-retried append may leave a
- * reserved position unused), so callers must rely only on the relative ordering of positions, never on contiguity.</p>
+ * single successful append is assigned a contiguous block of positions ({@code firstSequencePosition}..{@code
+ * lastSequencePosition}). Across separate appends only the relative ordering of positions is guaranteed, so callers
+ * must compare positions for ordering and must not assume the positions of different appends are contiguous.</p>
  *
  * @param firstSequencePosition the first global DCB sequence position assigned to the appended events
  * @param lastSequencePosition the last global DCB sequence position assigned to the appended events
