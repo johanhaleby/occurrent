@@ -35,8 +35,8 @@
 * Added a blocking DCB DSL module.
   * New module: `org.occurrent:dcb-dsl-blocking`.
   * Java helpers: `DcbDomainEventQueries` and `DcbDomainEventStream`.
-  * Java and Kotlin DCB query helpers compose with `DomainEventQueries`, reusing its configured `CloudEventConverter` and wrapped query implementation instead of requiring callers to pass a `DcbEventStore` directly.
-  * Kotlin query extensions on `DomainEventQueries`: `queryForSequence`, `queryForList`, and `queryWithPosition`.
+  * `DcbDomainEventQueries` wraps a `DomainEventQueries`, reusing its configured `CloudEventConverter` and delegating the regular stream query API, so a DCB application uses one object for both DCB queries and stream queries instead of passing a `DcbEventStore` directly.
+  * Kotlin query extensions on `DcbDomainEventQueries`: `queryForSequence` and `queryForList`. The `queryWithPosition` overloads are member functions on `DcbDomainEventQueries`.
   * Kotlin live subscription extension on `Subscribable`: `subscribeDcb`.
   * DCB subscription helpers subscribe to CloudEvents and post-filter DCB-tagged events by `DcbQuery`; they are live subscription conveniences, not DCB-consistent reads.
   * DCB subscription metadata callbacks reuse the existing `EventMetadata` type and expose DCB metadata through Kotlin extension properties: `dcbPosition` and `dcbTags`.
