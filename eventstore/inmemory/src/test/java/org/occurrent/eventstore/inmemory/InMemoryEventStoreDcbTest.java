@@ -244,6 +244,41 @@ class InMemoryEventStoreDcbTest {
         assertThat(eventStore.append("dcb:partition:0", List.of(taggedEvent("NameDefined", "name:1"))).firstSequencePosition()).isEqualTo(1);
     }
 
+    @Test
+    void last_sequence_position_is_the_store_head_not_the_max_matched_position() {
+        InMemoryEventStore eventStore = new InMemoryEventStore();
+        eventStore.append("dcb:partition:0", List.of(
+                taggedEvent("NameDefined", "name:1"),
+                taggedEvent("NameChanged", "name:1"),
+                taggedEvent("OrderPlaced", "name:2")));
+
+        // The query matches only the two "name:1" events (positions 1 and 2), but the store head is 3.
+        DcbEventStream matchesSome = eventStore.read(tagsAllOf("name:1"));
+        assertThat(matchesSome.events()).extracting(CloudEvent::getType).containsExactly("NameDefined", "NameChanged");
+        assertThat(matchesSome.lastSequencePosition()).isEqualTo(3);
+
+        // A query that matches nothing still observes the store head.
+        DcbEventStream matchesNone = eventStore.read(tagsAllOf("name:absent"));
+        assertThat(matchesNone.events()).isEmpty();
+        assertThat(matchesNone.lastSequencePosition()).isEqualTo(3);
+    }
+
+    @Test
+    void failed_append_does_not_break_position_monotonicity() {
+        InMemoryEventStore eventStore = new InMemoryEventStore();
+        CloudEvent duplicate = taggedEvent("NameDefined", "name:1");
+        DcbAppendResult first = eventStore.append("dcb:partition:0", List.of(duplicate));
+
+        assertThatThrownBy(() -> eventStore.append("dcb:partition:0", List.of(duplicate)))
+                .isExactlyInstanceOf(DuplicateCloudEventException.class);
+
+        // A rejected append must not corrupt the sequence. The next position is strictly greater than the last
+        // committed one. Positions are monotonic, gaps are allowed (see DcbAppendResult).
+        DcbAppendResult next = eventStore.append("dcb:partition:0", List.of(taggedEvent("NameChanged", "name:2")));
+        assertThat(next.firstSequencePosition()).isGreaterThan(first.lastSequencePosition());
+        assertThat(next.lastSequencePosition()).isGreaterThanOrEqualTo(next.firstSequencePosition());
+    }
+
     private static CloudEvent taggedEvent(String type, String... tags) {
         return DcbCloudEvents.withTags(event(type), Set.of(tags));
     }
