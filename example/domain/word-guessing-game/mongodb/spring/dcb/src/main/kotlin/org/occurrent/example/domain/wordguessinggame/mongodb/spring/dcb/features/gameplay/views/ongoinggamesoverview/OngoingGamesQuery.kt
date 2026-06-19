@@ -21,16 +21,15 @@ import org.springframework.data.domain.Sort
 import org.springframework.data.domain.Sort.Direction.DESC
 import org.springframework.data.mongodb.core.MongoOperations
 import org.springframework.data.mongodb.core.query.Query
-import org.springframework.data.mongodb.core.stream
+import org.springframework.data.mongodb.core.find
 import org.springframework.stereotype.Component
-import kotlin.streams.asSequence
 
 
 @Component
 class OngoingGamesQuery(private val mongo: MongoOperations) {
 
     fun execute(numberOfGames: Int): Sequence<OngoingGameOverview> =
-        mongo.stream<OngoingGameOverviewMongoDTO>(Query().with(Sort.by(DESC, "startedAt")).limit(numberOfGames))
+        mongo.find<OngoingGameOverviewMongoDTO>(Query().with(Sort.by(DESC, "startedAt")).limit(numberOfGames))
             .asSequence()
             .map(OngoingGameOverviewMongoDTO::toDomain)
 }
