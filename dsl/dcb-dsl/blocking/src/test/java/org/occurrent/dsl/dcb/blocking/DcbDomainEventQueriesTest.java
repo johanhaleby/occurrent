@@ -42,6 +42,7 @@ import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.stream.Stream;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.awaitility.Awaitility.await;
 import static org.occurrent.dsl.dcb.blocking.DcbDomainEventQueries.query;
 import static org.occurrent.dsl.dcb.blocking.DcbDomainEventQueries.queryWithPosition;
 
@@ -113,9 +114,12 @@ class DcbDomainEventQueriesTest {
                 .toList();
         eventStoreWithSubscriptions.append("dcb:partition:0", cloudEvents);
 
-        assertThat(metadata).hasSize(1);
-        assertThat(metadata.get(0).getStreamId()).isEqualTo("dcb:partition:0");
-        assertThat(metadata.get(0).getStreamVersion()).isEqualTo(1);
+        // The in-memory subscription model dispatches asynchronously, so wait for the callback like the sibling tests do.
+        await().untilAsserted(() -> {
+            assertThat(metadata).hasSize(1);
+            assertThat(metadata.get(0).getStreamId()).isEqualTo("dcb:partition:0");
+            assertThat(metadata.get(0).getStreamVersion()).isEqualTo(1);
+        });
     }
 
     private void append(String tag, DomainEvent... events) {
