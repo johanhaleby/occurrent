@@ -43,6 +43,10 @@ import static java.util.Objects.requireNonNull;
  * wraps its dependencies. The subscriptions are live CloudEvent subscriptions that post-filter DCB-tagged events
  * by a {@link DcbQuery}. They are not DCB reads, so they provide no DCB append-condition or high-watermark
  * guarantees.
+ * <p>
+ * Like {@link Subscribable}, the {@code subscribe} methods return the {@link Subscription} without waiting for it to
+ * start. Call {@link Subscription#waitUntilStarted()} on the returned subscription when you need it running before
+ * you continue (for example to avoid missing the first events of a brand new subscription).
  *
  * @param <E> the domain event type
  */
@@ -99,11 +103,9 @@ public final class DcbSubscriptions<E> {
         };
 
         OccurrentSubscriptionFilter filter = OccurrentSubscriptionFilter.filter(Filter.all());
-        Subscription subscription = startAt == null
+        return startAt == null
                 ? subscribable.subscribe(subscriptionId, filter, consumer)
                 : subscribable.subscribe(subscriptionId, filter, startAt, consumer);
-        subscription.waitUntilStarted();
-        return subscription;
     }
 
     private static EventMetadata toEventMetadata(CloudEvent cloudEvent) {
