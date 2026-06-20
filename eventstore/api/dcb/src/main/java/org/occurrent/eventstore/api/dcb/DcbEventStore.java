@@ -44,6 +44,26 @@ public interface DcbEventStore {
     DcbEventStream read(DcbQuery query, DcbReadOptions options);
 
     /**
+     * Returns whether any DCB event in the store matches {@code query}.
+     * <p>
+     * The default implementation reads the matching events; implementations should override it with a more
+     * efficient existence check.
+     */
+    default boolean exists(DcbQuery query) {
+        return !read(query).events().isEmpty();
+    }
+
+    /**
+     * Returns the number of DCB events in the store that match {@code query}.
+     * <p>
+     * The default implementation reads the matching events; implementations should override it with a more
+     * efficient count.
+     */
+    default long count(DcbQuery query) {
+        return read(query).events().size();
+    }
+
+    /**
      * Appends DCB-tagged CloudEvents to the given Occurrent storage stream without an additional DCB condition.
      */
     DcbAppendResult append(String streamId, List<CloudEvent> events);

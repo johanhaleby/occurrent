@@ -120,10 +120,10 @@ public final class DcbCloudEvents {
     public static boolean matches(CloudEvent cloudEvent, DcbQuery query) {
         requireNonNull(cloudEvent, "CloudEvent cannot be null");
         requireNonNull(query, "Query cannot be null");
-        if (query.matchAll()) {
-            return true;
+        if (query instanceof DcbQuery.Items items) {
+            return items.items().stream().anyMatch(item -> matches(cloudEvent, item));
         }
-        return query.items().stream().anyMatch(item -> matches(cloudEvent, item));
+        return true;
     }
 
     private static boolean matches(CloudEvent cloudEvent, DcbQueryItem item) {

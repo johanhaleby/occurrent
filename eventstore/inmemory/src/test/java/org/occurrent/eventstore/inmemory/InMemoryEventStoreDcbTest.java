@@ -280,6 +280,50 @@ class InMemoryEventStoreDcbTest {
         assertThat(next.lastSequencePosition()).isEqualTo(next.firstSequencePosition());
     }
 
+    @Test
+    void exists_and_count_report_matching_dcb_events() {
+        InMemoryEventStore eventStore = new InMemoryEventStore();
+        eventStore.append("dcb:partition:0", List.of(taggedEvent("NameDefined", "name:1")));
+        eventStore.append("dcb:partition:0", List.of(taggedEvent("NameChanged", "name:1")));
+        eventStore.append("dcb:partition:0", List.of(taggedEvent("OrderPlaced", "order:1")));
+
+        assertThat(eventStore.exists(tagsAllOf("name:1"))).isTrue();
+        assertThat(eventStore.exists(tagsAllOf("absent:1"))).isFalse();
+        assertThat(eventStore.count(tagsAllOf("name:1"))).isEqualTo(2);
+        assertThat(eventStore.count(tagsAllOf("order:1"))).isEqualTo(1);
+        assertThat(eventStore.count(all())).isEqualTo(3);
+    }
+
+    @Test
+    void read_honors_up_to_sequence_position_upper_bound() {
+        InMemoryEventStore eventStore = new InMemoryEventStore();
+        eventStore.append("dcb:partition:0", List.of(taggedEvent("NameDefined", "name:1")));
+        eventStore.append("dcb:partition:0", List.of(taggedEvent("NameChanged", "name:1")));
+        eventStore.append("dcb:partition:0", List.of(taggedEvent("OrderPlaced", "name:1")));
+
+        DcbEventStream upToTwo = eventStore.read(tagsAllOf("name:1"), DcbReadOptions.upToSequencePosition(2));
+
+        assertThat(upToTwo.events()).extracting(CloudEvent::getType).containsExactly("NameDefined", "NameChanged");
+        // lastSequencePosition is always the store head, not the upper bound used for this read.
+        assertThat(upToTwo.lastSequencePosition()).isEqualTo(3);
+    }
+
+    @Test
+    void any_of_matches_the_union_of_its_items() {
+        InMemoryEventStore eventStore = new InMemoryEventStore();
+        eventStore.append("dcb:partition:0", List.of(taggedEvent("NameDefined", "name:1")));
+        eventStore.append("dcb:partition:0", List.of(taggedEvent("OrderPlaced", "order:1")));
+        eventStore.append("dcb:partition:0", List.of(taggedEvent("Unrelated", "other:1")));
+
+        DcbQuery query = anyOf(
+                DcbQueryItem.types(List.of("NameDefined")),
+                DcbQueryItem.tagsAllOf(List.of("order:1")));
+
+        assertThat(eventStore.read(query).events())
+                .extracting(CloudEvent::getType)
+                .containsExactly("NameDefined", "OrderPlaced");
+    }
+
     private static CloudEvent taggedEvent(String type, String... tags) {
         return DcbCloudEvents.withTags(event(type), Set.of(tags));
     }

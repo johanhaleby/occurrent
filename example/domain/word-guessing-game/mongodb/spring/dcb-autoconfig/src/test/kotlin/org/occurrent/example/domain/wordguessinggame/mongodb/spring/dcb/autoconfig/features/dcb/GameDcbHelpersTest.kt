@@ -74,12 +74,12 @@ class GameDcbHelpersTest {
                 tags = setOf("game:$gameId")
         )
 
-        assertThat(GameDcbQueries.wordHintDecisionContext(gameId).items()).containsExactlyInAnyOrder(
+        assertThat((GameDcbQueries.wordHintDecisionContext(gameId) as DcbQuery.Items).items()).containsExactlyInAnyOrder(
                 queryItem(types = setOf(GameWasStarted::class.eventType()), tags = setOf("game:$gameId")),
                 queryItem(types = setOf(CharacterInWordHintWasRevealed::class.eventType()), tags = setOf("wordhint:$gameId"))
         )
 
-        assertThat(GameDcbQueries.pointsDecisionContext(gameId).items()).containsExactlyInAnyOrder(
+        assertThat((GameDcbQueries.pointsDecisionContext(gameId) as DcbQuery.Items).items()).containsExactlyInAnyOrder(
                 queryItem(types = setOf(GameWasStarted::class.eventType()), tags = setOf("game:$gameId")),
                 queryItem(types = setOf(PlayerGuessedTheWrongWord::class.eventType()), tags = setOf("gameplay:$gameId")),
                 queryItem(types = setOf(PlayerWasAwardedPointsForGuessingTheRightWord::class.eventType()), tags = setOf("points:$gameId")),
@@ -88,8 +88,8 @@ class GameDcbHelpersTest {
     }
 
     private fun assertSingleQueryItem(query: DcbQuery, types: Set<String> = emptySet(), tags: Set<String>) {
-        assertThat(query.matchAll()).isFalse()
-        assertThat(query.items()).containsExactly(queryItem(types, tags))
+        assertThat(query).isInstanceOf(DcbQuery.Items::class.java)
+        assertThat((query as DcbQuery.Items).items()).containsExactly(queryItem(types, tags))
     }
 
     private fun queryItem(types: Set<String> = emptySet(), tags: Set<String>) = org.occurrent.eventstore.api.dcb.DcbQueryItem(types, tags)

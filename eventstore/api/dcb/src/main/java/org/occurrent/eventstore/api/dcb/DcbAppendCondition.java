@@ -25,15 +25,14 @@ import static java.util.Objects.requireNonNull;
 /**
  * Optimistic conflict condition for a DCB append.
  * <p>
- * {@code failIfEventsMatch} describes the events that would conflict with the append.
- * {@code afterSequencePosition} optionally limits the conflict check to events written
- * after a position observed by a prior read.
+ * {@code query} describes the events that would conflict with the append. {@code afterSequencePosition}
+ * optionally limits the conflict check to events written after a position observed by a prior read.
  */
 @NullMarked
-public record DcbAppendCondition(DcbQuery failIfEventsMatch, OptionalLong afterSequencePosition) {
+public record DcbAppendCondition(DcbQuery query, OptionalLong afterSequencePosition) {
 
     public DcbAppendCondition {
-        requireNonNull(failIfEventsMatch, "Fail-if-events-match query cannot be null");
+        requireNonNull(query, "Query cannot be null");
         requireNonNull(afterSequencePosition, "After sequence position cannot be null");
         afterSequencePosition.ifPresent(position -> {
             if (position < 0) {
