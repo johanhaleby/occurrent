@@ -33,12 +33,16 @@ import org.occurrent.subscription.api.blocking.Subscription
  *
  * Events delivered by `subscribeDcb` are DCB-tagged and therefore have a non-null position.
  */
-val EventMetadata.dcbPosition: Long? get() = positionOrNull(data[DcbCloudEvents.POSITION])
+val EventMetadata.dcbPosition: Long?
+    get() {
+        val position = DcbEventMetadata.decodePosition(data[DcbCloudEvents.POSITION])
+        return if (position.isPresent) position.asLong else null
+    }
 
 /**
  * The canonical DCB tags of an event, or an empty set when the event has no DCB tags.
  */
-val EventMetadata.dcbTags: Set<String> get() = tags(data[DcbCloudEvents.TAGS])
+val EventMetadata.dcbTags: Set<String> get() = DcbEventMetadata.decodeTags(data[DcbCloudEvents.TAGS])
 
 /**
  * Subscribes to live DCB-tagged events that match [query].
@@ -93,17 +97,4 @@ fun <E : Any> Subscribable.subscribeDcb(
             waitUntilStarted()
         }
     }
-}
-
-private fun tags(value: Any?): Set<String> = when (value) {
-    null -> emptySet()
-    is String -> DcbCloudEvents.decodeTags(value)
-    else -> throw IllegalArgumentException("DCB tags extension must be a String")
-}
-
-private fun positionOrNull(value: Any?): Long? = when (value) {
-    null -> null
-    is Number -> value.toLong()
-    is String -> value.toLong()
-    else -> throw IllegalArgumentException("DCB position extension must be a Number or String")
 }
