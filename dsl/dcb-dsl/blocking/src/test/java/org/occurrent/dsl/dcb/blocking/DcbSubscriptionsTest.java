@@ -80,7 +80,7 @@ class DcbSubscriptionsTest {
     }
 
     @Test
-    void metadata_overload_exposes_dcb_position_and_tags() {
+    void subscribe_with_metadata_exposes_dcb_position_and_tags() {
         CopyOnWriteArrayList<OptionalLong> positions = new CopyOnWriteArrayList<>();
         CopyOnWriteArrayList<Set<String>> tags = new CopyOnWriteArrayList<>();
         CopyOnWriteArrayList<DomainEvent> events = new CopyOnWriteArrayList<>();
