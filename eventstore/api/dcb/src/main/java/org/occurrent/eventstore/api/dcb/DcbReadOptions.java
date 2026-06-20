@@ -48,8 +48,10 @@ public record DcbReadOptions(OptionalLong afterSequencePosition, OptionalLong up
             }
         });
         if (afterSequencePosition.isPresent() && upToSequencePosition.isPresent()
-                && afterSequencePosition.getAsLong() >= upToSequencePosition.getAsLong()) {
-            throw new IllegalArgumentException("After sequence position must be less than up to sequence position");
+                && afterSequencePosition.getAsLong() > upToSequencePosition.getAsLong()) {
+            // The lower bound is exclusive and the upper bound is inclusive, so an equal pair is a valid empty range.
+            // Only an inverted range (after greater than upTo) is rejected.
+            throw new IllegalArgumentException("After sequence position cannot be greater than up to sequence position");
         }
     }
 
