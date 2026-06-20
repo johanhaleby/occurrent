@@ -50,6 +50,7 @@ public sealed interface DcbQuery permits DcbQuery.MatchAll, DcbQuery.Items {
     record Items(List<DcbQueryItem> items) implements DcbQuery {
         public Items {
             requireNonNull(items, "Items cannot be null");
+            items.forEach(item -> requireNonNull(item, "Query item cannot be null"));
             items = List.copyOf(items);
             if (items.isEmpty()) {
                 throw new IllegalArgumentException("A query must contain at least one query item");
