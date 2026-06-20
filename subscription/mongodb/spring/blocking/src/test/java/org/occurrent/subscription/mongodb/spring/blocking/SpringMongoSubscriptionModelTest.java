@@ -161,6 +161,7 @@ public class SpringMongoSubscriptionModelTest {
         await().atMost(2, SECONDS).with().pollInterval(Duration.of(20, MILLIS)).untilAsserted(() -> {
             assertThat(state).hasSize(1);
             assertThat(DcbCloudEvents.getTags(state.get(0))).containsExactly("name:1");
+            assertThat(DcbCloudEvents.getPosition(state.get(0))).isPositive();
         });
     }
 

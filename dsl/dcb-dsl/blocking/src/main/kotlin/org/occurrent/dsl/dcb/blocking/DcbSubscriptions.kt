@@ -97,7 +97,7 @@ fun <E : Any> Subscribable.subscribeDcb(
 
 private fun tags(value: Any?): Set<String> = when (value) {
     null -> emptySet()
-    is String -> if (value.isEmpty()) emptySet() else DcbCloudEvents.canonicalizeTags(value.split("\n"))
+    is String -> DcbCloudEvents.decodeTags(value)
     else -> throw IllegalArgumentException("DCB tags extension must be a String")
 }
 

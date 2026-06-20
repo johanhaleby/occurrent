@@ -175,6 +175,9 @@ public class OccurrentProperties {
         }
 
         public void setCapabilities(Set<SpringMongoEventStoreCapability> capabilities) {
+            if (capabilities == null || capabilities.isEmpty()) {
+                throw new IllegalArgumentException("occurrent.event-store.capabilities must contain at least one capability");
+            }
             this.capabilities = capabilities;
         }
 
