@@ -43,11 +43,12 @@ public record DcbQueryItem(Set<String> types, Set<String> tags, Set<String> excl
         requireNonNull(tags, "Tags cannot be null");
         requireNonNull(excludedTypes, "Excluded types cannot be null");
         types = copyWithoutNulls(types, "Type cannot be null");
-        tags = copyWithoutNulls(tags, "Tag cannot be null");
         excludedTypes = copyWithoutNulls(excludedTypes, "Excluded type cannot be null");
         types = stripAndValidate(types, "Types");
-        tags = stripAndValidate(tags, "Tags");
         excludedTypes = stripAndValidate(excludedTypes, "Excluded types");
+        // Validate query tags the same way stored tags are canonicalized (strip, no blanks, no newlines), so a query
+        // can never carry a tag that no stored event could match.
+        tags = DcbCloudEvents.canonicalizeTags(tags);
         if (types.isEmpty() && tags.isEmpty()) {
             throw new IllegalArgumentException("A query item must contain at least one type or tag");
         }
