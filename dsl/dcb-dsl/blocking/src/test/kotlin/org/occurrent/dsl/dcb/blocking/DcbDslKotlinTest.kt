@@ -92,6 +92,21 @@ class DcbDslKotlinTest {
     }
 
     @Test
+    fun queryForListWithPosition_and_queryForSequenceWithPosition_return_events_and_position() {
+        val nameDefined = NameDefined("eventId1", time, "name", "Some Doe")
+        append("name:1", nameDefined)
+        append("other:1", NameWasChanged("eventId2", time, "name", "Jane Doe"))
+
+        val (list, listPosition) = dcbQueries.queryForListWithPosition(DcbQuery.tagsAllOf("name:1"))
+        assertThat(list).containsExactly(nameDefined)
+        assertThat(listPosition).isEqualTo(2)
+
+        val (sequence, sequencePosition) = dcbQueries.queryForSequenceWithPosition(DcbQuery.tagsAllOf("name:1"))
+        assertThat(sequence.toList()).containsExactly(nameDefined)
+        assertThat(sequencePosition).isEqualTo(2)
+    }
+
+    @Test
     fun dcb_subscription_invokes_callback_only_for_matching_dcb_events() {
         val received = CopyOnWriteArrayList<DomainEvent>()
 

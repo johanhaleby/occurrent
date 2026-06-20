@@ -41,3 +41,25 @@ fun <T : Any> DcbDomainEventQueries<T>.queryForList(
     options: DcbReadOptions = DcbReadOptions.fromBeginning()
 ): List<T> =
     this.query(query, options).toList()
+
+/**
+ * Query that returns the matching domain events as a [List] together with the observed DCB sequence position.
+ *
+ * @see DcbDomainEventQueries.queryWithPosition
+ */
+fun <T : Any> DcbDomainEventQueries<T>.queryForListWithPosition(
+    query: DcbQuery,
+    options: DcbReadOptions = DcbReadOptions.fromBeginning()
+): Pair<List<T>, Long> =
+    this.queryWithPosition(query, options).let { it.events() to it.lastSequencePosition() }
+
+/**
+ * Query that returns the matching domain events as a [Sequence] together with the observed DCB sequence position.
+ *
+ * @see DcbDomainEventQueries.queryWithPosition
+ */
+fun <T : Any> DcbDomainEventQueries<T>.queryForSequenceWithPosition(
+    query: DcbQuery,
+    options: DcbReadOptions = DcbReadOptions.fromBeginning()
+): Pair<Sequence<T>, Long> =
+    this.queryWithPosition(query, options).let { it.events().asSequence() to it.lastSequencePosition() }
