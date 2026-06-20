@@ -37,7 +37,7 @@ class DcbApiTest {
     void query_must_be_all_or_contain_at_least_one_item() {
         assertThatThrownBy(() -> DcbQuery.fromItems(List.of()))
                 .isExactlyInstanceOf(IllegalArgumentException.class)
-                .hasMessage("A query must contain at least one query item unless it matches all events");
+                .hasMessage("A query must contain at least one query item");
     }
 
     @Test
@@ -63,7 +63,7 @@ class DcbApiTest {
         assertThat(item.types()).isEmpty();
         assertThat(item.tags()).containsExactly("name:1");
         assertThat(item.excludedTypes()).containsExactlyInAnyOrder("NameImported", "NameSnapshot");
-        assertThat(DcbQuery.tagsAllOfExcludingTypes(List.of("name:1"), List.of("NameSnapshot")).items().get(0).excludedTypes())
+        assertThat(((DcbQuery.Items) DcbQuery.tagsAllOfExcludingTypes(List.of("name:1"), List.of("NameSnapshot"))).items().get(0).excludedTypes())
                 .containsExactly("NameSnapshot");
     }
 
@@ -128,11 +128,11 @@ class DcbApiTest {
         io.cloudevents.CloudEvent event = DcbCloudEvents.withTags(cloudEvent("NameDefined"), List.of("name:1", "tenant:1"));
 
         assertThat(DcbCloudEvents.matches(event, DcbQuery.all())).isTrue();
-        assertThat(DcbCloudEvents.matches(event, DcbQuery.type("NameDefined"))).isTrue();
+        assertThat(DcbCloudEvents.matches(event, DcbQuery.types("NameDefined"))).isTrue();
         assertThat(DcbCloudEvents.matches(event, DcbQuery.tagsAllOf("name:1", "tenant:1"))).isTrue();
         assertThat(DcbCloudEvents.matches(event, DcbQuery.tagsAllOfExcludingTypes(List.of("name:1"), List.of("NameWasChanged")))).isTrue();
         assertThat(DcbCloudEvents.matches(event, DcbQuery.tagsAllOfExcludingTypes(List.of("name:1"), List.of("NameDefined")))).isFalse();
-        assertThat(DcbCloudEvents.matches(event, DcbQuery.type("NameWasChanged"))).isFalse();
+        assertThat(DcbCloudEvents.matches(event, DcbQuery.types("NameWasChanged"))).isFalse();
         assertThat(DcbCloudEvents.matches(event, DcbQuery.tagsAllOf("name:1", "tenant:2"))).isFalse();
     }
 

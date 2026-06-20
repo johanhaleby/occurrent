@@ -25,6 +25,9 @@
 * Added initial Dynamic Consistency Boundary (DCB) support.
   * New module: `org.occurrent:eventstore-api-dcb`.
   * New core API types include `DcbEventStore`, `DcbQuery`, `DcbQueryItem`, `DcbReadOptions`, `DcbEventStream`, `DcbAppendCondition`, `DcbAppendResult`, `DcbAppendConditionNotFulfilledException`, and `DcbCloudEvents`.
+  * `DcbQuery` is a sealed type, either `DcbQuery.MatchAll` or `DcbQuery.Items`, built through factories such as `all()`, `types(..)`, `tagsAllOf(..)`, `typeAndTagsAllOf(..)`, `fromItems(..)`, and `anyOf(..)` for an OR across query items.
+  * `DcbReadOptions` scopes a read with an optional exclusive lower bound (`afterSequencePosition`) and an optional inclusive upper bound (`upToSequencePosition`).
+  * `DcbEventStore` exposes `exists(DcbQuery)` and `count(DcbQuery)` for checking a boundary without materializing the matching events.
   * DCB is implemented as an optional capability over the existing CloudEvent storage model, not as a separate event representation.
   * DCB metadata is stored as CloudEvent extensions:
     * `dcbtags` for canonical DCB tags.
