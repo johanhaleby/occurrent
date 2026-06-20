@@ -58,8 +58,19 @@ public class PartitionedDcbStreamIdGenerator implements DcbStreamIdGenerator {
     @Override
     public String generateStreamId(Set<String> boundaryTags) {
         requireNonNull(boundaryTags, "Boundary tags cannot be null");
-        String canonicalTags = String.join("|", new TreeSet<>(boundaryTags));
-        return prefix + jumpConsistentHash(hash(canonicalTags), partitions);
+        return prefix + jumpConsistentHash(hash(canonicalize(boundaryTags)), partitions);
+    }
+
+    /**
+     * Canonicalizes a boundary tag set into a single, order-independent string.
+     * <p>
+     * Joins on a newline, the one character DCB tags are not allowed to contain (see
+     * {@code DcbCloudEvents.canonicalizeTags}). Joining on a character that can legally appear in a tag, such as
+     * {@code "|"}, would let different tag sets collapse to the same string (for example {@code {"a|b", "c"}} and
+     * {@code {"a", "b", "c"}}) and therefore always hash to the same partition.
+     */
+    static String canonicalize(Set<String> boundaryTags) {
+        return String.join("\n", new TreeSet<>(boundaryTags));
     }
 
     private static long hash(String value) {
