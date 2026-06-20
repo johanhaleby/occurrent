@@ -45,6 +45,7 @@ import java.util.*
 import java.util.concurrent.CyclicBarrier
 import java.util.concurrent.ExecutionException
 import java.util.concurrent.Executors
+import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.atomic.AtomicReference
 
@@ -172,22 +173,22 @@ class SpringMongoMaterializedViewConfigTest {
                 val pool = Executors.newFixedThreadPool(2)
 
                 val f1 = pool.submit<String> {
-                    barrier.await()
+                    barrier.await(10, TimeUnit.SECONDS)
                     update(nameChanged(userId, name1))
                     name1
                 }
                 val f2 = pool.submit<String> {
-                    barrier.await()
+                    barrier.await(10, TimeUnit.SECONDS)
                     update(nameChanged(userId, name2))
                     name2
                 }
 
                 val outcome: Result<List<String>> = try {
-                    Result.success(listOf(f1.get(), f2.get()))
+                    Result.success(listOf(f1.get(10, TimeUnit.SECONDS), f2.get(10, TimeUnit.SECONDS)))
                 } catch (e: ExecutionException) {
                     Result.failure(e.cause ?: e)
                 } finally {
-                    pool.shutdown()
+                    pool.shutdownNow()
                 }
 
                 if (!requireConflict || getState(userId).version == 1L) {
