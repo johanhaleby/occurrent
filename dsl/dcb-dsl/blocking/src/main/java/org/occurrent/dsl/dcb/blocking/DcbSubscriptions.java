@@ -31,6 +31,7 @@ import org.occurrent.subscription.api.blocking.Subscription;
 
 import java.util.HashMap;
 import java.util.Map;
+import java.util.Set;
 import java.util.function.BiConsumer;
 import java.util.function.Consumer;
 
@@ -109,9 +110,13 @@ public final class DcbSubscriptions<E> {
     }
 
     private static EventMetadata toEventMetadata(CloudEvent cloudEvent) {
-        Map<String, Object> data = new HashMap<>();
-        for (String extensionName : cloudEvent.getExtensionNames()) {
-            data.put(extensionName, cloudEvent.getExtension(extensionName));
+        Set<String> extensionNames = cloudEvent.getExtensionNames();
+        Map<String, Object> data = new HashMap<>(extensionNames.size());
+        for (String extensionName : extensionNames) {
+            Object value = cloudEvent.getExtension(extensionName);
+            if (value != null) {
+                data.put(extensionName, value);
+            }
         }
         return new EventMetadata(data);
     }
