@@ -68,6 +68,7 @@ public sealed interface DcbQuery permits DcbQuery.MatchAll, DcbQuery.Items {
      * Creates a query from explicit query items.
      */
     static DcbQuery fromItems(Collection<DcbQueryItem> items) {
+        requireNonNull(items, "Items cannot be null");
         return new Items(List.copyOf(items));
     }
 

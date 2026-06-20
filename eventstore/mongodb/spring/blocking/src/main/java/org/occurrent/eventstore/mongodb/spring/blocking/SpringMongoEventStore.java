@@ -196,7 +196,7 @@ public class SpringMongoEventStore implements EventStore, EventStoreOperations, 
         long upperBound = Math.min(highWatermark, options.upToSequencePosition().orElse(highWatermark));
         Query mongoQuery = toDcbMongoQuery(query, options.afterSequencePosition().orElse(0), upperBound);
         mongoQuery.with(Sort.by(Sort.Direction.ASC, DcbCloudEvents.POSITION));
-        List<CloudEvent> events = mongoTemplate.find(mongoQuery, Document.class, eventStoreCollectionName).stream()
+        List<CloudEvent> events = mongoTemplate.find(queryOptions.apply(mongoQuery), Document.class, eventStoreCollectionName).stream()
                 .map(document -> convertToCloudEvent(timeRepresentation, document))
                 .toList();
         return new DcbEventStream(events, highWatermark);
@@ -219,14 +219,14 @@ public class SpringMongoEventStore implements EventStore, EventStoreOperations, 
     public boolean exists(DcbQuery query) {
         requireDcbCapability();
         requireNonNull(query, "Query cannot be null");
-        return mongoTemplate.exists(toDcbMongoQuery(query, 0, currentDcbPosition()), eventStoreCollectionName);
+        return mongoTemplate.exists(queryOptions.apply(toDcbMongoQuery(query, 0, currentDcbPosition())), eventStoreCollectionName);
     }
 
     @Override
     public long count(DcbQuery query) {
         requireDcbCapability();
         requireNonNull(query, "Query cannot be null");
-        return mongoTemplate.count(toDcbMongoQuery(query, 0, currentDcbPosition()), eventStoreCollectionName);
+        return mongoTemplate.count(queryOptions.apply(toDcbMongoQuery(query, 0, currentDcbPosition())), eventStoreCollectionName);
     }
 
     @Override

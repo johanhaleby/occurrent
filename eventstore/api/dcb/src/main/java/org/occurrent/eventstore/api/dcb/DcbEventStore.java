@@ -21,6 +21,8 @@ import org.jspecify.annotations.NullMarked;
 
 import java.util.List;
 
+import static java.util.Objects.requireNonNull;
+
 /**
  * Event store operations for Dynamic Consistency Boundary reads and appends.
  * <p>
@@ -50,6 +52,7 @@ public interface DcbEventStore {
      * efficient existence check.
      */
     default boolean exists(DcbQuery query) {
+        requireNonNull(query, "Query cannot be null");
         return !read(query).events().isEmpty();
     }
 
@@ -60,6 +63,7 @@ public interface DcbEventStore {
      * efficient count.
      */
     default long count(DcbQuery query) {
+        requireNonNull(query, "Query cannot be null");
         return read(query).events().size();
     }
 
