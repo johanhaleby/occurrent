@@ -80,6 +80,16 @@ public final class DcbCloudEvents {
         if (!(tags instanceof String encodedTags)) {
             throw new IllegalArgumentException("DCB tags extension must be a String");
         }
+        return decodeTags(encodedTags);
+    }
+
+    /**
+     * Decodes a canonical DCB tag set from the encoded string stored in the DCB tags extension, or an empty set
+     * when the string is empty. Splitting keeps trailing empty segments so a malformed encoding fails fast in
+     * {@link #canonicalizeTags(Collection)} rather than being silently accepted.
+     */
+    public static Set<String> decodeTags(String encodedTags) {
+        requireNonNull(encodedTags, "Encoded tags cannot be null");
         if (encodedTags.isEmpty()) {
             return Set.of();
         }
