@@ -214,14 +214,38 @@ public class InMemoryEventStore implements EventStore, EventStoreOperations, Eve
         synchronized (state) {
             long highWatermark = nextDcbPosition.get() - 1;
             long afterSequencePosition = options.afterSequencePosition().orElse(0);
+            long upperBound = Math.min(highWatermark, options.upToSequencePosition().orElse(highWatermark));
             List<CloudEvent> matchingEvents = allEvents()
                     .filter(event -> dcbPosition(event) > afterSequencePosition)
-                    .filter(event -> dcbPosition(event) <= highWatermark)
+                    .filter(event -> dcbPosition(event) <= upperBound)
                     .filter(event -> DcbCloudEvents.matches(event, query))
                     .sorted(Comparator.comparingLong(InMemoryEventStore::dcbPosition))
                     .toList();
             return new DcbEventStream(matchingEvents, highWatermark);
         }
+    }
+
+    @Override
+    public boolean exists(DcbQuery query) {
+        requireNonNull(query, "Query cannot be null");
+        synchronized (state) {
+            return matchingDcbEvents(query).findAny().isPresent();
+        }
+    }
+
+    @Override
+    public long count(DcbQuery query) {
+        requireNonNull(query, "Query cannot be null");
+        synchronized (state) {
+            return matchingDcbEvents(query).count();
+        }
+    }
+
+    private Stream<CloudEvent> matchingDcbEvents(DcbQuery query) {
+        long highWatermark = nextDcbPosition.get() - 1;
+        return allEvents()
+                .filter(event -> dcbPosition(event) > 0 && dcbPosition(event) <= highWatermark)
+                .filter(event -> DcbCloudEvents.matches(event, query));
     }
 
     @Override
@@ -246,7 +270,7 @@ public class InMemoryEventStore implements EventStore, EventStoreOperations, Eve
                 long afterSequencePosition = condition.afterSequencePosition().orElse(0);
                 boolean fulfilled = allEvents()
                         .filter(event -> dcbPosition(event) > afterSequencePosition)
-                        .noneMatch(event -> DcbCloudEvents.matches(event, condition.failIfEventsMatch()));
+                        .noneMatch(event -> DcbCloudEvents.matches(event, condition.query()));
                 long currentPosition = nextDcbPosition.get() - 1;
                 if (!fulfilled) {
                     throw new DcbAppendConditionNotFulfilledException(condition, currentPosition, "Append condition was not fulfilled.");

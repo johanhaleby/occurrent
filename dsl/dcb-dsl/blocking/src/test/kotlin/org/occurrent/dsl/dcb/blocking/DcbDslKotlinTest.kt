@@ -75,7 +75,7 @@ class DcbDslKotlinTest {
         append("name:1", nameDefined, nameWasChanged)
 
         assertThat(dcbQueries.queryForSequence(DcbQuery.tagsAllOf("name:1")).toList()).containsExactly(nameDefined, nameWasChanged)
-        assertThat(dcbQueries.queryForList(DcbQuery.type(NameDefined::class.qualifiedName!!))).containsExactly(nameDefined)
+        assertThat(dcbQueries.queryForList(DcbQuery.types(NameDefined::class.qualifiedName!!))).containsExactly(nameDefined)
         assertThat(dcbQueries.queryForList(DcbQuery.tagsAllOf("name:1"), DcbReadOptions.afterSequencePosition(1))).containsExactly(nameWasChanged)
     }
 
@@ -85,7 +85,7 @@ class DcbDslKotlinTest {
         append("other:1", NameWasChanged("eventId2", time, "name", "Jane Doe"))
         append("name:1", nameDefined)
 
-        val eventStream = dcbQueries.queryWithPosition(DcbQuery.type(NameDefined::class.qualifiedName!!))
+        val eventStream = dcbQueries.queryWithPosition(DcbQuery.types(NameDefined::class.qualifiedName!!))
 
         assertThat(eventStream.events()).containsExactly(nameDefined)
         assertThat(eventStream.lastSequencePosition()).isEqualTo(2)
