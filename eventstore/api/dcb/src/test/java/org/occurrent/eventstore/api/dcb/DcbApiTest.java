@@ -63,8 +63,9 @@ class DcbApiTest {
         assertThat(item.types()).isEmpty();
         assertThat(item.tags()).containsExactly("name:1");
         assertThat(item.excludedTypes()).containsExactlyInAnyOrder("NameImported", "NameSnapshot");
-        assertThat(((DcbQuery.Items) DcbQuery.tagsAllOfExcludingTypes(List.of("name:1"), List.of("NameSnapshot"))).items().get(0).excludedTypes())
-                .containsExactly("NameSnapshot");
+        assertThat(DcbQuery.tagsAllOfExcludingTypes(List.of("name:1"), List.of("NameSnapshot")))
+                .isInstanceOfSatisfying(DcbQuery.Items.class, items ->
+                        assertThat(items.items().get(0).excludedTypes()).containsExactly("NameSnapshot"));
     }
 
     @Test

@@ -19,6 +19,7 @@ package org.occurrent.example.domain.wordguessinggame.mongodb.spring.dcb.feature
 import org.assertj.core.api.Assertions.assertThat
 import org.junit.jupiter.api.Test
 import org.occurrent.eventstore.api.dcb.DcbQuery
+import org.occurrent.eventstore.api.dcb.DcbQueryItem
 import org.occurrent.example.domain.wordguessinggame.event.CharacterInWordHintWasRevealed
 import org.occurrent.example.domain.wordguessinggame.event.GameEvent
 import org.occurrent.example.domain.wordguessinggame.event.GameWasLost
@@ -74,12 +75,12 @@ class GameDcbHelpersTest {
                 tags = setOf("game:$gameId")
         )
 
-        assertThat((GameDcbQueries.wordHintDecisionContext(gameId) as DcbQuery.Items).items()).containsExactlyInAnyOrder(
+        assertThat(itemsOf(GameDcbQueries.wordHintDecisionContext(gameId))).containsExactlyInAnyOrder(
                 queryItem(types = setOf(GameWasStarted::class.eventType()), tags = setOf("game:$gameId")),
                 queryItem(types = setOf(CharacterInWordHintWasRevealed::class.eventType()), tags = setOf("wordhint:$gameId"))
         )
 
-        assertThat((GameDcbQueries.pointsDecisionContext(gameId) as DcbQuery.Items).items()).containsExactlyInAnyOrder(
+        assertThat(itemsOf(GameDcbQueries.pointsDecisionContext(gameId))).containsExactlyInAnyOrder(
                 queryItem(types = setOf(GameWasStarted::class.eventType()), tags = setOf("game:$gameId")),
                 queryItem(types = setOf(PlayerGuessedTheWrongWord::class.eventType()), tags = setOf("gameplay:$gameId")),
                 queryItem(types = setOf(PlayerWasAwardedPointsForGuessingTheRightWord::class.eventType()), tags = setOf("points:$gameId")),
@@ -87,9 +88,13 @@ class GameDcbHelpersTest {
         )
     }
 
-    private fun assertSingleQueryItem(query: DcbQuery, types: Set<String> = emptySet(), tags: Set<String>) {
+    private fun itemsOf(query: DcbQuery): List<DcbQueryItem> {
         assertThat(query).isInstanceOf(DcbQuery.Items::class.java)
-        assertThat((query as DcbQuery.Items).items()).containsExactly(queryItem(types, tags))
+        return (query as DcbQuery.Items).items()
+    }
+
+    private fun assertSingleQueryItem(query: DcbQuery, types: Set<String> = emptySet(), tags: Set<String>) {
+        assertThat(itemsOf(query)).containsExactly(queryItem(types, tags))
     }
 
     private fun queryItem(types: Set<String> = emptySet(), tags: Set<String>) = org.occurrent.eventstore.api.dcb.DcbQueryItem(types, tags)
