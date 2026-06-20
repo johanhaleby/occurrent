@@ -64,6 +64,9 @@
   * DCB subscription helpers subscribe to CloudEvents and post-filter DCB-tagged events by `DcbQuery`; they are live subscription conveniences, not DCB-consistent reads.
   * DCB subscription metadata callbacks reuse the existing `EventMetadata` type and expose DCB metadata through Kotlin extension properties: `dcbPosition` and `dcbTags`.
   * Kotlin decider extensions on `DcbApplicationService` mirror the stream decider helpers while using `DcbQuery` as the decision boundary.
+  * `DcbEventMetadata` gives Java callers access to the DCB sequence position and DCB tags of a subscription event, the same metadata Kotlin reads through the `dcbPosition` and `dcbTags` extension properties.
+  * `DcbSubscriptions` is an instance wrapper over a `Subscribable` and a `CloudEventConverter`, so DCB subscriptions can be created without passing the converter on every call, mirroring `DcbDomainEventQueries`.
+  * Kotlin `queryForListWithPosition` and `queryForSequenceWithPosition` extensions return the matching events together with the observed DCB sequence position.
 * Added two DCB word-guessing MongoDB Spring examples.
   * `example-domain-word-guessing-game-es-mongodb-spring-dcb` shows manual DCB wiring with explicit DCB queries, tags, application-service usage, and live durable subscriptions.
   * `example-domain-word-guessing-game-es-mongodb-spring-dcb-autoconfig` shows Spring Boot auto-configuration, `@EnableOccurrent`, DCB-only event-store capabilities, annotation subscriptions, and DCB decider command handling.
