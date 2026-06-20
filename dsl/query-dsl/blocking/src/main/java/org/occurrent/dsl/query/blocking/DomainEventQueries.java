@@ -326,6 +326,7 @@ public class DomainEventQueries<T> {
      */
     @SuppressWarnings("unchecked")
     public <E extends T> Stream<E> toDomainEvents(Stream<CloudEvent> stream) {
+        Objects.requireNonNull(stream, "Stream cannot be null");
         return stream.map(cloudEventConverter::toDomainEvent).map(t -> (E) t);
     }
 
