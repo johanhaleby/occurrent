@@ -49,7 +49,7 @@ import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.atomic.AtomicReference
 
 
-@Timeout(10)
+@Timeout(30)
 @Testcontainers
 @DisplayNameGeneration(DisplayNameGenerator.Simple::class)
 class SpringMongoMaterializedViewConfigTest {
@@ -122,7 +122,7 @@ class SpringMongoMaterializedViewConfigTest {
                 }))
 
                 // When
-                val names = materializedView.updateNameInParallel(userId)
+                val names = materializedView.updateNameInParallel(userId, requireConflict = true)
 
                 // Then
                 val state = getState(userId)
@@ -145,7 +145,7 @@ class SpringMongoMaterializedViewConfigTest {
                 val materializedView = materializedView(config(optimisticLockingHandling = OptimisticLockingHandling.rethrow()))
 
                 // When
-                val throwable = catchThrowable { materializedView.updateNameInParallel(userId) }
+                val throwable = catchThrowable { materializedView.updateNameInParallel(userId, requireConflict = true) }
 
                 // Then
                 val state = getState(userId)
@@ -156,31 +156,51 @@ class SpringMongoMaterializedViewConfigTest {
             }
         }
 
-        private fun MaterializedView<DomainEvent>.updateNameInParallel(userId: String): List<String> {
-            val barrier = CyclicBarrier(2)
-            val name1 = randomName()
-            val name2 = randomName()
-            val pool = Executors.newFixedThreadPool(2)
+        // Runs two updates against the same view in parallel. They only collide into an OptimisticLockingFailureException
+        // when both threads read the same version before either writes, which does not always happen under load. When the
+        // caller needs the conflict to occur (the ignore/rethrow handlers), set requireConflict and the helper retries
+        // until exactly one of the two updates was applied (persisted version == 1). The default (retry) handler reapplies
+        // the loser, so its version ends at 2 whether or not a conflict happened, and it does not need the retry.
+        private fun MaterializedView<DomainEvent>.updateNameInParallel(userId: String, requireConflict: Boolean = false): List<String> {
+            val maxAttempts = if (requireConflict) 50 else 1
+            repeat(maxAttempts) { attempt ->
+                if (attempt > 0) resetStateToVersionZero(userId)
 
-            val f1 = pool.submit<String> {
-                barrier.await()
-                update(nameChanged(userId, name1))
-                name1
-            }
-            val f2 = pool.submit<String> {
-                barrier.await()
-                update(nameChanged(userId, name2))
-                name2
-            }
+                val barrier = CyclicBarrier(2)
+                val name1 = randomName()
+                val name2 = randomName()
+                val pool = Executors.newFixedThreadPool(2)
 
-            return try {
-                listOf(f1.get(), f2.get())
-            } catch (e: ExecutionException) {
-                val cause = e.cause ?: e
-                throw cause
-            } finally {
-                pool.shutdown()
+                val f1 = pool.submit<String> {
+                    barrier.await()
+                    update(nameChanged(userId, name1))
+                    name1
+                }
+                val f2 = pool.submit<String> {
+                    barrier.await()
+                    update(nameChanged(userId, name2))
+                    name2
+                }
+
+                val outcome: Result<List<String>> = try {
+                    Result.success(listOf(f1.get(), f2.get()))
+                } catch (e: ExecutionException) {
+                    Result.failure(e.cause ?: e)
+                } finally {
+                    pool.shutdown()
+                }
+
+                if (!requireConflict || getState(userId).version == 1L) {
+                    return outcome.getOrElse { throw it }
+                }
             }
+            throw AssertionError("Could not induce an OptimisticLockingFailureException after $maxAttempts attempts")
+        }
+
+        // Removes the read model and recreates it at version 0 so the next parallel attempt starts from a clean slate.
+        private fun resetStateToVersionZero(userId: String) {
+            mongoOperations.remove(getState(userId))
+            saveState(userId)
         }
     }
 

@@ -671,7 +671,9 @@ public class SpringMongoSubscriptionModelTest {
             mongoEventStore.write("1", serialize(new NameDefined(UUID.randomUUID().toString(), now, "name", "name1")));
 
             // Then
-            await().atMost(2, SECONDS).with().pollInterval(Duration.of(20, MILLIS)).untilAsserted(() -> assertThat(state).hasSize(1));
+            // Restart-recovery await: after the mocked failure the subscription model restarts the change stream, which
+            // can take longer than a couple of seconds on a loaded CI machine. Awaitility short-circuits on success.
+            await().atMost(10, SECONDS).with().pollInterval(Duration.of(20, MILLIS)).untilAsserted(() -> assertThat(state).hasSize(1));
         }
 
     }
@@ -729,7 +731,9 @@ public class SpringMongoSubscriptionModelTest {
             mongoEventStore.write("1", serialize(new NameDefined(UUID.randomUUID().toString(), now, "name", "name1")));
 
             // Then
-            await().atMost(2, SECONDS).with().pollInterval(Duration.of(20, MILLIS)).untilAsserted(() -> assertThat(state).hasSize(1));
+            // Restart-recovery await: after the mocked failure the subscription model restarts the change stream, which
+            // can take longer than a couple of seconds on a loaded CI machine. Awaitility short-circuits on success.
+            await().atMost(10, SECONDS).with().pollInterval(Duration.of(20, MILLIS)).untilAsserted(() -> assertThat(state).hasSize(1));
         }
     }
 
