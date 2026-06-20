@@ -74,6 +74,23 @@ class InMemoryEventStoreDcbTest {
     }
 
     @Test
+    void dcb_read_returns_events_in_global_position_order_across_streams() {
+        InMemoryEventStore eventStore = new InMemoryEventStore();
+
+        // Positions 1 and 3 land in one partition stream, position 2 in another. A DCB read must return them in
+        // global dcbposition order, not grouped by the stream they happen to be stored in.
+        eventStore.append("dcb:partition:0", List.of(taggedEvent("NameDefined", "name:1")));
+        eventStore.append("dcb:partition:1", List.of(taggedEvent("NameChanged", "name:1")));
+        eventStore.append("dcb:partition:0", List.of(taggedEvent("OrderPlaced", "name:1")));
+
+        DcbEventStream eventStream = eventStore.read(tagsAllOf("name:1"));
+
+        assertThat(eventStream.events())
+                .extracting(CloudEvent::getType)
+                .containsExactly("NameDefined", "NameChanged", "OrderPlaced");
+    }
+
+    @Test
     void reads_events_matching_type_or_all_tags_after_sequence_position() {
         InMemoryEventStore eventStore = new InMemoryEventStore();
         eventStore.append("dcb:partition:0", List.of(
