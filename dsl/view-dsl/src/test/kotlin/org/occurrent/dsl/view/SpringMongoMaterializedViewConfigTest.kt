@@ -183,12 +183,17 @@ class SpringMongoMaterializedViewConfigTest {
                     name2
                 }
 
-                val outcome: Result<List<String>> = try {
-                    Result.success(listOf(f1.get(10, TimeUnit.SECONDS), f2.get(10, TimeUnit.SECONDS)))
-                } catch (e: ExecutionException) {
-                    Result.failure(e.cause ?: e)
-                } finally {
-                    pool.shutdownNow()
+                // Wait for both tasks to settle before inspecting the persisted version, so a thrown first task
+                // can't leave the second one still writing to Mongo in the background.
+                val r1 = runCatching { f1.get(10, TimeUnit.SECONDS) }
+                val r2 = runCatching { f2.get(10, TimeUnit.SECONDS) }
+                pool.shutdownNow()
+
+                val outcome: Result<List<String>> = if (r1.isSuccess && r2.isSuccess) {
+                    Result.success(listOf(r1.getOrThrow(), r2.getOrThrow()))
+                } else {
+                    val failure = (r1.exceptionOrNull() ?: r2.exceptionOrNull())!!
+                    Result.failure((failure as? ExecutionException)?.cause ?: failure)
                 }
 
                 if (!requireConflict || getState(userId).version == 1L) {
