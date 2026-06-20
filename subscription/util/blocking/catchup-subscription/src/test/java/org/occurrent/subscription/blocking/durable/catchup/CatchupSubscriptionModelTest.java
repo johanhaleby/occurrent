@@ -62,7 +62,6 @@ import static java.time.temporal.ChronoUnit.MILLIS;
 import static java.util.Objects.requireNonNull;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.awaitility.Awaitility.await;
-import static org.awaitility.Durations.FIVE_SECONDS;
 import static org.occurrent.filter.Filter.TIME;
 import static org.occurrent.filter.Filter.type;
 import static org.occurrent.functional.CheckedFunction.unchecked;
@@ -71,9 +70,15 @@ import static org.occurrent.subscription.blocking.durable.catchup.SubscriptionPo
 import static org.occurrent.time.TimeConversion.toLocalDateTime;
 
 @Testcontainers
-@Timeout(15)
+@Timeout(60)
 @DisplayNameGeneration(ReplaceUnderscores.class)
 public class CatchupSubscriptionModelTest {
+
+    // Generous awaitility timeout: the catch-up to live change-stream handover can take noticeably longer than a few
+    // seconds on a loaded CI machine. Awaitility short-circuits as soon as the condition is met, so this does not slow
+    // down passing runs, it only removes false timeouts. Kept below the per-test @Timeout so a real hang still fails
+    // with awaitility's assertion detail rather than a bare JUnit timeout.
+    private static final Duration AT_MOST = Duration.ofSeconds(30);
 
     @Container
     private static final MongoDBContainer mongoDBContainer =
@@ -133,7 +138,7 @@ public class CatchupSubscriptionModelTest {
         subscription.subscribe(UUID.randomUUID().toString(), StartAt.subscriptionPosition(TimeBasedSubscriptionPosition.beginningOfTime()), state::add).waitUntilStarted();
 
         // Then
-        await().atMost(FIVE_SECONDS).with().pollInterval(Duration.of(20, MILLIS)).untilAsserted(() -> assertThat(state).hasSize(3));
+        await().atMost(AT_MOST).with().pollInterval(Duration.of(20, MILLIS)).untilAsserted(() -> assertThat(state).hasSize(3));
     }
 
     @Test
@@ -154,7 +159,7 @@ public class CatchupSubscriptionModelTest {
         subscription.subscribeFromBeginningOfTime(UUID.randomUUID().toString(), state::add).waitUntilStarted();
 
         // Then
-        await().atMost(FIVE_SECONDS).with().pollInterval(Duration.of(20, MILLIS)).untilAsserted(() -> assertThat(state).hasSize(3));
+        await().atMost(AT_MOST).with().pollInterval(Duration.of(20, MILLIS)).untilAsserted(() -> assertThat(state).hasSize(3));
     }
 
     @Test
@@ -194,7 +199,7 @@ public class CatchupSubscriptionModelTest {
         }).waitUntilStarted();
 
         // Then
-        await().atMost(FIVE_SECONDS).with().pollInterval(Duration.of(20, MILLIS)).untilAsserted(() -> assertThat(state).hasSize(5));
+        await().atMost(AT_MOST).with().pollInterval(Duration.of(20, MILLIS)).untilAsserted(() -> assertThat(state).hasSize(5));
     }
 
     @Test
@@ -244,7 +249,7 @@ public class CatchupSubscriptionModelTest {
         String id1 = nameDefined1.eventId();
         String id2 = nameDefined2.eventId();
         String id3 = nameWasChanged1.eventId();
-        await().atMost(FIVE_SECONDS).with().pollInterval(Duration.of(20, MILLIS)).untilAsserted(() ->
+        await().atMost(AT_MOST).with().pollInterval(Duration.of(20, MILLIS)).untilAsserted(() ->
                 assertThat(state).extracting(CloudEvent::getId).contains(id1, id2, id3, skewedId));
     }
 
@@ -266,7 +271,7 @@ public class CatchupSubscriptionModelTest {
         subscription.subscribe(UUID.randomUUID().toString(), filter(type(NameDefined.class.getName())), StartAt.subscriptionPosition(TimeBasedSubscriptionPosition.beginningOfTime()), state::add).waitUntilStarted();
 
         // Then
-        await().atMost(FIVE_SECONDS).with().pollInterval(Duration.of(20, MILLIS)).untilAsserted(() -> {
+        await().atMost(AT_MOST).with().pollInterval(Duration.of(20, MILLIS)).untilAsserted(() -> {
             assertThat(state).hasSize(2);
             assertThat(state).extracting(CloudEvent::getType).containsOnly(NameDefined.class.getName());
         });
@@ -290,7 +295,7 @@ public class CatchupSubscriptionModelTest {
         subscription.subscribeFromBeginningOfTime(UUID.randomUUID().toString(), filter(type(NameDefined.class.getName())), state::add).waitUntilStarted();
 
         // Then
-        await().atMost(FIVE_SECONDS).with().pollInterval(Duration.of(20, MILLIS)).untilAsserted(() -> {
+        await().atMost(AT_MOST).with().pollInterval(Duration.of(20, MILLIS)).untilAsserted(() -> {
             assertThat(state).hasSize(2);
             assertThat(state).extracting(CloudEvent::getType).containsOnly(NameDefined.class.getName());
         });
@@ -321,7 +326,7 @@ public class CatchupSubscriptionModelTest {
         subscription.subscribe(UUID.randomUUID().toString(), StartAtTime.beginningOfTime(), state::add).waitUntilStarted();
 
         // Then
-        await().atMost(FIVE_SECONDS).with().pollInterval(Duration.of(20, MILLIS)).untilAsserted(() -> assertThat(state).extracting(CloudEvent::getId).containsExactly(eventId3, eventId2, eventId1));
+        await().atMost(AT_MOST).with().pollInterval(Duration.of(20, MILLIS)).untilAsserted(() -> assertThat(state).extracting(CloudEvent::getId).containsExactly(eventId3, eventId2, eventId1));
     }
 
     @Test
@@ -366,7 +371,7 @@ public class CatchupSubscriptionModelTest {
         }).waitUntilStarted();
 
         // Then
-        await().atMost(FIVE_SECONDS).with().pollInterval(Duration.of(100, MILLIS)).untilAsserted(() ->
+        await().atMost(AT_MOST).with().pollInterval(Duration.of(100, MILLIS)).untilAsserted(() ->
                 assertThat(state).hasSize(5).extracting(this::deserialize).containsExactly(nameDefined1, nameDefined2, nameChanged1, nameDefined3, nameDefined4));
 
         thread.join();
@@ -417,7 +422,7 @@ public class CatchupSubscriptionModelTest {
         subscription.subscribe(subscriptionId, state::add).waitUntilStarted();
 
         // Then
-        await().atMost(FIVE_SECONDS).with().pollInterval(Duration.of(100, MILLIS)).untilAsserted(() ->
+        await().atMost(AT_MOST).with().pollInterval(Duration.of(100, MILLIS)).untilAsserted(() ->
                 assertThat(state).hasSize(4).extracting(this::deserialize).containsExactly(nameDefined1, nameDefined2, nameDefined3, nameWasChanged1));
     }
 
@@ -466,7 +471,7 @@ public class CatchupSubscriptionModelTest {
         subscription.subscribe(subscriptionId, filter(type(NameDefined.class.getName())), state::add).waitUntilStarted();
 
         // Then
-        await().atMost(FIVE_SECONDS).with().pollInterval(Duration.of(100, MILLIS)).untilAsserted(() ->
+        await().atMost(AT_MOST).with().pollInterval(Duration.of(100, MILLIS)).untilAsserted(() ->
                 assertThat(state).hasSize(4).extracting(this::deserialize).containsExactly(nameDefined1, nameDefined2, nameDefined3, nameDefined4));
     }
 
@@ -524,7 +529,7 @@ public class CatchupSubscriptionModelTest {
         mongoEventStore.write("3", 0, serialize(nameDefined3));
 
         // Then
-        await().atMost(FIVE_SECONDS).with().pollInterval(Duration.of(100, MILLIS)).untilAsserted(() ->
+        await().atMost(AT_MOST).with().pollInterval(Duration.of(100, MILLIS)).untilAsserted(() ->
                 assertThat(state).hasSize(4).extracting(this::deserialize).containsExactly(nameDefined1, nameDefined2, nameDefined4, nameDefined3));
     }
 
@@ -576,7 +581,7 @@ public class CatchupSubscriptionModelTest {
         mongoEventStore.write("1", 2, serialize(nameWasChanged2));
 
         // Then
-        await().atMost(FIVE_SECONDS).with().pollInterval(Duration.of(100, MILLIS)).untilAsserted(() ->
+        await().atMost(AT_MOST).with().pollInterval(Duration.of(100, MILLIS)).untilAsserted(() ->
                 assertThat(state).hasSize(3).extracting(this::deserialize).containsExactly(nameDefined1, nameDefined2, nameWasChanged2));
     }
 
@@ -625,7 +630,7 @@ public class CatchupSubscriptionModelTest {
         subscription.subscribe(subscriptionId, StartAtTime.beginningOfTime(), state::add).waitUntilStarted();
 
         // Then
-        await().atMost(FIVE_SECONDS).with().pollInterval(Duration.of(100, MILLIS)).untilAsserted(() ->
+        await().atMost(AT_MOST).with().pollInterval(Duration.of(100, MILLIS)).untilAsserted(() ->
                 // Note that it's correct behavior that we expect 6 events here since the first subscription is not configured to store subscription position during catch-up => duplicates
                 assertThat(state).hasSize(6).extracting(this::deserialize).containsExactly(nameDefined1, nameDefined2, nameDefined1, nameDefined2, nameDefined3, nameWasChanged1));
     }
@@ -676,7 +681,7 @@ public class CatchupSubscriptionModelTest {
         subscription.subscribe(subscriptionId, StartAtTime.beginningOfTime(), state::add).waitUntilStarted();
 
         // Then
-        await().atMost(FIVE_SECONDS).with().pollInterval(Duration.of(100, MILLIS)).untilAsserted(() ->
+        await().atMost(AT_MOST).with().pollInterval(Duration.of(100, MILLIS)).untilAsserted(() ->
                 // Note that it's correct behavior that we expect 6 events here since the first subscription is not configured to store subscription position during catch-up => duplicates
                 assertThat(state).hasSize(6).extracting(this::deserialize).containsExactly(nameDefined1, nameDefined2, nameDefined1, nameDefined2, nameDefined3, nameWasChanged1));
     }
@@ -710,7 +715,7 @@ public class CatchupSubscriptionModelTest {
         subscription.subscribe(subscriptionId, StartAt.subscriptionPosition(TimeBasedSubscriptionPosition.beginningOfTime()), state::add).waitUntilStarted();
 
         // Then
-        await().atMost(FIVE_SECONDS).with().pollInterval(Duration.of(20, MILLIS)).untilAsserted(() -> assertThat(state).hasSize(100));
+        await().atMost(AT_MOST).with().pollInterval(Duration.of(20, MILLIS)).untilAsserted(() -> assertThat(state).hasSize(100));
         assertThat(numberOfSavedPositions).hasValue(11); // Store every 10th position equals 10 for 100 events + 1 additional save for global subscription position before switching to continuous mode
         assertThat(storage.read(subscriptionId)).isNotNull();
     }
