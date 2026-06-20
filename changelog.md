@@ -1,24 +1,4 @@
-### 0.20.5 (2026-06-29)
-
-* Added `adapt` and `compose` decider combinators to the `dsl/decider` module.
-  * `adapt` widens a decider over a feature's own command and event subtypes into one over the shared supertypes, ignoring foreign events and treating foreign commands as no-ops, so a `Decider<CourseCommand, CourseState, CourseEvent>` can run against a service over a common `DomainEvent`. It is available as a Java static taking `Class` tokens and as a Kotlin `reified` extension that reads `courseDecider.adapt()` at the call site.
-  * `compose` combines several feature deciders into one whose state is the product of the individual states. Each command routes to the decider that recognizes it, each state slice evolves independently, and the composed decider is terminal once every constituent is. The two and three decider overloads `adapt` each decider for you and return a typed `Pair` or `Triple`, so you can write `compose(courseDecider, studentDecider, enrollmentDecider)` over the feature deciders directly. The two decider case also has an infix form, `courseDecider compose studentDecider`. For four or more, a vararg `compose(d1, d2, d3, d4, ...)` and a `compose(list)` form both return a positional `CompositeState` and take deciders that already share the command and event type.
-  * Both combinators are pure decider algebra and add no new dependency to the module, in particular no dependency on any DCB module.
-  * See [ADR 15](doc/architecture/decisions/0015-adapt-and-compose-decider-combinators.md).
-* The decider `execute` extensions on `ApplicationService` now widen a decider's event type for you.
-  * A feature decider over its own narrow event type can be passed straight to an `ApplicationService` over a broader event type, without calling `adapt` or `adaptEvents` first. This removes a papercut, because an injected application service is typically over the broadest event type, so a feature decider previously always had to be widened by hand at every call site.
-  * Added `adaptEvents`, the event-only counterpart to `adapt`. It widens only the event type and leaves the command type unchanged. The `execute` extensions use it internally.
-* The CloudEvent converter can now truncate the CloudEvent time to a configured precision.
-  * `Instant.now()` and `OffsetDateTime.now()` carry nanoseconds on modern JVMs, which `TimeRepresentation.DATE` cannot store, so an append failed with a "contains micro-/nanoseconds" error. The Jackson CloudEvent converter builder gains `timePrecision(ChronoUnit)`, and the Spring Boot starter adds the `occurrent.cloud-event-converter.time-precision` property (a `ChronoUnit`, for example `millis`).
-  * When that property is unset and the event store `time-representation` is `DATE`, the converter now defaults to truncating to `MILLIS`, so the common case works with no configuration. `RFC_3339_STRING` keeps full precision.
-* The Spring Boot starter's fallback CloudEvent converter now registers the Jackson modules found on the classpath.
-  * The default Jackson 3 converter built a bare `ObjectMapper`, and Jackson 3, unlike Jackson 2, does not auto-register modules. So the fallback converter could not serialize or deserialize Kotlin data classes or `java.time` types even when their modules were on the classpath, failing with a "no Creators" error. The fallback now uses `JsonMapper.builder().findAndAddModules()` to discover and register them. Supplying your own `CloudEventConverter` or `tools.jackson` `ObjectMapper` bean still overrides this.
-* Fixed a remaining silent event loss in `CatchupSubscriptionModel` at the handover from the catch-up phase to the live subscription.
-  * The delta reconciliation sized its read from a count of matching events and then read the newest N of them. An event written in the window between that count and the read shifted the newest-N window forward and pushed the oldest during-catch-up event out of the read. That event sat at or before the live subscription's resume position, so the live subscription did not redeliver it either, and it was lost. This is the residual case left open by the 0.20.4 fix, which closed the clock-skew variant but not the count-to-read window.
-  * The reconciliation now re-reads the recent tail until the matching count stops growing, so an event that arrives in the count-to-read window is picked up by a later pass instead of being skipped. Overlapping passes are deduplicated through the handover cache, so at-least-once delivery is preserved without introducing duplicates.
-  * See [ADR 14](doc/architecture/decisions/0014-reconcile-catchup-events-by-insertion-order-to-avoid-loss-under-clock-skew.md).
-* Upgraded Spring Boot from 4.0.4 to 4.1.0. This pulls in Spring Framework 7.0.8, Spring Data 2026.0.0, Reactor 2025.0.x, the MongoDB driver 5.8.0, Kotlin 2.3.21, and Jackson 2.21.4 / 3.1.4 transitively.
-  * The explicit Reactor and MongoDB driver version overrides were removed from the root build, so their versions are now governed by the Spring Boot dependency BOM.
+### Changelog next version
 
 #### Highlights
 
@@ -77,6 +57,29 @@
 * Historical stream-written events are not automatically DCB-readable. They need explicit DCB metadata backfill (`dcbtags` and `dcbposition`) before they can participate in DCB reads.
 * Enabling a new Spring Mongo capability may create indexes on startup. For large production collections, create required indexes out-of-band before changing application configuration.
 * DCB-only Spring Mongo usage still stores normal CloudEvents with Occurrent stream metadata. If stream support is enabled later, DCB-written events can be read by their storage stream ids, typically DCB partition streams.
+
+### 0.20.5 (2026-06-29)
+
+* Added `adapt` and `compose` decider combinators to the `dsl/decider` module.
+  * `adapt` widens a decider over a feature's own command and event subtypes into one over the shared supertypes, ignoring foreign events and treating foreign commands as no-ops, so a `Decider<CourseCommand, CourseState, CourseEvent>` can run against a service over a common `DomainEvent`. It is available as a Java static taking `Class` tokens and as a Kotlin `reified` extension that reads `courseDecider.adapt()` at the call site.
+  * `compose` combines several feature deciders into one whose state is the product of the individual states. Each command routes to the decider that recognizes it, each state slice evolves independently, and the composed decider is terminal once every constituent is. The two and three decider overloads `adapt` each decider for you and return a typed `Pair` or `Triple`, so you can write `compose(courseDecider, studentDecider, enrollmentDecider)` over the feature deciders directly. The two decider case also has an infix form, `courseDecider compose studentDecider`. For four or more, a vararg `compose(d1, d2, d3, d4, ...)` and a `compose(list)` form both return a positional `CompositeState` and take deciders that already share the command and event type.
+  * Both combinators are pure decider algebra and add no new dependency to the module, in particular no dependency on any DCB module.
+  * See [ADR 15](doc/architecture/decisions/0015-adapt-and-compose-decider-combinators.md).
+* The decider `execute` extensions on `ApplicationService` now widen a decider's event type for you.
+  * A feature decider over its own narrow event type can be passed straight to an `ApplicationService` over a broader event type, without calling `adapt` or `adaptEvents` first. This removes a papercut, because an injected application service is typically over the broadest event type, so a feature decider previously always had to be widened by hand at every call site.
+  * Added `adaptEvents`, the event-only counterpart to `adapt`. It widens only the event type and leaves the command type unchanged. The `execute` extensions use it internally.
+* The CloudEvent converter can now truncate the CloudEvent time to a configured precision.
+  * `Instant.now()` and `OffsetDateTime.now()` carry nanoseconds on modern JVMs, which `TimeRepresentation.DATE` cannot store, so an append failed with a "contains micro-/nanoseconds" error. The Jackson CloudEvent converter builder gains `timePrecision(ChronoUnit)`, and the Spring Boot starter adds the `occurrent.cloud-event-converter.time-precision` property (a `ChronoUnit`, for example `millis`).
+  * When that property is unset and the event store `time-representation` is `DATE`, the converter now defaults to truncating to `MILLIS`, so the common case works with no configuration. `RFC_3339_STRING` keeps full precision.
+* The Spring Boot starter's fallback CloudEvent converter now registers the Jackson modules found on the classpath.
+  * The default Jackson 3 converter built a bare `ObjectMapper`, and Jackson 3, unlike Jackson 2, does not auto-register modules. So the fallback converter could not serialize or deserialize Kotlin data classes or `java.time` types even when their modules were on the classpath, failing with a "no Creators" error. The fallback now uses `JsonMapper.builder().findAndAddModules()` to discover and register them. Supplying your own `CloudEventConverter` or `tools.jackson` `ObjectMapper` bean still overrides this.
+* Fixed a remaining silent event loss in `CatchupSubscriptionModel` at the handover from the catch-up phase to the live subscription.
+  * The delta reconciliation sized its read from a count of matching events and then read the newest N of them. An event written in the window between that count and the read shifted the newest-N window forward and pushed the oldest during-catch-up event out of the read. That event sat at or before the live subscription's resume position, so the live subscription did not redeliver it either, and it was lost. This is the residual case left open by the 0.20.4 fix, which closed the clock-skew variant but not the count-to-read window.
+  * The reconciliation now re-reads the recent tail until the matching count stops growing, so an event that arrives in the count-to-read window is picked up by a later pass instead of being skipped. Overlapping passes are deduplicated through the handover cache, so at-least-once delivery is preserved without introducing duplicates.
+  * See [ADR 14](doc/architecture/decisions/0014-reconcile-catchup-events-by-insertion-order-to-avoid-loss-under-clock-skew.md).
+* Upgraded Spring Boot from 4.0.4 to 4.1.0. This pulls in Spring Framework 7.0.8, Spring Data 2026.0.0, Reactor 2025.0.x, the MongoDB driver 5.8.0, Kotlin 2.3.21, and Jackson 2.21.4 / 3.1.4 transitively.
+  * The explicit Reactor and MongoDB driver version overrides were removed from the root build, so their versions are now governed by the Spring Boot dependency BOM.
+
 ### 0.20.4 (2026-06-18)
 
 * Fixed a silent event loss in `CatchupSubscriptionModel` at the handover from the catch-up phase to the live subscription.

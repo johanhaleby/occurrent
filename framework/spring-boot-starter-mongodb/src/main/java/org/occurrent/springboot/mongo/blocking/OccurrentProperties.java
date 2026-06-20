@@ -178,7 +178,7 @@ public class OccurrentProperties {
             if (capabilities == null || capabilities.isEmpty()) {
                 throw new IllegalArgumentException("occurrent.event-store.capabilities must contain at least one capability");
             }
-            this.capabilities = capabilities;
+            this.capabilities = Set.copyOf(capabilities);
         }
 
         public boolean isEnabled() {
