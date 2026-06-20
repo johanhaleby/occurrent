@@ -70,7 +70,7 @@ class DcbSubscriptionsTest {
     @Test
     void delivers_only_matching_dcb_events() {
         CopyOnWriteArrayList<DomainEvent> received = new CopyOnWriteArrayList<>();
-        dcbSubscriptions.subscribe("subscription", DcbQuery.tagsAllOf("name:1"), (DomainEvent event) -> received.add(event));
+        dcbSubscriptions.subscribe("subscription", DcbQuery.tagsAllOf("name:1"), (DomainEvent event) -> received.add(event)).waitUntilStarted();
 
         NameDefined matching = new NameDefined("eventId1", time, "name", "Some Doe");
         append("name:1", matching);
@@ -89,7 +89,7 @@ class DcbSubscriptionsTest {
             positions.add(metadata.dcbPosition());
             tags.add(metadata.dcbTags());
             events.add(event);
-        });
+        }).waitUntilStarted();
 
         NameDefined nameDefined = new NameDefined("eventId1", time, "name", "Some Doe");
         append(List.of("name:1", "tenant:2"), nameDefined);
