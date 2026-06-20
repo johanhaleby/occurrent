@@ -91,6 +91,8 @@ public class OccurrentCloudEventMongoDocumentMapper {
             cloudEventBuilder.withExtension(DCB_POSITION, number.longValue());
         } else if (dcbPosition instanceof String string) {
             cloudEventBuilder.withExtension(DCB_POSITION, Long.parseLong(string));
+        } else if (dcbPosition != null) {
+            throw new IllegalStateException("Expected " + DCB_POSITION + " to be a Number or String but was " + dcbPosition.getClass().getName());
         }
         return cloudEventBuilder.build();
     }

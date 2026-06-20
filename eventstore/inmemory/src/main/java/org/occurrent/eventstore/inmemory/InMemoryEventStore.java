@@ -218,6 +218,7 @@ public class InMemoryEventStore implements EventStore, EventStoreOperations, Eve
                     .filter(event -> dcbPosition(event) > afterSequencePosition)
                     .filter(event -> dcbPosition(event) <= highWatermark)
                     .filter(event -> DcbCloudEvents.matches(event, query))
+                    .sorted(Comparator.comparingLong(InMemoryEventStore::dcbPosition))
                     .toList();
             return new DcbEventStream(matchingEvents, highWatermark);
         }
