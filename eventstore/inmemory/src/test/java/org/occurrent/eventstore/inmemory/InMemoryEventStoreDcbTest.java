@@ -21,7 +21,7 @@ import io.cloudevents.core.builder.CloudEventBuilder;
 import org.junit.jupiter.api.DisplayNameGeneration;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.DisplayNameGenerator.ReplaceUnderscores;
-import org.occurrent.cloudevents.OccurrentCloudEventExtension;
+import org.occurrent.cloudevents.OccurrentExtensionGetter;
 import org.occurrent.eventstore.api.DuplicateCloudEventException;
 import org.occurrent.eventstore.api.SortBy;
 import org.occurrent.eventstore.api.WriteCondition;
@@ -102,10 +102,11 @@ class InMemoryEventStoreDcbTest {
         eventStore.append(List.of(taggedEvent("NameChanged", "game:1", "extra:b")), failIfEventsMatch(tagsAllOf("game:1"), head));
 
         List<String> streamIds = eventStore.read(tagsAllOf("game:1")).events().stream()
-                .map(event -> (String) event.getExtension(OccurrentCloudEventExtension.STREAM_ID))
+                .map(OccurrentExtensionGetter::getStreamId)
                 .distinct()
                 .toList();
         assertThat(streamIds).hasSize(1);
+        assertThat(streamIds.get(0)).startsWith("dcb:partition:");
     }
 
     @Test
