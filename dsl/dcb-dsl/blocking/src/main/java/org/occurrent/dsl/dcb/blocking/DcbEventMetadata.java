@@ -66,21 +66,8 @@ public final class DcbEventMetadata {
     }
 
     /**
-     * The id of the Occurrent storage stream the event was written to.
-     */
-    public String streamId() {
-        return metadata.getStreamId();
-    }
-
-    /**
-     * The version of the event within its Occurrent storage stream.
-     */
-    public long streamVersion() {
-        return metadata.getStreamVersion();
-    }
-
-    /**
-     * The wrapped {@link EventMetadata}.
+     * The wrapped {@link EventMetadata}, for the generic subscription metadata (such as the storage stream id and
+     * version) that is not specific to DCB.
      */
     public EventMetadata eventMetadata() {
         return metadata;
