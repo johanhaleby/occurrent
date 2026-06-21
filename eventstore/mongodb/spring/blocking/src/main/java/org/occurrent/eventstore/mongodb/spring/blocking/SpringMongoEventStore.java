@@ -332,9 +332,11 @@ public class SpringMongoEventStore implements EventStore, EventStoreOperations, 
 
     private DcbAppendResult appendDcb(List<CloudEvent> events, @Nullable DcbAppendCondition condition) {
         List<CloudEvent> eventsToAppend = validateDcbEvents(events);
-        // Place by the condition's boundary tags when there is one, so the same boundary always lands in the same
-        // partition regardless of per-event tags. Fall back to the events' tags when there is no condition.
-        Set<String> placementTags = condition != null ? DcbCloudEvents.boundaryTags(condition.query()) : boundaryTagsOf(eventsToAppend);
+        // Place by the condition's boundary tags when it constrains on tags, so the same boundary always lands in
+        // the same partition regardless of per-event tags. Otherwise (no condition, or a type-only/match-all
+        // condition) fall back to the events' tags so tagless boundaries do not all collapse onto one hot partition.
+        Set<String> conditionBoundaryTags = condition == null ? Set.of() : DcbCloudEvents.boundaryTags(condition.query());
+        Set<String> placementTags = conditionBoundaryTags.isEmpty() ? boundaryTagsOf(eventsToAppend) : conditionBoundaryTags;
         String streamId = dcbStreamIdGenerator.generateStreamId(placementTags);
 
         return requireNonNull(transactionTemplate.execute(transactionStatus -> {
