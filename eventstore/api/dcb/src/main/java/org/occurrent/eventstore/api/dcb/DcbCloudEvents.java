@@ -134,6 +134,22 @@ public final class DcbCloudEvents {
     }
 
     /**
+     * Returns the union of the tags the query constrains on, that is the consistency boundary it defines. A
+     * {@link DcbQuery.MatchAll} query and a query that only constrains on types both yield an empty set. This is the
+     * stable per-boundary tag set a store can use to place DCB-written events, rather than the per-event tags which
+     * a {@code TagGenerator} may extend differently per event.
+     */
+    public static Set<String> boundaryTags(DcbQuery query) {
+        requireNonNull(query, "Query cannot be null");
+        if (query instanceof DcbQuery.Items items) {
+            return items.items().stream()
+                    .flatMap(item -> item.tags().stream())
+                    .collect(toCollection(TreeSet::new));
+        }
+        return Set.of();
+    }
+
+    /**
      * Strips, validates, de-duplicates, and sorts DCB tags into their canonical set form.
      */
     public static Set<String> canonicalizeTags(Collection<String> tags) {
