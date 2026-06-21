@@ -29,6 +29,7 @@ import java.util.ArrayList;
 import java.util.List;
 import java.util.Objects;
 import java.util.Optional;
+import java.util.function.Consumer;
 import java.util.function.Function;
 import java.util.stream.Stream;
 
@@ -75,23 +76,37 @@ public class GenericDcbApplicationService<E> implements DcbApplicationService<E>
      * Executes a domain function against the current events selected by the DCB query and appends any produced events.
      */
     @Override
-    public Optional<DcbAppendResult> execute(DcbQuery query, Function<Stream<E>, Stream<E>> functionThatCallsDomainModel) {
+    public Optional<DcbAppendResult> execute(DcbQuery query, DcbExecuteOptions<E> options, Function<Stream<E>, Stream<E>> functionThatCallsDomainModel) {
         Objects.requireNonNull(query, "Query cannot be null");
+        Objects.requireNonNull(options, DcbExecuteOptions.class.getSimpleName() + " cannot be null");
         Objects.requireNonNull(functionThatCallsDomainModel, "Function that calls domain model cannot be null");
 
-        return retryStrategy.execute(() -> {
+        @Nullable Consumer<Stream<E>> sideEffect = options.sideEffect();
+
+        // @formatter:off
+        record Tuple<T1, T2>(T1 v1, T2 v2) {}
+        // @formatter:on
+
+        Tuple<Optional<DcbAppendResult>, List<E>> result = retryStrategy.execute(() -> {
             DcbEventStream eventStream = eventStore.read(query);
             Stream<E> domainEvents = cloudEventConverter.toDomainEvents(eventStream.stream());
             List<E> newDomainEvents = emptyStreamIfNull(functionThatCallsDomainModel.apply(domainEvents)).toList();
             if (newDomainEvents.isEmpty()) {
-                return Optional.empty();
+                return new Tuple<>(Optional.empty(), List.of());
             }
 
             List<CloudEvent> cloudEvents = cloudEventConverter.toCloudEvents(newDomainEvents.stream()).toList();
             List<CloudEvent> dcbEvents = addTags(newDomainEvents, cloudEvents);
             DcbAppendCondition appendCondition = DcbAppendCondition.failIfEventsMatch(query, eventStream.lastSequencePosition());
-            return Optional.of(eventStore.append(dcbEvents, appendCondition));
+            return new Tuple<>(Optional.of(eventStore.append(dcbEvents, appendCondition)), newDomainEvents);
         });
+
+        // Invoke the side-effect once, after a successful append, with the newly written events. It is not invoked
+        // on the no-new-events path, and it is outside the retry so it does not run per attempt.
+        if (sideEffect != null && result.v1.isPresent()) {
+            sideEffect.accept(result.v2.stream());
+        }
+        return result.v1;
     }
 
     private List<CloudEvent> addTags(List<E> domainEvents, List<CloudEvent> cloudEvents) {
