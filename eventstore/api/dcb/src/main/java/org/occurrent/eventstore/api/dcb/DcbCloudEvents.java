@@ -142,9 +142,9 @@ public final class DcbCloudEvents {
     public static Set<String> boundaryTags(DcbQuery query) {
         requireNonNull(query, "Query cannot be null");
         if (query instanceof DcbQuery.Items items) {
-            return items.items().stream()
+            return Set.copyOf(items.items().stream()
                     .flatMap(item -> item.tags().stream())
-                    .collect(toCollection(TreeSet::new));
+                    .collect(toCollection(TreeSet::new)));
         }
         return Set.of();
     }
