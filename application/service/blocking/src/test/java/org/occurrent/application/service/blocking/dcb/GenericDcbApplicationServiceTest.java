@@ -50,12 +50,11 @@ class GenericDcbApplicationServiceTest {
     @Test
     void reads_by_dcb_query_and_appends_with_tags_from_domain_events() {
         InMemoryEventStore eventStore = new InMemoryEventStore();
-        eventStore.append("dcb:partition:0", List.of(DcbCloudEvents.withTags(converter().toCloudEvent(new DomainEvent("NameDefined", "name:1")), Set.of("name:1"))));
+        eventStore.append(List.of(DcbCloudEvents.withTags(converter().toCloudEvent(new DomainEvent("NameDefined", "name:1")), Set.of("name:1"))));
         GenericDcbApplicationService<DomainEvent> applicationService = new GenericDcbApplicationService<>(
                 eventStore,
                 converter(),
                 event -> Set.of(event.name()),
-                __ -> "dcb:partition:0",
                 GenericDcbApplicationService.defaultRetryStrategy());
 
         Optional<DcbAppendResult> result = applicationService.execute(tagsAllOf("name:1"), events -> {
@@ -89,14 +88,13 @@ class GenericDcbApplicationServiceTest {
     @Test
     void retries_from_a_fresh_dcb_read_when_append_condition_detects_a_conflict() {
         InMemoryEventStore delegate = new InMemoryEventStore();
-        delegate.append("dcb:partition:0", List.of(DcbCloudEvents.withTags(converter().toCloudEvent(new DomainEvent("NameDefined", "name:1")), Set.of("name:1"))));
+        delegate.append(List.of(DcbCloudEvents.withTags(converter().toCloudEvent(new DomainEvent("NameDefined", "name:1")), Set.of("name:1"))));
         ConflictingOnceDcbEventStore eventStore = new ConflictingOnceDcbEventStore(delegate, converter().toCloudEvent(new DomainEvent("NameChangedByOther", "name:1")));
         AtomicInteger attempts = new AtomicInteger();
         GenericDcbApplicationService<DomainEvent> applicationService = new GenericDcbApplicationService<>(
                 eventStore,
                 converter(),
                 event -> Set.of(event.name()),
-                __ -> "dcb:partition:0",
                 GenericDcbApplicationService.defaultRetryStrategy());
 
         Optional<DcbAppendResult> result = applicationService.execute(tagsAllOf("name:1"), events -> {
@@ -160,16 +158,16 @@ class GenericDcbApplicationServiceTest {
         }
 
         @Override
-        public DcbAppendResult append(String streamId, List<CloudEvent> events) {
-            return delegate.append(streamId, events);
+        public DcbAppendResult append(List<CloudEvent> events) {
+            return delegate.append(events);
         }
 
         @Override
-        public DcbAppendResult append(String streamId, List<CloudEvent> events, DcbAppendCondition condition) {
+        public DcbAppendResult append(List<CloudEvent> events, DcbAppendCondition condition) {
             if (conflictInserted.compareAndSet(false, true)) {
-                delegate.append(streamId, List.of(conflictingEvent));
+                delegate.append(List.of(conflictingEvent));
             }
-            return delegate.append(streamId, events, condition);
+            return delegate.append(events, condition);
         }
     }
 }

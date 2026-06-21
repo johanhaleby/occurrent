@@ -54,7 +54,6 @@ class DcbApplicationServiceDeciderExtensionsTest {
             eventStore,
             cloudEventConverter,
             { event: DomainEvent -> setOf(tagFor(event)) },
-            { "dcb:partition:0" },
             GenericDcbApplicationService.defaultRetryStrategy()
         )
         time = LocalDateTime.now()
@@ -127,7 +126,7 @@ class DcbApplicationServiceDeciderExtensionsTest {
         val cloudEvents = cloudEventConverter.toCloudEvents(Stream.of(*events))
             .map { event -> DcbCloudEvents.withTags(event, setOf("name:name")) }
             .toList()
-        eventStore.append("dcb:partition:0", cloudEvents)
+        eventStore.append(cloudEvents)
     }
 
     private fun readNameEvents(nameId: String): List<DomainEvent> =
