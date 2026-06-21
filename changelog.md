@@ -48,6 +48,12 @@
   * `DcbEventMetadata` gives Java callers access to the DCB sequence position and DCB tags of a subscription event, the same metadata Kotlin reads through the `dcbPosition` and `dcbTags` extension properties.
   * `DcbSubscriptions` is an instance wrapper over a `Subscribable` and a `CloudEventConverter`, so DCB subscriptions can be created without passing the converter on every call, mirroring `DcbDomainEventQueries`.
   * Kotlin `queryForListWithPosition` and `queryForSequenceWithPosition` extensions return the matching events together with the observed DCB sequence position.
+* Added DCB catch-up subscription support to `CatchupSubscriptionModel`.
+  * A new DCB-mode constructor takes a `DcbEventStore` and a `DcbQuery`. In this mode the catch-up phase replays historic DCB events ordered by `dcbposition` and the subscription resumes by `dcbposition`, so a DCB application can rebuild a read model from history rather than only subscribing live.
+  * The replay pages through the DCB sequence in position windows, so a large rebuild does not load the whole matched set at once. The window size is configurable through `CatchupSubscriptionModelConfig.dcbCatchupPositionWindowSize`.
+  * Reconciliation of events written during the replay is by `dcbposition` rather than by a count, so the DCB catch-up is immune to the clock-skew loss and the `estimatedDocumentCount` undercount the stream catch-up has to defend against.
+  * The stream catch-up behavior and its constructors are unchanged. A `CatchupSubscriptionModel` is in either stream mode or DCB mode, selected by constructor.
+  * New `DcbSubscriptionPosition` carries a `dcbposition` resume point.
 * Added two DCB word-guessing MongoDB Spring examples.
   * `example-domain-word-guessing-game-es-mongodb-spring-dcb` shows manual DCB wiring with explicit DCB queries, tags, application-service usage, and live durable subscriptions.
   * `example-domain-word-guessing-game-es-mongodb-spring-dcb-autoconfig` shows Spring Boot auto-configuration, `@EnableOccurrent`, DCB-only event-store capabilities, annotation subscriptions, and DCB decider command handling.
@@ -57,6 +63,7 @@
   * [ADR 17](doc/architecture/decisions/0017-introduce-dcb-as-shared-cloudevent-capability.md)
   * [ADR 18](doc/architecture/decisions/0018-spring-mongo-event-store-capabilities.md)
   * [ADR 19](doc/architecture/decisions/0019-dcb-dsl-module.md)
+  * [ADR 20](doc/architecture/decisions/0020-dcb-catch-up-subscription-by-dcbposition.md)
 
 #### Notes
 

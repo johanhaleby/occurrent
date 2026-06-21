@@ -32,9 +32,17 @@ import static org.occurrent.filter.Filter.TIME;
 @NullMarked
 public class CatchupSubscriptionModelConfig {
 
+    static final long DEFAULT_DCB_CATCHUP_POSITION_WINDOW_SIZE = 1000;
+
     public final int cacheSize;
     public final SubscriptionPositionStorageConfig subscriptionStorageConfig;
     public final SortBy catchupPhaseSortBy;
+    /**
+     * The DCB sequence-position window size used when {@link CatchupSubscriptionModel} replays in DCB mode. The replay
+     * pages through the DCB sequence in windows of this many positions so a large rebuild does not materialize the
+     * whole matched set at once. Ignored in stream mode.
+     */
+    public final long dcbCatchupPositionWindowSize;
 
     /**
      * Create a new {@code CatchupSubscriptionModelConfig} will the given cache size. Will default to sort by time and then stream version (if time is the same for two events)
@@ -77,14 +85,22 @@ public class CatchupSubscriptionModelConfig {
     }
 
     private CatchupSubscriptionModelConfig(int cacheSize, SubscriptionPositionStorageConfig subscriptionStorageConfig, SortBy sortBy) {
+        this(cacheSize, subscriptionStorageConfig, sortBy, DEFAULT_DCB_CATCHUP_POSITION_WINDOW_SIZE);
+    }
+
+    private CatchupSubscriptionModelConfig(int cacheSize, SubscriptionPositionStorageConfig subscriptionStorageConfig, SortBy sortBy, long dcbCatchupPositionWindowSize) {
         if (cacheSize < 1) {
             throw new IllegalArgumentException("Cache size must be greater than or equal to 1");
         }
         Objects.requireNonNull(subscriptionStorageConfig, SubscriptionPositionStorageConfig.class.getSimpleName() + " cannot be null");
         Objects.requireNonNull(sortBy, SortBy.class + " cannot be null");
+        if (dcbCatchupPositionWindowSize < 1) {
+            throw new IllegalArgumentException("DCB catch-up position window size must be greater than or equal to 1");
+        }
         this.cacheSize = cacheSize;
         this.subscriptionStorageConfig = subscriptionStorageConfig;
         this.catchupPhaseSortBy = sortBy;
+        this.dcbCatchupPositionWindowSize = dcbCatchupPositionWindowSize;
     }
 
     /**
@@ -105,7 +121,19 @@ public class CatchupSubscriptionModelConfig {
      * @return A new instance of {@link CatchupSubscriptionModel}.
      */
     public CatchupSubscriptionModelConfig catchupPhaseSortBy(SortBy sortBy) {
-        return new CatchupSubscriptionModelConfig(cacheSize, subscriptionStorageConfig, sortBy);
+        return new CatchupSubscriptionModelConfig(cacheSize, subscriptionStorageConfig, sortBy, dcbCatchupPositionWindowSize);
+    }
+
+    /**
+     * Specify the DCB sequence-position window size used when {@link CatchupSubscriptionModel} replays in DCB mode.
+     * The replay pages through the DCB sequence in windows of this many positions, bounding how many matched events
+     * are held in memory at once. Ignored in stream mode. Default is {@value #DEFAULT_DCB_CATCHUP_POSITION_WINDOW_SIZE}.
+     *
+     * @param dcbCatchupPositionWindowSize The number of DCB sequence positions to read per window. Must be at least 1.
+     * @return A new instance of {@link CatchupSubscriptionModelConfig}.
+     */
+    public CatchupSubscriptionModelConfig dcbCatchupPositionWindowSize(long dcbCatchupPositionWindowSize) {
+        return new CatchupSubscriptionModelConfig(cacheSize, subscriptionStorageConfig, catchupPhaseSortBy, dcbCatchupPositionWindowSize);
     }
 
     @Override
