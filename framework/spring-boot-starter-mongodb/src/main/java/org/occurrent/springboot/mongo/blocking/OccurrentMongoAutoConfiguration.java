@@ -29,6 +29,8 @@ import org.occurrent.application.service.blocking.dcb.DcbApplicationService;
 import org.occurrent.application.service.blocking.dcb.GenericDcbApplicationService;
 import org.occurrent.application.service.blocking.dcb.TagGenerator;
 import org.occurrent.application.service.blocking.generic.GenericApplicationService;
+import org.occurrent.dsl.dcb.blocking.DcbDomainEventQueries;
+import org.occurrent.dsl.dcb.blocking.DcbSubscriptions;
 import org.occurrent.dsl.query.blocking.DomainEventQueries;
 import org.occurrent.dsl.subscription.blocking.Subscriptions;
 import org.occurrent.eventstore.api.blocking.EventStore;
@@ -170,12 +172,37 @@ public class OccurrentMongoAutoConfiguration<E> {
         return new Subscriptions<>(subscribable, cloudEventConverter);
     }
 
+    /**
+     * DCB subscription DSL, auto-configured when the DCB event-store capability is enabled. In DCB-only mode the
+     * subscription is currently live only, because the catch-up model is not wired in DCB-only mode, so replay by
+     * dcbposition for auto-configured subscriptions is a follow-up.
+     */
+    @Bean
+    @ConditionalOnMissingBean(DcbSubscriptions.class)
+    @Conditional(OnDcbEventStoreCapabilityCondition.class)
+    @ConditionalOnProperty(name = "occurrent.subscription.enabled", havingValue = "true", matchIfMissing = true)
+    public DcbSubscriptions<E> occurrentDcbSubscriptions(Subscribable subscribable, CloudEventConverter<E> cloudEventConverter) {
+        return new DcbSubscriptions<>(subscribable, cloudEventConverter);
+    }
+
     @Bean
     @ConditionalOnMissingBean(DomainEventQueries.class)
     @Conditional(OnDomainEventQueriesCapabilityCondition.class)
     @ConditionalOnProperty(name = "occurrent.event-store.enabled", havingValue = "true", matchIfMissing = true)
     public DomainEventQueries<E> occurrentDomainEventQueries(EventStoreQueries eventStoreQueries, CloudEventConverter<E> cloudEventConverter) {
         return new DomainEventQueries<>(eventStoreQueries, cloudEventConverter);
+    }
+
+    /**
+     * DCB query DSL, auto-configured when the DCB event-store capability is enabled. It wraps the
+     * {@link DomainEventQueries} bean so a DCB application gets one object for both DCB and stream queries.
+     */
+    @Bean
+    @ConditionalOnMissingBean(DcbDomainEventQueries.class)
+    @Conditional(OnDcbEventStoreCapabilityCondition.class)
+    @ConditionalOnProperty(name = "occurrent.event-store.enabled", havingValue = "true", matchIfMissing = true)
+    public DcbDomainEventQueries<E> occurrentDcbDomainEventQueries(DomainEventQueries<E> domainEventQueries) {
+        return new DcbDomainEventQueries<>(domainEventQueries);
     }
 
     @Bean
