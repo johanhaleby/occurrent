@@ -109,6 +109,6 @@ class DcbSubscriptionsTest {
         List<CloudEvent> cloudEvents = cloudEventConverter.toCloudEvents(Stream.of(events))
                 .map(event -> DcbCloudEvents.withTags(event, tags))
                 .toList();
-        eventStore.append("dcb:partition:0", cloudEvents);
+        eventStore.append(cloudEvents);
     }
 }

@@ -48,7 +48,9 @@ The first implementation provides:
 - blocking DCB API,
 - in-memory DCB support in the existing `InMemoryEventStore`,
 - Spring Mongo blocking DCB support in the existing `SpringMongoEventStore`,
-- blocking DCB application service using `CloudEventConverter`, `TagGenerator`, and partitioned stream id generation.
+- blocking DCB application service using `CloudEventConverter` and `TagGenerator`.
+
+The DCB append API does not expose a storage stream id. The event store derives the storage stream that DCB-written events are placed in from their DCB tags, using a partitioned stream id generator (configurable per store). DCB-written events still keep `streamid` and `streamversion` metadata, so they remain readable through the stream APIs by those partition stream ids.
 
 Existing stream APIs remain backward compatible:
 

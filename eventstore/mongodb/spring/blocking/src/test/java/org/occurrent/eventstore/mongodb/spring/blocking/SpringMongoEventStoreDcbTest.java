@@ -93,7 +93,7 @@ class SpringMongoEventStoreDcbTest {
 
     @Test
     void dcb_writes_are_visible_to_normal_event_store_queries() {
-        eventStore.append("dcb:partition:0", List.of(taggedEvent("NameDefined", "name:1")));
+        eventStore.append(List.of(taggedEvent("NameDefined", "name:1")));
 
         assertThat(eventStore.all(SortBy.natural(SortBy.SortDirection.ASCENDING)))
                 .extracting(CloudEvent::getType)
@@ -105,7 +105,7 @@ class SpringMongoEventStoreDcbTest {
 
     @Test
     void reads_events_matching_type_or_all_tags_after_sequence_position() {
-        eventStore.append("dcb:partition:0", List.of(
+        eventStore.append(List.of(
                 taggedEvent("NameDefined", "name:1"),
                 taggedEvent("NameChanged", "name:1", "tenant:1"),
                 taggedEvent("OrderPlaced", "order:1")));
@@ -124,7 +124,7 @@ class SpringMongoEventStoreDcbTest {
 
     @Test
     void reads_tagged_events_except_excluded_types() {
-        eventStore.append("dcb:partition:0", List.of(
+        eventStore.append(List.of(
                 taggedEvent("NameDefined", "name:1"),
                 taggedEvent("NameSnapshot", "name:1"),
                 taggedEvent("OrderPlaced", "order:1")));
@@ -138,7 +138,7 @@ class SpringMongoEventStoreDcbTest {
 
     @Test
     void reads_type_and_tagged_events_except_excluded_types() {
-        eventStore.append("dcb:partition:0", List.of(
+        eventStore.append(List.of(
                 taggedEvent("NameDefined", "name:1"),
                 taggedEvent("NameChanged", "name:1"),
                 taggedEvent("OrderPlaced", "name:1")));
@@ -155,7 +155,7 @@ class SpringMongoEventStoreDcbTest {
 
     @Test
     void applies_excluded_types_per_query_item() {
-        eventStore.append("dcb:partition:0", List.of(
+        eventStore.append(List.of(
                 taggedEvent("NameSnapshot", "name:1"),
                 taggedEvent("NameDefined", "name:1"),
                 taggedEvent("OrderPlaced", "order:1")));
@@ -171,13 +171,12 @@ class SpringMongoEventStoreDcbTest {
 
     @Test
     void rejects_append_when_matching_event_exists_after_condition_position() {
-        eventStore.append("dcb:partition:0", List.of(taggedEvent("NameDefined", "name:1")));
+        eventStore.append(List.of(taggedEvent("NameDefined", "name:1")));
         DcbEventStream readModel = eventStore.read(tagsAllOf("name:1"));
 
-        eventStore.append("dcb:partition:0", List.of(taggedEvent("NameChanged", "name:1")));
+        eventStore.append(List.of(taggedEvent("NameChanged", "name:1")));
 
         assertThatThrownBy(() -> eventStore.append(
-                "dcb:partition:0",
                 List.of(taggedEvent("NameChanged", "name:1")),
                 failIfEventsMatch(tagsAllOf("name:1"), readModel.lastSequencePosition())))
                 .isExactlyInstanceOf(DcbAppendConditionNotFulfilledException.class);
@@ -185,14 +184,13 @@ class SpringMongoEventStoreDcbTest {
 
     @Test
     void append_condition_ignores_excluded_event_types_after_condition_position() {
-        eventStore.append("dcb:partition:0", List.of(taggedEvent("NameDefined", "name:1")));
+        eventStore.append(List.of(taggedEvent("NameDefined", "name:1")));
         DcbQuery query = tagsAllOfExcludingTypes(List.of("name:1"), List.of("NameSnapshot"));
         DcbEventStream readModel = eventStore.read(query);
 
-        eventStore.append("dcb:partition:0", List.of(taggedEvent("NameSnapshot", "name:1")));
+        eventStore.append(List.of(taggedEvent("NameSnapshot", "name:1")));
 
         DcbAppendResult result = eventStore.append(
-                "dcb:partition:0",
                 List.of(taggedEvent("NameChanged", "name:1")),
                 failIfEventsMatch(query, readModel.lastSequencePosition()));
 
@@ -201,14 +199,13 @@ class SpringMongoEventStoreDcbTest {
 
     @Test
     void append_condition_rejects_non_excluded_event_types_after_condition_position() {
-        eventStore.append("dcb:partition:0", List.of(taggedEvent("NameDefined", "name:1")));
+        eventStore.append(List.of(taggedEvent("NameDefined", "name:1")));
         DcbQuery query = tagsAllOfExcludingTypes(List.of("name:1"), List.of("NameSnapshot"));
         DcbEventStream readModel = eventStore.read(query);
 
-        eventStore.append("dcb:partition:0", List.of(taggedEvent("NameChanged", "name:1")));
+        eventStore.append(List.of(taggedEvent("NameChanged", "name:1")));
 
         assertThatThrownBy(() -> eventStore.append(
-                "dcb:partition:0",
                 List.of(taggedEvent("NameImported", "name:1")),
                 failIfEventsMatch(query, readModel.lastSequencePosition())))
                 .isExactlyInstanceOf(DcbAppendConditionNotFulfilledException.class);
@@ -217,12 +214,12 @@ class SpringMongoEventStoreDcbTest {
     @Test
     void rolls_back_position_reservation_when_duplicate_cloud_event_fails_insert() {
         CloudEvent cloudEvent = taggedEvent("NameDefined", "name:1");
-        eventStore.append("dcb:partition:0", List.of(cloudEvent));
+        eventStore.append(List.of(cloudEvent));
 
-        assertThatThrownBy(() -> eventStore.append("dcb:partition:0", List.of(cloudEvent)))
+        assertThatThrownBy(() -> eventStore.append(List.of(cloudEvent)))
                 .isExactlyInstanceOf(DuplicateCloudEventException.class);
 
-        DcbAppendResult appendResult = eventStore.append("dcb:partition:0", List.of(taggedEvent("NameChanged", "name:1")));
+        DcbAppendResult appendResult = eventStore.append(List.of(taggedEvent("NameChanged", "name:1")));
         assertThat(appendResult.firstSequencePosition()).isEqualTo(2);
         assertThat(appendResult.lastSequencePosition()).isEqualTo(2);
     }
@@ -232,13 +229,13 @@ class SpringMongoEventStoreDcbTest {
         DcbEventStream readModel = eventStore.read(tagsAllOf("name:1"));
         DcbAppendCondition appendCondition = failIfEventsMatch(tagsAllOf("name:1"), readModel.lastSequencePosition());
 
-        DcbAppendResult firstAppend = eventStore.append("dcb:partition:0", List.of(taggedEvent("NameDefined", "name:1")), appendCondition);
+        DcbAppendResult firstAppend = eventStore.append(List.of(taggedEvent("NameDefined", "name:1")), appendCondition);
         assertThat(firstAppend).isEqualTo(new DcbAppendResult(1, 1, 1));
 
-        assertThatThrownBy(() -> eventStore.append("dcb:partition:0", List.of(taggedEvent("NameChanged", "name:1")), appendCondition))
+        assertThatThrownBy(() -> eventStore.append(List.of(taggedEvent("NameChanged", "name:1")), appendCondition))
                 .isExactlyInstanceOf(DcbAppendConditionNotFulfilledException.class);
 
-        DcbAppendResult nextAppend = eventStore.append("dcb:partition:0", List.of(taggedEvent("NameChanged", "name:2")));
+        DcbAppendResult nextAppend = eventStore.append(List.of(taggedEvent("NameChanged", "name:2")));
         assertThat(nextAppend).isEqualTo(new DcbAppendResult(2, 2, 1));
     }
 
@@ -249,7 +246,7 @@ class SpringMongoEventStoreDcbTest {
                 .withData("{\"tags\":[\"name:1\"]}".getBytes(UTF_8))
                 .build(), Set.of("name:2"));
 
-        eventStore.append("dcb:partition:0", List.of(cloudEvent));
+        eventStore.append(List.of(cloudEvent));
 
         assertThat(eventStore.read(tagsAllOf("name:1")).events()).isEmpty();
         assertThat(eventStore.read(tagsAllOf("name:2")).events()).hasSize(1);
@@ -257,7 +254,7 @@ class SpringMongoEventStoreDcbTest {
 
     @Test
     void last_sequence_position_is_the_store_head_not_the_max_matched_position() {
-        eventStore.append("dcb:partition:0", List.of(
+        eventStore.append(List.of(
                 taggedEvent("NameDefined", "name:1"),
                 taggedEvent("NameChanged", "name:1"),
                 taggedEvent("OrderPlaced", "name:2")));
@@ -275,7 +272,7 @@ class SpringMongoEventStoreDcbTest {
 
     @Test
     void exists_and_count_report_matching_dcb_events() {
-        eventStore.append("dcb:partition:0", List.of(
+        eventStore.append(List.of(
                 taggedEvent("NameDefined", "name:1"),
                 taggedEvent("NameChanged", "name:1"),
                 taggedEvent("OrderPlaced", "order:1")));
@@ -288,7 +285,7 @@ class SpringMongoEventStoreDcbTest {
 
     @Test
     void read_honors_up_to_sequence_position_upper_bound() {
-        eventStore.append("dcb:partition:0", List.of(
+        eventStore.append(List.of(
                 taggedEvent("NameDefined", "name:1"),
                 taggedEvent("NameChanged", "name:1"),
                 taggedEvent("OrderPlaced", "name:1")));
