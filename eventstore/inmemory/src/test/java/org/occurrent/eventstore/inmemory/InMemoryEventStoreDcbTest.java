@@ -21,6 +21,7 @@ import io.cloudevents.core.builder.CloudEventBuilder;
 import org.junit.jupiter.api.DisplayNameGeneration;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.DisplayNameGenerator.ReplaceUnderscores;
+import org.occurrent.cloudevents.OccurrentCloudEventExtension;
 import org.occurrent.eventstore.api.DuplicateCloudEventException;
 import org.occurrent.eventstore.api.SortBy;
 import org.occurrent.eventstore.api.WriteCondition;
@@ -88,6 +89,23 @@ class InMemoryEventStoreDcbTest {
         assertThat(eventStream.events())
                 .extracting(CloudEvent::getType)
                 .containsExactly("NameDefined", "NameChanged", "OrderPlaced");
+    }
+
+    @Test
+    void dcb_append_with_condition_places_the_same_boundary_in_the_same_stream_regardless_of_per_event_tags() {
+        InMemoryEventStore eventStore = new InMemoryEventStore();
+
+        // Two appends to the same boundary (game:1), but each event carries a different extra tag. Placement must
+        // follow the condition's boundary tags, not the per-event tags, so both land in the same partition stream.
+        eventStore.append(List.of(taggedEvent("NameDefined", "game:1", "extra:a")), failIfEventsMatch(tagsAllOf("game:1")));
+        long head = eventStore.read(tagsAllOf("game:1")).lastSequencePosition();
+        eventStore.append(List.of(taggedEvent("NameChanged", "game:1", "extra:b")), failIfEventsMatch(tagsAllOf("game:1"), head));
+
+        List<String> streamIds = eventStore.read(tagsAllOf("game:1")).events().stream()
+                .map(event -> (String) event.getExtension(OccurrentCloudEventExtension.STREAM_ID))
+                .distinct()
+                .toList();
+        assertThat(streamIds).hasSize(1);
     }
 
     @Test

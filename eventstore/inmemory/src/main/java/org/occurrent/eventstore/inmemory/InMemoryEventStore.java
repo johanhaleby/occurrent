@@ -274,7 +274,10 @@ public class InMemoryEventStore implements EventStore, EventStoreOperations, Eve
 
     private DcbAppendResult appendDcb(List<CloudEvent> events, @Nullable DcbAppendCondition condition) {
         List<CloudEvent> eventsToAppend = validateDcbEvents(events);
-        String streamId = dcbStreamIdGenerator.generateStreamId(boundaryTagsOf(eventsToAppend));
+        // Place by the condition's boundary tags when there is one, so the same boundary always lands in the same
+        // partition regardless of per-event tags. Fall back to the events' tags when there is no condition.
+        Set<String> placementTags = condition != null ? DcbCloudEvents.boundaryTags(condition.query()) : boundaryTagsOf(eventsToAppend);
+        String streamId = dcbStreamIdGenerator.generateStreamId(placementTags);
 
         List<CloudEvent> addedEvents;
         DcbAppendResult result;
