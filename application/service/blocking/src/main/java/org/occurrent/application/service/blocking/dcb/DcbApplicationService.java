@@ -42,5 +42,20 @@ public interface DcbApplicationService<E> {
      * @param functionThatCallsDomainModel receives the current matching domain events and returns new domain events to append
      * @return the append result, or {@link Optional#empty()} when the domain function produced no new events
      */
-    Optional<DcbAppendResult> execute(DcbQuery query, Function<Stream<E>, Stream<E>> functionThatCallsDomainModel);
+    default Optional<DcbAppendResult> execute(DcbQuery query, Function<Stream<E>, Stream<E>> functionThatCallsDomainModel) {
+        return execute(query, DcbExecuteOptions.empty(), functionThatCallsDomainModel);
+    }
+
+    /**
+     * Executes a domain function for the events selected by {@code query}, with the supplied {@link DcbExecuteOptions}.
+     * <p>
+     * When the options carry a side-effect, it is invoked once with the newly produced domain events after they have
+     * been appended successfully. It is not invoked when the domain function produced no new events.
+     *
+     * @param query the DCB query that defines which existing events are relevant to the decision
+     * @param options the execute options (for example a post-append side-effect)
+     * @param functionThatCallsDomainModel receives the current matching domain events and returns new domain events to append
+     * @return the append result, or {@link Optional#empty()} when the domain function produced no new events
+     */
+    Optional<DcbAppendResult> execute(DcbQuery query, DcbExecuteOptions<E> options, Function<Stream<E>, Stream<E>> functionThatCallsDomainModel);
 }
