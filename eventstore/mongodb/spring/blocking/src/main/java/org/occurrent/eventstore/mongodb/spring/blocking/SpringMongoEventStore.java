@@ -103,6 +103,7 @@ public class SpringMongoEventStore implements EventStore, EventStoreOperations, 
     private final Function<Query, Query> queryOptions;
     private final Function<Query, Query> readOptions;
     private final Set<SpringMongoEventStoreCapability> eventStoreCapabilities;
+    private final DcbStreamIdGenerator dcbStreamIdGenerator;
 
     /**
      * Create a new instance of {@code SpringBlockingMongoEventStore}
@@ -122,6 +123,7 @@ public class SpringMongoEventStore implements EventStore, EventStoreOperations, 
         this.queryOptions = config.queryOptions;
         this.readOptions = config.readOptions;
         this.eventStoreCapabilities = config.eventStoreCapabilities;
+        this.dcbStreamIdGenerator = config.dcbStreamIdGenerator;
         initializeEventStore(eventStoreCollectionName, dcbPositionCollectionName, dcbCheckpointCollectionName, eventStoreCapabilities, mongoTemplate);
     }
 
@@ -203,16 +205,16 @@ public class SpringMongoEventStore implements EventStore, EventStoreOperations, 
     }
 
     @Override
-    public DcbAppendResult append(String streamId, List<CloudEvent> events) {
+    public DcbAppendResult append(List<CloudEvent> events) {
         requireDcbCapability();
-        return appendDcb(streamId, events, null);
+        return appendDcb(events, null);
     }
 
     @Override
-    public DcbAppendResult append(String streamId, List<CloudEvent> events, DcbAppendCondition condition) {
+    public DcbAppendResult append(List<CloudEvent> events, DcbAppendCondition condition) {
         requireDcbCapability();
         requireNonNull(condition, "Append condition cannot be null");
-        return appendDcb(streamId, events, condition);
+        return appendDcb(events, condition);
     }
 
     @Override
@@ -328,9 +330,9 @@ public class SpringMongoEventStore implements EventStore, EventStoreOperations, 
         return mapWithIndex(cloudEvents, currentStreamVersion, pair -> convertToDocument(timeRepresentation, streamId, pair.t1, pair.t2)).toList();
     }
 
-    private DcbAppendResult appendDcb(String streamId, List<CloudEvent> events, @Nullable DcbAppendCondition condition) {
-        requireNonNull(streamId, "Stream id cannot be null");
+    private DcbAppendResult appendDcb(List<CloudEvent> events, @Nullable DcbAppendCondition condition) {
         List<CloudEvent> eventsToAppend = validateDcbEvents(events);
+        String streamId = dcbStreamIdGenerator.generateStreamId(boundaryTagsOf(eventsToAppend));
 
         return requireNonNull(transactionTemplate.execute(transactionStatus -> {
             long firstPosition = reserveDcbPositions(eventsToAppend.size());
@@ -344,6 +346,10 @@ public class SpringMongoEventStore implements EventStore, EventStoreOperations, 
             insertAll(streamId, currentStreamVersion, WriteCondition.anyStreamVersion(), documents);
             return new DcbAppendResult(firstPosition, lastPosition, eventsToAppend.size());
         }));
+    }
+
+    private static Set<String> boundaryTagsOf(List<CloudEvent> events) {
+        return events.stream().flatMap(event -> DcbCloudEvents.getTags(event).stream()).collect(java.util.stream.Collectors.toCollection(java.util.TreeSet::new));
     }
 
     private List<Document> convertDcbCloudEventsToDocuments(String streamId, List<CloudEvent> cloudEvents, long currentStreamVersion, long firstPosition) {

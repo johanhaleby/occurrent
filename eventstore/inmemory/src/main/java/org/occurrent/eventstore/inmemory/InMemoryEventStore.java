@@ -84,6 +84,7 @@ public class InMemoryEventStore implements EventStore, EventStoreOperations, Eve
     private final Map<String, Long> insertionOrderByEventKey = new ConcurrentHashMap<>();
 
     private final Consumer<Stream<CloudEvent>> listener;
+    private final DcbStreamIdGenerator dcbStreamIdGenerator;
 
     /**
      * Create an instance of {@link InMemoryEventStore}
@@ -104,10 +105,22 @@ public class InMemoryEventStore implements EventStore, EventStoreOperations, Eve
      * @param listener A listener that will be invoked after events have been written to the datastore (synchronously!)
      */
     public InMemoryEventStore(@Nullable Consumer<Stream<CloudEvent>> listener) {
+        this(listener, new PartitionedDcbStreamIdGenerator());
+    }
+
+    /**
+     * Create an instance of {@link InMemoryEventStore} with a <code>listener</code> and a custom
+     * {@link DcbStreamIdGenerator} that decides which Occurrent storage stream DCB-written events are placed in.
+     *
+     * @param listener            A listener that will be invoked after events have been written to the datastore (synchronously!)
+     * @param dcbStreamIdGenerator Derives the storage stream id for DCB appends from the events' DCB tags
+     */
+    public InMemoryEventStore(@Nullable Consumer<Stream<CloudEvent>> listener, DcbStreamIdGenerator dcbStreamIdGenerator) {
         if (listener == null) {
             throw new IllegalArgumentException("listener cannot be null");
         }
         this.listener = listener;
+        this.dcbStreamIdGenerator = requireNonNull(dcbStreamIdGenerator, DcbStreamIdGenerator.class.getSimpleName() + " cannot be null");
     }
 
     @Override
@@ -249,19 +262,19 @@ public class InMemoryEventStore implements EventStore, EventStoreOperations, Eve
     }
 
     @Override
-    public DcbAppendResult append(String streamId, List<CloudEvent> events) {
-        return appendDcb(streamId, events, null);
+    public DcbAppendResult append(List<CloudEvent> events) {
+        return appendDcb(events, null);
     }
 
     @Override
-    public DcbAppendResult append(String streamId, List<CloudEvent> events, DcbAppendCondition condition) {
+    public DcbAppendResult append(List<CloudEvent> events, DcbAppendCondition condition) {
         requireNonNull(condition, "Append condition cannot be null");
-        return appendDcb(streamId, events, condition);
+        return appendDcb(events, condition);
     }
 
-    private DcbAppendResult appendDcb(String streamId, List<CloudEvent> events, @Nullable DcbAppendCondition condition) {
-        requireNonNull(streamId, "Stream id cannot be null");
+    private DcbAppendResult appendDcb(List<CloudEvent> events, @Nullable DcbAppendCondition condition) {
         List<CloudEvent> eventsToAppend = validateDcbEvents(events);
+        String streamId = dcbStreamIdGenerator.generateStreamId(boundaryTagsOf(eventsToAppend));
 
         List<CloudEvent> addedEvents;
         DcbAppendResult result;
@@ -300,6 +313,10 @@ public class InMemoryEventStore implements EventStore, EventStoreOperations, Eve
 
     private Stream<CloudEvent> allEvents() {
         return state.values().stream().flatMap(List::stream);
+    }
+
+    private static Set<String> boundaryTagsOf(List<CloudEvent> events) {
+        return events.stream().flatMap(event -> DcbCloudEvents.getTags(event).stream()).collect(Collectors.toCollection(TreeSet::new));
     }
 
     private static List<CloudEvent> validateDcbEvents(List<CloudEvent> events) {

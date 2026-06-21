@@ -112,13 +112,13 @@ class DcbDomainEventQueriesTest {
         List<CloudEvent> cloudEvents = cloudEventConverter.toCloudEvents(Stream.of(new NameDefined("eventId1", time, "name", "Some Doe")))
                 .map(event -> DcbCloudEvents.withTags(event, List.of("name:1")))
                 .toList();
-        eventStoreWithSubscriptions.append("dcb:partition:0", cloudEvents);
+        eventStoreWithSubscriptions.append(cloudEvents);
 
         // The in-memory subscription model dispatches asynchronously, so wait for the callback like the sibling tests do.
         await().untilAsserted(() -> {
             assertThat(metadata).hasSize(1);
-            assertThat(metadata.get(0).getStreamId()).isEqualTo("dcb:partition:0");
-            assertThat(metadata.get(0).getStreamVersion()).isEqualTo(1);
+            assertThat(metadata.get(0).getStreamId()).startsWith("dcb:partition:");
+            assertThat(metadata.get(0).getStreamVersion()).isPositive();
         });
     }
 
@@ -126,6 +126,6 @@ class DcbDomainEventQueriesTest {
         List<CloudEvent> cloudEvents = cloudEventConverter.toCloudEvents(Stream.of(events))
                 .map(event -> DcbCloudEvents.withTags(event, List.of(tag)))
                 .toList();
-        eventStore.append("dcb:partition:0", cloudEvents);
+        eventStore.append(cloudEvents);
     }
 }

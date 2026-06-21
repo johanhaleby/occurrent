@@ -156,8 +156,8 @@ class DcbDslKotlinTest {
 
         await().untilAsserted {
             assertThat(metadata).hasSize(1)
-            assertThat(metadata[0].streamId).isEqualTo("dcb:partition:0")
-            assertThat(metadata[0].streamVersion).isEqualTo(1)
+            assertThat(metadata[0].streamId).startsWith("dcb:partition:")
+            assertThat(metadata[0].streamVersion).isPositive()
             assertThat(metadata[0].dcbPosition).isEqualTo(1)
             assertThat(metadata[0].dcbTags).containsExactlyInAnyOrder("name:1", "tenant:1")
         }
@@ -177,8 +177,8 @@ class DcbDslKotlinTest {
 
         await().untilAsserted {
             assertThat(metadata).hasSize(1)
-            assertThat(metadata[0].streamId).isEqualTo("dcb:partition:0")
-            assertThat(metadata[0].streamVersion).isEqualTo(1)
+            assertThat(metadata[0].streamId).startsWith("dcb:partition:")
+            assertThat(metadata[0].streamVersion).isPositive()
             assertThat(metadata[0].dcbPosition).isEqualTo(1)
             assertThat(metadata[0].dcbTags).containsExactly("name:1")
         }
@@ -213,7 +213,7 @@ class DcbDslKotlinTest {
         val cloudEvents: List<CloudEvent> = cloudEventConverter.toCloudEvents(Stream.of(*events))
             .map { event -> DcbCloudEvents.withTags(event, tags) }
             .toList()
-        eventStore.append("dcb:partition:0", cloudEvents)
+        eventStore.append(cloudEvents)
     }
 
     private fun writeStreamEvent(event: DomainEvent) {
