@@ -25,6 +25,8 @@ import org.occurrent.application.converter.typemapper.ReflectionCloudEventTypeMa
 import org.occurrent.application.service.blocking.ApplicationService;
 import org.occurrent.application.service.blocking.dcb.DcbApplicationService;
 import org.occurrent.application.service.blocking.dcb.TagGenerator;
+import org.occurrent.dsl.dcb.blocking.DcbDomainEventQueries;
+import org.occurrent.dsl.dcb.blocking.DcbSubscriptions;
 import org.occurrent.dsl.query.blocking.DomainEventQueries;
 import org.occurrent.eventstore.mongodb.spring.blocking.EventStoreConfig;
 import org.occurrent.eventstore.mongodb.spring.blocking.SpringMongoEventStore;
@@ -231,6 +233,47 @@ class OccurrentMongoAutoConfigurationCharacterizationTest {
                 .withBean(TagGenerator.class, () -> tagsForTestEvent())
                 .withBean(DcbApplicationService.class, () -> customApplicationService)
                 .run(context -> assertThat(context.getBean(DcbApplicationService.class)).isSameAs(customApplicationService));
+    }
+
+    @Test
+    void dcb_capability_auto_configures_dcb_query_and_subscription_dsl() {
+        eventStoreConfigContextRunner()
+                .withPropertyValues(
+                        "occurrent.subscription.enabled=true",
+                        "occurrent.event-store.capabilities=dcb"
+                )
+                .run(context -> {
+                    assertThat(context).hasSingleBean(DcbDomainEventQueries.class);
+                    assertThat(context).hasSingleBean(DcbSubscriptions.class);
+                });
+    }
+
+    @Test
+    void stream_only_does_not_auto_configure_dcb_query_or_subscription_dsl() {
+        eventStoreConfigContextRunner()
+                .withPropertyValues("occurrent.subscription.enabled=true")
+                .run(context -> {
+                    assertThat(context).doesNotHaveBean(DcbDomainEventQueries.class);
+                    assertThat(context).doesNotHaveBean(DcbSubscriptions.class);
+                });
+    }
+
+    @Test
+    void custom_dcb_query_and_subscription_dsl_beans_are_not_replaced() {
+        DcbDomainEventQueries<?> customQueries = mock(DcbDomainEventQueries.class);
+        DcbSubscriptions<?> customSubscriptions = mock(DcbSubscriptions.class);
+
+        eventStoreConfigContextRunner()
+                .withPropertyValues(
+                        "occurrent.subscription.enabled=true",
+                        "occurrent.event-store.capabilities=dcb"
+                )
+                .withBean(DcbDomainEventQueries.class, () -> customQueries)
+                .withBean(DcbSubscriptions.class, () -> customSubscriptions)
+                .run(context -> {
+                    assertThat(context.getBean(DcbDomainEventQueries.class)).isSameAs(customQueries);
+                    assertThat(context.getBean(DcbSubscriptions.class)).isSameAs(customSubscriptions);
+                });
     }
 
     @Test
