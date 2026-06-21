@@ -104,7 +104,7 @@ public class InMemoryEventStore implements EventStore, EventStoreOperations, Eve
      *
      * @param listener A listener that will be invoked after events have been written to the datastore (synchronously!)
      */
-    public InMemoryEventStore(@Nullable Consumer<Stream<CloudEvent>> listener) {
+    public InMemoryEventStore(Consumer<Stream<CloudEvent>> listener) {
         this(listener, new PartitionedDcbStreamIdGenerator());
     }
 
@@ -115,11 +115,8 @@ public class InMemoryEventStore implements EventStore, EventStoreOperations, Eve
      * @param listener            A listener that will be invoked after events have been written to the datastore (synchronously!)
      * @param dcbStreamIdGenerator Derives the storage stream id for DCB appends from the events' DCB tags
      */
-    public InMemoryEventStore(@Nullable Consumer<Stream<CloudEvent>> listener, DcbStreamIdGenerator dcbStreamIdGenerator) {
-        if (listener == null) {
-            throw new IllegalArgumentException("listener cannot be null");
-        }
-        this.listener = listener;
+    public InMemoryEventStore(Consumer<Stream<CloudEvent>> listener, DcbStreamIdGenerator dcbStreamIdGenerator) {
+        this.listener = requireNonNull(listener, "listener cannot be null");
         this.dcbStreamIdGenerator = requireNonNull(dcbStreamIdGenerator, DcbStreamIdGenerator.class.getSimpleName() + " cannot be null");
     }
 
