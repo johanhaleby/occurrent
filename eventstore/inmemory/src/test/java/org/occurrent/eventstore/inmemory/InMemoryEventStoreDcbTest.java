@@ -48,7 +48,7 @@ class InMemoryEventStoreDcbTest {
     @Test
     void dcb_writes_are_visible_as_normal_cloud_events() {
         InMemoryEventStore eventStore = new InMemoryEventStore();
-        eventStore.append("dcb:partition:0", List.of(taggedEvent("NameDefined", "name:1")));
+        eventStore.append(List.of(taggedEvent("NameDefined", "name:1")));
 
         assertThat(eventStore.all())
                 .extracting(CloudEvent::getType)
@@ -64,9 +64,9 @@ class InMemoryEventStoreDcbTest {
 
         // Interleave DCB appends with a regular stream write. Natural order must follow the order things were
         // written, regardless of which write path produced them.
-        eventStore.append("dcb:partition:0", List.of(taggedEvent("NameDefined", "name:1")));
+        eventStore.append(List.of(taggedEvent("NameDefined", "name:1")));
         eventStore.write("stream:1", WriteCondition.streamVersionEq(0), Stream.of(event("OrderPlaced")));
-        eventStore.append("dcb:partition:0", List.of(taggedEvent("NameChanged", "name:1")));
+        eventStore.append(List.of(taggedEvent("NameChanged", "name:1")));
 
         assertThat(eventStore.all(SortBy.natural(ASCENDING)))
                 .extracting(CloudEvent::getType)
@@ -79,9 +79,9 @@ class InMemoryEventStoreDcbTest {
 
         // Positions 1 and 3 land in one partition stream, position 2 in another. A DCB read must return them in
         // global dcbposition order, not grouped by the stream they happen to be stored in.
-        eventStore.append("dcb:partition:0", List.of(taggedEvent("NameDefined", "name:1")));
-        eventStore.append("dcb:partition:1", List.of(taggedEvent("NameChanged", "name:1")));
-        eventStore.append("dcb:partition:0", List.of(taggedEvent("OrderPlaced", "name:1")));
+        eventStore.append(List.of(taggedEvent("NameDefined", "name:1")));
+        eventStore.append(List.of(taggedEvent("NameChanged", "name:1")));
+        eventStore.append(List.of(taggedEvent("OrderPlaced", "name:1")));
 
         DcbEventStream eventStream = eventStore.read(tagsAllOf("name:1"));
 
@@ -93,7 +93,7 @@ class InMemoryEventStoreDcbTest {
     @Test
     void reads_events_matching_type_or_all_tags_after_sequence_position() {
         InMemoryEventStore eventStore = new InMemoryEventStore();
-        eventStore.append("dcb:partition:0", List.of(
+        eventStore.append(List.of(
                 taggedEvent("NameDefined", "name:1"),
                 taggedEvent("NameChanged", "name:1", "tenant:1"),
                 taggedEvent("OrderPlaced", "order:1")));
@@ -113,7 +113,7 @@ class InMemoryEventStoreDcbTest {
     @Test
     void reads_tagged_events_except_excluded_types() {
         InMemoryEventStore eventStore = new InMemoryEventStore();
-        eventStore.append("dcb:partition:0", List.of(
+        eventStore.append(List.of(
                 taggedEvent("NameDefined", "name:1"),
                 taggedEvent("NameSnapshot", "name:1"),
                 taggedEvent("OrderPlaced", "order:1")));
@@ -128,7 +128,7 @@ class InMemoryEventStoreDcbTest {
     @Test
     void reads_type_and_tagged_events_except_excluded_types() {
         InMemoryEventStore eventStore = new InMemoryEventStore();
-        eventStore.append("dcb:partition:0", List.of(
+        eventStore.append(List.of(
                 taggedEvent("NameDefined", "name:1"),
                 taggedEvent("NameChanged", "name:1"),
                 taggedEvent("OrderPlaced", "name:1")));
@@ -146,7 +146,7 @@ class InMemoryEventStoreDcbTest {
     @Test
     void applies_excluded_types_per_query_item() {
         InMemoryEventStore eventStore = new InMemoryEventStore();
-        eventStore.append("dcb:partition:0", List.of(
+        eventStore.append(List.of(
                 taggedEvent("NameSnapshot", "name:1"),
                 taggedEvent("NameDefined", "name:1"),
                 taggedEvent("OrderPlaced", "order:1")));
@@ -163,13 +163,12 @@ class InMemoryEventStoreDcbTest {
     @Test
     void rejects_append_when_matching_event_exists_after_condition_position() {
         InMemoryEventStore eventStore = new InMemoryEventStore();
-        eventStore.append("dcb:partition:0", List.of(taggedEvent("NameDefined", "name:1")));
+        eventStore.append(List.of(taggedEvent("NameDefined", "name:1")));
         DcbEventStream readModel = eventStore.read(tagsAllOf("name:1"));
 
-        eventStore.append("dcb:partition:0", List.of(taggedEvent("NameChanged", "name:1")));
+        eventStore.append(List.of(taggedEvent("NameChanged", "name:1")));
 
         assertThatThrownBy(() -> eventStore.append(
-                "dcb:partition:0",
                 List.of(taggedEvent("NameChanged", "name:1")),
                 failIfEventsMatch(tagsAllOf("name:1"), readModel.lastSequencePosition())))
                 .isExactlyInstanceOf(DcbAppendConditionNotFulfilledException.class);
@@ -178,14 +177,13 @@ class InMemoryEventStoreDcbTest {
     @Test
     void append_condition_ignores_excluded_event_types_after_condition_position() {
         InMemoryEventStore eventStore = new InMemoryEventStore();
-        eventStore.append("dcb:partition:0", List.of(taggedEvent("NameDefined", "name:1")));
+        eventStore.append(List.of(taggedEvent("NameDefined", "name:1")));
         DcbQuery query = tagsAllOfExcludingTypes(List.of("name:1"), List.of("NameSnapshot"));
         DcbEventStream readModel = eventStore.read(query);
 
-        eventStore.append("dcb:partition:0", List.of(taggedEvent("NameSnapshot", "name:1")));
+        eventStore.append(List.of(taggedEvent("NameSnapshot", "name:1")));
 
         DcbAppendResult result = eventStore.append(
-                "dcb:partition:0",
                 List.of(taggedEvent("NameChanged", "name:1")),
                 failIfEventsMatch(query, readModel.lastSequencePosition()));
 
@@ -195,14 +193,13 @@ class InMemoryEventStoreDcbTest {
     @Test
     void append_condition_rejects_non_excluded_event_types_after_condition_position() {
         InMemoryEventStore eventStore = new InMemoryEventStore();
-        eventStore.append("dcb:partition:0", List.of(taggedEvent("NameDefined", "name:1")));
+        eventStore.append(List.of(taggedEvent("NameDefined", "name:1")));
         DcbQuery query = tagsAllOfExcludingTypes(List.of("name:1"), List.of("NameSnapshot"));
         DcbEventStream readModel = eventStore.read(query);
 
-        eventStore.append("dcb:partition:0", List.of(taggedEvent("NameChanged", "name:1")));
+        eventStore.append(List.of(taggedEvent("NameChanged", "name:1")));
 
         assertThatThrownBy(() -> eventStore.append(
-                "dcb:partition:0",
                 List.of(taggedEvent("NameImported", "name:1")),
                 failIfEventsMatch(query, readModel.lastSequencePosition())))
                 .isExactlyInstanceOf(DcbAppendConditionNotFulfilledException.class);
@@ -213,9 +210,9 @@ class InMemoryEventStoreDcbTest {
         InMemoryEventStore eventStore = new InMemoryEventStore();
         CloudEvent cloudEvent = taggedEvent("NameDefined", "name:1");
 
-        eventStore.append("dcb:partition:0", List.of(cloudEvent));
+        eventStore.append(List.of(cloudEvent));
 
-        assertThatThrownBy(() -> eventStore.append("dcb:partition:0", List.of(cloudEvent)))
+        assertThatThrownBy(() -> eventStore.append(List.of(cloudEvent)))
                 .isExactlyInstanceOf(DuplicateCloudEventException.class);
     }
 
@@ -227,7 +224,7 @@ class InMemoryEventStoreDcbTest {
                 .withData("{\"tags\":[\"name:1\"]}".getBytes(UTF_8))
                 .build(), Set.of("name:2"));
 
-        eventStore.append("dcb:partition:0", List.of(cloudEvent));
+        eventStore.append(List.of(cloudEvent));
 
         assertThat(eventStore.read(tagsAllOf("name:1")).events()).isEmpty();
         assertThat(eventStore.read(tagsAllOf("name:2")).events()).hasSize(1);
@@ -236,18 +233,18 @@ class InMemoryEventStoreDcbTest {
     @Test
     void delete_all_resets_dcb_sequence() {
         InMemoryEventStore eventStore = new InMemoryEventStore();
-        eventStore.append("dcb:partition:0", List.of(taggedEvent("NameDefined", "name:1")));
+        eventStore.append(List.of(taggedEvent("NameDefined", "name:1")));
 
         eventStore.deleteAll();
 
         assertThat(eventStore.read(all()).lastSequencePosition()).isZero();
-        assertThat(eventStore.append("dcb:partition:0", List.of(taggedEvent("NameDefined", "name:1"))).firstSequencePosition()).isEqualTo(1);
+        assertThat(eventStore.append(List.of(taggedEvent("NameDefined", "name:1"))).firstSequencePosition()).isEqualTo(1);
     }
 
     @Test
     void last_sequence_position_is_the_store_head_not_the_max_matched_position() {
         InMemoryEventStore eventStore = new InMemoryEventStore();
-        eventStore.append("dcb:partition:0", List.of(
+        eventStore.append(List.of(
                 taggedEvent("NameDefined", "name:1"),
                 taggedEvent("NameChanged", "name:1"),
                 taggedEvent("OrderPlaced", "name:2")));
@@ -267,15 +264,15 @@ class InMemoryEventStoreDcbTest {
     void failed_append_does_not_consume_a_dcb_position() {
         InMemoryEventStore eventStore = new InMemoryEventStore();
         CloudEvent duplicate = taggedEvent("NameDefined", "name:1");
-        DcbAppendResult first = eventStore.append("dcb:partition:0", List.of(duplicate));
+        DcbAppendResult first = eventStore.append(List.of(duplicate));
 
-        assertThatThrownBy(() -> eventStore.append("dcb:partition:0", List.of(duplicate)))
+        assertThatThrownBy(() -> eventStore.append(List.of(duplicate)))
                 .isExactlyInstanceOf(DuplicateCloudEventException.class);
 
         // The shared DcbAppendResult contract only guarantees ordering across appends, but the in-memory store
         // advances its position counter only after an append commits, so a rejected append consumes no position
         // and the next successful append gets exactly the following position.
-        DcbAppendResult next = eventStore.append("dcb:partition:0", List.of(taggedEvent("NameChanged", "name:2")));
+        DcbAppendResult next = eventStore.append(List.of(taggedEvent("NameChanged", "name:2")));
         assertThat(next.firstSequencePosition()).isEqualTo(first.lastSequencePosition() + 1);
         assertThat(next.lastSequencePosition()).isEqualTo(next.firstSequencePosition());
     }
@@ -283,9 +280,9 @@ class InMemoryEventStoreDcbTest {
     @Test
     void exists_and_count_report_matching_dcb_events() {
         InMemoryEventStore eventStore = new InMemoryEventStore();
-        eventStore.append("dcb:partition:0", List.of(taggedEvent("NameDefined", "name:1")));
-        eventStore.append("dcb:partition:0", List.of(taggedEvent("NameChanged", "name:1")));
-        eventStore.append("dcb:partition:0", List.of(taggedEvent("OrderPlaced", "order:1")));
+        eventStore.append(List.of(taggedEvent("NameDefined", "name:1")));
+        eventStore.append(List.of(taggedEvent("NameChanged", "name:1")));
+        eventStore.append(List.of(taggedEvent("OrderPlaced", "order:1")));
 
         assertThat(eventStore.exists(tagsAllOf("name:1"))).isTrue();
         assertThat(eventStore.exists(tagsAllOf("absent:1"))).isFalse();
@@ -297,9 +294,9 @@ class InMemoryEventStoreDcbTest {
     @Test
     void read_honors_up_to_sequence_position_upper_bound() {
         InMemoryEventStore eventStore = new InMemoryEventStore();
-        eventStore.append("dcb:partition:0", List.of(taggedEvent("NameDefined", "name:1")));
-        eventStore.append("dcb:partition:0", List.of(taggedEvent("NameChanged", "name:1")));
-        eventStore.append("dcb:partition:0", List.of(taggedEvent("OrderPlaced", "name:1")));
+        eventStore.append(List.of(taggedEvent("NameDefined", "name:1")));
+        eventStore.append(List.of(taggedEvent("NameChanged", "name:1")));
+        eventStore.append(List.of(taggedEvent("OrderPlaced", "name:1")));
 
         DcbEventStream upToTwo = eventStore.read(tagsAllOf("name:1"), DcbReadOptions.upToSequencePosition(2));
 
@@ -311,9 +308,9 @@ class InMemoryEventStoreDcbTest {
     @Test
     void any_of_matches_the_union_of_its_items() {
         InMemoryEventStore eventStore = new InMemoryEventStore();
-        eventStore.append("dcb:partition:0", List.of(taggedEvent("NameDefined", "name:1")));
-        eventStore.append("dcb:partition:0", List.of(taggedEvent("OrderPlaced", "order:1")));
-        eventStore.append("dcb:partition:0", List.of(taggedEvent("Unrelated", "other:1")));
+        eventStore.append(List.of(taggedEvent("NameDefined", "name:1")));
+        eventStore.append(List.of(taggedEvent("OrderPlaced", "order:1")));
+        eventStore.append(List.of(taggedEvent("Unrelated", "other:1")));
 
         DcbQuery query = anyOf(
                 DcbQueryItem.types(List.of("NameDefined")),

@@ -22,6 +22,7 @@
 
 #### Highlights
 
+* `DcbEventStore.append` no longer takes a storage stream id. The store now derives the Occurrent storage stream from the appended events' DCB tags, so callers reason in DCB terms (tags and append conditions) instead of storage stream ids. Placement is configured on the store through a `DcbStreamIdGenerator` (moved to the `eventstore-api-dcb` module, defaulting to `PartitionedDcbStreamIdGenerator`), set on `InMemoryEventStore` via a constructor and on the Spring Mongo store via `EventStoreConfig.Builder.dcbStreamIdGenerator(..)`. The application service no longer takes a `DcbStreamIdGenerator`.
 * Added initial Dynamic Consistency Boundary (DCB) support.
   * New module: `org.occurrent:eventstore-api-dcb`.
   * New core API types include `DcbEventStore`, `DcbQuery`, `DcbQueryItem`, `DcbReadOptions`, `DcbEventStream`, `DcbAppendCondition`, `DcbAppendResult`, `DcbAppendConditionNotFulfilledException`, and `DcbCloudEvents`.
