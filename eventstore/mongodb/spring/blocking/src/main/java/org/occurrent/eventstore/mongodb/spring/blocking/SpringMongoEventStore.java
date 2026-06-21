@@ -337,7 +337,7 @@ public class SpringMongoEventStore implements EventStore, EventStoreOperations, 
         // condition) fall back to the events' tags so tagless boundaries do not all collapse onto one hot partition.
         Set<String> conditionBoundaryTags = condition == null ? Set.of() : DcbCloudEvents.boundaryTags(condition.query());
         Set<String> placementTags = conditionBoundaryTags.isEmpty() ? boundaryTagsOf(eventsToAppend) : conditionBoundaryTags;
-        String streamId = dcbStreamIdGenerator.generateStreamId(placementTags);
+        String streamId = requireNonNull(dcbStreamIdGenerator.generateStreamId(placementTags), "DcbStreamIdGenerator returned a null stream id");
 
         return requireNonNull(transactionTemplate.execute(transactionStatus -> {
             long firstPosition = reserveDcbPositions(eventsToAppend.size());
