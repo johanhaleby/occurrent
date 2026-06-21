@@ -222,26 +222,39 @@ public class CatchupSubscriptionModel implements SubscriptionModel, DelegatingSu
             globalSubscriptionPosition = subscriptionModel.globalSubscriptionPosition();
         }
 
-        // Here we check if new events have arrived during catchup phase, if so we stream/catch-up these events as well.
-        long numberOfEventsAfterCatchupSubscriptionCompleted = eventStoreQueries.count(catchupFilter);
-        long numberOfEventsNotConsumed = numberOfEventsAfterCatchupSubscriptionCompleted - numberOfEventsBeforeStartingCatchupSubscription;
-
         // We generate a cache so that events that are streamed at the same time as streaming the events missed
         // during the catch-up phase are not streamed again.
         FixedSizeCache catchupPhaseCache = new FixedSizeCache(config.cacheSize);
-        if (numberOfEventsNotConsumed > 0) {
-            // The events written during the catch-up phase are, by definition, the most-recently-inserted events.
-            // We fetch exactly them by reading the newest "numberOfEventsNotConsumed" events in *insertion order*
-            // (SortBy.natural, descending + limit, no skip) and then reversing them back to insertion order for
-            // delivery. Selecting by insertion order rather than the configurable, time-based catchupPhaseSortBy
-            // is what makes this reconciliation loss-free under clock skew: a during-catch-up event whose "time"
-            // is earlier than the replay cursor's already-passed position would otherwise sort before the
-            // already-processed boundary (missed here) and sit below the live subscription's resume position
-            // (missed there too), and would be silently lost. Reading the newest N in insertion order also reads
-            // only the recent tail instead of skipping the whole backlog, which matters on large event stores.
-            List<CloudEvent> eventsWrittenDuringCatchup = new ArrayList<>(eventStoreQueries.query(catchupFilter, 0, Math.toIntExact(numberOfEventsNotConsumed), SortBy.natural(DESCENDING)).toList());
+
+        // Reconcile events that arrived during the catch-up phase, i.e. those written after the bulk replay started
+        // but at or before the live subscription's resume position (globalSubscriptionPosition). They are, by
+        // definition, the most-recently-inserted matching events, so we read the newest ones in *insertion order*
+        // (SortBy.natural, descending + limit, no skip) and reverse them back to insertion order for delivery.
+        //
+        // Selecting by insertion order rather than the configurable, time-based catchupPhaseSortBy is what makes this
+        // reconciliation loss-free under clock skew: a during-catch-up event whose "time" is earlier than the replay
+        // cursor's already-passed position would otherwise sort before the already-processed boundary (missed here)
+        // and sit below the live subscription's resume position (missed there too), and would be silently lost.
+        // Reading the newest N in insertion order also reads only the recent tail instead of skipping the whole
+        // backlog, which matters on large event stores.
+        //
+        // The number to read is derived from a count, but more events can be written between that count and the read.
+        // Such a write inflates the store and shifts the "newest N" window forward, pushing the oldest during-catch-up
+        // event out of the read; being at or before globalSubscriptionPosition it would not be re-delivered by the live
+        // subscription either, and would be lost. To close that window we re-read until the matching count stops
+        // growing: each pass reads every event after the pre-catch-up boundary, so a pass during which no new event is
+        // written has necessarily delivered them all. Re-reads re-deliver already-seen events, which are deduped by the
+        // cache (delivery is at-least-once). Any event written after a pass is, by definition, newer than
+        // globalSubscriptionPosition and is therefore covered by the live subscription regardless.
+        long reconciledThroughCount = numberOfEventsBeforeStartingCatchupSubscription;
+        long matchingEventCount = eventStoreQueries.count(catchupFilter);
+        while (matchingEventCount > reconciledThroughCount) {
+            long numberOfEventsToReconcile = matchingEventCount - numberOfEventsBeforeStartingCatchupSubscription;
+            List<CloudEvent> eventsWrittenDuringCatchup = new ArrayList<>(eventStoreQueries.query(catchupFilter, 0, Math.toIntExact(numberOfEventsToReconcile), SortBy.natural(DESCENDING)).toList());
             Collections.reverse(eventsWrittenDuringCatchup);
             runCatchupForStream(eventsWrittenDuringCatchup.stream(), subscriptionId, action, catchupPhaseCache);
+            reconciledThroughCount = matchingEventCount;
+            matchingEventCount = eventStoreQueries.count(catchupFilter);
         }
 
         // We check if the delegated subscription model is not allowed to subscribe. If so, we remove any temporary subscription position written during the catchup phase
@@ -339,14 +352,21 @@ public class CatchupSubscriptionModel implements SubscriptionModel, DelegatingSu
     }
 
     private void runCatchupForStream(Stream<CloudEvent> cloudEvents, String subscriptionId, Consumer<CloudEvent> action, @Nullable FixedSizeCache cache) {
-        Stream<CloudEvent> takeWhile = cloudEvents.takeWhile(__ -> !shuttingDown && runningCatchupSubscriptions.containsKey(subscriptionId));
-        if (cache != null) {
-            takeWhile = takeWhile.peek(e -> cache.put(e.getId()));
+        // try-with-resources closes the source stream even when takeWhile short-circuits on shutdown, so a
+        // resource-backed read (the Spring Mongo bulk replay wraps a server cursor) does not leak its cursor.
+        try (cloudEvents) {
+            Stream<CloudEvent> takeWhile = cloudEvents.takeWhile(__ -> !shuttingDown && runningCatchupSubscriptions.containsKey(subscriptionId));
+            if (cache != null) {
+                // Skip events already delivered in an earlier reconciliation pass (the during-catch-up delta is re-read
+                // until the matching count stabilises, so passes overlap) and record the rest so the live subscription can
+                // skip them at the handover seam. Without the filter the overlapping re-reads would deliver duplicates.
+                takeWhile = takeWhile.filter(e -> !cache.isCached(e.getId())).peek(e -> cache.put(e.getId()));
+            }
+            takeWhile
+                    .peek(action)
+                    .filter(returnIfSubscriptionPositionStorageConfigIs(PersistSubscriptionPositionDuringCatchupPhase.class, PersistSubscriptionPositionDuringCatchupPhase::persistCloudEventPositionPredicate).orElse(__ -> false))
+                    .forEach(e -> doIfSubscriptionPositionStorageConfigIs(PersistSubscriptionPositionDuringCatchupPhase.class, cfg -> cfg.storage().save(subscriptionId, TimeBasedSubscriptionPosition.from(e.getTime()))));
         }
-        takeWhile
-                .peek(action)
-                .filter(returnIfSubscriptionPositionStorageConfigIs(PersistSubscriptionPositionDuringCatchupPhase.class, PersistSubscriptionPositionDuringCatchupPhase::persistCloudEventPositionPredicate).orElse(__ -> false))
-                .forEach(e -> doIfSubscriptionPositionStorageConfigIs(PersistSubscriptionPositionDuringCatchupPhase.class, cfg -> cfg.storage().save(subscriptionId, TimeBasedSubscriptionPosition.from(e.getTime()))));
     }
 
     private static SubscriptionModelContext generateSubscriptionModelContext() {

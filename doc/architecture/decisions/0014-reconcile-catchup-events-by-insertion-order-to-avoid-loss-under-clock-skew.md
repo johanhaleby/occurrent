@@ -38,6 +38,21 @@ eventStoreQueries.query(catchupFilter, 0, numberOfEventsNotConsumed, SortBy.natu
 
 `SortBy.natural` is insertion order. It is monotonic with insertion regardless of the events' `time`, so a clock-skewed event written during the replay is still among the newest events and is no longer skipped. The live resume position stays captured after the bulk replay, so its token stays fresh and the oplog problem above does not arise. The bulk replay keeps `catchupPhaseSortBy` unchanged, so its time-ordered delivery and its index requirements are the same as before.
 
+The delta size comes from a count, and the count and the `$natural` read are not atomic: an event written between them inflates the store and shifts the newest-N window forward, pushing the oldest during-catch-up event out of the read. That event sits at or before the live resume position, so the live subscription would not redeliver it either, and it would be lost. To close that window the delta step re-reads until the matching count stops growing:
+
+```java
+long reconciledThroughCount = numberOfEventsBeforeStartingCatchupSubscription;
+long matchingEventCount = eventStoreQueries.count(catchupFilter);
+while (matchingEventCount > reconciledThroughCount) {
+    long numberOfEventsToReconcile = matchingEventCount - numberOfEventsBeforeStartingCatchupSubscription;
+    // read newest numberOfEventsToReconcile in SortBy.natural(DESCENDING), reverse, deliver through the cache
+    reconciledThroughCount = matchingEventCount;
+    matchingEventCount = eventStoreQueries.count(catchupFilter);
+}
+```
+
+Each pass reads every event after the pre-catch-up boundary, so a pass during which no event is written has necessarily delivered them all; any event written after a pass is, by definition, newer than the live resume position and is covered by the live subscription regardless. Re-reads re-deliver already-seen events, which the existing handover cache dedupes (delivery stays at-least-once).
+
 `SortBy.natural` has to mean the same thing on both event stores for this to be correct. On MongoDB it maps to `$natural`, which is global insertion order. On `InMemoryEventStore` it iterated the per-stream map, so an event appended to an existing stream was grouped with that stream rather than placed at the global end. That is now fixed: `InMemoryEventStore` assigns each event a global insertion sequence at write time and sorts `SortBy.natural` by it, matching MongoDB. The existing test `sort_by_natural_asc_sorts_by_insertion_order` already described this intent, it only passed before because it wrote one event per stream.
 
 ### Performance
@@ -67,5 +82,6 @@ Positive:
 Negative:
 
 - The delta's reverse `$natural` scan is not index-backed. With a selective filter on a busy store it reads recent non-matching writes until it has `delta` matches. For large rebuilds, keep the replay window low-write so this stays small. This is the same operational posture the motivating rebuild already uses.
-- The delta size comes from a count difference (`count(catchupFilter)` after the replay minus the count before it), and the count and the `$natural` query are not atomic. Two narrow cases remain. If matching events are written between the after-replay count and the query, the newest-N window shifts forward and can push the oldest during-replay events out of it (those are below the live resume position, so they would be lost). If matching events are deleted during the replay, the net count understates how many were written and the query reads too few. The write window is tiny in practice because there is no I/O between the count and the query, and append-only stores never hit the delete case, but both are real. Closing them fully needs the global position from ADR 0008, or an ascending `skip = count-before` read that walks the whole backlog (the cost this change set out to avoid).
+- The delta size comes from a count difference (`count(catchupFilter)` after the replay minus the count before it), and the count and the `$natural` query are not atomic. The concurrent-write case, where an event written between the after-replay count and the query shifts the newest-N window and pushes the oldest during-replay events out of it (those are below the live resume position, so they would be lost), is closed by the re-read loop in the Decision: the loop keeps reading until the count stops growing, so a shifted-out event is picked up on a later pass. One narrow case remains: if matching events are deleted during the replay, the net count understates how many were written and the loop terminates having read too few. Append-only stores never hit this. Closing it fully needs the global position from ADR 0008. The loop also assumes the matching-event count eventually stabilises during catch-up. A store under sustained write saturation could keep it iterating, but catch-up is a bounded startup activity and the live subscription handles steady state.
+- The loop's termination depends on `count(catchupFilter)` being exact. The MongoDB store returns `estimatedDocumentCount` for `Filter.All`, which is the count used when a subscription replays from beginning of time with no filter, and that value is approximate. It can undercount after an unclean shutdown, which would terminate the loop early and lose events, and it can overcount under sharding, which only causes extra deduplicated reads. The in-memory store counts exactly. As with the deletion case, closing this fully needs the global position from ADR 0008, tracked for the position-based DCB catch-up. Until then a beginning-of-time rebuild on MongoDB should run against a cleanly shut down collection.
 - The no-live case (an in-memory projection that replays from beginning of time on every restart and never starts the wrapped subscription) relies on the same insertion-order delta and is correct on stores whose natural order is global insertion order.
