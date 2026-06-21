@@ -14,7 +14,7 @@
  * limitations under the License.
  */
 
-package org.occurrent.application.service.blocking.dcb;
+package org.occurrent.eventstore.api.dcb;
 
 import org.junit.jupiter.api.DisplayNameGeneration;
 import org.junit.jupiter.api.DisplayNameGenerator.ReplaceUnderscores;

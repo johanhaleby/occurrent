@@ -19,6 +19,8 @@ package org.occurrent.eventstore.mongodb.spring.blocking;
 import org.jspecify.annotations.NullMarked;
 import org.jspecify.annotations.NullUnmarked;
 import org.occurrent.eventstore.api.blocking.EventStoreQueries;
+import org.occurrent.eventstore.api.dcb.DcbStreamIdGenerator;
+import org.occurrent.eventstore.api.dcb.PartitionedDcbStreamIdGenerator;
 import org.occurrent.mongodb.timerepresentation.TimeRepresentation;
 import org.springframework.data.domain.Sort;
 import org.springframework.data.mongodb.MongoTransactionManager;
@@ -50,6 +52,7 @@ public class EventStoreConfig {
     public final Function<Query, Query> queryOptions;
     public final Function<Query, Query> readOptions;
     public final Set<SpringMongoEventStoreCapability> eventStoreCapabilities;
+    public final DcbStreamIdGenerator dcbStreamIdGenerator;
 
     /**
      * Create a new instance of {@code EventStoreConfig}.
@@ -59,10 +62,10 @@ public class EventStoreConfig {
      * @param timeRepresentation       How time should be represented in the database
      */
     public EventStoreConfig(String eventStoreCollectionName, TransactionTemplate transactionTemplate, TimeRepresentation timeRepresentation) {
-        this(eventStoreCollectionName, transactionTemplate, timeRepresentation, DEFAULT_QUERY_OPTIONS_FUNCTION, DEFAULT_READ_OPTIONS_FUNCTION, DEFAULT_EVENT_STORE_CAPABILITIES);
+        this(eventStoreCollectionName, transactionTemplate, timeRepresentation, DEFAULT_QUERY_OPTIONS_FUNCTION, DEFAULT_READ_OPTIONS_FUNCTION, DEFAULT_EVENT_STORE_CAPABILITIES, new PartitionedDcbStreamIdGenerator());
     }
 
-    private EventStoreConfig(String eventStoreCollectionName, TransactionTemplate transactionTemplate, TimeRepresentation timeRepresentation, Function<Query, Query> queryOptions, Function<Query, Query> readOptions, Set<SpringMongoEventStoreCapability> eventStoreCapabilities) {
+    private EventStoreConfig(String eventStoreCollectionName, TransactionTemplate transactionTemplate, TimeRepresentation timeRepresentation, Function<Query, Query> queryOptions, Function<Query, Query> readOptions, Set<SpringMongoEventStoreCapability> eventStoreCapabilities, DcbStreamIdGenerator dcbStreamIdGenerator) {
         requireNonNull(eventStoreCollectionName, "Event store collection name cannot be null");
         requireNonNull(transactionTemplate, TransactionTemplate.class.getSimpleName() + " cannot be null");
         requireNonNull(timeRepresentation, TimeRepresentation.class.getSimpleName() + " cannot be null");
@@ -70,6 +73,7 @@ public class EventStoreConfig {
         if (eventStoreCapabilities.isEmpty()) {
             throw new IllegalArgumentException("Event store capabilities cannot be empty");
         }
+        requireNonNull(dcbStreamIdGenerator, DcbStreamIdGenerator.class.getSimpleName() + " cannot be null");
         // Note that we deliberately allow the WriteConcern to be null in order to be able to use the default MongoTemplate settings
         this.eventStoreCollectionName = eventStoreCollectionName;
         this.transactionTemplate = transactionTemplate;
@@ -77,6 +81,7 @@ public class EventStoreConfig {
         this.queryOptions = queryOptions;
         this.readOptions = readOptions;
         this.eventStoreCapabilities = Set.copyOf(eventStoreCapabilities);
+        this.dcbStreamIdGenerator = dcbStreamIdGenerator;
     }
 
     @Override
@@ -84,12 +89,12 @@ public class EventStoreConfig {
         if (this == o) return true;
         if (!(o instanceof EventStoreConfig)) return false;
         EventStoreConfig that = (EventStoreConfig) o;
-        return Objects.equals(eventStoreCollectionName, that.eventStoreCollectionName) && Objects.equals(transactionTemplate, that.transactionTemplate) && timeRepresentation == that.timeRepresentation && Objects.equals(queryOptions, that.queryOptions) && Objects.equals(readOptions, that.readOptions) && Objects.equals(eventStoreCapabilities, that.eventStoreCapabilities);
+        return Objects.equals(eventStoreCollectionName, that.eventStoreCollectionName) && Objects.equals(transactionTemplate, that.transactionTemplate) && timeRepresentation == that.timeRepresentation && Objects.equals(queryOptions, that.queryOptions) && Objects.equals(readOptions, that.readOptions) && Objects.equals(eventStoreCapabilities, that.eventStoreCapabilities) && Objects.equals(dcbStreamIdGenerator, that.dcbStreamIdGenerator);
     }
 
     @Override
     public int hashCode() {
-        return Objects.hash(eventStoreCollectionName, transactionTemplate, timeRepresentation, queryOptions, readOptions, eventStoreCapabilities);
+        return Objects.hash(eventStoreCollectionName, transactionTemplate, timeRepresentation, queryOptions, readOptions, eventStoreCapabilities, dcbStreamIdGenerator);
     }
 
     @Override
@@ -101,6 +106,7 @@ public class EventStoreConfig {
                 .add("queryOptions=" + queryOptions)
                 .add("readOptions=" + readOptions)
                 .add("eventStoreCapabilities=" + eventStoreCapabilities)
+                .add("dcbStreamIdGenerator=" + dcbStreamIdGenerator)
                 .toString();
     }
 
@@ -112,6 +118,7 @@ public class EventStoreConfig {
         private Function<Query, Query> queryOptions = DEFAULT_QUERY_OPTIONS_FUNCTION;
         private Function<Query, Query> readOptions = DEFAULT_READ_OPTIONS_FUNCTION;
         private Set<SpringMongoEventStoreCapability> eventStoreCapabilities = DEFAULT_EVENT_STORE_CAPABILITIES;
+        private DcbStreamIdGenerator dcbStreamIdGenerator = new PartitionedDcbStreamIdGenerator();
 
         /**
          * @param eventStoreCollectionName The collection in which the events are persisted
@@ -227,8 +234,22 @@ public class EventStoreConfig {
             return eventStoreCapabilities(capabilities);
         }
 
+        /**
+         * Choose how DCB-written events are placed into Occurrent storage streams. The default partitions them
+         * across a fixed number of streams keyed by the events' DCB tags. The placement does not affect DCB read or
+         * append-condition semantics, which are global by sequence position and tags.
+         *
+         * @param dcbStreamIdGenerator The generator that derives the storage stream id from the events' DCB tags.
+         * @return The same {@code Builder} instance.
+         */
+        @NullMarked
+        public Builder dcbStreamIdGenerator(DcbStreamIdGenerator dcbStreamIdGenerator) {
+            this.dcbStreamIdGenerator = requireNonNull(dcbStreamIdGenerator, DcbStreamIdGenerator.class.getSimpleName() + " cannot be null");
+            return this;
+        }
+
         public EventStoreConfig build() {
-            return new EventStoreConfig(eventStoreCollectionName, transactionTemplate, timeRepresentation, queryOptions, readOptions, eventStoreCapabilities);
+            return new EventStoreConfig(eventStoreCollectionName, transactionTemplate, timeRepresentation, queryOptions, readOptions, eventStoreCapabilities, dcbStreamIdGenerator);
         }
     }
 }

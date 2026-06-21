@@ -68,12 +68,17 @@ public interface DcbEventStore {
     }
 
     /**
-     * Appends DCB-tagged CloudEvents to the given Occurrent storage stream without an additional DCB condition.
+     * Appends DCB-tagged CloudEvents without an additional DCB condition.
+     * <p>
+     * The Occurrent storage stream the events are placed in is derived by the store from the events' DCB tags, so
+     * callers reason in DCB terms (tags and append conditions) rather than in storage stream ids.
      */
-    DcbAppendResult append(String streamId, List<CloudEvent> events);
+    DcbAppendResult append(List<CloudEvent> events);
 
     /**
-     * Appends DCB-tagged CloudEvents to the given Occurrent storage stream if {@code condition} is fulfilled.
+     * Appends DCB-tagged CloudEvents if {@code condition} is fulfilled.
+     * <p>
+     * The Occurrent storage stream the events are placed in is derived by the store from the events' DCB tags.
      */
-    DcbAppendResult append(String streamId, List<CloudEvent> events, DcbAppendCondition condition);
+    DcbAppendResult append(List<CloudEvent> events, DcbAppendCondition condition);
 }

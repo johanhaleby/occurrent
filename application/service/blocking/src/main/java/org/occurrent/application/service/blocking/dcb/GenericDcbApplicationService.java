@@ -26,62 +26,48 @@ import org.occurrent.retry.RetryStrategy.Retry;
 
 import java.time.Duration;
 import java.util.ArrayList;
-import java.util.Collection;
 import java.util.List;
 import java.util.Objects;
 import java.util.Optional;
-import java.util.Set;
-import java.util.TreeSet;
 import java.util.function.Function;
 import java.util.stream.Stream;
 
-import static java.util.stream.Collectors.toCollection;
 
 /**
  * Default blocking {@link DcbApplicationService} implementation.
  * <p>
- * It coordinates a {@link DcbEventStore}, a {@link CloudEventConverter}, a
- * {@link TagGenerator}, and a {@link DcbStreamIdGenerator} so application code can keep
- * domain decisions expressed in domain events while DCB metadata is applied at the
- * CloudEvent boundary.
+ * It coordinates a {@link DcbEventStore}, a {@link CloudEventConverter}, and a
+ * {@link TagGenerator} so application code can keep domain decisions expressed in domain
+ * events while DCB metadata is applied at the CloudEvent boundary. Storage stream
+ * placement is configured on the {@link DcbEventStore}.
  */
 @NullMarked
 public class GenericDcbApplicationService<E> implements DcbApplicationService<E> {
     private final DcbEventStore eventStore;
     private final CloudEventConverter<E> cloudEventConverter;
     private final TagGenerator<E> tagGenerator;
-    private final DcbStreamIdGenerator streamIdGenerator;
     private final RetryStrategy retryStrategy;
 
     /**
-     * Creates a service with the default partitioned storage stream id generator and retry strategy.
+     * Creates a service with the default retry strategy.
      */
     public GenericDcbApplicationService(DcbEventStore eventStore, CloudEventConverter<E> cloudEventConverter, TagGenerator<E> tagGenerator) {
-        this(eventStore, cloudEventConverter, tagGenerator, new PartitionedDcbStreamIdGenerator(), defaultRetryStrategy());
+        this(eventStore, cloudEventConverter, tagGenerator, defaultRetryStrategy());
     }
 
     /**
-     * Creates a service with the default partitioned storage stream id generator and a custom retry strategy.
+     * Creates a service with explicit collaborators for event conversion, DCB tagging, and retries after DCB
+     * append conflicts. Storage stream placement is configured on the {@link DcbEventStore}, not here.
      */
     public GenericDcbApplicationService(DcbEventStore eventStore, CloudEventConverter<E> cloudEventConverter, TagGenerator<E> tagGenerator, RetryStrategy retryStrategy) {
-        this(eventStore, cloudEventConverter, tagGenerator, new PartitionedDcbStreamIdGenerator(), retryStrategy);
-    }
-
-    /**
-     * Creates a service with explicit collaborators for event conversion, DCB tagging,
-     * storage stream placement, and retries after DCB append conflicts.
-     */
-    public GenericDcbApplicationService(DcbEventStore eventStore, CloudEventConverter<E> cloudEventConverter, TagGenerator<E> tagGenerator, DcbStreamIdGenerator streamIdGenerator, RetryStrategy retryStrategy) {
         if (eventStore == null) throw new IllegalArgumentException(DcbEventStore.class.getSimpleName() + " cannot be null");
         if (cloudEventConverter == null) throw new IllegalArgumentException(CloudEventConverter.class.getSimpleName() + " cannot be null");
         if (tagGenerator == null) throw new IllegalArgumentException(TagGenerator.class.getSimpleName() + " cannot be null");
-        if (streamIdGenerator == null) throw new IllegalArgumentException(DcbStreamIdGenerator.class.getSimpleName() + " cannot be null");
         if (retryStrategy == null) throw new IllegalArgumentException(RetryStrategy.class.getSimpleName() + " cannot be null");
 
         this.eventStore = eventStore;
         this.cloudEventConverter = cloudEventConverter;
         this.tagGenerator = tagGenerator;
-        this.streamIdGenerator = streamIdGenerator;
         this.retryStrategy = retryStrategy;
     }
 
@@ -104,8 +90,7 @@ public class GenericDcbApplicationService<E> implements DcbApplicationService<E>
             List<CloudEvent> cloudEvents = cloudEventConverter.toCloudEvents(newDomainEvents.stream()).toList();
             List<CloudEvent> dcbEvents = addTags(newDomainEvents, cloudEvents);
             DcbAppendCondition appendCondition = DcbAppendCondition.failIfEventsMatch(query, eventStream.lastSequencePosition());
-            String streamId = streamIdGenerator.generateStreamId(tagsFromQuery(query));
-            return Optional.of(eventStore.append(streamId, dcbEvents, appendCondition));
+            return Optional.of(eventStore.append(dcbEvents, appendCondition));
         });
     }
 
@@ -118,16 +103,6 @@ public class GenericDcbApplicationService<E> implements DcbApplicationService<E>
             dcbEvents.add(DcbCloudEvents.withTags(cloudEvents.get(i), tagGenerator.tags(domainEvents.get(i))));
         }
         return dcbEvents;
-    }
-
-    private static Set<String> tagsFromQuery(DcbQuery query) {
-        if (query instanceof DcbQuery.Items items) {
-            return items.items().stream()
-                    .map(DcbQueryItem::tags)
-                    .flatMap(Collection::stream)
-                    .collect(toCollection(TreeSet::new));
-        }
-        return new TreeSet<>();
     }
 
     private static <T> Stream<T> emptyStreamIfNull(@Nullable Stream<T> stream) {

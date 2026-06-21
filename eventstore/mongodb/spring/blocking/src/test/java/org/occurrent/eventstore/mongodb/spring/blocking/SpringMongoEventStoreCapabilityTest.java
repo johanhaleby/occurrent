@@ -175,8 +175,8 @@ class SpringMongoEventStoreCapabilityTest {
         SpringMongoEventStore eventStore = new SpringMongoEventStore(mongoTemplate, eventStoreConfig(STREAM).build());
 
         assertUnsupportedDcbOperation(() -> eventStore.read(tagsAllOf("name:1")));
-        assertUnsupportedDcbOperation(() -> eventStore.append("dcb:partition:0", List.of(taggedEvent("NameDefined", "name:1"))));
-        assertUnsupportedDcbOperation(() -> eventStore.append("dcb:partition:0", List.of(taggedEvent("NameDefined", "name:1")), DcbAppendCondition.failIfEventsMatch(tagsAllOf("name:1"))));
+        assertUnsupportedDcbOperation(() -> eventStore.append(List.of(taggedEvent("NameDefined", "name:1"))));
+        assertUnsupportedDcbOperation(() -> eventStore.append(List.of(taggedEvent("NameDefined", "name:1")), DcbAppendCondition.failIfEventsMatch(tagsAllOf("name:1"))));
     }
 
     @Test
@@ -202,7 +202,7 @@ class SpringMongoEventStoreCapabilityTest {
         SpringMongoEventStore eventStore = new SpringMongoEventStore(mongoTemplate, eventStoreConfig(STREAM, DCB).build());
 
         eventStore.write("name:1", WriteCondition.anyStreamVersion(), java.util.stream.Stream.of(event("NameDefined")));
-        eventStore.append("dcb:partition:0", List.of(taggedEvent("NameChanged", "name:1")));
+        eventStore.append(List.of(taggedEvent("NameChanged", "name:1")));
 
         assertThat(eventStore.read("name:1").events()).extracting(CloudEvent::getType).containsExactly("NameDefined");
         assertThat(eventStore.read(tagsAllOf("name:1")).events()).extracting(CloudEvent::getType).containsExactly("NameChanged");
@@ -214,7 +214,7 @@ class SpringMongoEventStoreCapabilityTest {
         streamOnly.write("name:1", WriteCondition.anyStreamVersion(), java.util.stream.Stream.of(event("NameDefined")));
 
         SpringMongoEventStore both = new SpringMongoEventStore(mongoTemplate, eventStoreConfig(STREAM, DCB).build());
-        both.append("dcb:partition:0", List.of(taggedEvent("NameChanged", "name:1")));
+        both.append(List.of(taggedEvent("NameChanged", "name:1")));
 
         assertThat(both.read("name:1").events()).extracting(CloudEvent::getType).containsExactly("NameDefined");
         assertThat(both.read(tagsAllOf("name:1")).events()).extracting(CloudEvent::getType).containsExactly("NameChanged");
@@ -223,27 +223,35 @@ class SpringMongoEventStoreCapabilityTest {
     @Test
     void dcb_to_stream_and_dcb_preserves_dcb_reads_and_enables_stream_reads_of_dcb_events() {
         SpringMongoEventStore dcbOnly = new SpringMongoEventStore(mongoTemplate, eventStoreConfig(DCB).build());
-        dcbOnly.append("dcb:partition:0", List.of(taggedEvent("NameDefined", "name:1")));
-        dcbOnly.append("dcb:partition:1", List.of(taggedEvent("OrderPlaced", "order:1")));
+        dcbOnly.append(List.of(taggedEvent("NameDefined", "name:1")));
+        dcbOnly.append(List.of(taggedEvent("OrderPlaced", "order:1")));
 
         SpringMongoEventStore both = new SpringMongoEventStore(mongoTemplate, eventStoreConfig(STREAM, DCB).build());
 
         assertThat(both.read(tagsAllOf("name:1")).events()).extracting(CloudEvent::getType).containsExactly("NameDefined");
-        assertThat(both.read("dcb:partition:0").events()).extracting(CloudEvent::getType).containsExactly("NameDefined");
-        assertThat(both.read("dcb:partition:0").version()).isEqualTo(1);
-        assertThat(both.read("dcb:partition:1").events()).extracting(CloudEvent::getType).containsExactly("OrderPlaced");
-        assertThat(both.read("dcb:partition:1").version()).isEqualTo(1);
+        assertThat(both.read(tagsAllOf("order:1")).events()).extracting(CloudEvent::getType).containsExactly("OrderPlaced");
+
+        // DCB-written events are still stored as normal Occurrent stream events, readable via the stream API by the
+        // storage stream id the store derived for them from the events' DCB tags.
+        String nameStreamId = OccurrentExtensionGetter.getStreamId(both.read(tagsAllOf("name:1")).events().get(0));
+        String orderStreamId = OccurrentExtensionGetter.getStreamId(both.read(tagsAllOf("order:1")).events().get(0));
+        assertThat(nameStreamId).startsWith("dcb:partition:");
+        assertThat(orderStreamId).startsWith("dcb:partition:");
+        assertThat(both.read(nameStreamId).events()).extracting(CloudEvent::getType).contains("NameDefined");
+        assertThat(both.read(orderStreamId).events()).extracting(CloudEvent::getType).contains("OrderPlaced");
     }
 
     @Test
     void dcb_only_events_still_have_occurrent_stream_metadata() {
         SpringMongoEventStore dcbOnly = new SpringMongoEventStore(mongoTemplate, eventStoreConfig(DCB).build());
-        dcbOnly.append("dcb:partition:0", List.of(taggedEvent("NameDefined", "name:1"), taggedEvent("NameChanged", "name:1")));
+        dcbOnly.append(List.of(taggedEvent("NameDefined", "name:1"), taggedEvent("NameChanged", "name:1")));
 
         List<CloudEvent> events = dcbOnly.read(tagsAllOf("name:1")).events();
 
         assertThat(events).hasSize(2);
-        assertThat(events).extracting(OccurrentExtensionGetter::getStreamId).containsExactly("dcb:partition:0", "dcb:partition:0");
+        // Appended together, so both events share the same derived partition stream, in order.
+        assertThat(events).extracting(OccurrentExtensionGetter::getStreamId).allSatisfy(streamId -> assertThat(streamId).startsWith("dcb:partition:"));
+        assertThat(OccurrentExtensionGetter.getStreamId(events.get(0))).isEqualTo(OccurrentExtensionGetter.getStreamId(events.get(1)));
         assertThat(events).extracting(OccurrentExtensionGetter::getStreamVersion).containsExactly(1L, 2L);
     }
 
@@ -251,12 +259,14 @@ class SpringMongoEventStoreCapabilityTest {
     void stream_and_dcb_to_stream_preserves_stream_reads_for_stream_and_dcb_written_events() {
         SpringMongoEventStore both = new SpringMongoEventStore(mongoTemplate, eventStoreConfig(STREAM, DCB).build());
         both.write("name:1", WriteCondition.anyStreamVersion(), java.util.stream.Stream.of(event("NameDefined")));
-        both.append("dcb:partition:0", List.of(taggedEvent("NameChanged", "name:1")));
+        both.append(List.of(taggedEvent("NameChanged", "name:1")));
+        String dcbStreamId = OccurrentExtensionGetter.getStreamId(both.read(tagsAllOf("name:1")).events().get(0));
 
         SpringMongoEventStore streamOnly = new SpringMongoEventStore(mongoTemplate, eventStoreConfig(STREAM).build());
 
         assertThat(streamOnly.read("name:1").events()).extracting(CloudEvent::getType).containsExactly("NameDefined");
-        assertThat(streamOnly.read("dcb:partition:0").events()).extracting(CloudEvent::getType).containsExactly("NameChanged");
+        assertThat(dcbStreamId).startsWith("dcb:partition:");
+        assertThat(streamOnly.read(dcbStreamId).events()).extracting(CloudEvent::getType).contains("NameChanged");
         assertThatThrownBy(() -> streamOnly.read(tagsAllOf("name:1")))
                 .isExactlyInstanceOf(UnsupportedOperationException.class);
     }

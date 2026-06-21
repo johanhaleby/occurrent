@@ -153,7 +153,7 @@ public class SpringMongoSubscriptionModelTest {
         NameDefined nameDefined = new NameDefined(UUID.randomUUID().toString(), now, "name", "name1");
 
         // When
-        mongoEventStore.append("dcb:partition:0", serialize(nameDefined)
+        mongoEventStore.append(serialize(nameDefined)
                 .map(event -> DcbCloudEvents.withTags(event, List.of("name:1")))
                 .toList());
 
