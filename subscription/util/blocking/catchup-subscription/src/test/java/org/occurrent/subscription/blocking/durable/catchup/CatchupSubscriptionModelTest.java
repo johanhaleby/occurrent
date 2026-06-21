@@ -33,8 +33,10 @@ import org.occurrent.domain.DomainEvent;
 import org.occurrent.domain.NameDefined;
 import org.occurrent.domain.NameWasChanged;
 import org.occurrent.eventstore.api.SortBy;
+import org.occurrent.eventstore.api.blocking.EventStoreQueries;
 import org.occurrent.eventstore.mongodb.nativedriver.EventStoreConfig;
 import org.occurrent.eventstore.mongodb.nativedriver.MongoEventStore;
+import org.occurrent.filter.Filter;
 import org.occurrent.mongodb.timerepresentation.TimeRepresentation;
 import org.occurrent.retry.RetryStrategy;
 import org.occurrent.subscription.StartAt;
@@ -51,10 +53,12 @@ import org.testcontainers.mongodb.MongoDBContainer;
 import java.net.URI;
 import java.time.Duration;
 import java.time.LocalDateTime;
+import java.util.List;
 import java.util.UUID;
 import java.util.concurrent.*;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.function.Supplier;
+import java.util.stream.Collectors;
 import java.util.stream.Stream;
 
 import static java.time.ZoneOffset.UTC;
@@ -375,6 +379,126 @@ public class CatchupSubscriptionModelTest {
                 assertThat(state).hasSize(5).extracting(this::deserialize).containsExactly(nameDefined1, nameDefined2, nameChanged1, nameDefined3, nameDefined4));
 
         thread.join();
+    }
+
+    /**
+     * Deterministic reproduction of the catch-up to live handover loss race. The catch-up phase sizes its
+     * during-catch-up reconciliation from a count and then reads the newest N events; an event written in the window
+     * between that count and the read shifts the "newest N" window forward and pushes the oldest during-catch-up event
+     * out of the read. Since that event sits at or before the live subscription's resume position it is not redelivered
+     * by the live subscription either, and is silently lost.
+     * <p>
+     * We force the race with a spying {@link EventStoreQueries} that injects writes at the exact handover seams instead
+     * of relying on timing: two events written during the bulk replay (so they can only reach the subscriber through
+     * the reconciliation, never the live subscription), and one "intruder" written between the post-replay count and
+     * the reconciliation read. On the unfixed code the first during-catch-up event is lost; the fix re-reads until the
+     * count stabilises and delivers it.
+     */
+    @Test
+    void catchup_subscription_does_not_lose_events_written_in_the_count_to_read_window_during_handover() {
+        // Given
+        LocalDateTime now = LocalDateTime.now();
+        NameDefined historic1 = new NameDefined(UUID.randomUUID().toString(), now, "name", "historic1");
+        NameDefined historic2 = new NameDefined(UUID.randomUUID().toString(), now.plusSeconds(1), "name", "historic2");
+        NameWasChanged historic3 = new NameWasChanged(UUID.randomUUID().toString(), now.plusSeconds(2), "name", "historic3");
+
+        mongoEventStore.write("h1", 0, serialize(historic1));
+        mongoEventStore.write("h2", 0, serialize(historic2));
+        mongoEventStore.write("h1", 1, serialize(historic3));
+
+        // Written during the bulk replay (after the replay cursor, at or before the live resume position), so they can
+        // only reach the subscriber through the during-catch-up reconciliation, not through the live subscription.
+        NameDefined duringCatchup1 = new NameDefined(UUID.randomUUID().toString(), now.plusSeconds(3), "name", "duringCatchup1");
+        NameDefined duringCatchup2 = new NameDefined(UUID.randomUUID().toString(), now.plusSeconds(4), "name", "duringCatchup2");
+        // Written in the window between the post-replay count and the reconciliation read; on the buggy code this
+        // shifts the "newest N" window and pushes duringCatchup1 out of the read.
+        NameDefined windowIntruder = new NameDefined(UUID.randomUUID().toString(), now.plusSeconds(5), "name", "windowIntruder");
+
+        Runnable injectDuringBulkReplay = () -> {
+            mongoEventStore.write("d1", 0, serialize(duringCatchup1));
+            mongoEventStore.write("d2", 0, serialize(duringCatchup2));
+        };
+        Runnable injectBetweenCountAndRead = () -> mongoEventStore.write("i1", 0, serialize(windowIntruder));
+
+        EventStoreQueries spyingQueries = new HandoverRaceInducingQueries(mongoEventStore, injectDuringBulkReplay, injectBetweenCountAndRead);
+
+        subscription.shutdown(); // discard the idle subscription created in @BeforeEach (also shuts down its executor)
+        subscriptionExecutor = Executors.newCachedThreadPool();
+        NativeMongoSubscriptionModel wrappedSubscription = new NativeMongoSubscriptionModel(database, eventCollection, TimeRepresentation.DATE, subscriptionExecutor, RetryStrategy.none());
+        subscription = new CatchupSubscriptionModel(wrappedSubscription, spyingQueries,
+                new CatchupSubscriptionModelConfig(100, useSubscriptionPositionStorage(storage).andPersistSubscriptionPositionDuringCatchupPhaseForEveryNEvents(1)));
+
+        CopyOnWriteArrayList<CloudEvent> state = new CopyOnWriteArrayList<>();
+
+        // When
+        subscription.subscribe(UUID.randomUUID().toString(), StartAt.subscriptionPosition(TimeBasedSubscriptionPosition.beginningOfTime()), state::add).waitUntilStarted();
+
+        // Then -- every event up to and during the catch-up phase must be delivered. On the unfixed handover,
+        // duringCatchup1 is lost (shifted out of the reconciliation read and below the live resume position).
+        await().atMost(AT_MOST).with().pollInterval(Duration.of(100, MILLIS)).untilAsserted(() ->
+                assertThat(state).extracting(this::deserialize)
+                        .contains(historic1, historic2, historic3, duringCatchup1, duringCatchup2));
+
+        // And the reconciliation must not deliver duplicates: the loop re-reads overlapping windows, which the
+        // handover cache must dedupe. (No new events are written after the handover, so the set is stable now.)
+        assertThat(state).extracting(CloudEvent::getId).doesNotHaveDuplicates();
+    }
+
+    /**
+     * Delegating {@link EventStoreQueries} that deterministically injects writes at the catch-up handover seams to
+     * reproduce the count-to-read window race. The two-argument {@code query} represents the bulk replay; the
+     * four-argument {@code query} represents the reconciliation read; the second {@code count} call is the post-replay
+     * count whose result the reconciliation read is sized from.
+     */
+    private static final class HandoverRaceInducingQueries implements EventStoreQueries {
+        private final EventStoreQueries delegate;
+        private final Runnable injectDuringBulkReplay;
+        private final Runnable injectBetweenCountAndRead;
+        private final AtomicInteger countInvocations = new AtomicInteger();
+        private boolean bulkReplayInjectionDone = false;
+
+        private HandoverRaceInducingQueries(EventStoreQueries delegate, Runnable injectDuringBulkReplay, Runnable injectBetweenCountAndRead) {
+            this.delegate = delegate;
+            this.injectDuringBulkReplay = injectDuringBulkReplay;
+            this.injectBetweenCountAndRead = injectBetweenCountAndRead;
+        }
+
+        @Override
+        public Stream<CloudEvent> query(Filter filter, int skip, int limit, SortBy sortBy) {
+            // Reconciliation read (and any later read): always reflects the current store.
+            return delegate.query(filter, skip, limit, sortBy);
+        }
+
+        @Override
+        public Stream<CloudEvent> query(Filter filter, SortBy sortBy) {
+            // Bulk replay: materialise the snapshot the cursor would have returned, then simulate events that are
+            // written after the cursor passed but before the post-replay count, so they fall to the reconciliation.
+            final List<CloudEvent> bulkReplaySnapshot;
+            try (Stream<CloudEvent> bulkReplay = delegate.query(filter, sortBy)) {
+                bulkReplaySnapshot = bulkReplay.collect(Collectors.toList());
+            }
+            if (!bulkReplayInjectionDone) {
+                bulkReplayInjectionDone = true;
+                injectDuringBulkReplay.run();
+            }
+            return bulkReplaySnapshot.stream();
+        }
+
+        @Override
+        public long count(Filter filter) {
+            long count = delegate.count(filter);
+            if (countInvocations.incrementAndGet() == 2) {
+                // The 2nd count is the post-replay count. Inject a concurrent write after it is taken but before the
+                // reconciliation read runs, reproducing the count-to-read window exactly.
+                injectBetweenCountAndRead.run();
+            }
+            return count;
+        }
+
+        @Override
+        public boolean exists(Filter filter) {
+            return delegate.exists(filter);
+        }
     }
 
     @Test

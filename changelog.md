@@ -1,3 +1,10 @@
+### Changelog next version
+
+* Fixed a remaining silent event loss in `CatchupSubscriptionModel` at the handover from the catch-up phase to the live subscription.
+  * The delta reconciliation sized its read from a count of matching events and then read the newest N of them. An event written in the window between that count and the read shifted the newest-N window forward and pushed the oldest during-catch-up event out of the read. That event sat at or before the live subscription's resume position, so the live subscription did not redeliver it either, and it was lost. This is the residual case left open by the 0.20.4 fix, which closed the clock-skew variant but not the count-to-read window.
+  * The reconciliation now re-reads the recent tail until the matching count stops growing, so an event that arrives in the count-to-read window is picked up by a later pass instead of being skipped. Overlapping passes are deduplicated through the handover cache, so at-least-once delivery is preserved without introducing duplicates.
+  * See [ADR 14](doc/architecture/decisions/0014-reconcile-catchup-events-by-insertion-order-to-avoid-loss-under-clock-skew.md).
+
 ### 0.20.4 (2026-06-18)
 
 * Fixed a silent event loss in `CatchupSubscriptionModel` at the handover from the catch-up phase to the live subscription.
