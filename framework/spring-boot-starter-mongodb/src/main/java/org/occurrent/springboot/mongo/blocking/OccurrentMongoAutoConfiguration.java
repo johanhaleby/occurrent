@@ -21,6 +21,8 @@ import com.mongodb.ReadConcern;
 import com.mongodb.TransactionOptions;
 import com.mongodb.WriteConcern;
 import org.jspecify.annotations.NonNull;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.occurrent.application.converter.CloudEventConverter;
 import org.occurrent.application.converter.typemapper.CloudEventTypeMapper;
 import org.occurrent.application.converter.typemapper.ReflectionCloudEventTypeMapper;
@@ -84,6 +86,8 @@ import static org.occurrent.subscription.mongodb.spring.blocking.SpringMongoSubs
 @EnableConfigurationProperties(OccurrentProperties.class)
 @Import(Jackson3CloudEventConverterConfiguration.class)
 public class OccurrentMongoAutoConfiguration<E> {
+
+    private static final Logger log = LoggerFactory.getLogger(OccurrentMongoAutoConfiguration.class);
 
     @Bean
     @ConditionalOnProperty(name = "occurrent.subscription.enabled", havingValue = "true", matchIfMissing = true)
@@ -224,7 +228,13 @@ public class OccurrentMongoAutoConfiguration<E> {
             }
             boolean hasDcbApplicationService = beanFactory.getBeanNamesForType(DcbApplicationService.class, false, false).length > 0;
             boolean hasTagGenerator = beanFactory.getBeanNamesForType(TagGenerator.class, false, false).length > 0;
-            if (hasDcbApplicationService || !hasTagGenerator) {
+            if (hasDcbApplicationService) {
+                return;
+            }
+            if (!hasTagGenerator) {
+                log.warn("Occurrent DCB event-store capability is enabled but no {} bean was found, so a {} is not auto-configured. " +
+                                "Define a {} bean (it derives the DCB tags written with each event) to enable auto-configuration, or provide your own {} bean.",
+                        TagGenerator.class.getName(), DcbApplicationService.class.getName(), TagGenerator.class.getSimpleName(), DcbApplicationService.class.getSimpleName());
                 return;
             }
             RootBeanDefinition beanDefinition = new RootBeanDefinition(DcbApplicationService.class);
