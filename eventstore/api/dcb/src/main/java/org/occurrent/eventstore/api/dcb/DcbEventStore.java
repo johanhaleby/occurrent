@@ -47,24 +47,40 @@ public interface DcbEventStore {
 
     /**
      * Returns whether any DCB event in the store matches {@code query}.
+     */
+    default boolean exists(DcbQuery query) {
+        return exists(query, DcbReadOptions.fromBeginning());
+    }
+
+    /**
+     * Returns whether any DCB event matches {@code query} within the position window of {@code options}.
      * <p>
      * The default implementation reads the matching events; implementations should override it with a more
      * efficient existence check.
      */
-    default boolean exists(DcbQuery query) {
+    default boolean exists(DcbQuery query, DcbReadOptions options) {
         requireNonNull(query, "Query cannot be null");
-        return !read(query).events().isEmpty();
+        requireNonNull(options, "Read options cannot be null");
+        return !read(query, options).events().isEmpty();
     }
 
     /**
      * Returns the number of DCB events in the store that match {@code query}.
+     */
+    default long count(DcbQuery query) {
+        return count(query, DcbReadOptions.fromBeginning());
+    }
+
+    /**
+     * Returns the number of DCB events matching {@code query} within the position window of {@code options}.
      * <p>
      * The default implementation reads the matching events; implementations should override it with a more
      * efficient count.
      */
-    default long count(DcbQuery query) {
+    default long count(DcbQuery query, DcbReadOptions options) {
         requireNonNull(query, "Query cannot be null");
-        return read(query).events().size();
+        requireNonNull(options, "Read options cannot be null");
+        return read(query, options).events().size();
     }
 
     /**
