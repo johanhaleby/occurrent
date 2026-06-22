@@ -54,7 +54,7 @@
   * DCB tag queries now match with a single `dcbTags` array-containment predicate instead of one predicate per tag.
   * The Spring Boot starter now auto-configures application services from the same capability set: stream `ApplicationService` for `STREAM`, `DcbApplicationService` for `DCB`, and both for `stream,dcb`.
   * DCB-only Spring Boot auto-configuration also exposes `DomainEventQueries` so DCB query DSL extensions can reuse the starter-provided converter while stream application services remain disabled.
-  * DCB application-service auto-configuration requires a user-provided `TagGenerator` bean, since DCB tags are domain-specific.
+  * DCB application-service auto-configuration requires a user-provided `TagGenerator` bean, since DCB tags are domain-specific. When the DCB capability is enabled but no `TagGenerator` bean is found, the starter now logs a warning explaining that `DcbApplicationService` is not auto-configured, instead of skipping silently.
   * The Spring Boot starter now also auto-configures the DCB DSL when the `DCB` capability is enabled: a `DcbDomainEventQueries` wrapping the auto-configured `DomainEventQueries`, and a `DcbSubscriptions` over the subscription model. Both back off to a user-provided bean of the same type.
   * In DCB-only mode the auto-configured subscriptions are currently live only, because the catch-up model is not wired in DCB-only mode. Replay by `dcbposition` for auto-configured subscriptions is a follow-up.
   * Occurrent creates missing indexes/collections only. It never removes indexes or collections automatically.
