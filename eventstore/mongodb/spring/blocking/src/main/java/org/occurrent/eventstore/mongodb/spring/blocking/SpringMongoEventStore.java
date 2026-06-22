@@ -427,14 +427,23 @@ public class SpringMongoEventStore implements EventStore, EventStoreOperations, 
     }
 
     private void enforceAppendCondition(DcbAppendCondition condition, List<CloudEvent> eventsToAppend, long lastPosition) {
-        // Authoritative optimistic-concurrency check: the condition carries the consistency token the command observed
-        // when it read the query (DcbEventStream.consistencyToken()). If the query's markers have advanced since, an
-        // append matching the query committed after the read, so the condition is not fulfilled. Unlike a position-based
-        // existence check this is immune to read-watermark overshoot, because marker versions are bumped inside the
-        // append transaction (at commit), not when positions are reserved (ADR 0021).
-        long expectedToken = condition.consistencyToken().map(DcbConsistencyToken::value).orElse(0L);
-        long currentToken = consistencyToken(condition.query());
-        if (currentToken != expectedToken) {
+        Optional<DcbConsistencyToken> expectedToken = condition.consistencyToken();
+        final boolean conflict;
+        if (expectedToken.isPresent()) {
+            // Token-carrying check: the condition carries the consistency token the command observed when it read the
+            // query (DcbEventStream.consistencyToken()). If the query's markers have advanced since, an append matching
+            // the query committed after the read, so the condition is not fulfilled. Unlike a position-based existence
+            // check this is immune to read-watermark overshoot, because marker versions are bumped inside the append
+            // transaction (at commit), not when positions are reserved (ADR 0021).
+            conflict = consistencyToken(condition.query()) != expectedToken.get().value();
+        } else {
+            // No token: an absolute "fail if any matching event exists" guard. Check the live events rather than the
+            // marker versions, so this means "currently exists" (matching the in-memory store, and surviving deletes and
+            // marker pruning) rather than "ever appended". The marker increments below still serialize concurrent
+            // unconditional guards on the same boundary so two of them cannot both pass.
+            conflict = mongoTemplate.exists(toDcbMongoQuery(condition.query(), 0, Long.MAX_VALUE), eventStoreCollectionName);
+        }
+        if (conflict) {
             throw new DcbAppendConditionNotFulfilledException(condition, currentDcbPosition(), "Append condition was not fulfilled.");
         }
         // Increment a marker per key for the union of the query's keys and the appended events' keys. The increments

@@ -33,12 +33,12 @@ internal object GameDcbQueries {
 
     fun gameplay(gameId: UUID): DcbQuery = DcbQuery.tagsAllOf(GameDcbTags.gameplay(gameId))
 
-    fun wordHintDecisionContext(gameId: UUID): DcbQuery = DcbQuery.fromItems(listOf(
+    fun wordHintDecisionContext(gameId: UUID): DcbQuery = DcbQuery.anyOf(listOf(
             eventItem(GameWasStarted::class, GameDcbTags.game(gameId)),
             eventItem(CharacterInWordHintWasRevealed::class, GameDcbTags.wordHint(gameId))
     ))
 
-    fun pointsDecisionContext(gameId: UUID): DcbQuery = DcbQuery.fromItems(listOf(
+    fun pointsDecisionContext(gameId: UUID): DcbQuery = DcbQuery.anyOf(listOf(
             eventItem(GameWasStarted::class, GameDcbTags.game(gameId)),
             eventItem(PlayerGuessedTheWrongWord::class, GameDcbTags.gameplay(gameId)),
             eventItem(PlayerWasAwardedPointsForGuessingTheRightWord::class, GameDcbTags.points(gameId)),
@@ -46,7 +46,7 @@ internal object GameDcbQueries {
     ))
 
     fun event(gameId: UUID, type: KClass<out GameEvent>): DcbQuery =
-            DcbQuery.fromItems(listOf(eventItem(type, GameDcbTags.game(gameId))))
+            DcbQuery.anyOf(listOf(eventItem(type, GameDcbTags.game(gameId))))
 
     inline fun <reified E : GameEvent> event(gameId: UUID): DcbQuery = event(gameId, E::class)
 

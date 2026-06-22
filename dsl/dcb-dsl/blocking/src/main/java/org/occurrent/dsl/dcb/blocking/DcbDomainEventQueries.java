@@ -90,15 +90,15 @@ public class DcbDomainEventQueries<E> {
     }
 
     /**
-     * Queries matching DCB events using the supplied read options and returns both the domain events and the
-     * observed DCB sequence position.
+     * Queries matching DCB events using the supplied read options and returns the domain events, the observed DCB
+     * sequence position, and the consistency token for a later conditional append.
      */
     public DcbDomainEventStream<E> queryWithPosition(DcbQuery query, DcbReadOptions options) {
         requireNonNull(query, "Query cannot be null");
         requireNonNull(options, "Read options cannot be null");
         DcbEventStream eventStream = dcbEventStore.read(query, options);
         List<E> events = domainEventQueries.toDomainEvents(eventStream.stream()).toList();
-        return new DcbDomainEventStream<>(events, eventStream.lastSequencePosition());
+        return new DcbDomainEventStream<>(events, eventStream.lastSequencePosition(), eventStream.consistencyToken());
     }
 
     // ------------------------------------------------------------------------------------------------------

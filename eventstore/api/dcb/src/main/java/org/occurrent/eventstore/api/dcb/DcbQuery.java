@@ -66,9 +66,9 @@ public sealed interface DcbQuery permits DcbQuery.MatchAll, DcbQuery.Items {
     }
 
     /**
-     * Creates a query from explicit query items.
+     * Creates a query that matches an event when it matches any of the supplied query items.
      */
-    static DcbQuery fromItems(Collection<DcbQueryItem> items) {
+    static DcbQuery anyOf(Collection<DcbQueryItem> items) {
         requireNonNull(items, "Items cannot be null");
         return new Items(List.copyOf(items));
     }
@@ -88,24 +88,32 @@ public sealed interface DcbQuery permits DcbQuery.MatchAll, DcbQuery.Items {
     }
 
     /**
+     * Creates a query that matches any event whose CloudEvent type is {@code type}. Shorthand for the single-type case
+     * of {@link #types(String, String...)}.
+     */
+    static DcbQuery type(String type) {
+        return types(type);
+    }
+
+    /**
      * Creates a query that matches any event whose CloudEvent type is one of the supplied types.
      */
     static DcbQuery types(String type, String... additionalTypes) {
-        return fromItems(List.of(DcbQueryItem.types(combine(type, additionalTypes))));
+        return anyOf(List.of(DcbQueryItem.types(combine(type, additionalTypes))));
     }
 
     /**
      * Creates a query that matches events containing all supplied DCB tags.
      */
     static DcbQuery tagsAllOf(String tag, String... additionalTags) {
-        return fromItems(List.of(DcbQueryItem.tagsAllOf(combine(tag, additionalTags))));
+        return anyOf(List.of(DcbQueryItem.tagsAllOf(combine(tag, additionalTags))));
     }
 
     /**
      * Creates a query that matches any of the supplied CloudEvent types and all supplied DCB tags.
      */
     static DcbQuery typeAndTagsAllOf(Collection<String> types, Collection<String> tags) {
-        return fromItems(List.of(DcbQueryItem.typeAndTagsAllOf(types, tags)));
+        return anyOf(List.of(DcbQueryItem.typeAndTagsAllOf(types, tags)));
     }
 
     /**
@@ -113,7 +121,7 @@ public sealed interface DcbQuery permits DcbQuery.MatchAll, DcbQuery.Items {
      * events whose CloudEvent type is excluded.
      */
     static DcbQuery tagsAllOfExcludingTypes(Collection<String> tags, Collection<String> excludedTypes) {
-        return fromItems(List.of(DcbQueryItem.tagsAllOfExcludingTypes(tags, excludedTypes)));
+        return anyOf(List.of(DcbQueryItem.tagsAllOfExcludingTypes(tags, excludedTypes)));
     }
 
     /**
@@ -121,7 +129,7 @@ public sealed interface DcbQuery permits DcbQuery.MatchAll, DcbQuery.Items {
      * DCB tags, except events whose CloudEvent type is excluded.
      */
     static DcbQuery typeAndTagsAllOfExcludingTypes(Collection<String> types, Collection<String> tags, Collection<String> excludedTypes) {
-        return fromItems(List.of(DcbQueryItem.typeAndTagsAllOfExcludingTypes(types, tags, excludedTypes)));
+        return anyOf(List.of(DcbQueryItem.typeAndTagsAllOfExcludingTypes(types, tags, excludedTypes)));
     }
 
     private static Set<String> combine(String first, String[] additional) {
