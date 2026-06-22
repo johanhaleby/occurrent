@@ -223,17 +223,28 @@ public class SpringMongoEventStore implements EventStore, EventStoreOperations, 
     }
 
     @Override
-    public boolean exists(DcbQuery query) {
+    public boolean exists(DcbQuery query, DcbReadOptions options) {
         requireDcbCapability();
         requireNonNull(query, "Query cannot be null");
-        return mongoTemplate.exists(queryOptions.apply(toDcbMongoQuery(query, 0, currentDcbPosition())), eventStoreCollectionName);
+        requireNonNull(options, "Read options cannot be null");
+        return mongoTemplate.exists(queryOptions.apply(toDcbMongoQuery(query, lowerBound(options), upperBound(options))), eventStoreCollectionName);
     }
 
     @Override
-    public long count(DcbQuery query) {
+    public long count(DcbQuery query, DcbReadOptions options) {
         requireDcbCapability();
         requireNonNull(query, "Query cannot be null");
-        return mongoTemplate.count(queryOptions.apply(toDcbMongoQuery(query, 0, currentDcbPosition())), eventStoreCollectionName);
+        requireNonNull(options, "Read options cannot be null");
+        return mongoTemplate.count(queryOptions.apply(toDcbMongoQuery(query, lowerBound(options), upperBound(options))), eventStoreCollectionName);
+    }
+
+    private long lowerBound(DcbReadOptions options) {
+        return options.afterSequencePosition().orElse(0);
+    }
+
+    private long upperBound(DcbReadOptions options) {
+        long highWatermark = currentDcbPosition();
+        return Math.min(highWatermark, options.upToSequencePosition().orElse(highWatermark));
     }
 
     @Override

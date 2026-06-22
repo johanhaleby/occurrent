@@ -60,6 +60,21 @@ class InMemoryEventStoreDcbTest {
     }
 
     @Test
+    void exists_and_count_honour_the_read_options_position_window() {
+        InMemoryEventStore eventStore = new InMemoryEventStore();
+        eventStore.append(List.of(taggedEvent("E", "t")));   // position 1
+        eventStore.append(List.of(taggedEvent("E", "t")));   // position 2
+        eventStore.append(List.of(taggedEvent("E", "t")));   // position 3
+
+        assertThat(eventStore.count(tagsAllOf("t"))).isEqualTo(3);
+        assertThat(eventStore.count(tagsAllOf("t"), DcbReadOptions.afterSequencePosition(1))).isEqualTo(2);
+        assertThat(eventStore.count(tagsAllOf("t"), DcbReadOptions.between(1, 2))).isEqualTo(1);
+        assertThat(eventStore.exists(tagsAllOf("t"), DcbReadOptions.between(2, 3))).isTrue();
+        assertThat(eventStore.exists(tagsAllOf("t"), DcbReadOptions.afterSequencePosition(3))).isFalse();
+        assertThat(eventStore.exists(tagsAllOf("missing"))).isFalse();
+    }
+
+    @Test
     void dcb_appends_participate_in_global_natural_insertion_order() {
         InMemoryEventStore eventStore = new InMemoryEventStore();
 

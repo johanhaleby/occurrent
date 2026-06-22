@@ -77,9 +77,9 @@ public record DcbReadOptions(OptionalLong afterSequencePosition, OptionalLong up
     }
 
     /**
-     * Reads events after {@code afterExclusive} (exclusive) and up to and including {@code upToInclusive}.
+     * Reads events after {@code afterSequencePosition} (exclusive) and up to and including {@code upToSequencePosition}.
      */
-    public static DcbReadOptions between(long afterExclusive, long upToInclusive) {
-        return new DcbReadOptions(OptionalLong.of(afterExclusive), OptionalLong.of(upToInclusive));
+    public static DcbReadOptions between(long afterSequencePosition, long upToSequencePosition) {
+        return new DcbReadOptions(OptionalLong.of(afterSequencePosition), OptionalLong.of(upToSequencePosition));
     }
 }
