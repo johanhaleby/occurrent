@@ -29,7 +29,10 @@ import org.occurrent.domain.NameDefined;
 import org.occurrent.domain.NameWasChanged;
 import org.occurrent.dsl.query.blocking.DomainEventQueries;
 import org.occurrent.dsl.subscription.blocking.EventMetadata;
+import org.occurrent.eventstore.api.dcb.DcbAppendCondition;
+import org.occurrent.eventstore.api.dcb.DcbAppendConditionNotFulfilledException;
 import org.occurrent.eventstore.api.dcb.DcbCloudEvents;
+import org.occurrent.eventstore.api.dcb.DcbConsistencyToken;
 import org.occurrent.eventstore.api.dcb.DcbQuery;
 import org.occurrent.eventstore.api.dcb.DcbReadOptions;
 import org.occurrent.eventstore.inmemory.InMemoryEventStore;
@@ -42,6 +45,7 @@ import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.stream.Stream;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.awaitility.Awaitility.await;
 
 @DisplayNameGeneration(ReplaceUnderscores.class)
@@ -96,6 +100,25 @@ class DcbDomainEventQueriesTest {
         assertThat(eventStream.events()).containsExactly(nameDefined);
         assertThat(eventStream.stream()).containsExactly(nameDefined);
         assertThat(eventStream.lastSequencePosition()).isEqualTo(2);
+    }
+
+    @Test
+    void query_with_position_exposes_a_usable_consistency_token() {
+        append("name:1", new NameDefined("eventId1", time, "name", "Some Doe"));
+
+        DcbDomainEventStream<DomainEvent> eventStream = dcbQueries.queryWithPosition(DcbQuery.tagsAllOf("name:1"));
+        DcbConsistencyToken token = eventStream.consistencyToken();
+        assertThat(token).isNotNull();
+
+        // A matching event committed after the DSL read invalidates the token, so a conditional append carrying it back
+        // to the store is correctly rejected. This proves the token flows through the DSL projection, not just the position.
+        append("name:1", new NameWasChanged("eventId2", time, "name", "Jane Doe"));
+        List<CloudEvent> newEvents = cloudEventConverter.toCloudEvents(Stream.of(new NameWasChanged("eventId3", time, "name", "Joe Doe")))
+                .map(event -> DcbCloudEvents.withTags(event, List.of("name:1")))
+                .toList();
+
+        assertThatThrownBy(() -> eventStore.append(newEvents, DcbAppendCondition.failIfEventsMatch(DcbQuery.tagsAllOf("name:1"), token)))
+                .isInstanceOf(DcbAppendConditionNotFulfilledException.class);
     }
 
     @Test

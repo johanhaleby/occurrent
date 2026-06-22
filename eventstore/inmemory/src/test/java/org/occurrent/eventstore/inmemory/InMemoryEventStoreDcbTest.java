@@ -75,6 +75,24 @@ class InMemoryEventStoreDcbTest {
     }
 
     @Test
+    void no_token_append_condition_reflects_current_existence_not_past_appends() {
+        InMemoryEventStore eventStore = new InMemoryEventStore();
+        DcbQuery query = tagsAllOf("name:1");
+        CloudEvent existing = taggedEvent("NameDefined", "name:1");
+        eventStore.append(List.of(existing));
+
+        // While a matching event exists, the no-token guard conflicts.
+        assertThatThrownBy(() -> eventStore.append(List.of(taggedEvent("NameChanged", "name:1")), failIfEventsMatch(query)))
+                .isInstanceOf(DcbAppendConditionNotFulfilledException.class);
+
+        // After the matching event is deleted, the no-token guard succeeds again: it means "currently exists". This is
+        // the cross-store contract the Spring Mongo store now matches.
+        eventStore.deleteEvent(existing.getId(), existing.getSource());
+        DcbAppendResult result = eventStore.append(List.of(taggedEvent("NameChanged", "name:1")), failIfEventsMatch(query));
+        assertThat(result.eventCount()).isEqualTo(1);
+    }
+
+    @Test
     void dcb_appends_participate_in_global_natural_insertion_order() {
         InMemoryEventStore eventStore = new InMemoryEventStore();
 
@@ -133,7 +151,7 @@ class InMemoryEventStoreDcbTest {
                 taggedEvent("OrderPlaced", "order:1")));
 
         DcbEventStream eventStream = eventStore.read(
-                fromItems(List.of(
+                anyOf(List.of(
                         DcbQueryItem.types(List.of("OrderPlaced")),
                         DcbQueryItem.tagsAllOf(List.of("name:1", "tenant:1")))),
                 DcbReadOptions.afterSequencePosition(1));
@@ -185,7 +203,7 @@ class InMemoryEventStoreDcbTest {
                 taggedEvent("NameDefined", "name:1"),
                 taggedEvent("OrderPlaced", "order:1")));
 
-        DcbEventStream eventStream = eventStore.read(fromItems(List.of(
+        DcbEventStream eventStream = eventStore.read(anyOf(List.of(
                 DcbQueryItem.tagsAllOfExcludingTypes(List.of("name:1"), List.of("NameSnapshot")),
                 DcbQueryItem.tagsAllOf(List.of("order:1")))));
 
