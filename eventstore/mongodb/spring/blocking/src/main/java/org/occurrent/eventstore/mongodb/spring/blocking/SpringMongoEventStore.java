@@ -93,6 +93,7 @@ public class SpringMongoEventStore implements EventStore, EventStoreOperations, 
     private static final String DCB_POSITION_DOCUMENT_ID = "dcb";
     private static final String DCB_COUNTER_POSITION = "position";
     private static final String CHECKPOINT_LAST_POSITION = "lastPosition";
+    private static final String CHECKPOINT_VERSION = "version";
 
     private final MongoTemplate mongoTemplate;
     private final String eventStoreCollectionName;
@@ -194,6 +195,10 @@ public class SpringMongoEventStore implements EventStore, EventStoreOperations, 
         requireNonNull(query, "Query cannot be null");
         requireNonNull(options, "Read options cannot be null");
 
+        // Snapshot the consistency token BEFORE reading the events. If an append commits between these two reads, the
+        // events may include it while the token does not, which only makes a later conditional append over-cautious (a
+        // false conflict that retries) rather than miss the conflict.
+        long consistencyTokenValue = consistencyToken(query);
         long highWatermark = currentDcbPosition();
         long upperBound = Math.min(highWatermark, options.upToSequencePosition().orElse(highWatermark));
         Query mongoQuery = toDcbMongoQuery(query, options.afterSequencePosition().orElse(0), upperBound);
@@ -201,7 +206,7 @@ public class SpringMongoEventStore implements EventStore, EventStoreOperations, 
         List<CloudEvent> events = mongoTemplate.find(queryOptions.apply(mongoQuery), Document.class, eventStoreCollectionName).stream()
                 .map(document -> convertToCloudEvent(timeRepresentation, document))
                 .toList();
-        return new DcbEventStream(events, highWatermark);
+        return new DcbEventStream(events, highWatermark, DcbConsistencyToken.of(consistencyTokenValue));
     }
 
     @Override
@@ -339,18 +344,56 @@ public class SpringMongoEventStore implements EventStore, EventStoreOperations, 
         Set<String> placementTags = conditionBoundaryTags.isEmpty() ? boundaryTagsOf(eventsToAppend) : conditionBoundaryTags;
         String streamId = requireNonNull(dcbStreamIdGenerator.generateStreamId(placementTags), "DcbStreamIdGenerator returned a null stream id");
 
-        return requireNonNull(transactionTemplate.execute(transactionStatus -> {
-            long firstPosition = reserveDcbPositions(eventsToAppend.size());
-            long lastPosition = firstPosition + eventsToAppend.size() - 1;
+        // Reserve the position block once, outside the transaction. The counter findAndModify is a single atomic
+        // document update that MongoDB serializes without raising a transaction conflict. The reserved block is reused
+        // across transient-transaction-error retries; a doomed or condition-failed append abandons it, so dcbposition
+        // may have gaps (DCB permits this, see ADR 0021).
+        long firstPosition = reserveDcbPositions(eventsToAppend.size());
+        long lastPosition = firstPosition + eventsToAppend.size() - 1;
+
+        return executeWithTransientRetry(() -> requireNonNull(transactionTemplate.execute(transactionStatus -> {
             long currentStreamVersion = currentStreamVersion(streamId);
             if (condition != null) {
-                updateCheckpoints(condition, eventsToAppend, lastPosition);
+                enforceAppendCondition(condition, eventsToAppend, lastPosition);
+            } else {
+                // An unconditional append still increments its events' markers so a concurrent conditional append on an
+                // overlapping tag/type shares a marker and serializes against it, and so the conditional append's
+                // consistency-token check observes it. Without this, an unconditional append touches no marker, nothing
+                // forces a write-write conflict, and a concurrent conditional append's snapshot can miss this append
+                // under MongoDB snapshot isolation (write skew). See ADR 0021.
+                incrementConflictMarkers(eventMarkerKeys(eventsToAppend), lastPosition);
             }
 
             List<Document> documents = convertDcbCloudEventsToDocuments(streamId, eventsToAppend, currentStreamVersion, firstPosition);
-            insertAll(streamId, currentStreamVersion, WriteCondition.anyStreamVersion(), documents);
+            insertAllDcb(streamId, currentStreamVersion, documents);
             return new DcbAppendResult(firstPosition, lastPosition, eventsToAppend.size());
-        }));
+        })));
+    }
+
+    /**
+     * Retry the append transaction on a MongoDB {@code TransientTransactionError} (the error label is present when two
+     * transactions conflict, e.g. a write-write conflict on a shared marker). The full cause chain is walked because
+     * Spring wraps the {@link MongoException}. {@link DcbAppendConditionNotFulfilledException} is deliberately NOT
+     * retried here: it propagates to the application service, which re-reads and retries the whole command.
+     */
+    private static <T> T executeWithTransientRetry(java.util.function.Supplier<T> action) {
+        // Exponential backoff with generous attempts: several appends placed in the same partition stream serialize on
+        // stream_version, so the last writer can need to retry past all the others before it commits.
+        return RetryStrategy.exponentialBackoff(java.time.Duration.ofMillis(10), java.time.Duration.ofMillis(500), 2.0f)
+                .maxAttempts(15)
+                .retryIf(SpringMongoEventStore::isTransientTransactionError)
+                .execute(action);
+    }
+
+    private static boolean isTransientTransactionError(Throwable throwable) {
+        // Bounded walk so a cyclic cause chain (self-cause or a longer A -> B -> A cycle) cannot spin forever.
+        Throwable cause = throwable;
+        for (int hops = 0; cause != null && hops < 64; cause = cause.getCause(), hops++) {
+            if (cause instanceof MongoException mongoException && mongoException.hasErrorLabel(MongoException.TRANSIENT_TRANSACTION_ERROR_LABEL)) {
+                return true;
+            }
+        }
+        return false;
     }
 
     private static Set<String> boundaryTagsOf(List<CloudEvent> events) {
@@ -372,47 +415,99 @@ public class SpringMongoEventStore implements EventStore, EventStoreOperations, 
         return documents;
     }
 
-    private void updateCheckpoints(DcbAppendCondition condition, List<CloudEvent> eventsToAppend, long lastPosition) {
-        long afterSequencePosition = condition.afterSequencePosition().orElse(0);
-        if (mongoTemplate.exists(toDcbMongoQuery(condition.query(), afterSequencePosition, Long.MAX_VALUE), eventStoreCollectionName)) {
+    private void enforceAppendCondition(DcbAppendCondition condition, List<CloudEvent> eventsToAppend, long lastPosition) {
+        // Authoritative optimistic-concurrency check: the condition carries the consistency token the command observed
+        // when it read the query (DcbEventStream.consistencyToken()). If the query's markers have advanced since, an
+        // append matching the query committed after the read, so the condition is not fulfilled. Unlike a position-based
+        // existence check this is immune to read-watermark overshoot, because marker versions are bumped inside the
+        // append transaction (at commit), not when positions are reserved (ADR 0021).
+        long expectedToken = condition.consistencyToken().map(DcbConsistencyToken::value).orElse(0L);
+        long currentToken = consistencyToken(condition.query());
+        if (currentToken != expectedToken) {
             throw new DcbAppendConditionNotFulfilledException(condition, currentDcbPosition(), "Append condition was not fulfilled.");
         }
-        if (eventsToAppend.stream().noneMatch(event -> DcbCloudEvents.matches(event, condition.query()))) {
-            return;
-        }
-        for (String key : checkpointKeys(condition.query())) {
-            Query query = new Query(where(ID).is("checkpoint:" + key));
-            Document checkpoint = mongoTemplate.findOne(query, Document.class, dcbCheckpointCollectionName);
-            long checkpointPosition = checkpoint == null ? 0 : ((Number) checkpoint.get(CHECKPOINT_LAST_POSITION)).longValue();
-            if (checkpointPosition > afterSequencePosition) {
-                throw new DcbAppendConditionNotFulfilledException(condition, currentDcbPosition(), "Append condition was not fulfilled.");
-            }
-            Update update = new Update().set(CHECKPOINT_LAST_POSITION, lastPosition);
+        // Increment a marker per key for the union of the query's keys and the appended events' keys. The increments
+        // force a write-write conflict that serializes concurrent appends sharing a marker, so the loser re-runs this
+        // check against the winner's committed increment. Always increment the query's markers so a concurrent matching
+        // append is serialized even when this append's own events do not match the query.
+        java.util.TreeSet<String> markerKeys = new java.util.TreeSet<>(queryMarkerKeys(condition.query()));
+        markerKeys.addAll(eventMarkerKeys(eventsToAppend));
+        incrementConflictMarkers(markerKeys, lastPosition);
+    }
+
+    // Increment a conflict marker per key. Two appends that can match a common event share at least one marker (per
+    // ADR 0021), so the in-transaction increment forces a MongoDB write-write conflict and they serialize. The
+    // monotonically increasing version is also the optimistic-concurrency token: a reader snapshots the versions of a
+    // query's markers (see consistencyToken), and an append fails if any of them changed since. The stored lastPosition
+    // is informational.
+    private void incrementConflictMarkers(Set<String> markerKeys, long lastPosition) {
+        for (String key : markerKeys) {
+            Query query = new Query(where(ID).is("marker:" + key));
+            Update update = new Update().inc(CHECKPOINT_VERSION, 1L).set(CHECKPOINT_LAST_POSITION, lastPosition);
             mongoTemplate.upsert(query, update, dcbCheckpointCollectionName);
         }
     }
 
-    private static Set<String> checkpointKeys(DcbQuery query) {
+    // The optimistic-concurrency token for a query: the sum of the versions of its conflict markers. The sum is
+    // monotonically increasing (every append increments at least one marker by one), so it changes if and only if some
+    // append touched at least one of the query's markers since the reader observed it. Because the versions are bumped
+    // inside the append transaction (not when positions are reserved), this token reflects only committed appends and is
+    // therefore immune to the read-watermark overshoot that a position-based check suffers (ADR 0021).
+    private long consistencyToken(DcbQuery query) {
+        Set<String> markerKeys = queryMarkerKeys(query);
+        long sum = 0;
+        for (String key : markerKeys) {
+            Document marker = mongoTemplate.findById("marker:" + key, Document.class, dcbCheckpointCollectionName);
+            if (marker != null) {
+                Number version = (Number) marker.get(CHECKPOINT_VERSION);
+                if (version != null) {
+                    sum += version.longValue();
+                }
+            }
+        }
+        return sum;
+    }
+
+    private static Set<String> queryMarkerKeys(DcbQuery query) {
         if (query instanceof DcbQuery.MatchAll) {
             return Set.of("all");
         }
+        // Decompose into one key per attribute (a key per tag, a key per type) and NEVER combine them into a single
+        // "type:X+tag:t" key. Skew-safety (ADR 0021) depends on this: a conflicting event shares a marker via whichever
+        // single attribute made it match, and a combined key would share nothing with an event that carries only one
+        // of the attributes through a different query.
         java.util.TreeSet<String> keys = new java.util.TreeSet<>();
         for (DcbQueryItem item : ((DcbQuery.Items) query).items()) {
             item.tags().forEach(tag -> keys.add("tag:" + tag));
-            if (item.tags().isEmpty()) {
-                item.types().forEach(type -> keys.add("type:" + type));
-            }
+            item.types().forEach(type -> keys.add("type:" + type));
+        }
+        return keys;
+    }
+
+    private static Set<String> eventMarkerKeys(List<CloudEvent> events) {
+        java.util.TreeSet<String> keys = new java.util.TreeSet<>();
+        for (CloudEvent event : events) {
+            DcbCloudEvents.getTags(event).forEach(tag -> keys.add("tag:" + tag));
+            keys.add("type:" + event.getType());
         }
         return keys;
     }
 
     private long reserveDcbPositions(int eventCount) {
-        Query query = new Query(where(ID).is(DCB_POSITION_DOCUMENT_ID));
-        Update update = new Update().inc(DCB_COUNTER_POSITION, eventCount);
-        FindAndModifyOptions options = FindAndModifyOptions.options().upsert(true).returnNew(true);
-        Document updated = mongoTemplate.findAndModify(query, update, options, Document.class, dcbPositionCollectionName);
-        long lastPosition = ((Number) requireNonNull(updated, "DCB position document cannot be null").get(DCB_COUNTER_POSITION)).longValue();
-        return lastPosition - eventCount + 1;
+        // Retry the cold-start race: when the counter document does not exist yet, concurrent upserts all try to insert
+        // it and all but one get a duplicate key. On retry the document exists, so the upsert becomes an update.
+        return RetryStrategy.retry()
+                .backoff(org.occurrent.retry.Backoff.fixed(20))
+                .maxAttempts(5)
+                .retryIf(throwable -> throwable instanceof org.springframework.dao.DuplicateKeyException)
+                .execute(() -> {
+                    Query query = new Query(where(ID).is(DCB_POSITION_DOCUMENT_ID));
+                    Update update = new Update().inc(DCB_COUNTER_POSITION, eventCount);
+                    FindAndModifyOptions options = FindAndModifyOptions.options().upsert(true).returnNew(true);
+                    Document updated = mongoTemplate.findAndModify(query, update, options, Document.class, dcbPositionCollectionName);
+                    long lastPosition = ((Number) requireNonNull(updated, "DCB position document cannot be null").get(DCB_COUNTER_POSITION)).longValue();
+                    return lastPosition - eventCount + 1;
+                });
     }
 
     private long currentDcbPosition() {
@@ -499,6 +594,25 @@ public class SpringMongoEventStore implements EventStore, EventStoreOperations, 
         }
     }
 
+    private void insertAllDcb(String streamId, long streamVersion, List<Document> documents) {
+        try {
+            mongoTemplate.insert(documents, eventStoreCollectionName);
+        } catch (DataAccessException e) {
+            final Throwable rootCause = e.getRootCause();
+            if (rootCause instanceof MongoException mongoException) {
+                // A transient transaction conflict (e.g. two disjoint DCB boundaries that hash to the same partition
+                // stream racing on stream_version) must stay transient so executeWithTransientRetry retries it, rather
+                // than being mapped to the stream-path WriteConditionNotFulfilledException (which DCB does not use).
+                if (isTransientTransactionError(mongoException)) {
+                    throw mongoException;
+                }
+                throw translateException(new WriteContext(streamId, streamVersion, WriteCondition.anyStreamVersion()), mongoException);
+            } else {
+                throw e;
+            }
+        }
+    }
+
     private static boolean isFulfilled(long currentStreamVersion, WriteCondition writeCondition) {
         if (writeCondition.isAnyStreamVersion()) {
             return true;
@@ -536,8 +650,8 @@ public class SpringMongoEventStore implements EventStore, EventStoreOperations, 
         if (!item.excludedTypes().isEmpty()) {
             criteria.add(where("type").nin(item.excludedTypes()));
         }
-        for (String tag : item.tags()) {
-            criteria.add(where(DCB_TAGS_INDEX_FIELD).is(tag));
+        if (!item.tags().isEmpty()) {
+            criteria.add(where(DCB_TAGS_INDEX_FIELD).all(item.tags()));
         }
         return new Criteria().andOperator(criteria);
     }
