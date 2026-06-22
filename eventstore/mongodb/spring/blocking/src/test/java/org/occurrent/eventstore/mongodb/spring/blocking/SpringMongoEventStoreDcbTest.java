@@ -216,6 +216,43 @@ class SpringMongoEventStoreDcbTest {
     }
 
     @Test
+    void exists_and_count_honour_the_read_options_position_window() {
+        eventStore.append(List.of(taggedEvent("E", "t")));   // position 1
+        eventStore.append(List.of(taggedEvent("E", "t")));   // position 2
+        eventStore.append(List.of(taggedEvent("E", "t")));   // position 3
+
+        assertThat(eventStore.count(tagsAllOf("t"))).isEqualTo(3);
+        assertThat(eventStore.count(tagsAllOf("t"), DcbReadOptions.afterSequencePosition(1))).isEqualTo(2);
+        assertThat(eventStore.count(tagsAllOf("t"), DcbReadOptions.upToSequencePosition(2))).isEqualTo(2);
+        assertThat(eventStore.count(tagsAllOf("t"), DcbReadOptions.between(1, 2))).isEqualTo(1);
+
+        assertThat(eventStore.exists(tagsAllOf("t"))).isTrue();
+        assertThat(eventStore.exists(tagsAllOf("t"), DcbReadOptions.between(2, 3))).isTrue();
+        assertThat(eventStore.exists(tagsAllOf("t"), DcbReadOptions.afterSequencePosition(3))).isFalse();
+        assertThat(eventStore.exists(tagsAllOf("missing"))).isFalse();
+    }
+
+    @Test
+    void match_all_condition_does_not_detect_a_tag_scoped_append_documenting_the_known_limitation() {
+        // ADR 0021: a MatchAll condition is keyed on a single "all" marker that only other MatchAll appends touch, so it
+        // is NOT skew-safe against a tag-scoped or type-scoped append. This test pins that documented limitation so a
+        // future change cannot silently alter it.
+        DcbEventStream readModel = eventStore.read(all());
+
+        // A tag-scoped append commits after the MatchAll read. It bumps the name:1 tag and NameDefined type markers, but
+        // not the "all" marker that the MatchAll condition is keyed on.
+        eventStore.append(List.of(taggedEvent("NameDefined", "name:1")));
+
+        // The MatchAll condition therefore does not observe it and the append succeeds, even though an event was written
+        // after the read. A tag-scoped condition on name:1 would correctly conflict here.
+        DcbAppendResult result = eventStore.append(
+                List.of(taggedEvent("NameChanged", "name:2")),
+                failIfEventsMatch(all(), readModel.consistencyToken()));
+
+        assertThat(result.firstSequencePosition()).isEqualTo(2);
+    }
+
+    @Test
     void abandons_reserved_position_block_when_duplicate_cloud_event_fails_insert() {
         CloudEvent cloudEvent = taggedEvent("NameDefined", "name:1");
         eventStore.append(List.of(cloudEvent));
