@@ -175,9 +175,9 @@ class DcbApiTest {
         assertThatThrownBy(() -> DcbReadOptions.afterSequencePosition(-1))
                 .isExactlyInstanceOf(IllegalArgumentException.class)
                 .hasMessage("After sequence position cannot be negative");
-        assertThatThrownBy(() -> DcbAppendCondition.failIfEventsMatch(DcbQuery.all(), -1))
+        assertThatThrownBy(() -> DcbAppendCondition.failIfEventsMatch(DcbQuery.all(), DcbConsistencyToken.of(-1)))
                 .isExactlyInstanceOf(IllegalArgumentException.class)
-                .hasMessage("After sequence position cannot be negative");
+                .hasMessage("Consistency token value cannot be negative");
     }
 
     private static io.cloudevents.CloudEvent cloudEvent() {

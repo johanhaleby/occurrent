@@ -98,8 +98,8 @@ class InMemoryEventStoreDcbTest {
         // Two appends to the same boundary (game:1), but each event carries a different extra tag. Placement must
         // follow the condition's boundary tags, not the per-event tags, so both land in the same partition stream.
         eventStore.append(List.of(taggedEvent("NameDefined", "game:1", "extra:a")), failIfEventsMatch(tagsAllOf("game:1")));
-        long head = eventStore.read(tagsAllOf("game:1")).lastSequencePosition();
-        eventStore.append(List.of(taggedEvent("NameChanged", "game:1", "extra:b")), failIfEventsMatch(tagsAllOf("game:1"), head));
+        DcbConsistencyToken token = eventStore.read(tagsAllOf("game:1")).consistencyToken();
+        eventStore.append(List.of(taggedEvent("NameChanged", "game:1", "extra:b")), failIfEventsMatch(tagsAllOf("game:1"), token));
 
         List<String> streamIds = eventStore.read(tagsAllOf("game:1")).events().stream()
                 .map(OccurrentExtensionGetter::getStreamId)
@@ -189,7 +189,7 @@ class InMemoryEventStoreDcbTest {
 
         assertThatThrownBy(() -> eventStore.append(
                 List.of(taggedEvent("NameChanged", "name:1")),
-                failIfEventsMatch(tagsAllOf("name:1"), readModel.lastSequencePosition())))
+                failIfEventsMatch(tagsAllOf("name:1"), readModel.consistencyToken())))
                 .isExactlyInstanceOf(DcbAppendConditionNotFulfilledException.class);
     }
 
@@ -204,7 +204,7 @@ class InMemoryEventStoreDcbTest {
 
         DcbAppendResult result = eventStore.append(
                 List.of(taggedEvent("NameChanged", "name:1")),
-                failIfEventsMatch(query, readModel.lastSequencePosition()));
+                failIfEventsMatch(query, readModel.consistencyToken()));
 
         assertThat(result.firstSequencePosition()).isEqualTo(3);
     }
@@ -220,7 +220,7 @@ class InMemoryEventStoreDcbTest {
 
         assertThatThrownBy(() -> eventStore.append(
                 List.of(taggedEvent("NameImported", "name:1")),
-                failIfEventsMatch(query, readModel.lastSequencePosition())))
+                failIfEventsMatch(query, readModel.consistencyToken())))
                 .isExactlyInstanceOf(DcbAppendConditionNotFulfilledException.class);
     }
 

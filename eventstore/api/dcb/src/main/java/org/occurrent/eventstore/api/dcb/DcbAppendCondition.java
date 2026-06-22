@@ -18,40 +18,38 @@ package org.occurrent.eventstore.api.dcb;
 
 import org.jspecify.annotations.NullMarked;
 
-import java.util.OptionalLong;
+import java.util.Optional;
 
 import static java.util.Objects.requireNonNull;
 
 /**
  * Optimistic conflict condition for a DCB append.
  * <p>
- * {@code query} describes the events that would conflict with the append. {@code afterSequencePosition}
- * optionally limits the conflict check to events written after a position observed by a prior read.
+ * {@code query} describes the events that would conflict with the append. {@code consistencyToken} optionally limits the
+ * conflict check to events committed after a boundary observed by a prior read (see
+ * {@link DcbEventStream#consistencyToken()}); when empty, the append fails if any existing event matches {@code query}.
  */
 @NullMarked
-public record DcbAppendCondition(DcbQuery query, OptionalLong afterSequencePosition) {
+public record DcbAppendCondition(DcbQuery query, Optional<DcbConsistencyToken> consistencyToken) {
 
     public DcbAppendCondition {
         requireNonNull(query, "Query cannot be null");
-        requireNonNull(afterSequencePosition, "After sequence position cannot be null");
-        afterSequencePosition.ifPresent(position -> {
-            if (position < 0) {
-                throw new IllegalArgumentException("After sequence position cannot be negative");
-            }
-        });
+        requireNonNull(consistencyToken, "Consistency token cannot be null");
     }
 
     /**
      * Creates a condition that fails if any existing event matches {@code query}.
      */
     public static DcbAppendCondition failIfEventsMatch(DcbQuery query) {
-        return new DcbAppendCondition(query, OptionalLong.empty());
+        return new DcbAppendCondition(query, Optional.empty());
     }
 
     /**
-     * Creates a condition that fails if an event after {@code afterSequencePosition} matches {@code query}.
+     * Creates a condition that fails if an event matching {@code query} was committed after the read that produced
+     * {@code consistencyToken}.
      */
-    public static DcbAppendCondition failIfEventsMatch(DcbQuery query, long afterSequencePosition) {
-        return new DcbAppendCondition(query, OptionalLong.of(afterSequencePosition));
+    public static DcbAppendCondition failIfEventsMatch(DcbQuery query, DcbConsistencyToken consistencyToken) {
+        requireNonNull(consistencyToken, "Consistency token cannot be null");
+        return new DcbAppendCondition(query, Optional.of(consistencyToken));
     }
 }

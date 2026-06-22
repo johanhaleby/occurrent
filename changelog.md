@@ -50,6 +50,8 @@
   * The backward-compatible default is `{STREAM}`.
   * Spring Boot property: `occurrent.event-store.capabilities=stream`, `dcb`, or `stream,dcb`.
   * `SpringMongoEventStore` now creates indexes/support collections based on enabled capabilities and fails fast when callers invoke a disabled API family.
+  * The Spring Mongo DCB append path now uses query-scoped concurrency instead of serializing every append on a global counter. The `dcbposition` counter is reserved outside the append transaction, so appends to disjoint boundaries no longer contend on a single hot document (`dcbposition` may now have gaps, which the DCB contract permits). Optimistic concurrency is enforced with a consistency token rather than a position. A read captures a `DcbConsistencyToken` (a distinct type from the `long` sequence position) from the versions of its query's per-attribute conflict markers, and the append fails if those markers advanced since the read. Because marker versions move at commit and never at reservation, this is sound even though the read head can run ahead of committed data, where a position-based check would silently miss a conflict. The markers also serialize concurrent appends that can match a common event and are provably skew-safe for tag-scoped and type-scoped boundaries, including unconditional appends, and transient MongoDB transaction conflicts are retried instead of surfacing as a spurious command failure. The token is derived from positive markers only, so excluded types and multi-attribute conjunctions are a safe over-approximation in the conflict check: reads still apply them precisely, and a false conflict self-heals through the application-service retry. A `MatchAll` append condition is a whole-store lock and is not skew-safe against concurrent tag or type scoped appends. See [ADR 21](doc/architecture/decisions/0021-dcb-write-path-query-scoped-concurrency.md). Adversarial multi-threaded tests prove the type-versus-tag, tag-versus-tag, and type-versus-type cases plus the read-watermark and unconditional-append scenarios, and `explain` confirms the conflict and read queries are index-backed.
+  * DCB tag queries now match with a single `dcbTags` array-containment predicate instead of one predicate per tag.
   * The Spring Boot starter now auto-configures application services from the same capability set: stream `ApplicationService` for `STREAM`, `DcbApplicationService` for `DCB`, and both for `stream,dcb`.
   * DCB-only Spring Boot auto-configuration also exposes `DomainEventQueries` so DCB query DSL extensions can reuse the starter-provided converter while stream application services remain disabled.
   * DCB application-service auto-configuration requires a user-provided `TagGenerator` bean, since DCB tags are domain-specific.
@@ -60,7 +62,7 @@
   * `DcbQueryItem` now has `excludedTypes`.
   * Added factories for tag and type+tag queries that exclude event types.
   * Included types are any-of, tags are all-of, and excluded types are none-of within each query item.
-  * Append-condition matching now respects excluded types so excluded events do not cause false DCB conflicts.
+  * Reads respect excluded types, so excluded events are filtered from DCB query results. The Spring Mongo append-condition check over-approximates excluded types as a safe conservatism (see the query-scoped concurrency note), so an excluded event that still carries a query's positive tag can trigger a self-healing conflict rather than being ignored.
 * Added a blocking DCB DSL module.
   * New module: `org.occurrent:dcb-dsl-blocking`.
   * Java helpers: `DcbDomainEventQueries` and `DcbDomainEventStream`.
@@ -89,6 +91,7 @@
   * [ADR 18](doc/architecture/decisions/0018-spring-mongo-event-store-capabilities.md)
   * [ADR 19](doc/architecture/decisions/0019-dcb-dsl-module.md)
   * [ADR 20](doc/architecture/decisions/0020-dcb-catch-up-subscription-by-dcbposition.md)
+  * [ADR 21](doc/architecture/decisions/0021-dcb-write-path-query-scoped-concurrency.md)
 
 #### Notes
 

@@ -178,23 +178,27 @@ class SpringMongoEventStoreDcbTest {
 
         assertThatThrownBy(() -> eventStore.append(
                 List.of(taggedEvent("NameChanged", "name:1")),
-                failIfEventsMatch(tagsAllOf("name:1"), readModel.lastSequencePosition())))
+                failIfEventsMatch(tagsAllOf("name:1"), readModel.consistencyToken())))
                 .isExactlyInstanceOf(DcbAppendConditionNotFulfilledException.class);
     }
 
     @Test
-    void append_condition_ignores_excluded_event_types_after_condition_position() {
+    void append_condition_conservatively_conflicts_on_an_excluded_type_sharing_a_tag() {
         eventStore.append(List.of(taggedEvent("NameDefined", "name:1")));
         DcbQuery query = tagsAllOfExcludingTypes(List.of("name:1"), List.of("NameSnapshot"));
         DcbEventStream readModel = eventStore.read(query);
 
+        // An excluded-type event is appended after the read. It does not match the query (reads exclude it precisely,
+        // see reads_tagged_events_except_excluded_types), but it shares the positive tag name:1, whose marker the consistency
+        // token is derived from. The token model over-approximates and conservatively conflicts: it is sound (it never
+        // misses a real conflict) at the cost of a false conflict here, which self-heals through the application service
+        // (it re-reads the still-excluded boundary and retries). See ADR 0021.
         eventStore.append(List.of(taggedEvent("NameSnapshot", "name:1")));
 
-        DcbAppendResult result = eventStore.append(
+        assertThatThrownBy(() -> eventStore.append(
                 List.of(taggedEvent("NameChanged", "name:1")),
-                failIfEventsMatch(query, readModel.lastSequencePosition()));
-
-        assertThat(result.firstSequencePosition()).isEqualTo(3);
+                failIfEventsMatch(query, readModel.consistencyToken())))
+                .isExactlyInstanceOf(DcbAppendConditionNotFulfilledException.class);
     }
 
     @Test
@@ -207,27 +211,29 @@ class SpringMongoEventStoreDcbTest {
 
         assertThatThrownBy(() -> eventStore.append(
                 List.of(taggedEvent("NameImported", "name:1")),
-                failIfEventsMatch(query, readModel.lastSequencePosition())))
+                failIfEventsMatch(query, readModel.consistencyToken())))
                 .isExactlyInstanceOf(DcbAppendConditionNotFulfilledException.class);
     }
 
     @Test
-    void rolls_back_position_reservation_when_duplicate_cloud_event_fails_insert() {
+    void abandons_reserved_position_block_when_duplicate_cloud_event_fails_insert() {
         CloudEvent cloudEvent = taggedEvent("NameDefined", "name:1");
         eventStore.append(List.of(cloudEvent));
 
         assertThatThrownBy(() -> eventStore.append(List.of(cloudEvent)))
                 .isExactlyInstanceOf(DuplicateCloudEventException.class);
 
+        // Positions are reserved outside the transaction (ADR 0021), so the failed append abandons its reserved block
+        // and dcbposition has a gap. The next successful append lands after the abandoned block.
         DcbAppendResult appendResult = eventStore.append(List.of(taggedEvent("NameChanged", "name:1")));
-        assertThat(appendResult.firstSequencePosition()).isEqualTo(2);
-        assertThat(appendResult.lastSequencePosition()).isEqualTo(2);
+        assertThat(appendResult.firstSequencePosition()).isEqualTo(3);
+        assertThat(appendResult.lastSequencePosition()).isEqualTo(3);
     }
 
     @Test
-    void same_stale_append_condition_rejects_second_append_without_advancing_position() {
+    void same_stale_append_condition_rejects_second_append_and_abandons_its_position_block() {
         DcbEventStream readModel = eventStore.read(tagsAllOf("name:1"));
-        DcbAppendCondition appendCondition = failIfEventsMatch(tagsAllOf("name:1"), readModel.lastSequencePosition());
+        DcbAppendCondition appendCondition = failIfEventsMatch(tagsAllOf("name:1"), readModel.consistencyToken());
 
         DcbAppendResult firstAppend = eventStore.append(List.of(taggedEvent("NameDefined", "name:1")), appendCondition);
         assertThat(firstAppend).isEqualTo(new DcbAppendResult(1, 1, 1));
@@ -235,8 +241,10 @@ class SpringMongoEventStoreDcbTest {
         assertThatThrownBy(() -> eventStore.append(List.of(taggedEvent("NameChanged", "name:1")), appendCondition))
                 .isExactlyInstanceOf(DcbAppendConditionNotFulfilledException.class);
 
+        // The condition-failed append abandons its reserved position block (ADR 0021), so dcbposition has a gap and the
+        // next successful append lands at position 3 rather than 2.
         DcbAppendResult nextAppend = eventStore.append(List.of(taggedEvent("NameChanged", "name:2")));
-        assertThat(nextAppend).isEqualTo(new DcbAppendResult(2, 2, 1));
+        assertThat(nextAppend).isEqualTo(new DcbAppendResult(3, 3, 1));
     }
 
     @Test
