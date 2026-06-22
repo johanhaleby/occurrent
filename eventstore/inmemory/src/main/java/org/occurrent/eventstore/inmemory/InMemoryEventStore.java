@@ -282,7 +282,9 @@ public class InMemoryEventStore implements EventStore, EventStoreOperations, Eve
         DcbAppendResult result;
         synchronized (state) {
             if (condition != null) {
-                long afterSequencePosition = condition.afterSequencePosition().orElse(0);
+                // The in-memory store assigns positions and commits atomically under the lock, so its read head is a
+                // sound concurrency boundary: the token value is simply the position observed by the read.
+                long afterSequencePosition = condition.consistencyToken().map(DcbConsistencyToken::value).orElse(0L);
                 boolean fulfilled = allEvents()
                         .filter(event -> dcbPosition(event) > afterSequencePosition)
                         .noneMatch(event -> DcbCloudEvents.matches(event, condition.query()));

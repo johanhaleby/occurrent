@@ -33,20 +33,37 @@ import static java.util.Objects.requireNonNull;
  *                             the matched {@code events}: the highest matched position can be lower than the head, and
  *                             when the query matches nothing there is no matched position at all, yet
  *                             {@code lastSequencePosition} still reports the store head. It is {@code 0} only when the
- *                             store holds no DCB events yet. Pass it to
- *                             {@link DcbAppendCondition#failIfEventsMatch(DcbQuery, long)} so a later append is rejected
- *                             if any event matching the query was written after this read, independent of which events
- *                             the query itself matched.
+ *                             store holds no DCB events yet. It is a monotonic global cursor, suitable for replay and
+ *                             catch-up, but it is NOT a safe optimistic-concurrency boundary on its own: a store that
+ *                             assigns positions before the events commit can report a head that is ahead of the data a
+ *                             reader can actually see. Use {@code consistencyToken} for optimistic concurrency.
+ * @param consistencyToken     an opaque, store-defined token capturing the consistency boundary observed by this read
+ *                             for the supplied query. Pass it unchanged to
+ *                             {@link DcbAppendCondition#failIfEventsMatch(DcbQuery, DcbConsistencyToken)} so a later
+ *                             append is rejected if any event matching the query was committed after this read. Unlike
+ *                             {@code lastSequencePosition}, it is sound under concurrent in-flight appends because the
+ *                             store derives it from data that is only observable once committed. Round-trip it within
+ *                             the same store; do not interpret or compare it across stores.
  */
 @NullMarked
-public record DcbEventStream(List<CloudEvent> events, long lastSequencePosition) {
+public record DcbEventStream(List<CloudEvent> events, long lastSequencePosition, DcbConsistencyToken consistencyToken) {
 
     public DcbEventStream {
         requireNonNull(events, "Events cannot be null");
+        requireNonNull(consistencyToken, "Consistency token cannot be null");
         if (lastSequencePosition < 0) {
             throw new IllegalArgumentException("Last sequence position cannot be negative");
         }
         events = List.copyOf(events);
+    }
+
+    /**
+     * Convenience for stores whose read head is itself a sound optimistic-concurrency boundary (for example the
+     * in-memory store, whose appends assign positions and commit atomically). Such stores use the position as the
+     * {@code consistencyToken}.
+     */
+    public DcbEventStream(List<CloudEvent> events, long lastSequencePosition) {
+        this(events, lastSequencePosition, DcbConsistencyToken.of(lastSequencePosition));
     }
 
     /**
