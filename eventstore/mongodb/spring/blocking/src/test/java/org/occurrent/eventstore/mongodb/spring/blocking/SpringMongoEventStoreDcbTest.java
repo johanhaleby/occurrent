@@ -111,7 +111,7 @@ class SpringMongoEventStoreDcbTest {
                 taggedEvent("OrderPlaced", "order:1")));
 
         DcbEventStream eventStream = eventStore.read(
-                fromItems(List.of(
+                anyOf(List.of(
                         DcbQueryItem.types(List.of("OrderPlaced")),
                         DcbQueryItem.tagsAllOf(List.of("name:1", "tenant:1")))),
                 DcbReadOptions.afterSequencePosition(1));
@@ -160,7 +160,7 @@ class SpringMongoEventStoreDcbTest {
                 taggedEvent("NameDefined", "name:1"),
                 taggedEvent("OrderPlaced", "order:1")));
 
-        DcbEventStream eventStream = eventStore.read(fromItems(List.of(
+        DcbEventStream eventStream = eventStore.read(anyOf(List.of(
                 DcbQueryItem.tagsAllOfExcludingTypes(List.of("name:1"), List.of("NameSnapshot")),
                 DcbQueryItem.tagsAllOf(List.of("order:1")))));
 
@@ -250,6 +250,24 @@ class SpringMongoEventStoreDcbTest {
                 failIfEventsMatch(all(), readModel.consistencyToken()));
 
         assertThat(result.firstSequencePosition()).isEqualTo(2);
+    }
+
+    @Test
+    void no_token_append_condition_reflects_current_existence_not_past_appends() {
+        DcbQuery query = tagsAllOf("name:1");
+        CloudEvent existing = taggedEvent("NameDefined", "name:1");
+        eventStore.append(List.of(existing));
+
+        // While a matching event exists, the no-token guard conflicts.
+        assertThatThrownBy(() -> eventStore.append(List.of(taggedEvent("NameChanged", "name:1")), failIfEventsMatch(query)))
+                .isExactlyInstanceOf(DcbAppendConditionNotFulfilledException.class);
+
+        // After the matching event is deleted, the no-token guard succeeds again. It means "currently exists", not
+        // "ever appended": the no-token path checks the live events, not the never-decremented marker versions, so it
+        // matches the in-memory store and survives deletes.
+        eventStore.deleteEvent(existing.getId(), existing.getSource());
+        DcbAppendResult result = eventStore.append(List.of(taggedEvent("NameChanged", "name:1")), failIfEventsMatch(query));
+        assertThat(result.eventCount()).isEqualTo(1);
     }
 
     @Test

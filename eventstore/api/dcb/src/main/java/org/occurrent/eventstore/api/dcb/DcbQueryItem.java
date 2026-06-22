@@ -58,6 +58,14 @@ public record DcbQueryItem(Set<String> types, Set<String> tags, Set<String> excl
     }
 
     /**
+     * Creates an item that matches events whose CloudEvent type is {@code type}. Shorthand for the single-type case of
+     * {@link #types(Collection)}.
+     */
+    public static DcbQueryItem type(String type) {
+        return types(Set.of(type));
+    }
+
+    /**
      * Creates an item that matches any of the supplied CloudEvent types.
      */
     public static DcbQueryItem types(Collection<String> types) {
