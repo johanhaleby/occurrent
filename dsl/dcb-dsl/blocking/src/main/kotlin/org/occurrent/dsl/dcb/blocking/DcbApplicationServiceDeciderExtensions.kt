@@ -20,31 +20,35 @@ import org.occurrent.application.service.blocking.dcb.DcbApplicationService
 import org.occurrent.dsl.decider.Decider
 import org.occurrent.eventstore.api.dcb.DcbAppendResult
 import org.occurrent.eventstore.api.dcb.DcbQuery
-import java.util.Optional
 import java.util.concurrent.atomic.AtomicReference
 import java.util.stream.Stream
 
 /**
  * Execute a decider command where [query] is the DCB decision boundary,
  * equivalent to the stream id in stream-based decider helpers.
+ *
+ * Returns the [DcbAppendResult], or `null` when the decider produced no new events (a no-op command). This is the
+ * Kotlin-idiomatic counterpart to the Java [DcbApplicationService.execute] which returns `Optional<DcbAppendResult>`.
  */
 fun <C, S, E : Any> DcbApplicationService<E>.execute(
     query: DcbQuery,
     command: C,
     decider: Decider<C, S, E>
-): Optional<DcbAppendResult> = execute(query, listOf(command), decider)
+): DcbAppendResult? = execute(query, listOf(command), decider)
 
 /**
  * Execute decider commands in order where [query] is the DCB decision boundary.
+ *
+ * Returns the [DcbAppendResult], or `null` when the decider produced no new events.
  */
 fun <C, S, E : Any> DcbApplicationService<E>.execute(
     query: DcbQuery,
     commands: List<C>,
     decider: Decider<C, S, E>
-): Optional<DcbAppendResult> =
+): DcbAppendResult? =
     execute(query) { events: Stream<E> ->
         decider.decideOnEventsAndReturnEvents(events.toList(), commands).stream()
-    }
+    }.orElse(null)
 
 /**
  * Execute a command and return the folded state plus the new events decided for [query].
