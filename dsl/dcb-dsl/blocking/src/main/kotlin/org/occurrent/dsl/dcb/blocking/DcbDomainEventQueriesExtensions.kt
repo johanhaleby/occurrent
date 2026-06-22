@@ -16,6 +16,7 @@
 
 package org.occurrent.dsl.dcb.blocking
 
+import org.occurrent.eventstore.api.dcb.DcbConsistencyToken
 import org.occurrent.eventstore.api.dcb.DcbQuery
 import org.occurrent.eventstore.api.dcb.DcbReadOptions
 import kotlin.streams.asSequence
@@ -43,23 +44,25 @@ fun <T : Any> DcbDomainEventQueries<T>.queryForList(
     this.query(query, options).toList()
 
 /**
- * Query that returns the matching domain events as a [List] together with the observed DCB sequence position.
+ * Query that returns the matching domain events as a [List] together with the observed DCB sequence position and the
+ * consistency token for a later conditional append.
  *
  * @see DcbDomainEventQueries.queryWithPosition
  */
 fun <T : Any> DcbDomainEventQueries<T>.queryForListWithPosition(
     query: DcbQuery,
     options: DcbReadOptions = DcbReadOptions.fromBeginning()
-): Pair<List<T>, Long> =
-    this.queryWithPosition(query, options).let { it.events() to it.lastSequencePosition() }
+): Triple<List<T>, Long, DcbConsistencyToken> =
+    this.queryWithPosition(query, options).let { Triple(it.events(), it.lastSequencePosition(), it.consistencyToken()) }
 
 /**
- * Query that returns the matching domain events as a [Sequence] together with the observed DCB sequence position.
+ * Query that returns the matching domain events as a [Sequence] together with the observed DCB sequence position and the
+ * consistency token for a later conditional append.
  *
  * @see DcbDomainEventQueries.queryWithPosition
  */
 fun <T : Any> DcbDomainEventQueries<T>.queryForSequenceWithPosition(
     query: DcbQuery,
     options: DcbReadOptions = DcbReadOptions.fromBeginning()
-): Pair<Sequence<T>, Long> =
-    this.queryWithPosition(query, options).let { it.events().asSequence() to it.lastSequencePosition() }
+): Triple<Sequence<T>, Long, DcbConsistencyToken> =
+    this.queryWithPosition(query, options).let { Triple(it.events().asSequence(), it.lastSequencePosition(), it.consistencyToken()) }

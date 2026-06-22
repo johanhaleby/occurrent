@@ -35,7 +35,7 @@ class DcbApiTest {
 
     @Test
     void query_must_be_all_or_contain_at_least_one_item() {
-        assertThatThrownBy(() -> DcbQuery.fromItems(List.of()))
+        assertThatThrownBy(() -> DcbQuery.anyOf(List.of()))
                 .isExactlyInstanceOf(IllegalArgumentException.class)
                 .hasMessage("A query must contain at least one query item");
     }
@@ -141,7 +141,7 @@ class DcbApiTest {
     void cloud_event_helper_matches_any_query_item() {
         io.cloudevents.CloudEvent event = DcbCloudEvents.withTags(cloudEvent("OrderPlaced"), List.of("order:1"));
 
-        DcbQuery query = DcbQuery.fromItems(List.of(
+        DcbQuery query = DcbQuery.anyOf(List.of(
                 DcbQueryItem.tagsAllOf(List.of("name:1")),
                 DcbQueryItem.types(List.of("OrderPlaced"))));
 
@@ -178,6 +178,18 @@ class DcbApiTest {
         assertThatThrownBy(() -> DcbAppendCondition.failIfEventsMatch(DcbQuery.all(), DcbConsistencyToken.of(-1)))
                 .isExactlyInstanceOf(IllegalArgumentException.class)
                 .hasMessage("Consistency token value cannot be negative");
+    }
+
+    @Test
+    void query_factory_shortcuts_are_consistent() {
+        DcbQueryItem item = DcbQueryItem.tagsAllOf(java.util.List.of("t"));
+
+        // anyOf(Collection) is equivalent to anyOf(varargs).
+        assertThat(DcbQuery.anyOf(java.util.List.of(item))).isEqualTo(DcbQuery.anyOf(item));
+
+        // type(String) is the single-type shorthand.
+        assertThat(DcbQuery.type("X")).isEqualTo(DcbQuery.types("X"));
+        assertThat(DcbQueryItem.type("X")).isEqualTo(DcbQueryItem.types(java.util.List.of("X")));
     }
 
     private static io.cloudevents.CloudEvent cloudEvent() {
