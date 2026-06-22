@@ -3,11 +3,12 @@ package org.occurrent.application.service.blocking.dcb
 import org.occurrent.application.service.blocking.PolicySideEffect
 
 /**
- * Create empty [DcbExecuteOptions] for Kotlin call sites.
+ * Create empty [DcbExecuteOptions] for Kotlin call sites, mirroring the stream `options()` helper.
  *
- * The event type is normally inferred from a chained [sideEffect] or from the surrounding `execute(...)` call.
+ * Returns `DcbExecuteOptions<Any>` so it works as a chain starter without a call-site type argument. A chained
+ * [DcbExecuteOptions.sideEffect] narrows the event type from its policy.
  */
-fun <E : Any> dcbExecuteOptions(): DcbExecuteOptions<E> = DcbExecuteOptions.empty()
+fun dcbExecuteOptions(): DcbExecuteOptions<Any> = DcbExecuteOptions.empty()
 
 /**
  * Create [DcbExecuteOptions] with a typed policy side-effect that is invoked for events matching [E] after the
