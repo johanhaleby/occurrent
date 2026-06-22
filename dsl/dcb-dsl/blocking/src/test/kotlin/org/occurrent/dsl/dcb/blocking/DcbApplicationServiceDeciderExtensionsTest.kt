@@ -63,19 +63,18 @@ class DcbApplicationServiceDeciderExtensionsTest {
     fun command_execution_appends_decider_produced_events() {
         val result = applicationService.execute(nameQuery("name"), DefineName("Jane Doe"), nameDecider())
 
-        assertThat(result).hasValueSatisfying { appendResult ->
-            assertThat(appendResult.eventCount()).isEqualTo(1)
-        }
+        assertThat(result).isNotNull()
+        assertThat(result!!.eventCount()).isEqualTo(1)
         assertThat(readNameEvents("name")).containsExactly(NameDefined("event-1", time, "name", "Jane Doe"))
     }
 
     @Test
-    fun no_op_decisions_return_empty_optional() {
+    fun no_op_decisions_return_null() {
         append(NameDefined("event-0", time, "name", "Jane Doe"))
 
         val result = applicationService.execute(nameQuery("name"), DefineName("Jane Doe"), nameDecider())
 
-        assertThat(result).isEmpty()
+        assertThat(result).isNull()
         assertThat(readNameEvents("name")).containsExactly(NameDefined("event-0", time, "name", "Jane Doe"))
     }
 

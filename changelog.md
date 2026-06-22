@@ -42,6 +42,7 @@
   * New types: `DcbApplicationService`, `GenericDcbApplicationService`, `TagGenerator`, `DcbStreamIdGenerator`, and `PartitionedDcbStreamIdGenerator`.
   * `GenericDcbApplicationService` reads with a `DcbQuery`, invokes the domain function, converts new domain events to CloudEvents, adds DCB tags, and appends with a DCB append condition.
   * `DcbExecuteOptions` adds a post-append side-effect, so a policy can run on the newly written events after a successful append, mirroring the stream `ExecuteOptions` side-effect. The side-effect runs once after the append, not on the no-new-events path and not per retry attempt, and the existing `PolicySideEffect` is reused. There is deliberately no read-filter option, because in DCB the `DcbQuery` is both the read filter and the consistency boundary. Kotlin gets a reified `dcbSideEffect` builder.
+  * Kotlin callers get `executeSequence` and `executeList` extensions on `DcbApplicationService` that return a nullable `DcbAppendResult?` (null on a no-op command) instead of the Java `Optional<DcbAppendResult>`, mirroring the stream `executeSequence`/`executeList`, and both take an optional `DcbExecuteOptions`. The Kotlin decider `execute` extensions now return `DcbAppendResult?` as well.
 * Added Spring Mongo event-store capabilities.
   * New enum: `SpringMongoEventStoreCapability`.
   * `EventStoreConfig` now accepts a non-empty set of capabilities: `STREAM`, `DCB`, or both.
