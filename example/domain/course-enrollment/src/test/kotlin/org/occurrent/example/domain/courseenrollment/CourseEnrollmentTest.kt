@@ -18,9 +18,8 @@ package org.occurrent.example.domain.courseenrollment
 
 import org.junit.jupiter.api.Disabled
 import org.junit.jupiter.api.Test
-import org.occurrent.example.domain.courseenrollment.features.enrollment.usecases.DefineCourse
-import org.occurrent.example.domain.courseenrollment.features.enrollment.usecases.EnrollStudent
-import org.occurrent.example.domain.courseenrollment.features.enrollment.usecases.RegisterStudent
+import org.occurrent.application.service.blocking.dcb.DcbApplicationService
+import org.occurrent.example.domain.courseenrollment.common.DomainEvent
 import org.springframework.beans.factory.annotation.Autowired
 import org.springframework.boot.test.context.SpringBootTest
 import org.springframework.boot.testcontainers.service.connection.ServiceConnection
@@ -32,8 +31,11 @@ import org.testcontainers.mongodb.MongoDBContainer
  * Test harness for the course-enrollment example. The MongoDB replica set required for DCB transactions is started by
  * Testcontainers and wired in via {@code @ServiceConnection}, so no local setup is needed.
  *
- * TODO(human): once the tag generator, queries, and decider are implemented, remove the {@code @Disabled} annotations
- * and flesh out the assertions. These two tests are the ones that prove DCB is doing its job.
+ * The use cases are extension functions on [DcbApplicationService], so the test autowires the service and calls them
+ * directly, for example {@code applicationService.defineCourse(...)}.
+ *
+ * TODO(human): once the deciders and queries are implemented, remove the {@code @Disabled} annotations and flesh out the
+ * assertions. These two tests are the ones that prove DCB is doing its job.
  */
 @SpringBootTest
 @Testcontainers
@@ -48,26 +50,20 @@ class CourseEnrollmentTest {
     }
 
     @Autowired
-    lateinit var defineCourse: DefineCourse
-
-    @Autowired
-    lateinit var registerStudent: RegisterStudent
-
-    @Autowired
-    lateinit var enrollStudent: EnrollStudent
+    lateinit var applicationService: DcbApplicationService<DomainEvent>
 
     @Test
-    @Disabled("TODO(human): enable once the decider and queries are implemented")
+    @Disabled("TODO(human): enable once the deciders and queries are implemented")
     fun `a course cannot be filled beyond its capacity`() {
-        // TODO(human): define a course with capacity N, register N+1 students, enroll N of them, then assert the
-        //  (N+1)-th enrollment is rejected. For the real DCB payoff, run the last two enrollments concurrently and
-        //  assert exactly one wins.
+        // TODO(human): applicationService.defineCourse(...) with capacity N, registerStudent(...) for N+1 students,
+        //  enrollStudent(...) N of them, then assert the (N+1)-th enrollment is rejected. For the real DCB payoff, run
+        //  the last two enrollments concurrently and assert exactly one wins.
     }
 
     @Test
-    @Disabled("TODO(human): enable once the decider and queries are implemented")
+    @Disabled("TODO(human): enable once the deciders and queries are implemented")
     fun `a student cannot exceed the per-student course limit`() {
-        // TODO(human): register one student, define MAX_COURSES_PER_STUDENT + 1 courses, enroll the student in each,
-        //  and assert the final enrollment is rejected.
+        // TODO(human): registerStudent(...) once, defineCourse(...) MAX_COURSES_PER_STUDENT + 1 courses, enrollStudent
+        //  the student in each, and assert the final enrollment is rejected.
     }
 }
