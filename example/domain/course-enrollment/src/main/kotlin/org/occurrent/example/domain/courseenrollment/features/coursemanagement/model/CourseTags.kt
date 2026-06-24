@@ -14,16 +14,10 @@
  * limitations under the License.
  */
 
-package org.occurrent.example.domain.courseenrollment.features.dcb
+package org.occurrent.example.domain.courseenrollment.features.coursemanagement.model
 
-import org.occurrent.example.domain.courseenrollment.CourseId
-import org.occurrent.example.domain.courseenrollment.StudentId
+import org.occurrent.example.domain.courseenrollment.common.CourseId
 
-/**
- * The two consistency boundaries in this domain. An event can belong to one or both of them, that is what makes the
- * enrollment decision a Dynamic Consistency Boundary spanning a course and a student at once.
- */
-internal object CourseEnrollmentDcbTags {
+internal object CourseTags {
     fun course(courseId: CourseId): String = "course:$courseId"
-    fun student(studentId: StudentId): String = "student:$studentId"
 }
