@@ -18,16 +18,19 @@ package org.occurrent.example.domain.courseenrollment.features.coursemanagement.
 
 import org.occurrent.application.service.blocking.dcb.DcbApplicationService
 import org.occurrent.dsl.dcb.blocking.execute
+import org.occurrent.dsl.decider.adapt
 import org.occurrent.example.domain.courseenrollment.features.coursemanagement.model.CourseCommand.DefineCourse
 import org.occurrent.example.domain.courseenrollment.features.coursemanagement.model.courseDecider
 import org.occurrent.example.domain.courseenrollment.common.DomainEvent
-import org.occurrent.example.domain.courseenrollment.common.forDomainEvents
 import org.occurrent.example.domain.courseenrollment.infrastructure.dcb.CourseEnrollmentDcbQueries.courseDecisionContext
 import java.time.Instant
 import java.util.*
 
+// courseDecider only understands CourseEvent, but the decision context also returns enrollment events tagged with this
+// course. adapt() widens it to DomainEvent so it runs against the shared DcbApplicationService<DomainEvent>, ignoring the
+// foreign events. This replaces the example's old hand-rolled forDomainEvents helper with the library combinator.
 fun DcbApplicationService<DomainEvent>.defineCourse(courseId: UUID, title: String, capacity: Int, occurredAt: Instant = Instant.now()) = execute(
     courseDecisionContext(courseId),
     DefineCourse(UUID.randomUUID(), occurredAt, courseId, title, capacity),
-    courseDecider.forDomainEvents()
+    courseDecider.adapt()
 )
