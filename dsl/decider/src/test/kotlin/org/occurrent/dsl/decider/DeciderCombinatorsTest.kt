@@ -397,12 +397,12 @@ class DeciderCombinatorsTest {
     }
 
     // -----------------------------------------------------------------------
-    // compose — vararg / CompositeState (4 deciders)
+    // compose — list / CompositeState (4 deciders)
     // -----------------------------------------------------------------------
 
     @Nested
-    @DisplayName("compose (vararg / CompositeState)")
-    inner class ComposeVararg {
+    @DisplayName("compose (list / CompositeState)")
+    inner class ComposeList {
 
         private val bulbWidened: Decider<DomainCommand, BulbState, DomainEvent> = bulbDecider.adapt()
         private val counterWidened: Decider<DomainCommand, CounterState, DomainEvent> = counterDecider.adapt()
@@ -410,7 +410,7 @@ class DeciderCombinatorsTest {
 
         // Four-way compose: bulb(0), counter(1), tag(2), bulb again(3)
         private val composed: Decider<DomainCommand, CompositeState, DomainEvent> =
-            compose(bulbWidened, counterWidened, tagWidened, bulbWidened)
+            compose(listOf(bulbWidened, counterWidened, tagWidened, bulbWidened))
 
         @Test
         fun `initial state has all slices at their own initial state`() {
@@ -531,7 +531,7 @@ class DeciderCombinatorsTest {
         @Test
         fun `CompositeState exposes its slices as an unmodifiable list`() {
             // Given
-            val composed = compose(bulbWidened, counterWidened, noteWidened, bulbWidened)
+            val composed = compose(listOf(bulbWidened, counterWidened, noteWidened, bulbWidened))
             val states = composed.initialState().states()
 
             // Then — the list cannot be mutated
@@ -543,13 +543,73 @@ class DeciderCombinatorsTest {
         @Test
         fun `composing zero deciders yields an empty, vacuously terminal composite`() {
             // Given
-            val composed: Decider<DomainCommand, CompositeState, DomainEvent> = compose()
+            val composed: Decider<DomainCommand, CompositeState, DomainEvent> = compose(emptyList())
 
             // Then
             assertAll(
                 { assertThat(composed.initialState().states()).isEmpty() },
                 { assertThat(composed.decide(state = composed.initialState(), command = TurnOn).component2()).isEmpty() },
                 { assertThat(composed.isTerminal(composed.initialState())).isTrue() }
+            )
+        }
+    }
+
+    // -----------------------------------------------------------------------
+    // auto-adapt (fixed-arity compose adapts narrow deciders itself)
+    // -----------------------------------------------------------------------
+
+    @Nested
+    @DisplayName("auto-adapt")
+    inner class AutoAdapt {
+
+        @Test
+        fun `two narrow deciders compose without an explicit adapt`() {
+            // Given — feature deciders over their own narrow command and event types, passed directly
+            val composed: Decider<DomainCommand, Pair<BulbState, CounterState>, DomainEvent> =
+                compose(bulbDecider, counterDecider)
+
+            // When
+            val (state, events) = composed.decide(state = composed.initialState(), command = TurnOn)
+
+            // Then — routed to the bulb slice, counter untouched
+            assertAll(
+                { assertThat(events).containsExactly(TurnedOn) },
+                { assertThat(state.first).isEqualTo(BulbState(on = true)) },
+                { assertThat(state.second).isEqualTo(CounterState(count = 0)) }
+            )
+        }
+
+        @Test
+        fun `three narrow deciders compose without an explicit adapt`() {
+            // Given
+            val composed: Decider<DomainCommand, Triple<BulbState, CounterState, TagState>, DomainEvent> =
+                compose(bulbDecider, counterDecider, tagDecider)
+
+            // When
+            val (state, events) = composed.decide(state = composed.initialState(), command = AddTag("kotlin"))
+
+            // Then — routed to the tag slice only
+            assertAll(
+                { assertThat(events).containsExactly(TagAdded("kotlin")) },
+                { assertThat(state.first).isEqualTo(BulbState(on = false)) },
+                { assertThat(state.second).isEqualTo(CounterState(count = 0)) },
+                { assertThat(state.third).isEqualTo(TagState(tags = listOf("kotlin"))) }
+            )
+        }
+
+        @Test
+        fun `auto-adapted slices ignore foreign events when folding a mixed stream`() {
+            // Given
+            val composed: Decider<DomainCommand, Pair<BulbState, CounterState>, DomainEvent> =
+                compose(bulbDecider, counterDecider)
+
+            // When — fold a stream mixing both features' events, then decide
+            val (state, _) = composed.decide(events = listOf(TurnedOn, Incremented), command = TurnOff)
+
+            // Then — each slice only advanced on its own events
+            assertAll(
+                { assertThat(state.first).isEqualTo(BulbState(on = false)) },
+                { assertThat(state.second).isEqualTo(CounterState(count = 1)) }
             )
         }
     }
