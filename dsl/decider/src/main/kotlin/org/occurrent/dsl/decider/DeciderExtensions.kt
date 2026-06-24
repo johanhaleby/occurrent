@@ -60,6 +60,20 @@ inline fun <C : Any, reified C1 : C, S1, reified E1 : E, reified C2 : C, S2, rei
 }
 
 /**
+ * Infix form of the two decider [compose], so you can write `first compose second`. Adapts both deciders to the shared
+ * command type [C] and event type [E] exactly like the prefix overload. This is a two decider convenience only: infix calls
+ * are left associative, so `a compose b compose c` produces a nested `Pair<Pair<S1, S2>, S3>` state rather than a `Triple`.
+ * For three deciders use the prefix `compose(a, b, c)`.
+ *
+ * Carries a distinct `@JvmName` because, as an extension, its receiver becomes its first JVM parameter, which would
+ * otherwise clash with the prefix `compose(first, second)` JVM signature. Kotlin callers use `compose` either way.
+ */
+@JvmName("composeWith")
+inline infix fun <C : Any, reified C1 : C, S1, reified E1 : E, reified C2 : C, S2, reified E2 : E, E : Any> Decider<C1, S1, E1>.compose(
+    other: Decider<C2, S2, E2>
+): Decider<C, Pair<S1, S2>, E> = compose(this, other)
+
+/**
  * Compose three feature deciders into one whose state is the [Triple] of their states. Like the two decider [compose], each
  * decider is [adapt]ed to the shared [C] and [E] automatically, so you can pass narrow feature deciders directly.
  *

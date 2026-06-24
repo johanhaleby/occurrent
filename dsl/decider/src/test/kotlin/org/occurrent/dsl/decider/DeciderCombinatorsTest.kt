@@ -598,6 +598,23 @@ class DeciderCombinatorsTest {
         }
 
         @Test
+        fun `infix compose composes two narrow deciders`() {
+            // Given — infix form over feature deciders
+            val composed: Decider<DomainCommand, Pair<BulbState, CounterState>, DomainEvent> =
+                bulbDecider compose counterDecider
+
+            // When
+            val (state, events) = composed.decide(state = composed.initialState(), command = Increment)
+
+            // Then — routed to the counter slice, bulb untouched
+            assertAll(
+                { assertThat(events).containsExactly(Incremented) },
+                { assertThat(state.first).isEqualTo(BulbState(on = false)) },
+                { assertThat(state.second).isEqualTo(CounterState(count = 1)) }
+            )
+        }
+
+        @Test
         fun `auto-adapted slices ignore foreign events when folding a mixed stream`() {
             // Given
             val composed: Decider<DomainCommand, Pair<BulbState, CounterState>, DomainEvent> =
