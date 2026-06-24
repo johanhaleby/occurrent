@@ -16,25 +16,16 @@
 
 package org.occurrent.example.domain.courseenrollment
 
-import org.occurrent.application.converter.CloudEventConverter
-import org.occurrent.application.converter.jackson3.jacksonCloudEventConverter
 import org.occurrent.application.converter.typemapper.CloudEventTypeMapper
 import org.occurrent.application.converter.typemapper.ReflectionCloudEventTypeMapper
 import org.occurrent.application.service.blocking.dcb.TagGenerator
-import org.occurrent.dsl.decider.Decider
-import org.occurrent.example.domain.courseenrollment.features.dcb.CourseEnrollmentEventTagGenerator
-import org.occurrent.example.domain.courseenrollment.features.enrollment.decider.CourseEnrollmentCommand
-import org.occurrent.example.domain.courseenrollment.features.enrollment.decider.CourseEnrollmentState
-import org.occurrent.example.domain.courseenrollment.features.enrollment.decider.courseEnrollmentDecider
+import org.occurrent.example.domain.courseenrollment.infrastructure.dcb.CourseEnrollmentEventTagGenerator
+import org.occurrent.example.domain.courseenrollment.common.DomainEvent
 import org.occurrent.springboot.mongo.blocking.EnableOccurrent
 import org.springframework.boot.autoconfigure.SpringBootApplication
 import org.springframework.boot.runApplication
 import org.springframework.context.annotation.Bean
 import org.springframework.retry.annotation.EnableRetry
-import tools.jackson.databind.ObjectMapper
-import java.net.URI
-import java.time.ZoneOffset.UTC
-import java.time.temporal.ChronoUnit.MILLIS
 
 /**
  * Spring Boot entry point.
@@ -51,29 +42,12 @@ import java.time.temporal.ChronoUnit.MILLIS
 class Bootstrap {
 
     @Bean
-    fun courseEnrollmentCloudEventTypeMapper(): CloudEventTypeMapper<CourseEnrollmentEvent> =
-        ReflectionCloudEventTypeMapper.simple(CourseEnrollmentEvent::class.java)
-
-    @Bean
-    fun cloudEventConverter(
-        objectMapper: ObjectMapper,
-        typeMapper: CloudEventTypeMapper<CourseEnrollmentEvent>
-    ): CloudEventConverter<CourseEnrollmentEvent> =
-        jacksonCloudEventConverter(
-            objectMapper = objectMapper,
-            cloudEventSource = URI.create("urn:occurrent:course-enrollment"),
-            typeMapper = typeMapper,
-            timeMapper = { it.occurredAt.atOffset(UTC).truncatedTo(MILLIS) },
-            subjectMapper = { it.eventId.toString() }
-        )
+    fun courseEnrollmentCloudEventTypeMapper(): CloudEventTypeMapper<DomainEvent> =
+        ReflectionCloudEventTypeMapper.simple(DomainEvent::class.java)
 
     /** Required by the starter when the DCB capability is enabled: how each event maps to its DCB tags. */
     @Bean
-    fun courseEnrollmentTagGenerator(): TagGenerator<CourseEnrollmentEvent> = CourseEnrollmentEventTagGenerator()
-
-    @Bean
-    fun courseEnrollmentDeciderBean(): Decider<CourseEnrollmentCommand, CourseEnrollmentState, CourseEnrollmentEvent> =
-        courseEnrollmentDecider()
+    fun courseEnrollmentTagGenerator(): TagGenerator<DomainEvent> = CourseEnrollmentEventTagGenerator()
 }
 
 fun main(args: Array<String>) {
