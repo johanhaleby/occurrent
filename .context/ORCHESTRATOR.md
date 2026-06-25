@@ -1,6 +1,6 @@
 # Occurrent Orchestrator Memory
 
-Last updated: 2026-06-25
+Last updated: 2026-05-22
 
 ## Current State
 
@@ -125,10 +125,12 @@ Testing:
 Root managed versions include:
 
 - CloudEvents `4.0.1`
-- Kotlin `2.3.21` (pin kept: drives the `kotlin-maven-plugin` version, which no BOM manages)
-- Jackson 2 `2.21.4`, Jackson 3 `3.1.4` (pins kept and aligned to the Spring Boot BOM; referenced across ~20 module POMs for the dual Jackson 2 + Jackson 3 converter support)
-- Spring Boot `4.1.0`
-- Reactor and the MongoDB driver are no longer pinned in the root POM; the Spring Boot dependency BOM now governs them (Reactor `2025.0.6`, MongoDB driver `5.8.0` as of 4.1.0). The explicit `reactor-bom` and `mongodb-driver-bom` imports were removed as redundant.
+- Kotlin `2.3.10`
+- Jackson 2 `2.19.2`
+- Jackson 3 `3.0.4`
+- Reactor BOM `2024.0.10`
+- Spring Boot `4.0.4`
+- MongoDB driver BOM `5.6.1`
 - Testcontainers `2.0.5`
 - JUnit `5.11.3`
 - JobRunr `8.1.0`
