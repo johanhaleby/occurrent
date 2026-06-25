@@ -9,6 +9,8 @@
   * The delta reconciliation sized its read from a count of matching events and then read the newest N of them. An event written in the window between that count and the read shifted the newest-N window forward and pushed the oldest during-catch-up event out of the read. That event sat at or before the live subscription's resume position, so the live subscription did not redeliver it either, and it was lost. This is the residual case left open by the 0.20.4 fix, which closed the clock-skew variant but not the count-to-read window.
   * The reconciliation now re-reads the recent tail until the matching count stops growing, so an event that arrives in the count-to-read window is picked up by a later pass instead of being skipped. Overlapping passes are deduplicated through the handover cache, so at-least-once delivery is preserved without introducing duplicates.
   * See [ADR 14](doc/architecture/decisions/0014-reconcile-catchup-events-by-insertion-order-to-avoid-loss-under-clock-skew.md).
+* Upgraded Spring Boot from 4.0.4 to 4.1.0. This pulls in Spring Framework 7.0.8, Spring Data 2026.0.0, Reactor 2025.0.x, the MongoDB driver 5.8.0, Kotlin 2.3.21, and Jackson 2.21.4 / 3.1.4 transitively.
+  * The explicit Reactor and MongoDB driver version overrides were removed from the root build, so their versions are now governed by the Spring Boot dependency BOM.
 
 ### 0.20.4 (2026-06-18)
 
