@@ -397,20 +397,20 @@ class DeciderCombinatorsTest {
     }
 
     // -----------------------------------------------------------------------
-    // compose — list / CompositeState (4 deciders)
+    // compose — vararg / CompositeState (4 deciders)
     // -----------------------------------------------------------------------
 
     @Nested
-    @DisplayName("compose (list / CompositeState)")
-    inner class ComposeList {
+    @DisplayName("compose (vararg / CompositeState)")
+    inner class ComposeVararg {
 
         private val bulbWidened: Decider<DomainCommand, BulbState, DomainEvent> = bulbDecider.adapt()
         private val counterWidened: Decider<DomainCommand, CounterState, DomainEvent> = counterDecider.adapt()
         private val tagWidened: Decider<DomainCommand, TagState, DomainEvent> = tagDecider.adapt()
 
-        // Four-way compose: bulb(0), counter(1), tag(2), bulb again(3)
+        // Four-way compose via the vararg form: bulb(0), counter(1), tag(2), bulb again(3)
         private val composed: Decider<DomainCommand, CompositeState, DomainEvent> =
-            compose(listOf(bulbWidened, counterWidened, tagWidened, bulbWidened))
+            compose(bulbWidened, counterWidened, tagWidened, bulbWidened)
 
         @Test
         fun `initial state has all slices at their own initial state`() {

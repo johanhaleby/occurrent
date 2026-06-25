@@ -113,6 +113,16 @@ inline fun <C : Any, reified C1 : C, S1, reified E1 : E, reified C2 : C, S2, rei
 fun <C, E : Any> compose(deciders: List<Decider<C, *, E>>): Decider<C, CompositeState, E> =
     Decider.compose(deciders)
 
+/**
+ * Vararg complement to the list [compose], taking at least two deciders that already share command type [C] and event type
+ * [E]. The two leading required parameters enforce that at least two deciders are composed, because composing fewer is
+ * pointless. Like the list form it does NOT adapt the deciders for you (a vararg cannot carry the per element types
+ * `adapt` needs), so pass deciders already over [C] and [E]. For exactly two or three deciders prefer the typed [Pair] and
+ * [Triple] overloads, which adapt for you and return typed state. Delegates to [Decider.compose].
+ */
+fun <C, E : Any> compose(first: Decider<C, *, E>, second: Decider<C, *, E>, third: Decider<C, *, E>, fourth: Decider<C, *, E>, vararg rest: Decider<C, *, E>): Decider<C, CompositeState, E> =
+    Decider.compose(listOf(first, second, third, fourth, *rest))
+
 fun <C, S, E> Decider<C, S, E>.decide(events: List<E>, command: C, vararg moreCommands: C): Decision<S, E> = decideOnEvents(events, listOf(command, *moreCommands))
 fun <C, S, E> Decider<C, S, E>.decide(events: List<E>, commands: List<C>): Decision<S, E> = decideOnEvents(events, commands)
 fun <C, S, E> Decider<C, S, E>.decide(state: S, command: C, vararg moreCommands: C): Decision<S, E> = decideOnState(state, listOf(command, *moreCommands))
