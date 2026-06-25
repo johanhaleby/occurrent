@@ -35,11 +35,23 @@ import java.util.function.Predicate;
  * @param <E> The type of events that the decider returns
  */
 public interface Decider<C, S, E> {
+    /**
+     * The state a decider starts from, before any events have been applied.
+     */
     S initialState();
 
+    /**
+     * Decide what should happen for {@code command} given the current {@code state}. Returns the events to append, or an
+     * empty list if the command does nothing or is rejected. This is where the business rules live and should be a pure
+     * function (no side effects).
+     */
     @NonNull
     List<E> decide(@NonNull C command, S state);
 
+    /**
+     * Apply {@code event} to {@code state} and return the new state. This is how past events are folded back into the
+     * current state before a decision is made. Should be a pure function.
+     */
     S evolve(S state, @NonNull E event);
 
     /**
@@ -53,12 +65,19 @@ public interface Decider<C, S, E> {
         return false;
     }
 
+    /**
+     * Fold {@code events} to rebuild the current state, then run the command(s) against it. Returns the resulting state
+     * and the new events that were produced. Use this when you have the entity's past events at hand.
+     */
     @NonNull
     @SuppressWarnings("unchecked")
     default Decision<S, E> decideOnEvents(List<E> events, C command, C... additionalCommands) {
         return decideOnEvents(events, toList(command, additionalCommands));
     }
 
+    /**
+     * Like {@link #decideOnEvents(List, Object, Object[])} but takes the commands as a list.
+     */
     @NonNull
     default Decision<S, E> decideOnEvents(List<E> events, List<C> commands) {
         Decision<S, E> decision = new Decision<>(initialState(), events);
@@ -74,32 +93,52 @@ public interface Decider<C, S, E> {
         return new Decision<>(decision.state, newEvents);
     }
 
+    /**
+     * Convenience for {@link #decideOnEvents} that returns only the new events.
+     */
     @NonNull
     @SuppressWarnings("unchecked")
     default List<E> decideOnEventsAndReturnEvents(List<E> events, C command, C... additionalCommands) {
         return decideOnEvents(events, command, additionalCommands).events;
     }
 
+    /**
+     * Convenience for {@link #decideOnEvents} that returns only the resulting state.
+     */
     @SuppressWarnings("unchecked")
     default @Nullable S decideOnEventsAndReturnState(List<E> events, C command, C... additionalCommands) {
         return decideOnEvents(events, command, additionalCommands).state;
     }
 
+    /**
+     * Convenience for {@link #decideOnEvents} that returns only the new events.
+     */
     @NonNull
     default List<E> decideOnEventsAndReturnEvents(List<E> events, List<C> commands) {
         return decideOnEvents(events, commands).events;
     }
 
+    /**
+     * Convenience for {@link #decideOnEvents} that returns only the resulting state.
+     */
     default @Nullable S decideOnEventsAndReturnState(List<E> events, List<C> commands) {
         return decideOnEvents(events, commands).state;
     }
 
+    /**
+     * Run the command(s) against an already known {@code state}, without folding any events first. Returns the new state
+     * and the events produced. Use this when you already hold the current state, for example from a snapshot or a read
+     * model.
+     */
     @NonNull
     @SuppressWarnings("unchecked")
     default Decision<S, E> decideOnState(S state, C command, C... additionalCommands) {
         return decideOnState(state, toList(command, additionalCommands));
     }
 
+    /**
+     * Like {@link #decideOnState(Object, Object, Object[])} but takes the commands as a list.
+     */
     @NonNull
     default Decision<S, E> decideOnState(S state, List<C> commands) {
         Decision<S, E> decision = new Decision<>(state, List.of());
@@ -112,21 +151,33 @@ public interface Decider<C, S, E> {
         return decision;
     }
 
+    /**
+     * Convenience for {@link #decideOnState} that returns only the new events.
+     */
     @NonNull
     default List<E> decideOnStateAndReturnEvents(S state, List<C> commands) {
         return decideOnState(state, commands).events;
     }
 
+    /**
+     * Convenience for {@link #decideOnState} that returns only the resulting state.
+     */
     default @Nullable S decideOnStateAndReturnState(S state, List<C> commands) {
         return decideOnState(state, commands).state;
     }
 
+    /**
+     * Convenience for {@link #decideOnState} that returns only the new events.
+     */
     @NonNull
     @SuppressWarnings("unchecked")
     default List<E> decideOnStateAndReturnEvents(S state, C command, C... additionalCommands) {
         return decideOnState(state, command, additionalCommands).events;
     }
 
+    /**
+     * Convenience for {@link #decideOnState} that returns only the resulting state.
+     */
     default @Nullable S decideOnStateAndReturnState(S state, C command, C... additionalCommands) {
         return decideOnState(state, command, additionalCommands).state;
     }
@@ -166,13 +217,23 @@ public interface Decider<C, S, E> {
         return commands;
     }
 
+    /**
+     * The outcome of a decision: the resulting {@code state} and the new {@code events} that were produced.
+     */
     record Decision<S, E>(S state, List<E> events) {
     }
 
+    /**
+     * Create a decider from functions instead of implementing the interface. This overload is never terminal. See
+     * {@link #create(Object, BiFunction, BiFunction, Predicate)} to also supply an {@code isTerminal} predicate.
+     */
     static <C, S, E> Decider<C, S, E> create(S initialState, @NonNull BiFunction<C, S, List<E>> decide, @NonNull BiFunction<S, E, S> evolve) {
         return create(initialState, decide, evolve, __ -> false);
     }
 
+    /**
+     * Create a decider from functions instead of implementing the interface, including an {@code isTerminal} predicate.
+     */
     static <C, S, E> Decider<C, S, E> create(S initialState, @NonNull BiFunction<C, S, List<E>> decide, @NonNull BiFunction<S, E, S> evolve,
                                              @NonNull Predicate<S> isTerminal) {
 
@@ -202,20 +263,24 @@ public interface Decider<C, S, E> {
     }
 
     /**
-     * Adapt a decider defined over a subtype of commands and events so it can run as a decider over the supertypes.
-     * Commands that are not instances of {@code commandType} produce no events, and events that are not instances of
-     * {@code eventType} leave the state unchanged. This is what lets a feature decider, for example
-     * {@code Decider<CourseCommand, CourseState, CourseEvent>}, run against a service over a common {@code DomainEvent},
-     * and it is the building block that {@link #compose} relies on.
+     * Widen a decider so it can be used where a decider over broader command and event types is expected, for example a
+     * decider for one feature running against an application service that handles a whole domain.
+     * <p>
+     * A decider for one feature only knows that feature's commands and events. {@code adapt} wraps it so it accepts the
+     * broader types and quietly ignores anything that is not its own: a command that is not a {@code commandType} produces
+     * no events, and an event that is not an {@code eventType} leaves the state unchanged. It is also the building block
+     * for {@link #compose}.
      *
-     * @param decider     the decider to adapt
-     * @param commandType the concrete command type the adapted decider understands
-     * @param eventType   the concrete event type the adapted decider understands
-     * @param <C>         the wider command type of the adapted decider
-     * @param <S>         the state type, unchanged by adapting
-     * @param <E>         the wider event type of the adapted decider
-     * @param <SubC>      the command type the wrapped decider understands
-     * @param <SubE>      the event type the wrapped decider understands
+     * <pre>
+     * // courseDecider is a Decider&lt;CourseCommand, CourseState, CourseEvent&gt;,
+     * // but the application service works with the whole domain's commands and events.
+     * Decider&lt;DomainCommand, CourseState, DomainEvent&gt; widened =
+     *         Decider.adapt(courseDecider, CourseCommand.class, CourseEvent.class);
+     * </pre>
+     *
+     * @param decider     the feature decider to widen
+     * @param commandType the command type the decider understands
+     * @param eventType   the event type the decider understands
      */
     static <C, S, E, SubC extends C, SubE extends E> Decider<C, S, E> adapt(@NonNull Decider<SubC, S, SubE> decider,
                                                                             @NonNull Class<SubC> commandType,
@@ -223,7 +288,7 @@ public interface Decider<C, S, E> {
         return create(
                 decider.initialState(),
                 (command, state) -> commandType.isInstance(command)
-                        ? new ArrayList<E>(decider.decide(commandType.cast(command), state))
+                        ? new ArrayList<>(decider.decide(commandType.cast(command), state))
                         : List.of(),
                 (state, event) -> eventType.isInstance(event)
                         ? decider.evolve(state, eventType.cast(event))
@@ -232,12 +297,23 @@ public interface Decider<C, S, E> {
     }
 
     /**
-     * Compose several deciders that share the same command and event types (typically reached with {@link #adapt}) into a
-     * single decider whose state is the product of the individual states, held positionally in a {@link CompositeState}.
-     * Each command is offered to every sub-decider, but only the one that recognizes it produces events. Each event
-     * evolves every sub-decider's own state slice independently, skipping a slice that is already terminal so each slice
-     * settles at the same state it would reach folding its own events alone (matching {@link #fold} and assuming
-     * {@link #isTerminal} is absorbing). The composed decider is terminal once every sub-decider is.
+     * Combine several deciders that work over the same command and event types into one. The combined decider keeps each
+     * decider's own state side by side in a {@link CompositeState}. A command is handed to whichever decider recognizes
+     * it, and each event updates only the decider that understands it, so the deciders stay independent. The combined
+     * decider is terminal once all of them are.
+     * <p>
+     * Use {@link #adapt} first so the deciders share the same command and event types. Read each decider's state back
+     * from the result with {@link CompositeState#slice(int)}, by the order the deciders were passed in.
+     *
+     * <pre>
+     * Decider&lt;DomainCommand, CompositeState, DomainEvent&gt; combined = Decider.compose(
+     *         Decider.adapt(courseDecider, CourseCommand.class, CourseEvent.class),
+     *         Decider.adapt(studentDecider, StudentCommand.class, StudentEvent.class));
+     *
+     * CompositeState state = combined.initialState();
+     * CourseState course = state.slice(0);   // first decider's state
+     * StudentState student = state.slice(1);  // second decider's state
+     * </pre>
      */
     @SafeVarargs
     static <C, E> Decider<C, CompositeState, E> compose(@NonNull Decider<C, ?, E>... deciders) {
@@ -245,11 +321,11 @@ public interface Decider<C, S, E> {
     }
 
     /**
-     * List-taking variant of {@link #compose(Decider[])}, for composing a number of deciders not known at compile time.
+     * Like {@link #compose(Decider[])} but takes the deciders as a list, for when the number is not known at compile time.
      */
     static <C, E> Decider<C, CompositeState, E> compose(@NonNull List<? extends Decider<C, ?, E>> deciders) {
         @SuppressWarnings("unchecked")
-        List<Decider<C, Object, E>> slices = (List<Decider<C, Object, E>>) (List<?>) new ArrayList<>(deciders);
+        List<Decider<C, Object, E>> slices = (List<Decider<C, Object, E>>) new ArrayList<>(deciders);
 
         List<Object> initialStates = new ArrayList<>();
         for (Decider<C, Object, E> decider : slices) {

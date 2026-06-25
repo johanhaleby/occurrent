@@ -25,21 +25,29 @@ import org.occurrent.dsl.decider.Decider.Decision
 fun <C, S, E> decider(initialState: S, decide: (C, S) -> List<E>, evolve: (S, E) -> S, isTerminal: (S) -> Boolean = { false }): Decider<C, S, E> = Decider.create(initialState, decide, evolve, isTerminal)
 
 /**
- * Adapt a decider over subtype commands [SubC] and events [SubE] into one over the supertypes [C] and [E], so it can run
- * against a service or be composed with deciders over those supertypes. Commands that are not [SubC] produce no events and
- * events that are not [SubE] leave the state unchanged. Delegates to [Decider.adapt], inferring [SubC] and [SubE] from the
- * receiver and [C] and [E] from the call site (typically the expected type at an `execute` call).
+ * Widen a feature decider so it can run where a decider over broader command and event types is expected, for example
+ * against an application service for the whole domain. Commands and events that are not this decider's own are ignored.
+ * The narrow types come from the receiver and the broader [C] and [E] from the call site (usually the expected type at an
+ * `execute` call), so you normally just write `courseDecider.adapt()`.
+ *
+ * ```
+ * // courseDecider: Decider<CourseCommand, CourseState, CourseEvent>
+ * val widened: Decider<DomainCommand, CourseState, DomainEvent> = courseDecider.adapt()
+ * ```
  */
 inline fun <reified SubC : C, S, reified SubE : E, C, E : Any> Decider<SubC, S, SubE>.adapt(): Decider<C, S, E> =
     Decider.adapt(this, SubC::class.java, SubE::class.java)
 
 /**
- * Compose two feature deciders into one whose state is the [Pair] of their states. Each decider is [adapt]ed to the shared
- * command type [C] and event type [E] automatically, so you can pass deciders over their own narrow command and event
- * subtypes directly. Each command is offered to both deciders, only the one that recognizes it emits events, and each
- * state evolves independently, skipping a slice once it is terminal.
+ * Combine two feature deciders into one whose state is the [Pair] of their states. The deciders are [adapt]ed to the
+ * shared command type [C] and event type [E] for you, so you can pass them over their own narrow types directly. A command
+ * goes to whichever decider recognizes it, and each event updates only its own decider's state, so they stay independent.
+ * Annotate the result type so [C] and [E] are known.
  *
- * [C] and [E] are inferred from the expected type (annotate the result, for example `Decider<DomainCommand, ..., DomainEvent>`).
+ * ```
+ * val decider: Decider<DomainCommand, Pair<CourseState, StudentState>, DomainEvent> =
+ *     compose(courseDecider, studentDecider)
+ * ```
  */
 inline fun <C : Any, reified C1 : C, S1, reified E1 : E, reified C2 : C, S2, reified E2 : E, E : Any> compose(
     first: Decider<C1, S1, E1>,
@@ -60,13 +68,16 @@ inline fun <C : Any, reified C1 : C, S1, reified E1 : E, reified C2 : C, S2, rei
 }
 
 /**
- * Infix form of the two decider [compose], so you can write `first compose second`. Adapts both deciders to the shared
- * command type [C] and event type [E] exactly like the prefix overload. This is a two decider convenience only: infix calls
- * are left associative, so `a compose b compose c` produces a nested `Pair<Pair<S1, S2>, S3>` state rather than a `Triple`.
- * For three deciders use the prefix `compose(a, b, c)`.
+ * Infix form of the two decider [compose], so you can write `courseDecider compose studentDecider`. Two deciders only:
+ * because infix is left associative, `a compose b compose c` would give a nested `Pair<Pair<S1, S2>, S3>` rather than a
+ * `Triple`, so use the prefix `compose(a, b, c)` for three.
  *
- * Carries a distinct `@JvmName` because, as an extension, its receiver becomes its first JVM parameter, which would
- * otherwise clash with the prefix `compose(first, second)` JVM signature. Kotlin callers use `compose` either way.
+ * ```
+ * val decider: Decider<DomainCommand, Pair<CourseState, StudentState>, DomainEvent> =
+ *     courseDecider compose studentDecider
+ * ```
+ *
+ * (The `@JvmName` only avoids a JVM signature clash with the prefix `compose`. Kotlin callers use `compose` either way.)
  */
 @JvmName("composeWith")
 inline infix fun <C : Any, reified C1 : C, S1, reified E1 : E, reified C2 : C, S2, reified E2 : E, E : Any> Decider<C1, S1, E1>.compose(
@@ -74,10 +85,14 @@ inline infix fun <C : Any, reified C1 : C, S1, reified E1 : E, reified C2 : C, S
 ): Decider<C, Pair<S1, S2>, E> = compose(this, other)
 
 /**
- * Compose three feature deciders into one whose state is the [Triple] of their states. Like the two decider [compose], each
- * decider is [adapt]ed to the shared [C] and [E] automatically, so you can pass narrow feature deciders directly.
+ * Combine three feature deciders into one whose state is the [Triple] of their states. Works like the two decider
+ * [compose], extended to a third. The deciders are [adapt]ed for you, so pass them over their own narrow types directly.
+ * Annotate the result type so [C] and [E] are known.
  *
- * [C] and [E] are inferred from the expected type (annotate the result, for example `Decider<DomainCommand, ..., DomainEvent>`).
+ * ```
+ * val decider: Decider<DomainCommand, Triple<CourseState, StudentState, EnrollmentState>, DomainEvent> =
+ *     compose(courseDecider, studentDecider, enrollmentDecider)
+ * ```
  */
 inline fun <C : Any, reified C1 : C, S1, reified E1 : E, reified C2 : C, S2, reified E2 : E, reified C3 : C, S3, reified E3 : E, E : Any> compose(
     first: Decider<C1, S1, E1>,
@@ -102,23 +117,30 @@ inline fun <C : Any, reified C1 : C, S1, reified E1 : E, reified C2 : C, S2, rei
 }
 
 /**
- * Compose a list of deciders that already share command type [C] and event type [E] into one whose state is a
- * [CompositeState] holding each decider's state positionally. Read a slice with [CompositeState.slice]. Unlike the two and
- * three decider overloads, this list form does NOT adapt the deciders for you, because the elements of a single list
- * cannot carry the per element types needed for that. Pass deciders that are already over [C] and [E] (call [adapt] on
- * each first). For two or three deciders prefer the typed [Pair] and [Triple] overloads, which adapt for you. Delegates to
- * [Decider.compose]. It is a `List` rather than a `vararg` so that a two or three decider call resolves to the typed,
- * auto-adapting overloads above rather than this one.
+ * Combine deciders given as a list into one whose state is a [CompositeState] (read a slice with [CompositeState.slice]).
+ * This does NOT adapt for you, so the deciders must already share command type [C] and event type [E] (call [adapt] on
+ * each first). For two or three deciders prefer the typed [Pair] and [Triple] overloads, which adapt for you. Use this, or
+ * the vararg [compose], for four or more. It takes a `List` rather than a `vararg` so that two and three decider calls
+ * still resolve to the typed, auto-adapting overloads.
+ *
+ * ```
+ * val decider: Decider<DomainCommand, CompositeState, DomainEvent> =
+ *     compose(listOf(courseDecider.adapt(), studentDecider.adapt(), enrollmentDecider.adapt(), roomDecider.adapt()))
+ * ```
  */
 fun <C, E : Any> compose(deciders: List<Decider<C, *, E>>): Decider<C, CompositeState, E> =
     Decider.compose(deciders)
 
 /**
- * Vararg complement to the list [compose], taking at least two deciders that already share command type [C] and event type
- * [E]. The two leading required parameters enforce that at least two deciders are composed, because composing fewer is
- * pointless. Like the list form it does NOT adapt the deciders for you (a vararg cannot carry the per element types
- * `adapt` needs), so pass deciders already over [C] and [E]. For exactly two or three deciders prefer the typed [Pair] and
- * [Triple] overloads, which adapt for you and return typed state. Delegates to [Decider.compose].
+ * Combine four or more deciders into one whose state is a [CompositeState] (read a slice with [CompositeState.slice]).
+ * Like the list [compose] it does NOT adapt for you, so pass deciders that already share command type [C] and event type
+ * [E] (call [adapt] on each first). Two and three deciders are handled by the typed [Pair] and [Triple] overloads, so this
+ * form requires four leading deciders, which is also what keeps it from clashing with those overloads.
+ *
+ * ```
+ * val decider: Decider<DomainCommand, CompositeState, DomainEvent> =
+ *     compose(courseDecider.adapt(), studentDecider.adapt(), enrollmentDecider.adapt(), roomDecider.adapt())
+ * ```
  */
 fun <C, E : Any> compose(first: Decider<C, *, E>, second: Decider<C, *, E>, third: Decider<C, *, E>, fourth: Decider<C, *, E>, vararg rest: Decider<C, *, E>): Decider<C, CompositeState, E> =
     Decider.compose(listOf(first, second, third, fourth, *rest))
