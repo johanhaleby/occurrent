@@ -21,15 +21,15 @@ import org.occurrent.dsl.decider.decider
 import org.occurrent.example.domain.courseenrollment.common.DomainCommand
 import org.occurrent.example.domain.courseenrollment.common.StudentId
 import java.time.Instant
-import java.util.UUID
+import java.util.*
 
 /**
  * Decider for the student's own lifecycle. Single boundary: the student (see
  * [org.occurrent.example.domain.courseenrollment.infrastructure.dcb.CourseEnrollmentDcbQueries.studentDecisionContext]).
  */
-val studentDecider: Decider<StudentCommand, StudentState, StudentEvent> =
+val studentDecider: Decider<StudentCommand, StudentRegistry, StudentEvent> =
     decider(
-        initialState = StudentState.NotRegistered,
+        initialState = StudentRegistry(),
         decide = ::decide,
         evolve = ::evolve
     )
@@ -38,21 +38,23 @@ sealed interface StudentCommand : DomainCommand {
     data class RegisterStudent(val eventId: UUID, val occurredAt: Instant, val studentId: StudentId, val name: String) : StudentCommand
 }
 
-sealed interface StudentState {
-    data object NotRegistered : StudentState
-    data object Registered : StudentState
-}
+data class StudentRegistry(val students: Map<StudentId, Student> = emptyMap())
 
-/**
- * TODO(human): emit [org.occurrent.example.domain.courseenrollment.common.StudentRegistered] when the student is not yet registered, otherwise reject.
- */
-private fun decide(command: StudentCommand, state: StudentState): List<StudentEvent> =
+private fun decide(command: StudentCommand, state: StudentRegistry): List<StudentEvent> =
     when (command) {
-        is StudentCommand.RegisterStudent -> TODO("emit StudentRegistered if state is NotRegistered, otherwise reject")
+        is StudentCommand.RegisterStudent -> {
+            val studentId = command.studentId
+            require(!state.isStudentRegistered(studentId)) { "Student $studentId is already registered" }
+
+            listOf(StudentRegistered(command.eventId, command.occurredAt, studentId, command.name))
+        }
     }
 
-/**
- * TODO(human): fold the student boundary into [StudentState] (StudentRegistered -> Registered, everything else -> state).
- */
-private fun evolve(state: StudentState, event: StudentEvent): StudentState =
-    TODO("update StudentState for $event")
+private fun evolve(state: StudentRegistry, event: StudentEvent): StudentRegistry = when (event) {
+    is StudentRegistered -> state.copy(students = state.students + (event.studentId to Student(event.studentId, event.name, event.occurredAt)))
+}
+
+// Helpers
+data class Student(val studentId: StudentId, val name: String, val registeredAt: Instant)
+
+private fun StudentRegistry.isStudentRegistered(studentId: StudentId): Boolean = students.containsKey(studentId)

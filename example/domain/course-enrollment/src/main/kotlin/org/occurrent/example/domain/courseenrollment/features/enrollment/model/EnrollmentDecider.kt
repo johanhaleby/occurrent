@@ -22,6 +22,8 @@ import org.occurrent.example.domain.courseenrollment.common.CourseId
 import org.occurrent.example.domain.courseenrollment.common.DomainCommand
 import org.occurrent.example.domain.courseenrollment.common.DomainEvent
 import org.occurrent.example.domain.courseenrollment.common.StudentId
+import org.occurrent.example.domain.courseenrollment.features.coursemanagement.model.CourseDefined
+import org.occurrent.example.domain.courseenrollment.features.studentmanagement.model.StudentRegistered
 import java.time.Instant
 import java.util.*
 
@@ -48,8 +50,11 @@ object EnrollmentPolicy {
 }
 
 sealed interface EnrollmentCommand : DomainCommand {
-    data class EnrollStudent(val eventId: UUID, val occurredAt: Instant, val courseId: CourseId, val studentId: StudentId) : EnrollmentCommand
-    data class UnenrollStudent(val eventId: UUID, val occurredAt: Instant, val courseId: CourseId, val studentId: StudentId) : EnrollmentCommand
+    val courseId: CourseId
+    val studentId: StudentId
+
+    data class EnrollStudent(val eventId: UUID, val occurredAt: Instant, override val courseId: CourseId, override val studentId: StudentId) : EnrollmentCommand
+    data class UnenrollStudent(val eventId: UUID, val occurredAt: Instant, override val courseId: CourseId, override val studentId: StudentId) : EnrollmentCommand
 }
 
 /**
@@ -60,12 +65,6 @@ sealed interface EnrollmentCommand : DomainCommand {
  * know which course or student is being decided on. The simplest sound approach is therefore to key the state by id and
  * let [decide] look up the entry for the command's course and student. Because the query is scoped to one course and one
  * student, these maps only ever hold those two.
- *
- * TODO(human): refine this shape if you like. A workable starting point:
- *  - capacityByCourse: Map<CourseId, Int>            (a course exists once it has a capacity here)
- *  - studentsByCourse: Map<CourseId, Set<StudentId>> (to count seats taken and detect a double enroll)
- *  - registeredStudents: Set<StudentId>              (does the student exist)
- *  - coursesByStudent: Map<StudentId, Set<CourseId>> (to enforce MAX_COURSES_PER_STUDENT)
  */
 data class EnrollmentState(
     val capacityByCourse: Map<CourseId, Int> = emptyMap(),
@@ -74,26 +73,75 @@ data class EnrollmentState(
     val coursesByStudent: Map<StudentId, Set<CourseId>> = emptyMap()
 )
 
-/**
- * TODO(human): implement the decision, the heart of the example.
- *
- *  - EnrollStudent: reject unless ALL hold, then emit [org.occurrent.example.domain.courseenrollment.common.StudentEnrolledInCourse]:
- *      * the course exists and the student exists
- *      * the student is not already enrolled in this course
- *      * the course is not full (seats taken < capacity)
- *      * the student is in fewer than [EnrollmentPolicy.MAX_COURSES_PER_STUDENT] courses
- *  - UnenrollStudent: emit [org.occurrent.example.domain.courseenrollment.common.StudentUnenrolledFromCourse] if currently enrolled, otherwise reject (or no-op).
- */
-private fun decide(command: EnrollmentCommand, state: EnrollmentState): List<DomainEvent> =
-    when (command) {
-        is EnrollmentCommand.EnrollStudent -> TODO("validate the capacity and per-student invariants, then emit StudentEnrolledInCourse")
-        is EnrollmentCommand.UnenrollStudent -> TODO("emit StudentUnenrolledFromCourse if currently enrolled")
+private fun decide(command: EnrollmentCommand, state: EnrollmentState): List<DomainEvent> {
+    val studentId = command.studentId
+    val courseId = command.courseId
+
+    require(state.isCourseDefined(courseId)) {
+        "Course ${command.courseId} is not defined"
     }
 
-/**
- * TODO(human): fold each event into [EnrollmentState]. All four event types appear in this boundary:
- * CourseDefined (capacity), StudentRegistered (existence), StudentEnrolledInCourse / StudentUnenrolledFromCourse (seats
- * and per-student courses). Update both the by-course and by-student maps for the enroll/unenroll events.
- */
-private fun evolve(state: EnrollmentState, event: DomainEvent): EnrollmentState =
-    TODO("update EnrollmentState for $event")
+    require(state.isStudentRegistered(studentId)) {
+        "Student ${command.studentId} is not registered"
+    }
+
+    return when (command) {
+        is EnrollmentCommand.EnrollStudent -> {
+            require(!state.isCourseFull(courseId)) {
+                "Course ${command.courseId} is full"
+            }
+
+            require(!state.isStudentAtCourseEnrollmentLimit(studentId)) {
+                "Student ${command.studentId} is already enrolled in ${EnrollmentPolicy.MAX_COURSES_PER_STUDENT} courses"
+            }
+
+            require(!state.isStudentRegisteredToCourse(courseId, studentId)) {
+                "Student ${command.studentId} is already enrolled in course ${command.courseId}"
+            }
+
+            listOf(StudentEnrolledInCourse(UUID.randomUUID(), command.occurredAt, courseId, studentId))
+        }
+
+        is EnrollmentCommand.UnenrollStudent -> {
+            require(state.isStudentRegisteredToCourse(courseId, studentId)) {
+                "Student ${command.studentId} is not enrolled in course ${command.courseId}"
+            }
+
+            listOf(StudentUnenrolledFromCourse(UUID.randomUUID(), command.occurredAt, courseId, studentId))
+        }
+    }
+}
+
+private fun evolve(state: EnrollmentState, event: DomainEvent): EnrollmentState = when (event) {
+    is CourseDefined -> state.copy(capacityByCourse = state.capacityByCourse + (event.courseId to event.capacity))
+    is StudentRegistered -> state.copy(registeredStudents = state.registeredStudents + event.studentId)
+    is StudentEnrolledInCourse -> state.copy(
+        studentsByCourse = state.studentsByCourse + (event.courseId to (state.studentsByCourse[event.courseId]?.plus(event.studentId) ?: setOf(event.studentId))),
+        coursesByStudent = state.coursesByStudent + (event.studentId to (state.coursesByStudent[event.studentId]?.plus(event.courseId) ?: setOf(event.courseId)))
+    )
+
+    is StudentUnenrolledFromCourse -> state.copy(
+        studentsByCourse = state.studentsByCourse + (event.courseId to (state.studentsByCourse[event.courseId]?.minus(event.studentId) ?: emptySet())),
+        coursesByStudent = state.coursesByStudent + (event.studentId to (state.coursesByStudent[event.studentId]?.minus(event.courseId) ?: emptySet()))
+    )
+
+    else -> throw IllegalArgumentException("Unexpected event type ${event::class.simpleName} in enrollment boundary")
+}
+
+
+// Helpers
+private fun EnrollmentState.isCourseFull(courseId: CourseId): Boolean {
+    val capacity = capacityByCourse[courseId] ?: return false
+    val enrolledStudents = studentsByCourse[courseId]?.size ?: 0
+    return enrolledStudents >= capacity
+}
+
+private fun EnrollmentState.isStudentAtCourseEnrollmentLimit(studentId: StudentId): Boolean {
+    return (coursesByStudent[studentId]?.size ?: 0) == EnrollmentPolicy.MAX_COURSES_PER_STUDENT
+}
+
+private fun EnrollmentState.isCourseDefined(courseId: CourseId): Boolean = capacityByCourse[courseId] != null
+
+private fun EnrollmentState.isStudentRegistered(studentId: StudentId): Boolean = registeredStudents.contains(studentId)
+
+private fun EnrollmentState.isStudentRegisteredToCourse(courseId: CourseId, studentId: StudentId): Boolean = studentsByCourse[courseId]?.contains(studentId) ?: false

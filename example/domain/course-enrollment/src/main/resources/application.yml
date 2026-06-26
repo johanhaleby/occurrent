@@ -1,13 +1,14 @@
 # Enable Occurrent's DCB capability. With this set, the Spring Boot starter auto-configures a
-# DcbApplicationService<CourseEnrollmentEvent> and the DCB query DSL from the beans in Bootstrap.kt.
+# DcbApplicationService<DomainEvent> and the DCB query DSL from the beans in Bootstrap.kt.
 occurrent:
   event-store:
     capabilities: dcb
+  cloud-event-converter:
+    cloud-event-source: urn:occurrent:example:course-enrollment
 
 spring:
-  data:
-    mongodb:
-      # DCB appends run in multi-document transactions, which require a replica set (a single-node replica set is fine
-      # for local development). The Testcontainers-based test starts one automatically; for running the app yourself,
-      # point this at a replica set.
-      uri: mongodb://localhost:27017/course-enrollment?replicaSet=rs0
+  mongodb:
+    # DCB appends run in multi-document transactions, which require a replica set (a single-node replica set is fine
+    # for local development). The Testcontainers-based test starts one automatically; for running the app yourself,
+    # point this at a replica set.
+    uri: mongodb://localhost:27017/course-enrollment?replicaSet=rs0
