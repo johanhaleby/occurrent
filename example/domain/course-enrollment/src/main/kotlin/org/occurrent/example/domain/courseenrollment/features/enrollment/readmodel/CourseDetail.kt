@@ -30,6 +30,8 @@ import kotlin.streams.asSequence
 
 data class EnrolledStudent(val studentId: StudentId, val name: String)
 
+private data class CourseAccumulator(val title: String? = null, val capacity: Int = 0, val enrolled: Set<StudentId> = emptySet())
+
 data class CourseDetailView(val courseId: CourseId, val title: String, val capacity: Int, val enrolledStudents: List<EnrolledStudent>) {
     val seatsRemaining: Int get() = capacity - enrolledStudents.size
 }
@@ -42,29 +44,21 @@ data class CourseDetailView(val courseId: CourseId, val title: String, val capac
 class CourseDetail(private val queries: DcbDomainEventQueries<DomainEvent>) {
 
     fun of(courseId: CourseId): CourseDetailView? {
-        var title: String? = null
-        var capacity = 0
-        val enrolled = LinkedHashSet<StudentId>()
         // The course tag scopes the read to this course's own events (definition plus enrollments), not the students'.
-        queries.query(CourseEnrollmentDcbQueries.courseDecisionContext(courseId)).use { events ->
-            events.forEach { event ->
+        val state = queries.query(CourseEnrollmentDcbQueries.courseDecisionContext(courseId)).use { events ->
+            events.asSequence().fold(CourseAccumulator()) { acc, event ->
                 when (event) {
-                    is CourseDefined -> {
-                        title = event.title
-                        capacity = event.capacity
-                    }
-
-                    is StudentEnrolledInCourse -> enrolled.add(event.studentId)
-                    is StudentUnenrolledFromCourse -> enrolled.remove(event.studentId)
-                    else -> {
-                    }
+                    is CourseDefined -> acc.copy(title = event.title, capacity = event.capacity)
+                    is StudentEnrolledInCourse -> acc.copy(enrolled = acc.enrolled + event.studentId)
+                    is StudentUnenrolledFromCourse -> acc.copy(enrolled = acc.enrolled - event.studentId)
+                    else -> acc
                 }
             }
         }
-        val courseTitle = title ?: return null
+        val courseTitle = state.title ?: return null
         // Resolve names with a consistent read per enrolled student, since names live on the student boundary.
-        val students = enrolled.map { studentId -> EnrolledStudent(studentId, nameOf(studentId)) }
-        return CourseDetailView(courseId, courseTitle, capacity, students)
+        val students = state.enrolled.map { studentId -> EnrolledStudent(studentId, nameOf(studentId)) }
+        return CourseDetailView(courseId, courseTitle, state.capacity, students)
     }
 
     private fun nameOf(studentId: StudentId): String =
