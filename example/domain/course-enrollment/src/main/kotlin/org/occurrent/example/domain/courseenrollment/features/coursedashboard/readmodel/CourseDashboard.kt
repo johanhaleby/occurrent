@@ -72,6 +72,8 @@ class CourseDashboard {
     fun students(): List<RegisteredStudent> =
         slot.get().students.entries.map { RegisteredStudent(it.key, it.value) }.sortedBy { it.name }
 
+    fun studentName(studentId: StudentId): String? = slot.get().students[studentId]
+
     private fun evolve(state: DashboardState, event: DomainEvent): DashboardState = when (event) {
         is CourseDefined -> {
             val existing = state.courses[event.courseId]
