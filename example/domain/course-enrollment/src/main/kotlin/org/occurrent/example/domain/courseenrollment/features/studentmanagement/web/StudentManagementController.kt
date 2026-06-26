@@ -18,9 +18,11 @@ package org.occurrent.example.domain.courseenrollment.features.studentmanagement
 
 import org.occurrent.application.service.blocking.dcb.DcbApplicationService
 import org.occurrent.example.domain.courseenrollment.common.DomainEvent
+import org.occurrent.example.domain.courseenrollment.features.studentmanagement.usecases.deregisterStudent
 import org.occurrent.example.domain.courseenrollment.features.studentmanagement.usecases.registerStudent
 import org.springframework.stereotype.Controller
 import org.springframework.ui.Model
+import org.springframework.web.bind.annotation.PathVariable
 import org.springframework.web.bind.annotation.PostMapping
 import org.springframework.web.bind.annotation.RequestParam
 import java.util.UUID
@@ -36,6 +38,18 @@ class StudentManagementController(private val applicationService: DcbApplication
             "fragments/feedback :: feedback"
         } catch (e: Exception) {
             model.addAttribute("message", e.message ?: "Could not register student")
+            model.addAttribute("error", true)
+            "fragments/feedback :: feedback"
+        }
+
+    @PostMapping("/students/{id}/deregistration")
+    fun deregisterStudent(@PathVariable id: UUID, model: Model): String =
+        try {
+            applicationService.deregisterStudent(id)
+            model.addAttribute("message", "Deregistered student")
+            "fragments/feedback :: feedback"
+        } catch (e: Exception) {
+            model.addAttribute("message", e.message ?: "Could not deregister student")
             model.addAttribute("error", true)
             "fragments/feedback :: feedback"
         }
