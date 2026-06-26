@@ -34,6 +34,7 @@ import org.springframework.web.bind.annotation.PathVariable
 import org.springframework.web.bind.annotation.PostMapping
 import org.springframework.web.bind.annotation.RequestParam
 import org.springframework.web.servlet.mvc.method.annotation.SseEmitter
+import org.springframework.web.util.HtmlUtils
 import java.util.UUID
 
 @Controller
@@ -84,10 +85,10 @@ class EnrollmentController(
         val emitter = SseEmitter(EMITTER_TIMEOUT_MILLIS)
         val subscriptionId = "activity-$id-${UUID.randomUUID()}"
         val subscription = dcbSubscriptions.subscribe(subscriptionId, CourseEnrollmentDcbQueries.courseDecisionContext(id)) { event ->
-            // Only a UUID is interpolated into this HTML, so it needs no escaping. Do not interpolate a name here.
+            // The student name is user input, so it is HTML-escaped before going into this raw SSE fragment.
             val line = when (event) {
-                is StudentEnrolledInCourse -> "<li>Student ${event.studentId} enrolled</li>"
-                is StudentUnenrolledFromCourse -> "<li>Student ${event.studentId} unenrolled</li>"
+                is StudentEnrolledInCourse -> "<li>${nameOf(event.studentId)} enrolled</li>"
+                is StudentUnenrolledFromCourse -> "<li>${nameOf(event.studentId)} unenrolled</li>"
                 else -> null
             }
             if (line != null) {
@@ -106,6 +107,11 @@ class EnrollmentController(
         subscription.waitUntilStarted()
         return emitter
     }
+
+    // Resolve the student name from the eventually-consistent dashboard, falling back to the id, and HTML-escape it
+    // because it is interpolated into a raw SSE fragment.
+    private fun nameOf(studentId: UUID): String =
+        HtmlUtils.htmlEscape(courseDashboard.studentName(studentId) ?: studentId.toString())
 
     companion object {
         private const val EMITTER_TIMEOUT_MILLIS = 10L * 60L * 1000L
