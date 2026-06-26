@@ -1,6 +1,6 @@
 # Course enrollment (DCB example)
 
-A small, from-scratch showcase of Occurrent's Dynamic Consistency Boundary (DCB) support, written in Kotlin with Spring Boot and the decider pattern. It is deliberately a skeleton: the wiring and the events are done, and the domain logic is left for you behind TODOs.
+A small, from-scratch showcase of Occurrent's Dynamic Consistency Boundary (DCB) support, written in Kotlin with Spring Boot and the decider pattern..
 
 ## Why this example
 
@@ -17,21 +17,6 @@ A classic aggregate owns a single entity, so holding both rules at once usually 
 - A command reads a DCB query (the decision boundary), a decider folds that into state and decides, and the application service appends the result conditionally and retries on a conflict.
 - The Spring Boot starter auto-configures the `DcbApplicationService` and the DCB DSL from the beans in `Bootstrap.kt`.
 
-## What is already done for you
-
-- The domain events in `CourseEnrollmentEvent.kt` and the policy constant.
-- The Spring Boot wiring in `Bootstrap.kt`, the CloudEvent converter, the type mapper, and `application.yml`.
-- The DCB tag names in `CourseEnrollmentDcbTags.kt`.
-- The decider commands and the use cases that drive the decider through the DCB DSL.
-
-## Where to start
-
-Work through the TODOs in this order. Each one is marked in the code.
-
-1. `CourseEnrollmentEventTagGenerator`: map each event to its tags. The enroll and unenroll events get both boundaries, this is the key modeling step.
-2. `CourseEnrollmentDcbQueries`: build the queries, above all the cross-entity enrollment boundary.
-3. `CourseEnrollmentDecider`: design the state, then implement `evolve` and `decide`. The enrollment invariants are the whole point of the example.
-4. Write a test that fills a course to capacity and asserts the next enrollment is rejected, and that a student cannot exceed the course limit. A skeleton test is provided under `src/test`.
 
 ## Running
 
