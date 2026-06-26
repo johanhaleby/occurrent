@@ -33,20 +33,30 @@ val courseDecider: Decider<CourseCommand, CourseState, CourseEvent> = decider(
 
 sealed interface CourseCommand : DomainCommand {
     data class DefineCourse(val eventId: UUID, val occurredAt: Instant, val courseId: CourseId, val title: String, val capacity: Int) : CourseCommand
+    data class CancelCourse(val eventId: UUID, val occurredAt: Instant, val courseId: CourseId) : CourseCommand
 }
 
 sealed interface CourseState {
     data object NotDefined : CourseState
     data class Defined(val courseId: CourseId, val title: String, val capacity: Int, val definedAt: Instant) : CourseState
+    data object Cancelled : CourseState
 }
 
 private fun decide(command: CourseCommand, state: CourseState): List<CourseEvent> = when (command) {
     is CourseCommand.DefineCourse -> when (state) {
         CourseState.NotDefined -> listOf(CourseDefined(UUID.randomUUID(), command.occurredAt, command.courseId, command.title, command.capacity))
         is CourseState.Defined -> throw IllegalArgumentException("Course ${command.title} is already defined")
+        CourseState.Cancelled -> throw IllegalArgumentException("Course ${command.courseId} was cancelled and cannot be redefined")
+    }
+
+    is CourseCommand.CancelCourse -> when (state) {
+        is CourseState.Defined -> listOf(CourseCancelled(UUID.randomUUID(), command.occurredAt, command.courseId))
+        CourseState.NotDefined -> throw IllegalArgumentException("Course ${command.courseId} is not defined")
+        CourseState.Cancelled -> throw IllegalArgumentException("Course ${command.courseId} is already cancelled")
     }
 }
 
 private fun evolve(state: CourseState, event: CourseEvent): CourseState = when (event) {
     is CourseDefined -> CourseState.Defined(event.courseId, event.title, event.capacity, event.occurredAt)
+    is CourseCancelled -> CourseState.Cancelled
 }

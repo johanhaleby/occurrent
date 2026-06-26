@@ -36,6 +36,7 @@ val studentDecider: Decider<StudentCommand, StudentRegistry, StudentEvent> =
 
 sealed interface StudentCommand : DomainCommand {
     data class RegisterStudent(val eventId: UUID, val occurredAt: Instant, val studentId: StudentId, val name: String) : StudentCommand
+    data class DeregisterStudent(val eventId: UUID, val occurredAt: Instant, val studentId: StudentId) : StudentCommand
 }
 
 data class StudentRegistry(val students: Map<StudentId, Student> = emptyMap())
@@ -48,10 +49,18 @@ private fun decide(command: StudentCommand, state: StudentRegistry): List<Studen
 
             listOf(StudentRegistered(command.eventId, command.occurredAt, studentId, command.name))
         }
+
+        is StudentCommand.DeregisterStudent -> {
+            val studentId = command.studentId
+            require(state.isStudentRegistered(studentId)) { "Student $studentId is not registered" }
+
+            listOf(StudentDeregistered(command.eventId, command.occurredAt, studentId))
+        }
     }
 
 private fun evolve(state: StudentRegistry, event: StudentEvent): StudentRegistry = when (event) {
     is StudentRegistered -> state.copy(students = state.students + (event.studentId to Student(event.studentId, event.name, event.occurredAt)))
+    is StudentDeregistered -> state.copy(students = state.students - event.studentId)
 }
 
 // Helpers
