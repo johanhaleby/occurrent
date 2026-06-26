@@ -1,0 +1,58 @@
+<!DOCTYPE html>
+<html lang="en" xmlns:th="http://www.thymeleaf.org">
+<head>
+    <meta charset="UTF-8"/>
+    <title th:text="${course.title}">Course</title>
+    <script th:src="@{/webjars/htmx.org/dist/htmx.min.js}"></script>
+    <script th:src="@{/webjars/htmx-ext-sse/dist/sse.js}"></script>
+    <style>
+        body { font-family: system-ui, sans-serif; max-width: 60rem; margin: 2rem auto; padding: 0 1rem; }
+        ul { padding-left: 1.2rem; }
+        form { display: inline-flex; gap: 0.5rem; align-items: center; margin: 0.3rem 0; }
+        .feedback { margin: 0.5rem 0; padding: 0.4rem 0.6rem; border-radius: 4px; }
+        .feedback.ok { background: #e6f4ea; }
+        .feedback.error { background: #fce8e6; }
+        #activity { border: 1px solid #ccc; padding: 0.5rem; border-radius: 4px; min-height: 3rem; }
+    </style>
+</head>
+<body>
+<p><a href="/">&larr; Back to dashboard</a></p>
+
+<!--/* The detail block is rebuilt from the strongly consistent read and swapped in after each enroll or unenroll. */-->
+<div th:fragment="detail" id="detail">
+    <h1 th:text="${course.title}">Course</h1>
+    <p>
+        Capacity <span th:text="${course.capacity}">0</span>,
+        seats left <span th:text="${course.seatsRemaining}">0</span>
+    </p>
+
+    <div th:if="${message}" th:classappend="${error} ? 'feedback error' : 'feedback ok'" th:text="${message}"></div>
+
+    <h2>Enrolled students</h2>
+    <p th:if="${course.enrolledStudents.isEmpty()}">Nobody is enrolled yet.</p>
+    <ul th:unless="${course.enrolledStudents.isEmpty()}">
+        <li th:each="student : ${course.enrolledStudents}">
+            <span th:text="${student.name}">Name</span>
+            <form hx-post="" th:attr="hx-post=@{/courses/{id}/unenrollments(id=${course.courseId})}" hx-target="#detail" hx-swap="outerHTML">
+                <input type="hidden" name="studentId" th:value="${student.studentId}"/>
+                <button type="submit">Unenroll</button>
+            </form>
+        </li>
+    </ul>
+
+    <h2>Enroll a student</h2>
+    <form th:attr="hx-post=@{/courses/{id}/enrollments(id=${course.courseId})}" hx-target="#detail" hx-swap="outerHTML">
+        <select name="studentId" required>
+            <option value="" disabled selected>Pick a student</option>
+            <option th:each="student : ${students}" th:value="${student.studentId}" th:text="${student.name}">Name</option>
+        </select>
+        <button type="submit">Enroll</button>
+    </form>
+</div>
+
+<section hx-ext="sse" th:attr="sse-connect=@{/courses/{id}/activity(id=${course.courseId})}">
+    <h2>Live activity</h2>
+    <ul id="activity" sse-swap="activity" hx-swap="beforeend"></ul>
+</section>
+</body>
+</html>
