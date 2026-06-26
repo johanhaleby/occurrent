@@ -26,6 +26,7 @@ import org.occurrent.example.domain.courseenrollment.features.enrollment.model.S
 import org.occurrent.example.domain.courseenrollment.features.studentmanagement.model.StudentRegistered
 import org.occurrent.example.domain.courseenrollment.infrastructure.dcb.CourseEnrollmentDcbQueries
 import org.springframework.stereotype.Component
+import kotlin.streams.asSequence
 
 data class EnrolledStudent(val studentId: StudentId, val name: String)
 
@@ -68,6 +69,6 @@ class CourseDetail(private val queries: DcbDomainEventQueries<DomainEvent>) {
 
     private fun nameOf(studentId: StudentId): String =
         queries.query(CourseEnrollmentDcbQueries.studentDecisionContext(studentId)).use { events ->
-            events.filter { it is StudentRegistered }.map { (it as StudentRegistered).name }.findFirst().orElse(studentId.toString())
+            events.asSequence().filterIsInstance<StudentRegistered>().map { it.name }.firstOrNull() ?: studentId.toString()
         }
 }
