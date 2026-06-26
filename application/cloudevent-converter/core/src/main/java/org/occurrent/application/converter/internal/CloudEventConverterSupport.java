@@ -28,6 +28,7 @@ import java.io.IOException;
 import java.io.UncheckedIOException;
 import java.net.URI;
 import java.time.OffsetDateTime;
+import java.time.temporal.ChronoUnit;
 import java.util.Map;
 import java.util.UUID;
 import java.util.function.Function;
@@ -96,6 +97,21 @@ public final class CloudEventConverterSupport {
 
     public static <T> Function<T, OffsetDateTime> defaultTimeMapperFunction() {
         return __ -> OffsetDateTime.now(UTC);
+    }
+
+    /**
+     * Wrap a time mapper so its result is truncated to the given {@code precision}, for example {@link ChronoUnit#MILLIS}.
+     * Returns the original mapper unchanged when {@code precision} is {@code null}. This is useful when the event store
+     * uses {@code TimeRepresentation.DATE}, which cannot represent sub-millisecond precision.
+     */
+    public static <T> Function<T, OffsetDateTime> truncatingTimeMapper(Function<T, OffsetDateTime> timeMapper, ChronoUnit precision) {
+        if (precision == null) {
+            return timeMapper;
+        }
+        return domainEvent -> {
+            OffsetDateTime time = timeMapper.apply(domainEvent);
+            return time == null ? null : time.truncatedTo(precision);
+        };
     }
 
     public static <T> Function<T, String> defaultSubjectMapperFunction() {

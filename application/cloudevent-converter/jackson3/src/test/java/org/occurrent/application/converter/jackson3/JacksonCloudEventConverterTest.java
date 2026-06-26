@@ -89,6 +89,21 @@ public class JacksonCloudEventConverterTest {
         );
     }
 
+    @SuppressWarnings("ConstantConditions")
+    @Test
+    void truncates_cloud_event_time_to_the_configured_precision() {
+        ObjectMapper objectMapper = new ObjectMapper();
+        OffsetDateTime timeWithNanos = OffsetDateTime.of(2024, 1, 2, 3, 4, 5, 123_456_789, UTC);
+        JacksonCloudEventConverter<TestEvent> cloudEventConverter = new JacksonCloudEventConverter.Builder<TestEvent>(objectMapper, CLOUD_EVENT_SOURCE)
+                .timeMapper(__ -> timeWithNanos)
+                .timePrecision(ChronoUnit.MILLIS)
+                .build();
+
+        CloudEvent cloudEvent = cloudEventConverter.toCloudEvent(new TestEvent(UUID.randomUUID().toString(), new Date(), "name", "subject"));
+
+        assertThat(cloudEvent.getTime()).isEqualTo(timeWithNanos.truncatedTo(ChronoUnit.MILLIS));
+    }
+
     @Test
     void converts_cloud_event_to_domain_event() {
         ObjectMapper objectMapper = new ObjectMapper();

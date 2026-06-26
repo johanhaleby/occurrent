@@ -24,6 +24,7 @@ import org.occurrent.retry.RetryStrategy;
 import org.springframework.boot.context.properties.ConfigurationProperties;
 
 import java.net.URI;
+import java.time.temporal.ChronoUnit;
 
 @ConfigurationProperties(prefix = "occurrent")
 public class OccurrentProperties {
@@ -89,12 +90,29 @@ public class OccurrentProperties {
          */
         private URI cloudEventSource;
 
+        /**
+         * Truncate the cloud event time to this precision, for example {@code millis}. Use this when the event store uses
+         * {@code TimeRepresentation.DATE}, which cannot store sub-millisecond precision (a common issue since
+         * {@code Instant.now()} carries nanoseconds on modern JVMs). When unset and the event store
+         * {@code time-representation} is {@code DATE}, the converter defaults to {@code MILLIS} so that the common case
+         * works without configuration. Has no effect when left unset with {@code RFC_3339_STRING}.
+         */
+        private ChronoUnit timePrecision;
+
         public URI getCloudEventSource() {
             return cloudEventSource;
         }
 
         public void setCloudEventSource(URI cloudEventSource) {
             this.cloudEventSource = cloudEventSource;
+        }
+
+        public ChronoUnit getTimePrecision() {
+            return timePrecision;
+        }
+
+        public void setTimePrecision(ChronoUnit timePrecision) {
+            this.timePrecision = timePrecision;
         }
     }
 

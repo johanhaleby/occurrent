@@ -77,6 +77,26 @@ class OccurrentMongoAutoConfigurationCharacterizationTest {
     }
 
     @Test
+    void cloud_event_time_is_truncated_to_millis_by_default_for_date_time_representation() {
+        // TimeRepresentation defaults to DATE, which cannot store sub-millisecond precision, so the converter should
+        // default to truncating the time to milliseconds.
+        contextRunner.run(context -> {
+            CloudEventConverter<TestEvent> converter = context.getBean(CloudEventConverter.class);
+            CloudEvent cloudEvent = converter.toCloudEvent(new TestEvent(UUID.randomUUID().toString(), new Date(), "name", "subject"));
+            assertThat(cloudEvent.getTime().getNano() % 1_000_000).isZero();
+        });
+    }
+
+    @Test
+    void explicit_time_precision_property_is_honored() {
+        contextRunner.withPropertyValues("occurrent.cloud-event-converter.time-precision=seconds").run(context -> {
+            CloudEventConverter<TestEvent> converter = context.getBean(CloudEventConverter.class);
+            CloudEvent cloudEvent = converter.toCloudEvent(new TestEvent(UUID.randomUUID().toString(), new Date(), "name", "subject"));
+            assertThat(cloudEvent.getTime().getNano()).isZero();
+        });
+    }
+
+    @Test
     void dependency_alone_does_not_activate_occurrents() {
         new ApplicationContextRunner().run(context -> {
             assertThat(context).doesNotHaveBean(CloudEventConverter.class);

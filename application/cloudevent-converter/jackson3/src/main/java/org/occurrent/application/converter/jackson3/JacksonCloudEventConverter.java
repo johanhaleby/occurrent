@@ -27,6 +27,7 @@ import tools.jackson.databind.ObjectMapper;
 
 import java.net.URI;
 import java.time.OffsetDateTime;
+import java.time.temporal.ChronoUnit;
 import java.util.Map;
 import java.util.function.Function;
 
@@ -111,6 +112,7 @@ public class JacksonCloudEventConverter<T> implements CloudEventConverter<T> {
         private CloudEventTypeMapper<T> cloudEventTypeMapper = defaultTypeMapper();
         private Function<T, OffsetDateTime> timeMapper = defaultTimeMapperFunction();
         private Function<T, String> subjectMapper = defaultSubjectMapperFunction();
+        private ChronoUnit timePrecision = null;
 
         public Builder(ObjectMapper objectMapper, URI cloudEventSource) {
             this.objectMapper = objectMapper;
@@ -142,8 +144,18 @@ public class JacksonCloudEventConverter<T> implements CloudEventConverter<T> {
             return this;
         }
 
+        /**
+         * Truncate the cloud event time to the given precision, for example {@link ChronoUnit#MILLIS}. Use this when the
+         * event store uses {@code TimeRepresentation.DATE}, which cannot store sub-millisecond precision. Defaults to no
+         * truncation.
+         */
+        public Builder<T> timePrecision(ChronoUnit timePrecision) {
+            this.timePrecision = timePrecision;
+            return this;
+        }
+
         public JacksonCloudEventConverter<T> build() {
-            return new JacksonCloudEventConverter<>(objectMapper, cloudEventSource, idMapper, cloudEventTypeMapper, timeMapper, subjectMapper, contentType);
+            return new JacksonCloudEventConverter<>(objectMapper, cloudEventSource, idMapper, cloudEventTypeMapper, CloudEventConverterSupport.truncatingTimeMapper(timeMapper, timePrecision), subjectMapper, contentType);
         }
     }
 
