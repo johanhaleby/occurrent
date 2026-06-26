@@ -18,7 +18,6 @@ package org.occurrent.example.domain.courseenrollment.features.studentmanagement
 
 import org.occurrent.application.service.blocking.dcb.DcbApplicationService
 import org.occurrent.dsl.dcb.blocking.execute
-import org.occurrent.dsl.decider.adapt
 import org.occurrent.example.domain.courseenrollment.common.DomainEvent
 import org.occurrent.example.domain.courseenrollment.features.studentmanagement.model.StudentCommand.RegisterStudent
 import org.occurrent.example.domain.courseenrollment.features.studentmanagement.model.studentDecider
@@ -26,10 +25,8 @@ import org.occurrent.example.domain.courseenrollment.infrastructure.dcb.CourseEn
 import java.time.Instant
 import java.util.*
 
-// studentDecider only understands StudentEvent. adapt() widens it to DomainEvent so it runs against the shared
-// DcbApplicationService<DomainEvent>, ignoring foreign events from the student decision context.
 fun DcbApplicationService<DomainEvent>.registerStudent(studentId: UUID, name: String, occurredAt: Instant = Instant.now()) = execute(
     studentDecisionContext(studentId),
     RegisterStudent(UUID.randomUUID(), occurredAt, studentId, name),
-    studentDecider.adapt()
+    studentDecider
 )

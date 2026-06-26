@@ -7,9 +7,8 @@ import java.time.Instant
 import java.util.*
 
 /**
- * The events of the course-enrollment domain. These are fully defined, the rest of the example (tags, queries, decider,
- * use cases) is left for you to implement, see the module README and the TODOs.
- *
+ * The events of the course-enrollment domain.
+ * 
  * The point of the example is the enrollment decision, which must hold two invariants that live on two different
  * entities at the same time: the course capacity and the per-student course limit. That is exactly what a Dynamic
  * Consistency Boundary lets you do without a saga.

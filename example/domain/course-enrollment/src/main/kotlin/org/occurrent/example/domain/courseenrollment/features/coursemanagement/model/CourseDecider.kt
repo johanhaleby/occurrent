@@ -27,12 +27,9 @@ import java.util.*
  * Decider for the course's own lifecycle. Single boundary: the course (see
  * [org.occurrent.example.domain.courseenrollment.infrastructure.dcb.CourseEnrollmentDcbQueries.courseDecisionContext]).
  */
-val courseDecider: Decider<CourseCommand, CourseState, CourseEvent> =
-    decider(
-        initialState = CourseState.NotDefined,
-        decide = ::decide,
-        evolve = ::evolve
-    )
+val courseDecider: Decider<CourseCommand, CourseState, CourseEvent> = decider(
+    initialState = CourseState.NotDefined, decide = ::decide, evolve = ::evolve
+)
 
 sealed interface CourseCommand : DomainCommand {
     data class DefineCourse(val eventId: UUID, val occurredAt: Instant, val courseId: CourseId, val title: String, val capacity: Int) : CourseCommand
@@ -40,20 +37,16 @@ sealed interface CourseCommand : DomainCommand {
 
 sealed interface CourseState {
     data object NotDefined : CourseState
-    data class Defined(val capacity: Int) : CourseState
+    data class Defined(val courseId: CourseId, val title: String, val capacity: Int, val definedAt: Instant) : CourseState
 }
 
-private fun decide(command: CourseCommand, state: CourseState): List<CourseEvent> =
-    when (command) {
-        is CourseCommand.DefineCourse -> when (state) {
-            CourseState.NotDefined -> listOf(CourseDefined(UUID.randomUUID(), command.occurredAt, command.courseId, command.title, command.capacity))
-            is CourseState.Defined -> throw IllegalArgumentException("Course ${command.title} is already defined")
-        }
+private fun decide(command: CourseCommand, state: CourseState): List<CourseEvent> = when (command) {
+    is CourseCommand.DefineCourse -> when (state) {
+        CourseState.NotDefined -> listOf(CourseDefined(UUID.randomUUID(), command.occurredAt, command.courseId, command.title, command.capacity))
+        is CourseState.Defined -> throw IllegalArgumentException("Course ${command.title} is already defined")
     }
+}
 
-/**
- * TODO(human): fold the course boundary into [CourseState]. The boundary also returns enrollment events tagged with this
- * course, which this decider does not care about, so they leave the state unchanged.
- */
-private fun evolve(state: CourseState, event: CourseEvent): CourseState =
-    TODO("update CourseState for $event (CourseEvent is sealed, so 'when (event)' is exhaustive: CourseDefined -> Defined)")
+private fun evolve(state: CourseState, event: CourseEvent): CourseState = when (event) {
+    is CourseDefined -> CourseState.Defined(event.courseId, event.title, event.capacity, event.occurredAt)
+}

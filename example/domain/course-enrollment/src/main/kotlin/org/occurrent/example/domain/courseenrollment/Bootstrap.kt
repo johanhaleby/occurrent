@@ -19,8 +19,8 @@ package org.occurrent.example.domain.courseenrollment
 import org.occurrent.application.converter.typemapper.CloudEventTypeMapper
 import org.occurrent.application.converter.typemapper.ReflectionCloudEventTypeMapper
 import org.occurrent.application.service.blocking.dcb.TagGenerator
-import org.occurrent.example.domain.courseenrollment.infrastructure.dcb.CourseEnrollmentEventTagGenerator
 import org.occurrent.example.domain.courseenrollment.common.DomainEvent
+import org.occurrent.example.domain.courseenrollment.infrastructure.dcb.CourseEnrollmentEventTagGenerator
 import org.occurrent.springboot.mongo.blocking.EnableOccurrent
 import org.springframework.boot.autoconfigure.SpringBootApplication
 import org.springframework.boot.runApplication
@@ -34,7 +34,6 @@ import org.springframework.retry.annotation.EnableRetry
  * src/main/resources/application.yml), the starter auto-configures a
  * [org.occurrent.application.service.blocking.dcb.DcbApplicationService] and the DCB query DSL from the beans below.
  *
- * Everything in this file is wired for you. The domain logic lives behind the TODOs in the feature packages.
  */
 @SpringBootApplication
 @EnableOccurrent
@@ -42,8 +41,10 @@ import org.springframework.retry.annotation.EnableRetry
 class Bootstrap {
 
     @Bean
+    // qualified() rather than simple() because the event types live in several feature packages
+    // (features/*/model), not all alongside DomainEvent, so fully-qualified names are needed to resolve them.
     fun courseEnrollmentCloudEventTypeMapper(): CloudEventTypeMapper<DomainEvent> =
-        ReflectionCloudEventTypeMapper.simple(DomainEvent::class.java)
+        ReflectionCloudEventTypeMapper.qualified()
 
     /** Required by the starter when the DCB capability is enabled: how each event maps to its DCB tags. */
     @Bean
