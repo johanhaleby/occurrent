@@ -101,6 +101,31 @@ class CourseEnrollmentWebTest {
     }
 
     @Test
+    fun `cancelling a course removes it from the dashboard`() {
+        val courseId = UUID.randomUUID()
+        applicationService.defineCourse(courseId, title = "Temporary Course", capacity = 5)
+        await().atMost(10, TimeUnit.SECONDS).untilAsserted { assertThat(dashboardBody()).contains("Temporary Course") }
+
+        mockMvc.post("/courses/$courseId/cancellation").andExpect { status { isOk() } }
+
+        await().atMost(10, TimeUnit.SECONDS).untilAsserted { assertThat(dashboardBody()).doesNotContain("Temporary Course") }
+    }
+
+    @Test
+    fun `deregistering a student removes it from the dashboard`() {
+        val studentId = UUID.randomUUID()
+        applicationService.registerStudent(studentId, name = "Ada Lovelace")
+        await().atMost(10, TimeUnit.SECONDS).untilAsserted { assertThat(dashboardBody()).contains("Ada Lovelace") }
+
+        mockMvc.post("/students/$studentId/deregistration").andExpect { status { isOk() } }
+
+        await().atMost(10, TimeUnit.SECONDS).untilAsserted { assertThat(dashboardBody()).doesNotContain("Ada Lovelace") }
+    }
+
+    private fun dashboardBody(): String =
+        mockMvc.get("/dashboard").andExpect { status { isOk() } }.andReturn().response.contentAsString
+
+    @Test
     fun `GET course detail returns strongly-consistent view with title and capacity`() {
         val courseId = UUID.randomUUID()
         applicationService.defineCourse(courseId, title = "Domain-Driven Design", capacity = 15)

@@ -20,9 +20,11 @@ import jakarta.annotation.PostConstruct
 import org.occurrent.dsl.dcb.blocking.DcbSubscriptions
 import org.occurrent.eventstore.api.dcb.DcbQuery
 import org.occurrent.example.domain.courseenrollment.common.DomainEvent
+import org.occurrent.example.domain.courseenrollment.features.coursemanagement.model.CourseCancelled
 import org.occurrent.example.domain.courseenrollment.features.coursemanagement.model.CourseDefined
 import org.occurrent.example.domain.courseenrollment.features.enrollment.model.StudentEnrolledInCourse
 import org.occurrent.example.domain.courseenrollment.features.enrollment.model.StudentUnenrolledFromCourse
+import org.occurrent.example.domain.courseenrollment.features.studentmanagement.model.StudentDeregistered
 import org.occurrent.example.domain.courseenrollment.features.studentmanagement.model.StudentRegistered
 import org.occurrent.subscription.StartAt
 import org.occurrent.subscription.blocking.durable.catchup.DcbSubscriptionPosition
@@ -44,7 +46,8 @@ class CourseDashboardSubscriber(
     @PostConstruct
     fun start() {
         dcbSubscriptions.subscribe("course-dashboard", DcbQuery.all(), StartAt.subscriptionPosition(DcbSubscriptionPosition.of(0))) { event ->
-            if (event is CourseDefined || event is StudentRegistered || event is StudentEnrolledInCourse || event is StudentUnenrolledFromCourse) {
+            if (event is CourseDefined || event is CourseCancelled || event is StudentRegistered || event is StudentDeregistered ||
+                event is StudentEnrolledInCourse || event is StudentUnenrolledFromCourse) {
                 courseDashboard.update(event)
             }
         }.waitUntilStarted()

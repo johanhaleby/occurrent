@@ -14,3 +14,10 @@ data class StudentRegistered(
     val studentId: StudentId,
     val name: String
 ) : StudentEvent
+
+/** A student is no longer registered. Belongs to the student boundary. */
+data class StudentDeregistered(
+    override val eventId: UUID,
+    override val occurredAt: Instant,
+    val studentId: StudentId
+) : StudentEvent

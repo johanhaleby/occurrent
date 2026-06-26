@@ -22,9 +22,11 @@ import org.occurrent.dsl.view.ViewStateRepository
 import org.occurrent.example.domain.courseenrollment.common.CourseId
 import org.occurrent.example.domain.courseenrollment.common.DomainEvent
 import org.occurrent.example.domain.courseenrollment.common.StudentId
+import org.occurrent.example.domain.courseenrollment.features.coursemanagement.model.CourseCancelled
 import org.occurrent.example.domain.courseenrollment.features.coursemanagement.model.CourseDefined
 import org.occurrent.example.domain.courseenrollment.features.enrollment.model.StudentEnrolledInCourse
 import org.occurrent.example.domain.courseenrollment.features.enrollment.model.StudentUnenrolledFromCourse
+import org.occurrent.example.domain.courseenrollment.features.studentmanagement.model.StudentDeregistered
 import org.occurrent.example.domain.courseenrollment.features.studentmanagement.model.StudentRegistered
 import org.springframework.stereotype.Component
 import java.util.concurrent.atomic.AtomicReference
@@ -78,6 +80,10 @@ class CourseDashboard {
         }
 
         is StudentRegistered -> state.copy(students = state.students + (event.studentId to event.name))
+
+        is CourseCancelled -> state.copy(courses = state.courses - event.courseId)
+
+        is StudentDeregistered -> state.copy(students = state.students - event.studentId)
 
         is StudentEnrolledInCourse -> {
             val existing = state.courses[event.courseId] ?: return state
