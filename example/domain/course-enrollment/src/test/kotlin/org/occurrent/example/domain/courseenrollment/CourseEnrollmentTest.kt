@@ -23,9 +23,11 @@ import org.junit.jupiter.api.DisplayNameGenerator
 import org.junit.jupiter.api.Test
 import org.occurrent.application.service.blocking.dcb.DcbApplicationService
 import org.occurrent.example.domain.courseenrollment.common.DomainEvent
+import org.occurrent.example.domain.courseenrollment.features.coursemanagement.usecases.cancelCourse
 import org.occurrent.example.domain.courseenrollment.features.coursemanagement.usecases.defineCourse
 import org.occurrent.example.domain.courseenrollment.features.enrollment.model.EnrollmentPolicy.MAX_COURSES_PER_STUDENT
 import org.occurrent.example.domain.courseenrollment.features.enrollment.usecases.enrollStudent
+import org.occurrent.example.domain.courseenrollment.features.studentmanagement.usecases.deregisterStudent
 import org.occurrent.example.domain.courseenrollment.features.studentmanagement.usecases.registerStudent
 import org.springframework.beans.factory.annotation.Autowired
 import org.springframework.boot.test.context.SpringBootTest
@@ -93,6 +95,32 @@ class CourseEnrollmentTest {
         assertThatThrownBy { applicationService.enrollStudent(courses.last(), studentId) }
             .isInstanceOf(IllegalArgumentException::class.java)
             .hasMessageContaining("courses")
+    }
+
+    @Test
+    fun `a cancelled course cannot be enrolled into`() {
+        val courseId = UUID.randomUUID()
+        val studentId = UUID.randomUUID()
+        applicationService.defineCourse(courseId, title = "Soon Cancelled", capacity = 5)
+        applicationService.registerStudent(studentId, name = "Student")
+        applicationService.cancelCourse(courseId)
+
+        assertThatThrownBy { applicationService.enrollStudent(courseId, studentId) }
+            .isInstanceOf(IllegalArgumentException::class.java)
+            .hasMessageContaining("cancelled")
+    }
+
+    @Test
+    fun `a deregistered student cannot be enrolled`() {
+        val courseId = UUID.randomUUID()
+        val studentId = UUID.randomUUID()
+        applicationService.defineCourse(courseId, title = "Open Course", capacity = 5)
+        applicationService.registerStudent(studentId, name = "Leaving Student")
+        applicationService.deregisterStudent(studentId)
+
+        assertThatThrownBy { applicationService.enrollStudent(courseId, studentId) }
+            .isInstanceOf(IllegalArgumentException::class.java)
+            .hasMessageContaining("deregistered")
     }
 
     @Test

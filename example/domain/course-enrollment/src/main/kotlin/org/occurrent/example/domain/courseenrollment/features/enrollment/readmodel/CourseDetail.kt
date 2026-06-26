@@ -21,6 +21,7 @@ import org.occurrent.dsl.dcb.blocking.queryForSequence
 import org.occurrent.example.domain.courseenrollment.common.CourseId
 import org.occurrent.example.domain.courseenrollment.common.DomainEvent
 import org.occurrent.example.domain.courseenrollment.common.StudentId
+import org.occurrent.example.domain.courseenrollment.features.coursemanagement.model.CourseCancelled
 import org.occurrent.example.domain.courseenrollment.features.coursemanagement.model.CourseDefined
 import org.occurrent.example.domain.courseenrollment.features.enrollment.model.StudentEnrolledInCourse
 import org.occurrent.example.domain.courseenrollment.features.enrollment.model.StudentUnenrolledFromCourse
@@ -30,7 +31,7 @@ import org.springframework.stereotype.Component
 
 data class EnrolledStudent(val studentId: StudentId, val name: String)
 
-private data class CourseAccumulator(val title: String? = null, val capacity: Int = 0, val enrolled: Set<StudentId> = emptySet())
+private data class CourseAccumulator(val title: String? = null, val capacity: Int = 0, val enrolled: Set<StudentId> = emptySet(), val cancelled: Boolean = false)
 
 data class CourseDetailView(val courseId: CourseId, val title: String, val capacity: Int, val enrolledStudents: List<EnrolledStudent>) {
     val seatsRemaining: Int get() = capacity - enrolledStudents.size
@@ -50,11 +51,14 @@ class CourseDetail(private val queries: DcbDomainEventQueries<DomainEvent>) {
             .fold(CourseAccumulator()) { acc, event ->
                 when (event) {
                     is CourseDefined -> acc.copy(title = event.title, capacity = event.capacity)
+                    is CourseCancelled -> acc.copy(cancelled = true)
                     is StudentEnrolledInCourse -> acc.copy(enrolled = acc.enrolled + event.studentId)
                     is StudentUnenrolledFromCourse -> acc.copy(enrolled = acc.enrolled - event.studentId)
                     else -> acc
                 }
             }
+        // A cancelled course is no longer shown.
+        if (state.cancelled) return null
         val courseTitle = state.title ?: return null
         // Resolve names with a consistent read per enrolled student, since names live on the student boundary.
         val students = state.enrolled.map { studentId -> EnrolledStudent(studentId, nameOf(studentId)) }

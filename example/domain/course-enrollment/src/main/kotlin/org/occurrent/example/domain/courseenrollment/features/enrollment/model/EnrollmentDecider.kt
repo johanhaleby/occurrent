@@ -22,7 +22,9 @@ import org.occurrent.example.domain.courseenrollment.common.CourseId
 import org.occurrent.example.domain.courseenrollment.common.DomainCommand
 import org.occurrent.example.domain.courseenrollment.common.DomainEvent
 import org.occurrent.example.domain.courseenrollment.common.StudentId
+import org.occurrent.example.domain.courseenrollment.features.coursemanagement.model.CourseCancelled
 import org.occurrent.example.domain.courseenrollment.features.coursemanagement.model.CourseDefined
+import org.occurrent.example.domain.courseenrollment.features.studentmanagement.model.StudentDeregistered
 import org.occurrent.example.domain.courseenrollment.features.studentmanagement.model.StudentRegistered
 import java.time.Instant
 import java.util.*
@@ -70,7 +72,9 @@ data class EnrollmentState(
     val capacityByCourse: Map<CourseId, Int> = emptyMap(),
     val studentsByCourse: Map<CourseId, Set<StudentId>> = emptyMap(),
     val registeredStudents: Set<StudentId> = emptySet(),
-    val coursesByStudent: Map<StudentId, Set<CourseId>> = emptyMap()
+    val coursesByStudent: Map<StudentId, Set<CourseId>> = emptyMap(),
+    val cancelledCourses: Set<CourseId> = emptySet(),
+    val deregisteredStudents: Set<StudentId> = emptySet()
 )
 
 private fun decide(command: EnrollmentCommand, state: EnrollmentState): List<DomainEvent> {
@@ -87,6 +91,14 @@ private fun decide(command: EnrollmentCommand, state: EnrollmentState): List<Dom
 
     return when (command) {
         is EnrollmentCommand.EnrollStudent -> {
+            require(!state.isCourseCancelled(courseId)) {
+                "Course ${command.courseId} is cancelled"
+            }
+
+            require(!state.isStudentDeregistered(studentId)) {
+                "Student ${command.studentId} is deregistered"
+            }
+
             require(!state.isCourseFull(courseId)) {
                 "Course ${command.courseId} is full"
             }
@@ -125,6 +137,11 @@ private fun evolve(state: EnrollmentState, event: DomainEvent): EnrollmentState 
         coursesByStudent = state.coursesByStudent + (event.studentId to (state.coursesByStudent[event.studentId]?.minus(event.courseId) ?: emptySet()))
     )
 
+    // The enrollment boundary also sees the course and student lifecycle events, so a cancelled course or a
+    // deregistered student can no longer be enrolled into.
+    is CourseCancelled -> state.copy(cancelledCourses = state.cancelledCourses + event.courseId)
+    is StudentDeregistered -> state.copy(deregisteredStudents = state.deregisteredStudents + event.studentId)
+
     else -> throw IllegalArgumentException("Unexpected event type ${event::class.simpleName} in enrollment boundary")
 }
 
@@ -145,3 +162,7 @@ private fun EnrollmentState.isCourseDefined(courseId: CourseId): Boolean = capac
 private fun EnrollmentState.isStudentRegistered(studentId: StudentId): Boolean = registeredStudents.contains(studentId)
 
 private fun EnrollmentState.isStudentRegisteredToCourse(courseId: CourseId, studentId: StudentId): Boolean = studentsByCourse[courseId]?.contains(studentId) ?: false
+
+private fun EnrollmentState.isCourseCancelled(courseId: CourseId): Boolean = cancelledCourses.contains(courseId)
+
+private fun EnrollmentState.isStudentDeregistered(studentId: StudentId): Boolean = deregisteredStudents.contains(studentId)

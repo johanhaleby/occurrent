@@ -43,3 +43,13 @@
 .enrolled-list form {
     margin: 0;
 }
+
+.actions {
+    display: flex;
+    gap: 0.5rem;
+    align-items: center;
+}
+
+.actions form {
+    margin: 0;
+}

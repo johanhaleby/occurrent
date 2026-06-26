@@ -21,7 +21,14 @@
                 <td th:text="${course.capacity}">0</td>
                 <td th:text="${course.enrolledCount}">0</td>
                 <td th:text="${course.seatsRemaining}">0</td>
-                <td><a th:href="@{/courses/{id}(id=${course.courseId})}" role="button" class="outline secondary">Open</a></td>
+                <td>
+                    <div class="actions">
+                        <a th:href="@{/courses/{id}(id=${course.courseId})}" role="button" class="outline secondary">Open</a>
+                        <form th:attr="hx-post=@{/courses/{id}/cancellation(id=${course.courseId})}" hx-target="#feedback" hx-swap="innerHTML">
+                            <button type="submit" class="outline contrast">Cancel</button>
+                        </form>
+                    </div>
+                </td>
             </tr>
             </tbody>
         </table>
@@ -34,11 +41,19 @@
             <thead>
             <tr>
                 <th>Name</th>
+                <th></th>
             </tr>
             </thead>
             <tbody>
             <tr th:each="student : ${students}">
                 <td th:text="${student.name}">Name</td>
+                <td>
+                    <div class="actions">
+                        <form th:attr="hx-post=@{/students/{id}/deregistration(id=${student.studentId})}" hx-target="#feedback" hx-swap="innerHTML">
+                            <button type="submit" class="outline contrast">Deregister</button>
+                        </form>
+                    </div>
+                </td>
             </tr>
             </tbody>
         </table>

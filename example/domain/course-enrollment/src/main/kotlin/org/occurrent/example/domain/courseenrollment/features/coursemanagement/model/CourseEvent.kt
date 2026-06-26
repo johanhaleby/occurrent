@@ -15,3 +15,10 @@ data class CourseDefined(
     val title: String,
     val capacity: Int
 ) : CourseEvent
+
+/** A course is no longer offered. Belongs to the course boundary. */
+data class CourseCancelled(
+    override val eventId: UUID,
+    override val occurredAt: Instant,
+    val courseId: CourseId
+) : CourseEvent
