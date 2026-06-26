@@ -1,0 +1,45 @@
+/* Small additions on top of Pico for the parts Pico does not cover. */
+
+.feedback {
+    margin: 1rem 0;
+    padding: 0.6rem 0.9rem;
+    border-radius: var(--pico-border-radius);
+}
+
+.feedback.ok {
+    background: #e6f4ea;
+    color: #1b5e20;
+}
+
+.feedback.error {
+    background: #fdecea;
+    color: #b71c1c;
+}
+
+#activity {
+    max-height: 12rem;
+    overflow-y: auto;
+    margin: 0;
+}
+
+#activity:empty::before {
+    content: "Waiting for enrollments...";
+    color: var(--pico-muted-color);
+}
+
+.enrolled-list {
+    list-style: none;
+    padding: 0;
+}
+
+.enrolled-list li {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    gap: 1rem;
+    padding: 0.25rem 0;
+}
+
+.enrolled-list form {
+    margin: 0;
+}
