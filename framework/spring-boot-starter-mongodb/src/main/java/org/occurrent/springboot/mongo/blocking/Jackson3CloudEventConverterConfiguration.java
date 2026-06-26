@@ -28,6 +28,7 @@ import org.springframework.context.annotation.Configuration;
 import org.springframework.context.annotation.Fallback;
 import org.springframework.context.annotation.Lazy;
 import tools.jackson.databind.ObjectMapper;
+import tools.jackson.databind.json.JsonMapper;
 
 import java.time.temporal.ChronoUnit;
 import java.util.Optional;
@@ -42,7 +43,10 @@ class Jackson3CloudEventConverterConfiguration {
     @Fallback
     @ConditionalOnMissingBean(CloudEventConverter.class)
     public <E> CloudEventConverter<E> occurrentCloudEventConverter(Optional<ObjectMapper> objectMapper, OccurrentProperties occurrentProperties, Optional<CloudEventTypeMapper<E>> cloudEventTypeMapper) {
-        ObjectMapper om = objectMapper.orElseGet(ObjectMapper::new);
+        // Discover and register Jackson modules on the classpath (for example Kotlin and java.time support), since
+        // Jackson 3 does not auto-register them. Without this the fallback mapper cannot (de)serialize Kotlin data
+        // classes or java.time types even when the modules are present.
+        ObjectMapper om = objectMapper.orElseGet(() -> JsonMapper.builder().findAndAddModules().build());
         CloudEventTypeMapper<E> typeMapper = cloudEventTypeMapper.orElseGet(ReflectionCloudEventTypeMapper::qualified);
         JacksonCloudEventConverter.Builder<E> builder = new JacksonCloudEventConverter.Builder<E>(om, occurrentProperties.getCloudEventConverter().getCloudEventSource())
                 .typeMapper(typeMapper);
