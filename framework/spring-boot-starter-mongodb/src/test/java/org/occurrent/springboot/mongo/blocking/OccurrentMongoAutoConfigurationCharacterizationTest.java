@@ -163,7 +163,7 @@ class OccurrentMongoAutoConfigurationCharacterizationTest {
     }
 
     @Test
-    void dcb_only_auto_configures_domain_event_queries_but_not_stream_application_service_or_subscription_catchup() {
+    void dcb_only_auto_configures_domain_event_queries_and_dcb_subscription_catchup_but_not_stream_application_service() {
         contextRunner
                 .withPropertyValues(
                         "occurrent.event-store.enabled=true",
@@ -176,11 +176,14 @@ class OccurrentMongoAutoConfigurationCharacterizationTest {
                     assertThat(context).hasSingleBean(DomainEventQueries.class);
                     assertThat(context).hasSingleBean(SubscriptionModel.class);
 
+                    // In DCB-only mode the subscription model now wraps a DCB-mode CatchupSubscriptionModel, so a
+                    // subscription started at a DcbSubscriptionPosition can replay history by dcbposition.
                     SubscriptionModel subscriptionModel = context.getBean(SubscriptionModel.class);
                     assertThat(subscriptionModel).isInstanceOf(DelegatingSubscriptionModel.class);
-                    assertThat(((DelegatingSubscriptionModel) subscriptionModel).getDelegatedSubscriptionModel())
-                            .isInstanceOf(DurableSubscriptionModel.class)
-                            .isNotInstanceOf(CatchupSubscriptionModel.class);
+                    SubscriptionModel delegated = ((DelegatingSubscriptionModel) subscriptionModel).getDelegatedSubscriptionModel();
+                    assertThat(delegated).isInstanceOf(CatchupSubscriptionModel.class);
+                    assertThat(((DelegatingSubscriptionModel) delegated).getDelegatedSubscriptionModel())
+                            .isInstanceOf(DurableSubscriptionModel.class);
                 });
     }
 
