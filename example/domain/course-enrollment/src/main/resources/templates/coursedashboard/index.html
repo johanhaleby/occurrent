@@ -1,0 +1,44 @@
+<!DOCTYPE html>
+<html lang="en" xmlns:th="http://www.thymeleaf.org">
+<head>
+    <meta charset="UTF-8"/>
+    <title>Course enrollment</title>
+    <script th:src="@{/webjars/htmx.org/dist/htmx.min.js}"></script>
+    <style>
+        body { font-family: system-ui, sans-serif; max-width: 60rem; margin: 2rem auto; padding: 0 1rem; }
+        table { border-collapse: collapse; width: 100%; }
+        th, td { border: 1px solid #ccc; padding: 0.4rem 0.6rem; text-align: left; }
+        form { display: inline-flex; gap: 0.5rem; align-items: center; margin: 0.5rem 0; }
+        .feedback { margin: 0.5rem 0; padding: 0.4rem 0.6rem; border-radius: 4px; }
+        .feedback.ok { background: #e6f4ea; }
+        .feedback.error { background: #fce8e6; }
+        section { margin-bottom: 1.5rem; }
+    </style>
+</head>
+<body>
+<h1>Course enrollment</h1>
+
+<section>
+    <h2>Define a course</h2>
+    <form hx-post="/courses" hx-target="#feedback" hx-swap="innerHTML">
+        <input type="text" name="title" placeholder="Title" required/>
+        <input type="number" name="capacity" placeholder="Capacity" min="1" required/>
+        <button type="submit">Define</button>
+    </form>
+</section>
+
+<section>
+    <h2>Register a student</h2>
+    <form hx-post="/students" hx-target="#feedback" hx-swap="innerHTML">
+        <input type="text" name="name" placeholder="Name" required/>
+        <button type="submit">Register</button>
+    </form>
+</section>
+
+<div id="feedback"></div>
+
+<section>
+    <div th:replace="~{coursedashboard/dashboard :: dashboard}"></div>
+</section>
+</body>
+</html>

@@ -1,0 +1,29 @@
+<!DOCTYPE html>
+<html xmlns:th="http://www.thymeleaf.org">
+<body>
+<div th:fragment="dashboard" id="dashboard" hx-get="/dashboard" hx-trigger="every 2s" hx-swap="outerHTML">
+    <h2>Courses</h2>
+    <p th:if="${courses.isEmpty()}">No courses yet. Define one above.</p>
+    <table th:unless="${courses.isEmpty()}">
+        <thead>
+        <tr>
+            <th>Title</th>
+            <th>Capacity</th>
+            <th>Enrolled</th>
+            <th>Seats left</th>
+            <th></th>
+        </tr>
+        </thead>
+        <tbody>
+        <tr th:each="course : ${courses}">
+            <td th:text="${course.title}">Title</td>
+            <td th:text="${course.capacity}">0</td>
+            <td th:text="${course.enrolledCount}">0</td>
+            <td th:text="${course.seatsRemaining}">0</td>
+            <td><a th:href="@{/courses/{id}(id=${course.courseId})}">Open</a></td>
+        </tr>
+        </tbody>
+    </table>
+</div>
+</body>
+</html>
