@@ -90,6 +90,17 @@ class CourseEnrollmentWebTest {
     }
 
     @Test
+    fun `dashboard eventually lists a registered student`() {
+        val studentId = UUID.randomUUID()
+        applicationService.registerStudent(studentId, name = "Grace Hopper")
+
+        await().atMost(10, TimeUnit.SECONDS).untilAsserted {
+            val body = mockMvc.get("/dashboard").andExpect { status { isOk() } }.andReturn().response.contentAsString
+            assertThat(body).contains("Grace Hopper")
+        }
+    }
+
+    @Test
     fun `GET course detail returns strongly-consistent view with title and capacity`() {
         val courseId = UUID.randomUUID()
         applicationService.defineCourse(courseId, title = "Domain-Driven Design", capacity = 15)
