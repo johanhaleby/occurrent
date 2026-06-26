@@ -39,6 +39,27 @@ inline fun <reified SubC : C, S, reified SubE : E, C, E : Any> Decider<SubC, S, 
     Decider.adapt(this, SubC::class.java, SubE::class.java)
 
 /**
+ * Widen only the event type of a decider, from [SubE] to the broader [E], leaving the command type unchanged. Events that
+ * are not [SubE] are ignored. This is the event-only counterpart to [adapt], for when the command type already matches but
+ * the decider's event type is narrower than the service it runs against. It is what the `execute` extensions use to accept
+ * a feature decider directly, so you rarely call it by hand.
+ *
+ * ```
+ * // courseDecider: Decider<CourseCommand, CourseState, CourseEvent>
+ * val widened: Decider<CourseCommand, CourseState, DomainEvent> = courseDecider.adaptEvents()
+ * ```
+ */
+inline fun <C : Any, S, reified SubE : E, E : Any> Decider<C, S, SubE>.adaptEvents(): Decider<C, S, E> {
+    val self = this
+    return decider<C, S, E>(
+        initialState = self.initialState(),
+        decide = { command, state -> self.decide(command, state) },
+        evolve = { state, event -> if (event is SubE) self.evolve(state, event) else state },
+        isTerminal = { state -> self.isTerminal(state) }
+    )
+}
+
+/**
  * Combine two feature deciders into one whose state is the [Pair] of their states. The deciders are [adapt]ed to the
  * shared command type [C] and event type [E] for you, so you can pass them over their own narrow types directly. A command
  * goes to whichever decider recognizes it, and each event updates only its own decider's state, so they stay independent.

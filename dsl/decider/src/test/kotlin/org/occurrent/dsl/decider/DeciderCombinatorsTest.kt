@@ -215,6 +215,21 @@ class DeciderCombinatorsTest {
                 { assertThat(widened.isTerminal(terminal)).isTrue() }
             )
         }
+
+        @Test
+        fun `adaptEvents widens only the event type and ignores foreign events`() {
+            // Given - bulb decider widened to DomainEvent, command type unchanged
+            val widened: Decider<BulbCommand, BulbState, DomainEvent> = bulbDecider.adaptEvents()
+
+            // When - fold a mixed stream (foreign Incremented ignored, TurnedOn applied), then turn off
+            val (state, events) = widened.decide(events = listOf(Incremented, TurnedOn), command = TurnOff)
+
+            // Then
+            assertAll(
+                { assertThat(events).containsExactly(TurnedOff) },
+                { assertThat(state).isEqualTo(BulbState(on = false)) }
+            )
+        }
     }
 
     // -----------------------------------------------------------------------

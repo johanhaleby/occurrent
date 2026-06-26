@@ -25,21 +25,28 @@ import java.util.concurrent.atomic.AtomicReference
 
 
 // Execute
-fun <C, S, E : Any> ApplicationService<E>.execute(streamId: UUID, command: C, decider: Decider<C, S, E>): WriteResult = execute(streamId.toString(), command, decider)
-fun <C, S, E : Any> ApplicationService<E>.execute(streamId: String, command: C, decider: Decider<C, S, E>): WriteResult = execute(streamId, listOf(command), decider)
-fun <C, S, E : Any> ApplicationService<E>.execute(streamId: UUID, commands: List<C>, decider: Decider<C, S, E>): WriteResult = execute(streamId.toString(), commands, decider)
-fun <C, S, E : Any> ApplicationService<E>.execute(streamId: String, commands: List<C>, decider: Decider<C, S, E>): WriteResult = executeList(streamId) { events: List<E> ->
-    decider.decideOnEventsAndReturnEvents(events, commands)
+//
+// The decider's event type may be a subtype of the service's event type [E]. The overloads widen it with `adaptEvents`,
+// so a feature decider over its own narrow event type can run directly against a service over a broader event type (for
+// example an injected ApplicationService<DomainEvent>) without the caller calling `adaptEvents`. When the decider already
+// uses [E] the widening is a no-op.
+inline fun <C : Any, S, reified SubE : E, E : Any> ApplicationService<E>.execute(streamId: UUID, command: C, decider: Decider<C, S, SubE>): WriteResult = execute(streamId.toString(), command, decider)
+inline fun <C : Any, S, reified SubE : E, E : Any> ApplicationService<E>.execute(streamId: String, command: C, decider: Decider<C, S, SubE>): WriteResult = execute(streamId, listOf(command), decider)
+inline fun <C : Any, S, reified SubE : E, E : Any> ApplicationService<E>.execute(streamId: UUID, commands: List<C>, decider: Decider<C, S, SubE>): WriteResult = execute(streamId.toString(), commands, decider)
+inline fun <C : Any, S, reified SubE : E, E : Any> ApplicationService<E>.execute(streamId: String, commands: List<C>, decider: Decider<C, S, SubE>): WriteResult {
+    val widened: Decider<C, S, E> = decider.adaptEvents()
+    return executeList(streamId) { events: List<E> -> widened.decideOnEventsAndReturnEvents(events, commands) }
 }
 
 // ExecuteAndReturnDecision
-fun <C, S, E : Any> ApplicationService<E>.executeAndReturnDecision(streamId: UUID, command: C, decider: Decider<C, S, E>): Decider.Decision<S, E> = executeAndReturnDecision(streamId.toString(), command, decider)
-fun <C, S, E : Any> ApplicationService<E>.executeAndReturnDecision(streamId: UUID, commands: List<C>, decider: Decider<C, S, E>): Decider.Decision<S, E> = executeAndReturnDecision(streamId.toString(), commands, decider)
-fun <C, S, E : Any> ApplicationService<E>.executeAndReturnDecision(streamId: String, command: C, decider: Decider<C, S, E>): Decider.Decision<S, E> = executeAndReturnDecision(streamId, listOf(command), decider)
-fun <C, S, E : Any> ApplicationService<E>.executeAndReturnDecision(streamId: String, commands: List<C>, decider: Decider<C, S, E>): Decider.Decision<S, E> {
+inline fun <C : Any, S, reified SubE : E, E : Any> ApplicationService<E>.executeAndReturnDecision(streamId: UUID, command: C, decider: Decider<C, S, SubE>): Decider.Decision<S, E> = executeAndReturnDecision(streamId.toString(), command, decider)
+inline fun <C : Any, S, reified SubE : E, E : Any> ApplicationService<E>.executeAndReturnDecision(streamId: UUID, commands: List<C>, decider: Decider<C, S, SubE>): Decider.Decision<S, E> = executeAndReturnDecision(streamId.toString(), commands, decider)
+inline fun <C : Any, S, reified SubE : E, E : Any> ApplicationService<E>.executeAndReturnDecision(streamId: String, command: C, decider: Decider<C, S, SubE>): Decider.Decision<S, E> = executeAndReturnDecision(streamId, listOf(command), decider)
+inline fun <C : Any, S, reified SubE : E, E : Any> ApplicationService<E>.executeAndReturnDecision(streamId: String, commands: List<C>, decider: Decider<C, S, SubE>): Decider.Decision<S, E> {
+    val widened: Decider<C, S, E> = decider.adaptEvents()
     val cheat = AtomicReference<Decider.Decision<S, E>>()
     executeList(streamId) { events: List<E> ->
-        val decision: Decider.Decision<S, E> = decider.decideOnEvents(events, commands)
+        val decision: Decider.Decision<S, E> = widened.decideOnEvents(events, commands)
         cheat.set(decision)
         decision.events
     }
@@ -47,13 +54,13 @@ fun <C, S, E : Any> ApplicationService<E>.executeAndReturnDecision(streamId: Str
 }
 
 // ExecuteAndReturnState
-fun <C, S, E : Any> ApplicationService<E>.executeAndReturnState(streamId: String, command: C, decider: Decider<C, S, E>): S = executeAndReturnDecision(streamId, command, decider).state
-fun <C, S, E : Any> ApplicationService<E>.executeAndReturnState(streamId: UUID, command: C, decider: Decider<C, S, E>): S = executeAndReturnDecision(streamId, command, decider).state
-fun <C, S, E : Any> ApplicationService<E>.executeAndReturnState(streamId: String, commands: List<C>, decider: Decider<C, S, E>): S = executeAndReturnDecision(streamId, commands, decider).state
-fun <C, S, E : Any> ApplicationService<E>.executeAndReturnState(streamId: UUID, commands: List<C>, decider: Decider<C, S, E>): S = executeAndReturnDecision(streamId, commands, decider).state
+inline fun <C : Any, S, reified SubE : E, E : Any> ApplicationService<E>.executeAndReturnState(streamId: String, command: C, decider: Decider<C, S, SubE>): S = executeAndReturnDecision(streamId, command, decider).state
+inline fun <C : Any, S, reified SubE : E, E : Any> ApplicationService<E>.executeAndReturnState(streamId: UUID, command: C, decider: Decider<C, S, SubE>): S = executeAndReturnDecision(streamId, command, decider).state
+inline fun <C : Any, S, reified SubE : E, E : Any> ApplicationService<E>.executeAndReturnState(streamId: String, commands: List<C>, decider: Decider<C, S, SubE>): S = executeAndReturnDecision(streamId, commands, decider).state
+inline fun <C : Any, S, reified SubE : E, E : Any> ApplicationService<E>.executeAndReturnState(streamId: UUID, commands: List<C>, decider: Decider<C, S, SubE>): S = executeAndReturnDecision(streamId, commands, decider).state
 
 // ExecuteAndReturnEvents
-fun <C, S, E : Any> ApplicationService<E>.executeAndReturnEvents(streamId: String, command: C, decider: Decider<C, S, E>): List<E> = executeAndReturnDecision(streamId, command, decider).events
-fun <C, S, E : Any> ApplicationService<E>.executeAndReturnEvents(streamId: UUID, command: C, decider: Decider<C, S, E>): List<E> = executeAndReturnDecision(streamId, command, decider).events
-fun <C, S, E : Any> ApplicationService<E>.executeAndReturnEvents(streamId: String, commands: List<C>, decider: Decider<C, S, E>): List<E> = executeAndReturnDecision(streamId, commands, decider).events
-fun <C, S, E : Any> ApplicationService<E>.executeAndReturnEvents(streamId: UUID, commands: List<C>, decider: Decider<C, S, E>): List<E> = executeAndReturnDecision(streamId, commands, decider).events
+inline fun <C : Any, S, reified SubE : E, E : Any> ApplicationService<E>.executeAndReturnEvents(streamId: String, command: C, decider: Decider<C, S, SubE>): List<E> = executeAndReturnDecision(streamId, command, decider).events
+inline fun <C : Any, S, reified SubE : E, E : Any> ApplicationService<E>.executeAndReturnEvents(streamId: UUID, command: C, decider: Decider<C, S, SubE>): List<E> = executeAndReturnDecision(streamId, command, decider).events
+inline fun <C : Any, S, reified SubE : E, E : Any> ApplicationService<E>.executeAndReturnEvents(streamId: String, commands: List<C>, decider: Decider<C, S, SubE>): List<E> = executeAndReturnDecision(streamId, commands, decider).events
+inline fun <C : Any, S, reified SubE : E, E : Any> ApplicationService<E>.executeAndReturnEvents(streamId: UUID, commands: List<C>, decider: Decider<C, S, SubE>): List<E> = executeAndReturnDecision(streamId, commands, decider).events

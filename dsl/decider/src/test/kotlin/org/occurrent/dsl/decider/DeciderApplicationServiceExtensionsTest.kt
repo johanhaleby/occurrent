@@ -422,5 +422,31 @@ class DeciderApplicationServiceExtensionsTest {
         }
     }
 
+    @Nested
+    @DisplayName("auto-adapt")
+    inner class AutoAdapt {
+
+        @Test
+        fun `a decider over a narrower event type runs against a service over the broader type without an explicit adapt`() {
+            // Given - a decider whose event type (NameDefined) is a subtype of the service's event type (DomainEvent)
+            val narrowDecider: Decider<DefineName, String?, NameDefined> = decider(
+                initialState = null,
+                decide = { cmd, _ -> listOf(NameDefined(cmd.commandId, cmd.time, cmd.userId, cmd.name)) },
+                evolve = { _, e -> e.name }
+            )
+            val streamId = UUID.randomUUID()
+            val command = DefineName(UUID.randomUUID().toString(), LocalDateTime.now(), "name", "Johan")
+
+            // When - passed straight to execute, no narrowDecider.adaptEvents() needed
+            val result = applicationService.execute(streamId, command, narrowDecider)
+
+            // Then
+            assertAll(
+                { assertThat(result).isEqualTo(WriteResult(streamId.toString(), 0, 1)) },
+                { assertThat(eventStore.domainEvents()).containsOnly(NameDefined(command.commandId, command.time, command.userId, command.name)) },
+            )
+        }
+    }
+
     private fun InMemoryEventStore.domainEvents(): Stream<DomainEvent> = all().map { cloudEventConverter.toDomainEvent(it) }
 }
