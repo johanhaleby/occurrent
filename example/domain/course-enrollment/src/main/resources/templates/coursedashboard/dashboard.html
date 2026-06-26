@@ -1,29 +1,48 @@
 <!DOCTYPE html>
 <html xmlns:th="http://www.thymeleaf.org">
 <body>
-<article th:fragment="dashboard" id="dashboard" hx-get="/dashboard" hx-trigger="every 2s" hx-swap="outerHTML">
-    <header><strong>Courses</strong></header>
-    <p th:if="${courses.isEmpty()}">No courses yet. Define one above.</p>
-    <table th:unless="${courses.isEmpty()}" class="striped">
-        <thead>
-        <tr>
-            <th>Title</th>
-            <th>Capacity</th>
-            <th>Enrolled</th>
-            <th>Seats left</th>
-            <th></th>
-        </tr>
-        </thead>
-        <tbody>
-        <tr th:each="course : ${courses}">
-            <td th:text="${course.title}">Title</td>
-            <td th:text="${course.capacity}">0</td>
-            <td th:text="${course.enrolledCount}">0</td>
-            <td th:text="${course.seatsRemaining}">0</td>
-            <td><a th:href="@{/courses/{id}(id=${course.courseId})}" role="button" class="outline secondary">Open</a></td>
-        </tr>
-        </tbody>
-    </table>
-</article>
+<div th:fragment="dashboard" id="dashboard" hx-get="/dashboard" hx-trigger="every 2s" hx-swap="outerHTML">
+    <article>
+        <header><strong>Courses</strong></header>
+        <p th:if="${courses.isEmpty()}">No courses yet. Define one above.</p>
+        <table th:unless="${courses.isEmpty()}" class="striped">
+            <thead>
+            <tr>
+                <th>Title</th>
+                <th>Capacity</th>
+                <th>Enrolled</th>
+                <th>Seats left</th>
+                <th></th>
+            </tr>
+            </thead>
+            <tbody>
+            <tr th:each="course : ${courses}">
+                <td th:text="${course.title}">Title</td>
+                <td th:text="${course.capacity}">0</td>
+                <td th:text="${course.enrolledCount}">0</td>
+                <td th:text="${course.seatsRemaining}">0</td>
+                <td><a th:href="@{/courses/{id}(id=${course.courseId})}" role="button" class="outline secondary">Open</a></td>
+            </tr>
+            </tbody>
+        </table>
+    </article>
+
+    <article>
+        <header><strong>Students</strong></header>
+        <p th:if="${students.isEmpty()}">No students yet. Register one above.</p>
+        <table th:unless="${students.isEmpty()}" class="striped">
+            <thead>
+            <tr>
+                <th>Name</th>
+            </tr>
+            </thead>
+            <tbody>
+            <tr th:each="student : ${students}">
+                <td th:text="${student.name}">Name</td>
+            </tr>
+            </tbody>
+        </table>
+    </article>
+</div>
 </body>
 </html>
