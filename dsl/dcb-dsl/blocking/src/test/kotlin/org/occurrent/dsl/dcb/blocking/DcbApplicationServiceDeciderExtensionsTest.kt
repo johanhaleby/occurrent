@@ -108,6 +108,23 @@ class DcbApplicationServiceDeciderExtensionsTest {
         assertThat(readNameEvents("name")).containsExactlyElementsOf(newEvents)
     }
 
+    @Test
+    fun decider_over_a_narrower_event_type_runs_without_an_explicit_adaptEvents() {
+        // Given a decider whose event type (NameDefined) is a subtype of the service's event type (DomainEvent)
+        val narrowDecider: Decider<DefineName, String?, NameDefined> = decider(
+            initialState = null,
+            decide = { command, _ -> listOf(NameDefined("event-1", time, "name", command.name)) },
+            evolve = { _, event -> event.name() }
+        )
+
+        // When passed straight to execute, no narrowDecider.adaptEvents() needed
+        val result = applicationService.execute(nameQuery("name"), DefineName("Jane Doe"), narrowDecider)
+
+        // Then
+        assertThat(result).isNotNull()
+        assertThat(readNameEvents("name")).containsExactly(NameDefined("event-1", time, "name", "Jane Doe"))
+    }
+
     private fun nameDecider(): Decider<NameCommand, String?, DomainEvent> =
         decider(
             initialState = null,
