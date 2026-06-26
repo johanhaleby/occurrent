@@ -41,10 +41,7 @@ import org.springframework.retry.annotation.EnableRetry
 class Bootstrap {
 
     @Bean
-    // qualified() rather than simple() because the event types live in several feature packages
-    // (features/*/model), not all alongside DomainEvent, so fully-qualified names are needed to resolve them.
-    fun courseEnrollmentCloudEventTypeMapper(): CloudEventTypeMapper<DomainEvent> =
-        ReflectionCloudEventTypeMapper.qualified()
+    fun courseEnrollmentCloudEventTypeMapper(): CloudEventTypeMapper<DomainEvent> = ReflectionCloudEventTypeMapper.qualified()
 
     /** Required by the starter when the DCB capability is enabled: how each event maps to its DCB tags. */
     @Bean
