@@ -38,7 +38,13 @@ import static org.occurrent.time.internal.RFC3339.RFC_3339_DATE_TIME_FORMATTER;
  * into a MongoDB {@link Document} and vice versa.
  */
 public class OccurrentCloudEventMongoDocumentMapper {
-    private static final String DCB_TAGS_INDEX_FIELD = "dcbTags";
+    /**
+     * The name of the indexed array field that holds an event's DCB tags in the stored MongoDB document, kept alongside
+     * the newline-joined {@code dcbtags} CloudEvent extension so that tag containment can be queried with {@code $all}.
+     * This is the storage contract shared between the event store, which writes it, and a DCB subscription, which
+     * matches a change stream against it.
+     */
+    public static final String DCB_TAGS_INDEX_FIELD = "dcbTags";
     private static final String DCB_POSITION = "dcbposition";
 
     public static Document convertToDocument(TimeRepresentation timeRepresentation, String streamId, long streamVersion, CloudEvent cloudEvent) {
