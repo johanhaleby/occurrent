@@ -17,6 +17,12 @@
 package org.occurrent.subscription;
 
 import org.jspecify.annotations.NullMarked;
+import org.jspecify.annotations.Nullable;
+import org.occurrent.subscription.StartAt.SubscriptionModelContext;
+
+import java.util.function.Function;
+
+import static java.util.Objects.requireNonNull;
 
 /**
  * Specifies where a DCB subscription should start. This is the DCB counterpart to {@link StartAt}: it can only express
@@ -69,6 +75,16 @@ public sealed interface DcbStartAt {
         return new AtPosition(lastProcessedPosition);
     }
 
+    /**
+     * Create a DCB start position that is resolved each time the subscription is started, for example to start from the
+     * beginning the first time and then resume from the stored position. The function receives the subscription model
+     * context and may return {@code null} to signal that the subscription should not start at this layer and should
+     * delegate to the parent subscription model, the same contract as {@link StartAt#dynamic(Function)}.
+     */
+    static DcbStartAt dynamic(Function<SubscriptionModelContext, @Nullable DcbStartAt> function) {
+        return new Dynamic(requireNonNull(function, "Dynamic DcbStartAt function cannot be null"));
+    }
+
     enum Relative implements DcbStartAt {
         NOW {
             @Override
@@ -94,6 +110,20 @@ public sealed interface DcbStartAt {
         @Override
         public StartAt toStartAt() {
             return StartAt.subscriptionPosition(DcbSubscriptionPosition.of(lastProcessedPosition));
+        }
+    }
+
+    record Dynamic(Function<SubscriptionModelContext, @Nullable DcbStartAt> function) implements DcbStartAt {
+        public Dynamic {
+            requireNonNull(function, "Dynamic DcbStartAt function cannot be null");
+        }
+
+        @Override
+        public StartAt toStartAt() {
+            return StartAt.dynamic(context -> {
+                DcbStartAt resolved = function.apply(context);
+                return resolved == null ? null : resolved.toStartAt();
+            });
         }
     }
 }

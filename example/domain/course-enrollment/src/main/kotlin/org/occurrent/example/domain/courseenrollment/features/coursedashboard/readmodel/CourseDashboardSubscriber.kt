@@ -16,9 +16,9 @@
 
 package org.occurrent.example.domain.courseenrollment.features.coursedashboard.readmodel
 
-import jakarta.annotation.PostConstruct
-import org.occurrent.dsl.dcb.blocking.DcbSubscriptions
-import org.occurrent.eventstore.api.dcb.DcbQuery
+import org.occurrent.annotation.DcbSubscription
+import org.occurrent.annotation.DcbSubscription.DcbStartPosition
+import org.occurrent.annotation.DcbSubscription.ResumeBehavior
 import org.occurrent.example.domain.courseenrollment.common.DomainEvent
 import org.occurrent.example.domain.courseenrollment.features.coursemanagement.model.CourseCancelled
 import org.occurrent.example.domain.courseenrollment.features.coursemanagement.model.CourseDefined
@@ -26,29 +26,28 @@ import org.occurrent.example.domain.courseenrollment.features.enrollment.model.S
 import org.occurrent.example.domain.courseenrollment.features.enrollment.model.StudentUnenrolledFromCourse
 import org.occurrent.example.domain.courseenrollment.features.studentmanagement.model.StudentDeregistered
 import org.occurrent.example.domain.courseenrollment.features.studentmanagement.model.StudentRegistered
-import org.occurrent.subscription.DcbStartAt
 import org.springframework.stereotype.Component
 
 /**
- * Feeds the [CourseDashboard] read model from a DCB subscription.
+ * Feeds the [CourseDashboard] read model from a DCB subscription declared with [DcbSubscription].
  *
- * Starting at [DcbStartAt.beginning] makes the subscription replay the whole DCB history by dcbposition on every boot and
- * then switch to live delivery, so the in-memory read model is rebuilt from scratch each start. This catch-up is only
- * available because the starter wires a DCB-mode catch-up subscription model in DCB-only mode.
+ * The read model is in-memory only, so it must be rebuilt from the whole DCB history on every boot. That is why this
+ * combines [DcbStartPosition.BEGINNING] with [ResumeBehavior.SAME_AS_START_AT]: BEGINNING alone would replay only the
+ * first time and then resume from the stored position on later restarts, which would leave the in-memory model missing
+ * all history before that position. SAME_AS_START_AT replays from the beginning on every boot (and keeps no checkpoint).
+ * This catch-up is only available because the starter wires a DCB-mode catch-up subscription model in DCB-only mode. The
+ * event types are narrowed on the annotation, so the subscription receives only the dashboard's events server-side.
  */
 @Component
-class CourseDashboardSubscriber(
-    private val dcbSubscriptions: DcbSubscriptions<DomainEvent>,
-    private val courseDashboard: CourseDashboard
-) {
+class CourseDashboardSubscriber(private val courseDashboard: CourseDashboard) {
 
-    @PostConstruct
-    fun start() {
-        dcbSubscriptions.subscribe("course-dashboard", DcbQuery.all(), DcbStartAt.beginning()) { event ->
-            if (event is CourseDefined || event is CourseCancelled || event is StudentRegistered || event is StudentDeregistered ||
-                event is StudentEnrolledInCourse || event is StudentUnenrolledFromCourse) {
-                courseDashboard.update(event)
-            }
-        }.waitUntilStarted()
+    @DcbSubscription(
+        id = "course-dashboard",
+        eventTypes = [CourseDefined::class, CourseCancelled::class, StudentRegistered::class, StudentDeregistered::class, StudentEnrolledInCourse::class, StudentUnenrolledFromCourse::class],
+        startAt = DcbStartPosition.BEGINNING,
+        resumeBehavior = ResumeBehavior.SAME_AS_START_AT
+    )
+    fun update(event: DomainEvent) {
+        courseDashboard.update(event)
     }
 }
