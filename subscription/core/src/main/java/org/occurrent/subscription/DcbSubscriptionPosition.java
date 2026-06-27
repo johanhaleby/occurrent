@@ -14,18 +14,16 @@
  * limitations under the License.
  */
 
-package org.occurrent.subscription.blocking.durable.catchup;
+package org.occurrent.subscription;
 
 import org.jspecify.annotations.NullMarked;
 import org.jspecify.annotations.Nullable;
-import org.occurrent.subscription.StringBasedSubscriptionPosition;
-import org.occurrent.subscription.SubscriptionPosition;
 
 import java.util.Objects;
 
 /**
  * A {@link SubscriptionPosition} that points at a DCB sequence position ({@code dcbposition}). It is used by
- * {@link CatchupSubscriptionModel} in DCB mode to resume a catch-up replay from where it left off.
+ * the catch-up subscription model in DCB mode to resume a catch-up replay from where it left off.
  * <p>
  * The string form is self-describing ({@code "dcbposition:<n>"}) so that it round-trips through a
  * {@code SubscriptionPositionStorage} (which reads positions back as a {@link StringBasedSubscriptionPosition}) and
