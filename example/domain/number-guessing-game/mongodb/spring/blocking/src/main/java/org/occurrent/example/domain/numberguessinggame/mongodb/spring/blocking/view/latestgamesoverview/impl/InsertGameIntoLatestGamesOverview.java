@@ -17,7 +17,7 @@
 package org.occurrent.example.domain.numberguessinggame.mongodb.spring.blocking.view.latestgamesoverview.impl;
 
 import org.bson.Document;
-import org.occurrent.annotation.Subscription;
+import org.occurrent.annotation.StreamSubscription;
 import org.occurrent.example.domain.numberguessinggame.model.domainevents.*;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -47,7 +47,7 @@ class InsertGameIntoLatestGamesOverview {
         this.mongoOperations = mongoOperations;
     }
 
-    @Subscription(id = "InsertGameIntoLatestGamesOverview")
+    @StreamSubscription(id = "InsertGameIntoLatestGamesOverview")
     @Retryable(maxAttempts = 10, backoff = @Backoff(delay = 100, multiplier = 2, maxDelay = 5000))
     void insertGame(GameEvent gameEvent) {
         log.info("Received event {}", gameEvent);

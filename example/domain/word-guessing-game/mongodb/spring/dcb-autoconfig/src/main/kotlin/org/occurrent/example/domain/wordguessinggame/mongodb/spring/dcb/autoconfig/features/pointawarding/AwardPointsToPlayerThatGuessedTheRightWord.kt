@@ -15,7 +15,7 @@
  */
 package org.occurrent.example.domain.wordguessinggame.mongodb.spring.dcb.autoconfig.features.pointawarding
 
-import org.occurrent.annotation.Subscription
+import org.occurrent.annotation.StreamSubscription
 import org.occurrent.application.service.blocking.dcb.DcbApplicationService
 import org.occurrent.dsl.dcb.blocking.dcbPosition
 import org.occurrent.dsl.dcb.blocking.dcbTags
@@ -42,7 +42,7 @@ class AwardPointsToPlayerThatGuessedTheRightWord(
     private val applicationService: DcbApplicationService<GameEvent>
 ) {
 
-    @Subscription(id = "WhenPlayerGuessedTheRightWordThenAwardPointsPolicy")
+    @StreamSubscription(id = "WhenPlayerGuessedTheRightWordThenAwardPointsPolicy")
     fun whenPlayerGuessedTheRightWord(playerGuessedTheRightWord: PlayerGuessedTheRightWord, metadata: EventMetadata) {
         if (!metadata.belongsToGame(playerGuessedTheRightWord.gameId)) {
             return
