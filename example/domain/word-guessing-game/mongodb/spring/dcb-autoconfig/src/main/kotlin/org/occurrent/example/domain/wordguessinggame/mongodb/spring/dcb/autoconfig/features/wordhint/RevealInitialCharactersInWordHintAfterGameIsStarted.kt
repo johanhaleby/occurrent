@@ -15,7 +15,7 @@
  */
 package org.occurrent.example.domain.wordguessinggame.mongodb.spring.dcb.autoconfig.features.wordhint
 
-import org.occurrent.annotation.Subscription
+import org.occurrent.annotation.StreamSubscription
 import org.occurrent.application.service.blocking.dcb.DcbApplicationService
 import org.occurrent.dsl.dcb.blocking.dcbPosition
 import org.occurrent.dsl.dcb.blocking.dcbTags
@@ -39,7 +39,7 @@ class RevealInitialCharactersInWordHintAfterGameIsStarted(
     private val applicationService: DcbApplicationService<GameEvent>
 ) {
 
-    @Subscription(id = "WhenGameWasStartedThenRevealInitialCharactersInWordHintPolicy")
+    @StreamSubscription(id = "WhenGameWasStartedThenRevealInitialCharactersInWordHintPolicy")
     fun whenGameWasStarted(gameWasStarted: GameWasStarted, metadata: EventMetadata) {
         if (!metadata.belongsToGame(gameWasStarted.gameId)) {
             return

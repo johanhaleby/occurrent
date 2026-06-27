@@ -15,7 +15,7 @@
  */
 package org.occurrent.example.domain.wordguessinggame.mongodb.spring.dcb.autoconfig.features.wordhint
 
-import org.occurrent.annotation.Subscription
+import org.occurrent.annotation.StreamSubscription
 import org.occurrent.application.service.blocking.dcb.DcbApplicationService
 import org.occurrent.dsl.dcb.blocking.dcbPosition
 import org.occurrent.dsl.dcb.blocking.dcbTags
@@ -45,7 +45,7 @@ class RevealCharacterInWordHintAfterPlayerGuessedTheWrongWord(
     private val domainEventQueries: DcbDomainEventQueries<GameEvent>
 ) {
 
-    @Subscription(id = "WhenPlayerGuessedTheWrongWordThenRevealCharacterInWordHintPolicy")
+    @StreamSubscription(id = "WhenPlayerGuessedTheWrongWordThenRevealCharacterInWordHintPolicy")
     fun whenPlayerGuessedTheWrongWord(playerGuessedTheWrongWord: PlayerGuessedTheWrongWord, metadata: EventMetadata) {
         if (!metadata.belongsToGame(playerGuessedTheWrongWord.gameId)) {
             return

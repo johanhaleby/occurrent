@@ -15,7 +15,7 @@
  */
 package org.occurrent.example.domain.wordguessinggame.mongodb.spring.dcb.autoconfig.features.emailwinner
 
-import org.occurrent.annotation.Subscription
+import org.occurrent.annotation.StreamSubscription
 import org.occurrent.example.domain.wordguessinggame.event.GameWasWon
 import org.occurrent.example.domain.wordguessinggame.mongodb.spring.dcb.autoconfig.support.loggerFor
 import org.springframework.stereotype.Component
@@ -24,7 +24,7 @@ import org.springframework.stereotype.Component
 class SendEmailToWinner {
     private val log = loggerFor<SendEmailToWinner>()
 
-    @Subscription(id = "WhenGameWasWonThenSendEmailToWinnerPolicy")
+    @StreamSubscription(id = "WhenGameWasWonThenSendEmailToWinnerPolicy")
     fun whenGameWasWon(gameWasWon: GameWasWon) {
         log.info("Sending email to player ${gameWasWon.winnerId} since he/she was a winner of game ${gameWasWon.gameId}")
     }
