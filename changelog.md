@@ -1,5 +1,9 @@
 ### Changelog next version
 
+* A STREAM-and-DCB application now catches up both kinds of subscription.
+  * `CatchupSubscriptionModel` gained a dual-mode constructor that holds both the stream query API and the DCB event store and routes each subscription to the right catch-up: a DCB subscription replays by `dcbposition`, a stream subscription replays by time. The Spring Boot starter wires this when the event store has both the STREAM and the DCB capability. Before, a combined application got only stream catch-up, so its DCB read models could not rebuild from history. STREAM-only and DCB-only applications are unchanged.
+  * See [ADR 25](doc/architecture/decisions/0025-dual-mode-catch-up-for-stream-and-dcb.md).
+
 * Stream and DCB subscriptions now have separate typed start positions and model views.
   * `DcbStartAt` is the DCB counterpart to `StartAt`, expressing only DCB starts (`now`, `subscriptionModelDefault`, `beginning`, `afterPosition`). `DcbSubscriptionModel` and `StreamSubscriptionModel` are typed facades over the shared `SubscriptionModel`, obtained with `from(subscriptionModel)`. A DCB subscription can no longer be handed a time-based position and a stream subscription can no longer be handed a `dcbposition`, which used to fail quietly at runtime. The shared durable, competing-consumer, and catch-up machinery is unchanged, the split is types and thin adapters.
   * `DcbSubscriptions` now takes a `DcbStartAt` instead of a generic `StartAt`. `DcbSubscriptionPosition` moved to the `org.occurrent.subscription` package.
