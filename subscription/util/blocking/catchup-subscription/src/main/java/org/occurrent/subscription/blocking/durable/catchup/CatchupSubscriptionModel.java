@@ -196,15 +196,17 @@ public class CatchupSubscriptionModel implements SubscriptionModel, DelegatingSu
     @Override
     public Subscription subscribe(String subscriptionId, @Nullable SubscriptionFilter filter, @Nullable StartAt startAt, Consumer<CloudEvent> action) {
         Objects.requireNonNull(startAt, "Start at supplier cannot be null");
-        if (filter != null && !(filter instanceof OccurrentSubscriptionFilter)) {
-            throw new IllegalArgumentException("Only OccurrentSubscriptionFilter is supported!");
-        }
         return isDcbMode()
                 ? subscribeDcb(subscriptionId, filter, startAt, action)
                 : subscribeStream(subscriptionId, filter, startAt, action);
     }
 
     private Subscription subscribeStream(String subscriptionId, @Nullable SubscriptionFilter filter, StartAt startAt, Consumer<CloudEvent> action) {
+        // Stream catch-up converts the filter into an Occurrent Filter for the historical query, so only the stream
+        // filter type is supported here. The DCB path accepts a DcbSubscriptionFilter and passes it to the inner model.
+        if (filter != null && !(filter instanceof OccurrentSubscriptionFilter)) {
+            throw new IllegalArgumentException("Only OccurrentSubscriptionFilter is supported!");
+        }
         final StartAt firstStartAt;
         if (startAt.isDefault()) {
             // By default, we check if there's a subscription position stored for this subscription, if so we resume from there, otherwise,

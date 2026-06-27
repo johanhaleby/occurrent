@@ -20,8 +20,11 @@ import io.cloudevents.CloudEvent;
 import jakarta.annotation.PreDestroy;
 import org.jspecify.annotations.NullMarked;
 import org.jspecify.annotations.Nullable;
+import org.occurrent.eventstore.api.dcb.DcbCloudEvents;
+import org.occurrent.eventstore.api.dcb.DcbQuery;
 import org.occurrent.filter.Filter;
 import org.occurrent.retry.RetryStrategy;
+import org.occurrent.subscription.DcbSubscriptionFilter;
 import org.occurrent.subscription.OccurrentSubscriptionFilter;
 import org.occurrent.subscription.StartAt;
 import org.occurrent.subscription.StartAt.SubscriptionModelContext;
@@ -34,8 +37,11 @@ import java.util.List;
 import java.util.StringJoiner;
 import java.util.concurrent.*;
 import java.util.function.Consumer;
+import java.util.function.Predicate;
 import java.util.function.Supplier;
 import java.util.stream.Stream;
+
+import static org.occurrent.inmemory.filtermatching.FilterMatcher.matchesFilter;
 
 /**
  * An in-memory subscription model
@@ -119,9 +125,9 @@ public class InMemorySubscriptionModel implements SubscriptionModel, Consumer<St
             throw new IllegalArgumentException(InMemorySubscriptionModel.class.getSimpleName() + " only supports starting from 'now' and 'default' (StartAt.now() or StartAt.subscriptionModelDefault())");
         }
 
-        final Filter f = getFilter(filter);
+        final Predicate<CloudEvent> matcher = matcherFor(filter);
 
-        InMemorySubscription subscription = new InMemorySubscription(subscriptionId, queueSupplier.get(), action, f, retryStrategy);
+        InMemorySubscription subscription = new InMemorySubscription(subscriptionId, queueSupplier.get(), action, matcher, retryStrategy);
         subscriptions.put(subscriptionId, subscription);
 
         if (!running) {
@@ -165,16 +171,20 @@ public class InMemorySubscriptionModel implements SubscriptionModel, Consumer<St
         ExecutorShutdown.shutdownSafely(cloudEventDispatcher, 5, TimeUnit.SECONDS);
     }
 
-    private static Filter getFilter(@Nullable SubscriptionFilter filter) {
-        final Filter f;
+    private static Predicate<CloudEvent> matcherFor(@Nullable SubscriptionFilter filter) {
         if (filter == null) {
-            f = Filter.all();
-        } else if (filter instanceof OccurrentSubscriptionFilter) {
-            f = ((OccurrentSubscriptionFilter) filter).filter();
+            return cloudEvent -> matchesFilter(cloudEvent, Filter.all());
+        } else if (filter instanceof OccurrentSubscriptionFilter occurrentSubscriptionFilter) {
+            Filter f = occurrentSubscriptionFilter.filter();
+            return cloudEvent -> matchesFilter(cloudEvent, f);
+        } else if (filter instanceof DcbSubscriptionFilter dcbSubscriptionFilter) {
+            // Match the DCB query in process and require a DCB position, the same guard the DCB subscription DSL uses,
+            // so a non-Mongo subscribable filters DCB events without a server-side change stream match.
+            DcbQuery query = dcbSubscriptionFilter.query();
+            return cloudEvent -> DcbCloudEvents.getPosition(cloudEvent) > 0 && DcbCloudEvents.matches(cloudEvent, query);
         } else {
-            throw new IllegalArgumentException(InMemorySubscriptionModel.class.getSimpleName() + " only support filters of type " + OccurrentSubscriptionFilter.class.getName());
+            throw new IllegalArgumentException(InMemorySubscriptionModel.class.getSimpleName() + " only supports filters of type " + OccurrentSubscriptionFilter.class.getName() + " and " + DcbSubscriptionFilter.class.getName());
         }
-        return f;
     }
 
     @Override
