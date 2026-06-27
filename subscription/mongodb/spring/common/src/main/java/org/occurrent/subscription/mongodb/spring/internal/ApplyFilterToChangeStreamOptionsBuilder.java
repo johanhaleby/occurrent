@@ -24,10 +24,12 @@ import org.jspecify.annotations.NullMarked;
 import org.jspecify.annotations.Nullable;
 import org.occurrent.filter.Filter;
 import org.occurrent.mongodb.timerepresentation.TimeRepresentation;
+import org.occurrent.subscription.DcbSubscriptionFilter;
 import org.occurrent.subscription.OccurrentSubscriptionFilter;
 import org.occurrent.subscription.SubscriptionFilter;
 import org.occurrent.subscription.mongodb.MongoFilterSpecification;
 import org.occurrent.subscription.mongodb.MongoFilterSpecification.MongoJsonFilterSpecification;
+import org.occurrent.subscription.mongodb.internal.DcbSubscriptionFilterConverter;
 import org.occurrent.subscription.mongodb.internal.DocumentAdapter;
 import org.springframework.data.mongodb.core.ChangeStreamOptions;
 import org.springframework.data.mongodb.core.ChangeStreamOptions.ChangeStreamOptionsBuilder;
@@ -51,6 +53,9 @@ public class ApplyFilterToChangeStreamOptionsBuilder {
             Filter occurrentFilter = ((OccurrentSubscriptionFilter) filter).filter();
             Criteria criteria = convertFilterToCriteria(FULL_DOCUMENT, timeRepresentation, occurrentFilter);
             changeStreamOptions = changeStreamOptionsBuilder.filter(newAggregation(match(criteria))).build();
+        } else if (filter instanceof DcbSubscriptionFilter dcbSubscriptionFilter) {
+            Document matchStage = DcbSubscriptionFilterConverter.toChangeStreamMatchStage(dcbSubscriptionFilter.query());
+            changeStreamOptions = changeStreamOptionsBuilder.filter(matchStage).build();
         } else if (filter instanceof MongoJsonFilterSpecification) {
             changeStreamOptions = changeStreamOptionsBuilder.filter(Document.parse(((MongoJsonFilterSpecification) filter).getJson())).build();
         } else if (filter instanceof MongoFilterSpecification.MongoBsonFilterSpecification) {
