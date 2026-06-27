@@ -26,7 +26,6 @@ import org.occurrent.example.domain.courseenrollment.features.enrollment.readmod
 import org.occurrent.example.domain.courseenrollment.features.enrollment.usecases.enrollStudent
 import org.occurrent.example.domain.courseenrollment.features.enrollment.usecases.unenrollStudent
 import org.occurrent.example.domain.courseenrollment.infrastructure.dcb.CourseEnrollmentDcbQueries
-import org.occurrent.subscription.api.blocking.SubscriptionModel
 import org.springframework.stereotype.Controller
 import org.springframework.ui.Model
 import org.springframework.web.bind.annotation.GetMapping
@@ -42,8 +41,7 @@ class EnrollmentController(
     private val applicationService: DcbApplicationService<DomainEvent>,
     private val courseDetail: CourseDetail,
     private val courseDashboard: CourseDashboard,
-    private val dcbSubscriptions: DcbSubscriptions<DomainEvent>,
-    private val subscriptionModel: SubscriptionModel
+    private val dcbSubscriptions: DcbSubscriptions<DomainEvent>
 ) {
 
     @GetMapping("/courses/{id}")
@@ -99,9 +97,9 @@ class EnrollmentController(
                 }
             }
         }
-        emitter.onCompletion { subscriptionModel.cancelSubscription(subscriptionId) }
-        emitter.onTimeout { subscriptionModel.cancelSubscription(subscriptionId) }
-        emitter.onError { subscriptionModel.cancelSubscription(subscriptionId) }
+        emitter.onCompletion { dcbSubscriptions.cancel(subscriptionId) }
+        emitter.onTimeout { dcbSubscriptions.cancel(subscriptionId) }
+        emitter.onError { dcbSubscriptions.cancel(subscriptionId) }
         // Wait until the subscription is running before returning, so the feed does not miss the first action after the
         // page opens.
         subscription.waitUntilStarted()
