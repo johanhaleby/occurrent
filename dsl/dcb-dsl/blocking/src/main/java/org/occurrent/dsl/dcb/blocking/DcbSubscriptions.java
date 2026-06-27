@@ -28,6 +28,7 @@ import org.occurrent.subscription.OccurrentSubscriptionFilter;
 import org.occurrent.subscription.StartAt;
 import org.occurrent.subscription.api.blocking.Subscribable;
 import org.occurrent.subscription.api.blocking.Subscription;
+import org.occurrent.subscription.api.blocking.SubscriptionModel;
 
 import java.util.HashMap;
 import java.util.Map;
@@ -40,25 +41,26 @@ import static java.util.Objects.requireNonNull;
 /**
  * Subscribes to live DCB-tagged events without having to pass the {@link CloudEventConverter} on every call.
  * <p>
- * This wraps a {@link Subscribable} and a {@link CloudEventConverter}, mirroring how {@link DcbDomainEventQueries}
+ * This wraps a {@link SubscriptionModel} and a {@link CloudEventConverter}, mirroring how {@link DcbDomainEventQueries}
  * wraps its dependencies. The subscriptions are live CloudEvent subscriptions that post-filter DCB-tagged events
  * by a {@link DcbQuery}. They are not DCB reads, so they provide no DCB append-condition or high-watermark
  * guarantees.
  * <p>
  * Like {@link Subscribable}, the {@code subscribe} methods return the {@link Subscription} without waiting for it to
  * start. Call {@link Subscription#waitUntilStarted()} on the returned subscription when you need it running before
- * you continue (for example to avoid missing the first events of a brand new subscription).
+ * you continue (for example to avoid missing the first events of a brand new subscription). Call {@link #cancel(String)}
+ * to stop and remove a subscription, for example when a per-connection subscription is no longer needed.
  *
  * @param <E> the domain event type
  */
 @NullMarked
 public final class DcbSubscriptions<E> {
 
-    private final Subscribable subscribable;
+    private final SubscriptionModel subscriptionModel;
     private final CloudEventConverter<E> cloudEventConverter;
 
-    public DcbSubscriptions(Subscribable subscribable, CloudEventConverter<E> cloudEventConverter) {
-        this.subscribable = requireNonNull(subscribable, Subscribable.class.getSimpleName() + " cannot be null");
+    public DcbSubscriptions(SubscriptionModel subscriptionModel, CloudEventConverter<E> cloudEventConverter) {
+        this.subscriptionModel = requireNonNull(subscriptionModel, SubscriptionModel.class.getSimpleName() + " cannot be null");
         this.cloudEventConverter = requireNonNull(cloudEventConverter, CloudEventConverter.class.getSimpleName() + " cannot be null");
     }
 
@@ -105,8 +107,18 @@ public final class DcbSubscriptions<E> {
 
         OccurrentSubscriptionFilter filter = OccurrentSubscriptionFilter.filter(Filter.all());
         return startAt == null
-                ? subscribable.subscribe(subscriptionId, filter, consumer)
-                : subscribable.subscribe(subscriptionId, filter, startAt, consumer);
+                ? subscriptionModel.subscribe(subscriptionId, filter, consumer)
+                : subscriptionModel.subscribe(subscriptionId, filter, startAt, consumer);
+    }
+
+    /**
+     * Cancels and removes the subscription with the given id, stopping further delivery to its callback. Cancelling an
+     * unknown or already cancelled subscription id is a no-op. This is the natural teardown for a per-connection
+     * subscription, such as an SSE activity feed that subscribes when a client connects and cancels when it disconnects.
+     */
+    public void cancel(String subscriptionId) {
+        requireNonNull(subscriptionId, "Subscription id cannot be null");
+        subscriptionModel.cancelSubscription(subscriptionId);
     }
 
     private static EventMetadata toEventMetadata(CloudEvent cloudEvent) {
