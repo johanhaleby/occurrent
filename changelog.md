@@ -1,5 +1,8 @@
 ### Changelog next version
 
+* The DCB subscription DSL can now cancel a subscription.
+  * `DcbSubscriptions.cancel(subscriptionId)` stops and removes a subscription, so per-connection teardown no longer has to reach past the DSL into the subscription model. An SSE activity feed, for example, can subscribe when a client connects and cancel when it disconnects, all through `DcbSubscriptions`. The DSL now wraps a `SubscriptionModel` rather than a bare `Subscribable` to make this possible.
+
 * DCB subscriptions now catch up from history in DCB-only mode.
   * In a DCB-only application the Spring Boot starter wraps the subscription model in a DCB-mode `CatchupSubscriptionModel`, so a subscription started at a `DcbSubscriptionPosition` replays past events by `dcbposition` before switching to live delivery. A read model can therefore be rebuilt from history on startup. Started without such a position, a DCB subscription stays live only, as before.
   * Request a replay from the start with `StartAt.subscriptionPosition(DcbSubscriptionPosition.of(0))`. A STREAM-and-DCB application keeps its stream catch-up and does not yet get DCB catch-up.

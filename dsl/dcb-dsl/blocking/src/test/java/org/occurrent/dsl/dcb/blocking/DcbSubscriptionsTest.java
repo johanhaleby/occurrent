@@ -101,6 +101,30 @@ class DcbSubscriptionsTest {
         });
     }
 
+    @Test
+    void cancel_stops_further_delivery_to_the_subscription() {
+        CopyOnWriteArrayList<DomainEvent> received = new CopyOnWriteArrayList<>();
+        dcbSubscriptions.subscribe("subscription", DcbQuery.tagsAllOf("name:1"), (DomainEvent event) -> received.add(event)).waitUntilStarted();
+
+        NameDefined beforeCancel = new NameDefined("eventId1", time, "name", "Some Doe");
+        append("name:1", beforeCancel);
+        await().untilAsserted(() -> assertThat(received).containsExactly(beforeCancel));
+
+        dcbSubscriptions.cancel("subscription");
+
+        // A second, still-live subscription is a positive control. Once it receives the post-cancel event we know the
+        // append was processed and delivered, so the cancelled subscription has had its chance. Asserting against that
+        // is stronger than waiting a fixed window, which only shows the event had not arrived yet.
+        CopyOnWriteArrayList<DomainEvent> witnessReceived = new CopyOnWriteArrayList<>();
+        dcbSubscriptions.subscribe("witness", DcbQuery.tagsAllOf("name:1"), (DomainEvent event) -> witnessReceived.add(event)).waitUntilStarted();
+
+        NameWasChanged afterCancel = new NameWasChanged("eventId2", time, "name", "Jane Doe");
+        append("name:1", afterCancel);
+
+        await().untilAsserted(() -> assertThat(witnessReceived).containsExactly(afterCancel));
+        assertThat(received).containsExactly(beforeCancel);
+    }
+
     private void append(String tag, DomainEvent... events) {
         append(List.of(tag), events);
     }
