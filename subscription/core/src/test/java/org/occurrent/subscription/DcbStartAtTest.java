@@ -58,4 +58,25 @@ class DcbStartAtTest {
                 .isInstanceOf(IllegalArgumentException.class)
                 .hasMessageContaining("negative");
     }
+
+    @Test
+    void dynamic_returning_null_propagates_null_to_the_caller() {
+        // A read-model delegate that always returns null signals "no opinion" to the subscription model.
+        StartAt.SubscriptionModelContext ctx = new StartAt.SubscriptionModelContext(Object.class);
+
+        StartAt resolved = DcbStartAt.dynamic(ignored -> null).toStartAt().get(ctx);
+
+        assertThat(resolved).isNull();
+    }
+
+    @Test
+    void dynamic_returning_beginning_resolves_to_dcb_position_zero() {
+        StartAt.SubscriptionModelContext ctx = new StartAt.SubscriptionModelContext(Object.class);
+
+        StartAt resolved = DcbStartAt.dynamic(ignored -> DcbStartAt.beginning()).toStartAt().get(ctx);
+
+        assertThat(resolved).isInstanceOf(StartAt.StartAtSubscriptionPosition.class);
+        assertThat(((StartAt.StartAtSubscriptionPosition) resolved).subscriptionPosition)
+                .isEqualTo(DcbSubscriptionPosition.of(0));
+    }
 }
