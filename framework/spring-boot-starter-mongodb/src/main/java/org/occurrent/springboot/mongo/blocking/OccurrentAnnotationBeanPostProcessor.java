@@ -20,10 +20,11 @@ package org.occurrent.springboot.mongo.blocking;
 import kotlin.Unit;
 import kotlin.jvm.functions.Function2;
 import org.jspecify.annotations.NonNull;
+import org.occurrent.annotation.StreamSubscription;
+import org.occurrent.annotation.StreamSubscription.ResumeBehavior;
+import org.occurrent.annotation.StreamSubscription.StartPosition;
+import org.occurrent.annotation.StreamSubscription.StartupMode;
 import org.occurrent.annotation.Subscription;
-import org.occurrent.annotation.Subscription.ResumeBehavior;
-import org.occurrent.annotation.Subscription.StartPosition;
-import org.occurrent.annotation.Subscription.StartupMode;
 import org.occurrent.application.converter.CloudEventConverter;
 import org.occurrent.dsl.subscription.blocking.EventMetadata;
 import org.occurrent.dsl.subscription.blocking.Subscriptions;
@@ -63,7 +64,8 @@ import static org.occurrent.filter.Filter.CompositionOperator.OR;
 import static org.occurrent.subscription.OccurrentSubscriptionFilter.filter;
 
 /**
- * Implements support for the {@link Subscription} annotation in Spring Boot
+ * Implements support for the {@link StreamSubscription} annotation, and the deprecated {@link Subscription} alias, in
+ * Spring Boot.
  */
 class OccurrentAnnotationBeanPostProcessor implements BeanPostProcessor, ApplicationContextAware {
 
@@ -78,16 +80,44 @@ class OccurrentAnnotationBeanPostProcessor implements BeanPostProcessor, Applica
     public Object postProcessBeforeInitialization(Object bean, @NonNull String beanName) throws BeansException {
         Class<?> managedBeanClass = bean.getClass();
         for (Method method : managedBeanClass.getDeclaredMethods()) {
+            StreamSubscription streamSubscription = AnnotationUtils.findAnnotation(method, StreamSubscription.class);
             Subscription subscription = AnnotationUtils.findAnnotation(method, Subscription.class);
-            if (subscription != null) {
-                processSubscribeAnnotation(bean, method, subscription);
+            if (streamSubscription != null && subscription != null) {
+                throw new IllegalArgumentException("Method %s#%s is annotated with both @StreamSubscription and the deprecated @Subscription, use only @StreamSubscription.".formatted(bean.getClass().getName(), method.getName()));
+            }
+            if (streamSubscription != null) {
+                processSubscribeAnnotation(bean, method, StreamSubscriptionDefinition.from(streamSubscription));
+            } else if (subscription != null) {
+                processSubscribeAnnotation(bean, method, StreamSubscriptionDefinition.from(subscription));
             }
         }
         return bean;
     }
 
+    /**
+     * The normalized form of a stream subscription declaration, built from either the {@link StreamSubscription}
+     * annotation or the deprecated {@link Subscription} alias. The deprecated annotation's enums are mapped to the
+     * canonical {@link StreamSubscription} enums by name, since the constants are identical.
+     */
+    private record StreamSubscriptionDefinition(String id, Class<?>[] eventTypes, String startAtISO8601,
+                                                long startAtTimeEpochMillis, StartPosition startAt,
+                                                ResumeBehavior resumeBehavior, StartupMode startupMode) {
+
+        static StreamSubscriptionDefinition from(StreamSubscription subscription) {
+            return new StreamSubscriptionDefinition(subscription.id(), subscription.eventTypes(), subscription.startAtISO8601(),
+                    subscription.startAtTimeEpochMillis(), subscription.startAt(), subscription.resumeBehavior(), subscription.startupMode());
+        }
+
+        @SuppressWarnings("deprecation")
+        static StreamSubscriptionDefinition from(Subscription subscription) {
+            return new StreamSubscriptionDefinition(subscription.id(), subscription.eventTypes(), subscription.startAtISO8601(),
+                    subscription.startAtTimeEpochMillis(), StartPosition.valueOf(subscription.startAt().name()),
+                    ResumeBehavior.valueOf(subscription.resumeBehavior().name()), StartupMode.valueOf(subscription.startupMode().name()));
+        }
+    }
+
     @SuppressWarnings("unchecked")
-    private <E> void processSubscribeAnnotation(Object bean, Method method, Subscription subscription) {
+    private <E> void processSubscribeAnnotation(Object bean, Method method, StreamSubscriptionDefinition subscription) {
         String id = subscription.id();
         final Filter filter;
         List<Class<?>> parameterTypes = new ArrayList<>();
@@ -129,7 +159,7 @@ class OccurrentAnnotationBeanPostProcessor implements BeanPostProcessor, Applica
                         .flatMap(e -> getConcreteEventTypes(id, (Class<E>) e).stream())
                         .peek(e -> {
                             if (!specifiedEventType.isAssignableFrom(e)) {
-                                throw new IllegalStateException("Event type %s specified in the @Subscription annotation with id %s is not assignable from the event type specified in %s#%s(..).".formatted(e.getName(), id, bean.getClass().getName(), method.getName()));
+                                throw new IllegalStateException("Event type %s specified in the @StreamSubscription annotation with id %s is not assignable from the event type specified in %s#%s(..).".formatted(e.getName(), id, bean.getClass().getName(), method.getName()));
                             }
                         })
                         .toList();
@@ -380,7 +410,7 @@ class OccurrentAnnotationBeanPostProcessor implements BeanPostProcessor, Applica
             Class<E>[] permittedSubclasses = (Class<E>[]) specifiedEventType.getPermittedSubclasses();
             domainEventTypesToSubscribeTo = Arrays.stream(permittedSubclasses).flatMap(c -> getConcreteEventTypes(subscriptionId, c).stream()).toList();
         } else if (specifiedEventType.isInterface() || specifiedEventType.isArray() || Modifier.isAbstract(specifiedEventType.getModifiers())) {
-            String msg = "You need cannot subscribe to a non-sealed interfaces or abstract types (problem is with %s). A concrete or sealed event type is required. You can also specify event types explicitly by using @Subscription(id = \"%s\", eventTypes = [MyEvent1.class, MyEvent2.class]))";
+            String msg = "You need cannot subscribe to a non-sealed interfaces or abstract types (problem is with %s). A concrete or sealed event type is required. You can also specify event types explicitly by using @StreamSubscription(id = \"%s\", eventTypes = [MyEvent1.class, MyEvent2.class]))";
             throw new IllegalArgumentException(msg.formatted(specifiedEventType.getName(), subscriptionId));
         } else {
             domainEventTypesToSubscribeTo = List.of(specifiedEventType);

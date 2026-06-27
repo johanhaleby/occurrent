@@ -16,7 +16,7 @@
 
 package org.occurrent.example.domain.numberguessinggame.mongodb.spring.blocking.policy;
 
-import org.occurrent.annotation.Subscription;
+import org.occurrent.annotation.StreamSubscription;
 import org.occurrent.dsl.query.blocking.DomainEventQueries;
 import org.occurrent.dsl.subscription.blocking.EventMetadata;
 import org.occurrent.example.domain.numberguessinggame.model.domainevents.*;
@@ -44,7 +44,7 @@ class WhenGameEndedThenPublishIntegrationEvent {
         this.domainEventQueries = domainEventQueries;
     }
 
-    @Subscription(id = "WhenGameEndedThenPublishIntegrationEvent")
+    @StreamSubscription(id = "WhenGameEndedThenPublishIntegrationEvent")
     void publishIntegrationEventWhenGameEnded(EventMetadata metadata, NumberGuessingGameEnded numberGuessingGameEnded) {
         String gameId = numberGuessingGameEnded.gameId().toString();
         long streamVersion = metadata.getStreamVersion();
