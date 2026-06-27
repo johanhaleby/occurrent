@@ -152,18 +152,21 @@ public class OccurrentMongoAutoConfiguration<E> {
         DurableSubscriptionModel durableSubscriptionModel = new DurableSubscriptionModel(mongoSubscriptionModel, storage);
         CatchupSubscriptionModelConfig catchupConfig = new CatchupSubscriptionModelConfig(useSubscriptionPositionStorage(storage)
                 .andPersistSubscriptionPositionDuringCatchupPhaseForEveryNEvents(1000));
-        SubscriptionModel subscriptionModel = durableSubscriptionModel;
-        if (eventStoreProperties.getCapabilities().contains(STREAM)) {
-            // Stream catch-up replays by event time over the stream query API.
+        // DCB catch-up replays by dcbposition over the DCB event store. The DcbQuery.all() is shared by every
+        // DcbSubscriptions subscription, which each narrow to their own DcbQuery in the consumer, so a single
+        // all-matching catch-up is correct. Stream catch-up replays by event time over the stream query API.
+        boolean stream = eventStoreProperties.getCapabilities().contains(STREAM);
+        DcbEventStore dcbStore = eventStoreProperties.getCapabilities().contains(DCB) ? dcbEventStore.getIfAvailable() : null;
+        SubscriptionModel subscriptionModel;
+        if (stream && dcbStore != null) {
+            // STREAM and DCB together: one dual-mode model routes each subscription to stream or DCB catch-up.
+            subscriptionModel = new CatchupSubscriptionModel(durableSubscriptionModel, eventStoreQueries, dcbStore, DcbQuery.all(), catchupConfig);
+        } else if (stream) {
             subscriptionModel = new CatchupSubscriptionModel(durableSubscriptionModel, eventStoreQueries, catchupConfig);
-        } else if (eventStoreProperties.getCapabilities().contains(DCB)) {
-            // DCB-only catch-up replays by dcbposition over the DCB event store. The model is constructed with
-            // DcbQuery.all() because it is shared by every DcbSubscriptions subscription. Each subscription narrows
-            // to its own DcbQuery in the DcbSubscriptions consumer, so a single all-matching catch-up is correct.
-            DcbEventStore store = dcbEventStore.getIfAvailable();
-            if (store != null) {
-                subscriptionModel = new CatchupSubscriptionModel(durableSubscriptionModel, store, DcbQuery.all(), catchupConfig);
-            }
+        } else if (dcbStore != null) {
+            subscriptionModel = new CatchupSubscriptionModel(durableSubscriptionModel, dcbStore, DcbQuery.all(), catchupConfig);
+        } else {
+            subscriptionModel = durableSubscriptionModel;
         }
         return new CompetingConsumerSubscriptionModel(subscriptionModel, competingConsumerStrategy);
     }
