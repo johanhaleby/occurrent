@@ -18,7 +18,6 @@ package org.occurrent.subscription.inmemory;
 
 import io.cloudevents.CloudEvent;
 import org.jspecify.annotations.NullMarked;
-import org.occurrent.filter.Filter;
 import org.occurrent.retry.RetryStrategy;
 import org.occurrent.subscription.DurationToTimeoutConverter;
 import org.occurrent.subscription.DurationToTimeoutConverter.Timeout;
@@ -30,9 +29,9 @@ import java.util.StringJoiner;
 import java.util.concurrent.BlockingQueue;
 import java.util.concurrent.CountDownLatch;
 import java.util.function.Consumer;
+import java.util.function.Predicate;
 
 import static java.util.concurrent.TimeUnit.MILLISECONDS;
-import static org.occurrent.inmemory.filtermatching.FilterMatcher.matchesFilter;
 import static org.occurrent.retry.internal.RetryExecution.executeWithRetry;
 
 /**
@@ -43,18 +42,18 @@ public class InMemorySubscription implements Subscription, Runnable {
     private final String id;
     private final BlockingQueue<CloudEvent> queue;
     private final Consumer<CloudEvent> consumer;
-    private final Filter filter;
+    private final Predicate<CloudEvent> matcher;
     private final RetryStrategy retryStrategy;
 
     private volatile boolean shutdown;
 
     private final CountDownLatch started = new CountDownLatch(1);
 
-    InMemorySubscription(String id, BlockingQueue<CloudEvent> queue, Consumer<CloudEvent> consumer, Filter filter, RetryStrategy retryStrategy) {
+    InMemorySubscription(String id, BlockingQueue<CloudEvent> queue, Consumer<CloudEvent> consumer, Predicate<CloudEvent> matcher, RetryStrategy retryStrategy) {
         this.id = id;
         this.queue = queue;
         this.consumer = consumer;
-        this.filter = filter;
+        this.matcher = matcher;
         this.retryStrategy = retryStrategy;
         this.shutdown = false;
     }
@@ -79,12 +78,12 @@ public class InMemorySubscription implements Subscription, Runnable {
         if (this == o) return true;
         if (!(o instanceof InMemorySubscription)) return false;
         InMemorySubscription that = (InMemorySubscription) o;
-        return shutdown == that.shutdown && Objects.equals(id, that.id) && Objects.equals(queue, that.queue) && Objects.equals(consumer, that.consumer) && Objects.equals(filter, that.filter) && Objects.equals(retryStrategy, that.retryStrategy);
+        return shutdown == that.shutdown && Objects.equals(id, that.id) && Objects.equals(queue, that.queue) && Objects.equals(consumer, that.consumer) && Objects.equals(matcher, that.matcher) && Objects.equals(retryStrategy, that.retryStrategy);
     }
 
     @Override
     public int hashCode() {
-        return Objects.hash(id, queue, consumer, filter, retryStrategy, shutdown);
+        return Objects.hash(id, queue, consumer, matcher, retryStrategy, shutdown);
     }
 
     @Override
@@ -93,7 +92,7 @@ public class InMemorySubscription implements Subscription, Runnable {
                 .add("id='" + id + "'")
                 .add("queue=" + queue)
                 .add("consumer=" + consumer)
-                .add("filter=" + filter)
+                .add("matcher=" + matcher)
                 .add("retryStrategy=" + retryStrategy)
                 .add("shutdown=" + shutdown)
                 .toString();
@@ -108,7 +107,7 @@ public class InMemorySubscription implements Subscription, Runnable {
     }
 
     boolean matches(CloudEvent cloudEvent) {
-        return matchesFilter(cloudEvent, filter);
+        return matcher.test(cloudEvent);
     }
 
     @Override
