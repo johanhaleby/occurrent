@@ -1,6 +1,6 @@
 /*
  *
- *  Copyright 2023 Johan Haleby
+ *  Copyright 2026 Johan Haleby
  *
  *  Licensed under the Apache License, Version 2.0 (the "License");
  *  you may not use this file except in compliance with the License.
@@ -20,10 +20,10 @@ package org.occurrent.annotation;
 import java.lang.annotation.*;
 
 /**
- * An annotation that can be used to start/resume subscriptions. For example:
+ * An annotation that can be used to start/resume stream subscriptions. For example:
  *
  * <pre lang="java">
- * &#64;Subscription(id = "mySubscription")
+ * &#64;StreamSubscription(id = "mySubscription")
  * void mySubscription(MyDomainEvent event) {
  *     System.out.println("Received event: " + event);
  * }
@@ -33,7 +33,7 @@ import java.lang.annotation.*;
  * <p>
  * You can also specify at which time the subscription should start:
  * <pre lang="java">
- * &#64;Subscription(id = "mySubscription", startAt = StartPosition.BEGINNING_OF_TIME)
+ * &#64;StreamSubscription(id = "mySubscription", startAt = StartPosition.BEGINNING_OF_TIME)
  * void mySubscription(MyDomainEvent event) { .. }
  * </pre>
  * This will first replay all historic events from the beginning of time and then continue subscribing to new events continuously. You can also start at a specific date
@@ -51,9 +51,9 @@ import java.lang.annotation.*;
  * <h4>Metadata</h4>
  * <p>
  * Sometimes it can be useful to get the metadata associated with the received event. For this reason, you can add a parameter to the method annotated with
- * {@code @Subscription} of type {@link org.occurrent.dsl.subscription.blocking.EventMetadata}. For example:
+ * {@code @StreamSubscription} of type {@link org.occurrent.dsl.subscription.blocking.EventMetadata}. For example:
  * <pre lang="java">
- * &#64;Subscription(id = "mySubscription")
+ * &#64;StreamSubscription(id = "mySubscription")
  * void mySubscription(MyDomainEvent event, EventMetadata metadata) {
  *   String streamId = metadata.getStreamId();
  *   long streamVersion = metadata.getStreamVersion();
@@ -61,16 +61,12 @@ import java.lang.annotation.*;
  *   ..
  * }
  * </pre>
- *
- * @deprecated Use {@link StreamSubscription} instead. This annotation is the original name for a stream subscription and
- * is kept as an alias for backward compatibility. It will be removed in a future release.
  */
-@Deprecated(forRemoval = true)
 @Target({ElementType.METHOD})
 @Retention(RetentionPolicy.RUNTIME)
 @Documented
 @Inherited
-public @interface Subscription {
+public @interface StreamSubscription {
     /**
      * The unique identifier of the subscription.
      */
@@ -93,7 +89,7 @@ public @interface Subscription {
      * </p>
      *
      * <pre lang="java">
-     * &#64;Subscription(id="mySubscription", eventTypes = {MyEvent1.class, MyEvent2.class})
+     * &#64;StreamSubscription(id="mySubscription", eventTypes = {MyEvent1.class, MyEvent2.class})
      * void subscribeToMyEvent1Or2(MyEvent event1Or2) { .. }
      * </pre>
      * <p>
@@ -103,7 +99,7 @@ public @interface Subscription {
     Class<?>[] eventTypes() default {};
 
     /**
-     * Specify the start position to one if the predefined ones in {@link StartPosition}.
+     * Specify the start position to one of the predefined ones in {@link StartPosition}.
      */
     StartPosition startAt() default StartPosition.DEFAULT;
 
@@ -129,7 +125,7 @@ public @interface Subscription {
      * specified {@code startAt} (or epoch/iso date), then the subscription will be resumed from the last
      * received event when the application is restarted. I.e. first the subscription is caught-up
      * (by reading the events from the beginning of time in this example) and then it'll continue by listening
-     * to new events, <i>without</i>_ starting from the beginning of time when the application is restarted.
+     * to new events, <i>without</i> starting from the beginning of time when the application is restarted.
      * If you <i>always</i> want to start from the beginning of time, you can set the resume behavior to
      * {@link ResumeBehavior#SAME_AS_START_AT}. This means that the subscription will start the "catching-up"
      * even on application restarts. This can be useful for in-memory projections/read-models where you don't

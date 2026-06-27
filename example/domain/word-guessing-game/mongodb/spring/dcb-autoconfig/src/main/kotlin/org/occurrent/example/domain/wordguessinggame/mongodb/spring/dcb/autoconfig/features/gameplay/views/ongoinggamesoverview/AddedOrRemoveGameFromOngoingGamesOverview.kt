@@ -16,7 +16,7 @@
 
 package org.occurrent.example.domain.wordguessinggame.mongodb.spring.dcb.autoconfig.features.gameplay.views.ongoinggamesoverview
 
-import org.occurrent.annotation.Subscription
+import org.occurrent.annotation.StreamSubscription
 import org.occurrent.dsl.dcb.blocking.dcbPosition
 import org.occurrent.dsl.dcb.blocking.dcbTags
 import org.occurrent.dsl.subscription.blocking.EventMetadata
@@ -39,7 +39,7 @@ import java.util.UUID
 class AddedOrRemoveGameFromOngoingGamesOverview(private val mongo: MongoOperations) {
     private val log = loggerFor<AddedOrRemoveGameFromOngoingGamesOverview>()
 
-    @Subscription(id = "WhenGameWasStartedThenAddGameToOngoingGamesOverview")
+    @StreamSubscription(id = "WhenGameWasStartedThenAddGameToOngoingGamesOverview")
     fun whenGameWasStartedThenAddGameToOngoingGamesOverview(gameWasStarted: GameWasStarted, metadata: EventMetadata) {
         if (!metadata.belongsToGame(gameWasStarted.gameId)) {
             return
@@ -52,7 +52,7 @@ class AddedOrRemoveGameFromOngoingGamesOverview(private val mongo: MongoOperatio
         mongo.save(ongoingGameOverview)
     }
 
-    @Subscription(id = "WhenGameIsEndedThenRemoveGameFromOngoingGamesOverview", eventTypes = [GameWasWon::class, GameWasLost::class])
+    @StreamSubscription(id = "WhenGameIsEndedThenRemoveGameFromOngoingGamesOverview", eventTypes = [GameWasWon::class, GameWasLost::class])
     fun whenGameIsEndedThenRemoveGameFromOngoingGamesOverview(e: GameEvent, metadata: EventMetadata) {
         val gameId = when (e) {
             is GameWasWon -> e.gameId

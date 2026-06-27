@@ -16,7 +16,7 @@
 
 package org.occurrent.example.domain.wordguessinggame.mongodb.spring.dcb.autoconfig.features.gameplay.views.endedgamesoverview
 
-import org.occurrent.annotation.Subscription
+import org.occurrent.annotation.StreamSubscription
 import org.occurrent.dsl.dcb.blocking.dcbPosition
 import org.occurrent.dsl.dcb.blocking.dcbTags
 import org.occurrent.dsl.dcb.blocking.DcbDomainEventQueries
@@ -39,7 +39,7 @@ class WhenGameIsEndedThenAddGameToEndedGamesOverview(
 ) {
     private val log = loggerFor<WhenGameIsEndedThenAddGameToEndedGamesOverview>()
 
-    @Subscription(id = "WhenGameIsEndedThenAddGameToGameEndedOverview", eventTypes = [GameWasWon::class, GameWasLost::class])
+    @StreamSubscription(id = "WhenGameIsEndedThenAddGameToGameEndedOverview", eventTypes = [GameWasWon::class, GameWasLost::class])
     fun whenGameIsEndedThenAddGameToEndedGamesOverviewPolicy(e: GameEvent, metadata: EventMetadata) {
         if (!metadata.belongsToGame(e.gameId)) {
             return
