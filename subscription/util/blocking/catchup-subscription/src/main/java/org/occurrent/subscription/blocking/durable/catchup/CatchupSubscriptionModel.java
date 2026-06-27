@@ -167,8 +167,23 @@ public class CatchupSubscriptionModel implements SubscriptionModel, DelegatingSu
         this.config = Objects.requireNonNull(config, "config cannot be null");
     }
 
-    private boolean isDcbMode() {
-        return dcbEventStore != null;
+    /**
+     * Create a dual-mode instance that catches up both stream subscriptions (by time, over {@code eventStoreQueries})
+     * and DCB subscriptions (by {@code dcbposition}, over {@code dcbEventStore}). Each subscription is routed by its
+     * filter and start position, so a single model serves a STREAM-and-DCB application. See ADR 25.
+     *
+     * @param subscriptionModel The subscription that'll be used to subscribe to new events <i>after</i> catch-up is completed.
+     * @param eventStoreQueries The API that will be used for stream catch-up.
+     * @param dcbEventStore     The DCB event store that will be used for DCB catch-up replay.
+     * @param dcbQuery          The DCB query that selects the events a DCB subscription delivers.
+     * @param config            The configuration to use.
+     */
+    public CatchupSubscriptionModel(PositionAwareSubscriptionModel subscriptionModel, EventStoreQueries eventStoreQueries, DcbEventStore dcbEventStore, DcbQuery dcbQuery, CatchupSubscriptionModelConfig config) {
+        this.subscriptionModel = Objects.requireNonNull(subscriptionModel, "subscriptionModel cannot be null");
+        this.eventStoreQueries = Objects.requireNonNull(eventStoreQueries, "eventStoreQueries cannot be null");
+        this.dcbEventStore = Objects.requireNonNull(dcbEventStore, "dcbEventStore cannot be null");
+        this.dcbQuery = Objects.requireNonNull(dcbQuery, "dcbQuery cannot be null");
+        this.config = Objects.requireNonNull(config, "config cannot be null");
     }
 
     /**
@@ -196,9 +211,30 @@ public class CatchupSubscriptionModel implements SubscriptionModel, DelegatingSu
     @Override
     public Subscription subscribe(String subscriptionId, @Nullable SubscriptionFilter filter, @Nullable StartAt startAt, Consumer<CloudEvent> action) {
         Objects.requireNonNull(startAt, "Start at supplier cannot be null");
-        return isDcbMode()
+        return routesToDcb(filter, startAt)
                 ? subscribeDcb(subscriptionId, filter, startAt, action)
                 : subscribeStream(subscriptionId, filter, startAt, action);
+    }
+
+    // Decide whether a subscription is a DCB or a stream subscription. A single-mode model has only one store, so it
+    // always routes there (preserving the original behavior). A dual-mode model routes a DCB subscription, which either
+    // carries a DcbSubscriptionFilter (set by the DcbSubscriptions DSL, the DcbSubscriptionModel facade, and the
+    // @DcbSubscription annotation) or starts at an explicit DcbSubscriptionPosition, to the DCB path. Only an
+    // already-resolved start position is inspected, never a dynamic one, so routing reads no subscription-position
+    // storage.
+    private boolean routesToDcb(@Nullable SubscriptionFilter filter, StartAt startAt) {
+        if (dcbEventStore == null) {
+            return false;
+        }
+        if (eventStoreQueries == null) {
+            return true;
+        }
+        return filter instanceof DcbSubscriptionFilter || startsAtExplicitDcbPosition(startAt);
+    }
+
+    private static boolean startsAtExplicitDcbPosition(StartAt startAt) {
+        return startAt instanceof StartAtSubscriptionPosition position
+                && DcbSubscriptionPosition.isDcbSubscriptionPosition(position.subscriptionPosition);
     }
 
     private Subscription subscribeStream(String subscriptionId, @Nullable SubscriptionFilter filter, StartAt startAt, Consumer<CloudEvent> action) {
