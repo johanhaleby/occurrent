@@ -31,8 +31,8 @@ import org.occurrent.dsl.dcb.blocking.DcbSubscriptions;
 import org.occurrent.eventstore.api.dcb.DcbCloudEvents;
 import org.occurrent.eventstore.api.dcb.DcbEventStore;
 import org.occurrent.eventstore.api.dcb.DcbQuery;
-import org.occurrent.subscription.StartAt;
-import org.occurrent.subscription.blocking.durable.catchup.DcbSubscriptionPosition;
+import org.occurrent.subscription.DcbStartAt;
+import org.occurrent.subscription.DcbSubscriptionPosition;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.autoconfigure.SpringBootApplication;
 import org.springframework.boot.test.context.SpringBootTest;
@@ -108,7 +108,7 @@ class DcbCatchupSubscriptionAutoConfigurationMongoTest {
                 .subscribe(
                         "test-catchup-" + UUID.randomUUID(),
                         DcbQuery.tagsAllOf(TAG),
-                        StartAt.subscriptionPosition(DcbSubscriptionPosition.of(0)),
+                        DcbStartAt.beginning(),
                         received::add)
                 .waitUntilStarted();
 

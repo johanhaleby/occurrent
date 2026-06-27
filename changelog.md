@@ -1,5 +1,10 @@
 ### Changelog next version
 
+* Stream and DCB subscriptions now have separate typed start positions and model views.
+  * `DcbStartAt` is the DCB counterpart to `StartAt`, expressing only DCB starts (`now`, `subscriptionModelDefault`, `beginning`, `afterPosition`). `DcbSubscriptionModel` and `StreamSubscriptionModel` are typed facades over the shared `SubscriptionModel`, obtained with `from(subscriptionModel)`. A DCB subscription can no longer be handed a time-based position and a stream subscription can no longer be handed a `dcbposition`, which used to fail quietly at runtime. The shared durable, competing-consumer, and catch-up machinery is unchanged, the split is types and thin adapters.
+  * `DcbSubscriptions` now takes a `DcbStartAt` instead of a generic `StartAt`. `DcbSubscriptionPosition` moved to the `org.occurrent.subscription` package.
+  * See [ADR 24](doc/architecture/decisions/0024-stream-and-dcb-subscription-model-split.md).
+
 * DCB subscriptions now filter server-side.
   * A new `DcbSubscriptionFilter`, wrapping a `DcbQuery`, is a first-class `SubscriptionFilter` alongside the stream `OccurrentSubscriptionFilter`. The Spring and native MongoDB subscription models translate it into a change stream `$match`, so a DCB read model that cares about a few event types or a tag boundary no longer receives every DCB event and discards most of them in the consumer. The in-memory model honors it in process. `DcbSubscriptions` now subscribes with it and keeps a small in-process check only as a correctness floor for backends that do not filter.
   * Tag containment matches the indexed `dcbTags` array the event store already writes, exposed as the public constant `OccurrentCloudEventMongoDocumentMapper.DCB_TAGS_INDEX_FIELD`.

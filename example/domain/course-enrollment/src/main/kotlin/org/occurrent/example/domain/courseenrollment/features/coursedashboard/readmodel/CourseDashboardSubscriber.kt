@@ -26,16 +26,15 @@ import org.occurrent.example.domain.courseenrollment.features.enrollment.model.S
 import org.occurrent.example.domain.courseenrollment.features.enrollment.model.StudentUnenrolledFromCourse
 import org.occurrent.example.domain.courseenrollment.features.studentmanagement.model.StudentDeregistered
 import org.occurrent.example.domain.courseenrollment.features.studentmanagement.model.StudentRegistered
-import org.occurrent.subscription.StartAt
-import org.occurrent.subscription.blocking.durable.catchup.DcbSubscriptionPosition
+import org.occurrent.subscription.DcbStartAt
 import org.springframework.stereotype.Component
 
 /**
  * Feeds the [CourseDashboard] read model from a DCB subscription.
  *
- * Starting at [DcbSubscriptionPosition] zero makes the subscription replay the whole DCB history by dcbposition on every
- * boot and then switch to live delivery, so the in-memory read model is rebuilt from scratch each start. This catch-up
- * is only available because the starter wires a DCB-mode catch-up subscription model in DCB-only mode.
+ * Starting at [DcbStartAt.beginning] makes the subscription replay the whole DCB history by dcbposition on every boot and
+ * then switch to live delivery, so the in-memory read model is rebuilt from scratch each start. This catch-up is only
+ * available because the starter wires a DCB-mode catch-up subscription model in DCB-only mode.
  */
 @Component
 class CourseDashboardSubscriber(
@@ -45,7 +44,7 @@ class CourseDashboardSubscriber(
 
     @PostConstruct
     fun start() {
-        dcbSubscriptions.subscribe("course-dashboard", DcbQuery.all(), StartAt.subscriptionPosition(DcbSubscriptionPosition.of(0))) { event ->
+        dcbSubscriptions.subscribe("course-dashboard", DcbQuery.all(), DcbStartAt.beginning()) { event ->
             if (event is CourseDefined || event is CourseCancelled || event is StudentRegistered || event is StudentDeregistered ||
                 event is StudentEnrolledInCourse || event is StudentUnenrolledFromCourse) {
                 courseDashboard.update(event)
