@@ -1,5 +1,9 @@
 ### Changelog next version
 
+* Added the `@DcbSubscription` annotation, the declarative DCB counterpart to `@StreamSubscription`.
+  * A DCB read model can now be declared as a single annotated method. `eventTypes` and `tagsAllOf` express the `DcbQuery`, and `startAt` (BEGINNING, NOW, DEFAULT) or `startAtDcbPosition` (an explicit position, the DCB counterpart to the stream `startAtTimeEpochMillis`) together with `resumeBehavior` give history replay, resume from the stored position, and an always-replay in-memory mode that disables the competing consumer and position storage. It routes through the DCB DSL, so it gets the server-side filter, and the method can take the event plus an optional `EventMetadata` or `DcbEventMetadata`. `DcbStartAt` gained a `dynamic` factory to back the resume logic. The course-enrollment dashboard subscriber now uses `@DcbSubscription` (combining `BEGINNING` with `SAME_AS_START_AT`, since it is an in-memory model rebuilt on every boot).
+  * See [ADR 27](doc/architecture/decisions/0027-dcb-subscription-annotation.md).
+
 * `@Subscription` is superseded by the new `@StreamSubscription` and deprecated.
   * `@StreamSubscription` is the new canonical name, paired with the upcoming `@DcbSubscription` so the annotations are symmetric. `@Subscription` still works as a deprecated alias (deprecated for removal), with its attributes and enums frozen, so existing code keeps compiling and behaving as before. The annotation processor honors both. The example applications now use `@StreamSubscription`.
   * See [ADR 26](doc/architecture/decisions/0026-rename-subscription-annotation-to-stream-subscription.md).

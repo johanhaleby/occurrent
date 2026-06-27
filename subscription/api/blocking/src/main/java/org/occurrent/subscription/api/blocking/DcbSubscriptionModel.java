@@ -28,6 +28,10 @@ import java.util.function.Consumer;
  * {@link DcbQuery} and a {@link DcbStartAt}, so a DCB subscription cannot be handed a stream {@code Filter} or a
  * time-based start position. It is a facade over the shared subscription model, not a separate lifecycle: obtain one
  * with {@link #from(SubscriptionModel)} and the typed calls are translated to the underlying model.
+ * <p>
+ * This is the lower-level, CloudEvent-level typed view. Most application code does not use it directly: use the
+ * {@code @DcbSubscription} annotation for a persistent framework-managed subscription, or the {@code DcbSubscriptions}
+ * DSL for an ephemeral per-connection one.
  */
 @NullMarked
 public interface DcbSubscriptionModel extends SubscriptionModelLifeCycle {
