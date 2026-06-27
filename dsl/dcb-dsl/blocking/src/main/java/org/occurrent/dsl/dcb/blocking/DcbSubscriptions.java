@@ -21,10 +21,9 @@ import org.jspecify.annotations.NullMarked;
 import org.jspecify.annotations.Nullable;
 import org.occurrent.application.converter.CloudEventConverter;
 import org.occurrent.dsl.subscription.blocking.EventMetadata;
-import org.occurrent.eventstore.api.dcb.DcbCloudEvents;
 import org.occurrent.eventstore.api.dcb.DcbQuery;
-import org.occurrent.subscription.DcbSubscriptionFilter;
-import org.occurrent.subscription.StartAt;
+import org.occurrent.subscription.DcbStartAt;
+import org.occurrent.subscription.api.blocking.DcbSubscriptionModel;
 import org.occurrent.subscription.api.blocking.Subscribable;
 import org.occurrent.subscription.api.blocking.Subscription;
 import org.occurrent.subscription.api.blocking.SubscriptionModel;
@@ -49,17 +48,21 @@ import static java.util.Objects.requireNonNull;
  * start. Call {@link Subscription#waitUntilStarted()} on the returned subscription when you need it running before
  * you continue (for example to avoid missing the first events of a brand new subscription). Call {@link #cancel(String)}
  * to stop and remove a subscription, for example when a per-connection subscription is no longer needed.
+ * <p>
+ * This DSL is for ephemeral, per-connection subscriptions that you start and cancel by hand, such as a Server-Sent-Events
+ * feed scoped to one request. For a persistent, framework-managed subscription, such as a read model that catches up
+ * from history on startup, use the {@code @DcbSubscription} annotation instead.
  *
  * @param <E> the domain event type
  */
 @NullMarked
 public final class DcbSubscriptions<E> {
 
-    private final SubscriptionModel subscriptionModel;
+    private final DcbSubscriptionModel subscriptionModel;
     private final CloudEventConverter<E> cloudEventConverter;
 
     public DcbSubscriptions(SubscriptionModel subscriptionModel, CloudEventConverter<E> cloudEventConverter) {
-        this.subscriptionModel = requireNonNull(subscriptionModel, SubscriptionModel.class.getSimpleName() + " cannot be null");
+        this.subscriptionModel = DcbSubscriptionModel.from(requireNonNull(subscriptionModel, SubscriptionModel.class.getSimpleName() + " cannot be null"));
         this.cloudEventConverter = requireNonNull(cloudEventConverter, CloudEventConverter.class.getSimpleName() + " cannot be null");
     }
 
@@ -73,7 +76,7 @@ public final class DcbSubscriptions<E> {
     /**
      * Subscribes to live DCB events that match {@code query}, starting at {@code startAt}.
      */
-    public Subscription subscribe(String subscriptionId, DcbQuery query, @Nullable StartAt startAt, Consumer<E> fn) {
+    public Subscription subscribe(String subscriptionId, DcbQuery query, @Nullable DcbStartAt startAt, Consumer<E> fn) {
         requireNonNull(fn, "Subscription function cannot be null");
         return subscribeWithMetadata(subscriptionId, query, startAt, (metadata, event) -> fn.accept(event));
     }
@@ -92,24 +95,20 @@ public final class DcbSubscriptions<E> {
      * Subscribes to live DCB events that match {@code query}, starting at {@code startAt} and exposing DCB metadata
      * to the callback.
      */
-    public Subscription subscribeWithMetadata(String subscriptionId, DcbQuery query, @Nullable StartAt startAt, BiConsumer<DcbEventMetadata, E> fn) {
+    public Subscription subscribeWithMetadata(String subscriptionId, DcbQuery query, @Nullable DcbStartAt startAt, BiConsumer<DcbEventMetadata, E> fn) {
         requireNonNull(subscriptionId, "Subscription id cannot be null");
         requireNonNull(query, "Query cannot be null");
         requireNonNull(fn, "Subscription function cannot be null");
 
-        // A capable subscription model filters DCB events server-side from the DcbSubscriptionFilter. The in-process
-        // check stays as a correctness floor for any Subscribable that does not honor the filter.
+        // The DcbSubscriptionModel scopes delivery to the query (server-side where the backend supports it, and an
+        // in-process floor in the typed adapter otherwise), so this callback only converts and dispatches.
         Consumer<CloudEvent> consumer = cloudEvent -> {
-            if (DcbCloudEvents.getPosition(cloudEvent) > 0 && DcbCloudEvents.matches(cloudEvent, query)) {
-                E event = cloudEventConverter.toDomainEvent(cloudEvent);
-                fn.accept(DcbEventMetadata.from(toEventMetadata(cloudEvent)), event);
-            }
+            E event = cloudEventConverter.toDomainEvent(cloudEvent);
+            fn.accept(DcbEventMetadata.from(toEventMetadata(cloudEvent)), event);
         };
 
-        DcbSubscriptionFilter filter = DcbSubscriptionFilter.filter(query);
-        return startAt == null
-                ? subscriptionModel.subscribe(subscriptionId, filter, consumer)
-                : subscriptionModel.subscribe(subscriptionId, filter, startAt, consumer);
+        DcbStartAt startAtToUse = startAt == null ? DcbStartAt.subscriptionModelDefault() : startAt;
+        return subscriptionModel.subscribe(subscriptionId, query, startAtToUse, consumer);
     }
 
     /**

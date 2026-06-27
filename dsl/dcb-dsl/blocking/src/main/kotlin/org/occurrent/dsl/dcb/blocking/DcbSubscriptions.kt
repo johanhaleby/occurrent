@@ -22,8 +22,8 @@ import org.occurrent.application.converter.get
 import org.occurrent.dsl.subscription.blocking.EventMetadata
 import org.occurrent.eventstore.api.dcb.DcbCloudEvents
 import org.occurrent.eventstore.api.dcb.DcbQuery
+import org.occurrent.subscription.DcbStartAt
 import org.occurrent.subscription.DcbSubscriptionFilter
-import org.occurrent.subscription.StartAt
 import org.occurrent.subscription.api.blocking.Subscribable
 import org.occurrent.subscription.api.blocking.Subscription
 
@@ -55,7 +55,7 @@ fun <E : Any> Subscribable.subscribeDcb(
     subscriptionId: String,
     cloudEventConverter: CloudEventConverter<E>,
     query: DcbQuery = DcbQuery.all(),
-    startAt: StartAt? = null,
+    startAt: DcbStartAt? = null,
     fn: (E) -> Unit
 ): Subscription =
     subscribeDcb(subscriptionId, cloudEventConverter, query, startAt) { _, event -> fn(event) }
@@ -72,7 +72,7 @@ fun <E : Any> Subscribable.subscribeDcb(
     subscriptionId: String,
     cloudEventConverter: CloudEventConverter<E>,
     query: DcbQuery = DcbQuery.all(),
-    startAt: StartAt? = null,
+    startAt: DcbStartAt? = null,
     waitUntilStarted: Boolean = true,
     fn: (EventMetadata, E) -> Unit
 ): Subscription {
@@ -90,7 +90,7 @@ fun <E : Any> Subscribable.subscribeDcb(
     val subscription = if (startAt == null) {
         subscribe(subscriptionId, filter, consumer)
     } else {
-        subscribe(subscriptionId, filter, startAt, consumer)
+        subscribe(subscriptionId, filter, startAt.toStartAt(), consumer)
     }
 
     return subscription.apply {
