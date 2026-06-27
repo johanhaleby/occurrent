@@ -45,6 +45,7 @@ import org.occurrent.subscription.internal.ExecutorShutdown;
 import org.occurrent.subscription.mongodb.MongoFilterSpecification;
 import org.occurrent.subscription.mongodb.MongoOperationTimeSubscriptionPosition;
 import org.occurrent.subscription.mongodb.MongoResumeTokenSubscriptionPosition;
+import org.occurrent.subscription.mongodb.internal.DcbSubscriptionFilterConverter;
 import org.occurrent.subscription.mongodb.internal.DocumentAdapter;
 import org.occurrent.subscription.mongodb.internal.MongoCloudEventsToJsonDeserializer;
 import org.occurrent.subscription.mongodb.internal.MongoCommons;
@@ -209,6 +210,8 @@ public class NativeMongoSubscriptionModel implements PositionAwareSubscriptionMo
             Filter occurrentFilter = ((OccurrentSubscriptionFilter) filter).filter();
             Bson bson = FilterToBsonFilterConverter.convertFilterToBsonFilter(MongoFilterSpecification.FULL_DOCUMENT, timeRepresentation, occurrentFilter);
             pipeline = Collections.singletonList(match(bson));
+        } else if (filter instanceof DcbSubscriptionFilter dcbSubscriptionFilter) {
+            pipeline = Collections.singletonList(DcbSubscriptionFilterConverter.toChangeStreamMatchStage(dcbSubscriptionFilter.query()));
         } else if (filter instanceof MongoFilterSpecification.MongoJsonFilterSpecification) {
             pipeline = Collections.singletonList(Document.parse(((MongoFilterSpecification.MongoJsonFilterSpecification) filter).getJson()));
         } else if (filter instanceof MongoFilterSpecification.MongoBsonFilterSpecification) {

@@ -1,5 +1,10 @@
 ### Changelog next version
 
+* DCB subscriptions now filter server-side.
+  * A new `DcbSubscriptionFilter`, wrapping a `DcbQuery`, is a first-class `SubscriptionFilter` alongside the stream `OccurrentSubscriptionFilter`. The Spring and native MongoDB subscription models translate it into a change stream `$match`, so a DCB read model that cares about a few event types or a tag boundary no longer receives every DCB event and discards most of them in the consumer. The in-memory model honors it in process. `DcbSubscriptions` now subscribes with it and keeps a small in-process check only as a correctness floor for backends that do not filter.
+  * Tag containment matches the indexed `dcbTags` array the event store already writes, exposed as the public constant `OccurrentCloudEventMongoDocumentMapper.DCB_TAGS_INDEX_FIELD`.
+  * See [ADR 23](doc/architecture/decisions/0023-server-side-filtering-for-dcb-subscriptions.md).
+
 * The DCB subscription DSL can now cancel a subscription.
   * `DcbSubscriptions.cancel(subscriptionId)` stops and removes a subscription, so per-connection teardown no longer has to reach past the DSL into the subscription model. An SSE activity feed, for example, can subscribe when a client connects and cancel when it disconnects, all through `DcbSubscriptions`. The DSL now wraps a `SubscriptionModel` rather than a bare `Subscribable` to make this possible.
 

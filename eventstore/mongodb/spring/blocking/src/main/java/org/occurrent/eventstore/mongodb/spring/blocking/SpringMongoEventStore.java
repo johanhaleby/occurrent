@@ -65,6 +65,7 @@ import static org.occurrent.cloudevents.OccurrentCloudEventExtension.STREAM_ID;
 import static org.occurrent.cloudevents.OccurrentCloudEventExtension.STREAM_VERSION;
 import static org.occurrent.eventstore.api.SortBy.SortDirection.ASCENDING;
 import static org.occurrent.eventstore.mongodb.internal.MongoExceptionTranslator.translateException;
+import static org.occurrent.eventstore.mongodb.internal.OccurrentCloudEventMongoDocumentMapper.DCB_TAGS_INDEX_FIELD;
 import static org.occurrent.eventstore.mongodb.internal.OccurrentCloudEventMongoDocumentMapper.convertToCloudEvent;
 import static org.occurrent.eventstore.mongodb.internal.OccurrentCloudEventMongoDocumentMapper.convertToDocument;
 import static org.occurrent.eventstore.mongodb.spring.blocking.SpringMongoEventStoreCapability.DCB;
@@ -89,7 +90,6 @@ import static org.springframework.data.mongodb.core.query.Criteria.where;
 public class SpringMongoEventStore implements EventStore, EventStoreOperations, EventStoreQueries, ReadEventStreamWithFilter, DcbEventStore {
 
     private static final String ID = "_id";
-    private static final String DCB_TAGS_INDEX_FIELD = "dcbTags";
     private static final String DCB_POSITION_DOCUMENT_ID = "dcb";
     private static final String DCB_COUNTER_POSITION = "position";
     private static final String CHECKPOINT_LAST_POSITION = "lastPosition";
