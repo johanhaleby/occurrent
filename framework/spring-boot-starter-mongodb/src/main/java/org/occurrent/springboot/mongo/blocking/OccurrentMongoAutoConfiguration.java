@@ -198,8 +198,8 @@ public class OccurrentMongoAutoConfiguration<E> {
     @ConditionalOnMissingBean(DcbSubscriptions.class)
     @Conditional(OnDcbEventStoreCapabilityCondition.class)
     @ConditionalOnProperty(name = "occurrent.subscription.enabled", havingValue = "true", matchIfMissing = true)
-    public DcbSubscriptions<E> occurrentDcbSubscriptions(Subscribable subscribable, CloudEventConverter<E> cloudEventConverter) {
-        return new DcbSubscriptions<>(subscribable, cloudEventConverter);
+    public DcbSubscriptions<E> occurrentDcbSubscriptions(SubscriptionModel subscriptionModel, CloudEventConverter<E> cloudEventConverter) {
+        return new DcbSubscriptions<>(subscriptionModel, cloudEventConverter);
     }
 
     @Bean

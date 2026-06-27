@@ -76,7 +76,8 @@ public interface SubscriptionModelLifeCycle {
 
     /**
      * Cancel a subscription, this will remove the position from position storage (if used),
-     * and you cannot restart it from its current position again.
+     * and you cannot restart it from its current position again. Cancelling a subscription id that is unknown or
+     * already cancelled is a no-op.
      */
     void cancelSubscription(String subscriptionId);
 
