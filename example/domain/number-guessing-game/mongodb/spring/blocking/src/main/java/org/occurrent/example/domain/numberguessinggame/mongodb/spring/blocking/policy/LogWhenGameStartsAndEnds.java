@@ -17,7 +17,7 @@
 
 package org.occurrent.example.domain.numberguessinggame.mongodb.spring.blocking.policy;
 
-import org.occurrent.annotation.Subscription;
+import org.occurrent.annotation.StreamSubscription;
 import org.occurrent.example.domain.numberguessinggame.model.domainevents.GameEvent;
 import org.occurrent.example.domain.numberguessinggame.model.domainevents.GuessingAttemptsExhausted;
 import org.occurrent.example.domain.numberguessinggame.model.domainevents.NumberGuessingGameWasStarted;
@@ -30,7 +30,7 @@ import org.springframework.stereotype.Component;
 public class LogWhenGameStartsAndEnds {
     private static final Logger log = LoggerFactory.getLogger(LogWhenGameStartsAndEnds.class);
 
-    @Subscription(
+    @StreamSubscription(
             id = "LogWhenGameStartsAndEnds",
             eventTypes = {NumberGuessingGameWasStarted.class, PlayerGuessedTheRightNumber.class, GuessingAttemptsExhausted.class}
     )

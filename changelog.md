@@ -1,5 +1,9 @@
 ### Changelog next version
 
+* `@Subscription` is superseded by the new `@StreamSubscription` and deprecated.
+  * `@StreamSubscription` is the new canonical name, paired with the upcoming `@DcbSubscription` so the annotations are symmetric. `@Subscription` still works as a deprecated alias (deprecated for removal), with its attributes and enums frozen, so existing code keeps compiling and behaving as before. The annotation processor honors both. The example applications now use `@StreamSubscription`.
+  * See [ADR 26](doc/architecture/decisions/0026-rename-subscription-annotation-to-stream-subscription.md).
+
 * A STREAM-and-DCB application now catches up both kinds of subscription.
   * `CatchupSubscriptionModel` gained a dual-mode constructor that holds both the stream query API and the DCB event store and routes each subscription to the right catch-up: a DCB subscription replays by `dcbposition`, a stream subscription replays by time. The Spring Boot starter wires this when the event store has both the STREAM and the DCB capability. Before, a combined application got only stream catch-up, so its DCB read models could not rebuild from history. STREAM-only and DCB-only applications are unchanged.
   * See [ADR 25](doc/architecture/decisions/0025-dual-mode-catch-up-for-stream-and-dcb.md).
