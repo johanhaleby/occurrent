@@ -484,19 +484,20 @@ public class CatchupSubscriptionModel implements SubscriptionModel, DelegatingSu
         SubscriptionPosition subscriptionPosition = ((StartAtSubscriptionPosition) Objects.requireNonNull(nextStartAt)).subscriptionPosition;
         long startPosition = DcbSubscriptionPosition.dcbPositionOf(subscriptionPosition);
 
+        // Capture the live resume token before the bulk replay, not after, so an event that commits during the replay
+        // is still delivered by the live change stream. The reconciliation below only scans forward, so on its own it
+        // would miss a low position that becomes visible late. Trade-off: on a replay longer than the change stream
+        // history the token ages out and the handover fails loudly instead of silently dropping that event.
+        Class<? extends SubscriptionModel> delegatedSubscriptionModelType = getDelegatedSubscriptionModel().getClass();
+        StartAt delegatedStartAt = startAt.get(new SubscriptionModelContext(delegatedSubscriptionModelType));
+        final SubscriptionPosition globalSubscriptionPosition = delegatedStartAt == null ? null : subscriptionModel.globalSubscriptionPosition();
+
         // Bulk replay: page through the DCB sequence from the resume position up to the head observed at the start, in
         // position windows so a large rebuild does not materialize the whole matched set at once. dcbposition is
         // monotonic and server-assigned, so this needs no count and no time sort, sidestepping both the clock-skew loss
         // and the estimatedDocumentCount undercount that the stream delta has to defend against (see ADR 20).
         long bulkHead = dcbEventStore.read(query, DcbReadOptions.between(startPosition, startPosition)).lastSequencePosition();
         long cursor = deliverDcbWindows(dcbEventStore, query, startPosition, bulkHead, windowSize, subscriptionId, action, null);
-
-        // Capture the live resume position *after* the bulk replay so the change-stream token stays fresh, the same
-        // reason as the stream path: a token captured before a long replay could age out of the change stream before
-        // the handover.
-        Class<? extends SubscriptionModel> delegatedSubscriptionModelType = getDelegatedSubscriptionModel().getClass();
-        StartAt delegatedStartAt = startAt.get(new SubscriptionModelContext(delegatedSubscriptionModelType));
-        final SubscriptionPosition globalSubscriptionPosition = delegatedStartAt == null ? null : subscriptionModel.globalSubscriptionPosition();
 
         FixedSizeCache catchupPhaseCache = new FixedSizeCache(config.cacheSize);
 

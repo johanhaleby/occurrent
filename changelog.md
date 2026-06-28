@@ -1,5 +1,10 @@
 ### Changelog next version
 
+* DCB catch-up no longer drops an event that commits during the replay.
+  * `dcbposition` is reserved before the append commits (ADR 21), so the store head can run ahead of committed data and a position below the head can be an in-flight hole. If such an event committed while a catch-up replay was running, it was delivered by neither the replay, the forward-only reconciliation, nor the live change stream, because the live resume token was captured after the replay. The catch-up now captures that token before the replay, so the live change stream delivers the late commit and the handover cache dedups the overlap.
+  * Trade-off: a replay that runs longer than the change stream history makes the resume token age out, so the handover fails loudly rather than silently dropping events. Size the change stream history (the MongoDB oplog window) for very large rebuilds.
+  * See [ADR 28](doc/architecture/decisions/0028-dcb-catch-up-captures-resume-token-before-replay.md).
+
 * Added the `@DcbSubscription` annotation, the declarative DCB counterpart to `@StreamSubscription`.
   * A DCB read model can now be declared as a single annotated method. `eventTypes` and `tagsAllOf` express the `DcbQuery`, and `startAt` (BEGINNING, NOW, DEFAULT) or `startAtDcbPosition` (an explicit position, the DCB counterpart to the stream `startAtTimeEpochMillis`) together with `resumeBehavior` give history replay, resume from the stored position, and an always-replay in-memory mode that disables the competing consumer and position storage. It routes through the DCB DSL, so it gets the server-side filter, and the method can take the event plus an optional `EventMetadata` or `DcbEventMetadata`. `DcbStartAt` gained a `dynamic` factory to back the resume logic. The course-enrollment dashboard subscriber now uses `@DcbSubscription` (combining `BEGINNING` with `SAME_AS_START_AT`, since it is an in-memory model rebuilt on every boot).
   * See [ADR 27](doc/architecture/decisions/0027-dcb-subscription-annotation.md).
