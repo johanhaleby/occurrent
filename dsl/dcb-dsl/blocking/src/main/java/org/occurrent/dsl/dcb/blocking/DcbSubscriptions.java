@@ -82,6 +82,16 @@ public final class DcbSubscriptions<E> {
     }
 
     /**
+     * Subscribes to live DCB events that match {@code query}, starting at {@code startAt}. When {@code waitUntilStarted}
+     * is {@code true} this blocks until the subscription has started, and for a replaying DCB subscription that means
+     * until catch-up has completed, mirroring the Kotlin DSL default.
+     */
+    public Subscription subscribe(String subscriptionId, DcbQuery query, @Nullable DcbStartAt startAt, boolean waitUntilStarted, Consumer<E> fn) {
+        requireNonNull(fn, "Subscription function cannot be null");
+        return subscribeWithMetadata(subscriptionId, query, startAt, waitUntilStarted, (metadata, event) -> fn.accept(event));
+    }
+
+    /**
      * Subscribes to live DCB events that match {@code query}, exposing DCB metadata to the callback.
      * <p>
      * This is a distinct method rather than an overload of {@link #subscribe} so that a method reference like
@@ -93,9 +103,18 @@ public final class DcbSubscriptions<E> {
 
     /**
      * Subscribes to live DCB events that match {@code query}, starting at {@code startAt} and exposing DCB metadata
-     * to the callback.
+     * to the callback. Returns without waiting for the subscription to start.
      */
     public Subscription subscribeWithMetadata(String subscriptionId, DcbQuery query, @Nullable DcbStartAt startAt, BiConsumer<DcbEventMetadata, E> fn) {
+        return subscribeWithMetadata(subscriptionId, query, startAt, false, fn);
+    }
+
+    /**
+     * Subscribes to live DCB events that match {@code query}, starting at {@code startAt} and exposing DCB metadata
+     * to the callback. When {@code waitUntilStarted} is {@code true} this blocks until the subscription has started,
+     * and for a replaying DCB subscription that means until catch-up has completed, mirroring the Kotlin DSL default.
+     */
+    public Subscription subscribeWithMetadata(String subscriptionId, DcbQuery query, @Nullable DcbStartAt startAt, boolean waitUntilStarted, BiConsumer<DcbEventMetadata, E> fn) {
         requireNonNull(subscriptionId, "Subscription id cannot be null");
         requireNonNull(query, "Query cannot be null");
         requireNonNull(fn, "Subscription function cannot be null");
@@ -108,7 +127,11 @@ public final class DcbSubscriptions<E> {
         };
 
         DcbStartAt startAtToUse = startAt == null ? DcbStartAt.subscriptionModelDefault() : startAt;
-        return subscriptionModel.subscribe(subscriptionId, query, startAtToUse, consumer);
+        Subscription subscription = subscriptionModel.subscribe(subscriptionId, query, startAtToUse, consumer);
+        if (waitUntilStarted) {
+            subscription.waitUntilStarted();
+        }
+        return subscription;
     }
 
     /**
