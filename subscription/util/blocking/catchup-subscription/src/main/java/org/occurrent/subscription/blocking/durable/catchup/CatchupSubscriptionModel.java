@@ -91,6 +91,13 @@ import static org.occurrent.time.internal.RFC3339.RFC_3339_DATE_TIME_FORMATTER;
  * For this to work, the subscription must store the subscription position in a {@link SubscriptionPositionStorage} implementation periodically. It's possible to configure
  * how often this should happen in the {@link CatchupSubscriptionModelConfig}.
  * </p>
+ * <br>
+ * <p>
+ * In DCB mode the live resume token is captured before the bulk replay, so an event that commits during the replay is still
+ * delivered through the live change stream. The trade-off is that a replay running longer than the change stream history
+ * (the MongoDB oplog window) makes the token age out, and the handover then fails loudly rather than silently dropping
+ * events. Size the oplog for very large DCB rebuilds.
+ * </p>
  */
 @NullMarked
 public class CatchupSubscriptionModel implements SubscriptionModel, DelegatingSubscriptionModel {
