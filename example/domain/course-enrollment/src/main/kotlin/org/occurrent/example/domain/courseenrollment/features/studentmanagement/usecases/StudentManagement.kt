@@ -22,18 +22,18 @@ import org.occurrent.example.domain.courseenrollment.common.DomainEvent
 import org.occurrent.example.domain.courseenrollment.features.studentmanagement.model.StudentCommand.DeregisterStudent
 import org.occurrent.example.domain.courseenrollment.features.studentmanagement.model.StudentCommand.RegisterStudent
 import org.occurrent.example.domain.courseenrollment.features.studentmanagement.model.studentDecider
-import org.occurrent.example.domain.courseenrollment.infrastructure.dcb.CourseEnrollmentDcbQueries.studentDecisionContext
+import org.occurrent.example.domain.courseenrollment.infrastructure.dcb.CourseEnrollmentDcbQueries.studentBoundary
 import java.time.Instant
 import java.util.*
 
 fun DcbApplicationService<DomainEvent>.registerStudent(studentId: UUID, name: String, occurredAt: Instant = Instant.now()) = execute(
-    studentDecisionContext(studentId),
+    studentBoundary(studentId),
     RegisterStudent(UUID.randomUUID(), occurredAt, studentId, name),
     studentDecider
 )
 
 fun DcbApplicationService<DomainEvent>.deregisterStudent(studentId: UUID, occurredAt: Instant = Instant.now()) = execute(
-    studentDecisionContext(studentId),
+    studentBoundary(studentId),
     DeregisterStudent(UUID.randomUUID(), occurredAt, studentId),
     studentDecider
 )

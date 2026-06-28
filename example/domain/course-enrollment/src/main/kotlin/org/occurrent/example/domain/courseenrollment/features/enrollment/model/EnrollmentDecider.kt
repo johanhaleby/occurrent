@@ -31,7 +31,7 @@ import java.util.*
 
 /**
  * The cross-boundary decider, and the point of the example. Its boundary spans a course AND a student at once (see
- * [org.occurrent.example.domain.courseenrollment.infrastructure.dcb.CourseEnrollmentDcbQueries.enrollmentDecisionContext]), so
+ * [org.occurrent.example.domain.courseenrollment.infrastructure.dcb.CourseEnrollmentDcbQueries.enrollmentBoundary]), so
  * one conditional append holds both the course-capacity invariant and the per-student-limit invariant.
  *
  * Note how this differs from [org.occurrent.example.domain.courseenrollment.features.coursemanagement.model.courseDecider] and [org.occurrent.example.domain.courseenrollment.features.studentmanagement.model.studentDecider]: it does not emit [org.occurrent.example.domain.courseenrollment.common.CourseDefined] or

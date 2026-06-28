@@ -58,7 +58,7 @@ import static java.nio.charset.StandardCharsets.UTF_8;
 import static java.util.Objects.requireNonNull;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.occurrent.eventstore.api.dcb.DcbAppendCondition.failIfEventsMatch;
-import static org.occurrent.eventstore.api.dcb.DcbQuery.tagsAllOf;
+import static org.occurrent.eventstore.api.dcb.DcbQuery.tags;
 import static org.occurrent.eventstore.api.dcb.DcbQuery.types;
 import static org.occurrent.eventstore.mongodb.spring.blocking.SpringMongoEventStoreCapability.DCB;
 import static org.occurrent.eventstore.mongodb.spring.blocking.SpringMongoEventStoreCapability.STREAM;
@@ -125,7 +125,7 @@ class SpringMongoEventStoreDcbConcurrencyTest {
     //
     // Two commands both see an empty boundary at position 0 (fresh per iteration via unique
     // iteration suffix).  Command A appends {type:X_i, tag:t_i} with condition types("X_i").
-    // Command B appends {type:X_i, tag:t_i} with condition tagsAllOf("t_i").
+    // Command B appends {type:X_i, tag:t_i} with condition tags("t_i").
     // The appended event satisfies BOTH conditions, so whichever commits first invalidates
     // the other's condition.  The marker keys written by A include "type:X_i"; the marker
     // keys written by B include "tag:t_i".  The event marker keys for A's append also include
@@ -152,12 +152,12 @@ class SpringMongoEventStoreDcbConcurrencyTest {
 
             // Both commands read the (empty) boundary at position 0
             DcbEventStream boundaryA = isolatedStore.read(types(type));
-            DcbEventStream boundaryB = isolatedStore.read(tagsAllOf(tag));
+            DcbEventStream boundaryB = isolatedStore.read(tags(tag));
             DcbConsistencyToken tokenA = boundaryA.consistencyToken();
             DcbConsistencyToken tokenB = boundaryB.consistencyToken();
 
             DcbAppendCondition condA = failIfEventsMatch(types(type), tokenA);
-            DcbAppendCondition condB = failIfEventsMatch(tagsAllOf(tag), tokenB);
+            DcbAppendCondition condB = failIfEventsMatch(tags(tag), tokenB);
 
             CloudEvent eventA = taggedEvent(type, tag);
             CloudEvent eventB = taggedEvent(type, tag);
@@ -224,14 +224,14 @@ class SpringMongoEventStoreDcbConcurrencyTest {
             String extraTagA = "extra-a-" + i;
 
             // Both read empty boundary
-            DcbConsistencyToken tokenA = isolatedStore.read(tagsAllOf(sharedTag)).consistencyToken();
-            DcbConsistencyToken tokenB = isolatedStore.read(tagsAllOf(sharedTag, extraTagA)).consistencyToken();
+            DcbConsistencyToken tokenA = isolatedStore.read(tags(sharedTag)).consistencyToken();
+            DcbConsistencyToken tokenB = isolatedStore.read(tags(sharedTag, extraTagA)).consistencyToken();
 
             // Event matches BOTH conditions: has sharedTag and extraTagA
-            // condA: tagsAllOf(sharedTag) — matched by the event
-            // condB: tagsAllOf(sharedTag, extraTagA) — also matched if event carries both
-            DcbAppendCondition condA = failIfEventsMatch(tagsAllOf(sharedTag), tokenA);
-            DcbAppendCondition condB = failIfEventsMatch(tagsAllOf(sharedTag, extraTagA), tokenB);
+            // condA: tags(sharedTag) — matched by the event
+            // condB: tags(sharedTag, extraTagA) — also matched if event carries both
+            DcbAppendCondition condA = failIfEventsMatch(tags(sharedTag), tokenA);
+            DcbAppendCondition condB = failIfEventsMatch(tags(sharedTag, extraTagA), tokenB);
 
             CyclicBarrier barrier = new CyclicBarrier(2);
             ExecutorService pool = Executors.newFixedThreadPool(2);
@@ -347,8 +347,8 @@ class SpringMongoEventStoreDcbConcurrencyTest {
             String tag = "contention-" + i;
 
             // All threads read the boundary at the same position
-            DcbConsistencyToken boundaryToken = eventStore.read(tagsAllOf(tag)).consistencyToken();
-            DcbAppendCondition condition = failIfEventsMatch(tagsAllOf(tag), boundaryToken);
+            DcbConsistencyToken boundaryToken = eventStore.read(tags(tag)).consistencyToken();
+            DcbAppendCondition condition = failIfEventsMatch(tags(tag), boundaryToken);
 
             CyclicBarrier barrier = new CyclicBarrier(threadCount);
             ExecutorService pool = Executors.newFixedThreadPool(threadCount);
@@ -435,8 +435,8 @@ class SpringMongoEventStoreDcbConcurrencyTest {
                 // The goal is to prove query-scoped isolation; shared-type conflicts are a separate, expected behavior.
                 final String distinctType = "DisjointEvent-iter" + i + "-t" + t;
                 futures.add(pool.submit(() -> {
-                    DcbConsistencyToken token = disjointStore.read(tagsAllOf(distinctTag)).consistencyToken();
-                    DcbAppendCondition cond = failIfEventsMatch(tagsAllOf(distinctTag), token);
+                    DcbConsistencyToken token = disjointStore.read(tags(distinctTag)).consistencyToken();
+                    DcbAppendCondition cond = failIfEventsMatch(tags(distinctTag), token);
                     barrier.await();
                     try {
                         disjointStore.append(List.of(taggedEvent(distinctType, distinctTag)), cond);
@@ -487,8 +487,8 @@ class SpringMongoEventStoreDcbConcurrencyTest {
                 final String distinctTag = "shared-iter" + i + "-t" + t;
                 final String distinctType = "SharedStreamEvent-iter" + i + "-t" + t;
                 futures.add(pool.submit(() -> {
-                    DcbConsistencyToken token = sharedStreamStore.read(tagsAllOf(distinctTag)).consistencyToken();
-                    DcbAppendCondition cond = failIfEventsMatch(tagsAllOf(distinctTag), token);
+                    DcbConsistencyToken token = sharedStreamStore.read(tags(distinctTag)).consistencyToken();
+                    DcbAppendCondition cond = failIfEventsMatch(tags(distinctTag), token);
                     barrier.await();
                     try {
                         sharedStreamStore.append(List.of(taggedEvent(distinctType, distinctTag)), cond);

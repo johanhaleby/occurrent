@@ -148,7 +148,7 @@ class DcbApplicationServiceDeciderExtensionsTest {
     private fun readNameEvents(nameId: String): List<DomainEvent> =
         cloudEventConverter.toDomainEvents(eventStore.read(nameQuery(nameId)).stream()).toList()
 
-    private fun nameQuery(nameId: String): DcbQuery = DcbQuery.tagsAllOf("name:$nameId")
+    private fun nameQuery(nameId: String): DcbQuery = DcbQuery.tags("name:$nameId")
 
     private fun tagFor(event: DomainEvent): String = "name:${event.userId()}"
 

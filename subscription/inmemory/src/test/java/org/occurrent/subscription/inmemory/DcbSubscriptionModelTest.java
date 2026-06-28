@@ -64,7 +64,7 @@ class DcbSubscriptionModelTest {
     @Test
     void delivers_only_query_matching_dcb_events() {
         CopyOnWriteArrayList<CloudEvent> received = new CopyOnWriteArrayList<>();
-        dcbSubscriptionModel.subscribe("sub", DcbQuery.tagsAllOf("x:1"), DcbStartAt.now(), received::add)
+        dcbSubscriptionModel.subscribe("sub", DcbQuery.tags("x:1"), DcbStartAt.now(), received::add)
                 .waitUntilStarted();
 
         CloudEvent matching = dcbEvent("TypeA", 1L, List.of("x:1"));
@@ -91,7 +91,7 @@ class DcbSubscriptionModelTest {
     @Test
     void cancel_through_the_facade_stops_delivery() {
         CopyOnWriteArrayList<CloudEvent> received = new CopyOnWriteArrayList<>();
-        dcbSubscriptionModel.subscribe("sub", DcbQuery.tagsAllOf("x:1"), DcbStartAt.now(), received::add)
+        dcbSubscriptionModel.subscribe("sub", DcbQuery.tags("x:1"), DcbStartAt.now(), received::add)
                 .waitUntilStarted();
 
         CloudEvent first = dcbEvent("TypeA", 1L, List.of("x:1"));

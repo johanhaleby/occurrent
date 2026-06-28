@@ -42,7 +42,7 @@ import java.util.stream.Stream;
 
 import static java.nio.charset.StandardCharsets.UTF_8;
 import static org.assertj.core.api.Assertions.assertThat;
-import static org.occurrent.eventstore.api.dcb.DcbQuery.tagsAllOf;
+import static org.occurrent.eventstore.api.dcb.DcbQuery.tags;
 
 @DisplayNameGeneration(ReplaceUnderscores.class)
 class GenericDcbApplicationServiceTest {
@@ -57,14 +57,14 @@ class GenericDcbApplicationServiceTest {
                 event -> Set.of(event.name()),
                 GenericDcbApplicationService.defaultRetryStrategy());
 
-        Optional<DcbAppendResult> result = applicationService.execute(tagsAllOf("name:1"), events -> {
+        Optional<DcbAppendResult> result = applicationService.execute(tags("name:1"), events -> {
             List<DomainEvent> currentEvents = events.toList();
             assertThat(currentEvents).extracting(DomainEvent::type).containsExactly("NameDefined");
             return Stream.of(new DomainEvent("NameChanged", "name:1"));
         });
 
         assertThat(result).hasValue(new DcbAppendResult(2, 2, 1));
-        DcbEventStream eventStream = eventStore.read(tagsAllOf("name:1"));
+        DcbEventStream eventStream = eventStore.read(tags("name:1"));
         assertThat(eventStream.events())
                 .extracting(CloudEvent::getType)
                 .containsExactly("NameDefined", "NameChanged");
@@ -79,10 +79,10 @@ class GenericDcbApplicationServiceTest {
                 converter(),
                 event -> Set.of(event.name()));
 
-        Optional<DcbAppendResult> result = applicationService.execute(tagsAllOf("name:1"), events -> Stream.empty());
+        Optional<DcbAppendResult> result = applicationService.execute(tags("name:1"), events -> Stream.empty());
 
         assertThat(result).isEmpty();
-        assertThat(eventStore.read(tagsAllOf("name:1")).events()).isEmpty();
+        assertThat(eventStore.read(tags("name:1")).events()).isEmpty();
     }
 
     @Test
@@ -97,7 +97,7 @@ class GenericDcbApplicationServiceTest {
                 event -> Set.of(event.name()),
                 GenericDcbApplicationService.defaultRetryStrategy());
 
-        Optional<DcbAppendResult> result = applicationService.execute(tagsAllOf("name:1"), events -> {
+        Optional<DcbAppendResult> result = applicationService.execute(tags("name:1"), events -> {
             attempts.incrementAndGet();
             List<DomainEvent> currentEvents = events.toList();
             if (attempts.get() == 1) {
@@ -110,7 +110,7 @@ class GenericDcbApplicationServiceTest {
 
         assertThat(result).hasValue(new DcbAppendResult(3, 3, 1));
         assertThat(attempts).hasValue(2);
-        assertThat(delegate.read(tagsAllOf("name:1")).events())
+        assertThat(delegate.read(tags("name:1")).events())
                 .extracting(CloudEvent::getType)
                 .containsExactly("NameDefined", "NameChangedByOther", "NameChangedByService");
     }

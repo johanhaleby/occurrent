@@ -100,7 +100,7 @@ class DcbCatchupSubscriptionModelTest {
         appendTagged("name:1", name3);
 
         CopyOnWriteArrayList<DomainEvent> received = new CopyOnWriteArrayList<>();
-        CatchupSubscriptionModel subscription = new CatchupSubscriptionModel(subscriptionModel, eventStore, DcbQuery.tagsAllOf("name:1"));
+        CatchupSubscriptionModel subscription = new CatchupSubscriptionModel(subscriptionModel, eventStore, DcbQuery.tags("name:1"));
 
         subscription.subscribe("subscription", StartAt.subscriptionPosition(DcbSubscriptionPosition.of(0)), toDomainEvents(received)).waitUntilStarted();
 
@@ -115,7 +115,7 @@ class DcbCatchupSubscriptionModelTest {
         appendTagged("name:1", historic2);
 
         CopyOnWriteArrayList<DomainEvent> received = new CopyOnWriteArrayList<>();
-        CatchupSubscriptionModel subscription = new CatchupSubscriptionModel(subscriptionModel, eventStore, DcbQuery.tagsAllOf("name:1"));
+        CatchupSubscriptionModel subscription = new CatchupSubscriptionModel(subscriptionModel, eventStore, DcbQuery.tags("name:1"));
 
         subscription.subscribe("subscription", StartAt.subscriptionPosition(DcbSubscriptionPosition.of(0)), toDomainEvents(received)).waitUntilStarted();
         await().untilAsserted(() -> assertThat(received).containsExactly(historic1, historic2));
@@ -142,7 +142,7 @@ class DcbCatchupSubscriptionModelTest {
         appendTagged("name:1", position3); // dcbposition 3
 
         CopyOnWriteArrayList<DomainEvent> received = new CopyOnWriteArrayList<>();
-        CatchupSubscriptionModel subscription = new CatchupSubscriptionModel(subscriptionModel, eventStore, DcbQuery.tagsAllOf("name:1"));
+        CatchupSubscriptionModel subscription = new CatchupSubscriptionModel(subscriptionModel, eventStore, DcbQuery.tags("name:1"));
 
         subscription.subscribe("subscription", StartAt.subscriptionPosition(DcbSubscriptionPosition.of(2)), toDomainEvents(received)).waitUntilStarted();
 
@@ -159,7 +159,7 @@ class DcbCatchupSubscriptionModelTest {
         storage.save("subscription", DcbSubscriptionPosition.of(1));
 
         CopyOnWriteArrayList<DomainEvent> received = new CopyOnWriteArrayList<>();
-        CatchupSubscriptionModel subscription = new CatchupSubscriptionModel(subscriptionModel, eventStore, DcbQuery.tagsAllOf("name:1"),
+        CatchupSubscriptionModel subscription = new CatchupSubscriptionModel(subscriptionModel, eventStore, DcbQuery.tags("name:1"),
                 new CatchupSubscriptionModelConfig(useSubscriptionPositionStorage(storage).andPersistSubscriptionPositionDuringCatchupPhaseForEveryNEvents(1)));
 
         subscription.subscribe("subscription", StartAt.subscriptionModelDefault(), toDomainEvents(received)).waitUntilStarted();
@@ -170,7 +170,7 @@ class DcbCatchupSubscriptionModelTest {
     @Test
     void live_only_subscription_applies_the_dcb_query_post_filter() {
         CopyOnWriteArrayList<DomainEvent> received = new CopyOnWriteArrayList<>();
-        CatchupSubscriptionModel subscription = new CatchupSubscriptionModel(subscriptionModel, eventStore, DcbQuery.tagsAllOf("name:1"));
+        CatchupSubscriptionModel subscription = new CatchupSubscriptionModel(subscriptionModel, eventStore, DcbQuery.tags("name:1"));
 
         // Default start with nothing stored subscribes live (no replay), mirroring the stream path.
         subscription.subscribe("subscription", StartAt.subscriptionModelDefault(), toDomainEvents(received)).waitUntilStarted();
@@ -189,7 +189,7 @@ class DcbCatchupSubscriptionModelTest {
 
         CopyOnWriteArrayList<DomainEvent> received = new CopyOnWriteArrayList<>();
         // A window of 2 positions forces the replay to page across several windows to cover all five events.
-        CatchupSubscriptionModel subscription = new CatchupSubscriptionModel(subscriptionModel, eventStore, DcbQuery.tagsAllOf("name:1"),
+        CatchupSubscriptionModel subscription = new CatchupSubscriptionModel(subscriptionModel, eventStore, DcbQuery.tags("name:1"),
                 new CatchupSubscriptionModelConfig(100).dcbCatchupPositionWindowSize(2));
 
         subscription.subscribe("subscription", StartAt.subscriptionPosition(DcbSubscriptionPosition.of(0)), toDomainEvents(received)).waitUntilStarted();

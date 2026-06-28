@@ -107,7 +107,7 @@ class DcbCatchupSubscriptionAutoConfigurationMongoTest {
         dcbSubscriptions
                 .subscribe(
                         "test-catchup-" + UUID.randomUUID(),
-                        DcbQuery.tagsAllOf(TAG),
+                        DcbQuery.tags(TAG),
                         DcbStartAt.beginning(),
                         received::add)
                 .waitUntilStarted();

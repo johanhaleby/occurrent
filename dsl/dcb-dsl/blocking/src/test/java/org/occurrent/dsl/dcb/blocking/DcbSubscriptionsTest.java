@@ -70,7 +70,7 @@ class DcbSubscriptionsTest {
     @Test
     void delivers_only_matching_dcb_events() {
         CopyOnWriteArrayList<DomainEvent> received = new CopyOnWriteArrayList<>();
-        dcbSubscriptions.subscribe("subscription", DcbQuery.tagsAllOf("name:1"), (DomainEvent event) -> received.add(event)).waitUntilStarted();
+        dcbSubscriptions.subscribe("subscription", DcbQuery.tags("name:1"), (DomainEvent event) -> received.add(event)).waitUntilStarted();
 
         NameDefined matching = new NameDefined("eventId1", time, "name", "Some Doe");
         append("name:1", matching);
@@ -109,7 +109,7 @@ class DcbSubscriptionsTest {
         CopyOnWriteArrayList<Set<String>> tags = new CopyOnWriteArrayList<>();
         CopyOnWriteArrayList<DomainEvent> events = new CopyOnWriteArrayList<>();
 
-        dcbSubscriptions.subscribeWithMetadata("subscription", DcbQuery.tagsAllOf("name:1"), (metadata, event) -> {
+        dcbSubscriptions.subscribeWithMetadata("subscription", DcbQuery.tags("name:1"), (metadata, event) -> {
             positions.add(metadata.dcbPosition());
             tags.add(metadata.dcbTags());
             events.add(event);
@@ -128,7 +128,7 @@ class DcbSubscriptionsTest {
     @Test
     void cancel_stops_further_delivery_to_the_subscription() {
         CopyOnWriteArrayList<DomainEvent> received = new CopyOnWriteArrayList<>();
-        dcbSubscriptions.subscribe("subscription", DcbQuery.tagsAllOf("name:1"), (DomainEvent event) -> received.add(event)).waitUntilStarted();
+        dcbSubscriptions.subscribe("subscription", DcbQuery.tags("name:1"), (DomainEvent event) -> received.add(event)).waitUntilStarted();
 
         NameDefined beforeCancel = new NameDefined("eventId1", time, "name", "Some Doe");
         append("name:1", beforeCancel);
@@ -140,7 +140,7 @@ class DcbSubscriptionsTest {
         // append was processed and delivered, so the cancelled subscription has had its chance. Asserting against that
         // is stronger than waiting a fixed window, which only shows the event had not arrived yet.
         CopyOnWriteArrayList<DomainEvent> witnessReceived = new CopyOnWriteArrayList<>();
-        dcbSubscriptions.subscribe("witness", DcbQuery.tagsAllOf("name:1"), (DomainEvent event) -> witnessReceived.add(event)).waitUntilStarted();
+        dcbSubscriptions.subscribe("witness", DcbQuery.tags("name:1"), (DomainEvent event) -> witnessReceived.add(event)).waitUntilStarted();
 
         NameWasChanged afterCancel = new NameWasChanged("eventId2", time, "name", "Jane Doe");
         append("name:1", afterCancel);

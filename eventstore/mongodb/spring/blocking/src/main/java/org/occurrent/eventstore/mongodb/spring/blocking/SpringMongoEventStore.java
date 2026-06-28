@@ -524,11 +524,19 @@ public class SpringMongoEventStore implements EventStore, EventStoreOperations, 
         // single attribute made it match, and a combined key would share nothing with an event that carries only one
         // of the attributes through a different query.
         java.util.TreeSet<String> keys = new java.util.TreeSet<>();
-        for (DcbQueryItem item : ((DcbQuery.Items) query).items()) {
+        for (DcbQueryItem item : dcbQueryItems(query)) {
             item.tags().forEach(tag -> keys.add("tag:" + tag));
             item.types().forEach(type -> keys.add("type:" + type));
         }
         return keys;
+    }
+
+    // A query here is either a single DcbQueryItem alternative or an Items list (MatchAll is handled by the callers).
+    private static List<DcbQueryItem> dcbQueryItems(DcbQuery query) {
+        if (query instanceof DcbQueryItem item) {
+            return List.of(item);
+        }
+        return ((DcbQuery.Items) query).items();
     }
 
     private static Set<String> eventMarkerKeys(List<CloudEvent> events) {
@@ -689,7 +697,7 @@ public class SpringMongoEventStore implements EventStore, EventStoreOperations, 
         if (query instanceof DcbQuery.MatchAll) {
             return new Query(positionCriteria);
         }
-        List<Criteria> itemCriteria = ((DcbQuery.Items) query).items().stream()
+        List<Criteria> itemCriteria = dcbQueryItems(query).stream()
                 .map(SpringMongoEventStore::toCriteria)
                 .toList();
         return new Query(new Criteria().andOperator(positionCriteria, new Criteria().orOperator(itemCriteria)));

@@ -19,24 +19,26 @@ package org.occurrent.eventstore.api.dcb;
 import org.jspecify.annotations.NullMarked;
 
 import java.util.ArrayList;
-import java.util.Arrays;
 import java.util.Collection;
 import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Set;
 
 import static java.util.Objects.requireNonNull;
-import static java.util.stream.Collectors.toUnmodifiableSet;
 
 /**
  * Query that selects CloudEvents by DCB metadata.
  * <p>
- * A query is either {@link MatchAll} (every DCB event) or {@link Items}, a non-empty list of
- * {@link DcbQueryItem} alternatives that are OR-ed together. Inside an item, types are matched as
- * any-of, tags as all-of, and excluded types as none-of.
+ * A query is {@link MatchAll} (every DCB event), a single {@link DcbQueryItem} alternative, or {@link Items}, several
+ * alternatives OR-ed together. Inside an item, types are matched as any-of, tags as all-of, and excluded types as
+ * none-of.
+ * <p>
+ * Build queries fluently: {@code DcbQuery.type("OrderPlaced").tags("order:1")} for one alternative, and
+ * {@code DcbQuery.anyOf(DcbQuery.tags("order:1"), DcbQuery.tags("customer:1"))} (or the {@link #tagsAnyOf(String, String...)}
+ * shortcut) to OR several. The model is deliberately an OR of items rather than a general boolean tree (see ADR 32).
  */
 @NullMarked
-public sealed interface DcbQuery permits DcbQuery.MatchAll, DcbQuery.Items {
+public sealed interface DcbQuery permits DcbQuery.MatchAll, DcbQuery.Items, DcbQueryItem {
 
     /**
      * A query that matches every DCB event.
@@ -71,70 +73,92 @@ public sealed interface DcbQuery permits DcbQuery.MatchAll, DcbQuery.Items {
     }
 
     /**
-     * Creates a query that matches an event when it matches any of the supplied query items.
+     * Creates a query matching events whose CloudEvent type is {@code type}. Refine it fluently with
+     * {@link DcbQueryItem#tags(String, String...)} or {@link DcbQueryItem#excludingTypes(String, String...)}.
      */
-    static DcbQuery anyOf(Collection<DcbQueryItem> items) {
-        requireNonNull(items, "Items cannot be null");
-        return new Items(List.copyOf(items));
+    static DcbQueryItem type(String type) {
+        return new DcbQueryItem(Set.of(requireNonNull(type, "Type cannot be null")), Set.of());
     }
 
     /**
-     * Creates a query that matches an event when it matches any of the supplied query items.
+     * Creates a query matching events whose CloudEvent type is any of the supplied types (any-of).
      */
-    static DcbQuery anyOf(DcbQueryItem first, DcbQueryItem... rest) {
-        requireNonNull(first, "First item cannot be null");
-        requireNonNull(rest, "Additional items cannot be null");
-        List<DcbQueryItem> items = new ArrayList<>();
-        items.add(first);
-        for (DcbQueryItem item : rest) {
-            items.add(requireNonNull(item, "Item cannot be null"));
+    static DcbQueryItem types(String first, String... rest) {
+        return new DcbQueryItem(combine(first, rest), Set.of());
+    }
+
+    /**
+     * Creates a query matching events whose CloudEvent type is any of the supplied types (any-of).
+     */
+    static DcbQueryItem types(Collection<String> types) {
+        return new DcbQueryItem(new LinkedHashSet<>(types), Set.of());
+    }
+
+    /**
+     * Creates a query matching events containing all the supplied DCB tags (all-of).
+     */
+    static DcbQueryItem tags(String first, String... rest) {
+        return new DcbQueryItem(Set.of(), combine(first, rest));
+    }
+
+    /**
+     * Creates a query matching events containing all the supplied DCB tags (all-of).
+     */
+    static DcbQueryItem tags(Collection<String> tags) {
+        return new DcbQueryItem(Set.of(), new LinkedHashSet<>(tags));
+    }
+
+    /**
+     * Creates a query matching an event when it matches any of the supplied alternatives. A {@link DcbQueryItem}
+     * contributes itself, an {@link Items} contributes all its alternatives, and a {@link MatchAll} collapses the whole
+     * query to match everything.
+     */
+    static DcbQuery anyOf(DcbQuery first, DcbQuery... rest) {
+        requireNonNull(first, "First query cannot be null");
+        requireNonNull(rest, "Additional queries cannot be null");
+        List<DcbQuery> queries = new ArrayList<>();
+        queries.add(first);
+        for (DcbQuery query : rest) {
+            queries.add(requireNonNull(query, "Query cannot be null"));
         }
-        return new Items(items);
+        return anyOf(queries);
     }
 
     /**
-     * Creates a query that matches any event whose CloudEvent type is {@code type}. Shorthand for the single-type case
-     * of {@link #types(String, String...)}.
+     * Creates a query matching an event when it matches any of the supplied alternatives.
      */
-    static DcbQuery type(String type) {
-        return types(type);
+    static DcbQuery anyOf(Collection<? extends DcbQuery> queries) {
+        requireNonNull(queries, "Queries cannot be null");
+        if (queries.isEmpty()) {
+            throw new IllegalArgumentException("A query must contain at least one query item");
+        }
+        List<DcbQueryItem> items = new ArrayList<>();
+        for (DcbQuery query : queries) {
+            requireNonNull(query, "Query cannot be null");
+            if (query instanceof MatchAll) {
+                return new MatchAll();
+            } else if (query instanceof DcbQueryItem item) {
+                items.add(item);
+            } else if (query instanceof Items existing) {
+                items.addAll(existing.items());
+            }
+        }
+        return items.size() == 1 ? items.get(0) : new Items(items);
     }
 
     /**
-     * Creates a query that matches any event whose CloudEvent type is one of the supplied types.
+     * Creates a query matching events that carry any one of the supplied DCB tags. Shorthand for
+     * {@code anyOf(tags(a), tags(b), ...)}.
      */
-    static DcbQuery types(String type, String... additionalTypes) {
-        return anyOf(List.of(DcbQueryItem.types(combine(type, additionalTypes))));
-    }
-
-    /**
-     * Creates a query that matches events containing all supplied DCB tags.
-     */
-    static DcbQuery tagsAllOf(String tag, String... additionalTags) {
-        return anyOf(List.of(DcbQueryItem.tagsAllOf(combine(tag, additionalTags))));
-    }
-
-    /**
-     * Creates a query that matches any of the supplied CloudEvent types and all supplied DCB tags.
-     */
-    static DcbQuery typeAndTagsAllOf(Collection<String> types, Collection<String> tags) {
-        return anyOf(List.of(DcbQueryItem.typeAndTagsAllOf(types, tags)));
-    }
-
-    /**
-     * Creates a query that matches events containing all supplied DCB tags except
-     * events whose CloudEvent type is excluded.
-     */
-    static DcbQuery tagsAllOfExcludingTypes(Collection<String> tags, Collection<String> excludedTypes) {
-        return anyOf(List.of(DcbQueryItem.tagsAllOfExcludingTypes(tags, excludedTypes)));
-    }
-
-    /**
-     * Creates a query that matches any of the supplied CloudEvent types and all supplied
-     * DCB tags, except events whose CloudEvent type is excluded.
-     */
-    static DcbQuery typeAndTagsAllOfExcludingTypes(Collection<String> types, Collection<String> tags, Collection<String> excludedTypes) {
-        return anyOf(List.of(DcbQueryItem.typeAndTagsAllOfExcludingTypes(types, tags, excludedTypes)));
+    static DcbQuery tagsAnyOf(String first, String... rest) {
+        requireNonNull(first, "First tag cannot be null");
+        requireNonNull(rest, "Additional tags cannot be null");
+        List<DcbQuery> items = new ArrayList<>();
+        items.add(tags(first));
+        for (String tag : rest) {
+            items.add(tags(requireNonNull(tag, "Tag cannot be null")));
+        }
+        return anyOf(items);
     }
 
     private static Set<String> combine(String first, String[] additional) {
@@ -142,9 +166,9 @@ public sealed interface DcbQuery permits DcbQuery.MatchAll, DcbQuery.Items {
         requireNonNull(additional, "Additional values cannot be null");
         LinkedHashSet<String> values = new LinkedHashSet<>();
         values.add(first);
-        values.addAll(Arrays.stream(additional)
-                .map(value -> requireNonNull(value, "Value cannot be null"))
-                .collect(toUnmodifiableSet()));
+        for (String value : additional) {
+            values.add(requireNonNull(value, "Value cannot be null"));
+        }
         return Set.copyOf(values);
     }
 }

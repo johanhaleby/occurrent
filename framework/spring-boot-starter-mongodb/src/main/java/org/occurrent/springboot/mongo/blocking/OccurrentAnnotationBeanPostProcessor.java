@@ -263,11 +263,11 @@ class OccurrentAnnotationBeanPostProcessor implements BeanPostProcessor, Applica
         if (!hasTypes && !hasTags) {
             return DcbQuery.all();
         } else if (hasTypes && hasTags) {
-            return DcbQuery.typeAndTagsAllOf(cloudEventTypes, tagsAllOf);
+            return DcbQuery.types(cloudEventTypes.get(0), cloudEventTypes.stream().skip(1).toArray(String[]::new)).tags(tagsAllOf);
         } else if (hasTypes) {
             return DcbQuery.types(cloudEventTypes.get(0), cloudEventTypes.stream().skip(1).toArray(String[]::new));
         } else {
-            return DcbQuery.tagsAllOf(tagsAllOf.get(0), tagsAllOf.stream().skip(1).toArray(String[]::new));
+            return DcbQuery.tags(tagsAllOf.get(0), tagsAllOf.stream().skip(1).toArray(String[]::new));
         }
     }
 

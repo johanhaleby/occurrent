@@ -19,20 +19,25 @@ package org.occurrent.eventstore.api.dcb;
 import org.jspecify.annotations.NullMarked;
 
 import java.util.Collection;
+import java.util.LinkedHashSet;
 import java.util.Set;
 
 import static java.util.Objects.requireNonNull;
 import static java.util.stream.Collectors.toUnmodifiableSet;
 
 /**
- * One alternative inside a {@link DcbQuery}.
+ * One alternative inside a {@link DcbQuery}, and itself a single-alternative query.
  * <p>
  * {@code types} match CloudEvent types as any-of. {@code tags} match DCB tags as
  * all-of. {@code excludedTypes} removes matching events whose CloudEvent type is
  * present in that set.
+ * <p>
+ * Build it through {@link DcbQuery#type(String)}, {@link DcbQuery#types(String, String...)}, or
+ * {@link DcbQuery#tags(String, String...)} and refine it fluently, for example
+ * {@code DcbQuery.type("OrderPlaced").tags("order:1")}.
  */
 @NullMarked
-public record DcbQueryItem(Set<String> types, Set<String> tags, Set<String> excludedTypes) {
+public record DcbQueryItem(Set<String> types, Set<String> tags, Set<String> excludedTypes) implements DcbQuery {
 
     public DcbQueryItem(Set<String> types, Set<String> tags) {
         this(types, tags, Set.of());
@@ -58,48 +63,56 @@ public record DcbQueryItem(Set<String> types, Set<String> tags, Set<String> excl
     }
 
     /**
-     * Creates an item that matches events whose CloudEvent type is {@code type}. Shorthand for the single-type case of
-     * {@link #types(Collection)}.
+     * Returns a copy of this item matching any of the supplied CloudEvent types (any-of).
      */
-    public static DcbQueryItem type(String type) {
-        return types(Set.of(type));
+    public DcbQueryItem types(String first, String... rest) {
+        return new DcbQueryItem(combine(first, rest), tags, excludedTypes);
     }
 
     /**
-     * Creates an item that matches any of the supplied CloudEvent types.
+     * Returns a copy of this item matching any of the supplied CloudEvent types (any-of).
      */
-    public static DcbQueryItem types(Collection<String> types) {
-        return new DcbQueryItem(copyWithoutNulls(types, "Type cannot be null"), Set.of());
+    public DcbQueryItem types(Collection<String> types) {
+        return new DcbQueryItem(copyWithoutNulls(types, "Type cannot be null"), tags, excludedTypes);
     }
 
     /**
-     * Creates an item that matches events containing all supplied DCB tags.
+     * Returns a copy of this item matching events containing all the supplied DCB tags (all-of).
      */
-    public static DcbQueryItem tagsAllOf(Collection<String> tags) {
-        return new DcbQueryItem(Set.of(), copyWithoutNulls(tags, "Tag cannot be null"));
+    public DcbQueryItem tags(String first, String... rest) {
+        return new DcbQueryItem(types, combine(first, rest), excludedTypes);
     }
 
     /**
-     * Creates an item that matches any supplied CloudEvent type and all supplied DCB tags.
+     * Returns a copy of this item matching events containing all the supplied DCB tags (all-of).
      */
-    public static DcbQueryItem typeAndTagsAllOf(Collection<String> types, Collection<String> tags) {
-        return new DcbQueryItem(copyWithoutNulls(types, "Type cannot be null"), copyWithoutNulls(tags, "Tag cannot be null"));
+    public DcbQueryItem tags(Collection<String> tags) {
+        return new DcbQueryItem(types, copyWithoutNulls(tags, "Tag cannot be null"), excludedTypes);
     }
 
     /**
-     * Creates an item that matches events containing all supplied DCB tags except
-     * events whose CloudEvent type is excluded.
+     * Returns a copy of this item that excludes events whose CloudEvent type is any of the supplied types (none-of).
      */
-    public static DcbQueryItem tagsAllOfExcludingTypes(Collection<String> tags, Collection<String> excludedTypes) {
-        return new DcbQueryItem(Set.of(), copyWithoutNulls(tags, "Tag cannot be null"), copyWithoutNulls(excludedTypes, "Excluded type cannot be null"));
+    public DcbQueryItem excludingTypes(String first, String... rest) {
+        return new DcbQueryItem(types, tags, combine(first, rest));
     }
 
     /**
-     * Creates an item that matches any supplied CloudEvent type and all supplied DCB tags,
-     * except events whose CloudEvent type is excluded.
+     * Returns a copy of this item that excludes events whose CloudEvent type is any of the supplied types (none-of).
      */
-    public static DcbQueryItem typeAndTagsAllOfExcludingTypes(Collection<String> types, Collection<String> tags, Collection<String> excludedTypes) {
-        return new DcbQueryItem(copyWithoutNulls(types, "Type cannot be null"), copyWithoutNulls(tags, "Tag cannot be null"), copyWithoutNulls(excludedTypes, "Excluded type cannot be null"));
+    public DcbQueryItem excludingTypes(Collection<String> excludedTypes) {
+        return new DcbQueryItem(types, tags, copyWithoutNulls(excludedTypes, "Excluded type cannot be null"));
+    }
+
+    private static Set<String> combine(String first, String[] additional) {
+        requireNonNull(first, "Value cannot be null");
+        requireNonNull(additional, "Additional values cannot be null");
+        LinkedHashSet<String> values = new LinkedHashSet<>();
+        values.add(first);
+        for (String value : additional) {
+            values.add(requireNonNull(value, "Value cannot be null"));
+        }
+        return Set.copyOf(values);
     }
 
     private static Set<String> copyWithoutNulls(Collection<String> values, String nullMessage) {

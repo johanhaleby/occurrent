@@ -72,7 +72,7 @@ class DcbDomainEventQueriesTest {
         NameWasChanged nameWasChanged = new NameWasChanged("eventId2", time, "name", "Jane Doe");
         append("name:1", nameDefined, nameWasChanged);
 
-        List<DomainEvent> events = dcbQueries.query(DcbQuery.tagsAllOf("name:1")).toList();
+        List<DomainEvent> events = dcbQueries.query(DcbQuery.tags("name:1")).toList();
 
         assertThat(events).containsExactly(nameDefined, nameWasChanged);
     }
@@ -84,7 +84,7 @@ class DcbDomainEventQueriesTest {
         append("name:1", nameDefined);
         append("name:1", nameWasChanged);
 
-        List<DomainEvent> events = dcbQueries.query(DcbQuery.tagsAllOf("name:1"), DcbReadOptions.afterSequencePosition(1)).toList();
+        List<DomainEvent> events = dcbQueries.query(DcbQuery.tags("name:1"), DcbReadOptions.afterSequencePosition(1)).toList();
 
         assertThat(events).containsExactly(nameWasChanged);
     }
@@ -95,7 +95,7 @@ class DcbDomainEventQueriesTest {
         append("name:1", nameDefined);
         append("other:1", new NameWasChanged("eventId2", time, "name", "Jane Doe"));
 
-        DcbDomainEventStream<DomainEvent> eventStream = dcbQueries.queryWithPosition(DcbQuery.tagsAllOf("name:1"));
+        DcbDomainEventStream<DomainEvent> eventStream = dcbQueries.queryWithPosition(DcbQuery.tags("name:1"));
 
         assertThat(eventStream.events()).containsExactly(nameDefined);
         assertThat(eventStream.stream()).containsExactly(nameDefined);
@@ -106,7 +106,7 @@ class DcbDomainEventQueriesTest {
     void query_with_position_exposes_a_usable_consistency_token() {
         append("name:1", new NameDefined("eventId1", time, "name", "Some Doe"));
 
-        DcbDomainEventStream<DomainEvent> eventStream = dcbQueries.queryWithPosition(DcbQuery.tagsAllOf("name:1"));
+        DcbDomainEventStream<DomainEvent> eventStream = dcbQueries.queryWithPosition(DcbQuery.tags("name:1"));
         DcbConsistencyToken token = eventStream.consistencyToken();
         assertThat(token).isNotNull();
 
@@ -117,7 +117,7 @@ class DcbDomainEventQueriesTest {
                 .map(event -> DcbCloudEvents.withTags(event, List.of("name:1")))
                 .toList();
 
-        assertThatThrownBy(() -> eventStore.append(newEvents, DcbAppendCondition.failIfEventsMatch(DcbQuery.tagsAllOf("name:1"), token)))
+        assertThatThrownBy(() -> eventStore.append(newEvents, DcbAppendCondition.failIfEventsMatch(DcbQuery.tags("name:1"), token)))
                 .isInstanceOf(DcbAppendConditionNotFulfilledException.class);
     }
 
@@ -127,7 +127,7 @@ class DcbDomainEventQueriesTest {
         InMemoryEventStore eventStoreWithSubscriptions = new InMemoryEventStore(subscriptionModel);
         CopyOnWriteArrayList<EventMetadata> metadata = new CopyOnWriteArrayList<>();
 
-        DcbSubscriptionsKt.subscribeDcbWithMetadata(subscriptionModel, "subscription", cloudEventConverter, DcbQuery.tagsAllOf("name:1"), null, true, (eventMetadata, event) -> {
+        DcbSubscriptionsKt.subscribeDcbWithMetadata(subscriptionModel, "subscription", cloudEventConverter, DcbQuery.tags("name:1"), null, true, (eventMetadata, event) -> {
             metadata.add(eventMetadata);
             return kotlin.Unit.INSTANCE;
         });

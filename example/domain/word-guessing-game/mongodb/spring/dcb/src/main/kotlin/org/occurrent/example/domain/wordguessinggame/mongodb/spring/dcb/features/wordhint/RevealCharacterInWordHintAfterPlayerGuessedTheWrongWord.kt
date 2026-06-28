@@ -56,7 +56,7 @@ class RevealCharacterInWordHintAfterPlayerGuessedTheWrongWord(
             .filterIsInstance<PlayerGuessedTheWrongWord>()
             .size
 
-        applicationService.execute(GameDcbQueries.wordHintDecisionContext(gameId)) { events: Stream<GameEvent> ->
+        applicationService.execute(GameDcbQueries.wordHintBoundary(gameId)) { events: Stream<GameEvent> ->
             val eventList = events.toList()
             val gameWasStarted = eventList.filterIsInstance<GameWasStarted>().firstOrNull()
             val revealedCharacters = eventList.filterIsInstance<CharacterInWordHintWasRevealed>()
