@@ -115,7 +115,7 @@ public record DcbQueryItem(Set<String> types, Set<String> tags, Set<String> excl
         return Set.copyOf(values);
     }
 
-    private static Set<String> copyWithoutNulls(Collection<String> values, String nullMessage) {
+    static Set<String> copyWithoutNulls(Collection<String> values, String nullMessage) {
         requireNonNull(values, "Values cannot be null");
         return values.stream()
                 .map(value -> requireNonNull(value, nullMessage))
