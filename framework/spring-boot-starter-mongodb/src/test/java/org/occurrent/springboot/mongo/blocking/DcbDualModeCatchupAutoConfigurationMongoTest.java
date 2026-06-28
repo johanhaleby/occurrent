@@ -141,7 +141,7 @@ class DcbDualModeCatchupAutoConfigurationMongoTest {
         dcbSubscriptions
                 .subscribe(
                         "dcb-catchup-" + UUID.randomUUID(),
-                        DcbQuery.tagsAllOf(DCB_TAG),
+                        DcbQuery.tags(DCB_TAG),
                         DcbStartAt.beginning(),
                         received::add)
                 .waitUntilStarted();
@@ -176,7 +176,7 @@ class DcbDualModeCatchupAutoConfigurationMongoTest {
         dcbSubscriptions
                 .subscribe(
                         "both-dcb-" + UUID.randomUUID(),
-                        DcbQuery.tagsAllOf(DCB_TAG),
+                        DcbQuery.tags(DCB_TAG),
                         DcbStartAt.beginning(),
                         dcbReceived::add)
                 .waitUntilStarted();
@@ -202,7 +202,7 @@ class DcbDualModeCatchupAutoConfigurationMongoTest {
         dcbSubscriptions
                 .subscribe(
                         "isolation-dcb-" + UUID.randomUUID(),
-                        DcbQuery.tagsAllOf(DCB_TAG),
+                        DcbQuery.tags(DCB_TAG),
                         DcbStartAt.beginning(),
                         dcbReceived::add)
                 .waitUntilStarted();
@@ -223,7 +223,7 @@ class DcbDualModeCatchupAutoConfigurationMongoTest {
         dcbSubscriptions
                 .subscribe(
                         "live-dcb-" + UUID.randomUUID(),
-                        DcbQuery.tagsAllOf(DCB_TAG),
+                        DcbQuery.tags(DCB_TAG),
                         DcbStartAt.beginning(),
                         received::add)
                 .waitUntilStarted();

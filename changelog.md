@@ -1,5 +1,9 @@
 ### Changelog next version
 
+* DCB queries are now built with a fluent API.
+  * `DcbQuery.type("OrderPlaced").tags("order:1")` builds one alternative, `DcbQuery.anyOf(...)` ORs several, and `DcbQuery.tagsAnyOf("a", "b")` is the shorthand for an or of single-tag alternatives. The telescoping `typeAndTagsAllOf`, `tagsAllOfExcludingTypes`, and `typeAndTagsAllOfExcludingTypes` factories are gone, and OR-ing alternatives no longer names `DcbQueryItem` or wraps it in a list. A single alternative is now itself a `DcbQuery`. The query model, the matcher, and the consistency markers are unchanged.
+  * See [ADR 32](doc/architecture/decisions/0032-fluent-dcb-query-construction.md).
+
 * Added the `@DcbSubscription` annotation, the declarative DCB counterpart to `@StreamSubscription`.
   * A DCB read model can now be declared as a single annotated method. `eventTypes` and `tagsAllOf` express the `DcbQuery`, and `startAt` (BEGINNING, NOW, DEFAULT) or `startAtDcbPosition` (an explicit position, the DCB counterpart to the stream `startAtTimeEpochMillis`) together with `resumeBehavior` give history replay, resume from the stored position, and an always-replay in-memory mode that disables the competing consumer and position storage. It routes through the DCB DSL, so it gets the server-side filter, and the method can take the event plus an optional `EventMetadata` or `DcbEventMetadata`. `DcbStartAt` gained a `dynamic` factory to back the resume logic. The course-enrollment dashboard subscriber now uses `@DcbSubscription` (combining `BEGINNING` with `SAME_AS_START_AT`, since it is an in-memory model rebuilt on every boot).
   * See [ADR 27](doc/architecture/decisions/0027-dcb-subscription-annotation.md).

@@ -55,7 +55,7 @@ class InMemorySubscriptionModelDcbFilterTest {
     @Test
     void delivers_matching_dcb_event_to_subscriber_with_dcb_filter() {
         CopyOnWriteArrayList<CloudEvent> received = new CopyOnWriteArrayList<>();
-        subscriptionModel.subscribe("sub", DcbSubscriptionFilter.filter(DcbQuery.tagsAllOf("x:1")), received::add)
+        subscriptionModel.subscribe("sub", DcbSubscriptionFilter.filter(DcbQuery.tags("x:1")), received::add)
                 .waitUntilStarted();
 
         CloudEvent matching = dcbEvent("TypeA", 1L, List.of("x:1"));
@@ -67,7 +67,7 @@ class InMemorySubscriptionModelDcbFilterTest {
     @Test
     void does_not_deliver_event_missing_required_tag() {
         CopyOnWriteArrayList<CloudEvent> received = new CopyOnWriteArrayList<>();
-        subscriptionModel.subscribe("sub", DcbSubscriptionFilter.filter(DcbQuery.tagsAllOf("x:1")), received::add)
+        subscriptionModel.subscribe("sub", DcbSubscriptionFilter.filter(DcbQuery.tags("x:1")), received::add)
                 .waitUntilStarted();
 
         CloudEvent nonMatching = dcbEvent("TypeA", 1L, List.of("y:2"));
@@ -81,7 +81,7 @@ class InMemorySubscriptionModelDcbFilterTest {
     @Test
     void does_not_deliver_event_with_no_dcb_position() {
         CopyOnWriteArrayList<CloudEvent> received = new CopyOnWriteArrayList<>();
-        subscriptionModel.subscribe("sub", DcbSubscriptionFilter.filter(DcbQuery.tagsAllOf("x:1")), received::add)
+        subscriptionModel.subscribe("sub", DcbSubscriptionFilter.filter(DcbQuery.tags("x:1")), received::add)
                 .waitUntilStarted();
 
         // An event with the right tag but no dcbposition must be rejected by the position guard.
@@ -101,7 +101,7 @@ class InMemorySubscriptionModelDcbFilterTest {
     @Test
     void filters_out_non_matching_and_keeps_matching_events_in_same_batch() {
         CopyOnWriteArrayList<CloudEvent> received = new CopyOnWriteArrayList<>();
-        subscriptionModel.subscribe("sub", DcbSubscriptionFilter.filter(DcbQuery.tagsAllOf("x:1")), received::add)
+        subscriptionModel.subscribe("sub", DcbSubscriptionFilter.filter(DcbQuery.tags("x:1")), received::add)
                 .waitUntilStarted();
 
         CloudEvent matching = dcbEvent("TypeA", 1L, List.of("x:1", "y:2"));

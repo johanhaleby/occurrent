@@ -47,7 +47,7 @@ class CourseDetail(private val queries: DcbDomainEventQueries<DomainEvent>) {
     fun of(courseId: CourseId): CourseDetailView? {
         // The course tag scopes the read to this course's own events (definition plus enrollments), not the students'.
         // A DCB read materializes its matched window into a list, so the sequence needs no explicit closing.
-        val state = queries.queryForSequence(CourseEnrollmentDcbQueries.courseDecisionContext(courseId))
+        val state = queries.queryForSequence(CourseEnrollmentDcbQueries.courseBoundary(courseId))
             .fold(CourseAccumulator()) { acc, event ->
                 when (event) {
                     is CourseDefined -> acc.copy(title = event.title, capacity = event.capacity)
@@ -66,6 +66,6 @@ class CourseDetail(private val queries: DcbDomainEventQueries<DomainEvent>) {
     }
 
     private fun nameOf(studentId: StudentId): String =
-        queries.queryForSequence(CourseEnrollmentDcbQueries.studentDecisionContext(studentId))
+        queries.queryForSequence(CourseEnrollmentDcbQueries.studentBoundary(studentId))
             .filterIsInstance<StudentRegistered>().map { it.name }.firstOrNull() ?: studentId.toString()
 }

@@ -22,6 +22,7 @@ import org.jspecify.annotations.NullMarked;
 
 import java.util.Arrays;
 import java.util.Collection;
+import java.util.List;
 import java.util.Set;
 import java.util.TreeSet;
 
@@ -120,10 +121,10 @@ public final class DcbCloudEvents {
     public static boolean matches(CloudEvent cloudEvent, DcbQuery query) {
         requireNonNull(cloudEvent, "CloudEvent cannot be null");
         requireNonNull(query, "Query cannot be null");
-        if (query instanceof DcbQuery.Items items) {
-            return items.items().stream().anyMatch(item -> matches(cloudEvent, item));
+        if (query instanceof DcbQuery.MatchAll) {
+            return true;
         }
-        return true;
+        return itemsOf(query).stream().anyMatch(item -> matches(cloudEvent, item));
     }
 
     private static boolean matches(CloudEvent cloudEvent, DcbQueryItem item) {
@@ -141,12 +142,19 @@ public final class DcbCloudEvents {
      */
     public static Set<String> boundaryTags(DcbQuery query) {
         requireNonNull(query, "Query cannot be null");
-        if (query instanceof DcbQuery.Items items) {
-            return Set.copyOf(items.items().stream()
-                    .flatMap(item -> item.tags().stream())
-                    .collect(toCollection(TreeSet::new)));
+        return Set.copyOf(itemsOf(query).stream()
+                .flatMap(item -> item.tags().stream())
+                .collect(toCollection(TreeSet::new)));
+    }
+
+    private static List<DcbQueryItem> itemsOf(DcbQuery query) {
+        if (query instanceof DcbQueryItem item) {
+            return List.of(item);
         }
-        return Set.of();
+        if (query instanceof DcbQuery.Items items) {
+            return items.items();
+        }
+        return List.of();
     }
 
     /**

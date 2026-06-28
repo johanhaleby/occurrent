@@ -54,13 +54,25 @@ public final class DcbSubscriptionFilterConverter {
      */
     public static Document toChangeStreamMatchStage(DcbQuery query) {
         Document conditions = new Document(POSITION_FIELD, new Document("$gt", 0));
-        if (query instanceof DcbQuery.Items items) {
-            List<Document> itemConditions = items.items().stream()
+        List<DcbQueryItem> items = itemsOf(query);
+        if (!items.isEmpty()) {
+            List<Document> itemConditions = items.stream()
                     .map(DcbSubscriptionFilterConverter::toItemCondition)
                     .toList();
             conditions.put("$or", itemConditions);
         }
         return new Document("$match", conditions);
+    }
+
+    // A bare DcbQueryItem is a single alternative, Items is several, and MatchAll yields no constraint (position only).
+    private static List<DcbQueryItem> itemsOf(DcbQuery query) {
+        if (query instanceof DcbQueryItem item) {
+            return List.of(item);
+        }
+        if (query instanceof DcbQuery.Items items) {
+            return items.items();
+        }
+        return List.of();
     }
 
     private static Document toItemCondition(DcbQueryItem item) {

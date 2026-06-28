@@ -103,9 +103,9 @@ class OccurrentMongoAutoConfigurationCombinedModeTest {
         String tag = "tenant:" + UUID.randomUUID();
         TestEvent event = new TestEvent(UUID.randomUUID().toString(), new Date(), "dcb-name", tag);
 
-        dcbApplicationService.execute(DcbQuery.tagsAllOf(tag), __ -> Stream.of(event));
+        dcbApplicationService.execute(DcbQuery.tags(tag), __ -> Stream.of(event));
 
-        try (Stream<TestEvent> read = dcbDomainEventQueries.query(DcbQuery.tagsAllOf(tag))) {
+        try (Stream<TestEvent> read = dcbDomainEventQueries.query(DcbQuery.tags(tag))) {
             assertThat(read).containsExactly(event);
         }
     }

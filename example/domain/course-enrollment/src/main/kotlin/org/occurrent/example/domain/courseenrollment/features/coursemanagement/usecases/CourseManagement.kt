@@ -22,18 +22,18 @@ import org.occurrent.example.domain.courseenrollment.common.DomainEvent
 import org.occurrent.example.domain.courseenrollment.features.coursemanagement.model.CourseCommand.CancelCourse
 import org.occurrent.example.domain.courseenrollment.features.coursemanagement.model.CourseCommand.DefineCourse
 import org.occurrent.example.domain.courseenrollment.features.coursemanagement.model.courseDecider
-import org.occurrent.example.domain.courseenrollment.infrastructure.dcb.CourseEnrollmentDcbQueries.courseDecisionContext
+import org.occurrent.example.domain.courseenrollment.infrastructure.dcb.CourseEnrollmentDcbQueries.courseBoundary
 import java.time.Instant
 import java.util.*
 
 fun DcbApplicationService<DomainEvent>.defineCourse(courseId: UUID, title: String, capacity: Int, occurredAt: Instant = Instant.now()) = execute(
-    courseDecisionContext(courseId),
+    courseBoundary(courseId),
     DefineCourse(UUID.randomUUID(), occurredAt, courseId, title, capacity),
     courseDecider
 )
 
 fun DcbApplicationService<DomainEvent>.cancelCourse(courseId: UUID, occurredAt: Instant = Instant.now()) = execute(
-    courseDecisionContext(courseId),
+    courseBoundary(courseId),
     CancelCourse(UUID.randomUUID(), occurredAt, courseId),
     courseDecider
 )

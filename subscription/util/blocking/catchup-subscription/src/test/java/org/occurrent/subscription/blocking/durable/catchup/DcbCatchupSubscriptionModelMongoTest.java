@@ -136,7 +136,7 @@ class DcbCatchupSubscriptionModelMongoTest {
         appendTagged("name:1", historic2);
 
         CopyOnWriteArrayList<DomainEvent> received = new CopyOnWriteArrayList<>();
-        subscription = new CatchupSubscriptionModel(subscriptionModel, eventStore, DcbQuery.tagsAllOf("name:1"),
+        subscription = new CatchupSubscriptionModel(subscriptionModel, eventStore, DcbQuery.tags("name:1"),
                 new CatchupSubscriptionModelConfig(100, useSubscriptionPositionStorage(storage).andPersistSubscriptionPositionDuringCatchupPhaseForEveryNEvents(1)));
 
         // When the DCB-mode catch-up subscription replays from the beginning of the DCB sequence and hands over to the live change stream

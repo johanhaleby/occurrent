@@ -25,7 +25,7 @@ import java.util.*
 
 /**
  * Decider for the course's own lifecycle. Single boundary: the course (see
- * [org.occurrent.example.domain.courseenrollment.infrastructure.dcb.CourseEnrollmentDcbQueries.courseDecisionContext]).
+ * [org.occurrent.example.domain.courseenrollment.infrastructure.dcb.CourseEnrollmentDcbQueries.courseBoundary]).
  */
 val courseDecider: Decider<CourseCommand, CourseState, CourseEvent> = decider(
     initialState = CourseState.NotDefined, decide = ::decide, evolve = ::evolve

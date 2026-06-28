@@ -82,7 +82,7 @@ class EnrollmentController(
     fun activity(@PathVariable id: UUID): SseEmitter {
         val emitter = SseEmitter(EMITTER_TIMEOUT_MILLIS)
         val subscriptionId = "activity-$id-${UUID.randomUUID()}"
-        val subscription = dcbSubscriptions.subscribe(subscriptionId, CourseEnrollmentDcbQueries.courseDecisionContext(id)) { event ->
+        val subscription = dcbSubscriptions.subscribe(subscriptionId, CourseEnrollmentDcbQueries.courseBoundary(id)) { event ->
             // The student name is user input, so it is HTML-escaped before going into this raw SSE fragment.
             val line = when (event) {
                 is StudentEnrolledInCourse -> "<li>${nameOf(event.studentId)} enrolled</li>"
