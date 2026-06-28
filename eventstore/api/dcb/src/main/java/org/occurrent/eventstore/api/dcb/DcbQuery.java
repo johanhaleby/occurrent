@@ -91,7 +91,7 @@ public sealed interface DcbQuery permits DcbQuery.MatchAll, DcbQuery.Items, DcbQ
      * Creates a query matching events whose CloudEvent type is any of the supplied types (any-of).
      */
     static DcbQueryItem types(Collection<String> types) {
-        return new DcbQueryItem(new LinkedHashSet<>(types), Set.of());
+        return new DcbQueryItem(DcbQueryItem.copyWithoutNulls(types, "Type cannot be null"), Set.of());
     }
 
     /**
@@ -105,7 +105,7 @@ public sealed interface DcbQuery permits DcbQuery.MatchAll, DcbQuery.Items, DcbQ
      * Creates a query matching events containing all the supplied DCB tags (all-of).
      */
     static DcbQueryItem tags(Collection<String> tags) {
-        return new DcbQueryItem(Set.of(), new LinkedHashSet<>(tags));
+        return new DcbQueryItem(Set.of(), DcbQueryItem.copyWithoutNulls(tags, "Tag cannot be null"));
     }
 
     /**
