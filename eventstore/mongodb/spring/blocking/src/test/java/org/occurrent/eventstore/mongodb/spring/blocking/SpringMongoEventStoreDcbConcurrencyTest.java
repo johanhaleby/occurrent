@@ -145,7 +145,6 @@ class SpringMongoEventStoreDcbConcurrencyTest {
                 tags -> "isolated:stream:" + streamCounter.getAndIncrement());
 
         int successes = 0;
-        int failures = 0;
 
         for (int i = 0; i < ITERATIONS; i++) {
             String type = "TypeX_" + i;
@@ -203,7 +202,6 @@ class SpringMongoEventStoreDcbConcurrencyTest {
                     .isGreaterThanOrEqualTo(1);
 
             if (aSucceeded || bSucceeded) successes++;
-            if (!aSucceeded || !bSucceeded) failures++;
         }
 
         // Across all iterations: always exactly one winner per iteration
@@ -623,7 +621,6 @@ class SpringMongoEventStoreDcbConcurrencyTest {
                 tags -> "isolated:tokenless:stream:" + streamCounter.getAndIncrement());
 
         int successes = 0;
-        int failures = 0;
 
         for (int i = 0; i < ITERATIONS; i++) {
             String tag = "tokenless-" + i;
@@ -675,7 +672,6 @@ class SpringMongoEventStoreDcbConcurrencyTest {
                     .isGreaterThanOrEqualTo(1);
 
             if (aSucceeded || bSucceeded) successes++;
-            if (!aSucceeded || !bSucceeded) failures++;
         }
 
         // Across all iterations: always exactly one winner per iteration
