@@ -34,7 +34,7 @@ import org.occurrent.application.service.blocking.generic.GenericApplicationServ
 import org.occurrent.dsl.dcb.blocking.DcbDomainEventQueries;
 import org.occurrent.dsl.dcb.blocking.DcbSubscriptions;
 import org.occurrent.dsl.query.blocking.DomainEventQueries;
-import org.occurrent.dsl.subscription.blocking.Subscriptions;
+import org.occurrent.dsl.subscription.blocking.StreamSubscriptions;
 import org.occurrent.eventstore.api.blocking.EventStore;
 import org.occurrent.eventstore.api.blocking.EventStoreQueries;
 import org.occurrent.eventstore.api.dcb.DcbEventStore;
@@ -185,10 +185,10 @@ public class OccurrentMongoAutoConfiguration<E> {
     }
 
     @Bean
-    @ConditionalOnMissingBean(Subscriptions.class)
+    @ConditionalOnMissingBean(StreamSubscriptions.class)
     @ConditionalOnProperty(name = "occurrent.subscription.enabled", havingValue = "true", matchIfMissing = true)
-    public Subscriptions<E> occurrentSubscriptionDsl(Subscribable subscribable, CloudEventConverter<E> cloudEventConverter) {
-        return new Subscriptions<>(subscribable, cloudEventConverter);
+    public StreamSubscriptions<E> occurrentSubscriptionDsl(Subscribable subscribable, CloudEventConverter<E> cloudEventConverter) {
+        return new StreamSubscriptions<>(subscribable, cloudEventConverter);
     }
 
     /**

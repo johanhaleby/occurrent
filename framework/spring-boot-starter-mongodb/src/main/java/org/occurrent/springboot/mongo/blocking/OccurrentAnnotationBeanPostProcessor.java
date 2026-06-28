@@ -30,7 +30,7 @@ import org.occurrent.application.converter.CloudEventConverter;
 import org.occurrent.dsl.dcb.blocking.DcbEventMetadata;
 import org.occurrent.dsl.dcb.blocking.DcbSubscriptions;
 import org.occurrent.dsl.subscription.blocking.EventMetadata;
-import org.occurrent.dsl.subscription.blocking.Subscriptions;
+import org.occurrent.dsl.subscription.blocking.StreamSubscriptions;
 import org.occurrent.eventstore.api.dcb.DcbQuery;
 import org.occurrent.filter.Filter;
 import org.occurrent.subscription.DcbStartAt;
@@ -161,7 +161,7 @@ class OccurrentAnnotationBeanPostProcessor implements BeanPostProcessor, Applica
         StartAt startAt = generateStartAt(subscription.id(), startPositionToUse, resumeBehavior);
 
         boolean shouldWaitUntilStarted = shouldWaitUntilStarted(startPositionToUse, subscription.startupMode());
-        Subscriptions<E> subscribable = applicationContext.getBean(Subscriptions.class);
+        StreamSubscriptions<E> subscribable = applicationContext.getBean(StreamSubscriptions.class);
 
         applyStartupWorkarounds();
 

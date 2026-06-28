@@ -54,7 +54,7 @@ data class EventMetadata(val data: Map<String, Any?>) {
  * ```
  * val mySubscriptionModel = ..
  * val myCloudEventConverter = ..
- * subscriptions(mySubscriptionModel, myCloudEventConverter) {
+ * streamSubscriptions(mySubscriptionModel, myCloudEventConverter) {
  *      subscribe<MyEvent>("subscriptionId") {
  *          ...
  *      }
@@ -63,11 +63,25 @@ data class EventMetadata(val data: Map<String, Any?>) {
  *
  * This will create a subscription with id "subscriptionId" and subscribe to all events of type "MyEvent" (it uses the [cloudEventConverter] to derive the cloud event type from the domain event type).
  */
-fun <E : Any> subscriptions(subscriptionModel: Subscribable, cloudEventConverter: CloudEventConverter<E>, subscriptions: Subscriptions<E>.() -> Unit) {
-    Subscriptions(subscriptionModel, cloudEventConverter).apply(subscriptions)
+fun <E : Any> streamSubscriptions(subscriptionModel: Subscribable, cloudEventConverter: CloudEventConverter<E>, subscriptions: StreamSubscriptions<E>.() -> Unit) {
+    StreamSubscriptions(subscriptionModel, cloudEventConverter).apply(subscriptions)
 }
 
-class Subscriptions<E : Any>(private val subscriptionModel: Subscribable, private val cloudEventConverter: CloudEventConverter<E>) {
+/**
+ * Renamed to [streamSubscriptions] to mirror `@StreamSubscription` and the DCB counterpart `DcbSubscriptions`.
+ */
+@Deprecated("Renamed to streamSubscriptions", ReplaceWith("streamSubscriptions(subscriptionModel, cloudEventConverter, subscriptions)"))
+fun <E : Any> subscriptions(subscriptionModel: Subscribable, cloudEventConverter: CloudEventConverter<E>, subscriptions: StreamSubscriptions<E>.() -> Unit) {
+    streamSubscriptions(subscriptionModel, cloudEventConverter, subscriptions)
+}
+
+/**
+ * Renamed to [StreamSubscriptions] to mirror `@StreamSubscription` and the DCB counterpart `DcbSubscriptions`.
+ */
+@Deprecated("Renamed to StreamSubscriptions", ReplaceWith("StreamSubscriptions<E>"))
+typealias Subscriptions<E> = StreamSubscriptions<E>
+
+class StreamSubscriptions<E : Any>(private val subscriptionModel: Subscribable, private val cloudEventConverter: CloudEventConverter<E>) {
 
     /**
      * Create a new subscription that is invoked after a specific domain event is written to the event store
