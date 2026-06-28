@@ -54,7 +54,7 @@ data class EventMetadata(val data: Map<String, Any?>) {
  * ```
  * val mySubscriptionModel = ..
  * val myCloudEventConverter = ..
- * subscriptions(mySubscriptionModel, myCloudEventConverter) {
+ * streamSubscriptions(mySubscriptionModel, myCloudEventConverter) {
  *      subscribe<MyEvent>("subscriptionId") {
  *          ...
  *      }
@@ -63,11 +63,20 @@ data class EventMetadata(val data: Map<String, Any?>) {
  *
  * This will create a subscription with id "subscriptionId" and subscribe to all events of type "MyEvent" (it uses the [cloudEventConverter] to derive the cloud event type from the domain event type).
  */
+fun <E : Any> streamSubscriptions(subscriptionModel: Subscribable, cloudEventConverter: CloudEventConverter<E>, block: StreamSubscriptions<E>.() -> Unit) {
+    StreamSubscriptions(subscriptionModel, cloudEventConverter).apply(block)
+}
+
+/**
+ * Renamed to [streamSubscriptions] to mirror `@StreamSubscription` and the DCB counterpart `DcbSubscriptions`.
+ */
+@Deprecated("Renamed to streamSubscriptions", ReplaceWith("streamSubscriptions(subscriptionModel, cloudEventConverter, subscriptions)"))
+@Suppress("DEPRECATION")
 fun <E : Any> subscriptions(subscriptionModel: Subscribable, cloudEventConverter: CloudEventConverter<E>, subscriptions: Subscriptions<E>.() -> Unit) {
     Subscriptions(subscriptionModel, cloudEventConverter).apply(subscriptions)
 }
 
-class Subscriptions<E : Any>(private val subscriptionModel: Subscribable, private val cloudEventConverter: CloudEventConverter<E>) {
+open class StreamSubscriptions<E : Any>(private val subscriptionModel: Subscribable, private val cloudEventConverter: CloudEventConverter<E>) {
 
     /**
      * Create a new subscription that is invoked after a specific domain event is written to the event store
@@ -188,3 +197,10 @@ class Subscriptions<E : Any>(private val subscriptionModel: Subscribable, privat
         return filter
     }
 }
+
+/**
+ * Renamed to [StreamSubscriptions] to mirror `@StreamSubscription` and the DCB counterpart `DcbSubscriptions`. Kept as a
+ * subclass rather than a typealias so the released type stays in the bytecode for Java and binary compatibility.
+ */
+@Deprecated("Renamed to StreamSubscriptions", ReplaceWith("StreamSubscriptions"))
+class Subscriptions<E : Any>(subscriptionModel: Subscribable, cloudEventConverter: CloudEventConverter<E>) : StreamSubscriptions<E>(subscriptionModel, cloudEventConverter)
