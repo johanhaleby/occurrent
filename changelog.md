@@ -1,5 +1,9 @@
 ### Changelog next version
 
+* The stream subscription DSL `Subscriptions` was renamed to `StreamSubscriptions`.
+  * The canonical class is now `StreamSubscriptions` and the builder is `streamSubscriptions(...)`, so the stream DSL name matches `@StreamSubscription`, `StreamSubscriptionModel`, and the DCB counterpart `DcbSubscriptions`. The released `Subscriptions` class is kept as a deprecated subclass of `StreamSubscriptions`, and the `subscriptions(...)` builder as a deprecated shim, so existing Java, Kotlin, and already-compiled callers keep working. A subclass is used rather than a typealias on purpose, because a Kotlin typealias preserves only Kotlin source compatibility and not Java or binary compatibility for a released type.
+  * See [ADR 29](doc/architecture/decisions/0029-rename-subscriptions-dsl-to-stream-subscriptions.md).
+
 * Added the `@DcbSubscription` annotation, the declarative DCB counterpart to `@StreamSubscription`.
   * A DCB read model can now be declared as a single annotated method. `eventTypes` and `tagsAllOf` express the `DcbQuery`, and `startAt` (BEGINNING, NOW, DEFAULT) or `startAtDcbPosition` (an explicit position, the DCB counterpart to the stream `startAtTimeEpochMillis`) together with `resumeBehavior` give history replay, resume from the stored position, and an always-replay in-memory mode that disables the competing consumer and position storage. It routes through the DCB DSL, so it gets the server-side filter, and the method can take the event plus an optional `EventMetadata` or `DcbEventMetadata`. `DcbStartAt` gained a `dynamic` factory to back the resume logic. The course-enrollment dashboard subscriber now uses `@DcbSubscription` (combining `BEGINNING` with `SAME_AS_START_AT`, since it is an in-memory model rebuilt on every boot).
   * See [ADR 27](doc/architecture/decisions/0027-dcb-subscription-annotation.md).
