@@ -390,9 +390,13 @@ public class SpringMongoEventStore implements EventStore, EventStoreOperations, 
     private static <T> T executeWithTransientRetry(java.util.function.Supplier<T> action) {
         // Exponential backoff with generous attempts: several appends placed in the same partition stream serialize on
         // stream_version, so the last writer can need to retry past all the others before it commits.
+        // Retry a transient transaction conflict, and also a DuplicateKeyException from two transactions first-creating
+        // the same conflict marker at once. Event-insert duplicates are translated to domain exceptions in insertAllDcb
+        // and so never reach here, so the only DuplicateKeyException at this layer is that cold-marker race. The retry
+        // re-runs the transaction, by which point the marker exists and the upsert updates it.
         return RetryStrategy.exponentialBackoff(java.time.Duration.ofMillis(10), java.time.Duration.ofMillis(500), 2.0f)
                 .maxAttempts(15)
-                .retryIf(SpringMongoEventStore::isTransientTransactionError)
+                .retryIf(throwable -> isTransientTransactionError(throwable) || throwable instanceof org.springframework.dao.DuplicateKeyException)
                 .execute(action);
     }
 
@@ -460,6 +464,11 @@ public class SpringMongoEventStore implements EventStore, EventStoreOperations, 
     // monotonically increasing version is also the optimistic-concurrency token: a reader snapshots the versions of a
     // query's markers (see consistencyToken), and an append fails if any of them changed since. The stored lastPosition
     // is informational.
+    // The marker collection holds one document per distinct tag and per distinct type that has taken part in an append,
+    // and nothing reclaims them automatically, so a high-cardinality tag (a tag per entity) grows the collection without
+    // bound. An operator can prune markers during quiescence (a later append recreates any it still needs). Automatic
+    // reclamation is deferred: safe reclamation needs proof that no in-flight append references a marker, which is its
+    // own concurrency problem and out of proportion to the need today.
     private void incrementConflictMarkers(Set<String> markerKeys, long lastPosition) {
         for (String key : markerKeys) {
             Query query = new Query(where(ID).is("marker:" + key));
@@ -475,14 +484,18 @@ public class SpringMongoEventStore implements EventStore, EventStoreOperations, 
     // therefore immune to the read-watermark overshoot that a position-based check suffers (ADR 0021).
     private long consistencyToken(DcbQuery query) {
         Set<String> markerKeys = queryMarkerKeys(query);
+        if (markerKeys.isEmpty()) {
+            return 0;
+        }
+        // Read the query's markers in one query so their versions come from a single consistent snapshot. Reading them
+        // one by one could tear across a concurrent append and capture a sum that matches a later state, masking a real
+        // conflict (ADR 31).
+        List<String> markerIds = markerKeys.stream().map(key -> "marker:" + key).toList();
         long sum = 0;
-        for (String key : markerKeys) {
-            Document marker = mongoTemplate.findById("marker:" + key, Document.class, dcbCheckpointCollectionName);
-            if (marker != null) {
-                Number version = (Number) marker.get(CHECKPOINT_VERSION);
-                if (version != null) {
-                    sum += version.longValue();
-                }
+        for (Document marker : mongoTemplate.find(new Query(where(ID).in(markerIds)), Document.class, dcbCheckpointCollectionName)) {
+            Number version = (Number) marker.get(CHECKPOINT_VERSION);
+            if (version != null) {
+                sum += version.longValue();
             }
         }
         return sum;
@@ -513,6 +526,12 @@ public class SpringMongoEventStore implements EventStore, EventStoreOperations, 
         return keys;
     }
 
+    /**
+     * Reserves a contiguous block of {@code eventCount} dcbpositions by incrementing one global counter document. Every
+     * DCB append passes through this single document, so it is a serialization point and an inherent throughput ceiling
+     * for the store as a whole under very high append rates. It is kept outside the append transaction (ADR 21) so it
+     * does not turn into transaction conflicts, but the global monotonic sequence cannot be sharded away.
+     */
     private long reserveDcbPositions(int eventCount) {
         // Retry the cold-start race: when the counter document does not exist yet, concurrent upserts all try to insert
         // it and all but one get a duplicate key. On retry the document exists, so the upsert becomes an update.

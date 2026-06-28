@@ -1,5 +1,11 @@
 ### Changelog next version
 
+* DCB append conditions no longer miss a conflict on a multi-marker boundary.
+  * The consistency token for a query with more than one marker (for example `tagsAllOf("t1","t2")`) was captured by reading each marker separately, so an append committing between those reads could produce a token that masked a real conflict (a write skew). The token is now captured in a single consistent read. See [ADR 31](doc/architecture/decisions/0031-capture-dcb-consistency-token-in-a-single-read.md).
+  * A `DuplicateKeyException` from two transactions first-creating the same conflict marker at once is now retried (it was already retried for the position counter), so a brand-new tag or type under concurrent appends no longer surfaces a spurious failure.
+* Clarified that a `MatchAll` DCB append condition is a whole-store lock.
+  * `DcbQuery.all()` used as a `DcbAppendCondition` boundary is skew-safe only against other whole-store conditions, not against concurrent scoped appends, so it is meant for single-writer or empty-store guards. The Javadoc now states this. See [ADR 30](doc/architecture/decisions/0030-keep-matchall-dcb-append-condition-with-documented-limit.md).
+
 * Added the `@DcbSubscription` annotation, the declarative DCB counterpart to `@StreamSubscription`.
   * A DCB read model can now be declared as a single annotated method. `eventTypes` and `tagsAllOf` express the `DcbQuery`, and `startAt` (BEGINNING, NOW, DEFAULT) or `startAtDcbPosition` (an explicit position, the DCB counterpart to the stream `startAtTimeEpochMillis`) together with `resumeBehavior` give history replay, resume from the stored position, and an always-replay in-memory mode that disables the competing consumer and position storage. It routes through the DCB DSL, so it gets the server-side filter, and the method can take the event plus an optional `EventMetadata` or `DcbEventMetadata`. `DcbStartAt` gained a `dynamic` factory to back the resume logic. The course-enrollment dashboard subscriber now uses `@DcbSubscription` (combining `BEGINNING` with `SAME_AS_START_AT`, since it is an in-memory model rebuilt on every boot).
   * See [ADR 27](doc/architecture/decisions/0027-dcb-subscription-annotation.md).

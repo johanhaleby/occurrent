@@ -60,6 +60,11 @@ public sealed interface DcbQuery permits DcbQuery.MatchAll, DcbQuery.Items {
 
     /**
      * Creates a query that matches every DCB event.
+     * <p>
+     * As a read query this simply matches everything. Take care using it as a {@link DcbAppendCondition} boundary: it is
+     * a whole-store optimistic lock that is skew-safe only against other whole-store conditions, not against a concurrent
+     * tag-scoped or type-scoped append, so on a store taking concurrent scoped writes it can under-protect (see ADR 30).
+     * It is correct for single-writer operations and for an empty-store or bootstrap guard.
      */
     static DcbQuery all() {
         return new MatchAll();
