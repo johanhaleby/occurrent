@@ -27,7 +27,7 @@ import org.occurrent.application.converter.generic.GenericCloudEventConverter
 import org.occurrent.domain.DomainEvent
 import org.occurrent.domain.DomainEventConverter
 import org.occurrent.domain.NameDefined
-import org.occurrent.eventstore.api.dcb.DcbQuery.tagsAllOf
+import org.occurrent.eventstore.api.dcb.DcbQuery.tags
 import org.occurrent.eventstore.inmemory.InMemoryEventStore
 import java.time.LocalDateTime
 import java.util.UUID
@@ -47,7 +47,7 @@ class DcbApplicationServiceExtensionsTest {
 
     @Test
     fun executeList_returns_the_append_result_when_events_are_produced() {
-        val result = applicationService.executeList(tagsAllOf("name:1")) { listOf(nameDefined("Johan")) }
+        val result = applicationService.executeList(tags("name:1")) { listOf(nameDefined("Johan")) }
 
         assertThat(result).isNotNull()
         assertThat(result!!.eventCount()).isEqualTo(1)
@@ -55,14 +55,14 @@ class DcbApplicationServiceExtensionsTest {
 
     @Test
     fun executeList_returns_null_when_no_events_are_produced() {
-        val result = applicationService.executeList(tagsAllOf("name:1")) { emptyList() }
+        val result = applicationService.executeList(tags("name:1")) { emptyList() }
 
         assertThat(result).isNull()
     }
 
     @Test
     fun executeSequence_returns_the_append_result_when_events_are_produced() {
-        val result = applicationService.executeSequence(tagsAllOf("name:1")) { sequenceOf(nameDefined("Ada")) }
+        val result = applicationService.executeSequence(tags("name:1")) { sequenceOf(nameDefined("Ada")) }
 
         assertThat(result).isNotNull()
         assertThat(result!!.eventCount()).isEqualTo(1)
@@ -73,7 +73,7 @@ class DcbApplicationServiceExtensionsTest {
         val observed = mutableListOf<String>()
         val options = dcbSideEffect<DomainEvent, NameDefined> { observed += it.name() }
 
-        val result = applicationService.executeList(tagsAllOf("name:1"), options) { listOf(nameDefined("Grace")) }
+        val result = applicationService.executeList(tags("name:1"), options) { listOf(nameDefined("Grace")) }
 
         assertThat(result).isNotNull()
         assertThat(observed).containsExactly("Grace")

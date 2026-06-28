@@ -51,7 +51,7 @@ import static java.util.Objects.requireNonNull;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.catchThrowable;
 import static org.occurrent.eventstore.api.dcb.DcbAppendCondition.failIfEventsMatch;
-import static org.occurrent.eventstore.api.dcb.DcbQuery.tagsAllOf;
+import static org.occurrent.eventstore.api.dcb.DcbQuery.tags;
 import static org.occurrent.eventstore.mongodb.spring.blocking.SpringMongoEventStoreCapability.DCB;
 import static org.occurrent.eventstore.mongodb.spring.blocking.SpringMongoEventStoreCapability.STREAM;
 
@@ -107,7 +107,7 @@ class SpringMongoEventStoreDcbUnconditionalMarkerTest {
         String tag = "shared-tag";
 
         // A command reads the (empty) boundary.
-        DcbConsistencyToken token = eventStore.read(tagsAllOf(tag)).consistencyToken();
+        DcbConsistencyToken token = eventStore.read(tags(tag)).consistencyToken();
 
         // An unconditional append commits a matching event.
         eventStore.append(List.of(taggedEvent("UnconditionalEvent", tag)));
@@ -116,7 +116,7 @@ class SpringMongoEventStoreDcbUnconditionalMarkerTest {
         // unconditional append committed a matching event, which (with the fix) advanced the tag marker so the token has
         // changed. Without event-derived markers on the unconditional path the marker never moves and this wrongly
         // succeeds (write skew).
-        DcbAppendCondition condition = failIfEventsMatch(tagsAllOf(tag), token);
+        DcbAppendCondition condition = failIfEventsMatch(tags(tag), token);
         Throwable thrown = catchThrowable(() ->
                 eventStore.append(List.of(taggedEvent("ConditionalEvent", tag)), condition));
 

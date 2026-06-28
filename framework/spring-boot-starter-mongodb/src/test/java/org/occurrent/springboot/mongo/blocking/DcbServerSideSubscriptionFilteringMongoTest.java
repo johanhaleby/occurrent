@@ -111,7 +111,7 @@ class DcbServerSideSubscriptionFilteringMongoTest {
         CopyOnWriteArrayList<CloudEvent> received = new CopyOnWriteArrayList<>();
         String subscriptionId = "tags-filter-" + UUID.randomUUID();
 
-        subscriptionModel.subscribe(subscriptionId, DcbSubscriptionFilter.filter(DcbQuery.tagsAllOf("customer:42", "tenant:1")), StartAt.now(), received::add)
+        subscriptionModel.subscribe(subscriptionId, DcbSubscriptionFilter.filter(DcbQuery.tags("customer:42", "tenant:1")), StartAt.now(), received::add)
                 .waitUntilStarted();
 
         CloudEvent bothTags = dcbEvent("OrderPlaced", List.of("customer:42", "tenant:1"));
@@ -131,7 +131,7 @@ class DcbServerSideSubscriptionFilteringMongoTest {
         CopyOnWriteArrayList<CloudEvent> received = new CopyOnWriteArrayList<>();
         String subscriptionId = "excluded-types-filter-" + UUID.randomUUID();
 
-        DcbQuery query = DcbQuery.tagsAllOfExcludingTypes(List.of("order:99"), List.of("OrderDeleted"));
+        DcbQuery query = DcbQuery.tags(List.of("order:99")).excludingTypes(List.of("OrderDeleted"));
         subscriptionModel.subscribe(subscriptionId, DcbSubscriptionFilter.filter(query), StartAt.now(), received::add)
                 .waitUntilStarted();
 
@@ -149,8 +149,8 @@ class DcbServerSideSubscriptionFilteringMongoTest {
         String subscriptionId = "or-filter-" + UUID.randomUUID();
 
         DcbQuery query = DcbQuery.anyOf(
-                org.occurrent.eventstore.api.dcb.DcbQueryItem.type("OrderPlaced"),
-                org.occurrent.eventstore.api.dcb.DcbQueryItem.tagsAllOf(List.of("vip:true"))
+                org.occurrent.eventstore.api.dcb.DcbQuery.type("OrderPlaced"),
+                org.occurrent.eventstore.api.dcb.DcbQuery.tags(List.of("vip:true"))
         );
         subscriptionModel.subscribe(subscriptionId, DcbSubscriptionFilter.filter(query), StartAt.now(), received::add)
                 .waitUntilStarted();

@@ -54,7 +54,7 @@ class InMemoryEventStoreDcbTest {
         assertThat(eventStore.all())
                 .extracting(CloudEvent::getType)
                 .containsExactly("NameDefined");
-        assertThat(eventStore.read(tagsAllOf("name:1")).events())
+        assertThat(eventStore.read(tags("name:1")).events())
                 .extracting(CloudEvent::getType)
                 .containsExactly("NameDefined");
     }
@@ -66,18 +66,18 @@ class InMemoryEventStoreDcbTest {
         eventStore.append(List.of(taggedEvent("E", "t")));   // position 2
         eventStore.append(List.of(taggedEvent("E", "t")));   // position 3
 
-        assertThat(eventStore.count(tagsAllOf("t"))).isEqualTo(3);
-        assertThat(eventStore.count(tagsAllOf("t"), DcbReadOptions.afterSequencePosition(1))).isEqualTo(2);
-        assertThat(eventStore.count(tagsAllOf("t"), DcbReadOptions.between(1, 2))).isEqualTo(1);
-        assertThat(eventStore.exists(tagsAllOf("t"), DcbReadOptions.between(2, 3))).isTrue();
-        assertThat(eventStore.exists(tagsAllOf("t"), DcbReadOptions.afterSequencePosition(3))).isFalse();
-        assertThat(eventStore.exists(tagsAllOf("missing"))).isFalse();
+        assertThat(eventStore.count(tags("t"))).isEqualTo(3);
+        assertThat(eventStore.count(tags("t"), DcbReadOptions.afterSequencePosition(1))).isEqualTo(2);
+        assertThat(eventStore.count(tags("t"), DcbReadOptions.between(1, 2))).isEqualTo(1);
+        assertThat(eventStore.exists(tags("t"), DcbReadOptions.between(2, 3))).isTrue();
+        assertThat(eventStore.exists(tags("t"), DcbReadOptions.afterSequencePosition(3))).isFalse();
+        assertThat(eventStore.exists(tags("missing"))).isFalse();
     }
 
     @Test
     void no_token_append_condition_reflects_current_existence_not_past_appends() {
         InMemoryEventStore eventStore = new InMemoryEventStore();
-        DcbQuery query = tagsAllOf("name:1");
+        DcbQuery query = tags("name:1");
         CloudEvent existing = taggedEvent("NameDefined", "name:1");
         eventStore.append(List.of(existing));
 
@@ -117,7 +117,7 @@ class InMemoryEventStoreDcbTest {
         eventStore.append(List.of(taggedEvent("NameChanged", "name:1")));
         eventStore.append(List.of(taggedEvent("OrderPlaced", "name:1")));
 
-        DcbEventStream eventStream = eventStore.read(tagsAllOf("name:1"));
+        DcbEventStream eventStream = eventStore.read(tags("name:1"));
 
         assertThat(eventStream.events())
                 .extracting(CloudEvent::getType)
@@ -130,11 +130,11 @@ class InMemoryEventStoreDcbTest {
 
         // Two appends to the same boundary (game:1), but each event carries a different extra tag. Placement must
         // follow the condition's boundary tags, not the per-event tags, so both land in the same partition stream.
-        eventStore.append(List.of(taggedEvent("NameDefined", "game:1", "extra:a")), failIfEventsMatch(tagsAllOf("game:1")));
-        DcbConsistencyToken token = eventStore.read(tagsAllOf("game:1")).consistencyToken();
-        eventStore.append(List.of(taggedEvent("NameChanged", "game:1", "extra:b")), failIfEventsMatch(tagsAllOf("game:1"), token));
+        eventStore.append(List.of(taggedEvent("NameDefined", "game:1", "extra:a")), failIfEventsMatch(tags("game:1")));
+        DcbConsistencyToken token = eventStore.read(tags("game:1")).consistencyToken();
+        eventStore.append(List.of(taggedEvent("NameChanged", "game:1", "extra:b")), failIfEventsMatch(tags("game:1"), token));
 
-        List<String> streamIds = eventStore.read(tagsAllOf("game:1")).events().stream()
+        List<String> streamIds = eventStore.read(tags("game:1")).events().stream()
                 .map(OccurrentExtensionGetter::getStreamId)
                 .distinct()
                 .toList();
@@ -152,8 +152,8 @@ class InMemoryEventStoreDcbTest {
 
         DcbEventStream eventStream = eventStore.read(
                 anyOf(List.of(
-                        DcbQueryItem.types(List.of("OrderPlaced")),
-                        DcbQueryItem.tagsAllOf(List.of("name:1", "tenant:1")))),
+                        DcbQuery.types(List.of("OrderPlaced")),
+                        DcbQuery.tags(List.of("name:1", "tenant:1")))),
                 DcbReadOptions.afterSequencePosition(1));
 
         assertThat(eventStream.events())
@@ -170,7 +170,7 @@ class InMemoryEventStoreDcbTest {
                 taggedEvent("NameSnapshot", "name:1"),
                 taggedEvent("OrderPlaced", "order:1")));
 
-        DcbEventStream eventStream = eventStore.read(tagsAllOfExcludingTypes(List.of("name:1"), List.of("NameSnapshot")));
+        DcbEventStream eventStream = eventStore.read(tags(List.of("name:1")).excludingTypes(List.of("NameSnapshot")));
 
         assertThat(eventStream.events())
                 .extracting(CloudEvent::getType)
@@ -185,10 +185,7 @@ class InMemoryEventStoreDcbTest {
                 taggedEvent("NameChanged", "name:1"),
                 taggedEvent("OrderPlaced", "name:1")));
 
-        DcbEventStream eventStream = eventStore.read(typeAndTagsAllOfExcludingTypes(
-                List.of("NameDefined", "NameChanged"),
-                List.of("name:1"),
-                List.of("OrderPlaced")));
+        DcbEventStream eventStream = eventStore.read(types(List.of("NameDefined", "NameChanged")).tags(List.of("name:1")).excludingTypes(List.of("OrderPlaced")));
 
         assertThat(eventStream.events())
                 .extracting(CloudEvent::getType)
@@ -204,8 +201,8 @@ class InMemoryEventStoreDcbTest {
                 taggedEvent("OrderPlaced", "order:1")));
 
         DcbEventStream eventStream = eventStore.read(anyOf(List.of(
-                DcbQueryItem.tagsAllOfExcludingTypes(List.of("name:1"), List.of("NameSnapshot")),
-                DcbQueryItem.tagsAllOf(List.of("order:1")))));
+                DcbQuery.tags(List.of("name:1")).excludingTypes(List.of("NameSnapshot")),
+                DcbQuery.tags(List.of("order:1")))));
 
         assertThat(eventStream.events())
                 .extracting(CloudEvent::getType)
@@ -216,13 +213,13 @@ class InMemoryEventStoreDcbTest {
     void rejects_append_when_matching_event_exists_after_condition_position() {
         InMemoryEventStore eventStore = new InMemoryEventStore();
         eventStore.append(List.of(taggedEvent("NameDefined", "name:1")));
-        DcbEventStream readModel = eventStore.read(tagsAllOf("name:1"));
+        DcbEventStream readModel = eventStore.read(tags("name:1"));
 
         eventStore.append(List.of(taggedEvent("NameChanged", "name:1")));
 
         assertThatThrownBy(() -> eventStore.append(
                 List.of(taggedEvent("NameChanged", "name:1")),
-                failIfEventsMatch(tagsAllOf("name:1"), readModel.consistencyToken())))
+                failIfEventsMatch(tags("name:1"), readModel.consistencyToken())))
                 .isExactlyInstanceOf(DcbAppendConditionNotFulfilledException.class);
     }
 
@@ -230,7 +227,7 @@ class InMemoryEventStoreDcbTest {
     void append_condition_ignores_excluded_event_types_after_condition_position() {
         InMemoryEventStore eventStore = new InMemoryEventStore();
         eventStore.append(List.of(taggedEvent("NameDefined", "name:1")));
-        DcbQuery query = tagsAllOfExcludingTypes(List.of("name:1"), List.of("NameSnapshot"));
+        DcbQuery query = tags(List.of("name:1")).excludingTypes(List.of("NameSnapshot"));
         DcbEventStream readModel = eventStore.read(query);
 
         eventStore.append(List.of(taggedEvent("NameSnapshot", "name:1")));
@@ -246,7 +243,7 @@ class InMemoryEventStoreDcbTest {
     void append_condition_rejects_non_excluded_event_types_after_condition_position() {
         InMemoryEventStore eventStore = new InMemoryEventStore();
         eventStore.append(List.of(taggedEvent("NameDefined", "name:1")));
-        DcbQuery query = tagsAllOfExcludingTypes(List.of("name:1"), List.of("NameSnapshot"));
+        DcbQuery query = tags(List.of("name:1")).excludingTypes(List.of("NameSnapshot"));
         DcbEventStream readModel = eventStore.read(query);
 
         eventStore.append(List.of(taggedEvent("NameChanged", "name:1")));
@@ -278,8 +275,8 @@ class InMemoryEventStoreDcbTest {
 
         eventStore.append(List.of(cloudEvent));
 
-        assertThat(eventStore.read(tagsAllOf("name:1")).events()).isEmpty();
-        assertThat(eventStore.read(tagsAllOf("name:2")).events()).hasSize(1);
+        assertThat(eventStore.read(tags("name:1")).events()).isEmpty();
+        assertThat(eventStore.read(tags("name:2")).events()).hasSize(1);
     }
 
     @Test
@@ -302,12 +299,12 @@ class InMemoryEventStoreDcbTest {
                 taggedEvent("OrderPlaced", "name:2")));
 
         // The query matches only the two "name:1" events (positions 1 and 2), but the store head is 3.
-        DcbEventStream matchesSome = eventStore.read(tagsAllOf("name:1"));
+        DcbEventStream matchesSome = eventStore.read(tags("name:1"));
         assertThat(matchesSome.events()).extracting(CloudEvent::getType).containsExactly("NameDefined", "NameChanged");
         assertThat(matchesSome.lastSequencePosition()).isEqualTo(3);
 
         // A query that matches nothing still observes the store head.
-        DcbEventStream matchesNone = eventStore.read(tagsAllOf("name:absent"));
+        DcbEventStream matchesNone = eventStore.read(tags("name:absent"));
         assertThat(matchesNone.events()).isEmpty();
         assertThat(matchesNone.lastSequencePosition()).isEqualTo(3);
     }
@@ -336,10 +333,10 @@ class InMemoryEventStoreDcbTest {
         eventStore.append(List.of(taggedEvent("NameChanged", "name:1")));
         eventStore.append(List.of(taggedEvent("OrderPlaced", "order:1")));
 
-        assertThat(eventStore.exists(tagsAllOf("name:1"))).isTrue();
-        assertThat(eventStore.exists(tagsAllOf("absent:1"))).isFalse();
-        assertThat(eventStore.count(tagsAllOf("name:1"))).isEqualTo(2);
-        assertThat(eventStore.count(tagsAllOf("order:1"))).isEqualTo(1);
+        assertThat(eventStore.exists(tags("name:1"))).isTrue();
+        assertThat(eventStore.exists(tags("absent:1"))).isFalse();
+        assertThat(eventStore.count(tags("name:1"))).isEqualTo(2);
+        assertThat(eventStore.count(tags("order:1"))).isEqualTo(1);
         assertThat(eventStore.count(all())).isEqualTo(3);
     }
 
@@ -350,7 +347,7 @@ class InMemoryEventStoreDcbTest {
         eventStore.append(List.of(taggedEvent("NameChanged", "name:1")));
         eventStore.append(List.of(taggedEvent("OrderPlaced", "name:1")));
 
-        DcbEventStream upToTwo = eventStore.read(tagsAllOf("name:1"), DcbReadOptions.upToSequencePosition(2));
+        DcbEventStream upToTwo = eventStore.read(tags("name:1"), DcbReadOptions.upToSequencePosition(2));
 
         assertThat(upToTwo.events()).extracting(CloudEvent::getType).containsExactly("NameDefined", "NameChanged");
         // lastSequencePosition is always the store head, not the upper bound used for this read.
@@ -365,8 +362,8 @@ class InMemoryEventStoreDcbTest {
         eventStore.append(List.of(taggedEvent("Unrelated", "other:1")));
 
         DcbQuery query = anyOf(
-                DcbQueryItem.types(List.of("NameDefined")),
-                DcbQueryItem.tagsAllOf(List.of("order:1")));
+                DcbQuery.types(List.of("NameDefined")),
+                DcbQuery.tags(List.of("order:1")));
 
         assertThat(eventStore.read(query).events())
                 .extracting(CloudEvent::getType)

@@ -74,9 +74,9 @@ class DcbDslKotlinTest {
         val nameWasChanged = NameWasChanged("eventId2", time, "name", "Jane Doe")
         append("name:1", nameDefined, nameWasChanged)
 
-        assertThat(dcbQueries.queryForSequence(DcbQuery.tagsAllOf("name:1")).toList()).containsExactly(nameDefined, nameWasChanged)
+        assertThat(dcbQueries.queryForSequence(DcbQuery.tags("name:1")).toList()).containsExactly(nameDefined, nameWasChanged)
         assertThat(dcbQueries.queryForList(DcbQuery.types(NameDefined::class.qualifiedName!!))).containsExactly(nameDefined)
-        assertThat(dcbQueries.queryForList(DcbQuery.tagsAllOf("name:1"), DcbReadOptions.afterSequencePosition(1))).containsExactly(nameWasChanged)
+        assertThat(dcbQueries.queryForList(DcbQuery.tags("name:1"), DcbReadOptions.afterSequencePosition(1))).containsExactly(nameWasChanged)
     }
 
     @Test
@@ -97,11 +97,11 @@ class DcbDslKotlinTest {
         append("name:1", nameDefined)
         append("other:1", NameWasChanged("eventId2", time, "name", "Jane Doe"))
 
-        val (list, listPosition) = dcbQueries.queryForListWithPosition(DcbQuery.tagsAllOf("name:1"))
+        val (list, listPosition) = dcbQueries.queryForListWithPosition(DcbQuery.tags("name:1"))
         assertThat(list).containsExactly(nameDefined)
         assertThat(listPosition).isEqualTo(2)
 
-        val (sequence, sequencePosition) = dcbQueries.queryForSequenceWithPosition(DcbQuery.tagsAllOf("name:1"))
+        val (sequence, sequencePosition) = dcbQueries.queryForSequenceWithPosition(DcbQuery.tags("name:1"))
         assertThat(sequence.toList()).containsExactly(nameDefined)
         assertThat(sequencePosition).isEqualTo(2)
     }
@@ -113,7 +113,7 @@ class DcbDslKotlinTest {
         subscriptionModel.subscribeDcb(
             subscriptionId = "subscription",
             cloudEventConverter = cloudEventConverter,
-            query = DcbQuery.tagsAllOfExcludingTypes(listOf("name:1"), listOf(NameWasChanged::class.qualifiedName!!))
+            query = DcbQuery.tags(listOf("name:1")).excludingTypes(listOf(NameWasChanged::class.qualifiedName!!))
         ) {
             received.add(it)
         }
@@ -148,7 +148,7 @@ class DcbDslKotlinTest {
     fun dcb_subscription_metadata_exposes_stream_and_dcb_metadata() {
         val metadata = CopyOnWriteArrayList<EventMetadata>()
 
-        subscriptionModel.subscribeDcb("subscription", cloudEventConverter, DcbQuery.tagsAllOf("name:1")) { eventMetadata, _ ->
+        subscriptionModel.subscribeDcb("subscription", cloudEventConverter, DcbQuery.tags("name:1")) { eventMetadata, _ ->
             metadata.add(eventMetadata)
         }
 

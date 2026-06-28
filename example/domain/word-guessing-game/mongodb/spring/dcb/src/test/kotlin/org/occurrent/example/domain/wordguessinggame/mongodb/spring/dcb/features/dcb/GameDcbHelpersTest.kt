@@ -75,12 +75,12 @@ class GameDcbHelpersTest {
                 tags = setOf("game:$gameId")
         )
 
-        assertThat(itemsOf(GameDcbQueries.wordHintDecisionContext(gameId))).containsExactlyInAnyOrder(
+        assertThat(itemsOf(GameDcbQueries.wordHintBoundary(gameId))).containsExactlyInAnyOrder(
                 queryItem(types = setOf(GameWasStarted::class.eventType()), tags = setOf("game:$gameId")),
                 queryItem(types = setOf(CharacterInWordHintWasRevealed::class.eventType()), tags = setOf("wordhint:$gameId"))
         )
 
-        assertThat(itemsOf(GameDcbQueries.pointsDecisionContext(gameId))).containsExactlyInAnyOrder(
+        assertThat(itemsOf(GameDcbQueries.pointsBoundary(gameId))).containsExactlyInAnyOrder(
                 queryItem(types = setOf(GameWasStarted::class.eventType()), tags = setOf("game:$gameId")),
                 queryItem(types = setOf(PlayerGuessedTheWrongWord::class.eventType()), tags = setOf("gameplay:$gameId")),
                 queryItem(types = setOf(PlayerWasAwardedPointsForGuessingTheRightWord::class.eventType()), tags = setOf("points:$gameId")),
@@ -88,9 +88,10 @@ class GameDcbHelpersTest {
         )
     }
 
-    private fun itemsOf(query: DcbQuery): List<DcbQueryItem> {
-        assertThat(query).isInstanceOf(DcbQuery.Items::class.java)
-        return (query as DcbQuery.Items).items()
+    private fun itemsOf(query: DcbQuery): List<DcbQueryItem> = when (query) {
+        is DcbQueryItem -> listOf(query)
+        is DcbQuery.Items -> query.items()
+        is DcbQuery.MatchAll -> emptyList()
     }
 
     private fun assertSingleQueryItem(query: DcbQuery, types: Set<String> = emptySet(), tags: Set<String>) {

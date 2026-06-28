@@ -22,18 +22,18 @@ import org.occurrent.example.domain.courseenrollment.common.DomainEvent
 import org.occurrent.example.domain.courseenrollment.features.enrollment.model.EnrollmentCommand.EnrollStudent
 import org.occurrent.example.domain.courseenrollment.features.enrollment.model.EnrollmentCommand.UnenrollStudent
 import org.occurrent.example.domain.courseenrollment.features.enrollment.model.enrollmentDecider
-import org.occurrent.example.domain.courseenrollment.infrastructure.dcb.CourseEnrollmentDcbQueries.enrollmentDecisionContext
+import org.occurrent.example.domain.courseenrollment.infrastructure.dcb.CourseEnrollmentDcbQueries.enrollmentBoundary
 import java.time.Instant
 import java.util.*
 
 fun DcbApplicationService<DomainEvent>.enrollStudent(courseId: UUID, studentId: UUID, occurredAt: Instant = Instant.now()) = execute(
-    enrollmentDecisionContext(courseId, studentId),
+    enrollmentBoundary(courseId, studentId),
     EnrollStudent(UUID.randomUUID(), occurredAt, courseId, studentId),
     enrollmentDecider
 )
 
 fun DcbApplicationService<DomainEvent>.unenrollStudent(courseId: UUID, studentId: UUID, occurredAt: Instant = Instant.now()) = execute(
-    enrollmentDecisionContext(courseId, studentId),
+    enrollmentBoundary(courseId, studentId),
     UnenrollStudent(UUID.randomUUID(), occurredAt, courseId, studentId),
     enrollmentDecider
 )
