@@ -39,6 +39,10 @@ public record DcbAppendCondition(DcbQuery query, Optional<DcbConsistencyToken> c
 
     /**
      * Creates a condition that fails if any existing event matches {@code query}.
+     * <p>
+     * A {@code MatchAll} query (from {@link DcbQuery#all()}) makes this a whole-store optimistic lock that is not
+     * skew-safe against concurrent tag-scoped or type-scoped appends, so use it only for single-writer or empty-store
+     * guards (see ADR 30). Prefer a scoped {@code query} for a real consistency boundary on a multi-writer store.
      */
     public static DcbAppendCondition failIfEventsMatch(DcbQuery query) {
         return new DcbAppendCondition(query, Optional.empty());
