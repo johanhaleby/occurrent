@@ -396,7 +396,7 @@ public class SpringMongoEventStore implements EventStore, EventStoreOperations, 
         // re-runs the transaction, by which point the marker exists and the upsert updates it.
         return RetryStrategy.exponentialBackoff(java.time.Duration.ofMillis(10), java.time.Duration.ofMillis(500), 2.0f)
                 .maxAttempts(15)
-                .retryIf(throwable -> isTransientTransactionError(throwable) || throwable instanceof org.springframework.dao.DuplicateKeyException)
+                .retryIf(throwable -> isTransientTransactionError(throwable) || isDuplicateKeyError(throwable))
                 .execute(action);
     }
 
@@ -405,6 +405,20 @@ public class SpringMongoEventStore implements EventStore, EventStoreOperations, 
         Throwable cause = throwable;
         for (int hops = 0; cause != null && hops < 64; cause = cause.getCause(), hops++) {
             if (cause instanceof MongoException mongoException && mongoException.hasErrorLabel(MongoException.TRANSIENT_TRANSACTION_ERROR_LABEL)) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    private static boolean isDuplicateKeyError(Throwable throwable) {
+        // A cold-marker race can surface the DuplicateKeyException wrapped rather than at the top, so walk the cause
+        // chain the same bounded way as the transient-transaction check. Event-insert duplicates are translated to
+        // domain exceptions in insertAllDcb and so never reach a retry predicate, so the only duplicate here is the
+        // marker race.
+        Throwable cause = throwable;
+        for (int hops = 0; cause != null && hops < 64; cause = cause.getCause(), hops++) {
+            if (cause instanceof org.springframework.dao.DuplicateKeyException) {
                 return true;
             }
         }
@@ -527,7 +541,7 @@ public class SpringMongoEventStore implements EventStore, EventStoreOperations, 
     }
 
     /**
-     * Reserves a contiguous block of {@code eventCount} dcbpositions by incrementing one global counter document. Every
+     * Reserves a contiguous block of {@code eventCount} DCB positions by incrementing one global counter document. Every
      * DCB append passes through this single document, so it is a serialization point and an inherent throughput ceiling
      * for the store as a whole under very high append rates. It is kept outside the append transaction (ADR 21) so it
      * does not turn into transaction conflicts, but the global monotonic sequence cannot be sharded away.
@@ -538,7 +552,7 @@ public class SpringMongoEventStore implements EventStore, EventStoreOperations, 
         return RetryStrategy.retry()
                 .backoff(org.occurrent.retry.Backoff.fixed(20))
                 .maxAttempts(5)
-                .retryIf(throwable -> throwable instanceof org.springframework.dao.DuplicateKeyException)
+                .retryIf(SpringMongoEventStore::isDuplicateKeyError)
                 .execute(() -> {
                     Query query = new Query(where(ID).is(DCB_POSITION_DOCUMENT_ID));
                     Update update = new Update().inc(DCB_COUNTER_POSITION, eventCount);
