@@ -532,7 +532,155 @@ class SpringMongoEventStoreDcbConcurrencyTest {
     }
 
     // ---------------------------------------------------------------------------
-    // Scenario 5: explain() index verification
+    // Scenario 5: multi-marker boundary serialization under contention
+    //
+    // Coverage note: the single-marker tests above (tagsAllOf with one tag, or types) exercise the
+    // common code path but do not exercise multi-marker token capture — where the consistency token
+    // must reflect the highest position across ALL markers in the query, not just one. This test
+    // closes that gap and acts as a regression guard for the single-read token capture logic.
+    //
+    // N threads all read the same multi-marker boundary (tagsAllOf("t1_i","t2_i"), two markers)
+    // and capture the consistency token, then concurrently append an event tagged with BOTH markers
+    // using failIfEventsMatch(query, token). Exactly one must win; the rest must throw
+    // DcbAppendConditionNotFulfilledException.
+    // ---------------------------------------------------------------------------
+    @Test
+    void multi_marker_boundary_serialization_under_contention() throws Exception {
+        int threadCount = 8;
+
+        for (int i = 0; i < ITERATIONS; i++) {
+            String tag1 = "mm-t1-" + i;
+            String tag2 = "mm-t2-" + i;
+
+            // Multi-marker query: both tag1 and tag2 must match — exercises the two-marker token capture path
+            DcbQuery multiMarkerQuery = tagsAllOf(tag1, tag2);
+            DcbConsistencyToken boundaryToken = eventStore.read(multiMarkerQuery).consistencyToken();
+            DcbAppendCondition condition = failIfEventsMatch(multiMarkerQuery, boundaryToken);
+
+            CyclicBarrier barrier = new CyclicBarrier(threadCount);
+            ExecutorService pool = Executors.newFixedThreadPool(threadCount);
+
+            AtomicInteger successCount = new AtomicInteger(0);
+            AtomicInteger condFailCount = new AtomicInteger(0);
+            AtomicInteger unexpectedFailCount = new AtomicInteger(0);
+            List<Future<Void>> futures = new ArrayList<>();
+
+            final int iteration = i;
+            for (int t = 0; t < threadCount; t++) {
+                final int threadIdx = t;
+                futures.add(pool.submit(() -> {
+                    barrier.await();
+                    try {
+                        // Event carries both markers so it satisfies the multi-marker query
+                        eventStore.append(List.of(taggedEvent("MultiMarkerEvent", tag1, tag2)), condition);
+                        successCount.incrementAndGet();
+                    } catch (DcbAppendConditionNotFulfilledException e) {
+                        condFailCount.incrementAndGet();
+                    } catch (Exception e) {
+                        unexpectedFailCount.incrementAndGet();
+                        System.err.println("Unexpected exception in multi-marker iteration " + iteration + " thread " + threadIdx + ": " + e);
+                    }
+                    return null;
+                }));
+            }
+
+            pool.shutdown();
+            for (Future<Void> f : futures) {
+                f.get();
+            }
+
+            assertThat(successCount.get())
+                    .as("Iteration %d: expected exactly one success under multi-marker contention (tags=%s,%s)", i, tag1, tag2)
+                    .isEqualTo(1);
+
+            assertThat(unexpectedFailCount.get())
+                    .as("Iteration %d: unexpected (non-DcbAppendConditionNotFulfilledException) failures must be zero", i)
+                    .isZero();
+
+            assertThat(condFailCount.get())
+                    .as("Iteration %d: expected %d DcbAppendConditionNotFulfilledException failures", i, threadCount - 1)
+                    .isEqualTo(threadCount - 1);
+        }
+    }
+
+    // ---------------------------------------------------------------------------
+    // Scenario 6: no-token conditional append prevents double-commit (Finding 4 coverage gap)
+    //
+    // DcbAppendCondition.failIfEventsMatch(query) — the single-arg form — omits the consistency
+    // token entirely, meaning the condition check scans the full event history for the given query.
+    // Two concurrent threads both call failIfEventsMatch(query) (no token) on the same scoped
+    // boundary and both try to append an event that satisfies that query. Exactly one must succeed;
+    // the other must fail with DcbAppendConditionNotFulfilledException.
+    // ---------------------------------------------------------------------------
+    @Test
+    void tokenless_conditional_append_prevents_double_commit() throws Exception {
+        // Distinct storage stream per append call — stream_version cannot serialize; markers are the sole guard.
+        AtomicLong streamCounter = new AtomicLong(0);
+        SpringMongoEventStore isolatedStore = buildEventStoreWithStreamIdGenerator(
+                tags -> "isolated:tokenless:stream:" + streamCounter.getAndIncrement());
+
+        int successes = 0;
+        int failures = 0;
+
+        for (int i = 0; i < ITERATIONS; i++) {
+            String tag = "tokenless-" + i;
+
+            // Both conditions use the single-arg (no-token) form: fail if ANY existing event matches
+            DcbAppendCondition condA = failIfEventsMatch(tagsAllOf(tag));
+            DcbAppendCondition condB = failIfEventsMatch(tagsAllOf(tag));
+
+            CloudEvent eventA = taggedEvent("TokenlessEvent", tag);
+            CloudEvent eventB = taggedEvent("TokenlessEvent", tag);
+
+            CyclicBarrier barrier = new CyclicBarrier(2);
+            ExecutorService pool = Executors.newFixedThreadPool(2);
+
+            Future<Boolean> futA = pool.submit(() -> {
+                barrier.await();
+                try {
+                    isolatedStore.append(List.of(eventA), condA);
+                    return true;
+                } catch (DcbAppendConditionNotFulfilledException e) {
+                    return false;
+                }
+            });
+
+            Future<Boolean> futB = pool.submit(() -> {
+                barrier.await();
+                try {
+                    isolatedStore.append(List.of(eventB), condB);
+                    return true;
+                } catch (DcbAppendConditionNotFulfilledException e) {
+                    return false;
+                }
+            });
+
+            pool.shutdown();
+            boolean aSucceeded = futA.get();
+            boolean bSucceeded = futB.get();
+
+            int iterSuccesses = (aSucceeded ? 1 : 0) + (bSucceeded ? 1 : 0);
+
+            // Core safety invariant: both must NEVER succeed simultaneously
+            assertThat(iterSuccesses)
+                    .as("Iteration %d: both tokenless conditional appends succeeded (double-commit)", i)
+                    .isLessThanOrEqualTo(1);
+
+            // At least one must succeed (boundary is empty at the start of each iteration)
+            assertThat(iterSuccesses)
+                    .as("Iteration %d: neither tokenless conditional append succeeded", i)
+                    .isGreaterThanOrEqualTo(1);
+
+            if (aSucceeded || bSucceeded) successes++;
+            if (!aSucceeded || !bSucceeded) failures++;
+        }
+
+        // Across all iterations: always exactly one winner per iteration
+        assertThat(successes).isEqualTo(ITERATIONS);
+    }
+
+    // ---------------------------------------------------------------------------
+    // Scenario 7 (was 5): explain() index verification
     //
     // With a seeded collection, run explain() on the DCB existence/conflict query shape
     // and the read query shape and assert the winning plan does NOT use COLLSCAN.
