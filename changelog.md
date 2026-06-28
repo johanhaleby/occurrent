@@ -15,6 +15,9 @@
 * Clarified that a `MatchAll` DCB append condition is a whole-store lock.
   * `DcbQuery.all()` used as a `DcbAppendCondition` boundary is skew-safe only against other whole-store conditions, not against concurrent scoped appends, so it is meant for single-writer or empty-store guards. The Javadoc now states this. See [ADR 30](doc/architecture/decisions/0030-keep-matchall-dcb-append-condition-with-documented-limit.md).
 
+* The Java DCB subscription DSL can now wait until a subscription has started.
+  * `DcbSubscriptions.subscribe(...)` and `subscribeWithMetadata(...)` gained an overload that takes a `waitUntilStarted` boolean. When it is `true` the call blocks until the subscription has started, and for a replaying DCB subscription that means until catch-up completes, matching the Kotlin DSL default. The existing overloads still return without waiting, so nothing changes unless you opt in.
+
 * Added the `@DcbSubscription` annotation, the declarative DCB counterpart to `@StreamSubscription`.
   * A DCB read model can now be declared as a single annotated method. `eventTypes` and `tagsAllOf` express the `DcbQuery`, and `startAt` (BEGINNING, NOW, DEFAULT) or `startAtDcbPosition` (an explicit position, the DCB counterpart to the stream `startAtTimeEpochMillis`) together with `resumeBehavior` give history replay, resume from the stored position, and an always-replay in-memory mode that disables the competing consumer and position storage. It routes through the DCB DSL, so it gets the server-side filter, and the method can take the event plus an optional `EventMetadata` or `DcbEventMetadata`. `DcbStartAt` gained a `dynamic` factory to back the resume logic. The course-enrollment dashboard subscriber now uses `@DcbSubscription` (combining `BEGINNING` with `SAME_AS_START_AT`, since it is an in-memory model rebuilt on every boot).
   * See [ADR 27](doc/architecture/decisions/0027-dcb-subscription-annotation.md).
