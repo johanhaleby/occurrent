@@ -70,7 +70,9 @@ fun <E : Any> streamSubscriptions(subscriptionModel: Subscribable, cloudEventCon
 /**
  * Renamed to [streamSubscriptions] to mirror `@StreamSubscription` and the DCB counterpart `DcbSubscriptions`.
  */
-@Deprecated("Renamed to streamSubscriptions", ReplaceWith("streamSubscriptions(subscriptionModel, cloudEventConverter, subscriptions)"))
+// No ReplaceWith: the lambda receiver is Subscriptions<E>, which is not assignable to the streamSubscriptions
+// receiver StreamSubscriptions<E>, so an automated replacement would not compile.
+@Deprecated("Renamed to streamSubscriptions")
 @Suppress("DEPRECATION")
 fun <E : Any> subscriptions(subscriptionModel: Subscribable, cloudEventConverter: CloudEventConverter<E>, subscriptions: Subscriptions<E>.() -> Unit) {
     Subscriptions(subscriptionModel, cloudEventConverter).apply(subscriptions)
