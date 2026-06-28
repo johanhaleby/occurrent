@@ -52,6 +52,7 @@ import java.util.concurrent.Executors;
 import java.util.concurrent.Future;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicLong;
+import java.util.concurrent.atomic.AtomicReference;
 
 import static java.nio.charset.StandardCharsets.UTF_8;
 import static java.util.Objects.requireNonNull;
@@ -536,13 +537,15 @@ class SpringMongoEventStoreDcbConcurrencyTest {
     //
     // Coverage note: the single-marker tests above (tagsAllOf with one tag, or types) exercise the
     // common code path but do not exercise multi-marker token capture — where the consistency token
-    // must reflect the highest position across ALL markers in the query, not just one. This test
+    // must aggregate ALL markers in the query (the sum of their versions), not just one. This test
     // closes that gap and acts as a regression guard for the single-read token capture logic.
     //
-    // N threads all read the same multi-marker boundary (tagsAllOf("t1_i","t2_i"), two markers)
-    // and capture the consistency token, then concurrently append an event tagged with BOTH markers
-    // using failIfEventsMatch(query, token). Exactly one must win; the rest must throw
-    // DcbAppendConditionNotFulfilledException.
+    // N threads share one multi-marker boundary token (tagsAllOf("t1_i","t2_i"), two markers) and
+    // concurrently append an event tagged with BOTH markers using failIfEventsMatch(query, token).
+    // Exactly one must win; the rest must throw DcbAppendConditionNotFulfilledException. The shared
+    // upfront token is what makes "exactly one" deterministic: an in-worker capture would let a late
+    // reader observe a fresher token and legitimately also succeed. Each worker additionally re-reads
+    // the token after the barrier so the single $in capture (ADR 31) runs under read/append contention.
     // ---------------------------------------------------------------------------
     @Test
     void multi_marker_boundary_serialization_under_contention() throws Exception {
@@ -562,23 +565,22 @@ class SpringMongoEventStoreDcbConcurrencyTest {
 
             AtomicInteger successCount = new AtomicInteger(0);
             AtomicInteger condFailCount = new AtomicInteger(0);
-            AtomicInteger unexpectedFailCount = new AtomicInteger(0);
+            AtomicReference<Throwable> firstUnexpected = new AtomicReference<>();
             List<Future<Void>> futures = new ArrayList<>();
 
-            final int iteration = i;
             for (int t = 0; t < threadCount; t++) {
-                final int threadIdx = t;
                 futures.add(pool.submit(() -> {
                     barrier.await();
                     try {
+                        // Re-read the multi-marker token concurrently with the appends so the single $in capture runs under contention
+                        eventStore.read(multiMarkerQuery).consistencyToken();
                         // Event carries both markers so it satisfies the multi-marker query
                         eventStore.append(List.of(taggedEvent("MultiMarkerEvent", tag1, tag2)), condition);
                         successCount.incrementAndGet();
                     } catch (DcbAppendConditionNotFulfilledException e) {
                         condFailCount.incrementAndGet();
                     } catch (Exception e) {
-                        unexpectedFailCount.incrementAndGet();
-                        System.err.println("Unexpected exception in multi-marker iteration " + iteration + " thread " + threadIdx + ": " + e);
+                        firstUnexpected.compareAndSet(null, e);
                     }
                     return null;
                 }));
@@ -589,13 +591,14 @@ class SpringMongoEventStoreDcbConcurrencyTest {
                 f.get();
             }
 
+            Throwable unexpected = firstUnexpected.get();
+            if (unexpected != null) {
+                throw new AssertionError("Iteration " + i + ": unexpected (non-DcbAppendConditionNotFulfilledException) failure under multi-marker contention", unexpected);
+            }
+
             assertThat(successCount.get())
                     .as("Iteration %d: expected exactly one success under multi-marker contention (tags=%s,%s)", i, tag1, tag2)
                     .isEqualTo(1);
-
-            assertThat(unexpectedFailCount.get())
-                    .as("Iteration %d: unexpected (non-DcbAppendConditionNotFulfilledException) failures must be zero", i)
-                    .isZero();
 
             assertThat(condFailCount.get())
                     .as("Iteration %d: expected %d DcbAppendConditionNotFulfilledException failures", i, threadCount - 1)
