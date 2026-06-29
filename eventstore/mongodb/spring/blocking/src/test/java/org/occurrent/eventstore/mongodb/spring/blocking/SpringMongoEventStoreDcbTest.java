@@ -255,6 +255,24 @@ class SpringMongoEventStoreDcbTest {
         assertThat(eventStore.read(tagsAllOf("name:2")).events()).hasSize(1);
     }
 
+    @Test
+    void last_sequence_position_is_the_store_head_not_the_max_matched_position() {
+        eventStore.append("dcb:partition:0", List.of(
+                taggedEvent("NameDefined", "name:1"),
+                taggedEvent("NameChanged", "name:1"),
+                taggedEvent("OrderPlaced", "name:2")));
+
+        // The query matches only the two "name:1" events (positions 1 and 2), but the store head is 3.
+        DcbEventStream matchesSome = eventStore.read(tagsAllOf("name:1"));
+        assertThat(matchesSome.events()).extracting(CloudEvent::getType).containsExactly("NameDefined", "NameChanged");
+        assertThat(matchesSome.lastSequencePosition()).isEqualTo(3);
+
+        // A query that matches nothing still observes the store head.
+        DcbEventStream matchesNone = eventStore.read(tagsAllOf("name:absent"));
+        assertThat(matchesNone.events()).isEmpty();
+        assertThat(matchesNone.lastSequencePosition()).isEqualTo(3);
+    }
+
     private static CloudEvent taggedEvent(String type, String... tags) {
         return DcbCloudEvents.withTags(event(type), Set.of(tags));
     }

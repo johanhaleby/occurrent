@@ -244,6 +244,42 @@ class InMemoryEventStoreDcbTest {
         assertThat(eventStore.append("dcb:partition:0", List.of(taggedEvent("NameDefined", "name:1"))).firstSequencePosition()).isEqualTo(1);
     }
 
+    @Test
+    void last_sequence_position_is_the_store_head_not_the_max_matched_position() {
+        InMemoryEventStore eventStore = new InMemoryEventStore();
+        eventStore.append("dcb:partition:0", List.of(
+                taggedEvent("NameDefined", "name:1"),
+                taggedEvent("NameChanged", "name:1"),
+                taggedEvent("OrderPlaced", "name:2")));
+
+        // The query matches only the two "name:1" events (positions 1 and 2), but the store head is 3.
+        DcbEventStream matchesSome = eventStore.read(tagsAllOf("name:1"));
+        assertThat(matchesSome.events()).extracting(CloudEvent::getType).containsExactly("NameDefined", "NameChanged");
+        assertThat(matchesSome.lastSequencePosition()).isEqualTo(3);
+
+        // A query that matches nothing still observes the store head.
+        DcbEventStream matchesNone = eventStore.read(tagsAllOf("name:absent"));
+        assertThat(matchesNone.events()).isEmpty();
+        assertThat(matchesNone.lastSequencePosition()).isEqualTo(3);
+    }
+
+    @Test
+    void failed_append_does_not_consume_a_dcb_position() {
+        InMemoryEventStore eventStore = new InMemoryEventStore();
+        CloudEvent duplicate = taggedEvent("NameDefined", "name:1");
+        DcbAppendResult first = eventStore.append("dcb:partition:0", List.of(duplicate));
+
+        assertThatThrownBy(() -> eventStore.append("dcb:partition:0", List.of(duplicate)))
+                .isExactlyInstanceOf(DuplicateCloudEventException.class);
+
+        // The shared DcbAppendResult contract only guarantees ordering across appends, but the in-memory store
+        // advances its position counter only after an append commits, so a rejected append consumes no position
+        // and the next successful append gets exactly the following position.
+        DcbAppendResult next = eventStore.append("dcb:partition:0", List.of(taggedEvent("NameChanged", "name:2")));
+        assertThat(next.firstSequencePosition()).isEqualTo(first.lastSequencePosition() + 1);
+        assertThat(next.lastSequencePosition()).isEqualTo(next.firstSequencePosition());
+    }
+
     private static CloudEvent taggedEvent(String type, String... tags) {
         return DcbCloudEvents.withTags(event(type), Set.of(tags));
     }
