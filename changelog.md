@@ -1,5 +1,15 @@
 ### Changelog next version
 
+#### Highlights
+
+This release adds Dynamic Consistency Boundary (DCB) support. DCB lets a command enforce a consistency rule that spans more than one entity without forcing those entities into a single stream or aggregate. You describe the events the decision depends on as a query over DCB tags and CloudEvent types, read them, and append the new events on the condition that nothing matching that query has changed since the read. That gives optimistic concurrency across a boundary you define per decision rather than per stream.
+
+It is useful when a rule crosses entities. Enrolling a student in a course depends on both the course, for its capacity, and the student, for how many courses they are already in. Modeling that as one aggregate is awkward, and splitting it into two streams loses the cross-entity guarantee. With DCB the enrollment command reads both through one query and appends only if neither changed in the meantime.
+
+DCB is a capability layered on the existing CloudEvent storage, not a new store or a new event format. A DCB event is a normal CloudEvent with two extensions, `dcbtags` and `dcbposition`, so stream consumers and subscriptions still see it. To support it the event store gained an explicit capability set (`STREAM`, `DCB`, or both), a query and append-condition model with a consistency token for the optimistic check, an application service that runs the read, decide, and append cycle, a DSL for queries and subscriptions, a `@DcbSubscription` annotation, and catch-up that replays by `dcbposition`. The default stays stream-only, so existing applications are untouched.
+
+#### Changes
+
 * DCB catch-up delivers an event even when it commits during the replay.
   * `dcbposition` is reserved before the append commits (ADR 21), so the store head can run ahead of committed data and a position below the head can be an in-flight hole. The catch-up captures the live resume token before the replay, so an event that commits at such a position while the replay runs is delivered by the live change stream, and the handover cache dedups the overlap.
   * Trade-off: a replay that runs longer than the change stream history makes the resume token age out, so the handover fails loudly rather than silently dropping events. Size the change stream history (the MongoDB oplog window) for very large rebuilds.
@@ -52,7 +62,7 @@
   * Request a replay from the start with `StartAt.subscriptionPosition(DcbSubscriptionPosition.of(0))`. A STREAM-and-DCB application keeps its stream catch-up and does not yet get DCB catch-up.
   * See [ADR 22](doc/architecture/decisions/0022-wire-dcb-catch-up-in-dcb-only-mode.md).
 
-#### Highlights
+#### Details
 
 * `DcbEventStore.append` derives the Occurrent storage stream from the appended events' DCB tags, so callers reason in DCB terms (tags and append conditions) rather than storage stream ids. Placement is configured on the store through a `DcbStreamIdGenerator` (in the `eventstore-api-dcb` module, defaulting to `PartitionedDcbStreamIdGenerator`), set on `InMemoryEventStore` via a constructor and on the Spring Mongo store via `EventStoreConfig.Builder.dcbStreamIdGenerator(..)`.
 * Added initial Dynamic Consistency Boundary (DCB) support.
