@@ -37,6 +37,7 @@ import org.occurrent.eventstore.api.internal.StreamReadFilterToFilterMapper;
 import org.occurrent.eventstore.api.internal.StreamReadFilterValidator;
 import org.occurrent.eventstore.mongodb.internal.MongoExceptionTranslator;
 import org.occurrent.eventstore.mongodb.internal.MongoExceptionTranslator.WriteContext;
+import org.occurrent.eventstore.mongodb.dcb.internal.DcbDocumentMapper;
 import org.occurrent.eventstore.mongodb.internal.OccurrentCloudEventMongoDocumentMapper;
 import org.occurrent.eventstore.mongodb.internal.StreamVersionDiff;
 import org.occurrent.filter.Filter;
@@ -247,7 +248,10 @@ public class ReactorMongoEventStore implements EventStore, EventStoreOperations,
     }
 
     private static CloudEvent convertToCloudEvent(TimeRepresentation timeRepresentation, Document document) {
-        return OccurrentCloudEventMongoDocumentMapper.convertToCloudEvent(timeRepresentation, document);
+        // Use the DCB-aware mapper so that DCB storage fields (dcbTags, dcbposition) are handled rather than leaked as
+        // CloudEvent extensions when this store reads a collection that a DCB-enabled store also writes to. It is a
+        // no-op for plain stream events.
+        return DcbDocumentMapper.toCloudEvent(timeRepresentation, document);
     }
 
     private static boolean isSkipOrLimitDefined(int skip, int limit) {
