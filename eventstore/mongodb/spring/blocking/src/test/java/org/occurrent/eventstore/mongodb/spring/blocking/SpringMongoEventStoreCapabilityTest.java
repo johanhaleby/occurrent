@@ -28,6 +28,7 @@ import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.DisplayNameGenerator.ReplaceUnderscores;
 import org.junit.jupiter.api.extension.RegisterExtension;
 import org.occurrent.cloudevents.OccurrentExtensionGetter;
+import org.occurrent.eventstore.api.EventStoreCapability;
 import org.occurrent.eventstore.api.SortBy;
 import org.occurrent.eventstore.api.StreamReadFilter;
 import org.occurrent.eventstore.api.WriteCondition;
@@ -56,8 +57,8 @@ import static java.util.Objects.requireNonNull;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.occurrent.eventstore.api.dcb.DcbQuery.tags;
-import static org.occurrent.eventstore.mongodb.spring.blocking.SpringMongoEventStoreCapability.DCB;
-import static org.occurrent.eventstore.mongodb.spring.blocking.SpringMongoEventStoreCapability.STREAM;
+import static org.occurrent.eventstore.api.EventStoreCapability.DCB;
+import static org.occurrent.eventstore.api.EventStoreCapability.STREAM;
 
 @Testcontainers
 @DisplayNameGeneration(ReplaceUnderscores.class)
@@ -121,10 +122,10 @@ class SpringMongoEventStoreCapabilityTest {
         assertThatThrownBy(() -> eventStoreConfig(Set.of()))
                 .isExactlyInstanceOf(IllegalArgumentException.class)
                 .hasMessage("Event store capabilities cannot be empty");
-        assertThatThrownBy(() -> eventStoreConfig((Set<SpringMongoEventStoreCapability>) null))
+        assertThatThrownBy(() -> eventStoreConfig((Set<EventStoreCapability>) null))
                 .isExactlyInstanceOf(NullPointerException.class)
                 .hasMessage("Event store capabilities cannot be null");
-        assertThatThrownBy(() -> eventStoreConfig(STREAM, (SpringMongoEventStoreCapability) null))
+        assertThatThrownBy(() -> eventStoreConfig(STREAM, (EventStoreCapability) null))
                 .isExactlyInstanceOf(NullPointerException.class)
                 .hasMessage("Event store capability cannot be null");
     }
@@ -296,11 +297,11 @@ class SpringMongoEventStoreCapabilityTest {
                 .hasMessage("DCB capability is not enabled for this SpringMongoEventStore");
     }
 
-    private EventStoreConfig.Builder eventStoreConfig(SpringMongoEventStoreCapability capability, SpringMongoEventStoreCapability... additionalCapabilities) {
+    private EventStoreConfig.Builder eventStoreConfig(EventStoreCapability capability, EventStoreCapability... additionalCapabilities) {
         return eventStoreConfigBuilder().eventStoreCapabilities(capability, additionalCapabilities);
     }
 
-    private EventStoreConfig.Builder eventStoreConfig(Set<SpringMongoEventStoreCapability> capabilities) {
+    private EventStoreConfig.Builder eventStoreConfig(Set<EventStoreCapability> capabilities) {
         return eventStoreConfigBuilder().eventStoreCapabilities(capabilities);
     }
 

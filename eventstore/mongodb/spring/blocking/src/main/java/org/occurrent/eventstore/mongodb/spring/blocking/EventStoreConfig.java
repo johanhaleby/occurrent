@@ -18,6 +18,7 @@ package org.occurrent.eventstore.mongodb.spring.blocking;
 
 import org.jspecify.annotations.NullMarked;
 import org.jspecify.annotations.NullUnmarked;
+import org.occurrent.eventstore.api.EventStoreCapability;
 import org.occurrent.eventstore.api.blocking.EventStoreQueries;
 import org.occurrent.eventstore.api.dcb.DcbStreamIdGenerator;
 import org.occurrent.eventstore.api.dcb.PartitionedDcbStreamIdGenerator;
@@ -35,7 +36,7 @@ import java.util.StringJoiner;
 import java.util.function.Function;
 
 import static java.util.Objects.requireNonNull;
-import static org.occurrent.eventstore.mongodb.spring.blocking.SpringMongoEventStoreCapability.STREAM;
+import static org.occurrent.eventstore.api.EventStoreCapability.STREAM;
 
 /**
  * Configuration for the blocking Spring java driver for MongoDB EventStore
@@ -44,14 +45,14 @@ import static org.occurrent.eventstore.mongodb.spring.blocking.SpringMongoEventS
 public class EventStoreConfig {
     private static final Function<Query, Query> DEFAULT_QUERY_OPTIONS_FUNCTION = Function.identity();
     private static final Function<Query, Query> DEFAULT_READ_OPTIONS_FUNCTION = Function.identity();
-    private static final Set<SpringMongoEventStoreCapability> DEFAULT_EVENT_STORE_CAPABILITIES = Set.of(STREAM);
+    private static final Set<EventStoreCapability> DEFAULT_EVENT_STORE_CAPABILITIES = Set.of(STREAM);
 
     public final String eventStoreCollectionName;
     public final TransactionTemplate transactionTemplate;
     public final TimeRepresentation timeRepresentation;
     public final Function<Query, Query> queryOptions;
     public final Function<Query, Query> readOptions;
-    public final Set<SpringMongoEventStoreCapability> eventStoreCapabilities;
+    public final Set<EventStoreCapability> eventStoreCapabilities;
     public final DcbStreamIdGenerator dcbStreamIdGenerator;
 
     /**
@@ -65,7 +66,7 @@ public class EventStoreConfig {
         this(eventStoreCollectionName, transactionTemplate, timeRepresentation, DEFAULT_QUERY_OPTIONS_FUNCTION, DEFAULT_READ_OPTIONS_FUNCTION, DEFAULT_EVENT_STORE_CAPABILITIES, new PartitionedDcbStreamIdGenerator());
     }
 
-    private EventStoreConfig(String eventStoreCollectionName, TransactionTemplate transactionTemplate, TimeRepresentation timeRepresentation, Function<Query, Query> queryOptions, Function<Query, Query> readOptions, Set<SpringMongoEventStoreCapability> eventStoreCapabilities, DcbStreamIdGenerator dcbStreamIdGenerator) {
+    private EventStoreConfig(String eventStoreCollectionName, TransactionTemplate transactionTemplate, TimeRepresentation timeRepresentation, Function<Query, Query> queryOptions, Function<Query, Query> readOptions, Set<EventStoreCapability> eventStoreCapabilities, DcbStreamIdGenerator dcbStreamIdGenerator) {
         requireNonNull(eventStoreCollectionName, "Event store collection name cannot be null");
         requireNonNull(transactionTemplate, TransactionTemplate.class.getSimpleName() + " cannot be null");
         requireNonNull(timeRepresentation, TimeRepresentation.class.getSimpleName() + " cannot be null");
@@ -117,7 +118,7 @@ public class EventStoreConfig {
         private TimeRepresentation timeRepresentation;
         private Function<Query, Query> queryOptions = DEFAULT_QUERY_OPTIONS_FUNCTION;
         private Function<Query, Query> readOptions = DEFAULT_READ_OPTIONS_FUNCTION;
-        private Set<SpringMongoEventStoreCapability> eventStoreCapabilities = DEFAULT_EVENT_STORE_CAPABILITIES;
+        private Set<EventStoreCapability> eventStoreCapabilities = DEFAULT_EVENT_STORE_CAPABILITIES;
         private DcbStreamIdGenerator dcbStreamIdGenerator = new PartitionedDcbStreamIdGenerator();
 
         /**
@@ -196,14 +197,14 @@ public class EventStoreConfig {
         /**
          * Select the event-store capabilities that should be enabled for this store.
          * <p>
-         * The default is {@link SpringMongoEventStoreCapability#STREAM}. Add {@link SpringMongoEventStoreCapability#DCB}
+         * The default is {@link EventStoreCapability#STREAM}. Add {@link EventStoreCapability#DCB}
          * to enable Dynamic Consistency Boundary indexes, support collections, and API operations.
          *
          * @param eventStoreCapabilities The non-empty capability set to enable.
          * @return The same {@code Builder} instance.
          */
         @NullMarked
-        public Builder eventStoreCapabilities(Set<SpringMongoEventStoreCapability> eventStoreCapabilities) {
+        public Builder eventStoreCapabilities(Set<EventStoreCapability> eventStoreCapabilities) {
             requireNonNull(eventStoreCapabilities, "Event store capabilities cannot be null");
             if (eventStoreCapabilities.isEmpty()) {
                 throw new IllegalArgumentException("Event store capabilities cannot be empty");
@@ -223,10 +224,10 @@ public class EventStoreConfig {
          * @return The same {@code Builder} instance.
          */
         @NullMarked
-        public Builder eventStoreCapabilities(SpringMongoEventStoreCapability eventStoreCapability, SpringMongoEventStoreCapability... additionalEventStoreCapabilities) {
+        public Builder eventStoreCapabilities(EventStoreCapability eventStoreCapability, EventStoreCapability... additionalEventStoreCapabilities) {
             requireNonNull(eventStoreCapability, "Event store capability cannot be null");
             requireNonNull(additionalEventStoreCapabilities, "Additional event store capabilities cannot be null");
-            Set<SpringMongoEventStoreCapability> capabilities = new LinkedHashSet<>();
+            Set<EventStoreCapability> capabilities = new LinkedHashSet<>();
             capabilities.add(eventStoreCapability);
             Arrays.stream(additionalEventStoreCapabilities)
                     .map(capability -> requireNonNull(capability, "Event store capability cannot be null"))

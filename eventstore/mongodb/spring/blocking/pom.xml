@@ -46,6 +46,11 @@
         </dependency>
         <dependency>
             <groupId>org.occurrent</groupId>
+            <artifactId>eventstore-mongodb-dcb-common</artifactId>
+            <version>${project.version}</version>
+        </dependency>
+        <dependency>
+            <groupId>org.occurrent</groupId>
             <artifactId>mongodb-spring-filter-query-conversion</artifactId>
             <version>${project.version}</version>
         </dependency>

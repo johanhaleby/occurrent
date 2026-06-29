@@ -14,14 +14,15 @@
  * limitations under the License.
  */
 
-package org.occurrent.eventstore.mongodb.spring.blocking;
+package org.occurrent.eventstore.api;
 
 /**
- * Selects which event-store APIs and MongoDB support structures a {@link SpringMongoEventStore} should enable.
+ * Selects which event-store APIs and supporting storage structures an event store should enable.
  * <p>
- * Capabilities control indexes, support collections, and fail-fast guards. They do not change the stored CloudEvent format.
+ * Capabilities control indexes, support collections, and fail-fast guards. They do not change the stored CloudEvent
+ * format. A store that supports both modes can enable both capabilities at once.
  */
-public enum SpringMongoEventStoreCapability {
+public enum EventStoreCapability {
     /**
      * Enables stream-based event-store reads, writes, queries, and operations.
      */

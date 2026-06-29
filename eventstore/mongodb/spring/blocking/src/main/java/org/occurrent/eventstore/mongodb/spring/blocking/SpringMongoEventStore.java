@@ -34,6 +34,8 @@ import org.occurrent.eventstore.api.blocking.*;
 import org.occurrent.eventstore.api.dcb.*;
 import org.occurrent.eventstore.api.internal.StreamReadFilterToFilterMapper;
 import org.occurrent.eventstore.api.internal.StreamReadFilterValidator;
+import org.occurrent.eventstore.mongodb.dcb.internal.DcbDocumentMapper;
+import org.occurrent.eventstore.mongodb.dcb.internal.DcbMarkerModel;
 import org.occurrent.eventstore.mongodb.internal.MongoExceptionTranslator.WriteContext;
 import org.occurrent.eventstore.mongodb.internal.StreamVersionDiff;
 import org.occurrent.filter.Filter;
@@ -65,11 +67,10 @@ import static org.occurrent.cloudevents.OccurrentCloudEventExtension.STREAM_ID;
 import static org.occurrent.cloudevents.OccurrentCloudEventExtension.STREAM_VERSION;
 import static org.occurrent.eventstore.api.SortBy.SortDirection.ASCENDING;
 import static org.occurrent.eventstore.mongodb.internal.MongoExceptionTranslator.translateException;
-import static org.occurrent.eventstore.mongodb.internal.OccurrentCloudEventMongoDocumentMapper.DCB_TAGS_INDEX_FIELD;
-import static org.occurrent.eventstore.mongodb.internal.OccurrentCloudEventMongoDocumentMapper.convertToCloudEvent;
+import static org.occurrent.eventstore.api.EventStoreCapability.DCB;
+import static org.occurrent.eventstore.api.EventStoreCapability.STREAM;
+import static org.occurrent.eventstore.mongodb.dcb.internal.DcbDocumentMapper.DCB_TAGS_INDEX_FIELD;
 import static org.occurrent.eventstore.mongodb.internal.OccurrentCloudEventMongoDocumentMapper.convertToDocument;
-import static org.occurrent.eventstore.mongodb.spring.blocking.SpringMongoEventStoreCapability.DCB;
-import static org.occurrent.eventstore.mongodb.spring.blocking.SpringMongoEventStoreCapability.STREAM;
 import static org.occurrent.functionalsupport.internal.FunctionalSupport.autoClose;
 import static org.occurrent.functionalsupport.internal.FunctionalSupport.mapWithIndex;
 import static org.occurrent.mongodb.spring.sortconversion.internal.SortConverter.convertToSpringSort;
@@ -90,10 +91,6 @@ import static org.springframework.data.mongodb.core.query.Criteria.where;
 public class SpringMongoEventStore implements EventStore, EventStoreOperations, EventStoreQueries, ReadEventStreamWithFilter, DcbEventStore {
 
     private static final String ID = "_id";
-    private static final String DCB_POSITION_DOCUMENT_ID = "dcb";
-    private static final String DCB_COUNTER_POSITION = "position";
-    private static final String CHECKPOINT_LAST_POSITION = "lastPosition";
-    private static final String CHECKPOINT_VERSION = "version";
 
     private final MongoTemplate mongoTemplate;
     private final String eventStoreCollectionName;
@@ -103,7 +100,7 @@ public class SpringMongoEventStore implements EventStore, EventStoreOperations, 
     private final TransactionTemplate transactionTemplate;
     private final Function<Query, Query> queryOptions;
     private final Function<Query, Query> readOptions;
-    private final Set<SpringMongoEventStoreCapability> eventStoreCapabilities;
+    private final Set<EventStoreCapability> eventStoreCapabilities;
     private final DcbStreamIdGenerator dcbStreamIdGenerator;
 
     /**
@@ -117,8 +114,8 @@ public class SpringMongoEventStore implements EventStore, EventStoreOperations, 
         requireNonNull(config, EventStoreConfig.class.getSimpleName() + " cannot be null");
         this.mongoTemplate = mongoTemplate;
         this.eventStoreCollectionName = config.eventStoreCollectionName;
-        this.dcbPositionCollectionName = eventStoreCollectionName + "_dcb_position";
-        this.dcbCheckpointCollectionName = eventStoreCollectionName + "_dcb_checkpoints";
+        this.dcbPositionCollectionName = DcbMarkerModel.positionCollectionName(eventStoreCollectionName);
+        this.dcbCheckpointCollectionName = DcbMarkerModel.checkpointCollectionName(eventStoreCollectionName);
         this.transactionTemplate = config.transactionTemplate;
         this.timeRepresentation = config.timeRepresentation;
         this.queryOptions = config.queryOptions;
@@ -132,7 +129,7 @@ public class SpringMongoEventStore implements EventStore, EventStoreOperations, 
     public EventStream<CloudEvent> read(String streamId, int skip, int limit) {
         requireStreamCapability();
         final EventStream<Document> eventStream = readEventStream(streamId, null, skip, limit);
-        return requireNonNull(eventStream).map(document -> convertToCloudEvent(timeRepresentation, document));
+        return requireNonNull(eventStream).map(document -> DcbDocumentMapper.toCloudEvent(timeRepresentation, document));
     }
 
     @SuppressWarnings("ConstantConditions")
@@ -204,7 +201,7 @@ public class SpringMongoEventStore implements EventStore, EventStoreOperations, 
         Query mongoQuery = toDcbMongoQuery(query, options.afterSequencePosition().orElse(0), upperBound);
         mongoQuery.with(Sort.by(Sort.Direction.ASC, DcbCloudEvents.POSITION));
         List<CloudEvent> events = mongoTemplate.find(queryOptions.apply(mongoQuery), Document.class, eventStoreCollectionName).stream()
-                .map(document -> convertToCloudEvent(timeRepresentation, document))
+                .map(document -> DcbDocumentMapper.toCloudEvent(timeRepresentation, document))
                 .toList();
         return new DcbEventStream(events, highWatermark, DcbConsistencyToken.of(consistencyTokenValue));
     }
@@ -302,7 +299,7 @@ public class SpringMongoEventStore implements EventStore, EventStoreOperations, 
                 return Optional.empty();
             }
 
-            CloudEvent currentCloudEvent = convertToCloudEvent(timeRepresentation, document);
+            CloudEvent currentCloudEvent = DcbDocumentMapper.toCloudEvent(timeRepresentation, document);
             CloudEvent updatedCloudEvent = fn.apply(currentCloudEvent);
             if (updatedCloudEvent == null) {
                 throw new IllegalArgumentException("Cloud event update function is not allowed to return null");
@@ -327,7 +324,7 @@ public class SpringMongoEventStore implements EventStore, EventStoreOperations, 
         requireNonNull(sortBy, SortBy.class.getSimpleName() + " cannot be null");
         final Query query = queryOptions.apply(FilterConverter.convertFilterToQuery(timeRepresentation, filter));
         return readCloudEvents(query, skip, limit, sortBy)
-                .map(document -> convertToCloudEvent(timeRepresentation, document));
+                .map(document -> DcbDocumentMapper.toCloudEvent(timeRepresentation, document));
     }
 
     @Override
@@ -347,12 +344,12 @@ public class SpringMongoEventStore implements EventStore, EventStoreOperations, 
     }
 
     private DcbAppendResult appendDcb(List<CloudEvent> events, @Nullable DcbAppendCondition condition) {
-        List<CloudEvent> eventsToAppend = validateDcbEvents(events);
+        List<CloudEvent> eventsToAppend = DcbMarkerModel.validateDcbEvents(events);
         // Place by the condition's boundary tags when it constrains on tags, so the same boundary always lands in
         // the same partition regardless of per-event tags. Otherwise (no condition, or a type-only/match-all
         // condition) fall back to the events' tags so tagless boundaries do not all collapse onto one hot partition.
         Set<String> conditionBoundaryTags = condition == null ? Set.of() : DcbCloudEvents.boundaryTags(condition.query());
-        Set<String> placementTags = conditionBoundaryTags.isEmpty() ? boundaryTagsOf(eventsToAppend) : conditionBoundaryTags;
+        Set<String> placementTags = conditionBoundaryTags.isEmpty() ? DcbMarkerModel.boundaryTagsOf(eventsToAppend) : conditionBoundaryTags;
         String streamId = requireNonNull(dcbStreamIdGenerator.generateStreamId(placementTags), "DcbStreamIdGenerator returned a null stream id");
 
         // Reserve the position block once, outside the transaction. The counter findAndModify is a single atomic
@@ -372,7 +369,7 @@ public class SpringMongoEventStore implements EventStore, EventStoreOperations, 
                 // consistency-token check observes it. Without this, an unconditional append touches no marker, nothing
                 // forces a write-write conflict, and a concurrent conditional append's snapshot can miss this append
                 // under MongoDB snapshot isolation (write skew). See ADR 0021.
-                incrementConflictMarkers(eventMarkerKeys(eventsToAppend), lastPosition);
+                incrementConflictMarkers(DcbMarkerModel.eventMarkerKeys(eventsToAppend), lastPosition);
             }
 
             List<Document> documents = convertDcbCloudEventsToDocuments(streamId, eventsToAppend, currentStreamVersion, firstPosition);
@@ -425,20 +422,13 @@ public class SpringMongoEventStore implements EventStore, EventStoreOperations, 
         return false;
     }
 
-    private static Set<String> boundaryTagsOf(List<CloudEvent> events) {
-        return events.stream().flatMap(event -> DcbCloudEvents.getTags(event).stream()).collect(java.util.stream.Collectors.toCollection(java.util.TreeSet::new));
-    }
-
     private List<Document> convertDcbCloudEventsToDocuments(String streamId, List<CloudEvent> cloudEvents, long currentStreamVersion, long firstPosition) {
         List<Document> documents = new ArrayList<>(cloudEvents.size());
         long streamVersion = currentStreamVersion + 1;
         long position = firstPosition;
         for (CloudEvent cloudEvent : cloudEvents) {
             CloudEvent dcbCloudEvent = DcbCloudEvents.withPosition(cloudEvent, position);
-            Document document = convertToDocument(timeRepresentation, streamId, streamVersion++, dcbCloudEvent);
-            document.put(DcbCloudEvents.POSITION, position);
-            document.put(DCB_TAGS_INDEX_FIELD, new ArrayList<>(DcbCloudEvents.getTags(dcbCloudEvent)));
-            documents.add(document);
+            documents.add(DcbDocumentMapper.toDocument(timeRepresentation, streamId, streamVersion++, dcbCloudEvent, position));
             position++;
         }
         return documents;
@@ -468,8 +458,8 @@ public class SpringMongoEventStore implements EventStore, EventStoreOperations, 
         // force a write-write conflict that serializes concurrent appends sharing a marker, so the loser re-runs this
         // check against the winner's committed increment. Always increment the query's markers so a concurrent matching
         // append is serialized even when this append's own events do not match the query.
-        java.util.TreeSet<String> markerKeys = new java.util.TreeSet<>(queryMarkerKeys(condition.query()));
-        markerKeys.addAll(eventMarkerKeys(eventsToAppend));
+        java.util.TreeSet<String> markerKeys = new java.util.TreeSet<>(DcbMarkerModel.queryMarkerKeys(condition.query()));
+        markerKeys.addAll(DcbMarkerModel.eventMarkerKeys(eventsToAppend));
         incrementConflictMarkers(markerKeys, lastPosition);
     }
 
@@ -485,8 +475,8 @@ public class SpringMongoEventStore implements EventStore, EventStoreOperations, 
     // own concurrency problem and out of proportion to the need today.
     private void incrementConflictMarkers(Set<String> markerKeys, long lastPosition) {
         for (String key : markerKeys) {
-            Query query = new Query(where(ID).is("marker:" + key));
-            Update update = new Update().inc(CHECKPOINT_VERSION, 1L).set(CHECKPOINT_LAST_POSITION, lastPosition);
+            Query query = new Query(where(ID).is(DcbMarkerModel.markerId(key)));
+            Update update = new Update().inc(DcbMarkerModel.CHECKPOINT_VERSION, 1L).set(DcbMarkerModel.CHECKPOINT_LAST_POSITION, lastPosition);
             mongoTemplate.upsert(query, update, dcbCheckpointCollectionName);
         }
     }
@@ -497,55 +487,22 @@ public class SpringMongoEventStore implements EventStore, EventStoreOperations, 
     // inside the append transaction (not when positions are reserved), this token reflects only committed appends and is
     // therefore immune to the read-watermark overshoot that a position-based check suffers (ADR 0021).
     private long consistencyToken(DcbQuery query) {
-        Set<String> markerKeys = queryMarkerKeys(query);
+        Set<String> markerKeys = DcbMarkerModel.queryMarkerKeys(query);
         if (markerKeys.isEmpty()) {
             return 0;
         }
         // Read the query's markers in one query so their versions come from a single consistent snapshot. Reading them
         // one by one could tear across a concurrent append and capture a sum that matches a later state, masking a real
         // conflict (ADR 31).
-        List<String> markerIds = markerKeys.stream().map(key -> "marker:" + key).toList();
+        List<String> markerIds = markerKeys.stream().map(DcbMarkerModel::markerId).toList();
         long sum = 0;
         for (Document marker : mongoTemplate.find(new Query(where(ID).in(markerIds)), Document.class, dcbCheckpointCollectionName)) {
-            Number version = (Number) marker.get(CHECKPOINT_VERSION);
+            Number version = (Number) marker.get(DcbMarkerModel.CHECKPOINT_VERSION);
             if (version != null) {
                 sum += version.longValue();
             }
         }
         return sum;
-    }
-
-    private static Set<String> queryMarkerKeys(DcbQuery query) {
-        if (query instanceof DcbQuery.MatchAll) {
-            return Set.of("all");
-        }
-        // Decompose into one key per attribute (a key per tag, a key per type) and NEVER combine them into a single
-        // "type:X+tag:t" key. Skew-safety (ADR 0021) depends on this: a conflicting event shares a marker via whichever
-        // single attribute made it match, and a combined key would share nothing with an event that carries only one
-        // of the attributes through a different query.
-        java.util.TreeSet<String> keys = new java.util.TreeSet<>();
-        for (DcbQueryItem item : dcbQueryItems(query)) {
-            item.tags().forEach(tag -> keys.add("tag:" + tag));
-            item.types().forEach(type -> keys.add("type:" + type));
-        }
-        return keys;
-    }
-
-    // A query here is either a single DcbQueryItem alternative or an Items list (MatchAll is handled by the callers).
-    private static List<DcbQueryItem> dcbQueryItems(DcbQuery query) {
-        if (query instanceof DcbQueryItem item) {
-            return List.of(item);
-        }
-        return ((DcbQuery.Items) query).items();
-    }
-
-    private static Set<String> eventMarkerKeys(List<CloudEvent> events) {
-        java.util.TreeSet<String> keys = new java.util.TreeSet<>();
-        for (CloudEvent event : events) {
-            DcbCloudEvents.getTags(event).forEach(tag -> keys.add("tag:" + tag));
-            keys.add("type:" + event.getType());
-        }
-        return keys;
     }
 
     /**
@@ -562,29 +519,18 @@ public class SpringMongoEventStore implements EventStore, EventStoreOperations, 
                 .maxAttempts(5)
                 .retryIf(SpringMongoEventStore::isDuplicateKeyError)
                 .execute(() -> {
-                    Query query = new Query(where(ID).is(DCB_POSITION_DOCUMENT_ID));
-                    Update update = new Update().inc(DCB_COUNTER_POSITION, eventCount);
+                    Query query = new Query(where(ID).is(DcbMarkerModel.DCB_POSITION_DOCUMENT_ID));
+                    Update update = new Update().inc(DcbMarkerModel.DCB_COUNTER_POSITION, eventCount);
                     FindAndModifyOptions options = FindAndModifyOptions.options().upsert(true).returnNew(true);
                     Document updated = mongoTemplate.findAndModify(query, update, options, Document.class, dcbPositionCollectionName);
-                    long lastPosition = ((Number) requireNonNull(updated, "DCB position document cannot be null").get(DCB_COUNTER_POSITION)).longValue();
+                    long lastPosition = ((Number) requireNonNull(updated, "DCB position document cannot be null").get(DcbMarkerModel.DCB_COUNTER_POSITION)).longValue();
                     return lastPosition - eventCount + 1;
                 });
     }
 
     private long currentDcbPosition() {
-        Document document = mongoTemplate.findById(DCB_POSITION_DOCUMENT_ID, Document.class, dcbPositionCollectionName);
-        return document == null ? 0 : ((Number) document.get(DCB_COUNTER_POSITION)).longValue();
-    }
-
-    private static List<CloudEvent> validateDcbEvents(List<CloudEvent> events) {
-        requireNonNull(events, "Events cannot be null");
-        List<CloudEvent> copy = List.copyOf(events);
-        if (copy.isEmpty()) {
-            throw new IllegalArgumentException("Events cannot be empty");
-        }
-        return copy.stream()
-                .map(event -> DcbCloudEvents.withTags(event, DcbCloudEvents.getTags(event)))
-                .toList();
+        Document document = mongoTemplate.findById(DcbMarkerModel.DCB_POSITION_DOCUMENT_ID, Document.class, dcbPositionCollectionName);
+        return document == null ? 0 : ((Number) document.get(DcbMarkerModel.DCB_COUNTER_POSITION)).longValue();
     }
 
     @Override
@@ -593,7 +539,7 @@ public class SpringMongoEventStore implements EventStore, EventStoreOperations, 
         requireNonNull(streamId, "Stream id cannot be null");
         requireNonNull(filter, "filter cannot be null");
         final EventStream<Document> eventStream = readEventStream(streamId, filter, skip, limit);
-        return requireNonNull(eventStream).map(document -> convertToCloudEvent(timeRepresentation, document));
+        return requireNonNull(eventStream).map(document -> DcbDocumentMapper.toCloudEvent(timeRepresentation, document));
     }
 
     @NullUnmarked
@@ -697,7 +643,7 @@ public class SpringMongoEventStore implements EventStore, EventStoreOperations, 
         if (query instanceof DcbQuery.MatchAll) {
             return new Query(positionCriteria);
         }
-        List<Criteria> itemCriteria = dcbQueryItems(query).stream()
+        List<Criteria> itemCriteria = DcbMarkerModel.dcbQueryItems(query).stream()
                 .map(SpringMongoEventStore::toCriteria)
                 .toList();
         return new Query(new Criteria().andOperator(positionCriteria, new Criteria().orOperator(itemCriteria)));
@@ -765,7 +711,7 @@ public class SpringMongoEventStore implements EventStore, EventStoreOperations, 
     }
 
     // Initialization
-    private static void initializeEventStore(String eventStoreCollectionName, String dcbPositionCollectionName, String dcbCheckpointCollectionName, Set<SpringMongoEventStoreCapability> eventStoreCapabilities, MongoTemplate mongoTemplate) {
+    private static void initializeEventStore(String eventStoreCollectionName, String dcbPositionCollectionName, String dcbCheckpointCollectionName, Set<EventStoreCapability> eventStoreCapabilities, MongoTemplate mongoTemplate) {
         if (!mongoTemplate.collectionExists(eventStoreCollectionName)) {
             mongoTemplate.createCollection(eventStoreCollectionName);
         }
@@ -803,7 +749,7 @@ public class SpringMongoEventStore implements EventStore, EventStoreOperations, 
         requireCapability(DCB);
     }
 
-    private void requireCapability(SpringMongoEventStoreCapability capability) {
+    private void requireCapability(EventStoreCapability capability) {
         if (!eventStoreCapabilities.contains(capability)) {
             throw new UnsupportedOperationException(capability + " capability is not enabled for this SpringMongoEventStore");
         }

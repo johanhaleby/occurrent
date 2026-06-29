@@ -52,8 +52,8 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.catchThrowable;
 import static org.occurrent.eventstore.api.dcb.DcbAppendCondition.failIfEventsMatch;
 import static org.occurrent.eventstore.api.dcb.DcbQuery.tags;
-import static org.occurrent.eventstore.mongodb.spring.blocking.SpringMongoEventStoreCapability.DCB;
-import static org.occurrent.eventstore.mongodb.spring.blocking.SpringMongoEventStoreCapability.STREAM;
+import static org.occurrent.eventstore.api.EventStoreCapability.DCB;
+import static org.occurrent.eventstore.api.EventStoreCapability.STREAM;
 
 /**
  * Regression test for the unconditional-append write-skew gap (ADR 0021).
