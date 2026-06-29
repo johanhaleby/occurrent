@@ -534,9 +534,14 @@ public class MongoEventStore implements EventStore, EventStoreOperations, EventS
 
     private static boolean isDuplicateKeyError(Throwable throwable) {
         // A cold-marker race can surface the duplicate key wrapped rather than at the top, so walk the cause chain the
-        // same bounded way as the transient-transaction check.
+        // same bounded way as the transient-transaction check. A DuplicateCloudEventException is a genuine business
+        // error (an event whose id and source already exist), not the cold-start race, and the driver duplicate-key
+        // exception is its cause, so stop and do not retry once it appears in the chain.
         Throwable cause = throwable;
         for (int hops = 0; cause != null && hops < 64; cause = cause.getCause(), hops++) {
+            if (cause instanceof DuplicateCloudEventException) {
+                return false;
+            }
             if (cause instanceof MongoBulkWriteException bulkWriteException) {
                 boolean duplicate = bulkWriteException.getWriteErrors().stream()
                         .anyMatch(writeError -> ErrorCategory.fromErrorCode(writeError.getCode()) == ErrorCategory.DUPLICATE_KEY);
