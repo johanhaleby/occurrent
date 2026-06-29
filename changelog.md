@@ -10,6 +10,10 @@ DCB is a capability layered on the existing CloudEvent storage, not a new store 
 
 #### Changes
 
+* DCB now works on the native MongoDB driver event store, not only the Spring store.
+  * `MongoEventStore`, the plain synchronous-driver store, implements the same DCB read and append API as the Spring store, with the same per-attribute marker model and consistency-token semantics. The shared model now lives in a new `eventstore-mongodb-dcb-common` module so the two stores cannot drift on the storage contract, and the capability set moved to a shared `EventStoreCapability` enum in `eventstore-api-common`. The native store defaults to stream-only, so existing applications are untouched.
+  * See [ADR 33](doc/architecture/decisions/0033-native-mongodb-driver-dcb-parity-via-shared-marker-model.md).
+
 * DCB catch-up delivers an event even when it commits during the replay.
   * `dcbposition` is reserved before the append commits (ADR 21), so the store head can run ahead of committed data and a position below the head can be an in-flight hole. The catch-up captures the live resume token before the replay, so an event that commits at such a position while the replay runs is delivered by the live change stream, and the handover cache dedups the overlap.
   * Trade-off: a replay that runs longer than the change stream history makes the resume token age out, so the handover fails loudly rather than silently dropping events. Size the change stream history (the MongoDB oplog window) for very large rebuilds.
