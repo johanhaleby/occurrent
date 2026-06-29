@@ -1,3 +1,63 @@
+### Changelog next version
+
+#### Highlights
+
+* Added initial Dynamic Consistency Boundary (DCB) support.
+  * New module: `org.occurrent:eventstore-api-dcb`.
+  * New core API types include `DcbEventStore`, `DcbQuery`, `DcbQueryItem`, `DcbReadOptions`, `DcbEventStream`, `DcbAppendCondition`, `DcbAppendResult`, `DcbAppendConditionNotFulfilledException`, and `DcbCloudEvents`.
+  * DCB is implemented as an optional capability over the existing CloudEvent storage model, not as a separate event representation.
+  * DCB metadata is stored as CloudEvent extensions:
+    * `dcbtags` for canonical DCB tags.
+    * `dcbposition` for the global DCB sequence position.
+  * DCB-written events remain normal CloudEvents with Occurrent stream metadata, so existing CloudEvent consumers and subscription models can still observe them.
+* Added DCB support to:
+  * `InMemoryEventStore`
+  * `SpringMongoEventStore`
+* Added blocking DCB application-service support.
+  * New package: `org.occurrent.application.service.blocking.dcb`.
+  * New types: `DcbApplicationService`, `GenericDcbApplicationService`, `TagGenerator`, `DcbStreamIdGenerator`, and `PartitionedDcbStreamIdGenerator`.
+  * `GenericDcbApplicationService` reads with a `DcbQuery`, invokes the domain function, converts new domain events to CloudEvents, adds DCB tags, and appends with a DCB append condition.
+* Added Spring Mongo event-store capabilities.
+  * New enum: `SpringMongoEventStoreCapability`.
+  * `EventStoreConfig` now accepts a non-empty set of capabilities: `STREAM`, `DCB`, or both.
+  * The backward-compatible default is `{STREAM}`.
+  * Spring Boot property: `occurrent.event-store.capabilities=stream`, `dcb`, or `stream,dcb`.
+  * `SpringMongoEventStore` now creates indexes/support collections based on enabled capabilities and fails fast when callers invoke a disabled API family.
+  * The Spring Boot starter now auto-configures application services from the same capability set: stream `ApplicationService` for `STREAM`, `DcbApplicationService` for `DCB`, and both for `stream,dcb`.
+  * DCB-only Spring Boot auto-configuration also exposes `DomainEventQueries` so DCB query DSL extensions can reuse the starter-provided converter while stream application services remain disabled.
+  * DCB application-service auto-configuration requires a user-provided `TagGenerator` bean, since DCB tags are domain-specific.
+  * Occurrent creates missing indexes/collections only. It never removes indexes or collections automatically.
+* Added DCB query excluded-type support.
+  * `DcbQueryItem` now has `excludedTypes`.
+  * Added factories for tag and type+tag queries that exclude event types.
+  * Included types are any-of, tags are all-of, and excluded types are none-of within each query item.
+  * Append-condition matching now respects excluded types so excluded events do not cause false DCB conflicts.
+* Added a blocking DCB DSL module.
+  * New module: `org.occurrent:dcb-dsl-blocking`.
+  * Java helpers: `DcbDomainEventQueries` and `DcbDomainEventStream`.
+  * `DcbDomainEventQueries` wraps a `DomainEventQueries`, reusing its configured `CloudEventConverter` and delegating the regular stream query API, so a DCB application uses one object for both DCB queries and stream queries instead of passing a `DcbEventStore` directly.
+  * Kotlin query extensions on `DcbDomainEventQueries`: `queryForSequence` and `queryForList`. The `queryWithPosition` overloads are member functions on `DcbDomainEventQueries`.
+  * Kotlin live subscription extension on `Subscribable`: `subscribeDcb`.
+  * DCB subscription helpers subscribe to CloudEvents and post-filter DCB-tagged events by `DcbQuery`; they are live subscription conveniences, not DCB-consistent reads.
+  * DCB subscription metadata callbacks reuse the existing `EventMetadata` type and expose DCB metadata through Kotlin extension properties: `dcbPosition` and `dcbTags`.
+  * Kotlin decider extensions on `DcbApplicationService` mirror the stream decider helpers while using `DcbQuery` as the decision boundary.
+* Added two DCB word-guessing MongoDB Spring examples.
+  * `example-domain-word-guessing-game-es-mongodb-spring-dcb` shows manual DCB wiring with explicit DCB queries, tags, application-service usage, and live durable subscriptions.
+  * `example-domain-word-guessing-game-es-mongodb-spring-dcb-autoconfig` shows Spring Boot auto-configuration, `@EnableOccurrent`, DCB-only event-store capabilities, annotation subscriptions, and DCB decider command handling.
+  * The DCB autoconfig example uses the starter-provided Jackson 3 `CloudEventConverter` with a domain-specific `ReflectionCloudEventTypeMapper`, instead of a custom converter.
+  * Both examples assert DCB-only stream API rejection while keeping DCB-written events observable as normal CloudEvents with DCB and Occurrent storage metadata.
+* Added ADRs for the DCB design:
+  * [ADR 17](doc/architecture/decisions/0017-introduce-dcb-as-shared-cloudevent-capability.md)
+  * [ADR 18](doc/architecture/decisions/0018-spring-mongo-event-store-capabilities.md)
+  * [ADR 19](doc/architecture/decisions/0019-dcb-dsl-module.md)
+
+#### Notes
+
+* Existing stream-based APIs remain backward compatible by default.
+* Historical stream-written events are not automatically DCB-readable. They need explicit DCB metadata backfill (`dcbtags` and `dcbposition`) before they can participate in DCB reads.
+* Enabling a new Spring Mongo capability may create indexes on startup. For large production collections, create required indexes out-of-band before changing application configuration.
+* DCB-only Spring Mongo usage still stores normal CloudEvents with Occurrent stream metadata. If stream support is enabled later, DCB-written events can be read by their storage stream ids, typically DCB partition streams.
+
 ### 0.20.5 (2026-06-29)
 
 * Added `adapt` and `compose` decider combinators to the `dsl/decider` module.

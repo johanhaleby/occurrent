@@ -34,7 +34,7 @@ import kotlin.reflect.KClass
  * Metadata associated with the event, such as stream id and version and other CloudEvent extensions
  * associated with the event.
  */
-data class EventMetadata internal constructor(val data: Map<String, Any?>) {
+data class EventMetadata(val data: Map<String, Any?>) {
     /**
      * The streamId of the event
      */

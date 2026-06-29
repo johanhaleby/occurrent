@@ -25,11 +25,15 @@ import org.occurrent.application.converter.CloudEventConverter;
 import org.occurrent.application.converter.typemapper.CloudEventTypeMapper;
 import org.occurrent.application.converter.typemapper.ReflectionCloudEventTypeMapper;
 import org.occurrent.application.service.blocking.ApplicationService;
+import org.occurrent.application.service.blocking.dcb.DcbApplicationService;
+import org.occurrent.application.service.blocking.dcb.GenericDcbApplicationService;
+import org.occurrent.application.service.blocking.dcb.TagGenerator;
 import org.occurrent.application.service.blocking.generic.GenericApplicationService;
 import org.occurrent.dsl.query.blocking.DomainEventQueries;
 import org.occurrent.dsl.subscription.blocking.Subscriptions;
 import org.occurrent.eventstore.api.blocking.EventStore;
 import org.occurrent.eventstore.api.blocking.EventStoreQueries;
+import org.occurrent.eventstore.api.dcb.DcbEventStore;
 import org.occurrent.eventstore.mongodb.spring.blocking.EventStoreConfig;
 import org.occurrent.eventstore.mongodb.spring.blocking.SpringMongoEventStore;
 import org.occurrent.retry.RetryStrategy;
@@ -45,8 +49,11 @@ import org.occurrent.subscription.blocking.durable.catchup.CatchupSubscriptionMo
 import org.occurrent.subscription.mongodb.spring.blocking.SpringMongoLeaseCompetingConsumerStrategy;
 import org.occurrent.subscription.mongodb.spring.blocking.SpringMongoSubscriptionModel;
 import org.occurrent.subscription.mongodb.spring.blocking.SpringMongoSubscriptionPositionStorage;
+import org.springframework.beans.factory.config.BeanFactoryPostProcessor;
+import org.springframework.beans.factory.config.ConfigurableListableBeanFactory;
+import org.springframework.beans.factory.support.BeanDefinitionRegistry;
+import org.springframework.beans.factory.support.RootBeanDefinition;
 import org.springframework.boot.autoconfigure.AutoConfiguration;
-import org.springframework.boot.autoconfigure.condition.ConditionalOnBean;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnClass;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnMissingBean;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
@@ -63,6 +70,7 @@ import org.springframework.data.mongodb.core.MongoTemplate;
 
 import java.util.List;
 
+import static org.occurrent.eventstore.mongodb.spring.blocking.SpringMongoEventStoreCapability.STREAM;
 import static org.occurrent.subscription.blocking.durable.catchup.SubscriptionPositionStorageConfig.useSubscriptionPositionStorage;
 import static org.occurrent.subscription.mongodb.spring.blocking.SpringMongoSubscriptionModelConfig.withConfig;
 
@@ -93,7 +101,12 @@ public class OccurrentMongoAutoConfiguration<E> {
     @ConditionalOnProperty(name = "occurrent.event-store.enabled", havingValue = "true", matchIfMissing = true)
     public EventStoreConfig occurrentEventStoreConfig(MongoTransactionManager transactionManager, OccurrentProperties occurrentProperties) {
         EventStoreProperties eventStoreProperties = occurrentProperties.getEventStore();
-        return new EventStoreConfig.Builder().eventStoreCollectionName(eventStoreProperties.getCollection()).transactionConfig(transactionManager).timeRepresentation(eventStoreProperties.getTimeRepresentation()).build();
+        return new EventStoreConfig.Builder()
+                .eventStoreCollectionName(eventStoreProperties.getCollection())
+                .transactionConfig(transactionManager)
+                .timeRepresentation(eventStoreProperties.getTimeRepresentation())
+                .eventStoreCapabilities(eventStoreProperties.getCapabilities())
+                .build();
     }
 
     @Bean
@@ -128,10 +141,13 @@ public class OccurrentMongoAutoConfiguration<E> {
         SpringMongoSubscriptionModel mongoSubscriptionModel = new SpringMongoSubscriptionModel(mongoTemplate, withConfig(eventStoreProperties.getCollection(), eventStoreProperties.getTimeRepresentation())
                 .restartSubscriptionsOnChangeStreamHistoryLost(occurrentProperties.getSubscription().isRestartOnChangeStreamHistoryLost()));
         DurableSubscriptionModel durableSubscriptionModel = new DurableSubscriptionModel(mongoSubscriptionModel, storage);
-        CatchupSubscriptionModel catchupSubscriptionModel = new CatchupSubscriptionModel(durableSubscriptionModel, eventStoreQueries,
-                new CatchupSubscriptionModelConfig(useSubscriptionPositionStorage(storage)
-                        .andPersistSubscriptionPositionDuringCatchupPhaseForEveryNEvents(1000)));
-        return new CompetingConsumerSubscriptionModel(catchupSubscriptionModel, competingConsumerStrategy);
+        SubscriptionModel subscriptionModel = durableSubscriptionModel;
+        if (eventStoreProperties.getCapabilities().contains(STREAM)) {
+            subscriptionModel = new CatchupSubscriptionModel(durableSubscriptionModel, eventStoreQueries,
+                    new CatchupSubscriptionModelConfig(useSubscriptionPositionStorage(storage)
+                            .andPersistSubscriptionPositionDuringCatchupPhaseForEveryNEvents(1000)));
+        }
+        return new CompetingConsumerSubscriptionModel(subscriptionModel, competingConsumerStrategy);
     }
 
     @Bean
@@ -156,6 +172,7 @@ public class OccurrentMongoAutoConfiguration<E> {
 
     @Bean
     @ConditionalOnMissingBean(DomainEventQueries.class)
+    @Conditional(OnDomainEventQueriesCapabilityCondition.class)
     @ConditionalOnProperty(name = "occurrent.event-store.enabled", havingValue = "true", matchIfMissing = true)
     public DomainEventQueries<E> occurrentDomainEventQueries(EventStoreQueries eventStoreQueries, CloudEventConverter<E> cloudEventConverter) {
         return new DomainEventQueries<>(eventStoreQueries, cloudEventConverter);
@@ -163,9 +180,42 @@ public class OccurrentMongoAutoConfiguration<E> {
 
     @Bean
     @ConditionalOnMissingBean(ApplicationService.class)
+    @Conditional(OnStreamEventStoreCapabilityCondition.class)
     @ConditionalOnProperty(name = {"occurrent.event-store.enabled", "occurrent.application-service.enabled"}, havingValue = "true", matchIfMissing = true)
     public ApplicationService<E> occurrentApplicationService(EventStore eventStore, CloudEventConverter<E> cloudEventConverter, OccurrentProperties occurrentProperties) {
         boolean enableDefaultRetryStrategy = occurrentProperties.getApplicationService().isEnableDefaultRetryStrategy();
         return enableDefaultRetryStrategy ? new GenericApplicationService<>(eventStore, cloudEventConverter) : new GenericApplicationService<>(eventStore, cloudEventConverter, RetryStrategy.none());
+    }
+
+    @Bean
+    @Conditional(OnDcbEventStoreCapabilityCondition.class)
+    @ConditionalOnProperty(name = {"occurrent.event-store.enabled", "occurrent.application-service.enabled"}, havingValue = "true", matchIfMissing = true)
+    static BeanFactoryPostProcessor occurrentDcbApplicationServiceRegistrar() {
+        return beanFactory -> {
+            if (!(beanFactory instanceof BeanDefinitionRegistry registry)) {
+                return;
+            }
+            boolean hasDcbApplicationService = beanFactory.getBeanNamesForType(DcbApplicationService.class, false, false).length > 0;
+            boolean hasTagGenerator = beanFactory.getBeanNamesForType(TagGenerator.class, false, false).length > 0;
+            if (hasDcbApplicationService || !hasTagGenerator) {
+                return;
+            }
+            RootBeanDefinition beanDefinition = new RootBeanDefinition(DcbApplicationService.class);
+            beanDefinition.setInstanceSupplier(() -> createDcbApplicationService(beanFactory));
+            registry.registerBeanDefinition("occurrentDcbApplicationService", beanDefinition);
+        };
+    }
+
+    @SuppressWarnings({"rawtypes", "unchecked"})
+    private static DcbApplicationService<?> createDcbApplicationService(ConfigurableListableBeanFactory beanFactory) {
+        DcbEventStore eventStore = beanFactory.getBean(DcbEventStore.class);
+        CloudEventConverter cloudEventConverter = beanFactory.getBean(CloudEventConverter.class);
+        TagGenerator tagGenerator = beanFactory.getBean(TagGenerator.class);
+        OccurrentProperties occurrentProperties = beanFactory.getBean(OccurrentProperties.class);
+        boolean enableDefaultRetryStrategy = occurrentProperties.getApplicationService().isEnableDefaultRetryStrategy();
+        if (enableDefaultRetryStrategy) {
+            return new GenericDcbApplicationService<>(eventStore, cloudEventConverter, tagGenerator);
+        }
+        return new GenericDcbApplicationService<>(eventStore, cloudEventConverter, tagGenerator, RetryStrategy.none());
     }
 }

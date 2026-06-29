@@ -12,6 +12,8 @@
 
     <modules>
         <module>blocking</module>
+        <module>dcb</module>
+        <module>dcb-autoconfig</module>
     </modules>
     
 </project>

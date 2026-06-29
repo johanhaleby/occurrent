@@ -31,6 +31,7 @@ import org.junit.jupiter.api.extension.RegisterExtension;
 import org.occurrent.domain.DomainEvent;
 import org.occurrent.domain.NameDefined;
 import org.occurrent.domain.NameWasChanged;
+import org.occurrent.eventstore.api.dcb.DcbCloudEvents;
 import org.occurrent.eventstore.mongodb.spring.blocking.EventStoreConfig;
 import org.occurrent.eventstore.mongodb.spring.blocking.SpringMongoEventStore;
 import org.occurrent.filter.Filter;
@@ -84,6 +85,8 @@ import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.Mockito.*;
 import static org.occurrent.filter.Filter.all;
 import static org.occurrent.filter.Filter.id;
+import static org.occurrent.eventstore.mongodb.spring.blocking.SpringMongoEventStoreCapability.DCB;
+import static org.occurrent.eventstore.mongodb.spring.blocking.SpringMongoEventStoreCapability.STREAM;
 import static org.occurrent.subscription.mongodb.MongoFilterSpecification.MongoBsonFilterSpecification.filter;
 import static org.occurrent.subscription.mongodb.spring.blocking.SpringMongoSubscriptionModelConfig.withConfig;
 
@@ -111,7 +114,7 @@ public class SpringMongoSubscriptionModelTest {
         mongoTemplate = new MongoTemplate(mongoClient, requireNonNull(connectionString.getDatabase()));
         MongoTransactionManager mongoTransactionManager = new MongoTransactionManager(new SimpleMongoClientDatabaseFactory(mongoClient, requireNonNull(connectionString.getDatabase())));
         TimeRepresentation timeRepresentation = TimeRepresentation.RFC_3339_STRING;
-        EventStoreConfig eventStoreConfig = new EventStoreConfig.Builder().eventStoreCollectionName(connectionString.getCollection()).transactionConfig(mongoTransactionManager).timeRepresentation(timeRepresentation).build();
+        EventStoreConfig eventStoreConfig = new EventStoreConfig.Builder().eventStoreCollectionName(connectionString.getCollection()).transactionConfig(mongoTransactionManager).timeRepresentation(timeRepresentation).eventStoreCapabilities(STREAM, DCB).build();
         mongoEventStore = new SpringMongoEventStore(mongoTemplate, eventStoreConfig);
         subscriptionModel = new SpringMongoSubscriptionModel(mongoTemplate, connectionString.getCollection(), timeRepresentation);
         objectMapper = new ObjectMapper();
@@ -139,6 +142,27 @@ public class SpringMongoSubscriptionModelTest {
 
         // Then
         await().atMost(2, SECONDS).with().pollInterval(Duration.of(20, MILLIS)).untilAsserted(() -> assertThat(state).hasSize(3));
+    }
+
+    @Test
+    void blocking_spring_subscription_calls_listener_for_dcb_written_event() {
+        // Given
+        LocalDateTime now = LocalDateTime.now();
+        CopyOnWriteArrayList<CloudEvent> state = new CopyOnWriteArrayList<>();
+        subscriptionModel.subscribe(UUID.randomUUID().toString(), state::add).waitUntilStarted(Duration.of(10, ChronoUnit.SECONDS));
+        NameDefined nameDefined = new NameDefined(UUID.randomUUID().toString(), now, "name", "name1");
+
+        // When
+        mongoEventStore.append("dcb:partition:0", serialize(nameDefined)
+                .map(event -> DcbCloudEvents.withTags(event, List.of("name:1")))
+                .toList());
+
+        // Then
+        await().atMost(2, SECONDS).with().pollInterval(Duration.of(20, MILLIS)).untilAsserted(() -> {
+            assertThat(state).hasSize(1);
+            assertThat(DcbCloudEvents.getTags(state.get(0))).containsExactly("name:1");
+            assertThat(DcbCloudEvents.getPosition(state.get(0))).isPositive();
+        });
     }
 
     @Test
