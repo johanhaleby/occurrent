@@ -54,11 +54,6 @@
             <artifactId>dcb-dsl-blocking</artifactId>
             <version>${project.version}</version>
         </dependency>
-        <dependency>
-            <groupId>org.occurrent</groupId>
-            <artifactId>view-dsl</artifactId>
-            <version>${project.version}</version>
-        </dependency>
 
         <!-- Spring -->
         <dependency>

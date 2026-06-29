@@ -16,9 +16,6 @@
 
 package org.occurrent.example.domain.courseenrollment.features.coursedashboard.readmodel
 
-import org.occurrent.dsl.view.MaterializedView
-import org.occurrent.dsl.view.View
-import org.occurrent.dsl.view.ViewStateRepository
 import org.occurrent.example.domain.courseenrollment.common.CourseId
 import org.occurrent.example.domain.courseenrollment.common.DomainEvent
 import org.occurrent.example.domain.courseenrollment.common.StudentId
@@ -45,27 +42,17 @@ data class DashboardState(val courses: Map<CourseId, CourseRow>, val students: M
 
 /**
  * An in-memory read model of all courses and students, kept current by a DCB subscription (see
- * [CourseDashboardSubscriber]). It is eventually consistent with the event store, which is exactly what a materialized
- * view is. For a strongly consistent read see the course-detail read model in the enrollment feature.
+ * [CourseDashboardSubscriber]). It is eventually consistent with the event store. For a strongly consistent read see the
+ * course-detail read model in the enrollment feature.
  */
 @Component
 class CourseDashboard {
 
     private val slot = AtomicReference(DashboardState.EMPTY)
 
-    private val repository: ViewStateRepository<DashboardState, String> =
-        ViewStateRepository.create({ slot.get() }, { _, state -> slot.set(state) })
-
-    private val view: View<DashboardState, DomainEvent> =
-        View.create(DashboardState.EMPTY) { state, event -> evolve(state ?: DashboardState.EMPTY, event) }
-
-    private val materializedView: MaterializedView<DomainEvent> =
-        MaterializedView.create({ _ -> KEY }, view, repository)
-
-    // update is a read-modify-write over the single read-model slot. DCB subscription delivery is single-threaded
-    // today, so this synchronization only guards the slot against a future change to the delivery threading.
-    @Synchronized
-    fun update(event: DomainEvent) = materializedView.update(event)
+    fun update(event: DomainEvent) {
+        slot.updateAndGet { state -> evolve(state, event) }
+    }
 
     fun courses(): List<CourseRow> = slot.get().courses.values.sortedBy { it.title }
 
@@ -98,10 +85,6 @@ class CourseDashboard {
         }
 
         else -> state
-    }
-
-    companion object {
-        private const val KEY = "course-dashboard"
     }
 }
 
