@@ -84,7 +84,7 @@ class DcbSubscriptionsTest {
         CopyOnWriteArrayList<DomainEvent> received = new CopyOnWriteArrayList<>();
         // waitUntilStarted=true must block until the subscription is live, so an event appended right after subscribe
         // returns is delivered without a separate waitUntilStarted() call.
-        dcbSubscriptions.subscribe("subscription", DcbQuery.tagsAllOf("name:1"), null, true, (DomainEvent event) -> received.add(event));
+        dcbSubscriptions.subscribe("subscription", DcbQuery.tags("name:1"), null, true, (DomainEvent event) -> received.add(event));
 
         NameDefined afterStart = new NameDefined("eventId1", time, "name", "Some Doe");
         append("name:1", afterStart);
@@ -95,7 +95,7 @@ class DcbSubscriptionsTest {
     @Test
     void subscribe_with_metadata_and_wait_until_started_is_live_before_returning() {
         CopyOnWriteArrayList<DomainEvent> received = new CopyOnWriteArrayList<>();
-        dcbSubscriptions.subscribeWithMetadata("subscription", DcbQuery.tagsAllOf("name:1"), null, true, (metadata, event) -> received.add(event));
+        dcbSubscriptions.subscribeWithMetadata("subscription", DcbQuery.tags("name:1"), null, true, (metadata, event) -> received.add(event));
 
         NameDefined afterStart = new NameDefined("eventId1", time, "name", "Some Doe");
         append("name:1", afterStart);
