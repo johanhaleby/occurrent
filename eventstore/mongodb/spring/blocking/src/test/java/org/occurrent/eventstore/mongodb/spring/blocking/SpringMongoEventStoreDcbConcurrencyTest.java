@@ -60,8 +60,8 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.occurrent.eventstore.api.dcb.DcbAppendCondition.failIfEventsMatch;
 import static org.occurrent.eventstore.api.dcb.DcbQuery.tags;
 import static org.occurrent.eventstore.api.dcb.DcbQuery.types;
-import static org.occurrent.eventstore.mongodb.spring.blocking.SpringMongoEventStoreCapability.DCB;
-import static org.occurrent.eventstore.mongodb.spring.blocking.SpringMongoEventStoreCapability.STREAM;
+import static org.occurrent.eventstore.api.EventStoreCapability.DCB;
+import static org.occurrent.eventstore.api.EventStoreCapability.STREAM;
 
 /**
  * Adversarial concurrency tests for the DCB write path (ADR 0021).

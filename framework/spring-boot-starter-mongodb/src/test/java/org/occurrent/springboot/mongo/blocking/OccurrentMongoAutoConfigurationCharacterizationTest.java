@@ -30,7 +30,7 @@ import org.occurrent.dsl.dcb.blocking.DcbSubscriptions;
 import org.occurrent.dsl.query.blocking.DomainEventQueries;
 import org.occurrent.eventstore.mongodb.spring.blocking.EventStoreConfig;
 import org.occurrent.eventstore.mongodb.spring.blocking.SpringMongoEventStore;
-import org.occurrent.eventstore.mongodb.spring.blocking.SpringMongoEventStoreCapability;
+import org.occurrent.eventstore.api.EventStoreCapability;
 import org.occurrent.subscription.api.blocking.DelegatingSubscriptionModel;
 import org.occurrent.subscription.api.blocking.SubscriptionModel;
 import org.occurrent.subscription.blocking.durable.DurableSubscriptionModel;
@@ -74,7 +74,7 @@ class OccurrentMongoAutoConfigurationCharacterizationTest {
 
             OccurrentProperties properties = context.getBean(OccurrentProperties.class);
             assertThat(properties.getEventStore().getCollection()).isEqualTo("events-v2");
-            assertThat(properties.getEventStore().getCapabilities()).containsExactly(SpringMongoEventStoreCapability.STREAM);
+            assertThat(properties.getEventStore().getCapabilities()).containsExactly(EventStoreCapability.STREAM);
             assertThat(properties.getSubscription().getCollection()).isEqualTo("subscriptions-v2");
             assertThat(properties.getCloudEventConverter().getCloudEventSource()).isEqualTo(URI.create("urn:occurrent:test"));
             assertThat(properties.getApplicationService().isEnableDefaultRetryStrategy()).isFalse();
@@ -117,7 +117,7 @@ class OccurrentMongoAutoConfigurationCharacterizationTest {
             OccurrentProperties properties = context.getBean(OccurrentProperties.class);
 
             assertThat(properties.getEventStore().getCapabilities())
-                    .containsExactlyInAnyOrder(SpringMongoEventStoreCapability.STREAM, SpringMongoEventStoreCapability.DCB);
+                    .containsExactlyInAnyOrder(EventStoreCapability.STREAM, EventStoreCapability.DCB);
         });
     }
 
@@ -126,7 +126,7 @@ class OccurrentMongoAutoConfigurationCharacterizationTest {
         eventStoreConfigContextRunner().run(context -> {
             EventStoreConfig eventStoreConfig = context.getBean(EventStoreConfig.class);
 
-            assertThat(eventStoreConfig.eventStoreCapabilities).containsExactly(SpringMongoEventStoreCapability.STREAM);
+            assertThat(eventStoreConfig.eventStoreCapabilities).containsExactly(EventStoreCapability.STREAM);
         });
     }
 
@@ -138,7 +138,7 @@ class OccurrentMongoAutoConfigurationCharacterizationTest {
                     EventStoreConfig eventStoreConfig = context.getBean(EventStoreConfig.class);
 
                     assertThat(eventStoreConfig.eventStoreCapabilities)
-                            .containsExactlyInAnyOrder(SpringMongoEventStoreCapability.STREAM, SpringMongoEventStoreCapability.DCB);
+                            .containsExactlyInAnyOrder(EventStoreCapability.STREAM, EventStoreCapability.DCB);
                 });
     }
 
@@ -149,7 +149,7 @@ class OccurrentMongoAutoConfigurationCharacterizationTest {
                 .run(context -> {
                     EventStoreConfig eventStoreConfig = context.getBean(EventStoreConfig.class);
 
-                    assertThat(eventStoreConfig.eventStoreCapabilities).containsExactly(SpringMongoEventStoreCapability.DCB);
+                    assertThat(eventStoreConfig.eventStoreCapabilities).containsExactly(EventStoreCapability.DCB);
                 });
     }
 
@@ -158,7 +158,7 @@ class OccurrentMongoAutoConfigurationCharacterizationTest {
         contextRunner.withPropertyValues("occurrent.event-store.capabilities=dcb").run(context -> {
             OccurrentProperties properties = context.getBean(OccurrentProperties.class);
 
-            assertThat(properties.getEventStore().getCapabilities()).containsExactly(SpringMongoEventStoreCapability.DCB);
+            assertThat(properties.getEventStore().getCapabilities()).containsExactly(EventStoreCapability.DCB);
         });
     }
 

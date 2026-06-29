@@ -38,14 +38,6 @@ import static org.occurrent.time.internal.RFC3339.RFC_3339_DATE_TIME_FORMATTER;
  * into a MongoDB {@link Document} and vice versa.
  */
 public class OccurrentCloudEventMongoDocumentMapper {
-    /**
-     * The name of the indexed array field that holds an event's DCB tags in the stored MongoDB document, kept alongside
-     * the newline-joined {@code dcbtags} CloudEvent extension so that tag containment can be queried with {@code $all}.
-     * This is the storage contract shared between the event store, which writes it, and a DCB subscription, which
-     * matches a change stream against it.
-     */
-    public static final String DCB_TAGS_INDEX_FIELD = "dcbTags";
-    private static final String DCB_POSITION = "dcbposition";
 
     public static Document convertToDocument(TimeRepresentation timeRepresentation, String streamId, long streamVersion, CloudEvent cloudEvent) {
         Document cloudEventDocument = DocumentCloudEventWriter.toDocument(cloudEvent);
@@ -77,8 +69,6 @@ public class OccurrentCloudEventMongoDocumentMapper {
     public static CloudEvent convertToCloudEvent(TimeRepresentation timeRepresentation, Document cloudEventDocument) {
         Document document = new Document(cloudEventDocument);
         document.remove("_id");
-        document.remove(DCB_TAGS_INDEX_FIELD);
-        Object dcbPosition = document.remove(DCB_POSITION);
 
         if (timeRepresentation == DATE) {
             Object time = document.get("time"); // Be a bit nice and don't enforce Date here if TimeRepresentation has been changed
@@ -92,14 +82,6 @@ public class OccurrentCloudEventMongoDocumentMapper {
 
         CloudEvent cloudEvent = DocumentCloudEventReader.toCloudEvent(document);
         // When converting to JSON (document.toJson()) the stream version is interpreted as an int in Jackson, we convert it manually to long afterwards.
-        CloudEventBuilder cloudEventBuilder = CloudEventBuilder.v1(cloudEvent).withExtension(OccurrentCloudEventExtension.STREAM_VERSION, document.getLong(OccurrentCloudEventExtension.STREAM_VERSION));
-        if (dcbPosition instanceof Number number) {
-            cloudEventBuilder.withExtension(DCB_POSITION, number.longValue());
-        } else if (dcbPosition instanceof String string) {
-            cloudEventBuilder.withExtension(DCB_POSITION, Long.parseLong(string));
-        } else if (dcbPosition != null) {
-            throw new IllegalStateException("Expected " + DCB_POSITION + " to be a Number or String but was " + dcbPosition.getClass().getName());
-        }
-        return cloudEventBuilder.build();
+        return CloudEventBuilder.v1(cloudEvent).withExtension(OccurrentCloudEventExtension.STREAM_VERSION, document.getLong(OccurrentCloudEventExtension.STREAM_VERSION)).build();
     }
 }

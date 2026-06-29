@@ -18,7 +18,7 @@
 package org.occurrent.springboot.mongo.blocking;
 
 import org.jspecify.annotations.NonNull;
-import org.occurrent.eventstore.mongodb.spring.blocking.SpringMongoEventStoreCapability;
+import org.occurrent.eventstore.api.EventStoreCapability;
 import org.springframework.boot.context.properties.bind.Bindable;
 import org.springframework.boot.context.properties.bind.Binder;
 import org.springframework.context.annotation.Condition;
@@ -27,13 +27,13 @@ import org.springframework.core.type.AnnotatedTypeMetadata;
 
 import java.util.Set;
 
-import static org.occurrent.eventstore.mongodb.spring.blocking.SpringMongoEventStoreCapability.STREAM;
+import static org.occurrent.eventstore.api.EventStoreCapability.STREAM;
 
 class OnStreamEventStoreCapabilityCondition implements Condition {
     @Override
     public boolean matches(ConditionContext context, @NonNull AnnotatedTypeMetadata metadata) {
-        Set<SpringMongoEventStoreCapability> capabilities = Binder.get(context.getEnvironment())
-                .bind("occurrent.event-store.capabilities", Bindable.setOf(SpringMongoEventStoreCapability.class))
+        Set<EventStoreCapability> capabilities = Binder.get(context.getEnvironment())
+                .bind("occurrent.event-store.capabilities", Bindable.setOf(EventStoreCapability.class))
                 .orElse(Set.of(STREAM));
         return capabilities.contains(STREAM);
     }

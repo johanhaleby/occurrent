@@ -19,7 +19,7 @@ package org.occurrent.springboot.mongo.blocking;
 
 import org.occurrent.application.service.blocking.generic.GenericApplicationService;
 import org.occurrent.eventstore.api.WriteConditionNotFulfilledException;
-import org.occurrent.eventstore.mongodb.spring.blocking.SpringMongoEventStoreCapability;
+import org.occurrent.eventstore.api.EventStoreCapability;
 import org.occurrent.mongodb.timerepresentation.TimeRepresentation;
 import org.occurrent.retry.RetryStrategy;
 import org.springframework.boot.context.properties.ConfigurationProperties;
@@ -28,7 +28,7 @@ import java.net.URI;
 import java.time.temporal.ChronoUnit;
 import java.util.Set;
 
-import static org.occurrent.eventstore.mongodb.spring.blocking.SpringMongoEventStoreCapability.STREAM;
+import static org.occurrent.eventstore.api.EventStoreCapability.STREAM;
 
 @ConfigurationProperties(prefix = "occurrent")
 public class OccurrentProperties {
@@ -135,10 +135,10 @@ public class OccurrentProperties {
         /**
          * The event-store capabilities to enable.
          * <p>
-         * Defaults to stream-based event sourcing. Add {@link SpringMongoEventStoreCapability#DCB}
+         * Defaults to stream-based event sourcing. Add {@link EventStoreCapability#DCB}
          * to enable Dynamic Consistency Boundary infrastructure and APIs.
          */
-        private Set<SpringMongoEventStoreCapability> capabilities = Set.of(STREAM);
+        private Set<EventStoreCapability> capabilities = Set.of(STREAM);
 
         /**
          * If the event store should be enabled (i.e. created as Spring Bean)
@@ -170,11 +170,11 @@ public class OccurrentProperties {
             this.timeRepresentation = timeRepresentation;
         }
 
-        public Set<SpringMongoEventStoreCapability> getCapabilities() {
+        public Set<EventStoreCapability> getCapabilities() {
             return capabilities;
         }
 
-        public void setCapabilities(Set<SpringMongoEventStoreCapability> capabilities) {
+        public void setCapabilities(Set<EventStoreCapability> capabilities) {
             if (capabilities == null || capabilities.isEmpty()) {
                 throw new IllegalArgumentException("occurrent.event-store.capabilities must contain at least one capability");
             }

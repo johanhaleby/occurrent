@@ -30,6 +30,7 @@
     <modules>
         <module>native</module>
         <module>common</module>
+        <module>dcb-common</module>
         <module>spring</module>
     </modules>
 </project>

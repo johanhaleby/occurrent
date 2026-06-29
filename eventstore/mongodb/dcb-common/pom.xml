@@ -1,6 +1,6 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <!--
-  ~ Copyright 2020 Johan Haleby
+  ~ Copyright 2026 Johan Haleby
   ~
   ~ Licensed under the Apache License, Version 2.0 (the "License");
   ~ you may not use this file except in compliance with the License.
@@ -18,13 +18,13 @@
 <project xmlns="http://maven.apache.org/POM/4.0.0" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
          xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 http://maven.apache.org/xsd/maven-4.0.0.xsd">
     <parent>
-        <artifactId>subscription-mongodb-common</artifactId>
         <groupId>org.occurrent</groupId>
+        <artifactId>eventstore-mongodb</artifactId>
         <version>${revision}</version>
     </parent>
     <modelVersion>4.0.0</modelVersion>
 
-    <artifactId>subscription-mongodb-base</artifactId>
+    <artifactId>eventstore-mongodb-dcb-common</artifactId>
 
     <name>${mavenProjectName}</name>
 
@@ -34,9 +34,8 @@
             <artifactId>mongodb-driver-core</artifactId>
         </dependency>
         <dependency>
-            <groupId>org.occurrent</groupId>
-            <artifactId>subscription-core</artifactId>
-            <version>${project.version}</version>
+            <groupId>io.cloudevents</groupId>
+            <artifactId>cloudevents-core</artifactId>
         </dependency>
         <dependency>
             <groupId>org.occurrent</groupId>
@@ -45,12 +44,12 @@
         </dependency>
         <dependency>
             <groupId>org.occurrent</groupId>
-            <artifactId>eventstore-mongodb-dcb-common</artifactId>
+            <artifactId>eventstore-api-dcb</artifactId>
             <version>${project.version}</version>
         </dependency>
         <dependency>
             <groupId>org.occurrent</groupId>
-            <artifactId>eventstore-api-dcb</artifactId>
+            <artifactId>mongodb-timerepresentation</artifactId>
             <version>${project.version}</version>
         </dependency>
         <dependency>
@@ -63,6 +62,11 @@
         <dependency>
             <groupId>org.junit.jupiter</groupId>
             <artifactId>junit-jupiter-engine</artifactId>
+            <scope>test</scope>
+        </dependency>
+        <dependency>
+            <groupId>org.junit.jupiter</groupId>
+            <artifactId>junit-jupiter-params</artifactId>
             <scope>test</scope>
         </dependency>
         <dependency>

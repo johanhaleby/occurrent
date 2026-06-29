@@ -25,7 +25,7 @@ import org.occurrent.eventstore.api.dcb.DcbQueryItem;
 import java.util.ArrayList;
 import java.util.List;
 
-import static org.occurrent.eventstore.mongodb.internal.OccurrentCloudEventMongoDocumentMapper.DCB_TAGS_INDEX_FIELD;
+import static org.occurrent.eventstore.mongodb.dcb.internal.DcbDocumentMapper.DCB_TAGS_INDEX_FIELD;
 import static org.occurrent.subscription.mongodb.MongoFilterSpecification.FULL_DOCUMENT;
 
 /**
