@@ -538,7 +538,7 @@ class SpringMongoEventStoreDcbConcurrencyTest {
     // must aggregate ALL markers in the query (the sum of their versions), not just one. This test
     // closes that gap and acts as a regression guard for the single-read token capture logic.
     //
-    // N threads share one multi-marker boundary token (tagsAllOf("t1_i","t2_i"), two markers) and
+    // N threads share one multi-marker boundary token (tags("t1_i","t2_i"), two markers) and
     // concurrently append an event tagged with BOTH markers using failIfEventsMatch(query, token).
     // Exactly one must win; the rest must throw DcbAppendConditionNotFulfilledException. The shared
     // upfront token is what makes "exactly one" deterministic: an in-worker capture would let a late
@@ -554,7 +554,7 @@ class SpringMongoEventStoreDcbConcurrencyTest {
             String tag2 = "mm-t2-" + i;
 
             // Multi-marker query: both tag1 and tag2 must match — exercises the two-marker token capture path
-            DcbQuery multiMarkerQuery = tagsAllOf(tag1, tag2);
+            DcbQuery multiMarkerQuery = tags(tag1, tag2);
             DcbConsistencyToken boundaryToken = eventStore.read(multiMarkerQuery).consistencyToken();
             DcbAppendCondition condition = failIfEventsMatch(multiMarkerQuery, boundaryToken);
 
@@ -626,8 +626,8 @@ class SpringMongoEventStoreDcbConcurrencyTest {
             String tag = "tokenless-" + i;
 
             // Both conditions use the single-arg (no-token) form: fail if ANY existing event matches
-            DcbAppendCondition condA = failIfEventsMatch(tagsAllOf(tag));
-            DcbAppendCondition condB = failIfEventsMatch(tagsAllOf(tag));
+            DcbAppendCondition condA = failIfEventsMatch(tags(tag));
+            DcbAppendCondition condB = failIfEventsMatch(tags(tag));
 
             CloudEvent eventA = taggedEvent("TokenlessEvent", tag);
             CloudEvent eventB = taggedEvent("TokenlessEvent", tag);

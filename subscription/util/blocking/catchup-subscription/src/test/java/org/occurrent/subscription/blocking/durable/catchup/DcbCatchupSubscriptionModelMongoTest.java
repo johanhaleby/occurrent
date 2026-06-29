@@ -201,7 +201,7 @@ class DcbCatchupSubscriptionModelMongoTest {
 
         CopyOnWriteArrayList<DomainEvent> received = new CopyOnWriteArrayList<>();
         // A whole-range window forces a single bulk read that the wrapper can hold open across the hole's commit.
-        subscription = new CatchupSubscriptionModel(subscriptionModel, blockingDuringBulkReplay, DcbQuery.tagsAllOf("name:1"),
+        subscription = new CatchupSubscriptionModel(subscriptionModel, blockingDuringBulkReplay, DcbQuery.tags("name:1"),
                 new CatchupSubscriptionModelConfig(100, useSubscriptionPositionStorage(storage).andPersistSubscriptionPositionDuringCatchupPhaseForEveryNEvents(1))
                         .dcbCatchupPositionWindowSize(1_000_000_000L));
 
