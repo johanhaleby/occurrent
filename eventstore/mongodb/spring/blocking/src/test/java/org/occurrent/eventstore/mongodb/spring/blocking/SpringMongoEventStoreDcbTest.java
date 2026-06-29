@@ -273,6 +273,32 @@ class SpringMongoEventStoreDcbTest {
         assertThat(matchesNone.lastSequencePosition()).isEqualTo(3);
     }
 
+    @Test
+    void exists_and_count_report_matching_dcb_events() {
+        eventStore.append("dcb:partition:0", List.of(
+                taggedEvent("NameDefined", "name:1"),
+                taggedEvent("NameChanged", "name:1"),
+                taggedEvent("OrderPlaced", "order:1")));
+
+        assertThat(eventStore.exists(tagsAllOf("name:1"))).isTrue();
+        assertThat(eventStore.exists(tagsAllOf("absent:1"))).isFalse();
+        assertThat(eventStore.count(tagsAllOf("name:1"))).isEqualTo(2);
+        assertThat(eventStore.count(all())).isEqualTo(3);
+    }
+
+    @Test
+    void read_honors_up_to_sequence_position_upper_bound() {
+        eventStore.append("dcb:partition:0", List.of(
+                taggedEvent("NameDefined", "name:1"),
+                taggedEvent("NameChanged", "name:1"),
+                taggedEvent("OrderPlaced", "name:1")));
+
+        DcbEventStream upToTwo = eventStore.read(tagsAllOf("name:1"), DcbReadOptions.upToSequencePosition(2));
+
+        assertThat(upToTwo.events()).extracting(CloudEvent::getType).containsExactly("NameDefined", "NameChanged");
+        assertThat(upToTwo.lastSequencePosition()).isEqualTo(3);
+    }
+
     private static CloudEvent taggedEvent(String type, String... tags) {
         return DcbCloudEvents.withTags(event(type), Set.of(tags));
     }

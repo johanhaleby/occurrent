@@ -18,6 +18,7 @@ package org.occurrent.eventstore.api.dcb;
 
 import org.jspecify.annotations.NullMarked;
 
+import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Collection;
 import java.util.LinkedHashSet;
@@ -30,56 +31,80 @@ import static java.util.stream.Collectors.toUnmodifiableSet;
 /**
  * Query that selects CloudEvents by DCB metadata.
  * <p>
- * A query either matches all DCB events or consists of one or more query items. Each
- * item contributes an alternative match. Inside an item, types are matched as any-of,
- * tags as all-of, and excluded types as none-of.
+ * A query is either {@link MatchAll} (every DCB event) or {@link Items}, a non-empty list of
+ * {@link DcbQueryItem} alternatives that are OR-ed together. Inside an item, types are matched as
+ * any-of, tags as all-of, and excluded types as none-of.
  */
 @NullMarked
-public record DcbQuery(boolean matchAll, List<DcbQueryItem> items) {
+public sealed interface DcbQuery permits DcbQuery.MatchAll, DcbQuery.Items {
 
-    public DcbQuery {
-        requireNonNull(items, "Items cannot be null");
-        items = List.copyOf(items);
-        if (matchAll && !items.isEmpty()) {
-            throw new IllegalArgumentException("A query that matches all events cannot contain query items");
-        }
-        if (!matchAll && items.isEmpty()) {
-            throw new IllegalArgumentException("A query must contain at least one query item unless it matches all events");
+    /**
+     * A query that matches every DCB event.
+     */
+    record MatchAll() implements DcbQuery {
+    }
+
+    /**
+     * A query that matches an event when the event matches any of the {@code items}.
+     */
+    record Items(List<DcbQueryItem> items) implements DcbQuery {
+        public Items {
+            requireNonNull(items, "Items cannot be null");
+            items.forEach(item -> requireNonNull(item, "Query item cannot be null"));
+            items = List.copyOf(items);
+            if (items.isEmpty()) {
+                throw new IllegalArgumentException("A query must contain at least one query item");
+            }
         }
     }
 
     /**
      * Creates a query that matches every DCB event.
      */
-    public static DcbQuery all() {
-        return new DcbQuery(true, List.of());
+    static DcbQuery all() {
+        return new MatchAll();
     }
 
     /**
      * Creates a query from explicit query items.
      */
-    public static DcbQuery fromItems(Collection<DcbQueryItem> items) {
-        return new DcbQuery(false, List.copyOf(items));
+    static DcbQuery fromItems(Collection<DcbQueryItem> items) {
+        requireNonNull(items, "Items cannot be null");
+        return new Items(List.copyOf(items));
+    }
+
+    /**
+     * Creates a query that matches an event when it matches any of the supplied query items.
+     */
+    static DcbQuery anyOf(DcbQueryItem first, DcbQueryItem... rest) {
+        requireNonNull(first, "First item cannot be null");
+        requireNonNull(rest, "Additional items cannot be null");
+        List<DcbQueryItem> items = new ArrayList<>();
+        items.add(first);
+        for (DcbQueryItem item : rest) {
+            items.add(requireNonNull(item, "Item cannot be null"));
+        }
+        return new Items(items);
     }
 
     /**
      * Creates a query that matches any event whose CloudEvent type is one of the supplied types.
      */
-    public static DcbQuery type(String type, String... additionalTypes) {
+    static DcbQuery types(String type, String... additionalTypes) {
         return fromItems(List.of(DcbQueryItem.types(combine(type, additionalTypes))));
     }
 
     /**
      * Creates a query that matches events containing all supplied DCB tags.
      */
-    public static DcbQuery tagsAllOf(String tag, String... additionalTags) {
+    static DcbQuery tagsAllOf(String tag, String... additionalTags) {
         return fromItems(List.of(DcbQueryItem.tagsAllOf(combine(tag, additionalTags))));
     }
 
     /**
      * Creates a query that matches any of the supplied CloudEvent types and all supplied DCB tags.
      */
-    public static DcbQuery typeAndTagsAllOf(Collection<String> types, Collection<String> tags) {
+    static DcbQuery typeAndTagsAllOf(Collection<String> types, Collection<String> tags) {
         return fromItems(List.of(DcbQueryItem.typeAndTagsAllOf(types, tags)));
     }
 
@@ -87,7 +112,7 @@ public record DcbQuery(boolean matchAll, List<DcbQueryItem> items) {
      * Creates a query that matches events containing all supplied DCB tags except
      * events whose CloudEvent type is excluded.
      */
-    public static DcbQuery tagsAllOfExcludingTypes(Collection<String> tags, Collection<String> excludedTypes) {
+    static DcbQuery tagsAllOfExcludingTypes(Collection<String> tags, Collection<String> excludedTypes) {
         return fromItems(List.of(DcbQueryItem.tagsAllOfExcludingTypes(tags, excludedTypes)));
     }
 
@@ -95,7 +120,7 @@ public record DcbQuery(boolean matchAll, List<DcbQueryItem> items) {
      * Creates a query that matches any of the supplied CloudEvent types and all supplied
      * DCB tags, except events whose CloudEvent type is excluded.
      */
-    public static DcbQuery typeAndTagsAllOfExcludingTypes(Collection<String> types, Collection<String> tags, Collection<String> excludedTypes) {
+    static DcbQuery typeAndTagsAllOfExcludingTypes(Collection<String> types, Collection<String> tags, Collection<String> excludedTypes) {
         return fromItems(List.of(DcbQueryItem.typeAndTagsAllOfExcludingTypes(types, tags, excludedTypes)));
     }
 

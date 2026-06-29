@@ -21,6 +21,8 @@ import org.jspecify.annotations.NullMarked;
 
 import java.util.List;
 
+import static java.util.Objects.requireNonNull;
+
 /**
  * Event store operations for Dynamic Consistency Boundary reads and appends.
  * <p>
@@ -42,6 +44,28 @@ public interface DcbEventStore {
      * Reads events that match {@code query} using the supplied read options.
      */
     DcbEventStream read(DcbQuery query, DcbReadOptions options);
+
+    /**
+     * Returns whether any DCB event in the store matches {@code query}.
+     * <p>
+     * The default implementation reads the matching events; implementations should override it with a more
+     * efficient existence check.
+     */
+    default boolean exists(DcbQuery query) {
+        requireNonNull(query, "Query cannot be null");
+        return !read(query).events().isEmpty();
+    }
+
+    /**
+     * Returns the number of DCB events in the store that match {@code query}.
+     * <p>
+     * The default implementation reads the matching events; implementations should override it with a more
+     * efficient count.
+     */
+    default long count(DcbQuery query) {
+        requireNonNull(query, "Query cannot be null");
+        return read(query).events().size();
+    }
 
     /**
      * Appends DCB-tagged CloudEvents to the given Occurrent storage stream without an additional DCB condition.

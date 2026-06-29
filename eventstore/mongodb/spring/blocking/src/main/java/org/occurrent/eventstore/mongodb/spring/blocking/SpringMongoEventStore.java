@@ -193,9 +193,10 @@ public class SpringMongoEventStore implements EventStore, EventStoreOperations, 
         requireNonNull(options, "Read options cannot be null");
 
         long highWatermark = currentDcbPosition();
-        Query mongoQuery = toDcbMongoQuery(query, options.afterSequencePosition().orElse(0), highWatermark);
+        long upperBound = Math.min(highWatermark, options.upToSequencePosition().orElse(highWatermark));
+        Query mongoQuery = toDcbMongoQuery(query, options.afterSequencePosition().orElse(0), upperBound);
         mongoQuery.with(Sort.by(Sort.Direction.ASC, DcbCloudEvents.POSITION));
-        List<CloudEvent> events = mongoTemplate.find(mongoQuery, Document.class, eventStoreCollectionName).stream()
+        List<CloudEvent> events = mongoTemplate.find(queryOptions.apply(mongoQuery), Document.class, eventStoreCollectionName).stream()
                 .map(document -> convertToCloudEvent(timeRepresentation, document))
                 .toList();
         return new DcbEventStream(events, highWatermark);
@@ -212,6 +213,20 @@ public class SpringMongoEventStore implements EventStore, EventStoreOperations, 
         requireDcbCapability();
         requireNonNull(condition, "Append condition cannot be null");
         return appendDcb(streamId, events, condition);
+    }
+
+    @Override
+    public boolean exists(DcbQuery query) {
+        requireDcbCapability();
+        requireNonNull(query, "Query cannot be null");
+        return mongoTemplate.exists(queryOptions.apply(toDcbMongoQuery(query, 0, currentDcbPosition())), eventStoreCollectionName);
+    }
+
+    @Override
+    public long count(DcbQuery query) {
+        requireDcbCapability();
+        requireNonNull(query, "Query cannot be null");
+        return mongoTemplate.count(queryOptions.apply(toDcbMongoQuery(query, 0, currentDcbPosition())), eventStoreCollectionName);
     }
 
     @Override
@@ -348,13 +363,13 @@ public class SpringMongoEventStore implements EventStore, EventStoreOperations, 
 
     private void updateCheckpoints(DcbAppendCondition condition, List<CloudEvent> eventsToAppend, long lastPosition) {
         long afterSequencePosition = condition.afterSequencePosition().orElse(0);
-        if (mongoTemplate.exists(toDcbMongoQuery(condition.failIfEventsMatch(), afterSequencePosition, Long.MAX_VALUE), eventStoreCollectionName)) {
+        if (mongoTemplate.exists(toDcbMongoQuery(condition.query(), afterSequencePosition, Long.MAX_VALUE), eventStoreCollectionName)) {
             throw new DcbAppendConditionNotFulfilledException(condition, currentDcbPosition(), "Append condition was not fulfilled.");
         }
-        if (eventsToAppend.stream().noneMatch(event -> DcbCloudEvents.matches(event, condition.failIfEventsMatch()))) {
+        if (eventsToAppend.stream().noneMatch(event -> DcbCloudEvents.matches(event, condition.query()))) {
             return;
         }
-        for (String key : checkpointKeys(condition.failIfEventsMatch())) {
+        for (String key : checkpointKeys(condition.query())) {
             Query query = new Query(where(ID).is("checkpoint:" + key));
             Document checkpoint = mongoTemplate.findOne(query, Document.class, dcbCheckpointCollectionName);
             long checkpointPosition = checkpoint == null ? 0 : ((Number) checkpoint.get(CHECKPOINT_LAST_POSITION)).longValue();
@@ -367,11 +382,11 @@ public class SpringMongoEventStore implements EventStore, EventStoreOperations, 
     }
 
     private static Set<String> checkpointKeys(DcbQuery query) {
-        if (query.matchAll()) {
+        if (query instanceof DcbQuery.MatchAll) {
             return Set.of("all");
         }
         java.util.TreeSet<String> keys = new java.util.TreeSet<>();
-        for (DcbQueryItem item : query.items()) {
+        for (DcbQueryItem item : ((DcbQuery.Items) query).items()) {
             item.tags().forEach(tag -> keys.add("tag:" + tag));
             if (item.tags().isEmpty()) {
                 item.types().forEach(type -> keys.add("type:" + type));
@@ -493,10 +508,10 @@ public class SpringMongoEventStore implements EventStore, EventStoreOperations, 
 
     private static Query toDcbMongoQuery(DcbQuery query, long afterSequencePosition, long upperSequencePosition) {
         Criteria positionCriteria = where(DcbCloudEvents.POSITION).gt(afterSequencePosition).lte(upperSequencePosition);
-        if (query.matchAll()) {
+        if (query instanceof DcbQuery.MatchAll) {
             return new Query(positionCriteria);
         }
-        List<Criteria> itemCriteria = query.items().stream()
+        List<Criteria> itemCriteria = ((DcbQuery.Items) query).items().stream()
                 .map(SpringMongoEventStore::toCriteria)
                 .toList();
         return new Query(new Criteria().andOperator(positionCriteria, new Criteria().orOperator(itemCriteria)));

@@ -121,10 +121,13 @@ public class GenericDcbApplicationService<E> implements DcbApplicationService<E>
     }
 
     private static Set<String> tagsFromQuery(DcbQuery query) {
-        return query.items().stream()
-                .map(DcbQueryItem::tags)
-                .flatMap(Collection::stream)
-                .collect(toCollection(TreeSet::new));
+        if (query instanceof DcbQuery.Items items) {
+            return items.items().stream()
+                    .map(DcbQueryItem::tags)
+                    .flatMap(Collection::stream)
+                    .collect(toCollection(TreeSet::new));
+        }
+        return new TreeSet<>();
     }
 
     private static <T> Stream<T> emptyStreamIfNull(@Nullable Stream<T> stream) {
