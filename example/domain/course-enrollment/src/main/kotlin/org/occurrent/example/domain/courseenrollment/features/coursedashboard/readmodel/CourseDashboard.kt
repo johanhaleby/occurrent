@@ -30,8 +30,10 @@ import java.util.concurrent.atomic.AtomicReference
 
 /** A course as shown on the dashboard. Enrolled students are a set so replay stays idempotent and order-tolerant. */
 data class CourseRow(val courseId: CourseId, val title: String, val capacity: Int, val enrolled: Set<StudentId>) {
-    val enrolledCount: Int get() = enrolled.size
-    val seatsRemaining: Int get() = capacity - enrolled.size
+    @Suppress("unused")
+    val enrolledCount: Int get() = enrolled.size // Used by thymeleaf
+    @Suppress("unused")
+    val seatsRemaining: Int get() = capacity - enrolled.size // Used by thymeleaf
 }
 
 data class DashboardState(val courses: Map<CourseId, CourseRow>, val students: Map<StudentId, String>) {
