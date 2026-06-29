@@ -675,6 +675,8 @@ public class MongoEventStore implements EventStore, EventStoreOperations, EventS
 
         // Cloud spec defines id + source must be unique!
         eventStoreCollection.createIndex(Indexes.compoundIndex(Indexes.ascending("id"), Indexes.ascending("source")), new IndexOptions().unique(true));
+        // streamId + streamVersion uniqueness is a stream-mode invariant. DCB correctness rests on the per-attribute
+        // markers and the unique dcbposition, not stream version, so a DCB-only store neither needs nor creates it.
         if (eventStoreCapabilities.contains(STREAM)) {
             // Create a streamId + streamVersion ascending index (note that we don't need to index stream id separately since it's covered by this compound index)
             // Note also that this index supports when sorting both ascending and descending since MongoDB can traverse an index in both directions.
