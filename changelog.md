@@ -1,4 +1,4 @@
-### Changelog next version
+### 0.20.5 (2026-06-29)
 
 * Added `adapt` and `compose` decider combinators to the `dsl/decider` module.
   * `adapt` widens a decider over a feature's own command and event subtypes into one over the shared supertypes, ignoring foreign events and treating foreign commands as no-ops, so a `Decider<CourseCommand, CourseState, CourseEvent>` can run against a service over a common `DomainEvent`. It is available as a Java static taking `Class` tokens and as a Kotlin `reified` extension that reads `courseDecider.adapt()` at the call site.
