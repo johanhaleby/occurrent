@@ -57,6 +57,7 @@ import java.util.concurrent.atomic.AtomicInteger;
 import static java.nio.charset.StandardCharsets.UTF_8;
 import static java.util.Objects.requireNonNull;
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.junit.jupiter.api.Assertions.assertAll;
 import static org.occurrent.eventstore.api.EventStoreCapability.DCB;
 import static org.occurrent.eventstore.api.EventStoreCapability.STREAM;
 import static org.occurrent.eventstore.api.dcb.DcbAppendCondition.failIfEventsMatch;
@@ -109,12 +110,13 @@ class ReactorMongoEventStoreDcbTest {
     void dcb_write_is_readable_by_tag_and_carries_position() {
         eventStore.append(List.of(taggedEvent("NameDefined", "name:1"))).block();
 
-        DcbEventStream stream = eventStore.read(tags("name:1")).block();
-        assertThat(requireNonNull(stream).events()).extracting(CloudEvent::getType).containsExactly("NameDefined");
-        CloudEvent event = stream.events().get(0);
-        assertThat(DcbCloudEvents.getTags(event)).containsExactly("name:1");
-        assertThat(event.getExtension(DcbCloudEvents.POSITION)).isEqualTo(1L);
-        assertThat(stream.lastSequencePosition()).isEqualTo(1);
+        DcbEventStream stream = requireNonNull(eventStore.read(tags("name:1")).block());
+        assertAll(
+                () -> assertThat(stream.events()).extracting(CloudEvent::getType).containsExactly("NameDefined"),
+                () -> assertThat(DcbCloudEvents.getTags(stream.events().get(0))).containsExactly("name:1"),
+                () -> assertThat(stream.events().get(0).getExtension(DcbCloudEvents.POSITION)).isEqualTo(1L),
+                () -> assertThat(stream.lastSequencePosition()).isEqualTo(1)
+        );
     }
 
     @Test
@@ -124,12 +126,14 @@ class ReactorMongoEventStoreDcbTest {
                 taggedEvent("NameChanged", "name:1", "tenant:1"),
                 taggedEvent("OrderPlaced", "order:1"))).block();
 
-        DcbEventStream stream = eventStore.read(
+        DcbEventStream stream = requireNonNull(eventStore.read(
                 anyOf(List.of(types(List.of("OrderPlaced")), tags(List.of("name:1", "tenant:1")))),
-                DcbReadOptions.afterSequencePosition(1)).block();
+                DcbReadOptions.afterSequencePosition(1)).block());
 
-        assertThat(requireNonNull(stream).events()).extracting(CloudEvent::getType).containsExactly("NameChanged", "OrderPlaced");
-        assertThat(stream.lastSequencePosition()).isEqualTo(3);
+        assertAll(
+                () -> assertThat(stream.events()).extracting(CloudEvent::getType).containsExactly("NameChanged", "OrderPlaced"),
+                () -> assertThat(stream.lastSequencePosition()).isEqualTo(3)
+        );
     }
 
     @Test
@@ -202,9 +206,11 @@ class ReactorMongoEventStoreDcbTest {
                 taggedEvent("NameDefined", "name:1"),
                 taggedEvent("OrderPlaced", "order:1"))).block();
 
-        assertThat(eventStore.exists(tags("name:1")).block()).isTrue();
-        assertThat(eventStore.exists(tags("missing:1")).block()).isFalse();
-        assertThat(eventStore.count(types(List.of("NameDefined", "OrderPlaced"))).block()).isEqualTo(2L);
+        assertAll(
+                () -> assertThat(eventStore.exists(tags("name:1")).block()).isTrue(),
+                () -> assertThat(eventStore.exists(tags("missing:1")).block()).isFalse(),
+                () -> assertThat(eventStore.count(types(List.of("NameDefined", "OrderPlaced"))).block()).isEqualTo(2L)
+        );
     }
 
     @Test
@@ -217,8 +223,10 @@ class ReactorMongoEventStoreDcbTest {
                 .count()
                 .block();
 
-        assertThat(appended).isEqualTo(8L);
-        assertThat(eventStore.count(all()).block()).isEqualTo(8L);
+        assertAll(
+                () -> assertThat(appended).isEqualTo(8L),
+                () -> assertThat(eventStore.count(all()).block()).isEqualTo(8L)
+        );
     }
 
     @Test
@@ -285,9 +293,12 @@ class ReactorMongoEventStoreDcbTest {
                 f.get();
             }
 
-            assertThat(successCount.get()).as("iteration %d: exactly one append wins (tag=%s)", i, tag).isEqualTo(1);
-            assertThat(unexpectedFailCount.get()).as("iteration %d: no unexpected failures, transient errors must be retried internally", i).isZero();
-            assertThat(condFailCount.get()).as("iteration %d: the other %d appends fail the condition", i, threadCount - 1).isEqualTo(threadCount - 1);
+            int iteration = i;
+            assertAll(
+                    () -> assertThat(successCount.get()).as("iteration %d: exactly one append wins (tag=%s)", iteration, tag).isEqualTo(1),
+                    () -> assertThat(unexpectedFailCount.get()).as("iteration %d: no unexpected failures, transient errors must be retried internally", iteration).isZero(),
+                    () -> assertThat(condFailCount.get()).as("iteration %d: the other %d appends fail the condition", iteration, threadCount - 1).isEqualTo(threadCount - 1)
+            );
         }
     }
 
