@@ -31,7 +31,7 @@ import org.occurrent.domain.DomainEvent
 import org.occurrent.domain.NameDefined
 import org.occurrent.domain.NameWasChanged
 import org.occurrent.dsl.query.blocking.DomainEventQueries
-import org.occurrent.dsl.subscription.blocking.EventMetadata
+import org.occurrent.dsl.subscription.EventMetadata
 import org.occurrent.dsl.subscription.blocking.subscriptions
 import org.occurrent.eventstore.api.dcb.DcbCloudEvents
 import org.occurrent.eventstore.api.dcb.DcbQuery

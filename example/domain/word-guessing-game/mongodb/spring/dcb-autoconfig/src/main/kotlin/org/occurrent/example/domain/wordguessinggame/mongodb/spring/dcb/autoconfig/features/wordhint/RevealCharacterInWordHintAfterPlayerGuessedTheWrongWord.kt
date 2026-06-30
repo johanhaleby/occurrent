@@ -21,7 +21,7 @@ import org.occurrent.dsl.dcb.blocking.dcbPosition
 import org.occurrent.dsl.dcb.blocking.dcbTags
 import org.occurrent.dsl.dcb.blocking.DcbDomainEventQueries
 import org.occurrent.dsl.dcb.blocking.queryForList
-import org.occurrent.dsl.subscription.blocking.EventMetadata
+import org.occurrent.dsl.subscription.EventMetadata
 import org.occurrent.example.domain.wordguessinggame.event.CharacterInWordHintWasRevealed
 import org.occurrent.example.domain.wordguessinggame.event.GameEvent
 import org.occurrent.example.domain.wordguessinggame.event.GameWasStarted

@@ -19,7 +19,7 @@ package org.occurrent.example.domain.wordguessinggame.mongodb.spring.dcb.autocon
 import org.occurrent.annotation.StreamSubscription
 import org.occurrent.dsl.dcb.blocking.dcbPosition
 import org.occurrent.dsl.dcb.blocking.dcbTags
-import org.occurrent.dsl.subscription.blocking.EventMetadata
+import org.occurrent.dsl.subscription.EventMetadata
 import org.occurrent.example.domain.wordguessinggame.event.GameEvent
 import org.occurrent.example.domain.wordguessinggame.event.GameWasLost
 import org.occurrent.example.domain.wordguessinggame.event.GameWasStarted

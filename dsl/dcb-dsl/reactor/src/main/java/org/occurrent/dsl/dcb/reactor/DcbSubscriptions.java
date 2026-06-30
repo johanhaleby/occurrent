@@ -18,6 +18,8 @@ package org.occurrent.dsl.dcb.reactor;
 
 import org.jspecify.annotations.NullMarked;
 import org.occurrent.application.converter.CloudEventConverter;
+import org.occurrent.dsl.dcb.DcbEventMetadata;
+import org.occurrent.dsl.subscription.EventMetadata;
 import org.occurrent.eventstore.api.dcb.DcbQuery;
 import org.occurrent.subscription.DcbStartAt;
 import org.occurrent.subscription.api.reactor.DcbSubscriptionModel;
@@ -82,6 +84,6 @@ public final class DcbSubscriptions<E> {
      */
     public Flux<DcbEvent<E>> subscribeWithMetadata(DcbQuery query, DcbStartAt startAt) {
         return subscriptionModel.subscribe(query, startAt)
-                .map(cloudEvent -> new DcbEvent<>(DcbEventMetadata.from(cloudEvent), cloudEventConverter.toDomainEvent(cloudEvent)));
+                .map(cloudEvent -> new DcbEvent<>(DcbEventMetadata.from(EventMetadata.from(cloudEvent)), cloudEventConverter.toDomainEvent(cloudEvent)));
     }
 }

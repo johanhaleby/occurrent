@@ -19,8 +19,8 @@ package org.occurrent.dsl.subscription.blocking
 import io.cloudevents.CloudEvent
 import org.occurrent.application.converter.CloudEventConverter
 import org.occurrent.application.converter.get
-import org.occurrent.cloudevents.OccurrentCloudEventExtension
 import org.occurrent.condition.Condition
+import org.occurrent.dsl.subscription.EventMetadata
 import org.occurrent.filter.Filter
 import org.occurrent.subscription.OccurrentSubscriptionFilter
 import org.occurrent.subscription.StartAt
@@ -30,23 +30,6 @@ import java.util.function.BiConsumer
 import java.util.function.Consumer
 import kotlin.reflect.KClass
 
-/**
- * Metadata associated with the event, such as stream id and version and other CloudEvent extensions
- * associated with the event.
- */
-data class EventMetadata(val data: Map<String, Any?>) {
-    /**
-     * The streamId of the event
-     */
-    val streamId: String get() = data[OccurrentCloudEventExtension.STREAM_ID] as String
-
-    /**
-     * The version of the event in the stream
-     */
-    val streamVersion: Long get() = data[OccurrentCloudEventExtension.STREAM_VERSION] as Long
-
-    inline operator fun <reified T : Any?> get(key: String) = data[key] as T
-}
 
 /**
  * Subscription DSL entry-point. Usage example:
@@ -171,8 +154,7 @@ open class StreamSubscriptions<E : Any>(private val subscriptionModel: Subscriba
     ): Subscription {
         val consumer: (CloudEvent) -> Unit = { cloudEvent ->
             val event = cloudEventConverter[cloudEvent]
-            val metadataMap = cloudEvent.extensionNames.associateWith { extensionName -> cloudEvent.getExtension(extensionName) }
-            val eventMetadata = EventMetadata(metadataMap)
+            val eventMetadata = EventMetadata.from(cloudEvent)
             fn(eventMetadata, event)
         }
 

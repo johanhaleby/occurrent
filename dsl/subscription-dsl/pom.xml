@@ -27,6 +27,7 @@
     <artifactId>subscription-dsl</artifactId>
 
     <modules>
+        <module>common</module>
         <module>blocking</module>
     </modules>
 </project>

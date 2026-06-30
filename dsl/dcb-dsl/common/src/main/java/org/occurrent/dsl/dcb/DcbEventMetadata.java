@@ -14,11 +14,11 @@
  * limitations under the License.
  */
 
-package org.occurrent.dsl.dcb.blocking;
+package org.occurrent.dsl.dcb;
 
 import org.jspecify.annotations.NullMarked;
 import org.jspecify.annotations.Nullable;
-import org.occurrent.dsl.subscription.blocking.EventMetadata;
+import org.occurrent.dsl.subscription.EventMetadata;
 import org.occurrent.eventstore.api.dcb.DcbCloudEvents;
 
 import java.util.OptionalLong;
@@ -31,8 +31,9 @@ import static java.util.Objects.requireNonNull;
  * position and the DCB tags.
  * <p>
  * The generic {@link EventMetadata} lives in the subscription DSL and intentionally does not depend on the DCB API,
- * so these accessors live here in the DCB DSL module. Kotlin callers can use the {@code EventMetadata.dcbPosition}
- * and {@code EventMetadata.dcbTags} extension properties instead.
+ * so these accessors live here in the DCB DSL. Both the blocking and the reactive DCB DSLs build an
+ * {@link EventMetadata} from the delivered CloudEvent and wrap it with this. Kotlin callers can use the
+ * {@code EventMetadata.dcbPosition} and {@code EventMetadata.dcbTags} extension properties instead.
  */
 @NullMarked
 public final class DcbEventMetadata {

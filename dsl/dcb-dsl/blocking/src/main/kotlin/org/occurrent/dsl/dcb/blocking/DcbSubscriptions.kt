@@ -19,7 +19,8 @@ package org.occurrent.dsl.dcb.blocking
 import io.cloudevents.CloudEvent
 import org.occurrent.application.converter.CloudEventConverter
 import org.occurrent.application.converter.get
-import org.occurrent.dsl.subscription.blocking.EventMetadata
+import org.occurrent.dsl.dcb.DcbEventMetadata
+import org.occurrent.dsl.subscription.EventMetadata
 import org.occurrent.eventstore.api.dcb.DcbCloudEvents
 import org.occurrent.eventstore.api.dcb.DcbQuery
 import org.occurrent.subscription.DcbStartAt
@@ -34,14 +35,14 @@ import org.occurrent.subscription.api.blocking.Subscription
  */
 val EventMetadata.dcbPosition: Long?
     get() {
-        val position = DcbEventMetadata.decodePosition(data[DcbCloudEvents.POSITION])
+        val position = DcbEventMetadata.from(this).dcbPosition()
         return if (position.isPresent) position.asLong else null
     }
 
 /**
  * The canonical DCB tags of an event, or an empty set when the event has no DCB tags.
  */
-val EventMetadata.dcbTags: Set<String> get() = DcbEventMetadata.decodeTags(data[DcbCloudEvents.TAGS])
+val EventMetadata.dcbTags: Set<String> get() = DcbEventMetadata.from(this).dcbTags()
 
 /**
  * Subscribes to live DCB-tagged events that match [query].

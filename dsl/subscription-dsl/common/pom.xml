@@ -24,24 +24,18 @@
     </parent>
     <modelVersion>4.0.0</modelVersion>
 
-    <artifactId>subscription-dsl-blocking</artifactId>
+    <artifactId>subscription-dsl-common</artifactId>
 
     <name>${mavenProjectName}</name>
 
     <dependencies>
         <dependency>
-            <groupId>org.occurrent</groupId>
-            <artifactId>subscription-dsl-common</artifactId>
-            <version>${project.version}</version>
+            <groupId>io.cloudevents</groupId>
+            <artifactId>cloudevents-api</artifactId>
         </dependency>
         <dependency>
             <groupId>org.occurrent</groupId>
-            <artifactId>cloudevent-converter-api</artifactId>
-            <version>${project.version}</version>
-        </dependency>
-        <dependency>
-            <groupId>org.occurrent</groupId>
-            <artifactId>subscription-api-blocking</artifactId>
+            <artifactId>cloudevents-extension</artifactId>
             <version>${project.version}</version>
         </dependency>
         <dependency>

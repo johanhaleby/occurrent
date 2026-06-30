@@ -17,7 +17,7 @@
 
 package org.occurrent.dsl.view
 
-import org.occurrent.dsl.subscription.blocking.EventMetadata
+import org.occurrent.dsl.subscription.EventMetadata
 import org.occurrent.dsl.subscription.blocking.StreamSubscriptions
 import org.occurrent.subscription.StartAt
 import org.occurrent.subscription.api.blocking.Subscription
