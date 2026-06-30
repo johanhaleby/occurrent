@@ -19,6 +19,7 @@ package org.occurrent.dsl.dcb.reactor
 import com.fasterxml.jackson.databind.ObjectMapper
 import com.mongodb.ConnectionString
 import com.mongodb.reactivestreams.client.MongoClients
+import io.cloudevents.CloudEvent
 import org.assertj.core.api.Assertions.assertThat
 import org.junit.jupiter.api.BeforeEach
 import org.junit.jupiter.api.DisplayNameGeneration
@@ -36,8 +37,13 @@ import org.occurrent.dsl.decider.Decider
 import org.occurrent.dsl.decider.decider
 import org.occurrent.eventstore.api.EventStoreCapability.DCB
 import org.occurrent.eventstore.api.EventStoreCapability.STREAM
+import org.occurrent.eventstore.api.dcb.DcbAppendCondition
+import org.occurrent.eventstore.api.dcb.DcbAppendResult
 import org.occurrent.eventstore.api.dcb.DcbCloudEvents
+import org.occurrent.eventstore.api.dcb.DcbEventStream
 import org.occurrent.eventstore.api.dcb.DcbQuery
+import org.occurrent.eventstore.api.dcb.DcbReadOptions
+import org.occurrent.eventstore.api.dcb.reactor.DcbEventStore
 import org.occurrent.eventstore.mongodb.spring.reactor.EventStoreConfig
 import org.occurrent.eventstore.mongodb.spring.reactor.ReactorMongoEventStore
 import org.occurrent.mongodb.timerepresentation.TimeRepresentation
@@ -48,8 +54,11 @@ import org.springframework.data.mongodb.core.SimpleReactiveMongoDatabaseFactory
 import org.testcontainers.junit.jupiter.Container
 import org.testcontainers.junit.jupiter.Testcontainers
 import org.testcontainers.mongodb.MongoDBContainer
+import reactor.core.publisher.Mono
 import java.net.URI
 import java.time.LocalDateTime
+import java.util.concurrent.atomic.AtomicBoolean
+import java.util.concurrent.atomic.AtomicInteger
 import java.util.stream.Stream
 
 @Testcontainers
@@ -140,6 +149,34 @@ class DcbReactorDslTest {
         assertThat(stream.consistencyToken()).isNotNull
     }
 
+    @Test
+    fun executeAndReturnDecision_returns_the_committed_decision_after_a_conflict_retry() {
+        append(NameDefined("event-0", time, "name", "Jane Doe"))
+        val interloper = DcbCloudEvents.withTags(converter.toCloudEvent(NameWasChanged("event-99", time, "name", "Interloper")), setOf("name:name"))
+        val conflictingStore = ConflictingOnceDcbEventStore(eventStore, interloper)
+        val service = GenericDcbApplicationService(conflictingStore, converter, { event -> setOf(tagFor(event)) }, GenericDcbApplicationService.defaultRetry())
+        val deciderRuns = AtomicInteger()
+        val countingDecider: Decider<NameCommand, String?, DomainEvent> = decider(
+            initialState = null,
+            decide = { command, _ ->
+                deciderRuns.incrementAndGet()
+                when (command) {
+                    is DefineName -> listOf(NameDefined("event-1", time, "name", command.name))
+                    is ChangeName -> listOf(NameWasChanged("event-2", time, "name", command.name))
+                }
+            },
+            evolve = { _, event -> event.name() }
+        )
+
+        val decision = service.executeAndReturnDecision(nameQuery("name"), ChangeName("John Doe"), countingDecider).block()
+
+        // The first append conflicts on the interloper, the retry reruns the decider against the fresh read, and
+        // executeAndReturnDecision returns the committed attempt's decision, not the first attempt's.
+        assertThat(deciderRuns).hasValue(2)
+        assertThat(decision!!.events).containsExactly(NameWasChanged("event-2", time, "name", "John Doe"))
+        assertThat(decision.state).isEqualTo("John Doe")
+    }
+
     private fun nameDecider(): Decider<NameCommand, String?, DomainEvent> =
         decider(
             initialState = null,
@@ -169,6 +206,28 @@ class DcbReactorDslTest {
     private sealed interface NameCommand
     private data class DefineName(val name: String) : NameCommand
     private data class ChangeName(val name: String) : NameCommand
+
+    /**
+     * A reactive DCB event store that, on the first conditional append, first commits a conflicting matching event so
+     * the carried consistency token is stale and the append fails once, then delegates normally on later attempts.
+     */
+    private class ConflictingOnceDcbEventStore(
+        private val delegate: DcbEventStore,
+        private val conflictingEvent: CloudEvent
+    ) : DcbEventStore {
+        private val conflictInserted = AtomicBoolean()
+
+        override fun read(query: DcbQuery, options: DcbReadOptions): Mono<DcbEventStream> = delegate.read(query, options)
+
+        override fun append(events: MutableList<CloudEvent>): Mono<DcbAppendResult> = delegate.append(events)
+
+        override fun append(events: MutableList<CloudEvent>, condition: DcbAppendCondition): Mono<DcbAppendResult> =
+            if (conflictInserted.compareAndSet(false, true)) {
+                delegate.append(listOf(conflictingEvent)).then(delegate.append(events, condition))
+            } else {
+                delegate.append(events, condition)
+            }
+    }
 
     companion object {
         @Container
