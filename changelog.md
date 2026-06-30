@@ -10,6 +10,10 @@ DCB is a capability layered on the existing CloudEvent storage, not a new store 
 
 #### Changes
 
+* Added a reactive DCB DSL (`dcb-dsl-reactor`).
+  * Reactive `DcbDomainEventQueries` returns matched domain events as a `Flux` and a `Mono<DcbDomainEventStream>` with the consistency token for a conditional append, built directly on the reactive DCB event store. Kotlin decider extensions run a decider through the reactive DCB application service and return a `Mono`. The live `subscribeDcb` helper and DCB subscription metadata are not part of this and come with reactive DCB subscriptions.
+  * See [ADR 36](doc/architecture/decisions/0036-reactive-dcb-dsl.md).
+
 * Added a reactive DCB application service (`application-service-reactor`).
   * `DcbApplicationService` runs the read, decide, and append cycle against the reactive DCB event store and returns a `Mono`, retrying from a fresh read on a DCB conflict. The domain function stays a synchronous `Function<Stream<E>, Stream<E>>`, and the post-append side-effect is reactive (`Function<Stream<E>, Mono<Void>>`). This is the first reactive application service in Occurrent.
   * See [ADR 35](doc/architecture/decisions/0035-reactive-dcb-application-service.md).
