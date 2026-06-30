@@ -21,7 +21,7 @@ import org.jspecify.annotations.NullMarked;
 import org.jspecify.annotations.Nullable;
 import org.occurrent.application.converter.CloudEventConverter;
 import org.occurrent.application.service.blocking.ApplicationService;
-import org.occurrent.application.service.blocking.ExecuteFilter;
+import org.occurrent.application.service.ExecuteFilter;
 import org.occurrent.application.service.blocking.ExecuteOptions;
 import org.occurrent.eventstore.api.StreamReadFilter;
 import org.occurrent.eventstore.api.WriteConditionNotFulfilledException;
