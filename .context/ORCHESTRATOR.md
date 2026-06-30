@@ -1,16 +1,14 @@
 # Occurrent Orchestrator Memory
 
-Last updated: 2026-05-24
+Last updated: 2026-06-30
 
 ## Current State
 
-Phase 1 initial exploration is complete and ready for user confirmation. This file did not exist at session start, so the first repository map was built from code-review-graph, Maven metadata, representative source reads, ADRs, CI config, `.context/lessons.md`, recent Git history, and read-only subagent exploration.
+DCB has shipped on `main` for three event stores (in-memory, Spring blocking, native driver). The shared Mongo DCB code lives in `eventstore-mongodb-dcb-common` (`DcbMarkerModel`, `DcbDocumentMapper`), and the event-store capability set is the shared `EventStoreCapability` enum in `eventstore-api-common`. Native DCB parity landed via PRs #236 (shared extraction) and #238 (native store), and a doc-only PR #241 records why the `streamId`+`streamVersion` unique index is stream-mode only (DCB-only does not need it).
 
-DCB support is currently implemented on branch `johan/dcb-support`.
+Now executing reactive DCB support. The reactive Spring store (`ReactorMongoEventStore`) is the last event store without DCB. The phased plan is `.context/reactive-dcb-plan.md`: Phase 1 (reactive event store) is IN PROGRESS off `main` via av. Phases 2 through 4 (reactive application service, DSL, subscriptions) are greenfield and demand-gated.
 
-Spring Mongo event-store capabilities have been added in the current worktree. The default remains stream-only (`{STREAM}`), while DCB is explicitly enabled through composable capabilities.
-
-One read-only conventions/history subagent timed out and was closed; its scope was covered by local history, ADRs, tests, and `.context/lessons.md`.
+The `av-land` helper at `/usr/local/bin/av-land` was rewritten to be prune-safe (retarget each child to trunk before deleting the parent branch) and hang-proof (git rebase instead of in-loop `av sync`, timeout-guarded). Verified on a throwaway stack.
 
 ## Architecture Summary
 
