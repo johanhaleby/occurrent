@@ -10,6 +10,10 @@ DCB is a capability layered on the existing CloudEvent storage, not a new store 
 
 #### Changes
 
+* Added live reactive DCB subscriptions.
+  * A reactive `DcbSubscriptionModel` facade (`subscription-api-reactor`) subscribes to DCB events matching a `DcbQuery` as a `Flux<CloudEvent>`, filtered server-side, and the reactor DCB DSL gains `DcbSubscriptions` with `Flux<E> subscribe(...)` and `Flux<DcbEvent<E>> subscribeWithMetadata(...)`. Live only for now. History replay by `dcbposition` (catch-up) is not part of this, so a `DcbStartAt.beginning()` starts live rather than replaying.
+  * See [ADR 37](doc/architecture/decisions/0037-live-reactive-dcb-subscriptions.md).
+
 * Added a reactive DCB DSL (`dcb-dsl-reactor`).
   * Reactive `DcbDomainEventQueries` returns matched domain events as a `Flux` and a `Mono<DcbDomainEventStream>` with the consistency token for a conditional append, built directly on the reactive DCB event store. Kotlin decider extensions run a decider through the reactive DCB application service and return a `Mono`. The live `subscribeDcb` helper and DCB subscription metadata are not part of this and come with reactive DCB subscriptions.
   * See [ADR 36](doc/architecture/decisions/0036-reactive-dcb-dsl.md).
