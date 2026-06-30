@@ -22,11 +22,11 @@ A new `org.occurrent.subscription.api.reactor.DcbSubscriptionModel` shaped like 
 
 ### Reactive DcbSubscriptions DSL
 
-Added to the reactor DCB DSL module: `Flux<E> subscribe(DcbQuery, DcbStartAt)` and `Flux<DcbEvent<E>> subscribeWithMetadata(...)`, where `DcbEvent<E>` carries the domain event and a `DcbEventMetadata`. The `Flux` is the subscription, so cancelling is disposing it. `DcbEventMetadata` is built directly from the `CloudEvent` (`dcbPosition`, `dcbTags`), because the reactive subscription stack has no generic `EventMetadata` wrapper, so reading the CloudEvent is simpler than mirroring the blocking wrapper.
+Added to the reactor DCB DSL module: `Flux<E> subscribe(DcbQuery, DcbStartAt)` and `Flux<DcbEvent<E>> subscribeWithMetadata(...)`, where `DcbEvent<E>` carries the domain event and a `DcbEventMetadata`. The `Flux` is the subscription, so it is cancelled by cancelling the downstream subscription, for example disposing the `Disposable` returned by `subscribe()`. `DcbEventMetadata` is built directly from the `CloudEvent` (`dcbPosition`, `dcbTags`), because the reactive subscription stack has no generic `EventMetadata` wrapper, so reading the CloudEvent is simpler than mirroring the blocking wrapper.
 
 ### Live only, for now
 
-A `DcbStartAt.beginning()` or `afterPosition(...)` passes through to the live subscription and just starts live, because giving those start positions their replay meaning needs catch-up. This is documented on the facade and the DSL. Live subscriptions cover activity feeds and triggers. Rebuilding a projection from history needs the deferred catch-up phase.
+A `DcbStartAt` is passed through to the underlying `SubscriptionModel`, so whether a replay-oriented start such as `DcbStartAt.beginning()` or `afterPosition(...)` replays history depends on that model. The current reactive subscription models have no DCB catch-up, so such a start behaves like a live start today. This is documented on the facade and the DSL. Live subscriptions cover activity feeds and triggers. Rebuilding a projection from history needs the deferred catch-up phase.
 
 ## Consequences
 

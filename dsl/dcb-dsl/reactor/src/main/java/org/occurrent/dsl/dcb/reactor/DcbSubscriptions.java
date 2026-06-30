@@ -31,11 +31,14 @@ import static java.util.Objects.requireNonNull;
  * <p>
  * This wraps a reactive {@link SubscriptionModel} and a {@link CloudEventConverter}, mirroring how
  * {@link DcbDomainEventQueries} wraps its dependencies. Each {@code subscribe} returns a {@link Flux} that is the
- * subscription, so cancelling is disposing the {@link Flux}.
+ * subscription, so it is cancelled by cancelling the downstream subscription, for example disposing the
+ * {@link reactor.core.Disposable} returned by {@code subscribe()}.
  * <p>
- * Delivery is live and the events are post-filtered by the {@link DcbQuery} server-side where the backend supports it.
- * A {@link DcbStartAt} that asks to replay history is passed through to the live subscription, which starts live,
- * because reactive DCB catch-up is not implemented yet.
+ * Delivery is live. Events are filtered by the {@link DcbQuery} server-side where the backend supports it, with an
+ * in-process scoping filter as a correctness floor. A {@link DcbStartAt} is passed through to the underlying
+ * {@link SubscriptionModel}, so whether a replay-oriented start such as {@link DcbStartAt#beginning()} replays history
+ * depends on that model. The current reactive subscription models have no DCB catch-up, so such a start behaves like a
+ * live start today.
  *
  * @param <E> the domain event type
  */

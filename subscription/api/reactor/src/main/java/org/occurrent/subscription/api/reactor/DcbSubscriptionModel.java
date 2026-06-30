@@ -26,9 +26,10 @@ import reactor.core.publisher.Flux;
  * A typed reactive view over a {@link SubscriptionModel} that subscribes to DCB events selected by a {@link DcbQuery}.
  * <p>
  * It is the DCB counterpart to the reactive {@link SubscriptionModel}, accepting a {@link DcbQuery} and a
- * {@link DcbStartAt} rather than a stream filter and a generic start position. Delivery is live. A {@link DcbStartAt}
- * that asks to replay history (such as {@link DcbStartAt#beginning()} or {@link DcbStartAt#afterPosition(long)}) is
- * passed through to the live subscription, which starts live, because reactive DCB catch-up is not implemented yet.
+ * {@link DcbStartAt} rather than a stream filter and a generic start position. The {@link DcbStartAt} is passed through
+ * to the underlying {@link SubscriptionModel}, so whether a replay-oriented start such as {@link DcbStartAt#beginning()}
+ * or {@link DcbStartAt#afterPosition(long)} replays history depends on that model. The current reactive subscription
+ * models have no DCB catch-up, so such a start behaves like a live start today.
  */
 @NullMarked
 public interface DcbSubscriptionModel {
