@@ -24,7 +24,7 @@ import org.junit.jupiter.api.DisplayNameGenerator.ReplaceUnderscores;
 import org.occurrent.application.converter.CloudEventConverter;
 import org.occurrent.application.converter.generic.GenericCloudEventConverter;
 import org.occurrent.application.service.blocking.ApplicationService;
-import org.occurrent.application.service.blocking.ExecuteFilter;
+import org.occurrent.application.service.ExecuteFilter;
 import org.occurrent.application.service.blocking.PolicySideEffect;
 import org.occurrent.application.service.blocking.generic.support.CountNumberOfNamesDefinedPolicy;
 import org.occurrent.application.service.blocking.generic.support.WhenNameDefinedThenCountAverageSizeOfNamePolicy;

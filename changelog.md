@@ -10,6 +10,11 @@ DCB is a capability layered on the existing CloudEvent storage, not a new store 
 
 #### Changes
 
+* Added a reactive stream application service, so the reactive stack has the same application-service ergonomics as the blocking one.
+  * `ApplicationService` in `application-service-reactor` runs the read, decide, and write cycle against the reactive event store and returns a `Mono<WriteResult>`, retrying from a fresh read on a `WriteConditionNotFulfilledException`. The domain function stays a synchronous `Function<Stream<E>, Stream<E>>`, the side-effect is reactive (`Function<Stream<E>, Mono<Void>>`), and it mirrors the blocking surface including the `ExecuteFilter` read filter and the Kotlin extensions.
+  * `ExecuteFilter` moved to the shared `application-service-common` module (package `org.occurrent.application.service`) so both stacks share one copy. This is a breaking change, the old `org.occurrent.application.service.blocking.ExecuteFilter` is gone, so update the import to `org.occurrent.application.service.ExecuteFilter`.
+  * See [ADR 39](doc/architecture/decisions/0039-reactive-stream-application-service.md).
+
 * Added reactive DCB catch-up, which completes reactive DCB support.
   * `ReactorDcbCatchupSubscriptionModel` replays DCB history by `dcbposition` and hands over to a live subscription, so a reactive read model can be rebuilt from the beginning. It mirrors the blocking DCB catch-up (the live resume token is captured before the replay so an event committing during the replay is still delivered), with id-based handover dedup because the reactive resume token is inclusive. Reactive DCB now matches the blocking stack across the store, application service, query DSL, and subscriptions.
   * See [ADR 38](doc/architecture/decisions/0038-reactive-dcb-catch-up.md).

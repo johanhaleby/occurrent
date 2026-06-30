@@ -1,5 +1,22 @@
-package org.occurrent.application.service.blocking;
+/*
+ * Copyright 2026 Johan Haleby
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ *        http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
 
+package org.occurrent.application.service;
+
+import org.jspecify.annotations.NullMarked;
 import org.occurrent.application.converter.typemapper.CloudEventTypeGetter;
 import org.occurrent.condition.Condition;
 import org.occurrent.eventstore.api.StreamReadFilter;
@@ -14,29 +31,13 @@ import java.util.stream.Stream;
  * through a {@link CloudEventTypeGetter} at execution time.
  * <p>
  * This type exists to keep {@link StreamReadFilter} independent from application service concerns while
- * still allowing fluent filters based on domain event classes such as {@code type(MyEvent.class)}.
- * <p>
- * Typical usage is to pass an {@link ExecuteFilter} to {@link ExecuteOptions} or directly to
- * {@link ApplicationService}:
- * <pre>{@code
- * applicationService.execute(
- *         streamId,
- *         ExecuteOptions.<DomainEvent>options()
- *                 .filter(ExecuteFilter.type(NameDefined.class))
- *                 .sideEffect(newEvents -> newEvents.forEach(this::publish)),
- *         domainFn
- * );
- *
- * applicationService.execute(
- *         streamId,
- *         ExecuteFilter.excludeTypes(NameWasChanged.class, NameDefined.class),
- *         domainFn
- * );
- * }</pre>
+ * still allowing fluent filters based on domain event classes such as {@code type(MyEvent.class)}. It is shared
+ * by both the blocking and the reactive application services.
  *
  * @param <E> The application service event type.
  */
 @FunctionalInterface
+@NullMarked
 public interface ExecuteFilter<E> {
 
     /**

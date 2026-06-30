@@ -1,5 +1,7 @@
 package org.occurrent.application.service.blocking
 
+import org.occurrent.application.service.ExecuteFilter
+
 import org.occurrent.eventstore.api.StreamReadFilter
 import java.util.function.Consumer
 import java.util.stream.Stream

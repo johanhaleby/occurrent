@@ -16,6 +16,8 @@
 
 package org.occurrent.application.service.blocking
 
+import org.occurrent.application.service.ExecuteFilter
+
 import org.occurrent.eventstore.api.WriteResult
 import java.util.UUID
 import java.util.function.Function
