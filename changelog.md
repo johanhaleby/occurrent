@@ -10,6 +10,10 @@ DCB is a capability layered on the existing CloudEvent storage, not a new store 
 
 #### Changes
 
+* Added reactive DCB catch-up, which completes reactive DCB support.
+  * `ReactorDcbCatchupSubscriptionModel` replays DCB history by `dcbposition` and hands over to a live subscription, so a reactive read model can be rebuilt from the beginning. It mirrors the blocking DCB catch-up (the live resume token is captured before the replay so an event committing during the replay is still delivered), with id-based handover dedup because the reactive resume token is inclusive. Reactive DCB now matches the blocking stack across the store, application service, query DSL, and subscriptions.
+  * See [ADR 38](doc/architecture/decisions/0038-reactive-dcb-catch-up.md).
+
 * Added live reactive DCB subscriptions.
   * A reactive `DcbSubscriptionModel` facade (`subscription-api-reactor`) subscribes to DCB events matching a `DcbQuery` as a `Flux<CloudEvent>`, filtered server-side, and the reactor DCB DSL gains `DcbSubscriptions` with `Flux<E> subscribe(...)` and `Flux<DcbEvent<E>> subscribeWithMetadata(...)`. Live only for now. The `DcbStartAt` is passed through to the underlying subscription model, and the current reactive models have no DCB catch-up, so a `DcbStartAt.beginning()` behaves like a live start rather than replaying history.
   * See [ADR 37](doc/architecture/decisions/0037-live-reactive-dcb-subscriptions.md).
