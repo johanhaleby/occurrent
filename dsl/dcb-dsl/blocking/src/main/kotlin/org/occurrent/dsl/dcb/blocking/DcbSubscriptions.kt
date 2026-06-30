@@ -19,7 +19,6 @@ package org.occurrent.dsl.dcb.blocking
 import io.cloudevents.CloudEvent
 import org.occurrent.application.converter.CloudEventConverter
 import org.occurrent.application.converter.get
-import org.occurrent.dsl.dcb.DcbEventMetadata
 import org.occurrent.dsl.subscription.EventMetadata
 import org.occurrent.eventstore.api.dcb.DcbCloudEvents
 import org.occurrent.eventstore.api.dcb.DcbQuery
@@ -27,22 +26,6 @@ import org.occurrent.subscription.DcbStartAt
 import org.occurrent.subscription.DcbSubscriptionFilter
 import org.occurrent.subscription.api.blocking.Subscribable
 import org.occurrent.subscription.api.blocking.Subscription
-
-/**
- * The DCB sequence position of an event, or `null` when the event has no DCB position.
- *
- * Events delivered by `subscribeDcb` are DCB-tagged and therefore have a non-null position.
- */
-val EventMetadata.dcbPosition: Long?
-    get() {
-        val position = DcbEventMetadata.from(this).dcbPosition()
-        return if (position.isPresent) position.asLong else null
-    }
-
-/**
- * The canonical DCB tags of an event, or an empty set when the event has no DCB tags.
- */
-val EventMetadata.dcbTags: Set<String> get() = DcbEventMetadata.from(this).dcbTags()
 
 /**
  * Subscribes to live DCB-tagged events that match [query].

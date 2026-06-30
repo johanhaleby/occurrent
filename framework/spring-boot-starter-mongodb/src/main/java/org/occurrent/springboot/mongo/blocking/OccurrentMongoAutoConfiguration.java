@@ -29,7 +29,7 @@ import org.occurrent.application.converter.typemapper.ReflectionCloudEventTypeMa
 import org.occurrent.application.service.blocking.ApplicationService;
 import org.occurrent.application.service.blocking.dcb.DcbApplicationService;
 import org.occurrent.application.service.blocking.dcb.GenericDcbApplicationService;
-import org.occurrent.application.service.blocking.dcb.TagGenerator;
+import org.occurrent.application.service.dcb.TagGenerator;
 import org.occurrent.application.service.blocking.generic.GenericApplicationService;
 import org.occurrent.dsl.dcb.blocking.DcbDomainEventQueries;
 import org.occurrent.dsl.dcb.blocking.DcbSubscriptions;

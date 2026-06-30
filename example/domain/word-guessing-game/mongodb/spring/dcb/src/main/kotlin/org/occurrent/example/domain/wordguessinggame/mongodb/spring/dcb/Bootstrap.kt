@@ -18,7 +18,7 @@ package org.occurrent.example.domain.wordguessinggame.mongodb.spring.dcb
 import org.occurrent.application.converter.CloudEventConverter
 import org.occurrent.application.service.blocking.dcb.DcbApplicationService
 import org.occurrent.application.service.blocking.dcb.GenericDcbApplicationService
-import org.occurrent.application.service.blocking.dcb.TagGenerator
+import org.occurrent.application.service.dcb.TagGenerator
 import org.occurrent.dsl.dcb.blocking.DcbDomainEventQueries
 import org.occurrent.dsl.query.blocking.DomainEventQueries
 import org.occurrent.dsl.subscription.blocking.Subscriptions

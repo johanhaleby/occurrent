@@ -14,7 +14,7 @@
  * limitations under the License.
  */
 
-package org.occurrent.dsl.dcb.reactor;
+package org.occurrent.dsl.dcb;
 
 import org.jspecify.annotations.NullMarked;
 import org.occurrent.eventstore.api.dcb.DcbAppendCondition;

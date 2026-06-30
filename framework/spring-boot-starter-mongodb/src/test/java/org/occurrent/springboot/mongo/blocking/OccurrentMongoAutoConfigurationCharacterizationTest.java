@@ -24,7 +24,7 @@ import org.occurrent.application.converter.typemapper.CloudEventTypeMapper;
 import org.occurrent.application.converter.typemapper.ReflectionCloudEventTypeMapper;
 import org.occurrent.application.service.blocking.ApplicationService;
 import org.occurrent.application.service.blocking.dcb.DcbApplicationService;
-import org.occurrent.application.service.blocking.dcb.TagGenerator;
+import org.occurrent.application.service.dcb.TagGenerator;
 import org.occurrent.dsl.dcb.blocking.DcbDomainEventQueries;
 import org.occurrent.dsl.dcb.blocking.DcbSubscriptions;
 import org.occurrent.dsl.query.blocking.DomainEventQueries;

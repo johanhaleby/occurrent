@@ -16,6 +16,9 @@
 
 package org.occurrent.dsl.dcb.blocking
 
+import org.occurrent.dsl.dcb.dcbPosition
+import org.occurrent.dsl.dcb.dcbTags
+
 import com.fasterxml.jackson.databind.ObjectMapper
 import io.cloudevents.CloudEvent
 import org.assertj.core.api.Assertions.assertThat

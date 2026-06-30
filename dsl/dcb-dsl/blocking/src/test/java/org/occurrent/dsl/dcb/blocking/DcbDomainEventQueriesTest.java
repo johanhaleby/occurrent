@@ -16,6 +16,8 @@
 
 package org.occurrent.dsl.dcb.blocking;
 
+import org.occurrent.dsl.dcb.DcbDomainEventStream;
+
 import com.fasterxml.jackson.databind.ObjectMapper;
 import io.cloudevents.CloudEvent;
 import org.junit.jupiter.api.BeforeEach;

@@ -20,7 +20,7 @@ import org.occurrent.application.converter.CloudEventConverter
 import org.occurrent.application.converter.jackson3.jacksonCloudEventConverter
 import org.occurrent.application.converter.typemapper.CloudEventTypeMapper
 import org.occurrent.application.converter.typemapper.ReflectionCloudEventTypeMapper
-import org.occurrent.application.service.blocking.dcb.TagGenerator
+import org.occurrent.application.service.dcb.TagGenerator
 import org.occurrent.dsl.decider.Decider
 import org.occurrent.example.domain.wordguessinggame.event.GameEvent
 import org.occurrent.example.domain.wordguessinggame.mongodb.spring.dcb.autoconfig.features.dcb.GameEventTagGenerator

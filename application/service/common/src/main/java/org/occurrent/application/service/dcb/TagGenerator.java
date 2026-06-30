@@ -14,7 +14,7 @@
  * limitations under the License.
  */
 
-package org.occurrent.application.service.blocking.dcb;
+package org.occurrent.application.service.dcb;
 
 import org.jspecify.annotations.NullMarked;
 

@@ -16,7 +16,7 @@
 
 package org.occurrent.example.domain.wordguessinggame.mongodb.spring.dcb.features.dcb
 
-import org.occurrent.application.service.blocking.dcb.TagGenerator
+import org.occurrent.application.service.dcb.TagGenerator
 import org.occurrent.example.domain.wordguessinggame.event.CharacterInWordHintWasRevealed
 import org.occurrent.example.domain.wordguessinggame.event.GameEvent
 import org.occurrent.example.domain.wordguessinggame.event.GameWasLost
