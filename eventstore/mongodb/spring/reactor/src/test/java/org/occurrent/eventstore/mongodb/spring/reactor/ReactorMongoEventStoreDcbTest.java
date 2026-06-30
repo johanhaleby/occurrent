@@ -26,6 +26,7 @@ import org.junit.jupiter.api.DisplayNameGeneration;
 import org.junit.jupiter.api.DisplayNameGenerator.ReplaceUnderscores;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.RegisterExtension;
+import org.occurrent.eventstore.api.DuplicateCloudEventException;
 import org.occurrent.eventstore.api.EventStoreCapability;
 import org.occurrent.eventstore.api.dcb.*;
 import org.occurrent.mongodb.timerepresentation.TimeRepresentation;
@@ -41,6 +42,7 @@ import reactor.core.scheduler.Schedulers;
 import reactor.test.StepVerifier;
 
 import java.net.URI;
+import java.time.Duration;
 import java.time.OffsetDateTime;
 import java.util.ArrayList;
 import java.util.List;
@@ -287,6 +289,22 @@ class ReactorMongoEventStoreDcbTest {
             assertThat(unexpectedFailCount.get()).as("iteration %d: no unexpected failures, transient errors must be retried internally", i).isZero();
             assertThat(condFailCount.get()).as("iteration %d: the other %d appends fail the condition", i, threadCount - 1).isEqualTo(threadCount - 1);
         }
+    }
+
+    @Test
+    void appending_an_event_with_a_duplicate_id_and_source_fails_fast_without_retrying() {
+        CloudEvent event = taggedEvent("NameDefined", "name:1");
+        eventStore.append(List.of(event)).block();
+
+        // The same id and source again is a duplicate CloudEvent, a business error, not a transient conflict or the
+        // cold-start marker race. It must surface as DuplicateCloudEventException and must not be fed into the append
+        // backoff, so it fails fast instead of running the full 15-attempt retry before giving up.
+        long start = System.nanoTime();
+        StepVerifier.create(eventStore.append(List.of(event)))
+                .expectError(DuplicateCloudEventException.class)
+                .verify(Duration.ofSeconds(10));
+        long elapsedMillis = Duration.ofNanos(System.nanoTime() - start).toMillis();
+        assertThat(elapsedMillis).as("a duplicate CloudEvent must not be retried, so it fails well before the multi-second backoff").isLessThan(3000L);
     }
 
     private static CloudEvent taggedEvent(String type, String... tags) {
