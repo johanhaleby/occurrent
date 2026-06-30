@@ -177,6 +177,28 @@ class ReactorDcbCatchupSubscriptionModelMongoTest {
         await().atMost(Duration.ofSeconds(40)).untilAsserted(() -> assertThat(received).containsExactly("matchHistoric", "matchLive"));
     }
 
+    @Test
+    void replays_every_event_with_a_small_window_and_cache_then_goes_live_without_loss() {
+        // More matching events than both the window and the handover cache, so the bulk replay pages across many
+        // windows and the cache evicts during the replay. The handover must still deliver every event exactly once.
+        for (int i = 0; i < 5; i++) {
+            appendTagged(name("h" + i), "name:1");
+        }
+
+        ReactorDcbCatchupSubscriptionModel catchup = new ReactorDcbCatchupSubscriptionModel(subscriptionModel, eventStore, 1, 1);
+        CopyOnWriteArrayList<String> received = new CopyOnWriteArrayList<>();
+        subscribe(catchup.subscribe(DcbQuery.tags("name:1"), DcbStartAt.beginning()), received);
+
+        await().atMost(Duration.ofSeconds(40)).untilAsserted(() -> assertThat(received).containsExactly("h0", "h1", "h2", "h3", "h4"));
+
+        appendTagged(name("live0"), "name:1");
+
+        await().atMost(Duration.ofSeconds(40)).untilAsserted(() -> {
+            assertThat(received).containsExactly("h0", "h1", "h2", "h3", "h4", "live0");
+            assertThat(received).doesNotHaveDuplicates();
+        });
+    }
+
     private void subscribe(reactor.core.publisher.Flux<CloudEvent> flux, CopyOnWriteArrayList<String> received) {
         disposables.add(flux.map(ce -> ((NameDefined) converter.toDomainEvent(ce)).name()).doOnNext(received::add).subscribe());
         // Give the change-stream subscription a moment to start before the test writes more events.

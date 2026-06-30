@@ -34,7 +34,6 @@ import reactor.core.publisher.Mono;
 
 import java.util.Collections;
 import java.util.LinkedHashSet;
-import java.util.Optional;
 import java.util.Set;
 
 import static java.util.Objects.requireNonNull;
@@ -53,7 +52,8 @@ import static java.util.Objects.requireNonNull;
  * <p>
  * Trade-off: if the replay runs longer than the change stream history (the MongoDB oplog window), the captured token
  * ages out and the live resume fails loudly rather than silently dropping an event. Size the oplog for very large
- * rebuilds.
+ * rebuilds. If the model cannot report a resume token at all (for example an empty oplog or a restricted cluster), the
+ * subscription fails loudly for the same reason, rather than replaying without a guaranteed handover to live.
  * <p>
  * This is the DCB path only. Stream time-based catch-up is not provided here, and this model does not persist
  * subscription positions, so layer a durable model on top if resume across restarts is needed.
@@ -109,12 +109,11 @@ public class ReactorDcbCatchupSubscriptionModel {
 
         long startPosition = DcbSubscriptionPosition.dcbPositionOf(position.subscriptionPosition);
         // Capture the live resume token before the bulk replay so an event committing during the replay is still
-        // delivered by the live subscription. The underlying model can report no token (for example an empty oplog or
-        // a restricted cluster), so carry it as an Optional rather than letting an empty Mono collapse the whole
-        // subscription to nothing.
+        // delivered by the live subscription. If the model reports no token (for example an empty oplog or a restricted
+        // cluster) a no-loss handover to live cannot be guaranteed, so fail loudly instead of silently dropping the
+        // events committed between the end of the replay and going live.
         return subscriptionModel.globalSubscriptionPosition()
-                .map(Optional::of)
-                .defaultIfEmpty(Optional.empty())
+                .switchIfEmpty(Mono.error(() -> new IllegalStateException("Cannot run a DCB catch-up subscription because the subscription model reported no resume token to hand over to live delivery. The change stream history may be unavailable, for example an empty oplog or a restricted cluster.")))
                 .flatMapMany(liveToken ->
                 readHead(query, startPosition).flatMapMany(bulkHead -> {
                     HandoverCache cache = new HandoverCache(handoverCacheSize);
@@ -124,11 +123,7 @@ public class ReactorDcbCatchupSubscriptionModel {
                     // never seen during the replay is still delivered once by the live change stream.
                     Flux<CloudEvent> bulk = windows(query, startPosition, bulkHead, cache);
                     Flux<CloudEvent> reconcile = reconcile(query, bulkHead, cache);
-                    // With no token, fall back to the model default so the subscription still replays and goes live
-                    // rather than silently delivering nothing. The reconciliation above already covers events written
-                    // during the replay, so only the post-reconciliation tail falls in the gap the token would close.
-                    StartAt liveStart = liveToken.map(StartAt::subscriptionPosition).orElseGet(StartAt::subscriptionModelDefault);
-                    Flux<CloudEvent> live = subscriptionModel.subscribe(DcbSubscriptionFilter.filter(query), liveStart)
+                    Flux<CloudEvent> live = subscriptionModel.subscribe(DcbSubscriptionFilter.filter(query), StartAt.subscriptionPosition(liveToken))
                             .filter(cloudEvent -> DcbCloudEvents.getPosition(cloudEvent) > 0
                                     && DcbCloudEvents.matches(cloudEvent, query)
                                     && !cache.contains(cloudEvent.getId()));
@@ -152,9 +147,7 @@ public class ReactorDcbCatchupSubscriptionModel {
         long upTo = Math.min(fromExclusive + windowSize, toInclusive);
         return dcbEventStore.read(query, DcbReadOptions.between(fromExclusive, upTo))
                 .flatMapMany(stream -> {
-                    if (cache != null) {
-                        stream.events().forEach(event -> cache.add(event.getId()));
-                    }
+                    stream.events().forEach(event -> cache.add(event.getId()));
                     return Flux.fromIterable(stream.events());
                 })
                 .concatWith(Flux.defer(() -> windows(query, upTo, toInclusive, cache)));

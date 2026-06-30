@@ -33,4 +33,5 @@ The cache is bounded (default 1000 ids, evicts eldest). It is insertion-ordered,
 
 - A reactive read model can be rebuilt from the beginning by subscribing with `DcbStartAt.beginning()` or any `afterPosition(...)`, then continue live. This closes the last reactive DCB gap, so reactive DCB now matches the blocking stack at the store, application-service, query, and subscription layers.
 - The replay-longer-than-oplog trade-off carries over: if the replay outlasts the change stream history, the captured token ages out and the live resume fails loudly rather than dropping events.
+- The same no-loss stance applies when the model reports no resume token at all (for example an empty oplog or a restricted cluster). The catch-up cannot guarantee a clean handover from the replay to live, so it fails loudly rather than replaying and resuming live from "now", which would silently drop any event committed between the end of the replay and the live subscription becoming active.
 - Position-storage and durable resume are left to the existing `ReactorDurableSubscriptionModel` composing on top, so this module is the catch-up-then-live `Flux` and nothing more.
