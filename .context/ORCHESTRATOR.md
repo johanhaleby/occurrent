@@ -1,12 +1,12 @@
 # Occurrent Orchestrator Memory
 
-Last updated: 2026-06-30
+Last updated: 2026-06-30 (reactive DCB stack reviewed + finish-up tests landed)
 
 ## Current State
 
 DCB has shipped on `main` for three event stores (in-memory, Spring blocking, native driver). The shared Mongo DCB code lives in `eventstore-mongodb-dcb-common` (`DcbMarkerModel`, `DcbDocumentMapper`), and the event-store capability set is the shared `EventStoreCapability` enum in `eventstore-api-common`. Native DCB parity landed via PRs #236 (shared extraction) and #238 (native store), and a doc-only PR #241 records why the `streamId`+`streamVersion` unique index is stream-mode only (DCB-only does not need it).
 
-Now executing reactive DCB support. The reactive Spring store (`ReactorMongoEventStore`) is the last event store without DCB. The phased plan is `.context/reactive-dcb-plan.md`: Phase 1 (reactive event store) is IN PROGRESS off `main` via av. Phases 2 through 4 (reactive application service, DSL, subscriptions) are greenfield and demand-gated.
+Reactive DCB support is complete and stacked as PRs #242 (store) → #243 (application service) → #244 (DSL) → #245 (subscriptions) → #246 (catch-up), all pushed and awaiting the user's `av-land`. This closes DCB across all four event stores. Per-PR `/code-review` found no behavior bugs, only test-coverage gaps and one real semantic issue in the catch-up empty-token path. Fixes applied: added regression tests on each PR (duplicate-event-not-retried #242, side-effect-once-across-retry + retry-exhaustion #243, conflict-retry decision #244, adapter floor/start pass-through #245, fail-loud empty-token + small-window/cache replay #246), and changed reactive DCB catch-up to FAIL LOUDLY when the model reports no resume token (was a best-effort fallback that could silently drop events between replay and live). The phased plan is `.context/reactive-dcb-plan.md`.
 
 The `av-land` helper at `/usr/local/bin/av-land` was rewritten to be prune-safe (retarget each child to trunk before deleting the parent branch) and hang-proof (git rebase instead of in-loop `av sync`, timeout-guarded). Verified on a throwaway stack.
 
