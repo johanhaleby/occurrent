@@ -136,13 +136,15 @@ public class ReactorDcbCatchupSubscriptionModel {
                 }));
     }
 
-    // Reads the current global DCB head observed for the query, as a single read.
+    // Reads the store's current global DCB head as a single read. lastSequencePosition is the global head at read
+    // time regardless of whether the query matched anything.
     private Mono<Long> readHead(DcbQuery query, long cursor) {
         return dcbEventStore.read(query, DcbReadOptions.between(cursor, cursor)).map(stream -> stream.lastSequencePosition());
     }
 
-    // Emits events in (fromExclusive, toInclusive] paging in position windows. Records ids in the cache when one is
-    // supplied (the reconciliation phase), so the live subscription can skip them at the handover seam.
+    // Emits events in (fromExclusive, toInclusive] paging in position windows. Records every emitted id in the cache so
+    // the inclusive live resume can skip the replayed events at the handover seam. Used by both the bulk and the
+    // reconciliation phases.
     private Flux<CloudEvent> windows(DcbQuery query, long fromExclusive, long toInclusive, HandoverCache cache) {
         if (fromExclusive >= toInclusive) {
             return Flux.empty();
