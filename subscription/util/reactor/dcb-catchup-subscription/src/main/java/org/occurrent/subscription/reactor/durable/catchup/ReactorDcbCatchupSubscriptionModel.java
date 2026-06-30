@@ -34,6 +34,7 @@ import reactor.core.publisher.Mono;
 
 import java.util.Collections;
 import java.util.LinkedHashSet;
+import java.util.Optional;
 import java.util.Set;
 
 import static java.util.Objects.requireNonNull;
@@ -108,8 +109,13 @@ public class ReactorDcbCatchupSubscriptionModel {
 
         long startPosition = DcbSubscriptionPosition.dcbPositionOf(position.subscriptionPosition);
         // Capture the live resume token before the bulk replay so an event committing during the replay is still
-        // delivered by the live subscription.
-        return subscriptionModel.globalSubscriptionPosition().flatMapMany(liveToken ->
+        // delivered by the live subscription. The underlying model can report no token (for example an empty oplog or
+        // a restricted cluster), so carry it as an Optional rather than letting an empty Mono collapse the whole
+        // subscription to nothing.
+        return subscriptionModel.globalSubscriptionPosition()
+                .map(Optional::of)
+                .defaultIfEmpty(Optional.empty())
+                .flatMapMany(liveToken ->
                 readHead(query, startPosition).flatMapMany(bulkHead -> {
                     HandoverCache cache = new HandoverCache(handoverCacheSize);
                     // Cache the replayed ids, including the bulk tail, because the reactive global subscription position
@@ -118,7 +124,11 @@ public class ReactorDcbCatchupSubscriptionModel {
                     // never seen during the replay is still delivered once by the live change stream.
                     Flux<CloudEvent> bulk = windows(query, startPosition, bulkHead, cache);
                     Flux<CloudEvent> reconcile = reconcile(query, bulkHead, cache);
-                    Flux<CloudEvent> live = subscriptionModel.subscribe(DcbSubscriptionFilter.filter(query), StartAt.subscriptionPosition(liveToken))
+                    // With no token, fall back to the model default so the subscription still replays and goes live
+                    // rather than silently delivering nothing. The reconciliation above already covers events written
+                    // during the replay, so only the post-reconciliation tail falls in the gap the token would close.
+                    StartAt liveStart = liveToken.map(StartAt::subscriptionPosition).orElseGet(StartAt::subscriptionModelDefault);
+                    Flux<CloudEvent> live = subscriptionModel.subscribe(DcbSubscriptionFilter.filter(query), liveStart)
                             .filter(cloudEvent -> DcbCloudEvents.getPosition(cloudEvent) > 0
                                     && DcbCloudEvents.matches(cloudEvent, query)
                                     && !cache.contains(cloudEvent.getId()));

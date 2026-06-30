@@ -81,12 +81,13 @@ class ReactorDcbCatchupSubscriptionModelMongoTest {
     private ReactorMongoEventStore eventStore;
     private ReactorMongoSubscriptionModel subscriptionModel;
     private CloudEventConverter<DomainEvent> converter;
+    private MongoClient mongoClient;
     private final CopyOnWriteArrayList<Disposable> disposables = new CopyOnWriteArrayList<>();
 
     @BeforeEach
     void create_instances() {
         ConnectionString connectionString = new ConnectionString(mongoDBContainer.getReplicaSetUrl() + ".dcbcatchup");
-        MongoClient mongoClient = MongoClients.create(connectionString);
+        mongoClient = MongoClients.create(connectionString);
         ReactiveMongoTemplate mongoTemplate = new ReactiveMongoTemplate(mongoClient, requireNonNull(connectionString.getDatabase()));
         ReactiveMongoTransactionManager tx = new ReactiveMongoTransactionManager(new SimpleReactiveMongoDatabaseFactory(mongoClient, requireNonNull(connectionString.getDatabase())));
         EventStoreConfig config = new EventStoreConfig.Builder()
@@ -103,6 +104,9 @@ class ReactorDcbCatchupSubscriptionModelMongoTest {
     @AfterEach
     void dispose() {
         disposables.forEach(Disposable::dispose);
+        if (mongoClient != null) {
+            mongoClient.close();
+        }
     }
 
     @Test
