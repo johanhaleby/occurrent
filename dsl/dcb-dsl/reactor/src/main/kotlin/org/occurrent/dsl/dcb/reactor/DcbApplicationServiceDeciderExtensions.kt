@@ -79,12 +79,16 @@ inline fun <C : Any, S, reified SubE : E, E : Any> DcbApplicationService<E>.exec
     decider: Decider<C, S, SubE>
 ): Mono<Decider.Decision<S, E>> {
     val widened: Decider<C, S, E> = decider.adaptEvents()
-    val decision = AtomicReference<Decider.Decision<S, E>>()
-    return execute(query) { events: Stream<E> ->
-        val result = widened.decideOnEvents(events.toList(), commands)
-        decision.set(result)
-        result.events.stream()
-    }.then(Mono.fromCallable { decision.get() })
+    // Defer so the AtomicReference is created per subscription. A shared one would let concurrent or repeat
+    // subscribers see each other's decision.
+    return Mono.defer {
+        val decision = AtomicReference<Decider.Decision<S, E>>()
+        execute(query) { events: Stream<E> ->
+            val result = widened.decideOnEvents(events.toList(), commands)
+            decision.set(result)
+            result.events.stream()
+        }.then(Mono.fromCallable { requireNotNull(decision.get()) { "The decider produced no decision" } })
+    }
 }
 
 /**
