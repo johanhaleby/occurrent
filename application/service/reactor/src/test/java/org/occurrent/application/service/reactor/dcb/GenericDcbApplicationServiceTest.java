@@ -28,6 +28,7 @@ import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.RegisterExtension;
 import org.occurrent.application.converter.CloudEventConverter;
 import org.occurrent.eventstore.api.dcb.DcbAppendCondition;
+import org.occurrent.eventstore.api.dcb.DcbAppendConditionNotFulfilledException;
 import org.occurrent.eventstore.api.dcb.DcbAppendResult;
 import org.occurrent.eventstore.api.dcb.DcbCloudEvents;
 import org.occurrent.eventstore.api.dcb.DcbEventStream;
@@ -180,6 +181,47 @@ class GenericDcbApplicationServiceTest {
                 .containsExactly("NameDefined", "NameChangedByOther", "NameChangedByService");
     }
 
+    @Test
+    void runs_the_side_effect_once_even_when_the_append_retries_after_a_conflict() {
+        eventStore.append(List.of(DcbCloudEvents.withTags(converter().toCloudEvent(new DomainEvent("NameDefined", "name:1")), Set.of("name:1")))).block();
+        CloudEvent conflictingEvent = DcbCloudEvents.withTags(converter().toCloudEvent(new DomainEvent("NameChangedByOther", "name:1")), Set.of("name:1"));
+        ConflictingOnceDcbEventStore conflictingStore = new ConflictingOnceDcbEventStore(eventStore, conflictingEvent);
+        AtomicInteger attempts = new AtomicInteger();
+        AtomicInteger sideEffectInvocations = new AtomicInteger();
+        GenericDcbApplicationService<DomainEvent> applicationService = new GenericDcbApplicationService<>(conflictingStore, converter(), event -> Set.of(event.name()));
+
+        applicationService.execute(tags("name:1"),
+                DcbExecuteOptions.<DomainEvent>options().sideEffect(events -> Mono.fromRunnable(sideEffectInvocations::incrementAndGet)),
+                events -> {
+                    attempts.incrementAndGet();
+                    return Stream.of(new DomainEvent("NameChangedByService", "name:1"));
+                }).block();
+
+        // The decider runs twice (the first append conflicts, the second succeeds), but the side-effect is composed
+        // after the retry, so it fires once on the committed result, not once per attempt.
+        assertThat(attempts).hasValue(2);
+        assertThat(sideEffectInvocations).hasValue(1);
+    }
+
+    @Test
+    void rethrows_the_condition_failure_when_the_retries_are_exhausted() {
+        eventStore.append(List.of(DcbCloudEvents.withTags(converter().toCloudEvent(new DomainEvent("NameDefined", "name:1")), Set.of("name:1")))).block();
+        AlwaysConflictingDcbEventStore conflictingStore = new AlwaysConflictingDcbEventStore(eventStore, converter());
+        AtomicInteger attempts = new AtomicInteger();
+        GenericDcbApplicationService<DomainEvent> applicationService = new GenericDcbApplicationService<>(conflictingStore, converter(), event -> Set.of(event.name()));
+
+        StepVerifier.create(applicationService.execute(tags("name:1"), events -> {
+                    attempts.incrementAndGet();
+                    return Stream.of(new DomainEvent("NameChangedByService", "name:1"));
+                }))
+                .expectError(DcbAppendConditionNotFulfilledException.class)
+                .verify();
+
+        // The default policy retries five times before giving up, so the decider runs six times and the original
+        // condition failure surfaces rather than a retry-exhausted wrapper.
+        assertThat(attempts).hasValue(6);
+    }
+
     private static CloudEventConverter<DomainEvent> converter() {
         return new CloudEventConverter<>() {
             @Override
@@ -237,6 +279,37 @@ class GenericDcbApplicationServiceTest {
                 return delegate.append(List.of(conflictingEvent)).then(delegate.append(events, condition));
             }
             return delegate.append(events, condition);
+        }
+    }
+
+    /**
+     * A reactive DCB event store that commits a fresh conflicting matching event before every conditional append, so
+     * the carried consistency token is always stale and the condition never holds. It drives the retry policy to
+     * exhaustion.
+     */
+    private static class AlwaysConflictingDcbEventStore implements DcbEventStore {
+        private final DcbEventStore delegate;
+        private final CloudEventConverter<DomainEvent> converter;
+
+        private AlwaysConflictingDcbEventStore(DcbEventStore delegate, CloudEventConverter<DomainEvent> converter) {
+            this.delegate = delegate;
+            this.converter = converter;
+        }
+
+        @Override
+        public Mono<DcbEventStream> read(DcbQuery query, DcbReadOptions options) {
+            return delegate.read(query, options);
+        }
+
+        @Override
+        public Mono<DcbAppendResult> append(List<CloudEvent> events) {
+            return delegate.append(events);
+        }
+
+        @Override
+        public Mono<DcbAppendResult> append(List<CloudEvent> events, DcbAppendCondition condition) {
+            CloudEvent interloper = DcbCloudEvents.withTags(converter.toCloudEvent(new DomainEvent("NameChangedByOther", "name:1")), Set.of("name:1"));
+            return delegate.append(List.of(interloper)).then(delegate.append(events, condition));
         }
     }
 }
