@@ -20,7 +20,8 @@ import io.cloudevents.CloudEvent;
 import org.jspecify.annotations.NullMarked;
 import org.jspecify.annotations.Nullable;
 import org.occurrent.application.converter.CloudEventConverter;
-import org.occurrent.dsl.subscription.blocking.EventMetadata;
+import org.occurrent.dsl.dcb.DcbEventMetadata;
+import org.occurrent.dsl.subscription.EventMetadata;
 import org.occurrent.eventstore.api.dcb.DcbQuery;
 import org.occurrent.subscription.DcbStartAt;
 import org.occurrent.subscription.api.blocking.DcbSubscriptionModel;
@@ -28,9 +29,6 @@ import org.occurrent.subscription.api.blocking.Subscribable;
 import org.occurrent.subscription.api.blocking.Subscription;
 import org.occurrent.subscription.api.blocking.SubscriptionModel;
 
-import java.util.HashMap;
-import java.util.Map;
-import java.util.Set;
 import java.util.function.BiConsumer;
 import java.util.function.Consumer;
 
@@ -123,7 +121,7 @@ public final class DcbSubscriptions<E> {
         // in-process floor in the typed adapter otherwise), so this callback only converts and dispatches.
         Consumer<CloudEvent> consumer = cloudEvent -> {
             E event = cloudEventConverter.toDomainEvent(cloudEvent);
-            fn.accept(DcbEventMetadata.from(toEventMetadata(cloudEvent)), event);
+            fn.accept(DcbEventMetadata.from(EventMetadata.from(cloudEvent)), event);
         };
 
         DcbStartAt startAtToUse = startAt == null ? DcbStartAt.subscriptionModelDefault() : startAt;
@@ -144,15 +142,4 @@ public final class DcbSubscriptions<E> {
         subscriptionModel.cancelSubscription(subscriptionId);
     }
 
-    private static EventMetadata toEventMetadata(CloudEvent cloudEvent) {
-        Set<String> extensionNames = cloudEvent.getExtensionNames();
-        Map<String, Object> data = new HashMap<>(extensionNames.size());
-        for (String extensionName : extensionNames) {
-            Object value = cloudEvent.getExtension(extensionName);
-            if (value != null) {
-                data.put(extensionName, value);
-            }
-        }
-        return new EventMetadata(data);
-    }
 }

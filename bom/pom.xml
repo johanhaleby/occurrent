@@ -308,6 +308,11 @@
             </dependency>
             <dependency>
                 <groupId>org.occurrent</groupId>
+                <artifactId>application-service-common</artifactId>
+                <version>${project.version}</version>
+            </dependency>
+            <dependency>
+                <groupId>org.occurrent</groupId>
                 <artifactId>application-service-blocking</artifactId>
                 <version>${project.version}</version>
             </dependency>
@@ -330,6 +335,11 @@
             <dependency>
                 <groupId>org.occurrent</groupId>
                 <artifactId>cloudevent-converter-jackson3</artifactId>
+                <version>${project.version}</version>
+            </dependency>
+            <dependency>
+                <groupId>org.occurrent</groupId>
+                <artifactId>subscription-dsl-common</artifactId>
                 <version>${project.version}</version>
             </dependency>
             <dependency>

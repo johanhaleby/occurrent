@@ -31,6 +31,11 @@
     <dependencies>
         <dependency>
             <groupId>org.occurrent</groupId>
+            <artifactId>subscription-dsl-common</artifactId>
+            <version>${project.version}</version>
+        </dependency>
+        <dependency>
+            <groupId>org.occurrent</groupId>
             <artifactId>cloudevent-converter-api</artifactId>
             <version>${project.version}</version>
         </dependency>

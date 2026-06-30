@@ -1,6 +1,6 @@
 package org.occurrent.example.domain.courseenrollment.infrastructure.dcb
 
-import org.occurrent.application.service.blocking.dcb.TagGenerator
+import org.occurrent.application.service.dcb.TagGenerator
 import org.occurrent.example.domain.courseenrollment.common.DomainEvent
 import org.occurrent.example.domain.courseenrollment.features.coursemanagement.model.CourseCancelled
 import org.occurrent.example.domain.courseenrollment.features.coursemanagement.model.CourseDefined

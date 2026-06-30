@@ -16,6 +16,8 @@
 
 package org.occurrent.dsl.dcb.blocking;
 
+import org.occurrent.dsl.dcb.DcbDomainEventStream;
+
 import com.fasterxml.jackson.databind.ObjectMapper;
 import io.cloudevents.CloudEvent;
 import org.junit.jupiter.api.BeforeEach;
@@ -28,7 +30,7 @@ import org.occurrent.domain.DomainEvent;
 import org.occurrent.domain.NameDefined;
 import org.occurrent.domain.NameWasChanged;
 import org.occurrent.dsl.query.blocking.DomainEventQueries;
-import org.occurrent.dsl.subscription.blocking.EventMetadata;
+import org.occurrent.dsl.subscription.EventMetadata;
 import org.occurrent.eventstore.api.dcb.DcbAppendCondition;
 import org.occurrent.eventstore.api.dcb.DcbAppendConditionNotFulfilledException;
 import org.occurrent.eventstore.api.dcb.DcbCloudEvents;

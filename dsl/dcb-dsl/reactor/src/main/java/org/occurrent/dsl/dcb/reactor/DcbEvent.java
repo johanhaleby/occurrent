@@ -17,6 +17,7 @@
 package org.occurrent.dsl.dcb.reactor;
 
 import org.jspecify.annotations.NullMarked;
+import org.occurrent.dsl.dcb.DcbEventMetadata;
 
 import static java.util.Objects.requireNonNull;
 

@@ -20,6 +20,7 @@ import io.cloudevents.CloudEvent;
 import org.jspecify.annotations.NullMarked;
 import org.jspecify.annotations.Nullable;
 import org.occurrent.application.converter.CloudEventConverter;
+import org.occurrent.application.service.dcb.TagGenerator;
 import org.occurrent.eventstore.api.dcb.*;
 import org.occurrent.retry.RetryStrategy;
 import org.occurrent.retry.RetryStrategy.Retry;

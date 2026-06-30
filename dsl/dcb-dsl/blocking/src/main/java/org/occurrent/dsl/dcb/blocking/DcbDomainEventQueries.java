@@ -18,6 +18,7 @@ package org.occurrent.dsl.dcb.blocking;
 
 import org.jspecify.annotations.NullMarked;
 import org.jspecify.annotations.Nullable;
+import org.occurrent.dsl.dcb.DcbDomainEventStream;
 import org.occurrent.dsl.query.blocking.DomainEventQueries;
 import org.occurrent.eventstore.api.SortBy;
 import org.occurrent.eventstore.api.blocking.EventStoreQueries;
