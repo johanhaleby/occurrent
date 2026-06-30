@@ -10,6 +10,10 @@ DCB is a capability layered on the existing CloudEvent storage, not a new store 
 
 #### Changes
 
+* DCB now works on the reactive Spring MongoDB event store, which completes DCB support across every event store.
+  * `ReactorMongoEventStore` implements a new reactive `DcbEventStore` (in `eventstore-api-dcb-reactor`) with `Mono` and `Flux`, reusing the same per-attribute marker model and storage contract as the blocking and native stores. It defaults to stream-only. A reactive DCB application service, DSL, and subscriptions are not part of this and remain to be done.
+  * See [ADR 34](doc/architecture/decisions/0034-reactive-spring-mongodb-dcb-support.md).
+
 * DCB now works on the native MongoDB driver event store, not only the Spring store.
   * `MongoEventStore`, the plain synchronous-driver store, implements the same DCB read and append API as the Spring store, with the same per-attribute marker model and consistency-token semantics. The shared model now lives in a new `eventstore-mongodb-dcb-common` module so the two stores cannot drift on the storage contract, and the capability set moved to a shared `EventStoreCapability` enum in `eventstore-api-common`. The native store defaults to stream-only, so existing applications are untouched.
   * See [ADR 33](doc/architecture/decisions/0033-native-mongodb-driver-dcb-parity-via-shared-marker-model.md).
