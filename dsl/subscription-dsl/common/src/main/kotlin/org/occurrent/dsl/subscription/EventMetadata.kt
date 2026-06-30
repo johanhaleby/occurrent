@@ -44,6 +44,6 @@ data class EventMetadata(val data: Map<String, Any?>) {
          */
         @JvmStatic
         fun from(cloudEvent: CloudEvent): EventMetadata =
-            EventMetadata(cloudEvent.extensionNames.associateWith { extensionName -> cloudEvent.getExtension(extensionName) })
+            EventMetadata(cloudEvent.extensionNames.mapNotNull { name -> cloudEvent.getExtension(name)?.let { value -> name to value } }.toMap())
     }
 }
