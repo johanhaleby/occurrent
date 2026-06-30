@@ -16,12 +16,11 @@
 
 package org.occurrent.application.service.reactor.dcb;
 
-import org.occurrent.application.service.dcb.TagGenerator;
-
 import io.cloudevents.CloudEvent;
 import org.jspecify.annotations.NullMarked;
 import org.jspecify.annotations.Nullable;
 import org.occurrent.application.converter.CloudEventConverter;
+import org.occurrent.application.service.dcb.TagGenerator;
 import org.occurrent.eventstore.api.dcb.DcbAppendCondition;
 import org.occurrent.eventstore.api.dcb.DcbAppendConditionNotFulfilledException;
 import org.occurrent.eventstore.api.dcb.DcbAppendResult;

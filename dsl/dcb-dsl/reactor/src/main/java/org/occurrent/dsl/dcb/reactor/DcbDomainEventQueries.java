@@ -16,10 +16,9 @@
 
 package org.occurrent.dsl.dcb.reactor;
 
-import org.occurrent.dsl.dcb.DcbDomainEventStream;
-
 import org.jspecify.annotations.NullMarked;
 import org.occurrent.application.converter.CloudEventConverter;
+import org.occurrent.dsl.dcb.DcbDomainEventStream;
 import org.occurrent.eventstore.api.dcb.DcbQuery;
 import org.occurrent.eventstore.api.dcb.DcbReadOptions;
 import org.occurrent.eventstore.api.dcb.reactor.DcbEventStore;
