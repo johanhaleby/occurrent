@@ -28,5 +28,6 @@
     
     <modules>
         <module>blocking</module>
+        <module>reactor</module>
     </modules>
 </project>
