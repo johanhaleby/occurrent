@@ -35,6 +35,7 @@ import org.occurrent.domain.NameDefined
 import org.occurrent.domain.NameWasChanged
 import org.occurrent.dsl.decider.Decider
 import org.occurrent.dsl.decider.decider
+import org.occurrent.dsl.query.reactor.DomainEventQueries
 import org.occurrent.eventstore.api.EventStoreCapability.DCB
 import org.occurrent.eventstore.api.EventStoreCapability.STREAM
 import org.occurrent.eventstore.api.dcb.DcbAppendCondition
@@ -86,7 +87,7 @@ class DcbReactorDslTest {
         eventStore = ReactorMongoEventStore(mongoTemplate, config)
         converter = JacksonCloudEventConverter.Builder<DomainEvent>(ObjectMapper(), URI.create("urn:test")).idMapper(DomainEvent::eventId).build()
         applicationService = GenericDcbApplicationService(eventStore, converter, { event -> setOf(tagFor(event)) }, GenericDcbApplicationService.defaultRetry())
-        queries = DcbDomainEventQueries(eventStore, converter)
+        queries = DcbDomainEventQueries(DomainEventQueries(eventStore, converter))
         time = LocalDateTime.now()
     }
 

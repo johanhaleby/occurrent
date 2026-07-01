@@ -36,6 +36,11 @@
         </dependency>
         <dependency>
             <groupId>org.occurrent</groupId>
+            <artifactId>query-dsl-reactor</artifactId>
+            <version>${project.version}</version>
+        </dependency>
+        <dependency>
+            <groupId>org.occurrent</groupId>
             <artifactId>eventstore-api-dcb-reactor</artifactId>
             <version>${project.version}</version>
         </dependency>
