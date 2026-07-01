@@ -123,11 +123,6 @@ public class ReactorMongoSubscriptionModel implements PositionAwareSubscriptionM
             Flux<ChangeStreamEvent<Document>> changeStream = mongo.changeStream(eventCollection, changeStreamOptions, Document.class);
             return changeStream
                     .flatMap(changeEvent -> {
-                        MongoResumeTokenSubscriptionPosition subscriptionPosition = new MongoResumeTokenSubscriptionPosition(requireNonNull(changeEvent.getResumeToken()).asDocument());
-                        // Advance the tracked position for every change-stream document received, even if it
-                        // doesn't deserialize into a delivered CloudEvent, mirroring NativeMongoSubscriptionModel,
-                        // so a resubscribe after an error resumes gap-free.
-                        currentStartAt.set(StartAt.subscriptionPosition(subscriptionPosition));
                         ChangeStreamDocument<Document> raw = changeEvent.getRaw();
                         if (raw == null) {
                             // Mirrors SpringMongoSubscriptionModel's same defensive check. Not expected to ever
@@ -135,6 +130,11 @@ public class ReactorMongoSubscriptionModel implements PositionAwareSubscriptionM
                             log.error("Internal error: ChangeStreamEvent for collection {} had a null raw document", eventCollection);
                             return Mono.empty();
                         }
+                        MongoResumeTokenSubscriptionPosition subscriptionPosition = new MongoResumeTokenSubscriptionPosition(requireNonNull(raw.getResumeToken()));
+                        // Advance the tracked position for every change-stream document received, even if it
+                        // doesn't deserialize into a delivered CloudEvent, mirroring NativeMongoSubscriptionModel,
+                        // so a resubscribe after an error resumes gap-free.
+                        currentStartAt.set(StartAt.subscriptionPosition(subscriptionPosition));
                         return MongoCloudEventsToJsonDeserializer.deserializeToCloudEvent(raw, timeRepresentation)
                                 .map(cloudEvent -> new PositionAwareCloudEvent(cloudEvent, subscriptionPosition))
                                 .map(Mono::just)

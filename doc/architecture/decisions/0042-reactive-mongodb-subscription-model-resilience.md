@@ -24,7 +24,7 @@ return Flux.defer(() -> {
 });
 ```
 
-`changeStream(filter, currentStartAt)` is itself a `Flux.defer(...)`, so `retryWhen` resubscribing to it re-reads `currentStartAt` on every attempt, including the retried ones. The outer `Flux.defer` gives each subscriber of the returned `Flux` its own tracked position. Inside `changeStream(...)`, a `doOnNext` on the raw change-stream events advances `currentStartAt` to the resume token of every document received, even if it doesn't deserialize into a delivered CloudEvent, mirroring `NativeMongoSubscriptionModel`'s tracking, so a retry resumes gap-free instead of replaying or skipping events.
+`changeStream(filter, currentStartAt)` is itself a `Flux.defer(...)`, so `retryWhen` resubscribing to it re-reads `currentStartAt` on every attempt, including the retried ones. The outer `Flux.defer` gives each subscriber of the returned `Flux` its own tracked position. Inside `changeStream(...)`, the `flatMap` that processes each raw change-stream event advances `currentStartAt` to the resume token of every document received, even if it doesn't deserialize into a delivered CloudEvent, mirroring `NativeMongoSubscriptionModel`'s tracking, so a retry resumes gap-free instead of replaying or skipping events.
 
 The `filter` predicate (`shouldRestart`) classifies the error, the same way `NativeMongoSubscriptionModel` and `SpringMongoSubscriptionModel` do:
 
