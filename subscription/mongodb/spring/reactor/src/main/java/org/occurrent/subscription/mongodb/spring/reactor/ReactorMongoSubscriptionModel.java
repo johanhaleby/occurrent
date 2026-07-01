@@ -59,8 +59,8 @@ import static org.occurrent.subscription.mongodb.internal.MongoCommons.cannotFin
  * <p>
  * Survives the same class of MongoDB operational disruption {@code SpringMongoSubscriptionModel} does (replica-set
  * failovers, transient network errors, and, if configured to, change stream history loss): the underlying change
- * stream automatically resubscribes and resumes from the position of the last event actually delivered, so recovery
- * is gap-free rather than a replay or a skipped window. See {@link ReactorMongoSubscriptionModelConfig}.
+ * stream automatically resubscribes and resumes from the position of the last change-stream document read, so
+ * recovery is gap-free rather than a replay or a skipped window. See {@link ReactorMongoSubscriptionModelConfig}.
  */
 @NullMarked
 public class ReactorMongoSubscriptionModel implements PositionAwareSubscriptionModel {

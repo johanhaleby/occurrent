@@ -43,6 +43,12 @@ public class ReactorMongoSubscriptionModelConfig {
     private ReactorMongoSubscriptionModelConfig(Duration minBackoff, Duration maxBackoff, boolean restartSubscriptionsOnChangeStreamHistoryLost) {
         requireNonNull(minBackoff, "minBackoff cannot be null");
         requireNonNull(maxBackoff, "maxBackoff cannot be null");
+        if (minBackoff.isNegative() || minBackoff.isZero()) {
+            throw new IllegalArgumentException("minBackoff must be > 0 but got " + minBackoff);
+        }
+        if (maxBackoff.compareTo(minBackoff) < 0) {
+            throw new IllegalArgumentException("maxBackoff (" + maxBackoff + ") must be >= minBackoff (" + minBackoff + ")");
+        }
         this.minBackoff = minBackoff;
         this.maxBackoff = maxBackoff;
         this.restartSubscriptionsOnChangeStreamHistoryLost = restartSubscriptionsOnChangeStreamHistoryLost;
