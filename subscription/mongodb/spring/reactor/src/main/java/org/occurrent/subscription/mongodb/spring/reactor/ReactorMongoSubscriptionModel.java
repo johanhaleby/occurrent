@@ -154,6 +154,10 @@ public class ReactorMongoSubscriptionModel implements PositionAwareSubscriptionM
             return new ReactorMongoSubscription(subscriptionId, internalSubscription.started);
         }
         Sinks.Empty<Void> startedSink = Sinks.empty();
+        // A placeholder goes in before subscribing, since a synchronously-failing subscribe (e.g. building the
+        // change stream options itself throws) runs the error handler below before subscribe() even returns,
+        // which would otherwise try to remove an entry that was never put in yet.
+        runningSubscriptions.put(subscriptionId, new InternalSubscription(Disposables.disposed(), currentStartAt, filter, action, startedSink.asMono()));
         Disposable disposable = resilientChangeStream(filter, currentStartAt, startedSink)
                 .concatMap(action)
                 .subscribe(unused -> {
@@ -168,7 +172,11 @@ public class ReactorMongoSubscriptionModel implements PositionAwareSubscriptionM
                             runningSubscriptions.remove(subscriptionId);
                         });
         InternalSubscription internalSubscription = new InternalSubscription(disposable, currentStartAt, filter, action, startedSink.asMono());
-        runningSubscriptions.put(subscriptionId, internalSubscription);
+        if (runningSubscriptions.replace(subscriptionId, internalSubscription) == null) {
+            // The placeholder was already removed by a synchronous error above, so this subscription is already
+            // dead. Dispose defensively, matching what the error handler does for the same subscription otherwise.
+            disposable.dispose();
+        }
         return new ReactorMongoSubscription(subscriptionId, internalSubscription.started);
     }
 

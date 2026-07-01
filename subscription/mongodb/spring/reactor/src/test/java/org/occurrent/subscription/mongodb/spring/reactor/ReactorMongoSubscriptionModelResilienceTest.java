@@ -316,6 +316,26 @@ public class ReactorMongoSubscriptionModelResilienceTest {
                     .expectErrorMatches(throwable -> throwable == historyLost)
                     .verify(Duration.ofSeconds(5));
         }
+
+        @Test
+        void a_subscription_that_fails_synchronously_on_subscribe_is_not_left_running() {
+            // Given: same synchronous-throw setup as above, this time checking the subscriptionId bookkeeping
+            // rather than waitUntilStarted(), since the error handler runs before subscribe() itself returns and
+            // could otherwise remove an entry that was never put in yet, leaving the real, dead one behind.
+            UncategorizedMongoDbException historyLost = changeStreamHistoryLostException();
+            ReactiveMongoOperations throwingOperations = mock(ReactiveMongoOperations.class);
+            when(throwingOperations.changeStream(eq("events"), any(ChangeStreamOptions.class), eq(Document.class))).thenThrow(historyLost);
+            ReactorMongoSubscriptionModel subscriptionModel = new ReactorMongoSubscriptionModel(throwingOperations, "events", TimeRepresentation.RFC_3339_STRING);
+            String subscriptionId = UUID.randomUUID().toString();
+
+            // When
+            subscriptionModel.subscribe(subscriptionId, __ -> Mono.empty());
+
+            // Then: not left running or paused, and the id can be reused without an explicit cancelSubscription()
+            assertThat(subscriptionModel.isRunning(subscriptionId)).isFalse();
+            assertThat(subscriptionModel.isPaused(subscriptionId)).isFalse();
+            subscriptionModel.subscribe(subscriptionId, __ -> Mono.empty());
+        }
     }
 
     private Flux<CloudEvent> serialize(DomainEvent e) {
