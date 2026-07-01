@@ -66,7 +66,7 @@ public class DomainEventQueries<T> {
     /**
      * Note that it's recommended to create an index the fields you're sorting on in order to make them efficient.
      *
-     * @return The first cloud event matching the specified filter, or an empty {@link Mono} if none match.
+     * @return The first domain event matching the specified filter, or an empty {@link Mono} if none match.
      */
     public <E extends T> Mono<E> queryOne(Filter filter) {
         return this.<E>toDomainEvents(eventStoreQueries.query(filter, 0, 1)).next();
@@ -233,15 +233,14 @@ public class DomainEventQueries<T> {
      *
      * @return All cloud events matching the specified type, skip, limit.
      */
-    @SuppressWarnings("unchecked")
     @SafeVarargs
     public final Flux<T> query(Class<? extends T> type, @Nullable Class<? extends T>... types) {
-        final List<T> list = new ArrayList<>();
-        list.add((T) type);
+        final List<Class<? extends T>> list = new ArrayList<>();
+        list.add(type);
         if (types != null && types.length > 0) {
-            list.addAll(Arrays.stream(types).map(t -> (T) t).toList());
+            list.addAll(Arrays.asList(types));
         }
-        return query((Collection<Class<? extends T>>) list);
+        return query(list);
     }
 
     /**
