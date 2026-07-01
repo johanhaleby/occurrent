@@ -18,7 +18,6 @@ package org.occurrent.subscription.mongodb.nativedriver.blocking;
 
 import com.mongodb.MongoClientSettings;
 import com.mongodb.MongoCommandException;
-import com.mongodb.MongoException;
 import com.mongodb.client.ChangeStreamIterable;
 import com.mongodb.client.MongoChangeStreamCursor;
 import com.mongodb.client.MongoCollection;
@@ -58,6 +57,8 @@ import java.util.List;
 import java.util.Objects;
 import java.util.StringJoiner;
 import java.util.concurrent.*;
+import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.atomic.AtomicReference;
 import java.util.function.Consumer;
 import java.util.function.Predicate;
 import java.util.stream.Collectors;
@@ -87,6 +88,7 @@ public class NativeMongoSubscriptionModel implements PositionAwareSubscriptionMo
     private final TimeRepresentation timeRepresentation;
     private final ExecutorService cloudEventDispatcher;
     private final RetryStrategy retryStrategy;
+    private final boolean restartSubscriptionsOnChangeStreamHistoryLost;
     private final MongoDatabase database;
 
     private volatile boolean shutdown = false;
@@ -133,13 +135,42 @@ public class NativeMongoSubscriptionModel implements PositionAwareSubscriptionMo
      */
     public NativeMongoSubscriptionModel(MongoDatabase database, MongoCollection<Document> eventCollection, TimeRepresentation timeRepresentation,
                                         ExecutorService subscriptionExecutor, RetryStrategy retryStrategy) {
+        this(database, eventCollection, timeRepresentation, subscriptionExecutor, NativeMongoSubscriptionModelConfig.withConfig().retryStrategy(retryStrategy));
+    }
+
+    /**
+     * Create a subscription using the native MongoDB sync driver.
+     *
+     * @param database             The MongoDB database to use
+     * @param eventCollectionName  The name of the collection that contains the events
+     * @param timeRepresentation   How time is represented in the database, must be the same as what's specified for the EventStore that stores the events.
+     * @param subscriptionExecutor The executor that will be used for the subscription. Typically a dedicated thread will be required per subscription.
+     * @param config               Configure how the subscription model should behave, for example retries and how to handle change stream history lost errors.
+     */
+    public NativeMongoSubscriptionModel(MongoDatabase database, String eventCollectionName, TimeRepresentation timeRepresentation,
+                                        ExecutorService subscriptionExecutor, NativeMongoSubscriptionModelConfig config) {
+        this(database, database.getCollection(requireNonNull(eventCollectionName, "Event collection cannot be null")), timeRepresentation, subscriptionExecutor, config);
+    }
+
+    /**
+     * Create a subscription using the native MongoDB sync driver.
+     *
+     * @param database             The MongoDB database to use
+     * @param eventCollection      The collection that contains the events
+     * @param timeRepresentation   How time is represented in the database, must be the same as what's specified for the EventStore that stores the events.
+     * @param subscriptionExecutor The executor that will be used for the subscription. Typically a dedicated thread will be required per subscription.
+     * @param config               Configure how the subscription model should behave, for example retries and how to handle change stream history lost errors.
+     */
+    public NativeMongoSubscriptionModel(MongoDatabase database, MongoCollection<Document> eventCollection, TimeRepresentation timeRepresentation,
+                                        ExecutorService subscriptionExecutor, NativeMongoSubscriptionModelConfig config) {
         requireNonNull(database, MongoDatabase.class.getSimpleName() + " cannot be null");
         requireNonNull(eventCollection, "Event collection cannot be null");
         requireNonNull(timeRepresentation, "Time representation cannot be null");
         requireNonNull(subscriptionExecutor, "CloudEventDispatcher cannot  be null");
-        requireNonNull(retryStrategy, "RetryStrategy cannot be null");
+        requireNonNull(config, NativeMongoSubscriptionModelConfig.class.getSimpleName() + " cannot be null");
         this.database = database;
-        this.retryStrategy = retryStrategy;
+        this.retryStrategy = config.retryStrategy;
+        this.restartSubscriptionsOnChangeStreamHistoryLost = config.restartSubscriptionsOnChangeStreamHistoryLost;
         this.cloudEventDispatcher = subscriptionExecutor;
         this.timeRepresentation = timeRepresentation;
         this.eventCollection = eventCollection;
@@ -158,8 +189,9 @@ public class NativeMongoSubscriptionModel implements PositionAwareSubscriptionMo
         }
 
         CountDownLatch subscriptionStartedLatch = new CountDownLatch(1);
+        AtomicReference<StartAt> currentStartAt = new AtomicReference<>(startAt);
 
-        Runnable internalSubscription = () -> newInternalSubscription(subscriptionId, filter, startAt, action, subscriptionStartedLatch);
+        Runnable internalSubscription = () -> newInternalSubscription(subscriptionId, filter, currentStartAt, action, subscriptionStartedLatch);
 
         if (shutdown || cloudEventDispatcher.isShutdown() || cloudEventDispatcher.isTerminated()) {
             throw new IllegalStateException("Cannot start subscription because the executor is shutdown or terminated.");
@@ -172,34 +204,66 @@ public class NativeMongoSubscriptionModel implements PositionAwareSubscriptionMo
         cloudEventDispatcher.execute(executeWithRetry(internalSubscription, NOT_SHUTDOWN, retryStrategy));
     }
 
-    private void newInternalSubscription(String subscriptionId, SubscriptionFilter filter, StartAt startAt, Consumer<CloudEvent> action, CountDownLatch subscriptionStartedLatch) {
-        List<Bson> pipeline = createPipeline(timeRepresentation, filter);
-        ChangeStreamIterable<Document> changeStreamDocuments = eventCollection.watch(pipeline, Document.class);
-        SubscriptionModelContext subscriptionModelContext = new SubscriptionModelContext(NativeMongoSubscriptionModel.class);
-        ChangeStreamIterable<Document> changeStreamDocumentsAtPosition = MongoCommons.applyStartPosition(changeStreamDocuments, ChangeStreamIterable::startAfter, ChangeStreamIterable::startAtOperationTime, startAt.get(subscriptionModelContext), subscriptionModelContext);
-        MongoChangeStreamCursor<ChangeStreamDocument<Document>> cursor = changeStreamDocumentsAtPosition.cursor();
-
-        InternalSubscription internalSubscription = new InternalSubscription(cursor, startAt, action, filter, subscriptionStartedLatch);
-
-        if (running) {
-            runningSubscriptions.put(subscriptionId, internalSubscription);
-        } else {
-            pausedSubscriptions.put(subscriptionId, internalSubscription);
-        }
-
-        internalSubscription.started();
-
+    // currentStartAt tracks the position of the last event actually delivered from the change stream (updated below),
+    // shared with the outer executeWithRetry(internalSubscription, ...) wrapper in startSubscription so that a restart
+    // (rethrown below) or a resume (see resumeSubscription) continues gap-free from there instead of the original StartAt.
+    // The try block spans opening the cursor too, not just iterating it, since a change-stream error (e.g. history lost,
+    // a failover) can just as well surface when the cursor is (re-)opened as while iterating it.
+    private void newInternalSubscription(String subscriptionId, SubscriptionFilter filter, AtomicReference<StartAt> currentStartAt, Consumer<CloudEvent> action, CountDownLatch subscriptionStartedLatch) {
+        InternalSubscription internalSubscription = null;
         try {
-            cursor.forEachRemaining(changeStreamDocument -> MongoCloudEventsToJsonDeserializer.deserializeToCloudEvent(changeStreamDocument, timeRepresentation)
-                    .map(cloudEvent -> new PositionAwareCloudEvent(cloudEvent, new MongoResumeTokenSubscriptionPosition(changeStreamDocument.getResumeToken())))
-                    .ifPresent(executeWithRetry(action, NOT_SHUTDOWN, retryStrategy)));
-        } catch (MongoException e) {
-            log.debug("Caught {} (code={}, message={}), this might happen when cursor is shutdown.", e.getClass().getName(), e.getCode(), e.getMessage(), e);
-        } catch (IllegalStateException e) {
-            log.debug("Caught {} (message={}), this might happen when cursor is shutdown.", e.getClass().getName(), e.getMessage(), e);
+            List<Bson> pipeline = createPipeline(timeRepresentation, filter);
+            ChangeStreamIterable<Document> changeStreamDocuments = eventCollection.watch(pipeline, Document.class);
+            SubscriptionModelContext subscriptionModelContext = new SubscriptionModelContext(NativeMongoSubscriptionModel.class);
+            ChangeStreamIterable<Document> changeStreamDocumentsAtPosition = MongoCommons.applyStartPosition(changeStreamDocuments, ChangeStreamIterable::startAfter, ChangeStreamIterable::startAtOperationTime, currentStartAt.get().get(subscriptionModelContext), subscriptionModelContext);
+            MongoChangeStreamCursor<ChangeStreamDocument<Document>> cursor = changeStreamDocumentsAtPosition.cursor();
+
+            internalSubscription = new InternalSubscription(cursor, currentStartAt, action, filter, subscriptionStartedLatch);
+
+            if (running) {
+                runningSubscriptions.put(subscriptionId, internalSubscription);
+            } else {
+                pausedSubscriptions.put(subscriptionId, internalSubscription);
+            }
+
+            internalSubscription.started();
+
+            cursor.forEachRemaining(changeStreamDocument -> {
+                MongoCloudEventsToJsonDeserializer.deserializeToCloudEvent(changeStreamDocument, timeRepresentation)
+                        .map(cloudEvent -> new PositionAwareCloudEvent(cloudEvent, new MongoResumeTokenSubscriptionPosition(changeStreamDocument.getResumeToken())))
+                        .ifPresent(executeWithRetry(action, NOT_SHUTDOWN, retryStrategy));
+                currentStartAt.set(StartAt.subscriptionPosition(new MongoResumeTokenSubscriptionPosition(changeStreamDocument.getResumeToken())));
+            });
+        } catch (RuntimeException e) {
+            if ((internalSubscription != null && internalSubscription.isIntentionallyClosed()) || isCursorNoLongerOpen(e)) {
+                log.debug("Caught {} (message={}) for subscription {}, this might happen when a subscription is paused or cancelled.", e.getClass().getName(), e.getMessage(), subscriptionId, e);
+            } else if (isChangeStreamHistoryLost(e)) {
+                if (restartSubscriptionsOnChangeStreamHistoryLost) {
+                    log.warn("There was not enough oplog to resume subscription {}, will restart subscription from current time.", subscriptionId, e);
+                    currentStartAt.set(StartAt.now());
+                    throw e;
+                } else {
+                    log.error("There was not enough oplog to resume subscription {}, will not restart subscription! Consider removing the subscription from the durable storage or use a catch-up subscription to get up to speed if needed.", subscriptionId, e);
+                }
+            } else if (shutdown) {
+                log.debug("Subscription {} is shutting down, ignoring {}.", subscriptionId, e.getClass().getName(), e);
+            } else {
+                log.warn("Error caught for subscription {}: {} {}. Will restart!", subscriptionId, e.getClass().getName(), e.getMessage(), e);
+                throw e;
+            }
         } finally {
-            internalSubscription.stopped();
+            if (internalSubscription != null) {
+                internalSubscription.stopped();
+            }
         }
+    }
+
+    private static boolean isCursorNoLongerOpen(Throwable throwable) {
+        return throwable instanceof IllegalStateException && throwable.getMessage() != null && throwable.getMessage().startsWith("Cursor") && throwable.getMessage().endsWith("is not longer open.");
+    }
+
+    private static boolean isChangeStreamHistoryLost(Throwable throwable) {
+        return throwable instanceof MongoCommandException mongoCommandException && mongoCommandException.getErrorCode() == MongoCommons.CHANGE_STREAM_HISTORY_LOST_ERROR_CODE;
     }
 
     private static List<Bson> createPipeline(TimeRepresentation timeRepresentation, @Nullable SubscriptionFilter filter) {
@@ -321,8 +385,10 @@ public class NativeMongoSubscriptionModel implements PositionAwareSubscriptionMo
         running = true;
 
         CountDownLatch startedLatch = new CountDownLatch(1);
+        // Reuses the same currentStartAt reference so a resume continues from the position of the last event
+        // delivered before the subscription was paused, rather than replaying (or skipping) from the original StartAt.
         Runnable newSubscription = () -> newInternalSubscription(subscriptionId, internalSubscription.filter,
-                internalSubscription.startAt, internalSubscription.action, startedLatch);
+                internalSubscription.currentStartAt, internalSubscription.action, startedLatch);
         startSubscription(newSubscription);
 
         return new NativeMongoSubscription(subscriptionId, startedLatch);
@@ -353,14 +419,15 @@ public class NativeMongoSubscriptionModel implements PositionAwareSubscriptionMo
         final CountDownLatch startedLatch;
         final CountDownLatch stoppedLatch;
         final MongoChangeStreamCursor<ChangeStreamDocument<Document>> cursor;
-        final StartAt startAt;
+        final AtomicReference<StartAt> currentStartAt;
         final Consumer<CloudEvent> action;
+        private final AtomicBoolean intentionallyClosed = new AtomicBoolean(false);
 
-        private InternalSubscription(MongoChangeStreamCursor<ChangeStreamDocument<Document>> cursor, StartAt startAtSupplier, Consumer<CloudEvent> action, SubscriptionFilter filter, CountDownLatch startedLatch) {
+        private InternalSubscription(MongoChangeStreamCursor<ChangeStreamDocument<Document>> cursor, AtomicReference<StartAt> currentStartAt, Consumer<CloudEvent> action, SubscriptionFilter filter, CountDownLatch startedLatch) {
             this.filter = filter;
             this.startedLatch = startedLatch;
             this.cursor = cursor;
-            this.startAt = startAtSupplier;
+            this.currentStartAt = currentStartAt;
             this.action = action;
             this.stoppedLatch = new CountDownLatch(1);
         }
@@ -370,12 +437,12 @@ public class NativeMongoSubscriptionModel implements PositionAwareSubscriptionMo
             if (this == o) return true;
             if (!(o instanceof InternalSubscription)) return false;
             InternalSubscription that = (InternalSubscription) o;
-            return Objects.equals(filter, that.filter) && Objects.equals(startedLatch, that.startedLatch) && Objects.equals(stoppedLatch, that.stoppedLatch) && Objects.equals(cursor, that.cursor) && Objects.equals(startAt, that.startAt) && Objects.equals(action, that.action);
+            return Objects.equals(filter, that.filter) && Objects.equals(startedLatch, that.startedLatch) && Objects.equals(stoppedLatch, that.stoppedLatch) && Objects.equals(cursor, that.cursor) && Objects.equals(currentStartAt, that.currentStartAt) && Objects.equals(action, that.action);
         }
 
         @Override
         public int hashCode() {
-            return Objects.hash(filter, startedLatch, stoppedLatch, cursor, startAt, action);
+            return Objects.hash(filter, startedLatch, stoppedLatch, cursor, currentStartAt, action);
         }
 
         void started() {
@@ -386,6 +453,10 @@ public class NativeMongoSubscriptionModel implements PositionAwareSubscriptionMo
             stoppedLatch.countDown();
         }
 
+        boolean isIntentionallyClosed() {
+            return intentionallyClosed.get();
+        }
+
         public boolean waitUntilStopped(Duration duration) {
             try {
                 return stoppedLatch.await(duration.toMillis(), MILLISECONDS);
@@ -394,7 +465,10 @@ public class NativeMongoSubscriptionModel implements PositionAwareSubscriptionMo
             }
         }
 
+        // Marked before closing so the change-stream error this deliberately triggers is recognized as benign
+        // (pause/cancel/shutdown) rather than an unexpected failure that should restart the subscription.
         public void close() {
+            intentionallyClosed.set(true);
             try {
                 cursor.close();
             } catch (Exception e) {

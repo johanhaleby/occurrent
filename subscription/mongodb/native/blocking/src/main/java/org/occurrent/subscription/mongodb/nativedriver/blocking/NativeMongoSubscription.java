@@ -32,6 +32,11 @@ public record NativeMongoSubscription(String subscriptionId, CountDownLatch subs
         return subscriptionId;
     }
 
+    /**
+     * Note that this only signals that the change stream cursor has been acquired, not that MongoDB has confirmed
+     * the cursor is healthy; a failure right after this returns is still possible and will trigger the subscription
+     * model's own restart-on-error handling.
+     */
     @Override
     public boolean waitUntilStarted(Duration timeout) {
         Timeout safeTimeout = DurationToTimeoutConverter.convertDurationToTimeout(timeout);
