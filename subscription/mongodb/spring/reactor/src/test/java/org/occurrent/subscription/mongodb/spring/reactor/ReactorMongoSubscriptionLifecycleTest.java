@@ -184,11 +184,14 @@ public class ReactorMongoSubscriptionLifecycleTest {
 
     @Test
     void cancelling_a_subscription_forgets_it_and_stops_delivery() {
-        // Given
+        // Given: an explicit position from before the write, since waitUntilStarted() only signals that the change
+        // stream Flux was subscribed to, not that the server has acknowledged the command and the cursor is
+        // positioned, so a write right after it could otherwise land before the cursor is actually watching.
         LocalDateTime now = LocalDateTime.now();
+        StartAt beforeWrite = StartAt.subscriptionPosition(subscriptionModel.globalSubscriptionPosition().block());
         CopyOnWriteArrayList<CloudEvent> state = new CopyOnWriteArrayList<>();
         String subscriptionId = UUID.randomUUID().toString();
-        subscriptionModel.subscribe(subscriptionId, cloudEvent -> {
+        subscriptionModel.subscribe(subscriptionId, beforeWrite, cloudEvent -> {
             state.add(cloudEvent);
             return Mono.empty();
         }).waitUntilStarted().block(Duration.ofSeconds(10));
@@ -210,9 +213,13 @@ public class ReactorMongoSubscriptionLifecycleTest {
     @Test
     void a_subscription_that_terminates_with_an_unrecoverable_error_is_removed_from_running_and_can_be_resubscribed() {
         // Given: the action itself throws, which concatMap surfaces as a terminal error the outer retryWhen never
-        // sees, since it only covers the change stream, not the action.
+        // sees, since it only covers the change stream, not the action. An explicit position from before the write
+        // is used, since waitUntilStarted() only signals that the change stream Flux was subscribed to, not that the
+        // server has acknowledged the command and the cursor is positioned, so a write right after it could
+        // otherwise land before the cursor is actually watching.
         String subscriptionId = UUID.randomUUID().toString();
-        subscriptionModel.subscribe(subscriptionId, __ -> {
+        StartAt beforeWrite = StartAt.subscriptionPosition(subscriptionModel.globalSubscriptionPosition().block());
+        subscriptionModel.subscribe(subscriptionId, beforeWrite, __ -> {
             throw new RuntimeException("boom");
         }).waitUntilStarted().block(Duration.ofSeconds(10));
 
