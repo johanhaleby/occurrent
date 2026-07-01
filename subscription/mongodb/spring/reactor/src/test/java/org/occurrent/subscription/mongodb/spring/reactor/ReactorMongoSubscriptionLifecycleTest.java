@@ -41,6 +41,7 @@ import org.springframework.transaction.ReactiveTransactionManager;
 import org.testcontainers.junit.jupiter.Container;
 import org.testcontainers.junit.jupiter.Testcontainers;
 import org.testcontainers.mongodb.MongoDBContainer;
+import reactor.core.publisher.Flux;
 import reactor.core.publisher.Mono;
 
 import java.net.URI;
@@ -62,7 +63,7 @@ import static org.occurrent.time.TimeConversion.toLocalDateTime;
 /**
  * Tests the named, lifecycle-managed subscriptions ({@link org.occurrent.subscription.api.reactor.Subscribable},
  * {@link org.occurrent.subscription.api.reactor.SubscriptionModelLifeCycle}) that {@link ReactorMongoSubscriptionModel}
- * adds on top of the plain {@link reactor.core.publisher.Flux} primitive. Mirrors {@code NativeMongoSubscriptionModelTest}'s
+ * adds on top of the plain {@link Flux} primitive. Mirrors {@code NativeMongoSubscriptionModelTest}'s
  * {@code LifeCycleTest}.
  */
 @Testcontainers
@@ -203,8 +204,8 @@ public class ReactorMongoSubscriptionLifecycleTest {
         assertThat(subscriptionModel.isPaused(pausedId)).isFalse();
     }
 
-    private reactor.core.publisher.Flux<CloudEvent> serialize(DomainEvent e) {
-        return reactor.core.publisher.Flux.just(CloudEventBuilder.v1()
+    private Flux<CloudEvent> serialize(DomainEvent e) {
+        return Flux.just(CloudEventBuilder.v1()
                 .withId(e.eventId())
                 .withSource(URI.create("http://name"))
                 .withType(e.getClass().getName())

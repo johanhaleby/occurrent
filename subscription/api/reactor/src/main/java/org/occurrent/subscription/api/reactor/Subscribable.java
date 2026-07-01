@@ -21,13 +21,14 @@ import org.jspecify.annotations.NullMarked;
 import org.jspecify.annotations.Nullable;
 import org.occurrent.subscription.StartAt;
 import org.occurrent.subscription.SubscriptionFilter;
+import reactor.core.publisher.Flux;
 import reactor.core.publisher.Mono;
 
 import java.util.function.Function;
 
 /**
  * A named, lifecycle-managed counterpart to the plain reactive {@link SubscriptionModel#subscribe(SubscriptionFilter, StartAt)}
- * primitive. Where that primitive returns a bare {@link reactor.core.publisher.Flux} the caller subscribes to and
+ * primitive. Where that primitive returns a bare {@link Flux} the caller subscribes to and
  * disposes itself, a {@code Subscribable} tracks the subscription by id so it can be paused, resumed, and cancelled
  * through {@link SubscriptionModelLifeCycle}.
  */
