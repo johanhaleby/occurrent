@@ -246,7 +246,7 @@ public class ReactorMongoSubscriptionModelResilienceTest {
     class PositionTrackingTest {
 
         @Test
-        void tracks_the_position_of_the_last_delivered_event_so_a_retry_does_not_replay_it() {
+        void tracks_the_position_of_the_last_change_stream_document_received_so_a_retry_does_not_replay_it() {
             // Given: subscribe from an explicit position (an operation time from before event 1 exists, not "now",
             // which is a no-op that applies no explicit position at all) so every (re)connect genuinely resumes from
             // whatever position is currently tracked, rather than opening a plain, position-less change stream that
