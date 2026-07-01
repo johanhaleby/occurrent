@@ -24,8 +24,9 @@ import java.time.Duration;
 import static java.util.Objects.requireNonNull;
 
 /**
- * Represents a unique subscription to a subscription. Subscriptions are typically started in a background thread
- * and you may wish to wait ({@link #waitUntilStarted()}) for them to start before continuing.
+ * Represents a subscription instance started by a subscription model's {@code subscribe(...)} call. It's typically
+ * started in a background thread and you may wish to wait ({@link #waitUntilStarted()}) for it to start before
+ * continuing.
  * <p>
  * Unlike the blocking {@code Subscription}, {@link #waitUntilStarted()} returns a {@link Mono} rather than blocking
  * the calling thread. "Started" means the underlying change stream has been subscribed to, not that the server has

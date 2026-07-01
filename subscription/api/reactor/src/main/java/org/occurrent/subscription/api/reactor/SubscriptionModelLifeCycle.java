@@ -20,8 +20,9 @@ import org.jspecify.annotations.NullMarked;
 
 /**
  * Defines life-cycle methods for reactive subscription models and subscriptions. Mirrors the blocking
- * {@code SubscriptionModelLifeCycle}. The methods here manage in-memory bookkeeping (which named subscriptions are
- * running, paused, or gone) rather than doing I/O themselves, so they are synchronous rather than returning a
+ * {@code SubscriptionModelLifeCycle}. These methods return synchronously, updating in-memory bookkeeping (which
+ * named subscriptions are running, paused, or gone) without waiting for the asynchronous I/O that starting or
+ * stopping a subscription can trigger in the background, which is why they return {@code void} rather than a
  * {@code Mono}/{@code Flux}.
  */
 @NullMarked
