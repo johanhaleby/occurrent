@@ -44,6 +44,7 @@ import org.testcontainers.junit.jupiter.Testcontainers;
 import org.testcontainers.mongodb.MongoDBContainer;
 import reactor.core.publisher.Flux;
 import reactor.core.publisher.Mono;
+import reactor.test.StepVerifier;
 
 import java.net.URI;
 import java.time.Duration;
@@ -105,10 +106,13 @@ public class ReactorMongoSubscriptionLifecycleTest {
 
     @Test
     void named_subscription_delivers_events_to_the_action() {
-        // Given
+        // Given: an explicit position from before the write, since waitUntilStarted() only signals that the change
+        // stream Flux was subscribed to, not that the server has acknowledged the command and the cursor is
+        // positioned, so a write right after it could otherwise land before the cursor is actually watching.
         LocalDateTime now = LocalDateTime.now();
+        StartAt beforeWrite = StartAt.subscriptionPosition(subscriptionModel.globalSubscriptionPosition().block());
         CopyOnWriteArrayList<CloudEvent> state = new CopyOnWriteArrayList<>();
-        subscriptionModel.subscribe(UUID.randomUUID().toString(), cloudEvent -> {
+        subscriptionModel.subscribe(UUID.randomUUID().toString(), beforeWrite, cloudEvent -> {
             state.add(cloudEvent);
             return Mono.empty();
         }).waitUntilStarted().block(Duration.ofSeconds(10));
@@ -147,11 +151,14 @@ public class ReactorMongoSubscriptionLifecycleTest {
 
     @Test
     void pausing_a_subscription_stops_delivery_and_resuming_continues_without_replay() {
-        // Given
+        // Given: an explicit position from before the write, since waitUntilStarted() only signals that the change
+        // stream Flux was subscribed to, not that the server has acknowledged the command and the cursor is
+        // positioned, so a write right after it could otherwise land before the cursor is actually watching.
         LocalDateTime now = LocalDateTime.now();
+        StartAt beforeWrite = StartAt.subscriptionPosition(subscriptionModel.globalSubscriptionPosition().block());
         CopyOnWriteArrayList<CloudEvent> state = new CopyOnWriteArrayList<>();
         String subscriptionId = UUID.randomUUID().toString();
-        subscriptionModel.subscribe(subscriptionId, StartAt.now(), cloudEvent -> {
+        subscriptionModel.subscribe(subscriptionId, beforeWrite, cloudEvent -> {
             state.add(cloudEvent);
             return Mono.empty();
         }).waitUntilStarted().block(Duration.ofSeconds(10));
@@ -243,6 +250,21 @@ public class ReactorMongoSubscriptionLifecycleTest {
         // one resumeSubscription starts here.
         await().atMost(10, SECONDS).with().pollInterval(Duration.of(20, MILLIS)).untilAsserted(() -> assertThat(state).hasSize(1));
         assertThat(state).extracting(CloudEvent::getId).doesNotHaveDuplicates();
+    }
+
+    @Test
+    void wait_until_started_does_not_complete_for_a_subscription_created_while_the_model_is_stopped() {
+        // Given
+        subscriptionModel.stop();
+        Subscription subscription = subscriptionModel.subscribe(UUID.randomUUID().toString(), __ -> Mono.empty());
+
+        // Then: it never actually starts while paused, so waitUntilStarted() on this handle never completes,
+        // unlike before the fix where it misleadingly completed via doOnSubscribe just before being disposed.
+        StepVerifier.create(subscription.waitUntilStarted())
+                .expectSubscription()
+                .expectNoEvent(Duration.ofMillis(500))
+                .thenCancel()
+                .verify(Duration.ofSeconds(5));
     }
 
     private Flux<CloudEvent> serialize(DomainEvent e) {

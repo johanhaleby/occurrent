@@ -46,6 +46,7 @@ import org.springframework.data.mongodb.core.ChangeStreamOptions;
 import org.springframework.data.mongodb.core.ChangeStreamOptions.ChangeStreamOptionsBuilder;
 import org.springframework.data.mongodb.core.ReactiveMongoOperations;
 import reactor.core.Disposable;
+import reactor.core.Disposables;
 import reactor.core.publisher.Flux;
 import reactor.core.publisher.Mono;
 import reactor.core.publisher.Sinks;
@@ -145,6 +146,13 @@ public class ReactorMongoSubscriptionModel implements PositionAwareSubscriptionM
     }
 
     private Subscription startInternalSubscription(String subscriptionId, @Nullable SubscriptionFilter filter, AtomicReference<StartAt> currentStartAt, Function<CloudEvent, Mono<Void>> action) {
+        if (!running) {
+            // The model is stopped: don't subscribe at all, so waitUntilStarted() doesn't complete successfully for
+            // a subscription that won't deliver anything until start(true)/resumeSubscription actually starts it.
+            InternalSubscription internalSubscription = new InternalSubscription(Disposables.disposed(), currentStartAt, filter, action, Mono.never());
+            pausedSubscriptions.put(subscriptionId, internalSubscription);
+            return new ReactorMongoSubscription(subscriptionId, internalSubscription.started);
+        }
         Sinks.Empty<Void> startedSink = Sinks.empty();
         Disposable disposable = resilientChangeStream(filter, currentStartAt, startedSink)
                 .concatMap(action)
@@ -157,14 +165,7 @@ public class ReactorMongoSubscriptionModel implements PositionAwareSubscriptionM
                             startedSink.tryEmitError(throwable);
                         });
         InternalSubscription internalSubscription = new InternalSubscription(disposable, currentStartAt, filter, action, startedSink.asMono());
-        if (running) {
-            runningSubscriptions.put(subscriptionId, internalSubscription);
-        } else {
-            // The model is stopped: dispose immediately so this subscription doesn't deliver events while paused,
-            // matching pauseSubscription's own contract. start(true)/resumeSubscription is what actually starts it.
-            disposable.dispose();
-            pausedSubscriptions.put(subscriptionId, internalSubscription);
-        }
+        runningSubscriptions.put(subscriptionId, internalSubscription);
         return new ReactorMongoSubscription(subscriptionId, internalSubscription.started);
     }
 
