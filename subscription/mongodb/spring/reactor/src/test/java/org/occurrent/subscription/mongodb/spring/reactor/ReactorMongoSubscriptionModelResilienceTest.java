@@ -137,6 +137,21 @@ public class ReactorMongoSubscriptionModelResilienceTest {
         return throwingOperations;
     }
 
+    /**
+     * Wraps {@code realMongoOperations} so that the very first {@code changeStream(...)} call delivers exactly one
+     * real event and then errors with {@code exception}, simulating a disruption that happens right after a
+     * subscription has genuinely delivered something, while every subsequent call behaves exactly like the real
+     * operations. Used to prove a retry resumes from the position of that delivered event rather than replaying it.
+     */
+    @SuppressWarnings("unchecked")
+    private ReactiveMongoOperations operationsThatFailAfterDeliveringOneEvent(RuntimeException exception) {
+        ReactiveMongoOperations throwingOperations = mock(ReactiveMongoOperations.class);
+        when(throwingOperations.changeStream(eq("events"), any(ChangeStreamOptions.class), eq(Document.class)))
+                .thenAnswer(invocation -> realMongoOperations.changeStream("events", invocation.getArgument(1), Document.class).take(1).concatWith(Flux.error(exception)))
+                .thenAnswer(invocation -> realMongoOperations.changeStream("events", invocation.getArgument(1), Document.class));
+        return throwingOperations;
+    }
+
     private static MongoCommandException changeStreamHistoryLostException() {
         List<BsonElement> elements = new ArrayList<>();
         elements.add(new BsonElement("code", new BsonInt32(286)));
@@ -227,25 +242,32 @@ public class ReactorMongoSubscriptionModelResilienceTest {
     class PositionTrackingTest {
 
         @Test
-        void tracks_the_position_of_the_last_delivered_event_so_a_resubscribe_does_not_replay_it() {
-            // Given: subscribe against the real operations (no injected failure), confirm the first event is
-            // genuinely delivered, then resubscribe with StartAt.now() (the "default" position) and confirm the
-            // already-delivered event is not replayed, proving the position resolution used by resubscribe-after-error
-            // does not simply restart from the beginning.
+        void tracks_the_position_of_the_last_delivered_event_so_a_retry_does_not_replay_it() {
+            // Given: subscribe from an explicit position (an operation time from before event 1 exists, not "now",
+            // which is a no-op that applies no explicit position at all) so every (re)connect genuinely resumes from
+            // whatever position is currently tracked, rather than opening a plain, position-less change stream that
+            // happens to pick up recent writes regardless of tracking. The first changeStream(...) call delivers
+            // event 1 for real, then errors, forcing a retry.
             LocalDateTime now = LocalDateTime.now();
-            ReactorMongoSubscriptionModel subscriptionModel = new ReactorMongoSubscriptionModel(realMongoOperations, "events", TimeRepresentation.RFC_3339_STRING,
+            ReactorMongoSubscriptionModel realModel = new ReactorMongoSubscriptionModel(realMongoOperations, "events", TimeRepresentation.RFC_3339_STRING);
+            StartAt beforeEvent1 = StartAt.subscriptionPosition(realModel.globalSubscriptionPosition().block());
+            ReactiveMongoOperations throwingOperations = operationsThatFailAfterDeliveringOneEvent(failoverLikeException());
+            ReactorMongoSubscriptionModel subscriptionModel = new ReactorMongoSubscriptionModel(throwingOperations, "events", TimeRepresentation.RFC_3339_STRING,
                     ReactorMongoSubscriptionModelConfig.withConfig().backoff(Duration.of(20, MILLIS), Duration.of(200, MILLIS)));
 
             CopyOnWriteArrayList<CloudEvent> state = new CopyOnWriteArrayList<>();
-            disposables.add(subscriptionModel.subscribe(StartAt.now()).subscribe(state::add));
+            disposables.add(subscriptionModel.subscribe(beforeEvent1).subscribe(state::add));
 
             mongoEventStore.write("1", 0, serialize(new NameDefined(UUID.randomUUID().toString(), now, "name", "name1"))).block();
             await().atMost(5, SECONDS).with().pollInterval(Duration.of(20, MILLIS)).untilAsserted(() -> assertThat(state).hasSize(1));
 
-            // When: write a second event and confirm it is delivered too, with no duplicate of the first.
+            // When: the retry's changeStream(...) call (the second one) has to actually happen before writing event
+            // 2, so the retry's own resumeAt/startAfter position is what's being exercised here, not the original.
+            verify(throwingOperations, timeout(5000).times(2)).changeStream(eq("events"), any(ChangeStreamOptions.class), eq(Document.class));
             mongoEventStore.write("2", 0, serialize(new NameDefined(UUID.randomUUID().toString(), now.plusSeconds(1), "name2", "name2"))).block();
 
-            // Then
+            // Then: event 2 is delivered, and event 1 is not replayed by the retry resuming from the original,
+            // pre-event-1 position instead of the tracked one.
             await().atMost(5, SECONDS).with().pollInterval(Duration.of(20, MILLIS)).untilAsserted(() -> assertThat(state).hasSize(2));
             assertThat(state).extracting(CloudEvent::getId).doesNotHaveDuplicates();
         }
