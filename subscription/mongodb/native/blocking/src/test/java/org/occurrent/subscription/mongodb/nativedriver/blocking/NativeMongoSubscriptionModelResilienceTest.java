@@ -21,10 +21,13 @@ import com.mongodb.MongoCommandException;
 import com.mongodb.MongoSocketReadException;
 import com.mongodb.ConnectionString;
 import com.mongodb.ServerAddress;
+import com.mongodb.client.ChangeStreamIterable;
+import com.mongodb.client.MongoChangeStreamCursor;
 import com.mongodb.client.MongoClient;
 import com.mongodb.client.MongoClients;
 import com.mongodb.client.MongoCollection;
 import com.mongodb.client.MongoDatabase;
+import com.mongodb.client.model.changestream.ChangeStreamDocument;
 import io.cloudevents.CloudEvent;
 import io.cloudevents.core.builder.CloudEventBuilder;
 import org.bson.BsonDocument;
@@ -72,8 +75,10 @@ import static java.util.concurrent.TimeUnit.SECONDS;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.awaitility.Awaitility.await;
 import static org.awaitility.Durations.FIVE_SECONDS;
+import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyList;
 import static org.mockito.ArgumentMatchers.eq;
+import static org.mockito.Mockito.doThrow;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.when;
 import static org.occurrent.functional.CheckedFunction.unchecked;
@@ -143,6 +148,22 @@ public class NativeMongoSubscriptionModelResilienceTest {
         return throwingCollection;
     }
 
+    /**
+     * Wraps {@code realEventCollection} so that {@code watch(...)} succeeds (registering the subscription normally),
+     * but the cursor throws {@code exception} as soon as it is iterated, simulating a change-stream disruption that
+     * happens mid-subscription rather than at cursor-open time.
+     */
+    @SuppressWarnings("unchecked")
+    private MongoCollection<Document> collectionThatFailsDuringIteration(RuntimeException exception) {
+        MongoChangeStreamCursor<ChangeStreamDocument<Document>> throwingCursor = mock(MongoChangeStreamCursor.class);
+        doThrow(exception).when(throwingCursor).forEachRemaining(any());
+        ChangeStreamIterable<Document> throwingIterable = mock(ChangeStreamIterable.class);
+        when(throwingIterable.cursor()).thenReturn(throwingCursor);
+        MongoCollection<Document> throwingCollection = mock(MongoCollection.class);
+        when(throwingCollection.watch(anyList(), eq(Document.class))).thenReturn(throwingIterable);
+        return throwingCollection;
+    }
+
     private static MongoCommandException changeStreamHistoryLostException() {
         List<BsonElement> elements = new ArrayList<>();
         elements.add(new BsonElement("code", new BsonInt32(286)));
@@ -181,7 +202,29 @@ public class NativeMongoSubscriptionModelResilienceTest {
         }
 
         @Test
-        void does_not_restart_subscription_when_not_configured_to_do_so() throws InterruptedException {
+        void removes_the_subscription_entry_when_history_is_lost_mid_subscription_and_not_configured_to_restart() {
+            // Given: unlike collectionThatFailsOnce, the failure happens once the cursor is already registered in
+            // runningSubscriptions, proving the entry isn't leaked once the subscription gives up.
+            MongoCollection<Document> throwingCollection = collectionThatFailsDuringIteration(changeStreamHistoryLostException());
+            subscriptionModel = new NativeMongoSubscriptionModel(database, throwingCollection, TimeRepresentation.RFC_3339_STRING, subscriptionExecutor,
+                    NativeMongoSubscriptionModelConfig.withConfig().retryStrategy(exponentialBackoff(Duration.of(20, MILLIS), Duration.of(200, MILLIS), 2)));
+            String subscriptionId = UUID.randomUUID().toString();
+
+            // When
+            subscriptionModel.subscribe(subscriptionId, __ -> {}).waitUntilStarted(Duration.ofSeconds(2));
+
+            // Then
+            await().atMost(Duration.ofSeconds(2)).untilAsserted(() -> {
+                assertThat(subscriptionModel.isRunning(subscriptionId)).isFalse();
+                assertThat(subscriptionModel.isPaused(subscriptionId)).isFalse();
+            });
+            // The strongest proof the entry isn't leaked: the id is free to reuse. If it were still in either map,
+            // this would throw IllegalArgumentException("Subscription ... is already defined.").
+            subscriptionModel.subscribe(subscriptionId, __ -> {}).waitUntilStarted(Duration.ofSeconds(2));
+        }
+
+        @Test
+        void does_not_restart_subscription_when_not_configured_to_do_so() {
             // Given
             MongoCollection<Document> throwingCollection = collectionThatFailsOnce(changeStreamHistoryLostException());
             subscriptionModel = new NativeMongoSubscriptionModel(database, throwingCollection, TimeRepresentation.RFC_3339_STRING, subscriptionExecutor,
@@ -194,11 +237,10 @@ public class NativeMongoSubscriptionModelResilienceTest {
 
             // When
             mongoEventStore.write("1", 0, serialize(new NameDefined(UUID.randomUUID().toString(), now, "name", "name1")));
-            Thread.sleep(500);
 
             // Then
             assertThat(started).isFalse();
-            assertThat(state).isEmpty();
+            await().atMost(Duration.ofSeconds(1)).during(Duration.ofMillis(500)).untilAsserted(() -> assertThat(state).isEmpty());
             assertThat(subscriptionModel.isRunning(subscriptionId)).isFalse();
         }
     }

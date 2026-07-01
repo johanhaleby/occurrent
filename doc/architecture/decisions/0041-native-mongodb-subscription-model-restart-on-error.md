@@ -33,7 +33,7 @@ Add `NativeMongoSubscriptionModelConfig`, mirroring `SpringMongoSubscriptionMode
 
 ## Consequences
 
-- `NativeMongoSubscriptionModel` survives the same class of MongoDB operational disruption `SpringMongoSubscriptionModel` does: failovers, transient network errors, and (opt-in) change-stream history loss, recovering gap-free from the position of the last event it actually delivered rather than replaying or skipping.
+- `NativeMongoSubscriptionModel` survives the same class of MongoDB operational disruption `SpringMongoSubscriptionModel` does: failovers, transient network errors, and (opt-in) change-stream history loss, recovering gap-free from the position of the last change-stream document it read rather than replaying or skipping.
 - `resumeSubscription` no longer replays (fixed `StartAt`) or drops events written during the pause window (`StartAt.now()`/default); it continues from where the subscription left off.
 - The restart-on-error behavior reuses the model's existing per-event `RetryStrategy` and backoff rather than introducing a second retry mechanism, keeping the change small and avoiding a parallel "restart in a new thread" scheme like the one `SpringMongoSubscriptionModel` needs (native does not need it, since its retry wrapper already runs on a dedicated per-subscription thread).
 - Existing constructors are unchanged; the config-object constructor is additive.

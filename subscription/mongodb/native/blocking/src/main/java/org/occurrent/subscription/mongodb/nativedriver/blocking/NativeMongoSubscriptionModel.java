@@ -166,7 +166,7 @@ public class NativeMongoSubscriptionModel implements PositionAwareSubscriptionMo
         requireNonNull(database, MongoDatabase.class.getSimpleName() + " cannot be null");
         requireNonNull(eventCollection, "Event collection cannot be null");
         requireNonNull(timeRepresentation, "Time representation cannot be null");
-        requireNonNull(subscriptionExecutor, "CloudEventDispatcher cannot  be null");
+        requireNonNull(subscriptionExecutor, "subscriptionExecutor cannot be null");
         requireNonNull(config, NativeMongoSubscriptionModelConfig.class.getSimpleName() + " cannot be null");
         this.database = database;
         this.retryStrategy = config.retryStrategy;
@@ -204,9 +204,10 @@ public class NativeMongoSubscriptionModel implements PositionAwareSubscriptionMo
         cloudEventDispatcher.execute(executeWithRetry(internalSubscription, NOT_SHUTDOWN, retryStrategy));
     }
 
-    // currentStartAt tracks the position of the last event actually delivered from the change stream (updated below),
-    // shared with the outer executeWithRetry(internalSubscription, ...) wrapper in startSubscription so that a restart
-    // (rethrown below) or a resume (see resumeSubscription) continues gap-free from there instead of the original StartAt.
+    // currentStartAt tracks the position of the last change-stream document read (updated below, whether or not it
+    // produced a delivered CloudEvent), shared with the outer executeWithRetry(internalSubscription, ...) wrapper in
+    // startSubscription so that a restart (rethrown below) or a resume (see resumeSubscription) continues gap-free
+    // from there instead of the original StartAt.
     // The try block spans opening the cursor too, not just iterating it, since a change-stream error (e.g. history lost,
     // a failover) can just as well surface when the cursor is (re-)opened as while iterating it.
     private void newInternalSubscription(String subscriptionId, SubscriptionFilter filter, AtomicReference<StartAt> currentStartAt, Consumer<CloudEvent> action, CountDownLatch subscriptionStartedLatch) {
@@ -244,6 +245,8 @@ public class NativeMongoSubscriptionModel implements PositionAwareSubscriptionMo
                     throw e;
                 } else {
                     log.error("There was not enough oplog to resume subscription {}, will not restart subscription! Consider removing the subscription from the durable storage or use a catch-up subscription to get up to speed if needed.", subscriptionId, e);
+                    runningSubscriptions.remove(subscriptionId);
+                    pausedSubscriptions.remove(subscriptionId);
                 }
             } else if (shutdown) {
                 log.debug("Subscription {} is shutting down, ignoring {}.", subscriptionId, e.getClass().getName(), e);
@@ -385,8 +388,8 @@ public class NativeMongoSubscriptionModel implements PositionAwareSubscriptionMo
         running = true;
 
         CountDownLatch startedLatch = new CountDownLatch(1);
-        // Reuses the same currentStartAt reference so a resume continues from the position of the last event
-        // delivered before the subscription was paused, rather than replaying (or skipping) from the original StartAt.
+        // Reuses the same currentStartAt reference so a resume continues from the position of the last change-stream
+        // document read before the subscription was paused, rather than replaying (or skipping) from the original StartAt.
         Runnable newSubscription = () -> newInternalSubscription(subscriptionId, internalSubscription.filter,
                 internalSubscription.currentStartAt, internalSubscription.action, startedLatch);
         startSubscription(newSubscription);

@@ -11,9 +11,9 @@ DCB is a capability layered on the existing CloudEvent storage, not a new store 
 #### Changes
 
 * Hardened `NativeMongoSubscriptionModel` against the MongoDB operational failures `SpringMongoSubscriptionModel` already survives in production: replica-set failovers, transient network errors, and change-stream history loss.
-  * A change-stream error (a failover, a transient network error, or anything else the driver itself does not resume) now restarts the subscription with the existing `RetryStrategy` backoff instead of silently dying, resuming from the position of the last event actually delivered so recovery is gap-free rather than a replay or a skipped window.
+  * A change-stream error (a failover, a transient network error, or anything else the driver itself does not resume) now restarts the subscription with the existing `RetryStrategy` backoff instead of silently dying, resuming from the position of the last change-stream document read so recovery is gap-free rather than a replay or a skipped window.
   * `MongoCommandException`s with error code 286 (`ChangeStreamHistoryLost`) restart from `StartAt.now()` only when configured to via the new `NativeMongoSubscriptionModelConfig.restartSubscriptionsOnChangeStreamHistoryLost(true)` (default `false`, matching the Spring default); otherwise the subscription stops and logs an error, same as `SpringMongoSubscriptionModel`.
-  * `resumeSubscription` now continues from the position of the last event delivered before the pause instead of the subscription's original `StartAt`, so pausing and resuming neither replays events nor drops events written while paused.
+  * `resumeSubscription` now continues from the position of the last change-stream document read before the pause instead of the subscription's original `StartAt`, so pausing and resuming neither replays events nor drops events written while paused.
   * See [ADR 41](doc/architecture/decisions/0041-native-mongodb-subscription-model-restart-on-error.md).
 
 * Added a reactive query DSL, so the reactive stack has the same typed-query ergonomics as the blocking one, and the reactive DCB DSL's domain event queries now delegate to it.
