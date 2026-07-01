@@ -204,6 +204,34 @@ public class ReactorMongoSubscriptionLifecycleTest {
         assertThat(subscriptionModel.isPaused(pausedId)).isFalse();
     }
 
+    @Test
+    void a_named_subscription_created_while_the_model_is_stopped_does_not_deliver_events_until_started() {
+        // Given
+        subscriptionModel.stop();
+        CopyOnWriteArrayList<CloudEvent> state = new CopyOnWriteArrayList<>();
+        String subscriptionId = UUID.randomUUID().toString();
+        subscriptionModel.subscribe(subscriptionId, cloudEvent -> {
+            state.add(cloudEvent);
+            return Mono.empty();
+        });
+
+        // Then: it's tracked as paused, not running, and an event written while stopped is not delivered
+        assertThat(subscriptionModel.isPaused(subscriptionId)).isTrue();
+        assertThat(subscriptionModel.isRunning(subscriptionId)).isFalse();
+        mongoEventStore.write("1", 0, serialize(new NameDefined(UUID.randomUUID().toString(), LocalDateTime.now(), "name", "name1"))).block();
+        await().atMost(Duration.ofSeconds(1)).during(Duration.ofMillis(500)).untilAsserted(() -> assertThat(state).isEmpty());
+
+        // When
+        subscriptionModel.start();
+        mongoEventStore.write("2", 0, serialize(new NameDefined(UUID.randomUUID().toString(), LocalDateTime.now(), "name", "name2"))).block();
+
+        // Then: exactly one delivery. If the subscription created while stopped had stayed live underneath instead
+        // of being disposed, this event would be delivered twice: once on that leaked subscription and once on the
+        // one resumeSubscription starts here.
+        await().atMost(10, SECONDS).with().pollInterval(Duration.of(20, MILLIS)).untilAsserted(() -> assertThat(state).hasSize(1));
+        assertThat(state).extracting(CloudEvent::getId).doesNotHaveDuplicates();
+    }
+
     private Flux<CloudEvent> serialize(DomainEvent e) {
         return Flux.just(CloudEventBuilder.v1()
                 .withId(e.eventId())

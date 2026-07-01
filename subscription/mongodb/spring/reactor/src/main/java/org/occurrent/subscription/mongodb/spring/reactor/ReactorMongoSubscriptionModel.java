@@ -154,6 +154,9 @@ public class ReactorMongoSubscriptionModel implements PositionAwareSubscriptionM
         if (running) {
             runningSubscriptions.put(subscriptionId, internalSubscription);
         } else {
+            // The model is stopped: dispose immediately so this subscription doesn't deliver events while paused,
+            // matching pauseSubscription's own contract. start(true)/resumeSubscription is what actually starts it.
+            disposable.dispose();
             pausedSubscriptions.put(subscriptionId, internalSubscription);
         }
         return new ReactorMongoSubscription(subscriptionId, internalSubscription.started);
@@ -173,8 +176,9 @@ public class ReactorMongoSubscriptionModel implements PositionAwareSubscriptionM
             ChangeStreamOptionsBuilder builder = MongoCommons.applyStartPosition(ChangeStreamOptions.builder(), ChangeStreamOptionsBuilder::startAfter, ChangeStreamOptionsBuilder::resumeAt, currentStartAt.get(), subscriptionModelContext);
             final ChangeStreamOptions changeStreamOptions = ApplyFilterToChangeStreamOptionsBuilder.applyFilter(timeRepresentation, filter, builder);
             Flux<ChangeStreamEvent<Document>> changeStream = mongo.changeStream(eventCollection, changeStreamOptions, Document.class);
-            // "Started" only means the change stream has been subscribed to, not that the server has confirmed the
-            // cursor is healthy, the same practical limitation NativeMongoSubscriptionModel's latch has.
+            // "Started" only means the change stream Flux has been subscribed to, not that the server has
+            // acknowledged the command and the cursor is positioned. This is weaker than NativeMongoSubscriptionModel's
+            // latch, which only fires after that blocking round trip has already completed.
             if (startedSink != null) {
                 changeStream = changeStream.doOnSubscribe(subscription -> startedSink.tryEmitEmpty());
             }
@@ -293,6 +297,7 @@ public class ReactorMongoSubscriptionModel implements PositionAwareSubscriptionM
         running = false;
         runningSubscriptions.values().forEach(internalSubscription -> internalSubscription.disposable.dispose());
         runningSubscriptions.clear();
+        pausedSubscriptions.values().forEach(internalSubscription -> internalSubscription.disposable.dispose());
         pausedSubscriptions.clear();
     }
 

@@ -28,7 +28,7 @@ import org.jspecify.annotations.NullMarked;
 public interface SubscriptionModelLifeCycle {
 
     /**
-     * Temporary stop the subscription model so that none of its subscriptions will receive any events.
+     * Temporarily stop the subscription model so that none of its subscriptions will receive any events.
      * It can be started again using {@link #start}.
      */
     void stop();

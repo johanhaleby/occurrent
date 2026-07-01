@@ -27,7 +27,8 @@ import java.time.Duration;
  * <p>
  * Unlike the blocking {@code Subscription}, {@link #waitUntilStarted()} returns a {@link Mono} rather than blocking
  * the calling thread. "Started" means the underlying change stream has been subscribed to, not that the server has
- * confirmed the cursor is healthy, the same practical limitation the blocking and native subscription models have.
+ * acknowledged the command and the cursor is positioned. This is weaker than the blocking and native subscription
+ * models, whose equivalent signal only fires after that blocking round trip has already completed.
  */
 @NullMarked
 public interface Subscription {
