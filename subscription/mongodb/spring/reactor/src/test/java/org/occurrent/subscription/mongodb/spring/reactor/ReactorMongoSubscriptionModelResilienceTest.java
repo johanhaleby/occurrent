@@ -45,6 +45,7 @@ import org.occurrent.mongodb.timerepresentation.TimeRepresentation;
 import org.occurrent.subscription.StartAt;
 import org.occurrent.testsupport.mongodb.FlushMongoDBExtension;
 import org.springframework.data.mongodb.ReactiveMongoTransactionManager;
+import org.springframework.data.mongodb.UncategorizedMongoDbException;
 import org.springframework.data.mongodb.core.ChangeStreamOptions;
 import org.springframework.data.mongodb.core.ReactiveMongoOperations;
 import org.springframework.data.mongodb.core.ReactiveMongoTemplate;
@@ -152,11 +153,14 @@ public class ReactorMongoSubscriptionModelResilienceTest {
         return throwingOperations;
     }
 
-    private static MongoCommandException changeStreamHistoryLostException() {
+    // Wrapped in UncategorizedMongoDbException since that's how Spring Data actually translates driver exceptions,
+    // exercising the same unwrap branch in ReactorMongoSubscriptionModel.isChangeStreamHistoryLost(...) that a raw
+    // MongoCommandException would skip. Mirrors SpringMongoSubscriptionModelTest's equivalent injection.
+    private static UncategorizedMongoDbException changeStreamHistoryLostException() {
         List<BsonElement> elements = new ArrayList<>();
         elements.add(new BsonElement("code", new BsonInt32(286)));
         elements.add(new BsonElement("codeName", new BsonString("ChangeStreamHistoryLost")));
-        return new MongoCommandException(new BsonDocument(elements), new ServerAddress());
+        return new UncategorizedMongoDbException("expected", new MongoCommandException(new BsonDocument(elements), new ServerAddress()));
     }
 
     /**
@@ -250,7 +254,9 @@ public class ReactorMongoSubscriptionModelResilienceTest {
             // event 1 for real, then errors, forcing a retry.
             LocalDateTime now = LocalDateTime.now();
             ReactorMongoSubscriptionModel realModel = new ReactorMongoSubscriptionModel(realMongoOperations, "events", TimeRepresentation.RFC_3339_STRING);
-            StartAt beforeEvent1 = StartAt.subscriptionPosition(realModel.globalSubscriptionPosition().block());
+            StartAt beforeEvent1 = StartAt.subscriptionPosition(realModel.globalSubscriptionPosition()
+                    .blockOptional()
+                    .orElseThrow(() -> new IllegalStateException("globalSubscriptionPosition() completed empty, the server may be prohibiting the hostInfo command")));
             ReactiveMongoOperations throwingOperations = operationsThatFailAfterDeliveringOneEvent(failoverLikeException());
             ReactorMongoSubscriptionModel subscriptionModel = new ReactorMongoSubscriptionModel(throwingOperations, "events", TimeRepresentation.RFC_3339_STRING,
                     ReactorMongoSubscriptionModelConfig.withConfig().backoff(Duration.of(20, MILLIS), Duration.of(200, MILLIS)));
