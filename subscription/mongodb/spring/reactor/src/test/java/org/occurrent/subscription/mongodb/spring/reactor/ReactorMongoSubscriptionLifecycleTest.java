@@ -44,6 +44,7 @@ import org.testcontainers.junit.jupiter.Testcontainers;
 import org.testcontainers.mongodb.MongoDBContainer;
 import reactor.core.publisher.Flux;
 import reactor.core.publisher.Mono;
+import reactor.core.publisher.Sinks;
 import reactor.test.StepVerifier;
 
 import java.net.URI;
@@ -51,6 +52,7 @@ import java.time.Duration;
 import java.time.LocalDateTime;
 import java.util.UUID;
 import java.util.concurrent.CopyOnWriteArrayList;
+import java.util.concurrent.atomic.AtomicInteger;
 
 import static java.time.ZoneOffset.UTC;
 import static java.time.temporal.ChronoUnit.MILLIS;
@@ -180,6 +182,42 @@ public class ReactorMongoSubscriptionLifecycleTest {
         // Then: the event written while paused is delivered exactly once, no replay of the first event
         await().atMost(10, SECONDS).with().pollInterval(Duration.of(20, MILLIS)).untilAsserted(() -> assertThat(state).hasSize(2));
         assertThat(state).extracting(CloudEvent::getId).doesNotHaveDuplicates();
+    }
+
+    @Test
+    void pausing_while_events_are_buffered_ahead_of_a_slow_action_does_not_lose_them_on_resume() {
+        // Given: the action blocks indefinitely on its first call, so the change stream underneath can keep
+        // reading (and, without the fix, keep advancing the tracked position for) further written events while
+        // that first call is still pending and nothing has reached the action a second time yet.
+        StartAt beforeWrite = StartAt.subscriptionPosition(subscriptionModel.globalSubscriptionPosition().block());
+        CopyOnWriteArrayList<CloudEvent> state = new CopyOnWriteArrayList<>();
+        Sinks.Empty<Void> releaseFirstAction = Sinks.empty();
+        AtomicInteger actionCallCount = new AtomicInteger();
+        String subscriptionId = UUID.randomUUID().toString();
+        subscriptionModel.subscribe(subscriptionId, beforeWrite, cloudEvent -> {
+            if (actionCallCount.getAndIncrement() == 0) {
+                return releaseFirstAction.asMono();
+            }
+            state.add(cloudEvent);
+            return Mono.empty();
+        }).waitUntilStarted().block(Duration.ofSeconds(10));
+
+        LocalDateTime now = LocalDateTime.now();
+        for (int i = 0; i < 5; i++) {
+            mongoEventStore.write(UUID.randomUUID().toString(), 0, serialize(new NameDefined(UUID.randomUUID().toString(), now.plusSeconds(i), "name", "name" + i))).block();
+        }
+
+        // When: give the change stream time to read ahead of the still-blocked first action call, then pause,
+        // discarding whatever it read, and resume.
+        Mono.delay(Duration.of(300, MILLIS)).block();
+        subscriptionModel.pauseSubscription(subscriptionId);
+        releaseFirstAction.tryEmitEmpty();
+
+        subscriptionModel.resumeSubscription(subscriptionId).waitUntilStarted().block(Duration.ofSeconds(10));
+
+        // Then: none of the 5 events are lost, even though they were read out of the change stream well before
+        // the blocked first action call ever completed.
+        await().atMost(10, SECONDS).untilAsserted(() -> assertThat(state).hasSize(5));
     }
 
     @Test

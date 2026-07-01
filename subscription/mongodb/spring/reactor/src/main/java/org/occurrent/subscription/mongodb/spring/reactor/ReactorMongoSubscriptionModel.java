@@ -55,6 +55,7 @@ import reactor.util.retry.Retry;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ConcurrentMap;
 import java.util.concurrent.atomic.AtomicReference;
+import java.util.function.Consumer;
 import java.util.function.Function;
 
 import static java.util.Objects.requireNonNull;
@@ -120,13 +121,16 @@ public class ReactorMongoSubscriptionModel implements PositionAwareSubscriptionM
     @Override
     public Flux<CloudEvent> subscribe(@Nullable SubscriptionFilter filter, StartAt startAt) {
         requireNonNull(startAt, StartAt.class.getSimpleName() + " cannot be null");
-        // currentStartAt tracks the position of the last change-stream document read (updated in changeStream(...)
-        // below, whether or not it produced a delivered CloudEvent), read again by resilientChangeStream(...) on
-        // every resubscribe that retryWhen triggers, so recovery from an error continues gap-free instead of
-        // replaying or skipping events. Flux.defer gives each subscriber to the returned Flux its own tracked position.
+        // currentStartAt tracks the position of the last change-stream document read (updated eagerly for every
+        // document changeStream(...) reads below, whether or not it produced a delivered CloudEvent), read again by
+        // resilientChangeStream(...) on every resubscribe that retryWhen triggers, so recovery from an error
+        // continues gap-free instead of replaying or skipping events. This is safe here because the caller owns
+        // consumption of the returned Flux directly, unlike the named-subscription path below, which defers
+        // tracking to actual action completion since it interposes its own buffering stage.
+        // Flux.defer gives each subscriber to the returned Flux its own tracked position.
         return Flux.defer(() -> {
             AtomicReference<StartAt> currentStartAt = new AtomicReference<>(startAt);
-            return resilientChangeStream(filter, currentStartAt, null);
+            return resilientChangeStream(filter, currentStartAt, currentStartAt::set, null);
         });
     }
 
@@ -158,8 +162,16 @@ public class ReactorMongoSubscriptionModel implements PositionAwareSubscriptionM
         // change stream options itself throws) runs the error handler below before subscribe() even returns,
         // which would otherwise try to remove an entry that was never put in yet.
         runningSubscriptions.put(subscriptionId, new InternalSubscription(Disposables.disposed(), currentStartAt, filter, action, startedSink.asMono()));
-        Disposable disposable = resilientChangeStream(filter, currentStartAt, startedSink)
-                .concatMap(action)
+        // The change stream's own eager, per-document-read tracking (used by the plain subscribe(...) above) is not
+        // used here: concatMap(action) can have several documents already read out of the change stream and
+        // buffered ahead of a slow action, and tracking eagerly would let a pause/cancel or a change-stream error
+        // resume past one of those buffered documents without ever handing it to action, losing it for good.
+        // Advancing currentStartAt only once action() completes means pausing, cancelling, or an automatic retry
+        // can at most redeliver the in-flight event, never skip one.
+        Disposable disposable = resilientChangeStream(filter, currentStartAt, __ -> {
+                }, startedSink)
+                .concatMap(cloudEvent -> action.apply(cloudEvent)
+                        .doOnSuccess(unused -> currentStartAt.set(StartAt.subscriptionPosition(PositionAwareCloudEvent.getSubscriptionPositionOrThrowIAE(cloudEvent)))))
                 .subscribe(unused -> {
                         }, throwable -> {
                             log.error("Subscription {} terminated with an unrecoverable error", subscriptionId, throwable);
@@ -180,14 +192,14 @@ public class ReactorMongoSubscriptionModel implements PositionAwareSubscriptionM
         return new ReactorMongoSubscription(subscriptionId, internalSubscription.started);
     }
 
-    private Flux<CloudEvent> resilientChangeStream(@Nullable SubscriptionFilter filter, AtomicReference<StartAt> currentStartAt, Sinks.@Nullable Empty<Void> startedSink) {
-        return changeStream(filter, currentStartAt, startedSink)
+    private Flux<CloudEvent> resilientChangeStream(@Nullable SubscriptionFilter filter, AtomicReference<StartAt> currentStartAt, Consumer<StartAt> onDocumentRead, Sinks.@Nullable Empty<Void> startedSink) {
+        return changeStream(filter, currentStartAt, onDocumentRead, startedSink)
                 .retryWhen(Retry.backoff(Long.MAX_VALUE, config.minBackoff)
                         .maxBackoff(config.maxBackoff)
                         .filter(throwable -> shouldRestart(throwable, currentStartAt)));
     }
 
-    private Flux<CloudEvent> changeStream(@Nullable SubscriptionFilter filter, AtomicReference<StartAt> currentStartAt, Sinks.@Nullable Empty<Void> startedSink) {
+    private Flux<CloudEvent> changeStream(@Nullable SubscriptionFilter filter, AtomicReference<StartAt> currentStartAt, Consumer<StartAt> onDocumentRead, Sinks.@Nullable Empty<Void> startedSink) {
         return Flux.defer(() -> {
             SubscriptionModelContext subscriptionModelContext = new SubscriptionModelContext(ReactorMongoSubscriptionModel.class);
             // TODO We should change builder::resumeAt to builder::startAtOperationTime once Spring adds support for it (see https://jira.spring.io/browse/DATAMONGO-2607)
@@ -213,7 +225,7 @@ public class ReactorMongoSubscriptionModel implements PositionAwareSubscriptionM
                         // Advance the tracked position for every change-stream document received, even if it
                         // doesn't deserialize into a delivered CloudEvent, mirroring NativeMongoSubscriptionModel,
                         // so a resubscribe after an error resumes gap-free.
-                        currentStartAt.set(StartAt.subscriptionPosition(subscriptionPosition));
+                        onDocumentRead.accept(StartAt.subscriptionPosition(subscriptionPosition));
                         return MongoCloudEventsToJsonDeserializer.deserializeToCloudEvent(raw, timeRepresentation)
                                 .map(cloudEvent -> new PositionAwareCloudEvent(cloudEvent, subscriptionPosition))
                                 .map(Mono::just)
