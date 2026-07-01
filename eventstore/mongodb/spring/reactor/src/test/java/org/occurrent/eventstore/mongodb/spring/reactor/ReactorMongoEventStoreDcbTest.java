@@ -57,6 +57,7 @@ import java.util.concurrent.atomic.AtomicInteger;
 import static java.nio.charset.StandardCharsets.UTF_8;
 import static java.util.Objects.requireNonNull;
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.catchThrowable;
 import static org.junit.jupiter.api.Assertions.assertAll;
 import static org.occurrent.eventstore.api.EventStoreCapability.DCB;
 import static org.occurrent.eventstore.api.EventStoreCapability.STREAM;
@@ -247,7 +248,7 @@ class ReactorMongoEventStoreDcbTest {
 
     @Test
     void empty_capability_set_is_rejected() {
-        assertThat(org.assertj.core.api.Assertions.catchThrowable(() -> new EventStoreConfig.Builder()
+        assertThat(catchThrowable(() -> new EventStoreConfig.Builder()
                 .eventStoreCollectionName("events")
                 .transactionConfig(transactionManager)
                 .timeRepresentation(TimeRepresentation.RFC_3339_STRING)

@@ -27,6 +27,7 @@ import org.occurrent.eventstore.api.StreamReadFilter;
 import org.occurrent.eventstore.api.WriteConditionNotFulfilledException;
 import org.occurrent.eventstore.api.WriteResult;
 import org.occurrent.eventstore.api.reactor.EventStore;
+import org.occurrent.eventstore.api.reactor.EventStream;
 import org.occurrent.eventstore.api.reactor.ReadEventStreamWithFilter;
 import reactor.core.publisher.Flux;
 import reactor.core.publisher.Mono;
@@ -105,7 +106,7 @@ public class GenericApplicationService<E> implements ApplicationService<E> {
         });
     }
 
-    private Mono<org.occurrent.eventstore.api.reactor.EventStream<CloudEvent>> read(String streamId, @Nullable StreamReadFilter filter) {
+    private Mono<EventStream<CloudEvent>> read(String streamId, @Nullable StreamReadFilter filter) {
         if (filter == null) {
             return eventStore.read(streamId);
         }

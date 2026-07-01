@@ -22,6 +22,7 @@ import com.mongodb.MongoException;
 import com.mongodb.TransactionOptions;
 import com.mongodb.client.*;
 import com.mongodb.client.model.FindOneAndUpdateOptions;
+import com.mongodb.client.model.Filters;
 import com.mongodb.client.model.IndexOptions;
 import com.mongodb.client.model.Indexes;
 import com.mongodb.client.model.Projections;
@@ -63,6 +64,7 @@ import java.util.List;
 import java.util.Objects;
 import java.util.Optional;
 import java.util.Set;
+import java.util.TreeSet;
 import java.util.function.BiFunction;
 import java.util.function.Function;
 import java.util.function.Supplier;
@@ -419,7 +421,7 @@ public class MongoEventStore implements EventStore, EventStoreOperations, EventS
         // force a write-write conflict that serializes concurrent appends sharing a marker, so the loser re-runs this
         // check against the winner's committed increment. Always increment the query's markers so a concurrent matching
         // append is serialized even when this append's own events do not match the query.
-        java.util.TreeSet<String> markerKeys = new java.util.TreeSet<>(DcbMarkerModel.queryMarkerKeys(condition.query()));
+        TreeSet<String> markerKeys = new TreeSet<>(DcbMarkerModel.queryMarkerKeys(condition.query()));
         markerKeys.addAll(DcbMarkerModel.eventMarkerKeys(eventsToAppend));
         incrementConflictMarkers(clientSession, markerKeys, lastPosition);
     }
@@ -739,7 +741,7 @@ public class MongoEventStore implements EventStore, EventStoreOperations, EventS
             filters.add(nin("type", item.excludedTypes()));
         }
         if (!item.tags().isEmpty()) {
-            filters.add(com.mongodb.client.model.Filters.all(DcbDocumentMapper.DCB_TAGS_INDEX_FIELD, item.tags()));
+            filters.add(Filters.all(DcbDocumentMapper.DCB_TAGS_INDEX_FIELD, item.tags()));
         }
         return and(filters);
     }

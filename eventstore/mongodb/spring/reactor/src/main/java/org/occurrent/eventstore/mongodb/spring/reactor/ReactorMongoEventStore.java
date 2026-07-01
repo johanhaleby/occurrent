@@ -31,6 +31,7 @@ import org.jspecify.annotations.Nullable;
 import org.occurrent.cloudevents.OccurrentExtensionGetter;
 import org.occurrent.eventstore.api.*;
 import org.occurrent.eventstore.api.dcb.*;
+import org.occurrent.eventstore.api.dcb.reactor.DcbEventStore;
 import org.occurrent.eventstore.api.internal.StreamReadFilterToFilterMapper;
 import org.occurrent.eventstore.api.internal.StreamReadFilterValidator;
 import org.occurrent.eventstore.api.reactor.EventStore;
@@ -88,14 +89,14 @@ import static org.springframework.data.mongodb.core.query.Criteria.where;
  * This is a reactive {@link EventStore} implementation that stores events in MongoDB using
  * Spring's {@link ReactiveMongoTemplate} that is based on <a href="https://projectreactor.io/">project reactor</a>.
  * It also supports the {@link EventStoreOperations} and {@link EventStoreQueries} contracts, and the reactive
- * {@link org.occurrent.eventstore.api.dcb.reactor.DcbEventStore} contract when the {@code DCB} capability is enabled.
+ * {@link DcbEventStore} contract when the {@code DCB} capability is enabled.
  * <p>
  * By default, only stream-based event-store operations are enabled. Configure
  * {@link EventStoreConfig.Builder#eventStoreCapabilities(Set)} to enable DCB, or to enable both stream and DCB
  * operations. Occurrent creates missing indexes for enabled capabilities, but it never removes indexes automatically.
  */
 @NullMarked
-public class ReactorMongoEventStore implements EventStore, EventStoreOperations, EventStoreQueries, ReadEventStreamWithFilter, org.occurrent.eventstore.api.dcb.reactor.DcbEventStore {
+public class ReactorMongoEventStore implements EventStore, EventStoreOperations, EventStoreQueries, ReadEventStreamWithFilter, DcbEventStore {
 
     private static final String ID = "_id";
 

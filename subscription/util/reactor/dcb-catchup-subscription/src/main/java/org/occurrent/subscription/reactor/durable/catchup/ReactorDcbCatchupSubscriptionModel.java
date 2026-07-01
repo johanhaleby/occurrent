@@ -33,6 +33,7 @@ import reactor.core.publisher.Flux;
 import reactor.core.publisher.Mono;
 
 import java.util.Collections;
+import java.util.Iterator;
 import java.util.LinkedHashSet;
 import java.util.Set;
 
@@ -176,7 +177,7 @@ public class ReactorDcbCatchupSubscriptionModel {
         private void add(String id) {
             synchronized (ids) {
                 if (ids.add(id) && ids.size() > maxSize) {
-                    java.util.Iterator<String> iterator = ids.iterator();
+                    Iterator<String> iterator = ids.iterator();
                     iterator.next();
                     iterator.remove();
                 }

@@ -50,6 +50,7 @@ import java.util.ArrayList;
 import java.util.List;
 import java.util.Set;
 import java.util.UUID;
+import java.util.stream.Stream;
 import java.util.stream.StreamSupport;
 
 import static java.nio.charset.StandardCharsets.UTF_8;
@@ -184,7 +185,7 @@ class SpringMongoEventStoreCapabilityTest {
     void stream_operations_fail_without_stream_capability() {
         SpringMongoEventStore eventStore = new SpringMongoEventStore(mongoTemplate, eventStoreConfig(DCB).build());
 
-        assertUnsupportedStreamOperation(() -> eventStore.write("name:1", WriteCondition.anyStreamVersion(), java.util.stream.Stream.of(event("NameDefined"))));
+        assertUnsupportedStreamOperation(() -> eventStore.write("name:1", WriteCondition.anyStreamVersion(), Stream.of(event("NameDefined"))));
         assertUnsupportedStreamOperation(() -> eventStore.read("name:1"));
         assertUnsupportedStreamOperation(() -> eventStore.read("name:1", 0, 10));
         assertUnsupportedStreamOperation(() -> eventStore.read("name:1", StreamReadFilter.type("NameDefined"), 0, 10));
@@ -202,7 +203,7 @@ class SpringMongoEventStoreCapabilityTest {
     void both_stream_and_dcb_operations_work_when_both_capabilities_are_enabled() {
         SpringMongoEventStore eventStore = new SpringMongoEventStore(mongoTemplate, eventStoreConfig(STREAM, DCB).build());
 
-        eventStore.write("name:1", WriteCondition.anyStreamVersion(), java.util.stream.Stream.of(event("NameDefined")));
+        eventStore.write("name:1", WriteCondition.anyStreamVersion(), Stream.of(event("NameDefined")));
         eventStore.append(List.of(taggedEvent("NameChanged", "name:1")));
 
         assertThat(eventStore.read("name:1").events()).extracting(CloudEvent::getType).containsExactly("NameDefined");
@@ -212,7 +213,7 @@ class SpringMongoEventStoreCapabilityTest {
     @Test
     void stream_to_stream_and_dcb_preserves_stream_reads_and_enables_dcb_for_new_events() {
         SpringMongoEventStore streamOnly = new SpringMongoEventStore(mongoTemplate, eventStoreConfig(STREAM).build());
-        streamOnly.write("name:1", WriteCondition.anyStreamVersion(), java.util.stream.Stream.of(event("NameDefined")));
+        streamOnly.write("name:1", WriteCondition.anyStreamVersion(), Stream.of(event("NameDefined")));
 
         SpringMongoEventStore both = new SpringMongoEventStore(mongoTemplate, eventStoreConfig(STREAM, DCB).build());
         both.append(List.of(taggedEvent("NameChanged", "name:1")));
@@ -259,7 +260,7 @@ class SpringMongoEventStoreCapabilityTest {
     @Test
     void stream_and_dcb_to_stream_preserves_stream_reads_for_stream_and_dcb_written_events() {
         SpringMongoEventStore both = new SpringMongoEventStore(mongoTemplate, eventStoreConfig(STREAM, DCB).build());
-        both.write("name:1", WriteCondition.anyStreamVersion(), java.util.stream.Stream.of(event("NameDefined")));
+        both.write("name:1", WriteCondition.anyStreamVersion(), Stream.of(event("NameDefined")));
         both.append(List.of(taggedEvent("NameChanged", "name:1")));
         String dcbStreamId = OccurrentExtensionGetter.getStreamId(both.read(tags("name:1")).events().get(0));
 

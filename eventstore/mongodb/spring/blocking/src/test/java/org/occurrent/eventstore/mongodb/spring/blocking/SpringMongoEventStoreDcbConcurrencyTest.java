@@ -45,7 +45,9 @@ import java.time.OffsetDateTime;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Set;
+import java.util.TreeSet;
 import java.util.UUID;
+import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.CyclicBarrier;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
@@ -419,7 +421,7 @@ class SpringMongoEventStoreDcbConcurrencyTest {
         // own stream, so no two threads share a stream and no WriteConflict can arise at the
         // stream-version level.
         SpringMongoEventStore disjointStore = buildEventStoreWithStreamIdGenerator(
-                tags -> "disjoint:stream:" + String.join(",", new java.util.TreeSet<>(tags)));
+                tags -> "disjoint:stream:" + String.join(",", new TreeSet<>(tags)));
 
         for (int i = 0; i < ITERATIONS; i++) {
             CyclicBarrier barrier = new CyclicBarrier(threadCount);
@@ -480,7 +482,7 @@ class SpringMongoEventStoreDcbConcurrencyTest {
             ExecutorService pool = Executors.newFixedThreadPool(threadCount);
 
             AtomicInteger successCount = new AtomicInteger(0);
-            List<Throwable> failures = new java.util.concurrent.CopyOnWriteArrayList<>();
+            List<Throwable> failures = new CopyOnWriteArrayList<>();
             List<Future<Void>> futures = new ArrayList<>();
 
             for (int t = 0; t < threadCount; t++) {

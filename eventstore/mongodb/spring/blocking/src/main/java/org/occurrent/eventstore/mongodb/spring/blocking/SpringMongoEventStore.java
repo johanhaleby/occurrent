@@ -41,8 +41,10 @@ import org.occurrent.eventstore.mongodb.internal.StreamVersionDiff;
 import org.occurrent.filter.Filter;
 import org.occurrent.mongodb.spring.filterqueryconversion.internal.FilterConverter;
 import org.occurrent.mongodb.timerepresentation.TimeRepresentation;
+import org.occurrent.retry.Backoff;
 import org.occurrent.retry.RetryStrategy;
 import org.springframework.dao.DataAccessException;
+import org.springframework.dao.DuplicateKeyException;
 import org.springframework.data.domain.Sort;
 import org.springframework.data.mongodb.core.FindAndModifyOptions;
 import org.springframework.data.mongodb.core.MongoTemplate;
@@ -53,13 +55,16 @@ import org.springframework.transaction.support.TransactionCallback;
 import org.springframework.transaction.support.TransactionTemplate;
 
 import java.net.URI;
+import java.time.Duration;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Objects;
 import java.util.Optional;
 import java.util.Set;
+import java.util.TreeSet;
 import java.util.function.BiFunction;
 import java.util.function.Function;
+import java.util.function.Supplier;
 import java.util.stream.Stream;
 
 import static java.util.Objects.requireNonNull;
@@ -384,14 +389,14 @@ public class SpringMongoEventStore implements EventStore, EventStoreOperations, 
      * Spring wraps the {@link MongoException}. {@link DcbAppendConditionNotFulfilledException} is deliberately NOT
      * retried here: it propagates to the application service, which re-reads and retries the whole command.
      */
-    private static <T> T executeWithTransientRetry(java.util.function.Supplier<T> action) {
+    private static <T> T executeWithTransientRetry(Supplier<T> action) {
         // Exponential backoff with generous attempts: several appends placed in the same partition stream serialize on
         // stream_version, so the last writer can need to retry past all the others before it commits.
         // Retry a transient transaction conflict, and also a DuplicateKeyException from two transactions first-creating
         // the same conflict marker at once. Event-insert duplicates are translated to domain exceptions in insertAllDcb
         // and so never reach here, so the only DuplicateKeyException at this layer is that cold-marker race. The retry
         // re-runs the transaction, by which point the marker exists and the upsert updates it.
-        return RetryStrategy.exponentialBackoff(java.time.Duration.ofMillis(10), java.time.Duration.ofMillis(500), 2.0f)
+        return RetryStrategy.exponentialBackoff(Duration.ofMillis(10), Duration.ofMillis(500), 2.0f)
                 .maxAttempts(15)
                 .retryIf(throwable -> isTransientTransactionError(throwable) || isDuplicateKeyError(throwable))
                 .execute(action);
@@ -415,7 +420,7 @@ public class SpringMongoEventStore implements EventStore, EventStoreOperations, 
         // marker race.
         Throwable cause = throwable;
         for (int hops = 0; cause != null && hops < 64; cause = cause.getCause(), hops++) {
-            if (cause instanceof org.springframework.dao.DuplicateKeyException) {
+            if (cause instanceof DuplicateKeyException) {
                 return true;
             }
         }
@@ -458,7 +463,7 @@ public class SpringMongoEventStore implements EventStore, EventStoreOperations, 
         // force a write-write conflict that serializes concurrent appends sharing a marker, so the loser re-runs this
         // check against the winner's committed increment. Always increment the query's markers so a concurrent matching
         // append is serialized even when this append's own events do not match the query.
-        java.util.TreeSet<String> markerKeys = new java.util.TreeSet<>(DcbMarkerModel.queryMarkerKeys(condition.query()));
+        TreeSet<String> markerKeys = new TreeSet<>(DcbMarkerModel.queryMarkerKeys(condition.query()));
         markerKeys.addAll(DcbMarkerModel.eventMarkerKeys(eventsToAppend));
         incrementConflictMarkers(markerKeys, lastPosition);
     }
@@ -515,7 +520,7 @@ public class SpringMongoEventStore implements EventStore, EventStoreOperations, 
         // Retry the cold-start race: when the counter document does not exist yet, concurrent upserts all try to insert
         // it and all but one get a duplicate key. On retry the document exists, so the upsert becomes an update.
         return RetryStrategy.retry()
-                .backoff(org.occurrent.retry.Backoff.fixed(20))
+                .backoff(Backoff.fixed(20))
                 .maxAttempts(5)
                 .retryIf(SpringMongoEventStore::isDuplicateKeyError)
                 .execute(() -> {

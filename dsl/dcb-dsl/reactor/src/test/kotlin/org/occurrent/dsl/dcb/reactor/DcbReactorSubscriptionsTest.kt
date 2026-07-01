@@ -54,6 +54,7 @@ import java.net.URI
 import java.time.LocalDateTime
 import java.util.UUID
 import java.util.concurrent.CopyOnWriteArrayList
+import java.util.stream.Stream
 
 @Timeout(30)
 @Testcontainers
@@ -127,7 +128,7 @@ class DcbReactorSubscriptionsTest {
     }
 
     private fun appendTagged(event: DomainEvent, tag: String) {
-        val cloudEvent: CloudEvent = converter.toCloudEvents(java.util.stream.Stream.of(event)).toList()[0]
+        val cloudEvent: CloudEvent = converter.toCloudEvents(Stream.of(event)).toList()[0]
         eventStore.append(listOf(DcbCloudEvents.withTags(cloudEvent, setOf(tag)))).block()
     }
 

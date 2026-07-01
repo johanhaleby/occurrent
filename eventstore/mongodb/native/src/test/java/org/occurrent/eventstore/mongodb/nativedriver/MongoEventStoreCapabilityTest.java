@@ -48,6 +48,7 @@ import java.util.ArrayList;
 import java.util.List;
 import java.util.Set;
 import java.util.UUID;
+import java.util.stream.Stream;
 import java.util.stream.StreamSupport;
 
 import static java.nio.charset.StandardCharsets.UTF_8;
@@ -184,7 +185,7 @@ class MongoEventStoreCapabilityTest {
     void stream_operations_fail_without_stream_capability() {
         MongoEventStore eventStore = newEventStore(eventStoreConfig(DCB).build());
 
-        assertUnsupportedStreamOperation(() -> eventStore.write("name:1", WriteCondition.anyStreamVersion(), java.util.stream.Stream.of(event("NameDefined"))));
+        assertUnsupportedStreamOperation(() -> eventStore.write("name:1", WriteCondition.anyStreamVersion(), Stream.of(event("NameDefined"))));
         assertUnsupportedStreamOperation(() -> eventStore.read("name:1"));
         assertUnsupportedStreamOperation(() -> eventStore.read("name:1", 0, 10));
         assertUnsupportedStreamOperation(() -> eventStore.read("name:1", StreamReadFilter.type("NameDefined"), 0, 10));
@@ -202,7 +203,7 @@ class MongoEventStoreCapabilityTest {
     void both_stream_and_dcb_operations_work_when_both_capabilities_are_enabled() {
         MongoEventStore eventStore = newEventStore(eventStoreConfig(STREAM, DCB).build());
 
-        eventStore.write("name:1", WriteCondition.anyStreamVersion(), java.util.stream.Stream.of(event("NameDefined")));
+        eventStore.write("name:1", WriteCondition.anyStreamVersion(), Stream.of(event("NameDefined")));
         eventStore.append(List.of(taggedEvent("NameChanged", "name:1")));
 
         assertThat(eventStore.read("name:1").events()).extracting(CloudEvent::getType).containsExactly("NameDefined");

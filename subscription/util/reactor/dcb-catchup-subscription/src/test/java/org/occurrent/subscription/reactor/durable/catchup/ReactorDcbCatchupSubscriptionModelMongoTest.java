@@ -32,10 +32,14 @@ import org.occurrent.application.converter.CloudEventConverter;
 import org.occurrent.application.converter.jackson.JacksonCloudEventConverter;
 import org.occurrent.domain.DomainEvent;
 import org.occurrent.domain.NameDefined;
+import org.occurrent.eventstore.api.EventStoreCapability;
+import org.occurrent.eventstore.api.dcb.DcbAppendCondition;
+import org.occurrent.eventstore.api.dcb.DcbAppendResult;
 import org.occurrent.eventstore.api.dcb.DcbCloudEvents;
 import org.occurrent.eventstore.api.dcb.DcbQuery;
 import org.occurrent.eventstore.api.dcb.DcbReadOptions;
 import org.occurrent.eventstore.api.dcb.DcbEventStream;
+import org.occurrent.eventstore.api.dcb.reactor.DcbEventStore;
 import org.occurrent.eventstore.mongodb.spring.reactor.EventStoreConfig;
 import org.occurrent.eventstore.mongodb.spring.reactor.ReactorMongoEventStore;
 import org.occurrent.mongodb.timerepresentation.TimeRepresentation;
@@ -49,12 +53,14 @@ import org.testcontainers.junit.jupiter.Container;
 import org.testcontainers.junit.jupiter.Testcontainers;
 import org.testcontainers.mongodb.MongoDBContainer;
 import reactor.core.Disposable;
+import reactor.core.publisher.Flux;
 import reactor.core.publisher.Mono;
 
 import java.net.URI;
 import java.time.Duration;
 import java.time.LocalDateTime;
 import java.util.List;
+import java.util.Set;
 import java.util.UUID;
 import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.atomic.AtomicBoolean;
@@ -94,7 +100,7 @@ class ReactorDcbCatchupSubscriptionModelMongoTest {
                 .eventStoreCollectionName("events")
                 .transactionConfig(tx)
                 .timeRepresentation(TimeRepresentation.RFC_3339_STRING)
-                .eventStoreCapabilities(org.occurrent.eventstore.api.EventStoreCapability.STREAM, org.occurrent.eventstore.api.EventStoreCapability.DCB)
+                .eventStoreCapabilities(EventStoreCapability.STREAM, EventStoreCapability.DCB)
                 .build();
         eventStore = new ReactorMongoEventStore(mongoTemplate, config);
         subscriptionModel = new ReactorMongoSubscriptionModel(mongoTemplate, "events", TimeRepresentation.RFC_3339_STRING);
@@ -199,7 +205,7 @@ class ReactorDcbCatchupSubscriptionModelMongoTest {
         });
     }
 
-    private void subscribe(reactor.core.publisher.Flux<CloudEvent> flux, CopyOnWriteArrayList<String> received) {
+    private void subscribe(Flux<CloudEvent> flux, CopyOnWriteArrayList<String> received) {
         disposables.add(flux.map(ce -> ((NameDefined) converter.toDomainEvent(ce)).name()).doOnNext(received::add).subscribe());
         // Give the change-stream subscription a moment to start before the test writes more events.
         sleep(700);
@@ -211,7 +217,7 @@ class ReactorDcbCatchupSubscriptionModelMongoTest {
 
     private void appendTagged(DomainEvent event, String tag) {
         CloudEvent cloudEvent = converter.toCloudEvents(Stream.of(event)).collect(Collectors.toList()).get(0);
-        eventStore.append(List.of(DcbCloudEvents.withTags(cloudEvent, java.util.Set.of(tag)))).block();
+        eventStore.append(List.of(DcbCloudEvents.withTags(cloudEvent, Set.of(tag)))).block();
     }
 
     private static void sleep(long millis) {
@@ -226,13 +232,13 @@ class ReactorDcbCatchupSubscriptionModelMongoTest {
     // the head probe (afterPosition == upToPosition), so the delay is applied to the first real window read after it.
     // The event committed during the delay lands above the captured bulk head and must be recovered exactly once
     // through reconciliation or the live subscription, which resumes from a token captured before the replay.
-    private static final class DelayFirstReadDcbEventStore implements org.occurrent.eventstore.api.dcb.reactor.DcbEventStore {
-        private final org.occurrent.eventstore.api.dcb.reactor.DcbEventStore delegate;
+    private static final class DelayFirstReadDcbEventStore implements DcbEventStore {
+        private final DcbEventStore delegate;
         private final Duration delay;
         private final AtomicBoolean firstReadStarted;
         private final AtomicBoolean windowDelayed = new AtomicBoolean(false);
 
-        private DelayFirstReadDcbEventStore(org.occurrent.eventstore.api.dcb.reactor.DcbEventStore delegate, Duration delay, AtomicBoolean firstReadStarted) {
+        private DelayFirstReadDcbEventStore(DcbEventStore delegate, Duration delay, AtomicBoolean firstReadStarted) {
             this.delegate = delegate;
             this.delay = delay;
             this.firstReadStarted = firstReadStarted;
@@ -251,12 +257,12 @@ class ReactorDcbCatchupSubscriptionModelMongoTest {
         }
 
         @Override
-        public Mono<org.occurrent.eventstore.api.dcb.DcbAppendResult> append(List<CloudEvent> events) {
+        public Mono<DcbAppendResult> append(List<CloudEvent> events) {
             return delegate.append(events);
         }
 
         @Override
-        public Mono<org.occurrent.eventstore.api.dcb.DcbAppendResult> append(List<CloudEvent> events, org.occurrent.eventstore.api.dcb.DcbAppendCondition condition) {
+        public Mono<DcbAppendResult> append(List<CloudEvent> events, DcbAppendCondition condition) {
             return delegate.append(events, condition);
         }
     }
