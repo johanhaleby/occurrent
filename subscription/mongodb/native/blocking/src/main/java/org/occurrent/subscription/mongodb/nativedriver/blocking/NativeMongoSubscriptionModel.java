@@ -257,12 +257,17 @@ public class NativeMongoSubscriptionModel implements PositionAwareSubscriptionMo
         } finally {
             if (internalSubscription != null) {
                 internalSubscription.stopped();
+                try {
+                    internalSubscription.cursor.close();
+                } catch (Exception closeException) {
+                    log.debug("Failed to close cursor for subscription {}, this can happen if the connection was already closed.", subscriptionId, closeException);
+                }
             }
         }
     }
 
     private static boolean isCursorNoLongerOpen(Throwable throwable) {
-        return throwable instanceof IllegalStateException && throwable.getMessage() != null && throwable.getMessage().startsWith("Cursor") && throwable.getMessage().endsWith("is not longer open.");
+        return throwable instanceof IllegalStateException && throwable.getMessage() != null && throwable.getMessage().startsWith("Cursor") && throwable.getMessage().contains("is not longer open");
     }
 
     private static boolean isChangeStreamHistoryLost(Throwable throwable) {
