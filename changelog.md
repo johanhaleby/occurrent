@@ -10,6 +10,11 @@ DCB is a capability layered on the existing CloudEvent storage, not a new store 
 
 #### Changes
 
+* Added a reactive query DSL, so the reactive stack has the same typed-query ergonomics as the blocking one, and the reactive DCB DSL's domain event queries now delegate to it.
+  * `DomainEventQueries` in `query-dsl-reactor` wraps a reactive `EventStoreQueries` and a `CloudEventConverter`, returning `Flux<E>` from its query methods and `Mono<E>` from `queryOne`, with the same `Class`/`Filter`/`SortBy` overloads and Kotlin `KClass` extensions as the blocking version.
+  * `DcbDomainEventQueries` in `dcb-dsl-reactor` now wraps a `DomainEventQueries<E>` and delegates every plain stream-query method to it, exactly like the blocking version, instead of only exposing the DCB query family. This is a breaking change to its constructor: `new DcbDomainEventQueries(DcbEventStore, CloudEventConverter)` no longer compiles, build a `DomainEventQueries<E>` first and pass that instead.
+  * See [ADR 40](doc/architecture/decisions/0040-reactive-query-dsl-and-dcb-domain-event-queries-delegation.md).
+
 * Added a reactive stream application service, so the reactive stack has the same application-service ergonomics as the blocking one.
   * `ApplicationService` in `application-service-reactor` runs the read, decide, and write cycle against the reactive event store and returns a `Mono<WriteResult>`, retrying from a fresh read on a `WriteConditionNotFulfilledException`. The domain function stays a synchronous `Function<Stream<E>, Stream<E>>`, the side-effect is reactive (`Function<Stream<E>, Mono<Void>>`), and it mirrors the blocking surface including the `ExecuteFilter` read filter and the Kotlin extensions.
   * `ExecuteFilter` moved to the shared `application-service-common` module (package `org.occurrent.application.service`) so both stacks share one copy. This is a breaking change, the old `org.occurrent.application.service.blocking.ExecuteFilter` is gone, so update the import to `org.occurrent.application.service.ExecuteFilter`.
