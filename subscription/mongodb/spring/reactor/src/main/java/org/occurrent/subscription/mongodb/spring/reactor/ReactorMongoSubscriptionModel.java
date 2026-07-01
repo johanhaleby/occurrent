@@ -120,8 +120,9 @@ public class ReactorMongoSubscriptionModel implements PositionAwareSubscriptionM
             final ChangeStreamOptions changeStreamOptions = ApplyFilterToChangeStreamOptionsBuilder.applyFilter(timeRepresentation, filter, builder);
             Flux<ChangeStreamEvent<Document>> changeStream = mongo.changeStream(eventCollection, changeStreamOptions, Document.class);
             return changeStream
-                    // Advance the tracked position for every change-stream document read, matched or not, mirroring
-                    // NativeMongoSubscriptionModel, so a resubscribe after an error resumes gap-free.
+                    // Advance the tracked position for every change-stream document received, even if it doesn't
+                    // deserialize into a delivered CloudEvent, mirroring NativeMongoSubscriptionModel, so a
+                    // resubscribe after an error resumes gap-free.
                     .doOnNext(changeEvent -> currentStartAt.set(StartAt.subscriptionPosition(new MongoResumeTokenSubscriptionPosition(requireNonNull(changeEvent.getResumeToken()).asDocument()))))
                     .flatMap(changeEvent ->
                             MongoCloudEventsToJsonDeserializer.deserializeToCloudEvent(requireNonNull(changeEvent.getRaw()), timeRepresentation)
