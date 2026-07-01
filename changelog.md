@@ -16,6 +16,12 @@ DCB is a capability layered on the existing CloudEvent storage, not a new store 
   * `resumeSubscription` now continues from the position of the last change-stream document read before the pause instead of the subscription's original `StartAt`, so pausing and resuming neither replays events nor drops events written while paused.
   * See [ADR 41](doc/architecture/decisions/0041-native-mongodb-subscription-model-restart-on-error.md).
 
+* Hardened `ReactorMongoSubscriptionModel` against the MongoDB operational failures `SpringMongoSubscriptionModel` already survives in production: replica-set failovers, transient network errors, and change-stream history loss.
+  * A change-stream error (a failover, a transient network error, or anything else the driver itself does not resume) now retries with exponential backoff instead of terminating the `Flux`, resuming from the position of the last change-stream document read so recovery is gap-free rather than a replay or a skipped window.
+  * `MongoCommandException`s with error code 286 (`ChangeStreamHistoryLost`) restart from `StartAt.now()` only when configured to via the new `ReactorMongoSubscriptionModelConfig.restartSubscriptionsOnChangeStreamHistoryLost(true)` (default `false`, matching the Spring default); otherwise the subscription stops and logs an error, same as `SpringMongoSubscriptionModel`.
+  * The `subscribe(filter, startAt) -> Flux<CloudEvent>` contract is unchanged, this is purely additive.
+  * See [ADR 42](doc/architecture/decisions/0042-reactive-mongodb-subscription-model-resilience.md).
+
 * Added a reactive query DSL, so the reactive stack has the same typed-query ergonomics as the blocking one, and the reactive DCB DSL's domain event queries now delegate to it.
   * `DomainEventQueries` in `query-dsl-reactor` wraps a reactive `EventStoreQueries` and a `CloudEventConverter`, returning `Flux<E>` from its query methods and `Mono<E>` from `queryOne`, with the same `Class`/`Filter`/`SortBy` overloads and Kotlin `KClass` extensions as the blocking version.
   * `DcbDomainEventQueries` in `dcb-dsl-reactor` now wraps a `DomainEventQueries<E>` and delegates every plain stream-query method to it, exactly like the blocking version, instead of only exposing the DCB query family. This is a breaking change to its constructor: `new DcbDomainEventQueries(DcbEventStore, CloudEventConverter)` no longer compiles, build a `DomainEventQueries<E>` first and pass that instead.
