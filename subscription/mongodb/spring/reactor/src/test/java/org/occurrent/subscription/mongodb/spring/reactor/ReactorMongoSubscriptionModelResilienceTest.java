@@ -43,6 +43,7 @@ import org.occurrent.eventstore.mongodb.spring.reactor.EventStoreConfig;
 import org.occurrent.eventstore.mongodb.spring.reactor.ReactorMongoEventStore;
 import org.occurrent.mongodb.timerepresentation.TimeRepresentation;
 import org.occurrent.subscription.StartAt;
+import org.occurrent.subscription.api.reactor.Subscription;
 import org.occurrent.testsupport.mongodb.FlushMongoDBExtension;
 import org.springframework.data.mongodb.ReactiveMongoTransactionManager;
 import org.springframework.data.mongodb.UncategorizedMongoDbException;
@@ -56,6 +57,8 @@ import org.testcontainers.junit.jupiter.Testcontainers;
 import org.testcontainers.mongodb.MongoDBContainer;
 import reactor.core.Disposable;
 import reactor.core.publisher.Flux;
+import reactor.core.publisher.Mono;
+import reactor.test.StepVerifier;
 
 import java.net.URI;
 import java.time.Duration;
@@ -286,6 +289,32 @@ public class ReactorMongoSubscriptionModelResilienceTest {
             // pre-event-1 position instead of the tracked one.
             await().atMost(5, SECONDS).with().pollInterval(Duration.of(20, MILLIS)).untilAsserted(() -> assertThat(state).hasSize(2));
             assertThat(state).extracting(CloudEvent::getId).doesNotHaveDuplicates();
+        }
+    }
+
+    @Nested
+    @DisplayName("waitUntilStarted")
+    class WaitUntilStartedTest {
+
+        @Test
+        void fails_instead_of_hanging_when_the_change_stream_cannot_even_be_created() {
+            // Given: changeStream(...) throws synchronously (not a Flux that errors on subscription), simulating a
+            // failure while building the change stream itself, e.g. an invalid filter. doOnSubscribe never gets a
+            // chance to complete the started signal since the change stream Flux is never created to subscribe to.
+            // Uses a non-restartable error (history lost, restart-on-history-lost off by default) so the failure is
+            // terminal instead of retried forever, matching the only way a real failure here can actually terminate.
+            MongoCommandException historyLost = changeStreamHistoryLostException();
+            ReactiveMongoOperations throwingOperations = mock(ReactiveMongoOperations.class);
+            when(throwingOperations.changeStream(eq("events"), any(ChangeStreamOptions.class), eq(Document.class))).thenThrow(historyLost);
+            ReactorMongoSubscriptionModel subscriptionModel = new ReactorMongoSubscriptionModel(throwingOperations, "events", TimeRepresentation.RFC_3339_STRING);
+
+            // When
+            Subscription subscription = subscriptionModel.subscribe(UUID.randomUUID().toString(), __ -> Mono.empty());
+
+            // Then
+            StepVerifier.create(subscription.waitUntilStarted())
+                    .expectErrorMatches(throwable -> throwable == historyLost)
+                    .verify(Duration.ofSeconds(5));
         }
     }
 

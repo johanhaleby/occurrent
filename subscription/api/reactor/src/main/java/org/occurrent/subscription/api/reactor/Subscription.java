@@ -21,6 +21,8 @@ import reactor.core.publisher.Mono;
 
 import java.time.Duration;
 
+import static java.util.Objects.requireNonNull;
+
 /**
  * Represents a unique subscription to a subscription. Subscriptions are typically started in a background thread
  * and you may wish to wait ({@link #waitUntilStarted()}) for them to start before continuing.
@@ -48,6 +50,7 @@ public interface Subscription {
      * @return A {@link Mono} that emits {@code true} if the subscription started within the given duration, {@code false} otherwise.
      */
     default Mono<Boolean> waitUntilStarted(Duration timeout) {
+        requireNonNull(timeout, "timeout cannot be null");
         return waitUntilStarted().thenReturn(true).timeout(timeout, Mono.just(false));
     }
 }

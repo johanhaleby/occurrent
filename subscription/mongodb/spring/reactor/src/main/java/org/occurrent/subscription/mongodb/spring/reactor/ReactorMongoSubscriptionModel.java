@@ -149,7 +149,13 @@ public class ReactorMongoSubscriptionModel implements PositionAwareSubscriptionM
         Disposable disposable = resilientChangeStream(filter, currentStartAt, startedSink)
                 .concatMap(action)
                 .subscribe(unused -> {
-                        }, throwable -> log.error("Subscription {} terminated with an unrecoverable error", subscriptionId, throwable));
+                        }, throwable -> {
+                            log.error("Subscription {} terminated with an unrecoverable error", subscriptionId, throwable);
+                            // No-op if doOnSubscribe already completed the sink successfully, but if the change
+                            // stream never got that far (e.g. building the change stream options itself threw),
+                            // this is what keeps waitUntilStarted() from hanging forever.
+                            startedSink.tryEmitError(throwable);
+                        });
         InternalSubscription internalSubscription = new InternalSubscription(disposable, currentStartAt, filter, action, startedSink.asMono());
         if (running) {
             runningSubscriptions.put(subscriptionId, internalSubscription);

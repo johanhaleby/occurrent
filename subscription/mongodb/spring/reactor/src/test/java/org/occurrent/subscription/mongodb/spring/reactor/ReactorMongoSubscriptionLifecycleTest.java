@@ -33,6 +33,7 @@ import org.occurrent.eventstore.mongodb.spring.reactor.EventStoreConfig;
 import org.occurrent.eventstore.mongodb.spring.reactor.ReactorMongoEventStore;
 import org.occurrent.mongodb.timerepresentation.TimeRepresentation;
 import org.occurrent.subscription.StartAt;
+import org.occurrent.subscription.api.reactor.Subscription;
 import org.occurrent.testsupport.mongodb.FlushMongoDBExtension;
 import org.springframework.data.mongodb.ReactiveMongoTransactionManager;
 import org.springframework.data.mongodb.core.ReactiveMongoTemplate;
@@ -117,6 +118,18 @@ public class ReactorMongoSubscriptionLifecycleTest {
 
         // Then
         await().atMost(10, SECONDS).with().pollInterval(Duration.of(20, MILLIS)).untilAsserted(() -> assertThat(state).hasSize(1));
+    }
+
+    @Test
+    void wait_until_started_with_a_timeout_throws_npe_when_timeout_is_null() {
+        // Given
+        Subscription subscription = subscriptionModel.subscribe(UUID.randomUUID().toString(), __ -> Mono.empty());
+
+        // When
+        Throwable throwable = catchThrowable(() -> subscription.waitUntilStarted(null));
+
+        // Then
+        assertThat(throwable).isInstanceOf(NullPointerException.class).hasMessageContaining("timeout");
     }
 
     @Test
