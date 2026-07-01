@@ -190,10 +190,16 @@ public class ReactorMongoSubscriptionModelResilienceTest {
             // operations) before writing, since the retry is scheduled asynchronously with backoff and there is no
             // readiness signal on the bare Flux to synchronize against otherwise.
             verify(throwingOperations, timeout(5000).times(2)).changeStream(eq("events"), any(ChangeStreamOptions.class), eq(Document.class));
-            mongoEventStore.write("1", 0, serialize(new NameDefined(UUID.randomUUID().toString(), now, "name", "name1"))).block();
 
-            // Then
-            await().atMost(10, SECONDS).with().pollInterval(Duration.of(20, MILLIS)).untilAsserted(() -> assertThat(state).hasSize(1));
+            // Then: keep writing new events until one is observed. The restart resumes from "now" with no resume
+            // marker, so a single write can race ahead of the server actually establishing the new cursor and be
+            // missed for good instead of just delayed.
+            await().atMost(10, SECONDS).with().pollInterval(Duration.of(100, MILLIS)).untilAsserted(() -> {
+                if (state.isEmpty()) {
+                    mongoEventStore.write(UUID.randomUUID().toString(), 0, serialize(new NameDefined(UUID.randomUUID().toString(), now, "name", "name1"))).block();
+                }
+                assertThat(state).isNotEmpty();
+            });
         }
 
         @Test
@@ -234,10 +240,14 @@ public class ReactorMongoSubscriptionModelResilienceTest {
 
             // When: wait for the retry to actually happen before writing, see the comment in ChangeStreamHistoryLostTest.
             verify(throwingOperations, timeout(5000).times(2)).changeStream(eq("events"), any(ChangeStreamOptions.class), eq(Document.class));
-            mongoEventStore.write("1", 0, serialize(new NameDefined(UUID.randomUUID().toString(), now, "name", "name1"))).block();
 
-            // Then
-            await().atMost(10, SECONDS).with().pollInterval(Duration.of(20, MILLIS)).untilAsserted(() -> assertThat(state).hasSize(1));
+            // Then: keep writing new events until one is observed, see the comment in ChangeStreamHistoryLostTest.
+            await().atMost(10, SECONDS).with().pollInterval(Duration.of(100, MILLIS)).untilAsserted(() -> {
+                if (state.isEmpty()) {
+                    mongoEventStore.write(UUID.randomUUID().toString(), 0, serialize(new NameDefined(UUID.randomUUID().toString(), now, "name", "name1"))).block();
+                }
+                assertThat(state).isNotEmpty();
+            });
         }
     }
 
