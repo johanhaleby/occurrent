@@ -19,6 +19,7 @@ package org.occurrent.subscription.mongodb.spring.reactor;
 import com.mongodb.MongoCommandException;
 import com.mongodb.client.model.changestream.ChangeStreamDocument;
 import io.cloudevents.CloudEvent;
+import jakarta.annotation.PreDestroy;
 import org.bson.Document;
 import org.jspecify.annotations.NullMarked;
 import org.jspecify.annotations.Nullable;
@@ -29,6 +30,9 @@ import org.occurrent.subscription.StartAt.SubscriptionModelContext;
 import org.occurrent.subscription.SubscriptionFilter;
 import org.occurrent.subscription.SubscriptionPosition;
 import org.occurrent.subscription.api.reactor.PositionAwareSubscriptionModel;
+import org.occurrent.subscription.api.reactor.Subscribable;
+import org.occurrent.subscription.api.reactor.Subscription;
+import org.occurrent.subscription.api.reactor.SubscriptionModelLifeCycle;
 import org.occurrent.subscription.mongodb.MongoOperationTimeSubscriptionPosition;
 import org.occurrent.subscription.mongodb.MongoResumeTokenSubscriptionPosition;
 import org.occurrent.subscription.mongodb.internal.MongoCloudEventsToJsonDeserializer;
@@ -41,11 +45,16 @@ import org.springframework.data.mongodb.core.ChangeStreamEvent;
 import org.springframework.data.mongodb.core.ChangeStreamOptions;
 import org.springframework.data.mongodb.core.ChangeStreamOptions.ChangeStreamOptionsBuilder;
 import org.springframework.data.mongodb.core.ReactiveMongoOperations;
+import reactor.core.Disposable;
 import reactor.core.publisher.Flux;
 import reactor.core.publisher.Mono;
+import reactor.core.publisher.Sinks;
 import reactor.util.retry.Retry;
 
+import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.ConcurrentMap;
 import java.util.concurrent.atomic.AtomicReference;
+import java.util.function.Function;
 
 import static java.util.Objects.requireNonNull;
 import static org.occurrent.subscription.mongodb.internal.MongoCommons.cannotFindGlobalSubscriptionPositionErrorMessage;
@@ -62,15 +71,24 @@ import static org.occurrent.subscription.mongodb.internal.MongoCommons.cannotFin
  * failovers, transient network errors, and, if configured to, change stream history loss): the underlying change
  * stream automatically resubscribes and resumes from the position of the last change-stream document read, so
  * recovery is gap-free rather than a replay or a skipped window. See {@link ReactorMongoSubscriptionModelConfig}.
+ * <p>
+ * Also supports named, lifecycle-managed subscriptions ({@link Subscribable}, {@link SubscriptionModelLifeCycle}):
+ * pause, resume, and cancel an individual subscription by id, in addition to the plain {@link #subscribe(SubscriptionFilter, StartAt)}
+ * {@link Flux} primitive.
  */
 @NullMarked
-public class ReactorMongoSubscriptionModel implements PositionAwareSubscriptionModel {
+public class ReactorMongoSubscriptionModel implements PositionAwareSubscriptionModel, Subscribable, SubscriptionModelLifeCycle {
     private static final Logger log = LoggerFactory.getLogger(ReactorMongoSubscriptionModel.class);
 
     private final ReactiveMongoOperations mongo;
     private final String eventCollection;
     private final TimeRepresentation timeRepresentation;
     private final ReactorMongoSubscriptionModelConfig config;
+    private final ConcurrentMap<String, InternalSubscription> runningSubscriptions = new ConcurrentHashMap<>();
+    private final ConcurrentMap<String, InternalSubscription> pausedSubscriptions = new ConcurrentHashMap<>();
+
+    private volatile boolean shutdown = false;
+    private volatile boolean running = true;
 
     /**
      * Create a reactive subscription using Spring
@@ -102,25 +120,64 @@ public class ReactorMongoSubscriptionModel implements PositionAwareSubscriptionM
     public Flux<CloudEvent> subscribe(@Nullable SubscriptionFilter filter, StartAt startAt) {
         requireNonNull(startAt, StartAt.class.getSimpleName() + " cannot be null");
         // currentStartAt tracks the position of the last change-stream document read (updated in changeStream(...)
-        // below, whether or not it produced a delivered CloudEvent), read again by changeStream(...) on every
-        // resubscribe that retryWhen triggers, so recovery from an error continues gap-free instead of replaying or
-        // skipping events. Flux.defer gives each subscriber to the returned Flux its own tracked position.
+        // below, whether or not it produced a delivered CloudEvent), read again by resilientChangeStream(...) on
+        // every resubscribe that retryWhen triggers, so recovery from an error continues gap-free instead of
+        // replaying or skipping events. Flux.defer gives each subscriber to the returned Flux its own tracked position.
         return Flux.defer(() -> {
             AtomicReference<StartAt> currentStartAt = new AtomicReference<>(startAt);
-            return changeStream(filter, currentStartAt)
-                    .retryWhen(Retry.backoff(Long.MAX_VALUE, config.minBackoff)
-                            .maxBackoff(config.maxBackoff)
-                            .filter(throwable -> shouldRestart(throwable, currentStartAt)));
+            return resilientChangeStream(filter, currentStartAt, null);
         });
     }
 
-    private Flux<CloudEvent> changeStream(@Nullable SubscriptionFilter filter, AtomicReference<StartAt> currentStartAt) {
+    @Override
+    public synchronized Subscription subscribe(String subscriptionId, @Nullable SubscriptionFilter filter, StartAt startAt, Function<CloudEvent, Mono<Void>> action) {
+        requireNonNull(subscriptionId, "subscriptionId cannot be null");
+        requireNonNull(action, "Action cannot be null");
+        requireNonNull(startAt, StartAt.class.getSimpleName() + " cannot be null");
+
+        if (runningSubscriptions.containsKey(subscriptionId) || pausedSubscriptions.containsKey(subscriptionId)) {
+            throw new IllegalArgumentException("Subscription " + subscriptionId + " is already defined.");
+        }
+        if (shutdown) {
+            throw new IllegalStateException("Cannot start subscription because the subscription model is shutdown.");
+        }
+        return startInternalSubscription(subscriptionId, filter, new AtomicReference<>(startAt), action);
+    }
+
+    private Subscription startInternalSubscription(String subscriptionId, @Nullable SubscriptionFilter filter, AtomicReference<StartAt> currentStartAt, Function<CloudEvent, Mono<Void>> action) {
+        Sinks.Empty<Void> startedSink = Sinks.empty();
+        Disposable disposable = resilientChangeStream(filter, currentStartAt, startedSink)
+                .concatMap(action)
+                .subscribe(unused -> {
+                        }, throwable -> log.error("Subscription {} terminated with an unrecoverable error", subscriptionId, throwable));
+        InternalSubscription internalSubscription = new InternalSubscription(disposable, currentStartAt, filter, action, startedSink.asMono());
+        if (running) {
+            runningSubscriptions.put(subscriptionId, internalSubscription);
+        } else {
+            pausedSubscriptions.put(subscriptionId, internalSubscription);
+        }
+        return new ReactorMongoSubscription(subscriptionId, internalSubscription.started);
+    }
+
+    private Flux<CloudEvent> resilientChangeStream(@Nullable SubscriptionFilter filter, AtomicReference<StartAt> currentStartAt, Sinks.@Nullable Empty<Void> startedSink) {
+        return changeStream(filter, currentStartAt, startedSink)
+                .retryWhen(Retry.backoff(Long.MAX_VALUE, config.minBackoff)
+                        .maxBackoff(config.maxBackoff)
+                        .filter(throwable -> shouldRestart(throwable, currentStartAt)));
+    }
+
+    private Flux<CloudEvent> changeStream(@Nullable SubscriptionFilter filter, AtomicReference<StartAt> currentStartAt, Sinks.@Nullable Empty<Void> startedSink) {
         return Flux.defer(() -> {
             SubscriptionModelContext subscriptionModelContext = new SubscriptionModelContext(ReactorMongoSubscriptionModel.class);
             // TODO We should change builder::resumeAt to builder::startAtOperationTime once Spring adds support for it (see https://jira.spring.io/browse/DATAMONGO-2607)
             ChangeStreamOptionsBuilder builder = MongoCommons.applyStartPosition(ChangeStreamOptions.builder(), ChangeStreamOptionsBuilder::startAfter, ChangeStreamOptionsBuilder::resumeAt, currentStartAt.get(), subscriptionModelContext);
             final ChangeStreamOptions changeStreamOptions = ApplyFilterToChangeStreamOptionsBuilder.applyFilter(timeRepresentation, filter, builder);
             Flux<ChangeStreamEvent<Document>> changeStream = mongo.changeStream(eventCollection, changeStreamOptions, Document.class);
+            // "Started" only means the change stream has been subscribed to, not that the server has confirmed the
+            // cursor is healthy, the same practical limitation NativeMongoSubscriptionModel's latch has.
+            if (startedSink != null) {
+                changeStream = changeStream.doOnSubscribe(subscription -> startedSink.tryEmitEmpty());
+            }
             return changeStream
                     .flatMap(changeEvent -> {
                         ChangeStreamDocument<Document> raw = changeEvent.getRaw();
@@ -182,5 +239,109 @@ public class ReactorMongoSubscriptionModel implements PositionAwareSubscriptionM
                     }
                 })
                 .map(MongoOperationTimeSubscriptionPosition::new);
+    }
+
+    @Override
+    public synchronized void pauseSubscription(String subscriptionId) {
+        if (shutdown) {
+            throw new IllegalStateException(ReactorMongoSubscriptionModel.class.getSimpleName() + " is shutdown");
+        } else if (isPaused(subscriptionId)) {
+            throw new IllegalArgumentException("Subscription " + subscriptionId + " is already paused");
+        } else if (!isRunning(subscriptionId)) {
+            throw new IllegalArgumentException("Subscription " + subscriptionId + " is not running");
+        }
+
+        InternalSubscription internalSubscription = runningSubscriptions.remove(subscriptionId);
+        if (internalSubscription != null) {
+            internalSubscription.disposable.dispose();
+            pausedSubscriptions.put(subscriptionId, internalSubscription);
+        }
+    }
+
+    @Override
+    public synchronized Subscription resumeSubscription(String subscriptionId) {
+        if (shutdown) {
+            throw new IllegalStateException(ReactorMongoSubscriptionModel.class.getSimpleName() + " is shutdown");
+        } else if (isRunning(subscriptionId)) {
+            throw new IllegalArgumentException("Subscription " + subscriptionId + " is already running");
+        }
+
+        InternalSubscription internalSubscription = pausedSubscriptions.remove(subscriptionId);
+        if (internalSubscription == null) {
+            throw new IllegalArgumentException("Subscription " + subscriptionId + " isn't paused.");
+        }
+
+        running = true;
+        // Reuses the same currentStartAt reference so resume continues from the position of the last event
+        // delivered before the subscription was paused, rather than replaying (or skipping) from the original StartAt.
+        return startInternalSubscription(subscriptionId, internalSubscription.filter, internalSubscription.currentStartAt, internalSubscription.action);
+    }
+
+    @Override
+    public synchronized void cancelSubscription(String subscriptionId) {
+        InternalSubscription internalSubscription = runningSubscriptions.remove(subscriptionId);
+        if (internalSubscription != null) {
+            internalSubscription.disposable.dispose();
+        }
+        pausedSubscriptions.remove(subscriptionId);
+    }
+
+    @PreDestroy
+    @Override
+    public synchronized void shutdown() {
+        shutdown = true;
+        running = false;
+        runningSubscriptions.values().forEach(internalSubscription -> internalSubscription.disposable.dispose());
+        runningSubscriptions.clear();
+        pausedSubscriptions.clear();
+    }
+
+    @Override
+    public synchronized void stop() {
+        if (!shutdown) {
+            running = false;
+            runningSubscriptions.forEach((subscriptionId, __) -> pauseSubscription(subscriptionId));
+        }
+    }
+
+    @Override
+    public synchronized void start(boolean resumeSubscriptionsAutomatically) {
+        if (!shutdown) {
+            running = true;
+            if (resumeSubscriptionsAutomatically) {
+                pausedSubscriptions.forEach((subscriptionId, __) -> resumeSubscription(subscriptionId));
+            }
+        }
+    }
+
+    @Override
+    public boolean isRunning() {
+        return running;
+    }
+
+    @Override
+    public boolean isRunning(String subscriptionId) {
+        return !shutdown && runningSubscriptions.containsKey(subscriptionId);
+    }
+
+    @Override
+    public boolean isPaused(String subscriptionId) {
+        return !shutdown && pausedSubscriptions.containsKey(subscriptionId);
+    }
+
+    private static final class InternalSubscription {
+        final Disposable disposable;
+        final AtomicReference<StartAt> currentStartAt;
+        final @Nullable SubscriptionFilter filter;
+        final Function<CloudEvent, Mono<Void>> action;
+        final Mono<Void> started;
+
+        private InternalSubscription(Disposable disposable, AtomicReference<StartAt> currentStartAt, @Nullable SubscriptionFilter filter, Function<CloudEvent, Mono<Void>> action, Mono<Void> started) {
+            this.disposable = disposable;
+            this.currentStartAt = currentStartAt;
+            this.filter = filter;
+            this.action = action;
+            this.started = started;
+        }
     }
 }

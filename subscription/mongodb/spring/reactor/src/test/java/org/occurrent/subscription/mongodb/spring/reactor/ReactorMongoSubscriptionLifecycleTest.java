@@ -1,0 +1,217 @@
+/*
+ * Copyright 2026 Johan Haleby
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ *        http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+
+package org.occurrent.subscription.mongodb.spring.reactor;
+
+import com.fasterxml.jackson.databind.ObjectMapper;
+import com.mongodb.ConnectionString;
+import com.mongodb.reactivestreams.client.MongoClient;
+import com.mongodb.reactivestreams.client.MongoClients;
+import io.cloudevents.CloudEvent;
+import io.cloudevents.core.builder.CloudEventBuilder;
+import org.junit.jupiter.api.AfterEach;
+import org.junit.jupiter.api.BeforeEach;
+import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.Timeout;
+import org.junit.jupiter.api.extension.RegisterExtension;
+import org.occurrent.domain.DomainEvent;
+import org.occurrent.domain.NameDefined;
+import org.occurrent.eventstore.mongodb.spring.reactor.EventStoreConfig;
+import org.occurrent.eventstore.mongodb.spring.reactor.ReactorMongoEventStore;
+import org.occurrent.mongodb.timerepresentation.TimeRepresentation;
+import org.occurrent.subscription.StartAt;
+import org.occurrent.testsupport.mongodb.FlushMongoDBExtension;
+import org.springframework.data.mongodb.ReactiveMongoTransactionManager;
+import org.springframework.data.mongodb.core.ReactiveMongoTemplate;
+import org.springframework.data.mongodb.core.SimpleReactiveMongoDatabaseFactory;
+import org.springframework.transaction.ReactiveTransactionManager;
+import org.testcontainers.junit.jupiter.Container;
+import org.testcontainers.junit.jupiter.Testcontainers;
+import org.testcontainers.mongodb.MongoDBContainer;
+import reactor.core.publisher.Mono;
+
+import java.net.URI;
+import java.time.Duration;
+import java.time.LocalDateTime;
+import java.util.UUID;
+import java.util.concurrent.CopyOnWriteArrayList;
+
+import static java.time.ZoneOffset.UTC;
+import static java.time.temporal.ChronoUnit.MILLIS;
+import static java.util.Objects.requireNonNull;
+import static java.util.concurrent.TimeUnit.SECONDS;
+import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.catchThrowable;
+import static org.awaitility.Awaitility.await;
+import static org.occurrent.functional.CheckedFunction.unchecked;
+import static org.occurrent.time.TimeConversion.toLocalDateTime;
+
+/**
+ * Tests the named, lifecycle-managed subscriptions ({@link org.occurrent.subscription.api.reactor.Subscribable},
+ * {@link org.occurrent.subscription.api.reactor.SubscriptionModelLifeCycle}) that {@link ReactorMongoSubscriptionModel}
+ * adds on top of the plain {@link reactor.core.publisher.Flux} primitive. Mirrors {@code NativeMongoSubscriptionModelTest}'s
+ * {@code LifeCycleTest}.
+ */
+@Testcontainers
+@Timeout(20)
+public class ReactorMongoSubscriptionLifecycleTest {
+
+    @Container
+    private static final MongoDBContainer mongoDBContainer =
+            new MongoDBContainer("mongo:" + System.getProperty("test.mongo.version"))
+                    .withReplicaSet()
+                    .withReuse(true);
+
+    @RegisterExtension
+    FlushMongoDBExtension flushMongoDBExtension = new FlushMongoDBExtension(new ConnectionString(mongoDBContainer.getReplicaSetUrl() + ".reactivelifecycle"));
+
+    private MongoClient mongoClient;
+    private ReactorMongoEventStore mongoEventStore;
+    private ReactorMongoSubscriptionModel subscriptionModel;
+    private ObjectMapper objectMapper;
+
+    @BeforeEach
+    void createEventStore() {
+        ConnectionString connectionString = new ConnectionString(mongoDBContainer.getReplicaSetUrl() + ".reactivelifecycle");
+        mongoClient = MongoClients.create(connectionString);
+        ReactiveMongoTemplate reactiveMongoTemplate = new ReactiveMongoTemplate(mongoClient, requireNonNull(connectionString.getDatabase()));
+        subscriptionModel = new ReactorMongoSubscriptionModel(reactiveMongoTemplate, "events", TimeRepresentation.RFC_3339_STRING);
+        ReactiveTransactionManager reactiveMongoTransactionManager = new ReactiveMongoTransactionManager(new SimpleReactiveMongoDatabaseFactory(mongoClient, requireNonNull(connectionString.getDatabase())));
+        EventStoreConfig eventStoreConfig = new EventStoreConfig.Builder().eventStoreCollectionName("events").transactionConfig(reactiveMongoTransactionManager).timeRepresentation(TimeRepresentation.RFC_3339_STRING).build();
+        mongoEventStore = new ReactorMongoEventStore(reactiveMongoTemplate, eventStoreConfig);
+        objectMapper = new ObjectMapper();
+    }
+
+    @AfterEach
+    void shutdown() {
+        subscriptionModel.shutdown();
+        mongoClient.close();
+    }
+
+    @Test
+    void named_subscription_delivers_events_to_the_action() {
+        // Given
+        LocalDateTime now = LocalDateTime.now();
+        CopyOnWriteArrayList<CloudEvent> state = new CopyOnWriteArrayList<>();
+        subscriptionModel.subscribe(UUID.randomUUID().toString(), cloudEvent -> {
+            state.add(cloudEvent);
+            return Mono.empty();
+        }).waitUntilStarted().block(Duration.ofSeconds(10));
+
+        // When
+        mongoEventStore.write("1", 0, serialize(new NameDefined(UUID.randomUUID().toString(), now, "name", "name1"))).block();
+
+        // Then
+        await().atMost(10, SECONDS).with().pollInterval(Duration.of(20, MILLIS)).untilAsserted(() -> assertThat(state).hasSize(1));
+    }
+
+    @Test
+    void subscribing_twice_with_the_same_id_throws_iae() {
+        // Given
+        String subscriptionId = UUID.randomUUID().toString();
+        subscriptionModel.subscribe(subscriptionId, __ -> Mono.empty()).waitUntilStarted().block(Duration.ofSeconds(10));
+
+        // When
+        Throwable throwable = catchThrowable(() -> subscriptionModel.subscribe(subscriptionId, __ -> Mono.empty()));
+
+        // Then
+        assertThat(throwable).isExactlyInstanceOf(IllegalArgumentException.class).hasMessage("Subscription " + subscriptionId + " is already defined.");
+    }
+
+    @Test
+    void pausing_a_subscription_stops_delivery_and_resuming_continues_without_replay() {
+        // Given
+        LocalDateTime now = LocalDateTime.now();
+        CopyOnWriteArrayList<CloudEvent> state = new CopyOnWriteArrayList<>();
+        String subscriptionId = UUID.randomUUID().toString();
+        subscriptionModel.subscribe(subscriptionId, StartAt.now(), cloudEvent -> {
+            state.add(cloudEvent);
+            return Mono.empty();
+        }).waitUntilStarted().block(Duration.ofSeconds(10));
+
+        mongoEventStore.write("1", 0, serialize(new NameDefined(UUID.randomUUID().toString(), now, "name", "name1"))).block();
+        await().atMost(10, SECONDS).with().pollInterval(Duration.of(20, MILLIS)).untilAsserted(() -> assertThat(state).hasSize(1));
+
+        // When
+        subscriptionModel.pauseSubscription(subscriptionId);
+        mongoEventStore.write("1", 1, serialize(new NameDefined(UUID.randomUUID().toString(), now.plusSeconds(1), "name", "name2"))).block();
+
+        // Then: nothing delivered while paused
+        assertThat(subscriptionModel.isPaused(subscriptionId)).isTrue();
+        assertThat(subscriptionModel.isRunning(subscriptionId)).isFalse();
+
+        // When: resumed
+        subscriptionModel.resumeSubscription(subscriptionId).waitUntilStarted().block(Duration.ofSeconds(10));
+
+        // Then: the event written while paused is delivered exactly once, no replay of the first event
+        await().atMost(10, SECONDS).with().pollInterval(Duration.of(20, MILLIS)).untilAsserted(() -> assertThat(state).hasSize(2));
+        assertThat(state).extracting(CloudEvent::getId).doesNotHaveDuplicates();
+    }
+
+    @Test
+    void cancelling_a_subscription_forgets_it_and_stops_delivery() {
+        // Given
+        LocalDateTime now = LocalDateTime.now();
+        CopyOnWriteArrayList<CloudEvent> state = new CopyOnWriteArrayList<>();
+        String subscriptionId = UUID.randomUUID().toString();
+        subscriptionModel.subscribe(subscriptionId, cloudEvent -> {
+            state.add(cloudEvent);
+            return Mono.empty();
+        }).waitUntilStarted().block(Duration.ofSeconds(10));
+
+        mongoEventStore.write("1", 0, serialize(new NameDefined(UUID.randomUUID().toString(), now, "name", "name1"))).block();
+        await().atMost(10, SECONDS).with().pollInterval(Duration.of(20, MILLIS)).untilAsserted(() -> assertThat(state).hasSize(1));
+
+        // When
+        subscriptionModel.cancelSubscription(subscriptionId);
+
+        // Then
+        assertThat(subscriptionModel.isRunning(subscriptionId)).isFalse();
+        assertThat(subscriptionModel.isPaused(subscriptionId)).isFalse();
+
+        // A new subscription can reuse the same id since the old one is forgotten
+        subscriptionModel.subscribe(subscriptionId, __ -> Mono.empty()).waitUntilStarted().block(Duration.ofSeconds(10));
+    }
+
+    @Test
+    void shutdown_disposes_all_running_and_paused_subscriptions() {
+        // Given
+        String runningId = UUID.randomUUID().toString();
+        String pausedId = UUID.randomUUID().toString();
+        subscriptionModel.subscribe(runningId, __ -> Mono.empty()).waitUntilStarted().block(Duration.ofSeconds(10));
+        subscriptionModel.subscribe(pausedId, __ -> Mono.empty()).waitUntilStarted().block(Duration.ofSeconds(10));
+        subscriptionModel.pauseSubscription(pausedId);
+
+        // When
+        subscriptionModel.shutdown();
+
+        // Then
+        assertThat(subscriptionModel.isRunning(runningId)).isFalse();
+        assertThat(subscriptionModel.isPaused(pausedId)).isFalse();
+    }
+
+    private reactor.core.publisher.Flux<CloudEvent> serialize(DomainEvent e) {
+        return reactor.core.publisher.Flux.just(CloudEventBuilder.v1()
+                .withId(e.eventId())
+                .withSource(URI.create("http://name"))
+                .withType(e.getClass().getName())
+                .withTime(toLocalDateTime(e.timestamp()).atOffset(UTC))
+                .withSubject(e.name())
+                .withDataContentType("application/json")
+                .withData(unchecked(objectMapper::writeValueAsBytes).apply(e))
+                .build());
+    }
+}
