@@ -99,6 +99,7 @@ public class ReactorMongoSubscriptionModel implements PositionAwareSubscriptionM
 
     @Override
     public Flux<CloudEvent> subscribe(@Nullable SubscriptionFilter filter, StartAt startAt) {
+        requireNonNull(startAt, StartAt.class.getSimpleName() + " cannot be null");
         // currentStartAt tracks the position of the last change-stream document read (updated in changeStream(...)
         // below, whether or not it produced a delivered CloudEvent), read again by changeStream(...) on every
         // resubscribe that retryWhen triggers, so recovery from an error continues gap-free instead of replaying or
@@ -120,15 +121,17 @@ public class ReactorMongoSubscriptionModel implements PositionAwareSubscriptionM
             final ChangeStreamOptions changeStreamOptions = ApplyFilterToChangeStreamOptionsBuilder.applyFilter(timeRepresentation, filter, builder);
             Flux<ChangeStreamEvent<Document>> changeStream = mongo.changeStream(eventCollection, changeStreamOptions, Document.class);
             return changeStream
-                    // Advance the tracked position for every change-stream document received, even if it doesn't
-                    // deserialize into a delivered CloudEvent, mirroring NativeMongoSubscriptionModel, so a
-                    // resubscribe after an error resumes gap-free.
-                    .doOnNext(changeEvent -> currentStartAt.set(StartAt.subscriptionPosition(new MongoResumeTokenSubscriptionPosition(requireNonNull(changeEvent.getResumeToken()).asDocument()))))
-                    .flatMap(changeEvent ->
-                            MongoCloudEventsToJsonDeserializer.deserializeToCloudEvent(requireNonNull(changeEvent.getRaw()), timeRepresentation)
-                                    .map(cloudEvent -> new PositionAwareCloudEvent(cloudEvent, new MongoResumeTokenSubscriptionPosition(requireNonNull(changeEvent.getResumeToken()).asDocument())))
-                                    .map(Mono::just)
-                                    .orElse(Mono.empty()));
+                    .flatMap(changeEvent -> {
+                        MongoResumeTokenSubscriptionPosition subscriptionPosition = new MongoResumeTokenSubscriptionPosition(requireNonNull(changeEvent.getResumeToken()).asDocument());
+                        // Advance the tracked position for every change-stream document received, even if it
+                        // doesn't deserialize into a delivered CloudEvent, mirroring NativeMongoSubscriptionModel,
+                        // so a resubscribe after an error resumes gap-free.
+                        currentStartAt.set(StartAt.subscriptionPosition(subscriptionPosition));
+                        return MongoCloudEventsToJsonDeserializer.deserializeToCloudEvent(requireNonNull(changeEvent.getRaw()), timeRepresentation)
+                                .map(cloudEvent -> new PositionAwareCloudEvent(cloudEvent, subscriptionPosition))
+                                .map(Mono::just)
+                                .orElse(Mono.empty());
+                    });
         });
     }
 
