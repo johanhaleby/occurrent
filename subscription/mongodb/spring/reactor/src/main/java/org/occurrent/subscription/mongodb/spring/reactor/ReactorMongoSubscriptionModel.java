@@ -72,7 +72,7 @@ public class ReactorMongoSubscriptionModel implements PositionAwareSubscriptionM
     private final ReactorMongoSubscriptionModelConfig config;
 
     /**
-     * Create a blocking subscription using Spring
+     * Create a reactive subscription using Spring
      *
      * @param mongo              The {@link ReactiveMongoOperations} instance to use when reading events from the event store
      * @param eventCollection    The collection that contains the events
@@ -83,7 +83,7 @@ public class ReactorMongoSubscriptionModel implements PositionAwareSubscriptionM
     }
 
     /**
-     * Create a blocking subscription using Spring
+     * Create a reactive subscription using Spring
      *
      * @param mongo              The {@link ReactiveMongoOperations} instance to use when reading events from the event store
      * @param eventCollection    The collection that contains the events
@@ -99,10 +99,10 @@ public class ReactorMongoSubscriptionModel implements PositionAwareSubscriptionM
 
     @Override
     public Flux<CloudEvent> subscribe(@Nullable SubscriptionFilter filter, StartAt startAt) {
-        // currentStartAt tracks the position of the last event actually delivered from the change stream (updated
-        // in changeStream(...) below), read again by changeStream(...) on every resubscribe that retryWhen triggers,
-        // so recovery from an error continues gap-free instead of replaying or skipping events. Flux.defer gives
-        // each subscriber to the returned Flux its own tracked position.
+        // currentStartAt tracks the position of the last change-stream document read (updated in changeStream(...)
+        // below, whether or not it produced a delivered CloudEvent), read again by changeStream(...) on every
+        // resubscribe that retryWhen triggers, so recovery from an error continues gap-free instead of replaying or
+        // skipping events. Flux.defer gives each subscriber to the returned Flux its own tracked position.
         return Flux.defer(() -> {
             AtomicReference<StartAt> currentStartAt = new AtomicReference<>(startAt);
             return changeStream(filter, currentStartAt)

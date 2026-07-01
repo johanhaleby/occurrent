@@ -12,7 +12,7 @@ Accepted
 
 ## Decision
 
-`subscribe(...)` now tracks the position of the last event actually delivered from the change stream in an `AtomicReference<StartAt>`, and wraps the change stream in `retryWhen(...)`:
+`subscribe(...)` now tracks the position of the last change-stream document read in an `AtomicReference<StartAt>`, and wraps the change stream in `retryWhen(...)`:
 
 ```java
 return Flux.defer(() -> {
@@ -39,7 +39,7 @@ Disposal (a subscriber calling `Disposable.dispose()`) sends a `cancel()` signal
 
 ## Consequences
 
-- `ReactorMongoSubscriptionModel` survives the same class of MongoDB operational disruption `SpringMongoSubscriptionModel` and `NativeMongoSubscriptionModel` do, recovering gap-free from the position of the last event it actually delivered.
+- `ReactorMongoSubscriptionModel` survives the same class of MongoDB operational disruption `SpringMongoSubscriptionModel` and `NativeMongoSubscriptionModel` do, recovering gap-free from the position of the last change-stream document it read.
 - The `subscribe(filter, startAt) -> Flux<CloudEvent>` contract is unchanged. This is purely additive, existing callers get the resilience automatically.
 - Verified against real MongoDB (a replica-set Testcontainer) by mocking `ReactiveMongoOperations.changeStream(...)` to error once with the exact exception types a failover or a 286 response would surface, then delegate to the real operations, the same technique `SpringMongoSubscriptionModelTest` and the native model's resilience test use. A live multi-node failover test was rejected for the same reason given in ADR 41, the deterministic injection tests exercise the identical code path with far less infrastructure and flakiness risk.
 - This PR intentionally does not add subscription lifecycle (named subscriptions, pause, resume, cancel) to the reactive model. That is tracked separately as reactive lifecycle parity, stacked on this change.

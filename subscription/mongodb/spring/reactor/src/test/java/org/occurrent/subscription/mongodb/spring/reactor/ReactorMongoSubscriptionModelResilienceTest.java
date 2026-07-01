@@ -178,7 +178,7 @@ public class ReactorMongoSubscriptionModelResilienceTest {
         }
 
         @Test
-        void does_not_restart_subscription_when_not_configured_to_do_so() throws InterruptedException {
+        void does_not_restart_subscription_when_not_configured_to_do_so() {
             // Given
             ReactiveMongoOperations throwingOperations = operationsThatFailOnce(changeStreamHistoryLostException());
             ReactorMongoSubscriptionModel subscriptionModel = new ReactorMongoSubscriptionModel(throwingOperations, "events", TimeRepresentation.RFC_3339_STRING,
@@ -191,11 +191,10 @@ public class ReactorMongoSubscriptionModelResilienceTest {
 
             // When
             mongoEventStore.write("1", 0, serialize(new NameDefined(UUID.randomUUID().toString(), now, "name", "name1"))).block();
-            Thread.sleep(500);
 
-            // Then
-            assertThat(state).isEmpty();
+            // Then: wait for the terminal error signal, the definitive point delivery has stopped, instead of a fixed sleep.
             await().atMost(5, SECONDS).untilAsserted(() -> assertThat(errors).hasSize(1));
+            assertThat(state).isEmpty();
         }
     }
 

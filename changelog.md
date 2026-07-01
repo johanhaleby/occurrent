@@ -11,7 +11,7 @@ DCB is a capability layered on the existing CloudEvent storage, not a new store 
 #### Changes
 
 * Hardened `ReactorMongoSubscriptionModel` against the MongoDB operational failures `SpringMongoSubscriptionModel` already survives in production: replica-set failovers, transient network errors, and change-stream history loss.
-  * A change-stream error (a failover, a transient network error, or anything else the driver itself does not resume) now retries with exponential backoff instead of terminating the `Flux`, resuming from the position of the last event actually delivered so recovery is gap-free rather than a replay or a skipped window.
+  * A change-stream error (a failover, a transient network error, or anything else the driver itself does not resume) now retries with exponential backoff instead of terminating the `Flux`, resuming from the position of the last change-stream document read so recovery is gap-free rather than a replay or a skipped window.
   * `MongoCommandException`s with error code 286 (`ChangeStreamHistoryLost`) restart from `StartAt.now()` only when configured to via the new `ReactorMongoSubscriptionModelConfig.restartSubscriptionsOnChangeStreamHistoryLost(true)` (default `false`, matching the Spring default); otherwise the subscription stops and logs an error, same as `SpringMongoSubscriptionModel`.
   * The `subscribe(filter, startAt) -> Flux<CloudEvent>` contract is unchanged, this is purely additive.
   * See [ADR 42](doc/architecture/decisions/0042-reactive-mongodb-subscription-model-resilience.md).
