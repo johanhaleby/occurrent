@@ -303,7 +303,7 @@ public class ReactorMongoSubscriptionModelResilienceTest {
             // chance to complete the started signal since the change stream Flux is never created to subscribe to.
             // Uses a non-restartable error (history lost, restart-on-history-lost off by default) so the failure is
             // terminal instead of retried forever, matching the only way a real failure here can actually terminate.
-            MongoCommandException historyLost = changeStreamHistoryLostException();
+            UncategorizedMongoDbException historyLost = changeStreamHistoryLostException();
             ReactiveMongoOperations throwingOperations = mock(ReactiveMongoOperations.class);
             when(throwingOperations.changeStream(eq("events"), any(ChangeStreamOptions.class), eq(Document.class))).thenThrow(historyLost);
             ReactorMongoSubscriptionModel subscriptionModel = new ReactorMongoSubscriptionModel(throwingOperations, "events", TimeRepresentation.RFC_3339_STRING);

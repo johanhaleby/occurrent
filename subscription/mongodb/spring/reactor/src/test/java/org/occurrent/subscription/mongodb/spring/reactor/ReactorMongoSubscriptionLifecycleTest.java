@@ -208,6 +208,26 @@ public class ReactorMongoSubscriptionLifecycleTest {
     }
 
     @Test
+    void a_subscription_that_terminates_with_an_unrecoverable_error_is_removed_from_running_and_can_be_resubscribed() {
+        // Given: the action itself throws, which concatMap surfaces as a terminal error the outer retryWhen never
+        // sees, since it only covers the change stream, not the action.
+        String subscriptionId = UUID.randomUUID().toString();
+        subscriptionModel.subscribe(subscriptionId, __ -> {
+            throw new RuntimeException("boom");
+        }).waitUntilStarted().block(Duration.ofSeconds(10));
+
+        // When
+        mongoEventStore.write("1", 0, serialize(new NameDefined(UUID.randomUUID().toString(), LocalDateTime.now(), "name", "name1"))).block();
+
+        // Then: the dead subscription is no longer tracked as running or paused
+        await().atMost(10, SECONDS).untilAsserted(() -> assertThat(subscriptionModel.isRunning(subscriptionId)).isFalse());
+        assertThat(subscriptionModel.isPaused(subscriptionId)).isFalse();
+
+        // A new subscription can reuse the same id since the dead one is forgotten
+        subscriptionModel.subscribe(subscriptionId, __ -> Mono.empty()).waitUntilStarted().block(Duration.ofSeconds(10));
+    }
+
+    @Test
     void shutdown_disposes_all_running_and_paused_subscriptions() {
         // Given
         String runningId = UUID.randomUUID().toString();

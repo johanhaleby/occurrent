@@ -163,6 +163,9 @@ public class ReactorMongoSubscriptionModel implements PositionAwareSubscriptionM
                             // stream never got that far (e.g. building the change stream options itself threw),
                             // this is what keeps waitUntilStarted() from hanging forever.
                             startedSink.tryEmitError(throwable);
+                            // A dead subscription must not still count as running, or isRunning(id) would lie and
+                            // the id couldn't be reused without an explicit cancelSubscription() call.
+                            runningSubscriptions.remove(subscriptionId);
                         });
         InternalSubscription internalSubscription = new InternalSubscription(disposable, currentStartAt, filter, action, startedSink.asMono());
         runningSubscriptions.put(subscriptionId, internalSubscription);
