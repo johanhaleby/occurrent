@@ -17,6 +17,7 @@
 package org.occurrent.subscription.mongodb.spring.reactor;
 
 import com.mongodb.MongoCommandException;
+import com.mongodb.client.model.changestream.ChangeStreamDocument;
 import io.cloudevents.CloudEvent;
 import org.bson.Document;
 import org.jspecify.annotations.NullMarked;
@@ -127,7 +128,14 @@ public class ReactorMongoSubscriptionModel implements PositionAwareSubscriptionM
                         // doesn't deserialize into a delivered CloudEvent, mirroring NativeMongoSubscriptionModel,
                         // so a resubscribe after an error resumes gap-free.
                         currentStartAt.set(StartAt.subscriptionPosition(subscriptionPosition));
-                        return MongoCloudEventsToJsonDeserializer.deserializeToCloudEvent(requireNonNull(changeEvent.getRaw()), timeRepresentation)
+                        ChangeStreamDocument<Document> raw = changeEvent.getRaw();
+                        if (raw == null) {
+                            // Mirrors SpringMongoSubscriptionModel's same defensive check. Not expected to ever
+                            // happen, but skipping this one event beats an NPE that retries the whole subscription.
+                            log.error("Internal error: ChangeStreamEvent for collection {} had a null raw document", eventCollection);
+                            return Mono.empty();
+                        }
+                        return MongoCloudEventsToJsonDeserializer.deserializeToCloudEvent(raw, timeRepresentation)
                                 .map(cloudEvent -> new PositionAwareCloudEvent(cloudEvent, subscriptionPosition))
                                 .map(Mono::just)
                                 .orElse(Mono.empty());
