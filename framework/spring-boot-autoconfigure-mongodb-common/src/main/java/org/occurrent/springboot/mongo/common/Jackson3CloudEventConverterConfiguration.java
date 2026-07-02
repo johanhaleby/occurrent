@@ -15,7 +15,7 @@
  *  limitations under the License.
  */
 
-package org.occurrent.springboot.mongo.blocking;
+package org.occurrent.springboot.mongo.common;
 
 import org.occurrent.application.converter.CloudEventConverter;
 import org.occurrent.application.converter.jackson3.JacksonCloudEventConverter;
@@ -34,7 +34,7 @@ import java.time.temporal.ChronoUnit;
 import java.util.Optional;
 
 @Configuration(proxyBeanMethods = false)
-class Jackson3CloudEventConverterConfiguration {
+public class Jackson3CloudEventConverterConfiguration {
 
     @Bean
     // Keep the fallback converter lazy so composed libraries can supply their own

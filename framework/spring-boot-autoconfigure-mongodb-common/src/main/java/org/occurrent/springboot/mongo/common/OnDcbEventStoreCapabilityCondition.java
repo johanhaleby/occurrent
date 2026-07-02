@@ -15,7 +15,7 @@
  *  limitations under the License.
  */
 
-package org.occurrent.springboot.mongo.blocking;
+package org.occurrent.springboot.mongo.common;
 
 import org.jspecify.annotations.NonNull;
 import org.occurrent.eventstore.api.EventStoreCapability;
@@ -30,7 +30,7 @@ import java.util.Set;
 import static org.occurrent.eventstore.api.EventStoreCapability.DCB;
 import static org.occurrent.eventstore.api.EventStoreCapability.STREAM;
 
-class OnDcbEventStoreCapabilityCondition implements Condition {
+public class OnDcbEventStoreCapabilityCondition implements Condition {
     @Override
     public boolean matches(ConditionContext context, @NonNull AnnotatedTypeMetadata metadata) {
         Set<EventStoreCapability> capabilities = Binder.get(context.getEnvironment())

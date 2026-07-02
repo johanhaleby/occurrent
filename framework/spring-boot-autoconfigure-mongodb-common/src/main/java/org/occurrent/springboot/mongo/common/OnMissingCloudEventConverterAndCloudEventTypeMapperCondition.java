@@ -15,7 +15,7 @@
  *  limitations under the License.
  */
 
-package org.occurrent.springboot.mongo.blocking;
+package org.occurrent.springboot.mongo.common;
 
 import org.jspecify.annotations.NonNull;
 import org.occurrent.application.converter.CloudEventConverter;
@@ -37,7 +37,7 @@ import org.springframework.core.type.AnnotatedTypeMetadata;
  * It'll match when ANY of the beans are missing
  * </p>
  */
-class OnMissingCloudEventConverterAndCloudEventTypeMapperCondition implements Condition {
+public class OnMissingCloudEventConverterAndCloudEventTypeMapperCondition implements Condition {
 
     @Override
     public boolean matches(ConditionContext context, @NonNull AnnotatedTypeMetadata metadata) {

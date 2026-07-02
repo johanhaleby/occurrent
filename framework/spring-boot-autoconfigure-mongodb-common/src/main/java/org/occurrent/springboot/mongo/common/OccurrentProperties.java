@@ -15,13 +15,10 @@
  *  limitations under the License.
  */
 
-package org.occurrent.springboot.mongo.blocking;
+package org.occurrent.springboot.mongo.common;
 
-import org.occurrent.application.service.blocking.generic.GenericApplicationService;
-import org.occurrent.eventstore.api.WriteConditionNotFulfilledException;
 import org.occurrent.eventstore.api.EventStoreCapability;
 import org.occurrent.mongodb.timerepresentation.TimeRepresentation;
-import org.occurrent.retry.RetryStrategy;
 import org.springframework.boot.context.properties.ConfigurationProperties;
 
 import java.net.URI;
@@ -58,8 +55,8 @@ public class OccurrentProperties {
 
         /**
          * Configure whether to enable the default retry strategy for the application service.
-         * If enabled, the {@link GenericApplicationService} will use a {@link RetryStrategy} for retries, with exponential backoff starting with 100 ms and progressively go up to max 2 seconds wait time between
-         * each retry, if {@link WriteConditionNotFulfilledException} is caught. It will, by default, only retry 5 times before giving up, rethrowing the original exception.
+         * If enabled, the GenericApplicationService will use a retry strategy for retries, with exponential backoff starting with 100 ms and progressively go up to max 2 seconds wait time between
+         * each retry, if a write-condition-not-fulfilled exception is caught. It will, by default, only retry 5 times before giving up, rethrowing the original exception.
          */
         private boolean enableDefaultRetryStrategy = true;
 
@@ -148,8 +145,8 @@ public class OccurrentProperties {
          * in this application.
          * </p>
          * <p>
-         * Note that settings this to {@code false} also disables the creation of an {@link org.occurrent.application.service.blocking.ApplicationService}
-         * and {@link org.occurrent.dsl.query.blocking.DomainEventQueries}.
+         * Note that settings this to {@code false} also disables the creation of an ApplicationService
+         * and a DomainEventQueries instance.
          * </p>
          */
         private boolean enabled = true;

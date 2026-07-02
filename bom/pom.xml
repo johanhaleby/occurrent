@@ -349,6 +349,11 @@
             </dependency>
             <dependency>
                 <groupId>org.occurrent</groupId>
+                <artifactId>subscription-dsl-reactor</artifactId>
+                <version>${project.version}</version>
+            </dependency>
+            <dependency>
+                <groupId>org.occurrent</groupId>
                 <artifactId>module-dsl-blocking</artifactId>
                 <version>${project.version}</version>
             </dependency>
@@ -384,7 +389,17 @@
             </dependency>
             <dependency>
                 <groupId>org.occurrent</groupId>
+                <artifactId>spring-boot-autoconfigure-mongodb-common</artifactId>
+                <version>${project.version}</version>
+            </dependency>
+            <dependency>
+                <groupId>org.occurrent</groupId>
                 <artifactId>spring-boot-starter-mongodb</artifactId>
+                <version>${project.version}</version>
+            </dependency>
+            <dependency>
+                <groupId>org.occurrent</groupId>
+                <artifactId>spring-boot-starter-mongodb-reactive</artifactId>
                 <version>${project.version}</version>
             </dependency>
             <dependency>
