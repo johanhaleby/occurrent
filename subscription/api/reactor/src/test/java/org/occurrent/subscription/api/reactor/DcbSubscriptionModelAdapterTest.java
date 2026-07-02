@@ -30,13 +30,18 @@ import org.occurrent.subscription.DcbSubscriptionPosition;
 import org.occurrent.subscription.StartAt;
 import org.occurrent.subscription.SubscriptionFilter;
 import reactor.core.publisher.Flux;
+import reactor.core.publisher.Mono;
 import reactor.test.StepVerifier;
 
 import java.net.URI;
+import java.util.ArrayList;
+import java.util.List;
 import java.util.Set;
 import java.util.UUID;
+import java.util.function.Function;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 @DisplayNameGeneration(ReplaceUnderscores.class)
 class DcbSubscriptionModelAdapterTest {
@@ -60,6 +65,56 @@ class DcbSubscriptionModelAdapterTest {
         // The DcbStartAt is converted to a generic StartAt and passed straight to the delegate.
         assertThat(delegate.capturedStartAt).isInstanceOfSatisfying(StartAt.StartAtSubscriptionPosition.class,
                 start -> assertThat(start.subscriptionPosition).isEqualTo(DcbSubscriptionPosition.of(5)));
+    }
+
+    @Test
+    void named_subscribe_scopes_delivery_to_the_query_and_cancel_delegates_to_the_lifecycle() {
+        CloudEvent matching = dcbEvent("NameDefined", 1, "name:1");
+        CloudEvent otherBoundary = dcbEvent("OrderPlaced", 2, "order:1");
+
+        RecordingSubscribableSubscriptionModel delegate = new RecordingSubscribableSubscriptionModel();
+        DcbSubscriptionModel adapter = DcbSubscriptionModel.from(delegate);
+
+        List<CloudEvent> delivered = new ArrayList<>();
+        Function<CloudEvent, Mono<Void>> action = cloudEvent -> {
+            delivered.add(cloudEvent);
+            return Mono.empty();
+        };
+
+        Subscription subscription = adapter.subscribe("sub-1", DcbQuery.tags("name:1"), DcbStartAt.afterPosition(5), action);
+
+        assertThat(subscription.id()).isEqualTo("sub-1");
+        assertThat(delegate.capturedFilter).isInstanceOf(DcbSubscriptionFilter.class);
+        assertThat(delegate.capturedStartAt).isInstanceOfSatisfying(StartAt.StartAtSubscriptionPosition.class,
+                start -> assertThat(start.subscriptionPosition).isEqualTo(DcbSubscriptionPosition.of(5)));
+
+        // The in-process floor scopes delivery to the query, matching the boundary case for the plain Flux subscribe.
+        delegate.capturedAction.apply(matching).block();
+        delegate.capturedAction.apply(otherBoundary).block();
+        assertThat(delivered).containsExactly(matching);
+
+        adapter.cancelSubscription("sub-1");
+        assertThat(delegate.cancelledSubscriptionIds).containsExactly("sub-1");
+    }
+
+    @Test
+    void named_subscribe_throws_if_the_delegate_does_not_support_named_subscriptions() {
+        RecordingSubscriptionModel delegate = new RecordingSubscriptionModel(Flux.empty());
+        DcbSubscriptionModel adapter = DcbSubscriptionModel.from(delegate);
+
+        assertThatThrownBy(() -> adapter.subscribe("sub-1", DcbQuery.tags("name:1"), DcbStartAt.afterPosition(5), cloudEvent -> Mono.empty()))
+                .isInstanceOf(IllegalStateException.class)
+                .hasMessageContaining(Subscribable.class.getSimpleName());
+    }
+
+    @Test
+    void cancel_subscription_throws_if_the_delegate_does_not_support_lifecycle_management() {
+        RecordingSubscriptionModel delegate = new RecordingSubscriptionModel(Flux.empty());
+        DcbSubscriptionModel adapter = DcbSubscriptionModel.from(delegate);
+
+        assertThatThrownBy(() -> adapter.cancelSubscription("sub-1"))
+                .isInstanceOf(IllegalStateException.class)
+                .hasMessageContaining(SubscriptionModelLifeCycle.class.getSimpleName());
     }
 
     private static CloudEvent dcbEvent(String type, long position, String... tags) {
@@ -90,6 +145,76 @@ class DcbSubscriptionModelAdapterTest {
             this.capturedFilter = filter;
             this.capturedStartAt = startAt;
             return events;
+        }
+    }
+
+    private static final class RecordingSubscribableSubscriptionModel implements SubscriptionModel, Subscribable, SubscriptionModelLifeCycle {
+        @Nullable
+        private SubscriptionFilter capturedFilter;
+        @Nullable
+        private StartAt capturedStartAt;
+        @Nullable
+        private Function<CloudEvent, Mono<Void>> capturedAction;
+        private final List<String> cancelledSubscriptionIds = new ArrayList<>();
+
+        @Override
+        public Flux<CloudEvent> subscribe(@Nullable SubscriptionFilter filter, StartAt startAt) {
+            throw new UnsupportedOperationException("Not used by this test");
+        }
+
+        @Override
+        public Subscription subscribe(String subscriptionId, @Nullable SubscriptionFilter filter, StartAt startAt, Function<CloudEvent, Mono<Void>> action) {
+            this.capturedFilter = filter;
+            this.capturedStartAt = startAt;
+            this.capturedAction = action;
+            return new Subscription() {
+                @Override
+                public String id() {
+                    return subscriptionId;
+                }
+
+                @Override
+                public Mono<Void> waitUntilStarted() {
+                    return Mono.empty();
+                }
+            };
+        }
+
+        @Override
+        public void stop() {
+        }
+
+        @Override
+        public void start(boolean resumeSubscriptionsAutomatically) {
+        }
+
+        @Override
+        public boolean isRunning() {
+            return true;
+        }
+
+        @Override
+        public boolean isRunning(String subscriptionId) {
+            return true;
+        }
+
+        @Override
+        public boolean isPaused(String subscriptionId) {
+            return false;
+        }
+
+        @Override
+        public Subscription resumeSubscription(String subscriptionId) {
+            throw new UnsupportedOperationException("Not used by this test");
+        }
+
+        @Override
+        public void pauseSubscription(String subscriptionId) {
+        }
+
+        @Override
+        public void cancelSubscription(String subscriptionId) {
+            cancelledSubscriptionIds.add(subscriptionId);
         }
     }
 }
