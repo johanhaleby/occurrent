@@ -162,8 +162,11 @@ public class ReactorDcbCatchupSubscriptionModel implements PositionAwareSubscrip
 
         StartAt resolved = startAt.get(new SubscriptionModelContext(ReactorDcbCatchupSubscriptionModel.class));
         if (!(resolved instanceof StartAt.StartAtSubscriptionPosition position) || !DcbSubscriptionPosition.isDcbSubscriptionPosition(position.subscriptionPosition)) {
-            // Not a DCB catch-up position, so go straight to live.
-            return subscriptionModel.subscribe(DcbSubscriptionFilter.filter(query), resolved == null ? startAt : resolved);
+            // Not a DCB catch-up position, so go straight to live. Apply the same in-process DCB floor the replay-to-live
+            // path and the DcbSubscriptionModel adapter apply, so a backend that does not honor the filter server-side
+            // still only delivers events matching the query.
+            return subscriptionModel.subscribe(DcbSubscriptionFilter.filter(query), resolved == null ? startAt : resolved)
+                    .filter(cloudEvent -> DcbCloudEvents.getPosition(cloudEvent) > 0 && DcbCloudEvents.matches(cloudEvent, query));
         }
 
         long startPosition = DcbSubscriptionPosition.dcbPositionOf(position.subscriptionPosition);
