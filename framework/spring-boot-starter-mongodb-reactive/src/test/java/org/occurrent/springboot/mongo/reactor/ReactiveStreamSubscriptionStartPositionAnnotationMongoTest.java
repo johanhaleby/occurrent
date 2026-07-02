@@ -50,6 +50,7 @@ import java.util.Date;
 import java.util.List;
 import java.util.UUID;
 import java.util.concurrent.CopyOnWriteArrayList;
+import java.util.concurrent.atomic.AtomicInteger;
 import java.util.stream.Stream;
 
 import static java.time.Duration.ofMillis;
@@ -90,11 +91,16 @@ class ReactiveStreamSubscriptionStartPositionAnnotationMongoTest {
 
     @Test
     void default_and_now_never_replay_pre_existing_history_only_live_events() {
-        // Neither subscriber ever sees the historic event appended before it started, even after settling.
-        await().during(ofSeconds(2)).atMost(ofSeconds(5)).untilAsserted(() ->
-                assertThat(defaultPositionSubscriber.received()).isEmpty());
-        await().during(ofSeconds(2)).atMost(ofSeconds(5)).untilAsserted(() ->
-                assertThat(nowPositionSubscriber.received()).isEmpty());
+        // Neither subscriber's handler is ever invoked for the historic event, and consequently neither
+        // sees it in received() either, even after settling.
+        await().during(ofSeconds(2)).atMost(ofSeconds(5)).untilAsserted(() -> {
+            assertThat(defaultPositionSubscriber.invocationCount()).isZero();
+            assertThat(defaultPositionSubscriber.received()).isEmpty();
+        });
+        await().during(ofSeconds(2)).atMost(ofSeconds(5)).untilAsserted(() -> {
+            assertThat(nowPositionSubscriber.invocationCount()).isZero();
+            assertThat(nowPositionSubscriber.received()).isEmpty();
+        });
 
         applicationService.execute(UUID.randomUUID().toString(), __ -> Stream.of(new TestEvent("live-default"))).block();
         applicationService.execute(UUID.randomUUID().toString(), __ -> Stream.of(new TestEvent("live-now"))).block();
@@ -170,9 +176,11 @@ class ReactiveStreamSubscriptionStartPositionAnnotationMongoTest {
 
     static class DefaultPositionSubscriber {
         private final CopyOnWriteArrayList<TestEvent> received = new CopyOnWriteArrayList<>();
+        private final AtomicInteger invocationCount = new AtomicInteger();
 
         @StreamSubscription(id = "reactive-sp-default")
         Mono<Void> on(TestEvent event) {
+            invocationCount.incrementAndGet();
             if (event.name().equals("live-default")) {
                 received.add(event);
             }
@@ -182,13 +190,19 @@ class ReactiveStreamSubscriptionStartPositionAnnotationMongoTest {
         List<TestEvent> received() {
             return received;
         }
+
+        int invocationCount() {
+            return invocationCount.get();
+        }
     }
 
     static class NowPositionSubscriber {
         private final CopyOnWriteArrayList<TestEvent> received = new CopyOnWriteArrayList<>();
+        private final AtomicInteger invocationCount = new AtomicInteger();
 
         @StreamSubscription(id = "reactive-sp-now", startAt = StartPosition.NOW)
         Mono<Void> on(TestEvent event) {
+            invocationCount.incrementAndGet();
             if (event.name().equals("live-now")) {
                 received.add(event);
             }
@@ -197,6 +211,10 @@ class ReactiveStreamSubscriptionStartPositionAnnotationMongoTest {
 
         List<TestEvent> received() {
             return received;
+        }
+
+        int invocationCount() {
+            return invocationCount.get();
         }
     }
 
