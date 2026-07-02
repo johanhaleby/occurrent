@@ -63,7 +63,7 @@ public class CompetingConsumerSubscriptionModel implements DelegatingSubscriptio
 
     public CompetingConsumerSubscriptionModel(SubscriptionModel subscriptionModel, CompetingConsumerStrategy strategy) {
         requireNonNull(subscriptionModel, "Subscription model cannot be null");
-        requireNonNull(subscriptionModel, CompetingConsumerStrategy.class.getSimpleName() + " cannot be null");
+        requireNonNull(strategy, CompetingConsumerStrategy.class.getSimpleName() + " cannot be null");
         this.delegate = subscriptionModel;
         this.competingConsumerStrategy = strategy;
         this.competingConsumerStrategy.addListener(this);

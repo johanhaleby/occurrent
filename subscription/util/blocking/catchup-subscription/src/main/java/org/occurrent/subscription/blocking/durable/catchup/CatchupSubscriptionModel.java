@@ -733,7 +733,7 @@ public class CatchupSubscriptionModel implements SubscriptionModel, DelegatingSu
         }
     }
 
-    private <T, C extends SubscriptionPositionStorageConfig> Optional<@Nullable T> returnIfSubscriptionPositionStorageConfigIs(Class<C> cls, Function<C, @Nullable T> fn) {
+    private <T, C extends SubscriptionPositionStorageConfig> Optional<T> returnIfSubscriptionPositionStorageConfigIs(Class<C> cls, Function<C, @Nullable T> fn) {
         if (cls.isInstance(config.subscriptionStorageConfig)) {
             return Optional.ofNullable(fn.apply(cls.cast(config.subscriptionStorageConfig)));
         }
