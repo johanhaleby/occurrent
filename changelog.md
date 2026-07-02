@@ -10,6 +10,9 @@ DCB is a capability layered on the existing CloudEvent storage, not a new store 
 
 #### Changes
 
+* Fixed a bug where a live `NOW`/`DEFAULT` subscription on `ReactorMongoSubscriptionModel` could redeliver the event written just before the subscription started.
+  * `globalSubscriptionPosition()` used the server's raw operation time as the resume position instead of bumping it past the last written event, so a write landing on the same BSON timestamp as the resume point could be replayed. It now increments the timestamp's increment field by 1, the same fix `SpringMongoSubscriptionModel` already had.
+
 * Added a reactive (Project Reactor) Spring Boot starter, `spring-boot-starter-mongodb-reactive`, alongside the blocking `spring-boot-starter-mongodb`, so a reactive application gets the same auto-configuration and annotation-driven subscriptions.
   * Enable it with `@EnableOccurrentReactive` and the new dependency. It auto-configures the reactive event store, transaction manager, application service (stream and DCB), query DSLs, subscription model, position storage, and the reactive `StreamSubscriptions` and `DcbSubscriptions` DSLs, driven by the same `occurrent.*` properties and capability set as the blocking starter.
   * `@StreamSubscription` and `@DcbSubscription` work on the reactive stack, with handler methods returning `Mono<Void>`. `@StreamSubscription` supports `NOW` and `DEFAULT` (live delivery plus durable resume). It fails loud for history replay, since there is no reactive stream catch-up model. `@DcbSubscription` replays by dcbposition through the reactive DCB catch-up model, same as blocking.

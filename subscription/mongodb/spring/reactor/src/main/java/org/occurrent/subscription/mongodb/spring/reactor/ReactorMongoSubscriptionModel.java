@@ -260,8 +260,10 @@ public class ReactorMongoSubscriptionModel implements PositionAwareSubscriptionM
 
     @Override
     public Mono<SubscriptionPosition> globalSubscriptionPosition() {
+        // Increase the "increment" by 1 so the resume position lands after the most recently
+        // written event, matching SpringMongoSubscriptionModel and avoiding replaying it.
         return mongo.executeCommand(new Document("hostInfo", 1))
-                .map(MongoCommons::getServerOperationTime)
+                .map(document -> MongoCommons.getServerOperationTime(document, 1))
                 .onErrorResume(UncategorizedMongoDbException.class, throwable -> {
                     if (throwable.getCause() instanceof MongoCommandException) {
                         // This can if the server doesn't allow to get the operation time since "db.adminCommand( { "hostInfo" : 1 } )" is prohibited.

@@ -51,6 +51,7 @@ import java.util.Date;
 import java.util.List;
 import java.util.UUID;
 import java.util.concurrent.CopyOnWriteArrayList;
+import java.util.concurrent.atomic.AtomicInteger;
 import java.util.stream.Stream;
 
 import static java.time.Duration.ofMillis;
@@ -100,10 +101,14 @@ class ReactiveDcbSubscriptionStartPositionAnnotationMongoTest {
     @Test
     void default_and_now_never_replay_while_an_explicit_position_resumes_strictly_after_it() {
         // Neither DEFAULT nor NOW ever sees the pre-existing history.
-        await().during(ofSeconds(2)).atMost(ofSeconds(5)).untilAsserted(() ->
-                assertThat(defaultPositionSubscriber.received()).isEmpty());
-        await().during(ofSeconds(2)).atMost(ofSeconds(5)).untilAsserted(() ->
-                assertThat(nowPositionSubscriber.received()).isEmpty());
+        await().during(ofSeconds(2)).atMost(ofSeconds(5)).untilAsserted(() -> {
+            assertThat(defaultPositionSubscriber.invocationCount()).isZero();
+            assertThat(defaultPositionSubscriber.received()).isEmpty();
+        });
+        await().during(ofSeconds(2)).atMost(ofSeconds(5)).untilAsserted(() -> {
+            assertThat(nowPositionSubscriber.invocationCount()).isZero();
+            assertThat(nowPositionSubscriber.received()).isEmpty();
+        });
 
         // startAtDcbPosition = 1 means: deliver from position 2 onward, i.e. skip "event-1".
         await().atMost(ofSeconds(30)).pollInterval(ofMillis(100)).untilAsserted(() ->
@@ -164,11 +169,13 @@ class ReactiveDcbSubscriptionStartPositionAnnotationMongoTest {
         }
 
         @Bean
+        @DependsOn("historyAppender")
         DefaultPositionSubscriber defaultPositionSubscriber() {
             return new DefaultPositionSubscriber();
         }
 
         @Bean
+        @DependsOn("historyAppender")
         NowPositionSubscriber nowPositionSubscriber() {
             return new NowPositionSubscriber();
         }
@@ -203,9 +210,11 @@ class ReactiveDcbSubscriptionStartPositionAnnotationMongoTest {
 
     static class DefaultPositionSubscriber {
         private final CopyOnWriteArrayList<TestEvent> received = new CopyOnWriteArrayList<>();
+        private final AtomicInteger invocationCount = new AtomicInteger();
 
         @DcbSubscription(id = "reactive-dcb-sp-default")
         Mono<Void> onEvent(TestEvent event) {
+            invocationCount.incrementAndGet();
             if (event.name().equals("live-default")) {
                 received.add(event);
             }
@@ -215,13 +224,19 @@ class ReactiveDcbSubscriptionStartPositionAnnotationMongoTest {
         List<TestEvent> received() {
             return received;
         }
+
+        int invocationCount() {
+            return invocationCount.get();
+        }
     }
 
     static class NowPositionSubscriber {
         private final CopyOnWriteArrayList<TestEvent> received = new CopyOnWriteArrayList<>();
+        private final AtomicInteger invocationCount = new AtomicInteger();
 
         @DcbSubscription(id = "reactive-dcb-sp-now", startAt = DcbStartPosition.NOW)
         Mono<Void> onEvent(TestEvent event) {
+            invocationCount.incrementAndGet();
             if (event.name().equals("live-now")) {
                 received.add(event);
             }
@@ -230,6 +245,10 @@ class ReactiveDcbSubscriptionStartPositionAnnotationMongoTest {
 
         List<TestEvent> received() {
             return received;
+        }
+
+        int invocationCount() {
+            return invocationCount.get();
         }
     }
 
