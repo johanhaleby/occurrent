@@ -18,4 +18,4 @@
 package org.occurrent.dsl.view
 
 fun <S, ID : Any> ViewStateRepository<S, ID>.find(id: ID): S? = findById(id).orElse(null)
-fun <S, ID : Any> viewStateRepository(find: (ID) -> S?, save: (ID, S) -> Unit)= ViewStateRepository.create(find, save)
+fun <S : Any, ID : Any> viewStateRepository(find: (ID) -> S?, save: (ID, S) -> Unit): ViewStateRepository<S, ID> = ViewStateRepository.create(find, save)

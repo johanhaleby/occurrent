@@ -94,7 +94,7 @@ public class ConditionMatcher {
 
     private static Object extractValue(CloudEvent cloudEvent, String fieldName) {
         // TODO data if content-type is json
-        if (fieldName != null && fieldName.startsWith(DATA + ".")) {
+        if (fieldName.startsWith(DATA + ".")) {
             throw new IllegalArgumentException("Currently, it's not possible to query the data field from in-memory event stores/subscriptions. The good thing is that Occurrent is open-source, so feel free to contribute :) (https://github.com/johanhaleby/occurrent/issues/58).");
         }
 

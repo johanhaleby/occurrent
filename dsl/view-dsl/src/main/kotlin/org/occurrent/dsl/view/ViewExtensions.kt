@@ -19,7 +19,7 @@ package org.occurrent.dsl.view
 
 import java.util.stream.Stream
 
-fun <S, E> view(initialState: S, updateState: (S, E) -> S) = View.create(initialState, updateState)
+fun <S, E> view(initialState: S, updateState: (S, E) -> S): View<S, E> = View.create(initialState, updateState)
 
 // =========================
 // Single event (convenience)

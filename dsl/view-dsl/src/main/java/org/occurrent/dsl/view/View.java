@@ -100,7 +100,7 @@ public interface View<S, E> {
             }
 
             @Override
-            public S evolve(S state, @NonNull E event) {
+            public S evolve(@Nullable S state, @NonNull E event) {
                 return evolve.apply(state, event);
             }
         };

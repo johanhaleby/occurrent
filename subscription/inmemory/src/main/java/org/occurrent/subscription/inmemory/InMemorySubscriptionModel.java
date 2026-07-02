@@ -107,7 +107,7 @@ public class InMemorySubscriptionModel implements SubscriptionModel, Consumer<St
     }
 
     @Override
-    public synchronized Subscription subscribe(String subscriptionId, SubscriptionFilter filter, StartAt startAt, Consumer<CloudEvent> action) {
+    public synchronized Subscription subscribe(String subscriptionId, @Nullable SubscriptionFilter filter, StartAt startAt, Consumer<CloudEvent> action) {
         if (shutdown) {
             throw new IllegalStateException("Cannot subscribe when shutdown");
         } else if (subscriptionId == null) {

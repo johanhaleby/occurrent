@@ -36,7 +36,9 @@ fun <C : Any, E : Any> module(
     return object : Module<C> {
         override fun dispatch(vararg commands: C) {
             commands.forEach { command ->
-                module.commandDispatchers.takeWhile { dispatcher -> !dispatcher.dispatch(command) }
+                for (dispatcher in module.commandDispatchers) {
+                    if (dispatcher.dispatch(command)) break
+                }
             }
         }
     }

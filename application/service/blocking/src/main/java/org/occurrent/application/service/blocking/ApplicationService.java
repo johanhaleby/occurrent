@@ -49,7 +49,7 @@ public interface ApplicationService<E> {
         Objects.requireNonNull(streamId, "Stream id cannot be null");
         Objects.requireNonNull(functionThatCallsDomainModel, "functionThatCallsDomainModel cannot be null");
 
-        final ExecuteOptions<E> options = ExecuteOptions.options().sideEffect(sideEffect);
+        final ExecuteOptions<E> options = sideEffect == null ? ExecuteOptions.<E>options() : ExecuteOptions.<E>options().sideEffect(sideEffect);
         return execute(streamId, options, functionThatCallsDomainModel);
     }
 

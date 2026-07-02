@@ -42,7 +42,9 @@ fun <C : Any, E : Any> eventModel(
     return object : Module<C> {
         override fun dispatch(vararg commands: C) {
             commands.forEach { command ->
-                spec.commandDispatchers.takeWhile { dispatcher -> !dispatcher.dispatch(command) }
+                for (dispatcher in spec.commandDispatchers) {
+                    if (dispatcher.dispatch(command)) break
+                }
             }
         }
     }

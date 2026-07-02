@@ -19,6 +19,7 @@ package org.occurrent.dsl.view;
 
 
 import org.jspecify.annotations.NonNull;
+import org.jspecify.annotations.Nullable;
 
 import java.util.Optional;
 import java.util.function.BiConsumer;
@@ -44,7 +45,7 @@ public interface ViewStateRepository<S, ID> {
         return findById(id).orElse(initialState);
     }
 
-    static <S, ID> ViewStateRepository<S, ID> create(Function<@NonNull ID, S> findById, BiConsumer<@NonNull ID, @NonNull S> save) {
+    static <S, ID> ViewStateRepository<S, ID> create(Function<@NonNull ID, @Nullable S> findById, BiConsumer<@NonNull ID, @NonNull S> save) {
         return new ViewStateRepository<>() {
             @Override
             public Optional<S> findById(@NonNull ID id) {
