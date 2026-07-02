@@ -62,6 +62,35 @@
             <artifactId>cloudevent-converter-jackson3</artifactId>
             <version>${project.version}</version>
         </dependency>
+        <dependency>
+            <groupId>org.occurrent</groupId>
+            <artifactId>annotations</artifactId>
+            <version>${project.version}</version>
+        </dependency>
+        <dependency>
+            <groupId>org.occurrent</groupId>
+            <artifactId>subscription-dsl-common</artifactId>
+            <version>${project.version}</version>
+        </dependency>
+        <dependency>
+            <groupId>org.occurrent</groupId>
+            <artifactId>dcb-dsl-common</artifactId>
+            <version>${project.version}</version>
+        </dependency>
+        <dependency>
+            <groupId>org.occurrent</groupId>
+            <artifactId>eventstore-api-dcb</artifactId>
+            <version>${project.version}</version>
+        </dependency>
+        <dependency>
+            <groupId>org.occurrent</groupId>
+            <artifactId>application-service-common</artifactId>
+            <version>${project.version}</version>
+        </dependency>
+        <dependency>
+            <groupId>org.slf4j</groupId>
+            <artifactId>slf4j-api</artifactId>
+        </dependency>
         <!-- Jackson 3 still relies on com.fasterxml.jackson annotations -->
         <dependency>
             <groupId>com.fasterxml.jackson.core</groupId>

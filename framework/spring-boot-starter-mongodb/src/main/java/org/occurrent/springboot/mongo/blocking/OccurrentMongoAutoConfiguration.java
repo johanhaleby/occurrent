@@ -21,8 +21,6 @@ import com.mongodb.ReadConcern;
 import com.mongodb.TransactionOptions;
 import com.mongodb.WriteConcern;
 import org.jspecify.annotations.NonNull;
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
 import org.occurrent.application.converter.CloudEventConverter;
 import org.occurrent.application.converter.typemapper.CloudEventTypeMapper;
 import org.occurrent.application.converter.typemapper.ReflectionCloudEventTypeMapper;
@@ -43,6 +41,7 @@ import org.occurrent.eventstore.api.dcb.DcbQuery;
 import org.occurrent.eventstore.mongodb.spring.blocking.EventStoreConfig;
 import org.occurrent.eventstore.mongodb.spring.blocking.SpringMongoEventStore;
 import org.occurrent.retry.RetryStrategy;
+import org.occurrent.springboot.mongo.common.DcbApplicationServiceRegistrar;
 import org.occurrent.springboot.mongo.common.Jackson3CloudEventConverterConfiguration;
 import org.occurrent.springboot.mongo.common.OccurrentProperties;
 import org.occurrent.springboot.mongo.common.OccurrentProperties.EventStoreProperties;
@@ -64,8 +63,6 @@ import org.occurrent.subscription.mongodb.spring.blocking.SpringMongoSubscriptio
 import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.beans.factory.config.BeanFactoryPostProcessor;
 import org.springframework.beans.factory.config.ConfigurableListableBeanFactory;
-import org.springframework.beans.factory.support.BeanDefinitionRegistry;
-import org.springframework.beans.factory.support.RootBeanDefinition;
 import org.springframework.boot.autoconfigure.AutoConfiguration;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnClass;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnMissingBean;
@@ -96,8 +93,6 @@ import static org.occurrent.subscription.mongodb.spring.blocking.SpringMongoSubs
 @EnableConfigurationProperties(OccurrentProperties.class)
 @Import(Jackson3CloudEventConverterConfiguration.class)
 public class OccurrentMongoAutoConfiguration<E> {
-
-    private static final Logger log = LoggerFactory.getLogger(OccurrentMongoAutoConfiguration.class);
 
     @Bean
     @ConditionalOnProperty(name = "occurrent.subscription.enabled", havingValue = "true", matchIfMissing = true)
@@ -246,25 +241,7 @@ public class OccurrentMongoAutoConfiguration<E> {
     @Conditional(OnDcbEventStoreCapabilityCondition.class)
     @ConditionalOnProperty(name = {"occurrent.event-store.enabled", "occurrent.application-service.enabled"}, havingValue = "true", matchIfMissing = true)
     static BeanFactoryPostProcessor occurrentDcbApplicationServiceRegistrar() {
-        return beanFactory -> {
-            if (!(beanFactory instanceof BeanDefinitionRegistry registry)) {
-                return;
-            }
-            boolean hasDcbApplicationService = beanFactory.getBeanNamesForType(DcbApplicationService.class, false, false).length > 0;
-            boolean hasTagGenerator = beanFactory.getBeanNamesForType(TagGenerator.class, false, false).length > 0;
-            if (hasDcbApplicationService) {
-                return;
-            }
-            if (!hasTagGenerator) {
-                log.warn("Occurrent DCB event-store capability is enabled but no {} bean was found, so a {} is not auto-configured. " +
-                                "Define a {} bean (it derives the DCB tags written with each event) to enable auto-configuration, or provide your own {} bean.",
-                        TagGenerator.class.getName(), DcbApplicationService.class.getName(), TagGenerator.class.getSimpleName(), DcbApplicationService.class.getSimpleName());
-                return;
-            }
-            RootBeanDefinition beanDefinition = new RootBeanDefinition(DcbApplicationService.class);
-            beanDefinition.setInstanceSupplier(() -> createDcbApplicationService(beanFactory));
-            registry.registerBeanDefinition("occurrentDcbApplicationService", beanDefinition);
-        };
+        return DcbApplicationServiceRegistrar.registrar(DcbApplicationService.class, "occurrentDcbApplicationService", OccurrentMongoAutoConfiguration::createDcbApplicationService);
     }
 
     @SuppressWarnings({"rawtypes", "unchecked"})
