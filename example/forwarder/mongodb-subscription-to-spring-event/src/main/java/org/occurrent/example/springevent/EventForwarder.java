@@ -25,10 +25,7 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.context.ApplicationEventPublisher;
 import org.springframework.stereotype.Component;
-import reactor.core.Disposable;
 import reactor.core.publisher.Mono;
-
-import java.util.concurrent.atomic.AtomicReference;
 
 @Component
 public class EventForwarder {
@@ -38,7 +35,6 @@ public class EventForwarder {
     private final ReactorDurableSubscriptionModel subscriptionModel;
     private final CloudEventConverter<DomainEvent> domainEventConverter;
     private final ApplicationEventPublisher eventPublisher;
-    private final AtomicReference<Disposable> subscription;
 
     public EventForwarder(ReactorDurableSubscriptionModel subscriptionModel,
                           CloudEventConverter<DomainEvent> domainEventConverter,
@@ -46,24 +42,22 @@ public class EventForwarder {
         this.subscriptionModel = subscriptionModel;
         this.domainEventConverter = domainEventConverter;
         this.eventPublisher = eventPublisher;
-        this.subscription = new AtomicReference<>();
     }
 
     @PostConstruct
     void startEventStreaming() {
         log.info("Subscribing with id {}", SUBSCRIBER_ID);
-        Disposable disposable = subscriptionModel.subscribe(SUBSCRIBER_ID,
+        subscriptionModel.subscribe(SUBSCRIBER_ID,
                 cloudEvent -> Mono.just(cloudEvent)
                         .map(domainEventConverter::toDomainEvent)
                         .doOnNext(eventPublisher::publishEvent)
-                        .then())
-                .subscribe();
-        subscription.set(disposable);
+                        .then());
     }
 
     @PreDestroy
     void stopEventStreaming() {
         log.info("Unsubscribing");
-        subscription.get().dispose();
+        // Disposes the running subscription without deleting the stored position, so it resumes on restart.
+        subscriptionModel.shutdown();
     }
 }
