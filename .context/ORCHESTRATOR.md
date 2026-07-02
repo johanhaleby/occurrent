@@ -175,7 +175,6 @@ Required shell workflow:
 CI:
 - `.github/workflows/maven.yml` runs `mvn -B package --file pom.xml` on Temurin Java 17 and 21.
 - CI enables Testcontainers reuse by writing `$HOME/.testcontainers.properties`.
-- Qodana runs separately with `jetbrains/qodana-jvm-community:2025.2`, project JDK 17.
 
 Local focused Maven patterns:
 - Full package: `rtk mvn -B package --file pom.xml`

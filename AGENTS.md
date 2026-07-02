@@ -55,7 +55,6 @@ Unreleased changes go under the existing `### Changelog next version` heading, n
 - Full build: `mvn -B package --file pom.xml` (CI runs this on Temurin Java 17 and 21).
 - Focused module test: `mvn -pl <module-path> -am test`.
 - Focused test class: `mvn -pl <module-path> -am -Dtest=<TestClass> -Dsurefire.failIfNoSpecifiedTests=false test`.
-- Qodana static analysis runs separately in CI (`jetbrains/qodana-jvm-community`, project JDK 17).
 - Release: `mvn_release.sh` (Java 17, `mvn deploy -Prelease`, GPG signing, Sonatype Central publishing).
 
 ## Deeper context
