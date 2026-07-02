@@ -19,8 +19,8 @@ package org.occurrent.dsl.subscription.blocking
 import io.cloudevents.CloudEvent
 import org.occurrent.application.converter.CloudEventConverter
 import org.occurrent.application.converter.get
-import org.occurrent.condition.Condition
 import org.occurrent.dsl.subscription.EventMetadata
+import org.occurrent.dsl.subscription.subscriptionFilterFromEventTypes
 import org.occurrent.filter.Filter
 import org.occurrent.subscription.OccurrentSubscriptionFilter
 import org.occurrent.subscription.StartAt
@@ -131,12 +131,12 @@ open class StreamSubscriptions<E : Any>(private val subscriptionModel: Subscriba
     }
 
     fun subscribe(subscriptionId: String, vararg eventTypes: KClass<out E>, startAt: StartAt? = null, fn: (E) -> Unit): Subscription {
-        val filter = subscriptionFilterFromEventTypes(eventTypes)
+        val filter = subscriptionFilterFromEventTypes(cloudEventConverter, eventTypes)
         return subscribe(subscriptionId, filter, startAt, fn)
     }
 
     fun subscribe(subscriptionId: String, vararg eventTypes: KClass<out E>, startAt: StartAt? = null, fn: (EventMetadata, E) -> Unit): Subscription {
-        val filter = subscriptionFilterFromEventTypes(eventTypes)
+        val filter = subscriptionFilterFromEventTypes(cloudEventConverter, eventTypes)
         return subscribe(subscriptionId, filter, startAt, true, fn)
     }
 
@@ -169,16 +169,6 @@ open class StreamSubscriptions<E : Any>(private val subscriptionModel: Subscriba
                 waitUntilStarted()
             }
         }
-    }
-
-    private fun subscriptionFilterFromEventTypes(eventTypes: Array<out KClass<out E>>): OccurrentSubscriptionFilter {
-        val condition = when {
-            eventTypes.isEmpty() -> null
-            eventTypes.size == 1 -> Condition.eq(cloudEventConverter[eventTypes[0]])
-            else -> Condition.or(eventTypes.map { e -> Condition.eq(cloudEventConverter[e]) })
-        }
-        val filter = OccurrentSubscriptionFilter.filter(if (condition == null) Filter.all() else Filter.type(condition))
-        return filter
     }
 }
 
