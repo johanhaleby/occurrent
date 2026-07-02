@@ -47,8 +47,8 @@ import static java.util.Objects.requireNonNull;
  * Delivery is live. Events are filtered by the {@link DcbQuery} server-side where the backend supports it, with an
  * in-process scoping filter as a correctness floor. A {@link DcbStartAt} is passed through to the underlying
  * {@link SubscriptionModel}, so whether a replay-oriented start such as {@link DcbStartAt#beginning()} replays history
- * depends on that model. The current reactive subscription models have no DCB catch-up, so such a start behaves like a
- * live start today.
+ * depends on that model. A plain model has no DCB catch-up and treats such a start as live, whereas a model composed
+ * with {@code ReactorDcbCatchupSubscriptionModel} replays history from that position before going live.
  * <p>
  * The {@link #subscribe(String, DcbQuery, Function)} and {@link #subscribeWithMetadata(String, DcbQuery, BiFunction)}
  * methods below are the named, lifecycle-managed counterpart to the {@link Flux}-returning methods above, mirroring
