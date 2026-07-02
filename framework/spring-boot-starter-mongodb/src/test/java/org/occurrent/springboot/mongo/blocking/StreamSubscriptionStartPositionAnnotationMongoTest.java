@@ -49,6 +49,7 @@ import java.util.Date;
 import java.util.List;
 import java.util.UUID;
 import java.util.concurrent.CopyOnWriteArrayList;
+import java.util.concurrent.atomic.AtomicInteger;
 import java.util.stream.Stream;
 
 import static java.time.Duration.ofMillis;
@@ -109,10 +110,16 @@ class StreamSubscriptionStartPositionAnnotationMongoTest {
     @Test
     void default_and_now_never_replay_history_while_beginning_of_time_iso8601_and_epoch_all_replay_it() {
         // None of the live-only subscribers ever see the pre-existing history, even after settling.
-        await().during(ofSeconds(2)).atMost(ofSeconds(5)).untilAsserted(() ->
-                assertThat(defaultPositionSubscriber.received()).isEmpty());
-        await().during(ofSeconds(2)).atMost(ofSeconds(5)).untilAsserted(() ->
-                assertThat(nowPositionSubscriber.received()).isEmpty());
+        // The invocation-count checks prove the handler was never called at all, not merely that
+        // whatever it was called with failed the name filter below.
+        await().during(ofSeconds(2)).atMost(ofSeconds(5)).untilAsserted(() -> {
+            assertThat(defaultPositionSubscriber.invocationCount()).isZero();
+            assertThat(defaultPositionSubscriber.received()).isEmpty();
+        });
+        await().during(ofSeconds(2)).atMost(ofSeconds(5)).untilAsserted(() -> {
+            assertThat(nowPositionSubscriber.invocationCount()).isZero();
+            assertThat(nowPositionSubscriber.received()).isEmpty();
+        });
 
         // The three replaying subscribers each see their own pre-existing historic event.
         await().atMost(ofSeconds(30)).pollInterval(ofMillis(100)).untilAsserted(() ->
@@ -181,11 +188,13 @@ class StreamSubscriptionStartPositionAnnotationMongoTest {
         }
 
         @Bean
+        @DependsOn("historyAppender")
         DefaultPositionSubscriber defaultPositionSubscriber() {
             return new DefaultPositionSubscriber();
         }
 
         @Bean
+        @DependsOn("historyAppender")
         NowPositionSubscriber nowPositionSubscriber() {
             return new NowPositionSubscriber();
         }
@@ -232,9 +241,11 @@ class StreamSubscriptionStartPositionAnnotationMongoTest {
 
     static class DefaultPositionSubscriber {
         private final CopyOnWriteArrayList<TestEvent> received = new CopyOnWriteArrayList<>();
+        private final AtomicInteger invocationCount = new AtomicInteger();
 
         @StreamSubscription(id = "sp-default")
         void on(TestEvent event) {
+            invocationCount.incrementAndGet();
             if (event.name().equals("live-default")) {
                 received.add(event);
             }
@@ -243,13 +254,19 @@ class StreamSubscriptionStartPositionAnnotationMongoTest {
         List<TestEvent> received() {
             return received;
         }
+
+        int invocationCount() {
+            return invocationCount.get();
+        }
     }
 
     static class NowPositionSubscriber {
         private final CopyOnWriteArrayList<TestEvent> received = new CopyOnWriteArrayList<>();
+        private final AtomicInteger invocationCount = new AtomicInteger();
 
         @StreamSubscription(id = "sp-now", startAt = StartPosition.NOW)
         void on(TestEvent event) {
+            invocationCount.incrementAndGet();
             if (event.name().equals("live-now")) {
                 received.add(event);
             }
@@ -257,6 +274,10 @@ class StreamSubscriptionStartPositionAnnotationMongoTest {
 
         List<TestEvent> received() {
             return received;
+        }
+
+        int invocationCount() {
+            return invocationCount.get();
         }
     }
 
