@@ -72,7 +72,7 @@ import static org.occurrent.subscription.OccurrentSubscriptionFilter.filter;
  * {@link Subscription} alias, in Spring Boot. The stack-neutral reflection and event-type resolution is shared with the
  * reactive processor through {@link SubscriptionAnnotations}.
  */
-class OccurrentAnnotationBeanPostProcessor implements BeanPostProcessor, ApplicationContextAware {
+class OccurrentBlockingAnnotationBeanPostProcessor implements BeanPostProcessor, ApplicationContextAware {
 
     private ApplicationContext applicationContext;
 

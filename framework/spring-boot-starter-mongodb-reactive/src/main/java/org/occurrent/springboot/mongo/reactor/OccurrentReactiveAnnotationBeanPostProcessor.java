@@ -56,7 +56,7 @@ import static org.occurrent.filter.Filter.CompositionOperator.OR;
 import static org.occurrent.subscription.OccurrentSubscriptionFilter.filter;
 
 /**
- * Reactive counterpart of the blocking {@code OccurrentAnnotationBeanPostProcessor}. It supports the
+ * Reactive counterpart of the blocking {@code OccurrentBlockingAnnotationBeanPostProcessor}. It supports the
  * {@link StreamSubscription} and {@link DcbSubscription} annotations, and the deprecated {@link Subscription} alias,
  * for the reactive (Project Reactor) stack. The stack-neutral reflection and event-type resolution is shared with the
  * blocking processor through {@link SubscriptionAnnotations}.
