@@ -31,6 +31,7 @@ import org.occurrent.dsl.query.blocking.DomainEventQueries;
 import org.occurrent.eventstore.mongodb.spring.blocking.EventStoreConfig;
 import org.occurrent.eventstore.mongodb.spring.blocking.SpringMongoEventStore;
 import org.occurrent.eventstore.api.EventStoreCapability;
+import org.occurrent.springboot.mongo.common.OccurrentProperties;
 import org.occurrent.subscription.api.blocking.DelegatingSubscriptionModel;
 import org.occurrent.subscription.api.blocking.SubscriptionModel;
 import org.occurrent.subscription.blocking.durable.DurableSubscriptionModel;
