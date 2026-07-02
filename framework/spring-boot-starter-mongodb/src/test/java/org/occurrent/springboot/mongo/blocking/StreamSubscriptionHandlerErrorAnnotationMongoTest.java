@@ -46,6 +46,7 @@ import java.util.Date;
 import java.util.List;
 import java.util.UUID;
 import java.util.concurrent.CopyOnWriteArrayList;
+import java.util.concurrent.atomic.AtomicInteger;
 import java.util.stream.Stream;
 
 import static java.time.Duration.ofSeconds;
@@ -102,7 +103,7 @@ class StreamSubscriptionHandlerErrorAnnotationMongoTest {
 
     static class AlwaysThrowingSubscriber {
         private final CopyOnWriteArrayList<TestEvent> received = new CopyOnWriteArrayList<>();
-        private final java.util.concurrent.atomic.AtomicInteger invocations = new java.util.concurrent.atomic.AtomicInteger();
+        private final AtomicInteger invocations = new AtomicInteger();
 
         @StreamSubscription(id = "stream-handler-error-subscriber")
         void on(TestEvent event) {
