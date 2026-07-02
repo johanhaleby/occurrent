@@ -26,6 +26,7 @@ import org.occurrent.eventstore.api.dcb.reactor.DcbEventStore;
 import org.occurrent.subscription.DcbStartAt;
 import org.occurrent.subscription.DcbSubscriptionFilter;
 import org.occurrent.subscription.DcbSubscriptionPosition;
+import org.occurrent.subscription.PositionAwareCloudEvent;
 import org.occurrent.subscription.StartAt;
 import org.occurrent.subscription.StartAt.SubscriptionModelContext;
 import org.occurrent.subscription.SubscriptionFilter;
@@ -210,7 +211,12 @@ public class ReactorDcbCatchupSubscriptionModel implements PositionAwareSubscrip
         return dcbEventStore.read(query, DcbReadOptions.between(fromExclusive, upTo))
                 .flatMapMany(stream -> {
                     stream.events().forEach(event -> cache.add(event.getId()));
-                    return Flux.fromIterable(stream.events());
+                    // Attach the dcbposition as the subscription position so a durable model layered on top can persist
+                    // the replay progress (a raw event read from the store carries no change-stream position). Mirrors
+                    // the blocking CatchupSubscriptionModel, which wraps each replayed DCB event with
+                    // DcbSubscriptionPosition.of(its dcbposition).
+                    return Flux.fromIterable(stream.events())
+                            .map(event -> (CloudEvent) new PositionAwareCloudEvent(event, DcbSubscriptionPosition.of(DcbCloudEvents.getPosition(event))));
                 })
                 .concatWith(Flux.defer(() -> windows(query, upTo, toInclusive, cache)));
     }
