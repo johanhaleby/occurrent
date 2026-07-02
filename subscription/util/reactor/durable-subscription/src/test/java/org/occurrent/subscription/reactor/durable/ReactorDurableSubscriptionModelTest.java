@@ -46,7 +46,6 @@ import org.springframework.transaction.ReactiveTransactionManager;
 import org.testcontainers.junit.jupiter.Container;
 import org.testcontainers.junit.jupiter.Testcontainers;
 import org.testcontainers.mongodb.MongoDBContainer;
-import reactor.core.Disposable;
 import reactor.core.publisher.Flux;
 import reactor.core.publisher.Mono;
 
@@ -57,7 +56,6 @@ import java.util.Objects;
 import java.util.UUID;
 import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.atomic.AtomicInteger;
-import java.util.function.Function;
 
 import static java.time.ZoneOffset.UTC;
 import static java.time.temporal.ChronoUnit.MILLIS;
@@ -84,7 +82,7 @@ public class ReactorDurableSubscriptionModelTest {
     private ReactorDurableSubscriptionModel subscription;
     private ObjectMapper objectMapper;
     private ReactiveMongoTemplate reactiveMongoTemplate;
-    private CopyOnWriteArrayList<Disposable> disposables;
+    private SubscriptionPositionStorage storage;
 
     @RegisterExtension
     FlushMongoDBExtension flushMongoDBExtension = new FlushMongoDBExtension(new ConnectionString(mongoDBContainer.getReplicaSetUrl()));
@@ -101,15 +99,16 @@ public class ReactorDurableSubscriptionModelTest {
         EventStoreConfig eventStoreConfig = new EventStoreConfig.Builder().eventStoreCollectionName("events").transactionConfig(reactiveMongoTransactionManager).timeRepresentation(TimeRepresentation.RFC_3339_STRING).build();
         mongoEventStore = new ReactorMongoEventStore(reactiveMongoTemplate, eventStoreConfig);
         springReactorSubscriptionForMongoDB = new ReactorMongoSubscriptionModel(reactiveMongoTemplate, "events", timeRepresentation);
-        SubscriptionPositionStorage storage = new ReactorSubscriptionPositionStorage(reactiveMongoTemplate, RESUME_TOKEN_COLLECTION);
+        storage = new ReactorSubscriptionPositionStorage(reactiveMongoTemplate, RESUME_TOKEN_COLLECTION);
         subscription = new ReactorDurableSubscriptionModel(springReactorSubscriptionForMongoDB, storage);
         objectMapper = new ObjectMapper();
-        disposables = new CopyOnWriteArrayList<>();
     }
 
     @AfterEach
     void dispose() {
-        disposables.forEach(Disposable::dispose);
+        if (subscription != null) {
+            subscription.shutdown();
+        }
         mongoClient.close();
     }
 
@@ -118,7 +117,7 @@ public class ReactorDurableSubscriptionModelTest {
         // Given
         LocalDateTime now = LocalDateTime.now();
         CopyOnWriteArrayList<CloudEvent> state = new CopyOnWriteArrayList<>();
-        disposeAfterTest(subscription.subscribe("test", cloudEvent -> Mono.fromRunnable(() -> state.add(cloudEvent))).subscribe());
+        subscription.subscribe("test", cloudEvent -> Mono.fromRunnable(() -> state.add(cloudEvent)));
         Thread.sleep(200);
         NameDefined nameDefined1 = new NameDefined(UUID.randomUUID().toString(), now, "name", "name1");
         NameDefined nameDefined2 = new NameDefined(UUID.randomUUID().toString(), now.plusSeconds(2), "name2", "name2");
@@ -162,7 +161,7 @@ public class ReactorDurableSubscriptionModelTest {
             }
         };
         subscription = new ReactorDurableSubscriptionModel(springReactorSubscriptionForMongoDB, subscriptionPositionStorage);
-        disposeAfterTest(subscription.subscribe(UUID.randomUUID().toString(), e -> Mono.fromRunnable(() -> state.add(e))).subscribe());
+        subscription.subscribe(UUID.randomUUID().toString(), e -> Mono.fromRunnable(() -> state.add(e)));
 
         // When
         mongoEventStore.write("1", 0, serialize(nameDefined1)).block();
@@ -202,7 +201,7 @@ public class ReactorDurableSubscriptionModelTest {
             }
         };
         subscription = new ReactorDurableSubscriptionModel(springReactorSubscriptionForMongoDB, subscriptionPositionStorage, new ReactorDurableSubscriptionModelConfig(3));
-        disposeAfterTest(subscription.subscribe(UUID.randomUUID().toString(), e -> Mono.fromRunnable(() -> state.add(e))).subscribe());
+        subscription.subscribe(UUID.randomUUID().toString(), e -> Mono.fromRunnable(() -> state.add(e)));
 
         // When
         mongoEventStore.write("1", 0, serialize(nameDefined1)).block();
@@ -222,8 +221,7 @@ public class ReactorDurableSubscriptionModelTest {
         LocalDateTime now = LocalDateTime.now();
         CopyOnWriteArrayList<CloudEvent> state = new CopyOnWriteArrayList<>();
         String subscriberId = UUID.randomUUID().toString();
-        Function<CloudEvent, Mono<Void>> function = cloudEvents -> Mono.fromRunnable(() -> state.add(cloudEvents));
-        Disposable subscription1 = disposeAfterTest(subscription.subscribe(subscriberId, function).subscribe());
+        subscription.subscribe(subscriberId, cloudEvent -> Mono.fromRunnable(() -> state.add(cloudEvent)));
         Thread.sleep(200);
         NameDefined nameDefined1 = new NameDefined(UUID.randomUUID().toString(), now, "name", "name1");
         NameDefined nameDefined2 = new NameDefined(UUID.randomUUID().toString(), now.plusSeconds(2), "name2", "name2");
@@ -233,10 +231,13 @@ public class ReactorDurableSubscriptionModelTest {
         mongoEventStore.write("1", 0, serialize(nameDefined1)).block();
         // The subscription is async so we need to wait for it
         await().atMost(Durations.ONE_SECOND).until(not(state::isEmpty));
-        subscription1.dispose();
+        // Simulate a restart: shut the model down and start a fresh one sharing the same position storage so it resumes
+        // from the persisted position rather than from the original start.
+        subscription.shutdown();
         mongoEventStore.write("2", 0, serialize(nameDefined2)).block();
         mongoEventStore.write("1", 1, serialize(nameWasChanged1)).block();
-        disposeAfterTest(subscription.subscribe(subscriberId, function).subscribe());
+        subscription = new ReactorDurableSubscriptionModel(springReactorSubscriptionForMongoDB, storage);
+        subscription.subscribe(subscriberId, cloudEvent -> Mono.fromRunnable(() -> state.add(cloudEvent)));
 
         // Then
         await().atMost(Durations.TWO_SECONDS).with().pollInterval(Duration.of(20, MILLIS)).untilAsserted(() -> assertThat(state).hasSize(3));
@@ -258,7 +259,7 @@ public class ReactorDurableSubscriptionModelTest {
                 state.add(cloudEvent);
                 return Mono.empty();
             }
-        }).subscribe();
+        });
         stream.run();
         NameDefined nameDefined1 = new NameDefined(UUID.randomUUID().toString(), now, "name", "name1");
         NameDefined nameDefined2 = new NameDefined(UUID.randomUUID().toString(), now.plusSeconds(2), "name2", "name2");
@@ -268,6 +269,9 @@ public class ReactorDurableSubscriptionModelTest {
         mongoEventStore.write("1", 0, serialize(nameDefined1)).block();
         // The subscription is async so we need to wait for it
         await().atMost(Durations.ONE_SECOND).and().dontCatchUncaughtExceptions().untilAtomic(counter, equalTo(1));
+        // The failed subscription is removed asynchronously by the error handler, so wait until the id is free before
+        // re-subscribing with the same id.
+        await().atMost(Durations.ONE_SECOND).until(() -> !subscription.isRunning(subscriberId));
         // Since an exception occurred we need to run the stream again
         stream.run();
         mongoEventStore.write("2", 0, serialize(nameDefined2)).block();
@@ -287,10 +291,5 @@ public class ReactorDurableSubscriptionModelTest {
                 .withDataContentType("application/json")
                 .withData(unchecked(objectMapper::writeValueAsBytes).apply(e))
                 .build());
-    }
-
-    private Disposable disposeAfterTest(Disposable disposable) {
-        disposables.add(disposable);
-        return disposable;
     }
 }

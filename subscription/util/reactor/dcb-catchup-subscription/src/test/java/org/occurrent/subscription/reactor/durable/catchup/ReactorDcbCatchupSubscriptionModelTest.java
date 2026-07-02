@@ -28,6 +28,8 @@ import org.occurrent.eventstore.api.dcb.DcbQuery;
 import org.occurrent.eventstore.api.dcb.DcbReadOptions;
 import org.occurrent.eventstore.api.dcb.reactor.DcbEventStore;
 import org.occurrent.subscription.DcbStartAt;
+import org.occurrent.subscription.DcbSubscriptionFilter;
+import org.occurrent.subscription.OccurrentSubscriptionFilter;
 import org.occurrent.subscription.StartAt;
 import org.occurrent.subscription.SubscriptionFilter;
 import org.occurrent.subscription.SubscriptionPosition;
@@ -60,6 +62,40 @@ class ReactorDcbCatchupSubscriptionModelTest {
         // history. The fail-loud rule is scoped to replay starts only.
         StepVerifier.create(catchup.subscribe(DcbQuery.tags("name:1"), DcbStartAt.now()))
                 .verifyComplete();
+    }
+
+    @Test
+    void generic_subscribe_with_a_dcb_filter_goes_live_for_a_non_replay_start() {
+        ReactorDcbCatchupSubscriptionModel catchup = new ReactorDcbCatchupSubscriptionModel(new NoTokenSubscriptionModel(), new UnusedDcbEventStore());
+
+        StepVerifier.create(catchup.subscribe(DcbSubscriptionFilter.filter(DcbQuery.tags("name:1")), StartAt.now()))
+                .verifyComplete();
+    }
+
+    @Test
+    void generic_subscribe_uses_the_default_query_when_no_filter_is_given() {
+        ReactorDcbCatchupSubscriptionModel catchup = new ReactorDcbCatchupSubscriptionModel(new NoTokenSubscriptionModel(), new UnusedDcbEventStore(), DcbQuery.all());
+
+        StepVerifier.create(catchup.subscribe(null, StartAt.now()))
+                .verifyComplete();
+    }
+
+    @Test
+    void generic_subscribe_without_a_filter_or_default_query_fails() {
+        ReactorDcbCatchupSubscriptionModel catchup = new ReactorDcbCatchupSubscriptionModel(new NoTokenSubscriptionModel(), new UnusedDcbEventStore());
+
+        StepVerifier.create(catchup.subscribe(null, StartAt.now()))
+                .expectError(IllegalArgumentException.class)
+                .verify();
+    }
+
+    @Test
+    void generic_subscribe_rejects_a_non_dcb_filter() {
+        ReactorDcbCatchupSubscriptionModel catchup = new ReactorDcbCatchupSubscriptionModel(new NoTokenSubscriptionModel(), new UnusedDcbEventStore());
+
+        StepVerifier.create(catchup.subscribe(OccurrentSubscriptionFilter.filter(org.occurrent.filter.Filter.all()), StartAt.now()))
+                .expectError(IllegalArgumentException.class)
+                .verify();
     }
 
     private static final class NoTokenSubscriptionModel implements PositionAwareSubscriptionModel {
