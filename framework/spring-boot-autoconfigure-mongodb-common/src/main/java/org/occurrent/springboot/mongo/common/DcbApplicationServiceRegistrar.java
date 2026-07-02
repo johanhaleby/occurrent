@@ -46,7 +46,7 @@ public final class DcbApplicationServiceRegistrar {
      * @param beanName                  the name to register the bean under
      * @param factory                   builds the {@code DcbApplicationService} instance from the bean factory
      */
-    public static BeanFactoryPostProcessor registrar(Class<?> dcbApplicationServiceType, String beanName, Function<ConfigurableListableBeanFactory, Object> factory) {
+    public static <T> BeanFactoryPostProcessor registrar(Class<T> dcbApplicationServiceType, String beanName, Function<ConfigurableListableBeanFactory, ? extends T> factory) {
         return beanFactory -> {
             if (!(beanFactory instanceof BeanDefinitionRegistry registry)) {
                 return;

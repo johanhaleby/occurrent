@@ -18,6 +18,7 @@
 package org.occurrent.springboot.mongo.common;
 
 import org.jspecify.annotations.NonNull;
+import org.occurrent.annotation.DcbSubscription;
 import org.occurrent.annotation.StreamSubscription;
 import org.occurrent.annotation.StreamSubscription.ResumeBehavior;
 import org.occurrent.annotation.StreamSubscription.StartPosition;
@@ -146,7 +147,7 @@ public final class SubscriptionAnnotations {
         return new Object[]{first, second};
     }
 
-    public static <E> @NonNull List<Class<E>> getConcreteEventTypes(String subscriptionId, Class<E> specifiedEventType) {
+    private static <E> @NonNull List<Class<E>> getConcreteEventTypes(String subscriptionId, Class<E> specifiedEventType) {
         final List<Class<E>> domainEventTypesToSubscribeTo;
         if (specifiedEventType.isSealed()) {
             //noinspection unchecked
