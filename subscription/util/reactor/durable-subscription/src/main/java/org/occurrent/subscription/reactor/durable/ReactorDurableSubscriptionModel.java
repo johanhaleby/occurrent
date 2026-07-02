@@ -37,6 +37,7 @@ import reactor.core.publisher.Flux;
 import reactor.core.publisher.Mono;
 import reactor.core.publisher.Sinks;
 
+import java.util.ArrayList;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ConcurrentMap;
 import java.util.concurrent.atomic.AtomicReference;
@@ -266,7 +267,9 @@ public class ReactorDurableSubscriptionModel implements PositionAwareSubscriptio
     public synchronized void stop() {
         if (!shutdown) {
             running = false;
-            runningSubscriptions.forEach((subscriptionId, __) -> pauseSubscription(subscriptionId));
+            // Snapshot the ids first: pauseSubscription mutates runningSubscriptions, and ConcurrentHashMap#forEach is
+            // only weakly consistent, so iterating it while removing could skip subscriptions.
+            new ArrayList<>(runningSubscriptions.keySet()).forEach(this::pauseSubscription);
         }
     }
 
@@ -275,7 +278,8 @@ public class ReactorDurableSubscriptionModel implements PositionAwareSubscriptio
         if (!shutdown) {
             running = true;
             if (resumeSubscriptionsAutomatically) {
-                pausedSubscriptions.forEach((subscriptionId, __) -> resumeSubscription(subscriptionId));
+                // Snapshot the ids first, for the same reason as stop(): resumeSubscription mutates pausedSubscriptions.
+                new ArrayList<>(pausedSubscriptions.keySet()).forEach(this::resumeSubscription);
             }
         }
     }

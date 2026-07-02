@@ -57,7 +57,8 @@ public class EventForwarder {
     @PreDestroy
     void stopEventStreaming() {
         log.info("Unsubscribing");
-        // Disposes the running subscription without deleting the stored position, so it resumes on restart.
-        subscriptionModel.shutdown();
+        // Pause just this subscription: disposes it without deleting the stored position, so it resumes on restart,
+        // and without shutting down the (potentially shared) subscription model the way shutdown() would.
+        subscriptionModel.pauseSubscription(SUBSCRIBER_ID);
     }
 }
