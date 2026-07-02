@@ -1,0 +1,59 @@
+<!DOCTYPE html>
+<html xmlns:th="http://www.thymeleaf.org">
+<body>
+<div th:fragment="dashboard" id="dashboard" hx-get="/dashboard" hx-trigger="every 2s" hx-swap="outerHTML">
+    <article>
+        <header><strong>Rooms</strong></header>
+        <p th:if="${rooms.isEmpty()}">No rooms yet. Define one above.</p>
+        <table th:unless="${rooms.isEmpty()}" class="striped">
+            <thead>
+            <tr>
+                <th>Room</th>
+                <th>Active bookings</th>
+                <th></th>
+            </tr>
+            </thead>
+            <tbody>
+            <tr th:each="room : ${rooms}">
+                <td th:text="${room.roomNumber}">Room</td>
+                <td th:text="${room.activeBookingCount}">0</td>
+                <td>
+                    <div class="actions">
+                        <a th:href="@{/rooms/{id}(id=${room.roomId})}" role="button" class="outline secondary">Open</a>
+                        <form th:attr="hx-post=@{/rooms/{id}/closure(id=${room.roomId})}" hx-target="#feedback" hx-swap="innerHTML">
+                            <button type="submit" class="outline contrast">Close</button>
+                        </form>
+                    </div>
+                </td>
+            </tr>
+            </tbody>
+        </table>
+    </article>
+
+    <article>
+        <header><strong>Guests</strong></header>
+        <p th:if="${guests.isEmpty()}">No guests yet. Register one above.</p>
+        <table th:unless="${guests.isEmpty()}" class="striped">
+            <thead>
+            <tr>
+                <th>Name</th>
+                <th></th>
+            </tr>
+            </thead>
+            <tbody>
+            <tr th:each="guest : ${guests}">
+                <td th:text="${guest.name}">Name</td>
+                <td>
+                    <div class="actions">
+                        <form th:attr="hx-post=@{/guests/{id}/deregistration(id=${guest.guestId})}" hx-target="#feedback" hx-swap="innerHTML">
+                            <button type="submit" class="outline contrast">Deregister</button>
+                        </form>
+                    </div>
+                </td>
+            </tr>
+            </tbody>
+        </table>
+    </article>
+</div>
+</body>
+</html>

@@ -1,0 +1,17 @@
+# Enable Occurrent's DCB capability. With this set, the reactive Spring Boot starter auto-configures a reactive
+# DcbApplicationService<DomainEvent> and the DCB query and subscription DSL from the beans in Bootstrap.kt.
+occurrent:
+  event-store:
+    capabilities: dcb
+  cloud-event-converter:
+    cloud-event-source: urn:occurrent:example:hotel-booking
+
+spring:
+  data:
+    mongodb:
+      # The reactive ReactiveMongoDatabaseFactory autoconfiguration reads spring.data.mongodb.uri.
+      #
+      # DCB appends run in multi-document transactions, which require a replica set (a single-node replica set is fine
+      # for local development). The Testcontainers-based test starts one automatically; for running the app yourself,
+      # point this at a replica set.
+      uri: mongodb://localhost:27017/hotel-booking?replicaSet=rs0

@@ -1,0 +1,40 @@
+<!DOCTYPE html>
+<html lang="en" xmlns:th="http://www.thymeleaf.org">
+<head>
+    <meta charset="UTF-8"/>
+    <meta name="viewport" content="width=device-width, initial-scale=1"/>
+    <title>Hotel room booking</title>
+    <link rel="stylesheet" th:href="@{/css/pico.min.css}"/>
+    <link rel="stylesheet" th:href="@{/css/app.css}"/>
+    <script th:src="@{/webjars/htmx.org/dist/htmx.min.js}"></script>
+</head>
+<body>
+<main class="container">
+    <hgroup>
+        <h1>Hotel room booking</h1>
+        <p>A reactive Dynamic Consistency Boundary demo. Define rooms and register guests, then book rooms.</p>
+    </hgroup>
+
+    <div class="grid">
+        <article>
+            <header><strong>Define a room</strong></header>
+            <form hx-post="/rooms" hx-target="#feedback" hx-swap="innerHTML">
+                <input type="text" name="roomNumber" placeholder="Room number" required/>
+                <button type="submit">Define</button>
+            </form>
+        </article>
+        <article>
+            <header><strong>Register a guest</strong></header>
+            <form hx-post="/guests" hx-target="#feedback" hx-swap="innerHTML">
+                <input type="text" name="name" placeholder="Name" required/>
+                <button type="submit">Register</button>
+            </form>
+        </article>
+    </div>
+
+    <div id="feedback"></div>
+
+    <div th:replace="~{hoteldashboard/dashboard :: dashboard}"></div>
+</main>
+</body>
+</html>

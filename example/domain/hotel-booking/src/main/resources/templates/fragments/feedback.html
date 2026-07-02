@@ -1,0 +1,6 @@
+<!DOCTYPE html>
+<html xmlns:th="http://www.thymeleaf.org">
+<body>
+<div th:fragment="feedback" th:classappend="${error} ? 'feedback error' : 'feedback ok'" th:text="${message}">Feedback</div>
+</body>
+</html>

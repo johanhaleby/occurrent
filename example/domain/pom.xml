@@ -30,6 +30,7 @@
         <module>rps</module>
         <module>mastermind</module>
         <module>course-enrollment</module>
+        <module>hotel-booking</module>
     </modules>
     <modelVersion>4.0.0</modelVersion>
 
