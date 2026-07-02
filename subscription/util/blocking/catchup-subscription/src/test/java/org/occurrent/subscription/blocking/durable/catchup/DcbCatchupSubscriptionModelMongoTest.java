@@ -224,6 +224,34 @@ class DcbCatchupSubscriptionModelMongoTest {
         assertThat(received).doesNotHaveDuplicates();
     }
 
+    @Test
+    void resuming_from_an_explicit_dcb_position_never_redelivers_an_event_at_or_before_it() {
+        // Three events exist before the subscription starts.
+        NameDefined event1 = nameDefined("event1");
+        NameDefined event2 = nameDefined("event2");
+        NameDefined event3 = nameDefined("event3");
+        appendTagged("name:1", event1);
+        appendTagged("name:1", event2);
+        appendTagged("name:1", event3);
+
+        CopyOnWriteArrayList<DomainEvent> received = new CopyOnWriteArrayList<>();
+        subscription = new CatchupSubscriptionModel(subscriptionModel, eventStore, DcbQuery.tags("name:1"),
+                new CatchupSubscriptionModelConfig(100, useSubscriptionPositionStorage(storage).andPersistSubscriptionPositionDuringCatchupPhaseForEveryNEvents(1)));
+
+        // Resuming after position 1 (as if event1 was already processed elsewhere) replays only event2 and event3.
+        subscription.subscribe("subscription", StartAt.subscriptionPosition(DcbSubscriptionPosition.of(1)), toDomainEvents(received)).waitUntilStarted();
+
+        await().atMost(AT_MOST).with().pollInterval(Duration.of(100, MILLIS)).untilAsserted(() ->
+                assertThat(received).containsExactly(event2, event3));
+
+        // event1 must never arrive, including through the live change stream after the handover settles.
+        NameDefined live1 = nameDefined("live1");
+        appendTagged("name:1", live1);
+        await().atMost(AT_MOST).with().pollInterval(Duration.of(100, MILLIS)).untilAsserted(() ->
+                assertThat(received).containsExactly(event2, event3, live1));
+        assertThat(received).doesNotContain(event1);
+    }
+
     private static void awaitLatch(CountDownLatch latch) {
         try {
             assertThat(latch.await(30, TimeUnit.SECONDS)).as("latch reached in time").isTrue();
