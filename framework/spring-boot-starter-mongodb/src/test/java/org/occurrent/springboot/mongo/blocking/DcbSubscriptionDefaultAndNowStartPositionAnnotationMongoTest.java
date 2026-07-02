@@ -50,6 +50,7 @@ import java.util.Date;
 import java.util.List;
 import java.util.UUID;
 import java.util.concurrent.CopyOnWriteArrayList;
+import java.util.concurrent.atomic.AtomicInteger;
 import java.util.stream.Stream;
 
 import static java.time.Duration.ofMillis;
@@ -94,11 +95,16 @@ class DcbSubscriptionDefaultAndNowStartPositionAnnotationMongoTest {
 
     @Test
     void default_and_now_never_replay_pre_existing_dcb_history_only_live_events() {
-        // Neither subscriber ever sees the historic event appended before it started, even after settling.
-        await().during(ofSeconds(2)).atMost(ofSeconds(5)).untilAsserted(() ->
-                assertThat(defaultPositionSubscriber.received()).isEmpty());
-        await().during(ofSeconds(2)).atMost(ofSeconds(5)).untilAsserted(() ->
-                assertThat(nowPositionSubscriber.received()).isEmpty());
+        // Neither subscriber's handler is ever invoked for the historic event, and consequently neither
+        // ever sees it in received(), even after settling.
+        await().during(ofSeconds(2)).atMost(ofSeconds(5)).untilAsserted(() -> {
+            assertThat(defaultPositionSubscriber.invocationCount()).isZero();
+            assertThat(defaultPositionSubscriber.received()).isEmpty();
+        });
+        await().during(ofSeconds(2)).atMost(ofSeconds(5)).untilAsserted(() -> {
+            assertThat(nowPositionSubscriber.invocationCount()).isZero();
+            assertThat(nowPositionSubscriber.received()).isEmpty();
+        });
 
         append(new TestEvent("live-default"));
         append(new TestEvent("live-now"));
@@ -187,9 +193,11 @@ class DcbSubscriptionDefaultAndNowStartPositionAnnotationMongoTest {
 
     static class DefaultPositionSubscriber {
         private final CopyOnWriteArrayList<TestEvent> received = new CopyOnWriteArrayList<>();
+        private final AtomicInteger invocationCount = new AtomicInteger();
 
         @DcbSubscription(id = "dcb-sp-default")
         void onEvent(TestEvent event) {
+            invocationCount.incrementAndGet();
             if (event.name().equals("live-default")) {
                 received.add(event);
             }
@@ -198,13 +206,19 @@ class DcbSubscriptionDefaultAndNowStartPositionAnnotationMongoTest {
         List<TestEvent> received() {
             return received;
         }
+
+        int invocationCount() {
+            return invocationCount.get();
+        }
     }
 
     static class NowPositionSubscriber {
         private final CopyOnWriteArrayList<TestEvent> received = new CopyOnWriteArrayList<>();
+        private final AtomicInteger invocationCount = new AtomicInteger();
 
         @DcbSubscription(id = "dcb-sp-now", startAt = DcbStartPosition.NOW)
         void onEvent(TestEvent event) {
+            invocationCount.incrementAndGet();
             if (event.name().equals("live-now")) {
                 received.add(event);
             }
@@ -212,6 +226,10 @@ class DcbSubscriptionDefaultAndNowStartPositionAnnotationMongoTest {
 
         List<TestEvent> received() {
             return received;
+        }
+
+        int invocationCount() {
+            return invocationCount.get();
         }
     }
 
