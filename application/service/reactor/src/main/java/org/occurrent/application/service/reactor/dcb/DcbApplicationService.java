@@ -21,7 +21,6 @@ import org.occurrent.eventstore.api.dcb.DcbAppendResult;
 import org.occurrent.eventstore.api.dcb.DcbQuery;
 import reactor.core.publisher.Mono;
 
-import java.util.Optional;
 import java.util.function.Function;
 import java.util.stream.Stream;
 
@@ -40,9 +39,9 @@ public interface DcbApplicationService<E> {
      *
      * @param query the DCB query that defines which existing events are relevant to the decision
      * @param functionThatCallsDomainModel receives the current matching domain events and returns new domain events to append
-     * @return a {@link Mono} of the append result, or {@link Optional#empty()} when the domain function produced no new events
+     * @return a {@link Mono} of the append result, or an empty {@link Mono} when the domain function produced no new events
      */
-    default Mono<Optional<DcbAppendResult>> execute(DcbQuery query, Function<Stream<E>, Stream<E>> functionThatCallsDomainModel) {
+    default Mono<DcbAppendResult> execute(DcbQuery query, Function<Stream<E>, Stream<E>> functionThatCallsDomainModel) {
         return execute(query, DcbExecuteOptions.empty(), functionThatCallsDomainModel);
     }
 
@@ -55,7 +54,7 @@ public interface DcbApplicationService<E> {
      * @param query the DCB query that defines which existing events are relevant to the decision
      * @param options the execute options (for example a post-append side-effect)
      * @param functionThatCallsDomainModel receives the current matching domain events and returns new domain events to append
-     * @return a {@link Mono} of the append result, or {@link Optional#empty()} when the domain function produced no new events
+     * @return a {@link Mono} of the append result, or an empty {@link Mono} when the domain function produced no new events
      */
-    Mono<Optional<DcbAppendResult>> execute(DcbQuery query, DcbExecuteOptions<E> options, Function<Stream<E>, Stream<E>> functionThatCallsDomainModel);
+    Mono<DcbAppendResult> execute(DcbQuery query, DcbExecuteOptions<E> options, Function<Stream<E>, Stream<E>> functionThatCallsDomainModel);
 }

@@ -51,7 +51,6 @@ import reactor.test.StepVerifier;
 import java.net.URI;
 import java.util.ArrayList;
 import java.util.List;
-import java.util.Optional;
 import java.util.Set;
 import java.util.UUID;
 import java.util.concurrent.atomic.AtomicBoolean;
@@ -104,14 +103,13 @@ class GenericDcbApplicationServiceTest {
         eventStore.append(List.of(DcbCloudEvents.withTags(converter().toCloudEvent(new DomainEvent("NameDefined", "name:1")), Set.of("name:1")))).block();
         GenericDcbApplicationService<DomainEvent> applicationService = new GenericDcbApplicationService<>(eventStore, converter(), event -> Set.of(event.name()));
 
-        Optional<DcbAppendResult> result = applicationService.execute(tags("name:1"), events -> {
+        DcbAppendResult result = applicationService.execute(tags("name:1"), events -> {
             List<DomainEvent> currentEvents = events.toList();
             assertThat(currentEvents).extracting(DomainEvent::type).containsExactly("NameDefined");
             return Stream.of(new DomainEvent("NameChanged", "name:1"));
         }).block();
 
-        assertThat(result).isPresent();
-        assertThat(requireNonNull(result).get().eventCount()).isEqualTo(1);
+        assertThat(requireNonNull(result).eventCount()).isEqualTo(1);
         DcbEventStream eventStream = eventStore.read(tags("name:1")).block();
         assertThat(requireNonNull(eventStream).events()).extracting(CloudEvent::getType).containsExactly("NameDefined", "NameChanged");
         assertThat(DcbCloudEvents.getTags(eventStream.events().get(1))).containsExactly("name:1");
@@ -122,7 +120,7 @@ class GenericDcbApplicationServiceTest {
         GenericDcbApplicationService<DomainEvent> applicationService = new GenericDcbApplicationService<>(eventStore, converter(), event -> Set.of(event.name()));
 
         StepVerifier.create(applicationService.execute(tags("name:1"), events -> Stream.empty()))
-                .expectNext(Optional.empty())
+                .expectNextCount(0)
                 .verifyComplete();
 
         assertThat(requireNonNull(eventStore.read(tags("name:1")).block()).events()).isEmpty();
@@ -163,7 +161,7 @@ class GenericDcbApplicationServiceTest {
         AtomicInteger attempts = new AtomicInteger();
         GenericDcbApplicationService<DomainEvent> applicationService = new GenericDcbApplicationService<>(conflictingStore, converter(), event -> Set.of(event.name()));
 
-        Optional<DcbAppendResult> result = applicationService.execute(tags("name:1"), events -> {
+        DcbAppendResult result = applicationService.execute(tags("name:1"), events -> {
             int attempt = attempts.incrementAndGet();
             List<DomainEvent> currentEvents = events.toList();
             if (attempt == 1) {
@@ -174,7 +172,7 @@ class GenericDcbApplicationServiceTest {
             return Stream.of(new DomainEvent("NameChangedByService", "name:1"));
         }).block();
 
-        assertThat(result).isPresent();
+        assertThat(result).isNotNull();
         assertThat(attempts).hasValue(2);
         assertThat(requireNonNull(eventStore.read(tags("name:1")).block()).events())
                 .extracting(CloudEvent::getType)

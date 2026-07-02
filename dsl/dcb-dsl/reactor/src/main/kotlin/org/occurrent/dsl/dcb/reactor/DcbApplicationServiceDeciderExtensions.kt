@@ -36,8 +36,7 @@ import java.util.stream.Stream
  * equivalent to the stream id in stream-based decider helpers.
  *
  * Returns a [Mono] of the [DcbAppendResult], or an empty [Mono] when the decider produced no new events (a no-op
- * command). This is the Kotlin-idiomatic counterpart to the Java [DcbApplicationService.execute] which returns a
- * `Mono<Optional<DcbAppendResult>>`.
+ * command).
  */
 inline fun <C : Any, S, reified SubE : E, E : Any> DcbApplicationService<E>.execute(
     query: DcbQuery,
@@ -58,7 +57,7 @@ inline fun <C : Any, S, reified SubE : E, E : Any> DcbApplicationService<E>.exec
     val widened: Decider<C, S, E> = decider.adaptEvents()
     return execute(query) { events: Stream<E> ->
         widened.decideOnEventsAndReturnEvents(events.toList(), commands).stream()
-    }.flatMap { Mono.justOrEmpty(it) }
+    }
 }
 
 /**

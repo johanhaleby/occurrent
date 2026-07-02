@@ -16,6 +16,7 @@
 
 package org.occurrent.dsl.dcb.reactor
 
+import org.occurrent.eventstore.api.dcb.DcbConsistencyToken
 import org.occurrent.eventstore.api.dcb.DcbQuery
 import org.occurrent.eventstore.api.dcb.DcbReadOptions
 import reactor.core.publisher.Mono
@@ -33,3 +34,15 @@ fun <T : Any> DcbDomainEventQueries<T>.queryForList(
     options: DcbReadOptions = DcbReadOptions.fromBeginning()
 ): Mono<List<T>> =
     this.query(query, options).collectList()
+
+/**
+ * Query that returns the matching domain events as a [List] together with the observed DCB sequence position and the
+ * consistency token for a later conditional append.
+ *
+ * @see DcbDomainEventQueries.queryWithPosition
+ */
+fun <T : Any> DcbDomainEventQueries<T>.queryForListWithPosition(
+    query: DcbQuery,
+    options: DcbReadOptions = DcbReadOptions.fromBeginning()
+): Mono<Triple<List<T>, Long, DcbConsistencyToken>> =
+    this.queryWithPosition(query, options).map { Triple(it.events(), it.lastSequencePosition(), it.consistencyToken()) }

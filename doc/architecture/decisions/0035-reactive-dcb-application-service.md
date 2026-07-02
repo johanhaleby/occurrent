@@ -16,7 +16,7 @@ Add a reactive `DcbApplicationService` in a new module `application/service/reac
 
 ### The domain function stays synchronous
 
-`execute` returns `Mono<Optional<DcbAppendResult>>`, but the domain function is `Function<Stream<E>, Stream<E>>`, the same shape as the blocking service. Only the read and append I/O are reactive. A domain decision is a pure function, and the reactive read already materializes its matched events into a list, so a `Flux<E>` domain function would add reactive ceremony to pure logic with no streaming benefit and would not compose with the existing synchronous deciders. Keeping the function synchronous also makes migration from the blocking service a one-line return-type change.
+`execute` returns `Mono<DcbAppendResult>` (an empty `Mono` means the domain function produced no new events), but the domain function is `Function<Stream<E>, Stream<E>>`, the same shape as the blocking service. Only the read and append I/O are reactive. A domain decision is a pure function, and the reactive read already materializes its matched events into a list, so a `Flux<E>` domain function would add reactive ceremony to pure logic with no streaming benefit and would not compose with the existing synchronous deciders. Keeping the function synchronous also makes migration from the blocking service a one-line return-type change.
 
 ### Read, decide, and append as one retried unit
 

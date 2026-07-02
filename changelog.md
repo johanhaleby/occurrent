@@ -65,6 +65,7 @@ DCB is a capability layered on the existing CloudEvent storage, not a new store 
 
 * Added a reactive DCB application service (`application-service-reactor`).
   * `DcbApplicationService` runs the read, decide, and append cycle against the reactive DCB event store and returns a `Mono`, retrying from a fresh read on a DCB conflict. The domain function stays a synchronous `Function<Stream<E>, Stream<E>>`, and the post-append side-effect is reactive (`Function<Stream<E>, Mono<Void>>`). This is the first reactive application service in Occurrent.
+  * The raw reactive `DcbApplicationService.execute` returns `Mono<DcbAppendResult>` rather than `Mono<Optional<DcbAppendResult>>`. An empty `Mono` is the reactive representation of no value, so an empty `Mono` now means the domain function produced no new events (a no-op). This matches the Kotlin `execute` decider extension, which already flattened to `Mono<DcbAppendResult>`.
   * See [ADR 35](doc/architecture/decisions/0035-reactive-dcb-application-service.md).
 
 * DCB now works on the reactive Spring MongoDB event store, which completes DCB support across every event store.
