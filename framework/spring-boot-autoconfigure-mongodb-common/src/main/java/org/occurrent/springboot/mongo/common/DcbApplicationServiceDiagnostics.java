@@ -36,14 +36,17 @@ import org.slf4j.Logger;
  * {@code ObjectProvider.getIfAvailable()} instead resolves at bean-instantiation time, after all definitions exist, so
  * it finds a user-defined {@link TagGenerator} reliably regardless of declaration order or import style.
  * <p>
- * Returning {@code null} when no {@link TagGenerator} exists behaves identically to the bean never having been
- * registered for every real consumer: Spring resolves a null-returning {@code @Bean} to a {@code NullBean} sentinel,
- * and {@code @Autowired}/constructor injection of this type then fails with the same
- * {@code NoSuchBeanDefinitionException}-style error as a genuinely absent bean. The only difference from a bean that
- * was never registered is that raw by-type introspection (for example {@code getBeanNamesForType}, as used by
- * Actuator's beans endpoint) still reports the bean name, since the bean definition itself is unconditional. That is
- * the accepted, narrow cost of making this a normal, generically-typed {@code @Bean} that IDEs can statically resolve,
- * instead of the {@code BeanFactoryPostProcessor} this replaced.
+ * Returning {@code null} when no {@link TagGenerator} exists behaves like the bean never having been registered for
+ * the common consumer path: Spring resolves a null-returning {@code @Bean} to a {@code NullBean} sentinel, and
+ * {@code @Autowired}/constructor injection of this type then fails with the same
+ * {@code NoSuchBeanDefinitionException}-style error as a genuinely absent bean. The bean definition itself is
+ * unconditional, though, so anything that resolves by name or by raw type introspection can still observe it: by-type
+ * introspection (for example {@code getBeanNamesForType}, as used by Actuator's beans endpoint) reports the bean
+ * name, and name-based lookups such as {@code containsBean("occurrentDcbApplicationService")} or
+ * {@code getBean("occurrentDcbApplicationService")} succeed and return the {@code NullBean} sentinel instead of
+ * throwing {@code NoSuchBeanDefinitionException}. That is the accepted, narrow cost of making this a normal,
+ * generically-typed {@code @Bean} that IDEs can statically resolve, instead of the {@code BeanFactoryPostProcessor}
+ * this replaced.
  */
 public final class DcbApplicationServiceDiagnostics {
 
