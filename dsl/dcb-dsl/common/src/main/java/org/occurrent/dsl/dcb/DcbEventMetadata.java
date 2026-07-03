@@ -25,6 +25,7 @@ import java.util.OptionalLong;
 import java.util.Set;
 
 import static java.util.Objects.requireNonNull;
+import org.occurrent.cloudevents.OccurrentCloudEventExtension;
 
 /**
  * Java-friendly view over an {@link EventMetadata} that exposes DCB-specific metadata, namely the DCB sequence
@@ -56,7 +57,7 @@ public final class DcbEventMetadata {
      * regular stream-written event).
      */
     public OptionalLong dcbPosition() {
-        return decodePosition(metadata.getData().get(DcbCloudEvents.POSITION));
+        return decodePosition(metadata.getData().get(OccurrentCloudEventExtension.POSITION));
     }
 
     /**

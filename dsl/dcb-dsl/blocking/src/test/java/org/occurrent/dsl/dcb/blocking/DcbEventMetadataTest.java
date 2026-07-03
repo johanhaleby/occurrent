@@ -27,20 +27,21 @@ import java.util.Map;
 import java.util.Set;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import org.occurrent.cloudevents.OccurrentCloudEventExtension;
 
 @DisplayNameGeneration(ReplaceUnderscores.class)
 class DcbEventMetadataTest {
 
     @Test
     void reads_position_when_stored_as_number() {
-        EventMetadata metadata = new EventMetadata(Map.of(DcbCloudEvents.POSITION, 7L));
+        EventMetadata metadata = new EventMetadata(Map.of(OccurrentCloudEventExtension.POSITION, 7L));
 
         assertThat(DcbEventMetadata.from(metadata).dcbPosition()).hasValue(7L);
     }
 
     @Test
     void reads_position_when_stored_as_string() {
-        EventMetadata metadata = new EventMetadata(Map.of(DcbCloudEvents.POSITION, "7"));
+        EventMetadata metadata = new EventMetadata(Map.of(OccurrentCloudEventExtension.POSITION, "7"));
 
         assertThat(DcbEventMetadata.from(metadata).dcbPosition()).hasValue(7L);
     }

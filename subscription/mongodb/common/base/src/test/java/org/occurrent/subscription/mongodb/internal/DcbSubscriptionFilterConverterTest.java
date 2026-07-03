@@ -32,7 +32,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 class DcbSubscriptionFilterConverterTest {
 
     private static final String FULL_DOCUMENT = "fullDocument";
-    private static final String POSITION_FIELD = FULL_DOCUMENT + ".dcbposition";
+    private static final String POSITION_FIELD = FULL_DOCUMENT + ".position";
     private static final String TYPE_FIELD = FULL_DOCUMENT + ".type";
     private static final String TAGS_FIELD = FULL_DOCUMENT + ".dcbTags";
 

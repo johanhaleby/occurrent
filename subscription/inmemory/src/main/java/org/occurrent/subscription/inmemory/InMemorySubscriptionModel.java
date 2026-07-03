@@ -42,6 +42,7 @@ import java.util.function.Supplier;
 import java.util.stream.Stream;
 
 import static org.occurrent.inmemory.filtermatching.FilterMatcher.matchesFilter;
+import org.occurrent.cloudevents.OccurrentCloudEventExtension;
 
 /**
  * An in-memory subscription model
@@ -181,7 +182,7 @@ public class InMemorySubscriptionModel implements SubscriptionModel, Consumer<St
             // Match the DCB query in process and require a DCB position, the same guard the DCB subscription DSL uses,
             // so a non-Mongo subscribable filters DCB events without a server-side change stream match.
             DcbQuery query = dcbSubscriptionFilter.query();
-            return cloudEvent -> DcbCloudEvents.getPosition(cloudEvent) > 0 && DcbCloudEvents.matches(cloudEvent, query);
+            return cloudEvent -> OccurrentCloudEventExtension.getPosition(cloudEvent) > 0 && DcbCloudEvents.matches(cloudEvent, query);
         } else {
             throw new IllegalArgumentException(InMemorySubscriptionModel.class.getSimpleName() + " only supports filters of type " + OccurrentSubscriptionFilter.class.getName() + " and " + DcbSubscriptionFilter.class.getName());
         }

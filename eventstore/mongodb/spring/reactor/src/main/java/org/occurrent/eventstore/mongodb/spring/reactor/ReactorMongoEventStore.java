@@ -84,6 +84,7 @@ import static org.occurrent.mongodb.spring.sortconversion.internal.SortConverter
 import static org.springframework.data.domain.Sort.Direction.DESC;
 import static org.springframework.data.mongodb.SessionSynchronization.ALWAYS;
 import static org.springframework.data.mongodb.core.query.Criteria.where;
+import org.occurrent.cloudevents.OccurrentCloudEventExtension;
 
 /**
  * This is a reactive {@link EventStore} implementation that stores events in MongoDB using
@@ -110,6 +111,7 @@ public class ReactorMongoEventStore implements EventStore, EventStoreOperations,
     private final Function<Query, Query> readOptions;
     private final Set<EventStoreCapability> eventStoreCapabilities;
     private final DcbStreamIdGenerator dcbStreamIdGenerator;
+    private final boolean streamPositionEnabled;
 
     /**
      * Create a new instance of {@code SpringReactorMongoEventStore}
@@ -130,6 +132,7 @@ public class ReactorMongoEventStore implements EventStore, EventStoreOperations,
         this.readOptions = config.readOptions;
         this.eventStoreCapabilities = config.eventStoreCapabilities;
         this.dcbStreamIdGenerator = config.dcbStreamIdGenerator;
+        this.streamPositionEnabled = config.streamPositionEnabled;
         initializeEventStore(eventStoreCollectionName, dcbPositionCollectionName, dcbCheckpointCollectionName, eventStoreCapabilities, mongoTemplate).block();
     }
 
@@ -208,10 +211,10 @@ public class ReactorMongoEventStore implements EventStore, EventStoreOperations,
         // events may include it while the token does not, which only makes a later conditional append over-cautious (a
         // false conflict that retries) rather than miss the conflict.
         return consistencyToken(query).flatMap(token ->
-                currentDcbPosition().flatMap(highWatermark -> {
+                currentPosition().flatMap(highWatermark -> {
                     long upperBound = Math.min(highWatermark, options.upToSequencePosition().orElse(highWatermark));
                     Query mongoQuery = toDcbMongoQuery(query, options.afterSequencePosition().orElse(0), upperBound);
-                    mongoQuery.with(Sort.by(Sort.Direction.ASC, DcbCloudEvents.POSITION));
+                    mongoQuery.with(Sort.by(Sort.Direction.ASC, OccurrentCloudEventExtension.POSITION));
                     return mongoTemplate.find(queryOptions.apply(mongoQuery), Document.class, eventStoreCollectionName)
                             .map(document -> DcbDocumentMapper.toCloudEvent(timeRepresentation, document))
                             .collectList()
@@ -226,7 +229,7 @@ public class ReactorMongoEventStore implements EventStore, EventStoreOperations,
         }
         requireNonNull(query, "Query cannot be null");
         requireNonNull(options, "Read options cannot be null");
-        return currentDcbPosition().flatMap(highWatermark -> {
+        return currentPosition().flatMap(highWatermark -> {
             long upperBound = Math.min(highWatermark, options.upToSequencePosition().orElse(highWatermark));
             return mongoTemplate.exists(queryOptions.apply(toDcbMongoQuery(query, options.afterSequencePosition().orElse(0), upperBound)), eventStoreCollectionName);
         });
@@ -239,7 +242,7 @@ public class ReactorMongoEventStore implements EventStore, EventStoreOperations,
         }
         requireNonNull(query, "Query cannot be null");
         requireNonNull(options, "Read options cannot be null");
-        return currentDcbPosition().flatMap(highWatermark -> {
+        return currentPosition().flatMap(highWatermark -> {
             long upperBound = Math.min(highWatermark, options.upToSequencePosition().orElse(highWatermark));
             return mongoTemplate.count(queryOptions.apply(toDcbMongoQuery(query, options.afterSequencePosition().orElse(0), upperBound)), eventStoreCollectionName);
         });
@@ -279,9 +282,9 @@ public class ReactorMongoEventStore implements EventStore, EventStoreOperations,
 
         // Reserve the position block once, outside the transaction. The counter findAndModify is a single atomic
         // document update that MongoDB serializes without raising a transaction conflict. The reserved block is reused
-        // across transient-transaction-error retries, a doomed or condition-failed append abandons it, so dcbposition
+        // across transient-transaction-error retries, a doomed or condition-failed append abandons it, so position
         // may have gaps (DCB permits this, see ADR 0021).
-        return reserveDcbPositions(eventCount).flatMap(firstPosition -> {
+        return reservePositions(eventCount).flatMap(firstPosition -> {
             long lastPosition = firstPosition + eventCount - 1;
             Mono<DcbAppendResult> transaction = transactionalOperator.transactional(
                     currentStreamVersion(streamId).flatMap(currentStreamVersion -> {
@@ -326,7 +329,7 @@ public class ReactorMongoEventStore implements EventStore, EventStoreOperations,
         }
         return conflictMono.flatMap(conflict -> {
             if (conflict) {
-                return currentDcbPosition().flatMap(position -> Mono.<Void>error(new DcbAppendConditionNotFulfilledException(condition, position, "Append condition was not fulfilled.")));
+                return currentPosition().flatMap(position -> Mono.<Void>error(new DcbAppendConditionNotFulfilledException(condition, position, "Append condition was not fulfilled.")));
             }
             // Increment a marker per key for the union of the query's keys and the appended events' keys. Always
             // increment the query's markers so a concurrent matching append is serialized even when this append's own
@@ -363,20 +366,20 @@ public class ReactorMongoEventStore implements EventStore, EventStoreOperations,
                 .reduce(0L, Long::sum);
     }
 
-    private Mono<Long> reserveDcbPositions(int eventCount) {
-        Query query = new Query(where(ID).is(DcbMarkerModel.DCB_POSITION_DOCUMENT_ID));
-        Update update = new Update().inc(DcbMarkerModel.DCB_COUNTER_POSITION, eventCount);
+    private Mono<Long> reservePositions(int eventCount) {
+        Query query = new Query(where(ID).is(DcbMarkerModel.POSITION_DOCUMENT_ID));
+        Update update = new Update().inc(DcbMarkerModel.COUNTER_POSITION, eventCount);
         FindAndModifyOptions options = FindAndModifyOptions.options().upsert(true).returnNew(true);
         return mongoTemplate.findAndModify(query, update, options, Document.class, dcbPositionCollectionName)
-                .map(updated -> ((Number) updated.get(DcbMarkerModel.DCB_COUNTER_POSITION)).longValue() - eventCount + 1)
+                .map(updated -> ((Number) updated.get(DcbMarkerModel.COUNTER_POSITION)).longValue() - eventCount + 1)
                 // Cold-start race: when the counter document does not exist yet, concurrent upserts all try to insert it
                 // and all but one get a duplicate key. On retry the document exists and the upsert becomes an update.
                 .retryWhen(Retry.fixedDelay(5, Duration.ofMillis(20)).filter(ReactorMongoEventStore::isDuplicateKeyError));
     }
 
-    private Mono<Long> currentDcbPosition() {
-        return mongoTemplate.findById(DcbMarkerModel.DCB_POSITION_DOCUMENT_ID, Document.class, dcbPositionCollectionName)
-                .map(document -> ((Number) document.get(DcbMarkerModel.DCB_COUNTER_POSITION)).longValue())
+    private Mono<Long> currentPosition() {
+        return mongoTemplate.findById(DcbMarkerModel.POSITION_DOCUMENT_ID, Document.class, dcbPositionCollectionName)
+                .map(document -> ((Number) document.get(DcbMarkerModel.COUNTER_POSITION)).longValue())
                 .defaultIfEmpty(0L);
     }
 
@@ -385,7 +388,7 @@ public class ReactorMongoEventStore implements EventStore, EventStoreOperations,
         long streamVersion = currentStreamVersion + 1;
         long position = firstPosition;
         for (CloudEvent cloudEvent : cloudEvents) {
-            CloudEvent dcbCloudEvent = DcbCloudEvents.withPosition(cloudEvent, position);
+            CloudEvent dcbCloudEvent = OccurrentCloudEventExtension.withPosition(cloudEvent, position);
             documents.add(DcbDocumentMapper.toDocument(timeRepresentation, streamId, streamVersion++, dcbCloudEvent, position));
             position++;
         }
@@ -412,6 +415,17 @@ public class ReactorMongoEventStore implements EventStore, EventStoreOperations,
 
     private static UnsupportedOperationException capabilityError(EventStoreCapability capability) {
         return new UnsupportedOperationException(capability + " capability is not enabled for this ReactorMongoEventStore");
+    }
+
+    /**
+     * Returns whether this store carries a global position, i.e. whether position-requiring APIs are safe to call.
+     */
+    public boolean writesPosition() {
+        return eventStoreCapabilities.contains(DCB) || (eventStoreCapabilities.contains(STREAM) && streamPositionEnabled);
+    }
+
+    private static UnsupportedOperationException positionError() {
+        return new UnsupportedOperationException("This ReactorMongoEventStore does not write a position. Enable DCB, or do not call withoutStreamPosition() on a STREAM-only store, to use position-requiring APIs.");
     }
 
     private static boolean isTransientTransactionError(Throwable throwable) {
@@ -460,7 +474,7 @@ public class ReactorMongoEventStore implements EventStore, EventStoreOperations,
     }
 
     private static Query toDcbMongoQuery(DcbQuery query, long afterSequencePosition, long upperSequencePosition) {
-        Criteria positionCriteria = where(DcbCloudEvents.POSITION).gt(afterSequencePosition).lte(upperSequencePosition);
+        Criteria positionCriteria = where(OccurrentCloudEventExtension.POSITION).gt(afterSequencePosition).lte(upperSequencePosition);
         if (query instanceof DcbQuery.MatchAll) {
             return new Query(positionCriteria);
         }
@@ -557,7 +571,7 @@ public class ReactorMongoEventStore implements EventStore, EventStoreOperations,
                 .then();
 
         // streamId + streamVersion uniqueness is a stream-mode invariant. DCB correctness rests on the per-attribute
-        // markers and the unique dcbposition, not stream version, so a DCB-only store neither needs nor creates it.
+        // markers and the unique position, not stream version, so a DCB-only store neither needs nor creates it.
         if (eventStoreCapabilities.contains(STREAM)) {
             chain = chain.then(createIndex(eventStoreCollectionName, mongoTemplate, Indexes.compoundIndex(Indexes.ascending(STREAM_ID), Indexes.ascending(STREAM_VERSION)), new IndexOptions().unique(true))).then();
         }
@@ -566,7 +580,7 @@ public class ReactorMongoEventStore implements EventStore, EventStoreOperations,
             chain = chain
                     .then(createCollection(dcbPositionCollectionName, mongoTemplate))
                     .then(createCollection(dcbCheckpointCollectionName, mongoTemplate))
-                    .then(createIndex(eventStoreCollectionName, mongoTemplate, Indexes.ascending(DcbCloudEvents.POSITION), new IndexOptions().unique(true).sparse(true)))
+                    .then(createIndex(eventStoreCollectionName, mongoTemplate, Indexes.ascending(OccurrentCloudEventExtension.POSITION), new IndexOptions().unique(true).sparse(true)))
                     .then(createIndex(eventStoreCollectionName, mongoTemplate, Indexes.ascending(DcbDocumentMapper.DCB_TAGS_INDEX_FIELD), new IndexOptions()))
                     .then();
         }
@@ -591,7 +605,7 @@ public class ReactorMongoEventStore implements EventStore, EventStoreOperations,
     }
 
     private static CloudEvent convertToCloudEvent(TimeRepresentation timeRepresentation, Document document) {
-        // Use the DCB-aware mapper so that DCB storage fields (dcbTags, dcbposition) are handled rather than leaked as
+        // Use the DCB-aware mapper so that DCB storage fields (dcbTags, position) are handled rather than leaked as
         // CloudEvent extensions when this store reads a collection that a DCB-enabled store also writes to. It is a
         // no-op for plain stream events.
         return DcbDocumentMapper.toCloudEvent(timeRepresentation, document);

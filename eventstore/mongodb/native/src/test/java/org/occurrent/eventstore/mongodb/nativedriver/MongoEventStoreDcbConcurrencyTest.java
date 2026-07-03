@@ -556,7 +556,7 @@ class MongoEventStoreDcbConcurrencyTest {
         MongoCollection<Document> collection = mongoClient.getDatabase(databaseName).getCollection(COLLECTION);
 
         Document tagReadQuery = new Document("$and", List.of(
-                new Document("dcbposition", new Document("$gt", 0).append("$lte", 1000000)),
+                new Document("position", new Document("$gt", 0).append("$lte", 1000000)),
                 new Document("$or", List.of(
                         new Document("dcbTags", new Document("$all", List.of("explain-tag")))
                 ))
@@ -567,18 +567,18 @@ class MongoEventStoreDcbConcurrencyTest {
                 .isEqualTo("IXSCAN");
 
         Document typeReadQuery = new Document("$and", List.of(
-                new Document("dcbposition", new Document("$gt", 0).append("$lte", 1000000)),
+                new Document("position", new Document("$gt", 0).append("$lte", 1000000)),
                 new Document("$or", List.of(
                         new Document("type", new Document("$in", List.of("SeedType")))
                 ))
         ));
         Document typeReadExplain = collection.find(typeReadQuery).explain(ExplainVerbosity.QUERY_PLANNER);
         assertThat(extractWinningPlanStage(typeReadExplain))
-                .as("Type read query should use IXSCAN (dcbposition index), not COLLSCAN or unrecognized stage. Full explain: %s", typeReadExplain.toJson())
+                .as("Type read query should use IXSCAN (position index), not COLLSCAN or unrecognized stage. Full explain: %s", typeReadExplain.toJson())
                 .isEqualTo("IXSCAN");
 
         Document existenceQuery = new Document("$and", List.of(
-                new Document("dcbposition", new Document("$gt", 0).append("$lte", Long.MAX_VALUE)),
+                new Document("position", new Document("$gt", 0).append("$lte", Long.MAX_VALUE)),
                 new Document("$or", List.of(
                         new Document("dcbTags", new Document("$all", List.of("explain-tag")))
                 ))

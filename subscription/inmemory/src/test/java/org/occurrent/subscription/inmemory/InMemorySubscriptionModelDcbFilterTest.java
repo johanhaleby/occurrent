@@ -36,6 +36,7 @@ import java.util.stream.Stream;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.awaitility.Awaitility.await;
+import org.occurrent.cloudevents.OccurrentCloudEventExtension;
 
 @DisplayNameGeneration(ReplaceUnderscores.class)
 class InMemorySubscriptionModelDcbFilterTest {
@@ -84,7 +85,7 @@ class InMemorySubscriptionModelDcbFilterTest {
         subscriptionModel.subscribe("sub", DcbSubscriptionFilter.filter(DcbQuery.tags("x:1")), received::add)
                 .waitUntilStarted();
 
-        // An event with the right tag but no dcbposition must be rejected by the position guard.
+        // An event with the right tag but no position must be rejected by the position guard.
         CloudEvent noPosition = CloudEventBuilder.v1()
                 .withId(UUID.randomUUID().toString())
                 .withType("TypeA")
@@ -134,6 +135,6 @@ class InMemorySubscriptionModelDcbFilterTest {
                 .withTime(OffsetDateTime.now())
                 .build();
         CloudEvent tagged = DcbCloudEvents.withTags(base, tags);
-        return DcbCloudEvents.withPosition(tagged, position);
+        return OccurrentCloudEventExtension.withPosition(tagged, position);
     }
 }

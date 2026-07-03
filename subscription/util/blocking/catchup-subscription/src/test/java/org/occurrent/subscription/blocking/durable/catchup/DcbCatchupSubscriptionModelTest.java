@@ -31,7 +31,7 @@ import org.occurrent.domain.NameDefined;
 import org.occurrent.eventstore.api.dcb.DcbCloudEvents;
 import org.occurrent.eventstore.api.dcb.DcbQuery;
 import org.occurrent.eventstore.inmemory.InMemoryEventStore;
-import org.occurrent.subscription.DcbSubscriptionPosition;
+import org.occurrent.subscription.GlobalSubscriptionPosition;
 import org.occurrent.subscription.StartAt;
 import org.occurrent.subscription.SubscriptionFilter;
 import org.occurrent.subscription.SubscriptionPosition;
@@ -56,10 +56,10 @@ import static org.awaitility.Awaitility.await;
 import static org.occurrent.subscription.blocking.durable.catchup.SubscriptionPositionStorageConfig.useSubscriptionPositionStorage;
 
 /**
- * Tests for {@link CatchupSubscriptionModel} in DCB mode (replay and resume by {@code dcbposition}, see ADR 20).
+ * Tests for {@link CatchupSubscriptionModel} in DCB mode (replay and resume by {@code position}, see ADR 20).
  * <p>
  * These use the in-memory event store and subscription model so the DCB-specific logic (position-windowed replay,
- * dcbposition resume, the query post-filter and the multi-window paging) is exercised deterministically without a
+ * position resume, the query post-filter and the multi-window paging) is exercised deterministically without a
  * database. The in-memory subscription model is not position aware, so a small {@link PositionAwareInMemorySubscriptionModel}
  * test double adapts it: it translates the concrete resume position the catch-up hands over into {@code StartAt.now()}
  * (the in-memory model only supports now and default) and reports a stub global position. The faithful change-stream
@@ -102,7 +102,7 @@ class DcbCatchupSubscriptionModelTest {
         CopyOnWriteArrayList<DomainEvent> received = new CopyOnWriteArrayList<>();
         CatchupSubscriptionModel subscription = new CatchupSubscriptionModel(subscriptionModel, eventStore, DcbQuery.tags("name:1"));
 
-        subscription.subscribe("subscription", StartAt.subscriptionPosition(DcbSubscriptionPosition.of(0)), toDomainEvents(received)).waitUntilStarted();
+        subscription.subscribe("subscription", StartAt.subscriptionPosition(GlobalSubscriptionPosition.of(0)), toDomainEvents(received)).waitUntilStarted();
 
         await().untilAsserted(() -> assertThat(received).containsExactly(name1, name2, name3));
     }
@@ -117,7 +117,7 @@ class DcbCatchupSubscriptionModelTest {
         CopyOnWriteArrayList<DomainEvent> received = new CopyOnWriteArrayList<>();
         CatchupSubscriptionModel subscription = new CatchupSubscriptionModel(subscriptionModel, eventStore, DcbQuery.tags("name:1"));
 
-        subscription.subscribe("subscription", StartAt.subscriptionPosition(DcbSubscriptionPosition.of(0)), toDomainEvents(received)).waitUntilStarted();
+        subscription.subscribe("subscription", StartAt.subscriptionPosition(GlobalSubscriptionPosition.of(0)), toDomainEvents(received)).waitUntilStarted();
         await().untilAsserted(() -> assertThat(received).containsExactly(historic1, historic2));
 
         NameDefined live1 = nameDefined("live1");
@@ -137,26 +137,26 @@ class DcbCatchupSubscriptionModelTest {
         NameDefined position1 = nameDefined("position1");
         NameDefined position2 = nameDefined("position2");
         NameDefined position3 = nameDefined("position3");
-        appendTagged("name:1", position1); // dcbposition 1
-        appendTagged("name:1", position2); // dcbposition 2
-        appendTagged("name:1", position3); // dcbposition 3
+        appendTagged("name:1", position1); // position 1
+        appendTagged("name:1", position2); // position 2
+        appendTagged("name:1", position3); // position 3
 
         CopyOnWriteArrayList<DomainEvent> received = new CopyOnWriteArrayList<>();
         CatchupSubscriptionModel subscription = new CatchupSubscriptionModel(subscriptionModel, eventStore, DcbQuery.tags("name:1"));
 
-        subscription.subscribe("subscription", StartAt.subscriptionPosition(DcbSubscriptionPosition.of(2)), toDomainEvents(received)).waitUntilStarted();
+        subscription.subscribe("subscription", StartAt.subscriptionPosition(GlobalSubscriptionPosition.of(2)), toDomainEvents(received)).waitUntilStarted();
 
         await().untilAsserted(() -> assertThat(received).containsExactly(position3));
     }
 
     @Test
     void resumes_replay_from_a_dcb_position_read_back_from_storage() {
-        appendTagged("name:1", nameDefined("position1")); // dcbposition 1
+        appendTagged("name:1", nameDefined("position1")); // position 1
         NameDefined position2 = nameDefined("position2");
-        appendTagged("name:1", position2);                // dcbposition 2
+        appendTagged("name:1", position2);                // position 2
 
         SubscriptionPositionStorage storage = new InMemorySubscriptionPositionStorage();
-        storage.save("subscription", DcbSubscriptionPosition.of(1));
+        storage.save("subscription", GlobalSubscriptionPosition.of(1));
 
         CopyOnWriteArrayList<DomainEvent> received = new CopyOnWriteArrayList<>();
         CatchupSubscriptionModel subscription = new CatchupSubscriptionModel(subscriptionModel, eventStore, DcbQuery.tags("name:1"),
@@ -192,7 +192,7 @@ class DcbCatchupSubscriptionModelTest {
         CatchupSubscriptionModel subscription = new CatchupSubscriptionModel(subscriptionModel, eventStore, DcbQuery.tags("name:1"),
                 new CatchupSubscriptionModelConfig(100).dcbCatchupPositionWindowSize(2));
 
-        subscription.subscribe("subscription", StartAt.subscriptionPosition(DcbSubscriptionPosition.of(0)), toDomainEvents(received)).waitUntilStarted();
+        subscription.subscribe("subscription", StartAt.subscriptionPosition(GlobalSubscriptionPosition.of(0)), toDomainEvents(received)).waitUntilStarted();
 
         await().untilAsserted(() -> assertThat(received).containsExactlyElementsOf(events));
     }

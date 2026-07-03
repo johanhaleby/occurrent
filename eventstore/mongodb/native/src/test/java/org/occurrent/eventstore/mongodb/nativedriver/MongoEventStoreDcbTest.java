@@ -51,6 +51,7 @@ import static org.occurrent.eventstore.api.EventStoreCapability.DCB;
 import static org.occurrent.eventstore.api.EventStoreCapability.STREAM;
 import static org.occurrent.eventstore.api.dcb.DcbAppendCondition.failIfEventsMatch;
 import static org.occurrent.eventstore.api.dcb.DcbQuery.*;
+import org.occurrent.cloudevents.OccurrentCloudEventExtension;
 
 @Testcontainers
 @DisplayNameGeneration(ReplaceUnderscores.class)
@@ -100,7 +101,7 @@ class MongoEventStoreDcbTest {
                 .containsExactly("NameDefined");
         CloudEvent dcbEvent = eventStore.read(tags("name:1")).events().get(0);
         assertThat(DcbCloudEvents.getTags(dcbEvent)).containsExactly("name:1");
-        assertThat(dcbEvent.getExtension(DcbCloudEvents.POSITION)).isEqualTo(1L);
+        assertThat(dcbEvent.getExtension(OccurrentCloudEventExtension.POSITION)).isEqualTo(1L);
     }
 
     @Test
@@ -276,7 +277,7 @@ class MongoEventStoreDcbTest {
                 .isExactlyInstanceOf(DuplicateCloudEventException.class);
 
         // Positions are reserved outside the transaction (ADR 0021), so the failed append abandons its reserved block
-        // and dcbposition has a gap. The next successful append lands after the abandoned block.
+        // and position has a gap. The next successful append lands after the abandoned block.
         DcbAppendResult appendResult = eventStore.append(List.of(taggedEvent("NameChanged", "name:1")));
         assertThat(appendResult.firstSequencePosition()).isEqualTo(3);
         assertThat(appendResult.lastSequencePosition()).isEqualTo(3);
@@ -293,7 +294,7 @@ class MongoEventStoreDcbTest {
         assertThatThrownBy(() -> eventStore.append(List.of(taggedEvent("NameChanged", "name:1")), appendCondition))
                 .isExactlyInstanceOf(DcbAppendConditionNotFulfilledException.class);
 
-        // The condition-failed append abandons its reserved position block (ADR 0021), so dcbposition has a gap and the
+        // The condition-failed append abandons its reserved position block (ADR 0021), so position has a gap and the
         // next successful append lands at position 3 rather than 2.
         DcbAppendResult nextAppend = eventStore.append(List.of(taggedEvent("NameChanged", "name:2")));
         assertThat(nextAppend).isEqualTo(new DcbAppendResult(3, 3, 1));

@@ -29,6 +29,7 @@ import java.util.Set;
 import static java.nio.charset.StandardCharsets.UTF_8;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
+import org.occurrent.cloudevents.OccurrentCloudEventExtension;
 
 @DisplayNameGeneration(ReplaceUnderscores.class)
 class DcbApiTest {
@@ -107,19 +108,19 @@ class DcbApiTest {
 
     @Test
     void cloud_event_helper_adds_position() {
-        io.cloudevents.CloudEvent event = DcbCloudEvents.withPosition(cloudEvent(), 42);
+        io.cloudevents.CloudEvent event = OccurrentCloudEventExtension.withPosition(cloudEvent(), 42);
 
-        assertThat(event.getExtension(DcbCloudEvents.POSITION)).isEqualTo(42L);
-        assertThat(DcbCloudEvents.getPosition(event)).isEqualTo(42);
+        assertThat(event.getExtension(OccurrentCloudEventExtension.POSITION)).isEqualTo(42L);
+        assertThat(OccurrentCloudEventExtension.getPosition(event)).isEqualTo(42);
     }
 
     @Test
     void cloud_event_helper_rejects_malformed_position() {
-        io.cloudevents.CloudEvent event = CloudEventBuilder.v1(cloudEvent()).withExtension(DcbCloudEvents.POSITION, true).build();
+        io.cloudevents.CloudEvent event = CloudEventBuilder.v1(cloudEvent()).withExtension(OccurrentCloudEventExtension.POSITION, true).build();
 
-        assertThatThrownBy(() -> DcbCloudEvents.getPosition(event))
+        assertThatThrownBy(() -> OccurrentCloudEventExtension.getPosition(event))
                 .isExactlyInstanceOf(IllegalArgumentException.class)
-                .hasMessage("DCB position extension must be a Number or String");
+                .hasMessage("Position extension must be a Number or String");
     }
 
     @Test
@@ -160,7 +161,7 @@ class DcbApiTest {
     void read_options_and_append_conditions_reject_negative_sequence_positions() {
         assertThatThrownBy(() -> DcbReadOptions.afterSequencePosition(-1))
                 .isExactlyInstanceOf(IllegalArgumentException.class)
-                .hasMessage("After sequence position cannot be negative");
+                .hasMessage("After position cannot be negative");
         assertThatThrownBy(() -> DcbAppendCondition.failIfEventsMatch(DcbQuery.all(), DcbConsistencyToken.of(-1)))
                 .isExactlyInstanceOf(IllegalArgumentException.class)
                 .hasMessage("Consistency token value cannot be negative");

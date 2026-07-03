@@ -89,6 +89,7 @@ import static org.occurrent.eventstore.api.EventStoreCapability.DCB;
 import static org.occurrent.eventstore.api.EventStoreCapability.STREAM;
 import static org.occurrent.subscription.mongodb.MongoFilterSpecification.MongoBsonFilterSpecification.filter;
 import static org.occurrent.subscription.mongodb.spring.blocking.SpringMongoSubscriptionModelConfig.withConfig;
+import org.occurrent.cloudevents.OccurrentCloudEventExtension;
 
 @Testcontainers
 public class SpringMongoSubscriptionModelTest {
@@ -161,7 +162,7 @@ public class SpringMongoSubscriptionModelTest {
         await().atMost(2, SECONDS).with().pollInterval(Duration.of(20, MILLIS)).untilAsserted(() -> {
             assertThat(state).hasSize(1);
             assertThat(DcbCloudEvents.getTags(state.get(0))).containsExactly("name:1");
-            assertThat(DcbCloudEvents.getPosition(state.get(0))).isPositive();
+            assertThat(OccurrentCloudEventExtension.getPosition(state.get(0))).isPositive();
         });
     }
 

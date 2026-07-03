@@ -64,7 +64,7 @@ import static org.occurrent.subscription.OccurrentSubscriptionFilter.filter;
  * The reactive stack has no stream (non-DCB) catch-up model, so a {@link StreamSubscription} that asks to replay
  * history (a start time, or {@code BEGINNING_OF_TIME}) fails loud. Only {@code NOW} and {@code DEFAULT} are supported
  * for stream subscriptions, giving live delivery plus durable resume across restarts. DCB subscriptions can replay
- * history by dcbposition via the reactive DCB catch-up model, matching the blocking behavior.
+ * history by position via the reactive DCB catch-up model, matching the blocking behavior.
  */
 class OccurrentReactiveAnnotationBeanPostProcessor implements BeanPostProcessor, ApplicationContextAware {
 
@@ -226,7 +226,7 @@ class OccurrentReactiveAnnotationBeanPostProcessor implements BeanPostProcessor,
                 || subscription.startAt() == StartPosition.BEGINNING_OF_TIME;
         if (timeBasedStart) {
             throw new IllegalArgumentException(("@StreamSubscription '%s' asks to replay history (a start time or BEGINNING_OF_TIME), but the reactive stack has no stream catch-up model, " +
-                    "so history replay is not supported for stream subscriptions. Use startAt = NOW or DEFAULT, or use @DcbSubscription for dcbposition replay.").formatted(subscription.id()));
+                    "so history replay is not supported for stream subscriptions. Use startAt = NOW or DEFAULT, or use @DcbSubscription for position replay.").formatted(subscription.id()));
         }
         return switch (subscription.startAt()) {
             case NOW -> StartAt.now();

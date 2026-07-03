@@ -26,7 +26,7 @@ import static java.util.Objects.requireNonNull;
 
 /**
  * Specifies where a DCB subscription should start. This is the DCB counterpart to {@link StartAt}: it can only express
- * DCB start positions (a {@code dcbposition} or one of the relative starts), never a time-based stream position, so a
+ * DCB start positions (a {@code position} or one of the relative starts), never a time-based stream position, so a
  * DCB subscription cannot be handed a position that belongs to a stream subscription.
  * <p>
  * Convert to the generic {@link StartAt} the shared subscription model consumes with {@link #toStartAt()}.
@@ -55,7 +55,7 @@ public sealed interface DcbStartAt {
     }
 
     /**
-     * Start subscribing from the beginning of the DCB sequence, replaying the whole history by {@code dcbposition} before
+     * Start subscribing from the beginning of the DCB sequence, replaying the whole history by {@code position} before
      * switching to live delivery. Shorthand for {@code afterPosition(0)} (DCB positions are assigned from {@code 1}, so
      * "after 0" is the first event). The history replay is performed by a catch-up-capable subscription model (the Spring
      * Boot stack includes one), so a subscription model without catch-up support may not replay past events from this
@@ -109,7 +109,7 @@ public sealed interface DcbStartAt {
 
         @Override
         public StartAt toStartAt() {
-            return StartAt.subscriptionPosition(DcbSubscriptionPosition.of(lastProcessedPosition));
+            return StartAt.subscriptionPosition(GlobalSubscriptionPosition.of(lastProcessedPosition));
         }
     }
 

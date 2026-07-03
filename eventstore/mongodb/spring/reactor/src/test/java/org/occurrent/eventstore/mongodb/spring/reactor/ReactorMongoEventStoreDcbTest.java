@@ -63,6 +63,7 @@ import static org.occurrent.eventstore.api.EventStoreCapability.DCB;
 import static org.occurrent.eventstore.api.EventStoreCapability.STREAM;
 import static org.occurrent.eventstore.api.dcb.DcbAppendCondition.failIfEventsMatch;
 import static org.occurrent.eventstore.api.dcb.DcbQuery.*;
+import org.occurrent.cloudevents.OccurrentCloudEventExtension;
 
 @Testcontainers
 @DisplayNameGeneration(ReplaceUnderscores.class)
@@ -115,7 +116,7 @@ class ReactorMongoEventStoreDcbTest {
         assertAll(
                 () -> assertThat(stream.events()).extracting(CloudEvent::getType).containsExactly("NameDefined"),
                 () -> assertThat(DcbCloudEvents.getTags(stream.events().get(0))).containsExactly("name:1"),
-                () -> assertThat(stream.events().get(0).getExtension(DcbCloudEvents.POSITION)).isEqualTo(1L),
+                () -> assertThat(stream.events().get(0).getExtension(OccurrentCloudEventExtension.POSITION)).isEqualTo(1L),
                 () -> assertThat(stream.lastSequencePosition()).isEqualTo(1)
         );
     }

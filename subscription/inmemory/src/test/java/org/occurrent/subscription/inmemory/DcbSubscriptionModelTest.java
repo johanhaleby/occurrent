@@ -38,6 +38,7 @@ import java.util.stream.Stream;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.awaitility.Awaitility.await;
+import org.occurrent.cloudevents.OccurrentCloudEventExtension;
 
 /**
  * The typed {@link DcbSubscriptionModel} facade over the shared {@link InMemorySubscriptionModel}. It only accepts a
@@ -112,6 +113,6 @@ class DcbSubscriptionModelTest {
                 .withSource(URI.create("urn:test"))
                 .withTime(OffsetDateTime.now())
                 .build();
-        return DcbCloudEvents.withPosition(DcbCloudEvents.withTags(base, tags), position);
+        return OccurrentCloudEventExtension.withPosition(DcbCloudEvents.withTags(base, tags), position);
     }
 }

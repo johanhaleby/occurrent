@@ -53,6 +53,7 @@ import org.springframework.context.annotation.Import
 import java.time.Duration
 import java.util.Date
 import java.util.UUID
+import org.occurrent.cloudevents.OccurrentCloudEventExtension
 
 @SpringBootTest(classes = [Bootstrap::class])
 @Import(TestBootstrap::class)
@@ -127,7 +128,7 @@ class AnnotationPoliciesAndDcbReadPathsTest {
         assertThat(points.points).isEqualTo(3)
         assertThat(cloudEvents(GameDcbQueries.pointsBoundary(gameId)).filter { GameDcbTags.points(gameId) in DcbCloudEvents.getTags(it) })
             .allSatisfy { cloudEvent ->
-                assertThat(DcbCloudEvents.getPosition(cloudEvent)).isGreaterThan(0)
+                assertThat(OccurrentCloudEventExtension.getPosition(cloudEvent)).isGreaterThan(0)
                 assertThat(OccurrentExtensionGetter.getStreamId(cloudEvent)).startsWith("dcb:partition:")
                 assertThat(OccurrentExtensionGetter.getStreamVersion(cloudEvent)).isGreaterThan(0)
             }

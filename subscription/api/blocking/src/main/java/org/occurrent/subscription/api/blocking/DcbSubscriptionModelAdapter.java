@@ -26,6 +26,7 @@ import org.occurrent.subscription.DcbSubscriptionFilter;
 import java.util.function.Consumer;
 
 import static java.util.Objects.requireNonNull;
+import org.occurrent.cloudevents.OccurrentCloudEventExtension;
 
 /**
  * Translates {@link DcbSubscriptionModel} calls into the shared {@link SubscriptionModel}, building a
@@ -49,7 +50,7 @@ final class DcbSubscriptionModelAdapter extends AbstractDelegatingSubscriptionMo
         // model-level query, so an in-process check keeps the subscription scoped to its own query during catch-up too
         // (and stays correct for any backend that does not honor the filter).
         Consumer<CloudEvent> scopedToQuery = cloudEvent -> {
-            if (DcbCloudEvents.getPosition(cloudEvent) > 0 && DcbCloudEvents.matches(cloudEvent, query)) {
+            if (OccurrentCloudEventExtension.getPosition(cloudEvent) > 0 && DcbCloudEvents.matches(cloudEvent, query)) {
                 action.accept(cloudEvent);
             }
         };

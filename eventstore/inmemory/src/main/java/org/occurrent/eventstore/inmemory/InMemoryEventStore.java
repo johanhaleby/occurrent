@@ -72,7 +72,7 @@ public class InMemoryEventStore implements EventStore, EventStoreOperations, Eve
 
     // We cannot use ConcurrentMap since it doesn't maintain insertion order
     private final Map<String, CopyOnWriteArrayList<CloudEvent>> state = Collections.synchronizedMap(new LinkedHashMap<>());
-    private final AtomicLong nextDcbPosition = new AtomicLong(1);
+    private final AtomicLong nextPosition = new AtomicLong(1);
 
     // Global, monotonically increasing insertion order assigned to each event at write time, keyed by the
     // event's "id + source" (the same uniqueness key used by validateNoDuplicateEventExists). This is what
@@ -85,6 +85,10 @@ public class InMemoryEventStore implements EventStore, EventStoreOperations, Eve
 
     private final Consumer<Stream<CloudEvent>> listener;
     private final DcbStreamIdGenerator dcbStreamIdGenerator;
+    // Foundation: defaults to false so stream behavior is unchanged. InMemory has no capability set (it implements
+    // DCB unconditionally), so writesPosition() is always true regardless of this flag; the flag exists so the
+    // opt-out API surface is consistent across stores ahead of Wave 1 actually writing a position onto stream events.
+    private final boolean streamPositionEnabled;
 
     /**
      * Create an instance of {@link InMemoryEventStore}
@@ -116,8 +120,36 @@ public class InMemoryEventStore implements EventStore, EventStoreOperations, Eve
      * @param dcbStreamIdGenerator Derives the storage stream id for DCB appends from the events' DCB tags
      */
     public InMemoryEventStore(Consumer<Stream<CloudEvent>> listener, DcbStreamIdGenerator dcbStreamIdGenerator) {
+        this(listener, dcbStreamIdGenerator, false);
+    }
+
+    private InMemoryEventStore(Consumer<Stream<CloudEvent>> listener, DcbStreamIdGenerator dcbStreamIdGenerator, boolean streamPositionEnabled) {
         this.listener = requireNonNull(listener, "listener cannot be null");
         this.dcbStreamIdGenerator = requireNonNull(dcbStreamIdGenerator, DcbStreamIdGenerator.class.getSimpleName() + " cannot be null");
+        this.streamPositionEnabled = streamPositionEnabled;
+    }
+
+    /**
+     * Returns a copy of this store with the stream-scoped position opt-out set, i.e. stream-written events will not
+     * carry a global position. This is only meaningful for a STREAM-only store; since {@link InMemoryEventStore}
+     * implements DCB unconditionally, {@link #writesPosition()} stays {@code true} regardless.
+     */
+    public InMemoryEventStore withoutStreamPosition() {
+        return new InMemoryEventStore(listener, dcbStreamIdGenerator, false);
+    }
+
+    /**
+     * Returns whether this store carries a global position, i.e. whether position-requiring APIs are safe to call.
+     * {@link InMemoryEventStore} implements DCB unconditionally, so this is always {@code true} today.
+     */
+    public boolean writesPosition() {
+        return true;
+    }
+
+    private void requirePosition() {
+        if (!writesPosition()) {
+            throw new UnsupportedOperationException("This event store does not write a position. Enable DCB, or do not call " + "withoutStreamPosition() on a STREAM-only store, to use position-requiring APIs.");
+        }
     }
 
     @Override
@@ -202,11 +234,11 @@ public class InMemoryEventStore implements EventStore, EventStoreOperations, Eve
         return cloudEventId + cloudEventSource;
     }
 
-    private static List<CloudEvent> applyDcbAndOccurrentMetadata(Stream<CloudEvent> events, String streamId, long streamVersion, long dcbPosition) {
+    private static List<CloudEvent> applyPositionAndOccurrentMetadata(Stream<CloudEvent> events, String streamId, long streamVersion, long startPosition) {
         AtomicLong streamVersionCounter = new AtomicLong(streamVersion + 1);
-        AtomicLong dcbPositionCounter = new AtomicLong(dcbPosition);
+        AtomicLong positionCounter = new AtomicLong(startPosition);
         return events
-                .map(event -> DcbCloudEvents.withPosition(event, dcbPositionCounter.getAndIncrement()))
+                .map(event -> OccurrentCloudEventExtension.withPosition(event, positionCounter.getAndIncrement()))
                 .map(event -> modifyCloudEvent(e -> e.withExtension(new OccurrentCloudEventExtension(streamId, streamVersionCounter.getAndIncrement()))).apply(event))
                 .collect(Collectors.toList());
     }
@@ -222,14 +254,14 @@ public class InMemoryEventStore implements EventStore, EventStoreOperations, Eve
         requireNonNull(options, "Read options cannot be null");
 
         synchronized (state) {
-            long highWatermark = nextDcbPosition.get() - 1;
+            long highWatermark = nextPosition.get() - 1;
             long afterSequencePosition = options.afterSequencePosition().orElse(0);
             long upperBound = Math.min(highWatermark, options.upToSequencePosition().orElse(highWatermark));
             List<CloudEvent> matchingEvents = allEvents()
-                    .filter(event -> dcbPosition(event) > afterSequencePosition)
-                    .filter(event -> dcbPosition(event) <= upperBound)
+                    .filter(event -> position(event) > afterSequencePosition)
+                    .filter(event -> position(event) <= upperBound)
                     .filter(event -> DcbCloudEvents.matches(event, query))
-                    .sorted(Comparator.comparingLong(InMemoryEventStore::dcbPosition))
+                    .sorted(Comparator.comparingLong(InMemoryEventStore::position))
                     .toList();
             return new DcbEventStream(matchingEvents, highWatermark);
         }
@@ -252,9 +284,9 @@ public class InMemoryEventStore implements EventStore, EventStoreOperations, Eve
     }
 
     private Stream<CloudEvent> matchingDcbEvents(DcbQuery query) {
-        long highWatermark = nextDcbPosition.get() - 1;
+        long highWatermark = nextPosition.get() - 1;
         return allEvents()
-                .filter(event -> dcbPosition(event) > 0 && dcbPosition(event) <= highWatermark)
+                .filter(event -> position(event) > 0 && position(event) <= highWatermark)
                 .filter(event -> DcbCloudEvents.matches(event, query));
     }
 
@@ -286,9 +318,9 @@ public class InMemoryEventStore implements EventStore, EventStoreOperations, Eve
                 // sound concurrency boundary: the token value is simply the position observed by the read.
                 long afterSequencePosition = condition.consistencyToken().map(DcbConsistencyToken::value).orElse(0L);
                 boolean fulfilled = allEvents()
-                        .filter(event -> dcbPosition(event) > afterSequencePosition)
+                        .filter(event -> position(event) > afterSequencePosition)
                         .noneMatch(event -> DcbCloudEvents.matches(event, condition.query()));
-                long currentPosition = nextDcbPosition.get() - 1;
+                long currentPosition = nextPosition.get() - 1;
                 if (!fulfilled) {
                     throw new DcbAppendConditionNotFulfilledException(condition, currentPosition, "Append condition was not fulfilled.");
                 }
@@ -296,7 +328,7 @@ public class InMemoryEventStore implements EventStore, EventStoreOperations, Eve
 
             CopyOnWriteArrayList<CloudEvent> currentEvents = state.get(streamId);
             long currentStreamVersion = calculateStreamVersion(currentEvents);
-            addedEvents = applyDcbAndOccurrentMetadata(eventsToAppend.stream(), streamId, currentStreamVersion, nextDcbPosition.get());
+            addedEvents = applyPositionAndOccurrentMetadata(eventsToAppend.stream(), streamId, currentStreamVersion, nextPosition.get());
 
             List<CloudEvent> eventList = currentEvents == null ? new ArrayList<>() : new ArrayList<>(currentEvents);
             eventList.addAll(addedEvents);
@@ -305,9 +337,9 @@ public class InMemoryEventStore implements EventStore, EventStoreOperations, Eve
             validateNoDuplicateEventExists(allEvents);
             assignInsertionOrder(addedEvents);
             state.put(streamId, new CopyOnWriteArrayList<>(eventList));
-            nextDcbPosition.addAndGet(addedEvents.size());
-            long firstPosition = dcbPosition(addedEvents.get(0));
-            long lastPosition = dcbPosition(addedEvents.get(addedEvents.size() - 1));
+            nextPosition.addAndGet(addedEvents.size());
+            long firstPosition = position(addedEvents.get(0));
+            long lastPosition = position(addedEvents.get(addedEvents.size() - 1));
             result = new DcbAppendResult(firstPosition, lastPosition, addedEvents.size());
         }
 
@@ -335,8 +367,8 @@ public class InMemoryEventStore implements EventStore, EventStoreOperations, Eve
                 .toList();
     }
 
-    private static long dcbPosition(CloudEvent event) {
-        return DcbCloudEvents.getPosition(event);
+    private static long position(CloudEvent event) {
+        return OccurrentCloudEventExtension.getPosition(event);
     }
 
     @Override
@@ -389,7 +421,7 @@ public class InMemoryEventStore implements EventStore, EventStoreOperations, Eve
             state.clear();
             insertionOrderByEventKey.clear();
             insertionSequence.set(0);
-            nextDcbPosition.set(1);
+            nextPosition.set(1);
         }
     }
 

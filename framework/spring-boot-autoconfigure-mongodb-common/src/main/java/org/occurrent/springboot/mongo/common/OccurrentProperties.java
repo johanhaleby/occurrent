@@ -138,6 +138,11 @@ public class OccurrentProperties {
         private Set<EventStoreCapability> capabilities = Set.of(STREAM);
 
         /**
+         * Stream event-store configuration.
+         */
+        private StreamProperties stream = new StreamProperties();
+
+        /**
          * If the event store should be enabled (i.e. created as Spring Bean)
          * <p>
          * Typically you only want to disable this if you don't need an event store for this application,
@@ -184,6 +189,33 @@ public class OccurrentProperties {
 
         public void setEnabled(boolean enabled) {
             this.enabled = enabled;
+        }
+
+        public StreamProperties getStream() {
+            return stream;
+        }
+
+        public void setStream(StreamProperties stream) {
+            this.stream = stream;
+        }
+    }
+
+    public static class StreamProperties {
+
+        /**
+         * Whether stream-written events carry a global, monotonic sequence position, the same position DCB always
+         * writes. This is a stream-scoped opt-out: {@link EventStoreCapability#DCB} always writes position regardless
+         * of this setting, and a combined {@code STREAM}+{@code DCB} store forces this on since a combined store must
+         * position everything.
+         */
+        private boolean position = false;
+
+        public boolean isPosition() {
+            return position;
+        }
+
+        public void setPosition(boolean position) {
+            this.position = position;
         }
     }
 

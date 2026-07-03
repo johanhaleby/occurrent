@@ -34,6 +34,7 @@ import org.occurrent.dsl.dcb.blocking.DcbSubscriptions;
 import org.occurrent.dsl.query.blocking.DomainEventQueries;
 import org.occurrent.dsl.subscription.blocking.StreamSubscriptions;
 import org.occurrent.dsl.subscription.blocking.Subscriptions;
+import org.occurrent.eventstore.api.EventStoreCapability;
 import org.occurrent.eventstore.api.blocking.EventStore;
 import org.occurrent.eventstore.api.blocking.EventStoreQueries;
 import org.occurrent.eventstore.api.dcb.DcbEventStore;
@@ -114,12 +115,18 @@ public class OccurrentMongoAutoConfiguration<E> {
     @ConditionalOnProperty(name = "occurrent.event-store.enabled", havingValue = "true", matchIfMissing = true)
     public EventStoreConfig occurrentEventStoreConfig(MongoTransactionManager transactionManager, OccurrentProperties occurrentProperties) {
         EventStoreProperties eventStoreProperties = occurrentProperties.getEventStore();
-        return new EventStoreConfig.Builder()
+        EventStoreConfig.Builder builder = new EventStoreConfig.Builder()
                 .eventStoreCollectionName(eventStoreProperties.getCollection())
                 .transactionConfig(transactionManager)
                 .timeRepresentation(eventStoreProperties.getTimeRepresentation())
-                .eventStoreCapabilities(eventStoreProperties.getCapabilities())
-                .build();
+                .eventStoreCapabilities(eventStoreProperties.getCapabilities());
+        // withoutStreamPosition() is only meaningful for a STREAM-only store: a combined STREAM+DCB store must
+        // position everything, and DCB-only ignores the stream position setting entirely. Only call it when DCB is
+        // not enabled, so an explicit "off" alongside DCB does not trip the builder's fail-fast combination guard.
+        if (!eventStoreProperties.getStream().isPosition() && !eventStoreProperties.getCapabilities().contains(EventStoreCapability.DCB)) {
+            builder.withoutStreamPosition();
+        }
+        return builder.build();
     }
 
     @Bean
@@ -156,7 +163,7 @@ public class OccurrentMongoAutoConfiguration<E> {
         DurableSubscriptionModel durableSubscriptionModel = new DurableSubscriptionModel(mongoSubscriptionModel, storage);
         CatchupSubscriptionModelConfig catchupConfig = new CatchupSubscriptionModelConfig(useSubscriptionPositionStorage(storage)
                 .andPersistSubscriptionPositionDuringCatchupPhaseForEveryNEvents(1000));
-        // DCB catch-up replays by dcbposition over the DCB event store. The DcbQuery.all() is shared by every
+        // DCB catch-up replays by position over the DCB event store. The DcbQuery.all() is shared by every
         // DcbSubscriptions subscription, which each narrow to their own DcbQuery in the consumer, so a single
         // all-matching catch-up is correct. Stream catch-up replays by event time over the stream query API.
         boolean stream = eventStoreProperties.getCapabilities().contains(STREAM);
@@ -199,7 +206,7 @@ public class OccurrentMongoAutoConfiguration<E> {
     /**
      * DCB subscription DSL, auto-configured when the DCB event-store capability is enabled. In DCB-only mode the
      * underlying subscription model wraps a {@link CatchupSubscriptionModel} in DCB mode, so a subscription started at a
-     * {@code DcbSubscriptionPosition} replays history by dcbposition before switching to live delivery. Started without
+     * {@code GlobalSubscriptionPosition} replays history by position before switching to live delivery. Started without
      * such a position it is live only, as before.
      */
     @Bean

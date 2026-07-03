@@ -45,6 +45,7 @@ import org.springframework.context.annotation.Import
 import java.time.Duration
 import java.util.Date
 import java.util.UUID
+import org.occurrent.cloudevents.OccurrentCloudEventExtension
 
 @SpringBootTest(classes = [Bootstrap::class])
 @Import(TestBootstrap::class)
@@ -85,7 +86,7 @@ class DeciderCommandHandlersTest {
             GameDcbTags.game(gameId),
             GameDcbTags.gameplay(gameId)
         )
-        assertThat(DcbCloudEvents.getPosition(cloudEvents.single())).isGreaterThan(0)
+        assertThat(OccurrentCloudEventExtension.getPosition(cloudEvents.single())).isGreaterThan(0)
     }
 
     @Test
@@ -129,7 +130,7 @@ class DeciderCommandHandlersTest {
         )
         assertThat(cloudEvents).allSatisfy { cloudEvent ->
             assertThat(DcbCloudEvents.getTags(cloudEvent)).contains(GameDcbTags.game(gameId), GameDcbTags.gameplay(gameId))
-            assertThat(DcbCloudEvents.getPosition(cloudEvent)).isGreaterThan(0)
+            assertThat(OccurrentCloudEventExtension.getPosition(cloudEvent)).isGreaterThan(0)
         }
     }
 

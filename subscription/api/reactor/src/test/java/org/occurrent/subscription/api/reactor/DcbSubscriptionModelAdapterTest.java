@@ -26,7 +26,7 @@ import org.occurrent.eventstore.api.dcb.DcbCloudEvents;
 import org.occurrent.eventstore.api.dcb.DcbQuery;
 import org.occurrent.subscription.DcbStartAt;
 import org.occurrent.subscription.DcbSubscriptionFilter;
-import org.occurrent.subscription.DcbSubscriptionPosition;
+import org.occurrent.subscription.GlobalSubscriptionPosition;
 import org.occurrent.subscription.StartAt;
 import org.occurrent.subscription.SubscriptionFilter;
 import reactor.core.publisher.Flux;
@@ -42,6 +42,7 @@ import java.util.function.Function;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
+import org.occurrent.cloudevents.OccurrentCloudEventExtension;
 
 @DisplayNameGeneration(ReplaceUnderscores.class)
 class DcbSubscriptionModelAdapterTest {
@@ -59,12 +60,12 @@ class DcbSubscriptionModelAdapterTest {
                 .expectNext(matching)
                 .verifyComplete();
 
-        // The in-process floor drops the event with no dcbposition and the one whose tags do not match the query, so
+        // The in-process floor drops the event with no position and the one whose tags do not match the query, so
         // the subscription stays scoped to its own query even if a backend ignores the server-side filter.
         assertThat(delegate.capturedFilter).isInstanceOf(DcbSubscriptionFilter.class);
         // The DcbStartAt is converted to a generic StartAt and passed straight to the delegate.
         assertThat(delegate.capturedStartAt).isInstanceOfSatisfying(StartAt.StartAtSubscriptionPosition.class,
-                start -> assertThat(start.subscriptionPosition).isEqualTo(DcbSubscriptionPosition.of(5)));
+                start -> assertThat(start.subscriptionPosition).isEqualTo(GlobalSubscriptionPosition.of(5)));
     }
 
     @Test
@@ -86,7 +87,7 @@ class DcbSubscriptionModelAdapterTest {
         assertThat(subscription.id()).isEqualTo("sub-1");
         assertThat(delegate.capturedFilter).isInstanceOf(DcbSubscriptionFilter.class);
         assertThat(delegate.capturedStartAt).isInstanceOfSatisfying(StartAt.StartAtSubscriptionPosition.class,
-                start -> assertThat(start.subscriptionPosition).isEqualTo(DcbSubscriptionPosition.of(5)));
+                start -> assertThat(start.subscriptionPosition).isEqualTo(GlobalSubscriptionPosition.of(5)));
 
         // The in-process floor scopes delivery to the query, matching the boundary case for the plain Flux subscribe.
         delegate.capturedAction.apply(matching).block();
@@ -118,7 +119,7 @@ class DcbSubscriptionModelAdapterTest {
     }
 
     private static CloudEvent dcbEvent(String type, long position, String... tags) {
-        return DcbCloudEvents.withPosition(DcbCloudEvents.withTags(event(type), Set.of(tags)), position);
+        return OccurrentCloudEventExtension.withPosition(DcbCloudEvents.withTags(event(type), Set.of(tags)), position);
     }
 
     private static CloudEvent event(String type) {

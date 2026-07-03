@@ -27,12 +27,13 @@ import java.util.List;
 
 import static org.occurrent.eventstore.mongodb.dcb.internal.DcbDocumentMapper.DCB_TAGS_INDEX_FIELD;
 import static org.occurrent.subscription.mongodb.MongoFilterSpecification.FULL_DOCUMENT;
+import org.occurrent.cloudevents.OccurrentCloudEventExtension;
 
 /**
  * Converts a {@link DcbQuery} into a MongoDB change stream {@code $match} stage, reproducing the
  * {@link DcbCloudEvents#matches(io.cloudevents.CloudEvent, DcbQuery)} semantics server-side: within a query item types
  * are any-of, tags are all-of, and excluded types are none-of, and the items are OR-ed together. A position filter of
- * {@code dcbposition > 0} is always applied so only DCB-tagged events are delivered, matching the in-process guard the
+ * {@code position > 0} is always applied so only DCB-tagged events are delivered, matching the in-process guard the
  * DCB subscription DSL uses.
  * <p>
  * The change stream wraps the stored event document under {@value org.occurrent.subscription.mongodb.MongoFilterSpecification#FULL_DOCUMENT},
@@ -43,7 +44,7 @@ import static org.occurrent.subscription.mongodb.MongoFilterSpecification.FULL_D
 public final class DcbSubscriptionFilterConverter {
 
     private static final String TYPE_FIELD = FULL_DOCUMENT + ".type";
-    private static final String POSITION_FIELD = FULL_DOCUMENT + "." + DcbCloudEvents.POSITION;
+    private static final String POSITION_FIELD = FULL_DOCUMENT + "." + OccurrentCloudEventExtension.POSITION;
     private static final String TAGS_FIELD = FULL_DOCUMENT + "." + DCB_TAGS_INDEX_FIELD;
 
     private DcbSubscriptionFilterConverter() {

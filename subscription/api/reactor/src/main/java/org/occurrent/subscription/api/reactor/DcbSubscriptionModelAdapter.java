@@ -28,6 +28,7 @@ import reactor.core.publisher.Mono;
 import java.util.function.Function;
 
 import static java.util.Objects.requireNonNull;
+import org.occurrent.cloudevents.OccurrentCloudEventExtension;
 
 /**
  * Translates {@link DcbSubscriptionModel} calls into the shared reactive {@link SubscriptionModel}, building a
@@ -55,7 +56,7 @@ final class DcbSubscriptionModelAdapter implements DcbSubscriptionModel {
         // subscription scoped to its own query for any backend that does not honor the filter, matching the blocking
         // adapter.
         return delegate.subscribe(DcbSubscriptionFilter.filter(query), startAt.toStartAt())
-                .filter(cloudEvent -> DcbCloudEvents.getPosition(cloudEvent) > 0 && DcbCloudEvents.matches(cloudEvent, query));
+                .filter(cloudEvent -> OccurrentCloudEventExtension.getPosition(cloudEvent) > 0 && DcbCloudEvents.matches(cloudEvent, query));
     }
 
     @Override
@@ -72,7 +73,7 @@ final class DcbSubscriptionModelAdapter implements DcbSubscriptionModel {
         // model-level query, so an in-process check keeps the subscription scoped to its own query during catch-up too
         // (and stays correct for any backend that does not honor the filter), matching the blocking adapter.
         Function<CloudEvent, Mono<Void>> scopedToQuery = cloudEvent -> {
-            if (DcbCloudEvents.getPosition(cloudEvent) > 0 && DcbCloudEvents.matches(cloudEvent, query)) {
+            if (OccurrentCloudEventExtension.getPosition(cloudEvent) > 0 && DcbCloudEvents.matches(cloudEvent, query)) {
                 return action.apply(cloudEvent);
             }
             return Mono.empty();

@@ -18,8 +18,11 @@ package org.occurrent.cloudevents;
 import io.cloudevents.CloudEvent;
 import io.cloudevents.CloudEventExtension;
 import io.cloudevents.CloudEventExtensions;
+import io.cloudevents.core.builder.CloudEventBuilder;
 
 import java.util.*;
+
+import static java.util.Objects.requireNonNull;
 
 /**
  * A {@link CloudEvent} {@link CloudEventExtension} that adds required extensions for Occurrent. These are:<br><br>
@@ -33,6 +36,10 @@ import java.util.*;
 public class OccurrentCloudEventExtension implements CloudEventExtension {
     public static final String STREAM_ID = "streamid";
     public static final String STREAM_VERSION = "streamversion";
+    /**
+     * CloudEvent extension name that contains an event's global, monotonic, comparable sequence position.
+     */
+    public static final String POSITION = "position";
 
     static final Set<String> KEYS = Collections.unmodifiableSet(new HashSet<>(Arrays.asList(STREAM_ID, STREAM_VERSION)));
     private String streamId;
@@ -77,5 +84,34 @@ public class OccurrentCloudEventExtension implements CloudEventExtension {
     @Override
     public Set<String> getKeys() {
         return KEYS;
+    }
+
+    /**
+     * Returns a copy of {@code cloudEvent} with the global sequence position in the {@value #POSITION} extension.
+     */
+    public static CloudEvent withPosition(CloudEvent cloudEvent, long position) {
+        requireNonNull(cloudEvent, "CloudEvent cannot be null");
+        if (position <= 0) {
+            throw new IllegalArgumentException("Position must be greater than zero");
+        }
+        return CloudEventBuilder.v1(cloudEvent).withExtension(POSITION, position).build();
+    }
+
+    /**
+     * Reads the global sequence position from a CloudEvent, or {@code 0} when it has no position.
+     */
+    public static long getPosition(CloudEvent cloudEvent) {
+        requireNonNull(cloudEvent, "CloudEvent cannot be null");
+        Object position = cloudEvent.getExtension(POSITION);
+        if (position == null) {
+            return 0;
+        }
+        if (position instanceof Number number) {
+            return number.longValue();
+        }
+        if (position instanceof String string) {
+            return Long.parseLong(string);
+        }
+        throw new IllegalArgumentException("Position extension must be a Number or String");
     }
 }
