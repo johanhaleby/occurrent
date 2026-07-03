@@ -89,6 +89,9 @@ class PositionBackfillTest {
                 .transactionConfig(mongoTransactionManager)
                 .timeRepresentation(TimeRepresentation.RFC_3339_STRING)
                 .eventStoreCapabilities(STREAM)
+                // Opt out of stream position (on by default) so this store writes the legacy, unpositioned events the
+                // backfill migration is meant to retrofit.
+                .withoutStreamPosition()
                 .build();
         eventStoreWithoutPosition = new SpringMongoEventStore(mongoTemplate, config);
     }

@@ -168,7 +168,7 @@ public class ReactorDcbCatchupSubscriptionModel implements PositionAwareSubscrip
             // path and the DcbSubscriptionModel adapter apply, so a backend that does not honor the filter server-side
             // still only delivers events matching the query.
             return subscriptionModel.subscribe(DcbSubscriptionFilter.filter(query), resolved == null ? startAt : resolved)
-                    .filter(cloudEvent -> OccurrentCloudEventExtension.getPosition(cloudEvent) > 0 && DcbCloudEvents.matches(cloudEvent, query));
+                    .filter(cloudEvent -> DcbCloudEvents.isDcbEvent(cloudEvent) && DcbCloudEvents.matches(cloudEvent, query));
         }
 
         long startPosition = GlobalSubscriptionPosition.positionOf(position.subscriptionPosition);
@@ -188,7 +188,7 @@ public class ReactorDcbCatchupSubscriptionModel implements PositionAwareSubscrip
                     Flux<CloudEvent> bulk = windows(query, startPosition, bulkHead, cache);
                     Flux<CloudEvent> reconcile = reconcile(query, bulkHead, cache);
                     Flux<CloudEvent> live = subscriptionModel.subscribe(DcbSubscriptionFilter.filter(query), StartAt.subscriptionPosition(liveToken))
-                            .filter(cloudEvent -> OccurrentCloudEventExtension.getPosition(cloudEvent) > 0
+                            .filter(cloudEvent -> DcbCloudEvents.isDcbEvent(cloudEvent)
                                     && DcbCloudEvents.matches(cloudEvent, query)
                                     && !cache.contains(cloudEvent.getId()));
                     return Flux.concat(bulk, reconcile, live);

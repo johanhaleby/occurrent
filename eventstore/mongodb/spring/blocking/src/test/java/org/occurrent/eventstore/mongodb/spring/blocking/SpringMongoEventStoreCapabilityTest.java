@@ -132,8 +132,8 @@ class SpringMongoEventStoreCapabilityTest {
     }
 
     @Test
-    void stream_capability_initializes_only_stream_indexes() {
-        new SpringMongoEventStore(mongoTemplate, eventStoreConfig(STREAM).build());
+    void stream_capability_without_position_initializes_only_stream_indexes() {
+        new SpringMongoEventStore(mongoTemplate, eventStoreConfig(STREAM).withoutStreamPosition().build());
 
         assertThat(indexNames()).contains(STREAM_INDEX);
         assertThat(indexNames()).doesNotContain(POSITION_INDEX, DCB_TAGS_INDEX);

@@ -108,7 +108,14 @@ public class CatchupSubscriptionModelTest {
         ConnectionString connectionString = new ConnectionString(mongoDBContainer.getReplicaSetUrl() + ".events");
         mongoClient = MongoClients.create(connectionString);
         TimeRepresentation timeRepresentation = TimeRepresentation.DATE;
-        EventStoreConfig config = new EventStoreConfig(timeRepresentation);
+        // This suite exercises the legacy time/$natural catch-up reconciliation path (custom catch-up sort order,
+        // time-based resume). Stream position is on by default now, which would route catch-up through the position
+        // path instead; opt out so this store keeps exercising the time path. The position path is covered by
+        // StreamPositionCatchupSubscriptionModelMongoTest.
+        EventStoreConfig config = new EventStoreConfig.Builder()
+                .timeRepresentation(timeRepresentation)
+                .withoutStreamPosition()
+                .build();
         database = mongoClient.getDatabase(requireNonNull(connectionString.getDatabase()));
         eventCollection = database.getCollection(requireNonNull(connectionString.getCollection()));
         mongoEventStore = new MongoEventStore(mongoClient, connectionString.getDatabase(), connectionString.getCollection(), config);

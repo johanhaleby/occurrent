@@ -133,8 +133,8 @@ class MongoEventStorePositionTest {
     }
 
     @Test
-    void stream_only_store_writes_no_position_by_default() {
-        MongoEventStore eventStore = newEventStore(eventStoreConfig(STREAM).build());
+    void stream_only_store_writes_no_position_when_opted_out() {
+        MongoEventStore eventStore = newEventStore(eventStoreConfig(STREAM).withoutStreamPosition().build());
 
         eventStore.write("stream:1", WriteCondition.anyStreamVersion(), Stream.of(event("StreamEvent1")));
 
@@ -152,7 +152,7 @@ class MongoEventStorePositionTest {
 
     @Test
     void position_index_is_not_created_for_a_stream_only_store_without_position() {
-        newEventStore(eventStoreConfig(STREAM).build());
+        newEventStore(eventStoreConfig(STREAM).withoutStreamPosition().build());
 
         assertThat(indexNames()).doesNotContain(POSITION_INDEX);
     }
@@ -244,7 +244,7 @@ class MongoEventStorePositionTest {
     void startup_guard_logs_a_warning_by_default_when_position_is_enabled_against_an_unbackfilled_collection() {
         // Seed a collection with a stream event written by a position-less store, mirroring an existing deployment
         // that has not yet run the position backfill migration.
-        newEventStore(eventStoreConfig(STREAM).build())
+        newEventStore(eventStoreConfig(STREAM).withoutStreamPosition().build())
                 .write("stream:1", WriteCondition.anyStreamVersion(), Stream.of(event("PreExistingEvent")));
 
         // Flipping stream position on against the pre-existing, unpositioned history must not throw by default (WARN).
@@ -258,10 +258,10 @@ class MongoEventStorePositionTest {
 
     @Test
     void startup_guard_fails_fast_when_configured_to_require_backfilled_position() {
-        newEventStore(eventStoreConfig(STREAM).build())
+        newEventStore(eventStoreConfig(STREAM).withoutStreamPosition().build())
                 .write("stream:1", WriteCondition.anyStreamVersion(), Stream.of(event("PreExistingEvent")));
 
-        assertThatThrownBy(() -> newEventStore(eventStoreConfig(STREAM).withStreamPosition().positionRequireBackfilled(true).build()))
+        assertThatThrownBy(() -> newEventStore(eventStoreConfig(STREAM).withStreamPosition().requireBackfilledPosition(true).build()))
                 .isExactlyInstanceOf(IllegalStateException.class)
                 .hasMessageContaining("position backfill migration");
     }
@@ -272,7 +272,7 @@ class MongoEventStorePositionTest {
         eventStore.write("stream:1", WriteCondition.anyStreamVersion(), Stream.of(event("PositionedEvent")));
 
         // Re-opening the store against the same, fully positioned collection must not fail even with a hard-fail guard.
-        MongoEventStore reopened = newEventStore(eventStoreConfig(STREAM).withStreamPosition().positionRequireBackfilled(true).build());
+        MongoEventStore reopened = newEventStore(eventStoreConfig(STREAM).withStreamPosition().requireBackfilledPosition(true).build());
         assertThat(reopened.currentPosition()).isEqualTo(1L);
     }
 

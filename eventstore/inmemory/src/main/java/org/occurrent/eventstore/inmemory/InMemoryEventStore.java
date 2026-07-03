@@ -86,9 +86,9 @@ public class InMemoryEventStore implements EventStore, EventStoreOperations, Eve
     private final Consumer<Stream<CloudEvent>> listener;
     private final DcbStreamIdGenerator dcbStreamIdGenerator;
     // Whether stream-written events are stamped with the global position from the same counter DCB uses. Defaults to
-    // false so stream events keep their pre-position behavior until the on-by-default flip lands; opt in with
-    // withStreamPosition() so stream and DCB events share one monotonic sequence. InMemory implements DCB
-    // unconditionally, so writesPosition() is derived from this flag alone.
+    // true so stream and DCB events share one monotonic sequence out of the box; opt out with withoutStreamPosition()
+    // for a STREAM-only store that never wants a global position. InMemory implements DCB unconditionally, so
+    // writesPosition() is derived from this flag alone.
     private final boolean streamPositionEnabled;
 
     /**
@@ -121,7 +121,7 @@ public class InMemoryEventStore implements EventStore, EventStoreOperations, Eve
      * @param dcbStreamIdGenerator Derives the storage stream id for DCB appends from the events' DCB tags
      */
     public InMemoryEventStore(Consumer<Stream<CloudEvent>> listener, DcbStreamIdGenerator dcbStreamIdGenerator) {
-        this(listener, dcbStreamIdGenerator, false);
+        this(listener, dcbStreamIdGenerator, true);
     }
 
     private InMemoryEventStore(Consumer<Stream<CloudEvent>> listener, DcbStreamIdGenerator dcbStreamIdGenerator, boolean streamPositionEnabled) {

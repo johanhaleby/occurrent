@@ -334,25 +334,30 @@ public class DomainEventQueriesTest {
 
     @Test
     void afterPosition_throws_when_the_underlying_event_store_does_not_write_a_position() {
-        // domainEventQueries (from @BeforeEach) is backed by a default InMemoryEventStore, which does not write a
-        // position unless withStreamPosition() is used.
-
         // When / Then
-        org.assertj.core.api.Assertions.assertThatThrownBy(() -> domainEventQueries.afterPosition(0))
+        org.assertj.core.api.Assertions.assertThatThrownBy(() -> queriesWithoutPosition().afterPosition(0))
                 .isInstanceOf(UnsupportedOperationException.class);
     }
 
     @Test
     void readInPositionOrder_throws_when_the_underlying_event_store_does_not_write_a_position() {
         // When / Then
-        org.assertj.core.api.Assertions.assertThatThrownBy(() -> domainEventQueries.readInPositionOrder(Filter.all(), org.occurrent.eventstore.api.PositionRange.fromBeginning()))
+        org.assertj.core.api.Assertions.assertThatThrownBy(() -> queriesWithoutPosition().readInPositionOrder(Filter.all(), org.occurrent.eventstore.api.PositionRange.fromBeginning()))
                 .isInstanceOf(UnsupportedOperationException.class);
     }
 
     @Test
     void currentPosition_throws_when_the_underlying_event_store_does_not_write_a_position() {
         // When / Then
-        org.assertj.core.api.Assertions.assertThatThrownBy(domainEventQueries::currentPosition)
+        org.assertj.core.api.Assertions.assertThatThrownBy(queriesWithoutPosition()::currentPosition)
                 .isInstanceOf(UnsupportedOperationException.class);
+    }
+
+    // Stream position is on by default, so a plain InMemoryEventStore writes position; opt out to get a store that
+    // rejects the position-requiring query APIs.
+    private DomainEventQueries<DomainEvent> queriesWithoutPosition() {
+        InMemoryEventStore eventStore = new InMemoryEventStore().withoutStreamPosition();
+        CloudEventConverter<DomainEvent> cloudEventConverter = new JacksonCloudEventConverter.Builder<DomainEvent>(new ObjectMapper(), URI.create("urn:test")).idMapper(DomainEvent::eventId).build();
+        return new DomainEventQueries<>(eventStore, cloudEventConverter);
     }
 }

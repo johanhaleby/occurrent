@@ -50,18 +50,21 @@ class DcbSubscriptionModelAdapterTest {
     @Test
     void delivers_only_dcb_events_matching_the_query_and_passes_the_start_position_through() {
         CloudEvent matching = dcbEvent("NameDefined", 1, "name:1");
-        CloudEvent withoutPosition = DcbCloudEvents.withTags(event("NameDefined"), Set.of("name:1"));
+        // A stream-written event: it carries a position (stream position is on by default) but no DCB tags, so it is
+        // not a DCB event and must be dropped by the isDcbEvent floor even though DcbQuery tag matching alone might
+        // otherwise let it through.
+        CloudEvent streamEvent = OccurrentCloudEventExtension.withPosition(event("NameDefined"), 3);
         CloudEvent otherBoundary = dcbEvent("OrderPlaced", 2, "order:1");
 
-        RecordingSubscriptionModel delegate = new RecordingSubscriptionModel(Flux.just(matching, withoutPosition, otherBoundary));
+        RecordingSubscriptionModel delegate = new RecordingSubscriptionModel(Flux.just(matching, streamEvent, otherBoundary));
         DcbSubscriptionModel adapter = DcbSubscriptionModel.from(delegate);
 
         StepVerifier.create(adapter.subscribe(DcbQuery.tags("name:1"), DcbStartAt.afterPosition(5)))
                 .expectNext(matching)
                 .verifyComplete();
 
-        // The in-process floor drops the event with no position and the one whose tags do not match the query, so
-        // the subscription stays scoped to its own query even if a backend ignores the server-side filter.
+        // The in-process floor drops the stream event (no DCB tags) and the DCB event whose tags do not match the
+        // query, so the subscription stays scoped to its own query even if a backend ignores the server-side filter.
         assertThat(delegate.capturedFilter).isInstanceOf(DcbSubscriptionFilter.class);
         // The DcbStartAt is converted to a generic StartAt and passed straight to the delegate.
         assertThat(delegate.capturedStartAt).isInstanceOfSatisfying(StartAt.StartAtSubscriptionPosition.class,

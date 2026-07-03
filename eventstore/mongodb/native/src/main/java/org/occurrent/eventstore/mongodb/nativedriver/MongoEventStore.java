@@ -69,7 +69,6 @@ import java.util.Objects;
 import java.util.Optional;
 import java.util.Set;
 import java.util.TreeSet;
-import java.util.function.BiFunction;
 import java.util.function.Function;
 import java.util.function.Supplier;
 import java.util.stream.Stream;
@@ -118,7 +117,7 @@ public class MongoEventStore implements EventStore, EventStoreOperations, EventS
     private final Set<EventStoreCapability> eventStoreCapabilities;
     private final DcbStreamIdGenerator dcbStreamIdGenerator;
     private final boolean streamPositionEnabled;
-    private final boolean positionRequireBackfilled;
+    private final boolean requireBackfilledPosition;
 
     /**
      * Create a new instance of {@code MongoEventStore}
@@ -159,10 +158,10 @@ public class MongoEventStore implements EventStore, EventStoreOperations, EventS
         this.eventStoreCapabilities = config.eventStoreCapabilities;
         this.dcbStreamIdGenerator = config.dcbStreamIdGenerator;
         this.streamPositionEnabled = config.streamPositionEnabled;
-        this.positionRequireBackfilled = config.positionRequireBackfilled;
+        this.requireBackfilledPosition = config.requireBackfilledPosition;
         initializeEventStore(eventCollection, database, eventStoreCapabilities, writesPosition(), dcbPositionCollection.getNamespace().getCollectionName(), dcbCheckpointCollection.getNamespace().getCollectionName());
         if (writesPosition()) {
-            warnOrFailOnUnpositionedEvents(eventCollection, positionRequireBackfilled);
+            warnOrFailOnUnpositionedEvents(eventCollection, requireBackfilledPosition);
         }
     }
 
@@ -252,19 +251,24 @@ public class MongoEventStore implements EventStore, EventStoreOperations, EventS
             throw new IllegalArgumentException(WriteCondition.class.getSimpleName() + " cannot be null");
         }
 
-        // This is an (ugly) hack to fix problems when write condition is "any" and we have parallel writes
-        // to the same stream. This will cause MongoDB to throw an exception since we're in a transaction.
-        // But in this case we should just retry since if the user has specified "any" as stream version
-        // he/she will expect that the events are just written to the event store and WriteConditionNotFulfilledException
-        // should not be thrown. Since the write method takes a "Stream" of events we can't simply retry since,
-        // on the first retry, the stream would already have been consumed. Thus, we preemptively convert the "events"
-        // stream into a list when write condition is any. This way, we can retry without errors.
-        final BiFunction<Stream<CloudEvent>, Long, List<Document>> convertCloudEventsToDocuments;
-        if (writeCondition.isAnyStreamVersion()) {
-            List<CloudEvent> cached = events.toList();
-            convertCloudEventsToDocuments = (cloudEvents, currentStreamVersion) -> convertCloudEventsToDocuments(streamId, cached.stream(), currentStreamVersion);
+        // The write method takes a "Stream" of events, but the write transaction may retry (a WriteConditionNotFulfilled
+        // retry when the condition is "any" and there are parallel writes to the same stream, or an internal transient
+        // transaction retry). A stream cannot be consumed twice, so materialize the events up front into a list that
+        // every attempt re-reads. This also lets us know the event count before opening the transaction so positions can
+        // be reserved outside it (below).
+        List<CloudEvent> cachedEvents = events.toList();
+
+        // Reserve the position block once, outside the transaction, for the same reason DCB does (see reservePositions
+        // javadoc): the counter findAndModify is its own serialization point and must not become a transaction
+        // write-write conflict on the shared counter document. Reserving it inside the transaction turns parallel writes
+        // into a counter hotspot. The reserved block is reused across retries; a doomed or condition-failed write
+        // abandons it, so position may have gaps (permitted, see ADR 0021). Reserve only when the store writes position
+        // and there is at least one event to write.
+        final long firstReservedPosition;
+        if (streamPositionEnabled && !cachedEvents.isEmpty()) {
+            firstReservedPosition = reservePositions(cachedEvents.size());
         } else {
-            convertCloudEventsToDocuments = (cloudEvents, currentStreamVersion) -> convertCloudEventsToDocuments(streamId, cloudEvents, currentStreamVersion);
+            firstReservedPosition = 0;
         }
 
         Supplier<WriteResult> writeEvents = () -> {
@@ -276,7 +280,7 @@ public class MongoEventStore implements EventStore, EventStoreOperations, EventS
                         throw new WriteConditionNotFulfilledException(streamId, currentStreamVersion, writeCondition, String.format("%s was not fulfilled. Expected version %s but was %s.", WriteCondition.class.getSimpleName(), writeCondition, currentStreamVersion));
                     }
 
-                    List<Document> cloudEventDocuments = convertCloudEventsToDocuments.apply(events, currentStreamVersion);
+                    List<Document> cloudEventDocuments = convertCloudEventsToDocuments(streamId, cachedEvents.stream(), currentStreamVersion, firstReservedPosition);
 
                     if (cloudEventDocuments.isEmpty()) {
                         return StreamVersionDiff.of(currentStreamVersion, currentStreamVersion);
@@ -297,15 +301,12 @@ public class MongoEventStore implements EventStore, EventStoreOperations, EventS
         return RetryStrategy.retry().retryIf(e -> e instanceof WriteConditionNotFulfilledException && writeCondition.isAnyStreamVersion()).execute(writeEvents);
     }
 
-    private List<Document> convertCloudEventsToDocuments(String streamId, Stream<CloudEvent> cloudEvents, long currentStreamVersion) {
+    private List<Document> convertCloudEventsToDocuments(String streamId, Stream<CloudEvent> cloudEvents, long currentStreamVersion, long firstReservedPosition) {
         List<Document> documents = mapWithIndex(cloudEvents, currentStreamVersion, pair -> convertToDocument(timeRepresentation, streamId, pair.t1, pair.t2)).toList();
         if (streamPositionEnabled && !documents.isEmpty()) {
-            // Reserve the position block once we know how many events are actually being written (after write-condition
-            // filtering), outside the insert, so a retried "any version" write reserves a fresh block per attempt rather
-            // than risking a stale/duplicate one. Positions may have gaps if a retry abandons a reserved block, same as
-            // the DCB write path (ADR 0021).
-            long firstPosition = reservePositions(documents.size());
-            long position = firstPosition;
+            // Stamp the pre-reserved positions (reserved outside the transaction, see write(...)). Positions may have
+            // gaps if a retry abandons a reserved block, same as the DCB write path (ADR 0021).
+            long position = firstReservedPosition;
             for (Document document : documents) {
                 PositionDocumentMapper.addPosition(document, position);
                 position++;
@@ -766,7 +767,7 @@ public class MongoEventStore implements EventStore, EventStoreOperations, EventS
     // produce a position blind-spot for position-based catch-up. A cheap existence check (not a full scan) so this
     // stays fast on a healthy, fully positioned store; it only pays for a document read when the position index has an
     // unpositioned event to find.
-    private static void warnOrFailOnUnpositionedEvents(MongoCollection<Document> eventCollection, boolean positionRequireBackfilled) {
+    private static void warnOrFailOnUnpositionedEvents(MongoCollection<Document> eventCollection, boolean requireBackfilledPosition) {
         if (eventCollection.estimatedDocumentCount() == 0) {
             return;
         }
@@ -777,9 +778,9 @@ public class MongoEventStore implements EventStore, EventStoreOperations, EventS
         }
         String message = "This MongoEventStore writes a global position, but its event collection already contains " +
                 "events without one. Position-based catch-up will silently skip this pre-existing history unless it " +
-                "is backfilled. Run the position backfill migration tool (see the migration runbook in " +
-                "eventstore/migration/position-backfill) before relying on position-based reads or catch-up.";
-        if (positionRequireBackfilled) {
+                "is backfilled. Run the position backfill migration tool (see the migration runbook at " +
+                "doc/runbooks/position-backfill.md) before relying on position-based reads or catch-up.";
+        if (requireBackfilledPosition) {
             throw new IllegalStateException(message);
         }
         log.warn(message);

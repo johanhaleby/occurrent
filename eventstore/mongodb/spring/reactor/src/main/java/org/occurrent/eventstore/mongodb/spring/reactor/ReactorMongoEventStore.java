@@ -158,12 +158,23 @@ public class ReactorMongoEventStore implements EventStore, EventStoreOperations,
             throw new IllegalArgumentException(WriteCondition.class.getSimpleName() + " cannot be null");
         }
 
-        Mono<StreamVersionDiff> operation = currentStreamVersion(streamId)
-                .flatMap(currentStreamVersion -> validateWriteCondition(streamId, writeCondition, currentStreamVersion))
-                .flatMap(currentStreamVersion -> {
-                    Flux<Document> documentFlux = convertEventsToMongoDocuments(streamId, events, currentStreamVersion);
-                    Mono<StreamVersionDiff> streamVersionDiffFlux = documentFlux.collectList().flatMap(documents ->
-                            stampStreamPositions(documents).flatMap(stampedDocuments -> {
+        // Materialize the events up front so the count is known before the transaction, and reserve the position block
+        // outside the transaction, for the same reason DCB does (see reservePositions javadoc): the counter
+        // findAndModify is its own serialization point and must not become a transaction write-write conflict on the
+        // shared counter document. Reserving it inside the transaction turns parallel writes into a counter hotspot. The
+        // reserved block is reused if the transaction retries; a doomed write abandons it, so position may have gaps
+        // (permitted, see ADR 0021). Reserve only when the store writes position and there is at least one event.
+        return events.collectList().flatMap(cachedEvents -> {
+            Mono<Long> firstReservedPosition = writesPosition() && !cachedEvents.isEmpty()
+                    ? reservePositions(cachedEvents.size())
+                    : Mono.just(0L);
+            return firstReservedPosition.flatMap(reservedPosition -> {
+                Mono<StreamVersionDiff> operation = currentStreamVersion(streamId)
+                        .flatMap(currentStreamVersion -> validateWriteCondition(streamId, writeCondition, currentStreamVersion))
+                        .flatMap(currentStreamVersion -> {
+                            Flux<Document> documentFlux = convertEventsToMongoDocuments(streamId, Flux.fromIterable(cachedEvents), currentStreamVersion);
+                            Mono<StreamVersionDiff> streamVersionDiffFlux = documentFlux.collectList().flatMap(documents -> {
+                                List<Document> stampedDocuments = stampStreamPositions(documents, reservedPosition);
                                 final long newStreamVersion;
                                 if (stampedDocuments.isEmpty()) {
                                     newStreamVersion = currentStreamVersion;
@@ -172,12 +183,14 @@ public class ReactorMongoEventStore implements EventStore, EventStoreOperations,
                                 }
                                 return insertAll(streamId, currentStreamVersion, writeCondition, stampedDocuments)
                                         .then(Mono.just(StreamVersionDiff.of(currentStreamVersion, newStreamVersion)));
-                            }));
-                    return streamVersionDiffFlux.switchIfEmpty(Mono.just(StreamVersionDiff.of(currentStreamVersion, currentStreamVersion)));
-                });
+                            });
+                            return streamVersionDiffFlux.switchIfEmpty(Mono.just(StreamVersionDiff.of(currentStreamVersion, currentStreamVersion)));
+                        });
 
-        return transactionalOperator.transactional(operation)
-                .map(streamVersionDiff -> new WriteResult(streamId, streamVersionDiff.oldStreamVersion, streamVersionDiff.newStreamVersion));
+                return transactionalOperator.transactional(operation)
+                        .map(streamVersionDiff -> new WriteResult(streamId, streamVersionDiff.oldStreamVersion, streamVersionDiff.newStreamVersion));
+            });
+        });
     }
 
     @Override
@@ -436,6 +449,7 @@ public class ReactorMongoEventStore implements EventStore, EventStoreOperations,
     /**
      * Returns whether this store carries a global position, i.e. whether position-requiring APIs are safe to call.
      */
+    @Override
     public boolean writesPosition() {
         return eventStoreCapabilities.contains(DCB) || (eventStoreCapabilities.contains(STREAM) && streamPositionEnabled);
     }
@@ -855,20 +869,18 @@ public class ReactorMongoEventStore implements EventStore, EventStoreOperations,
         return result;
     }
 
-    // Reserves a position block from the same counter DCB uses and stamps it onto each stream document, so stream and
-    // DCB events share one monotonic sequence. A no-op (returns the documents unchanged) when writesPosition() is
-    // false, i.e. an opt-out STREAM-only store.
-    private Mono<List<Document>> stampStreamPositions(List<Document> documents) {
+    // Stamps the pre-reserved position block (reserved outside the transaction, see write(...)) onto each stream
+    // document, so stream and DCB events share one monotonic sequence. A no-op (returns the documents unchanged) when
+    // writesPosition() is false, i.e. an opt-out STREAM-only store, or when there is nothing to stamp.
+    private List<Document> stampStreamPositions(List<Document> documents, long firstReservedPosition) {
         if (documents.isEmpty() || !writesPosition()) {
-            return Mono.just(documents);
-        }
-        return reservePositions(documents.size()).map(firstPosition -> {
-            long position = firstPosition;
-            for (Document document : documents) {
-                PositionDocumentMapper.addPosition(document, position++);
-            }
             return documents;
-        });
+        }
+        long position = firstReservedPosition;
+        for (Document document : documents) {
+            PositionDocumentMapper.addPosition(document, position++);
+        }
+        return documents;
     }
 
     private Flux<Document> convertEventsToMongoDocuments(String streamId, Flux<CloudEvent> events, Long currentStreamVersion) {

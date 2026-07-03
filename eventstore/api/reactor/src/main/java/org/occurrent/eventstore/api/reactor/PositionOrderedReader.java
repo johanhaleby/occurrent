@@ -49,4 +49,12 @@ public interface PositionOrderedReader {
      * Emits {@code 0} when no positioned event has been written yet.
      */
     Mono<Long> currentPosition();
+
+    /**
+     * Returns whether this store carries a global position, i.e. whether {@link #readInPositionOrder(Filter, PositionRange)}
+     * and {@link #currentPosition()} are safe to call. A consumer that only holds this interface (for example a
+     * position-selecting catch-up subscription model) uses this to choose its reconciliation strategy without
+     * depending on a concrete store type.
+     */
+    boolean writesPosition();
 }

@@ -116,5 +116,10 @@ class ReactorStreamCatchupSubscriptionModelTest {
         public Mono<Long> currentPosition() {
             return Mono.error(new AssertionError("currentPosition must not be called when the catch-up fails loudly"));
         }
+
+        @Override
+        public boolean writesPosition() {
+            return true;
+        }
     }
 }

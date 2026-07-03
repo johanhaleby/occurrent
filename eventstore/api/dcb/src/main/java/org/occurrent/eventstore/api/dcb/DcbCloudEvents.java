@@ -85,6 +85,18 @@ public final class DcbCloudEvents {
     }
 
     /**
+     * Returns whether {@code cloudEvent} is a DCB-written event, i.e. it carries the {@value #TAGS} extension. A DCB
+     * append always stamps this extension (even for an empty tag set), while a stream-written event never does, so this
+     * is the reliable discriminator between the two. It must be used instead of a "has a position" check when telling
+     * DCB events apart from stream events, since stream events also carry a global position once stream position is
+     * enabled (on by default).
+     */
+    public static boolean isDcbEvent(CloudEvent cloudEvent) {
+        requireNonNull(cloudEvent, "CloudEvent cannot be null");
+        return cloudEvent.getExtension(TAGS) != null;
+    }
+
+    /**
      * Returns whether {@code cloudEvent} matches the supplied DCB query.
      */
     public static boolean matches(CloudEvent cloudEvent, DcbQuery query) {

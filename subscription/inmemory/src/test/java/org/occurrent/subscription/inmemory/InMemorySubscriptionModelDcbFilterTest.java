@@ -80,20 +80,22 @@ class InMemorySubscriptionModelDcbFilterTest {
     }
 
     @Test
-    void does_not_deliver_event_with_no_dcb_position() {
+    void does_not_deliver_a_stream_event_that_has_a_position_but_no_dcb_tags() {
         CopyOnWriteArrayList<CloudEvent> received = new CopyOnWriteArrayList<>();
-        subscriptionModel.subscribe("sub", DcbSubscriptionFilter.filter(DcbQuery.tags("x:1")), received::add)
+        // A DcbQuery.all() matches any tags, so only the DCB discriminator (the DCB tags extension) keeps stream
+        // events out. With stream position on by default, a stream event carries a position, so a "position > 0" guard
+        // would leak it into this DCB subscription; the isDcbEvent guard must not.
+        subscriptionModel.subscribe("sub", DcbSubscriptionFilter.filter(DcbQuery.all()), received::add)
                 .waitUntilStarted();
 
-        // An event with the right tag but no position must be rejected by the position guard.
-        CloudEvent noPosition = CloudEventBuilder.v1()
+        // A stream-written event: it has a global position but no DCB tags extension, so it is not a DCB event.
+        CloudEvent streamEvent = OccurrentCloudEventExtension.withPosition(CloudEventBuilder.v1()
                 .withId(UUID.randomUUID().toString())
                 .withType("TypeA")
                 .withSource(URI.create("urn:test"))
                 .withTime(OffsetDateTime.now())
-                .build();
-        CloudEvent taggedButNoPosition = DcbCloudEvents.withTags(noPosition, List.of("x:1"));
-        subscriptionModel.accept(Stream.of(taggedButNoPosition));
+                .build(), 1L);
+        subscriptionModel.accept(Stream.of(streamEvent));
 
         await().during(java.time.Duration.ofMillis(200)).atMost(java.time.Duration.ofSeconds(2))
                 .untilAsserted(() -> assertThat(received).isEmpty());

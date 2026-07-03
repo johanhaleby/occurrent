@@ -53,10 +53,16 @@ public final class DcbEventMetadata {
     }
 
     /**
-     * The DCB sequence position of the event, or empty when the event has no DCB position (for example a
-     * regular stream-written event).
+     * The DCB sequence position of the event, or empty when the event is not a DCB-written event (for example a
+     * regular stream-written event). A stream event carries a global position too once stream position is enabled (on
+     * by default), and that position is the same shared sequence, but it is not DCB metadata, so this DCB-specific
+     * accessor reports it only for DCB events (those carrying the DCB tags extension). Use the generic
+     * {@code EventMetadata.position} to read the shared position of any event.
      */
     public OptionalLong dcbPosition() {
+        if (metadata.getData().get(DcbCloudEvents.TAGS) == null) {
+            return OptionalLong.empty();
+        }
         return decodePosition(metadata.getData().get(OccurrentCloudEventExtension.POSITION));
     }
 

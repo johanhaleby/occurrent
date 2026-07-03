@@ -77,6 +77,9 @@ class DomainEventQueriesTest {
 
     private ApplicationService<DomainEvent> applicationService;
     private DomainEventQueries<DomainEvent> domainEventQueries;
+    // A DomainEventQueries backed by a store with stream position opted out, for the position-guard tests. Stream
+    // position is on by default now, so the default store above writes position and would not trip the guard.
+    private DomainEventQueries<DomainEvent> domainEventQueriesWithoutPosition;
 
     @BeforeEach
     void createInstances() {
@@ -93,6 +96,15 @@ class DomainEventQueriesTest {
         CloudEventConverter<DomainEvent> cloudEventConverter = new JacksonCloudEventConverter.Builder<DomainEvent>(new ObjectMapper(), URI.create("urn:test")).idMapper(DomainEvent::eventId).build();
         applicationService = new GenericApplicationService<>(eventStore, cloudEventConverter);
         domainEventQueries = new DomainEventQueries<>(eventStore, cloudEventConverter);
+
+        EventStoreConfig configWithoutPosition = new EventStoreConfig.Builder()
+                .eventStoreCollectionName("events")
+                .transactionConfig(tx)
+                .timeRepresentation(TimeRepresentation.RFC_3339_STRING)
+                .withoutStreamPosition()
+                .build();
+        ReactorMongoEventStore eventStoreWithoutPosition = new ReactorMongoEventStore(mongoTemplate, configWithoutPosition);
+        domainEventQueriesWithoutPosition = new DomainEventQueries<>(eventStoreWithoutPosition, cloudEventConverter);
     }
 
     @Test
@@ -375,10 +387,10 @@ class DomainEventQueriesTest {
 
     @Test
     void afterPosition_emits_an_error_when_the_underlying_event_store_does_not_write_a_position() {
-        // domainEventQueries (from @BeforeEach) is backed by a STREAM-only store, which does not write a position.
+        // domainEventQueriesWithoutPosition is backed by a STREAM-only store with stream position opted out.
 
         // When / Then
-        StepVerifier.create(domainEventQueries.afterPosition(0))
+        StepVerifier.create(domainEventQueriesWithoutPosition.afterPosition(0))
                 .expectError(UnsupportedOperationException.class)
                 .verify();
     }
@@ -386,7 +398,7 @@ class DomainEventQueriesTest {
     @Test
     void readInPositionOrder_emits_an_error_when_the_underlying_event_store_does_not_write_a_position() {
         // When / Then
-        StepVerifier.create(domainEventQueries.readInPositionOrder(org.occurrent.filter.Filter.all(), PositionRange.fromBeginning()))
+        StepVerifier.create(domainEventQueriesWithoutPosition.readInPositionOrder(org.occurrent.filter.Filter.all(), PositionRange.fromBeginning()))
                 .expectError(UnsupportedOperationException.class)
                 .verify();
     }
@@ -394,7 +406,7 @@ class DomainEventQueriesTest {
     @Test
     void currentPosition_emits_an_error_when_the_underlying_event_store_does_not_write_a_position() {
         // When / Then
-        StepVerifier.create(domainEventQueries.currentPosition())
+        StepVerifier.create(domainEventQueriesWithoutPosition.currentPosition())
                 .expectError(UnsupportedOperationException.class)
                 .verify();
     }

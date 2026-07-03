@@ -294,5 +294,10 @@ class ReactorStreamCatchupSubscriptionModelMongoTest {
         public Mono<Long> currentPosition() {
             return delegate.currentPosition();
         }
+
+        @Override
+        public boolean writesPosition() {
+            return delegate.writesPosition();
+        }
     }
 }

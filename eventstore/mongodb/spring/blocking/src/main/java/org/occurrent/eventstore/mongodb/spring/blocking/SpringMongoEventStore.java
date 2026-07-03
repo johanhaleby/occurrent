@@ -65,7 +65,6 @@ import java.util.Objects;
 import java.util.Optional;
 import java.util.Set;
 import java.util.TreeSet;
-import java.util.function.BiFunction;
 import java.util.function.Function;
 import java.util.function.Supplier;
 import java.util.stream.Stream;
@@ -156,19 +155,24 @@ public class SpringMongoEventStore implements EventStore, EventStoreOperations, 
             throw new IllegalArgumentException(WriteCondition.class.getSimpleName() + " cannot be null");
         }
 
-        // This is an (ugly) hack to fix problems when write condition is "any" and we have parallel writes
-        // to the same stream. This will cause MongoDB to throw an exception since we're in a transaction.
-        // But in this case we should just retry since if the user has specified "any" as stream version
-        // he/she will expect that the events are just written to the event store and WriteConditionNotFulfilledException
-        // should not be thrown. Since the write method takes a "Stream" of events we can't simply retry since,
-        // on the first retry, the stream would already have been consumed. Thus, we preemptively convert the "events"
-        // stream into a list when write condition is any. This way, we can retry without errors.
-        final BiFunction<Stream<CloudEvent>, Long, List<Document>> convertCloudEventsToDocuments;
-        if (writeCondition.isAnyStreamVersion()) {
-            List<CloudEvent> cached = events.toList();
-            convertCloudEventsToDocuments = (cloudEvents, currentStreamVersion) -> convertCloudEventsToDocuments(streamId, cached.stream(), currentStreamVersion);
+        // The write method takes a "Stream" of events, but the write transaction may retry (a WriteConditionNotFulfilled
+        // retry when the condition is "any" and there are parallel writes to the same stream, or a transient transaction
+        // conflict). A stream cannot be consumed twice, so materialize the events up front into a list that every attempt
+        // re-reads. This also lets us know the event count before opening the transaction so positions can be reserved
+        // outside it (below).
+        List<CloudEvent> cachedEvents = events.toList();
+
+        // Reserve the position block once, outside the transaction, for the same reason DCB does (see reservePositions
+        // javadoc): the counter findAndModify is its own serialization point and must not become a transaction
+        // write-write conflict on the shared counter document. Reserving it inside the transaction turns parallel writes
+        // into a counter hotspot that conflicts on every collision. The reserved block is reused across retries; a
+        // doomed or condition-failed write abandons it, so position may have gaps (permitted, see ADR 0021). Reserve
+        // only when the store writes position and there is at least one event to write.
+        final long firstReservedPosition;
+        if (writesPosition() && !cachedEvents.isEmpty()) {
+            firstReservedPosition = reservePositions(cachedEvents.size());
         } else {
-            convertCloudEventsToDocuments = (cloudEvents, currentStreamVersion) -> convertCloudEventsToDocuments(streamId, cloudEvents, currentStreamVersion);
+            firstReservedPosition = 0;
         }
 
         // The actual write logic for the cloud events
@@ -179,17 +183,14 @@ public class SpringMongoEventStore implements EventStore, EventStoreOperations, 
                 throw new WriteConditionNotFulfilledException(streamId, currentStreamVersion, writeCondition, String.format("%s was not fulfilled. Expected version %s but was %s.", WriteCondition.class.getSimpleName(), writeCondition, currentStreamVersion));
             }
 
-            List<Document> cloudEventDocuments = convertCloudEventsToDocuments.apply(events, currentStreamVersion);
+            List<Document> cloudEventDocuments = convertCloudEventsToDocuments(streamId, cachedEvents.stream(), currentStreamVersion);
 
             final long newStreamVersion;
             if (!cloudEventDocuments.isEmpty()) {
                 if (writesPosition()) {
-                    // Reserve one position per document and stamp it before insert, outside the append transaction for
-                    // the same reason DCB does it that way (see reservePositions javadoc): the counter findAndModify is
-                    // its own serialization point and must not turn into a transaction conflict. A doomed or retried
-                    // write abandons its reserved block, so position may have gaps here too. Uses the same
-                    // PositionDocumentMapper.addPosition step DCB uses, so stream and DCB events share one sequence.
-                    long position = reservePositions(cloudEventDocuments.size());
+                    // Stamp the pre-reserved positions (reserved outside the transaction, above), using the same
+                    // PositionDocumentMapper.addPosition step DCB uses so stream and DCB events share one sequence.
+                    long position = firstReservedPosition;
                     for (Document document : cloudEventDocuments) {
                         PositionDocumentMapper.addPosition(document, position);
                         position++;
@@ -829,7 +830,7 @@ public class SpringMongoEventStore implements EventStore, EventStoreOperations, 
         String message = "The event collection '" + eventStoreCollectionName + "' contains events without a 'position'. " +
                 "This store writes a global position, but existing events predate it and are invisible to position-ordered reads " +
                 "and position-based catch-up until backfilled. Run the position-backfill migration runbook " +
-                "(eventstore/migration/position-backfill) before relying on position for this collection.";
+                "(doc/runbooks/position-backfill.md) before relying on position for this collection.";
         if (requireBackfilledPosition) {
             throw new IllegalStateException(message);
         }

@@ -188,12 +188,17 @@ class OccurrentReactiveMongoAutoConfigurationWiringTest {
     }
 
     @Test
-    void a_stream_subscription_that_replays_history_fails_loud() {
-        contextRunner().withUserConfiguration(BeginningOfTimeStreamSubscriptionConfiguration.class).run(context -> {
-            assertThat(context).hasFailed();
-            assertThat(context.getStartupFailure()).hasRootCauseInstanceOf(IllegalArgumentException.class);
-            assertThat(context.getStartupFailure()).rootCause().hasMessageContaining("no stream catch-up");
-        });
+    void a_stream_subscription_that_replays_history_fails_loud_when_stream_position_is_off() {
+        // Stream position is on by default, which makes reactive stream history replay supported. With position
+        // explicitly opted out there is no reactive stream catch-up model, so a BEGINNING_OF_TIME @StreamSubscription
+        // must fail loud rather than silently start live.
+        contextRunner()
+                .withPropertyValues("occurrent.event-store.stream.position=false")
+                .withUserConfiguration(BeginningOfTimeStreamSubscriptionConfiguration.class).run(context -> {
+                    assertThat(context).hasFailed();
+                    assertThat(context.getStartupFailure()).hasRootCauseInstanceOf(IllegalArgumentException.class);
+                    assertThat(context.getStartupFailure()).rootCause().hasMessageContaining("does not support reactive stream history replay");
+                });
     }
 
     @Configuration(proxyBeanMethods = false)

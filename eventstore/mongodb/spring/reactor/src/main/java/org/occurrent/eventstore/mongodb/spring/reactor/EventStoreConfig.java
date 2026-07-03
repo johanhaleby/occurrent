@@ -44,8 +44,9 @@ public class EventStoreConfig {
     private static final Function<Query, Query> DEFAULT_QUERY_OPTIONS_FUNCTION = Function.identity();
     private static final Function<Query, Query> DEFAULT_READ_OPTIONS_FUNCTION = Function.identity();
     private static final Set<EventStoreCapability> DEFAULT_EVENT_STORE_CAPABILITIES = Set.of(STREAM);
-    // Foundation: kept off so stream behavior is unchanged. The eventual target is on-by-default (see the position plan).
-    private static final boolean DEFAULT_STREAM_POSITION_ENABLED = false;
+    // On by default: a STREAM store writes position out of the box, sharing one monotonic sequence with DCB. Opt out
+    // with withoutStreamPosition() for a STREAM-only store that never wants a global position.
+    private static final boolean DEFAULT_STREAM_POSITION_ENABLED = true;
     // Default WARN (not hard-fail) when writesPosition() is true but pre-existing events lack a position, so an
     // upgrade does not crash a running deployment; the loud WARN plus the migration runbook is the mitigation.
     private static final boolean DEFAULT_REQUIRE_BACKFILLED_POSITION = false;
@@ -57,7 +58,7 @@ public class EventStoreConfig {
     public final Function<Query, Query> readOptions;
     public final Set<EventStoreCapability> eventStoreCapabilities;
     public final DcbStreamIdGenerator dcbStreamIdGenerator;
-    // Foundation: defaults to false (streams keep writing no position) so behavior is unchanged. See withoutStreamPosition().
+    // Defaults to true (streams write a global position). See withoutStreamPosition().
     public final boolean streamPositionEnabled;
     // When true, escalates the un-backfilled-position startup guard from a WARN log to a hard failure. See
     // Builder#requireBackfilledPosition().
@@ -255,16 +256,31 @@ public class EventStoreConfig {
 
         /**
          * Opt a STREAM-only store out of writing a global position onto stream-written events. Position is intrinsic
-         * to DCB (always written when the {@link EventStoreCapability#DCB} capability is enabled) and, once on by
-         * default, an opt-in-by-default attribute of {@link EventStoreCapability#STREAM}; this only has an effect for
-         * a STREAM-only store. {@link #build()} fails fast if this is combined with the {@code DCB} capability, since
-         * a combined store must position everything.
+         * to DCB (always written when the {@link EventStoreCapability#DCB} capability is enabled) and an on-by-default
+         * attribute of {@link EventStoreCapability#STREAM}; this only has an effect for a STREAM-only store.
+         * {@link #build()} fails fast if this is combined with the {@code DCB} capability, since a combined store
+         * must position everything.
          *
          * @return A same {@code Builder instance}
          */
         public Builder withoutStreamPosition() {
             this.streamPositionEnabled = false;
             this.streamPositionOptedOut = true;
+            return this;
+        }
+
+        /**
+         * Explicitly opt a STREAM-only store in to writing a global position onto stream-written events. Stream
+         * position is on by default, so this method is a no-op default kept for symmetry with
+         * {@link #withoutStreamPosition()} and for call sites that want to state the intent explicitly. Has no
+         * additional effect when the {@link EventStoreCapability#DCB} capability is enabled, since a combined store
+         * already positions everything.
+         *
+         * @return A same {@code Builder instance}
+         */
+        public Builder withStreamPosition() {
+            this.streamPositionEnabled = true;
+            this.streamPositionOptedOut = false;
             return this;
         }
 

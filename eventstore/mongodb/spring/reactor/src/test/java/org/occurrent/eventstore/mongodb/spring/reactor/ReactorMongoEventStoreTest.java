@@ -1512,7 +1512,8 @@ public class ReactorMongoEventStoreTest {
 
             // Then
             Flux<CloudEvent> events = eventStore.query(dataSchema(URI.create("urn:myschema")));
-            CloudEvent expectedCloudEvent = CloudEventBuilder.v1(cloudEvent).withData(PojoCloudEventData.wrap(Document.parse(new String(requireNonNull(cloudEvent.getData()).toBytes(), UTF_8)), document -> document.toJson().getBytes(UTF_8))).build();
+            // Stream position is on by default, so the store stamps a global position (the fourth event written here).
+            CloudEvent expectedCloudEvent = OccurrentCloudEventExtension.withPosition(CloudEventBuilder.v1(cloudEvent).withData(PojoCloudEventData.wrap(Document.parse(new String(requireNonNull(cloudEvent.getData()).toBytes(), UTF_8)), document -> document.toJson().getBytes(UTF_8))).build(), 4);
             assertThat(events.toStream()).containsExactly(expectedCloudEvent);
         }
 
@@ -1542,7 +1543,8 @@ public class ReactorMongoEventStoreTest {
 
             // Then
             Flux<CloudEvent> events = eventStore.query(dataContentType("text/plain"));
-            assertThat(events.toStream()).containsExactly(cloudEvent);
+            // Stream position is on by default, so the store stamps a global position (the fourth event written here).
+            assertThat(events.toStream()).containsExactly(OccurrentCloudEventExtension.withPosition(cloudEvent, 4));
         }
 
         @Nested

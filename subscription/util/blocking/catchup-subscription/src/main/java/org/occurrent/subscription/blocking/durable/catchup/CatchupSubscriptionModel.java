@@ -310,12 +310,25 @@ public class CatchupSubscriptionModel implements SubscriptionModel, DelegatingSu
         }
 
         if (positionMode) {
+            // A fresh replay-from-beginning intent (StartAtTime.beginningOfTime(), the form the @StreamSubscription
+            // annotation and the subscribeFromBeginningOfTime shortcut produce for a BEGINNING_OF_TIME request) is a
+            // time-based token, but on a position store it must map to a position-from-beginning start so the position
+            // catch-up path replays history rather than discarding it as an unrecognised token. This is distinct from
+            // the resume-token transition handled in the isDefault() branch above: there a *persisted* mid-stream time
+            // token is re-resolved to the model default, since a stale RFC3339 timestamp cannot be trusted as a
+            // position; here a caller explicitly asks to replay from the beginning, which maps cleanly to position 0.
+            final StartAt positionStartAt;
+            if (startsAtBeginningOfTime(firstStartAt)) {
+                positionStartAt = StartAt.subscriptionPosition(GlobalSubscriptionPosition.of(0));
+            } else {
+                positionStartAt = firstStartAt;
+            }
             // Position mode: only an explicit/resolved global-position start triggers a catch-up replay; anything
             // else (a live change-stream token, or a startAt this model does not recognise) resumes live directly.
-            if (!startsAtExplicitDcbPosition(firstStartAt)) {
-                return subscriptionModel.subscribe(subscriptionId, filter, firstStartAt, action);
+            if (!startsAtExplicitDcbPosition(positionStartAt)) {
+                return subscriptionModel.subscribe(subscriptionId, filter, positionStartAt, action);
             }
-            Future<Subscription> subscriptionCompletableFuture = CompletableFuture.supplyAsync(() -> startPositionCatchupSubscriptionForStream(subscriptionId, filter, startAt, action, firstStartAt));
+            Future<Subscription> subscriptionCompletableFuture = CompletableFuture.supplyAsync(() -> startPositionCatchupSubscriptionForStream(subscriptionId, filter, startAt, action, positionStartAt));
             return new CatchupSubscription(subscriptionId, subscriptionCompletableFuture);
         }
 
@@ -520,8 +533,10 @@ public class CatchupSubscriptionModel implements SubscriptionModel, DelegatingSu
         DcbQuery query = Objects.requireNonNull(this.dcbQuery);
         return cloudEvent -> {
             // The live change stream sees every CloudEvent, so post-filter to the DCB events matching the query and
-            // skip those already delivered during the catch-up phase (the handover seam).
-            if (OccurrentCloudEventExtension.getPosition(cloudEvent) > 0 && DcbCloudEvents.matches(cloudEvent, query)
+            // skip those already delivered during the catch-up phase (the handover seam). The DCB discriminator is
+            // isDcbEvent (the DCB tags extension), not a positive position: with stream position on by default, stream
+            // events also carry a position, so a "position > 0" guard would leak stream events into a DCB subscription.
+            if (DcbCloudEvents.isDcbEvent(cloudEvent) && DcbCloudEvents.matches(cloudEvent, query)
                     && (cache == null || !cache.isCached(cloudEvent.getId()))) {
                 action.accept(cloudEvent);
             }
@@ -851,6 +866,14 @@ public class CatchupSubscriptionModel implements SubscriptionModel, DelegatingSu
 
     private static boolean isBeginningOfTime(SubscriptionPosition subscriptionPosition) {
         return subscriptionPosition instanceof TimeBasedSubscriptionPosition && ((TimeBasedSubscriptionPosition) subscriptionPosition).isBeginningOfTime();
+    }
+
+    // Whether a resolved StartAt is a fresh "replay from the beginning of time" request, i.e. a time-based
+    // beginning-of-time position. On a position store this is mapped to a position-from-beginning start so the position
+    // catch-up path replays history.
+    private static boolean startsAtBeginningOfTime(StartAt startAt) {
+        StartAt start = startAt.get(generateSubscriptionModelContext());
+        return start instanceof StartAtSubscriptionPosition position && isBeginningOfTime(position.subscriptionPosition);
     }
 
     @Override
