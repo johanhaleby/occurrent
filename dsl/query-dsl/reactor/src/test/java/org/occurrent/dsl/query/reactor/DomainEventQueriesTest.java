@@ -34,6 +34,7 @@ import org.occurrent.domain.DomainEvent;
 import org.occurrent.domain.Name;
 import org.occurrent.domain.NameDefined;
 import org.occurrent.domain.NameWasChanged;
+import org.occurrent.eventstore.api.PositionRange;
 import org.occurrent.eventstore.api.SortBy;
 import org.occurrent.eventstore.mongodb.spring.reactor.EventStoreConfig;
 import org.occurrent.eventstore.mongodb.spring.reactor.ReactorMongoEventStore;
@@ -46,6 +47,7 @@ import org.testcontainers.junit.jupiter.Container;
 import org.testcontainers.junit.jupiter.Testcontainers;
 import org.testcontainers.mongodb.MongoDBContainer;
 import reactor.core.publisher.Flux;
+import reactor.test.StepVerifier;
 
 import java.net.URI;
 import java.time.LocalDateTime;
@@ -58,6 +60,8 @@ import static org.junit.jupiter.api.Assertions.assertAll;
 import static org.occurrent.application.composition.command.CommandConversion.toStreamCommand;
 import static org.occurrent.application.composition.command.ListCommandComposition.composeCommands;
 import static org.occurrent.application.composition.command.partial.PartialFunctionApplication.partial;
+import static org.occurrent.eventstore.api.EventStoreCapability.DCB;
+import static org.occurrent.eventstore.api.EventStoreCapability.STREAM;
 import static org.occurrent.eventstore.api.SortBy.SortDirection.DESCENDING;
 import static org.occurrent.filter.Filter.type;
 
@@ -300,5 +304,98 @@ class DomainEventQueriesTest {
 
         // Then
         assertThat(events).containsExactly(new NameDefined("eventId1", time, "name", "Some Doe"));
+    }
+
+    private DomainEventQueries<DomainEvent> domainEventQueriesFor(ReactorMongoEventStore eventStore) {
+        CloudEventConverter<DomainEvent> cloudEventConverter = new JacksonCloudEventConverter.Builder<DomainEvent>(new ObjectMapper(), URI.create("urn:test")).idMapper(DomainEvent::eventId).build();
+        return new DomainEventQueries<>(eventStore, cloudEventConverter);
+    }
+
+    private ApplicationService<DomainEvent> applicationServiceFor(ReactorMongoEventStore eventStore) {
+        CloudEventConverter<DomainEvent> cloudEventConverter = new JacksonCloudEventConverter.Builder<DomainEvent>(new ObjectMapper(), URI.create("urn:test")).idMapper(DomainEvent::eventId).build();
+        return new GenericApplicationService<>(eventStore, cloudEventConverter);
+    }
+
+    private ReactorMongoEventStore storeWith(EventStoreConfig.Builder builder) {
+        ConnectionString connectionString = new ConnectionString(mongoDBContainer.getReplicaSetUrl() + ".querydsl");
+        MongoClient mongoClient = MongoClients.create(connectionString);
+        ReactiveMongoTemplate mongoTemplate = new ReactiveMongoTemplate(mongoClient, requireNonNull(connectionString.getDatabase()));
+        ReactiveMongoTransactionManager transactionManager = new ReactiveMongoTransactionManager(new SimpleReactiveMongoDatabaseFactory(mongoClient, requireNonNull(connectionString.getDatabase())));
+        EventStoreConfig config = builder
+                .eventStoreCollectionName("events")
+                .transactionConfig(transactionManager)
+                .timeRepresentation(TimeRepresentation.RFC_3339_STRING)
+                .build();
+        return new ReactorMongoEventStore(mongoTemplate, config);
+    }
+
+    @Test
+    void afterPosition_returns_domain_events_strictly_after_the_given_position_in_ascending_position_order() {
+        // Given
+        ReactorMongoEventStore eventStore = storeWith(new EventStoreConfig.Builder().eventStoreCapabilities(STREAM, DCB));
+        DomainEventQueries<DomainEvent> queriesWithPosition = domainEventQueriesFor(eventStore);
+        ApplicationService<DomainEvent> applicationServiceWithPosition = applicationServiceFor(eventStore);
+
+        LocalDateTime time = LocalDateTime.now();
+        applicationServiceWithPosition.execute("stream1", toStreamCommand(partial(Name::defineName, "eventId1", time, "name", "Some Doe"))).block();
+        applicationServiceWithPosition.execute("stream1", toStreamCommand(partial(Name::changeName, "eventId2", time, "name", "Jane Doe"))).block();
+        applicationServiceWithPosition.execute("stream1", toStreamCommand(partial(Name::changeName, "eventId3", time, "name", "Jane Doe2"))).block();
+
+        // When
+        List<DomainEvent> events = queriesWithPosition.afterPosition(1).collectList().block();
+
+        // Then
+        assertAll(
+                () -> assertThat(events).hasSize(2),
+                () -> assertThat(events).extracting(DomainEvent::eventId).containsExactly("eventId2", "eventId3")
+        );
+    }
+
+    @Test
+    void readInPositionOrder_returns_domain_events_matching_the_filter_within_the_given_range_in_ascending_position_order() {
+        // Given
+        ReactorMongoEventStore eventStore = storeWith(new EventStoreConfig.Builder().eventStoreCapabilities(STREAM, DCB));
+        DomainEventQueries<DomainEvent> queriesWithPosition = domainEventQueriesFor(eventStore);
+        ApplicationService<DomainEvent> applicationServiceWithPosition = applicationServiceFor(eventStore);
+
+        LocalDateTime time = LocalDateTime.now();
+        applicationServiceWithPosition.execute("stream1", toStreamCommand(partial(Name::defineName, "eventId1", time, "name", "Some Doe"))).block();
+        applicationServiceWithPosition.execute("stream1", toStreamCommand(partial(Name::changeName, "eventId2", time, "name", "Jane Doe"))).block();
+        applicationServiceWithPosition.execute("stream1", toStreamCommand(partial(Name::changeName, "eventId3", time, "name", "Jane Doe2"))).block();
+
+        // When
+        List<DomainEvent> events = queriesWithPosition.readInPositionOrder(org.occurrent.filter.Filter.all(), PositionRange.between(1, 2)).collectList().block();
+
+        // Then
+        assertAll(
+                () -> assertThat(events).hasSize(1),
+                () -> assertThat(events).extracting(DomainEvent::eventId).containsExactly("eventId2")
+        );
+    }
+
+    @Test
+    void afterPosition_emits_an_error_when_the_underlying_event_store_does_not_write_a_position() {
+        // domainEventQueries (from @BeforeEach) is backed by a STREAM-only store, which does not write a position.
+
+        // When / Then
+        StepVerifier.create(domainEventQueries.afterPosition(0))
+                .expectError(UnsupportedOperationException.class)
+                .verify();
+    }
+
+    @Test
+    void readInPositionOrder_emits_an_error_when_the_underlying_event_store_does_not_write_a_position() {
+        // When / Then
+        StepVerifier.create(domainEventQueries.readInPositionOrder(org.occurrent.filter.Filter.all(), PositionRange.fromBeginning()))
+                .expectError(UnsupportedOperationException.class)
+                .verify();
+    }
+
+    @Test
+    void currentPosition_emits_an_error_when_the_underlying_event_store_does_not_write_a_position() {
+        // When / Then
+        StepVerifier.create(domainEventQueries.currentPosition())
+                .expectError(UnsupportedOperationException.class)
+                .verify();
     }
 }

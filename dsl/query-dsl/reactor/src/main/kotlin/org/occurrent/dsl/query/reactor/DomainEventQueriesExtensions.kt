@@ -16,6 +16,7 @@
 
 package org.occurrent.dsl.query.reactor
 
+import org.occurrent.eventstore.api.PositionRange
 import org.occurrent.eventstore.api.SortBy
 import org.occurrent.filter.Filter
 import reactor.core.publisher.Flux
@@ -100,3 +101,21 @@ fun <T : Any> DomainEventQueries<in T>.queryForList(
     query<T>(filter, skip, limit, sortBy)
         .map { it as T }
         .collectList()
+
+/**
+ * Reads domain events strictly after the global sequence [position], collected into a [Mono] of a [List], in
+ * ascending position order.
+ * @see DomainEventQueries.afterPosition
+ */
+fun <T : Any> DomainEventQueries<T>.afterPositionForList(position: Long): Mono<List<T>> =
+    afterPosition(position).collectList()
+
+/**
+ * Reads domain events matching [filter] within [range], collected into a [Mono] of a [List], in ascending position
+ * order.
+ * @see DomainEventQueries.readInPositionOrder
+ */
+fun <T : Any> DomainEventQueries<T>.readInPositionOrderForList(
+    filter: Filter = Filter.all(),
+    range: PositionRange
+): Mono<List<T>> = readInPositionOrder(filter, range).collectList()

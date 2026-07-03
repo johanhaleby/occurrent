@@ -284,4 +284,75 @@ public class DomainEventQueriesTest {
         // Then
         assertThat(event).isEqualTo(new NameWasChanged("eventId3", time, "name", "Jane Doe2"));
     }
+
+    @Test
+    void afterPosition_returns_domain_events_strictly_after_the_given_position_in_ascending_position_order() {
+        // Given
+        LocalDateTime time = LocalDateTime.now();
+        InMemoryEventStore eventStore = new InMemoryEventStore().withStreamPosition();
+        CloudEventConverter<DomainEvent> cloudEventConverter = new JacksonCloudEventConverter.Builder<DomainEvent>(new ObjectMapper(), URI.create("urn:test")).idMapper(DomainEvent::eventId).build();
+        ApplicationService<DomainEvent> applicationServiceWithPosition = new GenericApplicationService<>(eventStore, cloudEventConverter);
+        DomainEventQueries<DomainEvent> queriesWithPosition = new DomainEventQueries<>(eventStore, cloudEventConverter);
+
+        applicationServiceWithPosition.execute("stream1", toStreamCommand(partial(Name::defineName, "eventId1", time, "name", "Some Doe")));
+        applicationServiceWithPosition.execute("stream1", toStreamCommand(partial(Name::changeName, "eventId2", time, "name", "Jane Doe")));
+        applicationServiceWithPosition.execute("stream1", toStreamCommand(partial(Name::changeName, "eventId3", time, "name", "Jane Doe2")));
+
+        // When
+        List<DomainEvent> events = queriesWithPosition.afterPosition(1).collect(Collectors.toList());
+
+        // Then
+        assertAll(
+                () -> assertThat(events).hasSize(2),
+                () -> assertThat(events).extracting(DomainEvent::eventId).containsExactly("eventId2", "eventId3")
+        );
+    }
+
+    @Test
+    void readInPositionOrder_returns_domain_events_matching_the_filter_within_the_given_range_in_ascending_position_order() {
+        // Given
+        LocalDateTime time = LocalDateTime.now();
+        InMemoryEventStore eventStore = new InMemoryEventStore().withStreamPosition();
+        CloudEventConverter<DomainEvent> cloudEventConverter = new JacksonCloudEventConverter.Builder<DomainEvent>(new ObjectMapper(), URI.create("urn:test")).idMapper(DomainEvent::eventId).build();
+        ApplicationService<DomainEvent> applicationServiceWithPosition = new GenericApplicationService<>(eventStore, cloudEventConverter);
+        DomainEventQueries<DomainEvent> queriesWithPosition = new DomainEventQueries<>(eventStore, cloudEventConverter);
+
+        applicationServiceWithPosition.execute("stream1", toStreamCommand(partial(Name::defineName, "eventId1", time, "name", "Some Doe")));
+        applicationServiceWithPosition.execute("stream1", toStreamCommand(partial(Name::changeName, "eventId2", time, "name", "Jane Doe")));
+        applicationServiceWithPosition.execute("stream1", toStreamCommand(partial(Name::changeName, "eventId3", time, "name", "Jane Doe2")));
+
+        // When
+        List<DomainEvent> events = queriesWithPosition.readInPositionOrder(Filter.all(), org.occurrent.eventstore.api.PositionRange.between(1, 2))
+                .collect(Collectors.toList());
+
+        // Then
+        assertAll(
+                () -> assertThat(events).hasSize(1),
+                () -> assertThat(events).extracting(DomainEvent::eventId).containsExactly("eventId2")
+        );
+    }
+
+    @Test
+    void afterPosition_throws_when_the_underlying_event_store_does_not_write_a_position() {
+        // domainEventQueries (from @BeforeEach) is backed by a default InMemoryEventStore, which does not write a
+        // position unless withStreamPosition() is used.
+
+        // When / Then
+        org.assertj.core.api.Assertions.assertThatThrownBy(() -> domainEventQueries.afterPosition(0))
+                .isInstanceOf(UnsupportedOperationException.class);
+    }
+
+    @Test
+    void readInPositionOrder_throws_when_the_underlying_event_store_does_not_write_a_position() {
+        // When / Then
+        org.assertj.core.api.Assertions.assertThatThrownBy(() -> domainEventQueries.readInPositionOrder(Filter.all(), org.occurrent.eventstore.api.PositionRange.fromBeginning()))
+                .isInstanceOf(UnsupportedOperationException.class);
+    }
+
+    @Test
+    void currentPosition_throws_when_the_underlying_event_store_does_not_write_a_position() {
+        // When / Then
+        org.assertj.core.api.Assertions.assertThatThrownBy(domainEventQueries::currentPosition)
+                .isInstanceOf(UnsupportedOperationException.class);
+    }
 }

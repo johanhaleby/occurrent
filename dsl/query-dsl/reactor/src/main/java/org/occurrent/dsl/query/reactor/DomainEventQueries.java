@@ -20,8 +20,10 @@ import io.cloudevents.CloudEvent;
 import org.jspecify.annotations.NullMarked;
 import org.jspecify.annotations.Nullable;
 import org.occurrent.application.converter.CloudEventConverter;
+import org.occurrent.eventstore.api.PositionRange;
 import org.occurrent.eventstore.api.SortBy;
 import org.occurrent.eventstore.api.reactor.EventStoreQueries;
+import org.occurrent.eventstore.api.reactor.PositionOrderedReader;
 import org.occurrent.filter.Filter;
 import reactor.core.publisher.Flux;
 import reactor.core.publisher.Mono;
@@ -317,6 +319,57 @@ public class DomainEventQueries<T> {
      */
     public <E extends T> Flux<E> query(Filter filter) {
         return toDomainEvents(eventStoreQueries.query(filter));
+    }
+
+    // ------------------------------------------------------------------------------------------------------
+    // Position-ordered reads
+    // ------------------------------------------------------------------------------------------------------
+
+    /**
+     * Reads domain events strictly after the global sequence {@code position}, in ascending position order.
+     * Equivalent to {@code readInPositionOrder(Filter.all(), PositionRange.afterPosition(position))}.
+     *
+     * @return a {@link Flux} that emits an {@link UnsupportedOperationException} if the underlying event store does
+     * not write a position, i.e. {@code eventStoreQueries()} does not implement {@link PositionOrderedReader} or is
+     * backed by a store where {@code writesPosition()} is {@code false}.
+     * @see PositionOrderedReader#readInPositionOrder(Filter, PositionRange)
+     */
+    public Flux<T> afterPosition(long position) {
+        return readInPositionOrder(Filter.all(), PositionRange.afterPosition(position));
+    }
+
+    /**
+     * Reads domain events matching {@code filter} within {@code range}, in ascending position order.
+     *
+     * @return a {@link Flux} that emits an {@link UnsupportedOperationException} if the underlying event store does
+     * not write a position, i.e. {@code eventStoreQueries()} does not implement {@link PositionOrderedReader} or is
+     * backed by a store where {@code writesPosition()} is {@code false}.
+     * @see PositionOrderedReader#readInPositionOrder(Filter, PositionRange)
+     */
+    public Flux<T> readInPositionOrder(Filter filter, PositionRange range) {
+        Objects.requireNonNull(filter, "Filter cannot be null");
+        Objects.requireNonNull(range, "Range cannot be null");
+        return requirePositionOrderedReader().flatMapMany(reader -> toDomainEvents(reader.readInPositionOrder(filter, range)));
+    }
+
+    /**
+     * The store's current position high-watermark, i.e. the position of the most recently positioned event.
+     * Emits {@code 0} when no positioned event has been written yet.
+     *
+     * @return a {@link Mono} that emits an {@link UnsupportedOperationException} if the underlying event store does
+     * not write a position.
+     * @see PositionOrderedReader#currentPosition()
+     */
+    public Mono<Long> currentPosition() {
+        return requirePositionOrderedReader().flatMap(PositionOrderedReader::currentPosition);
+    }
+
+    private Mono<PositionOrderedReader> requirePositionOrderedReader() {
+        if (!(eventStoreQueries instanceof PositionOrderedReader positionOrderedReader)) {
+            return Mono.error(new UnsupportedOperationException("This event store does not write a position. Position-ordered reads require the underlying event store to implement "
+                    + PositionOrderedReader.class.getSimpleName() + ", but was " + eventStoreQueries.getClass().getName()));
+        }
+        return Mono.just(positionOrderedReader);
     }
 
     /**
