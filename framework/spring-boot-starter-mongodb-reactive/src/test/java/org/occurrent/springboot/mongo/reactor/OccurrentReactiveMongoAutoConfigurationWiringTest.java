@@ -23,7 +23,9 @@ import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.Test;
 import org.occurrent.annotation.StreamSubscription;
 import org.occurrent.annotation.StreamSubscription.StartPosition;
+import org.occurrent.application.service.dcb.TagGenerator;
 import org.occurrent.application.service.reactor.ApplicationService;
+import org.occurrent.application.service.reactor.dcb.DcbApplicationService;
 import org.occurrent.dsl.dcb.reactor.DcbDomainEventQueries;
 import org.occurrent.dsl.dcb.reactor.DcbSubscriptions;
 import org.occurrent.dsl.query.reactor.DomainEventQueries;
@@ -32,6 +34,7 @@ import org.occurrent.eventstore.api.reactor.EventStore;
 import org.occurrent.eventstore.mongodb.spring.reactor.ReactorMongoEventStore;
 import org.occurrent.subscription.api.reactor.Subscribable;
 import org.occurrent.subscription.reactor.durable.ReactorDurableSubscriptionModel;
+import org.springframework.beans.factory.NoSuchBeanDefinitionException;
 import org.springframework.boot.autoconfigure.AutoConfigurations;
 import org.springframework.boot.test.context.runner.ApplicationContextRunner;
 import org.springframework.context.annotation.Bean;
@@ -46,9 +49,11 @@ import reactor.core.publisher.Mono;
 
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Set;
 
 import static java.util.Objects.requireNonNull;
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.Mockito.mock;
 
 @Testcontainers
@@ -107,6 +112,47 @@ class OccurrentReactiveMongoAutoConfigurationWiringTest {
             assertThat(context).hasSingleBean(DcbSubscriptions.class);
             assertThat(context).hasSingleBean(DcbDomainEventQueries.class);
         });
+    }
+
+    @Test
+    void dcb_capability_auto_configures_dcb_application_service_when_tag_generator_exists() {
+        contextRunner()
+                .withPropertyValues("occurrent.event-store.capabilities=dcb")
+                .withBean(TagGenerator.class, () -> tagsForTestEvent())
+                .run(context -> {
+                    assertThat(context).hasNotFailed();
+                    assertThat(context).hasSingleBean(DcbApplicationService.class);
+                });
+    }
+
+    @Test
+    void dcb_capability_does_not_auto_configure_dcb_application_service_without_tag_generator() {
+        contextRunner()
+                .withPropertyValues("occurrent.event-store.capabilities=dcb")
+                .run(context -> {
+                    assertThat(context).hasNotFailed();
+                    // The DcbApplicationService bean method returns null here (see DcbApplicationServiceDiagnostics),
+                    // so doesNotHaveBean would wrongly report it present; assert the real by-type resolution instead.
+                    assertThatThrownBy(() -> context.getBean(DcbApplicationService.class)).isInstanceOf(NoSuchBeanDefinitionException.class);
+                });
+    }
+
+    @Test
+    void custom_dcb_application_service_is_not_replaced() {
+        DcbApplicationService customApplicationService = mock(DcbApplicationService.class);
+
+        contextRunner()
+                .withPropertyValues("occurrent.event-store.capabilities=dcb")
+                .withBean(TagGenerator.class, () -> tagsForTestEvent())
+                .withBean(DcbApplicationService.class, () -> customApplicationService)
+                .run(context -> {
+                    assertThat(context).hasNotFailed();
+                    assertThat(context.getBean(DcbApplicationService.class)).isSameAs(customApplicationService);
+                });
+    }
+
+    private static TagGenerator<TestEvent> tagsForTestEvent() {
+        return event -> Set.of(event.eventId());
     }
 
     @Test

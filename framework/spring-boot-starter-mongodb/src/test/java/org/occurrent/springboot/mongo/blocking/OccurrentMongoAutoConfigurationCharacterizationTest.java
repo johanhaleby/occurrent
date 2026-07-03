@@ -36,6 +36,7 @@ import org.occurrent.subscription.api.blocking.DelegatingSubscriptionModel;
 import org.occurrent.subscription.api.blocking.SubscriptionModel;
 import org.occurrent.subscription.blocking.durable.DurableSubscriptionModel;
 import org.occurrent.subscription.blocking.durable.catchup.CatchupSubscriptionModel;
+import org.springframework.beans.factory.NoSuchBeanDefinitionException;
 import org.springframework.boot.autoconfigure.AutoConfigurations;
 import org.springframework.boot.test.context.runner.ApplicationContextRunner;
 import org.springframework.context.annotation.Bean;
@@ -49,6 +50,7 @@ import java.util.Set;
 import java.util.UUID;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.Mockito.mock;
 
 class OccurrentMongoAutoConfigurationCharacterizationTest {
@@ -224,7 +226,9 @@ class OccurrentMongoAutoConfigurationCharacterizationTest {
                 .withPropertyValues("occurrent.event-store.capabilities=dcb")
                 .run(context -> {
                     assertThat(context).doesNotHaveBean(ApplicationService.class);
-                    assertThat(context).doesNotHaveBean(DcbApplicationService.class);
+                    // The DcbApplicationService bean method returns null here (see DcbApplicationServiceDiagnostics),
+                    // so doesNotHaveBean would wrongly report it present; assert the real by-type resolution instead.
+                    assertThatThrownBy(() -> context.getBean(DcbApplicationService.class)).isInstanceOf(NoSuchBeanDefinitionException.class);
                 });
     }
 
