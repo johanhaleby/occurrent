@@ -68,7 +68,7 @@ import static org.occurrent.inmemory.filtermatching.FilterMatcher.matchesFilter;
  * and/or demo purposes. It also supports the {@link EventStoreOperations} contract.
  */
 @NullMarked
-public class InMemoryEventStore implements EventStore, EventStoreOperations, EventStoreQueries, ReadEventStreamWithFilter, DcbEventStore {
+public class InMemoryEventStore implements EventStore, EventStoreOperations, EventStoreQueries, ReadEventStreamWithFilter, DcbEventStore, PositionOrderedReader {
 
     // We cannot use ConcurrentMap since it doesn't maintain insertion order
     private final Map<String, CopyOnWriteArrayList<CloudEvent>> state = Collections.synchronizedMap(new LinkedHashMap<>());
@@ -85,9 +85,11 @@ public class InMemoryEventStore implements EventStore, EventStoreOperations, Eve
 
     private final Consumer<Stream<CloudEvent>> listener;
     private final DcbStreamIdGenerator dcbStreamIdGenerator;
-    // Foundation: defaults to false so stream behavior is unchanged. InMemory has no capability set (it implements
-    // DCB unconditionally), so writesPosition() is always true regardless of this flag; the flag exists so the
-    // opt-out API surface is consistent across stores ahead of Wave 1 actually writing a position onto stream events.
+    // Whether stream-written events are stamped with the global position from the same counter DCB uses. Defaults to
+    // true (on) so stream and DCB events share one monotonic sequence out of the box; opt out with
+    // withoutStreamPosition() for a STREAM-only store that has no use for a global order (e.g. a per-stream
+    // projection store). InMemory implements DCB unconditionally, so writesPosition() is derived from this flag
+    // alone: DCB always contributes position, and there is no "DCB absent" state to consider here.
     private final boolean streamPositionEnabled;
 
     /**
@@ -120,7 +122,7 @@ public class InMemoryEventStore implements EventStore, EventStoreOperations, Eve
      * @param dcbStreamIdGenerator Derives the storage stream id for DCB appends from the events' DCB tags
      */
     public InMemoryEventStore(Consumer<Stream<CloudEvent>> listener, DcbStreamIdGenerator dcbStreamIdGenerator) {
-        this(listener, dcbStreamIdGenerator, false);
+        this(listener, dcbStreamIdGenerator, true);
     }
 
     private InMemoryEventStore(Consumer<Stream<CloudEvent>> listener, DcbStreamIdGenerator dcbStreamIdGenerator, boolean streamPositionEnabled) {
@@ -132,7 +134,8 @@ public class InMemoryEventStore implements EventStore, EventStoreOperations, Eve
     /**
      * Returns a copy of this store with the stream-scoped position opt-out set, i.e. stream-written events will not
      * carry a global position. This is only meaningful for a STREAM-only store; since {@link InMemoryEventStore}
-     * implements DCB unconditionally, {@link #writesPosition()} stays {@code true} regardless.
+     * implements DCB unconditionally, {@link #writesPosition()} on the returned copy is still driven by this flag
+     * because DCB events are the only ones guaranteed to carry a position.
      */
     public InMemoryEventStore withoutStreamPosition() {
         return new InMemoryEventStore(listener, dcbStreamIdGenerator, false);
@@ -140,10 +143,11 @@ public class InMemoryEventStore implements EventStore, EventStoreOperations, Eve
 
     /**
      * Returns whether this store carries a global position, i.e. whether position-requiring APIs are safe to call.
-     * {@link InMemoryEventStore} implements DCB unconditionally, so this is always {@code true} today.
+     * {@link InMemoryEventStore} implements DCB unconditionally (DCB always writes position), so this only reflects
+     * whether stream-written events are also stamped with a position; it does not gate the DCB read/write path.
      */
     public boolean writesPosition() {
-        return true;
+        return streamPositionEnabled;
     }
 
     private void requirePosition() {
@@ -164,28 +168,30 @@ public class InMemoryEventStore implements EventStore, EventStoreOperations, Eve
 
         final AtomicReference<@Nullable List<CloudEvent>> newCloudEvents = new AtomicReference<>();
         final AtomicLong currentStreamVersionContainer = new AtomicLong();
-        state.compute(streamId, (__, currentEvents) -> {
-            long currentStreamVersion = calculateStreamVersion(currentEvents);
-            currentStreamVersionContainer.set(currentStreamVersion);
+        synchronized (state) {
+            state.compute(streamId, (__, currentEvents) -> {
+                long currentStreamVersion = calculateStreamVersion(currentEvents);
+                currentStreamVersionContainer.set(currentStreamVersion);
 
-            if (currentEvents == null && isConditionFulfilledBy(writeCondition, 0)) {
-                List<CloudEvent> cloudEvents = applyOccurrentCloudEventExtension(cloudEventStream, streamId, 0);
-                newCloudEvents.set(cloudEvents);
-                validateNoDuplicateEventExists(cloudEvents);
-                assignInsertionOrder(cloudEvents);
-                return new CopyOnWriteArrayList<>(cloudEvents);
-            } else if (currentEvents != null && isConditionFulfilledBy(writeCondition, currentStreamVersion)) {
-                List<CloudEvent> eventList = new ArrayList<>(currentEvents);
-                List<CloudEvent> newEvents = applyOccurrentCloudEventExtension(cloudEventStream, streamId, currentStreamVersion);
-                eventList.addAll(newEvents);
-                validateNoDuplicateEventExists(eventList);
-                newCloudEvents.set(newEvents);
-                assignInsertionOrder(newEvents);
-                return new CopyOnWriteArrayList<>(eventList);
-            } else {
-                throw new WriteConditionNotFulfilledException(streamId, currentStreamVersion, writeCondition, String.format("%s was not fulfilled. Expected version %s but was %s.", WriteCondition.class.getSimpleName(), writeCondition, currentStreamVersion));
-            }
-        });
+                if (currentEvents == null && isConditionFulfilledBy(writeCondition, 0)) {
+                    List<CloudEvent> cloudEvents = applyStreamWriteExtensions(cloudEventStream, streamId, 0);
+                    newCloudEvents.set(cloudEvents);
+                    validateNoDuplicateEventExists(cloudEvents);
+                    assignInsertionOrder(cloudEvents);
+                    return new CopyOnWriteArrayList<>(cloudEvents);
+                } else if (currentEvents != null && isConditionFulfilledBy(writeCondition, currentStreamVersion)) {
+                    List<CloudEvent> eventList = new ArrayList<>(currentEvents);
+                    List<CloudEvent> newEvents = applyStreamWriteExtensions(cloudEventStream, streamId, currentStreamVersion);
+                    eventList.addAll(newEvents);
+                    validateNoDuplicateEventExists(eventList);
+                    newCloudEvents.set(newEvents);
+                    assignInsertionOrder(newEvents);
+                    return new CopyOnWriteArrayList<>(eventList);
+                } else {
+                    throw new WriteConditionNotFulfilledException(streamId, currentStreamVersion, writeCondition, String.format("%s was not fulfilled. Expected version %s but was %s.", WriteCondition.class.getSimpleName(), writeCondition, currentStreamVersion));
+                }
+            });
+        }
 
         final WriteResult writeResult;
         List<CloudEvent> addedEvents = newCloudEvents.get();
@@ -212,10 +218,21 @@ public class InMemoryEventStore implements EventStore, EventStoreOperations, Eve
         });
     }
 
-    private static List<CloudEvent> applyOccurrentCloudEventExtension(Stream<CloudEvent> events, String streamId, long streamVersion) {
-        return zip(LongStream.iterate(streamVersion + 1, i -> i + 1).boxed(), events, Pair::new)
+    // Must be called from inside the "state.compute" critical section (see write(...)) so that, when stream position
+    // is enabled, the positions handed out here are reserved from the same nextPosition counter DCB uses, under the
+    // same lock DCB appends use, keeping the two write paths on one shared monotonic sequence.
+    private List<CloudEvent> applyStreamWriteExtensions(Stream<CloudEvent> events, String streamId, long streamVersion) {
+        List<CloudEvent> withStreamMetadata = zip(LongStream.iterate(streamVersion + 1, i -> i + 1).boxed(), events, Pair::new)
                 .map(pair -> modifyCloudEvent(e -> e.withExtension(new OccurrentCloudEventExtension(streamId, pair.t1))).apply(pair.t2))
                 .collect(Collectors.toList());
+        if (!streamPositionEnabled || withStreamMetadata.isEmpty()) {
+            return withStreamMetadata;
+        }
+        List<CloudEvent> withPosition = new ArrayList<>(withStreamMetadata.size());
+        for (CloudEvent event : withStreamMetadata) {
+            withPosition.add(OccurrentCloudEventExtension.withPosition(event, nextPosition.getAndIncrement()));
+        }
+        return withPosition;
     }
 
     // Must be called from inside the "state.compute" critical section so that sequence numbers reflect the
@@ -345,6 +362,34 @@ public class InMemoryEventStore implements EventStore, EventStoreOperations, Eve
 
         listener.accept(addedEvents.stream());
         return result;
+    }
+
+    @Override
+    public Stream<CloudEvent> readInPositionOrder(Filter filter, PositionRange range) {
+        requireNonNull(filter, "Filter cannot be null");
+        requireNonNull(range, "Range cannot be null");
+        requirePosition();
+
+        synchronized (state) {
+            long highWatermark = nextPosition.get() - 1;
+            long afterPosition = range.afterPosition().orElse(0);
+            long upToPosition = Math.min(highWatermark, range.upToPosition().orElse(highWatermark));
+            return allEvents()
+                    .filter(event -> position(event) > afterPosition)
+                    .filter(event -> position(event) <= upToPosition)
+                    .filter(event -> matchesFilter(event, filter))
+                    .sorted(Comparator.comparingLong(InMemoryEventStore::position))
+                    .toList()
+                    .stream();
+        }
+    }
+
+    @Override
+    public long currentPosition() {
+        requirePosition();
+        synchronized (state) {
+            return nextPosition.get() - 1;
+        }
     }
 
     private Stream<CloudEvent> allEvents() {
