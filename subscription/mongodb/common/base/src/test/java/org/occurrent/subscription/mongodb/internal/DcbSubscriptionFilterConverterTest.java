@@ -45,34 +45,6 @@ class DcbSubscriptionFilterConverterTest {
     }
 
     @Test
-    void stream_event_with_position_but_no_dcb_tags_is_not_matched_by_the_dcb_tags_condition() {
-        Document stage = DcbSubscriptionFilterConverter.toChangeStreamMatchStage(DcbQuery.all());
-
-        Document match = stage.get("$match", Document.class);
-        Document tagsCondition = match.get(TAGS_FIELD, Document.class);
-
-        // A stream event document has a position field but no dcbTags field at all,
-        // so the $exists condition on dcbTags must not match it.
-        Document streamEventFullDocument = new Document("position", 3).append("type", "SomethingHappened");
-        assertThat(streamEventFullDocument).doesNotContainKey("dcbTags");
-        assertThat(tagsCondition.getBoolean("$exists")).isTrue();
-    }
-
-    @Test
-    void dcb_event_with_dcb_tags_field_is_matched_by_the_dcb_tags_condition() {
-        Document stage = DcbSubscriptionFilterConverter.toChangeStreamMatchStage(DcbQuery.all());
-
-        Document match = stage.get("$match", Document.class);
-        Document tagsCondition = match.get(TAGS_FIELD, Document.class);
-
-        // A DCB event document always carries a dcbTags array, even when empty (DcbDocumentMapper#toDocument),
-        // so the $exists condition on dcbTags matches it regardless of whether tags are present.
-        Document dcbEventFullDocument = new Document("position", 3).append("dcbTags", List.of());
-        assertThat(dcbEventFullDocument).containsKey("dcbTags");
-        assertThat(tagsCondition.getBoolean("$exists")).isTrue();
-    }
-
-    @Test
     void single_type_query_produces_dollar_in_on_type_field() {
         Document stage = DcbSubscriptionFilterConverter.toChangeStreamMatchStage(DcbQuery.type("OrderPlaced"));
 

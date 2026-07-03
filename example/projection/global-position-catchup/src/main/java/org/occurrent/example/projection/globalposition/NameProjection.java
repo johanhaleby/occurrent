@@ -18,10 +18,10 @@ package org.occurrent.example.projection.globalposition;
 
 import org.occurrent.domain.DomainEvent;
 
-import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.CopyOnWriteArrayList;
 
 /**
  * A minimal read model that is rebuilt by replaying domain events in global position order, regardless of which
@@ -34,7 +34,7 @@ import java.util.concurrent.ConcurrentHashMap;
 public class NameProjection {
 
     private final Map<String, String> currentNameByPersonId = new ConcurrentHashMap<>();
-    private final List<String> appliedInOrder = new ArrayList<>();
+    private final List<String> appliedInOrder = new CopyOnWriteArrayList<>();
 
     public void apply(DomainEvent event) {
         currentNameByPersonId.put(event.userId(), event.name());
