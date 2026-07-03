@@ -42,7 +42,6 @@ import java.util.function.Supplier;
 import java.util.stream.Stream;
 
 import static org.occurrent.inmemory.filtermatching.FilterMatcher.matchesFilter;
-import org.occurrent.cloudevents.OccurrentCloudEventExtension;
 
 /**
  * An in-memory subscription model
