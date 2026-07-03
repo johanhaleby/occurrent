@@ -27,6 +27,7 @@
     <modules>
         <module>durable-subscription</module>
         <module>dcb-catchup-subscription</module>
+        <module>stream-catchup-subscription</module>
     </modules>
     <artifactId>subscription-util-reactor</artifactId>
 
