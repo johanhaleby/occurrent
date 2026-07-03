@@ -40,7 +40,7 @@ public record DcbReadOptions(PositionRange positionRange) {
      * Optional exclusive lower bound; when present, only events with a DCB sequence position strictly greater than
      * this value are returned.
      */
-    public OptionalLong afterSequencePosition() {
+    public OptionalLong afterPosition() {
         return positionRange.afterPosition();
     }
 
@@ -48,7 +48,7 @@ public record DcbReadOptions(PositionRange positionRange) {
      * Optional inclusive upper bound; when present, only events with a DCB sequence position less than or equal to
      * this value are returned. When absent, the read includes everything up to the store's DCB head at read time.
      */
-    public OptionalLong upToSequencePosition() {
+    public OptionalLong upToPosition() {
         return positionRange.upToPosition();
     }
 
@@ -62,21 +62,21 @@ public record DcbReadOptions(PositionRange positionRange) {
     /**
      * Reads only events after the supplied DCB sequence position (exclusive).
      */
-    public static DcbReadOptions afterSequencePosition(long position) {
+    public static DcbReadOptions afterPosition(long position) {
         return new DcbReadOptions(PositionRange.afterPosition(position));
     }
 
     /**
      * Reads from the beginning up to and including the supplied DCB sequence position.
      */
-    public static DcbReadOptions upToSequencePosition(long position) {
+    public static DcbReadOptions upToPosition(long position) {
         return new DcbReadOptions(PositionRange.upToPosition(position));
     }
 
     /**
-     * Reads events after {@code afterSequencePosition} (exclusive) and up to and including {@code upToSequencePosition}.
+     * Reads events after {@code afterPosition} (exclusive) and up to and including {@code upToPosition}.
      */
-    public static DcbReadOptions between(long afterSequencePosition, long upToSequencePosition) {
-        return new DcbReadOptions(PositionRange.between(afterSequencePosition, upToSequencePosition));
+    public static DcbReadOptions between(long afterPosition, long upToPosition) {
+        return new DcbReadOptions(PositionRange.between(afterPosition, upToPosition));
     }
 }

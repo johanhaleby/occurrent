@@ -130,7 +130,7 @@ class ReactorMongoEventStoreDcbTest {
 
         DcbEventStream stream = requireNonNull(eventStore.read(
                 anyOf(List.of(types(List.of("OrderPlaced")), tags(List.of("name:1", "tenant:1")))),
-                DcbReadOptions.afterSequencePosition(1)).block());
+                DcbReadOptions.afterPosition(1)).block());
 
         assertAll(
                 () -> assertThat(stream.events()).extracting(CloudEvent::getType).containsExactly("NameChanged", "OrderPlaced"),

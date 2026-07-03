@@ -226,8 +226,8 @@ public class SpringMongoEventStore implements EventStore, EventStoreOperations, 
         // false conflict that retries) rather than miss the conflict.
         long consistencyTokenValue = consistencyToken(query);
         long highWatermark = currentPosition();
-        long upperBound = Math.min(highWatermark, options.upToSequencePosition().orElse(highWatermark));
-        Query mongoQuery = toDcbMongoQuery(query, options.afterSequencePosition().orElse(0), upperBound);
+        long upperBound = Math.min(highWatermark, options.upToPosition().orElse(highWatermark));
+        Query mongoQuery = toDcbMongoQuery(query, options.afterPosition().orElse(0), upperBound);
         mongoQuery.with(Sort.by(Sort.Direction.ASC, OccurrentCloudEventExtension.POSITION));
         List<CloudEvent> events = mongoTemplate.find(queryOptions.apply(mongoQuery), Document.class, eventStoreCollectionName).stream()
                 .map(document -> DcbDocumentMapper.toCloudEvent(timeRepresentation, document))
@@ -265,12 +265,12 @@ public class SpringMongoEventStore implements EventStore, EventStoreOperations, 
     }
 
     private long lowerBound(DcbReadOptions options) {
-        return options.afterSequencePosition().orElse(0);
+        return options.afterPosition().orElse(0);
     }
 
     private long upperBound(DcbReadOptions options) {
         long highWatermark = currentPosition();
-        return Math.min(highWatermark, options.upToSequencePosition().orElse(highWatermark));
+        return Math.min(highWatermark, options.upToPosition().orElse(highWatermark));
     }
 
     @Override
@@ -697,8 +697,8 @@ public class SpringMongoEventStore implements EventStore, EventStoreOperations, 
         return Query.query(streamIdEqualToCriteria(streamId));
     }
 
-    private static Query toDcbMongoQuery(DcbQuery query, long afterSequencePosition, long upperSequencePosition) {
-        Criteria positionCriteria = where(OccurrentCloudEventExtension.POSITION).gt(afterSequencePosition).lte(upperSequencePosition);
+    private static Query toDcbMongoQuery(DcbQuery query, long afterPosition, long upperSequencePosition) {
+        Criteria positionCriteria = where(OccurrentCloudEventExtension.POSITION).gt(afterPosition).lte(upperSequencePosition);
         if (query instanceof DcbQuery.MatchAll) {
             return new Query(positionCriteria);
         }

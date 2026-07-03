@@ -159,7 +159,7 @@ class DcbApiTest {
 
     @Test
     void read_options_and_append_conditions_reject_negative_sequence_positions() {
-        assertThatThrownBy(() -> DcbReadOptions.afterSequencePosition(-1))
+        assertThatThrownBy(() -> DcbReadOptions.afterPosition(-1))
                 .isExactlyInstanceOf(IllegalArgumentException.class)
                 .hasMessage("After position cannot be negative");
         assertThatThrownBy(() -> DcbAppendCondition.failIfEventsMatch(DcbQuery.all(), DcbConsistencyToken.of(-1)))

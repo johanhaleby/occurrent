@@ -79,7 +79,7 @@ class DcbDslKotlinTest {
 
         assertThat(dcbQueries.queryForSequence(DcbQuery.tags("name:1")).toList()).containsExactly(nameDefined, nameWasChanged)
         assertThat(dcbQueries.queryForList(DcbQuery.types(NameDefined::class.qualifiedName!!))).containsExactly(nameDefined)
-        assertThat(dcbQueries.queryForList(DcbQuery.tags("name:1"), DcbReadOptions.afterSequencePosition(1))).containsExactly(nameWasChanged)
+        assertThat(dcbQueries.queryForList(DcbQuery.tags("name:1"), DcbReadOptions.afterPosition(1))).containsExactly(nameWasChanged)
     }
 
     @Test

@@ -115,7 +115,7 @@ class SpringMongoEventStoreDcbTest {
                 anyOf(List.of(
                         DcbQuery.types(List.of("OrderPlaced")),
                         DcbQuery.tags(List.of("name:1", "tenant:1")))),
-                DcbReadOptions.afterSequencePosition(1));
+                DcbReadOptions.afterPosition(1));
 
         assertThat(eventStream.events())
                 .extracting(CloudEvent::getType)
@@ -220,13 +220,13 @@ class SpringMongoEventStoreDcbTest {
         eventStore.append(List.of(taggedEvent("E", "t")));   // position 3
 
         assertThat(eventStore.count(tags("t"))).isEqualTo(3);
-        assertThat(eventStore.count(tags("t"), DcbReadOptions.afterSequencePosition(1))).isEqualTo(2);
-        assertThat(eventStore.count(tags("t"), DcbReadOptions.upToSequencePosition(2))).isEqualTo(2);
+        assertThat(eventStore.count(tags("t"), DcbReadOptions.afterPosition(1))).isEqualTo(2);
+        assertThat(eventStore.count(tags("t"), DcbReadOptions.upToPosition(2))).isEqualTo(2);
         assertThat(eventStore.count(tags("t"), DcbReadOptions.between(1, 2))).isEqualTo(1);
 
         assertThat(eventStore.exists(tags("t"))).isTrue();
         assertThat(eventStore.exists(tags("t"), DcbReadOptions.between(2, 3))).isTrue();
-        assertThat(eventStore.exists(tags("t"), DcbReadOptions.afterSequencePosition(3))).isFalse();
+        assertThat(eventStore.exists(tags("t"), DcbReadOptions.afterPosition(3))).isFalse();
         assertThat(eventStore.exists(tags("missing"))).isFalse();
     }
 
@@ -351,7 +351,7 @@ class SpringMongoEventStoreDcbTest {
                 taggedEvent("NameChanged", "name:1"),
                 taggedEvent("OrderPlaced", "name:1")));
 
-        DcbEventStream upToTwo = eventStore.read(tags("name:1"), DcbReadOptions.upToSequencePosition(2));
+        DcbEventStream upToTwo = eventStore.read(tags("name:1"), DcbReadOptions.upToPosition(2));
 
         assertThat(upToTwo.events()).extracting(CloudEvent::getType).containsExactly("NameDefined", "NameChanged");
         assertThat(upToTwo.lastSequencePosition()).isEqualTo(3);

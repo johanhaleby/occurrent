@@ -86,7 +86,7 @@ class DcbDomainEventQueriesTest {
         append("name:1", nameDefined);
         append("name:1", nameWasChanged);
 
-        List<DomainEvent> events = dcbQueries.query(DcbQuery.tags("name:1"), DcbReadOptions.afterSequencePosition(1)).toList();
+        List<DomainEvent> events = dcbQueries.query(DcbQuery.tags("name:1"), DcbReadOptions.afterPosition(1)).toList();
 
         assertThat(events).containsExactly(nameWasChanged);
     }

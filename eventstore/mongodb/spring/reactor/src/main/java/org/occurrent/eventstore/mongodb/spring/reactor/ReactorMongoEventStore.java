@@ -234,8 +234,8 @@ public class ReactorMongoEventStore implements EventStore, EventStoreOperations,
         // false conflict that retries) rather than miss the conflict.
         return consistencyToken(query).flatMap(token ->
                 currentPosition().flatMap(highWatermark -> {
-                    long upperBound = Math.min(highWatermark, options.upToSequencePosition().orElse(highWatermark));
-                    Query mongoQuery = toDcbMongoQuery(query, options.afterSequencePosition().orElse(0), upperBound);
+                    long upperBound = Math.min(highWatermark, options.upToPosition().orElse(highWatermark));
+                    Query mongoQuery = toDcbMongoQuery(query, options.afterPosition().orElse(0), upperBound);
                     mongoQuery.with(Sort.by(Sort.Direction.ASC, OccurrentCloudEventExtension.POSITION));
                     return mongoTemplate.find(queryOptions.apply(mongoQuery), Document.class, eventStoreCollectionName)
                             .map(document -> DcbDocumentMapper.toCloudEvent(timeRepresentation, document))
@@ -252,8 +252,8 @@ public class ReactorMongoEventStore implements EventStore, EventStoreOperations,
         requireNonNull(query, "Query cannot be null");
         requireNonNull(options, "Read options cannot be null");
         return currentPosition().flatMap(highWatermark -> {
-            long upperBound = Math.min(highWatermark, options.upToSequencePosition().orElse(highWatermark));
-            return mongoTemplate.exists(queryOptions.apply(toDcbMongoQuery(query, options.afterSequencePosition().orElse(0), upperBound)), eventStoreCollectionName);
+            long upperBound = Math.min(highWatermark, options.upToPosition().orElse(highWatermark));
+            return mongoTemplate.exists(queryOptions.apply(toDcbMongoQuery(query, options.afterPosition().orElse(0), upperBound)), eventStoreCollectionName);
         });
     }
 
@@ -265,8 +265,8 @@ public class ReactorMongoEventStore implements EventStore, EventStoreOperations,
         requireNonNull(query, "Query cannot be null");
         requireNonNull(options, "Read options cannot be null");
         return currentPosition().flatMap(highWatermark -> {
-            long upperBound = Math.min(highWatermark, options.upToSequencePosition().orElse(highWatermark));
-            return mongoTemplate.count(queryOptions.apply(toDcbMongoQuery(query, options.afterSequencePosition().orElse(0), upperBound)), eventStoreCollectionName);
+            long upperBound = Math.min(highWatermark, options.upToPosition().orElse(highWatermark));
+            return mongoTemplate.count(queryOptions.apply(toDcbMongoQuery(query, options.afterPosition().orElse(0), upperBound)), eventStoreCollectionName);
         });
     }
 
@@ -525,8 +525,8 @@ public class ReactorMongoEventStore implements EventStore, EventStoreOperations,
         return null;
     }
 
-    private static Query toDcbMongoQuery(DcbQuery query, long afterSequencePosition, long upperSequencePosition) {
-        Criteria positionCriteria = where(OccurrentCloudEventExtension.POSITION).gt(afterSequencePosition).lte(upperSequencePosition);
+    private static Query toDcbMongoQuery(DcbQuery query, long afterPosition, long upperSequencePosition) {
+        Criteria positionCriteria = where(OccurrentCloudEventExtension.POSITION).gt(afterPosition).lte(upperSequencePosition);
         if (query instanceof DcbQuery.MatchAll) {
             return new Query(positionCriteria);
         }

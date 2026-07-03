@@ -246,7 +246,7 @@ class ReactorDcbCatchupSubscriptionModelMongoTest {
 
         @Override
         public Mono<DcbEventStream> read(DcbQuery query, DcbReadOptions options) {
-            boolean isHeadProbe = options.afterSequencePosition().orElse(0) == options.upToSequencePosition().orElse(0);
+            boolean isHeadProbe = options.afterPosition().orElse(0) == options.upToPosition().orElse(0);
             if (!isHeadProbe && windowDelayed.compareAndSet(false, true)) {
                 return Mono.defer(() -> {
                     firstReadStarted.set(true);

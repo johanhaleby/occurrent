@@ -326,8 +326,8 @@ public class MongoEventStore implements EventStore, EventStoreOperations, EventS
         // false conflict that retries) rather than miss the conflict.
         long consistencyTokenValue = consistencyToken(null, query);
         long highWatermark = currentPosition();
-        long upperBound = Math.min(highWatermark, options.upToSequencePosition().orElse(highWatermark));
-        Bson mongoQuery = toDcbBsonQuery(query, options.afterSequencePosition().orElse(0), upperBound);
+        long upperBound = Math.min(highWatermark, options.upToPosition().orElse(highWatermark));
+        Bson mongoQuery = toDcbBsonQuery(query, options.afterPosition().orElse(0), upperBound);
         FindIterable<Document> documents = eventCollection.find(mongoQuery).sort(ascending(OccurrentCloudEventExtension.POSITION));
         List<CloudEvent> events = StreamSupport.stream(queryOptions.apply(documents).spliterator(), false)
                 .map(document -> DcbDocumentMapper.toCloudEvent(timeRepresentation, document))
@@ -393,12 +393,12 @@ public class MongoEventStore implements EventStore, EventStoreOperations, EventS
     }
 
     private long lowerBound(DcbReadOptions options) {
-        return options.afterSequencePosition().orElse(0);
+        return options.afterPosition().orElse(0);
     }
 
     private long upperBound(DcbReadOptions options) {
         long highWatermark = currentPosition();
-        return Math.min(highWatermark, options.upToSequencePosition().orElse(highWatermark));
+        return Math.min(highWatermark, options.upToPosition().orElse(highWatermark));
     }
 
     private DcbAppendResult appendDcb(List<CloudEvent> events, @Nullable DcbAppendCondition condition) {
@@ -831,8 +831,8 @@ public class MongoEventStore implements EventStore, EventStoreOperations, EventS
         return and(streamIdEqualTo(streamId), lte(STREAM_VERSION, version));
     }
 
-    private static Bson toDcbBsonQuery(DcbQuery query, long afterSequencePosition, long upperSequencePosition) {
-        Bson positionFilter = and(gt(OccurrentCloudEventExtension.POSITION, afterSequencePosition), lte(OccurrentCloudEventExtension.POSITION, upperSequencePosition));
+    private static Bson toDcbBsonQuery(DcbQuery query, long afterPosition, long upperSequencePosition) {
+        Bson positionFilter = and(gt(OccurrentCloudEventExtension.POSITION, afterPosition), lte(OccurrentCloudEventExtension.POSITION, upperSequencePosition));
         if (query instanceof DcbQuery.MatchAll) {
             return positionFilter;
         }

@@ -281,10 +281,10 @@ public class InMemoryEventStore implements EventStore, EventStoreOperations, Eve
 
         synchronized (state) {
             long highWatermark = nextPosition.get() - 1;
-            long afterSequencePosition = options.afterSequencePosition().orElse(0);
-            long upperBound = Math.min(highWatermark, options.upToSequencePosition().orElse(highWatermark));
+            long afterPosition = options.afterPosition().orElse(0);
+            long upperBound = Math.min(highWatermark, options.upToPosition().orElse(highWatermark));
             List<CloudEvent> matchingEvents = allEvents()
-                    .filter(event -> position(event) > afterSequencePosition)
+                    .filter(event -> position(event) > afterPosition)
                     .filter(event -> position(event) <= upperBound)
                     .filter(event -> DcbCloudEvents.matches(event, query))
                     .sorted(Comparator.comparingLong(InMemoryEventStore::position))
@@ -342,9 +342,9 @@ public class InMemoryEventStore implements EventStore, EventStoreOperations, Eve
             if (condition != null) {
                 // The in-memory store assigns positions and commits atomically under the lock, so its read head is a
                 // sound concurrency boundary: the token value is simply the position observed by the read.
-                long afterSequencePosition = condition.consistencyToken().map(DcbConsistencyToken::value).orElse(0L);
+                long afterPosition = condition.consistencyToken().map(DcbConsistencyToken::value).orElse(0L);
                 boolean fulfilled = allEvents()
-                        .filter(event -> position(event) > afterSequencePosition)
+                        .filter(event -> position(event) > afterPosition)
                         .noneMatch(event -> DcbCloudEvents.matches(event, condition.query()));
                 long currentPosition = nextPosition.get() - 1;
                 if (!fulfilled) {
