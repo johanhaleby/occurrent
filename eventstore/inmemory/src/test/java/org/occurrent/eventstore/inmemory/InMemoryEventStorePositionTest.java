@@ -49,7 +49,7 @@ class InMemoryEventStorePositionTest {
 
     @Test
     void stream_written_events_get_a_monotonic_position_shared_with_dcb_events() {
-        InMemoryEventStore eventStore = new InMemoryEventStore();
+        InMemoryEventStore eventStore = new InMemoryEventStore().withStreamPosition();
 
         eventStore.append(List.of(taggedEvent("DcbEvent1", "t")));                                     // position 1
         eventStore.write("stream1", WriteCondition.anyStreamVersion(), Stream.of(event("StreamEvent1"), event("StreamEvent2"))); // positions 2,3
@@ -63,7 +63,7 @@ class InMemoryEventStorePositionTest {
 
     @Test
     void position_ordered_reader_returns_events_in_position_order_within_the_requested_range() {
-        InMemoryEventStore eventStore = new InMemoryEventStore();
+        InMemoryEventStore eventStore = new InMemoryEventStore().withStreamPosition();
 
         eventStore.write("stream1", WriteCondition.anyStreamVersion(), Stream.of(event("A")));  // position 1
         eventStore.append(List.of(taggedEvent("B", "t")));                                      // position 2

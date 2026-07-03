@@ -1284,9 +1284,7 @@ public class InMemoryEventStoreTest {
             inMemoryEventStore.write("something", Stream.of(cloudEvent));
 
             // Then
-            // Stream position is enabled by default, so the written event is stamped with the next global position
-            // (this is the 4th event written across the two preceding streams).
-            CloudEvent expectedCloudEvent = withPosition(cloudEvent, 4L);
+            CloudEvent expectedCloudEvent = cloudEvent;
             Stream<CloudEvent> events = inMemoryEventStore.query(dataSchema(URI.create("urn:myschema")));
             assertThat(events).containsExactly(expectedCloudEvent);
         }
@@ -1316,9 +1314,7 @@ public class InMemoryEventStoreTest {
             inMemoryEventStore.write("something", Stream.of(cloudEvent));
 
             // Then
-            // Stream position is enabled by default, so the written event is stamped with the next global position
-            // (this is the 4th event written across the two preceding streams).
-            CloudEvent expectedCloudEvent = withPosition(cloudEvent, 4L);
+            CloudEvent expectedCloudEvent = cloudEvent;
             Stream<CloudEvent> events = inMemoryEventStore.query(dataContentType("text/plain"));
             assertThat(events).containsExactly(expectedCloudEvent);
         }

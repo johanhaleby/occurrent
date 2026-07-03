@@ -86,10 +86,9 @@ public class InMemoryEventStore implements EventStore, EventStoreOperations, Eve
     private final Consumer<Stream<CloudEvent>> listener;
     private final DcbStreamIdGenerator dcbStreamIdGenerator;
     // Whether stream-written events are stamped with the global position from the same counter DCB uses. Defaults to
-    // true (on) so stream and DCB events share one monotonic sequence out of the box; opt out with
-    // withoutStreamPosition() for a STREAM-only store that has no use for a global order (e.g. a per-stream
-    // projection store). InMemory implements DCB unconditionally, so writesPosition() is derived from this flag
-    // alone: DCB always contributes position, and there is no "DCB absent" state to consider here.
+    // false so stream events keep their pre-position behavior until the on-by-default flip lands; opt in with
+    // withStreamPosition() so stream and DCB events share one monotonic sequence. InMemory implements DCB
+    // unconditionally, so writesPosition() is derived from this flag alone.
     private final boolean streamPositionEnabled;
 
     /**
@@ -122,7 +121,7 @@ public class InMemoryEventStore implements EventStore, EventStoreOperations, Eve
      * @param dcbStreamIdGenerator Derives the storage stream id for DCB appends from the events' DCB tags
      */
     public InMemoryEventStore(Consumer<Stream<CloudEvent>> listener, DcbStreamIdGenerator dcbStreamIdGenerator) {
-        this(listener, dcbStreamIdGenerator, true);
+        this(listener, dcbStreamIdGenerator, false);
     }
 
     private InMemoryEventStore(Consumer<Stream<CloudEvent>> listener, DcbStreamIdGenerator dcbStreamIdGenerator, boolean streamPositionEnabled) {
@@ -139,6 +138,15 @@ public class InMemoryEventStore implements EventStore, EventStoreOperations, Eve
      */
     public InMemoryEventStore withoutStreamPosition() {
         return new InMemoryEventStore(listener, dcbStreamIdGenerator, false);
+    }
+
+    /**
+     * Returns a copy of this store with stream-scoped position enabled, i.e. stream-written events are stamped with the
+     * same global position DCB uses so both share one monotonic sequence. This is the explicit opt-in until the
+     * on-by-default flip lands.
+     */
+    public InMemoryEventStore withStreamPosition() {
+        return new InMemoryEventStore(listener, dcbStreamIdGenerator, true);
     }
 
     /**
