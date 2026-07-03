@@ -811,6 +811,7 @@ public class MongoEventStore implements EventStore, EventStoreOperations, EventS
     /**
      * Returns whether this store carries a global position, i.e. whether position-requiring APIs are safe to call.
      */
+    @Override
     public boolean writesPosition() {
         return eventStoreCapabilities.contains(DCB) || (eventStoreCapabilities.contains(STREAM) && streamPositionEnabled);
     }

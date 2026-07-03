@@ -154,6 +154,7 @@ public class InMemoryEventStore implements EventStore, EventStoreOperations, Eve
      * {@link InMemoryEventStore} implements DCB unconditionally (DCB always writes position), so this only reflects
      * whether stream-written events are also stamped with a position; it does not gate the DCB read/write path.
      */
+    @Override
     public boolean writesPosition() {
         return streamPositionEnabled;
     }
