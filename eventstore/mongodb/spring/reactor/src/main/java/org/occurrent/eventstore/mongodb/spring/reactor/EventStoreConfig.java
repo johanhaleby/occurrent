@@ -46,6 +46,9 @@ public class EventStoreConfig {
     private static final Set<EventStoreCapability> DEFAULT_EVENT_STORE_CAPABILITIES = Set.of(STREAM);
     // Foundation: kept off so stream behavior is unchanged. The eventual target is on-by-default (see the position plan).
     private static final boolean DEFAULT_STREAM_POSITION_ENABLED = false;
+    // Default WARN (not hard-fail) when writesPosition() is true but pre-existing events lack a position, so an
+    // upgrade does not crash a running deployment; the loud WARN plus the migration runbook is the mitigation.
+    private static final boolean DEFAULT_REQUIRE_BACKFILLED_POSITION = false;
 
     public final String eventStoreCollectionName;
     public final TransactionalOperator transactionalOperator;
@@ -56,6 +59,9 @@ public class EventStoreConfig {
     public final DcbStreamIdGenerator dcbStreamIdGenerator;
     // Foundation: defaults to false (streams keep writing no position) so behavior is unchanged. See withoutStreamPosition().
     public final boolean streamPositionEnabled;
+    // When true, escalates the un-backfilled-position startup guard from a WARN log to a hard failure. See
+    // Builder#requireBackfilledPosition().
+    public final boolean requireBackfilledPosition;
 
     /**
      * Create a new instance of {@code EventStoreConfig}.
@@ -65,10 +71,10 @@ public class EventStoreConfig {
      * @param timeRepresentation       How time should be represented in the database
      */
     public EventStoreConfig(String eventStoreCollectionName, TransactionalOperator transactionalOperator, TimeRepresentation timeRepresentation) {
-        this(eventStoreCollectionName, transactionalOperator, timeRepresentation, DEFAULT_QUERY_OPTIONS_FUNCTION, DEFAULT_READ_OPTIONS_FUNCTION, DEFAULT_EVENT_STORE_CAPABILITIES, new PartitionedDcbStreamIdGenerator(), DEFAULT_STREAM_POSITION_ENABLED, false);
+        this(eventStoreCollectionName, transactionalOperator, timeRepresentation, DEFAULT_QUERY_OPTIONS_FUNCTION, DEFAULT_READ_OPTIONS_FUNCTION, DEFAULT_EVENT_STORE_CAPABILITIES, new PartitionedDcbStreamIdGenerator(), DEFAULT_STREAM_POSITION_ENABLED, false, DEFAULT_REQUIRE_BACKFILLED_POSITION);
     }
 
-    private EventStoreConfig(String eventStoreCollectionName, TransactionalOperator transactionalOperator, TimeRepresentation timeRepresentation, Function<Query, Query> queryOptions, Function<Query, Query> readOptions, Set<EventStoreCapability> eventStoreCapabilities, DcbStreamIdGenerator dcbStreamIdGenerator, boolean streamPositionEnabled, boolean streamPositionOptedOut) {
+    private EventStoreConfig(String eventStoreCollectionName, TransactionalOperator transactionalOperator, TimeRepresentation timeRepresentation, Function<Query, Query> queryOptions, Function<Query, Query> readOptions, Set<EventStoreCapability> eventStoreCapabilities, DcbStreamIdGenerator dcbStreamIdGenerator, boolean streamPositionEnabled, boolean streamPositionOptedOut, boolean requireBackfilledPosition) {
         requireNonNull(eventStoreCollectionName, "Event store collection name cannot be null");
         requireNonNull(transactionalOperator, TransactionalOperator.class.getSimpleName() + " cannot be null");
         requireNonNull(timeRepresentation, TimeRepresentation.class.getSimpleName() + " cannot be null");
@@ -88,6 +94,7 @@ public class EventStoreConfig {
         this.eventStoreCapabilities = Set.copyOf(eventStoreCapabilities);
         this.dcbStreamIdGenerator = dcbStreamIdGenerator;
         this.streamPositionEnabled = streamPositionEnabled;
+        this.requireBackfilledPosition = requireBackfilledPosition;
     }
 
     /**
@@ -102,12 +109,12 @@ public class EventStoreConfig {
         if (this == o) return true;
         if (!(o instanceof EventStoreConfig)) return false;
         EventStoreConfig that = (EventStoreConfig) o;
-        return Objects.equals(eventStoreCollectionName, that.eventStoreCollectionName) && Objects.equals(transactionalOperator, that.transactionalOperator) && timeRepresentation == that.timeRepresentation && Objects.equals(queryOptions, that.queryOptions) && Objects.equals(readOptions, that.readOptions) && Objects.equals(eventStoreCapabilities, that.eventStoreCapabilities) && Objects.equals(dcbStreamIdGenerator, that.dcbStreamIdGenerator) && streamPositionEnabled == that.streamPositionEnabled;
+        return Objects.equals(eventStoreCollectionName, that.eventStoreCollectionName) && Objects.equals(transactionalOperator, that.transactionalOperator) && timeRepresentation == that.timeRepresentation && Objects.equals(queryOptions, that.queryOptions) && Objects.equals(readOptions, that.readOptions) && Objects.equals(eventStoreCapabilities, that.eventStoreCapabilities) && Objects.equals(dcbStreamIdGenerator, that.dcbStreamIdGenerator) && streamPositionEnabled == that.streamPositionEnabled && requireBackfilledPosition == that.requireBackfilledPosition;
     }
 
     @Override
     public int hashCode() {
-        return Objects.hash(eventStoreCollectionName, transactionalOperator, timeRepresentation, queryOptions, readOptions, eventStoreCapabilities, dcbStreamIdGenerator, streamPositionEnabled);
+        return Objects.hash(eventStoreCollectionName, transactionalOperator, timeRepresentation, queryOptions, readOptions, eventStoreCapabilities, dcbStreamIdGenerator, streamPositionEnabled, requireBackfilledPosition);
     }
 
     @Override
@@ -121,6 +128,7 @@ public class EventStoreConfig {
                 .add("eventStoreCapabilities=" + eventStoreCapabilities)
                 .add("dcbStreamIdGenerator=" + dcbStreamIdGenerator)
                 .add("streamPositionEnabled=" + streamPositionEnabled)
+                .add("requireBackfilledPosition=" + requireBackfilledPosition)
                 .toString();
     }
 
@@ -134,6 +142,7 @@ public class EventStoreConfig {
         private DcbStreamIdGenerator dcbStreamIdGenerator = new PartitionedDcbStreamIdGenerator();
         private boolean streamPositionEnabled = DEFAULT_STREAM_POSITION_ENABLED;
         private boolean streamPositionOptedOut = false;
+        private boolean requireBackfilledPosition = DEFAULT_REQUIRE_BACKFILLED_POSITION;
 
         /**
          * @param eventStoreCollectionName The collection in which the events are persisted
@@ -259,8 +268,22 @@ public class EventStoreConfig {
             return this;
         }
 
+        /**
+         * Escalate the startup safety guard from a WARN log to a hard failure when {@code writesPosition()} is true
+         * but the events collection already contains events without a {@code position} field, i.e. an upgrade to
+         * position that has not yet run the position-backfill migration. Defaults to {@code false} (WARN only), so an
+         * existing deployment is not crashed by turning position on; opt in once the runbook's rollout is complete and
+         * pre-backfill deployments should fail fast instead.
+         *
+         * @return A same {@code Builder instance}
+         */
+        public Builder requireBackfilledPosition(boolean requireBackfilledPosition) {
+            this.requireBackfilledPosition = requireBackfilledPosition;
+            return this;
+        }
+
         public EventStoreConfig build() {
-            return new EventStoreConfig(eventStoreCollectionName, transactionalOperator, timeRepresentation, queryOptions, readOptions, eventStoreCapabilities, dcbStreamIdGenerator, streamPositionEnabled, streamPositionOptedOut);
+            return new EventStoreConfig(eventStoreCollectionName, transactionalOperator, timeRepresentation, queryOptions, readOptions, eventStoreCapabilities, dcbStreamIdGenerator, streamPositionEnabled, streamPositionOptedOut, requireBackfilledPosition);
         }
     }
 }
