@@ -23,6 +23,7 @@ public class OccurrentExtensionRemover {
         Objects.requireNonNull(cloudEvent, CloudEvent.class.getSimpleName() + " cannot be null");
         CloudEventBuilder builder = CloudEventBuilder.v1(cloudEvent);
         OccurrentCloudEventExtension.KEYS.forEach(builder::withoutExtension);
+        builder.withoutExtension(OccurrentCloudEventExtension.POSITION);
         return builder.build();
     }
 }

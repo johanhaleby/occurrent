@@ -28,7 +28,6 @@ import org.occurrent.subscription.DcbStartAt
 import org.occurrent.subscription.DcbSubscriptionFilter
 import org.occurrent.subscription.api.blocking.Subscribable
 import org.occurrent.subscription.api.blocking.Subscription
-import org.occurrent.cloudevents.OccurrentCloudEventExtension
 
 /**
  * Subscribes to live DCB-tagged events that match [query].
@@ -64,9 +63,11 @@ fun <E : Any> Subscribable.subscribeDcb(
     fn: (EventMetadata, E) -> Unit
 ): Subscription {
     // A capable subscription model filters DCB events server-side from the DcbSubscriptionFilter. The in-process
-    // check stays as a correctness floor for any Subscribable that does not honor the filter.
+    // check stays as a correctness floor for any Subscribable that does not honor the filter. The discriminator is
+    // isDcbEvent (the DCB tags extension), not a positive position: with stream position on by default, stream
+    // events also carry a positive position, so that check alone would incorrectly let stream events through.
     val consumer: (CloudEvent) -> Unit = { cloudEvent ->
-        if (OccurrentCloudEventExtension.getPosition(cloudEvent) > 0 && DcbCloudEvents.matches(cloudEvent, query)) {
+        if (DcbCloudEvents.isDcbEvent(cloudEvent) && DcbCloudEvents.matches(cloudEvent, query)) {
             val event = cloudEventConverter[cloudEvent]
             val metadata = EventMetadata(cloudEvent.extensionNames.associateWith { extensionName -> cloudEvent.getExtension(extensionName) })
             fn(metadata, event)
