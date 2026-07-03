@@ -32,18 +32,44 @@ import static org.assertj.core.api.Assertions.assertThat;
 class DcbSubscriptionFilterConverterTest {
 
     private static final String FULL_DOCUMENT = "fullDocument";
-    private static final String POSITION_FIELD = FULL_DOCUMENT + ".position";
     private static final String TYPE_FIELD = FULL_DOCUMENT + ".type";
     private static final String TAGS_FIELD = FULL_DOCUMENT + ".dcbTags";
 
     @Test
-    void match_all_query_produces_only_the_position_condition() {
+    void match_all_query_produces_only_the_dcb_tags_existence_condition() {
         Document stage = DcbSubscriptionFilterConverter.toChangeStreamMatchStage(DcbQuery.all());
 
         Document match = stage.get("$match", Document.class);
-        assertThat(match).containsKey(POSITION_FIELD);
-        assertThat(match.get(POSITION_FIELD, Document.class).getInteger("$gt")).isEqualTo(0);
+        assertDcbTagsConditionPresent(match);
         assertThat(match).doesNotContainKey("$or");
+    }
+
+    @Test
+    void stream_event_with_position_but_no_dcb_tags_is_not_matched_by_the_dcb_tags_condition() {
+        Document stage = DcbSubscriptionFilterConverter.toChangeStreamMatchStage(DcbQuery.all());
+
+        Document match = stage.get("$match", Document.class);
+        Document tagsCondition = match.get(TAGS_FIELD, Document.class);
+
+        // A stream event document has a position field but no dcbTags field at all,
+        // so the $exists condition on dcbTags must not match it.
+        Document streamEventFullDocument = new Document("position", 3).append("type", "SomethingHappened");
+        assertThat(streamEventFullDocument).doesNotContainKey("dcbTags");
+        assertThat(tagsCondition.getBoolean("$exists")).isTrue();
+    }
+
+    @Test
+    void dcb_event_with_dcb_tags_field_is_matched_by_the_dcb_tags_condition() {
+        Document stage = DcbSubscriptionFilterConverter.toChangeStreamMatchStage(DcbQuery.all());
+
+        Document match = stage.get("$match", Document.class);
+        Document tagsCondition = match.get(TAGS_FIELD, Document.class);
+
+        // A DCB event document always carries a dcbTags array, even when empty (DcbDocumentMapper#toDocument),
+        // so the $exists condition on dcbTags matches it regardless of whether tags are present.
+        Document dcbEventFullDocument = new Document("position", 3).append("dcbTags", List.of());
+        assertThat(dcbEventFullDocument).containsKey("dcbTags");
+        assertThat(tagsCondition.getBoolean("$exists")).isTrue();
     }
 
     @Test
@@ -51,7 +77,7 @@ class DcbSubscriptionFilterConverterTest {
         Document stage = DcbSubscriptionFilterConverter.toChangeStreamMatchStage(DcbQuery.type("OrderPlaced"));
 
         Document match = stage.get("$match", Document.class);
-        assertPositionConditionPresent(match);
+        assertDcbTagsConditionPresent(match);
 
         List<?> orList = match.getList("$or", Document.class);
         assertThat(orList).hasSize(1);
@@ -67,7 +93,7 @@ class DcbSubscriptionFilterConverterTest {
         Document stage = DcbSubscriptionFilterConverter.toChangeStreamMatchStage(DcbQuery.types("OrderPlaced", "OrderCancelled"));
 
         Document match = stage.get("$match", Document.class);
-        assertPositionConditionPresent(match);
+        assertDcbTagsConditionPresent(match);
 
         List<?> orList = match.getList("$or", Document.class);
         assertThat(orList).hasSize(1);
@@ -82,7 +108,7 @@ class DcbSubscriptionFilterConverterTest {
         Document stage = DcbSubscriptionFilterConverter.toChangeStreamMatchStage(DcbQuery.tags("order:1", "tenant:2"));
 
         Document match = stage.get("$match", Document.class);
-        assertPositionConditionPresent(match);
+        assertDcbTagsConditionPresent(match);
 
         List<?> orList = match.getList("$or", Document.class);
         assertThat(orList).hasSize(1);
@@ -99,7 +125,7 @@ class DcbSubscriptionFilterConverterTest {
                 DcbQuery.tags(Set.of("order:1")).excludingTypes(Set.of("OrderDeleted")));
 
         Document match = stage.get("$match", Document.class);
-        assertPositionConditionPresent(match);
+        assertDcbTagsConditionPresent(match);
 
         List<?> orList = match.getList("$or", Document.class);
         assertThat(orList).hasSize(1);
@@ -116,7 +142,7 @@ class DcbSubscriptionFilterConverterTest {
                 DcbQuery.types(Set.of("OrderPlaced")).tags(Set.of("order:1")));
 
         Document match = stage.get("$match", Document.class);
-        assertPositionConditionPresent(match);
+        assertDcbTagsConditionPresent(match);
 
         List<?> orList = match.getList("$or", Document.class);
         assertThat(orList).hasSize(1);
@@ -139,7 +165,7 @@ class DcbSubscriptionFilterConverterTest {
         Document stage = DcbSubscriptionFilterConverter.toChangeStreamMatchStage(query);
 
         Document match = stage.get("$match", Document.class);
-        assertPositionConditionPresent(match);
+        assertDcbTagsConditionPresent(match);
 
         List<?> orList = match.getList("$or", Document.class);
         assertThat(orList).hasSize(2);
@@ -164,9 +190,9 @@ class DcbSubscriptionFilterConverterTest {
         }
     }
 
-    private static void assertPositionConditionPresent(Document match) {
-        Document positionCondition = match.get(POSITION_FIELD, Document.class);
-        assertThat(positionCondition).isNotNull();
-        assertThat(positionCondition.getInteger("$gt")).isEqualTo(0);
+    private static void assertDcbTagsConditionPresent(Document match) {
+        Document tagsCondition = match.get(TAGS_FIELD, Document.class);
+        assertThat(tagsCondition).isNotNull();
+        assertThat(tagsCondition.getBoolean("$exists")).isTrue();
     }
 }

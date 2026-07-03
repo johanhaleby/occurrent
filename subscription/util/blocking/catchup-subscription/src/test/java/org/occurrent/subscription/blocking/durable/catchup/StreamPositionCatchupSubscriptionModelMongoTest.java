@@ -223,6 +223,52 @@ class StreamPositionCatchupSubscriptionModelMongoTest {
         assertThat(received).doesNotContain(preFlip);
     }
 
+    @Test
+    void a_dynamic_start_at_that_disallows_the_delegated_subscription_model_still_subscribes_live_and_does_not_lose_a_low_position_event_committed_late() {
+        // This exercises the delegatedStartAt == null branch (e.g. the @StreamSubscription SAME_AS_START_AT resume
+        // behavior, which tells the durable layer not to persist a checkpoint because the subscription always
+        // restarts from the same StartAt). In that branch globalSubscriptionPosition is also null (see
+        // CatchupSubscriptionModel#startPositionCatchupSubscriptionForStream), so no watermark-derived cursor is ever
+        // persisted, and getDelegatedSubscriptionModel().subscribe(...) is still called with the original dynamic
+        // startAt afterwards, i.e. a live change-stream subscription is started right after the catch-up phase, not
+        // skipped. This test proves an event that is only assigned (and commits) a low position after the bulk
+        // replay's head was read is still delivered, because the live change-stream subscription independently sees
+        // every subsequent insert regardless of the position value it carries.
+        NameDefined historic = nameDefined("historic");
+        write(historic);
+
+        CopyOnWriteArrayList<DomainEvent> received = new CopyOnWriteArrayList<>();
+        subscription = new CatchupSubscriptionModel(subscriptionModel, eventStore,
+                new CatchupSubscriptionModelConfig(100, useSubscriptionPositionStorage(storage).andPersistSubscriptionPositionDuringCatchupPhaseForEveryNEvents(1)));
+
+        // A dynamic StartAt that resolves to "replay from the beginning" for CatchupSubscriptionModel's own context
+        // (so the bulk replay below actually runs), but returns null for the delegated (innermost) subscription
+        // model's context, mirroring what OccurrentAnnotationBeanPostProcessor generates for SAME_AS_START_AT +
+        // BEGINNING_OF_TIME: "don't persist a checkpoint, always restart from beginning".
+        StartAt sameAsStartAt = StartAt.dynamic(ctx -> ctx.subscriptionModelType().equals(CatchupSubscriptionModel.class)
+                ? StartAt.subscriptionPosition(GlobalSubscriptionPosition.of(0))
+                : null);
+
+        subscription.subscribe("subscription", OccurrentSubscriptionFilter.filter(type(EVENT_TYPE)), sameAsStartAt, toDomainEvents(received))
+                .waitUntilStarted();
+
+        await().atMost(AT_MOST).with().pollInterval(Duration.of(100, MILLIS)).untilAsserted(() ->
+                assertThat(received).containsExactly(historic));
+
+        // A late-committing event: positions are reserved before commit, so in a real race a low position can commit
+        // after the bulk replay's head was read. Simulated here simply as a plain write after the handover, since the
+        // live change-stream subscription (started because delegatedStartAt == null still subscribes live) picks up
+        // every insert regardless of ordering between position reservation and commit.
+        NameDefined lateCommitting = nameDefined("lateCommitting");
+        write(lateCommitting);
+
+        await().atMost(AT_MOST).with().pollInterval(Duration.of(100, MILLIS)).untilAsserted(() ->
+                assertThat(received).containsExactly(historic, lateCommitting));
+
+        // No durable checkpoint is stored in this mode, confirming no watermark-derived cursor is persisted.
+        assertThat(storage.exists("subscription")).isFalse();
+    }
+
     private NameDefined nameDefined(String name) {
         return new NameDefined(UUID.randomUUID().toString(), time, "name", name);
     }

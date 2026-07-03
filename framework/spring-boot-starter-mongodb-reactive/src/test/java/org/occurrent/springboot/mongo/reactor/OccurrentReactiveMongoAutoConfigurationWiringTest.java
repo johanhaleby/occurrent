@@ -201,6 +201,19 @@ class OccurrentReactiveMongoAutoConfigurationWiringTest {
                 });
     }
 
+    @Test
+    void a_stream_subscription_with_a_specific_start_time_fails_loud_even_when_history_replay_is_supported() {
+        // Stream position is on by default, so BEGINNING_OF_TIME would be supported here. A specific start time has
+        // no position to map to though, so the reactive stack must fail loud rather than silently replaying all
+        // history from position 0, which would ignore the requested start time.
+        contextRunner()
+                .withUserConfiguration(SpecificTimeStreamSubscriptionConfiguration.class).run(context -> {
+                    assertThat(context).hasFailed();
+                    assertThat(context.getStartupFailure()).hasRootCauseInstanceOf(IllegalArgumentException.class);
+                    assertThat(context.getStartupFailure()).rootCause().hasMessageContaining("cannot honor a specific historical start time");
+                });
+    }
+
     @Configuration(proxyBeanMethods = false)
     static class BeginningOfTimeStreamSubscriptionConfiguration {
         @Bean
@@ -209,8 +222,23 @@ class OccurrentReactiveMongoAutoConfigurationWiringTest {
         }
     }
 
+    @Configuration(proxyBeanMethods = false)
+    static class SpecificTimeStreamSubscriptionConfiguration {
+        @Bean
+        SpecificTimeListener specificTimeListener() {
+            return new SpecificTimeListener();
+        }
+    }
+
     static class ReplayingListener {
         @StreamSubscription(id = "replaying", startAt = StartPosition.BEGINNING_OF_TIME)
+        Mono<Void> on(TestEvent event) {
+            return Mono.empty();
+        }
+    }
+
+    static class SpecificTimeListener {
+        @StreamSubscription(id = "specificTime", startAtISO8601 = "2024-01-01T00:00:00Z")
         Mono<Void> on(TestEvent event) {
             return Mono.empty();
         }

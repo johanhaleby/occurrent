@@ -188,7 +188,7 @@ class SpringMongoEventStorePositionTest {
         SpringMongoEventStore optedOut = new SpringMongoEventStore(mongoTemplate, configBuilder(STREAM).withoutStreamPosition().build());
         optedOut.write("stream:1", WriteCondition.anyStreamVersion(), Stream.of(event("NameDefined")));
 
-        assertThatThrownBy(() -> new SpringMongoEventStore(mongoTemplate, configBuilder(STREAM).withStreamPosition().requireBackfilledPosition().build()))
+        assertThatThrownBy(() -> new SpringMongoEventStore(mongoTemplate, configBuilder(STREAM).withStreamPosition().requireBackfilledPosition(true).build()))
                 .isExactlyInstanceOf(IllegalStateException.class)
                 .hasMessageContaining("position-backfill");
     }

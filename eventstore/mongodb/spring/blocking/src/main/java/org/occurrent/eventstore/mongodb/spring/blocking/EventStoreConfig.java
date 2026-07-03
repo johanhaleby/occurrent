@@ -319,8 +319,8 @@ public class EventStoreConfig {
          * @return The same {@code Builder} instance.
          */
         @NullMarked
-        public Builder requireBackfilledPosition() {
-            this.requireBackfilledPosition = true;
+        public Builder requireBackfilledPosition(boolean requireBackfilledPosition) {
+            this.requireBackfilledPosition = requireBackfilledPosition;
             return this;
         }
 

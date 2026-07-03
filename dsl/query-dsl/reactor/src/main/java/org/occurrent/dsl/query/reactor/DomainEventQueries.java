@@ -365,9 +365,9 @@ public class DomainEventQueries<T> {
     }
 
     private Mono<PositionOrderedReader> requirePositionOrderedReader() {
-        if (!(eventStoreQueries instanceof PositionOrderedReader positionOrderedReader)) {
+        if (!(eventStoreQueries instanceof PositionOrderedReader positionOrderedReader) || !positionOrderedReader.writesPosition()) {
             return Mono.error(new UnsupportedOperationException("This event store does not write a position. Position-ordered reads require the underlying event store to implement "
-                    + PositionOrderedReader.class.getSimpleName() + ", but was " + eventStoreQueries.getClass().getName()));
+                    + PositionOrderedReader.class.getSimpleName() + " with writesPosition() true, but was " + eventStoreQueries.getClass().getName()));
         }
         return Mono.just(positionOrderedReader);
     }
