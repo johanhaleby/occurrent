@@ -1,0 +1,298 @@
+/*
+ * Copyright 2026 Johan Haleby
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ *        http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+
+package org.occurrent.subscription.reactor.durable.catchup;
+
+import com.fasterxml.jackson.databind.ObjectMapper;
+import com.mongodb.ConnectionString;
+import com.mongodb.reactivestreams.client.MongoClient;
+import com.mongodb.reactivestreams.client.MongoClients;
+import io.cloudevents.CloudEvent;
+import org.junit.jupiter.api.AfterEach;
+import org.junit.jupiter.api.BeforeEach;
+import org.junit.jupiter.api.DisplayNameGeneration;
+import org.junit.jupiter.api.DisplayNameGenerator.ReplaceUnderscores;
+import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.Timeout;
+import org.junit.jupiter.api.extension.RegisterExtension;
+import org.occurrent.application.converter.CloudEventConverter;
+import org.occurrent.application.converter.jackson.JacksonCloudEventConverter;
+import org.occurrent.cloudevents.OccurrentCloudEventExtension;
+import org.occurrent.domain.DomainEvent;
+import org.occurrent.domain.NameDefined;
+import org.occurrent.eventstore.api.EventStoreCapability;
+import org.occurrent.eventstore.api.PositionRange;
+import org.occurrent.eventstore.api.WriteCondition;
+import org.occurrent.eventstore.api.reactor.PositionOrderedReader;
+import org.occurrent.eventstore.mongodb.spring.reactor.EventStoreConfig;
+import org.occurrent.eventstore.mongodb.spring.reactor.ReactorMongoEventStore;
+import org.occurrent.filter.Filter;
+import org.occurrent.mongodb.timerepresentation.TimeRepresentation;
+import org.occurrent.subscription.GlobalSubscriptionPosition;
+import org.occurrent.subscription.StartAt;
+import org.occurrent.subscription.mongodb.spring.reactor.ReactorMongoSubscriptionModel;
+import org.occurrent.testsupport.mongodb.FlushMongoDBExtension;
+import org.springframework.data.mongodb.ReactiveMongoTransactionManager;
+import org.springframework.data.mongodb.core.ReactiveMongoTemplate;
+import org.springframework.data.mongodb.core.SimpleReactiveMongoDatabaseFactory;
+import org.testcontainers.junit.jupiter.Container;
+import org.testcontainers.junit.jupiter.Testcontainers;
+import org.testcontainers.mongodb.MongoDBContainer;
+import reactor.core.Disposable;
+import reactor.core.publisher.Flux;
+import reactor.core.publisher.Mono;
+
+import java.net.URI;
+import java.time.Duration;
+import java.time.LocalDateTime;
+import java.util.List;
+import java.util.UUID;
+import java.util.concurrent.CopyOnWriteArrayList;
+import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.stream.Collectors;
+import java.util.stream.Stream;
+
+import static java.util.Objects.requireNonNull;
+import static org.assertj.core.api.Assertions.assertThat;
+import static org.awaitility.Awaitility.await;
+import static org.occurrent.eventstore.api.EventStoreCapability.DCB;
+import static org.occurrent.eventstore.api.EventStoreCapability.STREAM;
+
+/**
+ * Wave 1 does not yet flip stream position on by default for a STREAM-only store (that is Wave 3), so these tests
+ * combine STREAM with DCB, which forces {@code writesPosition()} on for stream-written events too. This exercises
+ * exactly the reactive stream catch-up path this model implements, without depending on the still-pending default
+ * flip.
+ */
+@Timeout(120)
+@Testcontainers
+@DisplayNameGeneration(ReplaceUnderscores.class)
+class ReactorStreamCatchupSubscriptionModelMongoTest {
+
+    @Container
+    private static final MongoDBContainer mongoDBContainer = new MongoDBContainer("mongo:" + System.getProperty("test.mongo.version"))
+            .withReplicaSet()
+            .withReuse(true);
+
+    @RegisterExtension
+    FlushMongoDBExtension flush = new FlushMongoDBExtension(new ConnectionString(mongoDBContainer.getReplicaSetUrl() + ".streamcatchup"));
+
+    private ReactorMongoEventStore eventStore;
+    private ReactorMongoSubscriptionModel subscriptionModel;
+    private CloudEventConverter<DomainEvent> converter;
+    private MongoClient mongoClient;
+    private final CopyOnWriteArrayList<Disposable> disposables = new CopyOnWriteArrayList<>();
+
+    @BeforeEach
+    void create_instances() {
+        ConnectionString connectionString = new ConnectionString(mongoDBContainer.getReplicaSetUrl() + ".streamcatchup");
+        mongoClient = MongoClients.create(connectionString);
+        ReactiveMongoTemplate mongoTemplate = new ReactiveMongoTemplate(mongoClient, requireNonNull(connectionString.getDatabase()));
+        ReactiveMongoTransactionManager tx = new ReactiveMongoTransactionManager(new SimpleReactiveMongoDatabaseFactory(mongoClient, requireNonNull(connectionString.getDatabase())));
+        EventStoreConfig config = new EventStoreConfig.Builder()
+                .eventStoreCollectionName("events")
+                .transactionConfig(tx)
+                .timeRepresentation(TimeRepresentation.RFC_3339_STRING)
+                .eventStoreCapabilities(STREAM, DCB)
+                .build();
+        eventStore = new ReactorMongoEventStore(mongoTemplate, config);
+        subscriptionModel = new ReactorMongoSubscriptionModel(mongoTemplate, "events", TimeRepresentation.RFC_3339_STRING);
+        converter = new JacksonCloudEventConverter.Builder<DomainEvent>(new ObjectMapper(), URI.create("urn:test")).idMapper(DomainEvent::eventId).build();
+    }
+
+    @AfterEach
+    void dispose() {
+        disposables.forEach(Disposable::dispose);
+        if (mongoClient != null) {
+            mongoClient.close();
+        }
+    }
+
+    @Test
+    void replays_stream_history_from_the_beginning_then_delivers_live_events_without_duplicates() {
+        NameDefined h1 = name("h1");
+        NameDefined h2 = name("h2");
+        appendToStream("stream-1", h1);
+        appendToStream("stream-2", name("ignoredHistoric"));
+        appendToStream("stream-1", h2);
+
+        ReactorStreamCatchupSubscriptionModel catchup = new ReactorStreamCatchupSubscriptionModel(subscriptionModel, asReader());
+        CopyOnWriteArrayList<String> received = new CopyOnWriteArrayList<>();
+        subscribe(catchup.subscribe(Filter.streamId("stream-1"), StartAt.subscriptionPosition(GlobalSubscriptionPosition.of(0))), received);
+
+        await().atMost(Duration.ofSeconds(40)).untilAsserted(() -> assertThat(received).containsExactly("h1", "h2"));
+
+        NameDefined l1 = name("l1");
+        NameDefined l2 = name("l2");
+        appendToStream("stream-1", l1);
+        appendToStream("stream-2", name("ignoredLive"));
+        appendToStream("stream-1", l2);
+
+        await().atMost(Duration.ofSeconds(40)).untilAsserted(() -> {
+            assertThat(received).containsExactly("h1", "h2", "l1", "l2");
+            assertThat(received).doesNotHaveDuplicates();
+        });
+    }
+
+    @Test
+    void a_stream_event_committed_while_the_replay_is_running_is_delivered_exactly_once() {
+        // Two historic matching events in the same stream.
+        appendToStream("stream-1", name("h1"));
+        appendToStream("stream-1", name("h2"));
+
+        // Delay the first replay read so an event can commit while the replay is in flight. The live resume token is
+        // captured before the replay, so the during-replay event must still be delivered, exactly once.
+        AtomicBoolean firstReadStarted = new AtomicBoolean(false);
+        DelayFirstReadPositionOrderedReader delaying = new DelayFirstReadPositionOrderedReader(asReader(), Duration.ofSeconds(2), firstReadStarted);
+
+        ReactorStreamCatchupSubscriptionModel catchup = new ReactorStreamCatchupSubscriptionModel(subscriptionModel, delaying);
+        CopyOnWriteArrayList<String> received = new CopyOnWriteArrayList<>();
+        subscribe(catchup.subscribe(Filter.streamId("stream-1"), StartAt.subscriptionPosition(GlobalSubscriptionPosition.of(0))), received);
+
+        // Wait until the replay read is in flight, then commit a new matching event during the delay.
+        await().atMost(Duration.ofSeconds(40)).untilTrue(firstReadStarted);
+        appendToStream("stream-1", name("duringReplay"));
+
+        await().atMost(Duration.ofSeconds(40)).untilAsserted(() -> {
+            assertThat(received).containsExactlyInAnyOrder("h1", "h2", "duringReplay");
+            assertThat(received).doesNotHaveDuplicates();
+        });
+    }
+
+    @Test
+    void only_events_matching_the_filter_are_delivered_during_catchup_and_live() {
+        appendToStream("stream-1", name("matchHistoric"));
+        appendToStream("stream-2", name("ignoredHistoric"));
+
+        ReactorStreamCatchupSubscriptionModel catchup = new ReactorStreamCatchupSubscriptionModel(subscriptionModel, asReader());
+        CopyOnWriteArrayList<String> received = new CopyOnWriteArrayList<>();
+        subscribe(catchup.subscribe(Filter.streamId("stream-1"), StartAt.subscriptionPosition(GlobalSubscriptionPosition.of(0))), received);
+
+        await().atMost(Duration.ofSeconds(40)).untilAsserted(() -> assertThat(received).containsExactly("matchHistoric"));
+
+        appendToStream("stream-1", name("matchLive"));
+        appendToStream("stream-2", name("ignoredLive"));
+
+        await().atMost(Duration.ofSeconds(40)).untilAsserted(() -> assertThat(received).containsExactly("matchHistoric", "matchLive"));
+    }
+
+    @Test
+    void replays_every_event_with_a_small_window_and_cache_then_goes_live_without_loss() {
+        // More matching events than both the window and the handover cache, so the bulk replay pages across many
+        // windows and the cache evicts during the replay. The handover must still deliver every event exactly once.
+        for (int i = 0; i < 5; i++) {
+            appendToStream("stream-1", name("h" + i));
+        }
+
+        ReactorStreamCatchupSubscriptionModel catchup = new ReactorStreamCatchupSubscriptionModel(subscriptionModel, asReader(), 1, 1);
+        CopyOnWriteArrayList<String> received = new CopyOnWriteArrayList<>();
+        subscribe(catchup.subscribe(Filter.streamId("stream-1"), StartAt.subscriptionPosition(GlobalSubscriptionPosition.of(0))), received);
+
+        await().atMost(Duration.ofSeconds(40)).untilAsserted(() -> assertThat(received).containsExactly("h0", "h1", "h2", "h3", "h4"));
+
+        appendToStream("stream-1", name("live0"));
+
+        await().atMost(Duration.ofSeconds(40)).untilAsserted(() -> {
+            assertThat(received).containsExactly("h0", "h1", "h2", "h3", "h4", "live0");
+            assertThat(received).doesNotHaveDuplicates();
+        });
+    }
+
+    @Test
+    void resumes_correctly_from_a_global_subscription_position() {
+        appendToStream("stream-1", name("h1"));
+        appendToStream("stream-1", name("h2"));
+        appendToStream("stream-1", name("h3"));
+
+        // Resolve the position of h1 so the resumed replay should skip it and start with h2.
+        CloudEvent h1Event = requireNonNull(requireNonNull(eventStore.read("stream-1", 0, Integer.MAX_VALUE).block())
+                .events().blockFirst());
+        long h1Position = OccurrentCloudEventExtension.getPosition(h1Event);
+
+        ReactorStreamCatchupSubscriptionModel catchup = new ReactorStreamCatchupSubscriptionModel(subscriptionModel, asReader());
+        CopyOnWriteArrayList<String> received = new CopyOnWriteArrayList<>();
+        subscribe(catchup.subscribe(Filter.streamId("stream-1"), StartAt.subscriptionPosition(GlobalSubscriptionPosition.of(h1Position))), received);
+
+        await().atMost(Duration.ofSeconds(40)).untilAsserted(() -> assertThat(received).containsExactly("h2", "h3"));
+
+        appendToStream("stream-1", name("live0"));
+
+        await().atMost(Duration.ofSeconds(40)).untilAsserted(() -> {
+            assertThat(received).containsExactly("h2", "h3", "live0");
+            assertThat(received).doesNotHaveDuplicates();
+        });
+    }
+
+    private PositionOrderedReader asReader() {
+        return eventStore;
+    }
+
+    private void subscribe(Flux<CloudEvent> flux, CopyOnWriteArrayList<String> received) {
+        disposables.add(flux.map(ce -> ((NameDefined) converter.toDomainEvent(ce)).name()).doOnNext(received::add).subscribe());
+        // Give the change-stream subscription a moment to start before the test writes more events.
+        sleep(700);
+    }
+
+    private NameDefined name(String name) {
+        return new NameDefined(UUID.randomUUID().toString(), LocalDateTime.now(), name, name);
+    }
+
+    private void appendToStream(String streamId, DomainEvent event) {
+        CloudEvent cloudEvent = converter.toCloudEvents(Stream.of(event)).collect(Collectors.toList()).get(0);
+        eventStore.write(streamId, WriteCondition.anyStreamVersion(), Flux.just(cloudEvent)).block();
+    }
+
+    private static void sleep(long millis) {
+        try {
+            Thread.sleep(millis);
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+        }
+    }
+
+    // Delays the first bulk window read so an event can commit while the replay is in flight. The model's first read
+    // is the head probe (currentPosition), so the delay is applied to the first real window read after it. The event
+    // committed during the delay lands above the captured bulk head and must be recovered exactly once through
+    // reconciliation or the live subscription, which resumes from a token captured before the replay.
+    private static final class DelayFirstReadPositionOrderedReader implements PositionOrderedReader {
+        private final PositionOrderedReader delegate;
+        private final Duration delay;
+        private final AtomicBoolean firstReadStarted;
+        private final AtomicBoolean windowDelayed = new AtomicBoolean(false);
+
+        private DelayFirstReadPositionOrderedReader(PositionOrderedReader delegate, Duration delay, AtomicBoolean firstReadStarted) {
+            this.delegate = delegate;
+            this.delay = delay;
+            this.firstReadStarted = firstReadStarted;
+        }
+
+        @Override
+        public Flux<CloudEvent> readInPositionOrder(Filter filter, PositionRange range) {
+            if (windowDelayed.compareAndSet(false, true)) {
+                return Flux.defer(() -> {
+                    firstReadStarted.set(true);
+                    return delegate.readInPositionOrder(filter, range).delayElements(delay);
+                });
+            }
+            return delegate.readInPositionOrder(filter, range);
+        }
+
+        @Override
+        public Mono<Long> currentPosition() {
+            return delegate.currentPosition();
+        }
+    }
+}
