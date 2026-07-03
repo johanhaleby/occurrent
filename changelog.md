@@ -10,6 +10,41 @@ DCB is a capability layered on the existing CloudEvent storage, not a new store 
 
 #### Changes
 
+* Added a global, monotonic `position` to every event, stream and DCB alike, replacing the old DCB-only
+  `dcbposition` and giving stream consumers the same ordering guarantee DCB already had.
+  * `position` is intrinsic to DCB, unchanged from before other than the name. For a STREAM-only store it is a
+    stream-scoped option that is on by default, so new stores get a global position out of the box. Opt out with
+    `EventStoreConfig.withoutStreamPosition()` (blocking, native, and reactor builders) or
+    `occurrent.event-store.stream.position=false` in Spring, for a store such as `entity-history` that only ever
+    reads one stream at a time and never wants a global order. A combined `STREAM` and `DCB` store cannot opt out,
+    since a combined store must position everything it writes.
+  * Stream catch-up now reconciles on position, the same range-based mechanism DCB catch-up already used, instead
+    of wall-clock time or `$natural` order, for any store that writes position. This is what closes the clock-skew
+    data-loss bug class from #199 for streams, not just for DCB. A STREAM-only store that opts out of position
+    keeps the previous time-based catch-up unchanged.
+  * Reactive `@StreamSubscription` can now replay history. The new `ReactorStreamCatchupSubscriptionModel` mirrors
+    the existing reactive DCB catch-up model. It fails loud only for a store that has opted out of stream position.
+  * `DomainEventQueries` (blocking and reactor) gained position-range reads, so a consumer can read events across
+    the whole store by `position` directly, without going through a subscription, and reconcile stream and DCB
+    consumers on one axis.
+  * `EventMetadata.position` is now a general accessor available on subscribed events from both stacks, not only
+    DCB events.
+  * **Upgrade hazard: read this before upgrading an existing deployment.** Because stream position defaults on, an
+    existing deployment that upgrades in place gets position on new stream events but not on the events already in
+    its collection. The store detects this on startup and logs a loud warning naming the migration runbook, with a
+    config flag to make it a hard failure instead
+    (`EventStoreConfig.Builder#requireBackfilledPosition` /
+    `occurrent.event-store.position.require-backfilled-position`). A new module,
+    `eventstore/migration/position-backfill`, is a throttled, resumable, idempotent backfill tool that seeds the
+    position counter and backfills existing events in `_id` order. Follow
+    [the migration runbook](doc/runbooks/position-backfill.md) before relying on position-based catch-up against an
+    existing deployment. A store with no existing events, or a brand-new deployment, needs no backfill.
+  * Known limitation: a combined `STREAM` and `DCB` reactive store does not yet have a dual-mode catch-up model
+    that replays both stream and DCB history together. The blocking stack supports this combination already.
+    Reactive combined-store stream replay fails loud rather than silently misbehaving; a reactive dual-mode
+    catch-up model is future work.
+  * See [ADR 45](doc/architecture/decisions/0045-unified-global-position.md).
+
 * Added a reactive (Project Reactor) Spring Boot starter, `spring-boot-starter-mongodb-reactive`, alongside the blocking `spring-boot-starter-mongodb`, so a reactive application gets the same auto-configuration and annotation-driven subscriptions.
   * Enable it with `@EnableOccurrentReactive` and the new dependency. It auto-configures the reactive event store, transaction manager, application service (stream and DCB), query DSLs, subscription model, position storage, and the reactive `StreamSubscriptions` and `DcbSubscriptions` DSLs, driven by the same `occurrent.*` properties and capability set as the blocking starter.
   * `@StreamSubscription` and `@DcbSubscription` work on the reactive stack, with handler methods returning `Mono<Void>`. `@StreamSubscription` supports `NOW` and `DEFAULT` (live delivery plus durable resume). It fails loud for history replay, since there is no reactive stream catch-up model. `@DcbSubscription` replays by dcbposition through the reactive DCB catch-up model, same as blocking.
