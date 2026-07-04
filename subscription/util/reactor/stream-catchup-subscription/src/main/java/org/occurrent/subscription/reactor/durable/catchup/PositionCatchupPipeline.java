@@ -24,6 +24,7 @@ import org.occurrent.subscription.api.reactor.PositionAwareSubscriptionModel;
 import reactor.core.publisher.Flux;
 import reactor.core.publisher.Mono;
 
+import java.util.Objects;
 import java.util.function.Predicate;
 
 import static java.util.Objects.requireNonNull;
@@ -67,6 +68,12 @@ public final class PositionCatchupPipeline {
      * catch-up's own selection (a stream {@link org.occurrent.filter.Filter} or a DCB query) reach the caller.
      */
     public Flux<CloudEvent> catchup(PositionAwareSubscriptionModel subscriptionModel, SubscriptionFilter liveSubscriptionFilter, Predicate<CloudEvent> livePredicate, long startPosition) {
+        Objects.requireNonNull(subscriptionModel, "subscriptionModel cannot be null");
+        Objects.requireNonNull(liveSubscriptionFilter, "liveSubscriptionFilter cannot be null");
+        Objects.requireNonNull(livePredicate, "livePredicate cannot be null");
+        if (startPosition < 0) {
+            throw new IllegalArgumentException("startPosition cannot be negative, was " + startPosition);
+        }
         // Capture the live resume token before the bulk replay so an event committing during the replay is still
         // delivered by the live subscription. If the model reports no token (for example an empty oplog or a
         // restricted cluster) a no-loss handover to live cannot be guaranteed, so fail loudly instead of silently

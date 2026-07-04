@@ -76,6 +76,7 @@ import org.springframework.data.mongodb.core.ReactiveMongoTemplate;
 import reactor.util.retry.Retry;
 
 import static org.occurrent.eventstore.api.EventStoreCapability.DCB;
+import static org.occurrent.eventstore.api.EventStoreCapability.STREAM;
 
 /**
  * Occurrent Spring autoconfiguration support for the reactive (Project Reactor) MongoDB event store and subscriptions.
@@ -163,7 +164,9 @@ public class OccurrentReactiveMongoAutoConfiguration<E> {
         // which each narrow to their own query or filter in the consumer.
         DcbEventStore dcbStore = eventStoreProperties.getCapabilities().contains(DCB) ? dcbEventStore.getIfAvailable() : null;
         ReactorMongoEventStore streamStore = reactorEventStore.getIfAvailable();
-        boolean streamCatchup = streamStore != null && streamStore.writesPosition();
+        // Stream catch-up needs the STREAM capability, not just a position. A DCB-only store also writes position, so
+        // gating on writesPosition() alone would wrongly wire stream catch-up for it.
+        boolean streamCatchup = eventStoreProperties.getCapabilities().contains(STREAM) && streamStore != null && streamStore.writesPosition();
         final PositionAwareSubscriptionModel inner;
         if (dcbStore != null && streamCatchup) {
             inner = new ReactorCatchupSubscriptionModel(mongoSubscriptionModel, streamStore, dcbStore, DcbQuery.all(), Filter.all());

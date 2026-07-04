@@ -231,6 +231,21 @@ class OccurrentReactiveMongoAutoConfigurationWiringTest {
     }
 
     @Test
+    void a_stream_subscription_that_replays_history_fails_loud_on_a_dcb_only_store() {
+        // A DCB-only store writes position too (DCB always does), but it has no STREAM capability, so a
+        // @StreamSubscription started from the beginning must fail loud instead of being wrongly treated as
+        // stream-catchup-capable. This guards the STREAM-capability gate in occurrentReactorCatchupSubscriptionModel
+        // and in streamHistoryReplaySupported(): gating on writesPosition() alone would let this case slip through.
+        contextRunner()
+                .withPropertyValues("occurrent.event-store.capabilities=dcb")
+                .withUserConfiguration(BeginningOfTimeStreamSubscriptionConfiguration.class).run(context -> {
+                    assertThat(context).hasFailed();
+                    assertThat(context.getStartupFailure()).hasRootCauseInstanceOf(IllegalArgumentException.class);
+                    assertThat(context.getStartupFailure()).rootCause().hasMessageContaining("does not support reactive stream history replay");
+                });
+    }
+
+    @Test
     void a_combined_stream_and_dcb_store_starts_a_beginning_of_time_stream_subscription_and_replays_history_without_failing() {
         // With both capabilities on, the reactive stack wires the dual-mode ReactorCatchupSubscriptionModel (see
         // OccurrentReactiveMongoAutoConfiguration#occurrentReactorCatchupSubscriptionModel). A @StreamSubscription

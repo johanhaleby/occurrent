@@ -34,6 +34,9 @@ public final class HandoverCache {
     private final Set<String> ids;
 
     public HandoverCache(int maxSize) {
+        if (maxSize < 1) {
+            throw new IllegalArgumentException("maxSize must be at least 1, was " + maxSize);
+        }
         this.maxSize = maxSize;
         this.ids = Collections.synchronizedSet(new LinkedHashSet<>());
     }
