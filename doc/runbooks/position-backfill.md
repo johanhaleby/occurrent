@@ -8,15 +8,16 @@ its collection. A store with no events, or a brand-new deployment, needs no back
 
 ## Why this is needed
 
-`position` is a global, monotonically increasing integer stamped on every event. It replaces the wall-clock/`$natural`
+`position` is a global, monotonically increasing integer on every event. It replaces the wall-clock/`$natural`
 based catch-up reconciliation with a range-based one that is immune to clock skew, and it lets stream and DCB
 consumers reconcile on one ordering axis. Events written before position existed have no `position` field. Until
-they are backfilled, they are invisible to position-ordered reads and to position-based catch-up, and any store that
-writes position will log a loud warning naming this runbook on startup if it finds such events in its collection.
+they are backfilled, they are invisible to position-ordered reads and to position-based catch-up.
 
-The backfill tool that performs steps 3-4 below lives at `eventstore/migration/position-backfill` (artifact
-`org.occurrent:eventstore-mongodb-position-backfill`). It reuses the store's own position document mapper and
-counter contract, so the schema it writes is exactly what a live store writes.
+The backfill tool performs the seed and backfill steps below (steps 2 and 4). It lives at
+`eventstore/migration/position-backfill` (artifact `org.occurrent:eventstore-mongodb-position-backfill`) and reuses
+the store's own position document mapper and counter contract, so the schema it writes is exactly what a live store
+writes. The other steps (create the index, deploy, verify) are things you do around the tool, not things the tool
+does.
 
 ## The safe upgrade sequence
 
@@ -51,9 +52,13 @@ This step is idempotent: if the counter already sits at or above the target, it 
 before deploying the new version so live writes after deploy immediately get positions above every position the
 backfill will later assign to historical events.
 
-### 3. Deploy the new version
+### 3. Deploy the new version with stream position enabled explicitly
 
-Deploy the version that writes position. From this point:
+Deploy the version that writes position, and enable stream position explicitly on the store
+(`EventStoreConfig.Builder.withStreamPosition()` or `occurrent.event-store.stream.position=true`). Explicit is
+required on an existing store. A store left on the default turns stream position off at startup when it finds a
+collection that still has events without a `position`, so it does not build the position index over the whole
+collection on an unplanned upgrade. Enabling it explicitly is how you say the upgrade is planned. From this point:
 
 - New stream events get a `position` on write.
 - Catch-up subscriptions stay on the legacy time/`$natural` path until the backfill (step 4) completes and full
@@ -61,6 +66,10 @@ Deploy the version that writes position. From this point:
   event.
 - The startup guard logs a WARN (or fails hard, if `requireBackfilledPosition` is enabled) pointing at this runbook
   for as long as un-positioned events remain in the collection.
+
+If you can take a short write freeze instead, backfill first (step 4) with writes stopped, then deploy with stream
+position left on its default. Once every event has a `position` the default store keeps position on by itself, so
+the explicit setting is not needed in that case.
 
 ### 4. Run the backfill
 
