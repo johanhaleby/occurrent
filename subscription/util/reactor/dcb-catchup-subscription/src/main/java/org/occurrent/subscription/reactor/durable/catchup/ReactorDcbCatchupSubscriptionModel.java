@@ -187,7 +187,7 @@ public class ReactorDcbCatchupSubscriptionModel implements PositionAwareSubscrip
                     Flux<CloudEvent> bulk = windows(query, startPosition, bulkHead, cache);
                     Flux<CloudEvent> reconcile = reconcile(query, bulkHead, cache);
                     Flux<CloudEvent> live = subscriptionModel.subscribe(DcbSubscriptionFilter.filter(query), StartAt.subscriptionPosition(liveToken))
-                            .filter(cloudEvent -> DcbCloudEvents.getPosition(cloudEvent) > 0
+                            .filter(cloudEvent -> DcbCloudEvents.getPosition(cloudEvent) > startPosition
                                     && DcbCloudEvents.matches(cloudEvent, query)
                                     && !cache.contains(cloudEvent.getId()));
                     return Flux.concat(bulk, reconcile, live);

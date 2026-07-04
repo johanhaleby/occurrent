@@ -98,8 +98,8 @@ public class OccurrentMongoAutoConfiguration<E> {
 
     @Bean
     @ConditionalOnProperty(name = "occurrent.subscription.enabled", havingValue = "true", matchIfMissing = true)
-    static OccurrentAnnotationBeanPostProcessor occurrentAnnotationBeanPostProcessor() {
-        return new OccurrentAnnotationBeanPostProcessor();
+    static OccurrentBlockingAnnotationBeanPostProcessor occurrentBlockingAnnotationBeanPostProcessor() {
+        return new OccurrentBlockingAnnotationBeanPostProcessor();
     }
 
     @Bean

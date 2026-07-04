@@ -196,6 +196,24 @@ class OccurrentReactiveMongoAutoConfigurationWiringTest {
         });
     }
 
+    @Test
+    void a_stream_subscription_with_an_explicit_iso8601_start_fails_loud() {
+        contextRunner().withUserConfiguration(Iso8601StreamSubscriptionConfiguration.class).run(context -> {
+            assertThat(context).hasFailed();
+            assertThat(context.getStartupFailure()).hasRootCauseInstanceOf(IllegalArgumentException.class);
+            assertThat(context.getStartupFailure()).rootCause().hasMessageContaining("no stream catch-up");
+        });
+    }
+
+    @Test
+    void a_stream_subscription_with_an_explicit_epoch_millis_start_fails_loud() {
+        contextRunner().withUserConfiguration(EpochMillisStreamSubscriptionConfiguration.class).run(context -> {
+            assertThat(context).hasFailed();
+            assertThat(context.getStartupFailure()).hasRootCauseInstanceOf(IllegalArgumentException.class);
+            assertThat(context.getStartupFailure()).rootCause().hasMessageContaining("no stream catch-up");
+        });
+    }
+
     @Configuration(proxyBeanMethods = false)
     static class BeginningOfTimeStreamSubscriptionConfiguration {
         @Bean
@@ -204,8 +222,38 @@ class OccurrentReactiveMongoAutoConfigurationWiringTest {
         }
     }
 
+    @Configuration(proxyBeanMethods = false)
+    static class Iso8601StreamSubscriptionConfiguration {
+        @Bean
+        Iso8601ReplayingListener iso8601ReplayingListener() {
+            return new Iso8601ReplayingListener();
+        }
+    }
+
+    @Configuration(proxyBeanMethods = false)
+    static class EpochMillisStreamSubscriptionConfiguration {
+        @Bean
+        EpochMillisReplayingListener epochMillisReplayingListener() {
+            return new EpochMillisReplayingListener();
+        }
+    }
+
     static class ReplayingListener {
         @StreamSubscription(id = "replaying", startAt = StartPosition.BEGINNING_OF_TIME)
+        Mono<Void> on(TestEvent event) {
+            return Mono.empty();
+        }
+    }
+
+    static class Iso8601ReplayingListener {
+        @StreamSubscription(id = "replaying-iso8601", startAtISO8601 = "2000-01-01T00:00:00Z")
+        Mono<Void> on(TestEvent event) {
+            return Mono.empty();
+        }
+    }
+
+    static class EpochMillisReplayingListener {
+        @StreamSubscription(id = "replaying-epoch", startAtTimeEpochMillis = 946684800000L)
         Mono<Void> on(TestEvent event) {
             return Mono.empty();
         }
