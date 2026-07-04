@@ -122,6 +122,18 @@ class PositionBackfillTest {
     }
 
     @Test
+    void removes_the_checkpoint_document_when_the_run_completes() {
+        writeUnpositionedEvents("stream-a", 3);
+
+        PositionBackfill backfill = new PositionBackfill(database, COLLECTION_NAME, PositionBackfillOptions.defaults().withBatchSize(2));
+        backfill.run();
+
+        MongoCollection<Document> checkpointCollection = database.getCollection(COLLECTION_NAME + "_position_backfill_checkpoint");
+        Document checkpoint = checkpointCollection.find(new Document("_id", "positionBackfill")).first();
+        assertThat(checkpoint).isNull();
+    }
+
+    @Test
     void seeds_counter_above_accurate_historical_count_plus_slack() {
         writeUnpositionedEvents("stream-a", 7);
 

@@ -104,7 +104,7 @@ public final class PositionBackfill {
                 sleep(options.throttleMillis());
             }
         }
-        markCompleted();
+        deleteCheckpoint();
         log.info("Position backfill for collection '{}' finished: {} events positioned this run, counter seeded to {}.",
                 eventStoreCollectionName, positioned, seededTo);
         return new PositionBackfillResult(positioned, seededTo, true);
@@ -191,19 +191,16 @@ public final class PositionBackfill {
                 eq(ID, PositionBackfillCheckpoint.CHECKPOINT_DOCUMENT_ID),
                 Updates.combine(
                         Updates.set(PositionBackfillCheckpoint.FIELD_LAST_PROCESSED_ID, lastProcessedId),
-                        Updates.inc(PositionBackfillCheckpoint.FIELD_PROCESSED_COUNT, batchSize),
-                        Updates.set(PositionBackfillCheckpoint.FIELD_COMPLETED, false)
+                        Updates.inc(PositionBackfillCheckpoint.FIELD_PROCESSED_COUNT, batchSize)
                 ),
                 new FindOneAndUpdateOptions().upsert(true)
         );
     }
 
-    private void markCompleted() {
-        checkpointCollection.findOneAndUpdate(
-                eq(ID, PositionBackfillCheckpoint.CHECKPOINT_DOCUMENT_ID),
-                Updates.set(PositionBackfillCheckpoint.FIELD_COMPLETED, true),
-                new FindOneAndUpdateOptions().upsert(true)
-        );
+    // Remove the checkpoint once every event is positioned, so a completed backfill leaves no state behind. A re-run
+    // then starts fresh and finds nothing to do, since only events missing position are touched.
+    private void deleteCheckpoint() {
+        checkpointCollection.deleteOne(eq(ID, PositionBackfillCheckpoint.CHECKPOINT_DOCUMENT_ID));
     }
 
     /**

@@ -25,7 +25,6 @@ final class PositionBackfillCheckpoint {
     static final String CHECKPOINT_DOCUMENT_ID = "positionBackfill";
     static final String FIELD_LAST_PROCESSED_ID = "lastProcessedId";
     static final String FIELD_PROCESSED_COUNT = "processedCount";
-    static final String FIELD_COMPLETED = "completed";
 
     private PositionBackfillCheckpoint() {
     }

@@ -7,7 +7,7 @@ Maven coordinates: `org.occurrent:eventstore-mongodb-position-backfill`.
 
 ## The problem
 
-Occurrent stamps a global, always-increasing `position` on every event. Position is what lets catch-up
+Occurrent gives every event a global, always-increasing `position`. Position is what lets catch-up
 subscriptions replay history in a fixed order that does not depend on wall-clock time, and it lets stream and DCB
 consumers order events on one shared axis.
 
@@ -28,8 +28,10 @@ Three properties make it safe to run against a live system:
 
 - **Idempotent.** It only touches events that are missing `position`, so running it twice is safe. A second run
   reports zero events positioned.
-- **Resumable.** It records the last processed `_id` in a checkpoint document. If the process is killed, running
-  it again continues from where it stopped instead of starting over.
+- **Resumable.** It records the last processed `_id` in a checkpoint document (`_id: "positionBackfill"` in the
+  `<events>_position_backfill_checkpoint` collection). If the process is killed, running it again continues from
+  where it stopped instead of starting over. On successful completion the checkpoint document is removed, so a
+  finished backfill leaves no state behind. Running it again after that starts fresh and finds nothing to do.
 - **Throttled.** You can make it sleep between batches so it does not compete with production traffic.
 
 ## The safe upgrade sequence
