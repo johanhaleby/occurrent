@@ -66,7 +66,7 @@ import static org.awaitility.Awaitility.await;
  * position in the method signature, through the reactive {@code subscribeWithMetadata} path. Three binding
  * configurations are exercised:
  *
- * - event-first, DcbEventMetadata second (dcbPosition and dcbTags populated)
+ * - event-first, DcbEventMetadata second (position and dcbTags populated)
  * - metadata-first, event second (the argument-ordering the blocking bindArguments fix covers)
  * - event-first, generic EventMetadata second (dcbTags readable through the raw data map)
  */
@@ -111,7 +111,7 @@ class ReactiveDcbSubscriptionMetadataBindingMongoTest {
             assertThat(eventFirstDcbMetadataReceiver.receivedEvents().get(0).name()).isEqualTo("meta-event-1");
         });
         DcbEventMetadata m = eventFirstDcbMetadataReceiver.receivedMetadata().get(0);
-        assertThat(m.dcbPosition()).isPresent();
+        assertThat(m.position()).isPresent();
         assertThat(m.dcbTags()).contains(TAG);
     }
 
@@ -122,7 +122,7 @@ class ReactiveDcbSubscriptionMetadataBindingMongoTest {
             assertThat(metadataFirstReceiver.receivedEvents().get(0).name()).isEqualTo("meta-event-2");
         });
         DcbEventMetadata m = metadataFirstReceiver.receivedMetadata().get(0);
-        assertThat(m.dcbPosition()).isPresent();
+        assertThat(m.position()).isPresent();
         assertThat(m.dcbTags()).contains(TAG);
     }
 

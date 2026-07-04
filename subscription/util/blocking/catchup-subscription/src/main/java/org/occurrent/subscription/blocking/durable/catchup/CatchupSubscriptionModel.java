@@ -291,36 +291,50 @@ public class CatchupSubscriptionModel implements SubscriptionModel, DelegatingSu
             firstStartAt = startAt;
         }
 
+        StreamStart streamStart = classifyStreamStart(firstStartAt);
         if (positionMode) {
-            // A "replay from the beginning of time" request is time-based, but on a position store it maps to position
-            // 0 so the position catch-up replays history instead of discarding it as an unrecognised token.
-            if (startsAtBeginningOfTime(firstStartAt)) {
-                StartAt positionStartAt = StartAt.subscriptionPosition(GlobalSubscriptionPosition.of(0));
-                Future<Subscription> subscriptionCompletableFuture = CompletableFuture.supplyAsync(() -> startPositionCatchupSubscriptionForStream(subscriptionId, filter, startAt, action, positionStartAt));
-                return new CatchupSubscription(subscriptionId, subscriptionCompletableFuture);
-            }
-            // A specific historical wall-clock start has no position to map to, so replay it through the legacy
-            // time-based catch-up even on a position store. Only beginning-of-time and explicit positions use the
-            // position path.
-            if (isTimeBasedSubscriptionPosition(firstStartAt)) {
-                Future<Subscription> subscriptionCompletableFuture = CompletableFuture.supplyAsync(() -> startCatchupSubscription(subscriptionId, filter, startAt, action, firstStartAt));
-                return new CatchupSubscription(subscriptionId, subscriptionCompletableFuture);
-            }
-            // Only an explicit global-position start triggers a position replay. Anything else resumes live directly.
-            if (!startsAtExplicitDcbPosition(firstStartAt)) {
-                return subscriptionModel.subscribe(subscriptionId, filter, firstStartAt, action);
-            }
-            Future<Subscription> subscriptionCompletableFuture = CompletableFuture.supplyAsync(() -> startPositionCatchupSubscriptionForStream(subscriptionId, filter, startAt, action, firstStartAt));
-            return new CatchupSubscription(subscriptionId, subscriptionCompletableFuture);
+            return switch (streamStart) {
+                // Beginning-of-time maps to position 0 so the position catch-up replays all history.
+                case BEGINNING_OF_TIME -> streamPositionCatchup(subscriptionId, filter, startAt, action, StartAt.subscriptionPosition(GlobalSubscriptionPosition.of(0)));
+                case GLOBAL_POSITION -> streamPositionCatchup(subscriptionId, filter, startAt, action, firstStartAt);
+                // A specific wall-clock time has no position to map to, so replay it through the legacy time-based
+                // catch-up even on a position store.
+                case SPECIFIC_TIME -> streamTimeCatchup(subscriptionId, filter, startAt, action, firstStartAt);
+                case LIVE -> subscriptionModel.subscribe(subscriptionId, filter, firstStartAt, action);
+            };
         }
+        return switch (streamStart) {
+            case BEGINNING_OF_TIME, SPECIFIC_TIME -> streamTimeCatchup(subscriptionId, filter, startAt, action, firstStartAt);
+            case GLOBAL_POSITION, LIVE -> subscriptionModel.subscribe(subscriptionId, filter, firstStartAt, action);
+        };
+    }
 
-        // We want to continue from the wrapping subscription if it has something stored in its position storage.
-        if (!isTimeBasedSubscriptionPosition(firstStartAt)) {
-            return subscriptionModel.subscribe(subscriptionId, filter, firstStartAt, action);
+    // The kinds of resolved start a stream subscription can have. Classifying once keeps the routing above an
+    // exhaustive switch, so a new kind forces both switches to handle it and no start can silently fall through to
+    // live delivery, which is the class of bug that once dropped specific-time replay on a position store.
+    private enum StreamStart {BEGINNING_OF_TIME, SPECIFIC_TIME, GLOBAL_POSITION, LIVE}
+
+    private static StreamStart classifyStreamStart(StartAt startAt) {
+        if (startsAtBeginningOfTime(startAt)) {
+            return StreamStart.BEGINNING_OF_TIME;
         }
+        if (isTimeBasedSubscriptionPosition(startAt)) {
+            return StreamStart.SPECIFIC_TIME;
+        }
+        if (startsAtExplicitDcbPosition(startAt)) {
+            return StreamStart.GLOBAL_POSITION;
+        }
+        return StreamStart.LIVE;
+    }
 
-        Future<Subscription> subscriptionCompletableFuture = CompletableFuture.supplyAsync(() -> startCatchupSubscription(subscriptionId, filter, startAt, action, firstStartAt));
-        return new CatchupSubscription(subscriptionId, subscriptionCompletableFuture);
+    private Subscription streamPositionCatchup(String subscriptionId, @Nullable SubscriptionFilter filter, StartAt startAt, Consumer<CloudEvent> action, StartAt positionStartAt) {
+        Future<Subscription> future = CompletableFuture.supplyAsync(() -> startPositionCatchupSubscriptionForStream(subscriptionId, filter, startAt, action, positionStartAt));
+        return new CatchupSubscription(subscriptionId, future);
+    }
+
+    private Subscription streamTimeCatchup(String subscriptionId, @Nullable SubscriptionFilter filter, StartAt startAt, Consumer<CloudEvent> action, StartAt firstStartAt) {
+        Future<Subscription> future = CompletableFuture.supplyAsync(() -> startCatchupSubscription(subscriptionId, filter, startAt, action, firstStartAt));
+        return new CatchupSubscription(subscriptionId, future);
     }
 
     private Subscription startCatchupSubscription(String subscriptionId, @Nullable SubscriptionFilter filter, StartAt startAt, Consumer<CloudEvent> action, StartAt firstStartAt) {
