@@ -48,10 +48,10 @@ DCB is a capability layered on the existing CloudEvent storage, not a new store 
     `withStreamPosition()` (or `occurrent.event-store.stream.position=true`) is always honored, and DCB always writes
     position. Catch-up follows the store, so a store guarded off this way stays on the legacy time-based path until
     you enable position and backfill.
-  * Known limitation: a combined `STREAM` and `DCB` reactive store does not yet have a dual-mode catch-up model
-    that replays both stream and DCB history together. The blocking stack supports this combination already.
-    Reactive combined-store stream replay fails loud rather than silently misbehaving; a reactive dual-mode
-    catch-up model is future work.
+  * A combined `STREAM` and `DCB` reactive store now replays both stream and DCB history. One dual-mode catch-up
+    model routes each subscription to the stream or DCB path by its filter and start position, matching the blocking
+    stack. Reactive stream catch-up no longer needs the DCB API on the classpath. The blocking stream catch-up will
+    be made DCB-free in a follow-up.
   * See [ADR 45](doc/architecture/decisions/0045-unified-global-position.md).
 * Fixed a bug where a live `NOW`/`DEFAULT` subscription on `ReactorMongoSubscriptionModel` could redeliver the event written just before the subscription started.
   * `globalSubscriptionPosition()` used the server's raw operation time as the resume position instead of bumping it past the last written event, so a write landing on the same BSON timestamp as the resume point could be replayed. It now increments the timestamp's increment field by 1, the same fix `SpringMongoSubscriptionModel` already had.

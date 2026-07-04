@@ -127,7 +127,8 @@ operational fact this feature introduces, and it is called out again in the chan
 A store that genuinely never wants a global position, such as `entity-history`, can opt out and pays no counter
 cost, keeping the pre-existing behavior and the legacy catch-up path exactly as before.
 
-A combined `{STREAM, DCB}` reactive store does not yet get a dual-mode reactive catch-up model that can replay both
-stream history and DCB history together. The blocking stack supports this combination. Reactive combined-store
-stream replay fails loud rather than silently doing the wrong thing, and building a reactive dual-mode catch-up
-model is future work.
+A combined `{STREAM, DCB}` reactive store replays both stream and DCB history through one dual-mode catch-up model
+that routes each subscription to the stream or DCB path by its filter and start position, matching the blocking
+stack. Reactive stream catch-up no longer depends on the DCB API, so a STREAM-only reactive store can replay
+history without the DCB module on its classpath. Making the blocking stream catch-up equally DCB-free is a
+follow-up.

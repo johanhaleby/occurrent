@@ -222,16 +222,16 @@ class OccurrentReactiveAnnotationBeanPostProcessor implements BeanPostProcessor,
         };
     }
 
-    // A @StreamSubscription can replay history only when the store writes stream position, since that wires a
-    // ReactorStreamCatchupSubscriptionModel for replay by position. A combined STREAM+DCB store wires the DCB catch-up
-    // model instead, which does not replay stream filters, so combined-store stream replay is not supported here.
+    // A @StreamSubscription can replay history when the store has the STREAM capability and writes stream position,
+    // which wires a catch-up model that replays stream filters by position. A combined STREAM+DCB store replays too. A
+    // DCB-only store also writes position but has no stream events, so it does not support stream history replay.
     private boolean streamHistoryReplaySupported() {
         ReactorMongoEventStore eventStore = applicationContext.getBeanProvider(ReactorMongoEventStore.class).getIfAvailable();
         if (eventStore == null || !eventStore.writesPosition()) {
             return false;
         }
         OccurrentProperties occurrentProperties = applicationContext.getBean(OccurrentProperties.class);
-        return !occurrentProperties.getEventStore().getCapabilities().contains(EventStoreCapability.DCB);
+        return occurrentProperties.getEventStore().getCapabilities().contains(EventStoreCapability.STREAM);
     }
 
     // A stream subscription's start position. A specific start time (startAtISO8601 or startAtTimeEpochMillis) always
@@ -249,7 +249,7 @@ class OccurrentReactiveAnnotationBeanPostProcessor implements BeanPostProcessor,
         boolean beginningOfTimeStart = subscription.startAt() == StartPosition.BEGINNING_OF_TIME;
         if (beginningOfTimeStart && !historyReplaySupported) {
             throw new IllegalArgumentException(("@StreamSubscription '%s' asks to replay history (BEGINNING_OF_TIME), but this store does not support reactive stream history replay " +
-                    "(stream position is off, or it is a combined STREAM+DCB store). Enable stream position (on by default) for a STREAM-only store, use startAt = NOW or DEFAULT, or use @DcbSubscription for position replay.").formatted(subscription.id()));
+                    "(it has no STREAM capability, or stream position is off). Enable stream position (on by default) for a STREAM store, use startAt = NOW or DEFAULT, or use @DcbSubscription for a DCB store.").formatted(subscription.id()));
         }
         if (beginningOfTimeStart) {
             // Map BEGINNING_OF_TIME to position 0, which the reactive stream catch-up model replays before going live.
