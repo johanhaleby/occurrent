@@ -51,6 +51,8 @@ DCB is a capability layered on the existing CloudEvent storage, not a new store 
     Reactive combined-store stream replay fails loud rather than silently misbehaving; a reactive dual-mode
     catch-up model is future work.
   * See [ADR 45](doc/architecture/decisions/0045-unified-global-position.md).
+* Fixed a bug where a live `NOW`/`DEFAULT` subscription on `ReactorMongoSubscriptionModel` could redeliver the event written just before the subscription started.
+  * `globalSubscriptionPosition()` used the server's raw operation time as the resume position instead of bumping it past the last written event, so a write landing on the same BSON timestamp as the resume point could be replayed. It now increments the timestamp's increment field by 1, the same fix `SpringMongoSubscriptionModel` already had.
 
 * Added a reactive (Project Reactor) Spring Boot starter, `spring-boot-starter-mongodb-reactive`, alongside the blocking `spring-boot-starter-mongodb`, so a reactive application gets the same auto-configuration and annotation-driven subscriptions.
   * Enable it with `@EnableOccurrentReactive` and the new dependency. It auto-configures the reactive event store, transaction manager, application service (stream and DCB), query DSLs, subscription model, position storage, and the reactive `StreamSubscriptions` and `DcbSubscriptions` DSLs, driven by the same `occurrent.*` properties and capability set as the blocking starter.
@@ -245,6 +247,9 @@ DCB is a capability layered on the existing CloudEvent storage, not a new store 
   * [ADR 19](doc/architecture/decisions/0019-dcb-dsl-module.md)
   * [ADR 20](doc/architecture/decisions/0020-dcb-catch-up-subscription-by-dcbposition.md)
   * [ADR 21](doc/architecture/decisions/0021-dcb-write-path-query-scoped-concurrency.md)
+* Renamed the package-private `OccurrentAnnotationBeanPostProcessor` to `OccurrentBlockingAnnotationBeanPostProcessor` for symmetry with the reactive starter's `OccurrentReactiveAnnotationBeanPostProcessor`. Internal only, no public API impact.
+* Fixed a bug in `ReactorDcbCatchupSubscriptionModel` where resuming a DCB catch-up subscription from an explicit position (`DcbStartAt.afterPosition(N)` with `N > 0`, for example `@DcbSubscription(startAtDcbPosition = N)`) could redeliver an event at or before that position through the live handover. The live change stream resumes from a token captured before the bulk replay and dedupes against it by event id, but that dedup cache only covers what the replay itself fetched, which deliberately excludes everything at or below `N`. An event in that excluded range could still slip through the live stream's own resume window uncached. The live filter now also excludes anything at or below the requested resume position directly, closing the gap. Replaying from the beginning (`N = 0`) was never affected, since nothing is excluded from the replay in that case.
+* Extensively broadened the integration test coverage for `@StreamSubscription` and `@DcbSubscription` annotation processing on both the blocking and reactive starters: the full `startAt` matrix (including the ISO8601 and epoch millis attributes, previously untested at the annotation level), durable resume and replay across an actual application restart for every `resumeBehavior`, metadata parameter binding for the reactive stack and for blocking stream subscriptions, reactive handler return type adaptation (`void`, `Mono<Void>`, and non-`Void` `Mono<T>`), the observable behavior of a permanently failing handler on each stack, and `startupMode = WAIT_UNTIL_STARTED`. This is what caught the `ReactorDcbCatchupSubscriptionModel` bug above.
 
 #### Notes
 

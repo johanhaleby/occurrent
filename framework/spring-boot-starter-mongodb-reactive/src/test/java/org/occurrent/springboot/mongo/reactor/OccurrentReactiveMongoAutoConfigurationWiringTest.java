@@ -214,6 +214,17 @@ class OccurrentReactiveMongoAutoConfigurationWiringTest {
                 });
     }
 
+    @Test
+    void a_stream_subscription_with_an_explicit_epoch_millis_start_fails_loud() {
+        // An epoch-millis start is a specific historical time, same as an ISO8601 one, so it fails loud for the same
+        // reason: a wall-clock time has no position to map to.
+        contextRunner().withUserConfiguration(EpochMillisStreamSubscriptionConfiguration.class).run(context -> {
+            assertThat(context).hasFailed();
+            assertThat(context.getStartupFailure()).hasRootCauseInstanceOf(IllegalArgumentException.class);
+            assertThat(context.getStartupFailure()).rootCause().hasMessageContaining("cannot honor a specific historical start time");
+        });
+    }
+
     @Configuration(proxyBeanMethods = false)
     static class BeginningOfTimeStreamSubscriptionConfiguration {
         @Bean
@@ -230,6 +241,14 @@ class OccurrentReactiveMongoAutoConfigurationWiringTest {
         }
     }
 
+    @Configuration(proxyBeanMethods = false)
+    static class EpochMillisStreamSubscriptionConfiguration {
+        @Bean
+        EpochMillisListener epochMillisListener() {
+            return new EpochMillisListener();
+        }
+    }
+
     static class ReplayingListener {
         @StreamSubscription(id = "replaying", startAt = StartPosition.BEGINNING_OF_TIME)
         Mono<Void> on(TestEvent event) {
@@ -239,6 +258,13 @@ class OccurrentReactiveMongoAutoConfigurationWiringTest {
 
     static class SpecificTimeListener {
         @StreamSubscription(id = "specificTime", startAtISO8601 = "2024-01-01T00:00:00Z")
+        Mono<Void> on(TestEvent event) {
+            return Mono.empty();
+        }
+    }
+
+    static class EpochMillisListener {
+        @StreamSubscription(id = "epochMillis", startAtTimeEpochMillis = 946684800000L)
         Mono<Void> on(TestEvent event) {
             return Mono.empty();
         }
