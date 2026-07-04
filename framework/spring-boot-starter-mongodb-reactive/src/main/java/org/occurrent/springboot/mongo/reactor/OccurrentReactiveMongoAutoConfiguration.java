@@ -54,8 +54,7 @@ import org.occurrent.subscription.mongodb.spring.reactor.ReactorMongoSubscriptio
 import org.occurrent.subscription.mongodb.spring.reactor.ReactorMongoSubscriptionModelConfig;
 import org.occurrent.subscription.mongodb.spring.reactor.ReactorSubscriptionPositionStorage;
 import org.occurrent.subscription.reactor.durable.ReactorDurableSubscriptionModel;
-import org.occurrent.subscription.reactor.durable.catchup.ReactorDcbCatchupSubscriptionModel;
-import org.occurrent.subscription.reactor.durable.catchup.ReactorStreamCatchupSubscriptionModel;
+import org.occurrent.subscription.reactor.durable.catchup.ReactorCatchupSubscriptionModel;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.ObjectProvider;
@@ -142,14 +141,13 @@ public class OccurrentReactiveMongoAutoConfiguration<E> {
     /**
      * The composed reactive subscription model. Unlike the blocking side (which also layers a competing consumer),
      * the reactive stack has no competing-consumer model, so the chain is {@code Durable(Catchup(mongo))} with the
-     * durable model on the outside as the {@link Subscribable}/lifecycle authority. A DCB catch-up layer is added when
-     * the DCB capability is enabled and a reactive {@link DcbEventStore} is available, giving DCB position replay. For a
-     * STREAM-only store that writes position (on by default, opt out with
-     * {@code occurrent.event-store.stream.position=false}), a {@link ReactorStreamCatchupSubscriptionModel} layer is
-     * added instead, so a {@code @StreamSubscription} started from the beginning replays stream history by position
-     * before going live. A combined STREAM+DCB store keeps the DCB catch-up layer only, the two catch-up models each
-     * accept only their own filter kind so they are not chained. {@code destroyMethod = "shutdown"} disposes the running
-     * subscriptions on context close.
+     * durable model on the outside as the {@link Subscribable}/lifecycle authority. The catch-up layer is a
+     * {@link ReactorCatchupSubscriptionModel}, which routes each subscription to stream or DCB replay by its filter and
+     * start position. A combined STREAM+DCB store gets the dual-mode model, so a {@code @StreamSubscription} started
+     * from the beginning replays stream history by position while DCB subscriptions replay by DCB position. A STREAM-only
+     * store that writes position (on by default, opt out with {@code occurrent.event-store.stream.position=false}) gets
+     * stream-only catch-up, a DCB-only store gets DCB-only catch-up, and a STREAM-only store with position off gets no
+     * catch-up layer. {@code destroyMethod = "shutdown"} disposes the running subscriptions on context close.
      */
     @Bean(destroyMethod = "shutdown")
     @ConditionalOnMissingBean({SubscriptionModel.class, Subscribable.class})
@@ -160,22 +158,21 @@ public class OccurrentReactiveMongoAutoConfiguration<E> {
         EventStoreProperties eventStoreProperties = occurrentProperties.getEventStore();
         ReactorMongoSubscriptionModel mongoSubscriptionModel = new ReactorMongoSubscriptionModel(mongo, eventStoreProperties.getCollection(), eventStoreProperties.getTimeRepresentation(),
                 ReactorMongoSubscriptionModelConfig.withConfig().restartSubscriptionsOnChangeStreamHistoryLost(occurrentProperties.getSubscription().isRestartOnChangeStreamHistoryLost()));
-        // DCB catch-up replays by position over the DCB event store. The DcbQuery.all() is shared by every
-        // DcbSubscriptions subscription, which each narrow to their own DcbQuery in the consumer, so a single
-        // all-matching catch-up is correct.
+        // A combined store has one ReactorMongoEventStore bean that is both the DCB store and the position-ordered
+        // stream reader, so it fills both roles. DcbQuery.all() and Filter.all() are shared by every subscription,
+        // which each narrow to their own query or filter in the consumer.
         DcbEventStore dcbStore = eventStoreProperties.getCapabilities().contains(DCB) ? dcbEventStore.getIfAvailable() : null;
+        ReactorMongoEventStore streamStore = reactorEventStore.getIfAvailable();
+        boolean streamCatchup = streamStore != null && streamStore.writesPosition();
         final PositionAwareSubscriptionModel inner;
-        if (dcbStore != null) {
-            inner = new ReactorDcbCatchupSubscriptionModel(mongoSubscriptionModel, dcbStore, DcbQuery.all());
+        if (dcbStore != null && streamCatchup) {
+            inner = new ReactorCatchupSubscriptionModel(mongoSubscriptionModel, streamStore, dcbStore, DcbQuery.all(), Filter.all());
+        } else if (dcbStore != null) {
+            inner = new ReactorCatchupSubscriptionModel(mongoSubscriptionModel, dcbStore, DcbQuery.all());
+        } else if (streamCatchup) {
+            inner = new ReactorCatchupSubscriptionModel(mongoSubscriptionModel, streamStore, Filter.all());
         } else {
-            ReactorMongoEventStore eventStore = reactorEventStore.getIfAvailable();
-            if (eventStore != null && eventStore.writesPosition()) {
-                // STREAM-only store with position on: replay stream history by position. Filter.all() is narrowed by
-                // each subscription's own filter, like the DCB catch-up wiring above.
-                inner = new ReactorStreamCatchupSubscriptionModel(mongoSubscriptionModel, eventStore, Filter.all());
-            } else {
-                inner = mongoSubscriptionModel;
-            }
+            inner = mongoSubscriptionModel;
         }
         return new ReactorDurableSubscriptionModel(inner, storage);
     }

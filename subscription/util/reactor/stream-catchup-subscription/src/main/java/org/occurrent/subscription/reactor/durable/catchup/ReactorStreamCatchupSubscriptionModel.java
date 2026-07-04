@@ -35,10 +35,7 @@ import org.occurrent.subscription.api.reactor.PositionAwareSubscriptionModel;
 import reactor.core.publisher.Flux;
 import reactor.core.publisher.Mono;
 
-import java.util.Collections;
-import java.util.Iterator;
-import java.util.LinkedHashSet;
-import java.util.Set;
+import java.util.function.Predicate;
 
 import static java.util.Objects.requireNonNull;
 
@@ -171,74 +168,24 @@ public class ReactorStreamCatchupSubscriptionModel implements PositionAwareSubsc
         }
 
         long startPosition = GlobalSubscriptionPosition.positionOf(position.subscriptionPosition);
-        // Capture the live resume token before the bulk replay so an event committing during the replay is still
-        // delivered by the live subscription. If the model reports no token (for example an empty oplog or a
-        // restricted cluster) events could be dropped between the end of the replay and going live, so fail loudly.
-        return subscriptionModel.globalSubscriptionPosition()
-                .switchIfEmpty(Mono.error(() -> new IllegalStateException("Cannot run a stream catch-up subscription because the subscription model reported no resume token to hand over to live delivery. The change stream history may be unavailable, for example an empty oplog or a restricted cluster.")))
-                .flatMapMany(liveToken ->
-                positionOrderedReader.currentPosition().flatMapMany(bulkHead -> {
-                    HandoverCache cache = new HandoverCache(handoverCacheSize);
-                    // Cache the replayed ids so the live change stream can skip them. It resumes inclusively and so
-                    // re-delivers boundary events the replay already emitted. Dedup by id, not by position, so an
-                    // event below the replay head that the replay never saw is still delivered once by the live stream.
-                    Flux<CloudEvent> bulk = windows(filter, startPosition, bulkHead, cache);
-                    Flux<CloudEvent> reconcile = reconcile(filter, bulkHead, cache);
-                    Flux<CloudEvent> live = subscriptionModel.subscribe(OccurrentSubscriptionFilter.filter(filter), StartAt.subscriptionPosition(liveToken))
-                            .filter(cloudEvent -> OccurrentCloudEventExtension.getPosition(cloudEvent) > 0
-                                    && FilterMatcher.matchesFilter(cloudEvent, filter)
-                                    && !cache.contains(cloudEvent.getId()));
-                    return Flux.concat(bulk, reconcile, live);
-                }));
+        CatchupReader reader = new StreamCatchupReader(positionOrderedReader, filter);
+        PositionCatchupPipeline pipeline = new PositionCatchupPipeline(reader, windowSize, handoverCacheSize);
+        Predicate<CloudEvent> livePredicate = cloudEvent -> OccurrentCloudEventExtension.getPosition(cloudEvent) > 0 && FilterMatcher.matchesFilter(cloudEvent, filter);
+        return pipeline.catchup(subscriptionModel, OccurrentSubscriptionFilter.filter(filter), livePredicate, startPosition);
     }
 
-    // Emits events in (fromExclusive, toInclusive], paging in position windows. Records every emitted id in the cache
-    // so the inclusive live resume can skip the replayed events. Used by both the bulk and the reconciliation phases.
-    private Flux<CloudEvent> windows(Filter filter, long fromExclusive, long toInclusive, HandoverCache cache) {
-        if (fromExclusive >= toInclusive) {
-            return Flux.empty();
-        }
-        long upTo = Math.min(fromExclusive + windowSize, toInclusive);
-        return positionOrderedReader.readInPositionOrder(filter, PositionRange.between(fromExclusive, upTo))
-                .doOnNext(event -> cache.add(event.getId()))
-                // Attach the position as the subscription position so a durable model layered on top can persist
-                // replay progress. A raw event read from the store carries no change-stream position.
-                .map(event -> (CloudEvent) new PositionAwareCloudEvent(event, GlobalSubscriptionPosition.of(OccurrentCloudEventExtension.getPosition(event))))
-                .concatWith(Flux.defer(() -> windows(filter, upTo, toInclusive, cache)));
-    }
-
-    // Pages from the bulk head onward, re-reading the head each round, until it stops advancing. This delivers events
-    // written during the bulk replay in position order.
-    private Flux<CloudEvent> reconcile(Filter filter, long cursor, HandoverCache cache) {
-        return positionOrderedReader.currentPosition().flatMapMany(head -> head > cursor
-                ? windows(filter, cursor, head, cache).concatWith(Flux.defer(() -> reconcile(filter, head, cache)))
-                : Flux.empty());
-    }
-
-    // A bounded, insertion-ordered set of recently replayed event ids. The live change stream resumes inclusively and
-    // re-delivers events near the captured token that the replay already emitted, and this cache skips those. It only
-    // needs the tail the live resume can overlap, not the whole history.
-    private static final class HandoverCache {
-        private final int maxSize;
-        private final Set<String> ids;
-
-        private HandoverCache(int maxSize) {
-            this.maxSize = maxSize;
-            this.ids = Collections.synchronizedSet(new LinkedHashSet<>());
+    // Reads stream events in position order through the PositionOrderedReader, wrapping each with its position so a
+    // durable model layered on top can persist replay progress.
+    private record StreamCatchupReader(PositionOrderedReader positionOrderedReader, Filter filter) implements CatchupReader {
+        @Override
+        public Flux<CloudEvent> readWindow(long fromExclusive, long toInclusive) {
+            return positionOrderedReader.readInPositionOrder(filter, PositionRange.between(fromExclusive, toInclusive))
+                    .map(event -> (CloudEvent) new PositionAwareCloudEvent(event, GlobalSubscriptionPosition.of(OccurrentCloudEventExtension.getPosition(event))));
         }
 
-        private void add(String id) {
-            synchronized (ids) {
-                if (ids.add(id) && ids.size() > maxSize) {
-                    Iterator<String> iterator = ids.iterator();
-                    iterator.next();
-                    iterator.remove();
-                }
-            }
-        }
-
-        private boolean contains(String id) {
-            return ids.contains(id);
+        @Override
+        public Mono<Long> currentHead() {
+            return positionOrderedReader.currentPosition();
         }
     }
 }

@@ -47,13 +47,18 @@ import org.testcontainers.junit.jupiter.Testcontainers;
 import org.testcontainers.mongodb.MongoDBContainer;
 import reactor.core.publisher.Mono;
 
+import java.time.Duration;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Set;
+import java.util.UUID;
+import java.util.concurrent.CopyOnWriteArrayList;
+import java.util.stream.Stream;
 
 import static java.util.Objects.requireNonNull;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
+import static org.awaitility.Awaitility.await;
 import static org.mockito.Mockito.mock;
 
 @Testcontainers
@@ -225,6 +230,27 @@ class OccurrentReactiveMongoAutoConfigurationWiringTest {
         });
     }
 
+    @Test
+    void a_combined_stream_and_dcb_store_starts_a_beginning_of_time_stream_subscription_and_replays_history_without_failing() {
+        // With both capabilities on, the reactive stack wires the dual-mode ReactorCatchupSubscriptionModel (see
+        // OccurrentReactiveMongoAutoConfiguration#occurrentReactorCatchupSubscriptionModel). A @StreamSubscription
+        // carries an OccurrentSubscriptionFilter, which the routing fix always sends to the stream inner model, so
+        // BEGINNING_OF_TIME must replay rather than fail loud like the position-off/specific-time scenarios above.
+        contextRunner()
+                .withPropertyValues("occurrent.event-store.capabilities=stream,dcb")
+                .withUserConfiguration(BeginningOfTimeStreamSubscriptionConfiguration.class).run(context -> {
+                    assertThat(context).hasNotFailed();
+
+                    ApplicationService<TestEvent> applicationService = context.getBean(ApplicationService.class);
+                    TestEvent historic = new TestEvent(UUID.randomUUID().toString());
+                    applicationService.execute(UUID.randomUUID().toString(), events -> Stream.of(historic)).block();
+
+                    ReplayingListener replayingListener = context.getBean(ReplayingListener.class);
+                    await().atMost(Duration.ofSeconds(30)).untilAsserted(() ->
+                            assertThat(replayingListener.received()).contains(historic.eventId()));
+                });
+    }
+
     @Configuration(proxyBeanMethods = false)
     static class BeginningOfTimeStreamSubscriptionConfiguration {
         @Bean
@@ -250,9 +276,16 @@ class OccurrentReactiveMongoAutoConfigurationWiringTest {
     }
 
     static class ReplayingListener {
+        private final CopyOnWriteArrayList<String> received = new CopyOnWriteArrayList<>();
+
         @StreamSubscription(id = "replaying", startAt = StartPosition.BEGINNING_OF_TIME)
         Mono<Void> on(TestEvent event) {
+            received.add(event.eventId());
             return Mono.empty();
+        }
+
+        List<String> received() {
+            return received;
         }
     }
 

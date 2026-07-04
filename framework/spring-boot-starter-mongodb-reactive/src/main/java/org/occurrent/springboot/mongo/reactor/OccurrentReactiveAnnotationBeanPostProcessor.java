@@ -29,7 +29,6 @@ import org.occurrent.dsl.dcb.DcbEventMetadata;
 import org.occurrent.dsl.dcb.reactor.DcbSubscriptions;
 import org.occurrent.dsl.subscription.EventMetadata;
 import org.occurrent.dsl.subscription.reactor.StreamSubscriptions;
-import org.occurrent.eventstore.api.EventStoreCapability;
 import org.occurrent.eventstore.api.dcb.DcbQuery;
 import org.occurrent.eventstore.mongodb.spring.reactor.ReactorMongoEventStore;
 import org.occurrent.filter.Filter;
@@ -222,16 +221,11 @@ class OccurrentReactiveAnnotationBeanPostProcessor implements BeanPostProcessor,
         };
     }
 
-    // A @StreamSubscription can replay history only when the store writes stream position, since that wires a
-    // ReactorStreamCatchupSubscriptionModel for replay by position. A combined STREAM+DCB store wires the DCB catch-up
-    // model instead, which does not replay stream filters, so combined-store stream replay is not supported here.
+    // A @StreamSubscription can replay history when the store writes stream position, which wires a catch-up model that
+    // replays stream filters by position. A combined STREAM+DCB store replays too, since it always writes position.
     private boolean streamHistoryReplaySupported() {
         ReactorMongoEventStore eventStore = applicationContext.getBeanProvider(ReactorMongoEventStore.class).getIfAvailable();
-        if (eventStore == null || !eventStore.writesPosition()) {
-            return false;
-        }
-        OccurrentProperties occurrentProperties = applicationContext.getBean(OccurrentProperties.class);
-        return !occurrentProperties.getEventStore().getCapabilities().contains(EventStoreCapability.DCB);
+        return eventStore != null && eventStore.writesPosition();
     }
 
     // A stream subscription's start position. A specific start time (startAtISO8601 or startAtTimeEpochMillis) always
@@ -249,7 +243,7 @@ class OccurrentReactiveAnnotationBeanPostProcessor implements BeanPostProcessor,
         boolean beginningOfTimeStart = subscription.startAt() == StartPosition.BEGINNING_OF_TIME;
         if (beginningOfTimeStart && !historyReplaySupported) {
             throw new IllegalArgumentException(("@StreamSubscription '%s' asks to replay history (BEGINNING_OF_TIME), but this store does not support reactive stream history replay " +
-                    "(stream position is off, or it is a combined STREAM+DCB store). Enable stream position (on by default) for a STREAM-only store, use startAt = NOW or DEFAULT, or use @DcbSubscription for position replay.").formatted(subscription.id()));
+                    "because stream position is off. Enable stream position (on by default) for this store, or use startAt = NOW or DEFAULT.").formatted(subscription.id()));
         }
         if (beginningOfTimeStart) {
             // Map BEGINNING_OF_TIME to position 0, which the reactive stream catch-up model replays before going live.

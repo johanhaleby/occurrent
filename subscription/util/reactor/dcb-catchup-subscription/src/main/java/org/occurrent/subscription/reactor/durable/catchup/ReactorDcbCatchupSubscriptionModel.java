@@ -35,10 +35,7 @@ import org.occurrent.subscription.api.reactor.PositionAwareSubscriptionModel;
 import reactor.core.publisher.Flux;
 import reactor.core.publisher.Mono;
 
-import java.util.Collections;
-import java.util.Iterator;
-import java.util.LinkedHashSet;
-import java.util.Set;
+import java.util.function.Predicate;
 import org.occurrent.cloudevents.OccurrentCloudEventExtension;
 
 import static java.util.Objects.requireNonNull;
@@ -172,89 +169,26 @@ public class ReactorDcbCatchupSubscriptionModel implements PositionAwareSubscrip
         }
 
         long startPosition = GlobalSubscriptionPosition.positionOf(position.subscriptionPosition);
-        // Capture the live resume token before the bulk replay so an event committing during the replay is still
-        // delivered by the live subscription. If the model reports no token (for example an empty oplog or a restricted
-        // cluster) a no-loss handover to live cannot be guaranteed, so fail loudly instead of silently dropping the
-        // events committed between the end of the replay and going live.
-        return subscriptionModel.globalSubscriptionPosition()
-                .switchIfEmpty(Mono.error(() -> new IllegalStateException("Cannot run a DCB catch-up subscription because the subscription model reported no resume token to hand over to live delivery. The change stream history may be unavailable, for example an empty oplog or a restricted cluster.")))
-                .flatMapMany(liveToken ->
-                readHead(query, startPosition).flatMapMany(bulkHead -> {
-                    HandoverCache cache = new HandoverCache(handoverCacheSize);
-                    // Cache the replayed ids, including the bulk tail, because the reactive global subscription position
-                    // resumes inclusively, so the live change stream re-delivers boundary events the replay already
-                    // emitted. Dedup is by id, not by position, so an in-flight event below the replay head that was
-                    // never seen during the replay is still delivered once by the live change stream.
-                    Flux<CloudEvent> bulk = windows(query, startPosition, bulkHead, cache);
-                    Flux<CloudEvent> reconcile = reconcile(query, bulkHead, cache);
-                    Flux<CloudEvent> live = subscriptionModel.subscribe(DcbSubscriptionFilter.filter(query), StartAt.subscriptionPosition(liveToken))
-                            .filter(cloudEvent -> DcbCloudEvents.isDcbEvent(cloudEvent)
-                                    && DcbCloudEvents.matches(cloudEvent, query)
-                                    && !cache.contains(cloudEvent.getId()));
-                    return Flux.concat(bulk, reconcile, live);
-                }));
+        CatchupReader reader = new DcbCatchupReader(dcbEventStore, query);
+        PositionCatchupPipeline pipeline = new PositionCatchupPipeline(reader, windowSize, handoverCacheSize);
+        Predicate<CloudEvent> livePredicate = cloudEvent -> DcbCloudEvents.isDcbEvent(cloudEvent) && DcbCloudEvents.matches(cloudEvent, query);
+        return pipeline.catchup(subscriptionModel, DcbSubscriptionFilter.filter(query), livePredicate, startPosition);
     }
 
-    // Reads the store's current global DCB head as a single read. lastSequencePosition is the global head at read
-    // time regardless of whether the query matched anything.
-    private Mono<Long> readHead(DcbQuery query, long cursor) {
-        return dcbEventStore.read(query, DcbReadOptions.between(cursor, cursor)).map(stream -> stream.lastSequencePosition());
-    }
-
-    // Emits events in (fromExclusive, toInclusive] paging in position windows. Records every emitted id in the cache so
-    // the inclusive live resume can skip the replayed events at the handover seam. Used by both the bulk and the
-    // reconciliation phases.
-    private Flux<CloudEvent> windows(DcbQuery query, long fromExclusive, long toInclusive, HandoverCache cache) {
-        if (fromExclusive >= toInclusive) {
-            return Flux.empty();
-        }
-        long upTo = Math.min(fromExclusive + windowSize, toInclusive);
-        return dcbEventStore.read(query, DcbReadOptions.between(fromExclusive, upTo))
-                .flatMapMany(stream -> {
-                    var events = stream.events();
-                    events.forEach(event -> cache.add(event.getId()));
-                    // Attach the position as the subscription position so a durable model layered on top can persist
-                    // the replay progress (a raw event read from the store carries no change-stream position). Mirrors
-                    // the blocking CatchupSubscriptionModel, which wraps each replayed DCB event with
-                    // GlobalSubscriptionPosition.of(its position).
-                    return Flux.fromIterable(events)
-                            .map(event -> (CloudEvent) new PositionAwareCloudEvent(event, GlobalSubscriptionPosition.of(OccurrentCloudEventExtension.getPosition(event))));
-                })
-                .concatWith(Flux.defer(() -> windows(query, upTo, toInclusive, cache)));
-    }
-
-    // Pages from the bulk head onward, re-reading the head each round, until it stops advancing. This delivers events
-    // written during the bulk replay in position order.
-    private Flux<CloudEvent> reconcile(DcbQuery query, long cursor, HandoverCache cache) {
-        return readHead(query, cursor).flatMapMany(head -> head > cursor
-                ? windows(query, cursor, head, cache).concatWith(Flux.defer(() -> reconcile(query, head, cache)))
-                : Flux.empty());
-    }
-
-    // A bounded, insertion-ordered set of event ids covering the recently replayed tail. The live change stream resumes
-    // inclusively, so it re-delivers events near the captured token that the replay already emitted, and this cache
-    // skips those. It does not need the whole history, only the tail the live resume can overlap.
-    private static final class HandoverCache {
-        private final int maxSize;
-        private final Set<String> ids;
-
-        private HandoverCache(int maxSize) {
-            this.maxSize = maxSize;
-            this.ids = Collections.synchronizedSet(new LinkedHashSet<>());
+    // Reads DCB events in position order through the DcbEventStore, wrapping each with its position so a durable
+    // model layered on top can persist replay progress.
+    private record DcbCatchupReader(DcbEventStore dcbEventStore, DcbQuery query) implements CatchupReader {
+        @Override
+        public Flux<CloudEvent> readWindow(long fromExclusive, long toInclusive) {
+            return dcbEventStore.read(query, DcbReadOptions.between(fromExclusive, toInclusive))
+                    .flatMapMany(stream -> Flux.fromIterable(stream.events())
+                            .map(event -> (CloudEvent) new PositionAwareCloudEvent(event, GlobalSubscriptionPosition.of(OccurrentCloudEventExtension.getPosition(event)))));
         }
 
-        private void add(String id) {
-            synchronized (ids) {
-                if (ids.add(id) && ids.size() > maxSize) {
-                    Iterator<String> iterator = ids.iterator();
-                    iterator.next();
-                    iterator.remove();
-                }
-            }
-        }
-
-        private boolean contains(String id) {
-            return ids.contains(id);
+        @Override
+        public Mono<Long> currentHead() {
+            // lastSequencePosition is the global head at read time regardless of whether the query matched anything.
+            return dcbEventStore.read(query, DcbReadOptions.between(0, 0)).map(stream -> stream.lastSequencePosition());
         }
     }
 }
