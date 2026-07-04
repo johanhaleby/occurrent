@@ -41,15 +41,15 @@ class DcbStartAtTest {
     @Test
     void beginning_maps_to_dcb_position_zero() {
         StartAt startAt = DcbStartAt.beginning().toStartAt();
-        assertThat(startAt).isInstanceOf(StartAt.StartAtSubscriptionPosition.class);
-        assertThat(((StartAt.StartAtSubscriptionPosition) startAt).subscriptionPosition).isEqualTo(GlobalSubscriptionPosition.of(0));
+        assertThat(startAt).isInstanceOf(StartAt.StartAtCheckpoint.class);
+        assertThat(((StartAt.StartAtCheckpoint) startAt).checkpoint).isEqualTo(GlobalCheckpoint.of(0));
     }
 
     @Test
     void after_position_maps_to_the_given_dcb_position() {
         StartAt startAt = DcbStartAt.afterPosition(5).toStartAt();
-        assertThat(startAt).isInstanceOf(StartAt.StartAtSubscriptionPosition.class);
-        assertThat(((StartAt.StartAtSubscriptionPosition) startAt).subscriptionPosition).isEqualTo(GlobalSubscriptionPosition.of(5));
+        assertThat(startAt).isInstanceOf(StartAt.StartAtCheckpoint.class);
+        assertThat(((StartAt.StartAtCheckpoint) startAt).checkpoint).isEqualTo(GlobalCheckpoint.of(5));
     }
 
     @Test
@@ -75,8 +75,8 @@ class DcbStartAtTest {
 
         StartAt resolved = DcbStartAt.dynamic(ignored -> DcbStartAt.beginning()).toStartAt().get(ctx);
 
-        assertThat(resolved).isInstanceOf(StartAt.StartAtSubscriptionPosition.class);
-        assertThat(((StartAt.StartAtSubscriptionPosition) resolved).subscriptionPosition)
-                .isEqualTo(GlobalSubscriptionPosition.of(0));
+        assertThat(resolved).isInstanceOf(StartAt.StartAtCheckpoint.class);
+        assertThat(((StartAt.StartAtCheckpoint) resolved).checkpoint)
+                .isEqualTo(GlobalCheckpoint.of(0));
     }
 }

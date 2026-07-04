@@ -28,19 +28,19 @@ import java.util.Optional;
 import java.util.Set;
 
 /**
- * A wrapper around a {@link CloudEvent} that also includes a {@link SubscriptionPosition} so that
+ * A wrapper around a {@link CloudEvent} that also includes a {@link Checkpoint} so that
  * it's possible to resume the stream from a particular state. You can treat this cloud event implementation
  * as a regular cloud event.
  */
-public final class PositionAwareCloudEvent implements CloudEvent {
+public final class CheckpointAwareCloudEvent implements CloudEvent {
     private final CloudEvent cloudEvent;
-    private final SubscriptionPosition subscriptionPosition;
+    private final Checkpoint checkpoint;
 
-    public PositionAwareCloudEvent(CloudEvent cloudEvent, SubscriptionPosition subscriptionPosition) {
+    public CheckpointAwareCloudEvent(CloudEvent cloudEvent, Checkpoint checkpoint) {
         Objects.requireNonNull(cloudEvent, CloudEvent.class.getSimpleName() + "cannot be null");
-        Objects.requireNonNull(subscriptionPosition, SubscriptionPosition.class.getSimpleName() + "cannot be null");
+        Objects.requireNonNull(checkpoint, Checkpoint.class.getSimpleName() + "cannot be null");
         this.cloudEvent = cloudEvent;
-        this.subscriptionPosition = subscriptionPosition;
+        this.checkpoint = checkpoint;
     }
 
     public @Nullable CloudEventData getData() {
@@ -95,8 +95,8 @@ public final class PositionAwareCloudEvent implements CloudEvent {
         return cloudEvent.getExtensionNames();
     }
 
-    public SubscriptionPosition getSubscriptionPosition() {
-        return subscriptionPosition;
+    public Checkpoint getCheckpoint() {
+        return checkpoint;
     }
 
     public CloudEvent getOriginalCloudEvent() {
@@ -106,36 +106,36 @@ public final class PositionAwareCloudEvent implements CloudEvent {
     @Override
     public boolean equals(Object o) {
         if (this == o) return true;
-        if (!(o instanceof PositionAwareCloudEvent)) return false;
-        PositionAwareCloudEvent that = (PositionAwareCloudEvent) o;
+        if (!(o instanceof CheckpointAwareCloudEvent)) return false;
+        CheckpointAwareCloudEvent that = (CheckpointAwareCloudEvent) o;
         return Objects.equals(cloudEvent, that.cloudEvent) &&
-                Objects.equals(subscriptionPosition, that.subscriptionPosition);
+                Objects.equals(checkpoint, that.checkpoint);
     }
 
     @Override
     public int hashCode() {
-        return Objects.hash(cloudEvent, subscriptionPosition);
+        return Objects.hash(cloudEvent, checkpoint);
     }
 
     @Override
     public String toString() {
         return "SubscriptionCloudEvent{" +
                 "cloudEvent=" + cloudEvent +
-                ", changeStreamPosition=" + subscriptionPosition +
+                ", changeStreamPosition=" + checkpoint +
                 '}';
     }
 
-    public static boolean hasSubscriptionPosition(CloudEvent cloudEvent) {
-        return cloudEvent instanceof PositionAwareCloudEvent;
+    public static boolean hasCheckpoint(CloudEvent cloudEvent) {
+        return cloudEvent instanceof CheckpointAwareCloudEvent;
     }
 
-    public static SubscriptionPosition getSubscriptionPositionOrThrowIAE(CloudEvent cloudEvent) {
-        return getSubscriptionPosition(cloudEvent).orElseThrow(() -> new IllegalArgumentException(CloudEvent.class.getSimpleName() + " doesn't contain a subscription position"));
+    public static Checkpoint getCheckpointOrThrowIAE(CloudEvent cloudEvent) {
+        return getCheckpoint(cloudEvent).orElseThrow(() -> new IllegalArgumentException(CloudEvent.class.getSimpleName() + " doesn't contain a checkpoint"));
     }
 
-    public static Optional<SubscriptionPosition> getSubscriptionPosition(CloudEvent cloudEvent) {
-        if (cloudEvent instanceof PositionAwareCloudEvent) {
-            return Optional.ofNullable(((PositionAwareCloudEvent) cloudEvent).getSubscriptionPosition());
+    public static Optional<Checkpoint> getCheckpoint(CloudEvent cloudEvent) {
+        if (cloudEvent instanceof CheckpointAwareCloudEvent) {
+            return Optional.ofNullable(((CheckpointAwareCloudEvent) cloudEvent).getCheckpoint());
         }
         return Optional.empty();
     }

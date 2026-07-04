@@ -25,12 +25,12 @@ import org.occurrent.eventstore.api.PositionRange;
 import org.occurrent.eventstore.api.reactor.PositionOrderedReader;
 import org.occurrent.filter.Filter;
 import org.occurrent.subscription.DcbSubscriptionFilter;
-import org.occurrent.subscription.GlobalSubscriptionPosition;
+import org.occurrent.subscription.GlobalCheckpoint;
 import org.occurrent.subscription.OccurrentSubscriptionFilter;
 import org.occurrent.subscription.StartAt;
 import org.occurrent.subscription.SubscriptionFilter;
-import org.occurrent.subscription.SubscriptionPosition;
-import org.occurrent.subscription.api.reactor.PositionAwareSubscriptionModel;
+import org.occurrent.subscription.Checkpoint;
+import org.occurrent.subscription.api.reactor.CheckpointAwareSubscriptionModel;
 import org.occurrent.eventstore.api.dcb.DcbQuery;
 import reactor.core.publisher.Flux;
 import reactor.core.publisher.Mono;
@@ -45,7 +45,7 @@ class ReactorStreamCatchupSubscriptionModelTest {
 
         // Without a resume token the handover from the replay to live cannot be guaranteed loss-free, so the catch-up
         // errors instead of replaying. The store is never read, the failure happens before the first replay read.
-        StepVerifier.create(catchup.subscribe(Filter.all(), StartAt.subscriptionPosition(GlobalSubscriptionPosition.of(0))))
+        StepVerifier.create(catchup.subscribe(Filter.all(), StartAt.checkpoint(GlobalCheckpoint.of(0))))
                 .expectError(IllegalStateException.class)
                 .verify();
     }
@@ -94,9 +94,9 @@ class ReactorStreamCatchupSubscriptionModelTest {
                 .verify();
     }
 
-    private static final class NoTokenSubscriptionModel implements PositionAwareSubscriptionModel {
+    private static final class NoTokenSubscriptionModel implements CheckpointAwareSubscriptionModel {
         @Override
-        public Mono<SubscriptionPosition> globalSubscriptionPosition() {
+        public Mono<Checkpoint> globalCheckpoint() {
             return Mono.empty();
         }
 

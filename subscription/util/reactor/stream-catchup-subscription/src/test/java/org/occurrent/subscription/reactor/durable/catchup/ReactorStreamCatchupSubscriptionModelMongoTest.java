@@ -41,7 +41,7 @@ import org.occurrent.eventstore.mongodb.spring.reactor.EventStoreConfig;
 import org.occurrent.eventstore.mongodb.spring.reactor.ReactorMongoEventStore;
 import org.occurrent.filter.Filter;
 import org.occurrent.mongodb.timerepresentation.TimeRepresentation;
-import org.occurrent.subscription.GlobalSubscriptionPosition;
+import org.occurrent.subscription.GlobalCheckpoint;
 import org.occurrent.subscription.StartAt;
 import org.occurrent.subscription.mongodb.spring.reactor.ReactorMongoSubscriptionModel;
 import org.occurrent.testsupport.mongodb.FlushMongoDBExtension;
@@ -130,7 +130,7 @@ class ReactorStreamCatchupSubscriptionModelMongoTest {
 
         ReactorStreamCatchupSubscriptionModel catchup = new ReactorStreamCatchupSubscriptionModel(subscriptionModel, asReader());
         CopyOnWriteArrayList<String> received = new CopyOnWriteArrayList<>();
-        subscribe(catchup.subscribe(Filter.streamId("stream-1"), StartAt.subscriptionPosition(GlobalSubscriptionPosition.of(0))), received);
+        subscribe(catchup.subscribe(Filter.streamId("stream-1"), StartAt.checkpoint(GlobalCheckpoint.of(0))), received);
 
         await().atMost(Duration.ofSeconds(40)).untilAsserted(() -> assertThat(received).containsExactly("h1", "h2"));
 
@@ -159,7 +159,7 @@ class ReactorStreamCatchupSubscriptionModelMongoTest {
 
         ReactorStreamCatchupSubscriptionModel catchup = new ReactorStreamCatchupSubscriptionModel(subscriptionModel, delaying);
         CopyOnWriteArrayList<String> received = new CopyOnWriteArrayList<>();
-        subscribe(catchup.subscribe(Filter.streamId("stream-1"), StartAt.subscriptionPosition(GlobalSubscriptionPosition.of(0))), received);
+        subscribe(catchup.subscribe(Filter.streamId("stream-1"), StartAt.checkpoint(GlobalCheckpoint.of(0))), received);
 
         // Wait until the replay read is in flight, then commit a new matching event during the delay.
         await().atMost(Duration.ofSeconds(40)).untilTrue(firstReadStarted);
@@ -178,7 +178,7 @@ class ReactorStreamCatchupSubscriptionModelMongoTest {
 
         ReactorStreamCatchupSubscriptionModel catchup = new ReactorStreamCatchupSubscriptionModel(subscriptionModel, asReader());
         CopyOnWriteArrayList<String> received = new CopyOnWriteArrayList<>();
-        subscribe(catchup.subscribe(Filter.streamId("stream-1"), StartAt.subscriptionPosition(GlobalSubscriptionPosition.of(0))), received);
+        subscribe(catchup.subscribe(Filter.streamId("stream-1"), StartAt.checkpoint(GlobalCheckpoint.of(0))), received);
 
         await().atMost(Duration.ofSeconds(40)).untilAsserted(() -> assertThat(received).containsExactly("matchHistoric"));
 
@@ -198,7 +198,7 @@ class ReactorStreamCatchupSubscriptionModelMongoTest {
 
         ReactorStreamCatchupSubscriptionModel catchup = new ReactorStreamCatchupSubscriptionModel(subscriptionModel, asReader(), 1, 1);
         CopyOnWriteArrayList<String> received = new CopyOnWriteArrayList<>();
-        subscribe(catchup.subscribe(Filter.streamId("stream-1"), StartAt.subscriptionPosition(GlobalSubscriptionPosition.of(0))), received);
+        subscribe(catchup.subscribe(Filter.streamId("stream-1"), StartAt.checkpoint(GlobalCheckpoint.of(0))), received);
 
         await().atMost(Duration.ofSeconds(40)).untilAsserted(() -> assertThat(received).containsExactly("h0", "h1", "h2", "h3", "h4"));
 
@@ -223,7 +223,7 @@ class ReactorStreamCatchupSubscriptionModelMongoTest {
 
         ReactorStreamCatchupSubscriptionModel catchup = new ReactorStreamCatchupSubscriptionModel(subscriptionModel, asReader());
         CopyOnWriteArrayList<String> received = new CopyOnWriteArrayList<>();
-        subscribe(catchup.subscribe(Filter.streamId("stream-1"), StartAt.subscriptionPosition(GlobalSubscriptionPosition.of(h1Position))), received);
+        subscribe(catchup.subscribe(Filter.streamId("stream-1"), StartAt.checkpoint(GlobalCheckpoint.of(h1Position))), received);
 
         await().atMost(Duration.ofSeconds(40)).untilAsserted(() -> assertThat(received).containsExactly("h2", "h3"));
 

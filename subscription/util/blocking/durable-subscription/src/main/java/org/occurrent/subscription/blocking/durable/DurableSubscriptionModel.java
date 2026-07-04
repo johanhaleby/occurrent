@@ -23,7 +23,7 @@ import org.jspecify.annotations.Nullable;
 import org.occurrent.subscription.StartAt;
 import org.occurrent.subscription.StartAt.SubscriptionModelContext;
 import org.occurrent.subscription.SubscriptionFilter;
-import org.occurrent.subscription.SubscriptionPosition;
+import org.occurrent.subscription.Checkpoint;
 import org.occurrent.subscription.api.blocking.*;
 
 import java.util.Objects;
@@ -31,48 +31,48 @@ import java.util.StringJoiner;
 import java.util.function.Consumer;
 
 import static java.util.Objects.requireNonNull;
-import static org.occurrent.subscription.PositionAwareCloudEvent.getSubscriptionPositionOrThrowIAE;
+import static org.occurrent.subscription.CheckpointAwareCloudEvent.getCheckpointOrThrowIAE;
 import static org.occurrent.subscription.util.predicate.EveryN.everyEvent;
 
 /**
- * Combines  a {@link SubscriptionModel} and with a {@link SubscriptionPositionStorage} to automatically persist
- * the subscription position after each successful call to the "action" method
+ * Combines  a {@link SubscriptionModel} and with a {@link CheckpointStorage} to automatically persist
+ * the checkpoint after each successful call to the "action" method
  * (i.e. when the consumer in this method {@link DurableSubscriptionModel#subscribe(String, Consumer)} has completed successfully),
  * thus making the subscription durable.
  *
  * <p>
- * Note that this implementation stores the subscription position after _every_ action. If you have a lot of events and duplication is not
+ * Note that this implementation stores the checkpoint after _every_ action. If you have a lot of events and duplication is not
  * that much of a deal, consider changing this behavior by supplying an instance of {@link DurableSubscriptionModelConfig}.
  */
 @NullMarked
-public class DurableSubscriptionModel implements PositionAwareSubscriptionModel, DelegatingSubscriptionModel {
+public class DurableSubscriptionModel implements CheckpointAwareSubscriptionModel, DelegatingSubscriptionModel {
 
-    private final PositionAwareSubscriptionModel subscriptionModel;
-    private final SubscriptionPositionStorage storage;
+    private final CheckpointAwareSubscriptionModel subscriptionModel;
+    private final CheckpointStorage storage;
     private final DurableSubscriptionModelConfig config;
 
     /**
-     * Create a subscription that combines a {@link PositionAwareSubscriptionModel} with a {@link SubscriptionPositionStorage} to automatically
+     * Create a subscription that combines a {@link CheckpointAwareSubscriptionModel} with a {@link CheckpointStorage} to automatically
      * store the subscription after each successful call to <code>action</code> (The "consumer" in {@link #subscribe(String, Consumer)}).
      *
      * @param subscriptionModel The subscription that will read events from the event store
-     * @param storage           The {@link SubscriptionPositionStorage} that'll be used to persist the stream position
+     * @param storage           The {@link CheckpointStorage} that'll be used to persist the stream position
      */
-    public DurableSubscriptionModel(PositionAwareSubscriptionModel subscriptionModel, SubscriptionPositionStorage storage) {
+    public DurableSubscriptionModel(CheckpointAwareSubscriptionModel subscriptionModel, CheckpointStorage storage) {
         this(subscriptionModel, storage, new DurableSubscriptionModelConfig(everyEvent()));
     }
 
     /**
-     * Create a subscription that combines a {@link PositionAwareSubscriptionModel} with a {@link SubscriptionPositionStorage} to automatically
+     * Create a subscription that combines a {@link CheckpointAwareSubscriptionModel} with a {@link CheckpointStorage} to automatically
      * store the subscription when the predicate defined in {@link DurableSubscriptionModelConfig#persistCloudEventPositionPredicate} is fulfilled.
      *
      * @param subscriptionModel The subscription that will read events from the event store
-     * @param storage           The {@link SubscriptionPositionStorage} that'll be used to persist the stream position
+     * @param storage           The {@link CheckpointStorage} that'll be used to persist the stream position
      */
-    public DurableSubscriptionModel(PositionAwareSubscriptionModel subscriptionModel, SubscriptionPositionStorage storage,
+    public DurableSubscriptionModel(CheckpointAwareSubscriptionModel subscriptionModel, CheckpointStorage storage,
                                     DurableSubscriptionModelConfig config) {
         requireNonNull(subscriptionModel, "subscription cannot be null");
-        requireNonNull(storage, SubscriptionPositionStorage.class.getSimpleName() + " cannot be null");
+        requireNonNull(storage, CheckpointStorage.class.getSimpleName() + " cannot be null");
         requireNonNull(config, DurableSubscriptionModelConfig.class.getSimpleName() + " cannot be null");
 
         this.storage = storage;
@@ -93,8 +93,8 @@ public class DurableSubscriptionModel implements PositionAwareSubscriptionModel,
         return subscriptionModel.subscribe(subscriptionId, filter, startAtToUse, cloudEvent -> {
                     action.accept(cloudEvent);
                     if (config.persistCloudEventPositionPredicate.test(cloudEvent)) {
-                        SubscriptionPosition subscriptionPosition = getSubscriptionPositionOrThrowIAE(cloudEvent);
-                        storage.save(subscriptionId, subscriptionPosition);
+                        Checkpoint checkpoint = getCheckpointOrThrowIAE(cloudEvent);
+                        storage.save(subscriptionId, checkpoint);
                     }
                 }
         );
@@ -107,15 +107,15 @@ public class DurableSubscriptionModel implements PositionAwareSubscriptionModel,
             StartAt startAtIfNoSubscriptionFound = StartAt.subscriptionModelDefault();
             startAtToUse = StartAt.dynamic(() -> {
                 // It's important that we find the document inside the supplier so that we lookup the latest resume token on retry
-                SubscriptionPosition subscriptionPosition = storage.read(subscriptionId);
-                if (subscriptionPosition == null) {
-                    SubscriptionPosition globalSubscriptionPosition = subscriptionModel.globalSubscriptionPosition();
-                    if (globalSubscriptionPosition != null) {
-                        subscriptionPosition = storage.save(subscriptionId, globalSubscriptionPosition);
+                Checkpoint checkpoint = storage.read(subscriptionId);
+                if (checkpoint == null) {
+                    Checkpoint globalCheckpoint = subscriptionModel.globalCheckpoint();
+                    if (globalCheckpoint != null) {
+                        checkpoint = storage.save(subscriptionId, globalCheckpoint);
                     }
                 }
 
-                return subscriptionPosition == null ? startAtIfNoSubscriptionFound : StartAt.subscriptionPosition(subscriptionPosition);
+                return checkpoint == null ? startAtIfNoSubscriptionFound : StartAt.checkpoint(checkpoint);
             });
         } else if (originalStartAt.isDynamic()) {
             var subscriptionModelContext = new SubscriptionModelContext(DurableSubscriptionModel.class);
@@ -167,7 +167,7 @@ public class DurableSubscriptionModel implements PositionAwareSubscriptionModel,
 
     /**
      * Cancel a subscription. This means that it'll no longer receive events as they are persisted to the event store.
-     * The subscription position that is persisted in the {@link SubscriptionPositionStorage} will also be removed.
+     * The checkpoint that is persisted in the {@link CheckpointStorage} will also be removed.
      *
      * @param subscriptionId The subscription id to cancel
      */
@@ -185,12 +185,12 @@ public class DurableSubscriptionModel implements PositionAwareSubscriptionModel,
 
     @Nullable
     @Override
-    public SubscriptionPosition globalSubscriptionPosition() {
-        return subscriptionModel.globalSubscriptionPosition();
+    public Checkpoint globalCheckpoint() {
+        return subscriptionModel.globalCheckpoint();
     }
 
     @Override
-    public PositionAwareSubscriptionModel getDelegatedSubscriptionModel() {
+    public CheckpointAwareSubscriptionModel getDelegatedSubscriptionModel() {
         return subscriptionModel;
     }
 

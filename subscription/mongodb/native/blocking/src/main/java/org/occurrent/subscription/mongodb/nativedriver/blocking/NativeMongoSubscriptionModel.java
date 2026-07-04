@@ -37,13 +37,13 @@ import org.occurrent.mongodb.timerepresentation.TimeRepresentation;
 import org.occurrent.retry.RetryStrategy;
 import org.occurrent.subscription.*;
 import org.occurrent.subscription.StartAt.SubscriptionModelContext;
-import org.occurrent.subscription.api.blocking.PositionAwareSubscriptionModel;
+import org.occurrent.subscription.api.blocking.CheckpointAwareSubscriptionModel;
 import org.occurrent.subscription.api.blocking.Subscription;
 import org.occurrent.subscription.api.blocking.SubscriptionModel;
 import org.occurrent.subscription.internal.ExecutorShutdown;
 import org.occurrent.subscription.mongodb.MongoFilterSpecification;
-import org.occurrent.subscription.mongodb.MongoOperationTimeSubscriptionPosition;
-import org.occurrent.subscription.mongodb.MongoResumeTokenSubscriptionPosition;
+import org.occurrent.subscription.mongodb.MongoOperationTimeCheckpoint;
+import org.occurrent.subscription.mongodb.MongoResumeTokenCheckpoint;
 import org.occurrent.subscription.mongodb.internal.DcbSubscriptionFilterConverter;
 import org.occurrent.subscription.mongodb.internal.DocumentAdapter;
 import org.occurrent.subscription.mongodb.internal.MongoCloudEventsToJsonDeserializer;
@@ -68,18 +68,18 @@ import static com.mongodb.client.model.Aggregates.match;
 import static java.util.Objects.requireNonNull;
 import static java.util.concurrent.TimeUnit.MILLISECONDS;
 import static org.occurrent.retry.internal.RetryExecution.executeWithRetry;
-import static org.occurrent.subscription.mongodb.internal.MongoCommons.cannotFindGlobalSubscriptionPositionErrorMessage;
+import static org.occurrent.subscription.mongodb.internal.MongoCommons.cannotFindGlobalCheckpointErrorMessage;
 
 /**
  * This is a subscription that uses the "native" MongoDB Java driver (sync) to listen to changes from the event store.
- * This Subscription doesn't maintain the subscription position, you need to store it in order to continue the stream
+ * This Subscription doesn't maintain the checkpoint, you need to store it in order to continue the stream
  * from where it's left off on application restart/crash etc. You can do this yourself or use a
- * <a href="https://occurrent.org/documentation#blocking-subscription-position-storage">subscription position storage implementation</a>
+ * <a href="https://occurrent.org/documentation#blocking-subscription-position-storage">checkpoint storage implementation</a>
  * or use the {@code DurableSubscriptionModel} utility from the {@code org.occurrent:durable-subscription}
  * module.
  */
 @NullMarked
-public class NativeMongoSubscriptionModel implements PositionAwareSubscriptionModel {
+public class NativeMongoSubscriptionModel implements CheckpointAwareSubscriptionModel {
     private static final Logger log = LoggerFactory.getLogger(NativeMongoSubscriptionModel.class);
 
     private final MongoCollection<Document> eventCollection;
@@ -98,7 +98,7 @@ public class NativeMongoSubscriptionModel implements PositionAwareSubscriptionMo
 
     /**
      * Create a subscription using the native MongoDB sync driver. It will by default use a {@link RetryStrategy} for retries,
-     * with exponential backoff starting with 100 ms and progressively go up to max 2 seconds wait time between each retry when reading/saving/deleting the subscription position.
+     * with exponential backoff starting with 100 ms and progressively go up to max 2 seconds wait time between each retry when reading/saving/deleting the checkpoint.
      *
      * @param database             The MongoDB database to use
      * @param eventCollectionName  The name of the collection that contains the events
@@ -231,9 +231,9 @@ public class NativeMongoSubscriptionModel implements PositionAwareSubscriptionMo
 
             cursor.forEachRemaining(changeStreamDocument -> {
                 MongoCloudEventsToJsonDeserializer.deserializeToCloudEvent(changeStreamDocument, timeRepresentation)
-                        .map(cloudEvent -> new PositionAwareCloudEvent(cloudEvent, new MongoResumeTokenSubscriptionPosition(changeStreamDocument.getResumeToken())))
+                        .map(cloudEvent -> new CheckpointAwareCloudEvent(cloudEvent, new MongoResumeTokenCheckpoint(changeStreamDocument.getResumeToken())))
                         .ifPresent(executeWithRetry(action, NOT_SHUTDOWN, retryStrategy));
-                currentStartAt.set(StartAt.subscriptionPosition(new MongoResumeTokenSubscriptionPosition(changeStreamDocument.getResumeToken())));
+                currentStartAt.set(StartAt.checkpoint(new MongoResumeTokenCheckpoint(changeStreamDocument.getResumeToken())));
             });
         } catch (RuntimeException e) {
             if ((internalSubscription != null && internalSubscription.isIntentionallyClosed()) || isCursorNoLongerOpen(e)) {
@@ -328,19 +328,19 @@ public class NativeMongoSubscriptionModel implements PositionAwareSubscriptionMo
 
     @Override
     @Nullable
-    public SubscriptionPosition globalSubscriptionPosition() {
+    public Checkpoint globalCheckpoint() {
         BsonTimestamp currentOperationTime;
         try {
             // Note that we increase the "increment" by 1 in order to not clash with an existing event in the event store.
             // This is so that we can avoid duplicates in certain rare cases when replaying events.
             currentOperationTime = MongoCommons.getServerOperationTime(database.runCommand(new Document("hostInfo", 1)), 1);
         } catch (MongoCommandException e) {
-            log.warn(cannotFindGlobalSubscriptionPositionErrorMessage(e));
+            log.warn(cannotFindGlobalCheckpointErrorMessage(e));
             // This can if the server doesn't allow to get the operation time since "db.adminCommand( { "hostInfo" : 1 } )" is prohibited.
             // This is the case on for example shared Atlas clusters. If this happens we return the current time of the client instead.
             return null;
         }
-        return new MongoOperationTimeSubscriptionPosition(currentOperationTime);
+        return new MongoOperationTimeCheckpoint(currentOperationTime);
     }
 
 

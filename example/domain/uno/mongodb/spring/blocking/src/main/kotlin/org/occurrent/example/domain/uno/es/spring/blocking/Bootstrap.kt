@@ -29,10 +29,10 @@ import org.occurrent.example.domain.uno.GameId
 import org.occurrent.example.domain.uno.es.UnoCloudEventConverter
 import org.occurrent.mongodb.timerepresentation.TimeRepresentation
 import org.occurrent.subscription.api.blocking.SubscriptionModel
-import org.occurrent.subscription.api.blocking.SubscriptionPositionStorage
+import org.occurrent.subscription.api.blocking.CheckpointStorage
 import org.occurrent.subscription.blocking.durable.DurableSubscriptionModel
 import org.occurrent.subscription.mongodb.spring.blocking.SpringMongoSubscriptionModel
-import org.occurrent.subscription.redis.spring.blocking.SpringRedisSubscriptionPositionStorage
+import org.occurrent.subscription.redis.spring.blocking.SpringRedisCheckpointStorage
 import org.slf4j.Logger
 import org.slf4j.LoggerFactory
 import org.springframework.boot.autoconfigure.SpringBootApplication
@@ -77,11 +77,11 @@ class Bootstrap {
     }
 
     @Bean
-    fun subscriptionStorage(redisOps: RedisOperations<String, String>): SubscriptionPositionStorage =
-        SpringRedisSubscriptionPositionStorage(redisOps)
+    fun subscriptionStorage(redisOps: RedisOperations<String, String>): CheckpointStorage =
+        SpringRedisCheckpointStorage(redisOps)
 
     @Bean
-    fun durableSubscriptionModel(storage: SubscriptionPositionStorage, mongoTemplate: MongoTemplate, eventStoreQueries: EventStoreQueries): SubscriptionModel {
+    fun durableSubscriptionModel(storage: CheckpointStorage, mongoTemplate: MongoTemplate, eventStoreQueries: EventStoreQueries): SubscriptionModel {
         val subscriptionModel = SpringMongoSubscriptionModel(mongoTemplate, EVENTS_COLLECTION_NAME, TimeRepresentation.DATE)
         return DurableSubscriptionModel(subscriptionModel, storage)
     }

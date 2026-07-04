@@ -267,9 +267,9 @@ public class ReactorMongoSubscriptionModelResilienceTest {
             // event 1 for real, then errors, forcing a retry.
             LocalDateTime now = LocalDateTime.now();
             ReactorMongoSubscriptionModel realModel = new ReactorMongoSubscriptionModel(realMongoOperations, "events", TimeRepresentation.RFC_3339_STRING);
-            StartAt beforeEvent1 = StartAt.subscriptionPosition(realModel.globalSubscriptionPosition()
+            StartAt beforeEvent1 = StartAt.checkpoint(realModel.globalCheckpoint()
                     .blockOptional()
-                    .orElseThrow(() -> new IllegalStateException("globalSubscriptionPosition() completed empty, the server may be prohibiting the hostInfo command")));
+                    .orElseThrow(() -> new IllegalStateException("globalCheckpoint() completed empty, the server may be prohibiting the hostInfo command")));
             ReactiveMongoOperations throwingOperations = operationsThatFailAfterDeliveringOneEvent(failoverLikeException());
             ReactorMongoSubscriptionModel subscriptionModel = new ReactorMongoSubscriptionModel(throwingOperations, "events", TimeRepresentation.RFC_3339_STRING,
                     ReactorMongoSubscriptionModelConfig.withConfig().backoff(Duration.of(20, MILLIS), Duration.of(200, MILLIS)));

@@ -21,7 +21,7 @@ import org.jspecify.annotations.NullMarked;
 import org.jspecify.annotations.Nullable;
 import org.occurrent.subscription.StartAt;
 import org.occurrent.subscription.SubscriptionFilter;
-import org.occurrent.subscription.SubscriptionPosition;
+import org.occurrent.subscription.Checkpoint;
 import reactor.core.publisher.Flux;
 
 /**
@@ -44,7 +44,7 @@ public interface SubscriptionModel {
     /**
      * Stream events from the event store as they arrive but filter only events that matches the <code>filter</code>.
      *
-     * @return A {@link Flux} with cloud events which also includes the {@link SubscriptionPosition} that can be used to resume the stream from the current position.
+     * @return A {@link Flux} with cloud events which also includes the {@link Checkpoint} that can be used to resume the stream from the current position.
      */
     default Flux<CloudEvent> subscribe(SubscriptionFilter filter) {
         return subscribe(filter, StartAt.subscriptionModelDefault());
@@ -54,7 +54,7 @@ public interface SubscriptionModel {
     /**
      * Stream events from the event store as they arrive from the given start position ({@code startAt}).
      *
-     * @return A {@link Flux} with cloud events which also includes the {@link SubscriptionPosition} that can be used to resume the stream from the current position.
+     * @return A {@link Flux} with cloud events which also includes the {@link Checkpoint} that can be used to resume the stream from the current position.
      */
     default Flux<CloudEvent> subscribe(StartAt startAt) {
         return subscribe(null, startAt);
@@ -63,7 +63,7 @@ public interface SubscriptionModel {
     /**
      * Stream events from the event store as they arrive.
      *
-     * @return A {@link Flux} with cloud events which also includes the {@link SubscriptionPosition} that can be used to resume the stream from the current position.
+     * @return A {@link Flux} with cloud events which also includes the {@link Checkpoint} that can be used to resume the stream from the current position.
      */
     default Flux<CloudEvent> subscribe() {
         return subscribe(null, StartAt.subscriptionModelDefault());

@@ -37,9 +37,9 @@ import org.occurrent.springboot.mongo.common.OccurrentProperties;
 import org.occurrent.springboot.mongo.common.SubscriptionAnnotations;
 import org.occurrent.springboot.mongo.common.SubscriptionAnnotations.StreamSubscriptionDefinition;
 import org.occurrent.subscription.DcbStartAt;
-import org.occurrent.subscription.GlobalSubscriptionPosition;
+import org.occurrent.subscription.GlobalCheckpoint;
 import org.occurrent.subscription.StartAt;
-import org.occurrent.subscription.api.reactor.SubscriptionPositionStorage;
+import org.occurrent.subscription.api.reactor.CheckpointStorage;
 import org.occurrent.subscription.reactor.durable.ReactorDurableSubscriptionModel;
 import org.springframework.beans.BeansException;
 import org.springframework.beans.factory.NoSuchBeanDefinitionException;
@@ -253,7 +253,7 @@ class OccurrentReactiveAnnotationBeanPostProcessor implements BeanPostProcessor,
         }
         if (beginningOfTimeStart) {
             // Map BEGINNING_OF_TIME to position 0, which the reactive stream catch-up model replays before going live.
-            return StartAt.subscriptionPosition(GlobalSubscriptionPosition.of(0));
+            return StartAt.checkpoint(GlobalCheckpoint.of(0));
         }
         return switch (subscription.startAt()) {
             case NOW -> StartAt.now();
@@ -286,7 +286,7 @@ class OccurrentReactiveAnnotationBeanPostProcessor implements BeanPostProcessor,
                 return isDurableSubscription ? null : replayStart;
             });
             case DEFAULT -> DcbStartAt.dynamic(ctx -> {
-                SubscriptionPositionStorage storage = applicationContext.getBean(SubscriptionPositionStorage.class);
+                CheckpointStorage storage = applicationContext.getBean(CheckpointStorage.class);
                 return storage.read(subscriptionId).blockOptional().isPresent() ? DcbStartAt.subscriptionModelDefault() : replayStart;
             });
         };

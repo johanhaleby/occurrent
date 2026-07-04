@@ -20,20 +20,20 @@ import org.bson.BsonTimestamp;
 import org.bson.BsonValue;
 import org.bson.Document;
 import org.jspecify.annotations.NullMarked;
-import org.occurrent.subscription.SubscriptionPosition;
+import org.occurrent.subscription.Checkpoint;
 
 import java.util.Objects;
 import java.util.StringJoiner;
 
 /**
- * A {@link SubscriptionPosition} implementation for MongoDB that provides the operation time
+ * A {@link Checkpoint} implementation for MongoDB that provides the operation time
  * that consumers may decide which to use when continuing the stream.
  */
 @NullMarked
-public class MongoOperationTimeSubscriptionPosition implements SubscriptionPosition {
+public class MongoOperationTimeCheckpoint implements Checkpoint {
     public final BsonTimestamp operationTime;
 
-    public MongoOperationTimeSubscriptionPosition(BsonTimestamp operationTime) {
+    public MongoOperationTimeCheckpoint(BsonTimestamp operationTime) {
         this.operationTime = operationTime;
     }
 
@@ -44,8 +44,8 @@ public class MongoOperationTimeSubscriptionPosition implements SubscriptionPosit
     @Override
     public boolean equals(Object o) {
         if (this == o) return true;
-        if (!(o instanceof MongoOperationTimeSubscriptionPosition)) return false;
-        MongoOperationTimeSubscriptionPosition that = (MongoOperationTimeSubscriptionPosition) o;
+        if (!(o instanceof MongoOperationTimeCheckpoint)) return false;
+        MongoOperationTimeCheckpoint that = (MongoOperationTimeCheckpoint) o;
         return Objects.equals(operationTime, that.operationTime);
     }
 
@@ -56,7 +56,7 @@ public class MongoOperationTimeSubscriptionPosition implements SubscriptionPosit
 
     @Override
     public String toString() {
-        return new StringJoiner(", ", MongoOperationTimeSubscriptionPosition.class.getSimpleName() + "[", "]")
+        return new StringJoiner(", ", MongoOperationTimeCheckpoint.class.getSimpleName() + "[", "]")
                 .add("operationTime=" + operationTime)
                 .toString();
     }

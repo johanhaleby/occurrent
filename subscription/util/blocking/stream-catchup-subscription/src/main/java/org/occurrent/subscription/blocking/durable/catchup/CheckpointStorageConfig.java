@@ -18,26 +18,26 @@ package org.occurrent.subscription.blocking.durable.catchup;
 
 import io.cloudevents.CloudEvent;
 import org.jspecify.annotations.NullMarked;
-import org.occurrent.subscription.api.blocking.SubscriptionPositionStorage;
+import org.occurrent.subscription.api.blocking.CheckpointStorage;
 import org.occurrent.subscription.util.predicate.EveryN;
 
 import java.util.Objects;
 import java.util.function.Predicate;
 
 /**
- * Configures if and how subscription position persistence should be handled during the catch-up phase.
+ * Configures if and how checkpoint persistence should be handled during the catch-up phase.
  */
 @NullMarked
-public sealed interface SubscriptionPositionStorageConfig {
+public sealed interface CheckpointStorageConfig {
 
     /**
-     * Don't use a subscription position storage. The catch-up subscription will start from beginning of time each time it is started (for example
+     * Don't use a checkpoint storage. The catch-up subscription will start from beginning of time each time it is started (for example
      * each time the application is restarted).
      *
-     * @return An instance of {@link DontUseSubscriptionPositionInStorage}.
+     * @return An instance of {@link DontUseCheckpointInStorage}.
      */
-    static DontUseSubscriptionPositionInStorage dontUseSubscriptionPositionStorage() {
-        return new DontUseSubscriptionPositionInStorage();
+    static DontUseCheckpointInStorage dontUseCheckpointStorage() {
+        return new DontUseCheckpointInStorage();
     }
 
     /**
@@ -48,24 +48,24 @@ public sealed interface SubscriptionPositionStorageConfig {
      * This is really useful if you want to start-off with a catch-up subscription but then automatically continue with from the wrapped subscription
      * position once the events have caught up.
      * <br><br>
-     * Note that if this setting is not combined with {@link UseSubscriptionPositionInStorage#andPersistSubscriptionPositionDuringCatchupPhaseForEveryNEvents(int)}
-     * or {@link UseSubscriptionPositionInStorage#andPersistSubscriptionPositionDuringCatchupPhaseWhen(Predicate)} the subscription position
+     * Note that if this setting is not combined with {@link UseCheckpointInStorage#andPersistCheckpointDuringCatchupPhaseForEveryNEvents(int)}
+     * or {@link UseCheckpointInStorage#andPersistCheckpointDuringCatchupPhaseWhen(Predicate)} the checkpoint
      * is will not be stored during the catch-up phase. This means that if the application crashes during catch-up it'll restart from the beginning
      * when the application is restarted. Combine this settings with any of the two methods defined above to alleviate this, if deemed required.
      *
-     * @param storage The storage to use. Must be the same instance as used by the wrapped subscription in order to allow continuing from the subscription position
+     * @param storage The storage to use. Must be the same instance as used by the wrapped subscription in order to allow continuing from the checkpoint
      *                on application restart.
-     * @return A {@link UseSubscriptionPositionInStorage} instance.
+     * @return A {@link UseCheckpointInStorage} instance.
      */
-    static UseSubscriptionPositionInStorage useSubscriptionPositionStorage(SubscriptionPositionStorage storage) {
-        return new UseOnlySubscriptionPositionInStorage(storage);
+    static UseCheckpointInStorage useCheckpointStorage(CheckpointStorage storage) {
+        return new UseOnlyCheckpointInStorage(storage);
     }
 
-    record DontUseSubscriptionPositionInStorage() implements SubscriptionPositionStorageConfig {
+    record DontUseCheckpointInStorage() implements CheckpointStorageConfig {
     }
 
-    sealed interface UseSubscriptionPositionInStorage extends SubscriptionPositionStorageConfig {
-        SubscriptionPositionStorage storage();
+    sealed interface UseCheckpointInStorage extends CheckpointStorageConfig {
+        CheckpointStorage storage();
 
         /**
          * Configure the catch-up subscription to periodically store the event position in a storage in case
@@ -75,11 +75,11 @@ public sealed interface SubscriptionPositionStorageConfig {
          *
          * @param persistCloudEventPositionPredicate A predicate that evaluates to <code>true</code> if the cloud event position should be persisted for the <i>catch-up</i> subscription.
          *                                           See {@link EveryN}. Supply a predicate that always returns {@code false} to never store the position.
-         * @return An instance of {@link PersistSubscriptionPositionDuringCatchupPhase}
+         * @return An instance of {@link PersistCheckpointDuringCatchupPhase}
          * @see EveryN
          */
-        default PersistSubscriptionPositionDuringCatchupPhase andPersistSubscriptionPositionDuringCatchupPhaseWhen(Predicate<CloudEvent> persistCloudEventPositionPredicate) {
-            return new PersistSubscriptionPositionDuringCatchupPhase(storage(), persistCloudEventPositionPredicate);
+        default PersistCheckpointDuringCatchupPhase andPersistCheckpointDuringCatchupPhaseWhen(Predicate<CloudEvent> persistCloudEventPositionPredicate) {
+            return new PersistCheckpointDuringCatchupPhase(storage(), persistCloudEventPositionPredicate);
         }
 
         /**
@@ -89,31 +89,31 @@ public sealed interface SubscriptionPositionStorageConfig {
          * and don't want to risk starting from the beginning on failure!
          *
          * @param persistPositionForEveryNCloudEvent Persist the position of every N cloud event so that it's possible to avoid restarting from scratch when the <i>catch-up</i> subscription is restarted.
-         * @return An instance of {@link PersistSubscriptionPositionDuringCatchupPhase}
+         * @return An instance of {@link PersistCheckpointDuringCatchupPhase}
          */
-        default PersistSubscriptionPositionDuringCatchupPhase andPersistSubscriptionPositionDuringCatchupPhaseForEveryNEvents(int persistPositionForEveryNCloudEvent) {
-            return new PersistSubscriptionPositionDuringCatchupPhase(storage(), EveryN.every(persistPositionForEveryNCloudEvent));
+        default PersistCheckpointDuringCatchupPhase andPersistCheckpointDuringCatchupPhaseForEveryNEvents(int persistPositionForEveryNCloudEvent) {
+            return new PersistCheckpointDuringCatchupPhase(storage(), EveryN.every(persistPositionForEveryNCloudEvent));
         }
     }
 
     /**
-     * @param storage                            The storage that will maintain the subscription position during catch-up mode.
+     * @param storage                            The storage that will maintain the checkpoint during catch-up mode.
      * @param persistCloudEventPositionPredicate A predicate that evaluates to <code>true</code> if the cloud event position should be persisted. See {@link EveryN}.
      *                                           Supply a predicate that always returns {@code false} to never store the position.
-     * @see UseSubscriptionPositionInStorage#andPersistSubscriptionPositionDuringCatchupPhaseWhen(Predicate)
-     * @see UseSubscriptionPositionInStorage#andPersistSubscriptionPositionDuringCatchupPhaseForEveryNEvents(int)
+     * @see UseCheckpointInStorage#andPersistCheckpointDuringCatchupPhaseWhen(Predicate)
+     * @see UseCheckpointInStorage#andPersistCheckpointDuringCatchupPhaseForEveryNEvents(int)
      */
-    record PersistSubscriptionPositionDuringCatchupPhase(SubscriptionPositionStorage storage,
-                                                         Predicate<CloudEvent> persistCloudEventPositionPredicate) implements UseSubscriptionPositionInStorage {
-        public PersistSubscriptionPositionDuringCatchupPhase {
-            Objects.requireNonNull(storage, SubscriptionPositionStorage.class.getSimpleName() + " cannot be null");
+    record PersistCheckpointDuringCatchupPhase(CheckpointStorage storage,
+                                                         Predicate<CloudEvent> persistCloudEventPositionPredicate) implements UseCheckpointInStorage {
+        public PersistCheckpointDuringCatchupPhase {
+            Objects.requireNonNull(storage, CheckpointStorage.class.getSimpleName() + " cannot be null");
             Objects.requireNonNull(persistCloudEventPositionPredicate, "persistCloudEventPositionPredicate cannot be null");
         }
     }
 
-    record UseOnlySubscriptionPositionInStorage(SubscriptionPositionStorage storage) implements UseSubscriptionPositionInStorage {
-        public UseOnlySubscriptionPositionInStorage {
-            Objects.requireNonNull(storage, SubscriptionPositionStorage.class.getSimpleName() + " cannot be null");
+    record UseOnlyCheckpointInStorage(CheckpointStorage storage) implements UseCheckpointInStorage {
+        public UseOnlyCheckpointInStorage {
+            Objects.requireNonNull(storage, CheckpointStorage.class.getSimpleName() + " cannot be null");
         }
     }
 }

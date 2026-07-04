@@ -21,11 +21,11 @@ import org.occurrent.eventstore.api.blocking.EventStore;
 import org.occurrent.eventstore.mongodb.spring.blocking.EventStoreConfig;
 import org.occurrent.eventstore.mongodb.spring.blocking.SpringMongoEventStore;
 import org.occurrent.mongodb.timerepresentation.TimeRepresentation;
-import org.occurrent.subscription.api.blocking.PositionAwareSubscriptionModel;
-import org.occurrent.subscription.api.blocking.SubscriptionPositionStorage;
+import org.occurrent.subscription.api.blocking.CheckpointAwareSubscriptionModel;
+import org.occurrent.subscription.api.blocking.CheckpointStorage;
 import org.occurrent.subscription.blocking.durable.DurableSubscriptionModel;
 import org.occurrent.subscription.mongodb.spring.blocking.SpringMongoSubscriptionModel;
-import org.occurrent.subscription.mongodb.spring.blocking.SpringMongoSubscriptionPositionStorage;
+import org.occurrent.subscription.mongodb.spring.blocking.SpringMongoCheckpointStorage;
 import org.springframework.boot.autoconfigure.SpringBootApplication;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Primary;
@@ -55,18 +55,18 @@ public class SubscriptionProjectionsWithSpringAndMongoDBApplication {
     }
 
     @Bean
-    public PositionAwareSubscriptionModel positionAwareSubscriptionModel(MongoTemplate mongoTemplate) {
+    public CheckpointAwareSubscriptionModel checkpointAwareSubscriptionModel(MongoTemplate mongoTemplate) {
         return new SpringMongoSubscriptionModel(mongoTemplate, EVENTS_COLLECTION, TimeRepresentation.RFC_3339_STRING);
     }
 
     @Bean
-    public SubscriptionPositionStorage storage(MongoTemplate mongoTemplate) {
-        return new SpringMongoSubscriptionPositionStorage(mongoTemplate, "subscriptions");
+    public CheckpointStorage storage(MongoTemplate mongoTemplate) {
+        return new SpringMongoCheckpointStorage(mongoTemplate, "subscriptions");
     }
 
     @Primary
     @Bean
-    public PositionAwareSubscriptionModel autoPersistingSubscriptionModel(PositionAwareSubscriptionModel subscription, SubscriptionPositionStorage storage) {
+    public CheckpointAwareSubscriptionModel autoPersistingSubscriptionModel(CheckpointAwareSubscriptionModel subscription, CheckpointStorage storage) {
         return new DurableSubscriptionModel(subscription, storage);
     }
 

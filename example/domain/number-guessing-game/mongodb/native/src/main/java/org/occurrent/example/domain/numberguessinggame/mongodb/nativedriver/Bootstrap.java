@@ -43,11 +43,11 @@ import org.occurrent.example.domain.numberguessinggame.mongodb.nativedriver.view
 import org.occurrent.mongodb.timerepresentation.TimeRepresentation;
 import org.occurrent.retry.RetryStrategy;
 import org.occurrent.subscription.api.blocking.SubscriptionModel;
-import org.occurrent.subscription.api.blocking.SubscriptionPositionStorage;
+import org.occurrent.subscription.api.blocking.CheckpointStorage;
 import org.occurrent.subscription.blocking.durable.DurableSubscriptionModel;
 import org.occurrent.subscription.mongodb.MongoFilterSpecification.MongoBsonFilterSpecification;
 import org.occurrent.subscription.mongodb.nativedriver.blocking.NativeMongoSubscriptionModel;
-import org.occurrent.subscription.mongodb.nativedriver.blocking.NativeMongoSubscriptionPositionStorage;
+import org.occurrent.subscription.mongodb.nativedriver.blocking.NativeMongoCheckpointStorage;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -76,7 +76,7 @@ public class Bootstrap {
     private static final String EVENTS_COLLECTION_NAME = "events";
     private static final String DATABASE_NAME = "test";
     private static final String LATEST_GAMES_OVERVIEW_COLLECTION_NAME = "latestGamesOverview";
-    private static final String SUBSCRIPTION_POSITIONS_COLLECTION_NAME = "subscriptionPositions";
+    private static final String CHECKPOINTS_COLLECTION_NAME = "checkpoints";
     private static final String NUMBER_GUESSING_GAME_TOPIC = "number-guessing-game";
 
     private final Javalin javalin;
@@ -203,7 +203,7 @@ public class Bootstrap {
     private static SubscriptionModel initializeSubscription(MongoClient mongoClient) {
         MongoDatabase database = mongoClient.getDatabase(DATABASE_NAME);
         NativeMongoSubscriptionModel blockingSubscriptionForMongoDB = new NativeMongoSubscriptionModel(database, EVENTS_COLLECTION_NAME, TimeRepresentation.DATE, Executors.newCachedThreadPool(), RetryStrategy.fixed(200));
-        SubscriptionPositionStorage storage = new NativeMongoSubscriptionPositionStorage(database, SUBSCRIPTION_POSITIONS_COLLECTION_NAME);
+        CheckpointStorage storage = new NativeMongoCheckpointStorage(database, CHECKPOINTS_COLLECTION_NAME);
         return new DurableSubscriptionModel(blockingSubscriptionForMongoDB, storage);
     }
 

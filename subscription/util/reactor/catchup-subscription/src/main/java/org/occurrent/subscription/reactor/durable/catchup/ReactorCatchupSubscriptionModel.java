@@ -25,12 +25,12 @@ import org.occurrent.eventstore.api.reactor.PositionOrderedReader;
 import org.occurrent.filter.Filter;
 import org.occurrent.subscription.DcbSubscriptionFilter;
 import org.occurrent.subscription.OccurrentSubscriptionFilter;
-import org.occurrent.subscription.GlobalSubscriptionPosition;
+import org.occurrent.subscription.GlobalCheckpoint;
 import org.occurrent.subscription.StartAt;
-import org.occurrent.subscription.StartAt.StartAtSubscriptionPosition;
+import org.occurrent.subscription.StartAt.StartAtCheckpoint;
 import org.occurrent.subscription.SubscriptionFilter;
-import org.occurrent.subscription.SubscriptionPosition;
-import org.occurrent.subscription.api.reactor.PositionAwareSubscriptionModel;
+import org.occurrent.subscription.Checkpoint;
+import org.occurrent.subscription.api.reactor.CheckpointAwareSubscriptionModel;
 import reactor.core.publisher.Flux;
 import reactor.core.publisher.Mono;
 
@@ -44,7 +44,7 @@ import static java.util.Objects.requireNonNull;
  * avoid the DCB dependency can use {@link ReactorStreamCatchupSubscriptionModel} directly as the DCB-free variant.
  */
 @NullMarked
-public class ReactorCatchupSubscriptionModel implements PositionAwareSubscriptionModel {
+public class ReactorCatchupSubscriptionModel implements CheckpointAwareSubscriptionModel {
 
     private final @Nullable ReactorStreamCatchupSubscriptionModel streamCatchupSubscriptionModel;
     private final @Nullable ReactorDcbCatchupSubscriptionModel dcbCatchupSubscriptionModel;
@@ -52,25 +52,25 @@ public class ReactorCatchupSubscriptionModel implements PositionAwareSubscriptio
     /**
      * Create a stream-only instance. Every subscription routes to the stream catch-up model.
      */
-    public ReactorCatchupSubscriptionModel(PositionAwareSubscriptionModel subscriptionModel, PositionOrderedReader positionOrderedReader, @Nullable Filter defaultFilter) {
+    public ReactorCatchupSubscriptionModel(CheckpointAwareSubscriptionModel subscriptionModel, PositionOrderedReader positionOrderedReader, @Nullable Filter defaultFilter) {
         this(subscriptionModel, positionOrderedReader, defaultFilter, ReactorStreamCatchupSubscriptionModel.DEFAULT_POSITION_WINDOW_SIZE, ReactorStreamCatchupSubscriptionModel.DEFAULT_HANDOVER_CACHE_SIZE);
     }
 
-    public ReactorCatchupSubscriptionModel(PositionAwareSubscriptionModel subscriptionModel, PositionOrderedReader positionOrderedReader, @Nullable Filter defaultFilter, long windowSize, int handoverCacheSize) {
-        this.streamCatchupSubscriptionModel = new ReactorStreamCatchupSubscriptionModel(requireNonNull(subscriptionModel, PositionAwareSubscriptionModel.class.getSimpleName() + " cannot be null"), positionOrderedReader, defaultFilter, windowSize, handoverCacheSize);
+    public ReactorCatchupSubscriptionModel(CheckpointAwareSubscriptionModel subscriptionModel, PositionOrderedReader positionOrderedReader, @Nullable Filter defaultFilter, long windowSize, int handoverCacheSize) {
+        this.streamCatchupSubscriptionModel = new ReactorStreamCatchupSubscriptionModel(requireNonNull(subscriptionModel, CheckpointAwareSubscriptionModel.class.getSimpleName() + " cannot be null"), positionOrderedReader, defaultFilter, windowSize, handoverCacheSize);
         this.dcbCatchupSubscriptionModel = null;
     }
 
     /**
      * Create a DCB-only instance. Every subscription routes to the DCB catch-up model.
      */
-    public ReactorCatchupSubscriptionModel(PositionAwareSubscriptionModel subscriptionModel, DcbEventStore dcbEventStore, @Nullable DcbQuery defaultQuery) {
+    public ReactorCatchupSubscriptionModel(CheckpointAwareSubscriptionModel subscriptionModel, DcbEventStore dcbEventStore, @Nullable DcbQuery defaultQuery) {
         this(subscriptionModel, dcbEventStore, defaultQuery, ReactorDcbCatchupSubscriptionModel.DEFAULT_POSITION_WINDOW_SIZE, ReactorDcbCatchupSubscriptionModel.DEFAULT_HANDOVER_CACHE_SIZE);
     }
 
-    public ReactorCatchupSubscriptionModel(PositionAwareSubscriptionModel subscriptionModel, DcbEventStore dcbEventStore, @Nullable DcbQuery defaultQuery, long windowSize, int handoverCacheSize) {
+    public ReactorCatchupSubscriptionModel(CheckpointAwareSubscriptionModel subscriptionModel, DcbEventStore dcbEventStore, @Nullable DcbQuery defaultQuery, long windowSize, int handoverCacheSize) {
         this.streamCatchupSubscriptionModel = null;
-        this.dcbCatchupSubscriptionModel = new ReactorDcbCatchupSubscriptionModel(requireNonNull(subscriptionModel, PositionAwareSubscriptionModel.class.getSimpleName() + " cannot be null"), dcbEventStore, defaultQuery, windowSize, handoverCacheSize);
+        this.dcbCatchupSubscriptionModel = new ReactorDcbCatchupSubscriptionModel(requireNonNull(subscriptionModel, CheckpointAwareSubscriptionModel.class.getSimpleName() + " cannot be null"), dcbEventStore, defaultQuery, windowSize, handoverCacheSize);
     }
 
     /**
@@ -79,13 +79,13 @@ public class ReactorCatchupSubscriptionModel implements PositionAwareSubscriptio
      * subscription is routed by its filter and start position, so a single model serves an application that uses
      * both streams and DCB.
      */
-    public ReactorCatchupSubscriptionModel(PositionAwareSubscriptionModel subscriptionModel, PositionOrderedReader positionOrderedReader, DcbEventStore dcbEventStore, @Nullable DcbQuery defaultQuery, @Nullable Filter defaultFilter, long windowSize, int handoverCacheSize) {
-        requireNonNull(subscriptionModel, PositionAwareSubscriptionModel.class.getSimpleName() + " cannot be null");
+    public ReactorCatchupSubscriptionModel(CheckpointAwareSubscriptionModel subscriptionModel, PositionOrderedReader positionOrderedReader, DcbEventStore dcbEventStore, @Nullable DcbQuery defaultQuery, @Nullable Filter defaultFilter, long windowSize, int handoverCacheSize) {
+        requireNonNull(subscriptionModel, CheckpointAwareSubscriptionModel.class.getSimpleName() + " cannot be null");
         this.streamCatchupSubscriptionModel = new ReactorStreamCatchupSubscriptionModel(subscriptionModel, positionOrderedReader, defaultFilter, windowSize, handoverCacheSize);
         this.dcbCatchupSubscriptionModel = new ReactorDcbCatchupSubscriptionModel(subscriptionModel, dcbEventStore, defaultQuery, windowSize, handoverCacheSize);
     }
 
-    public ReactorCatchupSubscriptionModel(PositionAwareSubscriptionModel subscriptionModel, PositionOrderedReader positionOrderedReader, DcbEventStore dcbEventStore, @Nullable DcbQuery defaultQuery, @Nullable Filter defaultFilter) {
+    public ReactorCatchupSubscriptionModel(CheckpointAwareSubscriptionModel subscriptionModel, PositionOrderedReader positionOrderedReader, DcbEventStore dcbEventStore, @Nullable DcbQuery defaultQuery, @Nullable Filter defaultFilter) {
         this(subscriptionModel, positionOrderedReader, dcbEventStore, defaultQuery, defaultFilter, ReactorStreamCatchupSubscriptionModel.DEFAULT_POSITION_WINDOW_SIZE, ReactorStreamCatchupSubscriptionModel.DEFAULT_HANDOVER_CACHE_SIZE);
     }
 
@@ -99,7 +99,7 @@ public class ReactorCatchupSubscriptionModel implements PositionAwareSubscriptio
 
     // Route to the DCB path or the stream path. A single-mode model has only one inner model and always routes there.
     // A dual-mode model routes by filter type first, since a global position start is ambiguous. Stream and DCB replay
-    // both use a GlobalSubscriptionPosition, so only the filter tells them apart. A null filter falls back to the
+    // both use a GlobalCheckpoint, so only the filter tells them apart. A null filter falls back to the
     // position heuristic and is narrowed by the default query or filter.
     private boolean routesToDcb(@Nullable SubscriptionFilter filter, StartAt startAt) {
         if (dcbCatchupSubscriptionModel == null) {
@@ -119,17 +119,17 @@ public class ReactorCatchupSubscriptionModel implements PositionAwareSubscriptio
 
     private static boolean startsAtExplicitDcbPosition(StartAt startAt) {
         StartAt resolved = startAt.get(new StartAt.SubscriptionModelContext(ReactorCatchupSubscriptionModel.class));
-        return resolved instanceof StartAtSubscriptionPosition position
-                && GlobalSubscriptionPosition.isGlobalSubscriptionPosition(position.subscriptionPosition);
+        return resolved instanceof StartAtCheckpoint position
+                && GlobalCheckpoint.isGlobalCheckpoint(position.checkpoint);
     }
 
     @Override
-    public Mono<SubscriptionPosition> globalSubscriptionPosition() {
-        // Both inner models delegate globalSubscriptionPosition() to the same wrapped subscriptionModel, so either
+    public Mono<Checkpoint> globalCheckpoint() {
+        // Both inner models delegate globalCheckpoint() to the same wrapped subscriptionModel, so either
         // one reports the identical position. In dual mode, ask whichever is present; there is no dcb-vs-stream
         // ambiguity here because this is the wrapped live model's position, not a catch-up cursor.
         return dcbCatchupSubscriptionModel != null
-                ? dcbCatchupSubscriptionModel.globalSubscriptionPosition()
-                : requireNonNull(streamCatchupSubscriptionModel).globalSubscriptionPosition();
+                ? dcbCatchupSubscriptionModel.globalCheckpoint()
+                : requireNonNull(streamCatchupSubscriptionModel).globalCheckpoint();
     }
 }

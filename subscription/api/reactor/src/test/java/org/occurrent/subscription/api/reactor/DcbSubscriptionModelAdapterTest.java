@@ -26,7 +26,7 @@ import org.occurrent.eventstore.api.dcb.DcbCloudEvents;
 import org.occurrent.eventstore.api.dcb.DcbQuery;
 import org.occurrent.subscription.DcbStartAt;
 import org.occurrent.subscription.DcbSubscriptionFilter;
-import org.occurrent.subscription.GlobalSubscriptionPosition;
+import org.occurrent.subscription.GlobalCheckpoint;
 import org.occurrent.subscription.StartAt;
 import org.occurrent.subscription.SubscriptionFilter;
 import reactor.core.publisher.Flux;
@@ -67,8 +67,8 @@ class DcbSubscriptionModelAdapterTest {
         // query, so the subscription stays scoped to its own query even if a backend ignores the server-side filter.
         assertThat(delegate.capturedFilter).isInstanceOf(DcbSubscriptionFilter.class);
         // The DcbStartAt is converted to a generic StartAt and passed straight to the delegate.
-        assertThat(delegate.capturedStartAt).isInstanceOfSatisfying(StartAt.StartAtSubscriptionPosition.class,
-                start -> assertThat(start.subscriptionPosition).isEqualTo(GlobalSubscriptionPosition.of(5)));
+        assertThat(delegate.capturedStartAt).isInstanceOfSatisfying(StartAt.StartAtCheckpoint.class,
+                start -> assertThat(start.checkpoint).isEqualTo(GlobalCheckpoint.of(5)));
     }
 
     @Test
@@ -89,8 +89,8 @@ class DcbSubscriptionModelAdapterTest {
 
         assertThat(subscription.id()).isEqualTo("sub-1");
         assertThat(delegate.capturedFilter).isInstanceOf(DcbSubscriptionFilter.class);
-        assertThat(delegate.capturedStartAt).isInstanceOfSatisfying(StartAt.StartAtSubscriptionPosition.class,
-                start -> assertThat(start.subscriptionPosition).isEqualTo(GlobalSubscriptionPosition.of(5)));
+        assertThat(delegate.capturedStartAt).isInstanceOfSatisfying(StartAt.StartAtCheckpoint.class,
+                start -> assertThat(start.checkpoint).isEqualTo(GlobalCheckpoint.of(5)));
 
         // The in-process floor scopes delivery to the query, matching the boundary case for the plain Flux subscribe.
         delegate.capturedAction.apply(matching).block();

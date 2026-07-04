@@ -23,10 +23,10 @@ import org.bson.Document;
 import org.jspecify.annotations.NullMarked;
 import org.jspecify.annotations.Nullable;
 import org.occurrent.retry.RetryStrategy;
-import org.occurrent.subscription.SubscriptionPosition;
-import org.occurrent.subscription.api.blocking.SubscriptionPositionStorage;
-import org.occurrent.subscription.mongodb.MongoOperationTimeSubscriptionPosition;
-import org.occurrent.subscription.mongodb.MongoResumeTokenSubscriptionPosition;
+import org.occurrent.subscription.Checkpoint;
+import org.occurrent.subscription.api.blocking.CheckpointStorage;
+import org.occurrent.subscription.mongodb.MongoOperationTimeCheckpoint;
+import org.occurrent.subscription.mongodb.MongoResumeTokenCheckpoint;
 import org.occurrent.subscription.mongodb.internal.MongoCommons;
 import org.springframework.data.mongodb.core.MongoOperations;
 import org.springframework.data.mongodb.core.query.Update;
@@ -41,72 +41,72 @@ import static org.springframework.data.mongodb.core.query.Criteria.where;
 import static org.springframework.data.mongodb.core.query.Query.query;
 
 /**
- * A Spring implementation of {@link SubscriptionPositionStorage} that stores {@link SubscriptionPosition} in MongoDB.
+ * A Spring implementation of {@link CheckpointStorage} that stores {@link Checkpoint} in MongoDB.
  */
 @NullMarked
-public class SpringMongoSubscriptionPositionStorage implements SubscriptionPositionStorage {
+public class SpringMongoCheckpointStorage implements CheckpointStorage {
 
     private final MongoOperations mongoOperations;
-    private final String subscriptionPositionCollection;
+    private final String checkpointCollection;
     private final RetryStrategy retryStrategy;
 
     private volatile boolean shutdown = false;
 
     /**
-     * Create a {@link SubscriptionPositionStorage} that uses the Spring's {@link MongoOperations} to persist subscription positions in MongoDB.
+     * Create a {@link CheckpointStorage} that uses the Spring's {@link MongoOperations} to persist checkpoints in MongoDB.
      * It will by default use a {@link RetryStrategy} for retries, with exponential backoff starting with 100 ms and progressively go up to max 2 seconds wait time between
-     * each retry when reading/saving/deleting the subscription position.
+     * each retry when reading/saving/deleting the checkpoint.
      *
-     * @param mongoOperations                The {@link MongoOperations} that'll be used to store the subscription position
-     * @param subscriptionPositionCollection The collection into which subscription positions will be stored
+     * @param mongoOperations                The {@link MongoOperations} that'll be used to store the checkpoint
+     * @param checkpointCollection The collection into which checkpoints will be stored
      */
-    public SpringMongoSubscriptionPositionStorage(MongoOperations mongoOperations, String subscriptionPositionCollection) {
-        this(mongoOperations, subscriptionPositionCollection, RetryStrategy.exponentialBackoff(Duration.ofMillis(100), Duration.ofSeconds(2), 2.0f));
+    public SpringMongoCheckpointStorage(MongoOperations mongoOperations, String checkpointCollection) {
+        this(mongoOperations, checkpointCollection, RetryStrategy.exponentialBackoff(Duration.ofMillis(100), Duration.ofSeconds(2), 2.0f));
     }
 
     /**
-     * Create a {@link SubscriptionPositionStorage} that uses the Spring's {@link MongoOperations} to persist subscription positions in MongoDB.
+     * Create a {@link CheckpointStorage} that uses the Spring's {@link MongoOperations} to persist checkpoints in MongoDB.
      *
-     * @param mongoOperations                The {@link MongoOperations} that'll be used to store the subscription position
-     * @param subscriptionPositionCollection The collection into which subscription positions will be stored
+     * @param mongoOperations                The {@link MongoOperations} that'll be used to store the checkpoint
+     * @param checkpointCollection The collection into which checkpoints will be stored
      * @param retryStrategy                  A custom retry strategy to use if there's a problem reading/saving/deleting the position to the MongoDB storage.
      */
-    public SpringMongoSubscriptionPositionStorage(MongoOperations mongoOperations, String subscriptionPositionCollection, RetryStrategy retryStrategy) {
+    public SpringMongoCheckpointStorage(MongoOperations mongoOperations, String checkpointCollection, RetryStrategy retryStrategy) {
         requireNonNull(mongoOperations, "Mongo operations cannot be null");
-        requireNonNull(subscriptionPositionCollection, "subscriptionPositionCollection cannot be null");
+        requireNonNull(checkpointCollection, "checkpointCollection cannot be null");
         requireNonNull(retryStrategy, RetryStrategy.class.getSimpleName() + " cannot be null");
         this.mongoOperations = mongoOperations;
-        this.subscriptionPositionCollection = subscriptionPositionCollection;
+        this.checkpointCollection = checkpointCollection;
         this.retryStrategy = retryStrategy;
     }
 
     @Nullable
     @Override
-    public SubscriptionPosition read(String subscriptionId) {
-        Supplier<@Nullable SubscriptionPosition> read = () -> {
-            Document document = mongoOperations.findOne(query(where(ID).is(subscriptionId)), Document.class, subscriptionPositionCollection);
+    public Checkpoint read(String subscriptionId) {
+        Supplier<@Nullable Checkpoint> read = () -> {
+            Document document = mongoOperations.findOne(query(where(ID).is(subscriptionId)), Document.class, checkpointCollection);
             if (document == null) {
                 return null;
             }
-            return MongoCommons.calculateSubscriptionPositionFromMongoStreamPositionDocument(document);
+            return MongoCommons.calculateCheckpointFromMongoStreamPositionDocument(document);
         };
 
         return executeWithRetry(read, __ -> !shutdown, retryStrategy).get();
     }
 
     @Override
-    public SubscriptionPosition save(String subscriptionId, SubscriptionPosition subscriptionPosition) {
-        Supplier<SubscriptionPosition> save = () -> {
-            if (subscriptionPosition instanceof MongoResumeTokenSubscriptionPosition) {
-                persistResumeTokenStreamPosition(subscriptionId, ((MongoResumeTokenSubscriptionPosition) subscriptionPosition).resumeToken);
-            } else if (subscriptionPosition instanceof MongoOperationTimeSubscriptionPosition) {
-                persistOperationTimeStreamPosition(subscriptionId, ((MongoOperationTimeSubscriptionPosition) subscriptionPosition).operationTime);
+    public Checkpoint save(String subscriptionId, Checkpoint checkpoint) {
+        Supplier<Checkpoint> save = () -> {
+            if (checkpoint instanceof MongoResumeTokenCheckpoint) {
+                persistResumeTokenStreamPosition(subscriptionId, ((MongoResumeTokenCheckpoint) checkpoint).resumeToken);
+            } else if (checkpoint instanceof MongoOperationTimeCheckpoint) {
+                persistOperationTimeStreamPosition(subscriptionId, ((MongoOperationTimeCheckpoint) checkpoint).operationTime);
             } else {
-                String subscriptionPositionString = subscriptionPosition.asString();
-                Document document = MongoCommons.generateGenericSubscriptionPositionDocument(subscriptionId, subscriptionPositionString);
+                String checkpointString = checkpoint.asString();
+                Document document = MongoCommons.generateGenericCheckpointDocument(subscriptionId, checkpointString);
                 persistDocumentStreamPosition(subscriptionId, document);
             }
-            return subscriptionPosition;
+            return checkpoint;
         };
 
         return requireNonNull(executeWithRetry(save, __ -> !shutdown, retryStrategy).get());
@@ -114,13 +114,13 @@ public class SpringMongoSubscriptionPositionStorage implements SubscriptionPosit
 
     @Override
     public void delete(String subscriptionId) {
-        Runnable delete = () -> mongoOperations.remove(query(where(ID).is(subscriptionId)), subscriptionPositionCollection);
+        Runnable delete = () -> mongoOperations.remove(query(where(ID).is(subscriptionId)), checkpointCollection);
         executeWithRetry(delete, __ -> !shutdown, retryStrategy).run();
     }
 
     @Override
     public boolean exists(String subscriptionId) {
-        Supplier<Boolean> exists = () -> mongoOperations.exists(query(where(ID).is(subscriptionId)), subscriptionPositionCollection);
+        Supplier<Boolean> exists = () -> mongoOperations.exists(query(where(ID).is(subscriptionId)), checkpointCollection);
         return Boolean.TRUE.equals(executeWithRetry(exists, __ -> !shutdown, retryStrategy).get());
     }
 
@@ -133,9 +133,14 @@ public class SpringMongoSubscriptionPositionStorage implements SubscriptionPosit
     }
 
     void persistDocumentStreamPosition(String subscriptionId, Document document) {
+        // "document" carries no $-prefixed update operators, so Spring Data applies it as a full-document
+        // replacement rather than a field-level merge. Any field absent from "document" is therefore dropped,
+        // including the legacy "subscriptionPosition" field written before the SubscriptionPosition -> Checkpoint
+        // rename: the first save after upgrade rewrites the document under the new "checkpoint" field and the legacy
+        // field does not survive. This is the same replacement behaviour the native adapter gets from replaceOne.
         mongoOperations.upsert(query(where(ID).is(subscriptionId)),
                 Update.fromDocument(document),
-                subscriptionPositionCollection);
+                checkpointCollection);
     }
 
     @PreDestroy

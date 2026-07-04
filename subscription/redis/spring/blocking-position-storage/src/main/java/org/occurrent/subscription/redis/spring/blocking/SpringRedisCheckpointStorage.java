@@ -20,9 +20,9 @@ import jakarta.annotation.PreDestroy;
 import org.jspecify.annotations.NullMarked;
 import org.jspecify.annotations.Nullable;
 import org.occurrent.retry.RetryStrategy;
-import org.occurrent.subscription.StringBasedSubscriptionPosition;
-import org.occurrent.subscription.SubscriptionPosition;
-import org.occurrent.subscription.api.blocking.SubscriptionPositionStorage;
+import org.occurrent.subscription.StringBasedCheckpoint;
+import org.occurrent.subscription.Checkpoint;
+import org.occurrent.subscription.api.blocking.CheckpointStorage;
 import org.springframework.data.redis.core.RedisOperations;
 
 import java.time.Duration;
@@ -32,10 +32,10 @@ import static java.util.Objects.requireNonNull;
 import static org.occurrent.retry.internal.RetryExecution.executeWithRetry;
 
 /**
- * A Spring implementation of {@link SubscriptionPositionStorage} that stores {@link SubscriptionPosition} in Redis.
+ * A Spring implementation of {@link CheckpointStorage} that stores {@link Checkpoint} in Redis.
  */
 @NullMarked
-public class SpringRedisSubscriptionPositionStorage implements SubscriptionPositionStorage {
+public class SpringRedisCheckpointStorage implements CheckpointStorage {
 
     private final RedisOperations<String, String> redis;
     private final RetryStrategy retryStrategy;
@@ -43,23 +43,23 @@ public class SpringRedisSubscriptionPositionStorage implements SubscriptionPosit
     private volatile boolean shutdown;
 
     /**
-     * Create a {@link SubscriptionPositionStorage} that uses the Native sync Java MongoDB driver to persists the subscription position in Redis.
+     * Create a {@link CheckpointStorage} that uses the Native sync Java MongoDB driver to persists the checkpoint in Redis.
      * It will by default use a {@link RetryStrategy} for retries, with exponential backoff starting with 100 ms and progressively go up to max 2 seconds wait time between
-     * each retry when reading/saving/deleting the subscription position.
+     * each retry when reading/saving/deleting the checkpoint.
      *
-     * @param redis The {@link RedisOperations} that'll be used to store the subscription position
+     * @param redis The {@link RedisOperations} that'll be used to store the checkpoint
      */
-    public SpringRedisSubscriptionPositionStorage(RedisOperations<String, String> redis) {
+    public SpringRedisCheckpointStorage(RedisOperations<String, String> redis) {
         this(redis, RetryStrategy.exponentialBackoff(Duration.ofMillis(100), Duration.ofSeconds(2), 2.0f));
     }
 
     /**
-     * Create a {@link SubscriptionPositionStorage} that uses the Native sync Java MongoDB driver to persists the subscription position in Redis.
+     * Create a {@link CheckpointStorage} that uses the Native sync Java MongoDB driver to persists the checkpoint in Redis.
      *
-     * @param redis         The {@link RedisOperations} that'll be used to store the subscription position
+     * @param redis         The {@link RedisOperations} that'll be used to store the checkpoint
      * @param retryStrategy A custom retry strategy to use if there's a problem reading/saving/deleting the position to the Redis storage.
      */
-    public SpringRedisSubscriptionPositionStorage(RedisOperations<String, String> redis, RetryStrategy retryStrategy) {
+    public SpringRedisCheckpointStorage(RedisOperations<String, String> redis, RetryStrategy retryStrategy) {
         requireNonNull(redis, "Redis operations cannot be null");
         requireNonNull(retryStrategy, RetryStrategy.class.getSimpleName() + " cannot be null");
         this.retryStrategy = retryStrategy;
@@ -68,27 +68,27 @@ public class SpringRedisSubscriptionPositionStorage implements SubscriptionPosit
 
     @Nullable
     @Override
-    public SubscriptionPosition read(String subscriptionId) {
-        Supplier<@Nullable SubscriptionPosition> read = () -> {
-            String subscriptionPosition = redis.opsForValue().get(subscriptionId);
-            if (subscriptionPosition == null) {
+    public Checkpoint read(String subscriptionId) {
+        Supplier<@Nullable Checkpoint> read = () -> {
+            String checkpoint = redis.opsForValue().get(subscriptionId);
+            if (checkpoint == null) {
                 return null;
             }
-            return new StringBasedSubscriptionPosition(subscriptionPosition);
+            return new StringBasedCheckpoint(checkpoint);
         };
 
         return executeWithRetry(read, __ -> !shutdown, retryStrategy).get();
     }
 
     @Override
-    public SubscriptionPosition save(String subscriptionId, SubscriptionPosition subscriptionPosition) {
+    public Checkpoint save(String subscriptionId, Checkpoint checkpoint) {
         requireNonNull(subscriptionId, "Subscription id cannot be null");
-        requireNonNull(subscriptionPosition, SubscriptionPosition.class.getSimpleName() + " cannot be null");
+        requireNonNull(checkpoint, Checkpoint.class.getSimpleName() + " cannot be null");
 
-        Supplier<SubscriptionPosition> save = () -> {
-            String changeStreamPositionAsString = subscriptionPosition.asString();
+        Supplier<Checkpoint> save = () -> {
+            String changeStreamPositionAsString = checkpoint.asString();
             redis.opsForValue().set(subscriptionId, changeStreamPositionAsString);
-            return subscriptionPosition;
+            return checkpoint;
         };
 
         return requireNonNull(executeWithRetry(save, __ -> !shutdown, retryStrategy).get());

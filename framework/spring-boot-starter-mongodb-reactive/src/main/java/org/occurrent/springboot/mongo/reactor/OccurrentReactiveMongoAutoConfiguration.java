@@ -46,13 +46,13 @@ import org.occurrent.springboot.mongo.common.OnDcbEventStoreCapabilityCondition;
 import org.occurrent.springboot.mongo.common.OnDomainEventQueriesCapabilityCondition;
 import org.occurrent.springboot.mongo.common.OnMissingCloudEventConverterAndCloudEventTypeMapperCondition;
 import org.occurrent.springboot.mongo.common.OnStreamEventStoreCapabilityCondition;
-import org.occurrent.subscription.api.reactor.PositionAwareSubscriptionModel;
+import org.occurrent.subscription.api.reactor.CheckpointAwareSubscriptionModel;
 import org.occurrent.subscription.api.reactor.Subscribable;
 import org.occurrent.subscription.api.reactor.SubscriptionModel;
-import org.occurrent.subscription.api.reactor.SubscriptionPositionStorage;
+import org.occurrent.subscription.api.reactor.CheckpointStorage;
 import org.occurrent.subscription.mongodb.spring.reactor.ReactorMongoSubscriptionModel;
 import org.occurrent.subscription.mongodb.spring.reactor.ReactorMongoSubscriptionModelConfig;
-import org.occurrent.subscription.mongodb.spring.reactor.ReactorSubscriptionPositionStorage;
+import org.occurrent.subscription.mongodb.spring.reactor.ReactorCheckpointStorage;
 import org.occurrent.subscription.reactor.durable.ReactorDurableSubscriptionModel;
 import org.occurrent.subscription.reactor.durable.catchup.ReactorCatchupSubscriptionModel;
 import org.slf4j.Logger;
@@ -133,10 +133,10 @@ public class OccurrentReactiveMongoAutoConfiguration<E> {
     }
 
     @Bean
-    @ConditionalOnMissingBean(SubscriptionPositionStorage.class)
+    @ConditionalOnMissingBean(CheckpointStorage.class)
     @ConditionalOnProperty(name = "occurrent.subscription.enabled", havingValue = "true", matchIfMissing = true)
-    public SubscriptionPositionStorage occurrentSubscriptionPositionStorage(ReactiveMongoOperations mongo, OccurrentProperties occurrentProperties) {
-        return new ReactorSubscriptionPositionStorage(mongo, occurrentProperties.getSubscription().getCollection());
+    public CheckpointStorage occurrentCheckpointStorage(ReactiveMongoOperations mongo, OccurrentProperties occurrentProperties) {
+        return new ReactorCheckpointStorage(mongo, occurrentProperties.getSubscription().getCollection());
     }
 
     /**
@@ -153,7 +153,7 @@ public class OccurrentReactiveMongoAutoConfiguration<E> {
     @Bean(destroyMethod = "shutdown")
     @ConditionalOnMissingBean({SubscriptionModel.class, Subscribable.class})
     @ConditionalOnProperty(name = "occurrent.subscription.enabled", havingValue = "true", matchIfMissing = true)
-    public ReactorDurableSubscriptionModel occurrentDurableSubscriptionModel(ReactiveMongoOperations mongo, SubscriptionPositionStorage storage,
+    public ReactorDurableSubscriptionModel occurrentDurableSubscriptionModel(ReactiveMongoOperations mongo, CheckpointStorage storage,
                                                                              OccurrentProperties occurrentProperties, ObjectProvider<DcbEventStore> dcbEventStore,
                                                                              ObjectProvider<ReactorMongoEventStore> reactorEventStore) {
         EventStoreProperties eventStoreProperties = occurrentProperties.getEventStore();
@@ -167,7 +167,7 @@ public class OccurrentReactiveMongoAutoConfiguration<E> {
         // Stream catch-up needs the STREAM capability, not just a position. A DCB-only store also writes position, so
         // gating on writesPosition() alone would wrongly wire stream catch-up for it.
         boolean streamCatchup = eventStoreProperties.getCapabilities().contains(STREAM) && streamStore != null && streamStore.writesPosition();
-        final PositionAwareSubscriptionModel inner;
+        final CheckpointAwareSubscriptionModel inner;
         if (dcbStore != null && streamCatchup) {
             inner = new ReactorCatchupSubscriptionModel(mongoSubscriptionModel, streamStore, dcbStore, DcbQuery.all(), Filter.all());
         } else if (dcbStore != null) {
@@ -197,8 +197,8 @@ public class OccurrentReactiveMongoAutoConfiguration<E> {
 
     /**
      * DCB subscription DSL, auto-configured when the DCB event-store capability is enabled. In DCB mode the underlying
-     * subscription model wraps a {@code ReactorDcbCatchupSubscriptionModel}, so a subscription started at a
-     * {@code GlobalSubscriptionPosition} replays history by position before switching to live delivery.
+     * subscription model wraps a {@code ReactorCatchupSubscriptionModel}, so a subscription started at a
+     * {@code GlobalCheckpoint} replays history by position before switching to live delivery.
      */
     @Bean
     @ConditionalOnMissingBean(DcbSubscriptions.class)

@@ -25,16 +25,16 @@ import org.occurrent.eventstore.api.dcb.DcbEventStore;
 import org.occurrent.eventstore.api.dcb.DcbEventStream;
 import org.occurrent.eventstore.api.dcb.DcbQuery;
 import org.occurrent.eventstore.api.dcb.DcbReadOptions;
-import org.occurrent.subscription.GlobalSubscriptionPosition;
+import org.occurrent.subscription.GlobalCheckpoint;
 import org.occurrent.subscription.StartAt;
-import org.occurrent.subscription.StartAt.StartAtSubscriptionPosition;
+import org.occurrent.subscription.StartAt.StartAtCheckpoint;
 import org.occurrent.subscription.StartAt.SubscriptionModelContext;
 import org.occurrent.subscription.SubscriptionFilter;
-import org.occurrent.subscription.SubscriptionPosition;
-import org.occurrent.subscription.api.blocking.PositionAwareSubscriptionModel;
+import org.occurrent.subscription.Checkpoint;
+import org.occurrent.subscription.api.blocking.CheckpointAwareSubscriptionModel;
 import org.occurrent.subscription.api.blocking.Subscription;
 import org.occurrent.subscription.api.blocking.SubscriptionModel;
-import org.occurrent.subscription.blocking.durable.catchup.SubscriptionPositionStorageConfig.UseSubscriptionPositionInStorage;
+import org.occurrent.subscription.blocking.durable.catchup.CheckpointStorageConfig.UseCheckpointInStorage;
 
 import java.util.Objects;
 import java.util.StringJoiner;
@@ -60,7 +60,7 @@ class DcbCatchupSubscriptionModel extends AbstractCatchupSubscriptionModel {
     private final DcbEventStore dcbEventStore;
     private final DcbQuery dcbQuery;
 
-    public DcbCatchupSubscriptionModel(PositionAwareSubscriptionModel subscriptionModel, DcbEventStore dcbEventStore, DcbQuery dcbQuery, CatchupSubscriptionModelConfig config) {
+    public DcbCatchupSubscriptionModel(CheckpointAwareSubscriptionModel subscriptionModel, DcbEventStore dcbEventStore, DcbQuery dcbQuery, CatchupSubscriptionModelConfig config) {
         this(subscriptionModel, dcbEventStore, dcbQuery, config, DcbCatchupSubscriptionModel.class);
     }
 
@@ -71,7 +71,7 @@ class DcbCatchupSubscriptionModel extends AbstractCatchupSubscriptionModel {
      *                                      class here so a caller that pattern-matches on the public dispatcher type
      *                                      keeps working regardless of which mode-specific class runs the catch-up.
      */
-    public DcbCatchupSubscriptionModel(PositionAwareSubscriptionModel subscriptionModel, DcbEventStore dcbEventStore, DcbQuery dcbQuery, CatchupSubscriptionModelConfig config, Class<?> subscriptionModelContextType) {
+    public DcbCatchupSubscriptionModel(CheckpointAwareSubscriptionModel subscriptionModel, DcbEventStore dcbEventStore, DcbQuery dcbQuery, CatchupSubscriptionModelConfig config, Class<?> subscriptionModelContextType) {
         super(subscriptionModel, config, subscriptionModelContextType);
         this.dcbEventStore = Objects.requireNonNull(dcbEventStore, "dcbEventStore cannot be null");
         this.dcbQuery = Objects.requireNonNull(dcbQuery, "dcbQuery cannot be null");
@@ -83,11 +83,11 @@ class DcbCatchupSubscriptionModel extends AbstractCatchupSubscriptionModel {
         final StartAt firstStartAt;
         if (startAt.isDefault()) {
             // Resume from the stored position if there is one, otherwise subscribe live (with the DCB query post-filter).
-            SubscriptionPosition subscriptionPosition = returnIfSubscriptionPositionStorageConfigIs(UseSubscriptionPositionInStorage.class, cfg -> cfg.storage().read(subscriptionId)).orElse(null);
-            if (subscriptionPosition == null) {
+            Checkpoint checkpoint = returnIfCheckpointStorageConfigIs(UseCheckpointInStorage.class, cfg -> cfg.storage().read(subscriptionId)).orElse(null);
+            if (checkpoint == null) {
                 return startLiveDcbSubscription(subscriptionId, filter, startAt, action, null);
             } else {
-                firstStartAt = StartAt.subscriptionPosition(subscriptionPosition);
+                firstStartAt = StartAt.checkpoint(checkpoint);
             }
         } else if (startAt.isDynamic()) {
             StartAt startAtGeneratedByDynamic = startAt.get(generateSubscriptionModelContext());
@@ -131,15 +131,15 @@ class DcbCatchupSubscriptionModel extends AbstractCatchupSubscriptionModel {
         long windowSize = config.dcbCatchupPositionWindowSize;
 
         StartAt nextStartAt = firstStartAt.get(generateSubscriptionModelContext());
-        SubscriptionPosition subscriptionPosition = ((StartAtSubscriptionPosition) Objects.requireNonNull(nextStartAt)).subscriptionPosition;
-        long startPosition = GlobalSubscriptionPosition.positionOf(subscriptionPosition);
+        Checkpoint checkpoint = ((StartAtCheckpoint) Objects.requireNonNull(nextStartAt)).checkpoint;
+        long startPosition = GlobalCheckpoint.positionOf(checkpoint);
 
         // Capture the live resume token before the bulk replay so an event committed during the replay is still
         // delivered live. On a replay longer than the change stream history the token ages out and the handover fails
         // loudly instead of dropping the event.
         Class<? extends SubscriptionModel> delegatedSubscriptionModelType = getDelegatedSubscriptionModel().getClass();
         StartAt delegatedStartAt = startAt.get(new SubscriptionModelContext(delegatedSubscriptionModelType));
-        final SubscriptionPosition globalSubscriptionPosition = delegatedStartAt == null ? null : subscriptionModel.globalSubscriptionPosition();
+        final Checkpoint globalCheckpoint = delegatedStartAt == null ? null : subscriptionModel.globalCheckpoint();
 
         // Page through the DCB sequence from the resume position to the head seen at the start, in windows so a large
         // rebuild does not load the whole matched set at once. position is monotonic and server-assigned, so this needs
@@ -159,7 +159,7 @@ class DcbCatchupSubscriptionModel extends AbstractCatchupSubscriptionModel {
         }
 
         if (delegatedStartAt == null) {
-            returnIfSubscriptionPositionStorageConfigIs(UseSubscriptionPositionInStorage.class, cfg -> {
+            returnIfCheckpointStorageConfigIs(UseCheckpointInStorage.class, cfg -> {
                 cfg.storage().delete(subscriptionId);
                 return null;
             });
@@ -173,29 +173,29 @@ class DcbCatchupSubscriptionModel extends AbstractCatchupSubscriptionModel {
             subscriptionsWasCancelledOrShutdown = true;
         }
 
-        StartAt startAtToUse = StartAt.dynamic(this.<Supplier<StartAt>, UseSubscriptionPositionInStorage>returnIfSubscriptionPositionStorageConfigIs(UseSubscriptionPositionInStorage.class,
+        StartAt startAtToUse = StartAt.dynamic(this.<Supplier<StartAt>, UseCheckpointInStorage>returnIfCheckpointStorageConfigIs(UseCheckpointInStorage.class,
                         cfg -> () -> {
-                            SubscriptionPosition position = cfg.storage().read(subscriptionId);
+                            Checkpoint position = cfg.storage().read(subscriptionId);
                             // If nothing is stored, or the stored position is a DCB position (written by this catch-up),
                             // save the live change-stream position so the wrapped subscription resumes from there.
-                            if ((position == null || GlobalSubscriptionPosition.isGlobalSubscriptionPosition(position)) && globalSubscriptionPosition != null) {
-                                position = cfg.storage().save(subscriptionId, globalSubscriptionPosition);
+                            if ((position == null || GlobalCheckpoint.isGlobalCheckpoint(position)) && globalCheckpoint != null) {
+                                position = cfg.storage().save(subscriptionId, globalCheckpoint);
                             } else if (position == null) {
                                 return delegatedStartAt == null ? startAt : StartAt.subscriptionModelDefault();
                             }
-                            return StartAt.subscriptionPosition(position);
+                            return StartAt.checkpoint(position);
                         })
                 .orElse(() -> {
-                    if (globalSubscriptionPosition == null) {
+                    if (globalCheckpoint == null) {
                         return delegatedStartAt == null ? startAt : StartAt.subscriptionModelDefault();
                     } else {
-                        return StartAt.subscriptionPosition(globalSubscriptionPosition);
+                        return StartAt.checkpoint(globalCheckpoint);
                     }
                 }));
 
         final Subscription subscription;
         if (subscriptionsWasCancelledOrShutdown) {
-            doIfSubscriptionPositionStorageConfigIs(UseSubscriptionPositionInStorage.class, cfg -> {
+            doIfCheckpointStorageConfigIs(UseCheckpointInStorage.class, cfg -> {
                 if (!cfg.storage().exists(subscriptionId)) {
                     startAtToUse.get(generateSubscriptionModelContext());
                 }
@@ -239,9 +239,9 @@ class DcbCatchupSubscriptionModel extends AbstractCatchupSubscriptionModel {
             }
             takeWhile
                     .peek(action)
-                    .filter(returnIfSubscriptionPositionStorageConfigIs(SubscriptionPositionStorageConfig.PersistSubscriptionPositionDuringCatchupPhase.class, SubscriptionPositionStorageConfig.PersistSubscriptionPositionDuringCatchupPhase::persistCloudEventPositionPredicate).orElse(__ -> false))
-                    .forEach(e -> doIfSubscriptionPositionStorageConfigIs(SubscriptionPositionStorageConfig.PersistSubscriptionPositionDuringCatchupPhase.class,
-                            cfg -> cfg.storage().save(subscriptionId, GlobalSubscriptionPosition.of(OccurrentCloudEventExtension.getPosition(e)))));
+                    .filter(returnIfCheckpointStorageConfigIs(CheckpointStorageConfig.PersistCheckpointDuringCatchupPhase.class, CheckpointStorageConfig.PersistCheckpointDuringCatchupPhase::persistCloudEventPositionPredicate).orElse(__ -> false))
+                    .forEach(e -> doIfCheckpointStorageConfigIs(CheckpointStorageConfig.PersistCheckpointDuringCatchupPhase.class,
+                            cfg -> cfg.storage().save(subscriptionId, GlobalCheckpoint.of(OccurrentCloudEventExtension.getPosition(e)))));
         }
     }
 
@@ -249,10 +249,10 @@ class DcbCatchupSubscriptionModel extends AbstractCatchupSubscriptionModel {
     // again is a no-op; generateSubscriptionModelContext() is used anyway for consistency with the other call sites.
     private boolean isDcbCatchupPosition(StartAt startAt) {
         StartAt start = startAt.get(generateSubscriptionModelContext());
-        if (!(start instanceof StartAtSubscriptionPosition)) {
+        if (!(start instanceof StartAtCheckpoint)) {
             return false;
         }
-        return GlobalSubscriptionPosition.isGlobalSubscriptionPosition(((StartAtSubscriptionPosition) start).subscriptionPosition);
+        return GlobalCheckpoint.isGlobalCheckpoint(((StartAtCheckpoint) start).checkpoint);
     }
 
     @Override

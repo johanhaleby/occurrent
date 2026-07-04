@@ -20,10 +20,10 @@ import org.jspecify.annotations.NullMarked;
 import org.jspecify.annotations.Nullable;
 import org.occurrent.subscription.StartAt.SubscriptionModelContext;
 import org.occurrent.subscription.api.blocking.DelegatingSubscriptionModel;
-import org.occurrent.subscription.api.blocking.PositionAwareSubscriptionModel;
+import org.occurrent.subscription.api.blocking.CheckpointAwareSubscriptionModel;
 import org.occurrent.subscription.api.blocking.Subscription;
 import org.occurrent.subscription.api.blocking.SubscriptionModel;
-import org.occurrent.subscription.blocking.durable.catchup.SubscriptionPositionStorageConfig.UseSubscriptionPositionInStorage;
+import org.occurrent.subscription.blocking.durable.catchup.CheckpointStorageConfig.UseCheckpointInStorage;
 
 import java.util.Objects;
 import java.util.Optional;
@@ -42,13 +42,13 @@ import java.util.function.Function;
 @NullMarked
 abstract class AbstractCatchupSubscriptionModel implements SubscriptionModel, DelegatingSubscriptionModel {
 
-    protected final PositionAwareSubscriptionModel subscriptionModel;
+    protected final CheckpointAwareSubscriptionModel subscriptionModel;
     protected final CatchupSubscriptionModelConfig config;
     protected final Class<?> subscriptionModelContextType;
     protected final ConcurrentMap<String, Boolean> runningCatchupSubscriptions = new ConcurrentHashMap<>();
     protected volatile boolean shuttingDown = false;
 
-    protected AbstractCatchupSubscriptionModel(PositionAwareSubscriptionModel subscriptionModel, CatchupSubscriptionModelConfig config, Class<?> subscriptionModelContextType) {
+    protected AbstractCatchupSubscriptionModel(CheckpointAwareSubscriptionModel subscriptionModel, CatchupSubscriptionModelConfig config, Class<?> subscriptionModelContextType) {
         this.subscriptionModel = Objects.requireNonNull(subscriptionModel, "subscriptionModel cannot be null");
         this.config = Objects.requireNonNull(config, "config cannot be null");
         this.subscriptionModelContextType = Objects.requireNonNull(subscriptionModelContextType, "subscriptionModelContextType cannot be null");
@@ -120,7 +120,7 @@ abstract class AbstractCatchupSubscriptionModel implements SubscriptionModel, De
      * the position storage config (and the storage instance it wraps) is shared, not owned per mode.
      */
     public void deletePositionFromStorage(String subscriptionId) {
-        doIfSubscriptionPositionStorageConfigIs(UseSubscriptionPositionInStorage.class, cfg -> cfg.storage().delete(subscriptionId));
+        doIfCheckpointStorageConfigIs(UseCheckpointInStorage.class, cfg -> cfg.storage().delete(subscriptionId));
     }
 
     @Override
@@ -128,14 +128,14 @@ abstract class AbstractCatchupSubscriptionModel implements SubscriptionModel, De
         return subscriptionModel;
     }
 
-    protected <T, C extends SubscriptionPositionStorageConfig> Optional<T> returnIfSubscriptionPositionStorageConfigIs(Class<C> cls, Function<C, @Nullable T> fn) {
+    protected <T, C extends CheckpointStorageConfig> Optional<T> returnIfCheckpointStorageConfigIs(Class<C> cls, Function<C, @Nullable T> fn) {
         if (cls.isInstance(config.subscriptionStorageConfig)) {
             return Optional.ofNullable(fn.apply(cls.cast(config.subscriptionStorageConfig)));
         }
         return Optional.empty();
     }
 
-    protected <C extends SubscriptionPositionStorageConfig> void doIfSubscriptionPositionStorageConfigIs(Class<C> cls, Consumer<C> consumer) {
+    protected <C extends CheckpointStorageConfig> void doIfCheckpointStorageConfigIs(Class<C> cls, Consumer<C> consumer) {
         if (cls.isInstance(config.subscriptionStorageConfig)) {
             consumer.accept(cls.cast(config.subscriptionStorageConfig));
         }

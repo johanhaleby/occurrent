@@ -35,7 +35,7 @@ import org.occurrent.functional.Not;
 import org.occurrent.mongodb.timerepresentation.TimeRepresentation;
 import org.occurrent.retry.RetryStrategy;
 import org.occurrent.subscription.api.blocking.DelegatingSubscriptionModel;
-import org.occurrent.subscription.api.blocking.SubscriptionPositionStorage;
+import org.occurrent.subscription.api.blocking.CheckpointStorage;
 import org.occurrent.subscription.blocking.durable.DurableSubscriptionModel;
 import org.occurrent.subscription.mongodb.spring.blocking.SpringMongoSubscriptionModel;
 import org.occurrent.testsupport.mongodb.FlushMongoDBExtension;
@@ -72,7 +72,7 @@ import static org.hamcrest.Matchers.equalTo;
 @Timeout(20)
 @DisplayNameGeneration(DisplayNameGenerator.Simple.class)
 @Testcontainers
-class SpringRedisSubscriptionPositionStorageTest {
+class SpringRedisCheckpointStorageTest {
 
     @Container
     private static final MongoDBContainer mongoDBContainer = new MongoDBContainer("mongo:" + System.getProperty("test.mongo.version"))
@@ -106,7 +106,7 @@ class SpringRedisSubscriptionPositionStorageTest {
         SpringMongoSubscriptionModel subscriptionModel = new SpringMongoSubscriptionModel(mongoTemplate, connectionString.getCollection(), TimeRepresentation.RFC_3339_STRING);
         lettuceConnectionFactory = new LettuceConnectionFactory(redisContainer.getHost(), redisContainer.getFirstMappedPort());
         redisTemplate = createRedisTemplate(lettuceConnectionFactory);
-        SubscriptionPositionStorage storage = new SpringRedisSubscriptionPositionStorage(redisTemplate);
+        CheckpointStorage storage = new SpringRedisCheckpointStorage(redisTemplate);
         redisSubscription = new DurableSubscriptionModel(subscriptionModel, storage);
         objectMapper = new ObjectMapper();
     }
@@ -173,7 +173,7 @@ class SpringRedisSubscriptionPositionStorageTest {
         Runnable stream = () -> {
             MongoTemplate mongoTemplate = new MongoTemplate(mongoClient, requireNonNull(connectionString.getDatabase()));
             SpringMongoSubscriptionModel subscriptionModel = new SpringMongoSubscriptionModel(mongoTemplate, connectionString.getCollection(), TimeRepresentation.RFC_3339_STRING, RetryStrategy.none());
-            SubscriptionPositionStorage storage = new SpringRedisSubscriptionPositionStorage(redisTemplate, RetryStrategy.none());
+            CheckpointStorage storage = new SpringRedisCheckpointStorage(redisTemplate, RetryStrategy.none());
             redisSubscription = new DurableSubscriptionModel(subscriptionModel, storage);
             redisSubscription.subscribe(subscriberId, cloudEvent -> {
                 if (counter.incrementAndGet() == 1) {

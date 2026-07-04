@@ -35,7 +35,7 @@ import static java.util.function.Predicate.not;
  * <br>
  * <pre>
  * MongoDatabase mongoDatabase = mongoClient.getDatabase("some-database");
- * SubscriptionPositionStorage positionStorage = NativeMongoSubscriptionPositionStorage(mongoDatabase, "position-storage");
+ * CheckpointStorage positionStorage = NativeMongoCheckpointStorage(mongoDatabase, "position-storage");
  * SubscriptionModel wrappedSubscriptionModel = new DurableSubscriptionModel(new NativeMongoSubscriptionModel(mongoDatabase, "events", TimeRepresentation.DATE), positionStorage);
  *
  * // Create the CompetingConsumerSubscriptionModel
@@ -367,7 +367,7 @@ public class CompetingConsumerSubscriptionModel implements DelegatingSubscriptio
         if (competingConsumer.isRunning()) {
             logDebug("CompetingConsumer is running, will pause subscription and consumers (subscriberId={}, subscriptionId={})", subscriberId, subscriptionId);
             // We pause the entire subscription. The reason for this is that we don't want this instance to subscribe to any events at all.
-            // If we don't do this, events will still be sent to the instance. Also, we make use of the "subscription position" when resuming the
+            // If we don't do this, events will still be sent to the instance. Also, we make use of the "checkpoint" when resuming the
             // subscription later. If we had not paused the subscription this could happen:
             // 1. Subscriber 1 loses lock
             // 2. An event is published (A)

@@ -53,14 +53,14 @@ import org.occurrent.springboot.mongo.common.OnStreamEventStoreCapabilityConditi
 import org.occurrent.subscription.api.blocking.CompetingConsumerStrategy.CompetingConsumerListener;
 import org.occurrent.subscription.api.blocking.Subscribable;
 import org.occurrent.subscription.api.blocking.SubscriptionModel;
-import org.occurrent.subscription.api.blocking.SubscriptionPositionStorage;
+import org.occurrent.subscription.api.blocking.CheckpointStorage;
 import org.occurrent.subscription.blocking.competingconsumers.CompetingConsumerSubscriptionModel;
 import org.occurrent.subscription.blocking.durable.DurableSubscriptionModel;
 import org.occurrent.subscription.blocking.durable.catchup.CatchupSubscriptionModel;
 import org.occurrent.subscription.blocking.durable.catchup.CatchupSubscriptionModelConfig;
 import org.occurrent.subscription.mongodb.spring.blocking.SpringMongoLeaseCompetingConsumerStrategy;
 import org.occurrent.subscription.mongodb.spring.blocking.SpringMongoSubscriptionModel;
-import org.occurrent.subscription.mongodb.spring.blocking.SpringMongoSubscriptionPositionStorage;
+import org.occurrent.subscription.mongodb.spring.blocking.SpringMongoCheckpointStorage;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.ObjectProvider;
@@ -83,7 +83,7 @@ import java.util.List;
 
 import static org.occurrent.eventstore.api.EventStoreCapability.DCB;
 import static org.occurrent.eventstore.api.EventStoreCapability.STREAM;
-import static org.occurrent.subscription.blocking.durable.catchup.SubscriptionPositionStorageConfig.useSubscriptionPositionStorage;
+import static org.occurrent.subscription.blocking.durable.catchup.CheckpointStorageConfig.useCheckpointStorage;
 import static org.occurrent.subscription.mongodb.spring.blocking.SpringMongoSubscriptionModelConfig.withConfig;
 
 /**
@@ -139,10 +139,10 @@ public class OccurrentMongoAutoConfiguration<E> {
     }
 
     @Bean
-    @ConditionalOnMissingBean(SubscriptionPositionStorage.class)
+    @ConditionalOnMissingBean(CheckpointStorage.class)
     @ConditionalOnProperty(name = "occurrent.subscription.enabled", havingValue = "true", matchIfMissing = true)
-    public SubscriptionPositionStorage occurrentSubscriptionPositionStorage(MongoTemplate mongoTemplate, OccurrentProperties occurrentProperties) {
-        return new SpringMongoSubscriptionPositionStorage(mongoTemplate, occurrentProperties.getSubscription().getCollection());
+    public CheckpointStorage occurrentCheckpointStorage(MongoTemplate mongoTemplate, OccurrentProperties occurrentProperties) {
+        return new SpringMongoCheckpointStorage(mongoTemplate, occurrentProperties.getSubscription().getCollection());
     }
 
     @Bean
@@ -157,14 +157,14 @@ public class OccurrentMongoAutoConfiguration<E> {
     @Bean
     @ConditionalOnMissingBean(SubscriptionModel.class)
     @ConditionalOnProperty(name = "occurrent.subscription.enabled", havingValue = "true", matchIfMissing = true)
-    public SubscriptionModel occurrentCompetingDurableSubscriptionModel(MongoTemplate mongoTemplate, SpringMongoLeaseCompetingConsumerStrategy competingConsumerStrategy, SubscriptionPositionStorage storage,
+    public SubscriptionModel occurrentCompetingDurableSubscriptionModel(MongoTemplate mongoTemplate, SpringMongoLeaseCompetingConsumerStrategy competingConsumerStrategy, CheckpointStorage storage,
                                                                         OccurrentProperties occurrentProperties, EventStoreQueries eventStoreQueries, ObjectProvider<DcbEventStore> dcbEventStore) {
         EventStoreProperties eventStoreProperties = occurrentProperties.getEventStore();
         SpringMongoSubscriptionModel mongoSubscriptionModel = new SpringMongoSubscriptionModel(mongoTemplate, withConfig(eventStoreProperties.getCollection(), eventStoreProperties.getTimeRepresentation())
                 .restartSubscriptionsOnChangeStreamHistoryLost(occurrentProperties.getSubscription().isRestartOnChangeStreamHistoryLost()));
         DurableSubscriptionModel durableSubscriptionModel = new DurableSubscriptionModel(mongoSubscriptionModel, storage);
-        CatchupSubscriptionModelConfig catchupConfig = new CatchupSubscriptionModelConfig(useSubscriptionPositionStorage(storage)
-                .andPersistSubscriptionPositionDuringCatchupPhaseForEveryNEvents(1000));
+        CatchupSubscriptionModelConfig catchupConfig = new CatchupSubscriptionModelConfig(useCheckpointStorage(storage)
+                .andPersistCheckpointDuringCatchupPhaseForEveryNEvents(1000));
         // DCB catch-up replays by position over the DCB event store. The DcbQuery.all() is shared by every
         // DcbSubscriptions subscription, which each narrow to their own DcbQuery in the consumer, so a single
         // all-matching catch-up is correct. Stream catch-up replays by event time over the stream query API.
@@ -208,7 +208,7 @@ public class OccurrentMongoAutoConfiguration<E> {
     /**
      * DCB subscription DSL, auto-configured when the DCB event-store capability is enabled. In DCB-only mode the
      * underlying subscription model wraps a {@link CatchupSubscriptionModel} in DCB mode, so a subscription started at a
-     * {@code GlobalSubscriptionPosition} replays history by position before switching to live delivery. Started without
+     * {@code GlobalCheckpoint} replays history by position before switching to live delivery. Started without
      * such a position it is live only, as before.
      */
     @Bean

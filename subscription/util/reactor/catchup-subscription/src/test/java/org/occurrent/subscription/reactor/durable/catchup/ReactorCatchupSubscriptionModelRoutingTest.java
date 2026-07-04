@@ -31,12 +31,12 @@ import org.occurrent.eventstore.api.dcb.reactor.DcbEventStore;
 import org.occurrent.eventstore.api.reactor.PositionOrderedReader;
 import org.occurrent.filter.Filter;
 import org.occurrent.subscription.DcbSubscriptionFilter;
-import org.occurrent.subscription.GlobalSubscriptionPosition;
+import org.occurrent.subscription.GlobalCheckpoint;
 import org.occurrent.subscription.OccurrentSubscriptionFilter;
 import org.occurrent.subscription.StartAt;
 import org.occurrent.subscription.SubscriptionFilter;
-import org.occurrent.subscription.SubscriptionPosition;
-import org.occurrent.subscription.api.reactor.PositionAwareSubscriptionModel;
+import org.occurrent.subscription.Checkpoint;
+import org.occurrent.subscription.api.reactor.CheckpointAwareSubscriptionModel;
 import reactor.core.publisher.Flux;
 import reactor.core.publisher.Mono;
 import reactor.test.StepVerifier;
@@ -46,13 +46,13 @@ import java.util.List;
 /**
  * Fast, no-Mongo regression guard for the dual-mode {@link ReactorCatchupSubscriptionModel} routing decision. Before
  * the fix, {@code routesToDcb} used a position-only heuristic, so a stream subscription with an
- * {@link OccurrentSubscriptionFilter} and a {@link GlobalSubscriptionPosition} start was misrouted to the DCB inner
+ * {@link OccurrentSubscriptionFilter} and a {@link GlobalCheckpoint} start was misrouted to the DCB inner
  * model, which then rejected it with "only supports a DcbSubscriptionFilter". The fix routes by filter type first: a
  * {@link DcbSubscriptionFilter} always goes to DCB, an {@link OccurrentSubscriptionFilter} always goes to stream, and
  * only a {@code null} filter falls back to the position heuristic.
  * <p>
  * Both inner models validate the filter type before doing anything else (see their {@code subscribe} methods), so a
- * stub {@link PositionAwareSubscriptionModel} reporting no resume token is enough to observe routing: reaching the
+ * stub {@link CheckpointAwareSubscriptionModel} reporting no resume token is enough to observe routing: reaching the
  * inner model's "no resume token" {@link IllegalStateException} proves the filter check was passed, i.e. the
  * subscription was routed to the model that accepts that filter type. Reaching the other model's
  * {@link IllegalArgumentException} would prove misrouting.
@@ -66,7 +66,7 @@ class ReactorCatchupSubscriptionModelRoutingTest {
 
         // Routed to the stream model: passes the stream filter-type check, then fails loud on the missing resume
         // token. Before the fix this scenario produced the DCB model's IllegalArgumentException instead.
-        StepVerifier.create(catchup.subscribe(OccurrentSubscriptionFilter.filter(Filter.all()), StartAt.subscriptionPosition(GlobalSubscriptionPosition.of(0))))
+        StepVerifier.create(catchup.subscribe(OccurrentSubscriptionFilter.filter(Filter.all()), StartAt.checkpoint(GlobalCheckpoint.of(0))))
                 .expectError(IllegalStateException.class)
                 .verify();
     }
@@ -76,7 +76,7 @@ class ReactorCatchupSubscriptionModelRoutingTest {
         ReactorCatchupSubscriptionModel catchup = dualMode();
 
         // Routed to the DCB model: passes the DCB filter-type check, then fails loud on the missing resume token.
-        StepVerifier.create(catchup.subscribe(DcbSubscriptionFilter.filter(DcbQuery.tags("name:1")), StartAt.subscriptionPosition(GlobalSubscriptionPosition.of(0))))
+        StepVerifier.create(catchup.subscribe(DcbSubscriptionFilter.filter(DcbQuery.tags("name:1")), StartAt.checkpoint(GlobalCheckpoint.of(0))))
                 .expectError(IllegalStateException.class)
                 .verify();
     }
@@ -87,7 +87,7 @@ class ReactorCatchupSubscriptionModelRoutingTest {
 
         // The regression was specifically the DCB model's "only supports a DcbSubscriptionFilter" rejection leaking
         // through for a stream subscription. Assert the error is not that IllegalArgumentException, of any message.
-        StepVerifier.create(catchup.subscribe(OccurrentSubscriptionFilter.filter(Filter.all()), StartAt.subscriptionPosition(GlobalSubscriptionPosition.of(0))))
+        StepVerifier.create(catchup.subscribe(OccurrentSubscriptionFilter.filter(Filter.all()), StartAt.checkpoint(GlobalCheckpoint.of(0))))
                 .expectErrorSatisfies(error -> {
                     if (error instanceof IllegalArgumentException illegalArgumentException) {
                         throw new AssertionError("Stream subscription was misrouted to the DCB model", illegalArgumentException);
@@ -97,12 +97,12 @@ class ReactorCatchupSubscriptionModelRoutingTest {
     }
 
     private static ReactorCatchupSubscriptionModel dualMode() {
-        return new ReactorCatchupSubscriptionModel(new NoTokenSubscriptionModel(), new UnusedPositionOrderedReader(), new UnusedDcbEventStore(), null, null);
+        return new ReactorCatchupSubscriptionModel(new NoTokenCheckpointModel(), new UnusedPositionOrderedReader(), new UnusedDcbEventStore(), null, null);
     }
 
-    private static final class NoTokenSubscriptionModel implements PositionAwareSubscriptionModel {
+    private static final class NoTokenCheckpointModel implements CheckpointAwareSubscriptionModel {
         @Override
-        public Mono<SubscriptionPosition> globalSubscriptionPosition() {
+        public Mono<Checkpoint> globalCheckpoint() {
             return Mono.empty();
         }
 

@@ -24,17 +24,17 @@ import org.bson.Document;
 import org.jspecify.annotations.NullMarked;
 import org.jspecify.annotations.Nullable;
 import org.occurrent.mongodb.timerepresentation.TimeRepresentation;
-import org.occurrent.subscription.PositionAwareCloudEvent;
+import org.occurrent.subscription.CheckpointAwareCloudEvent;
 import org.occurrent.subscription.StartAt;
 import org.occurrent.subscription.StartAt.SubscriptionModelContext;
 import org.occurrent.subscription.SubscriptionFilter;
-import org.occurrent.subscription.SubscriptionPosition;
-import org.occurrent.subscription.api.reactor.PositionAwareSubscriptionModel;
+import org.occurrent.subscription.Checkpoint;
+import org.occurrent.subscription.api.reactor.CheckpointAwareSubscriptionModel;
 import org.occurrent.subscription.api.reactor.Subscribable;
 import org.occurrent.subscription.api.reactor.Subscription;
 import org.occurrent.subscription.api.reactor.SubscriptionModelLifeCycle;
-import org.occurrent.subscription.mongodb.MongoOperationTimeSubscriptionPosition;
-import org.occurrent.subscription.mongodb.MongoResumeTokenSubscriptionPosition;
+import org.occurrent.subscription.mongodb.MongoOperationTimeCheckpoint;
+import org.occurrent.subscription.mongodb.MongoResumeTokenCheckpoint;
 import org.occurrent.subscription.mongodb.internal.MongoCloudEventsToJsonDeserializer;
 import org.occurrent.subscription.mongodb.internal.MongoCommons;
 import org.occurrent.subscription.mongodb.spring.internal.ApplyFilterToChangeStreamOptionsBuilder;
@@ -59,15 +59,15 @@ import java.util.function.Consumer;
 import java.util.function.Function;
 
 import static java.util.Objects.requireNonNull;
-import static org.occurrent.subscription.mongodb.internal.MongoCommons.cannotFindGlobalSubscriptionPositionErrorMessage;
+import static org.occurrent.subscription.mongodb.internal.MongoCommons.cannotFindGlobalCheckpointErrorMessage;
 
 /**
  * This is a subscription that uses project reactor and Spring to listen to changes from an event store.
- * This Subscription doesn't maintain the subscription position, you need to store it yourself
+ * This Subscription doesn't maintain the checkpoint, you need to store it yourself
  * (or use another pre-existing component in conjunction with this one) in order to continue the stream from where
- * it's left off on application restart/crash etc. It produces a {@link CloudEvent} implementation of type {@link PositionAwareCloudEvent}
- * that includes the subscription position. Use {@link PositionAwareCloudEvent#getSubscriptionPositionOrThrowIAE(CloudEvent)}
- * to get the subscription position.
+ * it's left off on application restart/crash etc. It produces a {@link CloudEvent} implementation of type {@link CheckpointAwareCloudEvent}
+ * that includes the checkpoint. Use {@link CheckpointAwareCloudEvent#getCheckpointOrThrowIAE(CloudEvent)}
+ * to get the checkpoint.
  * <p>
  * Survives the same class of MongoDB operational disruption {@code SpringMongoSubscriptionModel} does (replica-set
  * failovers, transient network errors, and, if configured to, change stream history loss): the underlying change
@@ -79,7 +79,7 @@ import static org.occurrent.subscription.mongodb.internal.MongoCommons.cannotFin
  * {@link Flux} primitive.
  */
 @NullMarked
-public class ReactorMongoSubscriptionModel implements PositionAwareSubscriptionModel, Subscribable, SubscriptionModelLifeCycle {
+public class ReactorMongoSubscriptionModel implements CheckpointAwareSubscriptionModel, Subscribable, SubscriptionModelLifeCycle {
     private static final Logger log = LoggerFactory.getLogger(ReactorMongoSubscriptionModel.class);
 
     private final ReactiveMongoOperations mongo;
@@ -171,7 +171,7 @@ public class ReactorMongoSubscriptionModel implements PositionAwareSubscriptionM
         Disposable disposable = resilientChangeStream(filter, currentStartAt, __ -> {
                 }, startedSink)
                 .concatMap(cloudEvent -> action.apply(cloudEvent)
-                        .doOnSuccess(unused -> currentStartAt.set(StartAt.subscriptionPosition(PositionAwareCloudEvent.getSubscriptionPositionOrThrowIAE(cloudEvent)))))
+                        .doOnSuccess(unused -> currentStartAt.set(StartAt.checkpoint(CheckpointAwareCloudEvent.getCheckpointOrThrowIAE(cloudEvent)))))
                 .subscribe(unused -> {
                         }, throwable -> {
                             log.error("Subscription {} terminated with an unrecoverable error", subscriptionId, throwable);
@@ -221,13 +221,13 @@ public class ReactorMongoSubscriptionModel implements PositionAwareSubscriptionM
                             log.error("Internal error: ChangeStreamEvent for collection {} had a null raw document", eventCollection);
                             return Mono.empty();
                         }
-                        MongoResumeTokenSubscriptionPosition subscriptionPosition = new MongoResumeTokenSubscriptionPosition(requireNonNull(raw.getResumeToken()));
+                        MongoResumeTokenCheckpoint checkpoint = new MongoResumeTokenCheckpoint(requireNonNull(raw.getResumeToken()));
                         // Advance the tracked position for every change-stream document received, even if it
                         // doesn't deserialize into a delivered CloudEvent, mirroring NativeMongoSubscriptionModel,
                         // so a resubscribe after an error resumes gap-free.
-                        onDocumentRead.accept(StartAt.subscriptionPosition(subscriptionPosition));
+                        onDocumentRead.accept(StartAt.checkpoint(checkpoint));
                         return MongoCloudEventsToJsonDeserializer.deserializeToCloudEvent(raw, timeRepresentation)
-                                .map(cloudEvent -> new PositionAwareCloudEvent(cloudEvent, subscriptionPosition))
+                                .map(cloudEvent -> new CheckpointAwareCloudEvent(cloudEvent, checkpoint))
                                 .map(Mono::just)
                                 .orElse(Mono.empty());
                     });
@@ -259,7 +259,7 @@ public class ReactorMongoSubscriptionModel implements PositionAwareSubscriptionM
     }
 
     @Override
-    public Mono<SubscriptionPosition> globalSubscriptionPosition() {
+    public Mono<Checkpoint> globalCheckpoint() {
         // Increase the "increment" by 1 so the resume position lands after the most recently
         // written event, matching SpringMongoSubscriptionModel and avoiding replaying it.
         return mongo.executeCommand(new Document("hostInfo", 1))
@@ -268,13 +268,13 @@ public class ReactorMongoSubscriptionModel implements PositionAwareSubscriptionM
                     if (throwable.getCause() instanceof MongoCommandException) {
                         // This can if the server doesn't allow to get the operation time since "db.adminCommand( { "hostInfo" : 1 } )" is prohibited.
                         // This is the case on for example shared Atlas clusters. If this happens we return the current time of the client instead.
-                        log.warn(cannotFindGlobalSubscriptionPositionErrorMessage(throwable.getCause()));
+                        log.warn(cannotFindGlobalCheckpointErrorMessage(throwable.getCause()));
                         return Mono.empty();
                     } else {
                         return Mono.error(throwable);
                     }
                 })
-                .map(MongoOperationTimeSubscriptionPosition::new);
+                .map(MongoOperationTimeCheckpoint::new);
     }
 
     @Override

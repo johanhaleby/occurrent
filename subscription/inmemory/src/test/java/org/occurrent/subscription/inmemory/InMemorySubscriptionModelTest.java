@@ -27,7 +27,7 @@ import org.occurrent.domain.NameWasChanged;
 import org.occurrent.eventstore.inmemory.InMemoryEventStore;
 import org.occurrent.functional.CheckedFunction;
 import org.occurrent.subscription.StartAt;
-import org.occurrent.subscription.StringBasedSubscriptionPosition;
+import org.occurrent.subscription.StringBasedCheckpoint;
 import org.occurrent.time.TimeConversion;
 
 import java.net.URI;
@@ -146,7 +146,7 @@ public class InMemorySubscriptionModelTest {
 
     @Test
     void throws_iae_when_start_at_is_not_now() {
-        Throwable throwable = catchThrowable(() -> inMemorySubscriptionModel.subscribe("subscription1", StartAt.subscriptionPosition(new StringBasedSubscriptionPosition("343")), __ -> {
+        Throwable throwable = catchThrowable(() -> inMemorySubscriptionModel.subscribe("subscription1", StartAt.checkpoint(new StringBasedCheckpoint("343")), __ -> {
         }));
 
         assertThat(throwable).isExactlyInstanceOf(IllegalArgumentException.class).hasMessage("InMemorySubscriptionModel only supports starting from 'now' and 'default' (StartAt.now() or StartAt.subscriptionModelDefault())");

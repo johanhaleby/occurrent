@@ -32,10 +32,10 @@ import java.time.OffsetDateTime;
 @NullMarked
 public class StartAtTime {
     public static StartAt beginningOfTime() {
-        return StartAt.subscriptionPosition(TimeBasedSubscriptionPosition.beginningOfTime());
+        return StartAt.checkpoint(TimeBasedCheckpoint.beginningOfTime());
     }
 
     public static StartAt offsetDateTime(OffsetDateTime offsetDateTime) {
-        return StartAt.subscriptionPosition(TimeBasedSubscriptionPosition.from(offsetDateTime));
+        return StartAt.checkpoint(TimeBasedCheckpoint.from(offsetDateTime));
     }
 }

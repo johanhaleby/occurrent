@@ -101,7 +101,7 @@ public interface SubscriptionModelLifeCycle {
     void cancelSubscription(String subscriptionId);
 
     /**
-     * Shutdown the subscription model and dispose all subscriptions (they can be resumed later if you start from a durable subscription position).
+     * Shutdown the subscription model and dispose all subscriptions (they can be resumed later if you start from a durable checkpoint).
      * A subscription model that is shutdown cannot be started again, since it releases resources such as database connections.
      */
     default void shutdown() {
