@@ -17,7 +17,7 @@
 package org.occurrent.subscription.blocking.durable.catchup;
 
 import org.jspecify.annotations.NullMarked;
-import org.occurrent.subscription.SubscriptionPosition;
+import org.occurrent.subscription.Checkpoint;
 
 import java.time.Instant;
 import java.time.OffsetDateTime;
@@ -27,23 +27,23 @@ import static java.util.Objects.requireNonNull;
 import static org.occurrent.time.internal.RFC3339.RFC_3339_DATE_TIME_FORMATTER;
 
 @NullMarked
-public class TimeBasedSubscriptionPosition implements SubscriptionPosition {
+public class TimeBasedCheckpoint implements Checkpoint {
 
     private static final OffsetDateTime BEGINNING_OF_TIME = Instant.EPOCH.atOffset(ZoneOffset.UTC);
 
     private final OffsetDateTime time;
 
-    public TimeBasedSubscriptionPosition(OffsetDateTime time) {
+    public TimeBasedCheckpoint(OffsetDateTime time) {
         requireNonNull(time, OffsetDateTime.class.getSimpleName() + " cannot be null");
         this.time = time;
     }
 
-    public static TimeBasedSubscriptionPosition beginningOfTime() {
-        return new TimeBasedSubscriptionPosition(BEGINNING_OF_TIME);
+    public static TimeBasedCheckpoint beginningOfTime() {
+        return new TimeBasedCheckpoint(BEGINNING_OF_TIME);
     }
 
-    public static TimeBasedSubscriptionPosition from(OffsetDateTime time) {
-        return new TimeBasedSubscriptionPosition(time);
+    public static TimeBasedCheckpoint from(OffsetDateTime time) {
+        return new TimeBasedCheckpoint(time);
     }
 
     public boolean isBeginningOfTime() {

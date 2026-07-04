@@ -18,7 +18,7 @@ package org.occurrent.subscription.reactor.durable.catchup;
 
 import io.cloudevents.CloudEvent;
 import org.jspecify.annotations.NullMarked;
-import org.occurrent.subscription.PositionAwareCloudEvent;
+import org.occurrent.subscription.CheckpointAwareCloudEvent;
 import reactor.core.publisher.Flux;
 import reactor.core.publisher.Mono;
 
@@ -32,7 +32,7 @@ interface CatchupReader {
 
     /**
      * Reads events in {@code (fromExclusive, toInclusive]}, in position order, already wrapped as a
-     * {@link PositionAwareCloudEvent} so a durable model layered on top can persist replay progress.
+     * {@link CheckpointAwareCloudEvent} so a durable model layered on top can persist replay progress.
      */
     Flux<CloudEvent> readWindow(long fromExclusive, long toInclusive);
 

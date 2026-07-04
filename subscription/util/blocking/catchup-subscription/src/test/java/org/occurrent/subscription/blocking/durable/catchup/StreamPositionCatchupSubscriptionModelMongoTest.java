@@ -36,13 +36,13 @@ import org.occurrent.eventstore.api.WriteCondition;
 import org.occurrent.eventstore.mongodb.spring.blocking.EventStoreConfig;
 import org.occurrent.eventstore.mongodb.spring.blocking.SpringMongoEventStore;
 import org.occurrent.mongodb.timerepresentation.TimeRepresentation;
-import org.occurrent.subscription.GlobalSubscriptionPosition;
+import org.occurrent.subscription.GlobalCheckpoint;
 import org.occurrent.subscription.OccurrentSubscriptionFilter;
 import org.occurrent.subscription.StartAt;
-import org.occurrent.subscription.StringBasedSubscriptionPosition;
-import org.occurrent.subscription.SubscriptionPosition;
+import org.occurrent.subscription.StringBasedCheckpoint;
+import org.occurrent.subscription.Checkpoint;
 import org.occurrent.subscription.mongodb.spring.blocking.SpringMongoSubscriptionModel;
-import org.occurrent.subscription.mongodb.spring.blocking.SpringMongoSubscriptionPositionStorage;
+import org.occurrent.subscription.mongodb.spring.blocking.SpringMongoCheckpointStorage;
 import org.occurrent.testsupport.mongodb.FlushMongoDBExtension;
 import org.springframework.data.mongodb.MongoTransactionManager;
 import org.springframework.data.mongodb.core.MongoTemplate;
@@ -67,7 +67,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.awaitility.Awaitility.await;
 import static org.occurrent.eventstore.api.EventStoreCapability.STREAM;
 import static org.occurrent.filter.Filter.type;
-import static org.occurrent.subscription.blocking.durable.catchup.SubscriptionPositionStorageConfig.useSubscriptionPositionStorage;
+import static org.occurrent.subscription.blocking.durable.catchup.CheckpointStorageConfig.useCheckpointStorage;
 import static org.occurrent.time.internal.RFC3339.RFC_3339_DATE_TIME_FORMATTER;
 
 /**
@@ -76,7 +76,7 @@ import static org.occurrent.time.internal.RFC3339.RFC_3339_DATE_TIME_FORMATTER;
  * time) is chosen from the store's position capability, not from the DCB-vs-stream distinction, so a STREAM-only,
  * position-enabled store now replays through the same position-windowed range loop DCB mode uses (see
  * {@link DcbCatchupSubscriptionModelMongoTest}), reading via {@code PositionOrderedReader.readInPositionOrder}, and
- * resumes by {@link GlobalSubscriptionPosition} instead of by time.
+ * resumes by {@link GlobalCheckpoint} instead of by time.
  * <p>
  * This covers the same class of scenario as the #199 clock-skew bug (a during-catch-up write reconciled without loss
  * or duplication across the catch-up-to-live handover), now on the position path where a clock-skewed event time
@@ -102,7 +102,7 @@ class StreamPositionCatchupSubscriptionModelMongoTest {
 
     private SpringMongoEventStore eventStore;
     private SpringMongoSubscriptionModel subscriptionModel;
-    private SpringMongoSubscriptionPositionStorage storage;
+    private SpringMongoCheckpointStorage storage;
     private CatchupSubscriptionModel subscription;
     private CloudEventConverter<DomainEvent> cloudEventConverter;
     private MongoClient mongoClient;
@@ -124,7 +124,7 @@ class StreamPositionCatchupSubscriptionModelMongoTest {
                 .build();
         eventStore = new SpringMongoEventStore(mongoTemplate, eventStoreConfig);
         subscriptionModel = new SpringMongoSubscriptionModel(mongoTemplate, requireNonNull(connectionString.getCollection()), timeRepresentation);
-        storage = new SpringMongoSubscriptionPositionStorage(mongoTemplate, "storage");
+        storage = new SpringMongoCheckpointStorage(mongoTemplate, "storage");
         cloudEventConverter = new JacksonCloudEventConverter.Builder<DomainEvent>(new ObjectMapper(), SOURCE).idMapper(DomainEvent::eventId).build();
         time = LocalDateTime.now();
     }
@@ -148,11 +148,11 @@ class StreamPositionCatchupSubscriptionModelMongoTest {
 
         CopyOnWriteArrayList<DomainEvent> received = new CopyOnWriteArrayList<>();
         subscription = new CatchupSubscriptionModel(subscriptionModel, eventStore,
-                new CatchupSubscriptionModelConfig(100, useSubscriptionPositionStorage(storage).andPersistSubscriptionPositionDuringCatchupPhaseForEveryNEvents(1)));
+                new CatchupSubscriptionModelConfig(100, useCheckpointStorage(storage).andPersistCheckpointDuringCatchupPhaseForEveryNEvents(1)));
 
         // When the position-mode catch-up subscription replays from the beginning of the global position sequence
         subscription.subscribe("subscription", OccurrentSubscriptionFilter.filter(type(EVENT_TYPE)),
-                StartAt.subscriptionPosition(GlobalSubscriptionPosition.of(0)), toDomainEvents(received)).waitUntilStarted();
+                StartAt.checkpoint(GlobalCheckpoint.of(0)), toDomainEvents(received)).waitUntilStarted();
 
         // Then the historic events are delivered in position order
         await().atMost(AT_MOST).with().pollInterval(Duration.of(100, MILLIS)).untilAsserted(() ->
@@ -184,11 +184,11 @@ class StreamPositionCatchupSubscriptionModelMongoTest {
 
         CopyOnWriteArrayList<DomainEvent> received = new CopyOnWriteArrayList<>();
         subscription = new CatchupSubscriptionModel(subscriptionModel, eventStore,
-                new CatchupSubscriptionModelConfig(100, useSubscriptionPositionStorage(storage).andPersistSubscriptionPositionDuringCatchupPhaseForEveryNEvents(1)));
+                new CatchupSubscriptionModelConfig(100, useCheckpointStorage(storage).andPersistCheckpointDuringCatchupPhaseForEveryNEvents(1)));
 
         // Resuming after position 1 (as if event1 was already processed elsewhere) replays only event2 and event3.
         subscription.subscribe("subscription", OccurrentSubscriptionFilter.filter(type(EVENT_TYPE)),
-                StartAt.subscriptionPosition(GlobalSubscriptionPosition.of(1)), toDomainEvents(received)).waitUntilStarted();
+                StartAt.checkpoint(GlobalCheckpoint.of(1)), toDomainEvents(received)).waitUntilStarted();
 
         await().atMost(AT_MOST).with().pollInterval(Duration.of(100, MILLIS)).untilAsserted(() ->
                 assertThat(received).containsExactly(event2, event3));
@@ -198,18 +198,18 @@ class StreamPositionCatchupSubscriptionModelMongoTest {
     @Test
     void a_legacy_time_based_resume_token_in_position_mode_is_detected_and_re_resolved_instead_of_being_trusted() {
         // Simulate a store that flipped stream position on after previously running the legacy time-based catch-up:
-        // the subscription position storage still holds a time-based token written before the flip.
+        // the checkpoint storage still holds a time-based token written before the flip.
         NameDefined preFlip = nameDefined("preFlip");
         write(preFlip);
         String legacyTimeToken = RFC_3339_DATE_TIME_FORMATTER.format(OffsetDateTime.now().minusMinutes(1));
-        storage.save("subscription", new StringBasedSubscriptionPosition(legacyTimeToken));
+        storage.save("subscription", new StringBasedCheckpoint(legacyTimeToken));
 
         CopyOnWriteArrayList<DomainEvent> received = new CopyOnWriteArrayList<>();
         subscription = new CatchupSubscriptionModel(subscriptionModel, eventStore,
-                new CatchupSubscriptionModelConfig(100, useSubscriptionPositionStorage(storage).andPersistSubscriptionPositionDuringCatchupPhaseForEveryNEvents(1)));
+                new CatchupSubscriptionModelConfig(100, useCheckpointStorage(storage).andPersistCheckpointDuringCatchupPhaseForEveryNEvents(1)));
 
         // Using StartAt.subscriptionModelDefault() triggers the default resume-from-storage path, where the model
-        // must detect that the stored token is a legacy time token (not a GlobalSubscriptionPosition) and re-resolve
+        // must detect that the stored token is a legacy time token (not a GlobalCheckpoint) and re-resolve
         // rather than misinterpret it as -- or crash trying to parse it as -- a position.
         subscription.subscribe("subscription", OccurrentSubscriptionFilter.filter(type(EVENT_TYPE)),
                 StartAt.subscriptionModelDefault(), toDomainEvents(received)).waitUntilStarted();
@@ -227,7 +227,7 @@ class StreamPositionCatchupSubscriptionModelMongoTest {
     void a_dynamic_start_at_that_disallows_the_delegated_subscription_model_still_subscribes_live_and_does_not_lose_a_low_position_event_committed_late() {
         // This exercises the delegatedStartAt == null branch (e.g. the @StreamSubscription SAME_AS_START_AT resume
         // behavior, which tells the durable layer not to persist a checkpoint because the subscription always
-        // restarts from the same StartAt). In that branch globalSubscriptionPosition is also null (see
+        // restarts from the same StartAt). In that branch globalCheckpoint is also null (see
         // CatchupSubscriptionModel#startPositionCatchupSubscriptionForStream), so no watermark-derived cursor is ever
         // persisted, and getDelegatedSubscriptionModel().subscribe(...) is still called with the original dynamic
         // startAt afterwards, i.e. a live change-stream subscription is started right after the catch-up phase, not
@@ -239,14 +239,14 @@ class StreamPositionCatchupSubscriptionModelMongoTest {
 
         CopyOnWriteArrayList<DomainEvent> received = new CopyOnWriteArrayList<>();
         subscription = new CatchupSubscriptionModel(subscriptionModel, eventStore,
-                new CatchupSubscriptionModelConfig(100, useSubscriptionPositionStorage(storage).andPersistSubscriptionPositionDuringCatchupPhaseForEveryNEvents(1)));
+                new CatchupSubscriptionModelConfig(100, useCheckpointStorage(storage).andPersistCheckpointDuringCatchupPhaseForEveryNEvents(1)));
 
         // A dynamic StartAt that resolves to "replay from the beginning" for CatchupSubscriptionModel's own context
         // (so the bulk replay below actually runs), but returns null for the delegated (innermost) subscription
         // model's context, mirroring what OccurrentAnnotationBeanPostProcessor generates for SAME_AS_START_AT +
         // BEGINNING_OF_TIME: "don't persist a checkpoint, always restart from beginning".
         StartAt sameAsStartAt = StartAt.dynamic(ctx -> ctx.subscriptionModelType().equals(CatchupSubscriptionModel.class)
-                ? StartAt.subscriptionPosition(GlobalSubscriptionPosition.of(0))
+                ? StartAt.checkpoint(GlobalCheckpoint.of(0))
                 : null);
 
         subscription.subscribe("subscription", OccurrentSubscriptionFilter.filter(type(EVENT_TYPE)), sameAsStartAt, toDomainEvents(received))

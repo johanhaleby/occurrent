@@ -116,7 +116,7 @@ position, and once the historical gap is closed, position-ordered reads see the 
 ## Resume-token transition for live subscriptions
 
 A subscription that was running against this store before the upgrade holds a persisted resume token in the legacy
-time-based form (`TimeBasedSubscriptionPosition`). After the flip to position-based catch-up, the model is now in
+time-based form (`TimeBasedCheckpoint`). After the flip to position-based catch-up, the model is now in
 position mode, but that stored token is still time-based.
 
 Both token forms are self-describing, so position-mode catch-up detects a legacy time-based token on resume and

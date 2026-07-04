@@ -112,7 +112,7 @@ public class ReactorMongoSubscriptionLifecycleTest {
         // stream Flux was subscribed to, not that the server has acknowledged the command and the cursor is
         // positioned, so a write right after it could otherwise land before the cursor is actually watching.
         LocalDateTime now = LocalDateTime.now();
-        StartAt beforeWrite = StartAt.subscriptionPosition(subscriptionModel.globalSubscriptionPosition().block());
+        StartAt beforeWrite = StartAt.checkpoint(subscriptionModel.globalCheckpoint().block());
         CopyOnWriteArrayList<CloudEvent> state = new CopyOnWriteArrayList<>();
         subscriptionModel.subscribe(UUID.randomUUID().toString(), beforeWrite, cloudEvent -> {
             state.add(cloudEvent);
@@ -157,7 +157,7 @@ public class ReactorMongoSubscriptionLifecycleTest {
         // stream Flux was subscribed to, not that the server has acknowledged the command and the cursor is
         // positioned, so a write right after it could otherwise land before the cursor is actually watching.
         LocalDateTime now = LocalDateTime.now();
-        StartAt beforeWrite = StartAt.subscriptionPosition(subscriptionModel.globalSubscriptionPosition().block());
+        StartAt beforeWrite = StartAt.checkpoint(subscriptionModel.globalCheckpoint().block());
         CopyOnWriteArrayList<CloudEvent> state = new CopyOnWriteArrayList<>();
         String subscriptionId = UUID.randomUUID().toString();
         subscriptionModel.subscribe(subscriptionId, beforeWrite, cloudEvent -> {
@@ -189,7 +189,7 @@ public class ReactorMongoSubscriptionLifecycleTest {
         // Given: the action blocks indefinitely on its first call, so the change stream underneath can keep
         // reading (and, without the fix, keep advancing the tracked position for) further written events while
         // that first call is still pending and nothing has reached the action a second time yet.
-        StartAt beforeWrite = StartAt.subscriptionPosition(subscriptionModel.globalSubscriptionPosition().block());
+        StartAt beforeWrite = StartAt.checkpoint(subscriptionModel.globalCheckpoint().block());
         CopyOnWriteArrayList<CloudEvent> state = new CopyOnWriteArrayList<>();
         Sinks.Empty<Void> releaseFirstAction = Sinks.empty();
         AtomicInteger actionCallCount = new AtomicInteger();
@@ -226,7 +226,7 @@ public class ReactorMongoSubscriptionLifecycleTest {
         // stream Flux was subscribed to, not that the server has acknowledged the command and the cursor is
         // positioned, so a write right after it could otherwise land before the cursor is actually watching.
         LocalDateTime now = LocalDateTime.now();
-        StartAt beforeWrite = StartAt.subscriptionPosition(subscriptionModel.globalSubscriptionPosition().block());
+        StartAt beforeWrite = StartAt.checkpoint(subscriptionModel.globalCheckpoint().block());
         CopyOnWriteArrayList<CloudEvent> state = new CopyOnWriteArrayList<>();
         String subscriptionId = UUID.randomUUID().toString();
         subscriptionModel.subscribe(subscriptionId, beforeWrite, cloudEvent -> {
@@ -256,7 +256,7 @@ public class ReactorMongoSubscriptionLifecycleTest {
         // server has acknowledged the command and the cursor is positioned, so a write right after it could
         // otherwise land before the cursor is actually watching.
         String subscriptionId = UUID.randomUUID().toString();
-        StartAt beforeWrite = StartAt.subscriptionPosition(subscriptionModel.globalSubscriptionPosition().block());
+        StartAt beforeWrite = StartAt.checkpoint(subscriptionModel.globalCheckpoint().block());
         subscriptionModel.subscribe(subscriptionId, beforeWrite, __ -> {
             throw new RuntimeException("boom");
         }).waitUntilStarted().block(Duration.ofSeconds(10));

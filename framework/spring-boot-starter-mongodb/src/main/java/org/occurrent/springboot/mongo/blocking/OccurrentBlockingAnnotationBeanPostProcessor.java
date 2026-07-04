@@ -37,11 +37,11 @@ import org.occurrent.springboot.mongo.common.SubscriptionAnnotations;
 import org.occurrent.springboot.mongo.common.SubscriptionAnnotations.StreamSubscriptionDefinition;
 import org.occurrent.subscription.DcbStartAt;
 import org.occurrent.subscription.StartAt;
-import org.occurrent.subscription.api.blocking.SubscriptionPositionStorage;
+import org.occurrent.subscription.api.blocking.CheckpointStorage;
 import org.occurrent.subscription.blocking.competingconsumers.CompetingConsumerSubscriptionModel;
 import org.occurrent.subscription.blocking.durable.DurableSubscriptionModel;
 import org.occurrent.subscription.blocking.durable.catchup.CatchupSubscriptionModel;
-import org.occurrent.subscription.blocking.durable.catchup.TimeBasedSubscriptionPosition;
+import org.occurrent.subscription.blocking.durable.catchup.TimeBasedCheckpoint;
 import org.springframework.beans.BeansException;
 import org.springframework.beans.factory.NoSuchBeanDefinitionException;
 import org.springframework.beans.factory.config.BeanPostProcessor;
@@ -234,8 +234,8 @@ class OccurrentBlockingAnnotationBeanPostProcessor implements BeanPostProcessor,
                 return isCompetingConsumerSubscription || isDurableSubscription ? null : replayStart;
             });
             case DEFAULT -> DcbStartAt.dynamic(ctx -> {
-                SubscriptionPositionStorage subscriptionPositionStorage = applicationContext.getBean(SubscriptionPositionStorage.class);
-                return subscriptionPositionStorage.exists(subscriptionId) ? DcbStartAt.subscriptionModelDefault() : replayStart;
+                CheckpointStorage checkpointStorage = applicationContext.getBean(CheckpointStorage.class);
+                return checkpointStorage.exists(subscriptionId) ? DcbStartAt.subscriptionModelDefault() : replayStart;
             });
         };
     }
@@ -279,22 +279,22 @@ class OccurrentBlockingAnnotationBeanPostProcessor implements BeanPostProcessor,
                         // to simply delegate to the parent subscription.
                         return null;
                     } else {
-                        return StartAt.subscriptionPosition(TimeBasedSubscriptionPosition.from(iso8601.offsetDateTime()));
+                        return StartAt.checkpoint(TimeBasedCheckpoint.from(iso8601.offsetDateTime()));
                     }
                 });
                 case DEFAULT -> StartAt.dynamic(() -> {
                     // Here we want to start the given IS8601 date/time the first time the subscription is started,
-                    // but then return from the lastest stored subscription position. To figure this out, we load the
-                    // default SubscriptionPositionStorage bean and check if a subscription position exists for this subscription.
+                    // but then return from the lastest stored checkpoint. To figure this out, we load the
+                    // default CheckpointStorage bean and check if a checkpoint exists for this subscription.
                     // If it does, we know that it was not the first time the subscription was started, and thus we just let the
                     // subscription model operate according to its default. Otherwise, we explicitly specify the ISO8601 date as
                     // start date.
-                    SubscriptionPositionStorage subscriptionPositionStorage = applicationContext.getBean(SubscriptionPositionStorage.class);
-                    boolean subscriptionPositionExistsForSubscription = subscriptionPositionStorage.exists(subscriptionId);
-                    if (subscriptionPositionExistsForSubscription) {
+                    CheckpointStorage checkpointStorage = applicationContext.getBean(CheckpointStorage.class);
+                    boolean checkpointExistsForSubscription = checkpointStorage.exists(subscriptionId);
+                    if (checkpointExistsForSubscription) {
                         return StartAt.subscriptionModelDefault();
                     } else {
-                        return StartAt.subscriptionPosition(TimeBasedSubscriptionPosition.from(iso8601.offsetDateTime()));
+                        return StartAt.checkpoint(TimeBasedCheckpoint.from(iso8601.offsetDateTime()));
                     }
                 });
             };
@@ -320,22 +320,22 @@ class OccurrentBlockingAnnotationBeanPostProcessor implements BeanPostProcessor,
                             // to simply delegate to the parent subscription.
                             return null;
                         } else {
-                            return StartAt.subscriptionPosition(TimeBasedSubscriptionPosition.beginningOfTime());
+                            return StartAt.checkpoint(TimeBasedCheckpoint.beginningOfTime());
                         }
                     });
                     case DEFAULT -> {
                         // Here we want to start the beginning of time the first time the subscription is started,
-                        // but then return from the lastest stored subscription position. To figure this out, we load the
-                        // default SubscriptionPositionStorage bean and check if a subscription position exists for this subscription.
+                        // but then return from the lastest stored checkpoint. To figure this out, we load the
+                        // default CheckpointStorage bean and check if a checkpoint exists for this subscription.
                         // If it does, we know that it was not the first time the subscription was started, and thus we just let the
                         // subscription model operate according to its default. Otherwise, we explicitly specify "beginning of time" as
                         // start date.
-                        SubscriptionPositionStorage subscriptionPositionStorage = applicationContext.getBean(SubscriptionPositionStorage.class);
-                        boolean subscriptionPositionExistsForSubscription = subscriptionPositionStorage.exists(subscriptionId);
-                        if (subscriptionPositionExistsForSubscription) {
+                        CheckpointStorage checkpointStorage = applicationContext.getBean(CheckpointStorage.class);
+                        boolean checkpointExistsForSubscription = checkpointStorage.exists(subscriptionId);
+                        if (checkpointExistsForSubscription) {
                             yield StartAt.subscriptionModelDefault();
                         } else {
-                            yield StartAt.subscriptionPosition(TimeBasedSubscriptionPosition.beginningOfTime());
+                            yield StartAt.checkpoint(TimeBasedCheckpoint.beginningOfTime());
                         }
                     }
                 };

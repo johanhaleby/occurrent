@@ -32,8 +32,8 @@ import org.occurrent.eventstore.api.dcb.DcbReadOptions;
 import org.occurrent.filter.Filter;
 import org.occurrent.subscription.StartAt;
 import org.occurrent.subscription.SubscriptionFilter;
-import org.occurrent.subscription.SubscriptionPosition;
-import org.occurrent.subscription.api.blocking.PositionAwareSubscriptionModel;
+import org.occurrent.subscription.Checkpoint;
+import org.occurrent.subscription.api.blocking.CheckpointAwareSubscriptionModel;
 import org.occurrent.subscription.api.blocking.Subscription;
 
 import java.util.List;
@@ -48,7 +48,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 /**
  * Fast, no-Mongo regression guard for the dual-mode {@link CatchupSubscriptionModel} dispatcher's
  * {@code cancelSubscription} and {@code shutdown} fan-out. Both inner models ({@link StreamCatchupSubscriptionModel}
- * and {@link DcbCatchupSubscriptionModel}) wrap the same shared {@link PositionAwareSubscriptionModel} delegate, so a
+ * and {@link DcbCatchupSubscriptionModel}) wrap the same shared {@link CheckpointAwareSubscriptionModel} delegate, so a
  * naive fan-out could call the delegate's {@code cancelSubscription}/{@code shutdown} once per inner model (double
  * firing) instead of once for the dispatcher as a whole. Neither inner model's own {@code cancelSubscription}/
  * {@code shutdown} touches the shared delegate (see their Javadoc), so this test never needs to drive an actual
@@ -59,7 +59,7 @@ class CatchupSubscriptionModelDualModeLifecycleTest {
 
     @Test
     void cancel_subscription_invokes_the_shared_delegates_cancel_subscription_exactly_once_in_dual_mode() {
-        CountingPositionAwareSubscriptionModel delegate = new CountingPositionAwareSubscriptionModel();
+        CountingCheckpointAwareSubscriptionModel delegate = new CountingCheckpointAwareSubscriptionModel();
         CatchupSubscriptionModel dualMode = dualMode(delegate);
 
         dualMode.cancelSubscription("someId");
@@ -69,7 +69,7 @@ class CatchupSubscriptionModelDualModeLifecycleTest {
 
     @Test
     void shutdown_invokes_the_shared_delegates_shutdown_exactly_once_in_dual_mode() {
-        CountingPositionAwareSubscriptionModel delegate = new CountingPositionAwareSubscriptionModel();
+        CountingCheckpointAwareSubscriptionModel delegate = new CountingCheckpointAwareSubscriptionModel();
         CatchupSubscriptionModel dualMode = dualMode(delegate);
 
         dualMode.shutdown();
@@ -77,7 +77,7 @@ class CatchupSubscriptionModelDualModeLifecycleTest {
         assertThat(delegate.shutdownCount()).isEqualTo(1);
     }
 
-    private static CatchupSubscriptionModel dualMode(PositionAwareSubscriptionModel delegate) {
+    private static CatchupSubscriptionModel dualMode(CheckpointAwareSubscriptionModel delegate) {
         return new CatchupSubscriptionModel(delegate, new UnusedEventStoreQueries(), new UnusedDcbEventStore(), DcbQuery.tags("name:1"), new CatchupSubscriptionModelConfig(1));
     }
 
@@ -86,7 +86,7 @@ class CatchupSubscriptionModelDualModeLifecycleTest {
      * double-fire from the dual-mode fan-out (once via the stream inner model's path, once via the DCB path) would
      * surface as a count greater than one for that id, rather than being hidden by aggregating across ids.
      */
-    private static final class CountingPositionAwareSubscriptionModel implements PositionAwareSubscriptionModel {
+    private static final class CountingCheckpointAwareSubscriptionModel implements CheckpointAwareSubscriptionModel {
         private final AtomicInteger shutdownCount = new AtomicInteger();
         private final ConcurrentMap<String, AtomicInteger> cancelSubscriptionCounts = new ConcurrentHashMap<>();
 
@@ -100,8 +100,8 @@ class CatchupSubscriptionModelDualModeLifecycleTest {
         }
 
         @Override
-        public @Nullable SubscriptionPosition globalSubscriptionPosition() {
-            throw new AssertionError("globalSubscriptionPosition must not be called by cancelSubscription/shutdown");
+        public @Nullable Checkpoint globalCheckpoint() {
+            throw new AssertionError("globalCheckpoint must not be called by cancelSubscription/shutdown");
         }
 
         @Override

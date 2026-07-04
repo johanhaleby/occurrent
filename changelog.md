@@ -10,6 +10,33 @@ DCB is a capability layered on the existing CloudEvent storage, not a new store 
 
 #### Changes
 
+* Renamed the `SubscriptionPosition` type family to `Checkpoint` to stop overloading "position" for two different
+  concepts: the ordering value (`position`) and the per-subscriber resume marker built from it. This is a breaking
+  API change; there is no deprecated alias.
+  * `SubscriptionPosition` -> `Checkpoint`, `GlobalSubscriptionPosition` -> `GlobalCheckpoint`,
+    `StringBasedSubscriptionPosition` -> `StringBasedCheckpoint`, `TimeBasedSubscriptionPosition` -> `TimeBasedCheckpoint`,
+    `MongoResumeTokenSubscriptionPosition` -> `MongoResumeTokenCheckpoint`,
+    `MongoOperationTimeSubscriptionPosition` -> `MongoOperationTimeCheckpoint`.
+  * `SubscriptionPositionStorage` -> `CheckpointStorage`, and its Mongo/Redis implementations
+    (`SpringMongoSubscriptionPositionStorage`, `NativeMongoSubscriptionPositionStorage`,
+    `ReactorSubscriptionPositionStorage`, `SpringRedisSubscriptionPositionStorage`) renamed to `*CheckpointStorage`.
+  * `PositionAwareSubscriptionModel` -> `CheckpointAwareSubscriptionModel`, `globalSubscriptionPosition()` ->
+    `globalCheckpoint()`. `PositionAwareCloudEvent` -> `CheckpointAwareCloudEvent`,
+    `getSubscriptionPosition()`/`hasSubscriptionPosition(...)`/`getSubscriptionPositionOrThrowIAE(...)` ->
+    `getCheckpoint()`/`hasCheckpoint(...)`/`getCheckpointOrThrowIAE(...)`.
+  * `StartAt.subscriptionPosition(...)` -> `StartAt.checkpoint(...)`.
+  * The catch-up `SubscriptionPositionStorageConfig` sealed type and its records/factories renamed to
+    `CheckpointStorageConfig` (`dontUseSubscriptionPositionStorage()` -> `dontUseCheckpointStorage()`,
+    `useSubscriptionPositionStorage(...)` -> `useCheckpointStorage(...)`, and the
+    `andPersistSubscriptionPositionDuringCatchupPhase*` builder methods -> `andPersistCheckpointDuringCatchupPhase*`).
+  * The Spring Boot autoconfiguration `occurrentSubscriptionPositionStorage` beans are now named
+    `occurrentCheckpointStorage`.
+  * See [ADR 46](doc/architecture/decisions/0046-rename-subscription-position-to-checkpoint.md).
+* Migrated the generic Mongo checkpoint document field from `subscriptionPosition` to `checkpoint`, with a
+  backward-compatible read: `MongoCommons` falls back to the legacy `subscriptionPosition` field when `checkpoint`
+  is absent, so an existing subscription resumes correctly on first read after upgrading. All Mongo checkpoint
+  storage adapters persist by replacing the whole document, so the first save after upgrade rewrites it under the
+  new `checkpoint` field and the legacy field does not survive.
 * Added a global, monotonic `position` to every event, stream and DCB alike, replacing the old DCB-only
   `dcbposition` and giving stream consumers the same ordering guarantee DCB already had.
   * `position` is intrinsic to DCB, unchanged from before other than the name. For a STREAM-only store it is a
@@ -56,13 +83,13 @@ DCB is a capability layered on the existing CloudEvent storage, not a new store 
     catch-up without the DCB API.
   * See [ADR 45](doc/architecture/decisions/0045-unified-global-position.md).
 * Fixed a bug where a live `NOW`/`DEFAULT` subscription on `ReactorMongoSubscriptionModel` could redeliver the event written just before the subscription started.
-  * `globalSubscriptionPosition()` used the server's raw operation time as the resume position instead of bumping it past the last written event, so a write landing on the same BSON timestamp as the resume point could be replayed. It now increments the timestamp's increment field by 1, the same fix `SpringMongoSubscriptionModel` already had.
+  * `globalCheckpoint()` used the server's raw operation time as the resume position instead of bumping it past the last written event, so a write landing on the same BSON timestamp as the resume point could be replayed. It now increments the timestamp's increment field by 1, the same fix `SpringMongoSubscriptionModel` already had.
 
 * Added a reactive (Project Reactor) Spring Boot starter, `spring-boot-starter-mongodb-reactive`, alongside the blocking `spring-boot-starter-mongodb`, so a reactive application gets the same auto-configuration and annotation-driven subscriptions.
-  * Enable it with `@EnableOccurrentReactive` and the new dependency. It auto-configures the reactive event store, transaction manager, application service (stream and DCB), query DSLs, subscription model, position storage, and the reactive `StreamSubscriptions` and `DcbSubscriptions` DSLs, driven by the same `occurrent.*` properties and capability set as the blocking starter.
+  * Enable it with `@EnableOccurrentReactive` and the new dependency. It auto-configures the reactive event store, transaction manager, application service (stream and DCB), query DSLs, subscription model, checkpoint storage, and the reactive `StreamSubscriptions` and `DcbSubscriptions` DSLs, driven by the same `occurrent.*` properties and capability set as the blocking starter.
   * `@StreamSubscription` and `@DcbSubscription` work on the reactive stack, with handler methods returning `Mono<Void>`. `@StreamSubscription` supports `NOW` and `DEFAULT` (live delivery plus durable resume). It fails loud for history replay, since there is no reactive stream catch-up model. `@DcbSubscription` replays by dcbposition through the reactive DCB catch-up model, same as blocking.
   * The stack-neutral autoconfiguration (`OccurrentProperties`, the Jackson3 `CloudEventConverter` configuration, the capability conditions) moved into a shared `spring-boot-autoconfigure-mongodb-common` module that both starters depend on. `OccurrentProperties` moved package from `org.occurrent.springboot.mongo.blocking` to `org.occurrent.springboot.mongo.common`; the `occurrent.*` property keys are unchanged.
-  * Supporting reactive infrastructure: a reactive `StreamSubscriptions` DSL (`subscription-dsl-reactor`), named lifecycle subscribe on the reactive `DcbSubscriptions` DSL, and `ReactorDurableSubscriptionModel`/`ReactorDcbCatchupSubscriptionModel` now implement the reactive `Subscribable`/`PositionAwareSubscriptionModel`/`SubscriptionModelLifeCycle` interfaces so they compose into one `Durable(Catchup(mongo))` model. `ReactorDurableSubscriptionModel`'s previous cold `Mono<Void> subscribe(id, action)` API is replaced by the hot `Subscription`-returning `Subscribable` API.
+  * Supporting reactive infrastructure: a reactive `StreamSubscriptions` DSL (`subscription-dsl-reactor`), named lifecycle subscribe on the reactive `DcbSubscriptions` DSL, and `ReactorDurableSubscriptionModel`/`ReactorDcbCatchupSubscriptionModel` now implement the reactive `Subscribable`/`CheckpointAwareSubscriptionModel`/`SubscriptionModelLifeCycle` interfaces so they compose into one `Durable(Catchup(mongo))` model. `ReactorDurableSubscriptionModel`'s previous cold `Mono<Void> subscribe(id, action)` API is replaced by the hot `Subscription`-returning `Subscribable` API.
   * There is no reactive competing-consumer model, so the reactive subscription model is not competing-consumer wrapped.
   * See [ADR 44](doc/architecture/decisions/0044-reactive-spring-boot-starter.md).
 
@@ -82,7 +109,7 @@ DCB is a capability layered on the existing CloudEvent storage, not a new store 
   * New `Subscribable` and `SubscriptionModelLifeCycle` interfaces in `subscription-api-reactor` mirror their blocking counterparts: `subscribe(subscriptionId, filter, startAt, action)` returning a `Subscription`, plus `pauseSubscription`, `resumeSubscription`, `cancelSubscription`, `isRunning`, `isPaused`, `start`, `stop`, and `shutdown`. The action is `Function<CloudEvent, Mono<Void>>`, matching `ReactorDurableSubscriptionModel`'s existing convention.
   * The new reactive `Subscription` interface's `waitUntilStarted()` returns a `Mono<Void>` instead of blocking, with a `Mono<Boolean>` timeout variant.
   * `resumeSubscription` continues from the position of the last event delivered before the pause, the same gap-free guarantee the change-stream error recovery from the previous change has.
-  * `ReactorMongoSubscriptionModel` now implements `PositionAwareSubscriptionModel, Subscribable, SubscriptionModelLifeCycle`. The existing `subscribe(filter, startAt) -> Flux<CloudEvent>` primitive is unchanged, this is purely additive.
+  * `ReactorMongoSubscriptionModel` now implements `CheckpointAwareSubscriptionModel, Subscribable, SubscriptionModelLifeCycle`. The existing `subscribe(filter, startAt) -> Flux<CloudEvent>` primitive is unchanged, this is purely additive.
   * See [ADR 43](doc/architecture/decisions/0043-reactive-mongodb-subscription-lifecycle-parity.md).
 
 * Added a reactive query DSL, so the reactive stack has the same typed-query ergonomics as the blocking one, and the reactive DCB DSL's domain event queries now delegate to it.
@@ -147,7 +174,7 @@ DCB is a capability layered on the existing CloudEvent storage, not a new store 
   * See [ADR 32](doc/architecture/decisions/0032-fluent-dcb-query-construction.md).
 
 * Added the `@DcbSubscription` annotation, the declarative DCB counterpart to `@StreamSubscription`.
-  * A DCB read model is declared as a single annotated method. `eventTypes` and `tagsAllOf` express the `DcbQuery`, and `startAt` (BEGINNING, NOW, DEFAULT) or `startAtDcbPosition` (an explicit position, the DCB counterpart to the stream `startAtTimeEpochMillis`) together with `resumeBehavior` give history replay, resume from the stored position, and an always-replay in-memory mode that disables the competing consumer and position storage. It routes through the DCB DSL, so it gets the server-side filter, and the method can take the event plus an optional `EventMetadata` or `DcbEventMetadata`. `DcbStartAt` has a `dynamic` factory to back the resume logic. The course-enrollment dashboard subscriber uses `@DcbSubscription` (combining `BEGINNING` with `SAME_AS_START_AT`, since it is an in-memory model rebuilt on every boot).
+  * A DCB read model is declared as a single annotated method. `eventTypes` and `tagsAllOf` express the `DcbQuery`, and `startAt` (BEGINNING, NOW, DEFAULT) or `startAtDcbPosition` (an explicit position, the DCB counterpart to the stream `startAtTimeEpochMillis`) together with `resumeBehavior` give history replay, resume from the stored position, and an always-replay in-memory mode that disables the competing consumer and checkpoint storage. It routes through the DCB DSL, so it gets the server-side filter, and the method can take the event plus an optional `EventMetadata` or `DcbEventMetadata`. `DcbStartAt` has a `dynamic` factory to back the resume logic. The course-enrollment dashboard subscriber uses `@DcbSubscription` (combining `BEGINNING` with `SAME_AS_START_AT`, since it is an in-memory model rebuilt on every boot).
   * See [ADR 27](doc/architecture/decisions/0027-dcb-subscription-annotation.md).
 
 * `@Subscription` is superseded by the new `@StreamSubscription` and deprecated.

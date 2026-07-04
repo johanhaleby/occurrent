@@ -29,13 +29,13 @@ import org.occurrent.example.domain.wordguessinggame.mongodb.spring.blocking.fea
 import org.occurrent.example.domain.wordguessinggame.mongodb.spring.blocking.features.emailwinner.SendEmailToWinner
 import org.occurrent.mongodb.timerepresentation.TimeRepresentation
 import org.occurrent.subscription.api.blocking.SubscriptionModel
-import org.occurrent.subscription.api.blocking.SubscriptionPositionStorage
+import org.occurrent.subscription.api.blocking.CheckpointStorage
 import org.occurrent.subscription.blocking.durable.DurableSubscriptionModel
 import org.occurrent.subscription.blocking.durable.catchup.CatchupSubscriptionModel
 import org.occurrent.subscription.blocking.durable.catchup.CatchupSubscriptionModelConfig
-import org.occurrent.subscription.blocking.durable.catchup.SubscriptionPositionStorageConfig.useSubscriptionPositionStorage
+import org.occurrent.subscription.blocking.durable.catchup.CheckpointStorageConfig.useCheckpointStorage
 import org.occurrent.subscription.mongodb.spring.blocking.SpringMongoSubscriptionModel
-import org.occurrent.subscription.mongodb.spring.blocking.SpringMongoSubscriptionPositionStorage
+import org.occurrent.subscription.mongodb.spring.blocking.SpringMongoCheckpointStorage
 import org.springframework.boot.autoconfigure.SpringBootApplication
 import org.springframework.boot.runApplication
 import org.springframework.context.annotation.Bean
@@ -76,16 +76,16 @@ class Bootstrap : WebMvcConfigurer {
     }
 
     @Bean
-    fun subscriptionPositionStorage(mongoTemplate: MongoTemplate): SubscriptionPositionStorage =
-        SpringMongoSubscriptionPositionStorage(mongoTemplate, "subscriptions")
+    fun checkpointStorage(mongoTemplate: MongoTemplate): CheckpointStorage =
+        SpringMongoCheckpointStorage(mongoTemplate, "subscriptions")
 
     @Bean
-    fun catchupSubscriptionModel(storage: SubscriptionPositionStorage, mongoTemplate: MongoTemplate, eventStoreQueries: EventStoreQueries): SubscriptionModel {
+    fun catchupSubscriptionModel(storage: CheckpointStorage, mongoTemplate: MongoTemplate, eventStoreQueries: EventStoreQueries): SubscriptionModel {
         val mongoSubscriptionModel = SpringMongoSubscriptionModel(mongoTemplate, EVENTS_COLLECTION_NAME, TimeRepresentation.DATE)
         val durableSubscriptionModel = DurableSubscriptionModel(mongoSubscriptionModel, storage)
         return CatchupSubscriptionModel(
             durableSubscriptionModel, eventStoreQueries,
-            CatchupSubscriptionModelConfig(useSubscriptionPositionStorage(storage))
+            CatchupSubscriptionModelConfig(useCheckpointStorage(storage))
         )
     }
 

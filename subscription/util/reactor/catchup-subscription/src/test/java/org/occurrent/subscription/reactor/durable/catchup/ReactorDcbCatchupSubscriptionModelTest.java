@@ -33,8 +33,8 @@ import org.occurrent.subscription.DcbSubscriptionFilter;
 import org.occurrent.subscription.OccurrentSubscriptionFilter;
 import org.occurrent.subscription.StartAt;
 import org.occurrent.subscription.SubscriptionFilter;
-import org.occurrent.subscription.SubscriptionPosition;
-import org.occurrent.subscription.api.reactor.PositionAwareSubscriptionModel;
+import org.occurrent.subscription.Checkpoint;
+import org.occurrent.subscription.api.reactor.CheckpointAwareSubscriptionModel;
 import reactor.core.publisher.Flux;
 import reactor.core.publisher.Mono;
 import reactor.test.StepVerifier;
@@ -99,9 +99,9 @@ class ReactorDcbCatchupSubscriptionModelTest {
                 .verify();
     }
 
-    private static final class NoTokenSubscriptionModel implements PositionAwareSubscriptionModel {
+    private static final class NoTokenSubscriptionModel implements CheckpointAwareSubscriptionModel {
         @Override
-        public Mono<SubscriptionPosition> globalSubscriptionPosition() {
+        public Mono<Checkpoint> globalCheckpoint() {
             return Mono.empty();
         }
 

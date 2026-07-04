@@ -24,7 +24,7 @@ import org.occurrent.subscription.api.blocking.CompetingConsumerStrategy;
 import org.occurrent.subscription.blocking.durable.DurableSubscriptionModel;
 import org.occurrent.subscription.mongodb.spring.blocking.SpringMongoLeaseCompetingConsumerStrategy;
 import org.occurrent.subscription.mongodb.spring.blocking.SpringMongoSubscriptionModel;
-import org.occurrent.subscription.mongodb.spring.blocking.SpringMongoSubscriptionPositionStorage;
+import org.occurrent.subscription.mongodb.spring.blocking.SpringMongoCheckpointStorage;
 import org.occurrent.testsupport.mongodb.FlushMongoDBExtension;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -84,7 +84,7 @@ class CompetingConsumerSubscriptionModelTest {
         TimeRepresentation timeRepresentation = TimeRepresentation.RFC_3339_STRING;
         EventStoreConfig eventStoreConfig = new EventStoreConfig.Builder().eventStoreCollectionName(connectionString.getCollection()).transactionConfig(mongoTransactionManager).timeRepresentation(timeRepresentation).build();
         eventStore = new SpringMongoEventStore(mongoTemplate, eventStoreConfig);
-        SpringMongoSubscriptionPositionStorage positionStorage = new SpringMongoSubscriptionPositionStorage(mongoTemplate, "positions");
+        SpringMongoCheckpointStorage positionStorage = new SpringMongoCheckpointStorage(mongoTemplate, "positions");
         springSubscriptionModel1 = new DurableSubscriptionModel(new SpringMongoSubscriptionModel(mongoTemplate, connectionString.getCollection(), timeRepresentation), positionStorage);
         springSubscriptionModel2 = new DurableSubscriptionModel(new SpringMongoSubscriptionModel(mongoTemplate, connectionString.getCollection(), timeRepresentation), positionStorage);
         objectMapper = new ObjectMapper();
@@ -269,7 +269,7 @@ class CompetingConsumerSubscriptionModelTest {
 
         competingConsumerSubscriptionModel1.cancelSubscription(subscriptionId);
 
-        // Cancelling a subscription also removes the subscription position from storage, thus this event will be lost!
+        // Cancelling a subscription also removes the checkpoint from storage, thus this event will be lost!
         // However, cancelSubscription is async because of Spring, this is why we have the @RepeatedIfExceptionsTest annotation here.
         eventStore.write("streamId", serialize(nameWasChanged1));
 
@@ -431,8 +431,8 @@ class CompetingConsumerSubscriptionModelTest {
 
     // Note that pausing a subscription is async when using the SpringMongoSubscriptionModel.
     // This means that if we resume a subscription fast enough (i.e. right after we've called pause), there's a chance that the
-    // "action" has not yet saved the position of the cloud event to the subscription position storage. This means that "resume" may
-    // start from an earlier event (the one previously written to the subscription position storage) and there may be duplicate events.
+    // "action" has not yet saved the position of the cloud event to the checkpoint storage. This means that "resume" may
+    // start from an earlier event (the one previously written to the checkpoint storage) and there may be duplicate events.
     // This is why we're using awaitility so much in this test (to wait for the action to have written the cloud event position to storage)
     @Timeout(20)
     @RepeatedIfExceptionsTest(repeats = 3, suspend = 500)

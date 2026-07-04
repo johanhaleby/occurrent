@@ -25,13 +25,13 @@ import org.occurrent.eventstore.api.dcb.DcbReadOptions;
 import org.occurrent.eventstore.api.dcb.reactor.DcbEventStore;
 import org.occurrent.subscription.DcbStartAt;
 import org.occurrent.subscription.DcbSubscriptionFilter;
-import org.occurrent.subscription.GlobalSubscriptionPosition;
-import org.occurrent.subscription.PositionAwareCloudEvent;
+import org.occurrent.subscription.GlobalCheckpoint;
+import org.occurrent.subscription.CheckpointAwareCloudEvent;
 import org.occurrent.subscription.StartAt;
 import org.occurrent.subscription.StartAt.SubscriptionModelContext;
 import org.occurrent.subscription.SubscriptionFilter;
-import org.occurrent.subscription.SubscriptionPosition;
-import org.occurrent.subscription.api.reactor.PositionAwareSubscriptionModel;
+import org.occurrent.subscription.Checkpoint;
+import org.occurrent.subscription.api.reactor.CheckpointAwareSubscriptionModel;
 import reactor.core.publisher.Flux;
 import reactor.core.publisher.Mono;
 
@@ -61,13 +61,13 @@ import static java.util.Objects.requireNonNull;
  * subscription positions, so layer a durable model on top (for example {@code ReactorDurableSubscriptionModel}) if
  * resume across restarts is needed.
  * <p>
- * It implements {@link PositionAwareSubscriptionModel}, so it can sit as a plain (cold) subscription model underneath a
+ * It implements {@link CheckpointAwareSubscriptionModel}, so it can sit as a plain (cold) subscription model underneath a
  * durable model or be handed to the reactive DCB subscription DSL. Its generic {@link #subscribe(SubscriptionFilter, StartAt)}
  * only understands a {@link DcbSubscriptionFilter} (or no filter, in which case a default {@link DcbQuery} supplied to the
  * constructor is used), since catch-up is DCB-specific.
  */
 @NullMarked
-class ReactorDcbCatchupSubscriptionModel implements PositionAwareSubscriptionModel {
+class ReactorDcbCatchupSubscriptionModel implements CheckpointAwareSubscriptionModel {
 
     /**
      * Default number of DCB positions read per replay window.
@@ -78,17 +78,17 @@ class ReactorDcbCatchupSubscriptionModel implements PositionAwareSubscriptionMod
      */
     public static final int DEFAULT_HANDOVER_CACHE_SIZE = 1000;
 
-    private final PositionAwareSubscriptionModel subscriptionModel;
+    private final CheckpointAwareSubscriptionModel subscriptionModel;
     private final DcbEventStore dcbEventStore;
     private final @Nullable DcbQuery defaultQuery;
     private final long windowSize;
     private final int handoverCacheSize;
 
-    public ReactorDcbCatchupSubscriptionModel(PositionAwareSubscriptionModel subscriptionModel, DcbEventStore dcbEventStore) {
+    public ReactorDcbCatchupSubscriptionModel(CheckpointAwareSubscriptionModel subscriptionModel, DcbEventStore dcbEventStore) {
         this(subscriptionModel, dcbEventStore, null, DEFAULT_POSITION_WINDOW_SIZE, DEFAULT_HANDOVER_CACHE_SIZE);
     }
 
-    public ReactorDcbCatchupSubscriptionModel(PositionAwareSubscriptionModel subscriptionModel, DcbEventStore dcbEventStore, long windowSize, int handoverCacheSize) {
+    public ReactorDcbCatchupSubscriptionModel(CheckpointAwareSubscriptionModel subscriptionModel, DcbEventStore dcbEventStore, long windowSize, int handoverCacheSize) {
         this(subscriptionModel, dcbEventStore, null, windowSize, handoverCacheSize);
     }
 
@@ -98,12 +98,12 @@ class ReactorDcbCatchupSubscriptionModel implements PositionAwareSubscriptionMod
      * takes a shared {@code DcbQuery.all()}, so the reactive starter can wire one model that every DCB subscription
      * narrows with its own query in the consumer.
      */
-    public ReactorDcbCatchupSubscriptionModel(PositionAwareSubscriptionModel subscriptionModel, DcbEventStore dcbEventStore, @Nullable DcbQuery defaultQuery) {
+    public ReactorDcbCatchupSubscriptionModel(CheckpointAwareSubscriptionModel subscriptionModel, DcbEventStore dcbEventStore, @Nullable DcbQuery defaultQuery) {
         this(subscriptionModel, dcbEventStore, defaultQuery, DEFAULT_POSITION_WINDOW_SIZE, DEFAULT_HANDOVER_CACHE_SIZE);
     }
 
-    public ReactorDcbCatchupSubscriptionModel(PositionAwareSubscriptionModel subscriptionModel, DcbEventStore dcbEventStore, @Nullable DcbQuery defaultQuery, long windowSize, int handoverCacheSize) {
-        this.subscriptionModel = requireNonNull(subscriptionModel, PositionAwareSubscriptionModel.class.getSimpleName() + " cannot be null");
+    public ReactorDcbCatchupSubscriptionModel(CheckpointAwareSubscriptionModel subscriptionModel, DcbEventStore dcbEventStore, @Nullable DcbQuery defaultQuery, long windowSize, int handoverCacheSize) {
+        this.subscriptionModel = requireNonNull(subscriptionModel, CheckpointAwareSubscriptionModel.class.getSimpleName() + " cannot be null");
         this.dcbEventStore = requireNonNull(dcbEventStore, DcbEventStore.class.getSimpleName() + " cannot be null");
         this.defaultQuery = defaultQuery;
         if (windowSize <= 0) {
@@ -140,8 +140,8 @@ class ReactorDcbCatchupSubscriptionModel implements PositionAwareSubscriptionMod
     }
 
     @Override
-    public Mono<SubscriptionPosition> globalSubscriptionPosition() {
-        return subscriptionModel.globalSubscriptionPosition();
+    public Mono<Checkpoint> globalCheckpoint() {
+        return subscriptionModel.globalCheckpoint();
     }
 
     /**
@@ -160,7 +160,7 @@ class ReactorDcbCatchupSubscriptionModel implements PositionAwareSubscriptionMod
         requireNonNull(startAt, StartAt.class.getSimpleName() + " cannot be null");
 
         StartAt resolved = startAt.get(new SubscriptionModelContext(ReactorDcbCatchupSubscriptionModel.class));
-        if (!(resolved instanceof StartAt.StartAtSubscriptionPosition position) || !GlobalSubscriptionPosition.isGlobalSubscriptionPosition(position.subscriptionPosition)) {
+        if (!(resolved instanceof StartAt.StartAtCheckpoint position) || !GlobalCheckpoint.isGlobalCheckpoint(position.checkpoint)) {
             // Not a DCB catch-up position, so go straight to live. Apply the same in-process DCB floor the replay-to-live
             // path and the DcbSubscriptionModel adapter apply, so a backend that does not honor the filter server-side
             // still only delivers events matching the query.
@@ -168,7 +168,7 @@ class ReactorDcbCatchupSubscriptionModel implements PositionAwareSubscriptionMod
                     .filter(cloudEvent -> DcbCloudEvents.isDcbEvent(cloudEvent) && DcbCloudEvents.matches(cloudEvent, query));
         }
 
-        long startPosition = GlobalSubscriptionPosition.positionOf(position.subscriptionPosition);
+        long startPosition = GlobalCheckpoint.positionOf(position.checkpoint);
         CatchupReader reader = new DcbCatchupReader(dcbEventStore, query);
         PositionCatchupPipeline pipeline = new PositionCatchupPipeline(reader, windowSize, handoverCacheSize);
         Predicate<CloudEvent> livePredicate = cloudEvent -> DcbCloudEvents.isDcbEvent(cloudEvent) && DcbCloudEvents.matches(cloudEvent, query);
@@ -182,7 +182,7 @@ class ReactorDcbCatchupSubscriptionModel implements PositionAwareSubscriptionMod
         public Flux<CloudEvent> readWindow(long fromExclusive, long toInclusive) {
             return dcbEventStore.read(query, DcbReadOptions.between(fromExclusive, toInclusive))
                     .flatMapMany(stream -> Flux.fromIterable(stream.events())
-                            .map(event -> (CloudEvent) new PositionAwareCloudEvent(event, GlobalSubscriptionPosition.of(OccurrentCloudEventExtension.getPosition(event)))));
+                            .map(event -> (CloudEvent) new CheckpointAwareCloudEvent(event, GlobalCheckpoint.of(OccurrentCloudEventExtension.getPosition(event)))));
         }
 
         @Override

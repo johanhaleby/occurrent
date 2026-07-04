@@ -24,19 +24,19 @@ import org.occurrent.eventstore.api.SortBy;
 import org.occurrent.eventstore.api.blocking.EventStoreQueries;
 import org.occurrent.eventstore.api.blocking.PositionOrderedReader;
 import org.occurrent.filter.Filter;
-import org.occurrent.subscription.GlobalSubscriptionPosition;
+import org.occurrent.subscription.GlobalCheckpoint;
 import org.occurrent.subscription.OccurrentSubscriptionFilter;
 import org.occurrent.subscription.StartAt;
-import org.occurrent.subscription.StartAt.StartAtSubscriptionPosition;
+import org.occurrent.subscription.StartAt.StartAtCheckpoint;
 import org.occurrent.subscription.StartAt.SubscriptionModelContext;
-import org.occurrent.subscription.StringBasedSubscriptionPosition;
+import org.occurrent.subscription.StringBasedCheckpoint;
 import org.occurrent.subscription.SubscriptionFilter;
-import org.occurrent.subscription.SubscriptionPosition;
-import org.occurrent.subscription.api.blocking.PositionAwareSubscriptionModel;
+import org.occurrent.subscription.Checkpoint;
+import org.occurrent.subscription.api.blocking.CheckpointAwareSubscriptionModel;
 import org.occurrent.subscription.api.blocking.Subscription;
 import org.occurrent.subscription.api.blocking.SubscriptionModel;
-import org.occurrent.subscription.blocking.durable.catchup.SubscriptionPositionStorageConfig.PersistSubscriptionPositionDuringCatchupPhase;
-import org.occurrent.subscription.blocking.durable.catchup.SubscriptionPositionStorageConfig.UseSubscriptionPositionInStorage;
+import org.occurrent.subscription.blocking.durable.catchup.CheckpointStorageConfig.PersistCheckpointDuringCatchupPhase;
+import org.occurrent.subscription.blocking.durable.catchup.CheckpointStorageConfig.UseCheckpointInStorage;
 import org.occurrent.cloudevents.OccurrentCloudEventExtension;
 
 import java.time.OffsetDateTime;
@@ -72,7 +72,7 @@ public class StreamCatchupSubscriptionModel extends AbstractCatchupSubscriptionM
 
     private final EventStoreQueries eventStoreQueries;
 
-    public StreamCatchupSubscriptionModel(PositionAwareSubscriptionModel subscriptionModel, EventStoreQueries eventStoreQueries, CatchupSubscriptionModelConfig config) {
+    public StreamCatchupSubscriptionModel(CheckpointAwareSubscriptionModel subscriptionModel, EventStoreQueries eventStoreQueries, CatchupSubscriptionModelConfig config) {
         this(subscriptionModel, eventStoreQueries, config, StreamCatchupSubscriptionModel.class);
     }
 
@@ -83,7 +83,7 @@ public class StreamCatchupSubscriptionModel extends AbstractCatchupSubscriptionM
      *                                      class here so a caller that pattern-matches on the public dispatcher type
      *                                      keeps working regardless of which mode-specific class runs the catch-up.
      */
-    public StreamCatchupSubscriptionModel(PositionAwareSubscriptionModel subscriptionModel, EventStoreQueries eventStoreQueries, CatchupSubscriptionModelConfig config, Class<?> subscriptionModelContextType) {
+    public StreamCatchupSubscriptionModel(CheckpointAwareSubscriptionModel subscriptionModel, EventStoreQueries eventStoreQueries, CatchupSubscriptionModelConfig config, Class<?> subscriptionModelContextType) {
         super(subscriptionModel, config, subscriptionModelContextType);
         this.eventStoreQueries = Objects.requireNonNull(eventStoreQueries, "eventStoreQueries cannot be null");
     }
@@ -123,16 +123,16 @@ public class StreamCatchupSubscriptionModel extends AbstractCatchupSubscriptionM
         if (startAt.isDefault()) {
             // By default, we check if there's a subscription position stored for this subscription, if so we resume from there, otherwise,
             // delegate to the parent subscription model.
-            SubscriptionPosition subscriptionPosition = returnIfSubscriptionPositionStorageConfigIs(UseSubscriptionPositionInStorage.class, cfg -> cfg.storage().read(subscriptionId)).orElse(null);
-            if (subscriptionPosition == null) {
+            Checkpoint checkpoint = returnIfCheckpointStorageConfigIs(UseCheckpointInStorage.class, cfg -> cfg.storage().read(subscriptionId)).orElse(null);
+            if (checkpoint == null) {
                 return getDelegatedSubscriptionModel().subscribe(subscriptionId, filter, startAt, action);
-            } else if (positionMode && isTimeBasedSubscriptionPosition(subscriptionPosition)) {
+            } else if (positionMode && isTimeBasedCheckpoint(checkpoint)) {
                 // The store now writes position, but this stored token predates that and is time-based. Reading it as a
                 // position would misinterpret a timestamp or replay from an unrelated cursor, so re-resolve to the
                 // model default instead.
                 return getDelegatedSubscriptionModel().subscribe(subscriptionId, filter, StartAt.subscriptionModelDefault(), action);
             } else {
-                firstStartAt = StartAt.subscriptionPosition(subscriptionPosition);
+                firstStartAt = StartAt.checkpoint(checkpoint);
             }
         } else if (startAt.isDynamic()) {
             StartAt startAtGeneratedByDynamic = startAt.get(generateSubscriptionModelContext());
@@ -150,7 +150,7 @@ public class StreamCatchupSubscriptionModel extends AbstractCatchupSubscriptionM
         if (positionMode) {
             return switch (streamStart) {
                 // Beginning-of-time maps to position 0 so the position catch-up replays all history.
-                case BEGINNING_OF_TIME -> streamPositionCatchup(subscriptionId, filter, startAt, action, StartAt.subscriptionPosition(GlobalSubscriptionPosition.of(0)));
+                case BEGINNING_OF_TIME -> streamPositionCatchup(subscriptionId, filter, startAt, action, StartAt.checkpoint(GlobalCheckpoint.of(0)));
                 case GLOBAL_POSITION -> streamPositionCatchup(subscriptionId, filter, startAt, action, firstStartAt);
                 // A specific wall-clock time has no position to map to, so replay it through the legacy time-based
                 // catch-up even on a position store.
@@ -173,7 +173,7 @@ public class StreamCatchupSubscriptionModel extends AbstractCatchupSubscriptionM
         if (startsAtBeginningOfTime(startAt, contextType)) {
             return StreamStart.BEGINNING_OF_TIME;
         }
-        if (isTimeBasedSubscriptionPosition(startAt, contextType)) {
+        if (isTimeBasedCheckpoint(startAt, contextType)) {
             return StreamStart.SPECIFIC_TIME;
         }
         if (startsAtExplicitGlobalPosition(startAt, contextType)) {
@@ -183,14 +183,14 @@ public class StreamCatchupSubscriptionModel extends AbstractCatchupSubscriptionM
     }
 
     /**
-     * Whether a resolved {@code startAt} is an explicit {@link GlobalSubscriptionPosition}. Shared with the dispatcher's
+     * Whether a resolved {@code startAt} is an explicit {@link GlobalCheckpoint}. Shared with the dispatcher's
      * routing, which needs the same check before any mode-specific class is even chosen; {@code contextType} is the
      * class the dispatcher (or this class, standalone) reports to a caller-supplied {@code StartAt.dynamic}.
      */
     public static boolean startsAtExplicitGlobalPosition(StartAt startAt, Class<?> contextType) {
         StartAt start = startAt.get(new SubscriptionModelContext(contextType));
-        return start instanceof StartAtSubscriptionPosition position
-                && GlobalSubscriptionPosition.isGlobalSubscriptionPosition(position.subscriptionPosition);
+        return start instanceof StartAtCheckpoint position
+                && GlobalCheckpoint.isGlobalCheckpoint(position.checkpoint);
     }
 
     private Subscription streamPositionCatchup(String subscriptionId, @Nullable SubscriptionFilter filter, StartAt startAt, Consumer<CloudEvent> action, StartAt positionStartAt) {
@@ -207,9 +207,9 @@ public class StreamCatchupSubscriptionModel extends AbstractCatchupSubscriptionM
         runningCatchupSubscriptions.put(subscriptionId, true);
 
         StartAt nextStartAt = firstStartAt.get(generateSubscriptionModelContext());
-        SubscriptionPosition subscriptionPosition = ((StartAtSubscriptionPosition) Objects.requireNonNull(nextStartAt)).subscriptionPosition;
+        Checkpoint checkpoint = ((StartAtCheckpoint) Objects.requireNonNull(nextStartAt)).checkpoint;
 
-        Filter catchupFilter = deriveFilterToUseDuringCatchupPhase(filter, subscriptionPosition);
+        Filter catchupFilter = deriveFilterToUseDuringCatchupPhase(filter, checkpoint);
 
         long numberOfEventsBeforeStartingCatchupSubscription = eventStoreQueries.count(catchupFilter);
 
@@ -224,18 +224,18 @@ public class StreamCatchupSubscriptionModel extends AbstractCatchupSubscriptionM
         // when application is rebooted). This allows for catching up in-memory projections/views/policies.
         Class<? extends SubscriptionModel> delegatedSubscriptionModelType = getDelegatedSubscriptionModel().getClass();
         StartAt delegatedStartAt = startAt.get(new SubscriptionModelContext(delegatedSubscriptionModelType));
-        final SubscriptionPosition globalSubscriptionPosition;
+        final Checkpoint globalCheckpoint;
         if (delegatedStartAt == null) {
             // The delegated subscription model is not allowed to subscribe, so we don't need to get the global position.
-            globalSubscriptionPosition = null;
+            globalCheckpoint = null;
         } else {
-            // We force the wrapping subscription to be a PositionAwareSubscriptionModel so that we can capture
+            // We force the wrapping subscription to be a CheckpointAwareSubscriptionModel so that we can capture
             // where the live subscription should resume. This position is captured *after* the bulk replay so it
             // stays fresh: capturing it before a long replay would risk the resume token ageing out of the
             // database change stream (e.g. MongoDB's oplog) before the handover, making the live subscription
             // unresumable. Events written during the replay are not covered by this position (they were written
             // before it). They are reconciled separately by the insertion-order delta below.
-            globalSubscriptionPosition = subscriptionModel.globalSubscriptionPosition();
+            globalCheckpoint = subscriptionModel.globalCheckpoint();
         }
 
         // We generate a cache so that events that are streamed at the same time as streaming the events missed
@@ -243,7 +243,7 @@ public class StreamCatchupSubscriptionModel extends AbstractCatchupSubscriptionM
         FixedSizeCache catchupPhaseCache = new FixedSizeCache(config.cacheSize);
 
         // Reconcile events that arrived during the catch-up phase, i.e. those written after the bulk replay started
-        // but at or before the live subscription's resume position (globalSubscriptionPosition). They are, by
+        // but at or before the live subscription's resume position (globalCheckpoint). They are, by
         // definition, the most-recently-inserted matching events, so we read the newest ones in *insertion order*
         // (SortBy.natural, descending + limit, no skip) and reverse them back to insertion order for delivery.
         //
@@ -256,12 +256,12 @@ public class StreamCatchupSubscriptionModel extends AbstractCatchupSubscriptionM
         //
         // The number to read is derived from a count, but more events can be written between that count and the read.
         // Such a write inflates the store and shifts the "newest N" window forward, pushing the oldest during-catch-up
-        // event out of the read; being at or before globalSubscriptionPosition it would not be re-delivered by the live
+        // event out of the read; being at or before globalCheckpoint it would not be re-delivered by the live
         // subscription either, and would be lost. To close that window we re-read until the matching count stops
         // growing: each pass reads every event after the pre-catch-up boundary, so a pass during which no new event is
         // written has necessarily delivered them all. Re-reads re-deliver already-seen events, which are deduped by the
         // cache (delivery is at-least-once). Any event written after a pass is, by definition, newer than
-        // globalSubscriptionPosition and is therefore covered by the live subscription regardless.
+        // globalCheckpoint and is therefore covered by the live subscription regardless.
         long reconciledThroughCount = numberOfEventsBeforeStartingCatchupSubscription;
         long matchingEventCount = eventStoreQueries.count(catchupFilter);
         while (matchingEventCount > reconciledThroughCount) {
@@ -276,7 +276,7 @@ public class StreamCatchupSubscriptionModel extends AbstractCatchupSubscriptionM
         // We check if the delegated subscription model is not allowed to subscribe. If so, we remove any temporary subscription position written during the catchup phase
         // since we're now done with the catch-up.
         if (delegatedStartAt == null) {
-            returnIfSubscriptionPositionStorageConfigIs(UseSubscriptionPositionInStorage.class, cfg -> {
+            returnIfCheckpointStorageConfigIs(UseCheckpointInStorage.class, cfg -> {
                 cfg.storage().delete(subscriptionId);
                 return null;
             });
@@ -294,34 +294,34 @@ public class StreamCatchupSubscriptionModel extends AbstractCatchupSubscriptionM
         // When the catch-up subscription is ready, we store the global position in the position storage so that subscriptions
         // that have not received _any_ new events during replay will start at the global position if the application is restarted.
         // Otherwise, nothing will be stored in the "storage" and replay of historic events will take place again on application restart
-        // which is not what we want! The reason for doing this with UseSubscriptionPositionInStorage (as opposed to just
-        // PersistSubscriptionPositionDuringCatchupPhase) is that if using a "storage" at all in the config, is to accommodate
+        // which is not what we want! The reason for doing this with UseCheckpointInStorage (as opposed to just
+        // PersistCheckpointDuringCatchupPhase) is that if using a "storage" at all in the config, is to accommodate
         // that the wrapping subscription continues from where we left off.
-        StartAt startAtToUse = StartAt.dynamic(this.<Supplier<StartAt>, UseSubscriptionPositionInStorage>returnIfSubscriptionPositionStorageConfigIs(UseSubscriptionPositionInStorage.class,
+        StartAt startAtToUse = StartAt.dynamic(this.<Supplier<StartAt>, UseCheckpointInStorage>returnIfCheckpointStorageConfigIs(UseCheckpointInStorage.class,
                         cfg -> () -> {
                             // It's important that we find the document inside the supplier so that we look up the latest resume token on retry
-                            SubscriptionPosition position = cfg.storage().read(subscriptionId);
+                            Checkpoint position = cfg.storage().read(subscriptionId);
                             // If there is no position stored in storage, or if the stored position is time-based
-                            // (i.e. written by the catch-up subscription), we save the globalSubscriptionPosition.
+                            // (i.e. written by the catch-up subscription), we save the globalCheckpoint.
                             // The reason that we need to write the time-based subscription position in this case
                             // is that the wrapped subscription might not support time-based subscriptions.
-                            if ((position == null || isTimeBasedSubscriptionPosition(position)) && globalSubscriptionPosition != null) {
-                                position = cfg.storage().save(subscriptionId, globalSubscriptionPosition);
+                            if ((position == null || isTimeBasedCheckpoint(position)) && globalCheckpoint != null) {
+                                position = cfg.storage().save(subscriptionId, globalCheckpoint);
                             } else if (position == null) {
-                                // Position can still be null here if globalSubscriptionPosition is null, if so, we start at the "subscriptionModelDefault",
+                                // Position can still be null here if globalCheckpoint is null, if so, we start at the "subscriptionModelDefault",
                                 // given that the delegated subscription model is allowed to subscribe (i.e. delegatedStartAt != null).
                                 return delegatedStartAt == null ? startAt : StartAt.subscriptionModelDefault();
                             }
-                            return StartAt.subscriptionPosition(position);
+                            return StartAt.checkpoint(position);
                         })
                 .orElse(() -> {
-                    if (globalSubscriptionPosition == null) {
+                    if (globalCheckpoint == null) {
                         // We check if the delegated subscription model is allowed to subscribe (delegatedStartAt != null),
                         // if so we instruct the subscription model to start from default, otherwise just return the original
                         // startAt supplied by the user.
                         return delegatedStartAt == null ? startAt : StartAt.subscriptionModelDefault();
                     } else {
-                        return StartAt.subscriptionPosition(globalSubscriptionPosition);
+                        return StartAt.checkpoint(globalCheckpoint);
                     }
                 }));
 
@@ -336,7 +336,7 @@ public class StreamCatchupSubscriptionModel extends AbstractCatchupSubscriptionM
     private Subscription startDelegatedSubscription(String subscriptionId, @Nullable SubscriptionFilter filter, boolean subscriptionsWasCancelledOrShutdown, StartAt startAtToUse, Consumer<CloudEvent> liveConsumer) {
         final Subscription subscription;
         if (subscriptionsWasCancelledOrShutdown) {
-            doIfSubscriptionPositionStorageConfigIs(UseSubscriptionPositionInStorage.class, cfg -> {
+            doIfCheckpointStorageConfigIs(UseCheckpointInStorage.class, cfg -> {
                 // Only get position if using storage and no position has been stored!
                 if (!cfg.storage().exists(subscriptionId)) {
                     startAtToUse.get(generateSubscriptionModelContext());
@@ -361,14 +361,14 @@ public class StreamCatchupSubscriptionModel extends AbstractCatchupSubscriptionM
         long windowSize = config.dcbCatchupPositionWindowSize;
 
         StartAt nextStartAt = firstStartAt.get(generateSubscriptionModelContext());
-        SubscriptionPosition subscriptionPosition = ((StartAtSubscriptionPosition) Objects.requireNonNull(nextStartAt)).subscriptionPosition;
-        long startPosition = GlobalSubscriptionPosition.positionOf(subscriptionPosition);
+        Checkpoint checkpoint = ((StartAtCheckpoint) Objects.requireNonNull(nextStartAt)).checkpoint;
+        long startPosition = GlobalCheckpoint.positionOf(checkpoint);
 
         // Capture the live resume token before the bulk replay so an event committed during the replay is still
         // delivered live, like the DCB handover.
         Class<? extends SubscriptionModel> delegatedSubscriptionModelType = getDelegatedSubscriptionModel().getClass();
         StartAt delegatedStartAt = startAt.get(new SubscriptionModelContext(delegatedSubscriptionModelType));
-        final SubscriptionPosition globalSubscriptionPosition = delegatedStartAt == null ? null : subscriptionModel.globalSubscriptionPosition();
+        final Checkpoint globalCheckpoint = delegatedStartAt == null ? null : subscriptionModel.globalCheckpoint();
 
         // Page through the position sequence from the resume position to the head seen at the start, in windows so a
         // large rebuild does not load the whole matched set at once.
@@ -386,7 +386,7 @@ public class StreamCatchupSubscriptionModel extends AbstractCatchupSubscriptionM
         }
 
         if (delegatedStartAt == null) {
-            returnIfSubscriptionPositionStorageConfigIs(UseSubscriptionPositionInStorage.class, cfg -> {
+            returnIfCheckpointStorageConfigIs(UseCheckpointInStorage.class, cfg -> {
                 cfg.storage().delete(subscriptionId);
                 return null;
             });
@@ -400,24 +400,24 @@ public class StreamCatchupSubscriptionModel extends AbstractCatchupSubscriptionM
             subscriptionsWasCancelledOrShutdown = true;
         }
 
-        StartAt startAtToUse = StartAt.dynamic(this.<Supplier<StartAt>, UseSubscriptionPositionInStorage>returnIfSubscriptionPositionStorageConfigIs(UseSubscriptionPositionInStorage.class,
+        StartAt startAtToUse = StartAt.dynamic(this.<Supplier<StartAt>, UseCheckpointInStorage>returnIfCheckpointStorageConfigIs(UseCheckpointInStorage.class,
                         cfg -> () -> {
-                            SubscriptionPosition position = cfg.storage().read(subscriptionId);
+                            Checkpoint position = cfg.storage().read(subscriptionId);
                             // If nothing is stored, or the stored position is a global position (written by this
                             // catch-up), save the live change-stream position so the wrapped subscription resumes
                             // from there.
-                            if ((position == null || GlobalSubscriptionPosition.isGlobalSubscriptionPosition(position)) && globalSubscriptionPosition != null) {
-                                position = cfg.storage().save(subscriptionId, globalSubscriptionPosition);
+                            if ((position == null || GlobalCheckpoint.isGlobalCheckpoint(position)) && globalCheckpoint != null) {
+                                position = cfg.storage().save(subscriptionId, globalCheckpoint);
                             } else if (position == null) {
                                 return delegatedStartAt == null ? startAt : StartAt.subscriptionModelDefault();
                             }
-                            return StartAt.subscriptionPosition(position);
+                            return StartAt.checkpoint(position);
                         })
                 .orElse(() -> {
-                    if (globalSubscriptionPosition == null) {
+                    if (globalCheckpoint == null) {
                         return delegatedStartAt == null ? startAt : StartAt.subscriptionModelDefault();
                     } else {
-                        return StartAt.subscriptionPosition(globalSubscriptionPosition);
+                        return StartAt.checkpoint(globalCheckpoint);
                     }
                 }));
 
@@ -438,18 +438,18 @@ public class StreamCatchupSubscriptionModel extends AbstractCatchupSubscriptionM
         while (cursor < toInclusive && !shuttingDown && runningCatchupSubscriptions.containsKey(subscriptionId)) {
             long upTo = Math.min(cursor + windowSize, toInclusive);
             Stream<CloudEvent> slice = positionOrderedReader.readInPositionOrder(filter, PositionRange.between(cursor, upTo));
-            deliverCatchupEvents(slice, subscriptionId, action, cache, e -> GlobalSubscriptionPosition.of(OccurrentCloudEventExtension.getPosition(e)));
+            deliverCatchupEvents(slice, subscriptionId, action, cache, e -> GlobalCheckpoint.of(OccurrentCloudEventExtension.getPosition(e)));
             cursor = upTo;
         }
         return cursor;
     }
 
-    private static Filter deriveFilterToUseDuringCatchupPhase(@Nullable SubscriptionFilter filter, SubscriptionPosition subscriptionPosition) {
+    private static Filter deriveFilterToUseDuringCatchupPhase(@Nullable SubscriptionFilter filter, Checkpoint checkpoint) {
         final Filter timeFilter;
-        if (isBeginningOfTime(subscriptionPosition)) {
+        if (isBeginningOfTime(checkpoint)) {
             timeFilter = Filter.all();
         } else {
-            OffsetDateTime offsetDateTime = OffsetDateTime.parse(subscriptionPosition.asString(), RFC_3339_DATE_TIME_FORMATTER);
+            OffsetDateTime offsetDateTime = OffsetDateTime.parse(checkpoint.asString(), RFC_3339_DATE_TIME_FORMATTER);
             timeFilter = time(gt(offsetDateTime));
         }
 
@@ -464,7 +464,7 @@ public class StreamCatchupSubscriptionModel extends AbstractCatchupSubscriptionM
     }
 
     private void runCatchupForStream(Stream<CloudEvent> cloudEvents, String subscriptionId, Consumer<CloudEvent> action, @Nullable FixedSizeCache cache) {
-        deliverCatchupEvents(cloudEvents, subscriptionId, action, cache, e -> TimeBasedSubscriptionPosition.from(e.getTime()));
+        deliverCatchupEvents(cloudEvents, subscriptionId, action, cache, e -> TimeBasedCheckpoint.from(e.getTime()));
     }
 
     /**
@@ -473,7 +473,7 @@ public class StreamCatchupSubscriptionModel extends AbstractCatchupSubscriptionM
      * event by {@code positionToPersist}, which differs between the time-based path (time based) and the position path
      * (global position).
      */
-    private void deliverCatchupEvents(Stream<CloudEvent> cloudEvents, String subscriptionId, Consumer<CloudEvent> action, @Nullable FixedSizeCache cache, Function<CloudEvent, SubscriptionPosition> positionToPersist) {
+    private void deliverCatchupEvents(Stream<CloudEvent> cloudEvents, String subscriptionId, Consumer<CloudEvent> action, @Nullable FixedSizeCache cache, Function<CloudEvent, Checkpoint> positionToPersist) {
         // try-with-resources closes the source stream even when takeWhile short-circuits on shutdown, so a
         // resource-backed read (the Spring Mongo bulk replay wraps a server cursor) does not leak its cursor.
         try (cloudEvents) {
@@ -486,8 +486,8 @@ public class StreamCatchupSubscriptionModel extends AbstractCatchupSubscriptionM
             }
             takeWhile
                     .peek(action)
-                    .filter(returnIfSubscriptionPositionStorageConfigIs(PersistSubscriptionPositionDuringCatchupPhase.class, PersistSubscriptionPositionDuringCatchupPhase::persistCloudEventPositionPredicate).orElse(__ -> false))
-                    .forEach(e -> doIfSubscriptionPositionStorageConfigIs(PersistSubscriptionPositionDuringCatchupPhase.class, cfg -> cfg.storage().save(subscriptionId, positionToPersist.apply(e))));
+                    .filter(returnIfCheckpointStorageConfigIs(PersistCheckpointDuringCatchupPhase.class, PersistCheckpointDuringCatchupPhase::persistCloudEventPositionPredicate).orElse(__ -> false))
+                    .forEach(e -> doIfCheckpointStorageConfigIs(PersistCheckpointDuringCatchupPhase.class, cfg -> cfg.storage().save(subscriptionId, positionToPersist.apply(e))));
         }
     }
 
@@ -504,19 +504,19 @@ public class StreamCatchupSubscriptionModel extends AbstractCatchupSubscriptionM
         subscriptionModel.shutdown();
     }
 
-    public static boolean isTimeBasedSubscriptionPosition(StartAt startAt, Class<?> contextType) {
+    public static boolean isTimeBasedCheckpoint(StartAt startAt, Class<?> contextType) {
         StartAt start = startAt.get(new SubscriptionModelContext(contextType));
-        if (!(start instanceof StartAtSubscriptionPosition)) {
+        if (!(start instanceof StartAtCheckpoint)) {
             return false;
         }
 
-        SubscriptionPosition subscriptionPosition = ((StartAtSubscriptionPosition) start).subscriptionPosition;
-        return isTimeBasedSubscriptionPosition(subscriptionPosition);
+        Checkpoint checkpoint = ((StartAtCheckpoint) start).checkpoint;
+        return isTimeBasedCheckpoint(checkpoint);
     }
 
-    public static boolean isTimeBasedSubscriptionPosition(SubscriptionPosition subscriptionPosition) {
-        return subscriptionPosition instanceof TimeBasedSubscriptionPosition ||
-                (subscriptionPosition instanceof StringBasedSubscriptionPosition && isRfc3339Timestamp(subscriptionPosition.asString()));
+    public static boolean isTimeBasedCheckpoint(Checkpoint checkpoint) {
+        return checkpoint instanceof TimeBasedCheckpoint ||
+                (checkpoint instanceof StringBasedCheckpoint && isRfc3339Timestamp(checkpoint.asString()));
     }
 
     private static boolean isRfc3339Timestamp(String string) {
@@ -528,15 +528,15 @@ public class StreamCatchupSubscriptionModel extends AbstractCatchupSubscriptionM
         }
     }
 
-    private static boolean isBeginningOfTime(SubscriptionPosition subscriptionPosition) {
-        return subscriptionPosition instanceof TimeBasedSubscriptionPosition && ((TimeBasedSubscriptionPosition) subscriptionPosition).isBeginningOfTime();
+    private static boolean isBeginningOfTime(Checkpoint checkpoint) {
+        return checkpoint instanceof TimeBasedCheckpoint && ((TimeBasedCheckpoint) checkpoint).isBeginningOfTime();
     }
 
     // Whether a resolved StartAt is a "replay from the beginning of time" request. On a position store this maps to a
     // position-from-beginning start.
     private static boolean startsAtBeginningOfTime(StartAt startAt, Class<?> contextType) {
         StartAt start = startAt.get(new SubscriptionModelContext(contextType));
-        return start instanceof StartAtSubscriptionPosition position && isBeginningOfTime(position.subscriptionPosition);
+        return start instanceof StartAtCheckpoint position && isBeginningOfTime(position.checkpoint);
     }
 
     @Override

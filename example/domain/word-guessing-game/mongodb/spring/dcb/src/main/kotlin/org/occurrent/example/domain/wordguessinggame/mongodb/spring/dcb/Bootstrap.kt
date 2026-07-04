@@ -29,10 +29,10 @@ import org.occurrent.example.domain.wordguessinggame.event.GameEvent
 import org.occurrent.example.domain.wordguessinggame.mongodb.spring.dcb.features.GameCloudEventConverter
 import org.occurrent.example.domain.wordguessinggame.mongodb.spring.dcb.features.dcb.GameEventTagGenerator
 import org.occurrent.mongodb.timerepresentation.TimeRepresentation
-import org.occurrent.subscription.api.blocking.SubscriptionPositionStorage
+import org.occurrent.subscription.api.blocking.CheckpointStorage
 import org.occurrent.subscription.blocking.durable.DurableSubscriptionModel
 import org.occurrent.subscription.mongodb.spring.blocking.SpringMongoSubscriptionModel
-import org.occurrent.subscription.mongodb.spring.blocking.SpringMongoSubscriptionPositionStorage
+import org.occurrent.subscription.mongodb.spring.blocking.SpringMongoCheckpointStorage
 import org.springframework.boot.autoconfigure.SpringBootApplication
 import org.springframework.boot.runApplication
 import org.springframework.context.annotation.Bean
@@ -77,11 +77,11 @@ class Bootstrap : WebMvcConfigurer {
         SpringMongoSubscriptionModel(mongoTemplate, EVENTS_COLLECTION_NAME, TimeRepresentation.DATE)
 
     @Bean
-    fun subscriptionPositionStorage(mongoTemplate: MongoTemplate): SubscriptionPositionStorage =
-        SpringMongoSubscriptionPositionStorage(mongoTemplate, SUBSCRIPTIONS_COLLECTION_NAME)
+    fun checkpointStorage(mongoTemplate: MongoTemplate): CheckpointStorage =
+        SpringMongoCheckpointStorage(mongoTemplate, SUBSCRIPTIONS_COLLECTION_NAME)
 
     @Bean
-    fun durableSubscriptionModel(subscriptionModel: SpringMongoSubscriptionModel, storage: SubscriptionPositionStorage): DurableSubscriptionModel =
+    fun durableSubscriptionModel(subscriptionModel: SpringMongoSubscriptionModel, storage: CheckpointStorage): DurableSubscriptionModel =
         DurableSubscriptionModel(subscriptionModel, storage)
 
     @Bean

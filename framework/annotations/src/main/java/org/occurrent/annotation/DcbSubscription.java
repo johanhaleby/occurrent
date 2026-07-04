@@ -146,8 +146,8 @@ public @interface DcbSubscription {
      */
     enum ResumeBehavior {
         /**
-         * Always start at the same position as specified by the {@link DcbStartPosition}. Even if a subscription
-         * position (checkpoint) is stored, it is ignored on restart and the subscription resumes from the specified
+         * Always start at the same position as specified by the {@link DcbStartPosition}. Even if a
+         * checkpoint is stored, it is ignored on restart and the subscription resumes from the specified
          * {@link DcbStartPosition}.
          */
         SAME_AS_START_AT,

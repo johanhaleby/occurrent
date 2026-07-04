@@ -21,10 +21,10 @@ import org.bson.BsonDocument;
 import org.bson.BsonTimestamp;
 import org.bson.Document;
 import org.jspecify.annotations.NullMarked;
-import org.occurrent.subscription.SubscriptionPosition;
-import org.occurrent.subscription.api.reactor.SubscriptionPositionStorage;
-import org.occurrent.subscription.mongodb.MongoOperationTimeSubscriptionPosition;
-import org.occurrent.subscription.mongodb.MongoResumeTokenSubscriptionPosition;
+import org.occurrent.subscription.Checkpoint;
+import org.occurrent.subscription.api.reactor.CheckpointStorage;
+import org.occurrent.subscription.mongodb.MongoOperationTimeCheckpoint;
+import org.occurrent.subscription.mongodb.MongoResumeTokenCheckpoint;
 import org.occurrent.subscription.mongodb.internal.MongoCommons;
 import org.springframework.data.mongodb.core.ReactiveMongoOperations;
 import org.springframework.data.mongodb.core.query.Update;
@@ -38,37 +38,37 @@ import static org.springframework.data.mongodb.core.query.Criteria.where;
 import static org.springframework.data.mongodb.core.query.Query.query;
 
 /**
- * A Spring implementation of {@link SubscriptionPositionStorage} that stores {@link SubscriptionPosition} in MongoDB.
+ * A Spring implementation of {@link CheckpointStorage} that stores {@link Checkpoint} in MongoDB.
  */
 @NullMarked
-public class ReactorSubscriptionPositionStorage implements SubscriptionPositionStorage {
+public class ReactorCheckpointStorage implements CheckpointStorage {
 
     private final ReactiveMongoOperations mongo;
-    private final String subscriptionPositionCollection;
+    private final String checkpointCollection;
 
     /**
-     * Create a new instance of {@link ReactorSubscriptionPositionStorage}
+     * Create a new instance of {@link ReactorCheckpointStorage}
      *
-     * @param mongo                    The {@link ReactiveMongoOperations} implementation to use persisting subscription positions to MongoDB.
-     * @param subscriptionPositionCollection The collection that will contain the subscription position for each subscriber.
+     * @param mongo                    The {@link ReactiveMongoOperations} implementation to use persisting checkpoints to MongoDB.
+     * @param checkpointCollection The collection that will contain the checkpoint for each subscriber.
      */
-    public ReactorSubscriptionPositionStorage(ReactiveMongoOperations mongo, String subscriptionPositionCollection) {
+    public ReactorCheckpointStorage(ReactiveMongoOperations mongo, String checkpointCollection) {
         requireNonNull(mongo, ReactiveMongoOperations.class.getSimpleName() + " cannot be null");
-        requireNonNull(subscriptionPositionCollection, "subscriptionPositionCollection cannot be null");
+        requireNonNull(checkpointCollection, "checkpointCollection cannot be null");
         this.mongo = mongo;
-        this.subscriptionPositionCollection = subscriptionPositionCollection;
+        this.checkpointCollection = checkpointCollection;
     }
 
     @Override
-    public Mono<SubscriptionPosition> save(String subscriptionId, SubscriptionPosition changeStreamPosition) {
+    public Mono<Checkpoint> save(String subscriptionId, Checkpoint changeStreamPosition) {
         Mono<?> result;
-        if (changeStreamPosition instanceof MongoResumeTokenSubscriptionPosition) {
-            result = persistResumeTokenStreamPosition(subscriptionId, ((MongoResumeTokenSubscriptionPosition) changeStreamPosition).resumeToken);
-        } else if (changeStreamPosition instanceof MongoOperationTimeSubscriptionPosition) {
-            result = persistOperationTimeStreamPosition(subscriptionId, ((MongoOperationTimeSubscriptionPosition) changeStreamPosition).operationTime);
+        if (changeStreamPosition instanceof MongoResumeTokenCheckpoint) {
+            result = persistResumeTokenStreamPosition(subscriptionId, ((MongoResumeTokenCheckpoint) changeStreamPosition).resumeToken);
+        } else if (changeStreamPosition instanceof MongoOperationTimeCheckpoint) {
+            result = persistOperationTimeStreamPosition(subscriptionId, ((MongoOperationTimeCheckpoint) changeStreamPosition).operationTime);
         } else {
-            String subscriptionPositionString = changeStreamPosition.asString();
-            Document document = MongoCommons.generateGenericSubscriptionPositionDocument(subscriptionId, subscriptionPositionString);
+            String checkpointString = changeStreamPosition.asString();
+            Document document = MongoCommons.generateGenericCheckpointDocument(subscriptionId, checkpointString);
             result = persistDocumentStreamPosition(subscriptionId, document);
         }
         return result.thenReturn(changeStreamPosition);
@@ -76,7 +76,7 @@ public class ReactorSubscriptionPositionStorage implements SubscriptionPositionS
 
     @Override
     public Mono<Void> delete(String subscriptionId) {
-        return mongo.remove(query(where(ID).is(subscriptionId)), subscriptionPositionCollection).then();
+        return mongo.remove(query(where(ID).is(subscriptionId)), checkpointCollection).then();
     }
 
     private Mono<Document> persistResumeTokenStreamPosition(String subscriptionId, BsonDocument resumeToken) {
@@ -90,14 +90,19 @@ public class ReactorSubscriptionPositionStorage implements SubscriptionPositionS
     }
 
     private Mono<UpdateResult> persistDocumentStreamPosition(String subscriptionId, Document document) {
+        // "document" carries no $-prefixed update operators, so Spring Data applies it as a full-document
+        // replacement rather than a field-level merge. Any field absent from "document" is therefore dropped,
+        // including the legacy "subscriptionPosition" field written before the SubscriptionPosition -> Checkpoint
+        // rename: the first save after upgrade rewrites the document under the new "checkpoint" field and the legacy
+        // field does not survive. This is the same replacement behaviour the native adapter gets from replaceOne.
         return mongo.upsert(query(where(ID).is(subscriptionId)),
                 Update.fromDocument(document),
-                subscriptionPositionCollection);
+                checkpointCollection);
     }
 
     @Override
-    public Mono<SubscriptionPosition> read(String subscriptionId) {
-        return mongo.findOne(query(where(ID).is(subscriptionId)), Document.class, subscriptionPositionCollection)
-                .map(MongoCommons::calculateSubscriptionPositionFromMongoStreamPositionDocument);
+    public Mono<Checkpoint> read(String subscriptionId) {
+        return mongo.findOne(query(where(ID).is(subscriptionId)), Document.class, checkpointCollection)
+                .map(MongoCommons::calculateCheckpointFromMongoStreamPositionDocument);
     }
 }

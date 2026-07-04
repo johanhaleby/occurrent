@@ -21,13 +21,13 @@ import org.jspecify.annotations.NullMarked;
 import java.util.Objects;
 
 /**
- * A simple {@link SubscriptionPosition} that is backed by a fixed String
+ * A simple {@link Checkpoint} that is backed by a fixed String
  */
 @NullMarked
-public class StringBasedSubscriptionPosition implements SubscriptionPosition {
+public class StringBasedCheckpoint implements Checkpoint {
     private final String value;
 
-    public StringBasedSubscriptionPosition(String value) {
+    public StringBasedCheckpoint(String value) {
         Objects.requireNonNull(value, "Stream position value cannot be null");
         this.value = value;
     }
@@ -35,8 +35,8 @@ public class StringBasedSubscriptionPosition implements SubscriptionPosition {
     @Override
     public boolean equals(Object o) {
         if (this == o) return true;
-        if (!(o instanceof StringBasedSubscriptionPosition)) return false;
-        StringBasedSubscriptionPosition that = (StringBasedSubscriptionPosition) o;
+        if (!(o instanceof StringBasedCheckpoint)) return false;
+        StringBasedCheckpoint that = (StringBasedCheckpoint) o;
         return Objects.equals(value, that.value);
     }
 

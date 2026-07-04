@@ -109,7 +109,7 @@ public sealed interface DcbStartAt {
 
         @Override
         public StartAt toStartAt() {
-            return StartAt.subscriptionPosition(GlobalSubscriptionPosition.of(lastProcessedPosition));
+            return StartAt.checkpoint(GlobalCheckpoint.of(lastProcessedPosition));
         }
     }
 

@@ -43,11 +43,11 @@ import org.occurrent.eventstore.api.dcb.DcbReadOptions;
 import org.occurrent.eventstore.mongodb.spring.blocking.EventStoreConfig;
 import org.occurrent.eventstore.mongodb.spring.blocking.SpringMongoEventStore;
 import org.occurrent.mongodb.timerepresentation.TimeRepresentation;
-import org.occurrent.subscription.GlobalSubscriptionPosition;
+import org.occurrent.subscription.GlobalCheckpoint;
 import org.occurrent.subscription.StartAt;
 import org.occurrent.subscription.api.blocking.Subscription;
 import org.occurrent.subscription.mongodb.spring.blocking.SpringMongoSubscriptionModel;
-import org.occurrent.subscription.mongodb.spring.blocking.SpringMongoSubscriptionPositionStorage;
+import org.occurrent.subscription.mongodb.spring.blocking.SpringMongoCheckpointStorage;
 import org.occurrent.testsupport.mongodb.FlushMongoDBExtension;
 import org.springframework.data.mongodb.MongoTransactionManager;
 import org.springframework.data.mongodb.core.MongoTemplate;
@@ -76,7 +76,7 @@ import static org.springframework.data.mongodb.core.query.Criteria.where;
 import static org.springframework.data.mongodb.core.query.Query.query;
 import static org.occurrent.eventstore.api.EventStoreCapability.DCB;
 import static org.occurrent.eventstore.api.EventStoreCapability.STREAM;
-import static org.occurrent.subscription.blocking.durable.catchup.SubscriptionPositionStorageConfig.useSubscriptionPositionStorage;
+import static org.occurrent.subscription.blocking.durable.catchup.CheckpointStorageConfig.useCheckpointStorage;
 
 /**
  * Real MongoDB integration test for {@link CatchupSubscriptionModel} in DCB mode (ADR 20). The in-memory
@@ -103,7 +103,7 @@ class DcbCatchupSubscriptionModelMongoTest {
 
     private SpringMongoEventStore eventStore;
     private SpringMongoSubscriptionModel subscriptionModel;
-    private SpringMongoSubscriptionPositionStorage storage;
+    private SpringMongoCheckpointStorage storage;
     private CatchupSubscriptionModel subscription;
     private CloudEventConverter<DomainEvent> cloudEventConverter;
     private MongoClient mongoClient;
@@ -127,7 +127,7 @@ class DcbCatchupSubscriptionModelMongoTest {
                 .build();
         eventStore = new SpringMongoEventStore(mongoTemplate, eventStoreConfig);
         subscriptionModel = new SpringMongoSubscriptionModel(mongoTemplate, requireNonNull(connectionString.getCollection()), timeRepresentation);
-        storage = new SpringMongoSubscriptionPositionStorage(mongoTemplate, "storage");
+        storage = new SpringMongoCheckpointStorage(mongoTemplate, "storage");
         cloudEventConverter = new JacksonCloudEventConverter.Builder<DomainEvent>(new ObjectMapper(), SOURCE).idMapper(DomainEvent::eventId).build();
         time = LocalDateTime.now();
     }
@@ -152,10 +152,10 @@ class DcbCatchupSubscriptionModelMongoTest {
 
         CopyOnWriteArrayList<DomainEvent> received = new CopyOnWriteArrayList<>();
         subscription = new CatchupSubscriptionModel(subscriptionModel, eventStore, DcbQuery.tags("name:1"),
-                new CatchupSubscriptionModelConfig(100, useSubscriptionPositionStorage(storage).andPersistSubscriptionPositionDuringCatchupPhaseForEveryNEvents(1)));
+                new CatchupSubscriptionModelConfig(100, useCheckpointStorage(storage).andPersistCheckpointDuringCatchupPhaseForEveryNEvents(1)));
 
         // When the DCB-mode catch-up subscription replays from the beginning of the DCB sequence and hands over to the live change stream
-        subscription.subscribe("subscription", StartAt.subscriptionPosition(GlobalSubscriptionPosition.of(0)), toDomainEvents(received)).waitUntilStarted();
+        subscription.subscribe("subscription", StartAt.checkpoint(GlobalCheckpoint.of(0)), toDomainEvents(received)).waitUntilStarted();
 
         // Then the matching history is delivered (non-matching events filtered out)
         await().atMost(AT_MOST).with().pollInterval(Duration.of(100, MILLIS)).untilAsserted(() ->
@@ -202,12 +202,12 @@ class DcbCatchupSubscriptionModelMongoTest {
         CopyOnWriteArrayList<DomainEvent> received = new CopyOnWriteArrayList<>();
         // A whole-range window forces a single bulk read that the wrapper can hold open across the hole's commit.
         subscription = new CatchupSubscriptionModel(subscriptionModel, blockingDuringBulkReplay, DcbQuery.tags("name:1"),
-                new CatchupSubscriptionModelConfig(100, useSubscriptionPositionStorage(storage).andPersistSubscriptionPositionDuringCatchupPhaseForEveryNEvents(1))
+                new CatchupSubscriptionModelConfig(100, useCheckpointStorage(storage).andPersistCheckpointDuringCatchupPhaseForEveryNEvents(1))
                         .dcbCatchupPositionWindowSize(1_000_000_000L));
 
         // The catch-up runs asynchronously and blocks inside the bulk replay read, after it has read a snapshot that
         // excludes the removed event.
-        Subscription handle = subscription.subscribe("subscription", StartAt.subscriptionPosition(GlobalSubscriptionPosition.of(0)), toDomainEvents(received));
+        Subscription handle = subscription.subscribe("subscription", StartAt.checkpoint(GlobalCheckpoint.of(0)), toDomainEvents(received));
 
         // While the replay is blocked (it has scanned past the hole without seeing it and has not captured any
         // post-replay token), commit the in-flight event by re-inserting its document, then let the replay finish.
@@ -236,10 +236,10 @@ class DcbCatchupSubscriptionModelMongoTest {
 
         CopyOnWriteArrayList<DomainEvent> received = new CopyOnWriteArrayList<>();
         subscription = new CatchupSubscriptionModel(subscriptionModel, eventStore, DcbQuery.tags("name:1"),
-                new CatchupSubscriptionModelConfig(100, useSubscriptionPositionStorage(storage).andPersistSubscriptionPositionDuringCatchupPhaseForEveryNEvents(1)));
+                new CatchupSubscriptionModelConfig(100, useCheckpointStorage(storage).andPersistCheckpointDuringCatchupPhaseForEveryNEvents(1)));
 
         // Resuming after position 1 (as if event1 was already processed elsewhere) replays only event2 and event3.
-        subscription.subscribe("subscription", StartAt.subscriptionPosition(GlobalSubscriptionPosition.of(1)), toDomainEvents(received)).waitUntilStarted();
+        subscription.subscribe("subscription", StartAt.checkpoint(GlobalCheckpoint.of(1)), toDomainEvents(received)).waitUntilStarted();
 
         await().atMost(AT_MOST).with().pollInterval(Duration.of(100, MILLIS)).untilAsserted(() ->
                 assertThat(received).containsExactly(event2, event3));

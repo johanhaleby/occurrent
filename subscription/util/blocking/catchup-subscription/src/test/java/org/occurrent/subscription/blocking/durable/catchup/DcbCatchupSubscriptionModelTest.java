@@ -31,14 +31,14 @@ import org.occurrent.domain.NameDefined;
 import org.occurrent.eventstore.api.dcb.DcbCloudEvents;
 import org.occurrent.eventstore.api.dcb.DcbQuery;
 import org.occurrent.eventstore.inmemory.InMemoryEventStore;
-import org.occurrent.subscription.GlobalSubscriptionPosition;
+import org.occurrent.subscription.GlobalCheckpoint;
 import org.occurrent.subscription.StartAt;
 import org.occurrent.subscription.SubscriptionFilter;
-import org.occurrent.subscription.SubscriptionPosition;
-import org.occurrent.subscription.StringBasedSubscriptionPosition;
-import org.occurrent.subscription.api.blocking.PositionAwareSubscriptionModel;
+import org.occurrent.subscription.Checkpoint;
+import org.occurrent.subscription.StringBasedCheckpoint;
+import org.occurrent.subscription.api.blocking.CheckpointAwareSubscriptionModel;
 import org.occurrent.subscription.api.blocking.Subscription;
-import org.occurrent.subscription.api.blocking.SubscriptionPositionStorage;
+import org.occurrent.subscription.api.blocking.CheckpointStorage;
 import org.occurrent.subscription.inmemory.InMemorySubscriptionModel;
 
 import java.net.URI;
@@ -53,14 +53,14 @@ import java.util.stream.Stream;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.awaitility.Awaitility.await;
-import static org.occurrent.subscription.blocking.durable.catchup.SubscriptionPositionStorageConfig.useSubscriptionPositionStorage;
+import static org.occurrent.subscription.blocking.durable.catchup.CheckpointStorageConfig.useCheckpointStorage;
 
 /**
  * Tests for {@link CatchupSubscriptionModel} in DCB mode (replay and resume by {@code position}, see ADR 20).
  * <p>
  * These use the in-memory event store and subscription model so the DCB-specific logic (position-windowed replay,
  * position resume, the query post-filter and the multi-window paging) is exercised deterministically without a
- * database. The in-memory subscription model is not position aware, so a small {@link PositionAwareInMemorySubscriptionModel}
+ * database. The in-memory subscription model is not position aware, so a small {@link CheckpointAwareInMemorySubscriptionModel}
  * test double adapts it: it translates the concrete resume position the catch-up hands over into {@code StartAt.now()}
  * (the in-memory model only supports now and default) and reports a stub global position. The faithful change-stream
  * resume across the catch-up to live seam is exercised against a real MongoDB change stream by
@@ -70,7 +70,7 @@ import static org.occurrent.subscription.blocking.durable.catchup.SubscriptionPo
 class DcbCatchupSubscriptionModelTest {
 
     private InMemorySubscriptionModel inMemorySubscriptionModel;
-    private PositionAwareInMemorySubscriptionModel subscriptionModel;
+    private CheckpointAwareInMemorySubscriptionModel subscriptionModel;
     private InMemoryEventStore eventStore;
     private CloudEventConverter<DomainEvent> cloudEventConverter;
     private LocalDateTime time;
@@ -78,7 +78,7 @@ class DcbCatchupSubscriptionModelTest {
     @BeforeEach
     void create_instances() {
         inMemorySubscriptionModel = new InMemorySubscriptionModel();
-        subscriptionModel = new PositionAwareInMemorySubscriptionModel(inMemorySubscriptionModel);
+        subscriptionModel = new CheckpointAwareInMemorySubscriptionModel(inMemorySubscriptionModel);
         eventStore = new InMemoryEventStore(inMemorySubscriptionModel);
         cloudEventConverter = new JacksonCloudEventConverter.Builder<DomainEvent>(new ObjectMapper(), URI.create("urn:test")).idMapper(DomainEvent::eventId).build();
         time = LocalDateTime.now();
@@ -102,7 +102,7 @@ class DcbCatchupSubscriptionModelTest {
         CopyOnWriteArrayList<DomainEvent> received = new CopyOnWriteArrayList<>();
         CatchupSubscriptionModel subscription = new CatchupSubscriptionModel(subscriptionModel, eventStore, DcbQuery.tags("name:1"));
 
-        subscription.subscribe("subscription", StartAt.subscriptionPosition(GlobalSubscriptionPosition.of(0)), toDomainEvents(received)).waitUntilStarted();
+        subscription.subscribe("subscription", StartAt.checkpoint(GlobalCheckpoint.of(0)), toDomainEvents(received)).waitUntilStarted();
 
         await().untilAsserted(() -> assertThat(received).containsExactly(name1, name2, name3));
     }
@@ -117,7 +117,7 @@ class DcbCatchupSubscriptionModelTest {
         CopyOnWriteArrayList<DomainEvent> received = new CopyOnWriteArrayList<>();
         CatchupSubscriptionModel subscription = new CatchupSubscriptionModel(subscriptionModel, eventStore, DcbQuery.tags("name:1"));
 
-        subscription.subscribe("subscription", StartAt.subscriptionPosition(GlobalSubscriptionPosition.of(0)), toDomainEvents(received)).waitUntilStarted();
+        subscription.subscribe("subscription", StartAt.checkpoint(GlobalCheckpoint.of(0)), toDomainEvents(received)).waitUntilStarted();
         await().untilAsserted(() -> assertThat(received).containsExactly(historic1, historic2));
 
         NameDefined live1 = nameDefined("live1");
@@ -144,7 +144,7 @@ class DcbCatchupSubscriptionModelTest {
         CopyOnWriteArrayList<DomainEvent> received = new CopyOnWriteArrayList<>();
         CatchupSubscriptionModel subscription = new CatchupSubscriptionModel(subscriptionModel, eventStore, DcbQuery.tags("name:1"));
 
-        subscription.subscribe("subscription", StartAt.subscriptionPosition(GlobalSubscriptionPosition.of(2)), toDomainEvents(received)).waitUntilStarted();
+        subscription.subscribe("subscription", StartAt.checkpoint(GlobalCheckpoint.of(2)), toDomainEvents(received)).waitUntilStarted();
 
         await().untilAsserted(() -> assertThat(received).containsExactly(position3));
     }
@@ -155,12 +155,12 @@ class DcbCatchupSubscriptionModelTest {
         NameDefined position2 = nameDefined("position2");
         appendTagged("name:1", position2);                // position 2
 
-        SubscriptionPositionStorage storage = new InMemorySubscriptionPositionStorage();
-        storage.save("subscription", GlobalSubscriptionPosition.of(1));
+        CheckpointStorage storage = new InMemoryCheckpointStorage();
+        storage.save("subscription", GlobalCheckpoint.of(1));
 
         CopyOnWriteArrayList<DomainEvent> received = new CopyOnWriteArrayList<>();
         CatchupSubscriptionModel subscription = new CatchupSubscriptionModel(subscriptionModel, eventStore, DcbQuery.tags("name:1"),
-                new CatchupSubscriptionModelConfig(useSubscriptionPositionStorage(storage).andPersistSubscriptionPositionDuringCatchupPhaseForEveryNEvents(1)));
+                new CatchupSubscriptionModelConfig(useCheckpointStorage(storage).andPersistCheckpointDuringCatchupPhaseForEveryNEvents(1)));
 
         subscription.subscribe("subscription", StartAt.subscriptionModelDefault(), toDomainEvents(received)).waitUntilStarted();
 
@@ -192,7 +192,7 @@ class DcbCatchupSubscriptionModelTest {
         CatchupSubscriptionModel subscription = new CatchupSubscriptionModel(subscriptionModel, eventStore, DcbQuery.tags("name:1"),
                 new CatchupSubscriptionModelConfig(100).dcbCatchupPositionWindowSize(2));
 
-        subscription.subscribe("subscription", StartAt.subscriptionPosition(GlobalSubscriptionPosition.of(0)), toDomainEvents(received)).waitUntilStarted();
+        subscription.subscribe("subscription", StartAt.checkpoint(GlobalCheckpoint.of(0)), toDomainEvents(received)).waitUntilStarted();
 
         await().untilAsserted(() -> assertThat(received).containsExactlyElementsOf(events));
     }
@@ -213,15 +213,15 @@ class DcbCatchupSubscriptionModelTest {
     }
 
     /**
-     * Adapts the (non position aware) {@link InMemorySubscriptionModel} to {@link PositionAwareSubscriptionModel} for
-     * these tests. The catch-up hands over to the live phase with a concrete subscription position, but the in-memory
+     * Adapts the (non position aware) {@link InMemorySubscriptionModel} to {@link CheckpointAwareSubscriptionModel} for
+     * these tests. The catch-up hands over to the live phase with a concrete checkpoint, but the in-memory
      * model only supports {@code now}/{@code default}, so any position start is translated to {@code now}. The stub
      * global position is enough for the catch-up to take its normal handover path.
      */
-    private static final class PositionAwareInMemorySubscriptionModel implements PositionAwareSubscriptionModel {
+    private static final class CheckpointAwareInMemorySubscriptionModel implements CheckpointAwareSubscriptionModel {
         private final InMemorySubscriptionModel delegate;
 
-        private PositionAwareInMemorySubscriptionModel(InMemorySubscriptionModel delegate) {
+        private CheckpointAwareInMemorySubscriptionModel(InMemorySubscriptionModel delegate) {
             this.delegate = delegate;
         }
 
@@ -233,8 +233,8 @@ class DcbCatchupSubscriptionModelTest {
         }
 
         @Override
-        public @Nullable SubscriptionPosition globalSubscriptionPosition() {
-            return new StringBasedSubscriptionPosition("in-memory-global-position");
+        public @Nullable Checkpoint globalCheckpoint() {
+            return new StringBasedCheckpoint("in-memory-global-position");
         }
 
         @Override
@@ -278,18 +278,18 @@ class DcbCatchupSubscriptionModelTest {
         }
     }
 
-    private static final class InMemorySubscriptionPositionStorage implements SubscriptionPositionStorage {
-        private final ConcurrentMap<String, SubscriptionPosition> positions = new ConcurrentHashMap<>();
+    private static final class InMemoryCheckpointStorage implements CheckpointStorage {
+        private final ConcurrentMap<String, Checkpoint> positions = new ConcurrentHashMap<>();
 
         @Override
-        public SubscriptionPosition read(String subscriptionId) {
+        public Checkpoint read(String subscriptionId) {
             return positions.get(subscriptionId);
         }
 
         @Override
-        public SubscriptionPosition save(String subscriptionId, SubscriptionPosition subscriptionPosition) {
-            positions.put(subscriptionId, subscriptionPosition);
-            return subscriptionPosition;
+        public Checkpoint save(String subscriptionId, Checkpoint checkpoint) {
+            positions.put(subscriptionId, checkpoint);
+            return checkpoint;
         }
 
         @Override

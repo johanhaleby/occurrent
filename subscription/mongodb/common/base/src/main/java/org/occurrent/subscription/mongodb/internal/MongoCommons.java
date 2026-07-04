@@ -19,12 +19,12 @@ package org.occurrent.subscription.mongodb.internal;
 import org.bson.*;
 import org.jspecify.annotations.Nullable;
 import org.occurrent.subscription.StartAt;
-import org.occurrent.subscription.StartAt.StartAtSubscriptionPosition;
+import org.occurrent.subscription.StartAt.StartAtCheckpoint;
 import org.occurrent.subscription.StartAt.SubscriptionModelContext;
-import org.occurrent.subscription.StringBasedSubscriptionPosition;
-import org.occurrent.subscription.SubscriptionPosition;
-import org.occurrent.subscription.mongodb.MongoOperationTimeSubscriptionPosition;
-import org.occurrent.subscription.mongodb.MongoResumeTokenSubscriptionPosition;
+import org.occurrent.subscription.StringBasedCheckpoint;
+import org.occurrent.subscription.Checkpoint;
+import org.occurrent.subscription.mongodb.MongoOperationTimeCheckpoint;
+import org.occurrent.subscription.mongodb.MongoResumeTokenCheckpoint;
 
 import java.util.HashMap;
 import java.util.Map;
@@ -34,7 +34,12 @@ public class MongoCommons {
 
     public static final String RESUME_TOKEN = "resumeToken";
     public static final String OPERATION_TIME = "operationTime";
-    public static final String GENERIC_SUBSCRIPTION_POSITION = "subscriptionPosition";
+    public static final String GENERIC_CHECKPOINT = "checkpoint";
+    // Legacy field name used before the SubscriptionPosition -> Checkpoint rename. Kept so that documents written
+    // by older versions of Occurrent can still be read. New writes never use this field, and because every adapter
+    // persists the checkpoint by replacing the whole document (see the storage adapters), the legacy field does not
+    // survive the first save after upgrade.
+    public static final String LEGACY_GENERIC_CHECKPOINT = "subscriptionPosition";
     static final String RESUME_TOKEN_DATA = "_data";
     public static final int CHANGE_STREAM_HISTORY_LOST_ERROR_CODE = 286;
 
@@ -52,10 +57,10 @@ public class MongoCommons {
         return new Document(data);
     }
 
-    public static Document generateGenericSubscriptionPositionDocument(String subscriptionId, String subscriptionPositionAsString) {
+    public static Document generateGenericCheckpointDocument(String subscriptionId, String checkpointAsString) {
         Map<String, Object> data = new HashMap<>();
         data.put(MongoCloudEventsToJsonDeserializer.ID, subscriptionId);
-        data.put(GENERIC_SUBSCRIPTION_POSITION, subscriptionPositionAsString);
+        data.put(GENERIC_CHECKPOINT, checkpointAsString);
         return new Document(data);
     }
 
@@ -74,32 +79,32 @@ public class MongoCommons {
         return new ResumeToken(resumeToken);
     }
 
-    public static String cannotFindGlobalSubscriptionPositionErrorMessage(Throwable throwable) {
-        return "Failed to get global subscription position from MongoDB, probably because the server doesn't allow to execute the \"hostinfo\" command. " +
+    public static String cannotFindGlobalCheckpointErrorMessage(Throwable throwable) {
+        return "Failed to get global checkpoint from MongoDB, probably because the server doesn't allow to execute the \"hostinfo\" command. " +
                 "This only affects the very first event received by the subscription. If the processing of this event fails _and_ the application is restarted " +
                 "the event cannot be retried. If this is major concern, consider upgrading your MongoDB server to a non-shared environment that supports the \"hostinfo\" command. Error is:\n" + throwable.getMessage();
     }
 
-    public static BsonTimestamp extractOperationTimeFromPersistedPositionDocument(Document subscriptionPositionDocument) {
-        return subscriptionPositionDocument.get(OPERATION_TIME, BsonTimestamp.class);
+    public static BsonTimestamp extractOperationTimeFromPersistedPositionDocument(Document checkpointDocument) {
+        return checkpointDocument.get(OPERATION_TIME, BsonTimestamp.class);
     }
 
     public static <T> T applyStartPosition(T t, BiFunction<T, BsonDocument, T> applyResumeToken, BiFunction<T, BsonTimestamp, T> applyOperationTime, @Nullable StartAt startAt, SubscriptionModelContext ctx) {
         StartAt startAtValue = startAt == null ? null : startAt.get(ctx);
         if (startAtValue == null || startAtValue.isNow() || startAtValue.isDefault()) {
             return t;
-        } else if (!(startAtValue instanceof StartAtSubscriptionPosition)) {
+        } else if (!(startAtValue instanceof StartAtCheckpoint)) {
             throw new IllegalArgumentException("Unrecognized " + StartAt.class.getSimpleName() + " implementation: " + startAtValue.getClass().getName());
         }
 
         final T withStartPositionApplied;
-        StartAtSubscriptionPosition position = (StartAtSubscriptionPosition) startAtValue;
-        SubscriptionPosition changeStreamPosition = position.subscriptionPosition;
-        if (changeStreamPosition instanceof MongoResumeTokenSubscriptionPosition) {
-            BsonDocument resumeToken = ((MongoResumeTokenSubscriptionPosition) changeStreamPosition).resumeToken;
+        StartAtCheckpoint position = (StartAtCheckpoint) startAtValue;
+        Checkpoint changeStreamPosition = position.checkpoint;
+        if (changeStreamPosition instanceof MongoResumeTokenCheckpoint) {
+            BsonDocument resumeToken = ((MongoResumeTokenCheckpoint) changeStreamPosition).resumeToken;
             withStartPositionApplied = applyResumeToken.apply(t, resumeToken);
-        } else if (changeStreamPosition instanceof MongoOperationTimeSubscriptionPosition) {
-            withStartPositionApplied = applyOperationTime.apply(t, ((MongoOperationTimeSubscriptionPosition) changeStreamPosition).operationTime);
+        } else if (changeStreamPosition instanceof MongoOperationTimeCheckpoint) {
+            withStartPositionApplied = applyOperationTime.apply(t, ((MongoOperationTimeCheckpoint) changeStreamPosition).operationTime);
         } else {
             String changeStreamPositionString = changeStreamPosition.asString();
             if (changeStreamPositionString.contains(RESUME_TOKEN)) {
@@ -114,29 +119,36 @@ public class MongoCommons {
                 // We don't recognize the start position, but instead of throwing an exception we just start at "subscription model default"/now which
                 // means returning t. The reason for not throwing is that subscription models that wraps _this_ subscription (which doesn't understand the
                 // "changeStreamPositionString") may have custom understanding of the change stream position. For example, in the case of a CatchupSubscription,
-                // it adds a "TimeBasedSubscriptionPosition" which no other subscription model understands. In the case where the CatchupSubscription cannot get a global position,
-                // for example if we run on Atlas free-tier, it may write the "TimeBasedSubscriptionPosition" to the position storage impl. If no event has been received after
-                // the subscription has caught-up, the "TimeBasedSubscriptionPosition" will be retained in storage. If a restart happens before a new event has been received,
-                // then the CatchupSubscription will kick in again and understand the "TimeBasedSubscriptionPosition", thus preventing reading the events from the event store again.
+                // it adds a "TimeBasedCheckpoint" which no other subscription model understands. In the case where the CatchupSubscription cannot get a global position,
+                // for example if we run on Atlas free-tier, it may write the "TimeBasedCheckpoint" to the position storage impl. If no event has been received after
+                // the subscription has caught-up, the "TimeBasedCheckpoint" will be retained in storage. If a restart happens before a new event has been received,
+                // then the CatchupSubscription will kick in again and understand the "TimeBasedCheckpoint", thus preventing reading the events from the event store again.
                 return t;
             }
         }
         return withStartPositionApplied;
     }
 
-    public static SubscriptionPosition calculateSubscriptionPositionFromMongoStreamPositionDocument(Document subscriptionPositionDocument) {
-        final SubscriptionPosition changeStreamPosition;
-        if (subscriptionPositionDocument.containsKey(MongoCommons.RESUME_TOKEN)) {
-            ResumeToken resumeToken = MongoCommons.extractResumeTokenFromPersistedResumeTokenDocument(subscriptionPositionDocument);
-            changeStreamPosition = new MongoResumeTokenSubscriptionPosition(resumeToken.asBsonDocument());
-        } else if (subscriptionPositionDocument.containsKey(MongoCommons.OPERATION_TIME)) {
-            BsonTimestamp lastOperationTime = MongoCommons.extractOperationTimeFromPersistedPositionDocument(subscriptionPositionDocument);
-            changeStreamPosition = new MongoOperationTimeSubscriptionPosition(lastOperationTime);
-        } else if (subscriptionPositionDocument.containsKey(MongoCommons.GENERIC_SUBSCRIPTION_POSITION)) {
-            String value = subscriptionPositionDocument.getString(MongoCommons.GENERIC_SUBSCRIPTION_POSITION);
-            changeStreamPosition = new StringBasedSubscriptionPosition(value);
+    public static Checkpoint calculateCheckpointFromMongoStreamPositionDocument(Document checkpointDocument) {
+        final Checkpoint changeStreamPosition;
+        if (checkpointDocument.containsKey(MongoCommons.RESUME_TOKEN)) {
+            ResumeToken resumeToken = MongoCommons.extractResumeTokenFromPersistedResumeTokenDocument(checkpointDocument);
+            changeStreamPosition = new MongoResumeTokenCheckpoint(resumeToken.asBsonDocument());
+        } else if (checkpointDocument.containsKey(MongoCommons.OPERATION_TIME)) {
+            BsonTimestamp lastOperationTime = MongoCommons.extractOperationTimeFromPersistedPositionDocument(checkpointDocument);
+            changeStreamPosition = new MongoOperationTimeCheckpoint(lastOperationTime);
+        } else if (checkpointDocument.containsKey(MongoCommons.GENERIC_CHECKPOINT)) {
+            String value = checkpointDocument.getString(MongoCommons.GENERIC_CHECKPOINT);
+            changeStreamPosition = new StringBasedCheckpoint(value);
+        } else if (checkpointDocument.containsKey(MongoCommons.LEGACY_GENERIC_CHECKPOINT)) {
+            // One-time backward-compatible read: documents written before the SubscriptionPosition -> Checkpoint
+            // rename stored the generic checkpoint value under the legacy "subscriptionPosition" field. Fall back
+            // to reading it so that existing subscriptions don't lose their position. The next successful write
+            // replaces the whole document under the new "checkpoint" field, so the legacy field does not survive.
+            String value = checkpointDocument.getString(MongoCommons.LEGACY_GENERIC_CHECKPOINT);
+            changeStreamPosition = new StringBasedCheckpoint(value);
         } else {
-            throw new IllegalStateException("Doesn't recognize " + subscriptionPositionDocument + " as a valid subscription position document");
+            throw new IllegalStateException("Doesn't recognize " + checkpointDocument + " as a valid checkpoint document");
         }
         return changeStreamPosition;
     }

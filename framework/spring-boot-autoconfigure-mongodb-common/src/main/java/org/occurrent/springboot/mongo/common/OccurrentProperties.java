@@ -222,7 +222,7 @@ public class OccurrentProperties {
 
     public static class SubscriptionProperties {
         /**
-         * The collection into which subscription positions will be stored
+         * The collection into which checkpoints will be stored
          */
         private String collection = "subscriptions";
 

@@ -32,7 +32,7 @@ import org.occurrent.eventstore.api.dcb.DcbCloudEvents;
 import org.occurrent.eventstore.api.dcb.DcbEventStore;
 import org.occurrent.eventstore.api.dcb.DcbQuery;
 import org.occurrent.subscription.DcbStartAt;
-import org.occurrent.subscription.GlobalSubscriptionPosition;
+import org.occurrent.subscription.GlobalCheckpoint;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.autoconfigure.SpringBootApplication;
 import org.springframework.boot.test.context.SpringBootTest;
@@ -62,7 +62,7 @@ import static org.awaitility.Awaitility.await;
  * Proves that DCB catch-up is correctly wired in DCB-only mode ({@code occurrent.event-store.capabilities=dcb}).
  * <p>
  * In DCB-only mode the auto-configured {@code SubscriptionModel} wraps a {@link org.occurrent.subscription.blocking.durable.catchup.CatchupSubscriptionModel}
- * in DCB mode. A subscription started at a {@link GlobalSubscriptionPosition} must (a) replay all matching
+ * in DCB mode. A subscription started at a {@link GlobalCheckpoint} must (a) replay all matching
  * history appended before it started, and (b) seamlessly deliver new events written after the catch-up phase
  * completes, with no duplicates at the seam. This test verifies that end-to-end contract using only
  * auto-configured beans -- no manual construction of the subscription model.

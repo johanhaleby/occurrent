@@ -20,20 +20,20 @@ import org.bson.BsonDocument;
 import org.bson.BsonValue;
 import org.bson.Document;
 import org.jspecify.annotations.NullMarked;
-import org.occurrent.subscription.SubscriptionPosition;
+import org.occurrent.subscription.Checkpoint;
 
 import java.util.Objects;
 import java.util.StringJoiner;
 
 /**
- * A {@link SubscriptionPosition} implementation for MongoDB that provides a resumeToken
+ * A {@link Checkpoint} implementation for MongoDB that provides a resumeToken
  * that consumers may decide which to use when continuing the stream.
  */
 @NullMarked
-public class MongoResumeTokenSubscriptionPosition implements SubscriptionPosition {
+public class MongoResumeTokenCheckpoint implements Checkpoint {
     public final BsonDocument resumeToken;
 
-    public MongoResumeTokenSubscriptionPosition(BsonDocument resumeToken) {
+    public MongoResumeTokenCheckpoint(BsonDocument resumeToken) {
         this.resumeToken = resumeToken;
     }
 
@@ -44,8 +44,8 @@ public class MongoResumeTokenSubscriptionPosition implements SubscriptionPositio
     @Override
     public boolean equals(Object o) {
         if (this == o) return true;
-        if (!(o instanceof MongoResumeTokenSubscriptionPosition)) return false;
-        MongoResumeTokenSubscriptionPosition that = (MongoResumeTokenSubscriptionPosition) o;
+        if (!(o instanceof MongoResumeTokenCheckpoint)) return false;
+        MongoResumeTokenCheckpoint that = (MongoResumeTokenCheckpoint) o;
         return Objects.equals(resumeToken, that.resumeToken);
     }
 
@@ -56,7 +56,7 @@ public class MongoResumeTokenSubscriptionPosition implements SubscriptionPositio
 
     @Override
     public String toString() {
-        return new StringJoiner(", ", MongoResumeTokenSubscriptionPosition.class.getSimpleName() + "[", "]")
+        return new StringJoiner(", ", MongoResumeTokenCheckpoint.class.getSimpleName() + "[", "]")
                 .add("resumeToken=" + resumeToken)
                 .toString();
     }

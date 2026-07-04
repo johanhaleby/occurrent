@@ -28,14 +28,14 @@ import org.jspecify.annotations.NullMarked;
 import org.jspecify.annotations.Nullable;
 import org.occurrent.mongodb.timerepresentation.TimeRepresentation;
 import org.occurrent.retry.RetryStrategy;
-import org.occurrent.subscription.PositionAwareCloudEvent;
+import org.occurrent.subscription.CheckpointAwareCloudEvent;
 import org.occurrent.subscription.StartAt;
 import org.occurrent.subscription.SubscriptionFilter;
-import org.occurrent.subscription.SubscriptionPosition;
-import org.occurrent.subscription.api.blocking.PositionAwareSubscriptionModel;
+import org.occurrent.subscription.Checkpoint;
+import org.occurrent.subscription.api.blocking.CheckpointAwareSubscriptionModel;
 import org.occurrent.subscription.api.blocking.Subscription;
-import org.occurrent.subscription.mongodb.MongoOperationTimeSubscriptionPosition;
-import org.occurrent.subscription.mongodb.MongoResumeTokenSubscriptionPosition;
+import org.occurrent.subscription.mongodb.MongoOperationTimeCheckpoint;
+import org.occurrent.subscription.mongodb.MongoResumeTokenCheckpoint;
 import org.occurrent.subscription.mongodb.internal.MongoCloudEventsToJsonDeserializer;
 import org.occurrent.subscription.mongodb.internal.MongoCommons;
 import org.occurrent.subscription.mongodb.spring.internal.ApplyFilterToChangeStreamOptionsBuilder;
@@ -66,16 +66,16 @@ import java.util.function.Function;
 import static java.util.Objects.requireNonNull;
 import static org.occurrent.retry.internal.RetryExecution.executeWithRetry;
 import static org.occurrent.subscription.mongodb.internal.MongoCommons.CHANGE_STREAM_HISTORY_LOST_ERROR_CODE;
-import static org.occurrent.subscription.mongodb.internal.MongoCommons.cannotFindGlobalSubscriptionPositionErrorMessage;
+import static org.occurrent.subscription.mongodb.internal.MongoCommons.cannotFindGlobalCheckpointErrorMessage;
 import static org.occurrent.subscription.mongodb.spring.blocking.SpringMongoSubscriptionModelConfig.withConfig;
 
 /**
  * This is a subscription that uses Spring and its {@link MessageListenerContainer} for MongoDB to listen to changes from an event store.
- * This Subscription doesn't maintain the subscription position, you need to store it yourself in order to continue the stream
+ * This Subscription doesn't maintain the checkpoint, you need to store it yourself in order to continue the stream
  * from where it's left off on application restart/crash etc.
  */
 @NullMarked
-public class SpringMongoSubscriptionModel implements PositionAwareSubscriptionModel, SmartLifecycle {
+public class SpringMongoSubscriptionModel implements CheckpointAwareSubscriptionModel, SmartLifecycle {
     private static final Logger log = LoggerFactory.getLogger(SpringMongoSubscriptionModel.class);
 
     private final String eventCollection;
@@ -91,7 +91,7 @@ public class SpringMongoSubscriptionModel implements PositionAwareSubscriptionMo
 
     /**
      * Create a blocking subscription using Spring. It will by default use a {@link RetryStrategy} for retries, with exponential backoff starting with 100 ms and progressively
-     * go up to max 2 seconds wait time between each retry when reading/saving/deleting the subscription position.
+     * go up to max 2 seconds wait time between each retry when reading/saving/deleting the checkpoint.
      *
      * @param mongoTemplate      The mongo template to use
      * @param eventCollection    The collection that contains the events
@@ -172,7 +172,7 @@ public class SpringMongoSubscriptionModel implements PositionAwareSubscriptionMo
 
             BsonDocument resumeToken = raw.getResumeToken();
             MongoCloudEventsToJsonDeserializer.deserializeToCloudEvent(raw, timeRepresentation)
-                    .map(cloudEvent -> new PositionAwareCloudEvent(cloudEvent, new MongoResumeTokenSubscriptionPosition(resumeToken)))
+                    .map(cloudEvent -> new CheckpointAwareCloudEvent(cloudEvent, new MongoResumeTokenCheckpoint(resumeToken)))
                     .ifPresentOrElse(executeWithRetry(action, __ -> !shutdown, retryStrategy), () -> {
                         if (log.isDebugEnabled()) {
                             log.debug("Won't deserialize document to cloud event for operation type {} in namespace {}: {}", raw.getOperationTypeString(), raw.getNamespace(), raw.getFullDocument());
@@ -216,7 +216,7 @@ public class SpringMongoSubscriptionModel implements PositionAwareSubscriptionMo
     }
 
     @Override
-    public @Nullable SubscriptionPosition globalSubscriptionPosition() {
+    public @Nullable Checkpoint globalCheckpoint() {
         // Note that we increase the "increment" by 1 in order to not clash with an existing event in the event store.
         // This is so that we can avoid duplicates in certain rare cases when replaying events.
         BsonTimestamp currentOperationTime;
@@ -224,7 +224,7 @@ public class SpringMongoSubscriptionModel implements PositionAwareSubscriptionMo
             currentOperationTime = MongoCommons.getServerOperationTime(mongoOperations.executeCommand(new Document("hostInfo", 1)), 1);
         } catch (UncategorizedMongoDbException e) {
             if (e.getCause() instanceof MongoCommandException) {
-                log.warn(cannotFindGlobalSubscriptionPositionErrorMessage(e.getCause()));
+                log.warn(cannotFindGlobalCheckpointErrorMessage(e.getCause()));
                 // This can if the server doesn't allow to get the operation time since "db.adminCommand( { "hostInfo" : 1 } )" is prohibited.
                 // This is the case on for example shared Atlas clusters. If this happens we return the current time of the client instead.
                 return null;
@@ -232,7 +232,7 @@ public class SpringMongoSubscriptionModel implements PositionAwareSubscriptionMo
                 throw e;
             }
         }
-        return new MongoOperationTimeSubscriptionPosition(currentOperationTime);
+        return new MongoOperationTimeCheckpoint(currentOperationTime);
     }
 
     // Life-cycle implementation

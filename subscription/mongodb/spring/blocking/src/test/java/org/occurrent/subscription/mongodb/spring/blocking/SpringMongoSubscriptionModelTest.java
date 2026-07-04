@@ -39,9 +39,9 @@ import org.occurrent.functional.CheckedFunction;
 import org.occurrent.functional.Not;
 import org.occurrent.mongodb.timerepresentation.TimeRepresentation;
 import org.occurrent.subscription.OccurrentSubscriptionFilter;
-import org.occurrent.subscription.PositionAwareCloudEvent;
+import org.occurrent.subscription.CheckpointAwareCloudEvent;
 import org.occurrent.subscription.StartAt;
-import org.occurrent.subscription.SubscriptionPosition;
+import org.occurrent.subscription.Checkpoint;
 import org.occurrent.subscription.mongodb.MongoFilterSpecification;
 import org.occurrent.testsupport.mongodb.FlushMongoDBExtension;
 import org.occurrent.time.TimeConversion;
@@ -234,7 +234,7 @@ public class SpringMongoSubscriptionModelTest {
         mongoEventStore.write("1", 0, serialize(nameDefined1));
 
         await("first event").atMost(2, SECONDS).with().pollInterval(Duration.of(20, MILLIS)).untilAsserted(() -> assertThat(state).hasSize(1));
-        SubscriptionPosition subscriptionPosition = PositionAwareCloudEvent.getSubscriptionPositionOrThrowIAE(state.get(0));
+        Checkpoint checkpoint = CheckpointAwareCloudEvent.getCheckpointOrThrowIAE(state.get(0));
 
         subscriptionModel.cancelSubscription(subscriptionId);
 
@@ -244,7 +244,7 @@ public class SpringMongoSubscriptionModelTest {
 
         // Write a new event and the resume subscription
         mongoEventStore.write("2", 0, serialize(nameDefined2));
-        subscriptionModel.subscribe(subscriptionId, StartAt.subscriptionPosition(subscriptionPosition), state::add).waitUntilStarted(Duration.of(10, ChronoUnit.SECONDS));
+        subscriptionModel.subscribe(subscriptionId, StartAt.checkpoint(checkpoint), state::add).waitUntilStarted(Duration.of(10, ChronoUnit.SECONDS));
 
         // Then
         await().atMost(2, SECONDS).with().pollInterval(Duration.of(20, MILLIS)).untilAsserted(() -> {

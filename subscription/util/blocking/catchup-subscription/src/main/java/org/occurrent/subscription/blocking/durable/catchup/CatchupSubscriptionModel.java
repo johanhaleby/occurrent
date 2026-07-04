@@ -23,13 +23,13 @@ import org.jspecify.annotations.Nullable;
 import org.occurrent.eventstore.api.blocking.EventStoreQueries;
 import org.occurrent.eventstore.api.dcb.DcbEventStore;
 import org.occurrent.eventstore.api.dcb.DcbQuery;
+import org.occurrent.subscription.Checkpoint;
 import org.occurrent.subscription.DcbSubscriptionFilter;
 import org.occurrent.subscription.OccurrentSubscriptionFilter;
 import org.occurrent.subscription.StartAt;
 import org.occurrent.subscription.SubscriptionFilter;
-import org.occurrent.subscription.SubscriptionPosition;
+import org.occurrent.subscription.api.blocking.CheckpointAwareSubscriptionModel;
 import org.occurrent.subscription.api.blocking.DelegatingSubscriptionModel;
-import org.occurrent.subscription.api.blocking.PositionAwareSubscriptionModel;
 import org.occurrent.subscription.api.blocking.Subscription;
 import org.occurrent.subscription.api.blocking.SubscriptionModel;
 
@@ -39,16 +39,16 @@ import java.util.function.Consumer;
 
 /**
  * A {@link SubscriptionModel} that can read historic cloud events from the all event streams (see {@link EventStoreQueries#all()}) until caught up with the
- * {@link PositionAwareSubscriptionModel#globalSubscriptionPosition()} of the {@code subscription} (you probably want to narrow the historic set events of events
+ * {@link CheckpointAwareSubscriptionModel#globalCheckpoint()} of the {@code subscription} (you probably want to narrow the historic set events of events
  * by using a {@link org.occurrent.filter.Filter} when subscribing). It'll automatically switch over to the wrapped {@code subscription model} when all history events are read and the subscription has caught-up.
- * <br><b>Important:</b>&nbsp;The subscription model will only stream historic events if started with a {@link TimeBasedSubscriptionPosition}, by default (i.e. if {@code StartAt.subscriptionModelDefault() is used}),
+ * <br><b>Important:</b>&nbsp;The subscription model will only stream historic events if started with a {@link TimeBasedCheckpoint}, by default (i.e. if {@code StartAt.subscriptionModelDefault() is used}),
  * it'll NOT replay historic events, but instead delegate to the wrapped subscription model. Thus, to start the {@link CatchupSubscriptionModel} and make it replay historic events you can start it like this:
  * <pre>
  * var subscriptionModel = new CatchupSubscriptionModel(..);
  * // All examples below are equivalent:
  * subscriptionModel.subscribeFromBeginningOfTime("subscriptionId", e -> System.out.println("Event: " + e);
  * subscriptionModel.subscribe("subscriptionId", StartAtTime.beginningOfTime(), e -> System.out.println("Event: " + e);
- * subscriptionModel.subscribe("subscriptionId", StartAt.subscriptionPosition(TimeBasedSubscription.beginningOfTime()), e -> System.out.println("Event: " + e);
+ * subscriptionModel.subscribe("subscriptionId", StartAt.checkpoint(TimeBasedSubscription.beginningOfTime()), e -> System.out.println("Event: " + e);
  * </pre>
  * <p>
  * If you're using Kotlin you can import the extension functions from {@code org.occurrent.subscription.blocking.durable.catchup.CatchupSubscriptionModelExtensions.kt} and do:
@@ -73,7 +73,7 @@ import java.util.function.Consumer;
  * <br>
  * <p>
  * Also note that the if a the subscription crashes during catch-up mode it'll continue where it left-off on restart, given the no specific `StartAt` position is supplied (i.e. if {@code StartAt.subscriptionModelDefault() is used}).
- * For this to work, the subscription must store the subscription position in a {@link org.occurrent.subscription.api.blocking.SubscriptionPositionStorage} implementation periodically. It's possible to configure
+ * For this to work, the subscription must store the checkpoint in a {@link org.occurrent.subscription.api.blocking.CheckpointStorage} implementation periodically. It's possible to configure
  * how often this should happen in the {@link CatchupSubscriptionModelConfig}.
  * </p>
  * <br>
@@ -105,32 +105,32 @@ public class CatchupSubscriptionModel implements SubscriptionModel, DelegatingSu
 
     private static final int DEFAULT_CACHE_SIZE = 100;
 
-    private final PositionAwareSubscriptionModel subscriptionModel;
+    private final CheckpointAwareSubscriptionModel subscriptionModel;
     private final @Nullable StreamCatchupSubscriptionModel streamCatchupSubscriptionModel;
     private final @Nullable DcbCatchupSubscriptionModel dcbCatchupSubscriptionModel;
 
     /**
      * Create a new instance of {@link CatchupSubscriptionModel} the uses a default {@link CatchupSubscriptionModelConfig} with a cache size of
-     * {@value #DEFAULT_CACHE_SIZE} but store the subscription position during the <i>catch-up</i> phase (i.e. if the application crashes or is shutdown during the
-     * catch-up phase then the subscription will start from the beginning on application restart). After the catch-up phase has completed, the {@link PositionAwareSubscriptionModel}
-     * will dictate how often the subscription position is stored.
+     * {@value #DEFAULT_CACHE_SIZE} but store the checkpoint during the <i>catch-up</i> phase (i.e. if the application crashes or is shutdown during the
+     * catch-up phase then the subscription will start from the beginning on application restart). After the catch-up phase has completed, the {@link CheckpointAwareSubscriptionModel}
+     * will dictate how often the checkpoint is stored.
      *
      * @param subscriptionModel The subscription that'll be used to subscribe to new events <i>after</i> catch-up is completed.
      * @param eventStoreQueries The API that will be used for catch-up
      */
-    public CatchupSubscriptionModel(PositionAwareSubscriptionModel subscriptionModel, EventStoreQueries eventStoreQueries) {
+    public CatchupSubscriptionModel(CheckpointAwareSubscriptionModel subscriptionModel, EventStoreQueries eventStoreQueries) {
         this(subscriptionModel, eventStoreQueries, new CatchupSubscriptionModelConfig(DEFAULT_CACHE_SIZE));
     }
 
     /**
      * Create a new instance of {@link CatchupSubscriptionModel} the uses the supplied {@link CatchupSubscriptionModelConfig}.
-     * After catch-up mode has completed, the {@link PositionAwareSubscriptionModel} will dictate how often the subscription position is stored.
+     * After catch-up mode has completed, the {@link CheckpointAwareSubscriptionModel} will dictate how often the checkpoint is stored.
      *
      * @param subscriptionModel The subscription that'll be used to subscribe to new events <i>after</i> catch-up is completed.
      * @param eventStoreQueries The API that will be used for catch-up
      * @param config            The configuration to use
      */
-    public CatchupSubscriptionModel(PositionAwareSubscriptionModel subscriptionModel, EventStoreQueries eventStoreQueries, CatchupSubscriptionModelConfig config) {
+    public CatchupSubscriptionModel(CheckpointAwareSubscriptionModel subscriptionModel, EventStoreQueries eventStoreQueries, CatchupSubscriptionModelConfig config) {
         this.subscriptionModel = Objects.requireNonNull(subscriptionModel, "subscriptionModel cannot be null");
         this.streamCatchupSubscriptionModel = new StreamCatchupSubscriptionModel(subscriptionModel, eventStoreQueries, config, CatchupSubscriptionModel.class);
         this.dcbCatchupSubscriptionModel = null;
@@ -146,7 +146,7 @@ public class CatchupSubscriptionModel implements SubscriptionModel, DelegatingSu
      * @param dcbEventStore     The DCB event store that will be used for the DCB catch-up replay.
      * @param dcbQuery          The DCB query that selects the events this subscription delivers.
      */
-    public CatchupSubscriptionModel(PositionAwareSubscriptionModel subscriptionModel, DcbEventStore dcbEventStore, DcbQuery dcbQuery) {
+    public CatchupSubscriptionModel(CheckpointAwareSubscriptionModel subscriptionModel, DcbEventStore dcbEventStore, DcbQuery dcbQuery) {
         this(subscriptionModel, dcbEventStore, dcbQuery, new CatchupSubscriptionModelConfig(DEFAULT_CACHE_SIZE));
     }
 
@@ -161,7 +161,7 @@ public class CatchupSubscriptionModel implements SubscriptionModel, DelegatingSu
      * @param dcbQuery          The DCB query that selects the events this subscription delivers.
      * @param config            The configuration to use.
      */
-    public CatchupSubscriptionModel(PositionAwareSubscriptionModel subscriptionModel, DcbEventStore dcbEventStore, DcbQuery dcbQuery, CatchupSubscriptionModelConfig config) {
+    public CatchupSubscriptionModel(CheckpointAwareSubscriptionModel subscriptionModel, DcbEventStore dcbEventStore, DcbQuery dcbQuery, CatchupSubscriptionModelConfig config) {
         this.subscriptionModel = Objects.requireNonNull(subscriptionModel, "subscriptionModel cannot be null");
         this.streamCatchupSubscriptionModel = null;
         this.dcbCatchupSubscriptionModel = new DcbCatchupSubscriptionModel(subscriptionModel, dcbEventStore, dcbQuery, config, CatchupSubscriptionModel.class);
@@ -178,7 +178,7 @@ public class CatchupSubscriptionModel implements SubscriptionModel, DelegatingSu
      * @param dcbQuery          The DCB query that selects the events a DCB subscription delivers.
      * @param config            The configuration to use.
      */
-    public CatchupSubscriptionModel(PositionAwareSubscriptionModel subscriptionModel, EventStoreQueries eventStoreQueries, DcbEventStore dcbEventStore, DcbQuery dcbQuery, CatchupSubscriptionModelConfig config) {
+    public CatchupSubscriptionModel(CheckpointAwareSubscriptionModel subscriptionModel, EventStoreQueries eventStoreQueries, DcbEventStore dcbEventStore, DcbQuery dcbQuery, CatchupSubscriptionModelConfig config) {
         this.subscriptionModel = Objects.requireNonNull(subscriptionModel, "subscriptionModel cannot be null");
         this.streamCatchupSubscriptionModel = new StreamCatchupSubscriptionModel(subscriptionModel, eventStoreQueries, config, CatchupSubscriptionModel.class);
         this.dcbCatchupSubscriptionModel = new DcbCatchupSubscriptionModel(subscriptionModel, dcbEventStore, dcbQuery, config, CatchupSubscriptionModel.class);
@@ -301,12 +301,12 @@ public class CatchupSubscriptionModel implements SubscriptionModel, DelegatingSu
         subscriptionModel.shutdown();
     }
 
-    public static boolean isTimeBasedSubscriptionPosition(StartAt startAt) {
-        return StreamCatchupSubscriptionModel.isTimeBasedSubscriptionPosition(startAt, CatchupSubscriptionModel.class);
+    public static boolean isTimeBasedCheckpoint(StartAt startAt) {
+        return StreamCatchupSubscriptionModel.isTimeBasedCheckpoint(startAt, CatchupSubscriptionModel.class);
     }
 
-    public static boolean isTimeBasedSubscriptionPosition(SubscriptionPosition subscriptionPosition) {
-        return StreamCatchupSubscriptionModel.isTimeBasedSubscriptionPosition(subscriptionPosition);
+    public static boolean isTimeBasedCheckpoint(Checkpoint checkpoint) {
+        return StreamCatchupSubscriptionModel.isTimeBasedCheckpoint(checkpoint);
     }
 
     @Override

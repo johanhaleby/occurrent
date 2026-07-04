@@ -35,7 +35,7 @@ public class CatchupSubscriptionModelConfig {
     static final long DEFAULT_DCB_CATCHUP_POSITION_WINDOW_SIZE = 1000;
 
     public final int cacheSize;
-    public final SubscriptionPositionStorageConfig subscriptionStorageConfig;
+    public final CheckpointStorageConfig subscriptionStorageConfig;
     public final SortBy catchupPhaseSortBy;
     /**
      * The DCB sequence-position window size used when {@link CatchupSubscriptionModel} replays in DCB mode. The replay
@@ -52,16 +52,16 @@ public class CatchupSubscriptionModelConfig {
      *                  and "subscription" mode ({@link Subscription}). The cache is needed to reduce the number of duplicate events the occurs when switching.
      */
     public CatchupSubscriptionModelConfig(int cacheSize) {
-        this(cacheSize, SubscriptionPositionStorageConfig.dontUseSubscriptionPositionStorage());
+        this(cacheSize, CheckpointStorageConfig.dontUseCheckpointStorage());
     }
 
     /**
      * Create a new {@code CatchupSubscriptionModelConfig} will the given subscription storage config. Will default to sort by time and then stream version (if time is the same for two events)
      * during the catchup phase. You can change this by calling {@link #catchupPhaseSortBy(SortBy)}.
      *
-     * @param subscriptionStorageConfig Configures if and how subscription position persistence should be handled during the catch-up phase.
+     * @param subscriptionStorageConfig Configures if and how checkpoint persistence should be handled during the catch-up phase.
      */
-    public CatchupSubscriptionModelConfig(SubscriptionPositionStorageConfig subscriptionStorageConfig) {
+    public CatchupSubscriptionModelConfig(CheckpointStorageConfig subscriptionStorageConfig) {
         this(100, subscriptionStorageConfig);
     }
 
@@ -71,9 +71,9 @@ public class CatchupSubscriptionModelConfig {
      *
      * @param cacheSize                 The number of cloud events id's to store in-memory when switching from "catch-up" mode (i.e. querying the {@link EventStoreQueries} API)
      *                                  and "subscription" mode ({@link Subscription}). The cache is needed to reduce the number of duplicate events the occurs when switching.
-     * @param subscriptionStorageConfig Configures if and how subscription position persistence should be handled during the catch-up phase.
+     * @param subscriptionStorageConfig Configures if and how checkpoint persistence should be handled during the catch-up phase.
      */
-    public CatchupSubscriptionModelConfig(int cacheSize, SubscriptionPositionStorageConfig subscriptionStorageConfig) {
+    public CatchupSubscriptionModelConfig(int cacheSize, CheckpointStorageConfig subscriptionStorageConfig) {
         // We sort by time but fallback to stream version if time is the same for two events.
         // While this will _not_ sort the entire in database in insertion order, it at least guarantees
         // order within a stream. Note that we can't do SortBy.time(ASCENDING).thenNatural(ASCENDING)
@@ -84,15 +84,15 @@ public class CatchupSubscriptionModelConfig {
         this(cacheSize, subscriptionStorageConfig, SortBy.ascending(TIME, STREAM_VERSION));
     }
 
-    private CatchupSubscriptionModelConfig(int cacheSize, SubscriptionPositionStorageConfig subscriptionStorageConfig, SortBy sortBy) {
+    private CatchupSubscriptionModelConfig(int cacheSize, CheckpointStorageConfig subscriptionStorageConfig, SortBy sortBy) {
         this(cacheSize, subscriptionStorageConfig, sortBy, DEFAULT_DCB_CATCHUP_POSITION_WINDOW_SIZE);
     }
 
-    private CatchupSubscriptionModelConfig(int cacheSize, SubscriptionPositionStorageConfig subscriptionStorageConfig, SortBy sortBy, long dcbCatchupPositionWindowSize) {
+    private CatchupSubscriptionModelConfig(int cacheSize, CheckpointStorageConfig subscriptionStorageConfig, SortBy sortBy, long dcbCatchupPositionWindowSize) {
         if (cacheSize < 1) {
             throw new IllegalArgumentException("Cache size must be greater than or equal to 1");
         }
-        Objects.requireNonNull(subscriptionStorageConfig, SubscriptionPositionStorageConfig.class.getSimpleName() + " cannot be null");
+        Objects.requireNonNull(subscriptionStorageConfig, CheckpointStorageConfig.class.getSimpleName() + " cannot be null");
         Objects.requireNonNull(sortBy, SortBy.class + " cannot be null");
         if (dcbCatchupPositionWindowSize < 1) {
             throw new IllegalArgumentException("DCB catch-up position window size must be greater than or equal to 1");

@@ -102,17 +102,17 @@ public sealed interface StartAt {
         }
     }
 
-    final class StartAtSubscriptionPosition implements StartAt {
-        public final SubscriptionPosition subscriptionPosition;
+    final class StartAtCheckpoint implements StartAt {
+        public final Checkpoint checkpoint;
 
-        private StartAtSubscriptionPosition(SubscriptionPosition subscriptionPosition) {
-            requireNonNull(subscriptionPosition, SubscriptionPosition.class.getSimpleName() + " cannot be null");
-            this.subscriptionPosition = subscriptionPosition;
+        private StartAtCheckpoint(Checkpoint checkpoint) {
+            requireNonNull(checkpoint, Checkpoint.class.getSimpleName() + " cannot be null");
+            this.checkpoint = checkpoint;
         }
 
         @Override
         public String toString() {
-            return subscriptionPosition.asString();
+            return checkpoint.asString();
         }
 
         @Override
@@ -138,15 +138,15 @@ public sealed interface StartAt {
     }
 
     /**
-     * Start subscribing to the subscription from the given subscription position
+     * Start subscribing to the subscription from the given checkpoint
      */
-    static StartAt subscriptionPosition(SubscriptionPosition subscriptionPosition) {
-        return new StartAtSubscriptionPosition(subscriptionPosition);
+    static StartAt checkpoint(Checkpoint checkpoint) {
+        return new StartAtCheckpoint(checkpoint);
     }
 
     /**
      * Create a "dynamic" start at position that may change during the life-cycle of a subscription model.
-     * For example, it could return the latest subscription position from a subscription position storage.
+     * For example, it could return the latest checkpoint from a checkpoint storage.
      */
     static StartAt dynamic(Supplier<StartAt> supplier) {
         return new Dynamic(__ -> supplier.get());
@@ -154,7 +154,7 @@ public sealed interface StartAt {
 
     /**
      * Create a "dynamic" start at position that may change during the life-cycle of a subscription model.
-     * For example, it could return the latest subscription position from a subscription position storage.
+     * For example, it could return the latest checkpoint from a checkpoint storage.
      */
     static StartAt dynamic(Function<SubscriptionModelContext, StartAt> supplier) {
         return new Dynamic(supplier);

@@ -22,12 +22,12 @@ import org.jspecify.annotations.Nullable;
 import org.occurrent.subscription.StartAt;
 import org.occurrent.subscription.StartAt.SubscriptionModelContext;
 import org.occurrent.subscription.SubscriptionFilter;
-import org.occurrent.subscription.SubscriptionPosition;
-import org.occurrent.subscription.api.reactor.PositionAwareSubscriptionModel;
+import org.occurrent.subscription.Checkpoint;
+import org.occurrent.subscription.api.reactor.CheckpointAwareSubscriptionModel;
 import org.occurrent.subscription.api.reactor.Subscribable;
 import org.occurrent.subscription.api.reactor.Subscription;
 import org.occurrent.subscription.api.reactor.SubscriptionModelLifeCycle;
-import org.occurrent.subscription.api.reactor.SubscriptionPositionStorage;
+import org.occurrent.subscription.api.reactor.CheckpointStorage;
 import org.occurrent.subscription.util.predicate.EveryN;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -44,31 +44,31 @@ import java.util.concurrent.atomic.AtomicReference;
 import java.util.function.Function;
 
 import static java.util.Objects.requireNonNull;
-import static org.occurrent.subscription.PositionAwareCloudEvent.getSubscriptionPositionOrThrowIAE;
+import static org.occurrent.subscription.CheckpointAwareCloudEvent.getCheckpointOrThrowIAE;
 
 /**
- * Wraps a {@link PositionAwareSubscriptionModel} and adds persistent subscription position support, making a
+ * Wraps a {@link CheckpointAwareSubscriptionModel} and adds persistent checkpoint support, making a
  * subscription durable: it resumes from the last stored position across restarts and stores the position after each
  * successful {@code action}.
  * <p>
- * It is a transparent decorator that itself implements {@link Subscribable}, {@link PositionAwareSubscriptionModel},
+ * It is a transparent decorator that itself implements {@link Subscribable}, {@link CheckpointAwareSubscriptionModel},
  * and {@link SubscriptionModelLifeCycle}, so a {@code Durable(delegate)} chain composes uniformly and can be handed to
  * the reactive subscription DSLs and to lifecycle management, mirroring the blocking {@code DurableSubscriptionModel}.
  * The named {@link #subscribe(String, SubscriptionFilter, StartAt, Function)} method reads events from the wrapped
- * model's plain (cold) {@link PositionAwareSubscriptionModel#subscribe(SubscriptionFilter, StartAt)} primitive,
+ * model's plain (cold) {@link CheckpointAwareSubscriptionModel#subscribe(SubscriptionFilter, StartAt)} primitive,
  * resolving the start position from storage when the caller asks for the subscription-model default, and persisting the
  * position after each event per {@link ReactorDurableSubscriptionModelConfig}.
  * <p>
- * Note that this implementation stores the subscription position after _every_ action by default. If you have a lot of
+ * Note that this implementation stores the checkpoint after _every_ action by default. If you have a lot of
  * events and duplication is not that much of a deal, consider changing this behavior by supplying an instance of
  * {@link ReactorDurableSubscriptionModelConfig}.
  */
 @NullMarked
-public class ReactorDurableSubscriptionModel implements PositionAwareSubscriptionModel, Subscribable, SubscriptionModelLifeCycle {
+public class ReactorDurableSubscriptionModel implements CheckpointAwareSubscriptionModel, Subscribable, SubscriptionModelLifeCycle {
     private static final Logger log = LoggerFactory.getLogger(ReactorDurableSubscriptionModel.class);
 
-    private final PositionAwareSubscriptionModel subscription;
-    private final SubscriptionPositionStorage storage;
+    private final CheckpointAwareSubscriptionModel subscription;
+    private final CheckpointStorage storage;
     private final ReactorDurableSubscriptionModelConfig config;
     private final ConcurrentMap<String, InternalSubscription> runningSubscriptions = new ConcurrentHashMap<>();
     private final ConcurrentMap<String, InternalSubscription> pausedSubscriptions = new ConcurrentHashMap<>();
@@ -77,33 +77,33 @@ public class ReactorDurableSubscriptionModel implements PositionAwareSubscriptio
     private volatile boolean running = true;
 
     /**
-     * Create a durable subscription model that stores the subscription position after each successful call to the action.
+     * Create a durable subscription model that stores the checkpoint after each successful call to the action.
      *
      * @param subscription The subscription model that will read events from the event store
-     * @param storage      The {@link SubscriptionPositionStorage} that'll be used to persist the stream position
+     * @param storage      The {@link CheckpointStorage} that'll be used to persist the stream position
      */
-    public ReactorDurableSubscriptionModel(PositionAwareSubscriptionModel subscription, SubscriptionPositionStorage storage) {
+    public ReactorDurableSubscriptionModel(CheckpointAwareSubscriptionModel subscription, CheckpointStorage storage) {
         this(subscription, storage, new ReactorDurableSubscriptionModelConfig(EveryN.everyEvent()));
     }
 
     /**
-     * Create a durable subscription model that stores the subscription position when the predicate defined in
+     * Create a durable subscription model that stores the checkpoint when the predicate defined in
      * {@link ReactorDurableSubscriptionModelConfig#persistCloudEventPositionPredicate} is fulfilled.
      *
      * @param subscription The subscription model that will read events from the event store
-     * @param storage      The {@link SubscriptionPositionStorage} that'll be used to persist the stream position
-     * @param config       Configures when the subscription position is persisted
+     * @param storage      The {@link CheckpointStorage} that'll be used to persist the stream position
+     * @param config       Configures when the checkpoint is persisted
      */
-    public ReactorDurableSubscriptionModel(PositionAwareSubscriptionModel subscription, SubscriptionPositionStorage storage,
+    public ReactorDurableSubscriptionModel(CheckpointAwareSubscriptionModel subscription, CheckpointStorage storage,
                                            ReactorDurableSubscriptionModelConfig config) {
-        this.subscription = requireNonNull(subscription, PositionAwareSubscriptionModel.class.getSimpleName() + " cannot be null");
-        this.storage = requireNonNull(storage, SubscriptionPositionStorage.class.getSimpleName() + " cannot be null");
+        this.subscription = requireNonNull(subscription, CheckpointAwareSubscriptionModel.class.getSimpleName() + " cannot be null");
+        this.storage = requireNonNull(storage, CheckpointStorage.class.getSimpleName() + " cannot be null");
         this.config = requireNonNull(config, ReactorDurableSubscriptionModelConfig.class.getSimpleName() + " cannot be null");
     }
 
     /**
      * The plain (cold) subscription-model primitive. It is a straight pass-through to the wrapped model and does
-     * <em>not</em> persist the subscription position, since position storage is keyed by subscription id and this
+     * <em>not</em> persist the checkpoint, since position storage is keyed by subscription id and this
      * primitive has none. Use the named {@link #subscribe(String, SubscriptionFilter, StartAt, Function)} method for a
      * durable subscription.
      */
@@ -113,8 +113,8 @@ public class ReactorDurableSubscriptionModel implements PositionAwareSubscriptio
     }
 
     @Override
-    public Mono<SubscriptionPosition> globalSubscriptionPosition() {
-        return subscription.globalSubscriptionPosition();
+    public Mono<Checkpoint> globalCheckpoint() {
+        return subscription.globalCheckpoint();
     }
 
     @Override
@@ -173,9 +173,9 @@ public class ReactorDurableSubscriptionModel implements PositionAwareSubscriptio
                 .doOnSubscribe(__ -> startedSink.tryEmitEmpty())
                 .concatMap(cloudEvent -> action.apply(cloudEvent)
                         .then(Mono.defer(() -> persist && config.persistCloudEventPositionPredicate.test(cloudEvent)
-                                ? storage.save(subscriptionId, getSubscriptionPositionOrThrowIAE(cloudEvent)).then()
+                                ? storage.save(subscriptionId, getCheckpointOrThrowIAE(cloudEvent)).then()
                                 : Mono.empty()))
-                        .doOnSuccess(unused -> currentStartAt.set(StartAt.subscriptionPosition(getSubscriptionPositionOrThrowIAE(cloudEvent)))));
+                        .doOnSuccess(unused -> currentStartAt.set(StartAt.checkpoint(getCheckpointOrThrowIAE(cloudEvent)))));
     }
 
     // Resolve the effective StartAt, mirroring the blocking DurableSubscriptionModel#generateStartAtPositionFrom:
@@ -185,9 +185,9 @@ public class ReactorDurableSubscriptionModel implements PositionAwareSubscriptio
     private Mono<StartAt> resolveStartAt(String subscriptionId, StartAt startAt) {
         if (startAt.isDefault()) {
             return storage.read(subscriptionId)
-                    .switchIfEmpty(Mono.defer(() -> subscription.globalSubscriptionPosition()
-                            .flatMap(globalSubscriptionPosition -> storage.save(subscriptionId, globalSubscriptionPosition))))
-                    .map(StartAt::subscriptionPosition)
+                    .switchIfEmpty(Mono.defer(() -> subscription.globalCheckpoint()
+                            .flatMap(globalCheckpoint -> storage.save(subscriptionId, globalCheckpoint))))
+                    .map(StartAt::checkpoint)
                     .switchIfEmpty(Mono.fromSupplier(StartAt::now));
         } else if (startAt.isDynamic()) {
             StartAt nextStartAt = startAt.get(new SubscriptionModelContext(ReactorDurableSubscriptionModel.class));
@@ -236,7 +236,7 @@ public class ReactorDurableSubscriptionModel implements PositionAwareSubscriptio
     }
 
     /**
-     * Cancel a subscription. It'll no longer receive events, and its persisted subscription position is removed.
+     * Cancel a subscription. It'll no longer receive events, and its persisted checkpoint is removed.
      *
      * @param subscriptionId The subscription id to cancel
      */
@@ -250,7 +250,7 @@ public class ReactorDurableSubscriptionModel implements PositionAwareSubscriptio
         // Best-effort asynchronous cleanup of the stored position. cancelSubscription is void (fire-and-forget), so the
         // delete runs on its own without blocking the caller.
         storage.delete(subscriptionId).subscribe(unused -> {
-        }, throwable -> log.warn("Failed to delete stored subscription position for cancelled subscription {}", subscriptionId, throwable));
+        }, throwable -> log.warn("Failed to delete stored checkpoint for cancelled subscription {}", subscriptionId, throwable));
     }
 
     @Override

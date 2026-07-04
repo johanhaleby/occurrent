@@ -164,14 +164,14 @@ public @interface Subscription {
      */
     enum ResumeBehavior {
         /**
-         * Always start at the same position as specified by the {@link StartPosition}. I.e. even if there's a subscription position (checkpoint) stored for the subscription
+         * Always start at the same position as specified by the {@link StartPosition}. I.e. even if there's a checkpoint stored for the subscription
          * it'll be ignored on application restart and the subscription will resume from the specified {@link StartPosition}.
          */
         SAME_AS_START_AT,
         /**
          * Use the default resume behavior of the underlying subscription model. For example, if the {@link StartPosition} is set to {@link StartPosition#BEGINNING_OF_TIME},
          * and {@code ResumeBehavior} is set to {@link ResumeBehavior#DEFAULT}, then the subscription will <i>start</i> from the beginning of time the first time it's run,
-         * then on application restart, it'll continue from the last received event (the subscription position (checkpoint) for the subscription) on restart.
+         * then on application restart, it'll continue from the last received event (the checkpoint for the subscription) on restart.
          */
         DEFAULT
     }
@@ -190,7 +190,7 @@ public @interface Subscription {
          * The subscription will wait until it's started up fully before Spring continues starting the rest of the application.
          * Most of the time this is recommended because otherwise there could be a small chance that a request is received to your application before
          * the subscription has bootstrapped completely. This can lead to the subscription missing this event. This is only true if the subscription is
-         * brand new. As soon as the subscription has received an event that is stored in a {@link org.occurrent.subscription.api.blocking.SubscriptionPositionStorage}
+         * brand new. As soon as the subscription has received an event that is stored in a {@link org.occurrent.subscription.api.blocking.CheckpointStorage}
          * (checkpointing), it'll never miss an event during startup.
          */
         WAIT_UNTIL_STARTED,

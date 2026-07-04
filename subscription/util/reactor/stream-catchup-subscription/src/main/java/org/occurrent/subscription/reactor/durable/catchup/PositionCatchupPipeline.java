@@ -20,7 +20,7 @@ import io.cloudevents.CloudEvent;
 import org.jspecify.annotations.NullMarked;
 import org.occurrent.subscription.StartAt;
 import org.occurrent.subscription.SubscriptionFilter;
-import org.occurrent.subscription.api.reactor.PositionAwareSubscriptionModel;
+import org.occurrent.subscription.api.reactor.CheckpointAwareSubscriptionModel;
 import reactor.core.publisher.Flux;
 import reactor.core.publisher.Mono;
 
@@ -67,7 +67,7 @@ final class PositionCatchupPipeline {
      * {@code liveSubscriptionFilter} and filtered further by {@code livePredicate}, so only events matching the
      * catch-up's own selection (a stream {@link org.occurrent.filter.Filter} or a DCB query) reach the caller.
      */
-    public Flux<CloudEvent> catchup(PositionAwareSubscriptionModel subscriptionModel, SubscriptionFilter liveSubscriptionFilter, Predicate<CloudEvent> livePredicate, long startPosition) {
+    public Flux<CloudEvent> catchup(CheckpointAwareSubscriptionModel subscriptionModel, SubscriptionFilter liveSubscriptionFilter, Predicate<CloudEvent> livePredicate, long startPosition) {
         Objects.requireNonNull(subscriptionModel, "subscriptionModel cannot be null");
         Objects.requireNonNull(liveSubscriptionFilter, "liveSubscriptionFilter cannot be null");
         Objects.requireNonNull(livePredicate, "livePredicate cannot be null");
@@ -78,7 +78,7 @@ final class PositionCatchupPipeline {
         // delivered by the live subscription. If the model reports no token (for example an empty oplog or a
         // restricted cluster) a no-loss handover to live cannot be guaranteed, so fail loudly instead of silently
         // dropping the events committed between the end of the replay and going live.
-        return subscriptionModel.globalSubscriptionPosition()
+        return subscriptionModel.globalCheckpoint()
                 .switchIfEmpty(Mono.error(() -> new IllegalStateException("Cannot run a catch-up subscription because the subscription model reported no resume token to hand over to live delivery. The change stream history may be unavailable, for example an empty oplog or a restricted cluster.")))
                 .flatMapMany(liveToken ->
                         reader.currentHead().flatMapMany(bulkHead -> {
@@ -90,7 +90,7 @@ final class PositionCatchupPipeline {
                             // delivered once by the live change stream.
                             Flux<CloudEvent> bulk = windows(startPosition, bulkHead, cache);
                             Flux<CloudEvent> reconcile = reconcile(bulkHead, cache);
-                            Flux<CloudEvent> live = subscriptionModel.subscribe(liveSubscriptionFilter, StartAt.subscriptionPosition(liveToken))
+                            Flux<CloudEvent> live = subscriptionModel.subscribe(liveSubscriptionFilter, StartAt.checkpoint(liveToken))
                                     .filter(cloudEvent -> livePredicate.test(cloudEvent) && !cache.contains(cloudEvent.getId()));
                             return Flux.concat(bulk, reconcile, live);
                         }));

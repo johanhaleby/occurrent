@@ -24,14 +24,14 @@ import org.occurrent.eventstore.api.PositionRange;
 import org.occurrent.eventstore.api.reactor.PositionOrderedReader;
 import org.occurrent.filter.Filter;
 import org.occurrent.inmemory.filtermatching.FilterMatcher;
-import org.occurrent.subscription.GlobalSubscriptionPosition;
+import org.occurrent.subscription.GlobalCheckpoint;
 import org.occurrent.subscription.OccurrentSubscriptionFilter;
-import org.occurrent.subscription.PositionAwareCloudEvent;
+import org.occurrent.subscription.CheckpointAwareCloudEvent;
 import org.occurrent.subscription.StartAt;
 import org.occurrent.subscription.StartAt.SubscriptionModelContext;
 import org.occurrent.subscription.SubscriptionFilter;
-import org.occurrent.subscription.SubscriptionPosition;
-import org.occurrent.subscription.api.reactor.PositionAwareSubscriptionModel;
+import org.occurrent.subscription.Checkpoint;
+import org.occurrent.subscription.api.reactor.CheckpointAwareSubscriptionModel;
 import reactor.core.publisher.Flux;
 import reactor.core.publisher.Mono;
 
@@ -67,13 +67,13 @@ import static java.util.Objects.requireNonNull;
  * This model does not persist subscription positions, so layer a durable model on top (for example
  * {@code ReactorDurableSubscriptionModel}) if resume across restarts is needed.
  * <p>
- * It implements {@link PositionAwareSubscriptionModel}, so it can sit as a plain (cold) subscription model underneath
+ * It implements {@link CheckpointAwareSubscriptionModel}, so it can sit as a plain (cold) subscription model underneath
  * a durable model. Its generic {@link #subscribe(SubscriptionFilter, StartAt)} only accepts an
  * {@link OccurrentSubscriptionFilter}, or no filter, in which case the default {@link Filter} passed to the
  * constructor is used.
  */
 @NullMarked
-public class ReactorStreamCatchupSubscriptionModel implements PositionAwareSubscriptionModel {
+public class ReactorStreamCatchupSubscriptionModel implements CheckpointAwareSubscriptionModel {
 
     /**
      * Default number of positions read per replay window.
@@ -84,17 +84,17 @@ public class ReactorStreamCatchupSubscriptionModel implements PositionAwareSubsc
      */
     public static final int DEFAULT_HANDOVER_CACHE_SIZE = 1000;
 
-    private final PositionAwareSubscriptionModel subscriptionModel;
+    private final CheckpointAwareSubscriptionModel subscriptionModel;
     private final PositionOrderedReader positionOrderedReader;
     private final @Nullable Filter defaultFilter;
     private final long windowSize;
     private final int handoverCacheSize;
 
-    public ReactorStreamCatchupSubscriptionModel(PositionAwareSubscriptionModel subscriptionModel, PositionOrderedReader positionOrderedReader) {
+    public ReactorStreamCatchupSubscriptionModel(CheckpointAwareSubscriptionModel subscriptionModel, PositionOrderedReader positionOrderedReader) {
         this(subscriptionModel, positionOrderedReader, null, DEFAULT_POSITION_WINDOW_SIZE, DEFAULT_HANDOVER_CACHE_SIZE);
     }
 
-    public ReactorStreamCatchupSubscriptionModel(PositionAwareSubscriptionModel subscriptionModel, PositionOrderedReader positionOrderedReader, long windowSize, int handoverCacheSize) {
+    public ReactorStreamCatchupSubscriptionModel(CheckpointAwareSubscriptionModel subscriptionModel, PositionOrderedReader positionOrderedReader, long windowSize, int handoverCacheSize) {
         this(subscriptionModel, positionOrderedReader, null, windowSize, handoverCacheSize);
     }
 
@@ -103,12 +103,12 @@ public class ReactorStreamCatchupSubscriptionModel implements PositionAwareSubsc
      * when it is called without a filter. Lets one model serve every stream subscription, each narrowing with its own
      * filter.
      */
-    public ReactorStreamCatchupSubscriptionModel(PositionAwareSubscriptionModel subscriptionModel, PositionOrderedReader positionOrderedReader, @Nullable Filter defaultFilter) {
+    public ReactorStreamCatchupSubscriptionModel(CheckpointAwareSubscriptionModel subscriptionModel, PositionOrderedReader positionOrderedReader, @Nullable Filter defaultFilter) {
         this(subscriptionModel, positionOrderedReader, defaultFilter, DEFAULT_POSITION_WINDOW_SIZE, DEFAULT_HANDOVER_CACHE_SIZE);
     }
 
-    public ReactorStreamCatchupSubscriptionModel(PositionAwareSubscriptionModel subscriptionModel, PositionOrderedReader positionOrderedReader, @Nullable Filter defaultFilter, long windowSize, int handoverCacheSize) {
-        this.subscriptionModel = requireNonNull(subscriptionModel, PositionAwareSubscriptionModel.class.getSimpleName() + " cannot be null");
+    public ReactorStreamCatchupSubscriptionModel(CheckpointAwareSubscriptionModel subscriptionModel, PositionOrderedReader positionOrderedReader, @Nullable Filter defaultFilter, long windowSize, int handoverCacheSize) {
+        this.subscriptionModel = requireNonNull(subscriptionModel, CheckpointAwareSubscriptionModel.class.getSimpleName() + " cannot be null");
         this.positionOrderedReader = requireNonNull(positionOrderedReader, PositionOrderedReader.class.getSimpleName() + " cannot be null");
         this.defaultFilter = defaultFilter;
         if (windowSize <= 0) {
@@ -145,14 +145,14 @@ public class ReactorStreamCatchupSubscriptionModel implements PositionAwareSubsc
     }
 
     @Override
-    public Mono<SubscriptionPosition> globalSubscriptionPosition() {
-        return subscriptionModel.globalSubscriptionPosition();
+    public Mono<Checkpoint> globalCheckpoint() {
+        return subscriptionModel.globalCheckpoint();
     }
 
     /**
      * Subscribe to stream events matching {@code filter}, starting from a {@code position}-based
-     * {@link StartAt#subscriptionPosition(SubscriptionPosition)} built from {@link GlobalSubscriptionPosition} (for
-     * example {@code GlobalSubscriptionPosition.of(0)} to replay from the beginning) to replay history then go live.
+     * {@link StartAt#checkpoint(Checkpoint)} built from {@link GlobalCheckpoint} (for
+     * example {@code GlobalCheckpoint.of(0)} to replay from the beginning) to replay history then go live.
      * Any other start (now or the subscription model default) goes straight to live.
      */
     public Flux<CloudEvent> subscribe(Filter filter, StartAt startAt) {
@@ -160,14 +160,14 @@ public class ReactorStreamCatchupSubscriptionModel implements PositionAwareSubsc
         requireNonNull(startAt, StartAt.class.getSimpleName() + " cannot be null");
 
         StartAt resolved = startAt.get(new SubscriptionModelContext(ReactorStreamCatchupSubscriptionModel.class));
-        if (!(resolved instanceof StartAt.StartAtSubscriptionPosition position) || !GlobalSubscriptionPosition.isGlobalSubscriptionPosition(position.subscriptionPosition)) {
+        if (!(resolved instanceof StartAt.StartAtCheckpoint position) || !GlobalCheckpoint.isGlobalCheckpoint(position.checkpoint)) {
             // Not a catch-up position, so go straight to live. Filter in-process too, so a backend that does not
             // honor the filter server-side still only delivers matching events, and skip events without a position.
             return subscriptionModel.subscribe(OccurrentSubscriptionFilter.filter(filter), resolved == null ? startAt : resolved)
                     .filter(cloudEvent -> OccurrentCloudEventExtension.getPosition(cloudEvent) > 0 && FilterMatcher.matchesFilter(cloudEvent, filter));
         }
 
-        long startPosition = GlobalSubscriptionPosition.positionOf(position.subscriptionPosition);
+        long startPosition = GlobalCheckpoint.positionOf(position.checkpoint);
         CatchupReader reader = new StreamCatchupReader(positionOrderedReader, filter);
         PositionCatchupPipeline pipeline = new PositionCatchupPipeline(reader, windowSize, handoverCacheSize);
         Predicate<CloudEvent> livePredicate = cloudEvent -> OccurrentCloudEventExtension.getPosition(cloudEvent) > 0 && FilterMatcher.matchesFilter(cloudEvent, filter);
@@ -180,7 +180,7 @@ public class ReactorStreamCatchupSubscriptionModel implements PositionAwareSubsc
         @Override
         public Flux<CloudEvent> readWindow(long fromExclusive, long toInclusive) {
             return positionOrderedReader.readInPositionOrder(filter, PositionRange.between(fromExclusive, toInclusive))
-                    .map(event -> (CloudEvent) new PositionAwareCloudEvent(event, GlobalSubscriptionPosition.of(OccurrentCloudEventExtension.getPosition(event))));
+                    .map(event -> (CloudEvent) new CheckpointAwareCloudEvent(event, GlobalCheckpoint.of(OccurrentCloudEventExtension.getPosition(event))));
         }
 
         @Override

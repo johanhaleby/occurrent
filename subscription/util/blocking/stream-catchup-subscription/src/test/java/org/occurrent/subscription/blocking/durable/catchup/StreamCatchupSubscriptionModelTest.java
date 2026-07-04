@@ -29,12 +29,12 @@ import org.occurrent.application.converter.jackson.JacksonCloudEventConverter;
 import org.occurrent.domain.DomainEvent;
 import org.occurrent.domain.NameDefined;
 import org.occurrent.eventstore.inmemory.InMemoryEventStore;
-import org.occurrent.subscription.GlobalSubscriptionPosition;
+import org.occurrent.subscription.GlobalCheckpoint;
 import org.occurrent.subscription.StartAt;
 import org.occurrent.subscription.SubscriptionFilter;
-import org.occurrent.subscription.SubscriptionPosition;
-import org.occurrent.subscription.StringBasedSubscriptionPosition;
-import org.occurrent.subscription.api.blocking.PositionAwareSubscriptionModel;
+import org.occurrent.subscription.Checkpoint;
+import org.occurrent.subscription.StringBasedCheckpoint;
+import org.occurrent.subscription.api.blocking.CheckpointAwareSubscriptionModel;
 import org.occurrent.subscription.api.blocking.Subscription;
 import org.occurrent.subscription.inmemory.InMemorySubscriptionModel;
 
@@ -59,14 +59,14 @@ import static org.awaitility.Awaitility.await;
 class StreamCatchupSubscriptionModelTest {
 
     private InMemorySubscriptionModel inMemorySubscriptionModel;
-    private PositionAwareSubscriptionModel subscriptionModel;
+    private CheckpointAwareSubscriptionModel subscriptionModel;
     private CloudEventConverter<DomainEvent> cloudEventConverter;
     private LocalDateTime time;
 
     @BeforeEach
     void create_instances() {
         inMemorySubscriptionModel = new InMemorySubscriptionModel();
-        subscriptionModel = new PositionAwareInMemorySubscriptionModel(inMemorySubscriptionModel);
+        subscriptionModel = new CheckpointAwareInMemorySubscriptionModel(inMemorySubscriptionModel);
         cloudEventConverter = new JacksonCloudEventConverter.Builder<DomainEvent>(new ObjectMapper(), URI.create("urn:test")).idMapper(DomainEvent::eventId).build();
         time = LocalDateTime.now();
     }
@@ -107,7 +107,7 @@ class StreamCatchupSubscriptionModelTest {
         CopyOnWriteArrayList<DomainEvent> received = new CopyOnWriteArrayList<>();
         StreamCatchupSubscriptionModel subscription = new StreamCatchupSubscriptionModel(subscriptionModel, eventStore, new CatchupSubscriptionModelConfig(100));
 
-        subscription.subscribe("subscription", StartAt.subscriptionPosition(GlobalSubscriptionPosition.of(0)), toDomainEvents(received)).waitUntilStarted();
+        subscription.subscribe("subscription", StartAt.checkpoint(GlobalCheckpoint.of(0)), toDomainEvents(received)).waitUntilStarted();
 
         await().untilAsserted(() -> assertThat(received).containsExactly(event1, event2));
     }
@@ -140,14 +140,14 @@ class StreamCatchupSubscriptionModelTest {
     }
 
     /**
-     * Adapts the (non position aware) {@link InMemorySubscriptionModel} to {@link PositionAwareSubscriptionModel} for
+     * Adapts the (non position aware) {@link InMemorySubscriptionModel} to {@link CheckpointAwareSubscriptionModel} for
      * these tests, mirroring the catchup-subscription module's own test double: any position start is translated
      * to {@code now}, since the in-memory model only supports {@code now}/{@code default}.
      */
-    private static final class PositionAwareInMemorySubscriptionModel implements PositionAwareSubscriptionModel {
+    private static final class CheckpointAwareInMemorySubscriptionModel implements CheckpointAwareSubscriptionModel {
         private final InMemorySubscriptionModel delegate;
 
-        private PositionAwareInMemorySubscriptionModel(InMemorySubscriptionModel delegate) {
+        private CheckpointAwareInMemorySubscriptionModel(InMemorySubscriptionModel delegate) {
             this.delegate = delegate;
         }
 
@@ -159,8 +159,8 @@ class StreamCatchupSubscriptionModelTest {
         }
 
         @Override
-        public @Nullable SubscriptionPosition globalSubscriptionPosition() {
-            return new StringBasedSubscriptionPosition("in-memory-global-position");
+        public @Nullable Checkpoint globalCheckpoint() {
+            return new StringBasedCheckpoint("in-memory-global-position");
         }
 
         @Override

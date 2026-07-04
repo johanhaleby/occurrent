@@ -27,7 +27,7 @@ public class SpringMongoSubscriptionModelConfig {
 
     /**
      * Create a new instance of {@link SpringMongoSubscriptionModelConfig} with the given settings.
-     * It will by default use a {@link RetryStrategy} for retries, with exponential backoff starting with 100 ms and progressively go up to max 2 seconds wait time between each retry when reading/saving/deleting the subscription position.
+     * It will by default use a {@link RetryStrategy} for retries, with exponential backoff starting with 100 ms and progressively go up to max 2 seconds wait time between each retry when reading/saving/deleting the checkpoint.
      *
      * @param eventCollection    The collection that contains the events
      * @param timeRepresentation How time is represented in the database, must be the same as what's specified for the EventStore that stores the events.

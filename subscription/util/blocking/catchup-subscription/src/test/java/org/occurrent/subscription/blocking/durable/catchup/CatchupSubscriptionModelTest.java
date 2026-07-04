@@ -41,11 +41,11 @@ import org.occurrent.filter.Filter;
 import org.occurrent.mongodb.timerepresentation.TimeRepresentation;
 import org.occurrent.retry.RetryStrategy;
 import org.occurrent.subscription.StartAt;
-import org.occurrent.subscription.SubscriptionPosition;
+import org.occurrent.subscription.Checkpoint;
 import org.occurrent.subscription.blocking.durable.DurableSubscriptionModel;
 import org.occurrent.subscription.internal.ExecutorShutdown;
 import org.occurrent.subscription.mongodb.nativedriver.blocking.NativeMongoSubscriptionModel;
-import org.occurrent.subscription.mongodb.nativedriver.blocking.NativeMongoSubscriptionPositionStorage;
+import org.occurrent.subscription.mongodb.nativedriver.blocking.NativeMongoCheckpointStorage;
 import org.occurrent.testsupport.mongodb.FlushMongoDBExtension;
 import org.testcontainers.junit.jupiter.Container;
 import org.testcontainers.junit.jupiter.Testcontainers;
@@ -71,7 +71,7 @@ import static org.occurrent.filter.Filter.TIME;
 import static org.occurrent.filter.Filter.type;
 import static org.occurrent.functional.CheckedFunction.unchecked;
 import static org.occurrent.subscription.OccurrentSubscriptionFilter.filter;
-import static org.occurrent.subscription.blocking.durable.catchup.SubscriptionPositionStorageConfig.useSubscriptionPositionStorage;
+import static org.occurrent.subscription.blocking.durable.catchup.CheckpointStorageConfig.useCheckpointStorage;
 import static org.occurrent.time.TimeConversion.toLocalDateTime;
 
 @Testcontainers
@@ -101,7 +101,7 @@ public class CatchupSubscriptionModelTest {
     private ExecutorService subscriptionExecutor;
     private MongoDatabase database;
     private MongoCollection<Document> eventCollection;
-    private NativeMongoSubscriptionPositionStorage storage;
+    private NativeMongoCheckpointStorage storage;
 
     @BeforeEach
     void create_mongo_event_store() {
@@ -119,8 +119,8 @@ public class CatchupSubscriptionModelTest {
         database = mongoClient.getDatabase(requireNonNull(connectionString.getDatabase()));
         eventCollection = database.getCollection(requireNonNull(connectionString.getCollection()));
         mongoEventStore = new MongoEventStore(mongoClient, connectionString.getDatabase(), connectionString.getCollection(), config);
-        storage = new NativeMongoSubscriptionPositionStorage(database, "storage");
-        subscription = newCatchupSubscription(database, eventCollection, timeRepresentation, new CatchupSubscriptionModelConfig(100, useSubscriptionPositionStorage(storage).andPersistSubscriptionPositionDuringCatchupPhaseForEveryNEvents(1)));
+        storage = new NativeMongoCheckpointStorage(database, "storage");
+        subscription = newCatchupSubscription(database, eventCollection, timeRepresentation, new CatchupSubscriptionModelConfig(100, useCheckpointStorage(storage).andPersistCheckpointDuringCatchupPhaseForEveryNEvents(1)));
         objectMapper = new ObjectMapper();
     }
 
@@ -147,7 +147,7 @@ public class CatchupSubscriptionModelTest {
         CopyOnWriteArrayList<CloudEvent> state = new CopyOnWriteArrayList<>();
 
         // When
-        subscription.subscribe(UUID.randomUUID().toString(), StartAt.subscriptionPosition(TimeBasedSubscriptionPosition.beginningOfTime()), state::add).waitUntilStarted();
+        subscription.subscribe(UUID.randomUUID().toString(), StartAt.checkpoint(TimeBasedCheckpoint.beginningOfTime()), state::add).waitUntilStarted();
 
         // Then
         await().atMost(AT_MOST).with().pollInterval(Duration.of(20, MILLIS)).untilAsserted(() -> assertThat(state).hasSize(3));
@@ -280,7 +280,7 @@ public class CatchupSubscriptionModelTest {
         CopyOnWriteArrayList<CloudEvent> state = new CopyOnWriteArrayList<>();
 
         // When
-        subscription.subscribe(UUID.randomUUID().toString(), filter(type(NameDefined.class.getName())), StartAt.subscriptionPosition(TimeBasedSubscriptionPosition.beginningOfTime()), state::add).waitUntilStarted();
+        subscription.subscribe(UUID.randomUUID().toString(), filter(type(NameDefined.class.getName())), StartAt.checkpoint(TimeBasedCheckpoint.beginningOfTime()), state::add).waitUntilStarted();
 
         // Then
         await().atMost(AT_MOST).with().pollInterval(Duration.of(20, MILLIS)).untilAsserted(() -> {
@@ -330,7 +330,7 @@ public class CatchupSubscriptionModelTest {
 
         CopyOnWriteArrayList<CloudEvent> state = new CopyOnWriteArrayList<>();
 
-        CatchupSubscriptionModelConfig cfg = new CatchupSubscriptionModelConfig(100, useSubscriptionPositionStorage(storage).andPersistSubscriptionPositionDuringCatchupPhaseForEveryNEvents(1))
+        CatchupSubscriptionModelConfig cfg = new CatchupSubscriptionModelConfig(100, useCheckpointStorage(storage).andPersistCheckpointDuringCatchupPhaseForEveryNEvents(1))
                 .catchupPhaseSortBy(SortBy.descending(TIME));
         subscription = newCatchupSubscription(database, eventCollection, TimeRepresentation.DATE, cfg);
 
@@ -375,7 +375,7 @@ public class CatchupSubscriptionModelTest {
         thread.start();
 
         // When
-        subscription.subscribe(UUID.randomUUID().toString(), StartAt.subscriptionPosition(TimeBasedSubscriptionPosition.beginningOfTime()), e -> {
+        subscription.subscribe(UUID.randomUUID().toString(), StartAt.checkpoint(TimeBasedCheckpoint.beginningOfTime()), e -> {
             state.add(e);
             switch (state.size()) {
                 case 2:
@@ -447,12 +447,12 @@ public class CatchupSubscriptionModelTest {
         subscriptionExecutor = Executors.newCachedThreadPool();
         NativeMongoSubscriptionModel wrappedSubscription = new NativeMongoSubscriptionModel(database, eventCollection, TimeRepresentation.DATE, subscriptionExecutor, RetryStrategy.none());
         subscription = new CatchupSubscriptionModel(wrappedSubscription, spyingQueries,
-                new CatchupSubscriptionModelConfig(100, useSubscriptionPositionStorage(storage).andPersistSubscriptionPositionDuringCatchupPhaseForEveryNEvents(1)));
+                new CatchupSubscriptionModelConfig(100, useCheckpointStorage(storage).andPersistCheckpointDuringCatchupPhaseForEveryNEvents(1)));
 
         CopyOnWriteArrayList<CloudEvent> state = new CopyOnWriteArrayList<>();
 
         // When
-        subscription.subscribe(UUID.randomUUID().toString(), StartAt.subscriptionPosition(TimeBasedSubscriptionPosition.beginningOfTime()), state::add).waitUntilStarted();
+        subscription.subscribe(UUID.randomUUID().toString(), StartAt.checkpoint(TimeBasedCheckpoint.beginningOfTime()), state::add).waitUntilStarted();
 
         // Then -- every event up to and during the catch-up phase must be delivered. On the unfixed handover,
         // duringCatchup1 is lost (shifted out of the reconciliation read and below the live resume position).
@@ -550,7 +550,7 @@ public class CatchupSubscriptionModelTest {
 
         // When
 
-        subscription.subscribe(subscriptionId, StartAt.subscriptionPosition(TimeBasedSubscriptionPosition.beginningOfTime()), e -> {
+        subscription.subscribe(subscriptionId, StartAt.checkpoint(TimeBasedCheckpoint.beginningOfTime()), e -> {
             if (state.size() < 2) {
                 state.add(e);
             }
@@ -563,7 +563,7 @@ public class CatchupSubscriptionModelTest {
         }).waitUntilStarted();
 
         awaitLatch(waitUntilSecondEventProcessed);
-        subscription = newCatchupSubscription(database, eventCollection, TimeRepresentation.DATE, new CatchupSubscriptionModelConfig(100, useSubscriptionPositionStorage(storage).andPersistSubscriptionPositionDuringCatchupPhaseForEveryNEvents(1)));
+        subscription = newCatchupSubscription(database, eventCollection, TimeRepresentation.DATE, new CatchupSubscriptionModelConfig(100, useCheckpointStorage(storage).andPersistCheckpointDuringCatchupPhaseForEveryNEvents(1)));
         subscription.subscribe(subscriptionId, state::add).waitUntilStarted();
 
         // Then
@@ -612,7 +612,7 @@ public class CatchupSubscriptionModelTest {
         }).waitUntilStarted();
 
         awaitLatch(waitUntilSecondEventProcessed);
-        subscription = newCatchupSubscription(database, eventCollection, TimeRepresentation.DATE, new CatchupSubscriptionModelConfig(100, useSubscriptionPositionStorage(storage).andPersistSubscriptionPositionDuringCatchupPhaseForEveryNEvents(1)));
+        subscription = newCatchupSubscription(database, eventCollection, TimeRepresentation.DATE, new CatchupSubscriptionModelConfig(100, useCheckpointStorage(storage).andPersistCheckpointDuringCatchupPhaseForEveryNEvents(1)));
         subscription.subscribe(subscriptionId, filter(type(NameDefined.class.getName())), state::add).waitUntilStarted();
 
         // Then
@@ -648,7 +648,7 @@ public class CatchupSubscriptionModelTest {
             subscriptionExecutor = Executors.newCachedThreadPool();
             NativeMongoSubscriptionModel blockingSubscriptionForMongoDB = new NativeMongoSubscriptionModel(database, eventCollection, TimeRepresentation.DATE, subscriptionExecutor, RetryStrategy.none());
             DurableSubscriptionModel blockingSubscriptionWithAutomaticPositionPersistence = new DurableSubscriptionModel(blockingSubscriptionForMongoDB, storage);
-            return new CatchupSubscriptionModel(blockingSubscriptionWithAutomaticPositionPersistence, mongoEventStore, new CatchupSubscriptionModelConfig(100, useSubscriptionPositionStorage(storage)));
+            return new CatchupSubscriptionModel(blockingSubscriptionWithAutomaticPositionPersistence, mongoEventStore, new CatchupSubscriptionModelConfig(100, useCheckpointStorage(storage)));
         };
 
         subscription = catchupSupportingBlockingSubscription.get();
@@ -720,7 +720,7 @@ public class CatchupSubscriptionModelTest {
         }).waitUntilStarted();
 
         awaitLatch(waitUntilSecondEventProcessed);
-        subscription = newCatchupSubscription(database, eventCollection, TimeRepresentation.DATE, new CatchupSubscriptionModelConfig(100, useSubscriptionPositionStorage(storage).andPersistSubscriptionPositionDuringCatchupPhaseForEveryNEvents(1)));
+        subscription = newCatchupSubscription(database, eventCollection, TimeRepresentation.DATE, new CatchupSubscriptionModelConfig(100, useCheckpointStorage(storage).andPersistCheckpointDuringCatchupPhaseForEveryNEvents(1)));
         subscription.subscribe(subscriptionId, state::add).waitUntilStarted();
 
         mongoEventStore.write("1", 2, serialize(nameWasChanged2));
@@ -771,12 +771,12 @@ public class CatchupSubscriptionModelTest {
         }).waitUntilStarted();
 
         awaitLatch(waitUntilSecondEventProcessed);
-        subscription = newCatchupSubscription(database, eventCollection, TimeRepresentation.DATE, new CatchupSubscriptionModelConfig(100, useSubscriptionPositionStorage(storage).andPersistSubscriptionPositionDuringCatchupPhaseForEveryNEvents(1)));
+        subscription = newCatchupSubscription(database, eventCollection, TimeRepresentation.DATE, new CatchupSubscriptionModelConfig(100, useCheckpointStorage(storage).andPersistCheckpointDuringCatchupPhaseForEveryNEvents(1)));
         subscription.subscribe(subscriptionId, StartAtTime.beginningOfTime(), state::add).waitUntilStarted();
 
         // Then
         await().atMost(AT_MOST).with().pollInterval(Duration.of(100, MILLIS)).untilAsserted(() ->
-                // Note that it's correct behavior that we expect 6 events here since the first subscription is not configured to store subscription position during catch-up => duplicates
+                // Note that it's correct behavior that we expect 6 events here since the first subscription is not configured to store checkpoint during catch-up => duplicates
                 assertThat(state).hasSize(6).extracting(this::deserialize).containsExactly(nameDefined1, nameDefined2, nameDefined1, nameDefined2, nameDefined3, nameWasChanged1));
     }
 
@@ -807,7 +807,7 @@ public class CatchupSubscriptionModelTest {
         }).start();
 
         // When
-        CatchupSubscriptionModelConfig config = new CatchupSubscriptionModelConfig(100, useSubscriptionPositionStorage(storage).andPersistSubscriptionPositionDuringCatchupPhaseForEveryNEvents(1));
+        CatchupSubscriptionModelConfig config = new CatchupSubscriptionModelConfig(100, useCheckpointStorage(storage).andPersistCheckpointDuringCatchupPhaseForEveryNEvents(1));
         subscription = newCatchupSubscription(database, eventCollection, TimeRepresentation.DATE, config);
         subscription.subscribe(subscriptionId, StartAtTime.beginningOfTime(), e -> {
             if (state.size() < 2) {
@@ -827,7 +827,7 @@ public class CatchupSubscriptionModelTest {
 
         // Then
         await().atMost(AT_MOST).with().pollInterval(Duration.of(100, MILLIS)).untilAsserted(() ->
-                // Note that it's correct behavior that we expect 6 events here since the first subscription is not configured to store subscription position during catch-up => duplicates
+                // Note that it's correct behavior that we expect 6 events here since the first subscription is not configured to store checkpoint during catch-up => duplicates
                 assertThat(state).hasSize(6).extracting(this::deserialize).containsExactly(nameDefined1, nameDefined2, nameDefined1, nameDefined2, nameDefined3, nameWasChanged1));
     }
 
@@ -842,26 +842,26 @@ public class CatchupSubscriptionModelTest {
 
         AtomicInteger numberOfSavedPositions = new AtomicInteger();
 
-        storage = new NativeMongoSubscriptionPositionStorage(database, "storage") {
+        storage = new NativeMongoCheckpointStorage(database, "storage") {
             @NullMarked
             @Override
-            public SubscriptionPosition save(String subscriptionId, SubscriptionPosition subscriptionPosition) {
+            public Checkpoint save(String subscriptionId, Checkpoint checkpoint) {
                 numberOfSavedPositions.incrementAndGet();
-                return super.save(subscriptionId, subscriptionPosition);
+                return super.save(subscriptionId, checkpoint);
             }
         };
 
-        subscription = newCatchupSubscription(database, eventCollection, TimeRepresentation.DATE, new CatchupSubscriptionModelConfig(100, useSubscriptionPositionStorage(storage).andPersistSubscriptionPositionDuringCatchupPhaseForEveryNEvents(10)));
+        subscription = newCatchupSubscription(database, eventCollection, TimeRepresentation.DATE, new CatchupSubscriptionModelConfig(100, useCheckpointStorage(storage).andPersistCheckpointDuringCatchupPhaseForEveryNEvents(10)));
 
         CopyOnWriteArrayList<CloudEvent> state = new CopyOnWriteArrayList<>();
 
         // When
         String subscriptionId = UUID.randomUUID().toString();
-        subscription.subscribe(subscriptionId, StartAt.subscriptionPosition(TimeBasedSubscriptionPosition.beginningOfTime()), state::add).waitUntilStarted();
+        subscription.subscribe(subscriptionId, StartAt.checkpoint(TimeBasedCheckpoint.beginningOfTime()), state::add).waitUntilStarted();
 
         // Then
         await().atMost(AT_MOST).with().pollInterval(Duration.of(20, MILLIS)).untilAsserted(() -> assertThat(state).hasSize(100));
-        assertThat(numberOfSavedPositions).hasValue(11); // Store every 10th position equals 10 for 100 events + 1 additional save for global subscription position before switching to continuous mode
+        assertThat(numberOfSavedPositions).hasValue(11); // Store every 10th position equals 10 for 100 events + 1 additional save for global checkpoint before switching to continuous mode
         assertThat(storage.read(subscriptionId)).isNotNull();
     }
 

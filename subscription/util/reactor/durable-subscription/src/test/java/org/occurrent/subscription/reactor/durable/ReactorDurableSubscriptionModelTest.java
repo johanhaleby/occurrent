@@ -34,10 +34,10 @@ import org.occurrent.eventstore.api.reactor.EventStore;
 import org.occurrent.eventstore.mongodb.spring.reactor.EventStoreConfig;
 import org.occurrent.eventstore.mongodb.spring.reactor.ReactorMongoEventStore;
 import org.occurrent.mongodb.timerepresentation.TimeRepresentation;
-import org.occurrent.subscription.SubscriptionPosition;
-import org.occurrent.subscription.api.reactor.SubscriptionPositionStorage;
+import org.occurrent.subscription.Checkpoint;
+import org.occurrent.subscription.api.reactor.CheckpointStorage;
 import org.occurrent.subscription.mongodb.spring.reactor.ReactorMongoSubscriptionModel;
-import org.occurrent.subscription.mongodb.spring.reactor.ReactorSubscriptionPositionStorage;
+import org.occurrent.subscription.mongodb.spring.reactor.ReactorCheckpointStorage;
 import org.occurrent.testsupport.mongodb.FlushMongoDBExtension;
 import org.springframework.data.mongodb.ReactiveMongoTransactionManager;
 import org.springframework.data.mongodb.core.ReactiveMongoTemplate;
@@ -82,7 +82,7 @@ public class ReactorDurableSubscriptionModelTest {
     private ReactorDurableSubscriptionModel subscription;
     private ObjectMapper objectMapper;
     private ReactiveMongoTemplate reactiveMongoTemplate;
-    private SubscriptionPositionStorage storage;
+    private CheckpointStorage storage;
 
     @RegisterExtension
     FlushMongoDBExtension flushMongoDBExtension = new FlushMongoDBExtension(new ConnectionString(mongoDBContainer.getReplicaSetUrl()));
@@ -99,7 +99,7 @@ public class ReactorDurableSubscriptionModelTest {
         EventStoreConfig eventStoreConfig = new EventStoreConfig.Builder().eventStoreCollectionName("events").transactionConfig(reactiveMongoTransactionManager).timeRepresentation(TimeRepresentation.RFC_3339_STRING).build();
         mongoEventStore = new ReactorMongoEventStore(reactiveMongoTemplate, eventStoreConfig);
         springReactorSubscriptionForMongoDB = new ReactorMongoSubscriptionModel(reactiveMongoTemplate, "events", timeRepresentation);
-        storage = new ReactorSubscriptionPositionStorage(reactiveMongoTemplate, RESUME_TOKEN_COLLECTION);
+        storage = new ReactorCheckpointStorage(reactiveMongoTemplate, RESUME_TOKEN_COLLECTION);
         subscription = new ReactorDurableSubscriptionModel(springReactorSubscriptionForMongoDB, storage);
         objectMapper = new ObjectMapper();
     }
@@ -144,15 +144,15 @@ public class ReactorDurableSubscriptionModelTest {
 
         AtomicInteger numberOfWritesToSubscriptionStorage = new AtomicInteger(0);
 
-        SubscriptionPositionStorage subscriptionPositionStorage = new SubscriptionPositionStorage() {
+        CheckpointStorage checkpointStorage = new CheckpointStorage() {
             @Override
-            public Mono<SubscriptionPosition> read(String subscriptionId) {
+            public Mono<Checkpoint> read(String subscriptionId) {
                 return Mono.empty();
             }
 
             @Override
-            public Mono<SubscriptionPosition> save(String subscriptionId, SubscriptionPosition subscriptionPosition) {
-                return Mono.fromRunnable(numberOfWritesToSubscriptionStorage::incrementAndGet).thenReturn(subscriptionPosition);
+            public Mono<Checkpoint> save(String subscriptionId, Checkpoint checkpoint) {
+                return Mono.fromRunnable(numberOfWritesToSubscriptionStorage::incrementAndGet).thenReturn(checkpoint);
             }
 
             @Override
@@ -160,7 +160,7 @@ public class ReactorDurableSubscriptionModelTest {
                 return Mono.empty();
             }
         };
-        subscription = new ReactorDurableSubscriptionModel(springReactorSubscriptionForMongoDB, subscriptionPositionStorage);
+        subscription = new ReactorDurableSubscriptionModel(springReactorSubscriptionForMongoDB, checkpointStorage);
         subscription.subscribe(UUID.randomUUID().toString(), e -> Mono.fromRunnable(() -> state.add(e)));
 
         // When
@@ -184,15 +184,15 @@ public class ReactorDurableSubscriptionModelTest {
 
         AtomicInteger numberOfWritesToSubscriptionStorage = new AtomicInteger(0);
 
-        SubscriptionPositionStorage subscriptionPositionStorage = new SubscriptionPositionStorage() {
+        CheckpointStorage checkpointStorage = new CheckpointStorage() {
             @Override
-            public Mono<SubscriptionPosition> read(String subscriptionId) {
+            public Mono<Checkpoint> read(String subscriptionId) {
                 return Mono.empty();
             }
 
             @Override
-            public Mono<SubscriptionPosition> save(String subscriptionId, SubscriptionPosition subscriptionPosition) {
-                return Mono.fromRunnable(numberOfWritesToSubscriptionStorage::incrementAndGet).thenReturn(subscriptionPosition);
+            public Mono<Checkpoint> save(String subscriptionId, Checkpoint checkpoint) {
+                return Mono.fromRunnable(numberOfWritesToSubscriptionStorage::incrementAndGet).thenReturn(checkpoint);
             }
 
             @Override
@@ -200,7 +200,7 @@ public class ReactorDurableSubscriptionModelTest {
                 return Mono.empty();
             }
         };
-        subscription = new ReactorDurableSubscriptionModel(springReactorSubscriptionForMongoDB, subscriptionPositionStorage, new ReactorDurableSubscriptionModelConfig(3));
+        subscription = new ReactorDurableSubscriptionModel(springReactorSubscriptionForMongoDB, checkpointStorage, new ReactorDurableSubscriptionModelConfig(3));
         subscription.subscribe(UUID.randomUUID().toString(), e -> Mono.fromRunnable(() -> state.add(e)));
 
         // When
@@ -211,7 +211,7 @@ public class ReactorDurableSubscriptionModelTest {
         // Then
         await().with().pollInterval(Duration.of(20, MILLIS)).untilAsserted(() -> {
             assertThat(state).hasSize(3);
-            assertThat(numberOfWritesToSubscriptionStorage).hasValue(2); // 1 event and one for global subscription position
+            assertThat(numberOfWritesToSubscriptionStorage).hasValue(2); // 1 event and one for global checkpoint
         });
     }
 

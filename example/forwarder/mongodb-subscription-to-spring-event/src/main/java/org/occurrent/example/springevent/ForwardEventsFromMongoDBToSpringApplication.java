@@ -28,10 +28,10 @@ import org.occurrent.eventstore.api.blocking.EventStore;
 import org.occurrent.eventstore.mongodb.nativedriver.EventStoreConfig;
 import org.occurrent.eventstore.mongodb.nativedriver.MongoEventStore;
 import org.occurrent.mongodb.timerepresentation.TimeRepresentation;
-import org.occurrent.subscription.api.reactor.PositionAwareSubscriptionModel;
-import org.occurrent.subscription.api.reactor.SubscriptionPositionStorage;
+import org.occurrent.subscription.api.reactor.CheckpointAwareSubscriptionModel;
+import org.occurrent.subscription.api.reactor.CheckpointStorage;
 import org.occurrent.subscription.mongodb.spring.reactor.ReactorMongoSubscriptionModel;
-import org.occurrent.subscription.mongodb.spring.reactor.ReactorSubscriptionPositionStorage;
+import org.occurrent.subscription.mongodb.spring.reactor.ReactorCheckpointStorage;
 import org.occurrent.subscription.reactor.durable.ReactorDurableSubscriptionModel;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.boot.autoconfigure.SpringBootApplication;
@@ -64,17 +64,17 @@ public class ForwardEventsFromMongoDBToSpringApplication {
     }
 
     @Bean
-    public SubscriptionPositionStorage reactorSubscriptionPositionStorage(ReactiveMongoOperations mongoOperations) {
-        return new ReactorSubscriptionPositionStorage(mongoOperations, "subscriptions");
+    public CheckpointStorage reactorCheckpointStorage(ReactiveMongoOperations mongoOperations) {
+        return new ReactorCheckpointStorage(mongoOperations, "subscriptions");
     }
 
     @Bean
-    public PositionAwareSubscriptionModel subscriptionModel(ReactiveMongoOperations mongoOperations) {
+    public CheckpointAwareSubscriptionModel subscriptionModel(ReactiveMongoOperations mongoOperations) {
         return new ReactorMongoSubscriptionModel(mongoOperations, "events", TimeRepresentation.RFC_3339_STRING);
     }
 
     @Bean
-    public ReactorDurableSubscriptionModel autoPersistingSubscription(PositionAwareSubscriptionModel subscription, SubscriptionPositionStorage storage) {
+    public ReactorDurableSubscriptionModel autoPersistingSubscription(CheckpointAwareSubscriptionModel subscription, CheckpointStorage storage) {
         return new ReactorDurableSubscriptionModel(subscription, storage);
     }
 
