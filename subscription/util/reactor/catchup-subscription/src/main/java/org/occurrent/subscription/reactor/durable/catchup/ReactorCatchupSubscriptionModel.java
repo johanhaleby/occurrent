@@ -37,9 +37,11 @@ import reactor.core.publisher.Mono;
 import static java.util.Objects.requireNonNull;
 
 /**
- * Dual-mode reactive catch-up: routes a subscription to a {@link ReactorStreamCatchupSubscriptionModel}, a
- * {@link ReactorDcbCatchupSubscriptionModel}, or both, so a single model serves an application that uses streams,
- * DCB, or both. Mirrors the routing of the blocking {@code CatchupSubscriptionModel}.
+ * The general reactive catch-up entry point. It routes each subscription to stream or DCB replay by the subscription
+ * filter and start position, dispatching over {@link ReactorStreamCatchupSubscriptionModel} (stream catch-up) and
+ * {@code ReactorDcbCatchupSubscriptionModel} (DCB catch-up), so a single model serves an application that uses streams,
+ * DCB, or both. Mirrors the routing of the blocking {@code CatchupSubscriptionModel}. A stream-only store that wants to
+ * avoid the DCB dependency can use {@link ReactorStreamCatchupSubscriptionModel} directly as the DCB-free variant.
  */
 @NullMarked
 public class ReactorCatchupSubscriptionModel implements PositionAwareSubscriptionModel {

@@ -197,7 +197,7 @@ public class OccurrentReactiveMongoAutoConfiguration<E> {
 
     /**
      * DCB subscription DSL, auto-configured when the DCB event-store capability is enabled. In DCB mode the underlying
-     * subscription model wraps a {@link ReactorDcbCatchupSubscriptionModel}, so a subscription started at a
+     * subscription model wraps a {@code ReactorDcbCatchupSubscriptionModel}, so a subscription started at a
      * {@code GlobalSubscriptionPosition} replays history by position before switching to live delivery.
      */
     @Bean

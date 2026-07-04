@@ -26,7 +26,7 @@ import java.time.Duration;
  * live delegate. {@link #waitUntilStarted(Duration)} is a no-op success since there is nothing left to start.
  */
 @NullMarked
-public record CancelledSubscription(String subscriptionId) implements Subscription {
+record CancelledSubscription(String subscriptionId) implements Subscription {
 
     @Override
     public String id() {

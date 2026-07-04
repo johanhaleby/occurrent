@@ -40,7 +40,7 @@ import java.util.function.Function;
  * live in the stream module that both modes build against.
  */
 @NullMarked
-public abstract class AbstractCatchupSubscriptionModel implements SubscriptionModel, DelegatingSubscriptionModel {
+abstract class AbstractCatchupSubscriptionModel implements SubscriptionModel, DelegatingSubscriptionModel {
 
     protected final PositionAwareSubscriptionModel subscriptionModel;
     protected final CatchupSubscriptionModelConfig config;

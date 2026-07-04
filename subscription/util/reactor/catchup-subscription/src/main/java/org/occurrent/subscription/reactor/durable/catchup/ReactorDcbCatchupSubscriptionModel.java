@@ -67,7 +67,7 @@ import static java.util.Objects.requireNonNull;
  * constructor is used), since catch-up is DCB-specific.
  */
 @NullMarked
-public class ReactorDcbCatchupSubscriptionModel implements PositionAwareSubscriptionModel {
+class ReactorDcbCatchupSubscriptionModel implements PositionAwareSubscriptionModel {
 
     /**
      * Default number of DCB positions read per replay window.

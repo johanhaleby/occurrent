@@ -55,7 +55,7 @@ import java.util.stream.Stream;
  * handover instead of silently dropping events.
  */
 @NullMarked
-public class DcbCatchupSubscriptionModel extends AbstractCatchupSubscriptionModel {
+class DcbCatchupSubscriptionModel extends AbstractCatchupSubscriptionModel {
 
     private final DcbEventStore dcbEventStore;
     private final DcbQuery dcbQuery;

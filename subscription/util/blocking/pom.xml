@@ -28,7 +28,7 @@
     <modules>
         <module>durable-subscription</module>
         <module>stream-catchup-subscription</module>
-        <module>dcb-catchup-subscription</module>
+        <module>catchup-subscription</module>
         <module>competing-consumer-subscription</module>
     </modules>
 

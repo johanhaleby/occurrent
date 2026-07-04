@@ -44,7 +44,7 @@ import static java.util.Objects.requireNonNull;
  * {@link PositionOrderedReader}, then hands over to a live subscription, all as a single {@link Flux}. It lets a
  * reactive read model rebuild from the start of the stream sequence and then keep up with new events.
  * <p>
- * This is the stream counterpart of {@link ReactorDcbCatchupSubscriptionModel}. It replays through
+ * This is the stream counterpart of {@code ReactorDcbCatchupSubscriptionModel}. It replays through
  * {@link PositionOrderedReader#readInPositionOrder(Filter, PositionRange)} and matches a stream {@link Filter}
  * in-process, where the DCB model uses a {@code DcbQuery}. Otherwise the two are the same, because both read the
  * same global {@code position} sequence.

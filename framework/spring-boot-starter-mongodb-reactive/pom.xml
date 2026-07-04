@@ -87,7 +87,7 @@
         </dependency>
         <dependency>
             <groupId>org.occurrent</groupId>
-            <artifactId>reactor-dcb-catchup-subscription</artifactId>
+            <artifactId>reactor-catchup-subscription</artifactId>
             <version>${project.version}</version>
         </dependency>
         <dependency>
