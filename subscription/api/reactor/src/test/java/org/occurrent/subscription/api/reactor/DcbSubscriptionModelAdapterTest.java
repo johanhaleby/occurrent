@@ -39,10 +39,10 @@ import java.util.List;
 import java.util.Set;
 import java.util.UUID;
 import java.util.function.Function;
+import org.occurrent.cloudevents.OccurrentCloudEventExtension;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
-import org.occurrent.cloudevents.OccurrentCloudEventExtension;
 
 @DisplayNameGeneration(ReplaceUnderscores.class)
 class DcbSubscriptionModelAdapterTest {

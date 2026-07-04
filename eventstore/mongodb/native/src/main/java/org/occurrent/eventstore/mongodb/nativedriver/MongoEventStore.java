@@ -73,6 +73,7 @@ import java.util.function.Function;
 import java.util.function.Supplier;
 import java.util.stream.Stream;
 import java.util.stream.StreamSupport;
+import org.occurrent.cloudevents.OccurrentCloudEventExtension;
 
 import static com.mongodb.client.model.Filters.*;
 import static com.mongodb.client.model.Sorts.ascending;
@@ -89,7 +90,6 @@ import static org.occurrent.eventstore.api.WriteCondition.anyStreamVersion;
 import static org.occurrent.eventstore.mongodb.internal.MongoExceptionTranslator.translateException;
 import static org.occurrent.eventstore.mongodb.internal.OccurrentCloudEventMongoDocumentMapper.convertToDocument;
 import static org.occurrent.functionalsupport.internal.FunctionalSupport.mapWithIndex;
-import org.occurrent.cloudevents.OccurrentCloudEventExtension;
 
 /**
  * This is an {@link EventStore} that stores events in MongoDB using the "native" synchronous java driver MongoDB.

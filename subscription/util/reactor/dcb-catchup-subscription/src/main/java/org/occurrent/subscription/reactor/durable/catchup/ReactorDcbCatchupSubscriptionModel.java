@@ -39,9 +39,9 @@ import java.util.Collections;
 import java.util.Iterator;
 import java.util.LinkedHashSet;
 import java.util.Set;
+import org.occurrent.cloudevents.OccurrentCloudEventExtension;
 
 import static java.util.Objects.requireNonNull;
-import org.occurrent.cloudevents.OccurrentCloudEventExtension;
 
 /**
  * Reactive DCB catch-up: replays the DCB history matching a {@link DcbQuery} by {@code position}, then hands over to

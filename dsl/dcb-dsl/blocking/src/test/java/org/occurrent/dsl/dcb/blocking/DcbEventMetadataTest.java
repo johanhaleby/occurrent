@@ -25,9 +25,9 @@ import org.occurrent.eventstore.api.dcb.DcbCloudEvents;
 
 import java.util.Map;
 import java.util.Set;
+import org.occurrent.cloudevents.OccurrentCloudEventExtension;
 
 import static org.assertj.core.api.Assertions.assertThat;
-import org.occurrent.cloudevents.OccurrentCloudEventExtension;
 
 @DisplayNameGeneration(ReplaceUnderscores.class)
 class DcbEventMetadataTest {

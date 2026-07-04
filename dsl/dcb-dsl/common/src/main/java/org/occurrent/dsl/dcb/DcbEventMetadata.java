@@ -23,9 +23,9 @@ import org.occurrent.eventstore.api.dcb.DcbCloudEvents;
 
 import java.util.OptionalLong;
 import java.util.Set;
+import org.occurrent.cloudevents.OccurrentCloudEventExtension;
 
 import static java.util.Objects.requireNonNull;
-import org.occurrent.cloudevents.OccurrentCloudEventExtension;
 
 /**
  * Java-friendly view over an {@link EventMetadata} that exposes the event's global position and its DCB tags as

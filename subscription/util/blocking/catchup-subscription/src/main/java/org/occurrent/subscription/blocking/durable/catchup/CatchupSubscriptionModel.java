@@ -48,12 +48,12 @@ import java.util.function.Consumer;
 import java.util.function.Function;
 import java.util.function.Supplier;
 import java.util.stream.Stream;
+import org.occurrent.cloudevents.OccurrentCloudEventExtension;
 
 import static org.occurrent.condition.Condition.gt;
 import static org.occurrent.eventstore.api.SortBy.SortDirection.DESCENDING;
 import static org.occurrent.filter.Filter.time;
 import static org.occurrent.time.internal.RFC3339.RFC_3339_DATE_TIME_FORMATTER;
-import org.occurrent.cloudevents.OccurrentCloudEventExtension;
 
 /**
  * A {@link SubscriptionModel} that can read historic cloud events from the all event streams (see {@link EventStoreQueries#all()}) until caught up with the
@@ -330,7 +330,6 @@ public class CatchupSubscriptionModel implements SubscriptionModel, DelegatingSu
 
         // Perform the catchup
         runCatchupForStream(eventStoreQueries.query(catchupFilter, config.catchupPhaseSortBy), subscriptionId, action, null);
-
 
         // Here we check if the delegated subscription model is allowed to execute. The reason for doing this is that
         // in certain scenarios, such as when using the @Subscription annotation with settings {@code startAt=BEGINNING_OF_TIME} and

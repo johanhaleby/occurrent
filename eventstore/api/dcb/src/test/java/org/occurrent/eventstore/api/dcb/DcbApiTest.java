@@ -25,11 +25,11 @@ import java.net.URI;
 import java.util.Arrays;
 import java.util.List;
 import java.util.Set;
+import org.occurrent.cloudevents.OccurrentCloudEventExtension;
 
 import static java.nio.charset.StandardCharsets.UTF_8;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
-import org.occurrent.cloudevents.OccurrentCloudEventExtension;
 
 @DisplayNameGeneration(ReplaceUnderscores.class)
 class DcbApiTest {

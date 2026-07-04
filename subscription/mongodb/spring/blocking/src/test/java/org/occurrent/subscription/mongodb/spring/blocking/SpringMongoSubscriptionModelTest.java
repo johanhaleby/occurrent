@@ -65,6 +65,7 @@ import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.stream.Stream;
+import org.occurrent.cloudevents.OccurrentCloudEventExtension;
 
 import static com.mongodb.client.model.Aggregates.match;
 import static com.mongodb.client.model.Filters.and;
@@ -89,7 +90,6 @@ import static org.occurrent.eventstore.api.EventStoreCapability.DCB;
 import static org.occurrent.eventstore.api.EventStoreCapability.STREAM;
 import static org.occurrent.subscription.mongodb.MongoFilterSpecification.MongoBsonFilterSpecification.filter;
 import static org.occurrent.subscription.mongodb.spring.blocking.SpringMongoSubscriptionModelConfig.withConfig;
-import org.occurrent.cloudevents.OccurrentCloudEventExtension;
 
 @Testcontainers
 public class SpringMongoSubscriptionModelTest {
@@ -663,7 +663,6 @@ public class SpringMongoSubscriptionModelTest {
         }
     }
 
-
     @Nested
     @DisplayName("ChangeStreamHistoryLost")
     class ChangeStreamHistoryLostTest {
@@ -761,7 +760,6 @@ public class SpringMongoSubscriptionModelTest {
             await().atMost(10, SECONDS).with().pollInterval(Duration.of(20, MILLIS)).untilAsserted(() -> assertThat(state).hasSize(1));
         }
     }
-
 
     private Stream<CloudEvent> serialize(DomainEvent e) {
         return Stream.of(CloudEventBuilder.v1()

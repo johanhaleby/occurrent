@@ -33,10 +33,10 @@ import java.util.List;
 import java.util.UUID;
 import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.stream.Stream;
+import org.occurrent.cloudevents.OccurrentCloudEventExtension;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.awaitility.Awaitility.await;
-import org.occurrent.cloudevents.OccurrentCloudEventExtension;
 
 @DisplayNameGeneration(ReplaceUnderscores.class)
 class InMemorySubscriptionModelDcbFilterTest {

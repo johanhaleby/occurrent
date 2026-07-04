@@ -68,6 +68,7 @@ import java.util.TreeSet;
 import java.util.function.Function;
 import java.util.function.Supplier;
 import java.util.stream.Stream;
+import org.occurrent.cloudevents.OccurrentCloudEventExtension;
 
 import static java.util.Objects.requireNonNull;
 import static org.occurrent.cloudevents.OccurrentCloudEventExtension.STREAM_ID;
@@ -84,7 +85,6 @@ import static org.occurrent.mongodb.spring.sortconversion.internal.SortConverter
 import static org.springframework.data.domain.Sort.Direction.DESC;
 import static org.springframework.data.mongodb.SessionSynchronization.ALWAYS;
 import static org.springframework.data.mongodb.core.query.Criteria.where;
-import org.occurrent.cloudevents.OccurrentCloudEventExtension;
 
 /**
  * This is an {@link EventStore} that stores events in MongoDB using Spring's {@link MongoTemplate}.
