@@ -141,7 +141,7 @@ class StreamCatchupSubscriptionModelTest {
 
     /**
      * Adapts the (non position aware) {@link InMemorySubscriptionModel} to {@link PositionAwareSubscriptionModel} for
-     * these tests, mirroring the dcb-catchup-subscription module's own test double: any position start is translated
+     * these tests, mirroring the catchup-subscription module's own test double: any position start is translated
      * to {@code now}, since the in-memory model only supports {@code now}/{@code default}.
      */
     private static final class PositionAwareInMemorySubscriptionModel implements PositionAwareSubscriptionModel {

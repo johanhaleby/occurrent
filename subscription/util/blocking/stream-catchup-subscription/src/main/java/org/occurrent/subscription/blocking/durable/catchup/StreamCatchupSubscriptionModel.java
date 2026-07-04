@@ -62,7 +62,7 @@ import static org.occurrent.time.internal.RFC3339.RFC_3339_DATE_TIME_FORMATTER;
  * otherwise by the legacy time/{@code $natural} order) then hands over to a live subscription. This is the stream
  * counterpart split out of {@code CatchupSubscriptionModel} (see ADR 25 / Wave 2b) so a stream-only application does
  * not need to depend on {@code eventstore-api-dcb}. The dispatcher {@code CatchupSubscriptionModel} in the
- * {@code dcb-catchup-subscription} module wraps this class for its stream routing.
+ * {@code catchup-subscription} module wraps this class for its stream routing.
  * <p>
  * Delivery is at-least-once, with the same catch-up-to-live handover and clock-skew-safe reconciliation guarantees
  * documented on the dispatcher.
