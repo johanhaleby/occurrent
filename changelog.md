@@ -21,7 +21,9 @@ DCB is a capability layered on the existing CloudEvent storage, not a new store 
   * Stream catch-up now reconciles on position, the same range-based mechanism DCB catch-up already used, instead
     of wall-clock time or `$natural` order, for any store that writes position. This is what closes the clock-skew
     data-loss bug class from #199 for streams, not just for DCB. A STREAM-only store that opts out of position
-    keeps the previous time-based catch-up unchanged.
+    keeps the previous time-based catch-up unchanged. On the blocking stack a subscription that starts at a specific
+    wall-clock time still uses the time-based catch-up even on a position store, since a timestamp has no position to
+    map to. Beginning-of-time and position starts use the position path.
   * Reactive `@StreamSubscription` can now replay history. The new `ReactorStreamCatchupSubscriptionModel` mirrors
     the existing reactive DCB catch-up model. It fails loud only for a store that has opted out of stream position.
   * `DomainEventQueries` (blocking and reactor) gained position-range reads, so a consumer can read events across

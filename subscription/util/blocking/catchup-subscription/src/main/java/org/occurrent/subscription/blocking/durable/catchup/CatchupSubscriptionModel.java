@@ -294,17 +294,23 @@ public class CatchupSubscriptionModel implements SubscriptionModel, DelegatingSu
         if (positionMode) {
             // A "replay from the beginning of time" request is time-based, but on a position store it maps to position
             // 0 so the position catch-up replays history instead of discarding it as an unrecognised token.
-            final StartAt positionStartAt;
             if (startsAtBeginningOfTime(firstStartAt)) {
-                positionStartAt = StartAt.subscriptionPosition(GlobalSubscriptionPosition.of(0));
-            } else {
-                positionStartAt = firstStartAt;
+                StartAt positionStartAt = StartAt.subscriptionPosition(GlobalSubscriptionPosition.of(0));
+                Future<Subscription> subscriptionCompletableFuture = CompletableFuture.supplyAsync(() -> startPositionCatchupSubscriptionForStream(subscriptionId, filter, startAt, action, positionStartAt));
+                return new CatchupSubscription(subscriptionId, subscriptionCompletableFuture);
             }
-            // Only an explicit global-position start triggers a replay. Anything else resumes live directly.
-            if (!startsAtExplicitDcbPosition(positionStartAt)) {
-                return subscriptionModel.subscribe(subscriptionId, filter, positionStartAt, action);
+            // A specific historical wall-clock start has no position to map to, so replay it through the legacy
+            // time-based catch-up even on a position store. Only beginning-of-time and explicit positions use the
+            // position path.
+            if (isTimeBasedSubscriptionPosition(firstStartAt)) {
+                Future<Subscription> subscriptionCompletableFuture = CompletableFuture.supplyAsync(() -> startCatchupSubscription(subscriptionId, filter, startAt, action, firstStartAt));
+                return new CatchupSubscription(subscriptionId, subscriptionCompletableFuture);
             }
-            Future<Subscription> subscriptionCompletableFuture = CompletableFuture.supplyAsync(() -> startPositionCatchupSubscriptionForStream(subscriptionId, filter, startAt, action, positionStartAt));
+            // Only an explicit global-position start triggers a position replay. Anything else resumes live directly.
+            if (!startsAtExplicitDcbPosition(firstStartAt)) {
+                return subscriptionModel.subscribe(subscriptionId, filter, firstStartAt, action);
+            }
+            Future<Subscription> subscriptionCompletableFuture = CompletableFuture.supplyAsync(() -> startPositionCatchupSubscriptionForStream(subscriptionId, filter, startAt, action, firstStartAt));
             return new CatchupSubscription(subscriptionId, subscriptionCompletableFuture);
         }
 
