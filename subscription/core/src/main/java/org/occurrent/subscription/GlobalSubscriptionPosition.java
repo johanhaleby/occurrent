@@ -22,12 +22,12 @@ import org.jspecify.annotations.Nullable;
 import java.util.Objects;
 
 /**
- * A {@link SubscriptionPosition} that points at a global sequence position ({@code position}). It is used by
- * the catch-up subscription model in position mode to resume a catch-up replay from where it left off.
+ * A {@link SubscriptionPosition} that points at a global sequence position. Used by the catch-up subscription model
+ * to resume a replay from where it left off.
  * <p>
- * The string form is self-describing ({@code "position:<n>"}) so that it round-trips through a
- * {@code SubscriptionPositionStorage} (which reads positions back as a {@link StringBasedSubscriptionPosition}) and
- * stays unambiguously distinguishable from an RFC3339 time position and from a database change-stream resume token.
+ * The string form is {@code "position:<n>"}. This lets it round-trip through a {@code SubscriptionPositionStorage}
+ * (which reads it back as a {@link StringBasedSubscriptionPosition}) and stay distinguishable from a time position
+ * or a change-stream resume token.
  */
 @NullMarked
 public class GlobalSubscriptionPosition implements SubscriptionPosition {
@@ -64,9 +64,8 @@ public class GlobalSubscriptionPosition implements SubscriptionPosition {
     }
 
     /**
-     * Returns whether the supplied subscription position is a global sequence position, either a
-     * {@link GlobalSubscriptionPosition} or a {@link StringBasedSubscriptionPosition} whose string form was written
-     * by one (the form a {@code SubscriptionPositionStorage} reads back).
+     * Whether the supplied position is a global sequence position, either a {@link GlobalSubscriptionPosition} or a
+     * {@link StringBasedSubscriptionPosition} written by one (the form read back from storage).
      */
     public static boolean isGlobalSubscriptionPosition(SubscriptionPosition subscriptionPosition) {
         return subscriptionPosition instanceof GlobalSubscriptionPosition ||
@@ -74,9 +73,8 @@ public class GlobalSubscriptionPosition implements SubscriptionPosition {
     }
 
     /**
-     * Reads the global sequence position out of a subscription position previously produced by a
-     * {@link GlobalSubscriptionPosition}, whether it is still a {@code GlobalSubscriptionPosition} or has been read
-     * back from storage as a {@link StringBasedSubscriptionPosition}.
+     * Reads the global sequence position out of a position produced by a {@link GlobalSubscriptionPosition}, whether
+     * it is still one or has been read back from storage as a {@link StringBasedSubscriptionPosition}.
      */
     public static long positionOf(SubscriptionPosition subscriptionPosition) {
         if (subscriptionPosition instanceof GlobalSubscriptionPosition global) {

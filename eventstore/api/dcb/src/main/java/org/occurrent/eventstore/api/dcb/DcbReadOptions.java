@@ -24,8 +24,8 @@ import java.util.OptionalLong;
 import static java.util.Objects.requireNonNull;
 
 /**
- * Options that scope a DCB read. Composes the shared {@link PositionRange} window, so DCB reads share one
- * position-window abstraction with stream position reads and the query DSL.
+ * Options that scope a DCB read. Uses the shared {@link PositionRange} window, the same window used by stream
+ * position reads and the query DSL.
  *
  * @param positionRange the position window to read
  */
@@ -37,7 +37,7 @@ public record DcbReadOptions(PositionRange positionRange) {
     }
 
     /**
-     * Optional exclusive lower bound; when present, only events with a DCB sequence position strictly greater than
+     * Optional exclusive lower bound. When present, only events with a DCB sequence position strictly greater than
      * this value are returned.
      */
     public OptionalLong afterPosition() {
@@ -45,7 +45,7 @@ public record DcbReadOptions(PositionRange positionRange) {
     }
 
     /**
-     * Optional inclusive upper bound; when present, only events with a DCB sequence position less than or equal to
+     * Optional inclusive upper bound. When present, only events with a DCB sequence position less than or equal to
      * this value are returned. When absent, the read includes everything up to the store's DCB head at read time.
      */
     public OptionalLong upToPosition() {

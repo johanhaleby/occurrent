@@ -21,14 +21,13 @@ import org.jspecify.annotations.NullMarked;
 /**
  * Configures the throttling, batching and safety margin of a {@link PositionBackfill} run.
  *
- * @param batchSize        Number of events read, positioned and written per batch. A smaller batch size lowers the
- *                          write-lock and memory footprint per iteration at the cost of more round-trips.
+ * @param batchSize        Number of events positioned per batch. A smaller batch lowers the write-lock and memory
+ *                          footprint per iteration at the cost of more round-trips.
  * @param throttleMillis   Milliseconds to sleep between batches, so the backfill does not compete with production
- *                          traffic for write capacity. {@code 0} disables throttling.
- * @param counterSeedSlack Extra positions reserved above the accurate historical event count when seeding the
- *                          position counter (step 1). This absorbs events written concurrently with the count, and
- *                          any stream/DCB events appended between the count and the counter seed, so live writes
- *                          after deploy are guaranteed to land above every position the backfill will assign.
+ *                          traffic. {@code 0} disables throttling.
+ * @param counterSeedSlack Extra positions reserved above the event count when seeding the counter. Absorbs events
+ *                          written between the count and the seed, so live writes after deploy land above every
+ *                          position the backfill assigns.
  */
 @NullMarked
 public record PositionBackfillOptions(int batchSize, long throttleMillis, long counterSeedSlack) {

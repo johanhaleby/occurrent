@@ -23,13 +23,12 @@ import java.util.OptionalLong;
 import static java.util.Objects.requireNonNull;
 
 /**
- * A bounded window over the global, monotonic sequence position, shared by every position-ordered read (DCB reads,
- * stream position reads, and the user-facing query DSL) so there is one position-window abstraction rather than a
- * duplicate per read shape.
+ * A bounded window over the global, monotonic sequence position. Shared by every position-ordered read: DCB reads,
+ * stream position reads, and the query DSL.
  *
- * @param afterPosition optional exclusive lower bound; when present, only events with a position strictly greater
- *                       than this value are included
- * @param upToPosition  optional inclusive upper bound; when present, only events with a position less than or equal
+ * @param afterPosition optional exclusive lower bound. When present, only events with a position strictly greater
+ *                       than this value are included.
+ * @param upToPosition  optional inclusive upper bound. When present, only events with a position less than or equal
  *                       to this value are included. When absent, the range includes everything up to the store's
  *                       position head at read time.
  */
@@ -51,8 +50,8 @@ public record PositionRange(OptionalLong afterPosition, OptionalLong upToPositio
         });
         if (afterPosition.isPresent() && upToPosition.isPresent()
                 && afterPosition.getAsLong() > upToPosition.getAsLong()) {
-            // The lower bound is exclusive and the upper bound is inclusive, so an equal pair is a valid empty range.
-            // Only an inverted range (after greater than upTo) is rejected.
+            // An equal pair is a valid empty range (lower bound exclusive, upper inclusive). Only reject an inverted
+            // range where after is greater than upTo.
             throw new IllegalArgumentException("After position cannot be greater than up to position");
         }
     }

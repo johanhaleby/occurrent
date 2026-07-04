@@ -25,13 +25,11 @@ import java.util.stream.Stream;
 
 /**
  * Implemented by event stores that can read events ordered by the global sequence position within a bounded
- * {@link PositionRange}, filtered by a {@link Filter}. This is the stream analogue of the DCB position-ordered read
- * (which already exists via {@code DcbEventStore.read(DcbQuery, DcbReadOptions)}), sharing the same
- * {@link PositionRange} window so a catch-up subscription model or the query DSL can replay stream and DCB history
- * through one abstraction.
+ * {@link PositionRange}, filtered by a {@link Filter}. Stream and DCB reads use the same {@link PositionRange}
+ * window, so callers can replay either through one abstraction.
  * <p>
- * Only implemented by stores where {@code writesPosition()} is {@code true}; a store without position throws
- * {@link UnsupportedOperationException} rather than returning an empty or incorrect result.
+ * Only implemented by stores where {@code writesPosition()} is {@code true}. A store without position throws
+ * {@link UnsupportedOperationException} instead of returning an empty or incorrect result.
  */
 @NullMarked
 public interface PositionOrderedReader {
@@ -52,10 +50,8 @@ public interface PositionOrderedReader {
     long currentPosition();
 
     /**
-     * Returns whether this store carries a global position, i.e. whether {@link #readInPositionOrder(Filter, PositionRange)}
-     * and {@link #currentPosition()} are safe to call. A consumer that only holds this interface (for example a
-     * position-selecting catch-up subscription model) uses this to choose its reconciliation strategy without
-     * depending on a concrete store type.
+     * Whether this store carries a global position, that is, whether {@link #readInPositionOrder(Filter, PositionRange)}
+     * and {@link #currentPosition()} are safe to call.
      */
     boolean writesPosition();
 }

@@ -56,10 +56,9 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.awaitility.Awaitility.await;
 
 /**
- * Proves that on a STREAM-only reactive store that writes position (on by default), a {@link StreamSubscription} that
- * starts at {@link StartPosition#BEGINNING_OF_TIME} replays historic stream events written before it subscribes, via the
- * reactive stream catch-up model wired when position is on. Before position, reactive stream history replay was
- * unsupported and failed loud.
+ * Proves that on a STREAM-only reactive store that writes position (on by default), a {@link StreamSubscription}
+ * starting at {@link StartPosition#BEGINNING_OF_TIME} replays historic stream events written before it subscribes.
+ * The reactive stream catch-up model is wired only when position is on.
  */
 @DisplayName("Reactive @StreamSubscription history replay (position on)")
 @DisplayNameGeneration(ReplaceUnderscores.class)

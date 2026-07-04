@@ -44,42 +44,36 @@ import static java.util.Objects.requireNonNull;
 
 /**
  * Reactive stream catch-up: replays stream history matching a {@link Filter} in global {@code position} order via
- * {@link PositionOrderedReader}, then hands over to a live subscription, as a single {@link Flux}. It lets a reactive
- * read model rebuild from the beginning of the stream sequence and then keep up with new events.
+ * {@link PositionOrderedReader}, then hands over to a live subscription, all as a single {@link Flux}. It lets a
+ * reactive read model rebuild from the start of the stream sequence and then keep up with new events.
  * <p>
- * This is the stream counterpart of {@link ReactorDcbCatchupSubscriptionModel}: it replays through
- * {@link PositionOrderedReader#readInPositionOrder(Filter, PositionRange)} instead of a {@code DcbQuery} read, and
- * matches a stream {@link Filter} in-process at the handover seam instead of a {@code DcbQuery}. Everything else -
- * the bulk/reconcile/live structure, the handover cache, {@link PositionAwareCloudEvent}, and
- * {@link GlobalSubscriptionPosition} - mirrors the DCB model exactly, because both stacks share the same global
- * {@code position} sequence.
+ * This is the stream counterpart of {@link ReactorDcbCatchupSubscriptionModel}. It replays through
+ * {@link PositionOrderedReader#readInPositionOrder(Filter, PositionRange)} and matches a stream {@link Filter}
+ * in-process, where the DCB model uses a {@code DcbQuery}. Otherwise the two are the same, because both read the
+ * same global {@code position} sequence.
  * <p>
- * Only meaningful for a store that writes a {@code position} on stream events ({@code writesPosition()} is
- * {@code true}). This model has no way to check that itself (it depends only on {@link PositionOrderedReader}, not
- * on a concrete event store), so a caller must not wire it up against a store that does not write position; the
- * store's own guarded APIs (its {@code requirePosition()}) will fail loudly first if that mistake is made, since
- * {@link PositionOrderedReader#readInPositionOrder(Filter, PositionRange)} itself throws
- * {@link UnsupportedOperationException} in that case.
+ * Only meaningful for a store that writes a {@code position} on stream events. This model cannot check that itself
+ * (it depends only on {@link PositionOrderedReader}), so do not wire it up against a store that does not write
+ * position. If you do, {@link PositionOrderedReader#readInPositionOrder(Filter, PositionRange)} throws
+ * {@link UnsupportedOperationException}.
  * <p>
- * The handover preserves the central invariant of the blocking catch-up. The live change-stream resume token is
- * captured before the bulk replay, not after, so a stream event that commits during the replay is still delivered by
- * the live subscription. The replay pages the sequence in {@code position} windows (no count and no time sort,
- * because {@code position} is monotonic and server-assigned), then a reconciliation pass keeps paging until the head
- * stops advancing to deliver events written during the replay in order. The handover seam is deduplicated with a
- * bounded id cache so a reconciliation event the live subscription also sees is delivered once.
+ * The live resume token is captured before the bulk replay, not after, so an event that commits during the replay is
+ * still delivered by the live subscription. The replay pages the sequence in {@code position} windows, then a
+ * reconciliation pass keeps paging until the head stops advancing so events written during the replay are delivered
+ * in order. A bounded id cache dedupes events that both the replay and the live subscription see.
  * <p>
- * Trade-off: if the replay runs longer than the change stream history (the MongoDB oplog window), the captured token
- * ages out and the live resume fails loudly rather than silently dropping an event. Size the oplog for very large
- * rebuilds. If the model cannot report a resume token at all (for example an empty oplog or a restricted cluster),
- * the subscription fails loudly for the same reason, rather than replaying without a guaranteed handover to live.
+ * If the replay runs longer than the change stream history (the MongoDB oplog window), the captured token ages out
+ * and the live resume fails loudly rather than silently dropping an event. Size the oplog for very large rebuilds.
+ * If the model reports no resume token at all (for example an empty oplog or a restricted cluster), the subscription
+ * fails loudly for the same reason.
  * <p>
  * This model does not persist subscription positions, so layer a durable model on top (for example
  * {@code ReactorDurableSubscriptionModel}) if resume across restarts is needed.
  * <p>
  * It implements {@link PositionAwareSubscriptionModel}, so it can sit as a plain (cold) subscription model underneath
- * a durable model. Its generic {@link #subscribe(SubscriptionFilter, StartAt)} only understands an
- * {@link OccurrentSubscriptionFilter} (or no filter, in which case a default {@link Filter} supplied to the
- * constructor is used), since catch-up is filter-specific.
+ * a durable model. Its generic {@link #subscribe(SubscriptionFilter, StartAt)} only accepts an
+ * {@link OccurrentSubscriptionFilter}, or no filter, in which case the default {@link Filter} passed to the
+ * constructor is used.
  */
 @NullMarked
 public class ReactorStreamCatchupSubscriptionModel implements PositionAwareSubscriptionModel {
@@ -109,8 +103,8 @@ public class ReactorStreamCatchupSubscriptionModel implements PositionAwareSubsc
 
     /**
      * Create a catch-up model with a default {@link Filter} used by {@link #subscribe(SubscriptionFilter, StartAt)}
-     * when it is called without a filter. This mirrors the DCB catch-up model's default-query constructor, so the
-     * reactive starter can wire one model that every stream subscription narrows with its own filter in the consumer.
+     * when it is called without a filter. Lets one model serve every stream subscription, each narrowing with its own
+     * filter.
      */
     public ReactorStreamCatchupSubscriptionModel(PositionAwareSubscriptionModel subscriptionModel, PositionOrderedReader positionOrderedReader, @Nullable Filter defaultFilter) {
         this(subscriptionModel, positionOrderedReader, defaultFilter, DEFAULT_POSITION_WINDOW_SIZE, DEFAULT_HANDOVER_CACHE_SIZE);
@@ -170,9 +164,8 @@ public class ReactorStreamCatchupSubscriptionModel implements PositionAwareSubsc
 
         StartAt resolved = startAt.get(new SubscriptionModelContext(ReactorStreamCatchupSubscriptionModel.class));
         if (!(resolved instanceof StartAt.StartAtSubscriptionPosition position) || !GlobalSubscriptionPosition.isGlobalSubscriptionPosition(position.subscriptionPosition)) {
-            // Not a catch-up position, so go straight to live. Apply the same in-process floor the replay-to-live
-            // path applies, so a backend that does not honor the filter server-side still only delivers events
-            // matching the filter, and skips events without a position (an opt-out or pre-backfill event).
+            // Not a catch-up position, so go straight to live. Filter in-process too, so a backend that does not
+            // honor the filter server-side still only delivers matching events, and skip events without a position.
             return subscriptionModel.subscribe(OccurrentSubscriptionFilter.filter(filter), resolved == null ? startAt : resolved)
                     .filter(cloudEvent -> OccurrentCloudEventExtension.getPosition(cloudEvent) > 0 && FilterMatcher.matchesFilter(cloudEvent, filter));
         }
@@ -180,17 +173,15 @@ public class ReactorStreamCatchupSubscriptionModel implements PositionAwareSubsc
         long startPosition = GlobalSubscriptionPosition.positionOf(position.subscriptionPosition);
         // Capture the live resume token before the bulk replay so an event committing during the replay is still
         // delivered by the live subscription. If the model reports no token (for example an empty oplog or a
-        // restricted cluster) a no-loss handover to live cannot be guaranteed, so fail loudly instead of silently
-        // dropping the events committed between the end of the replay and going live.
+        // restricted cluster) events could be dropped between the end of the replay and going live, so fail loudly.
         return subscriptionModel.globalSubscriptionPosition()
                 .switchIfEmpty(Mono.error(() -> new IllegalStateException("Cannot run a stream catch-up subscription because the subscription model reported no resume token to hand over to live delivery. The change stream history may be unavailable, for example an empty oplog or a restricted cluster.")))
                 .flatMapMany(liveToken ->
                 positionOrderedReader.currentPosition().flatMapMany(bulkHead -> {
                     HandoverCache cache = new HandoverCache(handoverCacheSize);
-                    // Cache the replayed ids, including the bulk tail, because the reactive global subscription
-                    // position resumes inclusively, so the live change stream re-delivers boundary events the replay
-                    // already emitted. Dedup is by id, not by position, so an in-flight event below the replay head
-                    // that was never seen during the replay is still delivered once by the live change stream.
+                    // Cache the replayed ids so the live change stream can skip them. It resumes inclusively and so
+                    // re-delivers boundary events the replay already emitted. Dedup by id, not by position, so an
+                    // event below the replay head that the replay never saw is still delivered once by the live stream.
                     Flux<CloudEvent> bulk = windows(filter, startPosition, bulkHead, cache);
                     Flux<CloudEvent> reconcile = reconcile(filter, bulkHead, cache);
                     Flux<CloudEvent> live = subscriptionModel.subscribe(OccurrentSubscriptionFilter.filter(filter), StartAt.subscriptionPosition(liveToken))
@@ -201,9 +192,8 @@ public class ReactorStreamCatchupSubscriptionModel implements PositionAwareSubsc
                 }));
     }
 
-    // Emits events in (fromExclusive, toInclusive] paging in position windows. Records every emitted id in the cache
-    // so the inclusive live resume can skip the replayed events at the handover seam. Used by both the bulk and the
-    // reconciliation phases.
+    // Emits events in (fromExclusive, toInclusive], paging in position windows. Records every emitted id in the cache
+    // so the inclusive live resume can skip the replayed events. Used by both the bulk and the reconciliation phases.
     private Flux<CloudEvent> windows(Filter filter, long fromExclusive, long toInclusive, HandoverCache cache) {
         if (fromExclusive >= toInclusive) {
             return Flux.empty();
@@ -211,10 +201,8 @@ public class ReactorStreamCatchupSubscriptionModel implements PositionAwareSubsc
         long upTo = Math.min(fromExclusive + windowSize, toInclusive);
         return positionOrderedReader.readInPositionOrder(filter, PositionRange.between(fromExclusive, upTo))
                 .doOnNext(event -> cache.add(event.getId()))
-                // Attach the position as the subscription position so a durable model layered on top can persist the
-                // replay progress (a raw event read from the store carries no change-stream position). Mirrors the
-                // DCB reactive catch-up model, which wraps each replayed event with
-                // GlobalSubscriptionPosition.of(its position).
+                // Attach the position as the subscription position so a durable model layered on top can persist
+                // replay progress. A raw event read from the store carries no change-stream position.
                 .map(event -> (CloudEvent) new PositionAwareCloudEvent(event, GlobalSubscriptionPosition.of(OccurrentCloudEventExtension.getPosition(event))))
                 .concatWith(Flux.defer(() -> windows(filter, upTo, toInclusive, cache)));
     }
@@ -227,9 +215,9 @@ public class ReactorStreamCatchupSubscriptionModel implements PositionAwareSubsc
                 : Flux.empty());
     }
 
-    // A bounded, insertion-ordered set of event ids covering the recently replayed tail. The live change stream
-    // resumes inclusively, so it re-delivers events near the captured token that the replay already emitted, and
-    // this cache skips those. It does not need the whole history, only the tail the live resume can overlap.
+    // A bounded, insertion-ordered set of recently replayed event ids. The live change stream resumes inclusively and
+    // re-delivers events near the captured token that the replay already emitted, and this cache skips those. It only
+    // needs the tail the live resume can overlap, not the whole history.
     private static final class HandoverCache {
         private final int maxSize;
         private final Set<String> ids;

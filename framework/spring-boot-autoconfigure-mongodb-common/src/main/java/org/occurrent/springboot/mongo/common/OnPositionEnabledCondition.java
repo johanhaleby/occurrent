@@ -31,10 +31,9 @@ import static org.occurrent.eventstore.api.EventStoreCapability.DCB;
 import static org.occurrent.eventstore.api.EventStoreCapability.STREAM;
 
 /**
- * Matches when the auto-configured event store carries a global position, i.e. the derived
- * {@code writesPosition()} predicate is true: the DCB capability is enabled (DCB always writes position), or the
- * STREAM capability is enabled with {@code occurrent.event-store.stream.position} on (the default). Use this to gate
- * beans that only make sense when the store carries position.
+ * Matches when the auto-configured event store writes a global position. That is the case when DCB is enabled (DCB
+ * always writes position) or when STREAM is enabled with {@code occurrent.event-store.stream.position} on (the
+ * default). Use it to gate beans that only make sense when the store writes position.
  */
 public class OnPositionEnabledCondition implements Condition {
     @Override

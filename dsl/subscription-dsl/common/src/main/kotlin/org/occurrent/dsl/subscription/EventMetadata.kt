@@ -37,8 +37,7 @@ data class EventMetadata(val data: Map<String, Any?>) {
     /**
      * The global, monotonic sequence position of the event, or `null` when the event has no position (for example a
      * stream-written event on a store that does not write stream position). DCB-written events always have a
-     * position. This is the general, stack-agnostic accessor; see `DcbEventMetadata.dcbPosition` for a DCB-flavored
-     * `OptionalLong` view of the same value.
+     * position. Java callers can use `DcbEventMetadata.position()` for an `OptionalLong` view of the same value.
      */
     val position: Long?
         get() = when (val value = data[OccurrentCloudEventExtension.POSITION]) {

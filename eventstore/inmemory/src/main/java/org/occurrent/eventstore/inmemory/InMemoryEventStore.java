@@ -85,10 +85,8 @@ public class InMemoryEventStore implements EventStore, EventStoreOperations, Eve
 
     private final Consumer<Stream<CloudEvent>> listener;
     private final DcbStreamIdGenerator dcbStreamIdGenerator;
-    // Whether stream-written events are stamped with the global position from the same counter DCB uses. Defaults to
-    // true so stream and DCB events share one monotonic sequence out of the box; opt out with withoutStreamPosition()
-    // for a STREAM-only store that never wants a global position. InMemory implements DCB unconditionally, so
-    // writesPosition() is derived from this flag alone.
+    // Whether stream-written events get a global position from the same counter DCB uses, so stream and DCB events
+    // share one sequence. Turn it off with withoutStreamPosition() for a STREAM-only store that wants no position.
     private final boolean streamPositionEnabled;
 
     /**
@@ -131,28 +129,24 @@ public class InMemoryEventStore implements EventStore, EventStoreOperations, Eve
     }
 
     /**
-     * Returns a copy of this store with the stream-scoped position opt-out set, i.e. stream-written events will not
-     * carry a global position. This is only meaningful for a STREAM-only store; since {@link InMemoryEventStore}
-     * implements DCB unconditionally, {@link #writesPosition()} on the returned copy is still driven by this flag
-     * because DCB events are the only ones guaranteed to carry a position.
+     * Returns a copy of this store where stream-written events carry no global position. Only meaningful for a
+     * STREAM-only store, since DCB events always carry a position.
      */
     public InMemoryEventStore withoutStreamPosition() {
         return new InMemoryEventStore(listener, dcbStreamIdGenerator, false);
     }
 
     /**
-     * Returns a copy of this store with stream-scoped position enabled, i.e. stream-written events are stamped with the
-     * same global position DCB uses so both share one monotonic sequence. This is the explicit opt-in until the
-     * on-by-default flip lands.
+     * Returns a copy of this store where stream-written events get the same global position DCB uses, so both share
+     * one sequence.
      */
     public InMemoryEventStore withStreamPosition() {
         return new InMemoryEventStore(listener, dcbStreamIdGenerator, true);
     }
 
     /**
-     * Returns whether this store carries a global position, i.e. whether position-requiring APIs are safe to call.
-     * {@link InMemoryEventStore} implements DCB unconditionally (DCB always writes position), so this only reflects
-     * whether stream-written events are also stamped with a position; it does not gate the DCB read/write path.
+     * Returns whether stream-written events carry a global position, so position-requiring APIs are safe to call. DCB
+     * always writes a position regardless of this flag.
      */
     @Override
     public boolean writesPosition() {
@@ -227,9 +221,8 @@ public class InMemoryEventStore implements EventStore, EventStoreOperations, Eve
         });
     }
 
-    // Must be called from inside the "state.compute" critical section (see write(...)) so that, when stream position
-    // is enabled, the positions handed out here are reserved from the same nextPosition counter DCB uses, under the
-    // same lock DCB appends use, keeping the two write paths on one shared monotonic sequence.
+    // Call from inside the "state.compute" critical section so positions are drawn from the same nextPosition counter,
+    // under the same lock, that DCB uses, keeping stream and DCB writes on one shared sequence.
     private List<CloudEvent> applyStreamWriteExtensions(Stream<CloudEvent> events, String streamId, long streamVersion) {
         List<CloudEvent> withStreamMetadata = zip(LongStream.iterate(streamVersion + 1, i -> i + 1).boxed(), events, Pair::new)
                 .map(pair -> modifyCloudEvent(e -> e.withExtension(new OccurrentCloudEventExtension(streamId, pair.t1))).apply(pair.t2))

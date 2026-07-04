@@ -251,19 +251,14 @@ public class MongoEventStore implements EventStore, EventStoreOperations, EventS
             throw new IllegalArgumentException(WriteCondition.class.getSimpleName() + " cannot be null");
         }
 
-        // The write method takes a "Stream" of events, but the write transaction may retry (a WriteConditionNotFulfilled
-        // retry when the condition is "any" and there are parallel writes to the same stream, or an internal transient
-        // transaction retry). A stream cannot be consumed twice, so materialize the events up front into a list that
-        // every attempt re-reads. This also lets us know the event count before opening the transaction so positions can
-        // be reserved outside it (below).
+        // The transaction may retry, but a Stream cannot be consumed twice, so materialize the events into a list that
+        // every attempt re-reads. This also gives the event count needed to reserve positions before the transaction.
         List<CloudEvent> cachedEvents = events.toList();
 
-        // Reserve the position block once, outside the transaction, for the same reason DCB does (see reservePositions
-        // javadoc): the counter findAndModify is its own serialization point and must not become a transaction
-        // write-write conflict on the shared counter document. Reserving it inside the transaction turns parallel writes
-        // into a counter hotspot. The reserved block is reused across retries; a doomed or condition-failed write
-        // abandons it, so position may have gaps (permitted, see ADR 0021). Reserve only when the store writes position
-        // and there is at least one event to write.
+        // Reserve the position block outside the transaction, like DCB does (see reservePositions), so the shared
+        // counter does not become a transaction write-write conflict. The block is reused across retries, and a write
+        // that never commits abandons it, so positions may have gaps. Reserve only when the store writes position and
+        // there is at least one event.
         final long firstReservedPosition;
         if (streamPositionEnabled && !cachedEvents.isEmpty()) {
             firstReservedPosition = reservePositions(cachedEvents.size());
@@ -304,8 +299,8 @@ public class MongoEventStore implements EventStore, EventStoreOperations, EventS
     private List<Document> convertCloudEventsToDocuments(String streamId, Stream<CloudEvent> cloudEvents, long currentStreamVersion, long firstReservedPosition) {
         List<Document> documents = mapWithIndex(cloudEvents, currentStreamVersion, pair -> convertToDocument(timeRepresentation, streamId, pair.t1, pair.t2)).toList();
         if (streamPositionEnabled && !documents.isEmpty()) {
-            // Stamp the pre-reserved positions (reserved outside the transaction, see write(...)). Positions may have
-            // gaps if a retry abandons a reserved block, same as the DCB write path (ADR 0021).
+            // Stamp the positions reserved outside the transaction (see write(...)). They may have gaps, like the DCB
+            // write path.
             long position = firstReservedPosition;
             for (Document document : documents) {
                 PositionDocumentMapper.addPosition(document, position);
@@ -336,10 +331,9 @@ public class MongoEventStore implements EventStore, EventStoreOperations, EventS
     }
 
     /**
-     * Reads events matching {@code filter} ordered by position ascending, within {@code range}, clamped to the
-     * store's position high-watermark at read time. Reuses the same read discipline as the DCB position-ordered read
-     * ({@link #read(DcbQuery, DcbReadOptions)}): the upper bound is the lesser of the range's {@code upToPosition} and
-     * the watermark, so a concurrent append after the watermark snapshot is never partially visible.
+     * Reads events matching {@code filter} in position order, within {@code range}, clamped to the store's highest
+     * written position at read time. The upper bound is the lesser of the range's {@code upToPosition} and that
+     * position, so a concurrent append is never partially visible.
      *
      * @throws UnsupportedOperationException if this store does not write a position ({@link #writesPosition()} is
      *                                        {@code false}).
@@ -525,10 +519,9 @@ public class MongoEventStore implements EventStore, EventStoreOperations, EventS
 
     /**
      * Reserves a contiguous block of {@code eventCount} global positions by incrementing one counter document, shared
-     * by the DCB append path and the stream write path so both draw from one monotonic sequence. Every append that
-     * writes position passes through this single document, so it is a serialization point and an inherent throughput
-     * ceiling for the store as a whole under very high append rates. It is kept outside the append transaction (ADR 21)
-     * so it does not turn into transaction conflicts, but the global monotonic sequence cannot be sharded away.
+     * by the DCB and stream write paths so both draw from one sequence. Every positioned append passes through this
+     * document, so it serializes writes and caps append throughput under very high load. It is kept outside the append
+     * transaction so it does not cause transaction conflicts.
      */
     private long reservePositions(int eventCount) {
         // Retry the cold-start race: when the counter document does not exist yet, concurrent upserts all try to insert
@@ -548,8 +541,8 @@ public class MongoEventStore implements EventStore, EventStoreOperations, EventS
     }
 
     /**
-     * The store's current position high-watermark, i.e. the position of the most recently reserved event, shared by
-     * the DCB and stream write paths. Returns {@code 0} when no positioned event has been written yet.
+     * The highest position reserved so far, shared by the DCB and stream write paths. Returns {@code 0} when no
+     * positioned event has been written yet.
      *
      * @throws UnsupportedOperationException if this store does not write a position ({@link #writesPosition()} is
      *                                        {@code false}).
@@ -733,9 +726,8 @@ public class MongoEventStore implements EventStore, EventStoreOperations, EventS
             mongoDatabase.createCollection(eventStoreCollectionName);
         }
         boolean dcbEnabled = eventStoreCapabilities.contains(DCB);
-        // The position counter/checkpoint collections back both the DCB conflict markers and, once writesPosition() is
-        // true for a STREAM-only store, the shared position counter, so they must exist whenever position is written,
-        // not only when DCB is enabled.
+        // The position counter collection holds the shared position counter too, so it must exist whenever position is
+        // written, not only when DCB is enabled.
         if (writesPosition && !collectionExists(mongoDatabase, dcbPositionCollectionName)) {
             mongoDatabase.createCollection(dcbPositionCollectionName);
         }
@@ -745,15 +737,15 @@ public class MongoEventStore implements EventStore, EventStoreOperations, EventS
 
         // Cloud spec defines id + source must be unique!
         eventStoreCollection.createIndex(Indexes.compoundIndex(Indexes.ascending("id"), Indexes.ascending("source")), new IndexOptions().unique(true));
-        // streamId + streamVersion uniqueness is a stream-mode invariant. DCB correctness rests on the per-attribute
-        // markers and the unique position, not stream version, so a DCB-only store neither needs nor creates it.
+        // streamId + streamVersion uniqueness is a stream-mode invariant. DCB does not use stream version, so a
+        // DCB-only store does not create it.
         if (eventStoreCapabilities.contains(STREAM)) {
             // Create a streamId + streamVersion ascending index (note that we don't need to index stream id separately since it's covered by this compound index)
             // Note also that this index supports when sorting both ascending and descending since MongoDB can traverse an index in both directions.
             eventStoreCollection.createIndex(Indexes.compoundIndex(Indexes.ascending(STREAM_ID), Indexes.ascending(STREAM_VERSION)), new IndexOptions().unique(true));
         }
-        // The position index is created whenever position is written, whether it comes from DCB or from a
-        // position-enabled STREAM-only store, since both write into the same unique, sparse position field.
+        // The position index is created whenever position is written, since DCB and stream writes share the same
+        // unique, sparse position field.
         if (writesPosition) {
             eventStoreCollection.createIndex(Indexes.ascending(OccurrentCloudEventExtension.POSITION), new IndexOptions().unique(true).sparse(true));
         }
@@ -762,11 +754,9 @@ public class MongoEventStore implements EventStore, EventStoreOperations, EventS
         }
     }
 
-    // Guards the on-by-default upgrade hazard: a store that flips writesPosition() on against a pre-existing,
-    // non-empty event collection whose events predate the flip has no position on that history, which would silently
-    // produce a position blind-spot for position-based catch-up. A cheap existence check (not a full scan) so this
-    // stays fast on a healthy, fully positioned store; it only pays for a document read when the position index has an
-    // unpositioned event to find.
+    // Warns or fails when a position-writing store has pre-existing events without a position, since position-based
+    // catch-up would silently skip that history. Uses the position index to find one such event, so it stays cheap on
+    // a fully positioned store.
     private static void warnOrFailOnUnpositionedEvents(MongoCollection<Document> eventCollection, boolean requireBackfilledPosition) {
         if (eventCollection.estimatedDocumentCount() == 0) {
             return;
@@ -810,7 +800,7 @@ public class MongoEventStore implements EventStore, EventStoreOperations, EventS
     }
 
     /**
-     * Returns whether this store carries a global position, i.e. whether position-requiring APIs are safe to call.
+     * Returns whether this store writes a global position, so position-requiring APIs are safe to call.
      */
     @Override
     public boolean writesPosition() {

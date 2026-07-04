@@ -32,35 +32,27 @@ import org.occurrent.cloudevents.OccurrentCloudEventExtension;
 @DisplayNameGeneration(ReplaceUnderscores.class)
 class DcbEventMetadataTest {
 
-    // dcbPosition() is DCB-specific: it reports the shared global position only for a DCB-written event (one carrying
-    // the DCB tags extension). A stream event carries a position too once stream position is on, but that is not DCB
-    // metadata, so these fixtures include the DCB tags extension to represent a DCB event.
+    // position() reads the event's global position from the POSITION extension, or empty when there is none. It does
+    // not depend on the event being DCB, a stream event with a position reads back the same way.
     @Test
     void reads_position_when_stored_as_number() {
-        EventMetadata metadata = new EventMetadata(Map.of(OccurrentCloudEventExtension.POSITION, 7L, DcbCloudEvents.TAGS, DcbCloudEvents.encodeTags(Set.of("name:1"))));
+        EventMetadata metadata = new EventMetadata(Map.of(OccurrentCloudEventExtension.POSITION, 7L));
 
-        assertThat(DcbEventMetadata.from(metadata).dcbPosition()).hasValue(7L);
+        assertThat(DcbEventMetadata.from(metadata).position()).hasValue(7L);
     }
 
     @Test
     void reads_position_when_stored_as_string() {
-        EventMetadata metadata = new EventMetadata(Map.of(OccurrentCloudEventExtension.POSITION, "7", DcbCloudEvents.TAGS, DcbCloudEvents.encodeTags(Set.of("name:1"))));
+        EventMetadata metadata = new EventMetadata(Map.of(OccurrentCloudEventExtension.POSITION, "7"));
 
-        assertThat(DcbEventMetadata.from(metadata).dcbPosition()).hasValue(7L);
+        assertThat(DcbEventMetadata.from(metadata).position()).hasValue(7L);
     }
 
     @Test
     void position_is_empty_when_absent() {
         EventMetadata metadata = new EventMetadata(Map.of(DcbCloudEvents.TAGS, DcbCloudEvents.encodeTags(Set.of("name:1"))));
 
-        assertThat(DcbEventMetadata.from(metadata).dcbPosition()).isEmpty();
-    }
-
-    @Test
-    void position_is_empty_for_a_stream_event_that_has_a_position_but_no_dcb_tags() {
-        EventMetadata metadata = new EventMetadata(Map.of(OccurrentCloudEventExtension.POSITION, 7L));
-
-        assertThat(DcbEventMetadata.from(metadata).dcbPosition()).isEmpty();
+        assertThat(DcbEventMetadata.from(metadata).position()).isEmpty();
     }
 
     @Test

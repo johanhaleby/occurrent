@@ -158,12 +158,11 @@ public class ReactorMongoEventStore implements EventStore, EventStoreOperations,
             throw new IllegalArgumentException(WriteCondition.class.getSimpleName() + " cannot be null");
         }
 
-        // Materialize the events up front so the count is known before the transaction, and reserve the position block
-        // outside the transaction, for the same reason DCB does (see reservePositions javadoc): the counter
-        // findAndModify is its own serialization point and must not become a transaction write-write conflict on the
-        // shared counter document. Reserving it inside the transaction turns parallel writes into a counter hotspot. The
-        // reserved block is reused if the transaction retries; a doomed write abandons it, so position may have gaps
-        // (permitted, see ADR 0021). Reserve only when the store writes position and there is at least one event.
+        // Collect the events first so the count is known before the transaction, then reserve the position block
+        // outside the transaction, like DCB does (see reservePositions), so the shared counter does not become a
+        // transaction write-write conflict. The block is reused if the transaction retries, and a write that never
+        // commits abandons it, so positions may have gaps. Reserve only when the store writes position and there is
+        // at least one event.
         return events.collectList().flatMap(cachedEvents -> {
             Mono<Long> firstReservedPosition = writesPosition() && !cachedEvents.isEmpty()
                     ? reservePositions(cachedEvents.size())
@@ -447,7 +446,7 @@ public class ReactorMongoEventStore implements EventStore, EventStoreOperations,
     }
 
     /**
-     * Returns whether this store carries a global position, i.e. whether position-requiring APIs are safe to call.
+     * Returns whether this store writes a global position, so position-requiring APIs are safe to call.
      */
     @Override
     public boolean writesPosition() {
@@ -623,15 +622,14 @@ public class ReactorMongoEventStore implements EventStore, EventStoreOperations,
                 .then(createIndex(eventStoreCollectionName, mongoTemplate, Indexes.compoundIndex(Indexes.ascending("id"), Indexes.ascending("source")), new IndexOptions().unique(true)))
                 .then();
 
-        // streamId + streamVersion uniqueness is a stream-mode invariant. DCB correctness rests on the per-attribute
-        // markers and the unique position, not stream version, so a DCB-only store neither needs nor creates it.
+        // streamId + streamVersion uniqueness is a stream-mode invariant. DCB does not use stream version, so a
+        // DCB-only store does not create it.
         if (eventStoreCapabilities.contains(STREAM)) {
             chain = chain.then(createIndex(eventStoreCollectionName, mongoTemplate, Indexes.compoundIndex(Indexes.ascending(STREAM_ID), Indexes.ascending(STREAM_VERSION)), new IndexOptions().unique(true))).then();
         }
 
-        // The position counter collection and index are shared by whichever write path(s) reserve from it: DCB always,
-        // and STREAM when position is enabled (writesPosition()). Sparse because opt-out STREAM-only events, or a
-        // not-yet-backfilled STREAM-only store's pre-existing events, carry no position field.
+        // The position counter collection and index are shared by DCB and by STREAM when position is enabled. The
+        // index is sparse because events without a position (opt-out or not-yet-backfilled) carry no position field.
         if (writesPosition) {
             chain = chain
                     .then(createCollection(dcbPositionCollectionName, mongoTemplate))
@@ -657,10 +655,9 @@ public class ReactorMongoEventStore implements EventStore, EventStoreOperations,
         return chain;
     }
 
-    // Startup safety guard for the on-by-default upgrade hazard: a deployment that enables position on an existing
-    // STREAM store without first running the backfill migration would otherwise silently develop a "position
-    // blind-spot" of historical events with no position, which position-based catch-up would then skip. Loudly WARN
-    // (or hard-fail, if configured) rather than let that pass unnoticed. See the position-backfill migration runbook.
+    // Startup guard: when this store writes position but the event collection already has events without one, those
+    // events are invisible to position-based catch-up. Warns, or fails when configured, so nobody silently runs with
+    // un-backfilled history.
     private Mono<Void> warnIfUnpositionedEventsExist(String eventStoreCollectionName, ReactiveMongoTemplate mongoTemplate) {
         Query unpositionedQuery = new Query(where(OccurrentCloudEventExtension.POSITION).exists(false));
         return mongoTemplate.exists(new Query(), eventStoreCollectionName).flatMap(collectionNonEmpty -> {
@@ -700,9 +697,8 @@ public class ReactorMongoEventStore implements EventStore, EventStoreOperations,
     }
 
     private static CloudEvent convertToCloudEvent(TimeRepresentation timeRepresentation, Document document) {
-        // Use the DCB-aware mapper so that DCB storage fields (dcbTags, position) are handled rather than leaked as
-        // CloudEvent extensions when this store reads a collection that a DCB-enabled store also writes to. It is a
-        // no-op for plain stream events.
+        // Use the DCB-aware mapper so DCB storage fields (dcbTags, position) are not leaked as CloudEvent extensions
+        // when reading a collection a DCB store also writes to. A no-op for plain stream events.
         return DcbDocumentMapper.toCloudEvent(timeRepresentation, document);
     }
 
@@ -869,9 +865,8 @@ public class ReactorMongoEventStore implements EventStore, EventStoreOperations,
         return result;
     }
 
-    // Stamps the pre-reserved position block (reserved outside the transaction, see write(...)) onto each stream
-    // document, so stream and DCB events share one monotonic sequence. A no-op (returns the documents unchanged) when
-    // writesPosition() is false, i.e. an opt-out STREAM-only store, or when there is nothing to stamp.
+    // Stamps the positions reserved outside the transaction (see write(...)) onto each stream document, so stream and
+    // DCB events share one sequence. A no-op when the store does not write position or there is nothing to stamp.
     private List<Document> stampStreamPositions(List<Document> documents, long firstReservedPosition) {
         if (documents.isEmpty() || !writesPosition()) {
             return documents;

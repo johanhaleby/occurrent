@@ -353,7 +353,7 @@ public class DomainEventQueriesTest {
                 .isInstanceOf(UnsupportedOperationException.class);
     }
 
-    // Stream position is on by default, so a plain InMemoryEventStore writes position; opt out to get a store that
+    // Stream position is on by default, so a plain InMemoryEventStore writes position. Opt out to get a store that
     // rejects the position-requiring query APIs.
     private DomainEventQueries<DomainEvent> queriesWithoutPosition() {
         InMemoryEventStore eventStore = new InMemoryEventStore().withoutStreamPosition();

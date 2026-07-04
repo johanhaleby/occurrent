@@ -43,20 +43,16 @@ import static java.util.Objects.requireNonNull;
 import static org.occurrent.cloudevents.OccurrentCloudEventExtension.POSITION;
 
 /**
- * Retrofits the global {@code position} extension (see {@link org.occurrent.cloudevents.OccurrentCloudEventExtension#POSITION})
- * onto events written before {@code position} existed for a MongoDB event store collection, so an existing
- * deployment can turn stream position on safely. See {@code doc/runbooks/position-backfill.md} for the full
- * upgrade sequence this tool is one step of.
+ * Adds the global {@code position} extension (see {@link org.occurrent.cloudevents.OccurrentCloudEventExtension#POSITION})
+ * to events written before {@code position} existed, so an existing MongoDB event store can turn stream position on.
  * <p>
- * Reuses {@link DcbMarkerModel} for the counter document contract and {@link PositionDocumentMapper} for writing the
- * position field, so the backfilled schema is identical to what a live store writes and cannot drift from it.
+ * Reuses {@link DcbMarkerModel} for the counter document and {@link PositionDocumentMapper} for the position field, so
+ * backfilled events match what a live store writes.
  * <p>
- * A single {@link #run()} call processes events in {@code _id} order (the collection's primary key, always
- * indexed, so no additional index or sort on a time field is needed) in batches, is safe to interrupt and resume
- * (a checkpoint document records the last processed {@code _id}), is idempotent (only events missing
- * {@code position} are touched, so a completed or partially completed run can always be re-run safely), and can be
- * throttled between batches via {@link PositionBackfillOptions#throttleMillis()} to avoid competing with production
- * traffic.
+ * {@link #run()} processes events in {@code _id} order (the primary key, always indexed) in batches. It is safe to
+ * interrupt and resume via a checkpoint document, and idempotent because only events missing {@code position} are
+ * touched, so a run can be repeated. Set {@link PositionBackfillOptions#throttleMillis()} to pause between batches and
+ * not compete with production traffic.
  * <p>
  * Typical usage for a one-off migration run:
  * <pre>{@code
@@ -90,9 +86,8 @@ public final class PositionBackfill {
     }
 
     /**
-     * Runs the backfill to completion: seeds the counter (step 1, a no-op if already seeded above the current
-     * historical max), then backfills every un-positioned event in {@code _id} order (steps 2-4), resuming from any
-     * prior checkpoint. Blocks the calling thread until every un-positioned event has been processed.
+     * Seeds the counter, then assigns a position to every un-positioned event in {@code _id} order, resuming from any
+     * prior checkpoint. Blocks until done.
      *
      * @return a summary of the work done by this call.
      */
@@ -116,13 +111,12 @@ public final class PositionBackfill {
     }
 
     /**
-     * Seeds the position counter document above the current historical event count, using an accurate
-     * {@link MongoCollection#countDocuments()} (not the estimated, metadata-based count, which can under-count and
-     * would let live writes after deploy collide with positions this backfill has not assigned yet) plus
-     * {@link PositionBackfillOptions#counterSeedSlack()}. A no-op if the counter is already seeded at or above that
-     * value, so this step is itself idempotent and safe to call before every {@link #run()}.
+     * Seeds the counter above the current event count plus {@link PositionBackfillOptions#counterSeedSlack()}. Uses an
+     * accurate {@link MongoCollection#countDocuments()} rather than the estimated count, which can under-count and let
+     * live writes after deploy collide with positions this backfill has not assigned yet. A no-op if the counter is
+     * already at or above that value, so it is safe to call before every {@link #run()}.
      *
-     * @return the counter value after this call (either newly seeded or the pre-existing, already-sufficient value).
+     * @return the counter value after this call.
      */
     public long seedCounter() {
         long historicalCount = eventCollection.countDocuments();
@@ -148,12 +142,11 @@ public final class PositionBackfill {
     }
 
     /**
-     * Backfills a single batch of up to {@link PositionBackfillOptions#batchSize()} un-positioned events, ordered by
-     * {@code _id} ascending, resuming after the last checkpointed {@code _id} if one exists. Reserves one contiguous
-     * block of positions per batch (via the same counter document {@link #seedCounter()} seeds) so the assigned
-     * positions are strictly increasing across batches and across resumed runs.
+     * Positions up to {@link PositionBackfillOptions#batchSize()} un-positioned events in {@code _id} order, resuming
+     * after the last checkpointed {@code _id}. Reserves one contiguous block of positions per batch so positions stay
+     * strictly increasing across batches and resumed runs.
      *
-     * @return the number of events positioned by this batch; {@code 0} means there was nothing left to do.
+     * @return the number of events positioned, {@code 0} when nothing is left to do.
      */
     public long backfillBatch() {
         Bson filter = and(exists(POSITION, false), afterCheckpointFilter());
@@ -214,10 +207,8 @@ public final class PositionBackfill {
     }
 
     /**
-     * Reserves a contiguous block of {@code eventCount} positions from the shared counter document and returns the
-     * first position in that block, exactly mirroring the reservation contract the live stores use (see
-     * {@code SpringMongoEventStore.reservePositions}) so backfilled and live-written positions share one sequence
-     * with no overlap.
+     * Reserves a contiguous block of {@code eventCount} positions from the shared counter and returns the first one.
+     * Uses the same counter as the live stores, so backfilled and live positions share one sequence with no overlap.
      */
     private long reservePositions(int eventCount) {
         Document updated = positionCollection.findOneAndUpdate(
@@ -243,13 +234,12 @@ public final class PositionBackfill {
     }
 
     /**
-     * Simple command-line entry point: {@code java -jar position-backfill.jar <mongoUri> <database> <collection>}.
-     * Uses {@link PositionBackfillOptions#defaults()}; use the {@link PositionBackfill} constructor directly for
-     * programmatic control over batching and throttling.
+     * Command-line entry point taking {@code <mongoUri> <database> <collection>} and running with
+     * {@link PositionBackfillOptions#defaults()}. Use the constructor directly to control batching and throttling.
      */
     public static void main(String[] args) {
         if (args.length != 3) {
-            System.err.println("Usage: java -jar position-backfill.jar <mongoUri> <database> <collection>");
+            System.err.println("Usage: PositionBackfill <mongoUri> <database> <collection>");
             System.exit(1);
             return;
         }

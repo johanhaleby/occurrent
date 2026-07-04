@@ -17,9 +17,8 @@
 package org.occurrent.eventstore.mongodb.migration.positionbackfill;
 
 /**
- * The persisted checkpoint document fields for a backfill run. One checkpoint document is kept per event store
- * collection so a crashed or interrupted backfill resumes from the last successfully processed {@code _id} instead
- * of restarting from the beginning.
+ * Checkpoint document fields for a backfill run. One document per event store collection, so a crashed backfill
+ * resumes from the last processed {@code _id} instead of restarting.
  */
 final class PositionBackfillCheckpoint {
 

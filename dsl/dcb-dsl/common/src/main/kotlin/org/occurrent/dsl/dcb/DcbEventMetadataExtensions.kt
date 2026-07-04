@@ -19,17 +19,6 @@ package org.occurrent.dsl.dcb
 import org.occurrent.dsl.subscription.EventMetadata
 
 /**
- * The DCB sequence position of an event, or `null` when the event has no DCB position.
- *
- * Events delivered by a DCB subscription are DCB-tagged and therefore have a non-null position.
- */
-val EventMetadata.dcbPosition: Long?
-    get() {
-        val position = DcbEventMetadata.from(this).dcbPosition()
-        return if (position.isPresent) position.asLong else null
-    }
-
-/**
  * The canonical DCB tags of an event, or an empty set when the event has no DCB tags.
  */
 val EventMetadata.dcbTags: Set<String> get() = DcbEventMetadata.from(this).dcbTags()

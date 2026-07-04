@@ -110,7 +110,7 @@ class DcbSubscriptionsTest {
         CopyOnWriteArrayList<DomainEvent> events = new CopyOnWriteArrayList<>();
 
         dcbSubscriptions.subscribeWithMetadata("subscription", DcbQuery.tags("name:1"), (metadata, event) -> {
-            positions.add(metadata.dcbPosition());
+            positions.add(metadata.position());
             tags.add(metadata.dcbTags());
             events.add(event);
         }).waitUntilStarted();

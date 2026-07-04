@@ -17,7 +17,6 @@
 package org.occurrent.example.domain.wordguessinggame.mongodb.spring.dcb.autoconfig.features.gameplay.views.endedgamesoverview
 
 import org.occurrent.annotation.StreamSubscription
-import org.occurrent.dsl.dcb.dcbPosition
 import org.occurrent.dsl.dcb.dcbTags
 import org.occurrent.dsl.dcb.blocking.DcbDomainEventQueries
 import org.occurrent.dsl.dcb.blocking.queryForSequence
@@ -44,7 +43,7 @@ class WhenGameIsEndedThenAddGameToEndedGamesOverview(
         if (!metadata.belongsToGame(e.gameId)) {
             return
         }
-        requireNotNull(metadata.dcbPosition) { "Expected DCB position for ${e.type}" }
+        requireNotNull(metadata.position) { "Expected DCB position for ${e.type}" }
         log.info("${e::class.eventType()} - will update ended games overview")
         val gameId = e.gameId
         val gameWasStarted = domainEventQueries

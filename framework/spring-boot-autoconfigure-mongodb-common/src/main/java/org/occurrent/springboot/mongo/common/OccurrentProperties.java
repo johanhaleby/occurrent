@@ -203,11 +203,9 @@ public class OccurrentProperties {
     public static class StreamProperties {
 
         /**
-         * Whether stream-written events carry a global, monotonic sequence position, the same position DCB always
-         * writes. On by default: a STREAM store writes position out of the box. This is a stream-scoped opt-out
-         * ({@code occurrent.event-store.stream.position=false} for a STREAM-only store that never wants a global
-         * position): {@link EventStoreCapability#DCB} always writes position regardless of this setting, and a
-         * combined {@code STREAM}+{@code DCB} store forces this on since a combined store must position everything.
+         * Whether stream-written events carry a global, monotonic position. On by default. Set to {@code false} to
+         * opt a STREAM-only store out of writing position. {@link EventStoreCapability#DCB} always writes position
+         * regardless of this setting, and a combined STREAM+DCB store always writes position too.
          */
         private boolean position = true;
 

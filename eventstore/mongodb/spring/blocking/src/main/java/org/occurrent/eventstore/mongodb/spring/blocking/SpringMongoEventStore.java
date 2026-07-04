@@ -155,19 +155,14 @@ public class SpringMongoEventStore implements EventStore, EventStoreOperations, 
             throw new IllegalArgumentException(WriteCondition.class.getSimpleName() + " cannot be null");
         }
 
-        // The write method takes a "Stream" of events, but the write transaction may retry (a WriteConditionNotFulfilled
-        // retry when the condition is "any" and there are parallel writes to the same stream, or a transient transaction
-        // conflict). A stream cannot be consumed twice, so materialize the events up front into a list that every attempt
-        // re-reads. This also lets us know the event count before opening the transaction so positions can be reserved
-        // outside it (below).
+        // The transaction may retry, but a Stream cannot be consumed twice, so materialize the events into a list that
+        // every attempt re-reads. This also gives the event count needed to reserve positions before the transaction.
         List<CloudEvent> cachedEvents = events.toList();
 
-        // Reserve the position block once, outside the transaction, for the same reason DCB does (see reservePositions
-        // javadoc): the counter findAndModify is its own serialization point and must not become a transaction
-        // write-write conflict on the shared counter document. Reserving it inside the transaction turns parallel writes
-        // into a counter hotspot that conflicts on every collision. The reserved block is reused across retries; a
-        // doomed or condition-failed write abandons it, so position may have gaps (permitted, see ADR 0021). Reserve
-        // only when the store writes position and there is at least one event to write.
+        // Reserve the position block outside the transaction, like DCB does (see reservePositions), so the shared
+        // counter does not become a transaction write-write conflict. The block is reused across retries, and a write
+        // that never commits abandons it, so positions may have gaps. Reserve only when the store writes position and
+        // there is at least one event.
         final long firstReservedPosition;
         if (writesPosition() && !cachedEvents.isEmpty()) {
             firstReservedPosition = reservePositions(cachedEvents.size());
@@ -188,8 +183,8 @@ public class SpringMongoEventStore implements EventStore, EventStoreOperations, 
             final long newStreamVersion;
             if (!cloudEventDocuments.isEmpty()) {
                 if (writesPosition()) {
-                    // Stamp the pre-reserved positions (reserved outside the transaction, above), using the same
-                    // PositionDocumentMapper.addPosition step DCB uses so stream and DCB events share one sequence.
+                    // Stamp the positions reserved outside the transaction (above), the same way DCB does, so stream
+                    // and DCB events share one sequence.
                     long position = firstReservedPosition;
                     for (Document document : cloudEventDocuments) {
                         PositionDocumentMapper.addPosition(document, position);
@@ -570,9 +565,8 @@ public class SpringMongoEventStore implements EventStore, EventStoreOperations, 
     /**
      * {@inheritDoc}
      * <p>
-     * Reuses the DCB read discipline: sort by position ascending and clamp the upper bound to the store's
-     * {@link #currentPosition() high-watermark} at read time, so a concurrent append cannot be observed by the range
-     * bound without also being observed by the watermark.
+     * Sorts by position and clamps the upper bound to the store's highest written position at read time, so a
+     * concurrent append is never partially visible.
      */
     @Override
     public Stream<CloudEvent> readInPositionOrder(Filter filter, PositionRange range) {
@@ -775,10 +769,9 @@ public class SpringMongoEventStore implements EventStore, EventStoreOperations, 
             mongoTemplate.createCollection(eventStoreCollectionName);
         }
         boolean dcbEnabled = eventStoreCapabilities.contains(DCB);
-        // Position is written (and so needs its counter/checkpoint support collections and index) whenever the store
-        // writes a position at all: intrinsically for DCB, or for STREAM when streamPositionEnabled. The counter and
-        // checkpoint collections are DCB-named but are also where a STREAM-only positioned store reserves its
-        // sequence, since stream and DCB events share one monotonic sequence (writesPosition()).
+        // Position is written for DCB, or for STREAM when streamPositionEnabled. The DCB-named counter collection also
+        // holds the shared sequence a STREAM-only positioned store reserves from, so it is needed whenever position is
+        // written.
         boolean positionWritten = dcbEnabled || (eventStoreCapabilities.contains(STREAM) && streamPositionEnabled);
         if (positionWritten && !mongoTemplate.collectionExists(dcbPositionCollectionName)) {
             mongoTemplate.createCollection(dcbPositionCollectionName);
@@ -790,8 +783,8 @@ public class SpringMongoEventStore implements EventStore, EventStoreOperations, 
         MongoCollection<Document> eventStoreCollection = mongoTemplate.getCollection(eventStoreCollectionName);
         // Cloud spec defines id + source must be unique!
         eventStoreCollection.createIndex(Indexes.compoundIndex(Indexes.ascending(CloudEventV1.ID), Indexes.ascending(CloudEventV1.SOURCE)), new IndexOptions().unique(true));
-        // streamId + streamVersion uniqueness is a stream-mode invariant. DCB correctness rests on the per-attribute
-        // markers and the unique position, not stream version, so a DCB-only store neither needs nor creates it.
+        // streamId + streamVersion uniqueness is a stream-mode invariant. DCB does not use stream version, so a
+        // DCB-only store does not create it.
         if (eventStoreCapabilities.contains(STREAM)) {
             // Create a streamId + streamVersion ascending index (note that we don't need to index stream id separately since it's covered by this compound index)
             // Note also that this index supports sorting both ascending and descending since MongoDB can traverse an index in both directions.
@@ -800,8 +793,8 @@ public class SpringMongoEventStore implements EventStore, EventStoreOperations, 
         if (dcbEnabled) {
             eventStoreCollection.createIndex(Indexes.ascending(DCB_TAGS_INDEX_FIELD));
         }
-        // The position index is created whenever the store writes a position at all, not just for DCB, so that
-        // position-ordered stream reads and catch-up have an index to sort on.
+        // The position index is created whenever the store writes a position, so position-ordered reads and catch-up
+        // have an index to sort on.
         if (positionWritten) {
             eventStoreCollection.createIndex(Indexes.ascending(OccurrentCloudEventExtension.POSITION), new IndexOptions().unique(true).sparse(true));
         }
@@ -812,11 +805,9 @@ public class SpringMongoEventStore implements EventStore, EventStoreOperations, 
     }
 
     /**
-     * Startup safety guard for the on-by-default (eventually) stream position: when this store writes position but
-     * the event collection already has events without one (an upgrade that has not yet run the position-backfill
-     * migration), those events are invisible to position-ordered reads and catch-up. Log a loud WARN naming the
-     * migration runbook, or escalate to a hard failure when {@code requireBackfilledPosition} is set, so an operator
-     * cannot silently run with a position blind-spot.
+     * Startup guard: when this store writes position but the event collection already has events without one, those
+     * events are invisible to position-ordered reads and catch-up. Warns, or fails when {@code requireBackfilledPosition}
+     * is set, so nobody silently runs with un-backfilled history.
      */
     private static void checkForUnpositionedEvents(String eventStoreCollectionName, MongoTemplate mongoTemplate, boolean requireBackfilledPosition) {
         if (!mongoTemplate.collectionExists(eventStoreCollectionName)) {
@@ -852,7 +843,7 @@ public class SpringMongoEventStore implements EventStore, EventStoreOperations, 
     }
 
     /**
-     * Returns whether this store carries a global position, i.e. whether position-requiring APIs are safe to call.
+     * Returns whether this store writes a global position, so position-requiring APIs are safe to call.
      */
     @Override
     public boolean writesPosition() {

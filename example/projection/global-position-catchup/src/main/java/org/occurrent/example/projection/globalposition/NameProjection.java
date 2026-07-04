@@ -24,12 +24,11 @@ import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.CopyOnWriteArrayList;
 
 /**
- * A minimal read model that is rebuilt by replaying domain events in global position order, regardless of which
- * event stream (person) each event belongs to.
+ * A minimal read model rebuilt by replaying domain events in global position order, no matter which stream (person)
+ * each event belongs to.
  * <p>
- * This is the "projection" side of the global position example: instead of catching up per stream, the projection
- * consumes a single, unified, monotonically increasing sequence that interleaves events from every stream in the
- * exact order they were written to the event store.
+ * Instead of catching up one stream at a time, the projection reads a single monotonic sequence that interleaves
+ * events from every stream in the order they were written to the store.
  */
 public class NameProjection {
 
@@ -46,8 +45,8 @@ public class NameProjection {
     }
 
     /**
-     * @return the ids of the events applied to this projection, in the order they were applied. Useful for asserting
-     * that a rebuild from the global position replayed events in write order across streams.
+     * @return the applied event ids in the order they were applied. Handy for asserting that a rebuild replayed
+     * events in write order across streams.
      */
     public List<String> appliedEventIdsInOrder() {
         return List.copyOf(appliedInOrder);

@@ -41,16 +41,14 @@ import static org.occurrent.application.composition.command.CommandConversion.to
 import static org.occurrent.application.composition.command.partial.PartialFunctionApplication.partial;
 
 /**
- * Demonstrates the unified global position feature: every event written to the store, regardless of which stream it
- * belongs to, is assigned a single monotonically increasing position. This example writes events to three separate
- * streams (one per person) interleaved with each other, then shows:
+ * Demonstrates the global position feature: every event gets a single monotonic position no matter which stream it
+ * belongs to. The example writes events to three streams (one per person), interleaved, then shows:
  * <p>
- * 1. Reading events across streams in global write order through the query DSL, using {@code afterPosition} and
- * {@code readInPositionOrder} with a {@link PositionRange}.
- * 2. Rebuilding a projection from scratch by replaying events in position order, producing a read model that
- * reflects the exact cross-stream write order rather than being grouped stream by stream.
- * 3. That a store which opts out of position tracking via {@code withoutStreamPosition()} does not carry a position
- * and rejects the position-based read APIs.
+ * 1. Reading events across streams in write order via {@code afterPosition} and {@code readInPositionOrder} with a
+ * {@link PositionRange}.
+ * 2. Rebuilding a projection by replaying events in position order, giving cross-stream write order instead of
+ * per-stream grouping.
+ * 3. That a store using {@code withoutStreamPosition()} carries no position and rejects the position-based reads.
  */
 @DisplayNameGeneration(ReplaceUnderscores.class)
 class GlobalPositionCatchupTest {
@@ -103,8 +101,7 @@ class GlobalPositionCatchupTest {
         applicationService.execute("alice", toStreamCommand(partial(Name::changeName, "event-3", time, "alice", "Alice Smith")));
         applicationService.execute("bob", toStreamCommand(partial(Name::changeName, "event-4", time, "bob", "Bob Jones")));
 
-        // When a brand-new projection is rebuilt from position 0, by reading in global position order rather than
-        // reading each stream separately (a position-based catch-up)
+        // When a new projection is rebuilt from position 0, reading in global position order rather than per stream
         NameProjection projection = new NameProjection();
         queries.readInPositionOrder(Filter.all(), PositionRange.fromBeginning())
                 .forEach(projection::apply);

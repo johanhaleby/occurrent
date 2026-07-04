@@ -96,25 +96,17 @@ import org.occurrent.cloudevents.OccurrentCloudEventExtension;
  * </p>
  * <br>
  * <p>
- * In DCB mode the live resume token is captured before the bulk replay, so an event that commits during the replay is still
- * delivered through the live change stream. The trade-off is that a replay running longer than the change stream history
- * (the MongoDB oplog window) makes the token age out, and the handover then fails loudly rather than silently dropping
- * events. Size the oplog for very large DCB rebuilds.
+ * During catch-up the live resume token is captured before the bulk replay, so an event committed during the replay
+ * is still delivered live. A replay that runs longer than the database change stream history (the MongoDB oplog
+ * window) ages the token out, and the handover then fails loudly rather than dropping events. Size the oplog for very
+ * large rebuilds.
  * </p>
  * <br>
  * <p>
- * <b>Reconciliation strategy vs. read shape (see ADR 25).</b> A subscription's read shape (a {@code dcb-query} against
- * a {@link DcbEventStore}, or a {@code stream-filter} against {@link EventStoreQueries}) is chosen by the filter and
- * start position supplied to {@link #subscribe}. Independently, its reconciliation strategy is chosen from the
- * backing store's own position capability, never from the filter: a {@code dcb-query} always reconciles by
- * {@code position} (DCB always writes position), and a {@code stream-filter} reconciles by {@code position} when the
- * store's {@code writesPosition()} is {@code true} (reusing the same position-windowed range loop as DCB mode, reading
- * via {@code PositionOrderedReader.readInPositionOrder}), or by the legacy time/{@code $natural} + count-stability
- * path otherwise. The illegal {@code {dcb-query, time}} cell is unreachable by construction, since a DCB read never
- * consults the time-based path. A store that flips stream position on after previously running the legacy time-based
- * catch-up may still hold a persisted time-based resume token for an existing subscription; position-mode catch-up
- * detects this (both token kinds are self-describing) and re-resolves to the model default rather than trusting the
- * stale time token.
+ * The catch-up phase reads historic events by {@code position} when the backing store writes one. A DCB store always
+ * does. A stream store does when {@code writesPosition()} is true, otherwise the catch-up falls back to the older
+ * time-ordered replay. If a stream store starts writing position after previously running the time-based catch-up, a
+ * stored time token is re-resolved to the model default instead of being read as a position.
  * </p>
  */
 @NullMarked
@@ -163,7 +155,7 @@ public class CatchupSubscriptionModel implements SubscriptionModel, DelegatingSu
      * Create a new instance of {@link CatchupSubscriptionModel} in DCB mode using a default {@link CatchupSubscriptionModelConfig}.
      * In DCB mode the catch-up phase replays historic DCB events ordered by their {@code position} (rather than stream
      * events ordered by time), and the subscription resumes by {@code position}. Only events matching {@code dcbQuery}
-     * are delivered, in both the replay and the live phase. See ADR 20.
+     * are delivered, in both the replay and the live phase.
      *
      * @param subscriptionModel The subscription that'll be used to subscribe to new events <i>after</i> catch-up is completed.
      * @param dcbEventStore     The DCB event store that will be used for the DCB catch-up replay.
@@ -177,7 +169,7 @@ public class CatchupSubscriptionModel implements SubscriptionModel, DelegatingSu
      * Create a new instance of {@link CatchupSubscriptionModel} in DCB mode using the supplied {@link CatchupSubscriptionModelConfig}.
      * In DCB mode the catch-up phase replays historic DCB events ordered by their {@code position} (rather than stream
      * events ordered by time), and the subscription resumes by {@code position}. Only events matching {@code dcbQuery}
-     * are delivered, in both the replay and the live phase. See ADR 20.
+     * are delivered, in both the replay and the live phase.
      *
      * @param subscriptionModel The subscription that'll be used to subscribe to new events <i>after</i> catch-up is completed.
      * @param dcbEventStore     The DCB event store that will be used for the DCB catch-up replay.
@@ -195,7 +187,7 @@ public class CatchupSubscriptionModel implements SubscriptionModel, DelegatingSu
     /**
      * Create a dual-mode instance that catches up both stream subscriptions (by time, over {@code eventStoreQueries})
      * and DCB subscriptions (by {@code position}, over {@code dcbEventStore}). Each subscription is routed by its
-     * filter and start position, so a single model serves a STREAM-and-DCB application. See ADR 25.
+     * filter and start position, so a single model serves an application that uses both streams and DCB.
      *
      * @param subscriptionModel The subscription that'll be used to subscribe to new events <i>after</i> catch-up is completed.
      * @param eventStoreQueries The API that will be used for stream catch-up.
@@ -241,12 +233,9 @@ public class CatchupSubscriptionModel implements SubscriptionModel, DelegatingSu
                 : subscribeStream(subscriptionId, filter, startAt, action);
     }
 
-    // Decide whether a subscription is a DCB or a stream subscription. A single-mode model has only one store, so it
-    // always routes there (preserving the original behavior). A dual-mode model routes a DCB subscription, which either
-    // carries a DcbSubscriptionFilter (set by the DcbSubscriptions DSL, the DcbSubscriptionModel facade, and the
-    // @DcbSubscription annotation) or starts at an explicit GlobalSubscriptionPosition, to the DCB path. Only an
-    // already-resolved start position is inspected, never a dynamic one, so routing reads no subscription-position
-    // storage.
+    // Route to the DCB path or the stream path. A single-mode model has only one store and always routes there. A
+    // dual-mode model routes to DCB when the filter is a DcbSubscriptionFilter or the start is an explicit global
+    // position. Only an already-resolved start is inspected, so routing reads no position storage.
     private boolean routesToDcb(@Nullable SubscriptionFilter filter, StartAt startAt) {
         if (dcbEventStore == null) {
             return false;
@@ -262,13 +251,8 @@ public class CatchupSubscriptionModel implements SubscriptionModel, DelegatingSu
                 && GlobalSubscriptionPosition.isGlobalSubscriptionPosition(position.subscriptionPosition);
     }
 
-    // Whether the stream-mode store backing this model carries a global position. This is the reconciliation-strategy
-    // half of the reconciliation-times-read-shape matrix (see class javadoc / ADR 25): read shape (stream-filter vs
-    // dcb-query) is chosen by routesToDcb/filter type, reconciliation strategy (position vs time) is chosen here from
-    // the store's own capability, never from the filter or a config flag. A store without PositionOrderedReader, or
-    // one that has it but reports writesPosition()==false (a position-off STREAM-only store), stays on the legacy
-    // time/$natural path. This makes the illegal {dcb-query, time} cell unreachable: a DCB read never calls this
-    // method, and DCB always writes position, so it would never answer false anyway.
+    // Whether the stream store carries a global position. A store without PositionOrderedReader, or one that reports
+    // writesPosition()==false, stays on the time-ordered catch-up path.
     private boolean streamStoreWritesPosition() {
         return eventStoreQueries instanceof PositionOrderedReader positionOrderedReader && positionOrderedReader.writesPosition();
     }
@@ -288,11 +272,9 @@ public class CatchupSubscriptionModel implements SubscriptionModel, DelegatingSu
             if (subscriptionPosition == null) {
                 return getDelegatedSubscriptionModel().subscribe(subscriptionId, filter, startAt, action);
             } else if (positionMode && isTimeBasedSubscriptionPosition(subscriptionPosition)) {
-                // Resume-token transition: the store now writes position, but the persisted token predates the flip
-                // (it is a legacy time token). Trusting it would misinterpret an RFC3339 timestamp as a position, or
-                // silently replay from a stale, unrelated cursor. Re-resolve to the model default instead, exactly as
-                // if nothing had been stored, rather than trust the stale time token. See ADR 25 / the position
-                // migration runbook.
+                // The store now writes position, but this stored token predates that and is time-based. Reading it as a
+                // position would misinterpret a timestamp or replay from an unrelated cursor, so re-resolve to the
+                // model default instead.
                 return getDelegatedSubscriptionModel().subscribe(subscriptionId, filter, StartAt.subscriptionModelDefault(), action);
             } else {
                 firstStartAt = StartAt.subscriptionPosition(subscriptionPosition);
@@ -310,21 +292,15 @@ public class CatchupSubscriptionModel implements SubscriptionModel, DelegatingSu
         }
 
         if (positionMode) {
-            // A fresh replay-from-beginning intent (StartAtTime.beginningOfTime(), the form the @StreamSubscription
-            // annotation and the subscribeFromBeginningOfTime shortcut produce for a BEGINNING_OF_TIME request) is a
-            // time-based token, but on a position store it must map to a position-from-beginning start so the position
-            // catch-up path replays history rather than discarding it as an unrecognised token. This is distinct from
-            // the resume-token transition handled in the isDefault() branch above: there a *persisted* mid-stream time
-            // token is re-resolved to the model default, since a stale RFC3339 timestamp cannot be trusted as a
-            // position; here a caller explicitly asks to replay from the beginning, which maps cleanly to position 0.
+            // A "replay from the beginning of time" request is time-based, but on a position store it maps to position
+            // 0 so the position catch-up replays history instead of discarding it as an unrecognised token.
             final StartAt positionStartAt;
             if (startsAtBeginningOfTime(firstStartAt)) {
                 positionStartAt = StartAt.subscriptionPosition(GlobalSubscriptionPosition.of(0));
             } else {
                 positionStartAt = firstStartAt;
             }
-            // Position mode: only an explicit/resolved global-position start triggers a catch-up replay; anything
-            // else (a live change-stream token, or a startAt this model does not recognise) resumes live directly.
+            // Only an explicit global-position start triggers a replay. Anything else resumes live directly.
             if (!startsAtExplicitDcbPosition(positionStartAt)) {
                 return subscriptionModel.subscribe(subscriptionId, filter, positionStartAt, action);
             }
@@ -490,8 +466,8 @@ public class CatchupSubscriptionModel implements SubscriptionModel, DelegatingSu
     }
 
     // ---------------------------------------------------------------------------------------------------------------
-    // DCB mode: replay historic DCB events ordered by position and resume by position (see ADR 20). Additive to
-    // the stream path above; an instance is in exactly one mode (selected by constructor).
+    // DCB mode: replay historic DCB events by position and resume by position. An instance is in exactly one mode,
+    // selected by constructor.
     // ---------------------------------------------------------------------------------------------------------------
 
     private Subscription subscribeDcb(String subscriptionId, @Nullable SubscriptionFilter filter, StartAt startAt, Consumer<CloudEvent> action) {
@@ -532,10 +508,9 @@ public class CatchupSubscriptionModel implements SubscriptionModel, DelegatingSu
     private Consumer<CloudEvent> dcbLiveConsumer(Consumer<CloudEvent> action, @Nullable FixedSizeCache cache) {
         DcbQuery query = Objects.requireNonNull(this.dcbQuery);
         return cloudEvent -> {
-            // The live change stream sees every CloudEvent, so post-filter to the DCB events matching the query and
-            // skip those already delivered during the catch-up phase (the handover seam). The DCB discriminator is
-            // isDcbEvent (the DCB tags extension), not a positive position: with stream position on by default, stream
-            // events also carry a position, so a "position > 0" guard would leak stream events into a DCB subscription.
+            // The live change stream sees every event, so keep only DCB events matching the query and skip those
+            // already delivered during catch-up. DCB events are identified by isDcbEvent (the tags extension), not by
+            // position, since stream events now carry a position too.
             if (DcbCloudEvents.isDcbEvent(cloudEvent) && DcbCloudEvents.matches(cloudEvent, query)
                     && (cache == null || !cache.isCached(cloudEvent.getId()))) {
                 action.accept(cloudEvent);
@@ -553,27 +528,24 @@ public class CatchupSubscriptionModel implements SubscriptionModel, DelegatingSu
         SubscriptionPosition subscriptionPosition = ((StartAtSubscriptionPosition) Objects.requireNonNull(nextStartAt)).subscriptionPosition;
         long startPosition = GlobalSubscriptionPosition.positionOf(subscriptionPosition);
 
-        // Capture the live resume token before the bulk replay, not after, so an event that commits during the replay
-        // is still delivered by the live change stream. The reconciliation below only scans forward, so on its own it
-        // would miss a low position that becomes visible late. Trade-off: on a replay longer than the change stream
-        // history the token ages out and the handover fails loudly instead of silently dropping that event.
+        // Capture the live resume token before the bulk replay so an event committed during the replay is still
+        // delivered live. On a replay longer than the change stream history the token ages out and the handover fails
+        // loudly instead of dropping the event.
         Class<? extends SubscriptionModel> delegatedSubscriptionModelType = getDelegatedSubscriptionModel().getClass();
         StartAt delegatedStartAt = startAt.get(new SubscriptionModelContext(delegatedSubscriptionModelType));
         final SubscriptionPosition globalSubscriptionPosition = delegatedStartAt == null ? null : subscriptionModel.globalSubscriptionPosition();
 
-        // Bulk replay: page through the DCB sequence from the resume position up to the head observed at the start, in
-        // position windows so a large rebuild does not materialize the whole matched set at once. position is
-        // monotonic and server-assigned, so this needs no count and no time sort, sidestepping both the clock-skew loss
-        // and the estimatedDocumentCount undercount that the stream delta has to defend against (see ADR 20).
+        // Page through the DCB sequence from the resume position to the head seen at the start, in windows so a large
+        // rebuild does not load the whole matched set at once. position is monotonic and server-assigned, so this needs
+        // no count and no time sort.
         long bulkHead = dcbEventStore.read(query, DcbReadOptions.between(startPosition, startPosition)).lastSequencePosition();
         long cursor = deliverDcbWindows(dcbEventStore, query, startPosition, bulkHead, windowSize, subscriptionId, action, null);
 
         FixedSizeCache catchupPhaseCache = new FixedSizeCache(config.cacheSize);
 
-        // Reconcile events written during the bulk replay (positions beyond bulkHead) by continuing to page until the
-        // head stops advancing. Re-reads of overlapping windows are deduped by the cache (delivery is at-least-once).
-        // Any event written after the loop is newer than globalSubscriptionPosition and is covered by the live
-        // subscription regardless.
+        // Reconcile events written during the replay by paging until the head stops advancing. Overlapping re-reads
+        // are deduped by the cache. Anything written after the loop is newer than the live resume position and arrives
+        // live.
         long head = dcbEventStore.read(query, DcbReadOptions.between(cursor, cursor)).lastSequencePosition();
         while (head > cursor && !shuttingDown && runningCatchupSubscriptions.containsKey(subscriptionId)) {
             cursor = deliverDcbWindows(dcbEventStore, query, cursor, head, windowSize, subscriptionId, action, catchupPhaseCache);
@@ -634,9 +606,8 @@ public class CatchupSubscriptionModel implements SubscriptionModel, DelegatingSu
     }
 
     // ---------------------------------------------------------------------------------------------------------------
-    // Stream mode, position-on: replay historic stream events ordered by position and resume by position, reusing the
-    // DCB range-loop shape above but reading through PositionOrderedReader.readInPositionOrder(Filter, PositionRange)
-    // rather than DcbEventStore.read(DcbQuery, DcbReadOptions). See ADR 25.
+    // Stream mode with position on: replay historic stream events by position and resume by position, reading through
+    // PositionOrderedReader instead of the DCB store.
     // ---------------------------------------------------------------------------------------------------------------
 
     private Subscription startPositionCatchupSubscriptionForStream(String subscriptionId, @Nullable SubscriptionFilter filter, StartAt startAt, Consumer<CloudEvent> action, StartAt firstStartAt) {
@@ -650,14 +621,14 @@ public class CatchupSubscriptionModel implements SubscriptionModel, DelegatingSu
         SubscriptionPosition subscriptionPosition = ((StartAtSubscriptionPosition) Objects.requireNonNull(nextStartAt)).subscriptionPosition;
         long startPosition = GlobalSubscriptionPosition.positionOf(subscriptionPosition);
 
-        // Capture the live resume token before the bulk replay, not after, so an event that commits during the replay
-        // is still delivered by the live change stream, mirroring the DCB-mode handover above.
+        // Capture the live resume token before the bulk replay so an event committed during the replay is still
+        // delivered live, like the DCB handover above.
         Class<? extends SubscriptionModel> delegatedSubscriptionModelType = getDelegatedSubscriptionModel().getClass();
         StartAt delegatedStartAt = startAt.get(new SubscriptionModelContext(delegatedSubscriptionModelType));
         final SubscriptionPosition globalSubscriptionPosition = delegatedStartAt == null ? null : subscriptionModel.globalSubscriptionPosition();
 
-        // Bulk replay: page through the position sequence from the resume position up to the head observed at the
-        // start, in position windows so a large rebuild does not materialize the whole matched set at once.
+        // Page through the position sequence from the resume position to the head seen at the start, in windows so a
+        // large rebuild does not load the whole matched set at once.
         long bulkHead = positionOrderedReader.currentPosition();
         long cursor = deliverPositionWindows(positionOrderedReader, streamFilter, startPosition, bulkHead, windowSize, subscriptionId, action, null);
 
@@ -716,10 +687,8 @@ public class CatchupSubscriptionModel implements SubscriptionModel, DelegatingSu
     }
 
     /**
-     * Delivers stream events in {@code (fromExclusive, toInclusive]} by paging through position windows via
-     * {@link PositionOrderedReader#readInPositionOrder(Filter, PositionRange)}, and returns the position the cursor
-     * reached. Stops early on shutdown or cancellation. Mirrors {@link #deliverDcbWindows} for the stream-filter read
-     * shape.
+     * Delivers stream events in {@code (fromExclusive, toInclusive]} by paging through position windows, and returns
+     * the position the cursor reached. Stops early on shutdown or cancellation.
      */
     private long deliverPositionWindows(PositionOrderedReader positionOrderedReader, Filter filter, long fromExclusive, long toInclusive, long windowSize, String subscriptionId, Consumer<CloudEvent> action, @Nullable FixedSizeCache cache) {
         long cursor = fromExclusive;
@@ -868,9 +837,8 @@ public class CatchupSubscriptionModel implements SubscriptionModel, DelegatingSu
         return subscriptionPosition instanceof TimeBasedSubscriptionPosition && ((TimeBasedSubscriptionPosition) subscriptionPosition).isBeginningOfTime();
     }
 
-    // Whether a resolved StartAt is a fresh "replay from the beginning of time" request, i.e. a time-based
-    // beginning-of-time position. On a position store this is mapped to a position-from-beginning start so the position
-    // catch-up path replays history.
+    // Whether a resolved StartAt is a "replay from the beginning of time" request. On a position store this maps to a
+    // position-from-beginning start.
     private static boolean startsAtBeginningOfTime(StartAt startAt) {
         StartAt start = startAt.get(generateSubscriptionModelContext());
         return start instanceof StartAtSubscriptionPosition position && isBeginningOfTime(position.subscriptionPosition);

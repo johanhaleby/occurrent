@@ -17,7 +17,6 @@
 package org.occurrent.example.domain.wordguessinggame.mongodb.spring.dcb.autoconfig.features.gameplay.views.ongoinggamesoverview
 
 import org.occurrent.annotation.StreamSubscription
-import org.occurrent.dsl.dcb.dcbPosition
 import org.occurrent.dsl.dcb.dcbTags
 import org.occurrent.dsl.subscription.EventMetadata
 import org.occurrent.example.domain.wordguessinggame.event.GameEvent
@@ -44,7 +43,7 @@ class AddedOrRemoveGameFromOngoingGamesOverview(private val mongo: MongoOperatio
         if (!metadata.belongsToGame(gameWasStarted.gameId)) {
             return
         }
-        requireNotNull(metadata.dcbPosition) { "Expected DCB position for ${gameWasStarted.type}" }
+        requireNotNull(metadata.position) { "Expected DCB position for ${gameWasStarted.type}" }
         log.info("Adding game ${gameWasStarted.gameId} to ongoing games view")
         val ongoingGameOverview = gameWasStarted.run {
             OngoingGameOverview(gameId, category, startedBy, timestamp).toDTO()
@@ -62,7 +61,7 @@ class AddedOrRemoveGameFromOngoingGamesOverview(private val mongo: MongoOperatio
         if (!metadata.belongsToGame(gameId)) {
             return
         }
-        requireNotNull(metadata.dcbPosition) { "Expected DCB position for ${e.type}" }
+        requireNotNull(metadata.position) { "Expected DCB position for ${e.type}" }
         log.info("Removing game $gameId from ongoing games view since ${e.type}")
         mongo.remove<OngoingGameOverviewMongoDTO>(query(where("_id").isEqualTo(gameId.toString())))
     }

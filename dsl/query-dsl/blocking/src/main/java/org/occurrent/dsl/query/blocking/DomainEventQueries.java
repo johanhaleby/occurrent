@@ -330,9 +330,7 @@ public class DomainEventQueries<T> {
      * Reads domain events strictly after the global sequence {@code position}, in ascending position order.
      * Equivalent to {@code readInPositionOrder(Filter.all(), PositionRange.afterPosition(position))}.
      *
-     * @throws UnsupportedOperationException if the underlying event store does not write a position, i.e.
-     *                                        {@code eventStoreQueries()} does not implement {@link PositionOrderedReader}
-     *                                        or is backed by a store where {@code writesPosition()} is {@code false}.
+     * @throws UnsupportedOperationException if the underlying event store does not write a position.
      * @see PositionOrderedReader#readInPositionOrder(Filter, PositionRange)
      */
     public Stream<T> afterPosition(long position) {
@@ -342,9 +340,7 @@ public class DomainEventQueries<T> {
     /**
      * Reads domain events matching {@code filter} within {@code range}, in ascending position order.
      *
-     * @throws UnsupportedOperationException if the underlying event store does not write a position, i.e.
-     *                                        {@code eventStoreQueries()} does not implement {@link PositionOrderedReader}
-     *                                        or is backed by a store where {@code writesPosition()} is {@code false}.
+     * @throws UnsupportedOperationException if the underlying event store does not write a position.
      * @see PositionOrderedReader#readInPositionOrder(Filter, PositionRange)
      */
     public Stream<T> readInPositionOrder(Filter filter, PositionRange range) {

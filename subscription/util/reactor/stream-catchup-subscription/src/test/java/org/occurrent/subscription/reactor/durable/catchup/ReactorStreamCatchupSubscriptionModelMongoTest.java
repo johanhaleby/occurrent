@@ -72,10 +72,9 @@ import static org.occurrent.eventstore.api.EventStoreCapability.DCB;
 import static org.occurrent.eventstore.api.EventStoreCapability.STREAM;
 
 /**
- * Wave 1 does not yet flip stream position on by default for a STREAM-only store (that is Wave 3), so these tests
- * combine STREAM with DCB, which forces {@code writesPosition()} on for stream-written events too. This exercises
- * exactly the reactive stream catch-up path this model implements, without depending on the still-pending default
- * flip.
+ * A STREAM-only store does not yet write a position on stream events by default, so these tests combine STREAM with
+ * DCB, which turns {@code writesPosition()} on for stream-written events too. This exercises the reactive stream
+ * catch-up path without depending on that default.
  */
 @Timeout(120)
 @Testcontainers
@@ -263,10 +262,8 @@ class ReactorStreamCatchupSubscriptionModelMongoTest {
         }
     }
 
-    // Delays the first bulk window read so an event can commit while the replay is in flight. The model's first read
-    // is the head probe (currentPosition), so the delay is applied to the first real window read after it. The event
-    // committed during the delay lands above the captured bulk head and must be recovered exactly once through
-    // reconciliation or the live subscription, which resumes from a token captured before the replay.
+    // Delays the first bulk window read so an event can commit while the replay is in flight. currentPosition is the
+    // head probe, so the delay is applied to the first window read after it.
     private static final class DelayFirstReadPositionOrderedReader implements PositionOrderedReader {
         private final PositionOrderedReader delegate;
         private final Duration delay;

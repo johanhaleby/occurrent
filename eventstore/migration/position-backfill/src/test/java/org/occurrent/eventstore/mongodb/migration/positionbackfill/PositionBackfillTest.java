@@ -89,8 +89,7 @@ class PositionBackfillTest {
                 .transactionConfig(mongoTransactionManager)
                 .timeRepresentation(TimeRepresentation.RFC_3339_STRING)
                 .eventStoreCapabilities(STREAM)
-                // Opt out of stream position (on by default) so this store writes the legacy, unpositioned events the
-                // backfill migration is meant to retrofit.
+                // Turn off stream position so this store writes the old unpositioned events the backfill retrofits.
                 .withoutStreamPosition()
                 .build();
         eventStoreWithoutPosition = new SpringMongoEventStore(mongoTemplate, config);
@@ -141,8 +140,8 @@ class PositionBackfillTest {
     void a_live_write_after_the_backfill_completes_lands_above_every_backfilled_position() {
         writeUnpositionedEvents("stream-a", 5);
 
-        // Simulate the deploy sequence: seed the counter once (step 2, before deploying the new version) and run
-        // the backfill to completion (step 4), then a live write happens on the now-deployed, position-writing store.
+        // Simulate the deploy sequence: seed the counter, run the backfill to completion, then a live write on the
+        // now position-writing store.
         PositionBackfill backfill = new PositionBackfill(database, COLLECTION_NAME, PositionBackfillOptions.defaults().withCounterSeedSlack(50));
         backfill.seedCounter();
         backfill.run();

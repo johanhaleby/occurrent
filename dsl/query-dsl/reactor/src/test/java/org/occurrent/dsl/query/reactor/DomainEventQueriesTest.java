@@ -77,8 +77,8 @@ class DomainEventQueriesTest {
 
     private ApplicationService<DomainEvent> applicationService;
     private DomainEventQueries<DomainEvent> domainEventQueries;
-    // A DomainEventQueries backed by a store with stream position opted out, for the position-guard tests. Stream
-    // position is on by default now, so the default store above writes position and would not trip the guard.
+    // A store with stream position opted out, for the guard tests. The default store above writes position (on by
+    // default) and would not trip the guard.
     private DomainEventQueries<DomainEvent> domainEventQueriesWithoutPosition;
 
     @BeforeEach

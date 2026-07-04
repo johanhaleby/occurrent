@@ -19,7 +19,6 @@ package org.occurrent.dsl.dcb.blocking
 import io.cloudevents.CloudEvent
 import org.occurrent.application.converter.CloudEventConverter
 import org.occurrent.application.converter.get
-import org.occurrent.dsl.dcb.dcbPosition
 import org.occurrent.dsl.dcb.dcbTags
 import org.occurrent.dsl.subscription.EventMetadata
 import org.occurrent.eventstore.api.dcb.DcbCloudEvents
@@ -49,8 +48,8 @@ fun <E : Any> Subscribable.subscribeDcb(
 /**
  * Subscribes to live DCB-tagged events that match [query], including DCB metadata in the callback.
  *
- * The callback receives the regular subscription DSL [EventMetadata]. Use the [dcbPosition] and [dcbTags]
- * extension properties (from `org.occurrent.dsl.dcb`) to read DCB-specific metadata from it.
+ * The callback receives the regular subscription DSL [EventMetadata]. Read its `position` directly, and use the
+ * `dcbTags` extension property (from `org.occurrent.dsl.dcb`) for the DCB tags.
  */
 @JvmOverloads
 @JvmName("subscribeDcbWithMetadata")

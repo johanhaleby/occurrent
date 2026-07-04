@@ -65,13 +65,11 @@ import static org.occurrent.subscription.OccurrentSubscriptionFilter.filter;
  * for the reactive (Project Reactor) stack. The stack-neutral reflection and event-type resolution is shared with the
  * blocking processor through {@link SubscriptionAnnotations}.
  * <p>
- * The reactive stack's stream (non-DCB) catch-up model can only replay by position, so a {@link StreamSubscription}
- * that asks to start at a specific historical time (via {@code startAtISO8601} or {@code startAtTimeEpochMillis})
- * always fails loud, position-based catch-up has no way to resolve a wall-clock time to a position.
- * {@code BEGINNING_OF_TIME} replays from position 0 when the store supports reactive stream history replay (a
- * position-writing STREAM-only store), and otherwise also fails loud. {@code NOW} and {@code DEFAULT} are always
- * supported for stream subscriptions, giving live delivery plus durable resume across restarts. DCB subscriptions
- * can replay history by position via the reactive DCB catch-up model, matching the blocking behavior.
+ * The reactive stream (non-DCB) catch-up model replays only by position, so a {@link StreamSubscription} that starts
+ * at a specific time ({@code startAtISO8601} or {@code startAtTimeEpochMillis}) fails loud, position replay cannot
+ * resolve a wall-clock time to a position. {@code BEGINNING_OF_TIME} replays from position 0 on a position-writing
+ * STREAM-only store, and fails loud otherwise. {@code NOW} and {@code DEFAULT} are always supported. DCB
+ * subscriptions replay history by position via the reactive DCB catch-up model, matching the blocking behavior.
  */
 class OccurrentReactiveAnnotationBeanPostProcessor implements BeanPostProcessor, ApplicationContextAware {
 
@@ -224,10 +222,9 @@ class OccurrentReactiveAnnotationBeanPostProcessor implements BeanPostProcessor,
         };
     }
 
-    // Whether a @StreamSubscription can replay history on the reactive stack. This is only possible when the store
-    // writes stream position (position on by default) so a ReactorStreamCatchupSubscriptionModel is wired for stream
-    // replay by position. A combined STREAM+DCB store wires the DCB catch-up model instead, which does not replay stream
-    // filters, so combined-store stream history replay is not supported here (use @DcbSubscription for position replay).
+    // A @StreamSubscription can replay history only when the store writes stream position, since that wires a
+    // ReactorStreamCatchupSubscriptionModel for replay by position. A combined STREAM+DCB store wires the DCB catch-up
+    // model instead, which does not replay stream filters, so combined-store stream replay is not supported here.
     private boolean streamHistoryReplaySupported() {
         ReactorMongoEventStore eventStore = applicationContext.getBeanProvider(ReactorMongoEventStore.class).getIfAvailable();
         if (eventStore == null || !eventStore.writesPosition()) {
@@ -237,13 +234,10 @@ class OccurrentReactiveAnnotationBeanPostProcessor implements BeanPostProcessor,
         return !occurrentProperties.getEventStore().getCapabilities().contains(EventStoreCapability.DCB);
     }
 
-    // A stream subscription's start position: when history replay is supported (a position-writing STREAM-only store),
-    // BEGINNING_OF_TIME replays history through the reactive stream catch-up model. When it is not supported (a store
-    // with stream position opted out, or a combined STREAM+DCB store), BEGINNING_OF_TIME and specific-time starts fail
-    // loud rather than silently behaving like a live start. A specific start time (startAtISO8601 or
-    // startAtTimeEpochMillis) always fails loud, since position-based catch-up has no way to resolve a wall-clock time
-    // to a position, position replay only understands BEGINNING_OF_TIME, NOW, and DEFAULT. NOW and DEFAULT are always
-    // supported.
+    // A stream subscription's start position. A specific start time (startAtISO8601 or startAtTimeEpochMillis) always
+    // fails loud, since position replay cannot resolve a wall-clock time to a position. BEGINNING_OF_TIME replays
+    // history when replay is supported (a position-writing STREAM-only store), and fails loud otherwise rather than
+    // silently starting live. NOW and DEFAULT are always supported.
     private StartAt generateStreamStartAt(StreamSubscriptionDefinition subscription, boolean historyReplaySupported) {
         boolean specificTimeStart = !subscription.startAtISO8601().isBlank()
                 || subscription.startAtTimeEpochMillis() >= 0;
@@ -258,8 +252,7 @@ class OccurrentReactiveAnnotationBeanPostProcessor implements BeanPostProcessor,
                     "(stream position is off, or it is a combined STREAM+DCB store). Enable stream position (on by default) for a STREAM-only store, use startAt = NOW or DEFAULT, or use @DcbSubscription for position replay.").formatted(subscription.id()));
         }
         if (beginningOfTimeStart) {
-            // History replay supported: map BEGINNING_OF_TIME to a replay-from-beginning by position, which the
-            // reactive stream catch-up model turns into a position windowed replay then live.
+            // Map BEGINNING_OF_TIME to position 0, which the reactive stream catch-up model replays before going live.
             return StartAt.subscriptionPosition(GlobalSubscriptionPosition.of(0));
         }
         return switch (subscription.startAt()) {
