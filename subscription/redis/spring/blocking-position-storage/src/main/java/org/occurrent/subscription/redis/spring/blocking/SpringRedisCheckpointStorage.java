@@ -57,7 +57,7 @@ public class SpringRedisCheckpointStorage implements CheckpointStorage {
      * Create a {@link CheckpointStorage} that uses the Native sync Java MongoDB driver to persists the checkpoint in Redis.
      *
      * @param redis         The {@link RedisOperations} that'll be used to store the checkpoint
-     * @param retryStrategy A custom retry strategy to use if there's a problem reading/saving/deleting the position to the Redis storage.
+     * @param retryStrategy A custom retry strategy to use if there's a problem reading/saving/deleting the checkpoint to the Redis storage.
      */
     public SpringRedisCheckpointStorage(RedisOperations<String, String> redis, RetryStrategy retryStrategy) {
         requireNonNull(redis, "Redis operations cannot be null");

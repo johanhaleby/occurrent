@@ -86,7 +86,7 @@ public class NativeMongoCheckpointStorage implements CheckpointStorage {
      * Create a {@code CheckpointStorage} that uses the Native sync Java MongoDB driver to persists the checkpoint in MongoDB.
      *
      * @param checkpointCollection The collection into which checkpoints will be stored
-     * @param retryStrategy                  A custom retry strategy to use if there's a problem reading/saving/deleting the position to the MongoDB storage.
+     * @param retryStrategy                  A custom retry strategy to use if there's a problem reading/saving/deleting the checkpoint to the MongoDB storage.
      */
     public NativeMongoCheckpointStorage(MongoCollection<Document> checkpointCollection, RetryStrategy retryStrategy) {
         requireNonNull(checkpointCollection, "checkpointCollection cannot be null");

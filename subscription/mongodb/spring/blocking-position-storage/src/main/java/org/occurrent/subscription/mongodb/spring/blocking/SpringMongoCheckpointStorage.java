@@ -69,7 +69,7 @@ public class SpringMongoCheckpointStorage implements CheckpointStorage {
      *
      * @param mongoOperations                The {@link MongoOperations} that'll be used to store the checkpoint
      * @param checkpointCollection The collection into which checkpoints will be stored
-     * @param retryStrategy                  A custom retry strategy to use if there's a problem reading/saving/deleting the position to the MongoDB storage.
+     * @param retryStrategy                  A custom retry strategy to use if there's a problem reading/saving/deleting the checkpoint to the MongoDB storage.
      */
     public SpringMongoCheckpointStorage(MongoOperations mongoOperations, String checkpointCollection, RetryStrategy retryStrategy) {
         requireNonNull(mongoOperations, "Mongo operations cannot be null");
