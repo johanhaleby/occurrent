@@ -130,5 +130,7 @@ cost, keeping the pre-existing behavior and the legacy catch-up path exactly as 
 A combined `{STREAM, DCB}` reactive store replays both stream and DCB history through one dual-mode catch-up model
 that routes each subscription to the stream or DCB path by its filter and start position, matching the blocking
 stack. Reactive stream catch-up no longer depends on the DCB API, so a STREAM-only reactive store can replay
-history without the DCB module on its classpath. Making the blocking stream catch-up equally DCB-free is a
-follow-up.
+history without the DCB module on its classpath. The blocking stream catch-up is DCB-free the same way, split into
+a `stream-catchup-subscription` module with no DCB dependency and a `dcb-catchup-subscription` module that holds the
+`CatchupSubscriptionModel` dispatcher. Both stacks route each subscription to the stream or DCB path by filter type
+first, since a global position start alone does not tell the two apart.

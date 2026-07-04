@@ -273,6 +273,11 @@
             </dependency>
             <dependency>
                 <groupId>org.occurrent</groupId>
+                <artifactId>stream-catchup-subscription</artifactId>
+                <version>${project.version}</version>
+            </dependency>
+            <dependency>
+                <groupId>org.occurrent</groupId>
                 <artifactId>catchup-subscription</artifactId>
                 <version>${project.version}</version>
             </dependency>
