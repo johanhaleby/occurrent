@@ -122,24 +122,21 @@ try (MongoClient mongoClient = MongoClients.create("mongodb://localhost:27017"))
 
 ### As a standalone command
 
-The module also ships a `main` method that takes `<mongoUri> <database> <collection>` and runs with default
-options:
-
-```
-org.occurrent.eventstore.mongodb.migration.positionbackfill.PositionBackfill
-```
-
-Run it the way you run any main class, for example from your IDE, or put the module and its runtime dependencies on
-the classpath and run:
+Build the runnable jar:
 
 ```bash
-java -cp "<module-and-dependencies>" \
-  org.occurrent.eventstore.mongodb.migration.positionbackfill.PositionBackfill \
+mvn -pl eventstore/migration/position-backfill -am package -DskipTests
+```
+
+That produces `eventstore-mongodb-position-backfill-<version>-cli.jar` in the module's `target/` directory, a single
+jar with all dependencies bundled. Run it with `<mongoUri> <database> <collection>`:
+
+```bash
+java -jar eventstore/migration/position-backfill/target/eventstore-mongodb-position-backfill-<version>-cli.jar \
   "mongodb://localhost:27017" my-database events
 ```
 
-The build does not produce a single bundled jar, so you assemble the classpath yourself, or just call it from Java
-as shown above.
+It runs with the default options. To change batching or throttling, call it from Java as shown above.
 
 ## Options
 
