@@ -114,10 +114,12 @@ public class OccurrentReactiveMongoAutoConfiguration<E> {
                 .transactionConfig(transactionManager)
                 .timeRepresentation(eventStoreProperties.getTimeRepresentation())
                 .eventStoreCapabilities(eventStoreProperties.getCapabilities());
-        // withoutStreamPosition() applies only to a STREAM-only store. A combined STREAM+DCB store always writes
-        // position, and DCB-only ignores the setting. Call it only when DCB is off, otherwise the builder rejects
-        // the combination.
-        if (!eventStoreProperties.getStream().isPosition() && !eventStoreProperties.getCapabilities().contains(EventStoreCapability.DCB)) {
+        // The property is only applied when set. true enables position explicitly (kept on even for an unpositioned
+        // store), false opts a STREAM-only store out. withoutStreamPosition() is rejected with DCB, so skip it then.
+        Boolean streamPosition = eventStoreProperties.getStream().getPosition();
+        if (Boolean.TRUE.equals(streamPosition)) {
+            builder.withStreamPosition();
+        } else if (Boolean.FALSE.equals(streamPosition) && !eventStoreProperties.getCapabilities().contains(EventStoreCapability.DCB)) {
             builder.withoutStreamPosition();
         }
         return builder.build();

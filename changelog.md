@@ -39,6 +39,13 @@ DCB is a capability layered on the existing CloudEvent storage, not a new store 
     position counter and backfills existing events in `_id` order. Follow
     [the migration runbook](doc/runbooks/position-backfill.md) before relying on position-based catch-up against an
     existing deployment. A store with no existing events, or a brand-new deployment, needs no backfill.
+  * As an extra guard for that upgrade path, when stream position is only on by default (not enabled explicitly) and
+    a MongoDB store starts against a collection that already holds events without a `position`, the store turns
+    stream position off for itself and logs how to turn it on. This avoids building the `position` index over a large
+    existing collection at startup, and it keeps working exactly as before the upgrade. An explicit
+    `withStreamPosition()` (or `occurrent.event-store.stream.position=true`) is always honored, and DCB always writes
+    position. Catch-up follows the store, so a store guarded off this way stays on the legacy time-based path until
+    you enable position and backfill.
   * Known limitation: a combined `STREAM` and `DCB` reactive store does not yet have a dual-mode catch-up model
     that replays both stream and DCB history together. The blocking stack supports this combination already.
     Reactive combined-store stream replay fails loud rather than silently misbehaving; a reactive dual-mode

@@ -276,6 +276,34 @@ class MongoEventStorePositionTest {
         assertThat(reopened.currentPosition()).isEqualTo(1L);
     }
 
+    @Test
+    void position_is_turned_off_on_an_existing_unpositioned_store_when_it_was_not_enabled_explicitly() {
+        newEventStore(eventStoreConfig(STREAM).withoutStreamPosition().build())
+                .write("stream:1", WriteCondition.anyStreamVersion(), Stream.of(event("PreExistingEvent")));
+
+        // Default (not explicit) position over a collection that already has unpositioned events turns itself off,
+        // rather than building the position index over the whole collection at startup.
+        MongoEventStore defaulted = newEventStore(eventStoreConfig(STREAM).build());
+        assertThat(defaulted.writesPosition()).isFalse();
+        assertThat(indexNames()).doesNotContain(POSITION_INDEX);
+    }
+
+    @Test
+    void position_stays_on_by_default_for_an_empty_store() {
+        MongoEventStore defaulted = newEventStore(eventStoreConfig(STREAM).build());
+        assertThat(defaulted.writesPosition()).isTrue();
+    }
+
+    @Test
+    void position_stays_on_by_default_once_the_store_has_positioned_events() {
+        newEventStore(eventStoreConfig(STREAM).build())
+                .write("stream:1", WriteCondition.anyStreamVersion(), Stream.of(event("PositionedEvent")));
+
+        // Re-opening a store whose events already have positions keeps position on.
+        MongoEventStore reopened = newEventStore(eventStoreConfig(STREAM).build());
+        assertThat(reopened.writesPosition()).isTrue();
+    }
+
     private MongoEventStore newEventStore(EventStoreConfig config) {
         return new MongoEventStore(mongoClient, databaseName, EVENT_COLLECTION, config);
     }

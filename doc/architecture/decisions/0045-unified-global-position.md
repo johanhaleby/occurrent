@@ -93,6 +93,19 @@ config flag to escalate to a hard failure instead
 (`occurrent.event-store.position.require-backfilled-position` /
 `EventStoreConfig.Builder#requireBackfilledPosition`).
 
+**When position is only on by default, an existing un-backfilled store turns it off at startup instead of enabling
+it.** The warning above still fires for an explicit choice (`withStreamPosition()` or the property) and for DCB,
+which always writes position. But if the store never made an explicit choice and finds an event collection that
+already holds events without a `position`, it disables stream position for that store and logs how to turn it on.
+This protects the upgrade path where someone bumps the Occurrent version on an existing large store without thinking
+about position: it avoids building the `position` index over the whole collection at startup and avoids writing
+positions onto a store whose history is not backfilled. The probe is cheap and does not need the position index. It
+reads the oldest event by `_id` (always indexed) and treats a missing `position` on it as an un-backfilled store,
+because the backfill assigns positions in `_id` order, oldest first. The catch-up path keys off the store's runtime
+`writesPosition()`, so a store that disables position this way automatically stays on the legacy time-based catch-up
+with no further wiring. This applies to the three MongoDB stores. The in-memory store always starts empty, so it
+has no such hazard.
+
 A new module, `eventstore/migration/position-backfill`, provides a runnable backfill tool rather than a one-off
 script. It seeds the position counter above the true historical event count (using an accurate count, not an
 estimate), then backfills `position` onto existing events ordered by `_id` rather than by any time field, so it

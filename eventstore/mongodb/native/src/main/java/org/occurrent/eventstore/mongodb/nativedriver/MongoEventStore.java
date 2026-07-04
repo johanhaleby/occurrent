@@ -157,7 +157,9 @@ public class MongoEventStore implements EventStore, EventStoreOperations, EventS
         this.queryOptions = config.queryOptions;
         this.eventStoreCapabilities = config.eventStoreCapabilities;
         this.dcbStreamIdGenerator = config.dcbStreamIdGenerator;
-        this.streamPositionEnabled = config.streamPositionEnabled;
+        // Resolve the effective stream-position setting before the store is initialized, so the position index and
+        // counter collection are not created when the startup guard disables position for this store.
+        this.streamPositionEnabled = resolveStreamPositionEnabled(config, eventCollection);
         this.requireBackfilledPosition = config.requireBackfilledPosition;
         initializeEventStore(eventCollection, database, eventStoreCapabilities, writesPosition(), dcbPositionCollection.getNamespace().getCollectionName(), dcbCheckpointCollection.getNamespace().getCollectionName());
         if (writesPosition()) {
@@ -752,6 +754,34 @@ public class MongoEventStore implements EventStore, EventStoreOperations, EventS
         if (dcbEnabled) {
             eventStoreCollection.createIndex(Indexes.ascending(DcbDocumentMapper.DCB_TAGS_INDEX_FIELD));
         }
+    }
+
+    // Decide at startup whether this store writes stream position. An explicit choice (withStreamPosition() or
+    // withoutStreamPosition()) and DCB are honored as-is. When position is only on by default, turn it off if the
+    // collection already holds events without a position, so upgrading an existing store does not build the position
+    // index over the whole collection at startup. The user gets a warning naming how to turn it on and backfill.
+    private static boolean resolveStreamPositionEnabled(EventStoreConfig config, MongoCollection<Document> eventCollection) {
+        if (!config.streamPositionEnabled) {
+            return false;
+        }
+        if (config.eventStoreCapabilities.contains(DCB) || config.streamPositionExplicitlyEnabled) {
+            return true;
+        }
+        if (hasPreExistingUnpositionedEvents(eventCollection)) {
+            log.warn("Stream position is on by default, but the event collection '{}' already contains events without a 'position'. " +
+                    "Position will NOT be used for this store, to avoid building the position index over a large existing collection at startup. " +
+                    "To use position, enable it explicitly with EventStoreConfig.Builder.withStreamPosition() (or set occurrent.event-store.stream.position=true) " +
+                    "and backfill existing events first with the position-backfill module (see doc/runbooks/position-backfill.md).", eventCollection.getNamespace().getCollectionName());
+            return false;
+        }
+        return true;
+    }
+
+    // A cheap probe for an existing un-backfilled store. Backfill assigns positions in _id order, oldest first, so if
+    // the oldest event has no position the collection predates position and has not been backfilled.
+    private static boolean hasPreExistingUnpositionedEvents(MongoCollection<Document> eventCollection) {
+        Document oldestEvent = eventCollection.find().sort(Sorts.ascending(ID)).limit(1).projection(Projections.include(OccurrentCloudEventExtension.POSITION)).first();
+        return oldestEvent != null && !oldestEvent.containsKey(OccurrentCloudEventExtension.POSITION);
     }
 
     // Warns or fails when a position-writing store has pre-existing events without a position, since position-based

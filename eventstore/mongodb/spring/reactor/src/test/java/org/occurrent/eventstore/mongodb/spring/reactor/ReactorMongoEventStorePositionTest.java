@@ -245,6 +245,42 @@ class ReactorMongoEventStorePositionTest {
         assertThat(withPosition).isNotNull();
     }
 
+    @Test
+    void position_is_turned_off_on_an_existing_unpositioned_store_when_it_was_not_enabled_explicitly() {
+        ReactorMongoEventStore optedOut = storeWith(new EventStoreConfig.Builder()
+                .eventStoreCapabilities(STREAM)
+                .withoutStreamPosition());
+        optedOut.write("stream-1", WriteCondition.anyStreamVersion(), Flux.just(event("NameDefined"))).block();
+
+        // Default (not explicit) position over a collection that already has unpositioned events turns itself off,
+        // rather than building the position index over the whole collection at startup.
+        ReactorMongoEventStore defaulted = storeWith(new EventStoreConfig.Builder().eventStoreCapabilities(STREAM));
+        assertThat(defaulted.writesPosition()).isFalse();
+
+        List<org.bson.Document> indexes = mongoTemplate.getCollection("events")
+                .flatMapMany(collection -> Flux.from(collection.listIndexes()))
+                .collectList()
+                .block();
+        assertThat(requireNonNull(indexes))
+                .noneMatch(document -> "position_1".equals(document.getString("name")));
+    }
+
+    @Test
+    void position_stays_on_by_default_for_an_empty_store() {
+        ReactorMongoEventStore defaulted = storeWith(new EventStoreConfig.Builder().eventStoreCapabilities(STREAM));
+        assertThat(defaulted.writesPosition()).isTrue();
+    }
+
+    @Test
+    void position_stays_on_by_default_once_the_store_has_positioned_events() {
+        ReactorMongoEventStore first = storeWith(new EventStoreConfig.Builder().eventStoreCapabilities(STREAM));
+        first.write("stream-1", WriteCondition.anyStreamVersion(), Flux.just(event("NameDefined"))).block();
+
+        // Re-opening a store whose events already have positions keeps position on.
+        ReactorMongoEventStore reopened = storeWith(new EventStoreConfig.Builder().eventStoreCapabilities(STREAM));
+        assertThat(reopened.writesPosition()).isTrue();
+    }
+
     private static CloudEvent taggedEvent(String type, String... tags) {
         return DcbCloudEvents.withTags(event(type), Set.of(tags));
     }

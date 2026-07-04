@@ -203,17 +203,19 @@ public class OccurrentProperties {
     public static class StreamProperties {
 
         /**
-         * Whether stream-written events carry a global, monotonic position. On by default. Set to {@code false} to
-         * opt a STREAM-only store out of writing position. {@link EventStoreCapability#DCB} always writes position
-         * regardless of this setting, and a combined STREAM+DCB store always writes position too.
+         * Whether stream-written events carry a global, monotonic position. On by default when unset. Set to
+         * {@code false} to opt a STREAM-only store out of writing position. Set to {@code true} to enable it
+         * explicitly, which keeps it on even for an existing store whose events have not been backfilled. When unset,
+         * the store may turn position off at startup if it finds such a collection. {@link EventStoreCapability#DCB}
+         * always writes position regardless of this setting, and a combined STREAM+DCB store always writes position.
          */
-        private boolean position = true;
+        private Boolean position;
 
-        public boolean isPosition() {
+        public Boolean getPosition() {
             return position;
         }
 
-        public void setPosition(boolean position) {
+        public void setPosition(Boolean position) {
             this.position = position;
         }
     }
