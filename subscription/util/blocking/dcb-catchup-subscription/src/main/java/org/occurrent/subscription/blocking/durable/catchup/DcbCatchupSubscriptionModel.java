@@ -31,21 +31,16 @@ import org.occurrent.subscription.StartAt.StartAtSubscriptionPosition;
 import org.occurrent.subscription.StartAt.SubscriptionModelContext;
 import org.occurrent.subscription.SubscriptionFilter;
 import org.occurrent.subscription.SubscriptionPosition;
-import org.occurrent.subscription.api.blocking.DelegatingSubscriptionModel;
 import org.occurrent.subscription.api.blocking.PositionAwareSubscriptionModel;
 import org.occurrent.subscription.api.blocking.Subscription;
 import org.occurrent.subscription.api.blocking.SubscriptionModel;
 import org.occurrent.subscription.blocking.durable.catchup.SubscriptionPositionStorageConfig.UseSubscriptionPositionInStorage;
 
 import java.util.Objects;
-import java.util.Optional;
 import java.util.StringJoiner;
 import java.util.concurrent.CompletableFuture;
-import java.util.concurrent.ConcurrentHashMap;
-import java.util.concurrent.ConcurrentMap;
 import java.util.concurrent.Future;
 import java.util.function.Consumer;
-import java.util.function.Function;
 import java.util.function.Supplier;
 import java.util.stream.Stream;
 
@@ -60,15 +55,10 @@ import java.util.stream.Stream;
  * handover instead of silently dropping events.
  */
 @NullMarked
-public class DcbCatchupSubscriptionModel implements SubscriptionModel, DelegatingSubscriptionModel {
+public class DcbCatchupSubscriptionModel extends AbstractCatchupSubscriptionModel {
 
-    private final PositionAwareSubscriptionModel subscriptionModel;
     private final DcbEventStore dcbEventStore;
     private final DcbQuery dcbQuery;
-    private final CatchupSubscriptionModelConfig config;
-    private final Class<?> subscriptionModelContextType;
-    private final ConcurrentMap<String, Boolean> runningCatchupSubscriptions = new ConcurrentHashMap<>();
-    private volatile boolean shuttingDown = false;
 
     public DcbCatchupSubscriptionModel(PositionAwareSubscriptionModel subscriptionModel, DcbEventStore dcbEventStore, DcbQuery dcbQuery, CatchupSubscriptionModelConfig config) {
         this(subscriptionModel, dcbEventStore, dcbQuery, config, DcbCatchupSubscriptionModel.class);
@@ -82,15 +72,9 @@ public class DcbCatchupSubscriptionModel implements SubscriptionModel, Delegatin
      *                                      keeps working regardless of which mode-specific class runs the catch-up.
      */
     public DcbCatchupSubscriptionModel(PositionAwareSubscriptionModel subscriptionModel, DcbEventStore dcbEventStore, DcbQuery dcbQuery, CatchupSubscriptionModelConfig config, Class<?> subscriptionModelContextType) {
-        this.subscriptionModel = Objects.requireNonNull(subscriptionModel, "subscriptionModel cannot be null");
+        super(subscriptionModel, config, subscriptionModelContextType);
         this.dcbEventStore = Objects.requireNonNull(dcbEventStore, "dcbEventStore cannot be null");
         this.dcbQuery = Objects.requireNonNull(dcbQuery, "dcbQuery cannot be null");
-        this.config = Objects.requireNonNull(config, "config cannot be null");
-        this.subscriptionModelContextType = Objects.requireNonNull(subscriptionModelContextType, "subscriptionModelContextType cannot be null");
-    }
-
-    private SubscriptionModelContext generateSubscriptionModelContext() {
-        return new SubscriptionModelContext(subscriptionModelContextType);
     }
 
     @Override
@@ -272,96 +256,16 @@ public class DcbCatchupSubscriptionModel implements SubscriptionModel, Delegatin
     }
 
     @Override
-    public void stop() {
-        getDelegatedSubscriptionModel().stop();
-    }
-
-    @Override
-    public void start(boolean resumeSubscriptionsAutomatically) {
-        getDelegatedSubscriptionModel().start(resumeSubscriptionsAutomatically);
-    }
-
-    @Override
-    public boolean isRunning() {
-        return getDelegatedSubscriptionModel().isRunning();
-    }
-
-    @Override
-    public boolean isRunning(String subscriptionId) {
-        return getDelegatedSubscriptionModel().isRunning(subscriptionId);
-    }
-
-    @Override
-    public boolean isPaused(String subscriptionId) {
-        return getDelegatedSubscriptionModel().isPaused(subscriptionId);
-    }
-
-    @Override
-    public Subscription resumeSubscription(String subscriptionId) {
-        return getDelegatedSubscriptionModel().resumeSubscription(subscriptionId);
-    }
-
-    @Override
-    public void pauseSubscription(String subscriptionId) {
-        getDelegatedSubscriptionModel().pauseSubscription(subscriptionId);
-    }
-
-    /**
-     * Cancel a DCB catch-up running for {@code subscriptionId}. A no-op if this class has no catch-up running for that
-     * id (for example because it belongs to the stream path in a dual-mode dispatcher). Does not touch the shared live
-     * delegate or position storage; the dispatcher owns those since both paths share the same delegate.
-     */
-    public void cancelRunningCatchup(String subscriptionId) {
-        runningCatchupSubscriptions.remove(subscriptionId);
-    }
-
-    /**
-     * Mark this model as shutting down so any in-flight catch-up stops as soon as possible. Does not touch the shared
-     * live delegate; the dispatcher owns that.
-     */
-    public void markShuttingDown() {
-        shuttingDown = true;
-        runningCatchupSubscriptions.clear();
-    }
-
-    @Override
     public void cancelSubscription(String subscriptionId) {
         cancelRunningCatchup(subscriptionId);
         subscriptionModel.cancelSubscription(subscriptionId);
         deletePositionFromStorage(subscriptionId);
     }
 
-    /**
-     * Delete {@code subscriptionId}'s position from the configured position storage, if any. Exposed so the
-     * dispatcher can delete it exactly once when cancelling a subscription that could belong to either mode, since
-     * the position storage config (and the storage instance it wraps) is shared, not owned per mode.
-     */
-    public void deletePositionFromStorage(String subscriptionId) {
-        doIfSubscriptionPositionStorageConfigIs(UseSubscriptionPositionInStorage.class, cfg -> cfg.storage().delete(subscriptionId));
-    }
-
     @Override
     public void shutdown() {
         markShuttingDown();
         subscriptionModel.shutdown();
-    }
-
-    @Override
-    public SubscriptionModel getDelegatedSubscriptionModel() {
-        return subscriptionModel;
-    }
-
-    private <T, C extends SubscriptionPositionStorageConfig> Optional<T> returnIfSubscriptionPositionStorageConfigIs(Class<C> cls, Function<C, @Nullable T> fn) {
-        if (cls.isInstance(config.subscriptionStorageConfig)) {
-            return Optional.ofNullable(fn.apply(cls.cast(config.subscriptionStorageConfig)));
-        }
-        return Optional.empty();
-    }
-
-    private <C extends SubscriptionPositionStorageConfig> void doIfSubscriptionPositionStorageConfigIs(Class<C> cls, Consumer<C> consumer) {
-        if (cls.isInstance(config.subscriptionStorageConfig)) {
-            consumer.accept(cls.cast(config.subscriptionStorageConfig));
-        }
     }
 
     @Override
