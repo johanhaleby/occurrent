@@ -29,7 +29,7 @@ import java.util.Set;
  * needs the tail the live resume can overlap, not the whole history.
  */
 @NullMarked
-public final class HandoverCache {
+final class HandoverCache {
     private final int maxSize;
     private final Set<String> ids;
 

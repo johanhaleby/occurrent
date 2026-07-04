@@ -33,7 +33,7 @@ import java.util.concurrent.Future;
  * DCB catch-up models can hand back the same kind of handle while the replay runs on a background thread.
  */
 @NullMarked
-public record CatchupSubscription(String id, Future<Subscription> delegatedSubscription) implements Subscription {
+record CatchupSubscription(String id, Future<Subscription> delegatedSubscription) implements Subscription {
     private static final Logger log = LoggerFactory.getLogger(CatchupSubscription.class);
 
     @Override

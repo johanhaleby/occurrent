@@ -28,7 +28,7 @@ import java.util.Map;
  * delivered during catch-up at the handover seam. Shared by the stream and DCB catch-up paths.
  */
 @NullMarked
-public final class FixedSizeCache {
+final class FixedSizeCache {
     private final LinkedHashMap<String, @Nullable String> cacheContent;
 
     public FixedSizeCache(int size) {

@@ -44,7 +44,7 @@ import static java.util.Objects.requireNonNull;
  * all (for example an empty oplog or a restricted cluster), the subscription fails loudly for the same reason.
  */
 @NullMarked
-public final class PositionCatchupPipeline {
+final class PositionCatchupPipeline {
 
     private final CatchupReader reader;
     private final long windowSize;

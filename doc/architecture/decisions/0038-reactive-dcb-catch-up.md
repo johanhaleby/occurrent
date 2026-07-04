@@ -14,7 +14,7 @@ It is scoped to DCB only. `dcbposition` is a monotonic server-assigned counter, 
 
 ## Decision
 
-Add `ReactorDcbCatchupSubscriptionModel` in a new module `subscription/util/reactor/dcb-catchup-subscription`. Its `Flux<CloudEvent> subscribe(DcbQuery, DcbStartAt)` mirrors the blocking DCB catch-up: when the start is a DCB position it replays history and hands over to live, otherwise it goes straight to live through the reactive `DcbSubscriptionModel` facade.
+Add `ReactorDcbCatchupSubscriptionModel` in a new module `subscription/util/reactor/catchup-subscription`. Its `Flux<CloudEvent> subscribe(DcbQuery, DcbStartAt)` mirrors the blocking DCB catch-up: when the start is a DCB position it replays history and hands over to live, otherwise it goes straight to live through the reactive `DcbSubscriptionModel` facade.
 
 The catch-up `Flux` is `concat(bulk, reconcile, live)`:
 

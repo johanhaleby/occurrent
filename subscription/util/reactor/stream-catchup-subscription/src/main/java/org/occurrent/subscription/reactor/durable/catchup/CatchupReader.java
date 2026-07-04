@@ -28,7 +28,7 @@ import reactor.core.publisher.Mono;
  * either store's specific query type.
  */
 @NullMarked
-public interface CatchupReader {
+interface CatchupReader {
 
     /**
      * Reads events in {@code (fromExclusive, toInclusive]}, in position order, already wrapped as a

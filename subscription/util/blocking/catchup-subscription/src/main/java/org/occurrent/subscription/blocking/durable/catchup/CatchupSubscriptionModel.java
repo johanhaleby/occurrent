@@ -91,11 +91,13 @@ import java.util.function.Consumer;
  * stored time token is re-resolved to the model default instead of being read as a position.
  * </p>
  * <p>
- * This class is a dispatcher over {@link StreamCatchupSubscriptionModel} (stream catch-up) and
- * {@link DcbCatchupSubscriptionModel} (DCB catch-up, ADR 20), routing each {@code subscribe} call to whichever one
- * applies. A single-mode instance only depends on the module for that mode's store; a stream-only application does
+ * This is the general catch-up entry point. It routes each subscription to stream or DCB replay by the subscription
+ * filter and start position, dispatching over {@link StreamCatchupSubscriptionModel} (stream catch-up) and
+ * {@code DcbCatchupSubscriptionModel} (DCB catch-up, ADR 20) so a single model can serve stream, DCB, or dual-mode
+ * stores. A single-mode instance only depends on the module for that mode's store; a stream-only application does
  * not need {@code eventstore-api-dcb} on its classpath, since {@link StreamCatchupSubscriptionModel} lives in the
- * separate {@code stream-catchup-subscription} module this class depends on.
+ * separate {@code stream-catchup-subscription} module this class depends on. A stream-only store that wants to avoid
+ * the DCB dependency altogether can use {@link StreamCatchupSubscriptionModel} directly as the DCB-free variant.
  * </p>
  */
 @NullMarked
