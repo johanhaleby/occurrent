@@ -17,69 +17,66 @@
 package org.occurrent.eventstore.api.dcb;
 
 import org.jspecify.annotations.NullMarked;
+import org.occurrent.eventstore.api.PositionRange;
 
 import java.util.OptionalLong;
 
 import static java.util.Objects.requireNonNull;
 
 /**
- * Options that scope a DCB read.
+ * Options that scope a DCB read. Uses the shared {@link PositionRange} window, the same window used by stream
+ * position reads and the query DSL.
  *
- * @param afterSequencePosition optional exclusive lower bound; when present, only events with a DCB sequence position
- *                              strictly greater than this value are returned
- * @param upToSequencePosition  optional inclusive upper bound; when present, only events with a DCB sequence position
- *                              less than or equal to this value are returned. When absent, the read includes everything
- *                              up to the store's DCB head at read time.
+ * @param positionRange the position window to read
  */
 @NullMarked
-public record DcbReadOptions(OptionalLong afterSequencePosition, OptionalLong upToSequencePosition) {
+public record DcbReadOptions(PositionRange positionRange) {
 
     public DcbReadOptions {
-        requireNonNull(afterSequencePosition, "After sequence position cannot be null");
-        requireNonNull(upToSequencePosition, "Up to sequence position cannot be null");
-        afterSequencePosition.ifPresent(position -> {
-            if (position < 0) {
-                throw new IllegalArgumentException("After sequence position cannot be negative");
-            }
-        });
-        upToSequencePosition.ifPresent(position -> {
-            if (position < 0) {
-                throw new IllegalArgumentException("Up to sequence position cannot be negative");
-            }
-        });
-        if (afterSequencePosition.isPresent() && upToSequencePosition.isPresent()
-                && afterSequencePosition.getAsLong() > upToSequencePosition.getAsLong()) {
-            // The lower bound is exclusive and the upper bound is inclusive, so an equal pair is a valid empty range.
-            // Only an inverted range (after greater than upTo) is rejected.
-            throw new IllegalArgumentException("After sequence position cannot be greater than up to sequence position");
-        }
+        requireNonNull(positionRange, "Position range cannot be null");
+    }
+
+    /**
+     * Optional exclusive lower bound. When present, only events with a DCB sequence position strictly greater than
+     * this value are returned.
+     */
+    public OptionalLong afterPosition() {
+        return positionRange.afterPosition();
+    }
+
+    /**
+     * Optional inclusive upper bound. When present, only events with a DCB sequence position less than or equal to
+     * this value are returned. When absent, the read includes everything up to the store's DCB head at read time.
+     */
+    public OptionalLong upToPosition() {
+        return positionRange.upToPosition();
     }
 
     /**
      * Reads from the beginning of the DCB sequence up to the store head.
      */
     public static DcbReadOptions fromBeginning() {
-        return new DcbReadOptions(OptionalLong.empty(), OptionalLong.empty());
+        return new DcbReadOptions(PositionRange.fromBeginning());
     }
 
     /**
      * Reads only events after the supplied DCB sequence position (exclusive).
      */
-    public static DcbReadOptions afterSequencePosition(long position) {
-        return new DcbReadOptions(OptionalLong.of(position), OptionalLong.empty());
+    public static DcbReadOptions afterPosition(long position) {
+        return new DcbReadOptions(PositionRange.afterPosition(position));
     }
 
     /**
      * Reads from the beginning up to and including the supplied DCB sequence position.
      */
-    public static DcbReadOptions upToSequencePosition(long position) {
-        return new DcbReadOptions(OptionalLong.empty(), OptionalLong.of(position));
+    public static DcbReadOptions upToPosition(long position) {
+        return new DcbReadOptions(PositionRange.upToPosition(position));
     }
 
     /**
-     * Reads events after {@code afterSequencePosition} (exclusive) and up to and including {@code upToSequencePosition}.
+     * Reads events after {@code afterPosition} (exclusive) and up to and including {@code upToPosition}.
      */
-    public static DcbReadOptions between(long afterSequencePosition, long upToSequencePosition) {
-        return new DcbReadOptions(OptionalLong.of(afterSequencePosition), OptionalLong.of(upToSequencePosition));
+    public static DcbReadOptions between(long afterPosition, long upToPosition) {
+        return new DcbReadOptions(PositionRange.between(afterPosition, upToPosition));
     }
 }

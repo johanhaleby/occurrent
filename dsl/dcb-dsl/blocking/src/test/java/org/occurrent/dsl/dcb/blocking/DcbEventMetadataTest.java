@@ -25,31 +25,34 @@ import org.occurrent.eventstore.api.dcb.DcbCloudEvents;
 
 import java.util.Map;
 import java.util.Set;
+import org.occurrent.cloudevents.OccurrentCloudEventExtension;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
 @DisplayNameGeneration(ReplaceUnderscores.class)
 class DcbEventMetadataTest {
 
+    // position() reads the event's global position from the POSITION extension, or empty when there is none. It does
+    // not depend on the event being DCB, a stream event with a position reads back the same way.
     @Test
     void reads_position_when_stored_as_number() {
-        EventMetadata metadata = new EventMetadata(Map.of(DcbCloudEvents.POSITION, 7L));
+        EventMetadata metadata = new EventMetadata(Map.of(OccurrentCloudEventExtension.POSITION, 7L));
 
-        assertThat(DcbEventMetadata.from(metadata).dcbPosition()).hasValue(7L);
+        assertThat(DcbEventMetadata.from(metadata).position()).hasValue(7L);
     }
 
     @Test
     void reads_position_when_stored_as_string() {
-        EventMetadata metadata = new EventMetadata(Map.of(DcbCloudEvents.POSITION, "7"));
+        EventMetadata metadata = new EventMetadata(Map.of(OccurrentCloudEventExtension.POSITION, "7"));
 
-        assertThat(DcbEventMetadata.from(metadata).dcbPosition()).hasValue(7L);
+        assertThat(DcbEventMetadata.from(metadata).position()).hasValue(7L);
     }
 
     @Test
     void position_is_empty_when_absent() {
-        EventMetadata metadata = new EventMetadata(Map.of());
+        EventMetadata metadata = new EventMetadata(Map.of(DcbCloudEvents.TAGS, DcbCloudEvents.encodeTags(Set.of("name:1"))));
 
-        assertThat(DcbEventMetadata.from(metadata).dcbPosition()).isEmpty();
+        assertThat(DcbEventMetadata.from(metadata).position()).isEmpty();
     }
 
     @Test

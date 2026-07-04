@@ -53,6 +53,7 @@ import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.Future;
 import java.util.concurrent.atomic.AtomicInteger;
+import org.occurrent.cloudevents.OccurrentCloudEventExtension;
 
 import static java.nio.charset.StandardCharsets.UTF_8;
 import static java.util.Objects.requireNonNull;
@@ -115,7 +116,7 @@ class ReactorMongoEventStoreDcbTest {
         assertAll(
                 () -> assertThat(stream.events()).extracting(CloudEvent::getType).containsExactly("NameDefined"),
                 () -> assertThat(DcbCloudEvents.getTags(stream.events().get(0))).containsExactly("name:1"),
-                () -> assertThat(stream.events().get(0).getExtension(DcbCloudEvents.POSITION)).isEqualTo(1L),
+                () -> assertThat(stream.events().get(0).getExtension(OccurrentCloudEventExtension.POSITION)).isEqualTo(1L),
                 () -> assertThat(stream.lastSequencePosition()).isEqualTo(1)
         );
     }
@@ -129,7 +130,7 @@ class ReactorMongoEventStoreDcbTest {
 
         DcbEventStream stream = requireNonNull(eventStore.read(
                 anyOf(List.of(types(List.of("OrderPlaced")), tags(List.of("name:1", "tenant:1")))),
-                DcbReadOptions.afterSequencePosition(1)).block());
+                DcbReadOptions.afterPosition(1)).block());
 
         assertAll(
                 () -> assertThat(stream.events()).extracting(CloudEvent::getType).containsExactly("NameChanged", "OrderPlaced"),

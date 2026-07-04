@@ -17,9 +17,9 @@
 package org.occurrent.eventstore.mongodb.dcb.internal;
 
 import io.cloudevents.CloudEvent;
-import io.cloudevents.core.builder.CloudEventBuilder;
 import org.bson.Document;
 import org.jspecify.annotations.NullMarked;
+import org.occurrent.cloudevents.OccurrentCloudEventExtension;
 import org.occurrent.eventstore.api.dcb.DcbCloudEvents;
 import org.occurrent.eventstore.mongodb.internal.OccurrentCloudEventMongoDocumentMapper;
 import org.occurrent.mongodb.timerepresentation.TimeRepresentation;
@@ -50,35 +50,23 @@ public final class DcbDocumentMapper {
      */
     public static Document toDocument(TimeRepresentation timeRepresentation, String streamId, long streamVersion, CloudEvent dcbCloudEvent, long position) {
         Document document = OccurrentCloudEventMongoDocumentMapper.convertToDocument(timeRepresentation, streamId, streamVersion, dcbCloudEvent);
-        document.put(DcbCloudEvents.POSITION, position);
+        PositionDocumentMapper.addPosition(document, position);
         document.put(DCB_TAGS_INDEX_FIELD, new ArrayList<>(DcbCloudEvents.getTags(dcbCloudEvent)));
         return document;
     }
 
     /**
      * Converts a stored document back to a CloudEvent. The DCB index fields are stripped before delegating to the
-     * stream mapper, and the DCB position is reattached as a CloudEvent extension. A plain stream document carries
+     * stream mapper, and the position is reattached as a CloudEvent extension. A plain stream document carries
      * neither field, so this also handles stream events and is safe as the single deserialization point for both.
      */
     public static CloudEvent toCloudEvent(TimeRepresentation timeRepresentation, Document cloudEventDocument) {
-        Object dcbPosition = cloudEventDocument.get(DcbCloudEvents.POSITION);
+        Object storedPosition = cloudEventDocument.get(OccurrentCloudEventExtension.POSITION);
         Document stripped = new Document(cloudEventDocument);
         stripped.remove(DCB_TAGS_INDEX_FIELD);
-        stripped.remove(DcbCloudEvents.POSITION);
+        PositionDocumentMapper.stripPosition(stripped);
 
         CloudEvent cloudEvent = OccurrentCloudEventMongoDocumentMapper.convertToCloudEvent(timeRepresentation, stripped);
-        if (dcbPosition == null) {
-            return cloudEvent;
-        }
-
-        CloudEventBuilder cloudEventBuilder = CloudEventBuilder.v1(cloudEvent);
-        if (dcbPosition instanceof Number number) {
-            cloudEventBuilder.withExtension(DcbCloudEvents.POSITION, number.longValue());
-        } else if (dcbPosition instanceof String string) {
-            cloudEventBuilder.withExtension(DcbCloudEvents.POSITION, Long.parseLong(string));
-        } else {
-            throw new IllegalStateException("Expected " + DcbCloudEvents.POSITION + " to be a Number or String but was " + dcbPosition.getClass().getName());
-        }
-        return cloudEventBuilder.build();
+        return PositionDocumentMapper.reattachPosition(cloudEvent, storedPosition);
     }
 }

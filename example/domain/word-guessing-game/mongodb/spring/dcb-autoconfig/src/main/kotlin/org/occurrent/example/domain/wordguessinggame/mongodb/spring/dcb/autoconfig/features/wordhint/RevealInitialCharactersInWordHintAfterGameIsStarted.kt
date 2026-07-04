@@ -17,7 +17,6 @@ package org.occurrent.example.domain.wordguessinggame.mongodb.spring.dcb.autocon
 
 import org.occurrent.annotation.StreamSubscription
 import org.occurrent.application.service.blocking.dcb.DcbApplicationService
-import org.occurrent.dsl.dcb.dcbPosition
 import org.occurrent.dsl.dcb.dcbTags
 import org.occurrent.dsl.subscription.EventMetadata
 import org.occurrent.example.domain.wordguessinggame.event.CharacterInWordHintWasRevealed
@@ -44,7 +43,7 @@ class RevealInitialCharactersInWordHintAfterGameIsStarted(
         if (!metadata.belongsToGame(gameWasStarted.gameId)) {
             return
         }
-        requireNotNull(metadata.dcbPosition) { "Expected DCB position for ${gameWasStarted.type}" }
+        requireNotNull(metadata.position) { "Expected DCB position for ${gameWasStarted.type}" }
         invoke(gameWasStarted)
     }
 

@@ -22,7 +22,7 @@ import java.lang.annotation.*;
 /**
  * Starts or resumes a Dynamic Consistency Boundary (DCB) subscription. It is the DCB counterpart to
  * {@link StreamSubscription}: where the stream annotation filters by an Occurrent {@code Filter} and starts at a time,
- * this one filters by a DCB query (event types and tags) and starts at a {@code dcbposition}. For example:
+ * this one filters by a DCB query (event types and tags) and starts at a {@code position}. For example:
  *
  * <pre lang="java">
  * &#64;DcbSubscription(id = "courseDashboard", startAt = DcbStartPosition.BEGINNING)
@@ -53,7 +53,7 @@ import java.lang.annotation.*;
  * <h4>Start Position</h4>
  * <p>
  * {@link #startAt()} selects one of the {@link DcbStartPosition} values. {@link DcbStartPosition#BEGINNING} replays
- * the whole DCB sequence by {@code dcbposition} before switching to live delivery, so a read model can be rebuilt
+ * the whole DCB sequence by {@code position} before switching to live delivery, so a read model can be rebuilt
  * from history. As with {@link StreamSubscription}, the replay happens the first time the subscription starts, and on
  * later restarts it resumes from the last received event, unless {@link #resumeBehavior()} says otherwise.
  * </p>
@@ -127,7 +127,7 @@ public @interface DcbSubscription {
      */
     enum DcbStartPosition {
         /**
-         * Replay the whole DCB sequence from the beginning (by {@code dcbposition}) before switching to live delivery.
+         * Replay the whole DCB sequence from the beginning (by {@code position}) before switching to live delivery.
          */
         BEGINNING,
         /**

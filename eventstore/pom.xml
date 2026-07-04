@@ -30,6 +30,7 @@
         <module>api</module>
         <module>inmemory</module>
         <module>mongodb</module>
+        <module>migration</module>
     </modules>
 
     <dependencyManagement>

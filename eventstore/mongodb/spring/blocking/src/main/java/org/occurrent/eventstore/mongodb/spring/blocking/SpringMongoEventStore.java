@@ -36,6 +36,7 @@ import org.occurrent.eventstore.api.internal.StreamReadFilterToFilterMapper;
 import org.occurrent.eventstore.api.internal.StreamReadFilterValidator;
 import org.occurrent.eventstore.mongodb.dcb.internal.DcbDocumentMapper;
 import org.occurrent.eventstore.mongodb.dcb.internal.DcbMarkerModel;
+import org.occurrent.eventstore.mongodb.dcb.internal.PositionDocumentMapper;
 import org.occurrent.eventstore.mongodb.internal.MongoExceptionTranslator.WriteContext;
 import org.occurrent.eventstore.mongodb.internal.StreamVersionDiff;
 import org.occurrent.filter.Filter;
@@ -43,6 +44,8 @@ import org.occurrent.mongodb.spring.filterqueryconversion.internal.FilterConvert
 import org.occurrent.mongodb.timerepresentation.TimeRepresentation;
 import org.occurrent.retry.Backoff;
 import org.occurrent.retry.RetryStrategy;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.dao.DataAccessException;
 import org.springframework.dao.DuplicateKeyException;
 import org.springframework.data.domain.Sort;
@@ -62,10 +65,10 @@ import java.util.Objects;
 import java.util.Optional;
 import java.util.Set;
 import java.util.TreeSet;
-import java.util.function.BiFunction;
 import java.util.function.Function;
 import java.util.function.Supplier;
 import java.util.stream.Stream;
+import org.occurrent.cloudevents.OccurrentCloudEventExtension;
 
 import static java.util.Objects.requireNonNull;
 import static org.occurrent.cloudevents.OccurrentCloudEventExtension.STREAM_ID;
@@ -93,7 +96,9 @@ import static org.springframework.data.mongodb.core.query.Criteria.where;
  * For large production collections, create new indexes out-of-band before enabling a new capability.
  */
 @NullMarked
-public class SpringMongoEventStore implements EventStore, EventStoreOperations, EventStoreQueries, ReadEventStreamWithFilter, DcbEventStore {
+public class SpringMongoEventStore implements EventStore, EventStoreOperations, EventStoreQueries, ReadEventStreamWithFilter, DcbEventStore, PositionOrderedReader {
+
+    private static final Logger log = LoggerFactory.getLogger(SpringMongoEventStore.class);
 
     private static final String ID = "_id";
 
@@ -107,6 +112,7 @@ public class SpringMongoEventStore implements EventStore, EventStoreOperations, 
     private final Function<Query, Query> readOptions;
     private final Set<EventStoreCapability> eventStoreCapabilities;
     private final DcbStreamIdGenerator dcbStreamIdGenerator;
+    private final boolean streamPositionEnabled;
 
     /**
      * Create a new instance of {@code SpringBlockingMongoEventStore}
@@ -127,7 +133,11 @@ public class SpringMongoEventStore implements EventStore, EventStoreOperations, 
         this.readOptions = config.readOptions;
         this.eventStoreCapabilities = config.eventStoreCapabilities;
         this.dcbStreamIdGenerator = config.dcbStreamIdGenerator;
-        initializeEventStore(eventStoreCollectionName, dcbPositionCollectionName, dcbCheckpointCollectionName, eventStoreCapabilities, mongoTemplate);
+        this.streamPositionEnabled = resolveStreamPositionEnabled(config, eventStoreCollectionName, mongoTemplate);
+        initializeEventStore(eventStoreCollectionName, dcbPositionCollectionName, dcbCheckpointCollectionName, eventStoreCapabilities, streamPositionEnabled, mongoTemplate);
+        if (writesPosition()) {
+            checkForUnpositionedEvents(eventStoreCollectionName, mongoTemplate, config.requireBackfilledPosition);
+        }
     }
 
     @Override
@@ -145,19 +155,19 @@ public class SpringMongoEventStore implements EventStore, EventStoreOperations, 
             throw new IllegalArgumentException(WriteCondition.class.getSimpleName() + " cannot be null");
         }
 
-        // This is an (ugly) hack to fix problems when write condition is "any" and we have parallel writes
-        // to the same stream. This will cause MongoDB to throw an exception since we're in a transaction.
-        // But in this case we should just retry since if the user has specified "any" as stream version
-        // he/she will expect that the events are just written to the event store and WriteConditionNotFulfilledException
-        // should not be thrown. Since the write method takes a "Stream" of events we can't simply retry since,
-        // on the first retry, the stream would already have been consumed. Thus, we preemptively convert the "events"
-        // stream into a list when write condition is any. This way, we can retry without errors.
-        final BiFunction<Stream<CloudEvent>, Long, List<Document>> convertCloudEventsToDocuments;
-        if (writeCondition.isAnyStreamVersion()) {
-            List<CloudEvent> cached = events.toList();
-            convertCloudEventsToDocuments = (cloudEvents, currentStreamVersion) -> convertCloudEventsToDocuments(streamId, cached.stream(), currentStreamVersion);
+        // The transaction may retry, but a Stream cannot be consumed twice, so materialize the events into a list that
+        // every attempt re-reads. This also gives the event count needed to reserve positions before the transaction.
+        List<CloudEvent> cachedEvents = events.toList();
+
+        // Reserve the position block outside the transaction, like DCB does (see reservePositions), so the shared
+        // counter does not become a transaction write-write conflict. The block is reused across retries, and a write
+        // that never commits abandons it, so positions may have gaps. Reserve only when the store writes position and
+        // there is at least one event.
+        final long firstReservedPosition;
+        if (writesPosition() && !cachedEvents.isEmpty()) {
+            firstReservedPosition = reservePositions(cachedEvents.size());
         } else {
-            convertCloudEventsToDocuments = (cloudEvents, currentStreamVersion) -> convertCloudEventsToDocuments(streamId, cloudEvents, currentStreamVersion);
+            firstReservedPosition = 0;
         }
 
         // The actual write logic for the cloud events
@@ -168,10 +178,19 @@ public class SpringMongoEventStore implements EventStore, EventStoreOperations, 
                 throw new WriteConditionNotFulfilledException(streamId, currentStreamVersion, writeCondition, String.format("%s was not fulfilled. Expected version %s but was %s.", WriteCondition.class.getSimpleName(), writeCondition, currentStreamVersion));
             }
 
-            List<Document> cloudEventDocuments = convertCloudEventsToDocuments.apply(events, currentStreamVersion);
+            List<Document> cloudEventDocuments = convertCloudEventsToDocuments(streamId, cachedEvents.stream(), currentStreamVersion);
 
             final long newStreamVersion;
             if (!cloudEventDocuments.isEmpty()) {
+                if (writesPosition()) {
+                    // Stamp the positions reserved outside the transaction (above), the same way DCB does, so stream
+                    // and DCB events share one sequence.
+                    long position = firstReservedPosition;
+                    for (Document document : cloudEventDocuments) {
+                        PositionDocumentMapper.addPosition(document, position);
+                        position++;
+                    }
+                }
                 insertAll(streamId, currentStreamVersion, writeCondition, cloudEventDocuments);
                 newStreamVersion = cloudEventDocuments.get(cloudEventDocuments.size() - 1).getLong(STREAM_VERSION);
             } else {
@@ -201,10 +220,10 @@ public class SpringMongoEventStore implements EventStore, EventStoreOperations, 
         // events may include it while the token does not, which only makes a later conditional append over-cautious (a
         // false conflict that retries) rather than miss the conflict.
         long consistencyTokenValue = consistencyToken(query);
-        long highWatermark = currentDcbPosition();
-        long upperBound = Math.min(highWatermark, options.upToSequencePosition().orElse(highWatermark));
-        Query mongoQuery = toDcbMongoQuery(query, options.afterSequencePosition().orElse(0), upperBound);
-        mongoQuery.with(Sort.by(Sort.Direction.ASC, DcbCloudEvents.POSITION));
+        long highWatermark = currentPosition();
+        long upperBound = Math.min(highWatermark, options.upToPosition().orElse(highWatermark));
+        Query mongoQuery = toDcbMongoQuery(query, options.afterPosition().orElse(0), upperBound);
+        mongoQuery.with(Sort.by(Sort.Direction.ASC, OccurrentCloudEventExtension.POSITION));
         List<CloudEvent> events = mongoTemplate.find(queryOptions.apply(mongoQuery), Document.class, eventStoreCollectionName).stream()
                 .map(document -> DcbDocumentMapper.toCloudEvent(timeRepresentation, document))
                 .toList();
@@ -241,12 +260,12 @@ public class SpringMongoEventStore implements EventStore, EventStoreOperations, 
     }
 
     private long lowerBound(DcbReadOptions options) {
-        return options.afterSequencePosition().orElse(0);
+        return options.afterPosition().orElse(0);
     }
 
     private long upperBound(DcbReadOptions options) {
-        long highWatermark = currentDcbPosition();
-        return Math.min(highWatermark, options.upToSequencePosition().orElse(highWatermark));
+        long highWatermark = currentPosition();
+        return Math.min(highWatermark, options.upToPosition().orElse(highWatermark));
     }
 
     @Override
@@ -359,9 +378,9 @@ public class SpringMongoEventStore implements EventStore, EventStoreOperations, 
 
         // Reserve the position block once, outside the transaction. The counter findAndModify is a single atomic
         // document update that MongoDB serializes without raising a transaction conflict. The reserved block is reused
-        // across transient-transaction-error retries; a doomed or condition-failed append abandons it, so dcbposition
+        // across transient-transaction-error retries; a doomed or condition-failed append abandons it, so position
         // may have gaps (DCB permits this, see ADR 0021).
-        long firstPosition = reserveDcbPositions(eventsToAppend.size());
+        long firstPosition = reservePositions(eventsToAppend.size());
         long lastPosition = firstPosition + eventsToAppend.size() - 1;
 
         return executeWithTransientRetry(() -> requireNonNull(transactionTemplate.execute(transactionStatus -> {
@@ -432,7 +451,7 @@ public class SpringMongoEventStore implements EventStore, EventStoreOperations, 
         long streamVersion = currentStreamVersion + 1;
         long position = firstPosition;
         for (CloudEvent cloudEvent : cloudEvents) {
-            CloudEvent dcbCloudEvent = DcbCloudEvents.withPosition(cloudEvent, position);
+            CloudEvent dcbCloudEvent = OccurrentCloudEventExtension.withPosition(cloudEvent, position);
             documents.add(DcbDocumentMapper.toDocument(timeRepresentation, streamId, streamVersion++, dcbCloudEvent, position));
             position++;
         }
@@ -457,7 +476,7 @@ public class SpringMongoEventStore implements EventStore, EventStoreOperations, 
             conflict = mongoTemplate.exists(toDcbMongoQuery(condition.query(), 0, Long.MAX_VALUE), eventStoreCollectionName);
         }
         if (conflict) {
-            throw new DcbAppendConditionNotFulfilledException(condition, currentDcbPosition(), "Append condition was not fulfilled.");
+            throw new DcbAppendConditionNotFulfilledException(condition, currentPosition(), "Append condition was not fulfilled.");
         }
         // Increment a marker per key for the union of the query's keys and the appended events' keys. The increments
         // force a write-write conflict that serializes concurrent appends sharing a marker, so the loser re-runs this
@@ -516,7 +535,7 @@ public class SpringMongoEventStore implements EventStore, EventStoreOperations, 
      * for the store as a whole under very high append rates. It is kept outside the append transaction (ADR 21) so it
      * does not turn into transaction conflicts, but the global monotonic sequence cannot be sharded away.
      */
-    private long reserveDcbPositions(int eventCount) {
+    private long reservePositions(int eventCount) {
         // Retry the cold-start race: when the counter document does not exist yet, concurrent upserts all try to insert
         // it and all but one get a duplicate key. On retry the document exists, so the upsert becomes an update.
         return RetryStrategy.retry()
@@ -524,18 +543,47 @@ public class SpringMongoEventStore implements EventStore, EventStoreOperations, 
                 .maxAttempts(5)
                 .retryIf(SpringMongoEventStore::isDuplicateKeyError)
                 .execute(() -> {
-                    Query query = new Query(where(ID).is(DcbMarkerModel.DCB_POSITION_DOCUMENT_ID));
-                    Update update = new Update().inc(DcbMarkerModel.DCB_COUNTER_POSITION, eventCount);
+                    Query query = new Query(where(ID).is(DcbMarkerModel.POSITION_DOCUMENT_ID));
+                    Update update = new Update().inc(DcbMarkerModel.COUNTER_POSITION, eventCount);
                     FindAndModifyOptions options = FindAndModifyOptions.options().upsert(true).returnNew(true);
                     Document updated = mongoTemplate.findAndModify(query, update, options, Document.class, dcbPositionCollectionName);
-                    long lastPosition = ((Number) requireNonNull(updated, "DCB position document cannot be null").get(DcbMarkerModel.DCB_COUNTER_POSITION)).longValue();
+                    long lastPosition = ((Number) requireNonNull(updated, "DCB position document cannot be null").get(DcbMarkerModel.COUNTER_POSITION)).longValue();
                     return lastPosition - eventCount + 1;
                 });
     }
 
-    private long currentDcbPosition() {
-        Document document = mongoTemplate.findById(DcbMarkerModel.DCB_POSITION_DOCUMENT_ID, Document.class, dcbPositionCollectionName);
-        return document == null ? 0 : ((Number) document.get(DcbMarkerModel.DCB_COUNTER_POSITION)).longValue();
+    /**
+     * {@inheritDoc}
+     */
+    @Override
+    public long currentPosition() {
+        requirePosition();
+        Document document = mongoTemplate.findById(DcbMarkerModel.POSITION_DOCUMENT_ID, Document.class, dcbPositionCollectionName);
+        return document == null ? 0 : ((Number) document.get(DcbMarkerModel.COUNTER_POSITION)).longValue();
+    }
+
+    /**
+     * {@inheritDoc}
+     * <p>
+     * Sorts by position and clamps the upper bound to the store's highest written position at read time, so a
+     * concurrent append is never partially visible.
+     */
+    @Override
+    public Stream<CloudEvent> readInPositionOrder(Filter filter, PositionRange range) {
+        requirePosition();
+        requireNonNull(filter, "Filter cannot be null");
+        requireNonNull(range, "Position range cannot be null");
+
+        long highWatermark = currentPosition();
+        long upperBound = Math.min(highWatermark, range.upToPosition().orElse(highWatermark));
+        long lowerBound = range.afterPosition().orElse(0);
+
+        Criteria positionCriteria = where(OccurrentCloudEventExtension.POSITION).gt(lowerBound).lte(upperBound);
+        Criteria filterCriteria = FilterConverter.convertFilterToCriteria(null, timeRepresentation, filter);
+        Query mongoQuery = new Query(new Criteria().andOperator(positionCriteria, filterCriteria))
+                .with(Sort.by(Sort.Direction.ASC, OccurrentCloudEventExtension.POSITION));
+        return mongoTemplate.find(queryOptions.apply(mongoQuery), Document.class, eventStoreCollectionName).stream()
+                .map(document -> DcbDocumentMapper.toCloudEvent(timeRepresentation, document));
     }
 
     @Override
@@ -643,8 +691,8 @@ public class SpringMongoEventStore implements EventStore, EventStoreOperations, 
         return Query.query(streamIdEqualToCriteria(streamId));
     }
 
-    private static Query toDcbMongoQuery(DcbQuery query, long afterSequencePosition, long upperSequencePosition) {
-        Criteria positionCriteria = where(DcbCloudEvents.POSITION).gt(afterSequencePosition).lte(upperSequencePosition);
+    private static Query toDcbMongoQuery(DcbQuery query, long afterPosition, long upperSequencePosition) {
+        Criteria positionCriteria = where(OccurrentCloudEventExtension.POSITION).gt(afterPosition).lte(upperSequencePosition);
         if (query instanceof DcbQuery.MatchAll) {
             return new Query(positionCriteria);
         }
@@ -716,12 +764,16 @@ public class SpringMongoEventStore implements EventStore, EventStoreOperations, 
     }
 
     // Initialization
-    private static void initializeEventStore(String eventStoreCollectionName, String dcbPositionCollectionName, String dcbCheckpointCollectionName, Set<EventStoreCapability> eventStoreCapabilities, MongoTemplate mongoTemplate) {
+    private static void initializeEventStore(String eventStoreCollectionName, String dcbPositionCollectionName, String dcbCheckpointCollectionName, Set<EventStoreCapability> eventStoreCapabilities, boolean streamPositionEnabled, MongoTemplate mongoTemplate) {
         if (!mongoTemplate.collectionExists(eventStoreCollectionName)) {
             mongoTemplate.createCollection(eventStoreCollectionName);
         }
         boolean dcbEnabled = eventStoreCapabilities.contains(DCB);
-        if (dcbEnabled && !mongoTemplate.collectionExists(dcbPositionCollectionName)) {
+        // Position is written for DCB, or for STREAM when streamPositionEnabled. The DCB-named counter collection also
+        // holds the shared sequence a STREAM-only positioned store reserves from, so it is needed whenever position is
+        // written.
+        boolean positionWritten = dcbEnabled || (eventStoreCapabilities.contains(STREAM) && streamPositionEnabled);
+        if (positionWritten && !mongoTemplate.collectionExists(dcbPositionCollectionName)) {
             mongoTemplate.createCollection(dcbPositionCollectionName);
         }
         if (dcbEnabled && !mongoTemplate.collectionExists(dcbCheckpointCollectionName)) {
@@ -731,21 +783,82 @@ public class SpringMongoEventStore implements EventStore, EventStoreOperations, 
         MongoCollection<Document> eventStoreCollection = mongoTemplate.getCollection(eventStoreCollectionName);
         // Cloud spec defines id + source must be unique!
         eventStoreCollection.createIndex(Indexes.compoundIndex(Indexes.ascending(CloudEventV1.ID), Indexes.ascending(CloudEventV1.SOURCE)), new IndexOptions().unique(true));
-        // streamId + streamVersion uniqueness is a stream-mode invariant. DCB correctness rests on the per-attribute
-        // markers and the unique dcbposition, not stream version, so a DCB-only store neither needs nor creates it.
+        // streamId + streamVersion uniqueness is a stream-mode invariant. DCB does not use stream version, so a
+        // DCB-only store does not create it.
         if (eventStoreCapabilities.contains(STREAM)) {
             // Create a streamId + streamVersion ascending index (note that we don't need to index stream id separately since it's covered by this compound index)
             // Note also that this index supports sorting both ascending and descending since MongoDB can traverse an index in both directions.
             eventStoreCollection.createIndex(Indexes.compoundIndex(Indexes.ascending(STREAM_ID), Indexes.ascending(STREAM_VERSION)), new IndexOptions().unique(true));
         }
         if (dcbEnabled) {
-            eventStoreCollection.createIndex(Indexes.ascending(DcbCloudEvents.POSITION), new IndexOptions().unique(true).sparse(true));
             eventStoreCollection.createIndex(Indexes.ascending(DCB_TAGS_INDEX_FIELD));
+        }
+        // The position index is created whenever the store writes a position, so position-ordered reads and catch-up
+        // have an index to sort on.
+        if (positionWritten) {
+            eventStoreCollection.createIndex(Indexes.ascending(OccurrentCloudEventExtension.POSITION), new IndexOptions().unique(true).sparse(true));
         }
 
         // SessionSynchronization need to be "ALWAYS" in order for TransactionTemplate to work with mongo template!
         // See https://docs.spring.io/spring-data/mongodb/docs/current/reference/html/#mongo.transactions.transaction-template
         mongoTemplate.setSessionSynchronization(ALWAYS);
+    }
+
+    // Decide at startup whether this store writes stream position. An explicit choice (withStreamPosition() or
+    // withoutStreamPosition()) and DCB are honored as-is. When position is only on by default, turn it off if the
+    // collection already holds events without a position, so upgrading an existing store does not build the position
+    // index over the whole collection at startup. The user gets a warning naming how to turn it on and backfill.
+    private static boolean resolveStreamPositionEnabled(EventStoreConfig config, String eventStoreCollectionName, MongoTemplate mongoTemplate) {
+        if (!config.streamPositionEnabled) {
+            return false;
+        }
+        if (config.eventStoreCapabilities.contains(DCB) || config.streamPositionExplicitlyEnabled) {
+            return true;
+        }
+        if (hasPreExistingUnpositionedEvents(eventStoreCollectionName, mongoTemplate)) {
+            log.warn("Stream position is on by default, but the event collection '{}' already contains events without a 'position'. " +
+                    "Position will NOT be used for this store, to avoid building the position index over a large existing collection at startup. " +
+                    "To use position, enable it explicitly with EventStoreConfig.Builder.withStreamPosition() (or set occurrent.event-store.stream.position=true) " +
+                    "and backfill existing events first with the position-backfill module (see doc/runbooks/position-backfill.md).", eventStoreCollectionName);
+            return false;
+        }
+        return true;
+    }
+
+    // A cheap probe for an existing un-backfilled store. Backfill assigns positions in _id order, oldest first, so if
+    // the oldest event has no position the collection predates position and has not been backfilled.
+    private static boolean hasPreExistingUnpositionedEvents(String eventStoreCollectionName, MongoTemplate mongoTemplate) {
+        if (!mongoTemplate.collectionExists(eventStoreCollectionName)) {
+            return false;
+        }
+        Query oldest = new Query().with(Sort.by(Sort.Direction.ASC, "_id")).limit(1);
+        oldest.fields().include(OccurrentCloudEventExtension.POSITION);
+        Document oldestEvent = mongoTemplate.findOne(oldest, Document.class, eventStoreCollectionName);
+        return oldestEvent != null && !oldestEvent.containsKey(OccurrentCloudEventExtension.POSITION);
+    }
+
+    /**
+     * Startup guard: when this store writes position but the event collection already has events without one, those
+     * events are invisible to position-ordered reads and catch-up. Warns, or fails when {@code requireBackfilledPosition}
+     * is set, so nobody silently runs with un-backfilled history.
+     */
+    private static void checkForUnpositionedEvents(String eventStoreCollectionName, MongoTemplate mongoTemplate, boolean requireBackfilledPosition) {
+        if (!mongoTemplate.collectionExists(eventStoreCollectionName)) {
+            return;
+        }
+        Query unpositionedQuery = new Query(where(OccurrentCloudEventExtension.POSITION).exists(false));
+        boolean hasUnpositionedEvents = mongoTemplate.exists(unpositionedQuery, eventStoreCollectionName);
+        if (!hasUnpositionedEvents) {
+            return;
+        }
+        String message = "The event collection '" + eventStoreCollectionName + "' contains events without a 'position'. " +
+                "This store writes a global position, but existing events predate it and are invisible to position-ordered reads " +
+                "and position-based catch-up until backfilled. Run the position-backfill migration runbook " +
+                "(doc/runbooks/position-backfill.md) before relying on position for this collection.";
+        if (requireBackfilledPosition) {
+            throw new IllegalStateException(message);
+        }
+        log.warn(message);
     }
 
     private void requireStreamCapability() {
@@ -759,6 +872,20 @@ public class SpringMongoEventStore implements EventStore, EventStoreOperations, 
     private void requireCapability(EventStoreCapability capability) {
         if (!eventStoreCapabilities.contains(capability)) {
             throw new UnsupportedOperationException(capability + " capability is not enabled for this SpringMongoEventStore");
+        }
+    }
+
+    /**
+     * Returns whether this store writes a global position, so position-requiring APIs are safe to call.
+     */
+    @Override
+    public boolean writesPosition() {
+        return eventStoreCapabilities.contains(DCB) || (eventStoreCapabilities.contains(STREAM) && streamPositionEnabled);
+    }
+
+    private void requirePosition() {
+        if (!writesPosition()) {
+            throw new UnsupportedOperationException("This SpringMongoEventStore does not write a position. Enable DCB, or do not call withoutStreamPosition() on a STREAM-only store, to use position-requiring APIs.");
         }
     }
 

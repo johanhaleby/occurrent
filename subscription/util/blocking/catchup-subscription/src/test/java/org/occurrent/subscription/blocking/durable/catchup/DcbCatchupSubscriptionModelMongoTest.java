@@ -43,7 +43,7 @@ import org.occurrent.eventstore.api.dcb.DcbReadOptions;
 import org.occurrent.eventstore.mongodb.spring.blocking.EventStoreConfig;
 import org.occurrent.eventstore.mongodb.spring.blocking.SpringMongoEventStore;
 import org.occurrent.mongodb.timerepresentation.TimeRepresentation;
-import org.occurrent.subscription.DcbSubscriptionPosition;
+import org.occurrent.subscription.GlobalSubscriptionPosition;
 import org.occurrent.subscription.StartAt;
 import org.occurrent.subscription.api.blocking.Subscription;
 import org.occurrent.subscription.mongodb.spring.blocking.SpringMongoSubscriptionModel;
@@ -155,7 +155,7 @@ class DcbCatchupSubscriptionModelMongoTest {
                 new CatchupSubscriptionModelConfig(100, useSubscriptionPositionStorage(storage).andPersistSubscriptionPositionDuringCatchupPhaseForEveryNEvents(1)));
 
         // When the DCB-mode catch-up subscription replays from the beginning of the DCB sequence and hands over to the live change stream
-        subscription.subscribe("subscription", StartAt.subscriptionPosition(DcbSubscriptionPosition.of(0)), toDomainEvents(received)).waitUntilStarted();
+        subscription.subscribe("subscription", StartAt.subscriptionPosition(GlobalSubscriptionPosition.of(0)), toDomainEvents(received)).waitUntilStarted();
 
         // Then the matching history is delivered (non-matching events filtered out)
         await().atMost(AT_MOST).with().pollInterval(Duration.of(100, MILLIS)).untilAsserted(() ->
@@ -189,7 +189,7 @@ class DcbCatchupSubscriptionModelMongoTest {
         appendTagged("name:1", name4);
         appendTagged("name:1", name5);
 
-        // Simulate the middle event being in-flight (its dcbposition reserved outside the commit transaction) while the
+        // Simulate the middle event being in-flight (its position reserved outside the commit transaction) while the
         // replay scans its window: remove its document so the replay cannot see it, while the later events keep the
         // store head above it. Re-inserting it during the replay models the in-flight append finally committing.
         Document holeDocument = requireNonNull(mongoTemplate.findOne(query(where("id").is(hole.eventId())), Document.class, eventCollectionName));
@@ -207,7 +207,7 @@ class DcbCatchupSubscriptionModelMongoTest {
 
         // The catch-up runs asynchronously and blocks inside the bulk replay read, after it has read a snapshot that
         // excludes the removed event.
-        Subscription handle = subscription.subscribe("subscription", StartAt.subscriptionPosition(DcbSubscriptionPosition.of(0)), toDomainEvents(received));
+        Subscription handle = subscription.subscribe("subscription", StartAt.subscriptionPosition(GlobalSubscriptionPosition.of(0)), toDomainEvents(received));
 
         // While the replay is blocked (it has scanned past the hole without seeing it and has not captured any
         // post-replay token), commit the in-flight event by re-inserting its document, then let the replay finish.
@@ -239,7 +239,7 @@ class DcbCatchupSubscriptionModelMongoTest {
                 new CatchupSubscriptionModelConfig(100, useSubscriptionPositionStorage(storage).andPersistSubscriptionPositionDuringCatchupPhaseForEveryNEvents(1)));
 
         // Resuming after position 1 (as if event1 was already processed elsewhere) replays only event2 and event3.
-        subscription.subscribe("subscription", StartAt.subscriptionPosition(DcbSubscriptionPosition.of(1)), toDomainEvents(received)).waitUntilStarted();
+        subscription.subscribe("subscription", StartAt.subscriptionPosition(GlobalSubscriptionPosition.of(1)), toDomainEvents(received)).waitUntilStarted();
 
         await().atMost(AT_MOST).with().pollInterval(Duration.of(100, MILLIS)).untilAsserted(() ->
                 assertThat(received).containsExactly(event2, event3));
@@ -281,8 +281,8 @@ class DcbCatchupSubscriptionModelMongoTest {
         @Override
         public DcbEventStream read(DcbQuery query, DcbReadOptions options) {
             DcbEventStream result = delegate.read(query, options);
-            boolean windowRead = options.afterSequencePosition().isPresent() && options.upToSequencePosition().isPresent()
-                    && options.afterSequencePosition().getAsLong() != options.upToSequencePosition().getAsLong();
+            boolean windowRead = options.afterPosition().isPresent() && options.upToPosition().isPresent()
+                    && options.afterPosition().getAsLong() != options.upToPosition().getAsLong();
             if (windowRead && blockedOnce.compareAndSet(false, true)) {
                 bulkReadReached.countDown();
                 try {

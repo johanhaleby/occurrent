@@ -26,7 +26,7 @@ import org.occurrent.eventstore.api.dcb.DcbCloudEvents;
 import org.occurrent.eventstore.api.dcb.DcbQuery;
 import org.occurrent.subscription.DcbStartAt;
 import org.occurrent.subscription.DcbSubscriptionFilter;
-import org.occurrent.subscription.DcbSubscriptionPosition;
+import org.occurrent.subscription.GlobalSubscriptionPosition;
 import org.occurrent.subscription.StartAt;
 import org.occurrent.subscription.SubscriptionFilter;
 import reactor.core.publisher.Flux;
@@ -39,6 +39,7 @@ import java.util.List;
 import java.util.Set;
 import java.util.UUID;
 import java.util.function.Function;
+import org.occurrent.cloudevents.OccurrentCloudEventExtension;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
@@ -49,22 +50,25 @@ class DcbSubscriptionModelAdapterTest {
     @Test
     void delivers_only_dcb_events_matching_the_query_and_passes_the_start_position_through() {
         CloudEvent matching = dcbEvent("NameDefined", 1, "name:1");
-        CloudEvent withoutPosition = DcbCloudEvents.withTags(event("NameDefined"), Set.of("name:1"));
+        // A stream-written event: it carries a position (stream position is on by default) but no DCB tags, so it is
+        // not a DCB event and must be dropped by the isDcbEvent floor even though DcbQuery tag matching alone might
+        // otherwise let it through.
+        CloudEvent streamEvent = OccurrentCloudEventExtension.withPosition(event("NameDefined"), 3);
         CloudEvent otherBoundary = dcbEvent("OrderPlaced", 2, "order:1");
 
-        RecordingSubscriptionModel delegate = new RecordingSubscriptionModel(Flux.just(matching, withoutPosition, otherBoundary));
+        RecordingSubscriptionModel delegate = new RecordingSubscriptionModel(Flux.just(matching, streamEvent, otherBoundary));
         DcbSubscriptionModel adapter = DcbSubscriptionModel.from(delegate);
 
         StepVerifier.create(adapter.subscribe(DcbQuery.tags("name:1"), DcbStartAt.afterPosition(5)))
                 .expectNext(matching)
                 .verifyComplete();
 
-        // The in-process floor drops the event with no dcbposition and the one whose tags do not match the query, so
-        // the subscription stays scoped to its own query even if a backend ignores the server-side filter.
+        // The in-process floor drops the stream event (no DCB tags) and the DCB event whose tags do not match the
+        // query, so the subscription stays scoped to its own query even if a backend ignores the server-side filter.
         assertThat(delegate.capturedFilter).isInstanceOf(DcbSubscriptionFilter.class);
         // The DcbStartAt is converted to a generic StartAt and passed straight to the delegate.
         assertThat(delegate.capturedStartAt).isInstanceOfSatisfying(StartAt.StartAtSubscriptionPosition.class,
-                start -> assertThat(start.subscriptionPosition).isEqualTo(DcbSubscriptionPosition.of(5)));
+                start -> assertThat(start.subscriptionPosition).isEqualTo(GlobalSubscriptionPosition.of(5)));
     }
 
     @Test
@@ -86,7 +90,7 @@ class DcbSubscriptionModelAdapterTest {
         assertThat(subscription.id()).isEqualTo("sub-1");
         assertThat(delegate.capturedFilter).isInstanceOf(DcbSubscriptionFilter.class);
         assertThat(delegate.capturedStartAt).isInstanceOfSatisfying(StartAt.StartAtSubscriptionPosition.class,
-                start -> assertThat(start.subscriptionPosition).isEqualTo(DcbSubscriptionPosition.of(5)));
+                start -> assertThat(start.subscriptionPosition).isEqualTo(GlobalSubscriptionPosition.of(5)));
 
         // The in-process floor scopes delivery to the query, matching the boundary case for the plain Flux subscribe.
         delegate.capturedAction.apply(matching).block();
@@ -118,7 +122,7 @@ class DcbSubscriptionModelAdapterTest {
     }
 
     private static CloudEvent dcbEvent(String type, long position, String... tags) {
-        return DcbCloudEvents.withPosition(DcbCloudEvents.withTags(event(type), Set.of(tags)), position);
+        return OccurrentCloudEventExtension.withPosition(DcbCloudEvents.withTags(event(type), Set.of(tags)), position);
     }
 
     private static CloudEvent event(String type) {

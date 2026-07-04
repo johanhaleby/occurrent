@@ -34,6 +34,19 @@ data class EventMetadata(val data: Map<String, Any?>) {
      */
     val streamVersion: Long get() = data[OccurrentCloudEventExtension.STREAM_VERSION] as Long
 
+    /**
+     * The global, monotonic sequence position of the event, or `null` when the event has no position (for example a
+     * stream-written event on a store that does not write stream position). DCB-written events always have a
+     * position. Java callers can use `DcbEventMetadata.position()` for an `OptionalLong` view of the same value.
+     */
+    val position: Long?
+        get() = when (val value = data[OccurrentCloudEventExtension.POSITION]) {
+            null -> null
+            is Number -> value.toLong()
+            is String -> value.toLong()
+            else -> throw IllegalArgumentException("Position extension must be a Number or String")
+        }
+
     inline operator fun <reified T : Any?> get(key: String) = data[key] as T
 
     companion object {

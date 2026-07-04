@@ -42,14 +42,14 @@ class DcbStartAtTest {
     void beginning_maps_to_dcb_position_zero() {
         StartAt startAt = DcbStartAt.beginning().toStartAt();
         assertThat(startAt).isInstanceOf(StartAt.StartAtSubscriptionPosition.class);
-        assertThat(((StartAt.StartAtSubscriptionPosition) startAt).subscriptionPosition).isEqualTo(DcbSubscriptionPosition.of(0));
+        assertThat(((StartAt.StartAtSubscriptionPosition) startAt).subscriptionPosition).isEqualTo(GlobalSubscriptionPosition.of(0));
     }
 
     @Test
     void after_position_maps_to_the_given_dcb_position() {
         StartAt startAt = DcbStartAt.afterPosition(5).toStartAt();
         assertThat(startAt).isInstanceOf(StartAt.StartAtSubscriptionPosition.class);
-        assertThat(((StartAt.StartAtSubscriptionPosition) startAt).subscriptionPosition).isEqualTo(DcbSubscriptionPosition.of(5));
+        assertThat(((StartAt.StartAtSubscriptionPosition) startAt).subscriptionPosition).isEqualTo(GlobalSubscriptionPosition.of(5));
     }
 
     @Test
@@ -77,6 +77,6 @@ class DcbStartAtTest {
 
         assertThat(resolved).isInstanceOf(StartAt.StartAtSubscriptionPosition.class);
         assertThat(((StartAt.StartAtSubscriptionPosition) resolved).subscriptionPosition)
-                .isEqualTo(DcbSubscriptionPosition.of(0));
+                .isEqualTo(GlobalSubscriptionPosition.of(0));
     }
 }

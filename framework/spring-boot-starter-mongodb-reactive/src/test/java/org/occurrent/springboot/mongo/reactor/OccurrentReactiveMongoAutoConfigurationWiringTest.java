@@ -188,29 +188,40 @@ class OccurrentReactiveMongoAutoConfigurationWiringTest {
     }
 
     @Test
-    void a_stream_subscription_that_replays_history_fails_loud() {
-        contextRunner().withUserConfiguration(BeginningOfTimeStreamSubscriptionConfiguration.class).run(context -> {
-            assertThat(context).hasFailed();
-            assertThat(context.getStartupFailure()).hasRootCauseInstanceOf(IllegalArgumentException.class);
-            assertThat(context.getStartupFailure()).rootCause().hasMessageContaining("no stream catch-up");
-        });
+    void a_stream_subscription_that_replays_history_fails_loud_when_stream_position_is_off() {
+        // Stream position is on by default, which makes reactive stream history replay supported. With position
+        // explicitly opted out there is no reactive stream catch-up model, so a BEGINNING_OF_TIME @StreamSubscription
+        // must fail loud rather than silently start live.
+        contextRunner()
+                .withPropertyValues("occurrent.event-store.stream.position=false")
+                .withUserConfiguration(BeginningOfTimeStreamSubscriptionConfiguration.class).run(context -> {
+                    assertThat(context).hasFailed();
+                    assertThat(context.getStartupFailure()).hasRootCauseInstanceOf(IllegalArgumentException.class);
+                    assertThat(context.getStartupFailure()).rootCause().hasMessageContaining("does not support reactive stream history replay");
+                });
     }
 
     @Test
-    void a_stream_subscription_with_an_explicit_iso8601_start_fails_loud() {
-        contextRunner().withUserConfiguration(Iso8601StreamSubscriptionConfiguration.class).run(context -> {
-            assertThat(context).hasFailed();
-            assertThat(context.getStartupFailure()).hasRootCauseInstanceOf(IllegalArgumentException.class);
-            assertThat(context.getStartupFailure()).rootCause().hasMessageContaining("no stream catch-up");
-        });
+    void a_stream_subscription_with_a_specific_start_time_fails_loud_even_when_history_replay_is_supported() {
+        // Stream position is on by default, so BEGINNING_OF_TIME would be supported here. A specific start time has
+        // no position to map to though, so the reactive stack must fail loud rather than silently replaying all
+        // history from position 0, which would ignore the requested start time.
+        contextRunner()
+                .withUserConfiguration(SpecificTimeStreamSubscriptionConfiguration.class).run(context -> {
+                    assertThat(context).hasFailed();
+                    assertThat(context.getStartupFailure()).hasRootCauseInstanceOf(IllegalArgumentException.class);
+                    assertThat(context.getStartupFailure()).rootCause().hasMessageContaining("cannot honor a specific historical start time");
+                });
     }
 
     @Test
     void a_stream_subscription_with_an_explicit_epoch_millis_start_fails_loud() {
+        // An epoch-millis start is a specific historical time, same as an ISO8601 one, so it fails loud for the same
+        // reason: a wall-clock time has no position to map to.
         contextRunner().withUserConfiguration(EpochMillisStreamSubscriptionConfiguration.class).run(context -> {
             assertThat(context).hasFailed();
             assertThat(context.getStartupFailure()).hasRootCauseInstanceOf(IllegalArgumentException.class);
-            assertThat(context.getStartupFailure()).rootCause().hasMessageContaining("no stream catch-up");
+            assertThat(context.getStartupFailure()).rootCause().hasMessageContaining("cannot honor a specific historical start time");
         });
     }
 
@@ -223,18 +234,18 @@ class OccurrentReactiveMongoAutoConfigurationWiringTest {
     }
 
     @Configuration(proxyBeanMethods = false)
-    static class Iso8601StreamSubscriptionConfiguration {
+    static class SpecificTimeStreamSubscriptionConfiguration {
         @Bean
-        Iso8601ReplayingListener iso8601ReplayingListener() {
-            return new Iso8601ReplayingListener();
+        SpecificTimeListener specificTimeListener() {
+            return new SpecificTimeListener();
         }
     }
 
     @Configuration(proxyBeanMethods = false)
     static class EpochMillisStreamSubscriptionConfiguration {
         @Bean
-        EpochMillisReplayingListener epochMillisReplayingListener() {
-            return new EpochMillisReplayingListener();
+        EpochMillisListener epochMillisListener() {
+            return new EpochMillisListener();
         }
     }
 
@@ -245,15 +256,15 @@ class OccurrentReactiveMongoAutoConfigurationWiringTest {
         }
     }
 
-    static class Iso8601ReplayingListener {
-        @StreamSubscription(id = "replaying-iso8601", startAtISO8601 = "2000-01-01T00:00:00Z")
+    static class SpecificTimeListener {
+        @StreamSubscription(id = "specificTime", startAtISO8601 = "2024-01-01T00:00:00Z")
         Mono<Void> on(TestEvent event) {
             return Mono.empty();
         }
     }
 
-    static class EpochMillisReplayingListener {
-        @StreamSubscription(id = "replaying-epoch", startAtTimeEpochMillis = 946684800000L)
+    static class EpochMillisListener {
+        @StreamSubscription(id = "epochMillis", startAtTimeEpochMillis = 946684800000L)
         Mono<Void> on(TestEvent event) {
             return Mono.empty();
         }

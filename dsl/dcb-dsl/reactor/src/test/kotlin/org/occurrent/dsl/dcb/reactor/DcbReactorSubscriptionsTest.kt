@@ -121,8 +121,8 @@ class DcbReactorSubscriptionsTest {
             assertThat(received).hasSize(1)
             val delivered = received[0]
             assertThat((delivered.event as NameDefined).name).isEqualTo("Carol")
-            assertThat(delivered.metadata.dcbPosition().isPresent).isTrue()
-            assertThat(delivered.metadata.dcbPosition().asLong).isGreaterThan(0)
+            assertThat(delivered.metadata.position().isPresent).isTrue()
+            assertThat(delivered.metadata.position().asLong).isGreaterThan(0)
             assertThat(delivered.metadata.dcbTags()).containsExactly("entity:carol")
         }
     }

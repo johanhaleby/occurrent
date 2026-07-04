@@ -10,6 +10,49 @@ DCB is a capability layered on the existing CloudEvent storage, not a new store 
 
 #### Changes
 
+* Added a global, monotonic `position` to every event, stream and DCB alike, replacing the old DCB-only
+  `dcbposition` and giving stream consumers the same ordering guarantee DCB already had.
+  * `position` is intrinsic to DCB, unchanged from before other than the name. For a STREAM-only store it is a
+    stream-scoped option that is on by default, so new stores get a global position out of the box. Opt out with
+    `EventStoreConfig.withoutStreamPosition()` (blocking, native, and reactor builders) or
+    `occurrent.event-store.stream.position=false` in Spring, for a store such as `entity-history` that only ever
+    reads one stream at a time and never wants a global order. A combined `STREAM` and `DCB` store cannot opt out,
+    since a combined store must position everything it writes.
+  * Stream catch-up now reconciles on position, the same range-based mechanism DCB catch-up already used, instead
+    of wall-clock time or `$natural` order, for any store that writes position. This is what closes the clock-skew
+    data-loss bug class from #199 for streams, not just for DCB. A STREAM-only store that opts out of position
+    keeps the previous time-based catch-up unchanged. On the blocking stack a subscription that starts at a specific
+    wall-clock time still uses the time-based catch-up even on a position store, since a timestamp has no position to
+    map to. Beginning-of-time and position starts use the position path.
+  * Reactive `@StreamSubscription` can now replay history. The new `ReactorStreamCatchupSubscriptionModel` mirrors
+    the existing reactive DCB catch-up model. It fails loud only for a store that has opted out of stream position.
+  * `DomainEventQueries` (blocking and reactor) gained position-range reads, so a consumer can read events across
+    the whole store by `position` directly, without going through a subscription, and reconcile stream and DCB
+    consumers on one axis.
+  * `EventMetadata.position` is now a general accessor available on subscribed events from both stacks, not only
+    DCB events.
+  * **Upgrade hazard: read this before upgrading an existing deployment.** Because stream position defaults on, an
+    existing deployment that upgrades in place gets position on new stream events but not on the events already in
+    its collection. The store detects this on startup and logs a loud warning naming the migration runbook, with a
+    config flag to make it a hard failure instead
+    (`EventStoreConfig.Builder#requireBackfilledPosition` /
+    `occurrent.event-store.position.require-backfilled-position`). A new module,
+    `eventstore/migration/position-backfill`, is a throttled, resumable, idempotent backfill tool that seeds the
+    position counter and backfills existing events in `_id` order. Follow
+    [the migration runbook](doc/runbooks/position-backfill.md) before relying on position-based catch-up against an
+    existing deployment. A store with no existing events, or a brand-new deployment, needs no backfill.
+  * As an extra guard for that upgrade path, when stream position is only on by default (not enabled explicitly) and
+    a MongoDB store starts against a collection that already holds events without a `position`, the store turns
+    stream position off for itself and logs how to turn it on. This avoids building the `position` index over a large
+    existing collection at startup, and it keeps working exactly as before the upgrade. An explicit
+    `withStreamPosition()` (or `occurrent.event-store.stream.position=true`) is always honored, and DCB always writes
+    position. Catch-up follows the store, so a store guarded off this way stays on the legacy time-based path until
+    you enable position and backfill.
+  * Known limitation: a combined `STREAM` and `DCB` reactive store does not yet have a dual-mode catch-up model
+    that replays both stream and DCB history together. The blocking stack supports this combination already.
+    Reactive combined-store stream replay fails loud rather than silently misbehaving; a reactive dual-mode
+    catch-up model is future work.
+  * See [ADR 45](doc/architecture/decisions/0045-unified-global-position.md).
 * Fixed a bug where a live `NOW`/`DEFAULT` subscription on `ReactorMongoSubscriptionModel` could redeliver the event written just before the subscription started.
   * `globalSubscriptionPosition()` used the server's raw operation time as the resume position instead of bumping it past the last written event, so a write landing on the same BSON timestamp as the resume point could be replayed. It now increments the timestamp's increment field by 1, the same fix `SpringMongoSubscriptionModel` already had.
 
@@ -55,7 +98,7 @@ DCB is a capability layered on the existing CloudEvent storage, not a new store 
   * See [ADR 38](doc/architecture/decisions/0038-reactive-dcb-catch-up.md).
 
 * Shared the common DCB types between the blocking and reactive DSLs instead of keeping a copy in each.
-  * `EventMetadata` is a plain wrapper over a CloudEvent's extensions with nothing blocking about it, but it used to live in `subscription-dsl-blocking`. It moved to a new `subscription-dsl-common` module (package `org.occurrent.dsl.subscription`), and the shared `DcbEventMetadata`, the `DcbDomainEventStream` read result, and the `EventMetadata.dcbPosition` and `EventMetadata.dcbTags` Kotlin accessors moved to a new `dcb-dsl-common` module (package `org.occurrent.dsl.dcb`). The `TagGenerator` interface moved to a new `application-service-common` module (package `org.occurrent.application.service.dcb`). The blocking and reactive stacks now read the same classes rather than each carrying its own, and reactive Kotlin callers get the same `dcbPosition` and `dcbTags` accessors the blocking DSL already had.
+  * `EventMetadata` is a plain wrapper over a CloudEvent's extensions with nothing blocking about it, but it used to live in `subscription-dsl-blocking`. It moved to a new `subscription-dsl-common` module (package `org.occurrent.dsl.subscription`), and the shared `DcbEventMetadata`, the `DcbDomainEventStream` read result, and the `EventMetadata.dcbTags` Kotlin accessor and the `DcbEventMetadata.position()` Java accessor moved to a new `dcb-dsl-common` module (package `org.occurrent.dsl.dcb`). The `TagGenerator` interface moved to a new `application-service-common` module (package `org.occurrent.application.service.dcb`). The blocking and reactive stacks now read the same classes rather than each carrying its own, and reactive Kotlin callers read `position` and `dcbTags` the same way the blocking DSL does.
   * `EventMetadata` is the one released type here, so its move is a breaking change. The old `org.occurrent.dsl.subscription.blocking.EventMetadata` is gone, so update the import to `org.occurrent.dsl.subscription.EventMetadata`.
 
 * Added live reactive DCB subscriptions.
@@ -184,9 +227,9 @@ DCB is a capability layered on the existing CloudEvent storage, not a new store 
   * `DcbDomainEventStream` and `queryWithPosition` carry the `DcbConsistencyToken` alongside the sequence position, so a caller can read through the DSL and then run a sound conditional append. The Kotlin `queryForListWithPosition`/`queryForSequenceWithPosition` extensions return the token as the third element of a `Triple`.
   * Kotlin live subscription extension on `Subscribable`: `subscribeDcb`.
   * DCB subscription helpers subscribe to CloudEvents and post-filter DCB-tagged events by `DcbQuery`. They are live subscription conveniences, not DCB-consistent reads.
-  * DCB subscription metadata callbacks reuse the existing `EventMetadata` type and expose DCB metadata through Kotlin extension properties: `dcbPosition` and `dcbTags`.
+  * DCB subscription metadata callbacks reuse the existing `EventMetadata` type and expose the shared `position` (on `EventMetadata`) and the DCB `dcbTags` Kotlin extension property.
   * Kotlin decider extensions on `DcbApplicationService` mirror the stream decider helpers while using `DcbQuery` as the decision boundary.
-  * `DcbEventMetadata` gives Java callers access to the DCB sequence position and DCB tags of a subscription event, the same metadata Kotlin reads through the `dcbPosition` and `dcbTags` extension properties.
+  * `DcbEventMetadata` gives Java callers an `OptionalLong` `position()` and the `dcbTags()` of a subscription event. Kotlin reads `position` on `EventMetadata` and `dcbTags` through the extension property.
   * `DcbSubscriptions` is an instance wrapper over a `Subscribable` and a `CloudEventConverter`, so DCB subscriptions can be created without passing the converter on every call, mirroring `DcbDomainEventQueries`.
   * Kotlin `queryForListWithPosition` and `queryForSequenceWithPosition` extensions return the matching events together with the observed DCB sequence position.
 * Added DCB catch-up subscription support to `CatchupSubscriptionModel`.

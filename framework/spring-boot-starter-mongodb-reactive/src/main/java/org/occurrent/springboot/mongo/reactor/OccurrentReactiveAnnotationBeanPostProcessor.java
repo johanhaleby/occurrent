@@ -29,11 +29,15 @@ import org.occurrent.dsl.dcb.DcbEventMetadata;
 import org.occurrent.dsl.dcb.reactor.DcbSubscriptions;
 import org.occurrent.dsl.subscription.EventMetadata;
 import org.occurrent.dsl.subscription.reactor.StreamSubscriptions;
+import org.occurrent.eventstore.api.EventStoreCapability;
 import org.occurrent.eventstore.api.dcb.DcbQuery;
+import org.occurrent.eventstore.mongodb.spring.reactor.ReactorMongoEventStore;
 import org.occurrent.filter.Filter;
+import org.occurrent.springboot.mongo.common.OccurrentProperties;
 import org.occurrent.springboot.mongo.common.SubscriptionAnnotations;
 import org.occurrent.springboot.mongo.common.SubscriptionAnnotations.StreamSubscriptionDefinition;
 import org.occurrent.subscription.DcbStartAt;
+import org.occurrent.subscription.GlobalSubscriptionPosition;
 import org.occurrent.subscription.StartAt;
 import org.occurrent.subscription.api.reactor.SubscriptionPositionStorage;
 import org.occurrent.subscription.reactor.durable.ReactorDurableSubscriptionModel;
@@ -61,10 +65,11 @@ import static org.occurrent.subscription.OccurrentSubscriptionFilter.filter;
  * for the reactive (Project Reactor) stack. The stack-neutral reflection and event-type resolution is shared with the
  * blocking processor through {@link SubscriptionAnnotations}.
  * <p>
- * The reactive stack has no stream (non-DCB) catch-up model, so a {@link StreamSubscription} that asks to replay
- * history (a start time, or {@code BEGINNING_OF_TIME}) fails loud. Only {@code NOW} and {@code DEFAULT} are supported
- * for stream subscriptions, giving live delivery plus durable resume across restarts. DCB subscriptions can replay
- * history by dcbposition via the reactive DCB catch-up model, matching the blocking behavior.
+ * The reactive stream (non-DCB) catch-up model replays only by position, so a {@link StreamSubscription} that starts
+ * at a specific time ({@code startAtISO8601} or {@code startAtTimeEpochMillis}) fails loud, position replay cannot
+ * resolve a wall-clock time to a position. {@code BEGINNING_OF_TIME} replays from position 0 on a position-writing
+ * STREAM-only store, and fails loud otherwise. {@code NOW} and {@code DEFAULT} are always supported. DCB
+ * subscriptions replay history by position via the reactive DCB catch-up model, matching the blocking behavior.
  */
 class OccurrentReactiveAnnotationBeanPostProcessor implements BeanPostProcessor, ApplicationContextAware {
 
@@ -121,7 +126,7 @@ class OccurrentReactiveAnnotationBeanPostProcessor implements BeanPostProcessor,
             throw new IllegalArgumentException("A subscription method must declare an event parameter, but %s#%s has none.".formatted(bean.getClass().getName(), method.getName()));
         }
 
-        StartAt startAt = generateStreamStartAt(subscription);
+        StartAt startAt = generateStreamStartAt(subscription, streamHistoryReplaySupported());
 
         Function2<EventMetadata, E, Mono<Void>> consumer = (metadata, event) ->
                 invokeMono(method, bean, SubscriptionAnnotations.bindArguments(parameterTypes, event, metadata, SubscriptionAnnotations::isStreamMetadataParameter));
@@ -217,16 +222,38 @@ class OccurrentReactiveAnnotationBeanPostProcessor implements BeanPostProcessor,
         };
     }
 
-    // Stream subscriptions on the reactive stack support only NOW and DEFAULT, since there is no reactive stream
-    // catch-up model to replay history. Any time-based start (an ISO8601 start, an epoch start, or BEGINNING_OF_TIME)
-    // fails loud rather than silently behaving like a live start.
-    private StartAt generateStreamStartAt(StreamSubscriptionDefinition subscription) {
-        boolean timeBasedStart = !subscription.startAtISO8601().isBlank()
-                || subscription.startAtTimeEpochMillis() >= 0
-                || subscription.startAt() == StartPosition.BEGINNING_OF_TIME;
-        if (timeBasedStart) {
-            throw new IllegalArgumentException(("@StreamSubscription '%s' asks to replay history (a start time or BEGINNING_OF_TIME), but the reactive stack has no stream catch-up model, " +
-                    "so history replay is not supported for stream subscriptions. Use startAt = NOW or DEFAULT, or use @DcbSubscription for dcbposition replay.").formatted(subscription.id()));
+    // A @StreamSubscription can replay history only when the store writes stream position, since that wires a
+    // ReactorStreamCatchupSubscriptionModel for replay by position. A combined STREAM+DCB store wires the DCB catch-up
+    // model instead, which does not replay stream filters, so combined-store stream replay is not supported here.
+    private boolean streamHistoryReplaySupported() {
+        ReactorMongoEventStore eventStore = applicationContext.getBeanProvider(ReactorMongoEventStore.class).getIfAvailable();
+        if (eventStore == null || !eventStore.writesPosition()) {
+            return false;
+        }
+        OccurrentProperties occurrentProperties = applicationContext.getBean(OccurrentProperties.class);
+        return !occurrentProperties.getEventStore().getCapabilities().contains(EventStoreCapability.DCB);
+    }
+
+    // A stream subscription's start position. A specific start time (startAtISO8601 or startAtTimeEpochMillis) always
+    // fails loud, since position replay cannot resolve a wall-clock time to a position. BEGINNING_OF_TIME replays
+    // history when replay is supported (a position-writing STREAM-only store), and fails loud otherwise rather than
+    // silently starting live. NOW and DEFAULT are always supported.
+    private StartAt generateStreamStartAt(StreamSubscriptionDefinition subscription, boolean historyReplaySupported) {
+        boolean specificTimeStart = !subscription.startAtISO8601().isBlank()
+                || subscription.startAtTimeEpochMillis() >= 0;
+        if (specificTimeStart) {
+            throw new IllegalArgumentException(("@StreamSubscription '%s' specifies a specific start time (startAtISO8601 or startAtTimeEpochMillis), but the reactive stack's position-based " +
+                    "stream catch-up cannot honor a specific historical start time, it can only replay from BEGINNING_OF_TIME, NOW, or DEFAULT. Use startAt = BEGINNING_OF_TIME to replay all history, " +
+                    "or NOW/DEFAULT, instead of a specific start time.").formatted(subscription.id()));
+        }
+        boolean beginningOfTimeStart = subscription.startAt() == StartPosition.BEGINNING_OF_TIME;
+        if (beginningOfTimeStart && !historyReplaySupported) {
+            throw new IllegalArgumentException(("@StreamSubscription '%s' asks to replay history (BEGINNING_OF_TIME), but this store does not support reactive stream history replay " +
+                    "(stream position is off, or it is a combined STREAM+DCB store). Enable stream position (on by default) for a STREAM-only store, use startAt = NOW or DEFAULT, or use @DcbSubscription for position replay.").formatted(subscription.id()));
+        }
+        if (beginningOfTimeStart) {
+            // Map BEGINNING_OF_TIME to position 0, which the reactive stream catch-up model replays before going live.
+            return StartAt.subscriptionPosition(GlobalSubscriptionPosition.of(0));
         }
         return switch (subscription.startAt()) {
             case NOW -> StartAt.now();

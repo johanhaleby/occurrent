@@ -410,7 +410,7 @@ class SpringMongoEventStoreDcbConcurrencyTest {
     // causes a WriteConflict (a separate implementation concern). This test is scoped to
     // proving query-scoped isolation, not partition placement, so we eliminate the variable.
     // The cold-start counter race (concurrent first upserts of the position document) is handled by
-    // reserveDcbPositions itself (it retries the duplicate key), so this test deliberately does NOT pre-warm and
+    // reservePositions itself (it retries the duplicate key), so this test deliberately does NOT pre-warm and
     // exercises the concurrent first append directly.
     // ---------------------------------------------------------------------------
     @Test
@@ -685,7 +685,7 @@ class SpringMongoEventStoreDcbConcurrencyTest {
     //
     // With a seeded collection, run explain() on the DCB existence/conflict query shape
     // and the read query shape and assert the winning plan does NOT use COLLSCAN.
-    // The DCB query uses dcbposition (range) and dcbTags (all), both indexed.
+    // The DCB query uses position (range) and dcbTags (all), both indexed.
     // ---------------------------------------------------------------------------
     @Test
     void dcb_queries_are_index_backed() {
@@ -698,9 +698,9 @@ class SpringMongoEventStoreDcbConcurrencyTest {
         MongoCollection<Document> collection = mongoTemplate.getCollection(COLLECTION);
 
         // Explain the tag-based read query shape:
-        // { dcbposition: { $gt: 0, $lte: <high> }, dcbTags: { $all: ["explain-tag"] } }
+        // { position: { $gt: 0, $lte: <high> }, dcbTags: { $all: ["explain-tag"] } }
         Document tagReadQuery = new Document("$and", List.of(
-                new Document("dcbposition", new Document("$gt", 0).append("$lte", 1000000)),
+                new Document("position", new Document("$gt", 0).append("$lte", 1000000)),
                 new Document("$or", List.of(
                         new Document("dcbTags", new Document("$all", List.of("explain-tag")))
                 ))
@@ -713,9 +713,9 @@ class SpringMongoEventStoreDcbConcurrencyTest {
                 .isEqualTo("IXSCAN");
 
         // Explain the type-based read query shape:
-        // { dcbposition: { $gt: 0, $lte: <high> }, type: { $in: ["SeedType"] } }
+        // { position: { $gt: 0, $lte: <high> }, type: { $in: ["SeedType"] } }
         Document typeReadQuery = new Document("$and", List.of(
-                new Document("dcbposition", new Document("$gt", 0).append("$lte", 1000000)),
+                new Document("position", new Document("$gt", 0).append("$lte", 1000000)),
                 new Document("$or", List.of(
                         new Document("type", new Document("$in", List.of("SeedType")))
                 ))
@@ -724,13 +724,13 @@ class SpringMongoEventStoreDcbConcurrencyTest {
 
         String typeReadPlanStage = extractWinningPlanStage(typeReadExplain);
         assertThat(typeReadPlanStage)
-                .as("Type read query should use IXSCAN (dcbposition index), not COLLSCAN or unrecognized stage. Full explain: %s", typeReadExplain.toJson())
+                .as("Type read query should use IXSCAN (position index), not COLLSCAN or unrecognized stage. Full explain: %s", typeReadExplain.toJson())
                 .isEqualTo("IXSCAN");
 
         // Explain the existence/conflict check query shape (used in enforceAppendCondition):
-        // { dcbposition: { $gt: <afterPos>, $lte: Long.MAX_VALUE }, dcbTags: { $all: ["explain-tag"] } }
+        // { position: { $gt: <afterPos>, $lte: Long.MAX_VALUE }, dcbTags: { $all: ["explain-tag"] } }
         Document existenceQuery = new Document("$and", List.of(
-                new Document("dcbposition", new Document("$gt", 0).append("$lte", Long.MAX_VALUE)),
+                new Document("position", new Document("$gt", 0).append("$lte", Long.MAX_VALUE)),
                 new Document("$or", List.of(
                         new Document("dcbTags", new Document("$all", List.of("explain-tag")))
                 ))

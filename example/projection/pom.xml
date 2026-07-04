@@ -31,6 +31,7 @@
         <module>spring-transactional-projection-mongodb</module>
         <module>spring-adhoc-evenstore-mongodb-queries</module>
         <module>spring-reactor-transactional-projection-mongodb</module>
+        <module>global-position-catchup</module>
     </modules>
 
 </project>

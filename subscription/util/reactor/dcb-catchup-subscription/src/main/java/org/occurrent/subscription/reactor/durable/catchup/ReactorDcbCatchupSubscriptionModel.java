@@ -25,7 +25,7 @@ import org.occurrent.eventstore.api.dcb.DcbReadOptions;
 import org.occurrent.eventstore.api.dcb.reactor.DcbEventStore;
 import org.occurrent.subscription.DcbStartAt;
 import org.occurrent.subscription.DcbSubscriptionFilter;
-import org.occurrent.subscription.DcbSubscriptionPosition;
+import org.occurrent.subscription.GlobalSubscriptionPosition;
 import org.occurrent.subscription.PositionAwareCloudEvent;
 import org.occurrent.subscription.StartAt;
 import org.occurrent.subscription.StartAt.SubscriptionModelContext;
@@ -39,18 +39,19 @@ import java.util.Collections;
 import java.util.Iterator;
 import java.util.LinkedHashSet;
 import java.util.Set;
+import org.occurrent.cloudevents.OccurrentCloudEventExtension;
 
 import static java.util.Objects.requireNonNull;
 
 /**
- * Reactive DCB catch-up: replays the DCB history matching a {@link DcbQuery} by {@code dcbposition}, then hands over to
+ * Reactive DCB catch-up: replays the DCB history matching a {@link DcbQuery} by {@code position}, then hands over to
  * a live subscription, as a single {@link Flux}. It lets a reactive read model rebuild from the beginning of the DCB
  * sequence and then keep up with new events.
  * <p>
  * The handover preserves the central invariant of the blocking catch-up. The live change-stream resume token is captured
  * before the bulk replay, not after, so a DCB event that commits during the replay is still delivered by the live
- * subscription. The replay pages the sequence in {@code dcbposition} windows (no count and no time sort, because
- * {@code dcbposition} is monotonic and server-assigned), then a reconciliation pass keeps paging until the head stops
+ * subscription. The replay pages the sequence in {@code position} windows (no count and no time sort, because
+ * {@code position} is monotonic and server-assigned), then a reconciliation pass keeps paging until the head stops
  * advancing to deliver events written during the replay in order. The handover seam is deduplicated with a bounded id
  * cache so a reconciliation event the live subscription also sees is delivered once.
  * <p>
@@ -121,7 +122,7 @@ public class ReactorDcbCatchupSubscriptionModel implements PositionAwareSubscrip
     /**
      * The generic (cold) subscription-model entry point. The {@code filter} must be a {@link DcbSubscriptionFilter}, or
      * {@code null} to use the default {@link DcbQuery} supplied to the constructor. A {@code startAt} that resolves to a
-     * {@code dcbposition} replays history from that position and then goes live, anything else goes straight to live.
+     * {@code position} replays history from that position and then goes live, anything else goes straight to live.
      * This is how a durable model wrapping this catch-up model, and the reactive DCB subscription DSL, drive it.
      */
     @Override
@@ -147,7 +148,7 @@ public class ReactorDcbCatchupSubscriptionModel implements PositionAwareSubscrip
     }
 
     /**
-     * Subscribe to DCB events matching {@code query}. A {@link DcbStartAt} that carries a {@code dcbposition} (for
+     * Subscribe to DCB events matching {@code query}. A {@link DcbStartAt} that carries a {@code position} (for
      * example {@link DcbStartAt#beginning()} or {@link DcbStartAt#afterPosition(long)}) replays history from that
      * position and then goes live. Any other start (now or the subscription model default) goes straight to live.
      */
@@ -162,15 +163,15 @@ public class ReactorDcbCatchupSubscriptionModel implements PositionAwareSubscrip
         requireNonNull(startAt, StartAt.class.getSimpleName() + " cannot be null");
 
         StartAt resolved = startAt.get(new SubscriptionModelContext(ReactorDcbCatchupSubscriptionModel.class));
-        if (!(resolved instanceof StartAt.StartAtSubscriptionPosition position) || !DcbSubscriptionPosition.isDcbSubscriptionPosition(position.subscriptionPosition)) {
+        if (!(resolved instanceof StartAt.StartAtSubscriptionPosition position) || !GlobalSubscriptionPosition.isGlobalSubscriptionPosition(position.subscriptionPosition)) {
             // Not a DCB catch-up position, so go straight to live. Apply the same in-process DCB floor the replay-to-live
             // path and the DcbSubscriptionModel adapter apply, so a backend that does not honor the filter server-side
             // still only delivers events matching the query.
             return subscriptionModel.subscribe(DcbSubscriptionFilter.filter(query), resolved == null ? startAt : resolved)
-                    .filter(cloudEvent -> DcbCloudEvents.getPosition(cloudEvent) > 0 && DcbCloudEvents.matches(cloudEvent, query));
+                    .filter(cloudEvent -> DcbCloudEvents.isDcbEvent(cloudEvent) && DcbCloudEvents.matches(cloudEvent, query));
         }
 
-        long startPosition = DcbSubscriptionPosition.dcbPositionOf(position.subscriptionPosition);
+        long startPosition = GlobalSubscriptionPosition.positionOf(position.subscriptionPosition);
         // Capture the live resume token before the bulk replay so an event committing during the replay is still
         // delivered by the live subscription. If the model reports no token (for example an empty oplog or a restricted
         // cluster) a no-loss handover to live cannot be guaranteed, so fail loudly instead of silently dropping the
@@ -187,7 +188,7 @@ public class ReactorDcbCatchupSubscriptionModel implements PositionAwareSubscrip
                     Flux<CloudEvent> bulk = windows(query, startPosition, bulkHead, cache);
                     Flux<CloudEvent> reconcile = reconcile(query, bulkHead, cache);
                     Flux<CloudEvent> live = subscriptionModel.subscribe(DcbSubscriptionFilter.filter(query), StartAt.subscriptionPosition(liveToken))
-                            .filter(cloudEvent -> DcbCloudEvents.getPosition(cloudEvent) > startPosition
+                            .filter(cloudEvent -> DcbCloudEvents.isDcbEvent(cloudEvent)
                                     && DcbCloudEvents.matches(cloudEvent, query)
                                     && !cache.contains(cloudEvent.getId()));
                     return Flux.concat(bulk, reconcile, live);
@@ -212,18 +213,18 @@ public class ReactorDcbCatchupSubscriptionModel implements PositionAwareSubscrip
                 .flatMapMany(stream -> {
                     var events = stream.events();
                     events.forEach(event -> cache.add(event.getId()));
-                    // Attach the dcbposition as the subscription position so a durable model layered on top can persist
+                    // Attach the position as the subscription position so a durable model layered on top can persist
                     // the replay progress (a raw event read from the store carries no change-stream position). Mirrors
                     // the blocking CatchupSubscriptionModel, which wraps each replayed DCB event with
-                    // DcbSubscriptionPosition.of(its dcbposition).
+                    // GlobalSubscriptionPosition.of(its position).
                     return Flux.fromIterable(events)
-                            .map(event -> (CloudEvent) new PositionAwareCloudEvent(event, DcbSubscriptionPosition.of(DcbCloudEvents.getPosition(event))));
+                            .map(event -> (CloudEvent) new PositionAwareCloudEvent(event, GlobalSubscriptionPosition.of(OccurrentCloudEventExtension.getPosition(event))));
                 })
                 .concatWith(Flux.defer(() -> windows(query, upTo, toInclusive, cache)));
     }
 
     // Pages from the bulk head onward, re-reading the head each round, until it stops advancing. This delivers events
-    // written during the bulk replay in dcbposition order.
+    // written during the bulk replay in position order.
     private Flux<CloudEvent> reconcile(DcbQuery query, long cursor, HandoverCache cache) {
         return readHead(query, cursor).flatMapMany(head -> head > cursor
                 ? windows(query, cursor, head, cache).concatWith(Flux.defer(() -> reconcile(query, head, cache)))

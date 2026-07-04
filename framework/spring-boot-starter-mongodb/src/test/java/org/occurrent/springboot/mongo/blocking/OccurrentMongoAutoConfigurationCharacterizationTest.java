@@ -180,7 +180,7 @@ class OccurrentMongoAutoConfigurationCharacterizationTest {
                     assertThat(context).hasSingleBean(SubscriptionModel.class);
 
                     // In DCB-only mode the subscription model now wraps a DCB-mode CatchupSubscriptionModel, so a
-                    // subscription started at a DcbSubscriptionPosition can replay history by dcbposition.
+                    // subscription started at a GlobalSubscriptionPosition can replay history by position.
                     SubscriptionModel subscriptionModel = context.getBean(SubscriptionModel.class);
                     assertThat(subscriptionModel).isInstanceOf(DelegatingSubscriptionModel.class);
                     SubscriptionModel delegated = ((DelegatingSubscriptionModel) subscriptionModel).getDelegatedSubscriptionModel();

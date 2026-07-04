@@ -63,7 +63,7 @@ import static org.awaitility.Awaitility.await;
  * Proves that the {@link DcbSubscription} annotation processor correctly binds the metadata parameter
  * regardless of its declared position in the method signature. Three binding configurations are exercised:
  *
- * - event-first, DcbEventMetadata second (dcbPosition and dcbTags populated)
+ * - event-first, DcbEventMetadata second (position and dcbTags populated)
  * - metadata-first, event second (this is the argument-ordering bug that bindArguments fixed)
  * - event-first, generic EventMetadata second (dcbTags readable through the raw data map)
  */
@@ -108,7 +108,7 @@ class DcbSubscriptionMetadataBindingMongoTest {
             assertThat(eventFirstDcbMetadataReceiver.receivedEvents().get(0).name()).isEqualTo("meta-event-1");
         });
         DcbEventMetadata m = eventFirstDcbMetadataReceiver.receivedMetadata().get(0);
-        assertThat(m.dcbPosition()).isPresent();
+        assertThat(m.position()).isPresent();
         assertThat(m.dcbTags()).contains(TAG);
     }
 
@@ -121,7 +121,7 @@ class DcbSubscriptionMetadataBindingMongoTest {
             assertThat(metadataFirstReceiver.receivedEvents().get(0).name()).isEqualTo("meta-event-2");
         });
         DcbEventMetadata m = metadataFirstReceiver.receivedMetadata().get(0);
-        assertThat(m.dcbPosition()).isPresent();
+        assertThat(m.position()).isPresent();
         assertThat(m.dcbTags()).contains(TAG);
     }
 

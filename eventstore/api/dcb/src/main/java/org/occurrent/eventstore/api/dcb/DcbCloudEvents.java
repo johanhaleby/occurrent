@@ -32,8 +32,10 @@ import static java.util.stream.Collectors.toCollection;
 /**
  * Utilities for reading and writing DCB metadata on CloudEvents.
  * <p>
- * DCB tags are stored in the {@value #TAGS} extension and the global sequence
- * position is stored in the {@value #POSITION} extension.
+ * DCB tags are stored in the {@value #TAGS} extension. The global sequence position that every DCB event carries is
+ * the general {@link org.occurrent.cloudevents.OccurrentCloudEventExtension#POSITION} extension; see
+ * {@link org.occurrent.cloudevents.OccurrentCloudEventExtension#withPosition(CloudEvent, long)} and
+ * {@link org.occurrent.cloudevents.OccurrentCloudEventExtension#getPosition(CloudEvent)}.
  */
 @NullMarked
 public final class DcbCloudEvents {
@@ -41,10 +43,6 @@ public final class DcbCloudEvents {
      * CloudEvent extension name that contains newline-separated DCB tags.
      */
     public static final String TAGS = "dcbtags";
-    /**
-     * CloudEvent extension name that contains the DCB sequence position.
-     */
-    public static final String POSITION = "dcbposition";
     private static final String TAG_SEPARATOR = "\n";
 
     private DcbCloudEvents() {
@@ -56,17 +54,6 @@ public final class DcbCloudEvents {
     public static CloudEvent withTags(CloudEvent cloudEvent, Collection<String> tags) {
         requireNonNull(cloudEvent, "CloudEvent cannot be null");
         return CloudEventBuilder.v1(cloudEvent).withExtension(TAGS, encodeTags(tags)).build();
-    }
-
-    /**
-     * Returns a copy of {@code cloudEvent} with the DCB sequence position in the {@value #POSITION} extension.
-     */
-    public static CloudEvent withPosition(CloudEvent cloudEvent, long position) {
-        requireNonNull(cloudEvent, "CloudEvent cannot be null");
-        if (position <= 0) {
-            throw new IllegalArgumentException("Position must be greater than zero");
-        }
-        return CloudEventBuilder.v1(cloudEvent).withExtension(POSITION, position).build();
     }
 
     /**
@@ -98,21 +85,15 @@ public final class DcbCloudEvents {
     }
 
     /**
-     * Reads the DCB sequence position from a CloudEvent, or {@code 0} when it has no DCB position.
+     * Returns whether {@code cloudEvent} is a DCB-written event, i.e. it carries the {@value #TAGS} extension. A DCB
+     * append always stamps this extension (even for an empty tag set), while a stream-written event never does, so this
+     * is the reliable discriminator between the two. It must be used instead of a "has a position" check when telling
+     * DCB events apart from stream events, since stream events also carry a global position once stream position is
+     * enabled (on by default).
      */
-    public static long getPosition(CloudEvent cloudEvent) {
+    public static boolean isDcbEvent(CloudEvent cloudEvent) {
         requireNonNull(cloudEvent, "CloudEvent cannot be null");
-        Object position = cloudEvent.getExtension(POSITION);
-        if (position == null) {
-            return 0;
-        }
-        if (position instanceof Number number) {
-            return number.longValue();
-        }
-        if (position instanceof String string) {
-            return Long.parseLong(string);
-        }
-        throw new IllegalArgumentException("DCB position extension must be a Number or String");
+        return cloudEvent.getExtension(TAGS) != null;
     }
 
     /**

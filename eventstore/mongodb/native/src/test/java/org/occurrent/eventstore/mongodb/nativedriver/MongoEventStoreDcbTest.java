@@ -42,6 +42,7 @@ import java.util.ArrayList;
 import java.util.List;
 import java.util.Set;
 import java.util.UUID;
+import org.occurrent.cloudevents.OccurrentCloudEventExtension;
 
 import static java.nio.charset.StandardCharsets.UTF_8;
 import static java.util.Objects.requireNonNull;
@@ -100,7 +101,7 @@ class MongoEventStoreDcbTest {
                 .containsExactly("NameDefined");
         CloudEvent dcbEvent = eventStore.read(tags("name:1")).events().get(0);
         assertThat(DcbCloudEvents.getTags(dcbEvent)).containsExactly("name:1");
-        assertThat(dcbEvent.getExtension(DcbCloudEvents.POSITION)).isEqualTo(1L);
+        assertThat(dcbEvent.getExtension(OccurrentCloudEventExtension.POSITION)).isEqualTo(1L);
     }
 
     @Test
@@ -114,7 +115,7 @@ class MongoEventStoreDcbTest {
                 anyOf(List.of(
                         DcbQuery.types(List.of("OrderPlaced")),
                         DcbQuery.tags(List.of("name:1", "tenant:1")))),
-                DcbReadOptions.afterSequencePosition(1));
+                DcbReadOptions.afterPosition(1));
 
         assertThat(eventStream.events())
                 .extracting(CloudEvent::getType)
@@ -219,13 +220,13 @@ class MongoEventStoreDcbTest {
         eventStore.append(List.of(taggedEvent("E", "t")));   // position 3
 
         assertThat(eventStore.count(tags("t"))).isEqualTo(3);
-        assertThat(eventStore.count(tags("t"), DcbReadOptions.afterSequencePosition(1))).isEqualTo(2);
-        assertThat(eventStore.count(tags("t"), DcbReadOptions.upToSequencePosition(2))).isEqualTo(2);
+        assertThat(eventStore.count(tags("t"), DcbReadOptions.afterPosition(1))).isEqualTo(2);
+        assertThat(eventStore.count(tags("t"), DcbReadOptions.upToPosition(2))).isEqualTo(2);
         assertThat(eventStore.count(tags("t"), DcbReadOptions.between(1, 2))).isEqualTo(1);
 
         assertThat(eventStore.exists(tags("t"))).isTrue();
         assertThat(eventStore.exists(tags("t"), DcbReadOptions.between(2, 3))).isTrue();
-        assertThat(eventStore.exists(tags("t"), DcbReadOptions.afterSequencePosition(3))).isFalse();
+        assertThat(eventStore.exists(tags("t"), DcbReadOptions.afterPosition(3))).isFalse();
         assertThat(eventStore.exists(tags("missing"))).isFalse();
     }
 
@@ -276,7 +277,7 @@ class MongoEventStoreDcbTest {
                 .isExactlyInstanceOf(DuplicateCloudEventException.class);
 
         // Positions are reserved outside the transaction (ADR 0021), so the failed append abandons its reserved block
-        // and dcbposition has a gap. The next successful append lands after the abandoned block.
+        // and position has a gap. The next successful append lands after the abandoned block.
         DcbAppendResult appendResult = eventStore.append(List.of(taggedEvent("NameChanged", "name:1")));
         assertThat(appendResult.firstSequencePosition()).isEqualTo(3);
         assertThat(appendResult.lastSequencePosition()).isEqualTo(3);
@@ -293,7 +294,7 @@ class MongoEventStoreDcbTest {
         assertThatThrownBy(() -> eventStore.append(List.of(taggedEvent("NameChanged", "name:1")), appendCondition))
                 .isExactlyInstanceOf(DcbAppendConditionNotFulfilledException.class);
 
-        // The condition-failed append abandons its reserved position block (ADR 0021), so dcbposition has a gap and the
+        // The condition-failed append abandons its reserved position block (ADR 0021), so position has a gap and the
         // next successful append lands at position 3 rather than 2.
         DcbAppendResult nextAppend = eventStore.append(List.of(taggedEvent("NameChanged", "name:2")));
         assertThat(nextAppend).isEqualTo(new DcbAppendResult(3, 3, 1));
@@ -350,7 +351,7 @@ class MongoEventStoreDcbTest {
                 taggedEvent("NameChanged", "name:1"),
                 taggedEvent("OrderPlaced", "name:1")));
 
-        DcbEventStream upToTwo = eventStore.read(tags("name:1"), DcbReadOptions.upToSequencePosition(2));
+        DcbEventStream upToTwo = eventStore.read(tags("name:1"), DcbReadOptions.upToPosition(2));
 
         assertThat(upToTwo.events()).extracting(CloudEvent::getType).containsExactly("NameDefined", "NameChanged");
         assertThat(upToTwo.lastSequencePosition()).isEqualTo(3);

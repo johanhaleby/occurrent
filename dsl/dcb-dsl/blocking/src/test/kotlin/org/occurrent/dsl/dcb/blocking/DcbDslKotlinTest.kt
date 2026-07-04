@@ -16,7 +16,6 @@
 
 package org.occurrent.dsl.dcb.blocking
 
-import org.occurrent.dsl.dcb.dcbPosition
 import org.occurrent.dsl.dcb.dcbTags
 
 import com.fasterxml.jackson.databind.ObjectMapper
@@ -79,7 +78,7 @@ class DcbDslKotlinTest {
 
         assertThat(dcbQueries.queryForSequence(DcbQuery.tags("name:1")).toList()).containsExactly(nameDefined, nameWasChanged)
         assertThat(dcbQueries.queryForList(DcbQuery.types(NameDefined::class.qualifiedName!!))).containsExactly(nameDefined)
-        assertThat(dcbQueries.queryForList(DcbQuery.tags("name:1"), DcbReadOptions.afterSequencePosition(1))).containsExactly(nameWasChanged)
+        assertThat(dcbQueries.queryForList(DcbQuery.tags("name:1"), DcbReadOptions.afterPosition(1))).containsExactly(nameWasChanged)
     }
 
     @Test
@@ -161,7 +160,7 @@ class DcbDslKotlinTest {
             assertThat(metadata).hasSize(1)
             assertThat(metadata[0].streamId).startsWith("dcb:partition:")
             assertThat(metadata[0].streamVersion).isPositive()
-            assertThat(metadata[0].dcbPosition).isEqualTo(1)
+            assertThat(metadata[0].position).isEqualTo(1)
             assertThat(metadata[0].dcbTags).containsExactlyInAnyOrder("name:1", "tenant:1")
         }
     }
@@ -182,7 +181,7 @@ class DcbDslKotlinTest {
             assertThat(metadata).hasSize(1)
             assertThat(metadata[0].streamId).startsWith("dcb:partition:")
             assertThat(metadata[0].streamVersion).isPositive()
-            assertThat(metadata[0].dcbPosition).isEqualTo(1)
+            assertThat(metadata[0].position).isEqualTo(1)
             assertThat(metadata[0].dcbTags).containsExactly("name:1")
         }
     }
@@ -203,7 +202,8 @@ class DcbDslKotlinTest {
             assertThat(metadata).hasSize(1)
             assertThat(metadata[0].streamId).isEqualTo("stream")
             assertThat(metadata[0].streamVersion).isEqualTo(1)
-            assertThat(metadata[0].dcbPosition).isNull()
+            // A stream event carries the shared global position (stream position is on by default), but no DCB tags.
+            assertThat(metadata[0].position).isEqualTo(1L)
             assertThat(metadata[0].dcbTags).isEmpty()
         }
     }

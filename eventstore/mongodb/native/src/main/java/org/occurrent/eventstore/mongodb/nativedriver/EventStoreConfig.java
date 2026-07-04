@@ -46,12 +46,27 @@ import static org.occurrent.eventstore.api.EventStoreCapability.STREAM;
 public class EventStoreConfig {
     private static final Function<FindIterable<Document>, FindIterable<Document>> DEFAULT_QUERY_OPTIONS_FUNCTION = Function.identity();
     private static final Set<EventStoreCapability> DEFAULT_EVENT_STORE_CAPABILITIES = Set.of(STREAM);
+    // A STREAM store writes position by default, sharing one sequence with DCB. Opt out with withoutStreamPosition()
+    // for a STREAM-only store that wants no global position.
+    private static final boolean DEFAULT_STREAM_POSITION_ENABLED = true;
+    // Default to a warning rather than a hard fail on un-backfilled history, so an operator can opt into failing once
+    // migration has run.
+    private static final boolean DEFAULT_REQUIRE_BACKFILLED_POSITION = false;
 
     public final TransactionOptions transactionOptions;
     public final TimeRepresentation timeRepresentation;
     public final Function<FindIterable<Document>, FindIterable<Document>> queryOptions;
     public final Set<EventStoreCapability> eventStoreCapabilities;
     public final DcbStreamIdGenerator dcbStreamIdGenerator;
+    // Defaults to true (streams write a global position). See withoutStreamPosition().
+    public final boolean streamPositionEnabled;
+    // True only when stream position was turned on explicitly (withStreamPosition() or the property). When it is on by
+    // default instead, the store may turn it off at startup if it finds an existing collection of events without a
+    // position, to avoid building the position index on a large existing collection.
+    public final boolean streamPositionExplicitlyEnabled;
+    // When true, construction fails instead of warning if the store writes position but the event collection already
+    // contains events without one.
+    public final boolean requireBackfilledPosition;
 
     /**
      * Create an {@link EventStoreConfig} indicating to the event store that it should represent time according to the supplied
@@ -76,21 +91,34 @@ public class EventStoreConfig {
      * @see TimeRepresentation
      */
     public EventStoreConfig(TimeRepresentation timeRepresentation, @Nullable TransactionOptions transactionOptions) {
-        this(timeRepresentation, transactionOptions, DEFAULT_QUERY_OPTIONS_FUNCTION, DEFAULT_EVENT_STORE_CAPABILITIES, new PartitionedDcbStreamIdGenerator());
+        this(timeRepresentation, transactionOptions, DEFAULT_QUERY_OPTIONS_FUNCTION, DEFAULT_EVENT_STORE_CAPABILITIES, new PartitionedDcbStreamIdGenerator(), DEFAULT_STREAM_POSITION_ENABLED, false, false, DEFAULT_REQUIRE_BACKFILLED_POSITION);
     }
 
-    private EventStoreConfig(TimeRepresentation timeRepresentation, @Nullable TransactionOptions transactionOptions, Function<FindIterable<Document>, FindIterable<Document>> queryOptions, Set<EventStoreCapability> eventStoreCapabilities, DcbStreamIdGenerator dcbStreamIdGenerator) {
+    private EventStoreConfig(TimeRepresentation timeRepresentation, @Nullable TransactionOptions transactionOptions, Function<FindIterable<Document>, FindIterable<Document>> queryOptions, Set<EventStoreCapability> eventStoreCapabilities, DcbStreamIdGenerator dcbStreamIdGenerator, boolean streamPositionEnabled, boolean streamPositionExplicitlyEnabled, boolean streamPositionOptedOut, boolean requireBackfilledPosition) {
         Objects.requireNonNull(timeRepresentation, "Time representation cannot be null");
         requireNonNull(eventStoreCapabilities, "Event store capabilities cannot be null");
         if (eventStoreCapabilities.isEmpty()) {
             throw new IllegalArgumentException("Event store capabilities cannot be empty");
         }
         requireNonNull(dcbStreamIdGenerator, DcbStreamIdGenerator.class.getSimpleName() + " cannot be null");
+        if (streamPositionOptedOut && eventStoreCapabilities.contains(EventStoreCapability.DCB)) {
+            throw new IllegalArgumentException("Cannot disable stream position when the DCB capability is enabled; a combined store must position everything.");
+        }
         this.transactionOptions = Objects.requireNonNullElseGet(transactionOptions, () -> TransactionOptions.builder().build());
         this.timeRepresentation = timeRepresentation;
         this.queryOptions = queryOptions;
         this.eventStoreCapabilities = Set.copyOf(eventStoreCapabilities);
         this.dcbStreamIdGenerator = dcbStreamIdGenerator;
+        this.streamPositionEnabled = streamPositionEnabled;
+        this.streamPositionExplicitlyEnabled = streamPositionExplicitlyEnabled;
+        this.requireBackfilledPosition = requireBackfilledPosition;
+    }
+
+    /**
+     * Returns whether this store writes a global position, so position-requiring APIs are safe to call.
+     */
+    public boolean writesPosition() {
+        return eventStoreCapabilities.contains(EventStoreCapability.DCB) || (eventStoreCapabilities.contains(STREAM) && streamPositionEnabled);
     }
 
     @Override
@@ -98,12 +126,12 @@ public class EventStoreConfig {
         if (this == o) return true;
         if (!(o instanceof EventStoreConfig)) return false;
         EventStoreConfig that = (EventStoreConfig) o;
-        return Objects.equals(transactionOptions, that.transactionOptions) && timeRepresentation == that.timeRepresentation && Objects.equals(queryOptions, that.queryOptions) && Objects.equals(eventStoreCapabilities, that.eventStoreCapabilities) && Objects.equals(dcbStreamIdGenerator, that.dcbStreamIdGenerator);
+        return Objects.equals(transactionOptions, that.transactionOptions) && timeRepresentation == that.timeRepresentation && Objects.equals(queryOptions, that.queryOptions) && Objects.equals(eventStoreCapabilities, that.eventStoreCapabilities) && Objects.equals(dcbStreamIdGenerator, that.dcbStreamIdGenerator) && streamPositionEnabled == that.streamPositionEnabled && streamPositionExplicitlyEnabled == that.streamPositionExplicitlyEnabled && requireBackfilledPosition == that.requireBackfilledPosition;
     }
 
     @Override
     public int hashCode() {
-        return Objects.hash(transactionOptions, timeRepresentation, queryOptions, eventStoreCapabilities, dcbStreamIdGenerator);
+        return Objects.hash(transactionOptions, timeRepresentation, queryOptions, eventStoreCapabilities, dcbStreamIdGenerator, streamPositionEnabled, streamPositionExplicitlyEnabled, requireBackfilledPosition);
     }
 
     @Override
@@ -114,6 +142,9 @@ public class EventStoreConfig {
                 .add("queryOptions=" + queryOptions)
                 .add("eventStoreCapabilities=" + eventStoreCapabilities)
                 .add("dcbStreamIdGenerator=" + dcbStreamIdGenerator)
+                .add("streamPositionEnabled=" + streamPositionEnabled)
+                .add("streamPositionExplicitlyEnabled=" + streamPositionExplicitlyEnabled)
+                .add("requireBackfilledPosition=" + requireBackfilledPosition)
                 .toString();
     }
 
@@ -124,6 +155,10 @@ public class EventStoreConfig {
         private Function<FindIterable<Document>, FindIterable<Document>> queryOptions = DEFAULT_QUERY_OPTIONS_FUNCTION;
         private Set<EventStoreCapability> eventStoreCapabilities = DEFAULT_EVENT_STORE_CAPABILITIES;
         private DcbStreamIdGenerator dcbStreamIdGenerator = new PartitionedDcbStreamIdGenerator();
+        private boolean streamPositionEnabled = DEFAULT_STREAM_POSITION_ENABLED;
+        private boolean streamPositionExplicitlyEnabled = false;
+        private boolean streamPositionOptedOut = false;
+        private boolean requireBackfilledPosition = DEFAULT_REQUIRE_BACKFILLED_POSITION;
 
         /**
          * @param transactionOptions The default {@link TransactionOptions} that the event store will use when starting transactions. May be <code>null</code>.
@@ -214,9 +249,51 @@ public class EventStoreConfig {
             return this;
         }
 
+        /**
+         * Opt a STREAM-only store out of writing a global position onto stream-written events. Only meaningful for a
+         * STREAM-only store, since DCB always writes a position. {@link #build()} fails if this is combined with the
+         * {@link EventStoreCapability#DCB} capability, since a combined store must position everything.
+         *
+         * @return The same {@code Builder} instance.
+         */
+        @NullMarked
+        public Builder withoutStreamPosition() {
+            this.streamPositionEnabled = false;
+            this.streamPositionExplicitlyEnabled = false;
+            this.streamPositionOptedOut = true;
+            return this;
+        }
+
+        /**
+         * Opt a STREAM-only store in to writing a global position onto stream-written events. This is the default, so
+         * the method only exists to state the intent explicitly and as the counterpart to {@link #withoutStreamPosition()}.
+         *
+         * @return The same {@code Builder} instance.
+         */
+        @NullMarked
+        public Builder withStreamPosition() {
+            this.streamPositionEnabled = true;
+            this.streamPositionExplicitlyEnabled = true;
+            this.streamPositionOptedOut = false;
+            return this;
+        }
+
+        /**
+         * When the store writes position but the event collection already contains events without one, fail
+         * construction with an {@link IllegalStateException} instead of only logging a warning. Turn this on once the
+         * position backfill has run, so an un-backfilled collection is caught rather than silently skipped.
+         *
+         * @return The same {@code Builder} instance.
+         */
+        @NullMarked
+        public Builder requireBackfilledPosition(boolean requireBackfilledPosition) {
+            this.requireBackfilledPosition = requireBackfilledPosition;
+            return this;
+        }
+
         @NullMarked
         public EventStoreConfig build() {
-            return new EventStoreConfig(timeRepresentation, transactionOptions, queryOptions, eventStoreCapabilities, dcbStreamIdGenerator);
+            return new EventStoreConfig(timeRepresentation, transactionOptions, queryOptions, eventStoreCapabilities, dcbStreamIdGenerator, streamPositionEnabled, streamPositionExplicitlyEnabled, streamPositionOptedOut, requireBackfilledPosition);
         }
     }
 }

@@ -21,8 +21,10 @@ import io.cloudevents.CloudEvent;
 import org.jspecify.annotations.NullMarked;
 import org.jspecify.annotations.Nullable;
 import org.occurrent.application.converter.CloudEventConverter;
+import org.occurrent.eventstore.api.PositionRange;
 import org.occurrent.eventstore.api.SortBy;
 import org.occurrent.eventstore.api.blocking.EventStoreQueries;
+import org.occurrent.eventstore.api.blocking.PositionOrderedReader;
 import org.occurrent.filter.Filter;
 
 import java.util.*;
@@ -318,6 +320,52 @@ public class DomainEventQueries<T> {
      */
     public <E extends T> Stream<E> query(Filter filter) {
         return toDomainEvents(eventStoreQueries.query(filter));
+    }
+
+    // ------------------------------------------------------------------------------------------------------
+    // Position-ordered reads
+    // ------------------------------------------------------------------------------------------------------
+
+    /**
+     * Reads domain events strictly after the global sequence {@code position}, in ascending position order.
+     * Equivalent to {@code readInPositionOrder(Filter.all(), PositionRange.afterPosition(position))}.
+     *
+     * @throws UnsupportedOperationException if the underlying event store does not write a position.
+     * @see PositionOrderedReader#readInPositionOrder(Filter, PositionRange)
+     */
+    public Stream<T> afterPosition(long position) {
+        return readInPositionOrder(Filter.all(), PositionRange.afterPosition(position));
+    }
+
+    /**
+     * Reads domain events matching {@code filter} within {@code range}, in ascending position order.
+     *
+     * @throws UnsupportedOperationException if the underlying event store does not write a position.
+     * @see PositionOrderedReader#readInPositionOrder(Filter, PositionRange)
+     */
+    public Stream<T> readInPositionOrder(Filter filter, PositionRange range) {
+        Objects.requireNonNull(filter, "Filter cannot be null");
+        Objects.requireNonNull(range, "Range cannot be null");
+        return toDomainEvents(requirePositionOrderedReader().readInPositionOrder(filter, range));
+    }
+
+    /**
+     * The store's current position high-watermark, i.e. the position of the most recently positioned event.
+     * Returns {@code 0} when no positioned event has been written yet.
+     *
+     * @throws UnsupportedOperationException if the underlying event store does not write a position.
+     * @see PositionOrderedReader#currentPosition()
+     */
+    public long currentPosition() {
+        return requirePositionOrderedReader().currentPosition();
+    }
+
+    private PositionOrderedReader requirePositionOrderedReader() {
+        if (!(eventStoreQueries instanceof PositionOrderedReader positionOrderedReader) || !positionOrderedReader.writesPosition()) {
+            throw new UnsupportedOperationException("This event store does not write a position. Position-ordered reads require the underlying event store to implement "
+                    + PositionOrderedReader.class.getSimpleName() + " with writesPosition() true, but was " + eventStoreQueries.getClass().getName());
+        }
+        return positionOrderedReader;
     }
 
     /**

@@ -63,8 +63,8 @@ import static org.occurrent.eventstore.api.EventStoreCapability.STREAM;
 /**
  * Reproduction for the read-watermark overshoot lost-conflict bug (finding 2).
  * <p>
- * {@code read()} reports {@code lastSequencePosition() == currentDcbPosition()}, i.e. the global position counter. That
- * counter is incremented by {@code reserveDcbPositions} <em>outside</em> the append transaction, before the events
+ * {@code read()} reports {@code lastSequencePosition() == currentPosition()}, i.e. the global position counter. That
+ * counter is incremented by {@code reservePositions} <em>outside</em> the append transaction, before the events
  * commit. So a reader that runs while an append holds reserved-but-uncommitted positions inherits a watermark that
  * points past data it cannot see. The reader's command then derives {@code failIfEventsMatch(query, watermark)}, and the
  * append-time check {@code position > watermark} structurally excludes the very events the appender reserved — once they

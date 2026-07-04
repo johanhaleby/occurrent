@@ -46,6 +46,7 @@ import org.springframework.boot.test.context.SpringBootTest
 import java.time.Duration
 import java.util.Date
 import java.util.UUID
+import org.occurrent.cloudevents.OccurrentCloudEventExtension
 
 @SpringBootTest(classes = [Bootstrap::class, TestBootstrap::class])
 class GameplayUsecasesAndPoliciesTest {
@@ -85,7 +86,7 @@ class GameplayUsecasesAndPoliciesTest {
         assertThat(cloudEvents(GameDcbQueries.gameplay(gameId)))
             .allSatisfy { cloudEvent ->
                 assertThat(DcbCloudEvents.getTags(cloudEvent)).contains(GameDcbTags.game(gameId), GameDcbTags.gameplay(gameId))
-                assertThat(DcbCloudEvents.getPosition(cloudEvent)).isGreaterThan(0)
+                assertThat(OccurrentCloudEventExtension.getPosition(cloudEvent)).isGreaterThan(0)
                 assertThat(OccurrentExtensionGetter.getStreamId(cloudEvent)).startsWith("dcb:partition:")
                 assertThat(OccurrentExtensionGetter.getStreamVersion(cloudEvent)).isGreaterThan(0)
             }

@@ -17,7 +17,6 @@ package org.occurrent.example.domain.wordguessinggame.mongodb.spring.dcb.autocon
 
 import org.occurrent.annotation.StreamSubscription
 import org.occurrent.application.service.blocking.dcb.DcbApplicationService
-import org.occurrent.dsl.dcb.dcbPosition
 import org.occurrent.dsl.dcb.dcbTags
 import org.occurrent.dsl.dcb.blocking.DcbDomainEventQueries
 import org.occurrent.dsl.dcb.blocking.queryForList
@@ -50,7 +49,7 @@ class RevealCharacterInWordHintAfterPlayerGuessedTheWrongWord(
         if (!metadata.belongsToGame(playerGuessedTheWrongWord.gameId)) {
             return
         }
-        requireNotNull(metadata.dcbPosition) { "Expected DCB position for ${playerGuessedTheWrongWord.type}" }
+        requireNotNull(metadata.position) { "Expected DCB position for ${playerGuessedTheWrongWord.type}" }
         invoke(playerGuessedTheWrongWord)
     }
 

@@ -30,12 +30,14 @@ import org.occurrent.dsl.dcb.reactor.DcbDomainEventQueries;
 import org.occurrent.dsl.dcb.reactor.DcbSubscriptions;
 import org.occurrent.dsl.query.reactor.DomainEventQueries;
 import org.occurrent.dsl.subscription.reactor.StreamSubscriptions;
+import org.occurrent.eventstore.api.EventStoreCapability;
 import org.occurrent.eventstore.api.dcb.DcbQuery;
 import org.occurrent.eventstore.api.dcb.reactor.DcbEventStore;
 import org.occurrent.eventstore.api.reactor.EventStore;
 import org.occurrent.eventstore.api.reactor.EventStoreQueries;
 import org.occurrent.eventstore.mongodb.spring.reactor.EventStoreConfig;
 import org.occurrent.eventstore.mongodb.spring.reactor.ReactorMongoEventStore;
+import org.occurrent.filter.Filter;
 import org.occurrent.springboot.mongo.common.DcbApplicationServiceDiagnostics;
 import org.occurrent.springboot.mongo.common.Jackson3CloudEventConverterConfiguration;
 import org.occurrent.springboot.mongo.common.OccurrentProperties;
@@ -53,6 +55,7 @@ import org.occurrent.subscription.mongodb.spring.reactor.ReactorMongoSubscriptio
 import org.occurrent.subscription.mongodb.spring.reactor.ReactorSubscriptionPositionStorage;
 import org.occurrent.subscription.reactor.durable.ReactorDurableSubscriptionModel;
 import org.occurrent.subscription.reactor.durable.catchup.ReactorDcbCatchupSubscriptionModel;
+import org.occurrent.subscription.reactor.durable.catchup.ReactorStreamCatchupSubscriptionModel;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.ObjectProvider;
@@ -106,12 +109,20 @@ public class OccurrentReactiveMongoAutoConfiguration<E> {
     @ConditionalOnProperty(name = "occurrent.event-store.enabled", havingValue = "true", matchIfMissing = true)
     public EventStoreConfig occurrentEventStoreConfig(ReactiveMongoTransactionManager transactionManager, OccurrentProperties occurrentProperties) {
         EventStoreProperties eventStoreProperties = occurrentProperties.getEventStore();
-        return new EventStoreConfig.Builder()
+        EventStoreConfig.Builder builder = new EventStoreConfig.Builder()
                 .eventStoreCollectionName(eventStoreProperties.getCollection())
                 .transactionConfig(transactionManager)
                 .timeRepresentation(eventStoreProperties.getTimeRepresentation())
-                .eventStoreCapabilities(eventStoreProperties.getCapabilities())
-                .build();
+                .eventStoreCapabilities(eventStoreProperties.getCapabilities());
+        // The property is only applied when set. true enables position explicitly (kept on even for an unpositioned
+        // store), false opts a STREAM-only store out. withoutStreamPosition() is rejected with DCB, so skip it then.
+        Boolean streamPosition = eventStoreProperties.getStream().getPosition();
+        if (Boolean.TRUE.equals(streamPosition)) {
+            builder.withStreamPosition();
+        } else if (Boolean.FALSE.equals(streamPosition) && !eventStoreProperties.getCapabilities().contains(EventStoreCapability.DCB)) {
+            builder.withoutStreamPosition();
+        }
+        return builder.build();
     }
 
     @Bean
@@ -131,26 +142,41 @@ public class OccurrentReactiveMongoAutoConfiguration<E> {
     /**
      * The composed reactive subscription model. Unlike the blocking side (which also layers a competing consumer),
      * the reactive stack has no competing-consumer model, so the chain is {@code Durable(Catchup(mongo))} with the
-     * durable model on the outside as the {@link Subscribable}/lifecycle authority. A DCB catch-up layer is added only
-     * when the DCB capability is enabled and a reactive {@link DcbEventStore} is available, giving dcbposition replay.
-     * There is no reactive stream (non-DCB) catch-up. {@code destroyMethod = "shutdown"} disposes the running
+     * durable model on the outside as the {@link Subscribable}/lifecycle authority. A DCB catch-up layer is added when
+     * the DCB capability is enabled and a reactive {@link DcbEventStore} is available, giving DCB position replay. For a
+     * STREAM-only store that writes position (on by default, opt out with
+     * {@code occurrent.event-store.stream.position=false}), a {@link ReactorStreamCatchupSubscriptionModel} layer is
+     * added instead, so a {@code @StreamSubscription} started from the beginning replays stream history by position
+     * before going live. A combined STREAM+DCB store keeps the DCB catch-up layer only, the two catch-up models each
+     * accept only their own filter kind so they are not chained. {@code destroyMethod = "shutdown"} disposes the running
      * subscriptions on context close.
      */
     @Bean(destroyMethod = "shutdown")
     @ConditionalOnMissingBean({SubscriptionModel.class, Subscribable.class})
     @ConditionalOnProperty(name = "occurrent.subscription.enabled", havingValue = "true", matchIfMissing = true)
     public ReactorDurableSubscriptionModel occurrentDurableSubscriptionModel(ReactiveMongoOperations mongo, SubscriptionPositionStorage storage,
-                                                                             OccurrentProperties occurrentProperties, ObjectProvider<DcbEventStore> dcbEventStore) {
+                                                                             OccurrentProperties occurrentProperties, ObjectProvider<DcbEventStore> dcbEventStore,
+                                                                             ObjectProvider<ReactorMongoEventStore> reactorEventStore) {
         EventStoreProperties eventStoreProperties = occurrentProperties.getEventStore();
         ReactorMongoSubscriptionModel mongoSubscriptionModel = new ReactorMongoSubscriptionModel(mongo, eventStoreProperties.getCollection(), eventStoreProperties.getTimeRepresentation(),
                 ReactorMongoSubscriptionModelConfig.withConfig().restartSubscriptionsOnChangeStreamHistoryLost(occurrentProperties.getSubscription().isRestartOnChangeStreamHistoryLost()));
-        // DCB catch-up replays by dcbposition over the DCB event store. The DcbQuery.all() is shared by every
+        // DCB catch-up replays by position over the DCB event store. The DcbQuery.all() is shared by every
         // DcbSubscriptions subscription, which each narrow to their own DcbQuery in the consumer, so a single
         // all-matching catch-up is correct.
         DcbEventStore dcbStore = eventStoreProperties.getCapabilities().contains(DCB) ? dcbEventStore.getIfAvailable() : null;
-        PositionAwareSubscriptionModel inner = dcbStore != null
-                ? new ReactorDcbCatchupSubscriptionModel(mongoSubscriptionModel, dcbStore, DcbQuery.all())
-                : mongoSubscriptionModel;
+        final PositionAwareSubscriptionModel inner;
+        if (dcbStore != null) {
+            inner = new ReactorDcbCatchupSubscriptionModel(mongoSubscriptionModel, dcbStore, DcbQuery.all());
+        } else {
+            ReactorMongoEventStore eventStore = reactorEventStore.getIfAvailable();
+            if (eventStore != null && eventStore.writesPosition()) {
+                // STREAM-only store with position on: replay stream history by position. Filter.all() is narrowed by
+                // each subscription's own filter, like the DCB catch-up wiring above.
+                inner = new ReactorStreamCatchupSubscriptionModel(mongoSubscriptionModel, eventStore, Filter.all());
+            } else {
+                inner = mongoSubscriptionModel;
+            }
+        }
         return new ReactorDurableSubscriptionModel(inner, storage);
     }
 
@@ -172,7 +198,7 @@ public class OccurrentReactiveMongoAutoConfiguration<E> {
     /**
      * DCB subscription DSL, auto-configured when the DCB event-store capability is enabled. In DCB mode the underlying
      * subscription model wraps a {@link ReactorDcbCatchupSubscriptionModel}, so a subscription started at a
-     * {@code DcbSubscriptionPosition} replays history by dcbposition before switching to live delivery.
+     * {@code GlobalSubscriptionPosition} replays history by position before switching to live delivery.
      */
     @Bean
     @ConditionalOnMissingBean(DcbSubscriptions.class)

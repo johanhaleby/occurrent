@@ -35,6 +35,7 @@ import java.util.List;
 import java.util.UUID;
 import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.stream.Stream;
+import org.occurrent.cloudevents.OccurrentCloudEventExtension;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.awaitility.Awaitility.await;
@@ -112,6 +113,6 @@ class DcbSubscriptionModelTest {
                 .withSource(URI.create("urn:test"))
                 .withTime(OffsetDateTime.now())
                 .build();
-        return DcbCloudEvents.withPosition(DcbCloudEvents.withTags(base, tags), position);
+        return OccurrentCloudEventExtension.withPosition(DcbCloudEvents.withTags(base, tags), position);
     }
 }

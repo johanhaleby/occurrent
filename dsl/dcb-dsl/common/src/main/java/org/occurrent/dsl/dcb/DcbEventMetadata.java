@@ -23,17 +23,18 @@ import org.occurrent.eventstore.api.dcb.DcbCloudEvents;
 
 import java.util.OptionalLong;
 import java.util.Set;
+import org.occurrent.cloudevents.OccurrentCloudEventExtension;
 
 import static java.util.Objects.requireNonNull;
 
 /**
- * Java-friendly view over an {@link EventMetadata} that exposes DCB-specific metadata, namely the DCB sequence
- * position and the DCB tags.
+ * Java-friendly view over an {@link EventMetadata} that exposes the event's global position and its DCB tags as
+ * an {@link OptionalLong} and a {@link Set}.
  * <p>
- * The generic {@link EventMetadata} lives in the subscription DSL and intentionally does not depend on the DCB API,
- * so these accessors live here in the DCB DSL. Both the blocking and the reactive DCB DSLs build an
- * {@link EventMetadata} from the delivered CloudEvent and wrap it with this. Kotlin callers can use the
- * {@code EventMetadata.dcbPosition} and {@code EventMetadata.dcbTags} extension properties instead.
+ * The generic {@link EventMetadata} lives in the subscription DSL and does not depend on the DCB API, so the tag
+ * accessor lives here. Both the blocking and the reactive DCB DSLs build an {@link EventMetadata} from the delivered
+ * CloudEvent and wrap it with this. Kotlin callers can read {@code EventMetadata.position} directly and use the
+ * {@code EventMetadata.dcbTags} extension property for tags.
  */
 @NullMarked
 public final class DcbEventMetadata {
@@ -52,11 +53,11 @@ public final class DcbEventMetadata {
     }
 
     /**
-     * The DCB sequence position of the event, or empty when the event has no DCB position (for example a
-     * regular stream-written event).
+     * The global position of the event, or empty when the event has no position (for example a stream-written event
+     * on a store that does not write stream position). A Java-friendly view of {@code EventMetadata.position}.
      */
-    public OptionalLong dcbPosition() {
-        return decodePosition(metadata.getData().get(DcbCloudEvents.POSITION));
+    public OptionalLong position() {
+        return decodePosition(metadata.getData().get(OccurrentCloudEventExtension.POSITION));
     }
 
     /**
@@ -84,7 +85,7 @@ public final class DcbEventMetadata {
         if (value instanceof String string) {
             return OptionalLong.of(Long.parseLong(string));
         }
-        throw new IllegalArgumentException("DCB position extension must be a Number or String");
+        throw new IllegalArgumentException("Position extension must be a Number or String");
     }
 
     static Set<String> decodeTags(@Nullable Object value) {

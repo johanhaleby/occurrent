@@ -38,13 +38,13 @@ import static java.util.Objects.requireNonNull;
 @NullMarked
 public final class DcbMarkerModel {
 
-    public static final String DCB_POSITION_DOCUMENT_ID = "dcb";
-    public static final String DCB_COUNTER_POSITION = "position";
+    public static final String POSITION_DOCUMENT_ID = "dcb";
+    public static final String COUNTER_POSITION = "position";
     public static final String CHECKPOINT_LAST_POSITION = "lastPosition";
     public static final String CHECKPOINT_VERSION = "version";
 
     private static final String MARKER_ID_PREFIX = "marker:";
-    private static final String POSITION_COLLECTION_SUFFIX = "_dcb_position";
+    private static final String POSITION_COLLECTION_SUFFIX = "_position";
     private static final String CHECKPOINT_COLLECTION_SUFFIX = "_dcb_checkpoints";
 
     private DcbMarkerModel() {

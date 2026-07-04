@@ -17,6 +17,7 @@
 
 package org.occurrent.dsl.query.blocking
 
+import org.occurrent.eventstore.api.PositionRange
 import org.occurrent.eventstore.api.SortBy
 import org.occurrent.filter.Filter
 import kotlin.reflect.KClass
@@ -152,3 +153,19 @@ fun <T : Any> DomainEventQueries<in T>.queryOne(
     limit: Int = Int.MAX_VALUE,
     sortBy: SortBy = SortBy.unsorted()
 ): T? = queryOne(type.java, skip, limit, sortBy)
+
+/**
+ * Reads domain events strictly after the global sequence [position] as a [Sequence], in ascending position order.
+ * @see DomainEventQueries.afterPosition
+ */
+fun <T : Any> DomainEventQueries<T>.afterPositionAsSequence(position: Long): Sequence<T> =
+    afterPosition(position).asSequence()
+
+/**
+ * Reads domain events matching [filter] within [range] as a [Sequence], in ascending position order.
+ * @see DomainEventQueries.readInPositionOrder
+ */
+fun <T : Any> DomainEventQueries<T>.readInPositionOrderAsSequence(
+    filter: Filter = Filter.all(),
+    range: PositionRange
+): Sequence<T> = readInPositionOrder(filter, range).asSequence()

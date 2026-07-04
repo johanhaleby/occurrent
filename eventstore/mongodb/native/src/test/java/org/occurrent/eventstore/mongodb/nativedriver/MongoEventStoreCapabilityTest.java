@@ -66,7 +66,7 @@ class MongoEventStoreCapabilityTest {
     private static final String EVENT_COLLECTION = "events";
     private static final String CLOUD_EVENT_ID_SOURCE_INDEX = "id_1_source_1";
     private static final String STREAM_INDEX = "streamid_1_streamversion_1";
-    private static final String DCB_POSITION_INDEX = "dcbposition_1";
+    private static final String POSITION_INDEX = "position_1";
     private static final String DCB_TAGS_INDEX = "dcbTags_1";
 
     @Container
@@ -132,18 +132,18 @@ class MongoEventStoreCapabilityTest {
     }
 
     @Test
-    void stream_capability_initializes_only_stream_indexes() {
-        newEventStore(eventStoreConfig(STREAM).build());
+    void stream_capability_without_position_initializes_only_stream_indexes() {
+        newEventStore(eventStoreConfig(STREAM).withoutStreamPosition().build());
 
         assertThat(indexNames()).contains(STREAM_INDEX);
-        assertThat(indexNames()).doesNotContain(DCB_POSITION_INDEX, DCB_TAGS_INDEX);
+        assertThat(indexNames()).doesNotContain(POSITION_INDEX, DCB_TAGS_INDEX);
         assertThat(index(CLOUD_EVENT_ID_SOURCE_INDEX))
                 .containsEntry("key", new Document("id", 1).append("source", 1))
                 .containsEntry("unique", true);
         assertThat(index(STREAM_INDEX))
                 .containsEntry("key", new Document("streamid", 1).append("streamversion", 1))
                 .containsEntry("unique", true);
-        assertThat(collectionExists(EVENT_COLLECTION + "_dcb_position")).isFalse();
+        assertThat(collectionExists(EVENT_COLLECTION + "_position")).isFalse();
         assertThat(collectionExists(EVENT_COLLECTION + "_dcb_checkpoints")).isFalse();
     }
 
@@ -151,17 +151,17 @@ class MongoEventStoreCapabilityTest {
     void dcb_capability_initializes_only_dcb_indexes_and_support_collections() {
         newEventStore(eventStoreConfig(DCB).build());
 
-        assertThat(indexNames()).contains(DCB_POSITION_INDEX, DCB_TAGS_INDEX);
+        assertThat(indexNames()).contains(POSITION_INDEX, DCB_TAGS_INDEX);
         assertThat(indexNames()).doesNotContain(STREAM_INDEX);
         assertThat(index(CLOUD_EVENT_ID_SOURCE_INDEX))
                 .containsEntry("key", new Document("id", 1).append("source", 1))
                 .containsEntry("unique", true);
-        assertThat(index(DCB_POSITION_INDEX))
-                .containsEntry("key", new Document("dcbposition", 1))
+        assertThat(index(POSITION_INDEX))
+                .containsEntry("key", new Document("position", 1))
                 .containsEntry("unique", true)
                 .containsEntry("sparse", true);
         assertThat(index(DCB_TAGS_INDEX)).containsEntry("key", new Document("dcbTags", 1));
-        assertThat(collectionExists(EVENT_COLLECTION + "_dcb_position")).isTrue();
+        assertThat(collectionExists(EVENT_COLLECTION + "_position")).isTrue();
         assertThat(collectionExists(EVENT_COLLECTION + "_dcb_checkpoints")).isTrue();
     }
 
@@ -169,7 +169,7 @@ class MongoEventStoreCapabilityTest {
     void stream_and_dcb_capabilities_initialize_both_index_sets() {
         newEventStore(eventStoreConfig(STREAM, DCB).build());
 
-        assertThat(indexNames()).contains(STREAM_INDEX, DCB_POSITION_INDEX, DCB_TAGS_INDEX);
+        assertThat(indexNames()).contains(STREAM_INDEX, POSITION_INDEX, DCB_TAGS_INDEX);
     }
 
     @Test
