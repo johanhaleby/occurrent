@@ -23,9 +23,10 @@ import org.junit.jupiter.api.DisplayNameGenerator.ReplaceUnderscores;
 import org.junit.jupiter.api.Test;
 import org.occurrent.eventstore.api.PositionRange;
 import org.occurrent.eventstore.api.dcb.DcbAppendCondition;
+import org.occurrent.eventstore.api.dcb.Tag;
 import org.occurrent.eventstore.api.dcb.DcbAppendResult;
 import org.occurrent.eventstore.api.dcb.DcbEventStream;
-import org.occurrent.eventstore.api.dcb.DcbQuery;
+import org.occurrent.eventstore.api.dcb.DcbCriteria;
 import org.occurrent.eventstore.api.dcb.DcbReadOptions;
 import org.occurrent.eventstore.api.dcb.reactor.DcbEventStore;
 import org.occurrent.eventstore.api.reactor.PositionOrderedReader;
@@ -76,7 +77,7 @@ class ReactorCatchupSubscriptionModelRoutingTest {
         ReactorCatchupSubscriptionModel catchup = dualMode();
 
         // Routed to the DCB model: passes the DCB filter-type check, then fails loud on the missing resume token.
-        StepVerifier.create(catchup.subscribe(DcbSubscriptionFilter.filter(DcbQuery.tags("name:1")), StartAt.checkpoint(GlobalCheckpoint.of(0))))
+        StepVerifier.create(catchup.subscribe(DcbSubscriptionFilter.filter(DcbCriteria.tags(Tag.parse("name:1"))), StartAt.checkpoint(GlobalCheckpoint.of(0))))
                 .expectError(IllegalStateException.class)
                 .verify();
     }
@@ -131,7 +132,7 @@ class ReactorCatchupSubscriptionModelRoutingTest {
 
     private static final class UnusedDcbEventStore implements DcbEventStore {
         @Override
-        public Mono<DcbEventStream> read(DcbQuery query, DcbReadOptions options) {
+        public Mono<DcbEventStream> read(DcbCriteria query, DcbReadOptions options) {
             return Mono.error(new AssertionError("read must not be called when the catch-up fails loudly"));
         }
 

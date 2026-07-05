@@ -19,8 +19,9 @@ package org.occurrent.subscription.mongodb.internal;
 import org.bson.Document;
 import org.jspecify.annotations.NullMarked;
 import org.occurrent.eventstore.api.dcb.DcbCloudEvents;
-import org.occurrent.eventstore.api.dcb.DcbQuery;
-import org.occurrent.eventstore.api.dcb.DcbQueryItem;
+import org.occurrent.eventstore.api.dcb.DcbCriteria;
+import org.occurrent.eventstore.api.dcb.DcbCriterion;
+import org.occurrent.eventstore.api.dcb.Tag;
 
 import java.util.ArrayList;
 import java.util.List;
@@ -29,8 +30,8 @@ import static org.occurrent.eventstore.mongodb.dcb.internal.DcbDocumentMapper.DC
 import static org.occurrent.subscription.mongodb.MongoFilterSpecification.FULL_DOCUMENT;
 
 /**
- * Converts a {@link DcbQuery} into a MongoDB change stream {@code $match} stage, reproducing the
- * {@link DcbCloudEvents#matches(io.cloudevents.CloudEvent, DcbQuery)} semantics server-side: within a query item types
+ * Converts a {@link DcbCriteria} into a MongoDB change stream {@code $match} stage, reproducing the
+ * {@link DcbCloudEvents#matches(io.cloudevents.CloudEvent, DcbCriteria)} semantics server-side: within a query item types
  * are any-of, tags are all-of, and excluded types are none-of, and the items are OR-ed together. A {@value DCB_TAGS_INDEX_FIELD}
  * existence check is always applied so only DCB-tagged events are delivered, matching the in-process
  * {@link DcbCloudEvents#isDcbEvent(io.cloudevents.CloudEvent)} guard. Stream events in the same collection carry a
@@ -52,9 +53,9 @@ public final class DcbSubscriptionFilterConverter {
     /**
      * Returns the single {@code {$match: ...}} aggregation stage that selects the events matching {@code query}.
      */
-    public static Document toChangeStreamMatchStage(DcbQuery query) {
+    public static Document toChangeStreamMatchStage(DcbCriteria query) {
         Document conditions = new Document(TAGS_FIELD, new Document("$exists", true));
-        List<DcbQueryItem> items = itemsOf(query);
+        List<DcbCriterion> items = itemsOf(query);
         if (!items.isEmpty()) {
             List<Document> itemConditions = items.stream()
                     .map(DcbSubscriptionFilterConverter::toItemCondition)
@@ -64,18 +65,18 @@ public final class DcbSubscriptionFilterConverter {
         return new Document("$match", conditions);
     }
 
-    // A bare DcbQueryItem is a single alternative, Items is several, and MatchAll yields no constraint (position only).
-    private static List<DcbQueryItem> itemsOf(DcbQuery query) {
-        if (query instanceof DcbQueryItem item) {
+    // A bare DcbCriterion is a single alternative, Items is several, and MatchAll yields no constraint (position only).
+    private static List<DcbCriterion> itemsOf(DcbCriteria query) {
+        if (query instanceof DcbCriterion item) {
             return List.of(item);
         }
-        if (query instanceof DcbQuery.Items items) {
+        if (query instanceof DcbCriteria.Items items) {
             return items.items();
         }
         return List.of();
     }
 
-    private static Document toItemCondition(DcbQueryItem item) {
+    private static Document toItemCondition(DcbCriterion item) {
         Document condition = new Document();
         Document typeOperators = new Document();
         if (!item.types().isEmpty()) {
@@ -88,7 +89,7 @@ public final class DcbSubscriptionFilterConverter {
             condition.put(TYPE_FIELD, typeOperators);
         }
         if (!item.tags().isEmpty()) {
-            condition.put(TAGS_FIELD, new Document("$all", new ArrayList<>(item.tags())));
+            condition.put(TAGS_FIELD, new Document("$all", item.tags().stream().map(Tag::canonical).toList()));
         }
         return condition;
     }

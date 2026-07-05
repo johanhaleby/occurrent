@@ -31,7 +31,8 @@ import org.occurrent.dsl.dcb.DcbEventMetadata;
 import org.occurrent.dsl.dcb.blocking.DcbSubscriptions;
 import org.occurrent.dsl.subscription.EventMetadata;
 import org.occurrent.dsl.subscription.blocking.StreamSubscriptions;
-import org.occurrent.eventstore.api.dcb.DcbQuery;
+import org.occurrent.eventstore.api.dcb.DcbCriteria;
+import org.occurrent.eventstore.api.dcb.Tag;
 import org.occurrent.filter.Filter;
 import org.occurrent.springboot.mongo.common.SubscriptionAnnotations;
 import org.occurrent.springboot.mongo.common.SubscriptionAnnotations.StreamSubscriptionDefinition;
@@ -57,6 +58,7 @@ import java.time.OffsetDateTime;
 import java.time.ZoneOffset;
 import java.time.format.DateTimeFormatter;
 import java.time.format.DateTimeParseException;
+import java.util.ArrayList;
 import java.util.List;
 import java.util.Objects;
 import java.util.function.BiConsumer;
@@ -147,7 +149,7 @@ class OccurrentBlockingAnnotationBeanPostProcessor implements BeanPostProcessor,
     @SuppressWarnings("unchecked")
     private <E> void processDcbSubscribeAnnotation(Object bean, Method method, DcbSubscription annotation) {
         String id = annotation.id();
-        final DcbQuery query;
+        final DcbCriteria query;
         final List<Class<?>> parameterTypes;
         if (method.getParameterCount() >= 1) {
             CloudEventConverter<E> cloudEventConverter = applicationContext.getBean(CloudEventConverter.class);
@@ -155,7 +157,15 @@ class OccurrentBlockingAnnotationBeanPostProcessor implements BeanPostProcessor,
             Class<E> specifiedEventType = (Class<E>) SubscriptionAnnotations.eventTypeOf(parameterTypes, SubscriptionAnnotations::isDcbMetadataParameter);
             List<Class<E>> domainEventTypesToSubscribeTo = SubscriptionAnnotations.resolveDomainEventTypes(id, bean, method, specifiedEventType, annotation.eventTypes(), "@DcbSubscription");
             List<String> cloudEventTypes = domainEventTypesToSubscribeTo.stream().map(cloudEventConverter::getCloudEventType).toList();
-            query = SubscriptionAnnotations.buildDcbQuery(cloudEventTypes, List.of(annotation.tagsAllOf()));
+            List<Tag> tags = new ArrayList<>();
+            for (String tag : annotation.tagsAllOf()) {
+                try {
+                    tags.add(Tag.parse(tag));
+                } catch (IllegalArgumentException e) {
+                    throw new IllegalArgumentException("@DcbSubscription(id=\"%s\") has a malformed tag \"%s\", expected \"key:value\": %s".formatted(id, tag, e.getMessage()), e);
+                }
+            }
+            query = SubscriptionAnnotations.buildDcbCriteria(cloudEventTypes, tags);
         } else {
             throw new IllegalArgumentException("A @DcbSubscription method must declare an event parameter, but %s#%s has none.".formatted(bean.getClass().getName(), method.getName()));
         }

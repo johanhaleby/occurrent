@@ -27,6 +27,7 @@ import org.occurrent.annotation.DcbSubscription;
 import org.occurrent.annotation.DcbSubscription.DcbStartPosition;
 import org.occurrent.annotation.DcbSubscription.ResumeBehavior;
 import org.occurrent.eventstore.api.dcb.DcbCloudEvents;
+import org.occurrent.eventstore.api.dcb.Tag;
 import org.occurrent.eventstore.api.dcb.DcbEventStore;
 import org.occurrent.application.converter.CloudEventConverter;
 import org.occurrent.application.converter.jackson3.JacksonCloudEventConverter;
@@ -267,7 +268,7 @@ class DcbSubscriptionResumeBehaviorAnnotationMongoTest {
 
     private static void append(DcbEventStore dcbEventStore, CloudEventConverter<TestEvent> converter, TestEvent... events) {
         List<io.cloudevents.CloudEvent> cloudEvents = converter.toCloudEvents(Stream.of(events))
-                .map(ce -> DcbCloudEvents.withTags(ce, List.of("test:resume-behavior")))
+                .map(ce -> DcbCloudEvents.withTags(ce, List.of(Tag.parse("test:resume-behavior"))))
                 .toList();
         dcbEventStore.append(cloudEvents);
     }

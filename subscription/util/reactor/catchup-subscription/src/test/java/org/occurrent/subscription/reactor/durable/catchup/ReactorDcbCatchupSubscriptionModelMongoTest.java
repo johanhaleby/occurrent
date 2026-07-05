@@ -34,9 +34,10 @@ import org.occurrent.domain.DomainEvent;
 import org.occurrent.domain.NameDefined;
 import org.occurrent.eventstore.api.EventStoreCapability;
 import org.occurrent.eventstore.api.dcb.DcbAppendCondition;
+import org.occurrent.eventstore.api.dcb.Tag;
 import org.occurrent.eventstore.api.dcb.DcbAppendResult;
 import org.occurrent.eventstore.api.dcb.DcbCloudEvents;
-import org.occurrent.eventstore.api.dcb.DcbQuery;
+import org.occurrent.eventstore.api.dcb.DcbCriteria;
 import org.occurrent.eventstore.api.dcb.DcbReadOptions;
 import org.occurrent.eventstore.api.dcb.DcbEventStream;
 import org.occurrent.eventstore.api.dcb.reactor.DcbEventStore;
@@ -125,7 +126,7 @@ class ReactorDcbCatchupSubscriptionModelMongoTest {
 
         ReactorDcbCatchupSubscriptionModel catchup = new ReactorDcbCatchupSubscriptionModel(subscriptionModel, eventStore);
         CopyOnWriteArrayList<String> received = new CopyOnWriteArrayList<>();
-        subscribe(catchup.subscribe(DcbQuery.tags("name:1"), DcbStartAt.beginning()), received);
+        subscribe(catchup.subscribe(DcbCriteria.tags(Tag.parse("name:1")), DcbStartAt.beginning()), received);
 
         await().atMost(Duration.ofSeconds(40)).untilAsserted(() -> assertThat(received).containsExactly("h1", "h2"));
 
@@ -154,7 +155,7 @@ class ReactorDcbCatchupSubscriptionModelMongoTest {
 
         ReactorDcbCatchupSubscriptionModel catchup = new ReactorDcbCatchupSubscriptionModel(subscriptionModel, delaying);
         CopyOnWriteArrayList<String> received = new CopyOnWriteArrayList<>();
-        subscribe(catchup.subscribe(DcbQuery.tags("name:1"), DcbStartAt.beginning()), received);
+        subscribe(catchup.subscribe(DcbCriteria.tags(Tag.parse("name:1")), DcbStartAt.beginning()), received);
 
         // Wait until the replay read is in flight, then commit a new matching event during the delay.
         await().atMost(Duration.ofSeconds(40)).untilTrue(firstReadStarted);
@@ -173,7 +174,7 @@ class ReactorDcbCatchupSubscriptionModelMongoTest {
 
         ReactorDcbCatchupSubscriptionModel catchup = new ReactorDcbCatchupSubscriptionModel(subscriptionModel, eventStore);
         CopyOnWriteArrayList<String> received = new CopyOnWriteArrayList<>();
-        subscribe(catchup.subscribe(DcbQuery.tags("name:1"), DcbStartAt.beginning()), received);
+        subscribe(catchup.subscribe(DcbCriteria.tags(Tag.parse("name:1")), DcbStartAt.beginning()), received);
 
         await().atMost(Duration.ofSeconds(40)).untilAsserted(() -> assertThat(received).containsExactly("matchHistoric"));
 
@@ -193,7 +194,7 @@ class ReactorDcbCatchupSubscriptionModelMongoTest {
 
         ReactorDcbCatchupSubscriptionModel catchup = new ReactorDcbCatchupSubscriptionModel(subscriptionModel, eventStore, 1, 1);
         CopyOnWriteArrayList<String> received = new CopyOnWriteArrayList<>();
-        subscribe(catchup.subscribe(DcbQuery.tags("name:1"), DcbStartAt.beginning()), received);
+        subscribe(catchup.subscribe(DcbCriteria.tags(Tag.parse("name:1")), DcbStartAt.beginning()), received);
 
         await().atMost(Duration.ofSeconds(40)).untilAsserted(() -> assertThat(received).containsExactly("h0", "h1", "h2", "h3", "h4"));
 
@@ -217,7 +218,7 @@ class ReactorDcbCatchupSubscriptionModelMongoTest {
 
     private void appendTagged(DomainEvent event, String tag) {
         CloudEvent cloudEvent = converter.toCloudEvents(Stream.of(event)).collect(Collectors.toList()).get(0);
-        eventStore.append(List.of(DcbCloudEvents.withTags(cloudEvent, Set.of(tag)))).block();
+        eventStore.append(List.of(DcbCloudEvents.withTags(cloudEvent, Set.of(Tag.parse(tag))))).block();
     }
 
     private static void sleep(long millis) {
@@ -245,7 +246,7 @@ class ReactorDcbCatchupSubscriptionModelMongoTest {
         }
 
         @Override
-        public Mono<DcbEventStream> read(DcbQuery query, DcbReadOptions options) {
+        public Mono<DcbEventStream> read(DcbCriteria query, DcbReadOptions options) {
             boolean isHeadProbe = options.afterPosition().orElse(0) == options.upToPosition().orElse(0);
             if (!isHeadProbe && windowDelayed.compareAndSet(false, true)) {
                 return Mono.defer(() -> {

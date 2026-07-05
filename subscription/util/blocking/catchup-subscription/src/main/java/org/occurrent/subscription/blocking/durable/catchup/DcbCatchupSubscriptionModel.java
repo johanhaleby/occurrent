@@ -23,7 +23,7 @@ import org.occurrent.cloudevents.OccurrentCloudEventExtension;
 import org.occurrent.eventstore.api.dcb.DcbCloudEvents;
 import org.occurrent.eventstore.api.dcb.DcbEventStore;
 import org.occurrent.eventstore.api.dcb.DcbEventStream;
-import org.occurrent.eventstore.api.dcb.DcbQuery;
+import org.occurrent.eventstore.api.dcb.DcbCriteria;
 import org.occurrent.eventstore.api.dcb.DcbReadOptions;
 import org.occurrent.subscription.GlobalCheckpoint;
 import org.occurrent.subscription.StartAt;
@@ -58,9 +58,9 @@ import java.util.stream.Stream;
 class DcbCatchupSubscriptionModel extends AbstractCatchupSubscriptionModel {
 
     private final DcbEventStore dcbEventStore;
-    private final DcbQuery dcbQuery;
+    private final DcbCriteria dcbQuery;
 
-    public DcbCatchupSubscriptionModel(CheckpointAwareSubscriptionModel subscriptionModel, DcbEventStore dcbEventStore, DcbQuery dcbQuery, CatchupSubscriptionModelConfig config) {
+    public DcbCatchupSubscriptionModel(CheckpointAwareSubscriptionModel subscriptionModel, DcbEventStore dcbEventStore, DcbCriteria dcbQuery, CatchupSubscriptionModelConfig config) {
         this(subscriptionModel, dcbEventStore, dcbQuery, config, DcbCatchupSubscriptionModel.class);
     }
 
@@ -71,7 +71,7 @@ class DcbCatchupSubscriptionModel extends AbstractCatchupSubscriptionModel {
      *                                      class here so a caller that pattern-matches on the public dispatcher type
      *                                      keeps working regardless of which mode-specific class runs the catch-up.
      */
-    public DcbCatchupSubscriptionModel(CheckpointAwareSubscriptionModel subscriptionModel, DcbEventStore dcbEventStore, DcbQuery dcbQuery, CatchupSubscriptionModelConfig config, Class<?> subscriptionModelContextType) {
+    public DcbCatchupSubscriptionModel(CheckpointAwareSubscriptionModel subscriptionModel, DcbEventStore dcbEventStore, DcbCriteria dcbQuery, CatchupSubscriptionModelConfig config, Class<?> subscriptionModelContextType) {
         super(subscriptionModel, config, subscriptionModelContextType);
         this.dcbEventStore = Objects.requireNonNull(dcbEventStore, "dcbEventStore cannot be null");
         this.dcbQuery = Objects.requireNonNull(dcbQuery, "dcbQuery cannot be null");

@@ -17,7 +17,7 @@
 package org.occurrent.dsl.dcb.reactor
 
 import org.occurrent.eventstore.api.dcb.DcbConsistencyToken
-import org.occurrent.eventstore.api.dcb.DcbQuery
+import org.occurrent.eventstore.api.dcb.DcbCriteria
 import org.occurrent.eventstore.api.dcb.DcbReadOptions
 import reactor.core.publisher.Mono
 
@@ -30,7 +30,7 @@ import reactor.core.publisher.Mono
  * @see DcbDomainEventQueries.query
  */
 fun <T : Any> DcbDomainEventQueries<T>.queryForList(
-    query: DcbQuery,
+    query: DcbCriteria,
     options: DcbReadOptions = DcbReadOptions.fromBeginning()
 ): Mono<List<T>> =
     this.query(query, options).collectList()
@@ -42,7 +42,7 @@ fun <T : Any> DcbDomainEventQueries<T>.queryForList(
  * @see DcbDomainEventQueries.queryWithPosition
  */
 fun <T : Any> DcbDomainEventQueries<T>.queryForListWithPosition(
-    query: DcbQuery,
+    query: DcbCriteria,
     options: DcbReadOptions = DcbReadOptions.fromBeginning()
 ): Mono<Triple<List<T>, Long, DcbConsistencyToken>> =
     this.queryWithPosition(query, options).map { Triple(it.events(), it.lastSequencePosition(), it.consistencyToken()) }

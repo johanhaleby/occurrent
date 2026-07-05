@@ -20,9 +20,10 @@ import io.cloudevents.CloudEvent;
 import org.jspecify.annotations.NullMarked;
 import org.jspecify.annotations.Nullable;
 import org.occurrent.application.converter.CloudEventConverter;
+import org.occurrent.dsl.dcb.DcbCriteriaBuilder;
 import org.occurrent.dsl.dcb.DcbEventMetadata;
 import org.occurrent.dsl.subscription.EventMetadata;
-import org.occurrent.eventstore.api.dcb.DcbQuery;
+import org.occurrent.eventstore.api.dcb.DcbCriteria;
 import org.occurrent.subscription.DcbStartAt;
 import org.occurrent.subscription.api.blocking.DcbSubscriptionModel;
 import org.occurrent.subscription.api.blocking.Subscribable;
@@ -39,7 +40,7 @@ import static java.util.Objects.requireNonNull;
  * <p>
  * This wraps a {@link SubscriptionModel} and a {@link CloudEventConverter}, mirroring how {@link DcbDomainEventQueries}
  * wraps its dependencies. The subscriptions are live CloudEvent subscriptions that post-filter DCB-tagged events
- * by a {@link DcbQuery}. They are not DCB reads, so they provide no DCB append-condition or high-watermark
+ * by a {@link DcbCriteria}. They are not DCB reads, so they provide no DCB append-condition or high-watermark
  * guarantees.
  * <p>
  * Like {@link Subscribable}, the {@code subscribe} methods return the {@link Subscription} without waiting for it to
@@ -65,16 +66,24 @@ public final class DcbSubscriptions<E> {
     }
 
     /**
+     * A {@link DcbCriteriaBuilder} bound to this instance's {@link CloudEventConverter}, so criteria can be built from
+     * domain event classes (mapped to their CloudEvent type strings) rather than raw type strings.
+     */
+    public DcbCriteriaBuilder<E> criteria() {
+        return new DcbCriteriaBuilder<>(cloudEventConverter);
+    }
+
+    /**
      * Subscribes to live DCB events that match {@code query}.
      */
-    public Subscription subscribe(String subscriptionId, DcbQuery query, Consumer<E> fn) {
+    public Subscription subscribe(String subscriptionId, DcbCriteria query, Consumer<E> fn) {
         return subscribe(subscriptionId, query, null, fn);
     }
 
     /**
      * Subscribes to live DCB events that match {@code query}, starting at {@code startAt}.
      */
-    public Subscription subscribe(String subscriptionId, DcbQuery query, @Nullable DcbStartAt startAt, Consumer<E> fn) {
+    public Subscription subscribe(String subscriptionId, DcbCriteria query, @Nullable DcbStartAt startAt, Consumer<E> fn) {
         requireNonNull(fn, "Subscription function cannot be null");
         return subscribeWithMetadata(subscriptionId, query, startAt, (metadata, event) -> fn.accept(event));
     }
@@ -84,7 +93,7 @@ public final class DcbSubscriptions<E> {
      * is {@code true} this blocks until the subscription has started, and for a replaying DCB subscription that means
      * until catch-up has completed, mirroring the Kotlin DSL default.
      */
-    public Subscription subscribe(String subscriptionId, DcbQuery query, @Nullable DcbStartAt startAt, boolean waitUntilStarted, Consumer<E> fn) {
+    public Subscription subscribe(String subscriptionId, DcbCriteria query, @Nullable DcbStartAt startAt, boolean waitUntilStarted, Consumer<E> fn) {
         requireNonNull(fn, "Subscription function cannot be null");
         return subscribeWithMetadata(subscriptionId, query, startAt, waitUntilStarted, (metadata, event) -> fn.accept(event));
     }
@@ -95,7 +104,7 @@ public final class DcbSubscriptions<E> {
      * This is a distinct method rather than an overload of {@link #subscribe} so that a method reference like
      * {@code list::add} stays unambiguous on the {@link Consumer} overloads.
      */
-    public Subscription subscribeWithMetadata(String subscriptionId, DcbQuery query, BiConsumer<DcbEventMetadata, E> fn) {
+    public Subscription subscribeWithMetadata(String subscriptionId, DcbCriteria query, BiConsumer<DcbEventMetadata, E> fn) {
         return subscribeWithMetadata(subscriptionId, query, null, fn);
     }
 
@@ -103,7 +112,7 @@ public final class DcbSubscriptions<E> {
      * Subscribes to live DCB events that match {@code query}, starting at {@code startAt} and exposing DCB metadata
      * to the callback. Returns without waiting for the subscription to start.
      */
-    public Subscription subscribeWithMetadata(String subscriptionId, DcbQuery query, @Nullable DcbStartAt startAt, BiConsumer<DcbEventMetadata, E> fn) {
+    public Subscription subscribeWithMetadata(String subscriptionId, DcbCriteria query, @Nullable DcbStartAt startAt, BiConsumer<DcbEventMetadata, E> fn) {
         return subscribeWithMetadata(subscriptionId, query, startAt, false, fn);
     }
 
@@ -112,7 +121,7 @@ public final class DcbSubscriptions<E> {
      * to the callback. When {@code waitUntilStarted} is {@code true} this blocks until the subscription has started,
      * and for a replaying DCB subscription that means until catch-up has completed, mirroring the Kotlin DSL default.
      */
-    public Subscription subscribeWithMetadata(String subscriptionId, DcbQuery query, @Nullable DcbStartAt startAt, boolean waitUntilStarted, BiConsumer<DcbEventMetadata, E> fn) {
+    public Subscription subscribeWithMetadata(String subscriptionId, DcbCriteria query, @Nullable DcbStartAt startAt, boolean waitUntilStarted, BiConsumer<DcbEventMetadata, E> fn) {
         requireNonNull(subscriptionId, "Subscription id cannot be null");
         requireNonNull(query, "Query cannot be null");
         requireNonNull(fn, "Subscription function cannot be null");

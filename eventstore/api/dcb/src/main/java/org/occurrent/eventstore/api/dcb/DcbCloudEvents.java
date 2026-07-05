@@ -22,11 +22,13 @@ import org.jspecify.annotations.NullMarked;
 
 import java.util.Arrays;
 import java.util.Collection;
+import java.util.Collections;
 import java.util.List;
 import java.util.Set;
 import java.util.TreeSet;
 
 import static java.util.Objects.requireNonNull;
+import static java.util.stream.Collectors.joining;
 import static java.util.stream.Collectors.toCollection;
 
 /**
@@ -51,7 +53,7 @@ public final class DcbCloudEvents {
     /**
      * Returns a copy of {@code cloudEvent} with canonical DCB tags in the {@value #TAGS} extension.
      */
-    public static CloudEvent withTags(CloudEvent cloudEvent, Collection<String> tags) {
+    public static CloudEvent withTags(CloudEvent cloudEvent, Collection<Tag> tags) {
         requireNonNull(cloudEvent, "CloudEvent cannot be null");
         return CloudEventBuilder.v1(cloudEvent).withExtension(TAGS, encodeTags(tags)).build();
     }
@@ -59,7 +61,7 @@ public final class DcbCloudEvents {
     /**
      * Reads canonical DCB tags from a CloudEvent, or an empty set when the event has no DCB tags.
      */
-    public static Set<String> getTags(CloudEvent cloudEvent) {
+    public static Set<Tag> getTags(CloudEvent cloudEvent) {
         requireNonNull(cloudEvent, "CloudEvent cannot be null");
         Object tags = cloudEvent.getExtension(TAGS);
         if (tags == null) {
@@ -76,12 +78,14 @@ public final class DcbCloudEvents {
      * when the string is empty. Splitting keeps trailing empty segments so a malformed encoding fails fast in
      * {@link #canonicalizeTags(Collection)} rather than being silently accepted.
      */
-    public static Set<String> decodeTags(String encodedTags) {
+    public static Set<Tag> decodeTags(String encodedTags) {
         requireNonNull(encodedTags, "Encoded tags cannot be null");
         if (encodedTags.isEmpty()) {
             return Set.of();
         }
-        return canonicalizeTags(Arrays.asList(encodedTags.split(TAG_SEPARATOR, -1)));
+        return canonicalizeTags(Arrays.stream(encodedTags.split(TAG_SEPARATOR, -1))
+                .map(Tag::parse)
+                .toList());
     }
 
     /**
@@ -97,18 +101,18 @@ public final class DcbCloudEvents {
     }
 
     /**
-     * Returns whether {@code cloudEvent} matches the supplied DCB query.
+     * Returns whether {@code cloudEvent} matches the supplied DCB criteria.
      */
-    public static boolean matches(CloudEvent cloudEvent, DcbQuery query) {
+    public static boolean matches(CloudEvent cloudEvent, DcbCriteria criteria) {
         requireNonNull(cloudEvent, "CloudEvent cannot be null");
-        requireNonNull(query, "Query cannot be null");
-        if (query instanceof DcbQuery.MatchAll) {
+        requireNonNull(criteria, "Criteria cannot be null");
+        if (criteria instanceof DcbCriteria.MatchAll) {
             return true;
         }
-        return itemsOf(query).stream().anyMatch(item -> matches(cloudEvent, item));
+        return itemsOf(criteria).stream().anyMatch(item -> matches(cloudEvent, item));
     }
 
-    private static boolean matches(CloudEvent cloudEvent, DcbQueryItem item) {
+    private static boolean matches(CloudEvent cloudEvent, DcbCriterion item) {
         boolean typeMatches = item.types().isEmpty() || item.types().contains(cloudEvent.getType());
         boolean tagsMatch = getTags(cloudEvent).containsAll(item.tags());
         boolean excludedTypeMatches = item.excludedTypes().contains(cloudEvent.getType());
@@ -116,50 +120,46 @@ public final class DcbCloudEvents {
     }
 
     /**
-     * Returns the union of the tags the query constrains on, that is the consistency boundary it defines. A
-     * {@link DcbQuery.MatchAll} query and a query that only constrains on types both yield an empty set. This is the
-     * stable per-boundary tag set a store can use to place DCB-written events, rather than the per-event tags which
+     * Returns the union of the tags the criteria constrains on, that is the consistency boundary it defines. A
+     * {@link DcbCriteria.MatchAll} criteria and a criteria that only constrains on types both yield an empty set. This is
+     * the stable per-boundary tag set a store can use to place DCB-written events, rather than the per-event tags which
      * a {@code TagGenerator} may extend differently per event.
      */
-    public static Set<String> boundaryTags(DcbQuery query) {
-        requireNonNull(query, "Query cannot be null");
-        return Set.copyOf(itemsOf(query).stream()
+    public static Set<Tag> tagsOf(DcbCriteria criteria) {
+        requireNonNull(criteria, "Criteria cannot be null");
+        return Set.copyOf(itemsOf(criteria).stream()
                 .flatMap(item -> item.tags().stream())
                 .collect(toCollection(TreeSet::new)));
     }
 
-    private static List<DcbQueryItem> itemsOf(DcbQuery query) {
-        if (query instanceof DcbQueryItem item) {
+    private static List<DcbCriterion> itemsOf(DcbCriteria criteria) {
+        if (criteria instanceof DcbCriterion item) {
             return List.of(item);
         }
-        if (query instanceof DcbQuery.Items items) {
+        if (criteria instanceof DcbCriteria.Items items) {
             return items.items();
         }
         return List.of();
     }
 
     /**
-     * Strips, validates, de-duplicates, and sorts DCB tags into their canonical set form.
+     * De-duplicates and sorts DCB tags into their canonical set form. Per-tag validation lives in {@link Tag}; this
+     * keeps the set order-independent and sorted so the partition hash is stable across equivalent tag sets.
      */
-    public static Set<String> canonicalizeTags(Collection<String> tags) {
+    public static Set<Tag> canonicalizeTags(Collection<Tag> tags) {
         requireNonNull(tags, "Tags cannot be null");
-        Set<String> canonicalTags = tags.stream()
+        TreeSet<Tag> canonicalTags = tags.stream()
                 .map(tag -> requireNonNull(tag, "Tag cannot be null"))
-                .map(String::strip)
                 .collect(toCollection(TreeSet::new));
-        if (canonicalTags.stream().anyMatch(String::isEmpty)) {
-            throw new IllegalArgumentException("Tags cannot contain blank values");
-        }
-        if (canonicalTags.stream().anyMatch(tag -> tag.contains(TAG_SEPARATOR))) {
-            throw new IllegalArgumentException("Tags cannot contain newline characters");
-        }
-        return Set.copyOf(canonicalTags);
+        return Collections.unmodifiableSet(canonicalTags);
     }
 
     /**
      * Encodes DCB tags for the {@value #TAGS} CloudEvent extension.
      */
-    public static String encodeTags(Collection<String> tags) {
-        return String.join(TAG_SEPARATOR, new TreeSet<>(canonicalizeTags(tags)));
+    public static String encodeTags(Collection<Tag> tags) {
+        return canonicalizeTags(tags).stream()
+                .map(Tag::canonical)
+                .collect(joining(TAG_SEPARATOR));
     }
 }

@@ -17,6 +17,7 @@
 package org.occurrent.example.domain.wordguessinggame.mongodb.spring.dcb.features.dcb
 
 import org.occurrent.application.service.dcb.TagGenerator
+import org.occurrent.eventstore.api.dcb.Tag
 import org.occurrent.example.domain.wordguessinggame.event.CharacterInWordHintWasRevealed
 import org.occurrent.example.domain.wordguessinggame.event.GameEvent
 import org.occurrent.example.domain.wordguessinggame.event.GameWasLost
@@ -29,7 +30,7 @@ import org.occurrent.example.domain.wordguessinggame.event.PlayerWasAwardedPoint
 import org.occurrent.example.domain.wordguessinggame.event.PlayerWasNotAwardedAnyPointsForGuessingTheRightWord
 
 internal class GameEventTagGenerator : TagGenerator<GameEvent> {
-    override fun tags(event: GameEvent): Set<String> = buildSet {
+    override fun tags(event: GameEvent): Set<Tag> = buildSet {
         add(GameDcbTags.game(event.gameId))
         add(when (event) {
             is GameWasStarted,

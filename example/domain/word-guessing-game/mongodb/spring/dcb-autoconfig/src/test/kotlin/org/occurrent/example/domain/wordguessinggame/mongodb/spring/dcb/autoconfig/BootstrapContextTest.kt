@@ -28,7 +28,7 @@ import org.occurrent.dsl.query.blocking.DomainEventQueries
 import org.occurrent.dsl.subscription.blocking.Subscriptions
 import org.occurrent.eventstore.mongodb.spring.blocking.EventStoreConfig
 import org.occurrent.eventstore.mongodb.spring.blocking.SpringMongoEventStore
-import org.occurrent.eventstore.mongodb.spring.blocking.SpringMongoEventStoreCapability.DCB
+import org.occurrent.eventstore.api.EventStoreCapability.DCB
 import org.springframework.beans.factory.annotation.Autowired
 import org.springframework.boot.test.context.SpringBootTest
 import org.springframework.context.ApplicationContext

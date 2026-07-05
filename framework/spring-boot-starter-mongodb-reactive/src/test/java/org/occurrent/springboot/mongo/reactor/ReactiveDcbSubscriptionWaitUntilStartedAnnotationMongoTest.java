@@ -30,6 +30,7 @@ import org.occurrent.application.converter.jackson3.JacksonCloudEventConverter;
 import org.occurrent.application.converter.typemapper.CloudEventTypeMapper;
 import org.occurrent.application.converter.typemapper.ReflectionCloudEventTypeMapper;
 import org.occurrent.eventstore.api.dcb.DcbCloudEvents;
+import org.occurrent.eventstore.api.dcb.Tag;
 import org.occurrent.eventstore.api.dcb.reactor.DcbEventStore;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.autoconfigure.SpringBootApplication;
@@ -91,7 +92,7 @@ class ReactiveDcbSubscriptionWaitUntilStartedAnnotationMongoTest {
     @Test
     void a_live_event_appended_immediately_after_context_startup_is_received_with_no_race() {
         List<io.cloudevents.CloudEvent> cloudEvents = cloudEventConverter.toCloudEvents(Stream.of(new TestEvent("live-1")))
-                .map(ce -> DcbCloudEvents.withTags(ce, List.of(TAG)))
+                .map(ce -> DcbCloudEvents.withTags(ce, List.of(Tag.parse(TAG))))
                 .toList();
         dcbEventStore.append(cloudEvents).block();
 

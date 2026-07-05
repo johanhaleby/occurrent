@@ -24,7 +24,8 @@ import org.junit.jupiter.api.DisplayNameGeneration;
 import org.junit.jupiter.api.DisplayNameGenerator.ReplaceUnderscores;
 import org.junit.jupiter.api.Test;
 import org.occurrent.eventstore.api.dcb.DcbCloudEvents;
-import org.occurrent.eventstore.api.dcb.DcbQuery;
+import org.occurrent.eventstore.api.dcb.Tag;
+import org.occurrent.eventstore.api.dcb.DcbCriteria;
 import org.occurrent.subscription.DcbStartAt;
 import org.occurrent.subscription.api.blocking.DcbSubscriptionModel;
 
@@ -42,7 +43,7 @@ import static org.awaitility.Awaitility.await;
 
 /**
  * The typed {@link DcbSubscriptionModel} facade over the shared {@link InMemorySubscriptionModel}. It only accepts a
- * {@link DcbQuery} and a {@link DcbStartAt}, so a time-based stream position cannot be passed to it: that is a
+ * {@link DcbCriteria} and a {@link DcbStartAt}, so a time-based stream position cannot be passed to it: that is a
  * compile-time guarantee, not something a runtime test can express.
  */
 @DisplayNameGeneration(ReplaceUnderscores.class)
@@ -65,7 +66,7 @@ class DcbSubscriptionModelTest {
     @Test
     void delivers_only_query_matching_dcb_events() {
         CopyOnWriteArrayList<CloudEvent> received = new CopyOnWriteArrayList<>();
-        dcbSubscriptionModel.subscribe("sub", DcbQuery.tags("x:1"), DcbStartAt.now(), received::add)
+        dcbSubscriptionModel.subscribe("sub", DcbCriteria.tags(Tag.parse("x:1")), DcbStartAt.now(), received::add)
                 .waitUntilStarted();
 
         CloudEvent matching = dcbEvent("TypeA", 1L, List.of("x:1"));
@@ -79,7 +80,7 @@ class DcbSubscriptionModelTest {
     @Test
     void the_no_start_position_overload_subscribes_at_the_default() {
         CopyOnWriteArrayList<CloudEvent> received = new CopyOnWriteArrayList<>();
-        dcbSubscriptionModel.subscribe("sub", DcbQuery.type("OrderPlaced"), received::add)
+        dcbSubscriptionModel.subscribe("sub", DcbCriteria.type("OrderPlaced"), received::add)
                 .waitUntilStarted();
 
         CloudEvent matching = dcbEvent("OrderPlaced", 1L, List.of("order:1"));
@@ -92,7 +93,7 @@ class DcbSubscriptionModelTest {
     @Test
     void cancel_through_the_facade_stops_delivery() {
         CopyOnWriteArrayList<CloudEvent> received = new CopyOnWriteArrayList<>();
-        dcbSubscriptionModel.subscribe("sub", DcbQuery.tags("x:1"), DcbStartAt.now(), received::add)
+        dcbSubscriptionModel.subscribe("sub", DcbCriteria.tags(Tag.parse("x:1")), DcbStartAt.now(), received::add)
                 .waitUntilStarted();
 
         CloudEvent first = dcbEvent("TypeA", 1L, List.of("x:1"));
@@ -113,6 +114,6 @@ class DcbSubscriptionModelTest {
                 .withSource(URI.create("urn:test"))
                 .withTime(OffsetDateTime.now())
                 .build();
-        return OccurrentCloudEventExtension.withPosition(DcbCloudEvents.withTags(base, tags), position);
+        return OccurrentCloudEventExtension.withPosition(DcbCloudEvents.withTags(base, tags.stream().map(Tag::parse).toList()), position);
     }
 }

@@ -16,7 +16,7 @@
 
 package org.occurrent.example.domain.wordguessinggame.mongodb.spring.dcb.autoconfig.features.dcb
 
-import org.occurrent.eventstore.api.dcb.DcbQuery
+import org.occurrent.eventstore.api.dcb.DcbCriteria
 import org.occurrent.example.domain.wordguessinggame.event.CharacterInWordHintWasRevealed
 import org.occurrent.example.domain.wordguessinggame.event.GameEvent
 import org.occurrent.example.domain.wordguessinggame.event.GameWasStarted
@@ -28,24 +28,24 @@ import java.util.UUID
 import kotlin.reflect.KClass
 
 internal object GameDcbQueries {
-    fun allGameEvents(gameId: UUID): DcbQuery = DcbQuery.tags(GameDcbTags.game(gameId))
+    fun allGameEvents(gameId: UUID): DcbCriteria = DcbCriteria.tags(GameDcbTags.game(gameId))
 
-    fun gameplay(gameId: UUID): DcbQuery = DcbQuery.tags(GameDcbTags.gameplay(gameId))
+    fun gameplay(gameId: UUID): DcbCriteria = DcbCriteria.tags(GameDcbTags.gameplay(gameId))
 
-    fun wordHintBoundary(gameId: UUID): DcbQuery = DcbQuery.anyOf(
-            DcbQuery.type(GameWasStarted::class.eventType()).tags(GameDcbTags.game(gameId)),
-            DcbQuery.type(CharacterInWordHintWasRevealed::class.eventType()).tags(GameDcbTags.wordHint(gameId))
+    fun wordHintBoundary(gameId: UUID): DcbCriteria = DcbCriteria.anyOf(
+            DcbCriteria.type(GameWasStarted::class.eventType()).tags(GameDcbTags.game(gameId)),
+            DcbCriteria.type(CharacterInWordHintWasRevealed::class.eventType()).tags(GameDcbTags.wordHint(gameId))
     )
 
-    fun pointsBoundary(gameId: UUID): DcbQuery = DcbQuery.anyOf(
-            DcbQuery.type(GameWasStarted::class.eventType()).tags(GameDcbTags.game(gameId)),
-            DcbQuery.type(PlayerGuessedTheWrongWord::class.eventType()).tags(GameDcbTags.gameplay(gameId)),
-            DcbQuery.type(PlayerWasAwardedPointsForGuessingTheRightWord::class.eventType()).tags(GameDcbTags.points(gameId)),
-            DcbQuery.type(PlayerWasNotAwardedAnyPointsForGuessingTheRightWord::class.eventType()).tags(GameDcbTags.points(gameId))
+    fun pointsBoundary(gameId: UUID): DcbCriteria = DcbCriteria.anyOf(
+            DcbCriteria.type(GameWasStarted::class.eventType()).tags(GameDcbTags.game(gameId)),
+            DcbCriteria.type(PlayerGuessedTheWrongWord::class.eventType()).tags(GameDcbTags.gameplay(gameId)),
+            DcbCriteria.type(PlayerWasAwardedPointsForGuessingTheRightWord::class.eventType()).tags(GameDcbTags.points(gameId)),
+            DcbCriteria.type(PlayerWasNotAwardedAnyPointsForGuessingTheRightWord::class.eventType()).tags(GameDcbTags.points(gameId))
     )
 
-    fun event(gameId: UUID, type: KClass<out GameEvent>): DcbQuery =
-            DcbQuery.type(type.eventType()).tags(GameDcbTags.game(gameId))
+    fun event(gameId: UUID, type: KClass<out GameEvent>): DcbCriteria =
+            DcbCriteria.type(type.eventType()).tags(GameDcbTags.game(gameId))
 
-    inline fun <reified E : GameEvent> event(gameId: UUID): DcbQuery = event(gameId, E::class)
+    inline fun <reified E : GameEvent> event(gameId: UUID): DcbCriteria = event(gameId, E::class)
 }

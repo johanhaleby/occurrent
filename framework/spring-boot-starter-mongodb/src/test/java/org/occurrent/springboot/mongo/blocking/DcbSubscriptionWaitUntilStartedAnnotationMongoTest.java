@@ -30,6 +30,7 @@ import org.occurrent.application.converter.jackson3.JacksonCloudEventConverter;
 import org.occurrent.application.converter.typemapper.CloudEventTypeMapper;
 import org.occurrent.application.converter.typemapper.ReflectionCloudEventTypeMapper;
 import org.occurrent.eventstore.api.dcb.DcbCloudEvents;
+import org.occurrent.eventstore.api.dcb.Tag;
 import org.occurrent.eventstore.api.dcb.DcbEventStore;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.autoconfigure.SpringBootApplication;
@@ -96,7 +97,7 @@ class DcbSubscriptionWaitUntilStartedAnnotationMongoTest {
         // By the time the context is up, WAIT_UNTIL_STARTED already forced the BEGINNING replay (of nothing, here)
         // and the live change stream to be fully attached, so this event, appended with no delay, is not missed.
         List<io.cloudevents.CloudEvent> cloudEvents = cloudEventConverter.toCloudEvents(Stream.of(new TestEvent("live-1")))
-                .map(ce -> DcbCloudEvents.withTags(ce, List.of(TAG)))
+                .map(ce -> DcbCloudEvents.withTags(ce, List.of(Tag.parse(TAG))))
                 .toList();
         dcbEventStore.append(cloudEvents);
 

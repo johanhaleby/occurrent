@@ -18,13 +18,14 @@ package org.occurrent.dsl.dcb.blocking;
 
 import org.jspecify.annotations.NullMarked;
 import org.jspecify.annotations.Nullable;
+import org.occurrent.dsl.dcb.DcbCriteriaBuilder;
 import org.occurrent.dsl.dcb.DcbDomainEventStream;
 import org.occurrent.dsl.query.blocking.DomainEventQueries;
 import org.occurrent.eventstore.api.SortBy;
 import org.occurrent.eventstore.api.blocking.EventStoreQueries;
 import org.occurrent.eventstore.api.dcb.DcbEventStore;
 import org.occurrent.eventstore.api.dcb.DcbEventStream;
-import org.occurrent.eventstore.api.dcb.DcbQuery;
+import org.occurrent.eventstore.api.dcb.DcbCriteria;
 import org.occurrent.eventstore.api.dcb.DcbReadOptions;
 import org.occurrent.filter.Filter;
 
@@ -38,7 +39,7 @@ import static java.util.Objects.requireNonNull;
  * Queries a DCB-capable event store and converts the matched CloudEvents into your domain event type.
  *
  * <p>This wraps a {@link DomainEventQueries} so a DCB application can use a single object for both DCB queries
- * (the {@link #query(DcbQuery)} family) and the regular stream-oriented queries (which are delegated to the
+ * (the {@link #query(DcbCriteria)} family) and the regular stream-oriented queries (which are delegated to the
  * wrapped {@link DomainEventQueries} unchanged). The wrapped instance must be backed by an event store that
  * also implements {@link DcbEventStore} (for example the in-memory event store, or the Spring MongoDB event
  * store with the DCB capability enabled); otherwise the constructor throws.</p>
@@ -61,6 +62,14 @@ public class DcbDomainEventQueries<E> {
         this.dcbEventStore = requireDcbEventStore(domainEventQueries);
     }
 
+    /**
+     * A {@link DcbCriteriaBuilder} bound to this instance's {@link org.occurrent.application.converter.CloudEventConverter},
+     * so criteria can be built from domain event classes (mapped to their CloudEvent type strings) rather than raw type strings.
+     */
+    public DcbCriteriaBuilder<E> criteria() {
+        return new DcbCriteriaBuilder<>(domainEventQueries.cloudEventConverter());
+    }
+
     // ------------------------------------------------------------------------------------------------------
     // DCB queries
     // ------------------------------------------------------------------------------------------------------
@@ -68,7 +77,7 @@ public class DcbDomainEventQueries<E> {
     /**
      * Queries matching DCB events from the beginning of the DCB sequence.
      */
-    public Stream<E> query(DcbQuery query) {
+    public Stream<E> query(DcbCriteria query) {
         return query(query, DcbReadOptions.fromBeginning());
     }
 
@@ -77,7 +86,7 @@ public class DcbDomainEventQueries<E> {
      * events lazily, so terminal short-circuiting operations such as {@code findFirst} or {@code limit} avoid
      * converting events that are never consumed.
      */
-    public Stream<E> query(DcbQuery query, DcbReadOptions options) {
+    public Stream<E> query(DcbCriteria query, DcbReadOptions options) {
         requireNonNull(query, "Query cannot be null");
         requireNonNull(options, "Read options cannot be null");
         return domainEventQueries.toDomainEvents(dcbEventStore.read(query, options).stream());
@@ -86,7 +95,7 @@ public class DcbDomainEventQueries<E> {
     /**
      * Queries matching DCB events and returns both the domain events and the observed DCB sequence position.
      */
-    public DcbDomainEventStream<E> queryWithPosition(DcbQuery query) {
+    public DcbDomainEventStream<E> queryWithPosition(DcbCriteria query) {
         return queryWithPosition(query, DcbReadOptions.fromBeginning());
     }
 
@@ -94,7 +103,7 @@ public class DcbDomainEventQueries<E> {
      * Queries matching DCB events using the supplied read options and returns the domain events, the observed DCB
      * sequence position, and the consistency token for a later conditional append.
      */
-    public DcbDomainEventStream<E> queryWithPosition(DcbQuery query, DcbReadOptions options) {
+    public DcbDomainEventStream<E> queryWithPosition(DcbCriteria query, DcbReadOptions options) {
         requireNonNull(query, "Query cannot be null");
         requireNonNull(options, "Read options cannot be null");
         DcbEventStream eventStream = dcbEventStore.read(query, options);

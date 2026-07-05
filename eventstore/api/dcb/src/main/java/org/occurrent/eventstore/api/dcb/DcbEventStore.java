@@ -36,19 +36,19 @@ public interface DcbEventStore {
     /**
      * Reads all events that match {@code query} from the beginning of the DCB sequence.
      */
-    default DcbEventStream read(DcbQuery query) {
+    default DcbEventStream read(DcbCriteria query) {
         return read(query, DcbReadOptions.fromBeginning());
     }
 
     /**
      * Reads events that match {@code query} using the supplied read options.
      */
-    DcbEventStream read(DcbQuery query, DcbReadOptions options);
+    DcbEventStream read(DcbCriteria query, DcbReadOptions options);
 
     /**
      * Returns whether any DCB event in the store matches {@code query}.
      */
-    default boolean exists(DcbQuery query) {
+    default boolean exists(DcbCriteria query) {
         return exists(query, DcbReadOptions.fromBeginning());
     }
 
@@ -58,7 +58,7 @@ public interface DcbEventStore {
      * The default implementation reads the matching events; implementations should override it with a more
      * efficient existence check.
      */
-    default boolean exists(DcbQuery query, DcbReadOptions options) {
+    default boolean exists(DcbCriteria query, DcbReadOptions options) {
         requireNonNull(query, "Query cannot be null");
         requireNonNull(options, "Read options cannot be null");
         return !read(query, options).events().isEmpty();
@@ -67,7 +67,7 @@ public interface DcbEventStore {
     /**
      * Returns the number of DCB events in the store that match {@code query}.
      */
-    default long count(DcbQuery query) {
+    default long count(DcbCriteria query) {
         return count(query, DcbReadOptions.fromBeginning());
     }
 
@@ -77,7 +77,7 @@ public interface DcbEventStore {
      * The default implementation reads the matching events; implementations should override it with a more
      * efficient count.
      */
-    default long count(DcbQuery query, DcbReadOptions options) {
+    default long count(DcbCriteria query, DcbReadOptions options) {
         requireNonNull(query, "Query cannot be null");
         requireNonNull(options, "Read options cannot be null");
         return read(query, options).events().size();

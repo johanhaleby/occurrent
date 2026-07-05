@@ -28,6 +28,7 @@ import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.Timeout;
 import org.junit.jupiter.api.extension.RegisterExtension;
 import org.occurrent.eventstore.api.dcb.DcbAppendCondition;
+import org.occurrent.eventstore.api.dcb.Tag;
 import org.occurrent.eventstore.api.dcb.DcbAppendConditionNotFulfilledException;
 import org.occurrent.eventstore.api.dcb.DcbCloudEvents;
 import org.occurrent.eventstore.api.dcb.DcbConsistencyToken;
@@ -51,7 +52,7 @@ import static java.util.Objects.requireNonNull;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.catchThrowable;
 import static org.occurrent.eventstore.api.dcb.DcbAppendCondition.failIfEventsMatch;
-import static org.occurrent.eventstore.api.dcb.DcbQuery.tags;
+import static org.occurrent.eventstore.api.dcb.DcbCriteria.tags;
 import static org.occurrent.eventstore.api.EventStoreCapability.DCB;
 import static org.occurrent.eventstore.api.EventStoreCapability.STREAM;
 
@@ -104,10 +105,10 @@ class SpringMongoEventStoreDcbUnconditionalMarkerTest {
 
     @Test
     void unconditional_append_is_detected_by_a_later_conditional_append_on_an_overlapping_tag() {
-        String tag = "shared-tag";
+        String tag = "shared:tag";
 
         // A command reads the (empty) boundary.
-        DcbConsistencyToken token = eventStore.read(tags(tag)).consistencyToken();
+        DcbConsistencyToken token = eventStore.read(tags(Tag.parse(tag))).consistencyToken();
 
         // An unconditional append commits a matching event.
         eventStore.append(List.of(taggedEvent("UnconditionalEvent", tag)));
@@ -116,7 +117,7 @@ class SpringMongoEventStoreDcbUnconditionalMarkerTest {
         // unconditional append committed a matching event, which (with the fix) advanced the tag marker so the token has
         // changed. Without event-derived markers on the unconditional path the marker never moves and this wrongly
         // succeeds (write skew).
-        DcbAppendCondition condition = failIfEventsMatch(tags(tag), token);
+        DcbAppendCondition condition = failIfEventsMatch(tags(Tag.parse(tag)), token);
         Throwable thrown = catchThrowable(() ->
                 eventStore.append(List.of(taggedEvent("ConditionalEvent", tag)), condition));
 
@@ -132,7 +133,7 @@ class SpringMongoEventStoreDcbUnconditionalMarkerTest {
     }
 
     private static CloudEvent taggedEvent(String type, String... tags) {
-        return DcbCloudEvents.withTags(event(type), Set.of(tags));
+        return DcbCloudEvents.withTags(event(type), java.util.Arrays.stream(tags).map(Tag::parse).toList());
     }
 
     private static CloudEvent event(String type) {

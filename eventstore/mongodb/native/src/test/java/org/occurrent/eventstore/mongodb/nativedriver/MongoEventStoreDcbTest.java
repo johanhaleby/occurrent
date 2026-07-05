@@ -51,7 +51,7 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.occurrent.eventstore.api.EventStoreCapability.DCB;
 import static org.occurrent.eventstore.api.EventStoreCapability.STREAM;
 import static org.occurrent.eventstore.api.dcb.DcbAppendCondition.failIfEventsMatch;
-import static org.occurrent.eventstore.api.dcb.DcbQuery.*;
+import static org.occurrent.eventstore.api.dcb.DcbCriteria.*;
 
 @Testcontainers
 @DisplayNameGeneration(ReplaceUnderscores.class)
@@ -99,8 +99,8 @@ class MongoEventStoreDcbTest {
         assertThat(eventStore.all(SortBy.natural(SortBy.SortDirection.ASCENDING)))
                 .extracting(CloudEvent::getType)
                 .containsExactly("NameDefined");
-        CloudEvent dcbEvent = eventStore.read(tags("name:1")).events().get(0);
-        assertThat(DcbCloudEvents.getTags(dcbEvent)).containsExactly("name:1");
+        CloudEvent dcbEvent = eventStore.read(tags(Tag.parse("name:1"))).events().get(0);
+        assertThat(DcbCloudEvents.getTags(dcbEvent)).containsExactly(Tag.parse("name:1"));
         assertThat(dcbEvent.getExtension(OccurrentCloudEventExtension.POSITION)).isEqualTo(1L);
     }
 
@@ -113,8 +113,8 @@ class MongoEventStoreDcbTest {
 
         DcbEventStream eventStream = eventStore.read(
                 anyOf(List.of(
-                        DcbQuery.types(List.of("OrderPlaced")),
-                        DcbQuery.tags(List.of("name:1", "tenant:1")))),
+                        DcbCriteria.types(List.of("OrderPlaced")),
+                        DcbCriteria.tags(List.of(Tag.parse("name:1"), Tag.parse("tenant:1"))))),
                 DcbReadOptions.afterPosition(1));
 
         assertThat(eventStream.events())
@@ -130,7 +130,7 @@ class MongoEventStoreDcbTest {
                 taggedEvent("NameSnapshot", "name:1"),
                 taggedEvent("OrderPlaced", "order:1")));
 
-        DcbEventStream eventStream = eventStore.read(tags(List.of("name:1")).excludingTypes(List.of("NameSnapshot")));
+        DcbEventStream eventStream = eventStore.read(tags(List.of(Tag.parse("name:1"))).excludingTypes(List.of("NameSnapshot")));
 
         assertThat(eventStream.events())
                 .extracting(CloudEvent::getType)
@@ -144,7 +144,7 @@ class MongoEventStoreDcbTest {
                 taggedEvent("NameChanged", "name:1"),
                 taggedEvent("OrderPlaced", "name:1")));
 
-        DcbEventStream eventStream = eventStore.read(types(List.of("NameDefined", "NameChanged")).tags(List.of("name:1")).excludingTypes(List.of("OrderPlaced")));
+        DcbEventStream eventStream = eventStore.read(types(List.of("NameDefined", "NameChanged")).tags(List.of(Tag.parse("name:1"))).excludingTypes(List.of("OrderPlaced")));
 
         assertThat(eventStream.events())
                 .extracting(CloudEvent::getType)
@@ -159,8 +159,8 @@ class MongoEventStoreDcbTest {
                 taggedEvent("OrderPlaced", "order:1")));
 
         DcbEventStream eventStream = eventStore.read(anyOf(List.of(
-                DcbQuery.tags(List.of("name:1")).excludingTypes(List.of("NameSnapshot")),
-                DcbQuery.tags(List.of("order:1")))));
+                DcbCriteria.tags(List.of(Tag.parse("name:1"))).excludingTypes(List.of("NameSnapshot")),
+                DcbCriteria.tags(List.of(Tag.parse("order:1"))))));
 
         assertThat(eventStream.events())
                 .extracting(CloudEvent::getType)
@@ -170,20 +170,20 @@ class MongoEventStoreDcbTest {
     @Test
     void rejects_append_when_matching_event_exists_after_condition_position() {
         eventStore.append(List.of(taggedEvent("NameDefined", "name:1")));
-        DcbEventStream readModel = eventStore.read(tags("name:1"));
+        DcbEventStream readModel = eventStore.read(tags(Tag.parse("name:1")));
 
         eventStore.append(List.of(taggedEvent("NameChanged", "name:1")));
 
         assertThatThrownBy(() -> eventStore.append(
                 List.of(taggedEvent("NameChanged", "name:1")),
-                failIfEventsMatch(tags("name:1"), readModel.consistencyToken())))
+                failIfEventsMatch(tags(Tag.parse("name:1")), readModel.consistencyToken())))
                 .isExactlyInstanceOf(DcbAppendConditionNotFulfilledException.class);
     }
 
     @Test
     void append_condition_conservatively_conflicts_on_an_excluded_type_sharing_a_tag() {
         eventStore.append(List.of(taggedEvent("NameDefined", "name:1")));
-        DcbQuery query = tags(List.of("name:1")).excludingTypes(List.of("NameSnapshot"));
+        DcbCriteria query = tags(List.of(Tag.parse("name:1"))).excludingTypes(List.of("NameSnapshot"));
         DcbEventStream readModel = eventStore.read(query);
 
         // An excluded-type event is appended after the read. It does not match the query (reads exclude it precisely,
@@ -202,7 +202,7 @@ class MongoEventStoreDcbTest {
     @Test
     void append_condition_rejects_non_excluded_event_types_after_condition_position() {
         eventStore.append(List.of(taggedEvent("NameDefined", "name:1")));
-        DcbQuery query = tags(List.of("name:1")).excludingTypes(List.of("NameSnapshot"));
+        DcbCriteria query = tags(List.of(Tag.parse("name:1"))).excludingTypes(List.of("NameSnapshot"));
         DcbEventStream readModel = eventStore.read(query);
 
         eventStore.append(List.of(taggedEvent("NameChanged", "name:1")));
@@ -215,19 +215,19 @@ class MongoEventStoreDcbTest {
 
     @Test
     void exists_and_count_honour_the_read_options_position_window() {
-        eventStore.append(List.of(taggedEvent("E", "t")));   // position 1
-        eventStore.append(List.of(taggedEvent("E", "t")));   // position 2
-        eventStore.append(List.of(taggedEvent("E", "t")));   // position 3
+        eventStore.append(List.of(taggedEvent("E", "t:1")));   // position 1
+        eventStore.append(List.of(taggedEvent("E", "t:1")));   // position 2
+        eventStore.append(List.of(taggedEvent("E", "t:1")));   // position 3
 
-        assertThat(eventStore.count(tags("t"))).isEqualTo(3);
-        assertThat(eventStore.count(tags("t"), DcbReadOptions.afterPosition(1))).isEqualTo(2);
-        assertThat(eventStore.count(tags("t"), DcbReadOptions.upToPosition(2))).isEqualTo(2);
-        assertThat(eventStore.count(tags("t"), DcbReadOptions.between(1, 2))).isEqualTo(1);
+        assertThat(eventStore.count(tags(Tag.parse("t:1")))).isEqualTo(3);
+        assertThat(eventStore.count(tags(Tag.parse("t:1")), DcbReadOptions.afterPosition(1))).isEqualTo(2);
+        assertThat(eventStore.count(tags(Tag.parse("t:1")), DcbReadOptions.upToPosition(2))).isEqualTo(2);
+        assertThat(eventStore.count(tags(Tag.parse("t:1")), DcbReadOptions.between(1, 2))).isEqualTo(1);
 
-        assertThat(eventStore.exists(tags("t"))).isTrue();
-        assertThat(eventStore.exists(tags("t"), DcbReadOptions.between(2, 3))).isTrue();
-        assertThat(eventStore.exists(tags("t"), DcbReadOptions.afterPosition(3))).isFalse();
-        assertThat(eventStore.exists(tags("missing"))).isFalse();
+        assertThat(eventStore.exists(tags(Tag.parse("t:1")))).isTrue();
+        assertThat(eventStore.exists(tags(Tag.parse("t:1")), DcbReadOptions.between(2, 3))).isTrue();
+        assertThat(eventStore.exists(tags(Tag.parse("t:1")), DcbReadOptions.afterPosition(3))).isFalse();
+        assertThat(eventStore.exists(tags(Tag.parse("missing:1")))).isFalse();
     }
 
     @Test
@@ -252,7 +252,7 @@ class MongoEventStoreDcbTest {
 
     @Test
     void no_token_append_condition_reflects_current_existence_not_past_appends() {
-        DcbQuery query = tags("name:1");
+        DcbCriteria query = tags(Tag.parse("name:1"));
         CloudEvent existing = taggedEvent("NameDefined", "name:1");
         eventStore.append(List.of(existing));
 
@@ -285,8 +285,8 @@ class MongoEventStoreDcbTest {
 
     @Test
     void same_stale_append_condition_rejects_second_append_and_abandons_its_position_block() {
-        DcbEventStream readModel = eventStore.read(tags("name:1"));
-        DcbAppendCondition appendCondition = failIfEventsMatch(tags("name:1"), readModel.consistencyToken());
+        DcbEventStream readModel = eventStore.read(tags(Tag.parse("name:1")));
+        DcbAppendCondition appendCondition = failIfEventsMatch(tags(Tag.parse("name:1")), readModel.consistencyToken());
 
         DcbAppendResult firstAppend = eventStore.append(List.of(taggedEvent("NameDefined", "name:1")), appendCondition);
         assertThat(firstAppend).isEqualTo(new DcbAppendResult(1, 1, 1));
@@ -305,12 +305,12 @@ class MongoEventStoreDcbTest {
         CloudEvent cloudEvent = DcbCloudEvents.withTags(CloudEventBuilder.v1(event("NameDefined"))
                 .withDataContentType("application/json")
                 .withData("{\"tags\":[\"name:1\"]}".getBytes(UTF_8))
-                .build(), Set.of("name:2"));
+                .build(), Set.of(Tag.parse("name:2")));
 
         eventStore.append(List.of(cloudEvent));
 
-        assertThat(eventStore.read(tags("name:1")).events()).isEmpty();
-        assertThat(eventStore.read(tags("name:2")).events()).hasSize(1);
+        assertThat(eventStore.read(tags(Tag.parse("name:1"))).events()).isEmpty();
+        assertThat(eventStore.read(tags(Tag.parse("name:2"))).events()).hasSize(1);
     }
 
     @Test
@@ -321,12 +321,12 @@ class MongoEventStoreDcbTest {
                 taggedEvent("OrderPlaced", "name:2")));
 
         // The query matches only the two "name:1" events (positions 1 and 2), but the store head is 3.
-        DcbEventStream matchesSome = eventStore.read(tags("name:1"));
+        DcbEventStream matchesSome = eventStore.read(tags(Tag.parse("name:1")));
         assertThat(matchesSome.events()).extracting(CloudEvent::getType).containsExactly("NameDefined", "NameChanged");
         assertThat(matchesSome.lastSequencePosition()).isEqualTo(3);
 
         // A query that matches nothing still observes the store head.
-        DcbEventStream matchesNone = eventStore.read(tags("name:absent"));
+        DcbEventStream matchesNone = eventStore.read(tags(Tag.parse("name:absent")));
         assertThat(matchesNone.events()).isEmpty();
         assertThat(matchesNone.lastSequencePosition()).isEqualTo(3);
     }
@@ -338,9 +338,9 @@ class MongoEventStoreDcbTest {
                 taggedEvent("NameChanged", "name:1"),
                 taggedEvent("OrderPlaced", "order:1")));
 
-        assertThat(eventStore.exists(tags("name:1"))).isTrue();
-        assertThat(eventStore.exists(tags("absent:1"))).isFalse();
-        assertThat(eventStore.count(tags("name:1"))).isEqualTo(2);
+        assertThat(eventStore.exists(tags(Tag.parse("name:1")))).isTrue();
+        assertThat(eventStore.exists(tags(Tag.parse("absent:1")))).isFalse();
+        assertThat(eventStore.count(tags(Tag.parse("name:1")))).isEqualTo(2);
         assertThat(eventStore.count(all())).isEqualTo(3);
     }
 
@@ -351,14 +351,14 @@ class MongoEventStoreDcbTest {
                 taggedEvent("NameChanged", "name:1"),
                 taggedEvent("OrderPlaced", "name:1")));
 
-        DcbEventStream upToTwo = eventStore.read(tags("name:1"), DcbReadOptions.upToPosition(2));
+        DcbEventStream upToTwo = eventStore.read(tags(Tag.parse("name:1")), DcbReadOptions.upToPosition(2));
 
         assertThat(upToTwo.events()).extracting(CloudEvent::getType).containsExactly("NameDefined", "NameChanged");
         assertThat(upToTwo.lastSequencePosition()).isEqualTo(3);
     }
 
     private static CloudEvent taggedEvent(String type, String... tags) {
-        return DcbCloudEvents.withTags(event(type), Set.of(tags));
+        return DcbCloudEvents.withTags(event(type), java.util.Arrays.stream(tags).map(Tag::parse).toList());
     }
 
     private static CloudEvent event(String type) {

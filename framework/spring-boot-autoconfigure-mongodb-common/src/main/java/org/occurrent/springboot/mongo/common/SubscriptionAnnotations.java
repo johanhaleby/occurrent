@@ -26,7 +26,8 @@ import org.occurrent.annotation.StreamSubscription.StartupMode;
 import org.occurrent.annotation.Subscription;
 import org.occurrent.dsl.dcb.DcbEventMetadata;
 import org.occurrent.dsl.subscription.EventMetadata;
-import org.occurrent.eventstore.api.dcb.DcbQuery;
+import org.occurrent.eventstore.api.dcb.DcbCriteria;
+import org.occurrent.eventstore.api.dcb.Tag;
 
 import java.lang.reflect.Method;
 import java.lang.reflect.Modifier;
@@ -121,17 +122,17 @@ public final class SubscriptionAnnotations {
                 .toList();
     }
 
-    public static DcbQuery buildDcbQuery(List<String> cloudEventTypes, List<String> tagsAllOf) {
+    public static DcbCriteria buildDcbCriteria(List<String> cloudEventTypes, List<Tag> tagsAllOf) {
         boolean hasTypes = !cloudEventTypes.isEmpty();
         boolean hasTags = !tagsAllOf.isEmpty();
         if (!hasTypes && !hasTags) {
-            return DcbQuery.all();
+            return DcbCriteria.all();
         } else if (hasTypes && hasTags) {
-            return DcbQuery.types(cloudEventTypes.get(0), cloudEventTypes.stream().skip(1).toArray(String[]::new)).tags(tagsAllOf);
+            return DcbCriteria.types(cloudEventTypes.get(0), cloudEventTypes.stream().skip(1).toArray(String[]::new)).tags(tagsAllOf);
         } else if (hasTypes) {
-            return DcbQuery.types(cloudEventTypes.get(0), cloudEventTypes.stream().skip(1).toArray(String[]::new));
+            return DcbCriteria.types(cloudEventTypes.get(0), cloudEventTypes.stream().skip(1).toArray(String[]::new));
         } else {
-            return DcbQuery.tags(tagsAllOf.get(0), tagsAllOf.stream().skip(1).toArray(String[]::new));
+            return DcbCriteria.tags(tagsAllOf);
         }
     }
 

@@ -63,7 +63,7 @@ import static org.junit.jupiter.api.Assertions.assertAll;
 import static org.occurrent.eventstore.api.EventStoreCapability.DCB;
 import static org.occurrent.eventstore.api.EventStoreCapability.STREAM;
 import static org.occurrent.eventstore.api.dcb.DcbAppendCondition.failIfEventsMatch;
-import static org.occurrent.eventstore.api.dcb.DcbQuery.*;
+import static org.occurrent.eventstore.api.dcb.DcbCriteria.*;
 
 @Testcontainers
 @DisplayNameGeneration(ReplaceUnderscores.class)
@@ -112,10 +112,10 @@ class ReactorMongoEventStoreDcbTest {
     void dcb_write_is_readable_by_tag_and_carries_position() {
         eventStore.append(List.of(taggedEvent("NameDefined", "name:1"))).block();
 
-        DcbEventStream stream = requireNonNull(eventStore.read(tags("name:1")).block());
+        DcbEventStream stream = requireNonNull(eventStore.read(tags(Tag.parse("name:1"))).block());
         assertAll(
                 () -> assertThat(stream.events()).extracting(CloudEvent::getType).containsExactly("NameDefined"),
-                () -> assertThat(DcbCloudEvents.getTags(stream.events().get(0))).containsExactly("name:1"),
+                () -> assertThat(DcbCloudEvents.getTags(stream.events().get(0))).containsExactly(Tag.parse("name:1")),
                 () -> assertThat(stream.events().get(0).getExtension(OccurrentCloudEventExtension.POSITION)).isEqualTo(1L),
                 () -> assertThat(stream.lastSequencePosition()).isEqualTo(1)
         );
@@ -129,7 +129,7 @@ class ReactorMongoEventStoreDcbTest {
                 taggedEvent("OrderPlaced", "order:1"))).block();
 
         DcbEventStream stream = requireNonNull(eventStore.read(
-                anyOf(List.of(types(List.of("OrderPlaced")), tags(List.of("name:1", "tenant:1")))),
+                anyOf(List.of(types(List.of("OrderPlaced")), tags(List.of(Tag.parse("name:1"), Tag.parse("tenant:1"))))),
                 DcbReadOptions.afterPosition(1)).block());
 
         assertAll(
@@ -145,7 +145,7 @@ class ReactorMongoEventStoreDcbTest {
                 taggedEvent("NameSnapshot", "name:1"),
                 taggedEvent("OrderPlaced", "order:1"))).block();
 
-        DcbEventStream stream = eventStore.read(tags(List.of("name:1")).excludingTypes(List.of("NameSnapshot"))).block();
+        DcbEventStream stream = eventStore.read(tags(List.of(Tag.parse("name:1"))).excludingTypes(List.of("NameSnapshot"))).block();
 
         assertThat(requireNonNull(stream).events()).extracting(CloudEvent::getType).containsExactly("NameDefined");
     }
@@ -153,25 +153,25 @@ class ReactorMongoEventStoreDcbTest {
     @Test
     void conditional_append_with_stale_token_is_rejected() {
         eventStore.append(List.of(taggedEvent("NameDefined", "name:1"))).block();
-        DcbEventStream readModel = eventStore.read(tags("name:1")).block();
+        DcbEventStream readModel = eventStore.read(tags(Tag.parse("name:1"))).block();
 
         // Another append on the same boundary advances the marker.
         eventStore.append(List.of(taggedEvent("NameChanged", "name:1"))).block();
 
         StepVerifier.create(eventStore.append(
                         List.of(taggedEvent("NameChanged", "name:1")),
-                        failIfEventsMatch(tags("name:1"), requireNonNull(readModel).consistencyToken())))
+                        failIfEventsMatch(tags(Tag.parse("name:1")), requireNonNull(readModel).consistencyToken())))
                 .expectError(DcbAppendConditionNotFulfilledException.class)
                 .verify();
     }
 
     @Test
     void conditional_append_with_fresh_token_succeeds() {
-        DcbEventStream readModel = eventStore.read(tags("name:1")).block();
+        DcbEventStream readModel = eventStore.read(tags(Tag.parse("name:1"))).block();
 
         DcbAppendResult result = eventStore.append(
                 List.of(taggedEvent("NameDefined", "name:1")),
-                failIfEventsMatch(tags("name:1"), requireNonNull(readModel).consistencyToken())).block();
+                failIfEventsMatch(tags(Tag.parse("name:1")), requireNonNull(readModel).consistencyToken())).block();
 
         assertThat(requireNonNull(result).firstSequencePosition()).isEqualTo(1);
     }
@@ -182,7 +182,7 @@ class ReactorMongoEventStoreDcbTest {
 
         StepVerifier.create(eventStore.append(
                         List.of(taggedEvent("NameChanged", "name:1")),
-                        failIfEventsMatch(tags("name:1"))))
+                        failIfEventsMatch(tags(Tag.parse("name:1")))))
                 .expectError(DcbAppendConditionNotFulfilledException.class)
                 .verify();
     }
@@ -190,14 +190,14 @@ class ReactorMongoEventStoreDcbTest {
     @Test
     void unconditional_append_makes_a_concurrent_conditional_append_on_the_same_tag_fail() {
         // Read the boundary while empty: token is 0.
-        DcbEventStream readModel = eventStore.read(tags("name:1")).block();
+        DcbEventStream readModel = eventStore.read(tags(Tag.parse("name:1"))).block();
 
         // An unconditional append must still bump the tag marker, so the stale-token conditional append below is rejected.
         eventStore.append(List.of(taggedEvent("NameDefined", "name:1"))).block();
 
         StepVerifier.create(eventStore.append(
                         List.of(taggedEvent("NameChanged", "name:1")),
-                        failIfEventsMatch(tags("name:1"), requireNonNull(readModel).consistencyToken())))
+                        failIfEventsMatch(tags(Tag.parse("name:1")), requireNonNull(readModel).consistencyToken())))
                 .expectError(DcbAppendConditionNotFulfilledException.class)
                 .verify();
     }
@@ -209,8 +209,8 @@ class ReactorMongoEventStoreDcbTest {
                 taggedEvent("OrderPlaced", "order:1"))).block();
 
         assertAll(
-                () -> assertThat(eventStore.exists(tags("name:1")).block()).isTrue(),
-                () -> assertThat(eventStore.exists(tags("missing:1")).block()).isFalse(),
+                () -> assertThat(eventStore.exists(tags(Tag.parse("name:1"))).block()).isTrue(),
+                () -> assertThat(eventStore.exists(tags(Tag.parse("missing:1"))).block()).isFalse(),
                 () -> assertThat(eventStore.count(types(List.of("NameDefined", "OrderPlaced"))).block()).isEqualTo(2L)
         );
     }
@@ -264,7 +264,7 @@ class ReactorMongoEventStoreDcbTest {
         int iterations = 3;
 
         for (int i = 0; i < iterations; i++) {
-            String tag = "contention-" + i;
+            Tag tag = Tag.of("contention", String.valueOf(i));
             DcbConsistencyToken boundaryToken = requireNonNull(eventStore.read(tags(tag)).block()).consistencyToken();
             DcbAppendCondition condition = failIfEventsMatch(tags(tag), boundaryToken);
 
@@ -279,7 +279,7 @@ class ReactorMongoEventStoreDcbTest {
                 futures.add(pool.submit(() -> {
                     barrier.await();
                     try {
-                        eventStore.append(List.of(taggedEvent("SomeEvent", tag)), condition).block();
+                        eventStore.append(List.of(taggedEvent("SomeEvent", tag.canonical())), condition).block();
                         successCount.incrementAndGet();
                     } catch (DcbAppendConditionNotFulfilledException e) {
                         condFailCount.incrementAndGet();
@@ -321,7 +321,7 @@ class ReactorMongoEventStoreDcbTest {
     }
 
     private static CloudEvent taggedEvent(String type, String... tags) {
-        return DcbCloudEvents.withTags(event(type), Set.of(tags));
+        return DcbCloudEvents.withTags(event(type), java.util.Arrays.stream(tags).map(Tag::parse).toList());
     }
 
     private static CloudEvent event(String type) {

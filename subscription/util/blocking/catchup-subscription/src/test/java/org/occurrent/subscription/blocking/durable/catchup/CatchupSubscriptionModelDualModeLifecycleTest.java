@@ -24,10 +24,11 @@ import org.junit.jupiter.api.Test;
 import org.occurrent.eventstore.api.SortBy;
 import org.occurrent.eventstore.api.blocking.EventStoreQueries;
 import org.occurrent.eventstore.api.dcb.DcbAppendCondition;
+import org.occurrent.eventstore.api.dcb.Tag;
 import org.occurrent.eventstore.api.dcb.DcbAppendResult;
 import org.occurrent.eventstore.api.dcb.DcbEventStore;
 import org.occurrent.eventstore.api.dcb.DcbEventStream;
-import org.occurrent.eventstore.api.dcb.DcbQuery;
+import org.occurrent.eventstore.api.dcb.DcbCriteria;
 import org.occurrent.eventstore.api.dcb.DcbReadOptions;
 import org.occurrent.filter.Filter;
 import org.occurrent.subscription.StartAt;
@@ -78,7 +79,7 @@ class CatchupSubscriptionModelDualModeLifecycleTest {
     }
 
     private static CatchupSubscriptionModel dualMode(CheckpointAwareSubscriptionModel delegate) {
-        return new CatchupSubscriptionModel(delegate, new UnusedEventStoreQueries(), new UnusedDcbEventStore(), DcbQuery.tags("name:1"), new CatchupSubscriptionModelConfig(1));
+        return new CatchupSubscriptionModel(delegate, new UnusedEventStoreQueries(), new UnusedDcbEventStore(), DcbCriteria.tags(Tag.parse("name:1")), new CatchupSubscriptionModelConfig(1));
     }
 
     /**
@@ -176,7 +177,7 @@ class CatchupSubscriptionModelDualModeLifecycleTest {
     // Never actually read from since these tests only exercise cancelSubscription/shutdown, not subscribe.
     private static final class UnusedDcbEventStore implements DcbEventStore {
         @Override
-        public DcbEventStream read(DcbQuery query, DcbReadOptions options) {
+        public DcbEventStream read(DcbCriteria query, DcbReadOptions options) {
             throw new AssertionError("read must not be called by this test");
         }
 

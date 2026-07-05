@@ -32,6 +32,7 @@ import org.occurrent.domain.DomainEvent;
 import org.occurrent.domain.NameDefined;
 import org.occurrent.domain.NameWasChanged;
 import org.occurrent.eventstore.api.dcb.DcbCloudEvents;
+import org.occurrent.eventstore.api.dcb.Tag;
 import org.occurrent.eventstore.mongodb.spring.blocking.EventStoreConfig;
 import org.occurrent.eventstore.mongodb.spring.blocking.SpringMongoEventStore;
 import org.occurrent.filter.Filter;
@@ -155,13 +156,13 @@ public class SpringMongoSubscriptionModelTest {
 
         // When
         mongoEventStore.append(serialize(nameDefined)
-                .map(event -> DcbCloudEvents.withTags(event, List.of("name:1")))
+                .map(event -> DcbCloudEvents.withTags(event, List.of(Tag.parse("name:1"))))
                 .toList());
 
         // Then
         await().atMost(2, SECONDS).with().pollInterval(Duration.of(20, MILLIS)).untilAsserted(() -> {
             assertThat(state).hasSize(1);
-            assertThat(DcbCloudEvents.getTags(state.get(0))).containsExactly("name:1");
+            assertThat(DcbCloudEvents.getTags(state.get(0))).containsExactly(Tag.parse("name:1"));
             assertThat(OccurrentCloudEventExtension.getPosition(state.get(0))).isPositive();
         });
     }

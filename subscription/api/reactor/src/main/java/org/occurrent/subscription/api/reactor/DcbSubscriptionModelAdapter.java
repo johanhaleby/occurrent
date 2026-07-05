@@ -19,7 +19,7 @@ package org.occurrent.subscription.api.reactor;
 import io.cloudevents.CloudEvent;
 import org.jspecify.annotations.NullMarked;
 import org.occurrent.eventstore.api.dcb.DcbCloudEvents;
-import org.occurrent.eventstore.api.dcb.DcbQuery;
+import org.occurrent.eventstore.api.dcb.DcbCriteria;
 import org.occurrent.subscription.DcbStartAt;
 import org.occurrent.subscription.DcbSubscriptionFilter;
 import reactor.core.publisher.Flux;
@@ -48,8 +48,8 @@ final class DcbSubscriptionModelAdapter implements DcbSubscriptionModel {
     }
 
     @Override
-    public Flux<CloudEvent> subscribe(DcbQuery query, DcbStartAt startAt) {
-        requireNonNull(query, "Query cannot be null");
+    public Flux<CloudEvent> subscribe(DcbCriteria query, DcbStartAt startAt) {
+        requireNonNull(query, "Criteria cannot be null");
         requireNonNull(startAt, DcbStartAt.class.getSimpleName() + " cannot be null");
         // The DcbSubscriptionFilter is honored server-side for live delivery. The in-process check keeps the
         // subscription scoped to its own query for any backend that does not honor the filter, matching the blocking
@@ -59,9 +59,9 @@ final class DcbSubscriptionModelAdapter implements DcbSubscriptionModel {
     }
 
     @Override
-    public Subscription subscribe(String subscriptionId, DcbQuery query, DcbStartAt startAt, Function<CloudEvent, Mono<Void>> action) {
+    public Subscription subscribe(String subscriptionId, DcbCriteria query, DcbStartAt startAt, Function<CloudEvent, Mono<Void>> action) {
         requireNonNull(subscriptionId, "Subscription id cannot be null");
-        requireNonNull(query, "Query cannot be null");
+        requireNonNull(query, "Criteria cannot be null");
         requireNonNull(startAt, DcbStartAt.class.getSimpleName() + " cannot be null");
         requireNonNull(action, "Subscription action cannot be null");
         if (!(delegate instanceof Subscribable subscribable)) {

@@ -29,7 +29,8 @@ import org.occurrent.application.converter.jackson.JacksonCloudEventConverter;
 import org.occurrent.domain.DomainEvent;
 import org.occurrent.domain.NameDefined;
 import org.occurrent.eventstore.api.dcb.DcbCloudEvents;
-import org.occurrent.eventstore.api.dcb.DcbQuery;
+import org.occurrent.eventstore.api.dcb.Tag;
+import org.occurrent.eventstore.api.dcb.DcbCriteria;
 import org.occurrent.eventstore.inmemory.InMemoryEventStore;
 import org.occurrent.subscription.GlobalCheckpoint;
 import org.occurrent.subscription.StartAt;
@@ -100,7 +101,7 @@ class DcbCatchupSubscriptionModelTest {
         appendTagged("name:1", name3);
 
         CopyOnWriteArrayList<DomainEvent> received = new CopyOnWriteArrayList<>();
-        CatchupSubscriptionModel subscription = new CatchupSubscriptionModel(subscriptionModel, eventStore, DcbQuery.tags("name:1"));
+        CatchupSubscriptionModel subscription = new CatchupSubscriptionModel(subscriptionModel, eventStore, DcbCriteria.tags(Tag.parse("name:1")));
 
         subscription.subscribe("subscription", StartAt.checkpoint(GlobalCheckpoint.of(0)), toDomainEvents(received)).waitUntilStarted();
 
@@ -115,7 +116,7 @@ class DcbCatchupSubscriptionModelTest {
         appendTagged("name:1", historic2);
 
         CopyOnWriteArrayList<DomainEvent> received = new CopyOnWriteArrayList<>();
-        CatchupSubscriptionModel subscription = new CatchupSubscriptionModel(subscriptionModel, eventStore, DcbQuery.tags("name:1"));
+        CatchupSubscriptionModel subscription = new CatchupSubscriptionModel(subscriptionModel, eventStore, DcbCriteria.tags(Tag.parse("name:1")));
 
         subscription.subscribe("subscription", StartAt.checkpoint(GlobalCheckpoint.of(0)), toDomainEvents(received)).waitUntilStarted();
         await().untilAsserted(() -> assertThat(received).containsExactly(historic1, historic2));
@@ -142,7 +143,7 @@ class DcbCatchupSubscriptionModelTest {
         appendTagged("name:1", position3); // position 3
 
         CopyOnWriteArrayList<DomainEvent> received = new CopyOnWriteArrayList<>();
-        CatchupSubscriptionModel subscription = new CatchupSubscriptionModel(subscriptionModel, eventStore, DcbQuery.tags("name:1"));
+        CatchupSubscriptionModel subscription = new CatchupSubscriptionModel(subscriptionModel, eventStore, DcbCriteria.tags(Tag.parse("name:1")));
 
         subscription.subscribe("subscription", StartAt.checkpoint(GlobalCheckpoint.of(2)), toDomainEvents(received)).waitUntilStarted();
 
@@ -159,7 +160,7 @@ class DcbCatchupSubscriptionModelTest {
         storage.save("subscription", GlobalCheckpoint.of(1));
 
         CopyOnWriteArrayList<DomainEvent> received = new CopyOnWriteArrayList<>();
-        CatchupSubscriptionModel subscription = new CatchupSubscriptionModel(subscriptionModel, eventStore, DcbQuery.tags("name:1"),
+        CatchupSubscriptionModel subscription = new CatchupSubscriptionModel(subscriptionModel, eventStore, DcbCriteria.tags(Tag.parse("name:1")),
                 new CatchupSubscriptionModelConfig(useCheckpointStorage(storage).andPersistCheckpointDuringCatchupPhaseForEveryNEvents(1)));
 
         subscription.subscribe("subscription", StartAt.subscriptionModelDefault(), toDomainEvents(received)).waitUntilStarted();
@@ -170,7 +171,7 @@ class DcbCatchupSubscriptionModelTest {
     @Test
     void live_only_subscription_applies_the_dcb_query_post_filter() {
         CopyOnWriteArrayList<DomainEvent> received = new CopyOnWriteArrayList<>();
-        CatchupSubscriptionModel subscription = new CatchupSubscriptionModel(subscriptionModel, eventStore, DcbQuery.tags("name:1"));
+        CatchupSubscriptionModel subscription = new CatchupSubscriptionModel(subscriptionModel, eventStore, DcbCriteria.tags(Tag.parse("name:1")));
 
         // Default start with nothing stored subscribes live (no replay), mirroring the stream path.
         subscription.subscribe("subscription", StartAt.subscriptionModelDefault(), toDomainEvents(received)).waitUntilStarted();
@@ -189,7 +190,7 @@ class DcbCatchupSubscriptionModelTest {
 
         CopyOnWriteArrayList<DomainEvent> received = new CopyOnWriteArrayList<>();
         // A window of 2 positions forces the replay to page across several windows to cover all five events.
-        CatchupSubscriptionModel subscription = new CatchupSubscriptionModel(subscriptionModel, eventStore, DcbQuery.tags("name:1"),
+        CatchupSubscriptionModel subscription = new CatchupSubscriptionModel(subscriptionModel, eventStore, DcbCriteria.tags(Tag.parse("name:1")),
                 new CatchupSubscriptionModelConfig(100).dcbCatchupPositionWindowSize(2));
 
         subscription.subscribe("subscription", StartAt.checkpoint(GlobalCheckpoint.of(0)), toDomainEvents(received)).waitUntilStarted();
@@ -207,7 +208,7 @@ class DcbCatchupSubscriptionModelTest {
 
     private void appendTagged(String tag, DomainEvent... events) {
         List<CloudEvent> cloudEvents = cloudEventConverter.toCloudEvents(Stream.of(events))
-                .map(event -> DcbCloudEvents.withTags(event, List.of(tag)))
+                .map(event -> DcbCloudEvents.withTags(event, List.of(Tag.parse(tag))))
                 .toList();
         eventStore.append(cloudEvents);
     }

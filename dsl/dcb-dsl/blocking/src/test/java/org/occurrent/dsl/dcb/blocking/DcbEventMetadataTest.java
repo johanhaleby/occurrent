@@ -22,6 +22,7 @@ import org.junit.jupiter.api.Test;
 import org.occurrent.dsl.dcb.DcbEventMetadata;
 import org.occurrent.dsl.subscription.EventMetadata;
 import org.occurrent.eventstore.api.dcb.DcbCloudEvents;
+import org.occurrent.eventstore.api.dcb.Tag;
 
 import java.util.Map;
 import java.util.Set;
@@ -50,16 +51,16 @@ class DcbEventMetadataTest {
 
     @Test
     void position_is_empty_when_absent() {
-        EventMetadata metadata = new EventMetadata(Map.of(DcbCloudEvents.TAGS, DcbCloudEvents.encodeTags(Set.of("name:1"))));
+        EventMetadata metadata = new EventMetadata(Map.of(DcbCloudEvents.TAGS, DcbCloudEvents.encodeTags(Set.of(Tag.of("name", "1")))));
 
         assertThat(DcbEventMetadata.from(metadata).position()).isEmpty();
     }
 
     @Test
     void reads_and_canonicalizes_tags() {
-        EventMetadata metadata = new EventMetadata(Map.of(DcbCloudEvents.TAGS, DcbCloudEvents.encodeTags(Set.of("name:1", "tenant:2"))));
+        EventMetadata metadata = new EventMetadata(Map.of(DcbCloudEvents.TAGS, DcbCloudEvents.encodeTags(Set.of(Tag.of("name", "1"), Tag.of("tenant", "2")))));
 
-        assertThat(DcbEventMetadata.from(metadata).dcbTags()).containsExactlyInAnyOrder("name:1", "tenant:2");
+        assertThat(DcbEventMetadata.from(metadata).dcbTags()).containsExactlyInAnyOrder(Tag.of("name", "1"), Tag.of("tenant", "2"));
     }
 
     @Test

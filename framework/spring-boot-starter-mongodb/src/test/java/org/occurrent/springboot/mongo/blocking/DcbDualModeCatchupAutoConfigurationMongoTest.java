@@ -31,8 +31,9 @@ import org.occurrent.application.service.blocking.ApplicationService;
 import org.occurrent.application.service.dcb.TagGenerator;
 import org.occurrent.dsl.dcb.blocking.DcbSubscriptions;
 import org.occurrent.eventstore.api.dcb.DcbCloudEvents;
+import org.occurrent.eventstore.api.dcb.Tag;
 import org.occurrent.eventstore.api.dcb.DcbEventStore;
-import org.occurrent.eventstore.api.dcb.DcbQuery;
+import org.occurrent.eventstore.api.dcb.DcbCriteria;
 import org.occurrent.subscription.DcbStartAt;
 import org.occurrent.subscription.api.blocking.SubscriptionModel;
 import org.occurrent.subscription.blocking.durable.catchup.StartAtTime;
@@ -141,7 +142,7 @@ class DcbDualModeCatchupAutoConfigurationMongoTest {
         dcbSubscriptions
                 .subscribe(
                         "dcb-catchup-" + UUID.randomUUID(),
-                        DcbQuery.tags(DCB_TAG),
+                        DcbCriteria.tags(Tag.parse(DCB_TAG)),
                         DcbStartAt.beginning(),
                         received::add)
                 .waitUntilStarted();
@@ -176,7 +177,7 @@ class DcbDualModeCatchupAutoConfigurationMongoTest {
         dcbSubscriptions
                 .subscribe(
                         "both-dcb-" + UUID.randomUUID(),
-                        DcbQuery.tags(DCB_TAG),
+                        DcbCriteria.tags(Tag.parse(DCB_TAG)),
                         DcbStartAt.beginning(),
                         dcbReceived::add)
                 .waitUntilStarted();
@@ -202,7 +203,7 @@ class DcbDualModeCatchupAutoConfigurationMongoTest {
         dcbSubscriptions
                 .subscribe(
                         "isolation-dcb-" + UUID.randomUUID(),
-                        DcbQuery.tags(DCB_TAG),
+                        DcbCriteria.tags(Tag.parse(DCB_TAG)),
                         DcbStartAt.beginning(),
                         dcbReceived::add)
                 .waitUntilStarted();
@@ -223,7 +224,7 @@ class DcbDualModeCatchupAutoConfigurationMongoTest {
         dcbSubscriptions
                 .subscribe(
                         "live-dcb-" + UUID.randomUUID(),
-                        DcbQuery.tags(DCB_TAG),
+                        DcbCriteria.tags(Tag.parse(DCB_TAG)),
                         DcbStartAt.beginning(),
                         received::add)
                 .waitUntilStarted();
@@ -259,7 +260,7 @@ class DcbDualModeCatchupAutoConfigurationMongoTest {
 
     private void appendDcb(TestEvent... events) {
         List<CloudEvent> cloudEvents = cloudEventConverter.toCloudEvents(Stream.of(events))
-                .map(ce -> DcbCloudEvents.withTags(ce, List.of(DCB_TAG)))
+                .map(ce -> DcbCloudEvents.withTags(ce, List.of(Tag.parse(DCB_TAG))))
                 .toList();
         dcbEventStore.append(cloudEvents);
     }
@@ -297,7 +298,7 @@ class DcbDualModeCatchupAutoConfigurationMongoTest {
 
         @Bean
         TagGenerator<TestEvent> testEventTagGenerator() {
-            return event -> Set.of(event.kind());
+            return event -> Set.of(Tag.parse(event.kind()));
         }
     }
 

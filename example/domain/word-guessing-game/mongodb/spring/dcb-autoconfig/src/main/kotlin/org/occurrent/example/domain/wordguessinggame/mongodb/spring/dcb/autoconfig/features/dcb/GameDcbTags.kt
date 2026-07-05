@@ -16,11 +16,12 @@
 
 package org.occurrent.example.domain.wordguessinggame.mongodb.spring.dcb.autoconfig.features.dcb
 
+import org.occurrent.eventstore.api.dcb.Tag
 import java.util.UUID
 
 internal object GameDcbTags {
-    fun game(gameId: UUID): String = "game:$gameId"
-    fun gameplay(gameId: UUID): String = "gameplay:$gameId"
-    fun wordHint(gameId: UUID): String = "wordhint:$gameId"
-    fun points(gameId: UUID): String = "points:$gameId"
+    fun game(gameId: UUID): Tag = Tag.of("game", gameId.toString())
+    fun gameplay(gameId: UUID): Tag = Tag.of("gameplay", gameId.toString())
+    fun wordHint(gameId: UUID): Tag = Tag.of("wordhint", gameId.toString())
+    fun points(gameId: UUID): Tag = Tag.of("points", gameId.toString())
 }

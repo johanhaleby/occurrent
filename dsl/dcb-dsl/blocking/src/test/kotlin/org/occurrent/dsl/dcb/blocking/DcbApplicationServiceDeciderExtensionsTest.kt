@@ -32,7 +32,8 @@ import org.occurrent.domain.NameWasChanged
 import org.occurrent.dsl.decider.Decider
 import org.occurrent.dsl.decider.decider
 import org.occurrent.eventstore.api.dcb.DcbCloudEvents
-import org.occurrent.eventstore.api.dcb.DcbQuery
+import org.occurrent.eventstore.api.dcb.DcbCriteria
+import org.occurrent.eventstore.api.dcb.Tag
 import org.occurrent.eventstore.inmemory.InMemoryEventStore
 import java.net.URI
 import java.time.LocalDateTime
@@ -140,7 +141,7 @@ class DcbApplicationServiceDeciderExtensionsTest {
 
     private fun append(vararg events: DomainEvent) {
         val cloudEvents = cloudEventConverter.toCloudEvents(Stream.of(*events))
-            .map { event -> DcbCloudEvents.withTags(event, setOf("name:name")) }
+            .map { event -> DcbCloudEvents.withTags(event, setOf(Tag.of("name", "name"))) }
             .toList()
         eventStore.append(cloudEvents)
     }
@@ -148,9 +149,9 @@ class DcbApplicationServiceDeciderExtensionsTest {
     private fun readNameEvents(nameId: String): List<DomainEvent> =
         cloudEventConverter.toDomainEvents(eventStore.read(nameQuery(nameId)).stream()).toList()
 
-    private fun nameQuery(nameId: String): DcbQuery = DcbQuery.tags("name:$nameId")
+    private fun nameQuery(nameId: String): DcbCriteria = DcbCriteria.tags(Tag.of("name", nameId))
 
-    private fun tagFor(event: DomainEvent): String = "name:${event.userId()}"
+    private fun tagFor(event: DomainEvent): Tag = Tag.of("name", event.userId())
 
     private sealed interface NameCommand
     private data class DefineName(val name: String) : NameCommand

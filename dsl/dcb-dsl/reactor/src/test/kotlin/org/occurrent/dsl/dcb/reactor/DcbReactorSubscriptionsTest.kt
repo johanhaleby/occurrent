@@ -37,7 +37,8 @@ import org.occurrent.domain.NameDefined
 import org.occurrent.eventstore.api.EventStoreCapability.DCB
 import org.occurrent.eventstore.api.EventStoreCapability.STREAM
 import org.occurrent.eventstore.api.dcb.DcbCloudEvents
-import org.occurrent.eventstore.api.dcb.DcbQuery
+import org.occurrent.eventstore.api.dcb.DcbCriteria
+import org.occurrent.eventstore.api.dcb.Tag
 import org.occurrent.eventstore.mongodb.spring.reactor.EventStoreConfig
 import org.occurrent.eventstore.mongodb.spring.reactor.ReactorMongoEventStore
 import org.occurrent.mongodb.timerepresentation.TimeRepresentation
@@ -98,7 +99,7 @@ class DcbReactorSubscriptionsTest {
     @Test
     fun delivers_only_events_matching_the_query() {
         val received = CopyOnWriteArrayList<DomainEvent>()
-        disposables.add(dcbSubscriptions.subscribe(DcbQuery.tags("entity:alice")).doOnNext(received::add).subscribe())
+        disposables.add(dcbSubscriptions.subscribe(DcbCriteria.tags(Tag.of("entity", "alice"))).doOnNext(received::add).subscribe())
         Thread.sleep(500)
 
         appendTagged(NameDefined(UUID.randomUUID().toString(), time, "alice", "Alice"), "entity:alice")
@@ -112,7 +113,7 @@ class DcbReactorSubscriptionsTest {
     @Test
     fun exposes_dcb_metadata() {
         val received = CopyOnWriteArrayList<DcbEvent<DomainEvent>>()
-        disposables.add(dcbSubscriptions.subscribeWithMetadata(DcbQuery.tags("entity:carol")).doOnNext(received::add).subscribe())
+        disposables.add(dcbSubscriptions.subscribeWithMetadata(DcbCriteria.tags(Tag.of("entity", "carol"))).doOnNext(received::add).subscribe())
         Thread.sleep(500)
 
         appendTagged(NameDefined(UUID.randomUUID().toString(), time, "carol", "Carol"), "entity:carol")
@@ -123,13 +124,13 @@ class DcbReactorSubscriptionsTest {
             assertThat((delivered.event as NameDefined).name).isEqualTo("Carol")
             assertThat(delivered.metadata.position().isPresent).isTrue()
             assertThat(delivered.metadata.position().asLong).isGreaterThan(0)
-            assertThat(delivered.metadata.dcbTags()).containsExactly("entity:carol")
+            assertThat(delivered.metadata.dcbTags()).containsExactly(Tag.of("entity", "carol"))
         }
     }
 
     private fun appendTagged(event: DomainEvent, tag: String) {
         val cloudEvent: CloudEvent = converter.toCloudEvents(Stream.of(event)).toList()[0]
-        eventStore.append(listOf(DcbCloudEvents.withTags(cloudEvent, setOf(tag)))).block()
+        eventStore.append(listOf(DcbCloudEvents.withTags(cloudEvent, setOf(Tag.parse(tag))))).block()
     }
 
     companion object {

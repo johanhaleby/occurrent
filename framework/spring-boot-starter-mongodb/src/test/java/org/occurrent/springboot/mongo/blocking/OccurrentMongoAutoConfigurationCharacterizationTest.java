@@ -20,6 +20,7 @@ package org.occurrent.springboot.mongo.blocking;
 import io.cloudevents.CloudEvent;
 import org.junit.jupiter.api.Test;
 import org.occurrent.application.converter.CloudEventConverter;
+import org.occurrent.eventstore.api.dcb.Tag;
 import org.occurrent.application.converter.typemapper.CloudEventTypeMapper;
 import org.occurrent.application.converter.typemapper.ReflectionCloudEventTypeMapper;
 import org.occurrent.application.service.blocking.ApplicationService;
@@ -313,7 +314,7 @@ class OccurrentMongoAutoConfigurationCharacterizationTest {
     }
 
     private TagGenerator<TestEvent> tagsForTestEvent() {
-        return event -> Set.of(event.subject());
+        return event -> Set.of(Tag.of("subject", event.subject()));
     }
 
     @Configuration(proxyBeanMethods = false)

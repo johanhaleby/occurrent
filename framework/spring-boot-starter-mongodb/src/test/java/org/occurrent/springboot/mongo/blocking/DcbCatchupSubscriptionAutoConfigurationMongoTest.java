@@ -29,8 +29,9 @@ import org.occurrent.application.converter.typemapper.CloudEventTypeMapper;
 import org.occurrent.application.converter.typemapper.ReflectionCloudEventTypeMapper;
 import org.occurrent.dsl.dcb.blocking.DcbSubscriptions;
 import org.occurrent.eventstore.api.dcb.DcbCloudEvents;
+import org.occurrent.eventstore.api.dcb.Tag;
 import org.occurrent.eventstore.api.dcb.DcbEventStore;
-import org.occurrent.eventstore.api.dcb.DcbQuery;
+import org.occurrent.eventstore.api.dcb.DcbCriteria;
 import org.occurrent.subscription.DcbStartAt;
 import org.occurrent.subscription.GlobalCheckpoint;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -107,7 +108,7 @@ class DcbCatchupSubscriptionAutoConfigurationMongoTest {
         dcbSubscriptions
                 .subscribe(
                         "test-catchup-" + UUID.randomUUID(),
-                        DcbQuery.tags(TAG),
+                        DcbCriteria.tags(Tag.parse(TAG)),
                         DcbStartAt.beginning(),
                         received::add)
                 .waitUntilStarted();
@@ -135,7 +136,7 @@ class DcbCatchupSubscriptionAutoConfigurationMongoTest {
 
     private void appendTagged(String tag, TestEvent... events) {
         List<CloudEvent> cloudEvents = cloudEventConverter.toCloudEvents(Stream.of(events))
-                .map(ce -> DcbCloudEvents.withTags(ce, List.of(tag)))
+                .map(ce -> DcbCloudEvents.withTags(ce, List.of(Tag.parse(tag))))
                 .toList();
         dcbEventStore.append(cloudEvents);
     }

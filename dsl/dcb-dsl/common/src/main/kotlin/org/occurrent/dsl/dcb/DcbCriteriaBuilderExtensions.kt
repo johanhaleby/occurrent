@@ -1,0 +1,29 @@
+/*
+ * Copyright 2026 Johan Haleby
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ *        http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+
+package org.occurrent.dsl.dcb
+
+import org.occurrent.eventstore.api.dcb.DcbCriterion
+
+/**
+ * Creates a criterion matching events whose CloudEvent type is the type string mapped from the reified [T].
+ *
+ * The name is [typeOf] rather than `type` so it does not collide with the Java member [DcbCriteriaBuilder.type],
+ * which Kotlin overload resolution would otherwise prefer (see ADR 0012).
+ *
+ * @see DcbCriteriaBuilder.type
+ */
+inline fun <reified T : E, E : Any> DcbCriteriaBuilder<E>.typeOf(): DcbCriterion = type(T::class.java)

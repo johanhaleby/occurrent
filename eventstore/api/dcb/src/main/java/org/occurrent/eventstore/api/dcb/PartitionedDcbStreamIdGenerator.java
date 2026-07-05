@@ -22,6 +22,7 @@ import java.util.TreeSet;
 import java.util.zip.CRC32;
 
 import static java.util.Objects.requireNonNull;
+import static java.util.stream.Collectors.joining;
 
 /**
  * Places DCB-written events into a fixed number of Occurrent storage streams.
@@ -56,9 +57,9 @@ public class PartitionedDcbStreamIdGenerator implements DcbStreamIdGenerator {
      * Generates the storage stream id for the supplied boundary tags.
      */
     @Override
-    public String generateStreamId(Set<String> boundaryTags) {
-        requireNonNull(boundaryTags, "Boundary tags cannot be null");
-        return prefix + jumpConsistentHash(hash(canonicalize(boundaryTags)), partitions);
+    public String generateStreamId(Set<Tag> tags) {
+        requireNonNull(tags, "Tags cannot be null");
+        return prefix + jumpConsistentHash(hash(canonicalize(tags)), partitions);
     }
 
     /**
@@ -69,8 +70,8 @@ public class PartitionedDcbStreamIdGenerator implements DcbStreamIdGenerator {
      * {@code "|"}, would let different tag sets collapse to the same string (for example {@code {"a|b", "c"}} and
      * {@code {"a", "b", "c"}}) and therefore always hash to the same partition.
      */
-    static String canonicalize(Set<String> boundaryTags) {
-        return String.join("\n", new TreeSet<>(boundaryTags));
+    static String canonicalize(Set<Tag> tags) {
+        return new TreeSet<>(tags).stream().map(Tag::canonical).collect(joining("\n"));
     }
 
     private static long hash(String value) {

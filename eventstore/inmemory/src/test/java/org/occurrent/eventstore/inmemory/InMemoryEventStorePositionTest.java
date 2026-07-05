@@ -24,6 +24,7 @@ import org.junit.jupiter.api.Test;
 import org.occurrent.eventstore.api.PositionRange;
 import org.occurrent.eventstore.api.WriteCondition;
 import org.occurrent.eventstore.api.dcb.DcbCloudEvents;
+import org.occurrent.eventstore.api.dcb.Tag;
 
 import java.net.URI;
 import java.time.OffsetDateTime;
@@ -51,9 +52,9 @@ class InMemoryEventStorePositionTest {
     void stream_written_events_get_a_monotonic_position_shared_with_dcb_events() {
         InMemoryEventStore eventStore = new InMemoryEventStore().withStreamPosition();
 
-        eventStore.append(List.of(taggedEvent("DcbEvent1", "t")));                                     // position 1
+        eventStore.append(List.of(taggedEvent("DcbEvent1", "t:1")));                                     // position 1
         eventStore.write("stream1", WriteCondition.anyStreamVersion(), Stream.of(event("StreamEvent1"), event("StreamEvent2"))); // positions 2,3
-        eventStore.append(List.of(taggedEvent("DcbEvent2", "t")));                                     // position 4
+        eventStore.append(List.of(taggedEvent("DcbEvent2", "t:1")));                                     // position 4
 
         List<CloudEvent> streamEvents = eventStore.read("stream1").events().toList();
         assertThat(streamEvents).extracting(InMemoryEventStorePositionTest::position).containsExactly(2L, 3L);
@@ -66,7 +67,7 @@ class InMemoryEventStorePositionTest {
         InMemoryEventStore eventStore = new InMemoryEventStore().withStreamPosition();
 
         eventStore.write("stream1", WriteCondition.anyStreamVersion(), Stream.of(event("A")));  // position 1
-        eventStore.append(List.of(taggedEvent("B", "t")));                                      // position 2
+        eventStore.append(List.of(taggedEvent("B", "t:1")));                                      // position 2
         eventStore.write("stream1", WriteCondition.anyStreamVersion(), Stream.of(event("C")));  // position 3
         eventStore.write("stream2", WriteCondition.anyStreamVersion(), Stream.of(event("D")));  // position 4
 
@@ -101,7 +102,7 @@ class InMemoryEventStorePositionTest {
     }
 
     private static CloudEvent taggedEvent(String type, String... tags) {
-        return DcbCloudEvents.withTags(event(type), Set.of(tags));
+        return DcbCloudEvents.withTags(event(type), java.util.Arrays.stream(tags).map(Tag::parse).toList());
     }
 
     private static CloudEvent event(String type) {

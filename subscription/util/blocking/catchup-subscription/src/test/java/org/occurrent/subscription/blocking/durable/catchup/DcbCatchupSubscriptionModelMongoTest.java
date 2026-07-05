@@ -34,11 +34,12 @@ import org.occurrent.application.converter.jackson.JacksonCloudEventConverter;
 import org.occurrent.domain.DomainEvent;
 import org.occurrent.domain.NameDefined;
 import org.occurrent.eventstore.api.dcb.DcbAppendCondition;
+import org.occurrent.eventstore.api.dcb.Tag;
 import org.occurrent.eventstore.api.dcb.DcbAppendResult;
 import org.occurrent.eventstore.api.dcb.DcbCloudEvents;
 import org.occurrent.eventstore.api.dcb.DcbEventStore;
 import org.occurrent.eventstore.api.dcb.DcbEventStream;
-import org.occurrent.eventstore.api.dcb.DcbQuery;
+import org.occurrent.eventstore.api.dcb.DcbCriteria;
 import org.occurrent.eventstore.api.dcb.DcbReadOptions;
 import org.occurrent.eventstore.mongodb.spring.blocking.EventStoreConfig;
 import org.occurrent.eventstore.mongodb.spring.blocking.SpringMongoEventStore;
@@ -151,7 +152,7 @@ class DcbCatchupSubscriptionModelMongoTest {
         appendTagged("name:1", historic2);
 
         CopyOnWriteArrayList<DomainEvent> received = new CopyOnWriteArrayList<>();
-        subscription = new CatchupSubscriptionModel(subscriptionModel, eventStore, DcbQuery.tags("name:1"),
+        subscription = new CatchupSubscriptionModel(subscriptionModel, eventStore, DcbCriteria.tags(Tag.parse("name:1")),
                 new CatchupSubscriptionModelConfig(100, useCheckpointStorage(storage).andPersistCheckpointDuringCatchupPhaseForEveryNEvents(1)));
 
         // When the DCB-mode catch-up subscription replays from the beginning of the DCB sequence and hands over to the live change stream
@@ -201,7 +202,7 @@ class DcbCatchupSubscriptionModelMongoTest {
 
         CopyOnWriteArrayList<DomainEvent> received = new CopyOnWriteArrayList<>();
         // A whole-range window forces a single bulk read that the wrapper can hold open across the hole's commit.
-        subscription = new CatchupSubscriptionModel(subscriptionModel, blockingDuringBulkReplay, DcbQuery.tags("name:1"),
+        subscription = new CatchupSubscriptionModel(subscriptionModel, blockingDuringBulkReplay, DcbCriteria.tags(Tag.parse("name:1")),
                 new CatchupSubscriptionModelConfig(100, useCheckpointStorage(storage).andPersistCheckpointDuringCatchupPhaseForEveryNEvents(1))
                         .dcbCatchupPositionWindowSize(1_000_000_000L));
 
@@ -235,7 +236,7 @@ class DcbCatchupSubscriptionModelMongoTest {
         appendTagged("name:1", event3);
 
         CopyOnWriteArrayList<DomainEvent> received = new CopyOnWriteArrayList<>();
-        subscription = new CatchupSubscriptionModel(subscriptionModel, eventStore, DcbQuery.tags("name:1"),
+        subscription = new CatchupSubscriptionModel(subscriptionModel, eventStore, DcbCriteria.tags(Tag.parse("name:1")),
                 new CatchupSubscriptionModelConfig(100, useCheckpointStorage(storage).andPersistCheckpointDuringCatchupPhaseForEveryNEvents(1)));
 
         // Resuming after position 1 (as if event1 was already processed elsewhere) replays only event2 and event3.
@@ -279,7 +280,7 @@ class DcbCatchupSubscriptionModelMongoTest {
         }
 
         @Override
-        public DcbEventStream read(DcbQuery query, DcbReadOptions options) {
+        public DcbEventStream read(DcbCriteria query, DcbReadOptions options) {
             DcbEventStream result = delegate.read(query, options);
             boolean windowRead = options.afterPosition().isPresent() && options.upToPosition().isPresent()
                     && options.afterPosition().getAsLong() != options.upToPosition().getAsLong();
@@ -317,7 +318,7 @@ class DcbCatchupSubscriptionModelMongoTest {
 
     private void appendTagged(String tag, DomainEvent... events) {
         List<CloudEvent> cloudEvents = cloudEventConverter.toCloudEvents(Stream.of(events))
-                .map(event -> DcbCloudEvents.withTags(event, List.of(tag)))
+                .map(event -> DcbCloudEvents.withTags(event, List.of(Tag.parse(tag))))
                 .toList();
         eventStore.append(cloudEvents);
     }

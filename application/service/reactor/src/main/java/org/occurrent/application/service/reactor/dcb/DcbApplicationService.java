@@ -18,7 +18,7 @@ package org.occurrent.application.service.reactor.dcb;
 
 import org.jspecify.annotations.NullMarked;
 import org.occurrent.eventstore.api.dcb.DcbAppendResult;
-import org.occurrent.eventstore.api.dcb.DcbQuery;
+import org.occurrent.eventstore.api.dcb.DcbCriteria;
 import reactor.core.publisher.Mono;
 
 import java.util.function.Function;
@@ -41,7 +41,7 @@ public interface DcbApplicationService<E> {
      * @param functionThatCallsDomainModel receives the current matching domain events and returns new domain events to append
      * @return a {@link Mono} of the append result, or an empty {@link Mono} when the domain function produced no new events
      */
-    default Mono<DcbAppendResult> execute(DcbQuery query, Function<Stream<E>, Stream<E>> functionThatCallsDomainModel) {
+    default Mono<DcbAppendResult> execute(DcbCriteria query, Function<Stream<E>, Stream<E>> functionThatCallsDomainModel) {
         return execute(query, DcbExecuteOptions.empty(), functionThatCallsDomainModel);
     }
 
@@ -56,5 +56,5 @@ public interface DcbApplicationService<E> {
      * @param functionThatCallsDomainModel receives the current matching domain events and returns new domain events to append
      * @return a {@link Mono} of the append result, or an empty {@link Mono} when the domain function produced no new events
      */
-    Mono<DcbAppendResult> execute(DcbQuery query, DcbExecuteOptions<E> options, Function<Stream<E>, Stream<E>> functionThatCallsDomainModel);
+    Mono<DcbAppendResult> execute(DcbCriteria query, DcbExecuteOptions<E> options, Function<Stream<E>, Stream<E>> functionThatCallsDomainModel);
 }

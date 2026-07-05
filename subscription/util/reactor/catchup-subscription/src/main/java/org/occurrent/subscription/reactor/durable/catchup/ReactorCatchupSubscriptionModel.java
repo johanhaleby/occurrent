@@ -19,7 +19,7 @@ package org.occurrent.subscription.reactor.durable.catchup;
 import io.cloudevents.CloudEvent;
 import org.jspecify.annotations.NullMarked;
 import org.jspecify.annotations.Nullable;
-import org.occurrent.eventstore.api.dcb.DcbQuery;
+import org.occurrent.eventstore.api.dcb.DcbCriteria;
 import org.occurrent.eventstore.api.dcb.reactor.DcbEventStore;
 import org.occurrent.eventstore.api.reactor.PositionOrderedReader;
 import org.occurrent.filter.Filter;
@@ -64,11 +64,11 @@ public class ReactorCatchupSubscriptionModel implements CheckpointAwareSubscript
     /**
      * Create a DCB-only instance. Every subscription routes to the DCB catch-up model.
      */
-    public ReactorCatchupSubscriptionModel(CheckpointAwareSubscriptionModel subscriptionModel, DcbEventStore dcbEventStore, @Nullable DcbQuery defaultQuery) {
+    public ReactorCatchupSubscriptionModel(CheckpointAwareSubscriptionModel subscriptionModel, DcbEventStore dcbEventStore, @Nullable DcbCriteria defaultQuery) {
         this(subscriptionModel, dcbEventStore, defaultQuery, ReactorDcbCatchupSubscriptionModel.DEFAULT_POSITION_WINDOW_SIZE, ReactorDcbCatchupSubscriptionModel.DEFAULT_HANDOVER_CACHE_SIZE);
     }
 
-    public ReactorCatchupSubscriptionModel(CheckpointAwareSubscriptionModel subscriptionModel, DcbEventStore dcbEventStore, @Nullable DcbQuery defaultQuery, long windowSize, int handoverCacheSize) {
+    public ReactorCatchupSubscriptionModel(CheckpointAwareSubscriptionModel subscriptionModel, DcbEventStore dcbEventStore, @Nullable DcbCriteria defaultQuery, long windowSize, int handoverCacheSize) {
         this.streamCatchupSubscriptionModel = null;
         this.dcbCatchupSubscriptionModel = new ReactorDcbCatchupSubscriptionModel(requireNonNull(subscriptionModel, CheckpointAwareSubscriptionModel.class.getSimpleName() + " cannot be null"), dcbEventStore, defaultQuery, windowSize, handoverCacheSize);
     }
@@ -79,13 +79,13 @@ public class ReactorCatchupSubscriptionModel implements CheckpointAwareSubscript
      * subscription is routed by its filter and start position, so a single model serves an application that uses
      * both streams and DCB.
      */
-    public ReactorCatchupSubscriptionModel(CheckpointAwareSubscriptionModel subscriptionModel, PositionOrderedReader positionOrderedReader, DcbEventStore dcbEventStore, @Nullable DcbQuery defaultQuery, @Nullable Filter defaultFilter, long windowSize, int handoverCacheSize) {
+    public ReactorCatchupSubscriptionModel(CheckpointAwareSubscriptionModel subscriptionModel, PositionOrderedReader positionOrderedReader, DcbEventStore dcbEventStore, @Nullable DcbCriteria defaultQuery, @Nullable Filter defaultFilter, long windowSize, int handoverCacheSize) {
         requireNonNull(subscriptionModel, CheckpointAwareSubscriptionModel.class.getSimpleName() + " cannot be null");
         this.streamCatchupSubscriptionModel = new ReactorStreamCatchupSubscriptionModel(subscriptionModel, positionOrderedReader, defaultFilter, windowSize, handoverCacheSize);
         this.dcbCatchupSubscriptionModel = new ReactorDcbCatchupSubscriptionModel(subscriptionModel, dcbEventStore, defaultQuery, windowSize, handoverCacheSize);
     }
 
-    public ReactorCatchupSubscriptionModel(CheckpointAwareSubscriptionModel subscriptionModel, PositionOrderedReader positionOrderedReader, DcbEventStore dcbEventStore, @Nullable DcbQuery defaultQuery, @Nullable Filter defaultFilter) {
+    public ReactorCatchupSubscriptionModel(CheckpointAwareSubscriptionModel subscriptionModel, PositionOrderedReader positionOrderedReader, DcbEventStore dcbEventStore, @Nullable DcbCriteria defaultQuery, @Nullable Filter defaultFilter) {
         this(subscriptionModel, positionOrderedReader, dcbEventStore, defaultQuery, defaultFilter, ReactorStreamCatchupSubscriptionModel.DEFAULT_POSITION_WINDOW_SIZE, ReactorStreamCatchupSubscriptionModel.DEFAULT_HANDOVER_CACHE_SIZE);
     }
 

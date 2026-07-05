@@ -283,7 +283,7 @@ public class NativeMongoSubscriptionModel implements CheckpointAwareSubscription
             Bson bson = FilterToBsonFilterConverter.convertFilterToBsonFilter(MongoFilterSpecification.FULL_DOCUMENT, timeRepresentation, occurrentFilter);
             pipeline = Collections.singletonList(match(bson));
         } else if (filter instanceof DcbSubscriptionFilter dcbSubscriptionFilter) {
-            pipeline = Collections.singletonList(DcbSubscriptionFilterConverter.toChangeStreamMatchStage(dcbSubscriptionFilter.query()));
+            pipeline = Collections.singletonList(DcbSubscriptionFilterConverter.toChangeStreamMatchStage(dcbSubscriptionFilter.criteria()));
         } else if (filter instanceof MongoFilterSpecification.MongoJsonFilterSpecification) {
             pipeline = Collections.singletonList(Document.parse(((MongoFilterSpecification.MongoJsonFilterSpecification) filter).getJson()));
         } else if (filter instanceof MongoFilterSpecification.MongoBsonFilterSpecification) {

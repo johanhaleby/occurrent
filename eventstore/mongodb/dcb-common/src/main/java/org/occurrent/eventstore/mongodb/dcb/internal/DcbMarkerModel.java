@@ -19,8 +19,9 @@ package org.occurrent.eventstore.mongodb.dcb.internal;
 import io.cloudevents.CloudEvent;
 import org.jspecify.annotations.NullMarked;
 import org.occurrent.eventstore.api.dcb.DcbCloudEvents;
-import org.occurrent.eventstore.api.dcb.DcbQuery;
-import org.occurrent.eventstore.api.dcb.DcbQueryItem;
+import org.occurrent.eventstore.api.dcb.DcbCriteria;
+import org.occurrent.eventstore.api.dcb.DcbCriterion;
+import org.occurrent.eventstore.api.dcb.Tag;
 
 import java.util.List;
 import java.util.Set;
@@ -62,8 +63,8 @@ public final class DcbMarkerModel {
         return MARKER_ID_PREFIX + key;
     }
 
-    public static Set<String> queryMarkerKeys(DcbQuery query) {
-        if (query instanceof DcbQuery.MatchAll) {
+    public static Set<String> queryMarkerKeys(DcbCriteria query) {
+        if (query instanceof DcbCriteria.MatchAll) {
             return Set.of("all");
         }
         // Decompose into one key per attribute (a key per tag, a key per type) and NEVER combine them into a single
@@ -71,31 +72,31 @@ public final class DcbMarkerModel {
         // single attribute made it match, and a combined key would share nothing with an event that carries only one
         // of the attributes through a different query.
         TreeSet<String> keys = new TreeSet<>();
-        for (DcbQueryItem item : dcbQueryItems(query)) {
-            item.tags().forEach(tag -> keys.add("tag:" + tag));
+        for (DcbCriterion item : dcbQueryItems(query)) {
+            item.tags().forEach(tag -> keys.add("tag:" + tag.canonical()));
             item.types().forEach(type -> keys.add("type:" + type));
         }
         return keys;
     }
 
-    // A query here is either a single DcbQueryItem alternative or an Items list (MatchAll is handled by the callers).
-    public static List<DcbQueryItem> dcbQueryItems(DcbQuery query) {
-        if (query instanceof DcbQueryItem item) {
+    // A query here is either a single DcbCriterion alternative or an Items list (MatchAll is handled by the callers).
+    public static List<DcbCriterion> dcbQueryItems(DcbCriteria query) {
+        if (query instanceof DcbCriterion item) {
             return List.of(item);
         }
-        return ((DcbQuery.Items) query).items();
+        return ((DcbCriteria.Items) query).items();
     }
 
     public static Set<String> eventMarkerKeys(List<CloudEvent> events) {
         TreeSet<String> keys = new TreeSet<>();
         for (CloudEvent event : events) {
-            DcbCloudEvents.getTags(event).forEach(tag -> keys.add("tag:" + tag));
+            DcbCloudEvents.getTags(event).forEach(tag -> keys.add("tag:" + tag.canonical()));
             keys.add("type:" + event.getType());
         }
         return keys;
     }
 
-    public static Set<String> boundaryTagsOf(List<CloudEvent> events) {
+    public static Set<Tag> tagsOf(List<CloudEvent> events) {
         return events.stream().flatMap(event -> DcbCloudEvents.getTags(event).stream()).collect(Collectors.toCollection(TreeSet::new));
     }
 

@@ -26,24 +26,24 @@ import static java.util.Objects.requireNonNull;
 import static java.util.stream.Collectors.toUnmodifiableSet;
 
 /**
- * One alternative inside a {@link DcbQuery}, and itself a single-alternative query.
+ * One alternative inside a {@link DcbCriteria}, and itself a single-alternative criteria.
  * <p>
  * {@code types} match CloudEvent types as any-of. {@code tags} match DCB tags as
  * all-of. {@code excludedTypes} removes matching events whose CloudEvent type is
  * present in that set.
  * <p>
- * Build it through {@link DcbQuery#type(String)}, {@link DcbQuery#types(String, String...)}, or
- * {@link DcbQuery#tags(String, String...)} and refine it fluently, for example
- * {@code DcbQuery.type("OrderPlaced").tags("order:1")}.
+ * Build it through {@link DcbCriteria#type(String)}, {@link DcbCriteria#types(String, String...)}, or
+ * {@link DcbCriteria#tags(Tag, Tag...)} and refine it fluently, for example
+ * {@code DcbCriteria.type("OrderPlaced").tags(Tag.of("order", "1"))}.
  */
 @NullMarked
-public record DcbQueryItem(Set<String> types, Set<String> tags, Set<String> excludedTypes) implements DcbQuery {
+public record DcbCriterion(Set<String> types, Set<Tag> tags, Set<String> excludedTypes) implements DcbCriteria {
 
-    public DcbQueryItem(Set<String> types, Set<String> tags) {
+    public DcbCriterion(Set<String> types, Set<Tag> tags) {
         this(types, tags, Set.of());
     }
 
-    public DcbQueryItem {
+    public DcbCriterion {
         requireNonNull(types, "Types cannot be null");
         requireNonNull(tags, "Tags cannot be null");
         requireNonNull(excludedTypes, "Excluded types cannot be null");
@@ -51,11 +51,11 @@ public record DcbQueryItem(Set<String> types, Set<String> tags, Set<String> excl
         excludedTypes = copyWithoutNulls(excludedTypes, "Excluded type cannot be null");
         types = stripAndValidate(types, "Types");
         excludedTypes = stripAndValidate(excludedTypes, "Excluded types");
-        // Validate query tags the same way stored tags are canonicalized (strip, no blanks, no newlines), so a query
-        // can never carry a tag that no stored event could match.
+        // Canonicalize criterion tags the same way stored tags are canonicalized (dedup, sorted), so a criterion can
+        // never carry a tag that no stored event could match.
         tags = DcbCloudEvents.canonicalizeTags(tags);
         if (types.isEmpty() && tags.isEmpty()) {
-            throw new IllegalArgumentException("A query item must contain at least one type or tag");
+            throw new IllegalArgumentException("A criterion must contain at least one type or tag");
         }
         if (types.stream().anyMatch(excludedTypes::contains)) {
             throw new IllegalArgumentException("Types and excluded types cannot overlap");
@@ -63,45 +63,45 @@ public record DcbQueryItem(Set<String> types, Set<String> tags, Set<String> excl
     }
 
     /**
-     * Returns a copy of this item matching any of the supplied CloudEvent types (any-of).
+     * Returns a copy of this criterion matching any of the supplied CloudEvent types (any-of).
      */
-    public DcbQueryItem types(String first, String... rest) {
-        return new DcbQueryItem(combine(first, rest), tags, excludedTypes);
+    public DcbCriterion types(String first, String... rest) {
+        return new DcbCriterion(combine(first, rest), tags, excludedTypes);
     }
 
     /**
-     * Returns a copy of this item matching any of the supplied CloudEvent types (any-of).
+     * Returns a copy of this criterion matching any of the supplied CloudEvent types (any-of).
      */
-    public DcbQueryItem types(Collection<String> types) {
-        return new DcbQueryItem(copyWithoutNulls(types, "Type cannot be null"), tags, excludedTypes);
+    public DcbCriterion types(Collection<String> types) {
+        return new DcbCriterion(copyWithoutNulls(types, "Type cannot be null"), tags, excludedTypes);
     }
 
     /**
-     * Returns a copy of this item matching events containing all the supplied DCB tags (all-of).
+     * Returns a copy of this criterion matching events containing all the supplied DCB tags (all-of).
      */
-    public DcbQueryItem tags(String first, String... rest) {
-        return new DcbQueryItem(types, combine(first, rest), excludedTypes);
+    public DcbCriterion tags(Tag first, Tag... rest) {
+        return new DcbCriterion(types, combineTags(first, rest), excludedTypes);
     }
 
     /**
-     * Returns a copy of this item matching events containing all the supplied DCB tags (all-of).
+     * Returns a copy of this criterion matching events containing all the supplied DCB tags (all-of).
      */
-    public DcbQueryItem tags(Collection<String> tags) {
-        return new DcbQueryItem(types, copyWithoutNulls(tags, "Tag cannot be null"), excludedTypes);
+    public DcbCriterion tags(Collection<Tag> tags) {
+        return new DcbCriterion(types, copyTagsWithoutNulls(tags), excludedTypes);
     }
 
     /**
-     * Returns a copy of this item that excludes events whose CloudEvent type is any of the supplied types (none-of).
+     * Returns a copy of this criterion that excludes events whose CloudEvent type is any of the supplied types (none-of).
      */
-    public DcbQueryItem excludingTypes(String first, String... rest) {
-        return new DcbQueryItem(types, tags, combine(first, rest));
+    public DcbCriterion excludingTypes(String first, String... rest) {
+        return new DcbCriterion(types, tags, combine(first, rest));
     }
 
     /**
-     * Returns a copy of this item that excludes events whose CloudEvent type is any of the supplied types (none-of).
+     * Returns a copy of this criterion that excludes events whose CloudEvent type is any of the supplied types (none-of).
      */
-    public DcbQueryItem excludingTypes(Collection<String> excludedTypes) {
-        return new DcbQueryItem(types, tags, copyWithoutNulls(excludedTypes, "Excluded type cannot be null"));
+    public DcbCriterion excludingTypes(Collection<String> excludedTypes) {
+        return new DcbCriterion(types, tags, copyWithoutNulls(excludedTypes, "Excluded type cannot be null"));
     }
 
     private static Set<String> combine(String first, String[] additional) {
@@ -115,10 +115,28 @@ public record DcbQueryItem(Set<String> types, Set<String> tags, Set<String> excl
         return Set.copyOf(values);
     }
 
+    private static Set<Tag> combineTags(Tag first, Tag[] additional) {
+        requireNonNull(first, "Tag cannot be null");
+        requireNonNull(additional, "Additional tags cannot be null");
+        LinkedHashSet<Tag> tags = new LinkedHashSet<>();
+        tags.add(first);
+        for (Tag tag : additional) {
+            tags.add(requireNonNull(tag, "Tag cannot be null"));
+        }
+        return Set.copyOf(tags);
+    }
+
     static Set<String> copyWithoutNulls(Collection<String> values, String nullMessage) {
         requireNonNull(values, "Values cannot be null");
         return values.stream()
                 .map(value -> requireNonNull(value, nullMessage))
+                .collect(toUnmodifiableSet());
+    }
+
+    static Set<Tag> copyTagsWithoutNulls(Collection<Tag> tags) {
+        requireNonNull(tags, "Tags cannot be null");
+        return tags.stream()
+                .map(tag -> requireNonNull(tag, "Tag cannot be null"))
                 .collect(toUnmodifiableSet());
     }
 

@@ -30,7 +30,7 @@ import static java.util.Objects.requireNonNull;
  * {@link DcbEventStream#consistencyToken()}); when empty, the append fails if any existing event matches {@code query}.
  */
 @NullMarked
-public record DcbAppendCondition(DcbQuery query, Optional<DcbConsistencyToken> consistencyToken) {
+public record DcbAppendCondition(DcbCriteria query, Optional<DcbConsistencyToken> consistencyToken) {
 
     public DcbAppendCondition {
         requireNonNull(query, "Query cannot be null");
@@ -40,11 +40,11 @@ public record DcbAppendCondition(DcbQuery query, Optional<DcbConsistencyToken> c
     /**
      * Creates a condition that fails if any existing event matches {@code query}.
      * <p>
-     * A {@code MatchAll} query (from {@link DcbQuery#all()}) makes this a whole-store optimistic lock that is not
+     * A {@code MatchAll} query (from {@link DcbCriteria#all()}) makes this a whole-store optimistic lock that is not
      * skew-safe against concurrent tag-scoped or type-scoped appends, so use it only for single-writer or empty-store
      * guards (see ADR 30). Prefer a scoped {@code query} for a real consistency boundary on a multi-writer store.
      */
-    public static DcbAppendCondition failIfEventsMatch(DcbQuery query) {
+    public static DcbAppendCondition failIfEventsMatch(DcbCriteria query) {
         return new DcbAppendCondition(query, Optional.empty());
     }
 
@@ -52,7 +52,7 @@ public record DcbAppendCondition(DcbQuery query, Optional<DcbConsistencyToken> c
      * Creates a condition that fails if an event matching {@code query} was committed after the read that produced
      * {@code consistencyToken}.
      */
-    public static DcbAppendCondition failIfEventsMatch(DcbQuery query, DcbConsistencyToken consistencyToken) {
+    public static DcbAppendCondition failIfEventsMatch(DcbCriteria query, DcbConsistencyToken consistencyToken) {
         requireNonNull(consistencyToken, "Consistency token cannot be null");
         return new DcbAppendCondition(query, Optional.of(consistencyToken));
     }

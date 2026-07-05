@@ -31,7 +31,7 @@ import org.occurrent.dsl.dcb.reactor.DcbSubscriptions;
 import org.occurrent.dsl.query.reactor.DomainEventQueries;
 import org.occurrent.dsl.subscription.reactor.StreamSubscriptions;
 import org.occurrent.eventstore.api.EventStoreCapability;
-import org.occurrent.eventstore.api.dcb.DcbQuery;
+import org.occurrent.eventstore.api.dcb.DcbCriteria;
 import org.occurrent.eventstore.api.dcb.reactor.DcbEventStore;
 import org.occurrent.eventstore.api.reactor.EventStore;
 import org.occurrent.eventstore.api.reactor.EventStoreQueries;
@@ -160,7 +160,7 @@ public class OccurrentReactiveMongoAutoConfiguration<E> {
         ReactorMongoSubscriptionModel mongoSubscriptionModel = new ReactorMongoSubscriptionModel(mongo, eventStoreProperties.getCollection(), eventStoreProperties.getTimeRepresentation(),
                 ReactorMongoSubscriptionModelConfig.withConfig().restartSubscriptionsOnChangeStreamHistoryLost(occurrentProperties.getSubscription().isRestartOnChangeStreamHistoryLost()));
         // A combined store has one ReactorMongoEventStore bean that is both the DCB store and the position-ordered
-        // stream reader, so it fills both roles. DcbQuery.all() and Filter.all() are shared by every subscription,
+        // stream reader, so it fills both roles. DcbCriteria.all() and Filter.all() are shared by every subscription,
         // which each narrow to their own query or filter in the consumer.
         DcbEventStore dcbStore = eventStoreProperties.getCapabilities().contains(DCB) ? dcbEventStore.getIfAvailable() : null;
         ReactorMongoEventStore streamStore = reactorEventStore.getIfAvailable();
@@ -169,9 +169,9 @@ public class OccurrentReactiveMongoAutoConfiguration<E> {
         boolean streamCatchup = eventStoreProperties.getCapabilities().contains(STREAM) && streamStore != null && streamStore.writesPosition();
         final CheckpointAwareSubscriptionModel inner;
         if (dcbStore != null && streamCatchup) {
-            inner = new ReactorCatchupSubscriptionModel(mongoSubscriptionModel, streamStore, dcbStore, DcbQuery.all(), Filter.all());
+            inner = new ReactorCatchupSubscriptionModel(mongoSubscriptionModel, streamStore, dcbStore, DcbCriteria.all(), Filter.all());
         } else if (dcbStore != null) {
-            inner = new ReactorCatchupSubscriptionModel(mongoSubscriptionModel, dcbStore, DcbQuery.all());
+            inner = new ReactorCatchupSubscriptionModel(mongoSubscriptionModel, dcbStore, DcbCriteria.all());
         } else if (streamCatchup) {
             inner = new ReactorCatchupSubscriptionModel(mongoSubscriptionModel, streamStore, Filter.all());
         } else {

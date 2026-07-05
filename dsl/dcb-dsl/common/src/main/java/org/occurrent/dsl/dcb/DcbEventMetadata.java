@@ -20,6 +20,7 @@ import org.jspecify.annotations.NullMarked;
 import org.jspecify.annotations.Nullable;
 import org.occurrent.dsl.subscription.EventMetadata;
 import org.occurrent.eventstore.api.dcb.DcbCloudEvents;
+import org.occurrent.eventstore.api.dcb.Tag;
 
 import java.util.OptionalLong;
 import java.util.Set;
@@ -63,7 +64,7 @@ public final class DcbEventMetadata {
     /**
      * The canonical DCB tags of the event, or an empty set when the event has no DCB tags.
      */
-    public Set<String> dcbTags() {
+    public Set<Tag> dcbTags() {
         return decodeTags(metadata.getData().get(DcbCloudEvents.TAGS));
     }
 
@@ -88,7 +89,7 @@ public final class DcbEventMetadata {
         throw new IllegalArgumentException("Position extension must be a Number or String");
     }
 
-    static Set<String> decodeTags(@Nullable Object value) {
+    static Set<Tag> decodeTags(@Nullable Object value) {
         if (value == null) {
             return Set.of();
         }

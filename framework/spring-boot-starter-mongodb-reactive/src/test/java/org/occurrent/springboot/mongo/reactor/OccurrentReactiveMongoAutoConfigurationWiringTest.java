@@ -22,6 +22,7 @@ import com.mongodb.reactivestreams.client.MongoClients;
 import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.Test;
 import org.occurrent.annotation.StreamSubscription;
+import org.occurrent.eventstore.api.dcb.Tag;
 import org.occurrent.annotation.StreamSubscription.StartPosition;
 import org.occurrent.application.service.dcb.TagGenerator;
 import org.occurrent.application.service.reactor.ApplicationService;
@@ -157,7 +158,7 @@ class OccurrentReactiveMongoAutoConfigurationWiringTest {
     }
 
     private static TagGenerator<TestEvent> tagsForTestEvent() {
-        return event -> Set.of(event.eventId());
+        return event -> Set.of(Tag.of("eventId", event.eventId()));
     }
 
     @Test

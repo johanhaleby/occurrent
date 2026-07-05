@@ -32,7 +32,8 @@ import org.occurrent.eventstore.api.dcb.DcbAppendConditionNotFulfilledException;
 import org.occurrent.eventstore.api.dcb.DcbAppendResult;
 import org.occurrent.eventstore.api.dcb.DcbCloudEvents;
 import org.occurrent.eventstore.api.dcb.DcbEventStream;
-import org.occurrent.eventstore.api.dcb.DcbQuery;
+import org.occurrent.eventstore.api.dcb.DcbCriteria;
+import org.occurrent.eventstore.api.dcb.Tag;
 import org.occurrent.eventstore.api.dcb.DcbReadOptions;
 import org.occurrent.eventstore.api.dcb.reactor.DcbEventStore;
 import org.occurrent.eventstore.mongodb.spring.reactor.EventStoreConfig;
@@ -62,7 +63,7 @@ import static java.util.Objects.requireNonNull;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.occurrent.eventstore.api.EventStoreCapability.DCB;
 import static org.occurrent.eventstore.api.EventStoreCapability.STREAM;
-import static org.occurrent.eventstore.api.dcb.DcbQuery.tags;
+import static org.occurrent.eventstore.api.dcb.DcbCriteria.tags;
 
 @Testcontainers
 @DisplayNameGeneration(ReplaceUnderscores.class)
@@ -100,38 +101,38 @@ class GenericDcbApplicationServiceTest {
 
     @Test
     void reads_by_dcb_query_and_appends_with_tags_from_domain_events() {
-        eventStore.append(List.of(DcbCloudEvents.withTags(converter().toCloudEvent(new DomainEvent("NameDefined", "name:1")), Set.of("name:1")))).block();
-        GenericDcbApplicationService<DomainEvent> applicationService = new GenericDcbApplicationService<>(eventStore, converter(), event -> Set.of(event.name()));
+        eventStore.append(List.of(DcbCloudEvents.withTags(converter().toCloudEvent(new DomainEvent("NameDefined", "name:1")), Set.of(Tag.parse("name:1"))))).block();
+        GenericDcbApplicationService<DomainEvent> applicationService = new GenericDcbApplicationService<>(eventStore, converter(), event -> Set.of(Tag.parse(event.name())));
 
-        DcbAppendResult result = applicationService.execute(tags("name:1"), events -> {
+        DcbAppendResult result = applicationService.execute(tags(Tag.parse("name:1")), events -> {
             List<DomainEvent> currentEvents = events.toList();
             assertThat(currentEvents).extracting(DomainEvent::type).containsExactly("NameDefined");
             return Stream.of(new DomainEvent("NameChanged", "name:1"));
         }).block();
 
         assertThat(requireNonNull(result).eventCount()).isEqualTo(1);
-        DcbEventStream eventStream = eventStore.read(tags("name:1")).block();
+        DcbEventStream eventStream = eventStore.read(tags(Tag.parse("name:1"))).block();
         assertThat(requireNonNull(eventStream).events()).extracting(CloudEvent::getType).containsExactly("NameDefined", "NameChanged");
-        assertThat(DcbCloudEvents.getTags(eventStream.events().get(1))).containsExactly("name:1");
+        assertThat(DcbCloudEvents.getTags(eventStream.events().get(1))).containsExactly(Tag.of("name", "1"));
     }
 
     @Test
     void does_not_append_when_domain_function_returns_no_events() {
-        GenericDcbApplicationService<DomainEvent> applicationService = new GenericDcbApplicationService<>(eventStore, converter(), event -> Set.of(event.name()));
+        GenericDcbApplicationService<DomainEvent> applicationService = new GenericDcbApplicationService<>(eventStore, converter(), event -> Set.of(Tag.parse(event.name())));
 
-        StepVerifier.create(applicationService.execute(tags("name:1"), events -> Stream.empty()))
+        StepVerifier.create(applicationService.execute(tags(Tag.parse("name:1")), events -> Stream.empty()))
                 .expectNextCount(0)
                 .verifyComplete();
 
-        assertThat(requireNonNull(eventStore.read(tags("name:1")).block()).events()).isEmpty();
+        assertThat(requireNonNull(eventStore.read(tags(Tag.parse("name:1"))).block()).events()).isEmpty();
     }
 
     @Test
     void runs_the_side_effect_once_after_a_successful_append() {
-        GenericDcbApplicationService<DomainEvent> applicationService = new GenericDcbApplicationService<>(eventStore, converter(), event -> Set.of(event.name()));
+        GenericDcbApplicationService<DomainEvent> applicationService = new GenericDcbApplicationService<>(eventStore, converter(), event -> Set.of(Tag.parse(event.name())));
         AtomicInteger sideEffectInvocations = new AtomicInteger();
 
-        applicationService.execute(tags("name:1"),
+        applicationService.execute(tags(Tag.parse("name:1")),
                 DcbExecuteOptions.<DomainEvent>options().sideEffect(events -> Mono.fromRunnable(() -> {
                     assertThat(events.map(DomainEvent::type).toList()).containsExactly("NameDefined");
                     sideEffectInvocations.incrementAndGet();
@@ -143,10 +144,10 @@ class GenericDcbApplicationServiceTest {
 
     @Test
     void does_not_run_the_side_effect_when_no_events_are_produced() {
-        GenericDcbApplicationService<DomainEvent> applicationService = new GenericDcbApplicationService<>(eventStore, converter(), event -> Set.of(event.name()));
+        GenericDcbApplicationService<DomainEvent> applicationService = new GenericDcbApplicationService<>(eventStore, converter(), event -> Set.of(Tag.parse(event.name())));
         AtomicInteger sideEffectInvocations = new AtomicInteger();
 
-        applicationService.execute(tags("name:1"),
+        applicationService.execute(tags(Tag.parse("name:1")),
                 DcbExecuteOptions.<DomainEvent>options().sideEffect(events -> Mono.fromRunnable(sideEffectInvocations::incrementAndGet)),
                 events -> Stream.empty()).block();
 
@@ -155,13 +156,13 @@ class GenericDcbApplicationServiceTest {
 
     @Test
     void retries_from_a_fresh_dcb_read_when_append_condition_detects_a_conflict() {
-        eventStore.append(List.of(DcbCloudEvents.withTags(converter().toCloudEvent(new DomainEvent("NameDefined", "name:1")), Set.of("name:1")))).block();
-        CloudEvent conflictingEvent = DcbCloudEvents.withTags(converter().toCloudEvent(new DomainEvent("NameChangedByOther", "name:1")), Set.of("name:1"));
+        eventStore.append(List.of(DcbCloudEvents.withTags(converter().toCloudEvent(new DomainEvent("NameDefined", "name:1")), Set.of(Tag.parse("name:1"))))).block();
+        CloudEvent conflictingEvent = DcbCloudEvents.withTags(converter().toCloudEvent(new DomainEvent("NameChangedByOther", "name:1")), Set.of(Tag.parse("name:1")));
         ConflictingOnceDcbEventStore conflictingStore = new ConflictingOnceDcbEventStore(eventStore, conflictingEvent);
         AtomicInteger attempts = new AtomicInteger();
-        GenericDcbApplicationService<DomainEvent> applicationService = new GenericDcbApplicationService<>(conflictingStore, converter(), event -> Set.of(event.name()));
+        GenericDcbApplicationService<DomainEvent> applicationService = new GenericDcbApplicationService<>(conflictingStore, converter(), event -> Set.of(Tag.parse(event.name())));
 
-        DcbAppendResult result = applicationService.execute(tags("name:1"), events -> {
+        DcbAppendResult result = applicationService.execute(tags(Tag.parse("name:1")), events -> {
             int attempt = attempts.incrementAndGet();
             List<DomainEvent> currentEvents = events.toList();
             if (attempt == 1) {
@@ -174,21 +175,21 @@ class GenericDcbApplicationServiceTest {
 
         assertThat(result).isNotNull();
         assertThat(attempts).hasValue(2);
-        assertThat(requireNonNull(eventStore.read(tags("name:1")).block()).events())
+        assertThat(requireNonNull(eventStore.read(tags(Tag.parse("name:1"))).block()).events())
                 .extracting(CloudEvent::getType)
                 .containsExactly("NameDefined", "NameChangedByOther", "NameChangedByService");
     }
 
     @Test
     void runs_the_side_effect_once_even_when_the_append_retries_after_a_conflict() {
-        eventStore.append(List.of(DcbCloudEvents.withTags(converter().toCloudEvent(new DomainEvent("NameDefined", "name:1")), Set.of("name:1")))).block();
-        CloudEvent conflictingEvent = DcbCloudEvents.withTags(converter().toCloudEvent(new DomainEvent("NameChangedByOther", "name:1")), Set.of("name:1"));
+        eventStore.append(List.of(DcbCloudEvents.withTags(converter().toCloudEvent(new DomainEvent("NameDefined", "name:1")), Set.of(Tag.parse("name:1"))))).block();
+        CloudEvent conflictingEvent = DcbCloudEvents.withTags(converter().toCloudEvent(new DomainEvent("NameChangedByOther", "name:1")), Set.of(Tag.parse("name:1")));
         ConflictingOnceDcbEventStore conflictingStore = new ConflictingOnceDcbEventStore(eventStore, conflictingEvent);
         AtomicInteger attempts = new AtomicInteger();
         AtomicInteger sideEffectInvocations = new AtomicInteger();
-        GenericDcbApplicationService<DomainEvent> applicationService = new GenericDcbApplicationService<>(conflictingStore, converter(), event -> Set.of(event.name()));
+        GenericDcbApplicationService<DomainEvent> applicationService = new GenericDcbApplicationService<>(conflictingStore, converter(), event -> Set.of(Tag.parse(event.name())));
 
-        applicationService.execute(tags("name:1"),
+        applicationService.execute(tags(Tag.parse("name:1")),
                 DcbExecuteOptions.<DomainEvent>options().sideEffect(events -> Mono.fromRunnable(sideEffectInvocations::incrementAndGet)),
                 events -> {
                     attempts.incrementAndGet();
@@ -203,12 +204,12 @@ class GenericDcbApplicationServiceTest {
 
     @Test
     void rethrows_the_condition_failure_when_the_retries_are_exhausted() {
-        eventStore.append(List.of(DcbCloudEvents.withTags(converter().toCloudEvent(new DomainEvent("NameDefined", "name:1")), Set.of("name:1")))).block();
+        eventStore.append(List.of(DcbCloudEvents.withTags(converter().toCloudEvent(new DomainEvent("NameDefined", "name:1")), Set.of(Tag.parse("name:1"))))).block();
         AlwaysConflictingDcbEventStore conflictingStore = new AlwaysConflictingDcbEventStore(eventStore, converter());
         AtomicInteger attempts = new AtomicInteger();
-        GenericDcbApplicationService<DomainEvent> applicationService = new GenericDcbApplicationService<>(conflictingStore, converter(), event -> Set.of(event.name()));
+        GenericDcbApplicationService<DomainEvent> applicationService = new GenericDcbApplicationService<>(conflictingStore, converter(), event -> Set.of(Tag.parse(event.name())));
 
-        StepVerifier.create(applicationService.execute(tags("name:1"), events -> {
+        StepVerifier.create(applicationService.execute(tags(Tag.parse("name:1")), events -> {
                     attempts.incrementAndGet();
                     return Stream.of(new DomainEvent("NameChangedByService", "name:1"));
                 }))
@@ -262,7 +263,7 @@ class GenericDcbApplicationServiceTest {
         }
 
         @Override
-        public Mono<DcbEventStream> read(DcbQuery query, DcbReadOptions options) {
+        public Mono<DcbEventStream> read(DcbCriteria query, DcbReadOptions options) {
             return delegate.read(query, options);
         }
 
@@ -295,7 +296,7 @@ class GenericDcbApplicationServiceTest {
         }
 
         @Override
-        public Mono<DcbEventStream> read(DcbQuery query, DcbReadOptions options) {
+        public Mono<DcbEventStream> read(DcbCriteria query, DcbReadOptions options) {
             return delegate.read(query, options);
         }
 
@@ -306,7 +307,7 @@ class GenericDcbApplicationServiceTest {
 
         @Override
         public Mono<DcbAppendResult> append(List<CloudEvent> events, DcbAppendCondition condition) {
-            CloudEvent interloper = DcbCloudEvents.withTags(converter.toCloudEvent(new DomainEvent("NameChangedByOther", "name:1")), Set.of("name:1"));
+            CloudEvent interloper = DcbCloudEvents.withTags(converter.toCloudEvent(new DomainEvent("NameChangedByOther", "name:1")), Set.of(Tag.parse("name:1")));
             return delegate.append(List.of(interloper)).then(delegate.append(events, condition));
         }
     }

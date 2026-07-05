@@ -60,8 +60,8 @@ import static java.nio.charset.StandardCharsets.UTF_8;
 import static java.util.Objects.requireNonNull;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.occurrent.eventstore.api.dcb.DcbAppendCondition.failIfEventsMatch;
-import static org.occurrent.eventstore.api.dcb.DcbQuery.tags;
-import static org.occurrent.eventstore.api.dcb.DcbQuery.types;
+import static org.occurrent.eventstore.api.dcb.DcbCriteria.tags;
+import static org.occurrent.eventstore.api.dcb.DcbCriteria.types;
 import static org.occurrent.eventstore.api.EventStoreCapability.DCB;
 import static org.occurrent.eventstore.api.EventStoreCapability.STREAM;
 
@@ -150,16 +150,16 @@ class SpringMongoEventStoreDcbConcurrencyTest {
 
         for (int i = 0; i < ITERATIONS; i++) {
             String type = "TypeX_" + i;
-            String tag = "tag-x-" + i;
+            String tag = "tagx:" + i;
 
             // Both commands read the (empty) boundary at position 0
             DcbEventStream boundaryA = isolatedStore.read(types(type));
-            DcbEventStream boundaryB = isolatedStore.read(tags(tag));
+            DcbEventStream boundaryB = isolatedStore.read(tags(Tag.parse(tag)));
             DcbConsistencyToken tokenA = boundaryA.consistencyToken();
             DcbConsistencyToken tokenB = boundaryB.consistencyToken();
 
             DcbAppendCondition condA = failIfEventsMatch(types(type), tokenA);
-            DcbAppendCondition condB = failIfEventsMatch(tags(tag), tokenB);
+            DcbAppendCondition condB = failIfEventsMatch(tags(Tag.parse(tag)), tokenB);
 
             CloudEvent eventA = taggedEvent(type, tag);
             CloudEvent eventB = taggedEvent(type, tag);
@@ -222,18 +222,18 @@ class SpringMongoEventStoreDcbConcurrencyTest {
                 tags -> "isolated:stream:" + streamCounter.getAndIncrement());
 
         for (int i = 0; i < ITERATIONS; i++) {
-            String sharedTag = "shared-tag-" + i;
-            String extraTagA = "extra-a-" + i;
+            String sharedTag = "sharedtag:" + i;
+            String extraTagA = "extraa:" + i;
 
             // Both read empty boundary
-            DcbConsistencyToken tokenA = isolatedStore.read(tags(sharedTag)).consistencyToken();
-            DcbConsistencyToken tokenB = isolatedStore.read(tags(sharedTag, extraTagA)).consistencyToken();
+            DcbConsistencyToken tokenA = isolatedStore.read(tags(Tag.parse(sharedTag))).consistencyToken();
+            DcbConsistencyToken tokenB = isolatedStore.read(tags(Tag.parse(sharedTag), Tag.parse(extraTagA))).consistencyToken();
 
             // Event matches BOTH conditions: has sharedTag and extraTagA
-            // condA: tags(sharedTag) — matched by the event
-            // condB: tags(sharedTag, extraTagA) — also matched if event carries both
-            DcbAppendCondition condA = failIfEventsMatch(tags(sharedTag), tokenA);
-            DcbAppendCondition condB = failIfEventsMatch(tags(sharedTag, extraTagA), tokenB);
+            // condA: tags(Tag.parse(sharedTag)) — matched by the event
+            // condB: tags(Tag.parse(sharedTag), Tag.parse(extraTagA)) — also matched if event carries both
+            DcbAppendCondition condA = failIfEventsMatch(tags(Tag.parse(sharedTag)), tokenA);
+            DcbAppendCondition condB = failIfEventsMatch(tags(Tag.parse(sharedTag), Tag.parse(extraTagA)), tokenB);
 
             CyclicBarrier barrier = new CyclicBarrier(2);
             ExecutorService pool = Executors.newFixedThreadPool(2);
@@ -287,7 +287,7 @@ class SpringMongoEventStoreDcbConcurrencyTest {
 
         for (int i = 0; i < ITERATIONS; i++) {
             String sharedType = "SharedType_" + i;
-            String tag = "tt-tag-" + i;
+            String tag = "tttag:" + i;
 
             DcbConsistencyToken tokenA = isolatedStore.read(types(sharedType)).consistencyToken();
             DcbConsistencyToken tokenB = isolatedStore.read(types(sharedType)).consistencyToken();
@@ -346,11 +346,11 @@ class SpringMongoEventStoreDcbConcurrencyTest {
         int threadCount = 8;
 
         for (int i = 0; i < ITERATIONS; i++) {
-            String tag = "contention-" + i;
+            String tag = "contention:" + i;
 
             // All threads read the boundary at the same position
-            DcbConsistencyToken boundaryToken = eventStore.read(tags(tag)).consistencyToken();
-            DcbAppendCondition condition = failIfEventsMatch(tags(tag), boundaryToken);
+            DcbConsistencyToken boundaryToken = eventStore.read(tags(Tag.parse(tag))).consistencyToken();
+            DcbAppendCondition condition = failIfEventsMatch(tags(Tag.parse(tag)), boundaryToken);
 
             CyclicBarrier barrier = new CyclicBarrier(threadCount);
             ExecutorService pool = Executors.newFixedThreadPool(threadCount);
@@ -421,7 +421,7 @@ class SpringMongoEventStoreDcbConcurrencyTest {
         // own stream, so no two threads share a stream and no WriteConflict can arise at the
         // stream-version level.
         SpringMongoEventStore disjointStore = buildEventStoreWithStreamIdGenerator(
-                tags -> "disjoint:stream:" + String.join(",", new TreeSet<>(tags)));
+                tags -> "disjoint:stream:" + new TreeSet<>(tags).stream().map(Tag::canonical).collect(java.util.stream.Collectors.joining(",")));
 
         for (int i = 0; i < ITERATIONS; i++) {
             CyclicBarrier barrier = new CyclicBarrier(threadCount);
@@ -432,13 +432,13 @@ class SpringMongoEventStoreDcbConcurrencyTest {
             List<Future<Void>> futures = new ArrayList<>();
 
             for (int t = 0; t < threadCount; t++) {
-                final String distinctTag = "disjoint-iter" + i + "-t" + t;
+                final String distinctTag = "disjoint:iter" + i + "t" + t;
                 // Use a distinct type per thread so the type marker does not create false conflicts.
                 // The goal is to prove query-scoped isolation; shared-type conflicts are a separate, expected behavior.
                 final String distinctType = "DisjointEvent-iter" + i + "-t" + t;
                 futures.add(pool.submit(() -> {
-                    DcbConsistencyToken token = disjointStore.read(tags(distinctTag)).consistencyToken();
-                    DcbAppendCondition cond = failIfEventsMatch(tags(distinctTag), token);
+                    DcbConsistencyToken token = disjointStore.read(tags(Tag.parse(distinctTag))).consistencyToken();
+                    DcbAppendCondition cond = failIfEventsMatch(tags(Tag.parse(distinctTag)), token);
                     barrier.await();
                     try {
                         disjointStore.append(List.of(taggedEvent(distinctType, distinctTag)), cond);
@@ -486,11 +486,11 @@ class SpringMongoEventStoreDcbConcurrencyTest {
             List<Future<Void>> futures = new ArrayList<>();
 
             for (int t = 0; t < threadCount; t++) {
-                final String distinctTag = "shared-iter" + i + "-t" + t;
+                final String distinctTag = "shared:iter" + i + "t" + t;
                 final String distinctType = "SharedStreamEvent-iter" + i + "-t" + t;
                 futures.add(pool.submit(() -> {
-                    DcbConsistencyToken token = sharedStreamStore.read(tags(distinctTag)).consistencyToken();
-                    DcbAppendCondition cond = failIfEventsMatch(tags(distinctTag), token);
+                    DcbConsistencyToken token = sharedStreamStore.read(tags(Tag.parse(distinctTag))).consistencyToken();
+                    DcbAppendCondition cond = failIfEventsMatch(tags(Tag.parse(distinctTag)), token);
                     barrier.await();
                     try {
                         sharedStreamStore.append(List.of(taggedEvent(distinctType, distinctTag)), cond);
@@ -552,11 +552,11 @@ class SpringMongoEventStoreDcbConcurrencyTest {
         int threadCount = 8;
 
         for (int i = 0; i < ITERATIONS; i++) {
-            String tag1 = "mm-t1-" + i;
-            String tag2 = "mm-t2-" + i;
+            String tag1 = "mmt1:" + i;
+            String tag2 = "mmt2:" + i;
 
             // Multi-marker query: both tag1 and tag2 must match — exercises the two-marker token capture path
-            DcbQuery multiMarkerQuery = tags(tag1, tag2);
+            DcbCriteria multiMarkerQuery = tags(Tag.parse(tag1), Tag.parse(tag2));
             DcbConsistencyToken boundaryToken = eventStore.read(multiMarkerQuery).consistencyToken();
             DcbAppendCondition condition = failIfEventsMatch(multiMarkerQuery, boundaryToken);
 
@@ -625,11 +625,11 @@ class SpringMongoEventStoreDcbConcurrencyTest {
         int successes = 0;
 
         for (int i = 0; i < ITERATIONS; i++) {
-            String tag = "tokenless-" + i;
+            String tag = "tokenless:" + i;
 
             // Both conditions use the single-arg (no-token) form: fail if ANY existing event matches
-            DcbAppendCondition condA = failIfEventsMatch(tags(tag));
-            DcbAppendCondition condB = failIfEventsMatch(tags(tag));
+            DcbAppendCondition condA = failIfEventsMatch(tags(Tag.parse(tag)));
+            DcbAppendCondition condB = failIfEventsMatch(tags(Tag.parse(tag)));
 
             CloudEvent eventA = taggedEvent("TokenlessEvent", tag);
             CloudEvent eventB = taggedEvent("TokenlessEvent", tag);
@@ -691,18 +691,18 @@ class SpringMongoEventStoreDcbConcurrencyTest {
     void dcb_queries_are_index_backed() {
         // Seed the collection with a few events so the query planner sees a non-empty collection
         eventStore.append(List.of(
-                taggedEvent("SeedType", "explain-tag"),
-                taggedEvent("SeedType", "explain-tag"),
-                taggedEvent("SeedType", "explain-tag")));
+                taggedEvent("SeedType", "explain:tag"),
+                taggedEvent("SeedType", "explain:tag"),
+                taggedEvent("SeedType", "explain:tag")));
 
         MongoCollection<Document> collection = mongoTemplate.getCollection(COLLECTION);
 
         // Explain the tag-based read query shape:
-        // { position: { $gt: 0, $lte: <high> }, dcbTags: { $all: ["explain-tag"] } }
+        // { position: { $gt: 0, $lte: <high> }, dcbTags: { $all: ["explain:tag"] } }
         Document tagReadQuery = new Document("$and", List.of(
                 new Document("position", new Document("$gt", 0).append("$lte", 1000000)),
                 new Document("$or", List.of(
-                        new Document("dcbTags", new Document("$all", List.of("explain-tag")))
+                        new Document("dcbTags", new Document("$all", List.of("explain:tag")))
                 ))
         ));
         Document tagReadExplain = collection.find(tagReadQuery).explain(ExplainVerbosity.QUERY_PLANNER);
@@ -728,11 +728,11 @@ class SpringMongoEventStoreDcbConcurrencyTest {
                 .isEqualTo("IXSCAN");
 
         // Explain the existence/conflict check query shape (used in enforceAppendCondition):
-        // { position: { $gt: <afterPos>, $lte: Long.MAX_VALUE }, dcbTags: { $all: ["explain-tag"] } }
+        // { position: { $gt: <afterPos>, $lte: Long.MAX_VALUE }, dcbTags: { $all: ["explain:tag"] } }
         Document existenceQuery = new Document("$and", List.of(
                 new Document("position", new Document("$gt", 0).append("$lte", Long.MAX_VALUE)),
                 new Document("$or", List.of(
-                        new Document("dcbTags", new Document("$all", List.of("explain-tag")))
+                        new Document("dcbTags", new Document("$all", List.of("explain:tag")))
                 ))
         ));
         Document existenceExplain = collection.find(existenceQuery).explain(ExplainVerbosity.QUERY_PLANNER);
@@ -790,7 +790,7 @@ class SpringMongoEventStoreDcbConcurrencyTest {
     // ---------------------------------------------------------------------------
 
     private static CloudEvent taggedEvent(String type, String... tags) {
-        return DcbCloudEvents.withTags(event(type), Set.of(tags));
+        return DcbCloudEvents.withTags(event(type), java.util.Arrays.stream(tags).map(Tag::parse).toList());
     }
 
     private static CloudEvent event(String type) {

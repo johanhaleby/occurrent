@@ -35,6 +35,7 @@ import org.occurrent.eventstore.api.SortBy;
 import org.occurrent.eventstore.api.StreamReadFilter;
 import org.occurrent.eventstore.api.WriteCondition;
 import org.occurrent.eventstore.api.dcb.DcbAppendCondition;
+import org.occurrent.eventstore.api.dcb.Tag;
 import org.occurrent.eventstore.api.dcb.DcbCloudEvents;
 import org.occurrent.filter.Filter;
 import org.occurrent.mongodb.timerepresentation.TimeRepresentation;
@@ -57,7 +58,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.occurrent.eventstore.api.EventStoreCapability.DCB;
 import static org.occurrent.eventstore.api.EventStoreCapability.STREAM;
-import static org.occurrent.eventstore.api.dcb.DcbQuery.tags;
+import static org.occurrent.eventstore.api.dcb.DcbCriteria.tags;
 
 @Testcontainers
 @DisplayNameGeneration(ReplaceUnderscores.class)
@@ -176,9 +177,9 @@ class MongoEventStoreCapabilityTest {
     void dcb_operations_fail_without_dcb_capability() {
         MongoEventStore eventStore = newEventStore(eventStoreConfig(STREAM).build());
 
-        assertUnsupportedDcbOperation(() -> eventStore.read(tags("name:1")));
+        assertUnsupportedDcbOperation(() -> eventStore.read(tags(Tag.parse("name:1"))));
         assertUnsupportedDcbOperation(() -> eventStore.append(List.of(taggedEvent("NameDefined", "name:1"))));
-        assertUnsupportedDcbOperation(() -> eventStore.append(List.of(taggedEvent("NameDefined", "name:1")), DcbAppendCondition.failIfEventsMatch(tags("name:1"))));
+        assertUnsupportedDcbOperation(() -> eventStore.append(List.of(taggedEvent("NameDefined", "name:1")), DcbAppendCondition.failIfEventsMatch(tags(Tag.parse("name:1")))));
     }
 
     @Test
@@ -207,7 +208,7 @@ class MongoEventStoreCapabilityTest {
         eventStore.append(List.of(taggedEvent("NameChanged", "name:1")));
 
         assertThat(eventStore.read("name:1").events()).extracting(CloudEvent::getType).containsExactly("NameDefined");
-        assertThat(eventStore.read(tags("name:1")).events()).extracting(CloudEvent::getType).containsExactly("NameChanged");
+        assertThat(eventStore.read(tags(Tag.parse("name:1"))).events()).extracting(CloudEvent::getType).containsExactly("NameChanged");
     }
 
     @Test
@@ -215,7 +216,7 @@ class MongoEventStoreCapabilityTest {
         MongoEventStore dcbOnly = newEventStore(eventStoreConfig(DCB).build());
         dcbOnly.append(List.of(taggedEvent("NameDefined", "name:1"), taggedEvent("NameChanged", "name:1")));
 
-        List<CloudEvent> events = dcbOnly.read(tags("name:1")).events();
+        List<CloudEvent> events = dcbOnly.read(tags(Tag.parse("name:1"))).events();
 
         assertThat(events).hasSize(2);
         assertThat(events).extracting(OccurrentExtensionGetter::getStreamId).allSatisfy(streamId -> assertThat(streamId).startsWith("dcb:partition:"));
@@ -229,11 +230,11 @@ class MongoEventStoreCapabilityTest {
         both.append(List.of(taggedEvent("NameDefined", "name:1")));
         both.append(List.of(taggedEvent("OrderPlaced", "order:1")));
 
-        assertThat(both.read(tags("name:1")).events()).extracting(CloudEvent::getType).containsExactly("NameDefined");
-        assertThat(both.read(tags("order:1")).events()).extracting(CloudEvent::getType).containsExactly("OrderPlaced");
+        assertThat(both.read(tags(Tag.parse("name:1"))).events()).extracting(CloudEvent::getType).containsExactly("NameDefined");
+        assertThat(both.read(tags(Tag.parse("order:1"))).events()).extracting(CloudEvent::getType).containsExactly("OrderPlaced");
 
-        String nameStreamId = OccurrentExtensionGetter.getStreamId(both.read(tags("name:1")).events().get(0));
-        String orderStreamId = OccurrentExtensionGetter.getStreamId(both.read(tags("order:1")).events().get(0));
+        String nameStreamId = OccurrentExtensionGetter.getStreamId(both.read(tags(Tag.parse("name:1"))).events().get(0));
+        String orderStreamId = OccurrentExtensionGetter.getStreamId(both.read(tags(Tag.parse("order:1"))).events().get(0));
         assertThat(nameStreamId).startsWith("dcb:partition:");
         assertThat(orderStreamId).startsWith("dcb:partition:");
         assertThat(both.read(nameStreamId).events()).extracting(CloudEvent::getType).contains("NameDefined");
@@ -292,7 +293,7 @@ class MongoEventStoreCapabilityTest {
     }
 
     private static CloudEvent taggedEvent(String type, String... tags) {
-        return DcbCloudEvents.withTags(event(type), Set.of(tags));
+        return DcbCloudEvents.withTags(event(type), java.util.Arrays.stream(tags).map(Tag::parse).toList());
     }
 
     private static CloudEvent event(String type) {

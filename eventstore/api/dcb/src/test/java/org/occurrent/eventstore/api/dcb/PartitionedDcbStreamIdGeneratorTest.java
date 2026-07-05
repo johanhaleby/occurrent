@@ -31,21 +31,21 @@ class PartitionedDcbStreamIdGeneratorTest {
 
     @Test
     void tag_sets_that_differ_only_by_a_separator_character_canonicalize_differently() {
-        // A tag may legally contain "|", so two different sets must not canonicalize to the same string (which would
-        // force them onto the same partition). Asserted on the canonical form because two distinct strings can still
-        // land on the same partition by chance.
-        assertThat(PartitionedDcbStreamIdGenerator.canonicalize(Set.of("a|b", "c")))
-                .isNotEqualTo(PartitionedDcbStreamIdGenerator.canonicalize(Set.of("a", "b", "c")));
+        // A tag value may legally contain the tag key/value separator ':', so two different sets must not canonicalize
+        // to the same string (which would force them onto the same partition). Asserted on the canonical form because
+        // two distinct strings can still land on the same partition by chance.
+        assertThat(PartitionedDcbStreamIdGenerator.canonicalize(Set.of(Tag.of("a", "b:c"))))
+                .isNotEqualTo(PartitionedDcbStreamIdGenerator.canonicalize(Set.of(Tag.of("a", "b"), Tag.of("c", "d"))));
     }
 
     @Test
     void same_tag_set_always_maps_to_the_same_stream_id_regardless_of_iteration_order() {
-        assertThat(generator.generateStreamId(Set.of("game:1", "tenant:42")))
-                .isEqualTo(generator.generateStreamId(Set.of("tenant:42", "game:1")));
+        assertThat(generator.generateStreamId(Set.of(Tag.of("game", "1"), Tag.of("tenant", "42"))))
+                .isEqualTo(generator.generateStreamId(Set.of(Tag.of("tenant", "42"), Tag.of("game", "1"))));
     }
 
     @Test
     void generated_stream_id_starts_with_the_configured_prefix() {
-        assertThat(generator.generateStreamId(Set.of("game:1"))).startsWith("dcb:partition:");
+        assertThat(generator.generateStreamId(Set.of(Tag.of("game", "1")))).startsWith("dcb:partition:");
     }
 }

@@ -20,8 +20,9 @@ import org.bson.Document;
 import org.junit.jupiter.api.DisplayNameGeneration;
 import org.junit.jupiter.api.DisplayNameGenerator.ReplaceUnderscores;
 import org.junit.jupiter.api.Test;
-import org.occurrent.eventstore.api.dcb.DcbQuery;
-import org.occurrent.eventstore.api.dcb.DcbQueryItem;
+import org.occurrent.eventstore.api.dcb.DcbCriteria;
+import org.occurrent.eventstore.api.dcb.Tag;
+import org.occurrent.eventstore.api.dcb.DcbCriterion;
 
 import java.util.List;
 import java.util.Set;
@@ -37,7 +38,7 @@ class DcbSubscriptionFilterConverterTest {
 
     @Test
     void match_all_query_produces_only_the_dcb_tags_existence_condition() {
-        Document stage = DcbSubscriptionFilterConverter.toChangeStreamMatchStage(DcbQuery.all());
+        Document stage = DcbSubscriptionFilterConverter.toChangeStreamMatchStage(DcbCriteria.all());
 
         Document match = stage.get("$match", Document.class);
         assertDcbTagsConditionPresent(match);
@@ -46,7 +47,7 @@ class DcbSubscriptionFilterConverterTest {
 
     @Test
     void single_type_query_produces_dollar_in_on_type_field() {
-        Document stage = DcbSubscriptionFilterConverter.toChangeStreamMatchStage(DcbQuery.type("OrderPlaced"));
+        Document stage = DcbSubscriptionFilterConverter.toChangeStreamMatchStage(DcbCriteria.type("OrderPlaced"));
 
         Document match = stage.get("$match", Document.class);
         assertDcbTagsConditionPresent(match);
@@ -62,7 +63,7 @@ class DcbSubscriptionFilterConverterTest {
 
     @Test
     void multiple_types_query_produces_dollar_in_with_all_types() {
-        Document stage = DcbSubscriptionFilterConverter.toChangeStreamMatchStage(DcbQuery.types("OrderPlaced", "OrderCancelled"));
+        Document stage = DcbSubscriptionFilterConverter.toChangeStreamMatchStage(DcbCriteria.types("OrderPlaced", "OrderCancelled"));
 
         Document match = stage.get("$match", Document.class);
         assertDcbTagsConditionPresent(match);
@@ -77,7 +78,7 @@ class DcbSubscriptionFilterConverterTest {
 
     @Test
     void tags_all_of_query_produces_dollar_all_on_tags_field() {
-        Document stage = DcbSubscriptionFilterConverter.toChangeStreamMatchStage(DcbQuery.tags("order:1", "tenant:2"));
+        Document stage = DcbSubscriptionFilterConverter.toChangeStreamMatchStage(DcbCriteria.tags(Tag.parse("order:1"), Tag.parse("tenant:2")));
 
         Document match = stage.get("$match", Document.class);
         assertDcbTagsConditionPresent(match);
@@ -94,7 +95,7 @@ class DcbSubscriptionFilterConverterTest {
     @Test
     void excluded_types_query_produces_dollar_nin_on_type_field() {
         Document stage = DcbSubscriptionFilterConverter.toChangeStreamMatchStage(
-                DcbQuery.tags(Set.of("order:1")).excludingTypes(Set.of("OrderDeleted")));
+                DcbCriteria.tags(Set.of(Tag.parse("order:1"))).excludingTypes(Set.of("OrderDeleted")));
 
         Document match = stage.get("$match", Document.class);
         assertDcbTagsConditionPresent(match);
@@ -111,7 +112,7 @@ class DcbSubscriptionFilterConverterTest {
     @Test
     void type_and_tags_all_of_query_combines_dollar_in_and_dollar_all() {
         Document stage = DcbSubscriptionFilterConverter.toChangeStreamMatchStage(
-                DcbQuery.types(Set.of("OrderPlaced")).tags(Set.of("order:1")));
+                DcbCriteria.types(Set.of("OrderPlaced")).tags(Set.of(Tag.parse("order:1"))));
 
         Document match = stage.get("$match", Document.class);
         assertDcbTagsConditionPresent(match);
@@ -129,9 +130,9 @@ class DcbSubscriptionFilterConverterTest {
 
     @Test
     void any_of_multiple_items_produces_one_dollar_or_entry_per_item() {
-        DcbQuery query = DcbQuery.anyOf(
-                DcbQuery.type("OrderPlaced"),
-                DcbQuery.tags(Set.of("customer:99"))
+        DcbCriteria query = DcbCriteria.anyOf(
+                DcbCriteria.type("OrderPlaced"),
+                DcbCriteria.tags(Set.of(Tag.parse("customer:99")))
         );
 
         Document stage = DcbSubscriptionFilterConverter.toChangeStreamMatchStage(query);
@@ -156,7 +157,7 @@ class DcbSubscriptionFilterConverterTest {
 
     @Test
     void every_produced_match_stage_contains_the_top_level_dollar_match_key() {
-        for (DcbQuery query : List.of(DcbQuery.all(), DcbQuery.type("T"), DcbQuery.tags("x:1"))) {
+        for (DcbCriteria query : List.of(DcbCriteria.all(), DcbCriteria.type("T"), DcbCriteria.tags(Tag.parse("x:1")))) {
             Document stage = DcbSubscriptionFilterConverter.toChangeStreamMatchStage(query);
             assertThat(stage).containsKey("$match");
         }
