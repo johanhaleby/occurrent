@@ -169,15 +169,21 @@ public class StreamCatchupSubscriptionModel extends AbstractCatchupSubscriptionM
     // live delivery, which is the class of bug that once dropped specific-time replay on a position store.
     private enum StreamStart {BEGINNING_OF_TIME, SPECIFIC_TIME, GLOBAL_POSITION, LIVE}
 
+    // Resolve the start once, then branch on the resolved checkpoint. Beginning-of-time must be checked before
+    // specific-time because the beginning-of-time checkpoint is itself a TimeBasedCheckpoint.
     private static StreamStart classifyStreamStart(StartAt startAt, Class<?> contextType) {
-        if (startsAtBeginningOfTime(startAt, contextType)) {
-            return StreamStart.BEGINNING_OF_TIME;
-        }
-        if (isTimeBasedCheckpoint(startAt, contextType)) {
-            return StreamStart.SPECIFIC_TIME;
-        }
-        if (startsAtExplicitGlobalPosition(startAt, contextType)) {
-            return StreamStart.GLOBAL_POSITION;
+        StartAt resolved = startAt.get(new SubscriptionModelContext(contextType));
+        if (resolved instanceof StartAtCheckpoint start) {
+            Checkpoint checkpoint = start.checkpoint;
+            if (isBeginningOfTime(checkpoint)) {
+                return StreamStart.BEGINNING_OF_TIME;
+            }
+            if (isTimeBasedCheckpoint(checkpoint)) {
+                return StreamStart.SPECIFIC_TIME;
+            }
+            if (GlobalCheckpoint.isGlobalCheckpoint(checkpoint)) {
+                return StreamStart.GLOBAL_POSITION;
+            }
         }
         return StreamStart.LIVE;
     }
@@ -530,13 +536,6 @@ public class StreamCatchupSubscriptionModel extends AbstractCatchupSubscriptionM
 
     private static boolean isBeginningOfTime(Checkpoint checkpoint) {
         return checkpoint instanceof TimeBasedCheckpoint && ((TimeBasedCheckpoint) checkpoint).isBeginningOfTime();
-    }
-
-    // Whether a resolved StartAt is a "replay from the beginning of time" request. On a position store this maps to a
-    // position-from-beginning start.
-    private static boolean startsAtBeginningOfTime(StartAt startAt, Class<?> contextType) {
-        StartAt start = startAt.get(new SubscriptionModelContext(contextType));
-        return start instanceof StartAtCheckpoint position && isBeginningOfTime(position.checkpoint);
     }
 
     @Override
