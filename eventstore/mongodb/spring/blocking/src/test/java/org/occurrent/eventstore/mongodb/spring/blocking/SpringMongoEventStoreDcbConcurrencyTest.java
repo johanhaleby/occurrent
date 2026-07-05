@@ -743,6 +743,28 @@ class SpringMongoEventStoreDcbConcurrencyTest {
                 .isEqualTo("IXSCAN");
     }
 
+    @Test
+    void dcb_match_all_query_is_index_backed_on_dcb_tags_field() {
+        eventStore.append(List.of(taggedEvent("SeedType", "explain:tag")));
+
+        MongoCollection<Document> collection = mongoTemplate.getCollection(COLLECTION);
+
+        // Mirrors what toDcbMongoQuery(...) now builds for DcbCriteria.all(): the position window ANDed with an
+        // existence check on dcbTags, so a MatchAll/type-only read can never match a stream-written event (which has
+        // no dcbTags field) and does so via an index rather than a collection scan.
+        Document matchAllQuery = new Document("$and", List.of(
+                new Document("position", new Document("$gt", 0).append("$lte", 1000000)),
+                new Document("dcbTags", new Document("$exists", true))
+        ));
+        Document matchAllExplain = collection.find(matchAllQuery).explain(ExplainVerbosity.QUERY_PLANNER);
+        assertThat(extractWinningPlanStage(matchAllExplain))
+                .as("MatchAll DCB read should be index-backed via the sparse dcbTags index, not a COLLSCAN. Full explain: %s", matchAllExplain.toJson())
+                .isEqualTo("IXSCAN");
+        assertThat(matchAllExplain.toJson())
+                .as("The winning plan should use the dcbTags index specifically. Full explain: %s", matchAllExplain.toJson())
+                .contains("dcbTags");
+    }
+
     /**
      * Extracts the stage name of the winning plan from an explain() output document.
      * Walks the {@code queryPlanner.winningPlan} tree, following {@code inputStage} or

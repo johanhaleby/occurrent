@@ -752,7 +752,7 @@ public class MongoEventStore implements EventStore, EventStoreOperations, EventS
             eventStoreCollection.createIndex(Indexes.ascending(OccurrentCloudEventExtension.POSITION), new IndexOptions().unique(true).sparse(true));
         }
         if (dcbEnabled) {
-            eventStoreCollection.createIndex(Indexes.ascending(DcbDocumentMapper.DCB_TAGS_INDEX_FIELD));
+            eventStoreCollection.createIndex(Indexes.ascending(DcbDocumentMapper.DCB_TAGS_INDEX_FIELD), new IndexOptions().sparse(true));
         }
     }
 
@@ -853,13 +853,14 @@ public class MongoEventStore implements EventStore, EventStoreOperations, EventS
 
     private static Bson toDcbBsonQuery(DcbCriteria query, long afterPosition, long upperSequencePosition) {
         Bson positionFilter = and(gt(OccurrentCloudEventExtension.POSITION, afterPosition), lte(OccurrentCloudEventExtension.POSITION, upperSequencePosition));
+        Bson dcbTagsExistsFilter = Filters.exists(DcbDocumentMapper.DCB_TAGS_INDEX_FIELD);
         if (query instanceof DcbCriteria.MatchAll) {
-            return positionFilter;
+            return and(positionFilter, dcbTagsExistsFilter);
         }
         List<Bson> itemFilters = DcbMarkerModel.dcbQueryItems(query).stream()
                 .map(MongoEventStore::toBsonFilter)
                 .toList();
-        return and(positionFilter, or(itemFilters));
+        return and(positionFilter, dcbTagsExistsFilter, or(itemFilters));
     }
 
     private static Bson toBsonFilter(DcbCriterion item) {

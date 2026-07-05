@@ -305,6 +305,86 @@ class ReactorMongoEventStoreDcbTest {
     }
 
     @Test
+    void dcb_all_only_matches_dcb_written_events_not_stream_written_events() {
+        eventStore.write("stream:1", Flux.just(event("OrderPlaced"))).block();
+        eventStore.append(List.of(taggedEvent("NameDefined", "name:1"))).block();
+
+        DcbEventStream stream = eventStore.read(all()).block();
+
+        assertThat(requireNonNull(stream).events()).extracting(CloudEvent::getType).containsExactly("NameDefined");
+    }
+
+    @Test
+    void dcb_type_only_criterion_does_not_match_a_stream_written_event_of_that_type() {
+        eventStore.write("stream:1", Flux.just(event("OrderPlaced"))).block();
+        eventStore.append(List.of(taggedEvent("NameDefined", "name:1"))).block();
+
+        DcbEventStream stream = eventStore.read(types(List.of("OrderPlaced"))).block();
+
+        assertThat(requireNonNull(stream).events()).isEmpty();
+    }
+
+    @Test
+    void exists_and_count_are_false_and_zero_for_a_store_with_only_stream_written_events() {
+        eventStore.write("stream:1", Flux.just(event("OrderPlaced"))).block();
+
+        assertAll(
+                () -> assertThat(eventStore.exists(all()).block()).isFalse(),
+                () -> assertThat(eventStore.count(all()).block()).isZero()
+        );
+    }
+
+    @Test
+    void dcb_match_all_query_is_index_backed_on_dcb_tags_field() {
+        eventStore.append(List.of(taggedEvent("SeedType", "explain:tag"))).block();
+
+        // Mirrors what toDcbMongoQuery(...) now builds for DcbCriteria.all(): the position window ANDed with an
+        // existence check on dcbTags, so a MatchAll/type-only read can never match a stream-written event (which has
+        // no dcbTags field) and does so via an index rather than a collection scan.
+        org.bson.Document matchAllQuery = new org.bson.Document("$and", List.of(
+                new org.bson.Document("position", new org.bson.Document("$gt", 0).append("$lte", 1000000)),
+                new org.bson.Document("dcbTags", new org.bson.Document("$exists", true))
+        ));
+
+        org.bson.Document explain = requireNonNull(mongoTemplate.getCollection("events")
+                .flatMap(collection -> reactor.core.publisher.Mono.from(collection.find(matchAllQuery).explain(com.mongodb.ExplainVerbosity.QUERY_PLANNER)))
+                .block());
+
+        assertThat(extractWinningPlanStage(explain))
+                .as("MatchAll DCB read should be index-backed via the sparse dcbTags index, not a COLLSCAN. Full explain: %s", explain.toJson())
+                .isEqualTo("IXSCAN");
+        assertThat(explain.toJson())
+                .as("The winning plan should use the dcbTags index specifically. Full explain: %s", explain.toJson())
+                .contains("dcbTags");
+    }
+
+    private static String extractWinningPlanStage(org.bson.Document explainDoc) {
+        org.bson.Document queryPlanner = explainDoc.get("queryPlanner", org.bson.Document.class);
+        if (queryPlanner == null) {
+            return "UNKNOWN";
+        }
+        org.bson.Document plan = queryPlanner.get("winningPlan", org.bson.Document.class);
+        int depth = 0;
+        while (plan != null && depth++ < 20) {
+            String stage = plan.getString("stage");
+            if ("IXSCAN".equals(stage) || "COLLSCAN".equals(stage) || "COUNT_SCAN".equals(stage)) {
+                return stage;
+            }
+            org.bson.Document inputStage = plan.get("inputStage", org.bson.Document.class);
+            if (inputStage == null) {
+                List<?> inputStages = plan.getList("inputStages", org.bson.Document.class);
+                if (inputStages != null && !inputStages.isEmpty()) {
+                    plan = (org.bson.Document) inputStages.get(0);
+                    continue;
+                }
+                return stage == null ? "UNKNOWN" : stage;
+            }
+            plan = inputStage;
+        }
+        return "UNKNOWN";
+    }
+
+    @Test
     void appending_an_event_with_a_duplicate_id_and_source_fails_fast_without_retrying() {
         CloudEvent event = taggedEvent("NameDefined", "name:1");
         eventStore.append(List.of(event)).block();

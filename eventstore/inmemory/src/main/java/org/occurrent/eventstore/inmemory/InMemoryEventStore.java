@@ -279,7 +279,7 @@ public class InMemoryEventStore implements EventStore, EventStoreOperations, Eve
             List<CloudEvent> matchingEvents = allEvents()
                     .filter(event -> position(event) > afterPosition)
                     .filter(event -> position(event) <= upperBound)
-                    .filter(event -> DcbCloudEvents.matches(event, query))
+                    .filter(event -> DcbCloudEvents.isDcbEvent(event) && DcbCloudEvents.matches(event, query))
                     .sorted(Comparator.comparingLong(InMemoryEventStore::position))
                     .toList();
             return new DcbEventStream(matchingEvents, highWatermark);
@@ -306,7 +306,7 @@ public class InMemoryEventStore implements EventStore, EventStoreOperations, Eve
         long highWatermark = nextPosition.get() - 1;
         return allEvents()
                 .filter(event -> position(event) > 0 && position(event) <= highWatermark)
-                .filter(event -> DcbCloudEvents.matches(event, query));
+                .filter(event -> DcbCloudEvents.isDcbEvent(event) && DcbCloudEvents.matches(event, query));
     }
 
     @Override
@@ -338,7 +338,7 @@ public class InMemoryEventStore implements EventStore, EventStoreOperations, Eve
                 long afterPosition = condition.consistencyToken().map(DcbConsistencyToken::value).orElse(0L);
                 boolean fulfilled = allEvents()
                         .filter(event -> position(event) > afterPosition)
-                        .noneMatch(event -> DcbCloudEvents.matches(event, condition.query()));
+                        .noneMatch(event -> DcbCloudEvents.isDcbEvent(event) && DcbCloudEvents.matches(event, condition.query()));
                 long currentPosition = nextPosition.get() - 1;
                 if (!fulfilled) {
                     throw new DcbAppendConditionNotFulfilledException(condition, currentPosition, "Append condition was not fulfilled.");
