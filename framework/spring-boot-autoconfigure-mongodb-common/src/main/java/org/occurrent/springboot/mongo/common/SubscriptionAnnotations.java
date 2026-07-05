@@ -122,17 +122,17 @@ public final class SubscriptionAnnotations {
                 .toList();
     }
 
-    public static DcbCriteria buildDcbCriteria(List<String> cloudEventTypes, List<Tag> tagsAllOf) {
+    public static DcbCriteria buildDcbCriteria(List<String> cloudEventTypes, List<Tag> tags) {
         boolean hasTypes = !cloudEventTypes.isEmpty();
-        boolean hasTags = !tagsAllOf.isEmpty();
+        boolean hasTags = !tags.isEmpty();
         if (!hasTypes && !hasTags) {
             return DcbCriteria.all();
         } else if (hasTypes && hasTags) {
-            return DcbCriteria.types(cloudEventTypes.get(0), cloudEventTypes.stream().skip(1).toArray(String[]::new)).tags(tagsAllOf);
+            return DcbCriteria.types(cloudEventTypes.get(0), cloudEventTypes.stream().skip(1).toArray(String[]::new)).tags(tags);
         } else if (hasTypes) {
             return DcbCriteria.types(cloudEventTypes.get(0), cloudEventTypes.stream().skip(1).toArray(String[]::new));
         } else {
-            return DcbCriteria.tags(tagsAllOf);
+            return DcbCriteria.tags(tags);
         }
     }
 

@@ -43,10 +43,10 @@ import java.lang.annotation.*;
  * <h4>Query</h4>
  * <p>
  * The subscription delivers the DCB events matching its query. The query is built from {@link #eventTypes()} and
- * {@link #tagsAllOf()}: event types are matched as any-of (translated to CloudEvent types through the configured
+ * {@link #tags()}: event types are matched as any-of (translated to CloudEvent types through the configured
  * converter), tags are matched as all-of. When {@link #eventTypes()} is empty the event types are taken from the
  * method's event parameter (a sealed parameter expands to its concrete subtypes), the same way
- * {@link StreamSubscription} does, so the query is always scoped to the resolved event types. Add {@link #tagsAllOf()}
+ * {@link StreamSubscription} does, so the query is always scoped to the resolved event types. Add {@link #tags()}
  * to narrow further to a tag boundary.
  * </p>
  *
@@ -86,12 +86,12 @@ public @interface DcbSubscription {
      * Specify the DCB tags the events must all carry, the consistency boundary the subscription is scoped to. Matched
      * as all-of. When empty the subscription is not scoped by tags.
      * <p>
-     * Each entry must be in the {@code "key:value"} format (for example {@code "email:foo@bar.com"}); the string is
+     * Each entry must be in the {@code "key:value"} format (for example {@code "email:foo@bar.com"}). The string is
      * split on the first {@code :} into a tag key and value. A malformed value (missing {@code :}, or a blank key or
      * value) fails fast at application startup.
      * </p>
      */
-    String[] tagsAllOf() default {};
+    String[] tags() default {};
 
     /**
      * Specify the start position as one of the predefined {@link DcbStartPosition} values. Mutually exclusive with

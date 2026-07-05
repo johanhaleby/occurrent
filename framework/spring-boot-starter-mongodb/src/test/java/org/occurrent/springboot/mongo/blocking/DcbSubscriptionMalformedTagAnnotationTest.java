@@ -34,7 +34,7 @@ import java.net.URI;
 import static org.assertj.core.api.Assertions.assertThat;
 
 /**
- * A {@code @DcbSubscription} whose {@link DcbSubscription#tagsAllOf() tagsAllOf} carries a value that is not in
+ * A {@code @DcbSubscription} whose {@link DcbSubscription#tags() tags} carries a value that is not in
  * {@code key:value} form must fail fast at startup, and the failure must name the subscription id and the offending
  * tag so it is diagnosable. The tag is parsed in {@code OccurrentBlockingAnnotationBeanPostProcessor} before the
  * subscription model is ever consulted, so this reproduces the failure without a running store (no Docker).
@@ -45,7 +45,7 @@ class DcbSubscriptionMalformedTagAnnotationTest {
     private static final String SUBSCRIPTION_ID = "malformed-tag-subscription";
 
     @Test
-    void malformed_tagsAllOf_fails_fast_at_startup_naming_the_subscription_id_and_the_tag() {
+    void malformed_tags_fails_fast_at_startup_naming_the_subscription_id_and_the_tag() {
         new ApplicationContextRunner()
                 .withBean(OccurrentBlockingAnnotationBeanPostProcessor.class, OccurrentBlockingAnnotationBeanPostProcessor::new)
                 .withUserConfiguration(ConverterConfiguration.class, MalformedTagSubscriberConfiguration.class)
@@ -94,7 +94,7 @@ class DcbSubscriptionMalformedTagAnnotationTest {
     }
 
     static class MalformedTagSubscriber {
-        @DcbSubscription(id = SUBSCRIPTION_ID, eventTypes = TestEvent.class, tagsAllOf = "nope", startAt = DcbStartPosition.NOW)
+        @DcbSubscription(id = SUBSCRIPTION_ID, eventTypes = TestEvent.class, tags = "nope", startAt = DcbStartPosition.NOW)
         void on(TestEvent event, DcbEventMetadata metadata) {
         }
     }

@@ -535,7 +535,7 @@ class SpringMongoEventStoreDcbConcurrencyTest {
     // ---------------------------------------------------------------------------
     // Scenario 5: multi-marker boundary serialization under contention
     //
-    // Coverage note: the single-marker tests above (tagsAllOf with one tag, or types) exercise the
+    // Coverage note: the single-marker tests above (a single all-of tag, or types) exercise the
     // common code path but do not exercise multi-marker token capture — where the consistency token
     // must aggregate ALL markers in the query (the sum of their versions), not just one. This test
     // closes that gap and acts as a regression guard for the single-read token capture logic.
