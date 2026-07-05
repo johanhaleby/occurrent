@@ -71,7 +71,7 @@
         <!--use '-Drevision=...' when invoking Maven to assign required version-->
         <revision>0.0.0-SNAPSHOT</revision>
         <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
-        <maven.compiler.release>17</maven.compiler.release>
+        <maven.compiler.release>21</maven.compiler.release>
         <kotlin.compiler.jvmTarget>${maven.compiler.release}</kotlin.compiler.jvmTarget>
         <junit.version>5.11.3</junit.version>
         <test-containers.version>2.0.5</test-containers.version>
@@ -359,7 +359,7 @@
                     <version>${kotlin.version}</version>
 
                     <configuration>
-                        <jvmTarget>17</jvmTarget>
+                        <jvmTarget>21</jvmTarget>
                         <args>
                             <arg>-Xjsr305=strict</arg>
                         </args>

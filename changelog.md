@@ -10,6 +10,7 @@ DCB is a capability layered on the existing CloudEvent storage, not a new store 
 
 #### Changes
 
+* Occurrent now requires Java 21 instead of Java 17. This raises the minimum JDK needed to build and run Occurrent. Stored data is unaffected, so an existing application only needs to move its runtime to Java 21.
 * Renamed the `SubscriptionPosition` type family to `Checkpoint` to stop overloading "position" for two different
   concepts: the ordering value (`position`) and the per-subscriber resume marker built from it. This is a breaking
   API change; there is no deprecated alias.

@@ -112,7 +112,7 @@ Subscription flow:
 ## Conventions And Patterns
 
 General:
-- Java 17 baseline; Kotlin JVM target follows Java 17.
+- Java 21 baseline; Kotlin JVM target follows Java 21.
 - Java and Kotlin coexist in most modules. Root Maven build-helper adds `src/main/kotlin` and `src/test/kotlin`.
 - Public APIs are small capability interfaces composed together rather than large monoliths.
 - Nullness uses JSpecify in newer APIs (`@NullMarked`, `@Nullable`) but not uniformly across old code.
@@ -188,9 +188,8 @@ Required shell workflow:
 - Before raw shell commands, explicitly consider whether `rtk` supports the command. Use raw commands only when unsupported or proven unsuitable.
 
 CI:
-- `.github/workflows/maven.yml` runs `mvn -B package --file pom.xml` on Temurin Java 17 and 21.
+- `.github/workflows/maven.yml` runs `mvn -B package --file pom.xml` on Temurin Java 21 and 25.
 - CI enables Testcontainers reuse by writing `$HOME/.testcontainers.properties`.
-- Qodana runs separately with `jetbrains/qodana-jvm-community:2025.2`, project JDK 17.
 
 Local focused Maven patterns:
 - Full package: `rtk mvn -B package --file pom.xml`
@@ -202,7 +201,7 @@ Local focused Maven patterns:
 
 Release scripts:
 - `mvn_local_snapshot.sh` runs release-profile local install with `-Drevision=...` and optional skip tests.
-- `mvn_release.sh` requires Java 17, uses `mvn deploy -Prelease`, GPG signing, source/javadoc jars, Sonatype Central publishing, and tags `occurrent-<version>`.
+- `mvn_release.sh` requires Java 21, uses `mvn deploy -Prelease`, GPG signing, source/javadoc jars, Sonatype Central publishing, and tags `occurrent-<version>`.
 
 ## Orchestrator Operating Notes
 
