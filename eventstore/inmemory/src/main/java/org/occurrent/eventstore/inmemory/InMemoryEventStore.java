@@ -201,7 +201,7 @@ public class InMemoryEventStore implements EventStore, EventStoreOperations, Eve
         final long oldStreamVersion = currentStreamVersionContainer.get();
         if (addedEvents != null && !addedEvents.isEmpty()) {
             listener.accept(addedEvents.stream());
-            CloudEvent cloudEvent = addedEvents.get(addedEvents.size() - 1);
+            CloudEvent cloudEvent = addedEvents.getLast();
             long newStreamVersion = OccurrentExtensionGetter.getStreamVersion(cloudEvent);
             writeResult = new WriteResult(streamId, oldStreamVersion, newStreamVersion);
         } else {
@@ -215,7 +215,7 @@ public class InMemoryEventStore implements EventStore, EventStoreOperations, Eve
         Map<String, List<CloudEvent>> eventsById = events.stream().collect(groupingBy(c -> c.getId() + c.getSource().toString()));
         eventsById.forEach((key, cloudEvents) -> {
             if (cloudEvents.size() > 1) {
-                CloudEvent cloudEvent = cloudEvents.get(0);
+                CloudEvent cloudEvent = cloudEvents.getFirst();
                 throw new DuplicateCloudEventException(cloudEvent.getId(), cloudEvent.getSource());
             }
         });
@@ -357,8 +357,8 @@ public class InMemoryEventStore implements EventStore, EventStoreOperations, Eve
             assignInsertionOrder(addedEvents);
             state.put(streamId, new CopyOnWriteArrayList<>(eventList));
             nextPosition.addAndGet(addedEvents.size());
-            long firstPosition = position(addedEvents.get(0));
-            long lastPosition = position(addedEvents.get(addedEvents.size() - 1));
+            long firstPosition = position(addedEvents.getFirst());
+            long lastPosition = position(addedEvents.getLast());
             result = new DcbAppendResult(firstPosition, lastPosition, addedEvents.size());
         }
 
@@ -651,7 +651,7 @@ public class InMemoryEventStore implements EventStore, EventStoreOperations, Eve
         if (events == null || events.isEmpty()) {
             return 0;
         }
-        return (long) events.get(events.size() - 1).getExtension(STREAM_VERSION);
+        return (long) events.getLast().getExtension(STREAM_VERSION);
     }
 
     @Nullable

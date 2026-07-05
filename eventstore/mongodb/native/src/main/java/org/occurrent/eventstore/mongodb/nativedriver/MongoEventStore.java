@@ -287,7 +287,7 @@ public class MongoEventStore implements EventStore, EventStoreOperations, EventS
                         } catch (MongoException e) {
                             throw translateException(new WriteContext(streamId, currentStreamVersion, writeCondition), e);
                         }
-                        final long newStreamVersion = cloudEventDocuments.get(cloudEventDocuments.size() - 1).getLong(STREAM_VERSION);
+                        final long newStreamVersion = cloudEventDocuments.getLast().getLong(STREAM_VERSION);
                         return StreamVersionDiff.of(currentStreamVersion, newStreamVersion);
                     }
                 }, transactionOptions);

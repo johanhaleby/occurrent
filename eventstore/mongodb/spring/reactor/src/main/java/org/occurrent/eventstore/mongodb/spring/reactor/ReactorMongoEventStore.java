@@ -180,7 +180,7 @@ public class ReactorMongoEventStore implements EventStore, EventStoreOperations,
                                 if (stampedDocuments.isEmpty()) {
                                     newStreamVersion = currentStreamVersion;
                                 } else {
-                                    newStreamVersion = stampedDocuments.get(stampedDocuments.size() - 1).getLong(STREAM_VERSION);
+                                    newStreamVersion = stampedDocuments.getLast().getLong(STREAM_VERSION);
                                 }
                                 return insertAll(streamId, currentStreamVersion, writeCondition, stampedDocuments)
                                         .then(Mono.just(StreamVersionDiff.of(currentStreamVersion, newStreamVersion)));
