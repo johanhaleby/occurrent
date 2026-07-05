@@ -42,7 +42,7 @@ final class DcbSubscriptionModelAdapter extends AbstractDelegatingSubscriptionMo
     @Override
     public Subscription subscribe(String subscriptionId, DcbCriteria query, DcbStartAt startAt, Consumer<CloudEvent> action) {
         requireNonNull(subscriptionId, "Subscription id cannot be null");
-        requireNonNull(query, "Query cannot be null");
+        requireNonNull(query, "Criteria cannot be null");
         requireNonNull(startAt, DcbStartAt.class.getSimpleName() + " cannot be null");
         requireNonNull(action, "Subscription action cannot be null");
         // The DcbSubscriptionFilter is honored server-side for live delivery, but a DCB catch-up replays by the

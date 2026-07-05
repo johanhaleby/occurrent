@@ -314,7 +314,7 @@ class OccurrentMongoAutoConfigurationCharacterizationTest {
     }
 
     private TagGenerator<TestEvent> tagsForTestEvent() {
-        return event -> Set.of(Tag.parse(event.subject()));
+        return event -> Set.of(Tag.of("subject", event.subject()));
     }
 
     @Configuration(proxyBeanMethods = false)
