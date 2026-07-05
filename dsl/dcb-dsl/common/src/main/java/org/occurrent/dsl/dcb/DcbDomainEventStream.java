@@ -30,7 +30,7 @@ import static java.util.Objects.requireNonNull;
  *
  * @param events the domain events matched by the DCB query
  * @param lastSequencePosition the latest DCB sequence position observed by the read, or {@code 0} when none has been observed. A global cursor, not a safe optimistic-concurrency boundary on its own
- * @param consistencyToken the optimistic-concurrency boundary observed by the read. Pass it to {@link DcbAppendCondition#failIfEventsMatch(org.occurrent.eventstore.api.dcb.DcbQuery, DcbConsistencyToken)} for a conditional append
+ * @param consistencyToken the optimistic-concurrency boundary observed by the read. Pass it to {@link DcbAppendCondition#failIfEventsMatch(org.occurrent.eventstore.api.dcb.DcbCriteria, DcbConsistencyToken)} for a conditional append
  */
 @NullMarked
 public record DcbDomainEventStream<E>(List<E> events, long lastSequencePosition, DcbConsistencyToken consistencyToken) {

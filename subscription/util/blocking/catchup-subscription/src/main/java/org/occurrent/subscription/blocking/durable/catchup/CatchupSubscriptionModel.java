@@ -22,7 +22,7 @@ import org.jspecify.annotations.NullMarked;
 import org.jspecify.annotations.Nullable;
 import org.occurrent.eventstore.api.blocking.EventStoreQueries;
 import org.occurrent.eventstore.api.dcb.DcbEventStore;
-import org.occurrent.eventstore.api.dcb.DcbQuery;
+import org.occurrent.eventstore.api.dcb.DcbCriteria;
 import org.occurrent.subscription.Checkpoint;
 import org.occurrent.subscription.DcbSubscriptionFilter;
 import org.occurrent.subscription.OccurrentSubscriptionFilter;
@@ -146,7 +146,7 @@ public class CatchupSubscriptionModel implements SubscriptionModel, DelegatingSu
      * @param dcbEventStore     The DCB event store that will be used for the DCB catch-up replay.
      * @param dcbQuery          The DCB query that selects the events this subscription delivers.
      */
-    public CatchupSubscriptionModel(CheckpointAwareSubscriptionModel subscriptionModel, DcbEventStore dcbEventStore, DcbQuery dcbQuery) {
+    public CatchupSubscriptionModel(CheckpointAwareSubscriptionModel subscriptionModel, DcbEventStore dcbEventStore, DcbCriteria dcbQuery) {
         this(subscriptionModel, dcbEventStore, dcbQuery, new CatchupSubscriptionModelConfig(DEFAULT_CACHE_SIZE));
     }
 
@@ -161,7 +161,7 @@ public class CatchupSubscriptionModel implements SubscriptionModel, DelegatingSu
      * @param dcbQuery          The DCB query that selects the events this subscription delivers.
      * @param config            The configuration to use.
      */
-    public CatchupSubscriptionModel(CheckpointAwareSubscriptionModel subscriptionModel, DcbEventStore dcbEventStore, DcbQuery dcbQuery, CatchupSubscriptionModelConfig config) {
+    public CatchupSubscriptionModel(CheckpointAwareSubscriptionModel subscriptionModel, DcbEventStore dcbEventStore, DcbCriteria dcbQuery, CatchupSubscriptionModelConfig config) {
         this.subscriptionModel = Objects.requireNonNull(subscriptionModel, "subscriptionModel cannot be null");
         this.streamCatchupSubscriptionModel = null;
         this.dcbCatchupSubscriptionModel = new DcbCatchupSubscriptionModel(subscriptionModel, dcbEventStore, dcbQuery, config, CatchupSubscriptionModel.class);
@@ -178,7 +178,7 @@ public class CatchupSubscriptionModel implements SubscriptionModel, DelegatingSu
      * @param dcbQuery          The DCB query that selects the events a DCB subscription delivers.
      * @param config            The configuration to use.
      */
-    public CatchupSubscriptionModel(CheckpointAwareSubscriptionModel subscriptionModel, EventStoreQueries eventStoreQueries, DcbEventStore dcbEventStore, DcbQuery dcbQuery, CatchupSubscriptionModelConfig config) {
+    public CatchupSubscriptionModel(CheckpointAwareSubscriptionModel subscriptionModel, EventStoreQueries eventStoreQueries, DcbEventStore dcbEventStore, DcbCriteria dcbQuery, CatchupSubscriptionModelConfig config) {
         this.subscriptionModel = Objects.requireNonNull(subscriptionModel, "subscriptionModel cannot be null");
         this.streamCatchupSubscriptionModel = new StreamCatchupSubscriptionModel(subscriptionModel, eventStoreQueries, config, CatchupSubscriptionModel.class);
         this.dcbCatchupSubscriptionModel = new DcbCatchupSubscriptionModel(subscriptionModel, dcbEventStore, dcbQuery, config, CatchupSubscriptionModel.class);

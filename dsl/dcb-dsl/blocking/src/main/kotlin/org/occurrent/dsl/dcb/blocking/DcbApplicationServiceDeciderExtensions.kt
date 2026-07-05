@@ -20,7 +20,7 @@ import org.occurrent.application.service.blocking.dcb.DcbApplicationService
 import org.occurrent.dsl.decider.Decider
 import org.occurrent.dsl.decider.adaptEvents
 import org.occurrent.eventstore.api.dcb.DcbAppendResult
-import org.occurrent.eventstore.api.dcb.DcbQuery
+import org.occurrent.eventstore.api.dcb.DcbCriteria
 import java.util.concurrent.atomic.AtomicReference
 import java.util.stream.Stream
 
@@ -36,7 +36,7 @@ import java.util.stream.Stream
  * Kotlin-idiomatic counterpart to the Java [DcbApplicationService.execute] which returns `Optional<DcbAppendResult>`.
  */
 inline fun <C : Any, S, reified SubE : E, E : Any> DcbApplicationService<E>.execute(
-    query: DcbQuery,
+    query: DcbCriteria,
     command: C,
     decider: Decider<C, S, SubE>
 ): DcbAppendResult? = execute(query, listOf(command), decider)
@@ -47,7 +47,7 @@ inline fun <C : Any, S, reified SubE : E, E : Any> DcbApplicationService<E>.exec
  * Returns the [DcbAppendResult], or `null` when the decider produced no new events.
  */
 inline fun <C : Any, S, reified SubE : E, E : Any> DcbApplicationService<E>.execute(
-    query: DcbQuery,
+    query: DcbCriteria,
     commands: List<C>,
     decider: Decider<C, S, SubE>
 ): DcbAppendResult? {
@@ -61,7 +61,7 @@ inline fun <C : Any, S, reified SubE : E, E : Any> DcbApplicationService<E>.exec
  * Execute a command and return the folded state plus the new events decided for [query].
  */
 inline fun <C : Any, S, reified SubE : E, E : Any> DcbApplicationService<E>.executeAndReturnDecision(
-    query: DcbQuery,
+    query: DcbCriteria,
     command: C,
     decider: Decider<C, S, SubE>
 ): Decider.Decision<S, E> = executeAndReturnDecision(query, listOf(command), decider)
@@ -70,7 +70,7 @@ inline fun <C : Any, S, reified SubE : E, E : Any> DcbApplicationService<E>.exec
  * Execute commands and return the folded state plus the new events decided for [query].
  */
 inline fun <C : Any, S, reified SubE : E, E : Any> DcbApplicationService<E>.executeAndReturnDecision(
-    query: DcbQuery,
+    query: DcbCriteria,
     commands: List<C>,
     decider: Decider<C, S, SubE>
 ): Decider.Decision<S, E> {
@@ -87,23 +87,23 @@ inline fun <C : Any, S, reified SubE : E, E : Any> DcbApplicationService<E>.exec
 /**
  * Execute a command and return the folded state after the decision.
  */
-inline fun <C : Any, S, reified SubE : E, E : Any> DcbApplicationService<E>.executeAndReturnState(query: DcbQuery, command: C, decider: Decider<C, S, SubE>): S =
+inline fun <C : Any, S, reified SubE : E, E : Any> DcbApplicationService<E>.executeAndReturnState(query: DcbCriteria, command: C, decider: Decider<C, S, SubE>): S =
     executeAndReturnDecision(query, command, decider).state
 
 /**
  * Execute commands and return the folded state after the decision.
  */
-inline fun <C : Any, S, reified SubE : E, E : Any> DcbApplicationService<E>.executeAndReturnState(query: DcbQuery, commands: List<C>, decider: Decider<C, S, SubE>): S =
+inline fun <C : Any, S, reified SubE : E, E : Any> DcbApplicationService<E>.executeAndReturnState(query: DcbCriteria, commands: List<C>, decider: Decider<C, S, SubE>): S =
     executeAndReturnDecision(query, commands, decider).state
 
 /**
  * Execute a command and return the new events decided for [query].
  */
-inline fun <C : Any, S, reified SubE : E, E : Any> DcbApplicationService<E>.executeAndReturnEvents(query: DcbQuery, command: C, decider: Decider<C, S, SubE>): List<E> =
+inline fun <C : Any, S, reified SubE : E, E : Any> DcbApplicationService<E>.executeAndReturnEvents(query: DcbCriteria, command: C, decider: Decider<C, S, SubE>): List<E> =
     executeAndReturnDecision(query, command, decider).events
 
 /**
  * Execute commands and return the new events decided for [query].
  */
-inline fun <C : Any, S, reified SubE : E, E : Any> DcbApplicationService<E>.executeAndReturnEvents(query: DcbQuery, commands: List<C>, decider: Decider<C, S, SubE>): List<E> =
+inline fun <C : Any, S, reified SubE : E, E : Any> DcbApplicationService<E>.executeAndReturnEvents(query: DcbCriteria, commands: List<C>, decider: Decider<C, S, SubE>): List<E> =
     executeAndReturnDecision(query, commands, decider).events

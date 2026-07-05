@@ -18,7 +18,7 @@ package org.occurrent.subscription.api.reactor;
 
 import io.cloudevents.CloudEvent;
 import org.jspecify.annotations.NullMarked;
-import org.occurrent.eventstore.api.dcb.DcbQuery;
+import org.occurrent.eventstore.api.dcb.DcbCriteria;
 import org.occurrent.subscription.DcbStartAt;
 import reactor.core.publisher.Flux;
 import reactor.core.publisher.Mono;
@@ -26,9 +26,9 @@ import reactor.core.publisher.Mono;
 import java.util.function.Function;
 
 /**
- * A typed reactive view over a {@link SubscriptionModel} that subscribes to DCB events selected by a {@link DcbQuery}.
+ * A typed reactive view over a {@link SubscriptionModel} that subscribes to DCB events selected by a {@link DcbCriteria}.
  * <p>
- * It is the DCB counterpart to the reactive {@link SubscriptionModel}, accepting a {@link DcbQuery} and a
+ * It is the DCB counterpart to the reactive {@link SubscriptionModel}, accepting a {@link DcbCriteria} and a
  * {@link DcbStartAt} rather than a stream filter and a generic start position. The {@link DcbStartAt} is passed through
  * to the underlying {@link SubscriptionModel}, so whether a replay-oriented start such as {@link DcbStartAt#beginning()}
  * or {@link DcbStartAt#afterPosition(long)} replays history depends on that model. A plain model such as
@@ -37,7 +37,7 @@ import java.util.function.Function;
  * <p>
  * The {@code subscribe(query)}/{@code subscribe(query, startAt)} methods above return a bare {@link Flux}: the
  * subscription lives as long as something is subscribed to the {@code Flux} and is cancelled by disposing that
- * subscription. The named {@link #subscribe(String, DcbQuery, DcbStartAt, Function)} methods below are the
+ * subscription. The named {@link #subscribe(String, DcbCriteria, DcbStartAt, Function)} methods below are the
  * lifecycle-managed counterpart, mirroring {@link Subscribable}: they track the subscription by id so it can be
  * cancelled through {@link #cancelSubscription(String)}, which is what a durable, catch-up-capable DCB subscription
  * (such as the {@code @DcbSubscription} annotation) needs.
@@ -50,12 +50,12 @@ public interface DcbSubscriptionModel {
      *
      * @return a {@link Flux} of the matching cloud events.
      */
-    Flux<CloudEvent> subscribe(DcbQuery query, DcbStartAt startAt);
+    Flux<CloudEvent> subscribe(DcbCriteria query, DcbStartAt startAt);
 
     /**
      * Subscribe to DCB events matching {@code query} at the subscription model default position.
      */
-    default Flux<CloudEvent> subscribe(DcbQuery query) {
+    default Flux<CloudEvent> subscribe(DcbCriteria query) {
         return subscribe(query, DcbStartAt.subscriptionModelDefault());
     }
 
@@ -63,7 +63,7 @@ public interface DcbSubscriptionModel {
      * Subscribe to every DCB event at the subscription model default position.
      */
     default Flux<CloudEvent> subscribe() {
-        return subscribe(DcbQuery.all());
+        return subscribe(DcbCriteria.all());
     }
 
     /**
@@ -76,27 +76,27 @@ public interface DcbSubscriptionModel {
      * @param action         This action will be invoked for each cloud event matching {@code query}. The next event
      *                       is not processed until the returned {@link Mono} completes.
      */
-    Subscription subscribe(String subscriptionId, DcbQuery query, DcbStartAt startAt, Function<CloudEvent, Mono<Void>> action);
+    Subscription subscribe(String subscriptionId, DcbCriteria query, DcbStartAt startAt, Function<CloudEvent, Mono<Void>> action);
 
     /**
      * Subscribe to DCB events matching {@code query} at the subscription model default position, tracked by
      * {@code subscriptionId}.
      *
-     * @see #subscribe(String, DcbQuery, DcbStartAt, Function)
+     * @see #subscribe(String, DcbCriteria, DcbStartAt, Function)
      */
-    default Subscription subscribe(String subscriptionId, DcbQuery query, Function<CloudEvent, Mono<Void>> action) {
+    default Subscription subscribe(String subscriptionId, DcbCriteria query, Function<CloudEvent, Mono<Void>> action) {
         return subscribe(subscriptionId, query, DcbStartAt.subscriptionModelDefault(), action);
     }
 
     /**
-     * Cancel a named DCB subscription started with {@link #subscribe(String, DcbQuery, DcbStartAt, Function)} and
+     * Cancel a named DCB subscription started with {@link #subscribe(String, DcbCriteria, DcbStartAt, Function)} and
      * forget it. Cancelling a subscription id that is unknown or already cancelled is a no-op.
      */
     void cancelSubscription(String subscriptionId);
 
     /**
      * Create a DCB view over an existing reactive {@link SubscriptionModel}. The named
-     * {@link #subscribe(String, DcbQuery, DcbStartAt, Function)} and {@link #cancelSubscription(String)} methods
+     * {@link #subscribe(String, DcbCriteria, DcbStartAt, Function)} and {@link #cancelSubscription(String)} methods
      * additionally require {@code delegate} to implement {@link Subscribable} and {@link SubscriptionModelLifeCycle}
      * respectively; this is only checked when one of those methods is called, not eagerly here, since a delegate
      * that only ever uses the {@link Flux}-returning {@code subscribe} methods need not support named subscriptions.

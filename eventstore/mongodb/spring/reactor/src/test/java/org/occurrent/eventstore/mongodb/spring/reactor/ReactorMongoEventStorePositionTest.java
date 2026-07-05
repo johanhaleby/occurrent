@@ -30,6 +30,7 @@ import org.occurrent.eventstore.api.EventStoreCapability;
 import org.occurrent.eventstore.api.PositionRange;
 import org.occurrent.eventstore.api.WriteCondition;
 import org.occurrent.eventstore.api.dcb.DcbCloudEvents;
+import org.occurrent.eventstore.api.dcb.Tag;
 import org.occurrent.filter.Filter;
 import org.occurrent.mongodb.timerepresentation.TimeRepresentation;
 import org.occurrent.testsupport.mongodb.FlushMongoDBExtension;
@@ -282,7 +283,7 @@ class ReactorMongoEventStorePositionTest {
     }
 
     private static CloudEvent taggedEvent(String type, String... tags) {
-        return DcbCloudEvents.withTags(event(type), Set.of(tags));
+        return DcbCloudEvents.withTags(event(type), java.util.Arrays.stream(tags).map(Tag::parse).toList());
     }
 
     private static CloudEvent event(String type) {

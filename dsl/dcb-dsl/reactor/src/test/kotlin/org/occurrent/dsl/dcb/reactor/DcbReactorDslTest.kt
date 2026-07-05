@@ -42,8 +42,9 @@ import org.occurrent.eventstore.api.dcb.DcbAppendCondition
 import org.occurrent.eventstore.api.dcb.DcbAppendResult
 import org.occurrent.eventstore.api.dcb.DcbCloudEvents
 import org.occurrent.eventstore.api.dcb.DcbEventStream
-import org.occurrent.eventstore.api.dcb.DcbQuery
+import org.occurrent.eventstore.api.dcb.DcbCriteria
 import org.occurrent.eventstore.api.dcb.DcbReadOptions
+import org.occurrent.eventstore.api.dcb.Tag
 import org.occurrent.eventstore.api.dcb.reactor.DcbEventStore
 import org.occurrent.eventstore.mongodb.spring.reactor.EventStoreConfig
 import org.occurrent.eventstore.mongodb.spring.reactor.ReactorMongoEventStore
@@ -153,7 +154,7 @@ class DcbReactorDslTest {
     @Test
     fun executeAndReturnDecision_returns_the_committed_decision_after_a_conflict_retry() {
         append(NameDefined("event-0", time, "name", "Jane Doe"))
-        val interloper = DcbCloudEvents.withTags(converter.toCloudEvent(NameWasChanged("event-99", time, "name", "Interloper")), setOf("name:name"))
+        val interloper = DcbCloudEvents.withTags(converter.toCloudEvent(NameWasChanged("event-99", time, "name", "Interloper")), setOf(Tag.of("name", "name")))
         val conflictingStore = ConflictingOnceDcbEventStore(eventStore, interloper)
         val service = GenericDcbApplicationService(conflictingStore, converter, { event -> setOf(tagFor(event)) }, GenericDcbApplicationService.defaultRetry())
         val deciderRuns = AtomicInteger()
@@ -192,7 +193,7 @@ class DcbReactorDslTest {
 
     private fun append(vararg events: DomainEvent) {
         val cloudEvents = converter.toCloudEvents(Stream.of(*events))
-            .map { event -> DcbCloudEvents.withTags(event, setOf("name:name")) }
+            .map { event -> DcbCloudEvents.withTags(event, setOf(Tag.of("name", "name"))) }
             .toList()
         eventStore.append(cloudEvents).block()
     }
@@ -200,9 +201,9 @@ class DcbReactorDslTest {
     private fun readNameEvents(nameId: String): List<DomainEvent> =
         queries.query(nameQuery(nameId)).collectList().block()!!
 
-    private fun nameQuery(nameId: String): DcbQuery = DcbQuery.tags("name:$nameId")
+    private fun nameQuery(nameId: String): DcbCriteria = DcbCriteria.tags(Tag.of("name", nameId))
 
-    private fun tagFor(event: DomainEvent): String = "name:${event.userId()}"
+    private fun tagFor(event: DomainEvent): Tag = Tag.of("name", event.userId())
 
     private sealed interface NameCommand
     private data class DefineName(val name: String) : NameCommand
@@ -218,7 +219,7 @@ class DcbReactorDslTest {
     ) : DcbEventStore {
         private val conflictInserted = AtomicBoolean()
 
-        override fun read(query: DcbQuery, options: DcbReadOptions): Mono<DcbEventStream> = delegate.read(query, options)
+        override fun read(query: DcbCriteria, options: DcbReadOptions): Mono<DcbEventStream> = delegate.read(query, options)
 
         override fun append(events: MutableList<CloudEvent>): Mono<DcbAppendResult> = delegate.append(events)
 

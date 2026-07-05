@@ -152,10 +152,10 @@ class GameplayReadPathsTest {
     fun `manual bounded reads use DCB query helpers`() {
         assertThat(readSource("game/FindGameByIdQuery.kt"))
             .contains("GameDcbQueries.allGameEvents(gameId)")
-            .doesNotContain("DcbQuery.")
+            .doesNotContain("DcbCriteria.")
         assertThat(readSource("endedgamesoverview/WhenGameIsEndedThenAddGameToEndedGamesOverview.kt"))
             .contains("GameDcbQueries.event<GameWasStarted>(gameId)")
-            .doesNotContain("DcbQuery.")
+            .doesNotContain("DcbCriteria.")
     }
 
     private fun wordList() = WordList(

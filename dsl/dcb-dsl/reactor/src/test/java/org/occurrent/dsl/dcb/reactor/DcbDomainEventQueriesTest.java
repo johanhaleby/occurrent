@@ -36,10 +36,11 @@ import org.occurrent.dsl.query.reactor.DomainEventQueries;
 import org.occurrent.eventstore.api.EventStoreCapability;
 import org.occurrent.eventstore.api.SortBy;
 import org.occurrent.eventstore.api.dcb.DcbAppendCondition;
+import org.occurrent.eventstore.api.dcb.Tag;
 import org.occurrent.eventstore.api.dcb.DcbAppendConditionNotFulfilledException;
 import org.occurrent.eventstore.api.dcb.DcbCloudEvents;
 import org.occurrent.eventstore.api.dcb.DcbConsistencyToken;
-import org.occurrent.eventstore.api.dcb.DcbQuery;
+import org.occurrent.eventstore.api.dcb.DcbCriteria;
 import org.occurrent.eventstore.api.dcb.DcbReadOptions;
 import org.occurrent.eventstore.api.reactor.EventStoreQueries;
 import org.occurrent.eventstore.mongodb.spring.reactor.EventStoreConfig;
@@ -104,7 +105,7 @@ class DcbDomainEventQueriesTest {
         NameWasChanged nameWasChanged = new NameWasChanged("eventId2", time, "name", "Jane Doe");
         append("name:1", nameDefined, nameWasChanged);
 
-        List<DomainEvent> events = dcbQueries.query(DcbQuery.tags("name:1")).collectList().block();
+        List<DomainEvent> events = dcbQueries.query(DcbCriteria.tags(Tag.parse("name:1"))).collectList().block();
 
         assertThat(events).containsExactly(nameDefined, nameWasChanged);
     }
@@ -116,7 +117,7 @@ class DcbDomainEventQueriesTest {
         append("name:1", nameDefined);
         append("name:1", nameWasChanged);
 
-        List<DomainEvent> events = dcbQueries.query(DcbQuery.tags("name:1"), DcbReadOptions.afterPosition(1)).collectList().block();
+        List<DomainEvent> events = dcbQueries.query(DcbCriteria.tags(Tag.parse("name:1")), DcbReadOptions.afterPosition(1)).collectList().block();
 
         assertThat(events).containsExactly(nameWasChanged);
     }
@@ -127,7 +128,7 @@ class DcbDomainEventQueriesTest {
         append("name:1", nameDefined);
         append("other:1", new NameWasChanged("eventId2", time, "name", "Jane Doe"));
 
-        DcbDomainEventStream<DomainEvent> eventStream = dcbQueries.queryWithPosition(DcbQuery.tags("name:1")).block();
+        DcbDomainEventStream<DomainEvent> eventStream = dcbQueries.queryWithPosition(DcbCriteria.tags(Tag.parse("name:1"))).block();
 
         assertThat(eventStream.events()).containsExactly(nameDefined);
         assertThat(eventStream.stream()).containsExactly(nameDefined);
@@ -138,7 +139,7 @@ class DcbDomainEventQueriesTest {
     void query_with_position_exposes_a_usable_consistency_token() {
         append("name:1", new NameDefined("eventId1", time, "name", "Some Doe"));
 
-        DcbDomainEventStream<DomainEvent> eventStream = dcbQueries.queryWithPosition(DcbQuery.tags("name:1")).block();
+        DcbDomainEventStream<DomainEvent> eventStream = dcbQueries.queryWithPosition(DcbCriteria.tags(Tag.parse("name:1"))).block();
         DcbConsistencyToken token = eventStream.consistencyToken();
         assertThat(token).isNotNull();
 
@@ -146,10 +147,10 @@ class DcbDomainEventQueriesTest {
         // to the store is correctly rejected. This proves the token flows through the DSL projection, not just the position.
         append("name:1", new NameWasChanged("eventId2", time, "name", "Jane Doe"));
         List<CloudEvent> newEvents = cloudEventConverter.toCloudEvents(Stream.of(new NameWasChanged("eventId3", time, "name", "Joe Doe")))
-                .map(event -> DcbCloudEvents.withTags(event, List.of("name:1")))
+                .map(event -> DcbCloudEvents.withTags(event, List.of(Tag.parse("name:1"))))
                 .toList();
 
-        assertThatThrownBy(() -> eventStore.append(newEvents, DcbAppendCondition.failIfEventsMatch(DcbQuery.tags("name:1"), token)).block())
+        assertThatThrownBy(() -> eventStore.append(newEvents, DcbAppendCondition.failIfEventsMatch(DcbCriteria.tags(Tag.parse("name:1")), token)).block())
                 .isInstanceOf(DcbAppendConditionNotFulfilledException.class);
     }
 
@@ -207,7 +208,7 @@ class DcbDomainEventQueriesTest {
 
     private void append(String tag, DomainEvent... events) {
         List<CloudEvent> cloudEvents = cloudEventConverter.toCloudEvents(Stream.of(events))
-                .map(event -> DcbCloudEvents.withTags(event, List.of(tag)))
+                .map(event -> DcbCloudEvents.withTags(event, List.of(Tag.parse(tag))))
                 .toList();
         eventStore.append(cloudEvents).block();
     }

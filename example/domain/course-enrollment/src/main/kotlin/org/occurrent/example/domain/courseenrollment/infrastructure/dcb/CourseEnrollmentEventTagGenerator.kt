@@ -1,6 +1,7 @@
 package org.occurrent.example.domain.courseenrollment.infrastructure.dcb
 
 import org.occurrent.application.service.dcb.TagGenerator
+import org.occurrent.eventstore.api.dcb.Tag
 import org.occurrent.example.domain.courseenrollment.common.DomainEvent
 import org.occurrent.example.domain.courseenrollment.features.coursemanagement.model.CourseCancelled
 import org.occurrent.example.domain.courseenrollment.features.coursemanagement.model.CourseDefined
@@ -19,7 +20,7 @@ import org.occurrent.example.domain.courseenrollment.features.studentmanagement.
  * single conditional append protect the course capacity AND the per-student limit in one atomic decision.
  */
 internal class CourseEnrollmentEventTagGenerator : TagGenerator<DomainEvent> {
-    override fun tags(event: DomainEvent): Set<String> = when (event) {
+    override fun tags(event: DomainEvent): Set<Tag> = when (event) {
         is CourseDefined -> setOf(CourseTags.course(event.courseId))
         is CourseCancelled -> setOf(CourseTags.course(event.courseId))
         is StudentRegistered -> setOf(StudentTags.student(event.studentId))

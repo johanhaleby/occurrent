@@ -25,7 +25,7 @@ import org.occurrent.eventstore.api.dcb.DcbAppendCondition;
 import org.occurrent.eventstore.api.dcb.DcbAppendConditionNotFulfilledException;
 import org.occurrent.eventstore.api.dcb.DcbAppendResult;
 import org.occurrent.eventstore.api.dcb.DcbCloudEvents;
-import org.occurrent.eventstore.api.dcb.DcbQuery;
+import org.occurrent.eventstore.api.dcb.DcbCriteria;
 import org.occurrent.eventstore.api.dcb.reactor.DcbEventStore;
 import reactor.core.publisher.Mono;
 import reactor.util.retry.Retry;
@@ -75,7 +75,7 @@ public class GenericDcbApplicationService<E> implements DcbApplicationService<E>
     }
 
     @Override
-    public Mono<DcbAppendResult> execute(DcbQuery query, DcbExecuteOptions<E> options, Function<Stream<E>, Stream<E>> functionThatCallsDomainModel) {
+    public Mono<DcbAppendResult> execute(DcbCriteria query, DcbExecuteOptions<E> options, Function<Stream<E>, Stream<E>> functionThatCallsDomainModel) {
         Objects.requireNonNull(query, "Query cannot be null");
         Objects.requireNonNull(options, DcbExecuteOptions.class.getSimpleName() + " cannot be null");
         Objects.requireNonNull(functionThatCallsDomainModel, "Function that calls domain model cannot be null");

@@ -27,7 +27,8 @@ import org.occurrent.application.service.blocking.dcb.DcbApplicationService;
 import org.occurrent.application.service.dcb.TagGenerator;
 import org.occurrent.dsl.dcb.blocking.DcbDomainEventQueries;
 import org.occurrent.dsl.query.blocking.DomainEventQueries;
-import org.occurrent.eventstore.api.dcb.DcbQuery;
+import org.occurrent.eventstore.api.dcb.DcbCriteria;
+import org.occurrent.eventstore.api.dcb.Tag;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.autoconfigure.SpringBootApplication;
 import org.springframework.boot.test.context.SpringBootTest;
@@ -103,9 +104,9 @@ class OccurrentMongoAutoConfigurationCombinedModeTest {
         String tag = "tenant:" + UUID.randomUUID();
         TestEvent event = new TestEvent(UUID.randomUUID().toString(), new Date(), "dcb-name", tag);
 
-        dcbApplicationService.execute(DcbQuery.tags(tag), __ -> Stream.of(event));
+        dcbApplicationService.execute(DcbCriteria.tags(Tag.parse(tag)), __ -> Stream.of(event));
 
-        try (Stream<TestEvent> read = dcbDomainEventQueries.query(DcbQuery.tags(tag))) {
+        try (Stream<TestEvent> read = dcbDomainEventQueries.query(DcbCriteria.tags(Tag.parse(tag)))) {
             assertThat(read).containsExactly(event);
         }
     }
@@ -141,7 +142,7 @@ class OccurrentMongoAutoConfigurationCombinedModeTest {
 
         @Bean
         TagGenerator<TestEvent> testEventTagGenerator() {
-            return event -> Set.of(event.subject());
+            return event -> Set.of(Tag.parse(event.subject()));
         }
     }
 

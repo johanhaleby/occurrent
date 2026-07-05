@@ -27,6 +27,7 @@ import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.Timeout;
 import org.junit.jupiter.api.extension.RegisterExtension;
 import org.occurrent.eventstore.api.dcb.DcbAppendCondition;
+import org.occurrent.eventstore.api.dcb.Tag;
 import org.occurrent.eventstore.api.dcb.DcbAppendConditionNotFulfilledException;
 import org.occurrent.eventstore.api.dcb.DcbCloudEvents;
 import org.occurrent.eventstore.api.dcb.DcbConsistencyToken;
@@ -56,7 +57,7 @@ import static java.util.Objects.requireNonNull;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.catchThrowable;
 import static org.occurrent.eventstore.api.dcb.DcbAppendCondition.failIfEventsMatch;
-import static org.occurrent.eventstore.api.dcb.DcbQuery.tags;
+import static org.occurrent.eventstore.api.dcb.DcbCriteria.tags;
 import static org.occurrent.eventstore.api.EventStoreCapability.DCB;
 import static org.occurrent.eventstore.api.EventStoreCapability.STREAM;
 
@@ -93,7 +94,7 @@ class SpringMongoEventStoreDcbReadWatermarkTest {
 
     @Test
     void conditional_append_detects_an_event_reserved_before_but_committed_after_the_read() throws Exception {
-        String tag = "shared-tag";
+        String tag = "shared:tag";
 
         CountDownLatch appenderReserved = new CountDownLatch(1);
         CountDownLatch readerHasRead = new CountDownLatch(1);
@@ -116,7 +117,7 @@ class SpringMongoEventStoreDcbReadWatermarkTest {
                         new SimpleMongoClientDatabaseFactory(readerClient, databaseName))));
 
         // A reads an empty boundary and appends a matching event conditionally.
-        DcbAppendCondition appenderCondition = failIfEventsMatch(tags(tag), DcbConsistencyToken.of(0));
+        DcbAppendCondition appenderCondition = failIfEventsMatch(tags(Tag.parse(tag)), DcbConsistencyToken.of(0));
         Thread appender = new Thread(
                 () -> appenderStore.append(List.of(taggedEvent("AppenderEvent", tag)), appenderCondition),
                 "appender");
@@ -127,7 +128,7 @@ class SpringMongoEventStoreDcbReadWatermarkTest {
 
         // R reads the same boundary. A's event is uncommitted, so R observes nothing, and the consistency token it
         // captures reflects only committed appends (A's marker version is not bumped until A commits).
-        DcbEventStream readerBoundary = readerStore.read(tags(tag));
+        DcbEventStream readerBoundary = readerStore.read(tags(Tag.parse(tag)));
         DcbConsistencyToken readerToken = readerBoundary.consistencyToken();
         assertThat(readerBoundary.stream().toList())
                 .as("A's event is uncommitted, so R must observe an empty boundary")
@@ -138,7 +139,7 @@ class SpringMongoEventStoreDcbReadWatermarkTest {
 
         // R appends conditionally on the token it read. A's matching event is now committed, which bumped the marker
         // version, so the token has changed and R's append must be rejected.
-        DcbAppendCondition readerCondition = failIfEventsMatch(tags(tag), readerToken);
+        DcbAppendCondition readerCondition = failIfEventsMatch(tags(Tag.parse(tag)), readerToken);
         Throwable thrown = catchThrowable(() ->
                 readerStore.append(List.of(taggedEvent("ReaderEvent", tag)), readerCondition));
 
@@ -205,7 +206,7 @@ class SpringMongoEventStoreDcbReadWatermarkTest {
     }
 
     private static CloudEvent taggedEvent(String type, String... tags) {
-        return DcbCloudEvents.withTags(event(type), Set.of(tags));
+        return DcbCloudEvents.withTags(event(type), java.util.Arrays.stream(tags).map(Tag::parse).toList());
     }
 
     private static CloudEvent event(String type) {

@@ -39,7 +39,7 @@ import static java.util.Objects.requireNonNull;
  *                             reader can actually see. Use {@code consistencyToken} for optimistic concurrency.
  * @param consistencyToken     an opaque, store-defined token capturing the consistency boundary observed by this read
  *                             for the supplied query. Pass it unchanged to
- *                             {@link DcbAppendCondition#failIfEventsMatch(DcbQuery, DcbConsistencyToken)} so a later
+ *                             {@link DcbAppendCondition#failIfEventsMatch(DcbCriteria, DcbConsistencyToken)} so a later
  *                             append is rejected if any event matching the query was committed after this read. Unlike
  *                             {@code lastSequencePosition}, it is sound under concurrent in-flight appends because the
  *                             store derives it from data that is only observable once committed. Round-trip it within

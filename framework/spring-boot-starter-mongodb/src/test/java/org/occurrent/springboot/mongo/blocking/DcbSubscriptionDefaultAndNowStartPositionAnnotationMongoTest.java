@@ -30,6 +30,7 @@ import org.occurrent.application.converter.jackson3.JacksonCloudEventConverter;
 import org.occurrent.application.converter.typemapper.CloudEventTypeMapper;
 import org.occurrent.application.converter.typemapper.ReflectionCloudEventTypeMapper;
 import org.occurrent.eventstore.api.dcb.DcbCloudEvents;
+import org.occurrent.eventstore.api.dcb.Tag;
 import org.occurrent.eventstore.api.dcb.DcbEventStore;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.autoconfigure.SpringBootApplication;
@@ -117,7 +118,7 @@ class DcbSubscriptionDefaultAndNowStartPositionAnnotationMongoTest {
 
     private void append(TestEvent event) {
         List<io.cloudevents.CloudEvent> cloudEvents = cloudEventConverter.toCloudEvents(Stream.of(event))
-                .map(ce -> DcbCloudEvents.withTags(ce, List.of(TAG)))
+                .map(ce -> DcbCloudEvents.withTags(ce, List.of(Tag.parse(TAG))))
                 .toList();
         dcbEventStore.append(cloudEvents);
     }
@@ -183,7 +184,7 @@ class DcbSubscriptionDefaultAndNowStartPositionAnnotationMongoTest {
         @PostConstruct
         void appendHistory() {
             List<io.cloudevents.CloudEvent> cloudEvents = cloudEventConverter.toCloudEvents(Stream.of(new TestEvent("historic")))
-                    .map(ce -> DcbCloudEvents.withTags(ce, List.of(TAG)))
+                    .map(ce -> DcbCloudEvents.withTags(ce, List.of(Tag.parse(TAG))))
                     .toList();
             dcbEventStore.append(cloudEvents);
         }

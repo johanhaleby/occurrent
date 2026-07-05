@@ -44,7 +44,8 @@ import java.util.concurrent.atomic.AtomicReference;
 import java.util.stream.Stream;
 
 import static org.assertj.core.api.Assertions.assertThat;
-import static org.occurrent.eventstore.api.dcb.DcbQuery.tags;
+import org.occurrent.eventstore.api.dcb.Tag;
+import static org.occurrent.eventstore.api.dcb.DcbCriteria.tags;
 
 @DisplayNameGeneration(ReplaceUnderscores.class)
 class DcbApplicationServiceSideEffectTest {
@@ -57,7 +58,7 @@ class DcbApplicationServiceSideEffectTest {
         DomainEventConverter domainEventConverter = new DomainEventConverter(new ObjectMapper());
         CloudEventConverter<DomainEvent> cloudEventConverter = new GenericCloudEventConverter<>(domainEventConverter::convertToDomainEvent, domainEventConverter::convertToCloudEvent);
         eventStore = new InMemoryEventStore();
-        applicationService = new GenericDcbApplicationService<>(eventStore, cloudEventConverter, event -> Set.of("name:1"));
+        applicationService = new GenericDcbApplicationService<>(eventStore, cloudEventConverter, event -> Set.of(Tag.parse("name:1")));
     }
 
     @Test
@@ -66,7 +67,7 @@ class DcbApplicationServiceSideEffectTest {
         List<DomainEvent> observed = new ArrayList<>();
         NameDefined nameDefined = new NameDefined(UUID.randomUUID().toString(), LocalDateTime.now(), "name", "Johan");
 
-        Optional<DcbAppendResult> result = applicationService.execute(tags("name:1"),
+        Optional<DcbAppendResult> result = applicationService.execute(tags(Tag.parse("name:1")),
                 DcbExecuteOptions.<DomainEvent>options().sideEffect(events -> {
                     invocations.incrementAndGet();
                     events.forEach(observed::add);
@@ -82,7 +83,7 @@ class DcbApplicationServiceSideEffectTest {
     void does_not_invoke_side_effect_when_the_domain_function_returns_no_events() {
         AtomicBoolean invoked = new AtomicBoolean();
 
-        Optional<DcbAppendResult> result = applicationService.execute(tags("name:1"),
+        Optional<DcbAppendResult> result = applicationService.execute(tags(Tag.parse("name:1")),
                 DcbExecuteOptions.<DomainEvent>options().sideEffect(events -> invoked.set(true)),
                 events -> Stream.empty());
 
@@ -97,7 +98,7 @@ class DcbApplicationServiceSideEffectTest {
         PolicySideEffect<DomainEvent> policy = PolicySideEffect.<DomainEvent, NameDefined>executePolicy(NameDefined.class, e -> definedName.set(e.name()))
                 .andThenExecuteAnotherPolicy(NameWasChanged.class, e -> changedName.set(e.name()));
 
-        applicationService.execute(tags("name:1"),
+        applicationService.execute(tags(Tag.parse("name:1")),
                 DcbExecuteOptions.<DomainEvent>options().sideEffect(policy),
                 events -> Stream.of(new NameDefined(UUID.randomUUID().toString(), LocalDateTime.now(), "name", "Johan")));
 
@@ -107,10 +108,10 @@ class DcbApplicationServiceSideEffectTest {
 
     @Test
     void simple_execute_overload_appends_without_a_side_effect() {
-        Optional<DcbAppendResult> result = applicationService.execute(tags("name:1"),
+        Optional<DcbAppendResult> result = applicationService.execute(tags(Tag.parse("name:1")),
                 events -> Stream.of(new NameDefined(UUID.randomUUID().toString(), LocalDateTime.now(), "name", "Johan")));
 
         assertThat(result).isPresent();
-        assertThat(eventStore.read(tags("name:1")).events()).extracting(CloudEvent::getType).hasSize(1);
+        assertThat(eventStore.read(tags(Tag.parse("name:1"))).events()).extracting(CloudEvent::getType).hasSize(1);
     }
 }

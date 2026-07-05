@@ -46,7 +46,7 @@ import static java.util.Objects.requireNonNull;
  * <p>
  * This is the stream counterpart of {@code ReactorDcbCatchupSubscriptionModel}. It replays through
  * {@link PositionOrderedReader#readInPositionOrder(Filter, PositionRange)} and matches a stream {@link Filter}
- * in-process, where the DCB model uses a {@code DcbQuery}. Otherwise the two are the same, because both read the
+ * in-process, where the DCB model uses a {@code DcbCriteria}. Otherwise the two are the same, because both read the
  * same global {@code position} sequence.
  * <p>
  * Only meaningful for a store that writes a {@code position} on stream events. This model cannot check that itself

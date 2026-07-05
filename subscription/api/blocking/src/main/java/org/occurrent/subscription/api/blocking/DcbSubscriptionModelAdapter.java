@@ -19,7 +19,7 @@ package org.occurrent.subscription.api.blocking;
 import io.cloudevents.CloudEvent;
 import org.jspecify.annotations.NullMarked;
 import org.occurrent.eventstore.api.dcb.DcbCloudEvents;
-import org.occurrent.eventstore.api.dcb.DcbQuery;
+import org.occurrent.eventstore.api.dcb.DcbCriteria;
 import org.occurrent.subscription.DcbStartAt;
 import org.occurrent.subscription.DcbSubscriptionFilter;
 
@@ -40,7 +40,7 @@ final class DcbSubscriptionModelAdapter extends AbstractDelegatingSubscriptionMo
     }
 
     @Override
-    public Subscription subscribe(String subscriptionId, DcbQuery query, DcbStartAt startAt, Consumer<CloudEvent> action) {
+    public Subscription subscribe(String subscriptionId, DcbCriteria query, DcbStartAt startAt, Consumer<CloudEvent> action) {
         requireNonNull(subscriptionId, "Subscription id cannot be null");
         requireNonNull(query, "Query cannot be null");
         requireNonNull(startAt, DcbStartAt.class.getSimpleName() + " cannot be null");

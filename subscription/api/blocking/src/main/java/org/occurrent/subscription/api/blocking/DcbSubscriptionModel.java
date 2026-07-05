@@ -18,14 +18,14 @@ package org.occurrent.subscription.api.blocking;
 
 import io.cloudevents.CloudEvent;
 import org.jspecify.annotations.NullMarked;
-import org.occurrent.eventstore.api.dcb.DcbQuery;
+import org.occurrent.eventstore.api.dcb.DcbCriteria;
 import org.occurrent.subscription.DcbStartAt;
 
 import java.util.function.Consumer;
 
 /**
  * A typed view of a {@link SubscriptionModel} for Dynamic Consistency Boundary (DCB) subscriptions. It accepts a
- * {@link DcbQuery} and a {@link DcbStartAt}, so a DCB subscription cannot be handed a stream {@code Filter} or a
+ * {@link DcbCriteria} and a {@link DcbStartAt}, so a DCB subscription cannot be handed a stream {@code Filter} or a
  * time-based start position. It is a facade over the shared subscription model, not a separate lifecycle: obtain one
  * with {@link #from(SubscriptionModel)} and the typed calls are translated to the underlying model.
  * <p>
@@ -39,12 +39,12 @@ public interface DcbSubscriptionModel extends SubscriptionModelLifeCycle {
     /**
      * Subscribe to DCB events matching {@code query}, starting at {@code startAt}.
      */
-    Subscription subscribe(String subscriptionId, DcbQuery query, DcbStartAt startAt, Consumer<CloudEvent> action);
+    Subscription subscribe(String subscriptionId, DcbCriteria query, DcbStartAt startAt, Consumer<CloudEvent> action);
 
     /**
      * Subscribe to DCB events matching {@code query} at the subscription model default position.
      */
-    default Subscription subscribe(String subscriptionId, DcbQuery query, Consumer<CloudEvent> action) {
+    default Subscription subscribe(String subscriptionId, DcbCriteria query, Consumer<CloudEvent> action) {
         return subscribe(subscriptionId, query, DcbStartAt.subscriptionModelDefault(), action);
     }
 
@@ -52,7 +52,7 @@ public interface DcbSubscriptionModel extends SubscriptionModelLifeCycle {
      * Subscribe to every DCB event at the subscription model default position.
      */
     default Subscription subscribe(String subscriptionId, Consumer<CloudEvent> action) {
-        return subscribe(subscriptionId, DcbQuery.all(), action);
+        return subscribe(subscriptionId, DcbCriteria.all(), action);
     }
 
     /**

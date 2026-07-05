@@ -38,7 +38,7 @@ import org.occurrent.eventstore.api.EventStoreCapability;
 import org.occurrent.eventstore.api.blocking.EventStore;
 import org.occurrent.eventstore.api.blocking.EventStoreQueries;
 import org.occurrent.eventstore.api.dcb.DcbEventStore;
-import org.occurrent.eventstore.api.dcb.DcbQuery;
+import org.occurrent.eventstore.api.dcb.DcbCriteria;
 import org.occurrent.eventstore.mongodb.spring.blocking.EventStoreConfig;
 import org.occurrent.eventstore.mongodb.spring.blocking.SpringMongoEventStore;
 import org.occurrent.retry.RetryStrategy;
@@ -165,19 +165,19 @@ public class OccurrentMongoAutoConfiguration<E> {
         DurableSubscriptionModel durableSubscriptionModel = new DurableSubscriptionModel(mongoSubscriptionModel, storage);
         CatchupSubscriptionModelConfig catchupConfig = new CatchupSubscriptionModelConfig(useCheckpointStorage(storage)
                 .andPersistCheckpointDuringCatchupPhaseForEveryNEvents(1000));
-        // DCB catch-up replays by position over the DCB event store. The DcbQuery.all() is shared by every
-        // DcbSubscriptions subscription, which each narrow to their own DcbQuery in the consumer, so a single
+        // DCB catch-up replays by position over the DCB event store. The DcbCriteria.all() is shared by every
+        // DcbSubscriptions subscription, which each narrow to their own DcbCriteria in the consumer, so a single
         // all-matching catch-up is correct. Stream catch-up replays by event time over the stream query API.
         boolean stream = eventStoreProperties.getCapabilities().contains(STREAM);
         DcbEventStore dcbStore = eventStoreProperties.getCapabilities().contains(DCB) ? dcbEventStore.getIfAvailable() : null;
         SubscriptionModel subscriptionModel;
         if (stream && dcbStore != null) {
             // STREAM and DCB together: one dual-mode model routes each subscription to stream or DCB catch-up.
-            subscriptionModel = new CatchupSubscriptionModel(durableSubscriptionModel, eventStoreQueries, dcbStore, DcbQuery.all(), catchupConfig);
+            subscriptionModel = new CatchupSubscriptionModel(durableSubscriptionModel, eventStoreQueries, dcbStore, DcbCriteria.all(), catchupConfig);
         } else if (stream) {
             subscriptionModel = new CatchupSubscriptionModel(durableSubscriptionModel, eventStoreQueries, catchupConfig);
         } else if (dcbStore != null) {
-            subscriptionModel = new CatchupSubscriptionModel(durableSubscriptionModel, dcbStore, DcbQuery.all(), catchupConfig);
+            subscriptionModel = new CatchupSubscriptionModel(durableSubscriptionModel, dcbStore, DcbCriteria.all(), catchupConfig);
         } else {
             subscriptionModel = durableSubscriptionModel;
         }

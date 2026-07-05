@@ -85,6 +85,11 @@ public @interface DcbSubscription {
     /**
      * Specify the DCB tags the events must all carry, the consistency boundary the subscription is scoped to. Matched
      * as all-of. When empty the subscription is not scoped by tags.
+     * <p>
+     * Each entry must be in the {@code "key:value"} format (for example {@code "email:foo@bar.com"}); the string is
+     * split on the first {@code :} into a tag key and value. A malformed value (missing {@code :}, or a blank key or
+     * value) fails fast at application startup.
+     * </p>
      */
     String[] tagsAllOf() default {};
 

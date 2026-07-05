@@ -21,7 +21,7 @@ import org.jspecify.annotations.NullMarked;
 import org.occurrent.eventstore.api.dcb.DcbAppendCondition;
 import org.occurrent.eventstore.api.dcb.DcbAppendResult;
 import org.occurrent.eventstore.api.dcb.DcbEventStream;
-import org.occurrent.eventstore.api.dcb.DcbQuery;
+import org.occurrent.eventstore.api.dcb.DcbCriteria;
 import org.occurrent.eventstore.api.dcb.DcbReadOptions;
 import reactor.core.publisher.Mono;
 
@@ -36,7 +36,7 @@ import static java.util.Objects.requireNonNull;
  * <p>
  * DCB is an optional capability over shared CloudEvent storage. Implementations keep storing CloudEvents in Occurrent
  * streams while exposing reads, append conditions, tags, and sequence positions in DCB terms. The DCB value types
- * ({@link DcbQuery}, {@link DcbReadOptions}, {@link DcbEventStream}, {@link DcbAppendCondition}, {@link DcbAppendResult})
+ * ({@link DcbCriteria}, {@link DcbReadOptions}, {@link DcbEventStream}, {@link DcbAppendCondition}, {@link DcbAppendResult})
  * are shared with the blocking API.
  */
 @NullMarked
@@ -45,19 +45,19 @@ public interface DcbEventStore {
     /**
      * Reads all events that match {@code query} from the beginning of the DCB sequence.
      */
-    default Mono<DcbEventStream> read(DcbQuery query) {
+    default Mono<DcbEventStream> read(DcbCriteria query) {
         return read(query, DcbReadOptions.fromBeginning());
     }
 
     /**
      * Reads events that match {@code query} using the supplied read options.
      */
-    Mono<DcbEventStream> read(DcbQuery query, DcbReadOptions options);
+    Mono<DcbEventStream> read(DcbCriteria query, DcbReadOptions options);
 
     /**
      * Returns whether any DCB event in the store matches {@code query}.
      */
-    default Mono<Boolean> exists(DcbQuery query) {
+    default Mono<Boolean> exists(DcbCriteria query) {
         return exists(query, DcbReadOptions.fromBeginning());
     }
 
@@ -67,7 +67,7 @@ public interface DcbEventStore {
      * The default implementation reads the matching events. Implementations should override it with a more efficient
      * existence check.
      */
-    default Mono<Boolean> exists(DcbQuery query, DcbReadOptions options) {
+    default Mono<Boolean> exists(DcbCriteria query, DcbReadOptions options) {
         requireNonNull(query, "Query cannot be null");
         requireNonNull(options, "Read options cannot be null");
         return read(query, options).map(stream -> !stream.events().isEmpty());
@@ -76,7 +76,7 @@ public interface DcbEventStore {
     /**
      * Returns the number of DCB events in the store that match {@code query}.
      */
-    default Mono<Long> count(DcbQuery query) {
+    default Mono<Long> count(DcbCriteria query) {
         return count(query, DcbReadOptions.fromBeginning());
     }
 
@@ -86,7 +86,7 @@ public interface DcbEventStore {
      * The default implementation reads the matching events. Implementations should override it with a more efficient
      * count.
      */
-    default Mono<Long> count(DcbQuery query, DcbReadOptions options) {
+    default Mono<Long> count(DcbCriteria query, DcbReadOptions options) {
         requireNonNull(query, "Query cannot be null");
         requireNonNull(options, "Read options cannot be null");
         return read(query, options).map(stream -> (long) stream.events().size());

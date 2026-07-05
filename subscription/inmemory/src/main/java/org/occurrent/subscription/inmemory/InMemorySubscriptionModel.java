@@ -21,7 +21,7 @@ import jakarta.annotation.PreDestroy;
 import org.jspecify.annotations.NullMarked;
 import org.jspecify.annotations.Nullable;
 import org.occurrent.eventstore.api.dcb.DcbCloudEvents;
-import org.occurrent.eventstore.api.dcb.DcbQuery;
+import org.occurrent.eventstore.api.dcb.DcbCriteria;
 import org.occurrent.filter.Filter;
 import org.occurrent.retry.RetryStrategy;
 import org.occurrent.subscription.DcbSubscriptionFilter;
@@ -183,7 +183,7 @@ public class InMemorySubscriptionModel implements SubscriptionModel, Consumer<St
             // isDcbEvent (the presence of the DCB tags extension), not a positive position: with stream position on by
             // default, stream events also carry a global position, so a "position > 0" guard would leak stream events
             // into a DCB subscription.
-            DcbQuery query = dcbSubscriptionFilter.query();
+            DcbCriteria query = dcbSubscriptionFilter.criteria();
             return cloudEvent -> DcbCloudEvents.isDcbEvent(cloudEvent) && DcbCloudEvents.matches(cloudEvent, query);
         } else {
             throw new IllegalArgumentException(InMemorySubscriptionModel.class.getSimpleName() + " only supports filters of type " + OccurrentSubscriptionFilter.class.getName() + " and " + DcbSubscriptionFilter.class.getName());

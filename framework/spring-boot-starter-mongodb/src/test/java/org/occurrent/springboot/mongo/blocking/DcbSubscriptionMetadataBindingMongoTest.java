@@ -32,6 +32,7 @@ import org.occurrent.application.converter.typemapper.ReflectionCloudEventTypeMa
 import org.occurrent.dsl.dcb.DcbEventMetadata;
 import org.occurrent.dsl.subscription.EventMetadata;
 import org.occurrent.eventstore.api.dcb.DcbCloudEvents;
+import org.occurrent.eventstore.api.dcb.Tag;
 import org.occurrent.eventstore.api.dcb.DcbEventStore;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.autoconfigure.SpringBootApplication;
@@ -109,7 +110,7 @@ class DcbSubscriptionMetadataBindingMongoTest {
         });
         DcbEventMetadata m = eventFirstDcbMetadataReceiver.receivedMetadata().get(0);
         assertThat(m.position()).isPresent();
-        assertThat(m.dcbTags()).contains(TAG);
+        assertThat(m.dcbTags()).contains(Tag.parse(TAG));
     }
 
     @Test
@@ -122,7 +123,7 @@ class DcbSubscriptionMetadataBindingMongoTest {
         });
         DcbEventMetadata m = metadataFirstReceiver.receivedMetadata().get(0);
         assertThat(m.position()).isPresent();
-        assertThat(m.dcbTags()).contains(TAG);
+        assertThat(m.dcbTags()).contains(Tag.parse(TAG));
     }
 
     @Test
@@ -134,14 +135,14 @@ class DcbSubscriptionMetadataBindingMongoTest {
         EventMetadata m = eventFirstGenericMetadataReceiver.receivedMetadata().get(0);
         assertThat(m.getData()).containsKey(DcbCloudEvents.TAGS);
         // Unwrap via DcbEventMetadata to assert the decoded tag value round-trips correctly.
-        assertThat(DcbEventMetadata.from(m).dcbTags()).contains(TAG);
+        assertThat(DcbEventMetadata.from(m).dcbTags()).contains(Tag.parse(TAG));
     }
 
     // --- helpers ---
 
     private void append(String tag, MyEvent... events) {
         List<CloudEvent> cloudEvents = cloudEventConverter.toCloudEvents(Stream.of(events))
-                .map(ce -> DcbCloudEvents.withTags(ce, List.of(tag)))
+                .map(ce -> DcbCloudEvents.withTags(ce, List.of(Tag.parse(tag))))
                 .toList();
         dcbEventStore.append(cloudEvents);
     }
@@ -212,7 +213,7 @@ class DcbSubscriptionMetadataBindingMongoTest {
                             new MyEvent("meta-event-2"),
                             new MyEvent("meta-event-3")
                     ))
-                    .map(ce -> DcbCloudEvents.withTags(ce, List.of(TAG)))
+                    .map(ce -> DcbCloudEvents.withTags(ce, List.of(Tag.parse(TAG))))
                     .toList();
             store.append(batch);
         }

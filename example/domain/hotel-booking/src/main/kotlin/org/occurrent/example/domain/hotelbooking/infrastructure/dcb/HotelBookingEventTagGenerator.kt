@@ -1,6 +1,7 @@
 package org.occurrent.example.domain.hotelbooking.infrastructure.dcb
 
 import org.occurrent.application.service.dcb.TagGenerator
+import org.occurrent.eventstore.api.dcb.Tag
 import org.occurrent.example.domain.hotelbooking.common.DomainEvent
 import org.occurrent.example.domain.hotelbooking.features.booking.model.BookingCancelled
 import org.occurrent.example.domain.hotelbooking.features.booking.model.RoomBooked
@@ -19,7 +20,7 @@ import org.occurrent.example.domain.hotelbooking.features.roommanagement.model.R
  * conditional append protect the no-double-booking invariant AND the per-guest booking limit in one atomic decision.
  */
 internal class HotelBookingEventTagGenerator : TagGenerator<DomainEvent> {
-    override fun tags(event: DomainEvent): Set<String> = when (event) {
+    override fun tags(event: DomainEvent): Set<Tag> = when (event) {
         is RoomDefined -> setOf(RoomTags.room(event.roomId))
         is RoomClosed -> setOf(RoomTags.room(event.roomId))
         is GuestRegistered -> setOf(GuestTags.guest(event.guestId))

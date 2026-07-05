@@ -224,7 +224,7 @@ public class ReactorMongoEventStore implements EventStore, EventStoreOperations,
 
     // DCB
     @Override
-    public Mono<DcbEventStream> read(DcbQuery query, DcbReadOptions options) {
+    public Mono<DcbEventStream> read(DcbCriteria query, DcbReadOptions options) {
         if (!eventStoreCapabilities.contains(DCB)) {
             return Mono.error(capabilityError(DCB));
         }
@@ -246,7 +246,7 @@ public class ReactorMongoEventStore implements EventStore, EventStoreOperations,
     }
 
     @Override
-    public Mono<Boolean> exists(DcbQuery query, DcbReadOptions options) {
+    public Mono<Boolean> exists(DcbCriteria query, DcbReadOptions options) {
         if (!eventStoreCapabilities.contains(DCB)) {
             return Mono.error(capabilityError(DCB));
         }
@@ -259,7 +259,7 @@ public class ReactorMongoEventStore implements EventStore, EventStoreOperations,
     }
 
     @Override
-    public Mono<Long> count(DcbQuery query, DcbReadOptions options) {
+    public Mono<Long> count(DcbCriteria query, DcbReadOptions options) {
         if (!eventStoreCapabilities.contains(DCB)) {
             return Mono.error(capabilityError(DCB));
         }
@@ -298,8 +298,8 @@ public class ReactorMongoEventStore implements EventStore, EventStoreOperations,
         // Place by the condition's boundary tags when it constrains on tags, so the same boundary always lands in the
         // same partition regardless of per-event tags. Otherwise (no condition, or a type-only/match-all condition)
         // fall back to the events' tags so tagless boundaries do not all collapse onto one hot partition.
-        Set<String> conditionBoundaryTags = condition == null ? Set.of() : DcbCloudEvents.boundaryTags(condition.query());
-        Set<String> placementTags = conditionBoundaryTags.isEmpty() ? DcbMarkerModel.boundaryTagsOf(eventsToAppend) : conditionBoundaryTags;
+        Set<Tag> conditionTags = condition == null ? Set.of() : DcbCloudEvents.tagsOf(condition.query());
+        Set<Tag> placementTags = conditionTags.isEmpty() ? DcbMarkerModel.tagsOf(eventsToAppend) : conditionTags;
         String streamId = requireNonNull(dcbStreamIdGenerator.generateStreamId(placementTags), "DcbStreamIdGenerator returned a null stream id");
         int eventCount = eventsToAppend.size();
 
@@ -375,7 +375,7 @@ public class ReactorMongoEventStore implements EventStore, EventStoreOperations,
 
     // The optimistic-concurrency token for a query: the sum of the versions of its conflict markers. Read the markers
     // in one query so their versions come from a single consistent snapshot.
-    private Mono<Long> consistencyToken(DcbQuery query) {
+    private Mono<Long> consistencyToken(DcbCriteria query) {
         Set<String> markerKeys = DcbMarkerModel.queryMarkerKeys(query);
         if (markerKeys.isEmpty()) {
             return Mono.just(0L);
@@ -526,9 +526,9 @@ public class ReactorMongoEventStore implements EventStore, EventStoreOperations,
         return null;
     }
 
-    private static Query toDcbMongoQuery(DcbQuery query, long afterPosition, long upperSequencePosition) {
+    private static Query toDcbMongoQuery(DcbCriteria query, long afterPosition, long upperSequencePosition) {
         Criteria positionCriteria = where(OccurrentCloudEventExtension.POSITION).gt(afterPosition).lte(upperSequencePosition);
-        if (query instanceof DcbQuery.MatchAll) {
+        if (query instanceof DcbCriteria.MatchAll) {
             return new Query(positionCriteria);
         }
         List<Criteria> itemCriteria = DcbMarkerModel.dcbQueryItems(query).stream()
@@ -537,7 +537,7 @@ public class ReactorMongoEventStore implements EventStore, EventStoreOperations,
         return new Query(new Criteria().andOperator(positionCriteria, new Criteria().orOperator(itemCriteria)));
     }
 
-    private static Criteria toCriteria(DcbQueryItem item) {
+    private static Criteria toCriteria(DcbCriterion item) {
         List<Criteria> criteria = new ArrayList<>();
         if (!item.types().isEmpty()) {
             criteria.add(where("type").in(item.types()));
@@ -546,7 +546,7 @@ public class ReactorMongoEventStore implements EventStore, EventStoreOperations,
             criteria.add(where("type").nin(item.excludedTypes()));
         }
         if (!item.tags().isEmpty()) {
-            criteria.add(where(DcbDocumentMapper.DCB_TAGS_INDEX_FIELD).all(item.tags()));
+            criteria.add(where(DcbDocumentMapper.DCB_TAGS_INDEX_FIELD).all(item.tags().stream().map(Tag::canonical).toList()));
         }
         return new Criteria().andOperator(criteria);
     }

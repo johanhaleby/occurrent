@@ -54,7 +54,7 @@ public class ApplyFilterToChangeStreamOptionsBuilder {
             Criteria criteria = convertFilterToCriteria(FULL_DOCUMENT, timeRepresentation, occurrentFilter);
             changeStreamOptions = changeStreamOptionsBuilder.filter(newAggregation(match(criteria))).build();
         } else if (filter instanceof DcbSubscriptionFilter dcbSubscriptionFilter) {
-            Document matchStage = DcbSubscriptionFilterConverter.toChangeStreamMatchStage(dcbSubscriptionFilter.query());
+            Document matchStage = DcbSubscriptionFilterConverter.toChangeStreamMatchStage(dcbSubscriptionFilter.criteria());
             changeStreamOptions = changeStreamOptionsBuilder.filter(matchStage).build();
         } else if (filter instanceof MongoJsonFilterSpecification) {
             changeStreamOptions = changeStreamOptionsBuilder.filter(Document.parse(((MongoJsonFilterSpecification) filter).getJson())).build();

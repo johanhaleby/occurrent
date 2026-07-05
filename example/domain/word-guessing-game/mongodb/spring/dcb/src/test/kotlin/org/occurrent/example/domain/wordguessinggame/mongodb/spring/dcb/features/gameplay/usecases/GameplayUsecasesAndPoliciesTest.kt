@@ -126,22 +126,22 @@ class GameplayUsecasesAndPoliciesTest {
         listOf(Word("alpha"), Word("bravo"), Word("crane"), Word("delta"))
     )
 
-    private inline fun <reified E : GameEvent> eventuallySingle(query: org.occurrent.eventstore.api.dcb.DcbQuery): E =
+    private inline fun <reified E : GameEvent> eventuallySingle(query: org.occurrent.eventstore.api.dcb.DcbCriteria): E =
         await().atMost(Duration.ofSeconds(10)).untilAsserted {
             assertThat(events<E>(query)).hasSize(1)
         }.let { events<E>(query).single() }
 
-    private inline fun <reified E : GameEvent> eventuallyAtLeast(query: org.occurrent.eventstore.api.dcb.DcbQuery, size: Int): List<E> =
+    private inline fun <reified E : GameEvent> eventuallyAtLeast(query: org.occurrent.eventstore.api.dcb.DcbCriteria, size: Int): List<E> =
         await().atMost(Duration.ofSeconds(10)).untilAsserted {
             assertThat(events<E>(query)).hasSizeGreaterThanOrEqualTo(size)
         }.let { events<E>(query) }
 
-    private inline fun <reified E : GameEvent> events(query: org.occurrent.eventstore.api.dcb.DcbQuery): List<E> =
+    private inline fun <reified E : GameEvent> events(query: org.occurrent.eventstore.api.dcb.DcbCriteria): List<E> =
         domainEventQueries.queryForList(query).filterIsInstance<E>()
 
-    private fun cloudEvents(query: org.occurrent.eventstore.api.dcb.DcbQuery): List<io.cloudevents.CloudEvent> =
+    private fun cloudEvents(query: org.occurrent.eventstore.api.dcb.DcbCriteria): List<io.cloudevents.CloudEvent> =
         eventStore.read(query).events()
 
-    private fun cloudEventTags(query: org.occurrent.eventstore.api.dcb.DcbQuery): List<Set<String>> =
+    private fun cloudEventTags(query: org.occurrent.eventstore.api.dcb.DcbCriteria): List<Set<org.occurrent.eventstore.api.dcb.Tag>> =
         cloudEvents(query).map(DcbCloudEvents::getTags)
 }

@@ -23,7 +23,8 @@ import org.junit.jupiter.api.DisplayNameGeneration;
 import org.junit.jupiter.api.DisplayNameGenerator.ReplaceUnderscores;
 import org.junit.jupiter.api.Test;
 import org.occurrent.eventstore.api.dcb.DcbCloudEvents;
-import org.occurrent.eventstore.api.dcb.DcbQuery;
+import org.occurrent.eventstore.api.dcb.Tag;
+import org.occurrent.eventstore.api.dcb.DcbCriteria;
 import org.occurrent.subscription.DcbStartAt;
 import org.occurrent.subscription.DcbSubscriptionFilter;
 import org.occurrent.subscription.GlobalCheckpoint;
@@ -51,7 +52,7 @@ class DcbSubscriptionModelAdapterTest {
     void delivers_only_dcb_events_matching_the_query_and_passes_the_start_position_through() {
         CloudEvent matching = dcbEvent("NameDefined", 1, "name:1");
         // A stream-written event: it carries a position (stream position is on by default) but no DCB tags, so it is
-        // not a DCB event and must be dropped by the isDcbEvent floor even though DcbQuery tag matching alone might
+        // not a DCB event and must be dropped by the isDcbEvent floor even though DcbCriteria tag matching alone might
         // otherwise let it through.
         CloudEvent streamEvent = OccurrentCloudEventExtension.withPosition(event("NameDefined"), 3);
         CloudEvent otherBoundary = dcbEvent("OrderPlaced", 2, "order:1");
@@ -59,7 +60,7 @@ class DcbSubscriptionModelAdapterTest {
         RecordingSubscriptionModel delegate = new RecordingSubscriptionModel(Flux.just(matching, streamEvent, otherBoundary));
         DcbSubscriptionModel adapter = DcbSubscriptionModel.from(delegate);
 
-        StepVerifier.create(adapter.subscribe(DcbQuery.tags("name:1"), DcbStartAt.afterPosition(5)))
+        StepVerifier.create(adapter.subscribe(DcbCriteria.tags(Tag.parse("name:1")), DcbStartAt.afterPosition(5)))
                 .expectNext(matching)
                 .verifyComplete();
 
@@ -85,7 +86,7 @@ class DcbSubscriptionModelAdapterTest {
             return Mono.empty();
         };
 
-        Subscription subscription = adapter.subscribe("sub-1", DcbQuery.tags("name:1"), DcbStartAt.afterPosition(5), action);
+        Subscription subscription = adapter.subscribe("sub-1", DcbCriteria.tags(Tag.parse("name:1")), DcbStartAt.afterPosition(5), action);
 
         assertThat(subscription.id()).isEqualTo("sub-1");
         assertThat(delegate.capturedFilter).isInstanceOf(DcbSubscriptionFilter.class);
@@ -106,7 +107,7 @@ class DcbSubscriptionModelAdapterTest {
         RecordingSubscriptionModel delegate = new RecordingSubscriptionModel(Flux.empty());
         DcbSubscriptionModel adapter = DcbSubscriptionModel.from(delegate);
 
-        assertThatThrownBy(() -> adapter.subscribe("sub-1", DcbQuery.tags("name:1"), DcbStartAt.afterPosition(5), cloudEvent -> Mono.empty()))
+        assertThatThrownBy(() -> adapter.subscribe("sub-1", DcbCriteria.tags(Tag.parse("name:1")), DcbStartAt.afterPosition(5), cloudEvent -> Mono.empty()))
                 .isInstanceOf(IllegalStateException.class)
                 .hasMessageContaining(Subscribable.class.getSimpleName());
     }
@@ -122,7 +123,7 @@ class DcbSubscriptionModelAdapterTest {
     }
 
     private static CloudEvent dcbEvent(String type, long position, String... tags) {
-        return OccurrentCloudEventExtension.withPosition(DcbCloudEvents.withTags(event(type), Set.of(tags)), position);
+        return OccurrentCloudEventExtension.withPosition(DcbCloudEvents.withTags(event(type), java.util.Arrays.stream(tags).map(Tag::parse).toList()), position);
     }
 
     private static CloudEvent event(String type) {

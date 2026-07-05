@@ -32,7 +32,7 @@ import java.util.stream.Stream;
  * append, outside the retry, so it runs once on success rather than once per attempt.
  * <p>
  * Unlike the stream execute options, it has no read-filter option on purpose. In DCB the
- * {@link org.occurrent.eventstore.api.dcb.DcbQuery} passed to {@code execute} is both the read filter and the
+ * {@link org.occurrent.eventstore.api.dcb.DcbCriteria} passed to {@code execute} is both the read filter and the
  * consistency boundary, so a separate filter here would be redundant and misleading.
  *
  * @param <E> The application service event type.

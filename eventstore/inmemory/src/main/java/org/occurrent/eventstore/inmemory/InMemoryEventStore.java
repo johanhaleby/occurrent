@@ -268,7 +268,7 @@ public class InMemoryEventStore implements EventStore, EventStoreOperations, Eve
     }
 
     @Override
-    public DcbEventStream read(DcbQuery query, DcbReadOptions options) {
+    public DcbEventStream read(DcbCriteria query, DcbReadOptions options) {
         requireNonNull(query, "Query cannot be null");
         requireNonNull(options, "Read options cannot be null");
 
@@ -287,7 +287,7 @@ public class InMemoryEventStore implements EventStore, EventStoreOperations, Eve
     }
 
     @Override
-    public boolean exists(DcbQuery query) {
+    public boolean exists(DcbCriteria query) {
         requireNonNull(query, "Query cannot be null");
         synchronized (state) {
             return matchingDcbEvents(query).findAny().isPresent();
@@ -295,14 +295,14 @@ public class InMemoryEventStore implements EventStore, EventStoreOperations, Eve
     }
 
     @Override
-    public long count(DcbQuery query) {
+    public long count(DcbCriteria query) {
         requireNonNull(query, "Query cannot be null");
         synchronized (state) {
             return matchingDcbEvents(query).count();
         }
     }
 
-    private Stream<CloudEvent> matchingDcbEvents(DcbQuery query) {
+    private Stream<CloudEvent> matchingDcbEvents(DcbCriteria query) {
         long highWatermark = nextPosition.get() - 1;
         return allEvents()
                 .filter(event -> position(event) > 0 && position(event) <= highWatermark)
@@ -325,8 +325,8 @@ public class InMemoryEventStore implements EventStore, EventStoreOperations, Eve
         // Place by the condition's boundary tags when it constrains on tags, so the same boundary always lands in
         // the same partition regardless of per-event tags. Otherwise (no condition, or a type-only/match-all
         // condition) fall back to the events' tags so tagless boundaries do not all collapse onto one hot partition.
-        Set<String> conditionBoundaryTags = condition == null ? Set.of() : DcbCloudEvents.boundaryTags(condition.query());
-        Set<String> placementTags = conditionBoundaryTags.isEmpty() ? boundaryTagsOf(eventsToAppend) : conditionBoundaryTags;
+        Set<Tag> conditionTags = condition == null ? Set.of() : DcbCloudEvents.tagsOf(condition.query());
+        Set<Tag> placementTags = conditionTags.isEmpty() ? tagsOf(eventsToAppend) : conditionTags;
         String streamId = requireNonNull(dcbStreamIdGenerator.generateStreamId(placementTags), "DcbStreamIdGenerator returned a null stream id");
 
         List<CloudEvent> addedEvents;
@@ -398,7 +398,7 @@ public class InMemoryEventStore implements EventStore, EventStoreOperations, Eve
         return state.values().stream().flatMap(List::stream);
     }
 
-    private static Set<String> boundaryTagsOf(List<CloudEvent> events) {
+    private static Set<Tag> tagsOf(List<CloudEvent> events) {
         return events.stream().flatMap(event -> DcbCloudEvents.getTags(event).stream()).collect(Collectors.toCollection(TreeSet::new));
     }
 

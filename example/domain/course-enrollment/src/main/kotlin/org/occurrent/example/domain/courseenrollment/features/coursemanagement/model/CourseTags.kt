@@ -16,8 +16,9 @@
 
 package org.occurrent.example.domain.courseenrollment.features.coursemanagement.model
 
+import org.occurrent.eventstore.api.dcb.Tag
 import org.occurrent.example.domain.courseenrollment.common.CourseId
 
 internal object CourseTags {
-    fun course(courseId: CourseId): String = "course:$courseId"
+    fun course(courseId: CourseId): Tag = Tag.of("course", courseId.toString())
 }

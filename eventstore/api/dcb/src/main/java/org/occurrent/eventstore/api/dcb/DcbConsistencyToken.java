@@ -22,7 +22,7 @@ import org.jspecify.annotations.NullMarked;
  * An opaque, store-defined token capturing the optimistic-concurrency boundary a DCB read observed for a query.
  * <p>
  * A {@link DcbEventStream#consistencyToken() read} produces a token; pass it unchanged to
- * {@link DcbAppendCondition#failIfEventsMatch(DcbQuery, DcbConsistencyToken)} so a later append is rejected if any event
+ * {@link DcbAppendCondition#failIfEventsMatch(DcbCriteria, DcbConsistencyToken)} so a later append is rejected if any event
  * matching the query was committed after the read. It is deliberately a distinct type from the {@code long}
  * {@link DcbEventStream#lastSequencePosition() sequence position} so the two cannot be confused: the position is a global
  * cursor (suitable for replay) but is NOT a safe concurrency boundary on its own, whereas this token is.

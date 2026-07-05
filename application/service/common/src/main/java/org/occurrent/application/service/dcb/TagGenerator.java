@@ -17,11 +17,12 @@
 package org.occurrent.application.service.dcb;
 
 import org.jspecify.annotations.NullMarked;
+import org.occurrent.eventstore.api.dcb.Tag;
 
 import java.util.Set;
 
 /**
- * Derives DCB tags from domain events before they are stored as CloudEvents.
+ * Derives DCB {@link Tag tags} from domain events before they are stored as CloudEvents.
  * <p>
  * Tags describe the Dynamic Consistency Boundary that future reads and append
  * conditions can match. The application service stores them in the {@code dcbtags}
@@ -32,10 +33,10 @@ import java.util.Set;
 public interface TagGenerator<E> {
 
     /**
-     * Returns the DCB tags that should be attached to {@code event}.
+     * Returns the DCB {@link Tag tags} that should be attached to {@code event}.
      *
      * @param event the domain event about to be written
      * @return the tags that make the event visible to relevant DCB queries
      */
-    Set<String> tags(E event);
+    Set<Tag> tags(E event);
 }

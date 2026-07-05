@@ -16,8 +16,9 @@
 
 package org.occurrent.example.domain.hotelbooking.features.roommanagement.model
 
+import org.occurrent.eventstore.api.dcb.Tag
 import org.occurrent.example.domain.hotelbooking.common.RoomId
 
 internal object RoomTags {
-    fun room(roomId: RoomId): String = "room:$roomId"
+    fun room(roomId: RoomId): Tag = Tag.of("room", roomId.toString())
 }

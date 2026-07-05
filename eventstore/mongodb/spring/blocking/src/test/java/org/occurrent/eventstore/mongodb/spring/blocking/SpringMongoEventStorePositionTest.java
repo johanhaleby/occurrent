@@ -31,7 +31,8 @@ import org.occurrent.cloudevents.OccurrentCloudEventExtension;
 import org.occurrent.eventstore.api.PositionRange;
 import org.occurrent.eventstore.api.WriteCondition;
 import org.occurrent.eventstore.api.dcb.DcbCloudEvents;
-import org.occurrent.eventstore.api.dcb.DcbQuery;
+import org.occurrent.eventstore.api.dcb.Tag;
+import org.occurrent.eventstore.api.dcb.DcbCriteria;
 import org.occurrent.filter.Filter;
 import org.occurrent.mongodb.timerepresentation.TimeRepresentation;
 import org.occurrent.testsupport.mongodb.FlushMongoDBExtension;
@@ -104,7 +105,7 @@ class SpringMongoEventStorePositionTest {
         long firstStreamEventPosition = OccurrentCloudEventExtension.getPosition(streamEvents.get(0));
         long secondStreamEventPosition = OccurrentCloudEventExtension.getPosition(streamEvents.get(1));
 
-        CloudEvent dcbEvent = eventStore.read(DcbQuery.tags("name:1")).events().get(0);
+        CloudEvent dcbEvent = eventStore.read(DcbCriteria.tags(Tag.parse("name:1"))).events().get(0);
         long dcbEventPosition = OccurrentCloudEventExtension.getPosition(dcbEvent);
 
         // Stream and DCB events are interleaved in one monotonic sequence: 1 (stream), 2 (dcb), 3 (stream).
@@ -243,7 +244,7 @@ class SpringMongoEventStorePositionTest {
     }
 
     private static CloudEvent taggedEvent(String type, String... tags) {
-        return DcbCloudEvents.withTags(event(type), Set.of(tags));
+        return DcbCloudEvents.withTags(event(type), java.util.Arrays.stream(tags).map(Tag::parse).toList());
     }
 
     private static CloudEvent event(String type) {

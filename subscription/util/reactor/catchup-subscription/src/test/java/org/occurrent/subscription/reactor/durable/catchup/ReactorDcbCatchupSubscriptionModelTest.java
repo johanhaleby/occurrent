@@ -22,9 +22,10 @@ import org.junit.jupiter.api.DisplayNameGeneration;
 import org.junit.jupiter.api.DisplayNameGenerator.ReplaceUnderscores;
 import org.junit.jupiter.api.Test;
 import org.occurrent.eventstore.api.dcb.DcbAppendCondition;
+import org.occurrent.eventstore.api.dcb.Tag;
 import org.occurrent.eventstore.api.dcb.DcbAppendResult;
 import org.occurrent.eventstore.api.dcb.DcbEventStream;
-import org.occurrent.eventstore.api.dcb.DcbQuery;
+import org.occurrent.eventstore.api.dcb.DcbCriteria;
 import org.occurrent.eventstore.api.dcb.DcbReadOptions;
 import org.occurrent.eventstore.api.dcb.reactor.DcbEventStore;
 import org.occurrent.filter.Filter;
@@ -50,7 +51,7 @@ class ReactorDcbCatchupSubscriptionModelTest {
 
         // Without a resume token the handover from the replay to live cannot be guaranteed loss-free, so the catch-up
         // errors instead of replaying. The event store is never read, the failure happens before the first replay read.
-        StepVerifier.create(catchup.subscribe(DcbQuery.tags("name:1"), DcbStartAt.beginning()))
+        StepVerifier.create(catchup.subscribe(DcbCriteria.tags(Tag.parse("name:1")), DcbStartAt.beginning()))
                 .expectError(IllegalStateException.class)
                 .verify();
     }
@@ -61,7 +62,7 @@ class ReactorDcbCatchupSubscriptionModelTest {
 
         // A non-replay start goes straight to live through the facade, so it neither needs a resume token nor reads
         // history. The fail-loud rule is scoped to replay starts only.
-        StepVerifier.create(catchup.subscribe(DcbQuery.tags("name:1"), DcbStartAt.now()))
+        StepVerifier.create(catchup.subscribe(DcbCriteria.tags(Tag.parse("name:1")), DcbStartAt.now()))
                 .verifyComplete();
     }
 
@@ -69,13 +70,13 @@ class ReactorDcbCatchupSubscriptionModelTest {
     void generic_subscribe_with_a_dcb_filter_goes_live_for_a_non_replay_start() {
         ReactorDcbCatchupSubscriptionModel catchup = new ReactorDcbCatchupSubscriptionModel(new NoTokenSubscriptionModel(), new UnusedDcbEventStore());
 
-        StepVerifier.create(catchup.subscribe(DcbSubscriptionFilter.filter(DcbQuery.tags("name:1")), StartAt.now()))
+        StepVerifier.create(catchup.subscribe(DcbSubscriptionFilter.filter(DcbCriteria.tags(Tag.parse("name:1"))), StartAt.now()))
                 .verifyComplete();
     }
 
     @Test
     void generic_subscribe_uses_the_default_query_when_no_filter_is_given() {
-        ReactorDcbCatchupSubscriptionModel catchup = new ReactorDcbCatchupSubscriptionModel(new NoTokenSubscriptionModel(), new UnusedDcbEventStore(), DcbQuery.all());
+        ReactorDcbCatchupSubscriptionModel catchup = new ReactorDcbCatchupSubscriptionModel(new NoTokenSubscriptionModel(), new UnusedDcbEventStore(), DcbCriteria.all());
 
         StepVerifier.create(catchup.subscribe(null, StartAt.now()))
                 .verifyComplete();
@@ -113,7 +114,7 @@ class ReactorDcbCatchupSubscriptionModelTest {
 
     private static final class UnusedDcbEventStore implements DcbEventStore {
         @Override
-        public Mono<DcbEventStream> read(DcbQuery query, DcbReadOptions options) {
+        public Mono<DcbEventStream> read(DcbCriteria query, DcbReadOptions options) {
             return Mono.error(new AssertionError("read must not be called when the catch-up fails loudly"));
         }
 

@@ -36,74 +36,77 @@ class DcbApiTest {
 
     @Test
     void query_must_be_all_or_contain_at_least_one_item() {
-        assertThatThrownBy(() -> DcbQuery.anyOf(List.of()))
+        assertThatThrownBy(() -> DcbCriteria.anyOf(List.of()))
                 .isExactlyInstanceOf(IllegalArgumentException.class)
-                .hasMessage("A query must contain at least one query item");
+                .hasMessage("A criteria must contain at least one criterion");
     }
 
     @Test
     void query_item_requires_type_or_tag() {
-        assertThatThrownBy(() -> new DcbQueryItem(Set.of(), Set.of()))
+        assertThatThrownBy(() -> new DcbCriterion(Set.of(), Set.of()))
                 .isExactlyInstanceOf(IllegalArgumentException.class)
-                .hasMessage("A query item must contain at least one type or tag");
+                .hasMessage("A criterion must contain at least one type or tag");
     }
 
     @Test
     void existing_query_item_factories_use_empty_excluded_types() {
-        assertThat(DcbQuery.types(List.of("NameDefined")).excludedTypes()).isEmpty();
-        assertThat(DcbQuery.tags(List.of("name:1")).excludedTypes()).isEmpty();
-        assertThat(DcbQuery.types(List.of("NameDefined")).tags(List.of("name:1")).excludedTypes()).isEmpty();
+        assertThat(DcbCriteria.types(List.of("NameDefined")).excludedTypes()).isEmpty();
+        assertThat(DcbCriteria.tags(List.of(Tag.of("name", "1"))).excludedTypes()).isEmpty();
+        assertThat(DcbCriteria.types(List.of("NameDefined")).tags(List.of(Tag.of("name", "1"))).excludedTypes()).isEmpty();
     }
 
     @Test
     void query_item_can_exclude_event_types() {
-        DcbQueryItem item = DcbQuery.tags(List.of(" name:1 ")).excludingTypes(List.of("NameSnapshot", " NameSnapshot ", "NameImported"));
+        DcbCriterion item = DcbCriteria.tags(List.of(Tag.of("name", "1"))).excludingTypes(List.of("NameSnapshot", " NameSnapshot ", "NameImported"));
 
         assertThat(item.types()).isEmpty();
-        assertThat(item.tags()).containsExactly("name:1");
+        assertThat(item.tags()).containsExactly(Tag.of("name", "1"));
         assertThat(item.excludedTypes()).containsExactlyInAnyOrder("NameImported", "NameSnapshot");
-        assertThat(DcbQuery.tags(List.of("name:1")).excludingTypes(List.of("NameSnapshot")))
-                .isInstanceOfSatisfying(DcbQueryItem.class, single ->
+        assertThat(DcbCriteria.tags(List.of(Tag.of("name", "1"))).excludingTypes(List.of("NameSnapshot")))
+                .isInstanceOfSatisfying(DcbCriterion.class, single ->
                         assertThat(single.excludedTypes()).containsExactly("NameSnapshot"));
     }
 
     @Test
     void query_item_rejects_invalid_excluded_types() {
-        assertThatThrownBy(() -> DcbQuery.tags(List.of("name:1")).excludingTypes(List.of(" ")))
+        assertThatThrownBy(() -> DcbCriteria.tags(List.of(Tag.of("name", "1"))).excludingTypes(List.of(" ")))
                 .isExactlyInstanceOf(IllegalArgumentException.class)
                 .hasMessage("Excluded types cannot contain blank values");
-        assertThatThrownBy(() -> DcbQuery.tags(List.of("name:1")).excludingTypes(Arrays.asList("NameDefined", null)))
+        assertThatThrownBy(() -> DcbCriteria.tags(List.of(Tag.of("name", "1"))).excludingTypes(Arrays.asList("NameDefined", null)))
                 .isExactlyInstanceOf(NullPointerException.class)
                 .hasMessage("Excluded type cannot be null");
     }
 
     @Test
     void query_item_rejects_overlapping_included_and_excluded_types() {
-        assertThatThrownBy(() -> DcbQuery.types(List.of("NameDefined")).tags(List.of("name:1")).excludingTypes(List.of("NameDefined")))
+        assertThatThrownBy(() -> DcbCriteria.types(List.of("NameDefined")).tags(List.of(Tag.of("name", "1"))).excludingTypes(List.of("NameDefined")))
                 .isExactlyInstanceOf(IllegalArgumentException.class)
                 .hasMessage("Types and excluded types cannot overlap");
     }
 
     @Test
     void query_item_rejects_excluded_types_without_positive_selector() {
-        assertThatThrownBy(() -> new DcbQueryItem(Set.of(), Set.of(), Set.of("NameDefined")))
+        assertThatThrownBy(() -> new DcbCriterion(Set.of(), Set.of(), Set.of("NameDefined")))
                 .isExactlyInstanceOf(IllegalArgumentException.class)
-                .hasMessage("A query item must contain at least one type or tag");
+                .hasMessage("A criterion must contain at least one type or tag");
     }
 
     @Test
     void cloud_event_helper_strips_deduplicates_and_encodes_tags() {
-        io.cloudevents.CloudEvent event = DcbCloudEvents.withTags(cloudEvent(), List.of(" name:1 ", "name:1", "course:2"));
+        io.cloudevents.CloudEvent event = DcbCloudEvents.withTags(cloudEvent(), List.of(Tag.of("name", "1"), Tag.of("name", "1"), Tag.of("course", "2")));
 
-        assertThat(DcbCloudEvents.getTags(event)).containsExactlyInAnyOrder("course:2", "name:1");
+        assertThat(DcbCloudEvents.getTags(event)).containsExactlyInAnyOrder(Tag.of("course", "2"), Tag.of("name", "1"));
         assertThat(event.getExtension(DcbCloudEvents.TAGS)).isEqualTo("course:2\nname:1");
     }
 
     @Test
-    void cloud_event_helper_rejects_blank_tags() {
-        assertThatThrownBy(() -> DcbCloudEvents.withTags(cloudEvent(), List.of(" ")))
+    void tag_rejects_blank_key_or_value() {
+        assertThatThrownBy(() -> Tag.of(" ", "1"))
                 .isExactlyInstanceOf(IllegalArgumentException.class)
-                .hasMessage("Tags cannot contain blank values");
+                .hasMessage("Tag key cannot be blank");
+        assertThatThrownBy(() -> Tag.of("name", " "))
+                .isExactlyInstanceOf(IllegalArgumentException.class)
+                .hasMessage("Tag value cannot be blank");
     }
 
     @Test
@@ -125,36 +128,36 @@ class DcbApiTest {
 
     @Test
     void cloud_event_helper_matches_dcb_queries() {
-        io.cloudevents.CloudEvent event = DcbCloudEvents.withTags(cloudEvent("NameDefined"), List.of("name:1", "tenant:1"));
+        io.cloudevents.CloudEvent event = DcbCloudEvents.withTags(cloudEvent("NameDefined"), List.of(Tag.of("name", "1"), Tag.of("tenant", "1")));
 
-        assertThat(DcbCloudEvents.matches(event, DcbQuery.all())).isTrue();
-        assertThat(DcbCloudEvents.matches(event, DcbQuery.types("NameDefined"))).isTrue();
-        assertThat(DcbCloudEvents.matches(event, DcbQuery.tags("name:1", "tenant:1"))).isTrue();
-        assertThat(DcbCloudEvents.matches(event, DcbQuery.tags(List.of("name:1")).excludingTypes(List.of("NameWasChanged")))).isTrue();
-        assertThat(DcbCloudEvents.matches(event, DcbQuery.tags(List.of("name:1")).excludingTypes(List.of("NameDefined")))).isFalse();
-        assertThat(DcbCloudEvents.matches(event, DcbQuery.types("NameWasChanged"))).isFalse();
-        assertThat(DcbCloudEvents.matches(event, DcbQuery.tags("name:1", "tenant:2"))).isFalse();
+        assertThat(DcbCloudEvents.matches(event, DcbCriteria.all())).isTrue();
+        assertThat(DcbCloudEvents.matches(event, DcbCriteria.types("NameDefined"))).isTrue();
+        assertThat(DcbCloudEvents.matches(event, DcbCriteria.tags(Tag.of("name", "1"), Tag.of("tenant", "1")))).isTrue();
+        assertThat(DcbCloudEvents.matches(event, DcbCriteria.tags(List.of(Tag.of("name", "1"))).excludingTypes(List.of("NameWasChanged")))).isTrue();
+        assertThat(DcbCloudEvents.matches(event, DcbCriteria.tags(List.of(Tag.of("name", "1"))).excludingTypes(List.of("NameDefined")))).isFalse();
+        assertThat(DcbCloudEvents.matches(event, DcbCriteria.types("NameWasChanged"))).isFalse();
+        assertThat(DcbCloudEvents.matches(event, DcbCriteria.tags(Tag.of("name", "1"), Tag.of("tenant", "2")))).isFalse();
     }
 
     @Test
     void cloud_event_helper_matches_any_query_item() {
-        io.cloudevents.CloudEvent event = DcbCloudEvents.withTags(cloudEvent("OrderPlaced"), List.of("order:1"));
+        io.cloudevents.CloudEvent event = DcbCloudEvents.withTags(cloudEvent("OrderPlaced"), List.of(Tag.of("order", "1")));
 
-        DcbQuery query = DcbQuery.anyOf(List.of(
-                DcbQuery.tags(List.of("name:1")),
-                DcbQuery.types(List.of("OrderPlaced"))));
+        DcbCriteria query = DcbCriteria.anyOf(List.of(
+                DcbCriteria.tags(List.of(Tag.of("name", "1"))),
+                DcbCriteria.types(List.of("OrderPlaced"))));
 
         assertThat(DcbCloudEvents.matches(event, query)).isTrue();
     }
 
     @Test
     void cloud_event_helper_matches_type_tags_and_excluded_types_together() {
-        io.cloudevents.CloudEvent event = DcbCloudEvents.withTags(cloudEvent("NameDefined"), List.of("name:1", "tenant:1"));
+        io.cloudevents.CloudEvent event = DcbCloudEvents.withTags(cloudEvent("NameDefined"), List.of(Tag.of("name", "1"), Tag.of("tenant", "1")));
 
-        assertThat(DcbCloudEvents.matches(event, DcbQuery.types(List.of("NameDefined")).tags(List.of("name:1", "tenant:1")).excludingTypes(List.of("NameWasChanged")))).isTrue();
-        assertThat(DcbCloudEvents.matches(event, DcbQuery.types(List.of("NameWasChanged")).tags(List.of("name:1", "tenant:1")).excludingTypes(List.of("NameImported")))).isFalse();
-        assertThat(DcbCloudEvents.matches(event, DcbQuery.types(List.of("NameDefined")).tags(List.of("name:1", "tenant:2")).excludingTypes(List.of("NameWasChanged")))).isFalse();
-        assertThat(DcbCloudEvents.matches(DcbCloudEvents.withTags(cloudEvent("NameImported"), List.of("name:1", "tenant:1")), DcbQuery.types(List.of("NameDefined")).tags(List.of("name:1", "tenant:1")).excludingTypes(List.of("NameImported")))).isFalse();
+        assertThat(DcbCloudEvents.matches(event, DcbCriteria.types(List.of("NameDefined")).tags(List.of(Tag.of("name", "1"), Tag.of("tenant", "1"))).excludingTypes(List.of("NameWasChanged")))).isTrue();
+        assertThat(DcbCloudEvents.matches(event, DcbCriteria.types(List.of("NameWasChanged")).tags(List.of(Tag.of("name", "1"), Tag.of("tenant", "1"))).excludingTypes(List.of("NameImported")))).isFalse();
+        assertThat(DcbCloudEvents.matches(event, DcbCriteria.types(List.of("NameDefined")).tags(List.of(Tag.of("name", "1"), Tag.of("tenant", "2"))).excludingTypes(List.of("NameWasChanged")))).isFalse();
+        assertThat(DcbCloudEvents.matches(DcbCloudEvents.withTags(cloudEvent("NameImported"), List.of(Tag.of("name", "1"), Tag.of("tenant", "1"))), DcbCriteria.types(List.of("NameDefined")).tags(List.of(Tag.of("name", "1"), Tag.of("tenant", "1"))).excludingTypes(List.of("NameImported")))).isFalse();
     }
 
     @Test
@@ -162,21 +165,21 @@ class DcbApiTest {
         assertThatThrownBy(() -> DcbReadOptions.afterPosition(-1))
                 .isExactlyInstanceOf(IllegalArgumentException.class)
                 .hasMessage("After position cannot be negative");
-        assertThatThrownBy(() -> DcbAppendCondition.failIfEventsMatch(DcbQuery.all(), DcbConsistencyToken.of(-1)))
+        assertThatThrownBy(() -> DcbAppendCondition.failIfEventsMatch(DcbCriteria.all(), DcbConsistencyToken.of(-1)))
                 .isExactlyInstanceOf(IllegalArgumentException.class)
                 .hasMessage("Consistency token value cannot be negative");
     }
 
     @Test
     void query_factory_shortcuts_are_consistent() {
-        DcbQueryItem item = DcbQuery.tags(java.util.List.of("t"));
+        DcbCriterion item = DcbCriteria.tags(java.util.List.of(Tag.of("t", "1")));
 
         // anyOf(Collection) is equivalent to anyOf(varargs).
-        assertThat(DcbQuery.anyOf(java.util.List.of(item))).isEqualTo(DcbQuery.anyOf(item));
+        assertThat(DcbCriteria.anyOf(java.util.List.of(item))).isEqualTo(DcbCriteria.anyOf(item));
 
         // type(String) is the single-type shorthand.
-        assertThat(DcbQuery.type("X")).isEqualTo(DcbQuery.types("X"));
-        assertThat(DcbQuery.type("X")).isEqualTo(DcbQuery.types(java.util.List.of("X")));
+        assertThat(DcbCriteria.type("X")).isEqualTo(DcbCriteria.types("X"));
+        assertThat(DcbCriteria.type("X")).isEqualTo(DcbCriteria.types(java.util.List.of("X")));
     }
 
     private static io.cloudevents.CloudEvent cloudEvent() {

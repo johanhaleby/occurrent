@@ -77,7 +77,7 @@ public class GenericDcbApplicationService<E> implements DcbApplicationService<E>
      * Executes a domain function against the current events selected by the DCB query and appends any produced events.
      */
     @Override
-    public Optional<DcbAppendResult> execute(DcbQuery query, DcbExecuteOptions<E> options, Function<Stream<E>, Stream<E>> functionThatCallsDomainModel) {
+    public Optional<DcbAppendResult> execute(DcbCriteria query, DcbExecuteOptions<E> options, Function<Stream<E>, Stream<E>> functionThatCallsDomainModel) {
         Objects.requireNonNull(query, "Query cannot be null");
         Objects.requireNonNull(options, DcbExecuteOptions.class.getSimpleName() + " cannot be null");
         Objects.requireNonNull(functionThatCallsDomainModel, "Function that calls domain model cannot be null");

@@ -60,6 +60,14 @@ public class DomainEventQueries<T> {
     }
 
     /**
+     * The {@link CloudEventConverter} this instance uses to map between CloudEvents and domain events. Useful for
+     * capabilities layered on top, such as resolving a domain event class to its CloudEvent type for a DCB criteria.
+     */
+    public CloudEventConverter<T> cloudEventConverter() {
+        return cloudEventConverter;
+    }
+
+    /**
      * Note that it's recommended to create an index the fields you're sorting on in order to make them efficient.
      *
      * @return All cloud events matching the specified filter, skip, limit and sort by <code>sortBy</code>.

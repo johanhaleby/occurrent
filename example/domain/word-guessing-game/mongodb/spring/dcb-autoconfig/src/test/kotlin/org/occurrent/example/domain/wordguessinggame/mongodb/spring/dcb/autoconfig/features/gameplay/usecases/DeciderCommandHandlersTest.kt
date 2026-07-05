@@ -24,7 +24,7 @@ import org.occurrent.dsl.dcb.blocking.DcbDomainEventQueries
 import org.occurrent.dsl.dcb.blocking.queryForList
 import org.occurrent.eventstore.api.dcb.DcbCloudEvents
 import org.occurrent.eventstore.api.dcb.DcbEventStore
-import org.occurrent.eventstore.api.dcb.DcbQuery
+import org.occurrent.eventstore.api.dcb.DcbCriteria
 import org.occurrent.example.domain.wordguessinggame.event.CharacterInWordHintWasRevealed
 import org.occurrent.example.domain.wordguessinggame.event.GameEvent
 import org.occurrent.example.domain.wordguessinggame.event.GameWasStarted
@@ -139,17 +139,17 @@ class DeciderCommandHandlersTest {
     private fun List<io.cloudevents.CloudEvent>.toDomainEvents(): List<GameEvent> =
         cloudEventConverter.toDomainEvents(stream()).toList()
 
-    private inline fun <reified E : GameEvent> eventuallySingle(query: DcbQuery): E =
+    private inline fun <reified E : GameEvent> eventuallySingle(query: DcbCriteria): E =
         await().atMost(Duration.ofSeconds(10)).untilAsserted {
             assertThat(events<E>(query)).hasSize(1)
         }.let { events<E>(query).single() }
 
-    private inline fun <reified E : GameEvent> eventuallyAtLeast(query: DcbQuery, size: Int): List<E> =
+    private inline fun <reified E : GameEvent> eventuallyAtLeast(query: DcbCriteria, size: Int): List<E> =
         await().atMost(Duration.ofSeconds(10)).untilAsserted {
             assertThat(events<E>(query)).hasSizeGreaterThanOrEqualTo(size)
         }.let { events<E>(query) }
 
-    private inline fun <reified E : GameEvent> events(query: DcbQuery): List<E> =
+    private inline fun <reified E : GameEvent> events(query: DcbCriteria): List<E> =
         domainEventQueries.queryForList(query).filterIsInstance<E>()
 
     private fun wordList(): WordList = WordList(

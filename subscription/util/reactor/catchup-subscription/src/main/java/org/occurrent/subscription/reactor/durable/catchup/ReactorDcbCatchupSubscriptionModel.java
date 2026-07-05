@@ -20,7 +20,7 @@ import io.cloudevents.CloudEvent;
 import org.jspecify.annotations.NullMarked;
 import org.jspecify.annotations.Nullable;
 import org.occurrent.eventstore.api.dcb.DcbCloudEvents;
-import org.occurrent.eventstore.api.dcb.DcbQuery;
+import org.occurrent.eventstore.api.dcb.DcbCriteria;
 import org.occurrent.eventstore.api.dcb.DcbReadOptions;
 import org.occurrent.eventstore.api.dcb.reactor.DcbEventStore;
 import org.occurrent.subscription.DcbStartAt;
@@ -41,7 +41,7 @@ import org.occurrent.cloudevents.OccurrentCloudEventExtension;
 import static java.util.Objects.requireNonNull;
 
 /**
- * Reactive DCB catch-up: replays the DCB history matching a {@link DcbQuery} by {@code position}, then hands over to
+ * Reactive DCB catch-up: replays the DCB history matching a {@link DcbCriteria} by {@code position}, then hands over to
  * a live subscription, as a single {@link Flux}. It lets a reactive read model rebuild from the beginning of the DCB
  * sequence and then keep up with new events.
  * <p>
@@ -63,7 +63,7 @@ import static java.util.Objects.requireNonNull;
  * <p>
  * It implements {@link CheckpointAwareSubscriptionModel}, so it can sit as a plain (cold) subscription model underneath a
  * durable model or be handed to the reactive DCB subscription DSL. Its generic {@link #subscribe(SubscriptionFilter, StartAt)}
- * only understands a {@link DcbSubscriptionFilter} (or no filter, in which case a default {@link DcbQuery} supplied to the
+ * only understands a {@link DcbSubscriptionFilter} (or no filter, in which case a default {@link DcbCriteria} supplied to the
  * constructor is used), since catch-up is DCB-specific.
  */
 @NullMarked
@@ -80,7 +80,7 @@ class ReactorDcbCatchupSubscriptionModel implements CheckpointAwareSubscriptionM
 
     private final CheckpointAwareSubscriptionModel subscriptionModel;
     private final DcbEventStore dcbEventStore;
-    private final @Nullable DcbQuery defaultQuery;
+    private final @Nullable DcbCriteria defaultQuery;
     private final long windowSize;
     private final int handoverCacheSize;
 
@@ -93,16 +93,16 @@ class ReactorDcbCatchupSubscriptionModel implements CheckpointAwareSubscriptionM
     }
 
     /**
-     * Create a catch-up model with a default {@link DcbQuery} used by {@link #subscribe(SubscriptionFilter, StartAt)}
+     * Create a catch-up model with a default {@link DcbCriteria} used by {@link #subscribe(SubscriptionFilter, StartAt)}
      * when it is called without a filter. This mirrors the blocking {@code CatchupSubscriptionModel} constructor that
-     * takes a shared {@code DcbQuery.all()}, so the reactive starter can wire one model that every DCB subscription
+     * takes a shared {@code DcbCriteria.all()}, so the reactive starter can wire one model that every DCB subscription
      * narrows with its own query in the consumer.
      */
-    public ReactorDcbCatchupSubscriptionModel(CheckpointAwareSubscriptionModel subscriptionModel, DcbEventStore dcbEventStore, @Nullable DcbQuery defaultQuery) {
+    public ReactorDcbCatchupSubscriptionModel(CheckpointAwareSubscriptionModel subscriptionModel, DcbEventStore dcbEventStore, @Nullable DcbCriteria defaultQuery) {
         this(subscriptionModel, dcbEventStore, defaultQuery, DEFAULT_POSITION_WINDOW_SIZE, DEFAULT_HANDOVER_CACHE_SIZE);
     }
 
-    public ReactorDcbCatchupSubscriptionModel(CheckpointAwareSubscriptionModel subscriptionModel, DcbEventStore dcbEventStore, @Nullable DcbQuery defaultQuery, long windowSize, int handoverCacheSize) {
+    public ReactorDcbCatchupSubscriptionModel(CheckpointAwareSubscriptionModel subscriptionModel, DcbEventStore dcbEventStore, @Nullable DcbCriteria defaultQuery, long windowSize, int handoverCacheSize) {
         this.subscriptionModel = requireNonNull(subscriptionModel, CheckpointAwareSubscriptionModel.class.getSimpleName() + " cannot be null");
         this.dcbEventStore = requireNonNull(dcbEventStore, DcbEventStore.class.getSimpleName() + " cannot be null");
         this.defaultQuery = defaultQuery;
@@ -118,21 +118,21 @@ class ReactorDcbCatchupSubscriptionModel implements CheckpointAwareSubscriptionM
 
     /**
      * The generic (cold) subscription-model entry point. The {@code filter} must be a {@link DcbSubscriptionFilter}, or
-     * {@code null} to use the default {@link DcbQuery} supplied to the constructor. A {@code startAt} that resolves to a
+     * {@code null} to use the default {@link DcbCriteria} supplied to the constructor. A {@code startAt} that resolves to a
      * {@code position} replays history from that position and then goes live, anything else goes straight to live.
      * This is how a durable model wrapping this catch-up model, and the reactive DCB subscription DSL, drive it.
      */
     @Override
     public Flux<CloudEvent> subscribe(@Nullable SubscriptionFilter filter, StartAt startAt) {
         requireNonNull(startAt, StartAt.class.getSimpleName() + " cannot be null");
-        final DcbQuery query;
+        final DcbCriteria query;
         if (filter == null) {
             if (defaultQuery == null) {
-                return Flux.error(new IllegalArgumentException("A " + DcbSubscriptionFilter.class.getSimpleName() + " is required unless a default " + DcbQuery.class.getSimpleName() + " was supplied to the constructor."));
+                return Flux.error(new IllegalArgumentException("A " + DcbSubscriptionFilter.class.getSimpleName() + " is required unless a default " + DcbCriteria.class.getSimpleName() + " was supplied to the constructor."));
             }
             query = defaultQuery;
         } else if (filter instanceof DcbSubscriptionFilter dcbSubscriptionFilter) {
-            query = dcbSubscriptionFilter.query();
+            query = dcbSubscriptionFilter.criteria();
         } else {
             return Flux.error(new IllegalArgumentException(ReactorDcbCatchupSubscriptionModel.class.getSimpleName() + " only supports a " + DcbSubscriptionFilter.class.getSimpleName() + ", but got " + filter.getClass().getName()));
         }
@@ -149,13 +149,13 @@ class ReactorDcbCatchupSubscriptionModel implements CheckpointAwareSubscriptionM
      * example {@link DcbStartAt#beginning()} or {@link DcbStartAt#afterPosition(long)}) replays history from that
      * position and then goes live. Any other start (now or the subscription model default) goes straight to live.
      */
-    public Flux<CloudEvent> subscribe(DcbQuery query, DcbStartAt startAt) {
+    public Flux<CloudEvent> subscribe(DcbCriteria query, DcbStartAt startAt) {
         requireNonNull(query, "Query cannot be null");
         requireNonNull(startAt, DcbStartAt.class.getSimpleName() + " cannot be null");
         return subscribe(query, startAt.toStartAt());
     }
 
-    private Flux<CloudEvent> subscribe(DcbQuery query, StartAt startAt) {
+    private Flux<CloudEvent> subscribe(DcbCriteria query, StartAt startAt) {
         requireNonNull(query, "Query cannot be null");
         requireNonNull(startAt, StartAt.class.getSimpleName() + " cannot be null");
 
@@ -177,7 +177,7 @@ class ReactorDcbCatchupSubscriptionModel implements CheckpointAwareSubscriptionM
 
     // Reads DCB events in position order through the DcbEventStore, wrapping each with its position so a durable
     // model layered on top can persist replay progress.
-    private record DcbCatchupReader(DcbEventStore dcbEventStore, DcbQuery query) implements CatchupReader {
+    private record DcbCatchupReader(DcbEventStore dcbEventStore, DcbCriteria query) implements CatchupReader {
         @Override
         public Flux<CloudEvent> readWindow(long fromExclusive, long toInclusive) {
             return dcbEventStore.read(query, DcbReadOptions.between(fromExclusive, toInclusive))

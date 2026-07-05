@@ -18,8 +18,9 @@ package org.occurrent.example.domain.wordguessinggame.mongodb.spring.dcb.feature
 
 import org.assertj.core.api.Assertions.assertThat
 import org.junit.jupiter.api.Test
-import org.occurrent.eventstore.api.dcb.DcbQuery
-import org.occurrent.eventstore.api.dcb.DcbQueryItem
+import org.occurrent.eventstore.api.dcb.DcbCriteria
+import org.occurrent.eventstore.api.dcb.DcbCriterion
+import org.occurrent.eventstore.api.dcb.Tag
 import org.occurrent.example.domain.wordguessinggame.event.CharacterInWordHintWasRevealed
 import org.occurrent.example.domain.wordguessinggame.event.GameEvent
 import org.occurrent.example.domain.wordguessinggame.event.GameWasLost
@@ -43,10 +44,10 @@ class GameDcbHelpersTest {
 
     @Test
     fun `creates stable DCB tags for a game`() {
-        assertThat(GameDcbTags.game(gameId)).isEqualTo("game:$gameId")
-        assertThat(GameDcbTags.gameplay(gameId)).isEqualTo("gameplay:$gameId")
-        assertThat(GameDcbTags.wordHint(gameId)).isEqualTo("wordhint:$gameId")
-        assertThat(GameDcbTags.points(gameId)).isEqualTo("points:$gameId")
+        assertThat(GameDcbTags.game(gameId)).isEqualTo(Tag.of("game", gameId.toString()))
+        assertThat(GameDcbTags.gameplay(gameId)).isEqualTo(Tag.of("gameplay", gameId.toString()))
+        assertThat(GameDcbTags.wordHint(gameId)).isEqualTo(Tag.of("wordhint", gameId.toString()))
+        assertThat(GameDcbTags.points(gameId)).isEqualTo(Tag.of("points", gameId.toString()))
     }
 
     @Test
@@ -54,51 +55,51 @@ class GameDcbHelpersTest {
         val tagGenerator = GameEventTagGenerator()
 
         assertThat(allEvents().associate { it::class.simpleName to tagGenerator.tags(it) })
-                .containsEntry(GameWasStarted::class.simpleName, setOf("game:$gameId", "gameplay:$gameId"))
-                .containsEntry(PlayerGuessedTheWrongWord::class.simpleName, setOf("game:$gameId", "gameplay:$gameId"))
-                .containsEntry(NumberOfGuessesWasExhaustedForPlayer::class.simpleName, setOf("game:$gameId", "gameplay:$gameId"))
-                .containsEntry(PlayerGuessedTheRightWord::class.simpleName, setOf("game:$gameId", "gameplay:$gameId"))
-                .containsEntry(GameWasWon::class.simpleName, setOf("game:$gameId", "gameplay:$gameId"))
-                .containsEntry(GameWasLost::class.simpleName, setOf("game:$gameId", "gameplay:$gameId"))
-                .containsEntry(CharacterInWordHintWasRevealed::class.simpleName, setOf("game:$gameId", "wordhint:$gameId"))
-                .containsEntry(PlayerWasAwardedPointsForGuessingTheRightWord::class.simpleName, setOf("game:$gameId", "points:$gameId"))
-                .containsEntry(PlayerWasNotAwardedAnyPointsForGuessingTheRightWord::class.simpleName, setOf("game:$gameId", "points:$gameId"))
+                .containsEntry(GameWasStarted::class.simpleName, setOf(Tag.of("game", "$gameId"), Tag.of("gameplay", "$gameId")))
+                .containsEntry(PlayerGuessedTheWrongWord::class.simpleName, setOf(Tag.of("game", "$gameId"), Tag.of("gameplay", "$gameId")))
+                .containsEntry(NumberOfGuessesWasExhaustedForPlayer::class.simpleName, setOf(Tag.of("game", "$gameId"), Tag.of("gameplay", "$gameId")))
+                .containsEntry(PlayerGuessedTheRightWord::class.simpleName, setOf(Tag.of("game", "$gameId"), Tag.of("gameplay", "$gameId")))
+                .containsEntry(GameWasWon::class.simpleName, setOf(Tag.of("game", "$gameId"), Tag.of("gameplay", "$gameId")))
+                .containsEntry(GameWasLost::class.simpleName, setOf(Tag.of("game", "$gameId"), Tag.of("gameplay", "$gameId")))
+                .containsEntry(CharacterInWordHintWasRevealed::class.simpleName, setOf(Tag.of("game", "$gameId"), Tag.of("wordhint", "$gameId")))
+                .containsEntry(PlayerWasAwardedPointsForGuessingTheRightWord::class.simpleName, setOf(Tag.of("game", "$gameId"), Tag.of("points", "$gameId")))
+                .containsEntry(PlayerWasNotAwardedAnyPointsForGuessingTheRightWord::class.simpleName, setOf(Tag.of("game", "$gameId"), Tag.of("points", "$gameId")))
     }
 
     @Test
     fun `maps query helpers to intended tags and event types`() {
-        assertSingleQueryItem(GameDcbQueries.allGameEvents(gameId), tags = setOf("game:$gameId"))
-        assertSingleQueryItem(GameDcbQueries.gameplay(gameId), tags = setOf("gameplay:$gameId"))
+        assertSingleQueryItem(GameDcbQueries.allGameEvents(gameId), tags = setOf(Tag.of("game", "$gameId")))
+        assertSingleQueryItem(GameDcbQueries.gameplay(gameId), tags = setOf(Tag.of("gameplay", "$gameId")))
         assertSingleQueryItem(
                 GameDcbQueries.event(gameId, GameWasWon::class),
                 types = setOf(GameWasWon::class.eventType()),
-                tags = setOf("game:$gameId")
+                tags = setOf(Tag.of("game", "$gameId"))
         )
 
         assertThat(itemsOf(GameDcbQueries.wordHintBoundary(gameId))).containsExactlyInAnyOrder(
-                queryItem(types = setOf(GameWasStarted::class.eventType()), tags = setOf("game:$gameId")),
-                queryItem(types = setOf(CharacterInWordHintWasRevealed::class.eventType()), tags = setOf("wordhint:$gameId"))
+                queryItem(types = setOf(GameWasStarted::class.eventType()), tags = setOf(Tag.of("game", "$gameId"))),
+                queryItem(types = setOf(CharacterInWordHintWasRevealed::class.eventType()), tags = setOf(Tag.of("wordhint", "$gameId")))
         )
 
         assertThat(itemsOf(GameDcbQueries.pointsBoundary(gameId))).containsExactlyInAnyOrder(
-                queryItem(types = setOf(GameWasStarted::class.eventType()), tags = setOf("game:$gameId")),
-                queryItem(types = setOf(PlayerGuessedTheWrongWord::class.eventType()), tags = setOf("gameplay:$gameId")),
-                queryItem(types = setOf(PlayerWasAwardedPointsForGuessingTheRightWord::class.eventType()), tags = setOf("points:$gameId")),
-                queryItem(types = setOf(PlayerWasNotAwardedAnyPointsForGuessingTheRightWord::class.eventType()), tags = setOf("points:$gameId"))
+                queryItem(types = setOf(GameWasStarted::class.eventType()), tags = setOf(Tag.of("game", "$gameId"))),
+                queryItem(types = setOf(PlayerGuessedTheWrongWord::class.eventType()), tags = setOf(Tag.of("gameplay", "$gameId"))),
+                queryItem(types = setOf(PlayerWasAwardedPointsForGuessingTheRightWord::class.eventType()), tags = setOf(Tag.of("points", "$gameId"))),
+                queryItem(types = setOf(PlayerWasNotAwardedAnyPointsForGuessingTheRightWord::class.eventType()), tags = setOf(Tag.of("points", "$gameId")))
         )
     }
 
-    private fun itemsOf(query: DcbQuery): List<DcbQueryItem> = when (query) {
-        is DcbQueryItem -> listOf(query)
-        is DcbQuery.Items -> query.items()
-        is DcbQuery.MatchAll -> emptyList()
+    private fun itemsOf(query: DcbCriteria): List<DcbCriterion> = when (query) {
+        is DcbCriterion -> listOf(query)
+        is DcbCriteria.Items -> query.items()
+        is DcbCriteria.MatchAll -> emptyList()
     }
 
-    private fun assertSingleQueryItem(query: DcbQuery, types: Set<String> = emptySet(), tags: Set<String>) {
+    private fun assertSingleQueryItem(query: DcbCriteria, types: Set<String> = emptySet(), tags: Set<Tag>) {
         assertThat(itemsOf(query)).containsExactly(queryItem(types, tags))
     }
 
-    private fun queryItem(types: Set<String> = emptySet(), tags: Set<String>) = org.occurrent.eventstore.api.dcb.DcbQueryItem(types, tags)
+    private fun queryItem(types: Set<String> = emptySet(), tags: Set<Tag>) = DcbCriterion(types, tags)
 
     private fun allEvents(): List<GameEvent> = listOf(
             GameWasStarted(UUID.randomUUID(), timestamp, gameId, playerId, "programming", "occurrent", 3, 10),

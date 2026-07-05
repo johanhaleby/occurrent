@@ -31,8 +31,8 @@ public interface DcbStreamIdGenerator {
     /**
      * Generates a storage stream id for events written under the supplied DCB boundary tags.
      *
-     * @param boundaryTags the tags that participate in the current consistency boundary
+     * @param tags the tags that participate in the current consistency boundary
      * @return the Occurrent stream id to use for storage
      */
-    String generateStreamId(Set<String> boundaryTags);
+    String generateStreamId(Set<Tag> tags);
 }

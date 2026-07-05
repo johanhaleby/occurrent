@@ -35,7 +35,8 @@ import org.occurrent.domain.NameDefined;
 import org.occurrent.eventstore.api.EventStoreCapability;
 import org.occurrent.eventstore.api.WriteCondition;
 import org.occurrent.eventstore.api.dcb.DcbCloudEvents;
-import org.occurrent.eventstore.api.dcb.DcbQuery;
+import org.occurrent.eventstore.api.dcb.Tag;
+import org.occurrent.eventstore.api.dcb.DcbCriteria;
 import org.occurrent.eventstore.mongodb.spring.reactor.EventStoreConfig;
 import org.occurrent.eventstore.mongodb.spring.reactor.ReactorMongoEventStore;
 import org.occurrent.filter.Filter;
@@ -154,7 +155,7 @@ class ReactorCatchupSubscriptionModelMongoTest {
 
         ReactorCatchupSubscriptionModel catchup = dualMode();
         CopyOnWriteArrayList<String> received = new CopyOnWriteArrayList<>();
-        subscribe(catchup.subscribe(DcbSubscriptionFilter.filter(DcbQuery.tags("name:1")), DcbStartAt.beginning().toStartAt()), received);
+        subscribe(catchup.subscribe(DcbSubscriptionFilter.filter(DcbCriteria.tags(Tag.parse("name:1"))), DcbStartAt.beginning().toStartAt()), received);
 
         await().atMost(Duration.ofSeconds(40)).untilAsserted(() -> assertThat(received).containsExactly("h1", "h2"));
 
@@ -178,7 +179,7 @@ class ReactorCatchupSubscriptionModelMongoTest {
         subscribe(catchup.subscribe(OccurrentSubscriptionFilter.filter(Filter.streamId("stream-1")), StartAt.checkpoint(GlobalCheckpoint.of(0))), streamReceived);
 
         CopyOnWriteArrayList<String> dcbReceived = new CopyOnWriteArrayList<>();
-        subscribe(catchup.subscribe(DcbSubscriptionFilter.filter(DcbQuery.tags("name:1")), DcbStartAt.beginning().toStartAt()), dcbReceived);
+        subscribe(catchup.subscribe(DcbSubscriptionFilter.filter(DcbCriteria.tags(Tag.parse("name:1"))), DcbStartAt.beginning().toStartAt()), dcbReceived);
 
         await().atMost(Duration.ofSeconds(40)).untilAsserted(() -> {
             assertThat(streamReceived).containsExactly("streamHistoric");
@@ -215,7 +216,7 @@ class ReactorCatchupSubscriptionModelMongoTest {
 
     private void appendTagged(DomainEvent event, String tag) {
         CloudEvent cloudEvent = converter.toCloudEvents(Stream.of(event)).collect(Collectors.toList()).get(0);
-        eventStore.append(List.of(DcbCloudEvents.withTags(cloudEvent, Set.of(tag)))).block();
+        eventStore.append(List.of(DcbCloudEvents.withTags(cloudEvent, Set.of(Tag.parse(tag))))).block();
     }
 
     private static void sleep(long millis) {

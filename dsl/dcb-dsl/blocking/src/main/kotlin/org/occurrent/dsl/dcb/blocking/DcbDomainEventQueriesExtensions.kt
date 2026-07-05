@@ -17,7 +17,7 @@
 package org.occurrent.dsl.dcb.blocking
 
 import org.occurrent.eventstore.api.dcb.DcbConsistencyToken
-import org.occurrent.eventstore.api.dcb.DcbQuery
+import org.occurrent.eventstore.api.dcb.DcbCriteria
 import org.occurrent.eventstore.api.dcb.DcbReadOptions
 import kotlin.streams.asSequence
 
@@ -27,7 +27,7 @@ import kotlin.streams.asSequence
  * @see DcbDomainEventQueries.query
  */
 fun <T : Any> DcbDomainEventQueries<T>.queryForSequence(
-    query: DcbQuery,
+    query: DcbCriteria,
     options: DcbReadOptions = DcbReadOptions.fromBeginning()
 ): Sequence<T> =
     this.query(query, options).asSequence()
@@ -38,7 +38,7 @@ fun <T : Any> DcbDomainEventQueries<T>.queryForSequence(
  * @see DcbDomainEventQueries.query
  */
 fun <T : Any> DcbDomainEventQueries<T>.queryForList(
-    query: DcbQuery,
+    query: DcbCriteria,
     options: DcbReadOptions = DcbReadOptions.fromBeginning()
 ): List<T> =
     this.query(query, options).toList()
@@ -50,7 +50,7 @@ fun <T : Any> DcbDomainEventQueries<T>.queryForList(
  * @see DcbDomainEventQueries.queryWithPosition
  */
 fun <T : Any> DcbDomainEventQueries<T>.queryForListWithPosition(
-    query: DcbQuery,
+    query: DcbCriteria,
     options: DcbReadOptions = DcbReadOptions.fromBeginning()
 ): Triple<List<T>, Long, DcbConsistencyToken> =
     this.queryWithPosition(query, options).let { Triple(it.events(), it.lastSequencePosition(), it.consistencyToken()) }
@@ -62,7 +62,7 @@ fun <T : Any> DcbDomainEventQueries<T>.queryForListWithPosition(
  * @see DcbDomainEventQueries.queryWithPosition
  */
 fun <T : Any> DcbDomainEventQueries<T>.queryForSequenceWithPosition(
-    query: DcbQuery,
+    query: DcbCriteria,
     options: DcbReadOptions = DcbReadOptions.fromBeginning()
 ): Triple<Sequence<T>, Long, DcbConsistencyToken> =
     this.queryWithPosition(query, options).let { Triple(it.events().asSequence(), it.lastSequencePosition(), it.consistencyToken()) }

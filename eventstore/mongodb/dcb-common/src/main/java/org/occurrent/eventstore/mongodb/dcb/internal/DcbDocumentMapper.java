@@ -21,10 +21,12 @@ import org.bson.Document;
 import org.jspecify.annotations.NullMarked;
 import org.occurrent.cloudevents.OccurrentCloudEventExtension;
 import org.occurrent.eventstore.api.dcb.DcbCloudEvents;
+import org.occurrent.eventstore.api.dcb.Tag;
 import org.occurrent.eventstore.mongodb.internal.OccurrentCloudEventMongoDocumentMapper;
 import org.occurrent.mongodb.timerepresentation.TimeRepresentation;
 
 import java.util.ArrayList;
+import java.util.stream.Collectors;
 
 /**
  * Maps DCB events between a {@link CloudEvent} and a MongoDB {@link Document}. It wraps the stream-only
@@ -51,7 +53,7 @@ public final class DcbDocumentMapper {
     public static Document toDocument(TimeRepresentation timeRepresentation, String streamId, long streamVersion, CloudEvent dcbCloudEvent, long position) {
         Document document = OccurrentCloudEventMongoDocumentMapper.convertToDocument(timeRepresentation, streamId, streamVersion, dcbCloudEvent);
         PositionDocumentMapper.addPosition(document, position);
-        document.put(DCB_TAGS_INDEX_FIELD, new ArrayList<>(DcbCloudEvents.getTags(dcbCloudEvent)));
+        document.put(DCB_TAGS_INDEX_FIELD, DcbCloudEvents.getTags(dcbCloudEvent).stream().map(Tag::canonical).collect(Collectors.toCollection(ArrayList::new)));
         return document;
     }
 

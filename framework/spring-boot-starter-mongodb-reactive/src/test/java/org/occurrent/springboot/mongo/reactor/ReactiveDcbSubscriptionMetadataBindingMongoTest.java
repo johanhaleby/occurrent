@@ -32,6 +32,7 @@ import org.occurrent.application.converter.typemapper.ReflectionCloudEventTypeMa
 import org.occurrent.dsl.dcb.DcbEventMetadata;
 import org.occurrent.dsl.subscription.EventMetadata;
 import org.occurrent.eventstore.api.dcb.DcbCloudEvents;
+import org.occurrent.eventstore.api.dcb.Tag;
 import org.occurrent.eventstore.api.dcb.reactor.DcbEventStore;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.autoconfigure.SpringBootApplication;
@@ -112,7 +113,7 @@ class ReactiveDcbSubscriptionMetadataBindingMongoTest {
         });
         DcbEventMetadata m = eventFirstDcbMetadataReceiver.receivedMetadata().get(0);
         assertThat(m.position()).isPresent();
-        assertThat(m.dcbTags()).contains(TAG);
+        assertThat(m.dcbTags()).contains(Tag.parse(TAG));
     }
 
     @Test
@@ -123,7 +124,7 @@ class ReactiveDcbSubscriptionMetadataBindingMongoTest {
         });
         DcbEventMetadata m = metadataFirstReceiver.receivedMetadata().get(0);
         assertThat(m.position()).isPresent();
-        assertThat(m.dcbTags()).contains(TAG);
+        assertThat(m.dcbTags()).contains(Tag.parse(TAG));
     }
 
     @Test
@@ -134,7 +135,7 @@ class ReactiveDcbSubscriptionMetadataBindingMongoTest {
         });
         EventMetadata m = eventFirstGenericMetadataReceiver.receivedMetadata().get(0);
         assertThat(m.getData()).containsKey(DcbCloudEvents.TAGS);
-        assertThat(DcbEventMetadata.from(m).dcbTags()).contains(TAG);
+        assertThat(DcbEventMetadata.from(m).dcbTags()).contains(Tag.parse(TAG));
     }
 
     // --- container configuration ---
@@ -203,7 +204,7 @@ class ReactiveDcbSubscriptionMetadataBindingMongoTest {
                             new MyEvent("meta-event-2"),
                             new MyEvent("meta-event-3")
                     ))
-                    .map(ce -> DcbCloudEvents.withTags(ce, List.of(TAG)))
+                    .map(ce -> DcbCloudEvents.withTags(ce, List.of(Tag.parse(TAG))))
                     .toList();
             store.append(batch).block();
         }

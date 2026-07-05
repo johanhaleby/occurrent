@@ -29,7 +29,8 @@ import org.occurrent.domain.DomainEvent;
 import org.occurrent.domain.NameDefined;
 import org.occurrent.domain.NameWasChanged;
 import org.occurrent.eventstore.api.dcb.DcbCloudEvents;
-import org.occurrent.eventstore.api.dcb.DcbQuery;
+import org.occurrent.eventstore.api.dcb.DcbCriteria;
+import org.occurrent.eventstore.api.dcb.Tag;
 import org.occurrent.eventstore.inmemory.InMemoryEventStore;
 import org.occurrent.subscription.inmemory.InMemorySubscriptionModel;
 
@@ -70,7 +71,7 @@ class DcbSubscriptionsTest {
     @Test
     void delivers_only_matching_dcb_events() {
         CopyOnWriteArrayList<DomainEvent> received = new CopyOnWriteArrayList<>();
-        dcbSubscriptions.subscribe("subscription", DcbQuery.tags("name:1"), (DomainEvent event) -> received.add(event)).waitUntilStarted();
+        dcbSubscriptions.subscribe("subscription", DcbCriteria.tags(Tag.of("name", "1")), (DomainEvent event) -> received.add(event)).waitUntilStarted();
 
         NameDefined matching = new NameDefined("eventId1", time, "name", "Some Doe");
         append("name:1", matching);
@@ -84,7 +85,7 @@ class DcbSubscriptionsTest {
         CopyOnWriteArrayList<DomainEvent> received = new CopyOnWriteArrayList<>();
         // waitUntilStarted=true must block until the subscription is live, so an event appended right after subscribe
         // returns is delivered without a separate waitUntilStarted() call.
-        dcbSubscriptions.subscribe("subscription", DcbQuery.tags("name:1"), null, true, (DomainEvent event) -> received.add(event));
+        dcbSubscriptions.subscribe("subscription", DcbCriteria.tags(Tag.of("name", "1")), null, true, (DomainEvent event) -> received.add(event));
 
         NameDefined afterStart = new NameDefined("eventId1", time, "name", "Some Doe");
         append("name:1", afterStart);
@@ -95,7 +96,7 @@ class DcbSubscriptionsTest {
     @Test
     void subscribe_with_metadata_and_wait_until_started_is_live_before_returning() {
         CopyOnWriteArrayList<DomainEvent> received = new CopyOnWriteArrayList<>();
-        dcbSubscriptions.subscribeWithMetadata("subscription", DcbQuery.tags("name:1"), null, true, (metadata, event) -> received.add(event));
+        dcbSubscriptions.subscribeWithMetadata("subscription", DcbCriteria.tags(Tag.of("name", "1")), null, true, (metadata, event) -> received.add(event));
 
         NameDefined afterStart = new NameDefined("eventId1", time, "name", "Some Doe");
         append("name:1", afterStart);
@@ -106,10 +107,10 @@ class DcbSubscriptionsTest {
     @Test
     void subscribe_with_metadata_exposes_dcb_position_and_tags() {
         CopyOnWriteArrayList<OptionalLong> positions = new CopyOnWriteArrayList<>();
-        CopyOnWriteArrayList<Set<String>> tags = new CopyOnWriteArrayList<>();
+        CopyOnWriteArrayList<Set<Tag>> tags = new CopyOnWriteArrayList<>();
         CopyOnWriteArrayList<DomainEvent> events = new CopyOnWriteArrayList<>();
 
-        dcbSubscriptions.subscribeWithMetadata("subscription", DcbQuery.tags("name:1"), (metadata, event) -> {
+        dcbSubscriptions.subscribeWithMetadata("subscription", DcbCriteria.tags(Tag.of("name", "1")), (metadata, event) -> {
             positions.add(metadata.position());
             tags.add(metadata.dcbTags());
             events.add(event);
@@ -121,14 +122,14 @@ class DcbSubscriptionsTest {
         await().untilAsserted(() -> {
             assertThat(events).containsExactly(nameDefined);
             assertThat(positions).containsExactly(OptionalLong.of(1));
-            assertThat(tags.get(0)).containsExactlyInAnyOrder("name:1", "tenant:2");
+            assertThat(tags.get(0)).containsExactlyInAnyOrder(Tag.of("name", "1"), Tag.of("tenant", "2"));
         });
     }
 
     @Test
     void cancel_stops_further_delivery_to_the_subscription() {
         CopyOnWriteArrayList<DomainEvent> received = new CopyOnWriteArrayList<>();
-        dcbSubscriptions.subscribe("subscription", DcbQuery.tags("name:1"), (DomainEvent event) -> received.add(event)).waitUntilStarted();
+        dcbSubscriptions.subscribe("subscription", DcbCriteria.tags(Tag.of("name", "1")), (DomainEvent event) -> received.add(event)).waitUntilStarted();
 
         NameDefined beforeCancel = new NameDefined("eventId1", time, "name", "Some Doe");
         append("name:1", beforeCancel);
@@ -140,7 +141,7 @@ class DcbSubscriptionsTest {
         // append was processed and delivered, so the cancelled subscription has had its chance. Asserting against that
         // is stronger than waiting a fixed window, which only shows the event had not arrived yet.
         CopyOnWriteArrayList<DomainEvent> witnessReceived = new CopyOnWriteArrayList<>();
-        dcbSubscriptions.subscribe("witness", DcbQuery.tags("name:1"), (DomainEvent event) -> witnessReceived.add(event)).waitUntilStarted();
+        dcbSubscriptions.subscribe("witness", DcbCriteria.tags(Tag.of("name", "1")), (DomainEvent event) -> witnessReceived.add(event)).waitUntilStarted();
 
         NameWasChanged afterCancel = new NameWasChanged("eventId2", time, "name", "Jane Doe");
         append("name:1", afterCancel);
@@ -154,8 +155,9 @@ class DcbSubscriptionsTest {
     }
 
     private void append(List<String> tags, DomainEvent... events) {
+        List<Tag> parsedTags = tags.stream().map(Tag::parse).toList();
         List<CloudEvent> cloudEvents = cloudEventConverter.toCloudEvents(Stream.of(events))
-                .map(event -> DcbCloudEvents.withTags(event, tags))
+                .map(event -> DcbCloudEvents.withTags(event, parsedTags))
                 .toList();
         eventStore.append(cloudEvents);
     }

@@ -132,7 +132,7 @@ DCB is a capability layered on the existing CloudEvent storage, not a new store 
   * `EventMetadata` is the one released type here, so its move is a breaking change. The old `org.occurrent.dsl.subscription.blocking.EventMetadata` is gone, so update the import to `org.occurrent.dsl.subscription.EventMetadata`.
 
 * Added live reactive DCB subscriptions.
-  * A reactive `DcbSubscriptionModel` facade (`subscription-api-reactor`) subscribes to DCB events matching a `DcbQuery` as a `Flux<CloudEvent>`, filtered server-side, and the reactor DCB DSL gains `DcbSubscriptions` with `Flux<E> subscribe(...)` and `Flux<DcbEvent<E>> subscribeWithMetadata(...)`. Live only for now. The `DcbStartAt` is passed through to the underlying subscription model, and the current reactive models have no DCB catch-up, so a `DcbStartAt.beginning()` behaves like a live start rather than replaying history.
+  * A reactive `DcbSubscriptionModel` facade (`subscription-api-reactor`) subscribes to DCB events matching a `DcbCriteria` as a `Flux<CloudEvent>`, filtered server-side, and the reactor DCB DSL gains `DcbSubscriptions` with `Flux<E> subscribe(...)` and `Flux<DcbEvent<E>> subscribeWithMetadata(...)`. Live only for now. The `DcbStartAt` is passed through to the underlying subscription model, and the current reactive models have no DCB catch-up, so a `DcbStartAt.beginning()` behaves like a live start rather than replaying history.
   * See [ADR 37](doc/architecture/decisions/0037-live-reactive-dcb-subscriptions.md).
 
 * Added a reactive DCB DSL (`dcb-dsl-reactor`).
@@ -165,17 +165,18 @@ DCB is a capability layered on the existing CloudEvent storage, not a new store 
   * The consistency token for a query with more than one marker (for example `tags("t1","t2")`) is captured in a single consistent read, so an append committing between per-marker reads cannot produce a token that masks a real conflict (a write skew). See [ADR 31](doc/architecture/decisions/0031-capture-dcb-consistency-token-in-a-single-read.md).
   * A `DuplicateKeyException` from two transactions first-creating the same conflict marker at once is retried (as the position counter is), so a brand-new tag or type under concurrent appends does not surface a spurious failure.
 * A `MatchAll` DCB append condition is a whole-store lock.
-  * `DcbQuery.all()` used as a `DcbAppendCondition` boundary is skew-safe only against other whole-store conditions, not against concurrent scoped appends, so it is meant for single-writer or empty-store guards. See [ADR 30](doc/architecture/decisions/0030-keep-matchall-dcb-append-condition-with-documented-limit.md).
+  * `DcbCriteria.all()` used as a `DcbAppendCondition` boundary is skew-safe only against other whole-store conditions, not against concurrent scoped appends, so it is meant for single-writer or empty-store guards. See [ADR 30](doc/architecture/decisions/0030-keep-matchall-dcb-append-condition-with-documented-limit.md).
 
 * The Java DCB subscription DSL can wait until a subscription has started.
   * `DcbSubscriptions.subscribe(...)` and `subscribeWithMetadata(...)` take a `waitUntilStarted` boolean. When it is `true` the call blocks until the subscription has started, and for a replaying DCB subscription that means until catch-up completes, matching the Kotlin DSL. The overloads without the flag return without waiting.
 
-* DCB queries are built with a fluent API.
-  * `DcbQuery.type("OrderPlaced").tags("order:1")` builds one alternative, `DcbQuery.anyOf(...)` ORs several, and `DcbQuery.tagsAnyOf("a", "b")` is the shorthand for an or of single-tag alternatives. A single alternative is itself a `DcbQuery`.
-  * See [ADR 32](doc/architecture/decisions/0032-fluent-dcb-query-construction.md).
+* DCB criteria are built with a fluent API.
+  * `DcbCriteria.type("OrderPlaced").tags(Tag.of("order", "1"))` builds one alternative, `DcbCriteria.anyOf(...)` ORs several, and `DcbCriteria.tagsAnyOf(Tag.of("a", "1"), Tag.of("b", "2"))` is the shorthand for an or of single-tag alternatives. A single alternative is itself a `DcbCriteria`.
+  * DCB tags are now a first-class `Tag(key, value)` type (`Tag.of("order", "1")`, canonical form `"order:1"`), replacing bare strings, so `TagGenerator` returns `Set<Tag>` and a tag always has a key and a value.
+  * See [ADR 32](doc/architecture/decisions/0032-fluent-dcb-query-construction.md) and [ADR 47](doc/architecture/decisions/0047-dcb-criteria-tag-type-and-typed-class-construction.md).
 
 * Added the `@DcbSubscription` annotation, the declarative DCB counterpart to `@StreamSubscription`.
-  * A DCB read model is declared as a single annotated method. `eventTypes` and `tagsAllOf` express the `DcbQuery`, and `startAt` (BEGINNING, NOW, DEFAULT) or `startAtDcbPosition` (an explicit position, the DCB counterpart to the stream `startAtTimeEpochMillis`) together with `resumeBehavior` give history replay, resume from the stored position, and an always-replay in-memory mode that disables the competing consumer and checkpoint storage. It routes through the DCB DSL, so it gets the server-side filter, and the method can take the event plus an optional `EventMetadata` or `DcbEventMetadata`. `DcbStartAt` has a `dynamic` factory to back the resume logic. The course-enrollment dashboard subscriber uses `@DcbSubscription` (combining `BEGINNING` with `SAME_AS_START_AT`, since it is an in-memory model rebuilt on every boot).
+  * A DCB read model is declared as a single annotated method. `eventTypes` and `tagsAllOf` express the `DcbCriteria`, and `startAt` (BEGINNING, NOW, DEFAULT) or `startAtDcbPosition` (an explicit position, the DCB counterpart to the stream `startAtTimeEpochMillis`) together with `resumeBehavior` give history replay, resume from the stored position, and an always-replay in-memory mode that disables the competing consumer and checkpoint storage. It routes through the DCB DSL, so it gets the server-side filter, and the method can take the event plus an optional `EventMetadata` or `DcbEventMetadata`. `DcbStartAt` has a `dynamic` factory to back the resume logic. The course-enrollment dashboard subscriber uses `@DcbSubscription` (combining `BEGINNING` with `SAME_AS_START_AT`, since it is an in-memory model rebuilt on every boot).
   * See [ADR 27](doc/architecture/decisions/0027-dcb-subscription-annotation.md).
 
 * `@Subscription` is superseded by the new `@StreamSubscription` and deprecated.
@@ -192,7 +193,7 @@ DCB is a capability layered on the existing CloudEvent storage, not a new store 
   * See [ADR 24](doc/architecture/decisions/0024-stream-and-dcb-subscription-model-split.md).
 
 * DCB subscriptions filter server-side.
-  * `DcbSubscriptionFilter`, wrapping a `DcbQuery`, is a first-class `SubscriptionFilter` alongside the stream `OccurrentSubscriptionFilter`. The Spring and native MongoDB subscription models translate it into a change stream `$match`, so a DCB read model that cares about a few event types or a tag boundary receives only the matching events rather than every DCB event. The in-memory model honors it in process. `DcbSubscriptions` subscribes with it and keeps a small in-process check only as a correctness floor for backends that do not filter.
+  * `DcbSubscriptionFilter`, wrapping a `DcbCriteria`, is a first-class `SubscriptionFilter` alongside the stream `OccurrentSubscriptionFilter`. The Spring and native MongoDB subscription models translate it into a change stream `$match`, so a DCB read model that cares about a few event types or a tag boundary receives only the matching events rather than every DCB event. The in-memory model honors it in process. `DcbSubscriptions` subscribes with it and keeps a small in-process check only as a correctness floor for backends that do not filter.
   * Tag containment matches the indexed `dcbTags` array the event store already writes, exposed as the public constant `OccurrentCloudEventMongoDocumentMapper.DCB_TAGS_INDEX_FIELD`.
   * See [ADR 23](doc/architecture/decisions/0023-server-side-filtering-for-dcb-subscriptions.md).
 
@@ -209,10 +210,10 @@ DCB is a capability layered on the existing CloudEvent storage, not a new store 
 * `DcbEventStore.append` derives the Occurrent storage stream from the appended events' DCB tags, so callers reason in DCB terms (tags and append conditions) rather than storage stream ids. Placement is configured on the store through a `DcbStreamIdGenerator` (in the `eventstore-api-dcb` module, defaulting to `PartitionedDcbStreamIdGenerator`), set on `InMemoryEventStore` via a constructor and on the Spring Mongo store via `EventStoreConfig.Builder.dcbStreamIdGenerator(..)`.
 * Added initial Dynamic Consistency Boundary (DCB) support.
   * New module: `org.occurrent:eventstore-api-dcb`.
-  * New core API types include `DcbEventStore`, `DcbQuery`, `DcbQueryItem`, `DcbReadOptions`, `DcbEventStream`, `DcbAppendCondition`, `DcbAppendResult`, `DcbAppendConditionNotFulfilledException`, and `DcbCloudEvents`.
-  * `DcbQuery` is a sealed type, either `DcbQuery.MatchAll`, `DcbQuery.Items`, or a single `DcbQueryItem`, built through a fluent API (`all()`, `type(..)`/`types(..)`, `tags(..)`, `anyOf(..)`, and `tagsAnyOf(..)`) for an OR across query items, where a single alternative is itself a `DcbQuery`.
+  * New core API types include `DcbEventStore`, `DcbCriteria`, `DcbCriterion`, `DcbReadOptions`, `DcbEventStream`, `DcbAppendCondition`, `DcbAppendResult`, `DcbAppendConditionNotFulfilledException`, and `DcbCloudEvents`.
+  * `DcbCriteria` is a sealed type, either `DcbCriteria.MatchAll`, `DcbCriteria.Items`, or a single `DcbCriterion`, built through a fluent API (`all()`, `type(..)`/`types(..)`, `tags(..)`, `anyOf(..)`, and `tagsAnyOf(..)`) for an OR across query items, where a single alternative is itself a `DcbCriteria`.
   * `DcbReadOptions` scopes a read with an optional exclusive lower bound (`afterSequencePosition`) and an optional inclusive upper bound (`upToSequencePosition`).
-  * `DcbEventStore` exposes `exists(DcbQuery)` and `count(DcbQuery)` for checking a boundary without materializing the matching events, plus `exists(DcbQuery, DcbReadOptions)` and `count(DcbQuery, DcbReadOptions)` overloads that scope the check to a position window.
+  * `DcbEventStore` exposes `exists(DcbCriteria)` and `count(DcbCriteria)` for checking a boundary without materializing the matching events, plus `exists(DcbCriteria, DcbReadOptions)` and `count(DcbCriteria, DcbReadOptions)` overloads that scope the check to a position window.
   * DCB is implemented as an optional capability over the existing CloudEvent storage model, not as a separate event representation.
   * DCB metadata is stored as CloudEvent extensions:
     * `dcbtags` for canonical DCB tags.
@@ -224,8 +225,8 @@ DCB is a capability layered on the existing CloudEvent storage, not a new store 
 * Added blocking DCB application-service support.
   * New package: `org.occurrent.application.service.blocking.dcb`.
   * New types: `DcbApplicationService`, `GenericDcbApplicationService`, `TagGenerator`, `DcbStreamIdGenerator`, and `PartitionedDcbStreamIdGenerator`.
-  * `GenericDcbApplicationService` reads with a `DcbQuery`, invokes the domain function, converts new domain events to CloudEvents, adds DCB tags, and appends with a DCB append condition.
-  * `DcbExecuteOptions` adds a post-append side-effect, so a policy can run on the newly written events after a successful append, mirroring the stream `ExecuteOptions` side-effect. The side-effect runs once after the append, not on the no-new-events path and not per retry attempt, and the existing `PolicySideEffect` is reused. There is deliberately no read-filter option, because in DCB the `DcbQuery` is both the read filter and the consistency boundary. Kotlin gets a reified `dcbSideEffect` builder.
+  * `GenericDcbApplicationService` reads with a `DcbCriteria`, invokes the domain function, converts new domain events to CloudEvents, adds DCB tags, and appends with a DCB append condition.
+  * `DcbExecuteOptions` adds a post-append side-effect, so a policy can run on the newly written events after a successful append, mirroring the stream `ExecuteOptions` side-effect. The side-effect runs once after the append, not on the no-new-events path and not per retry attempt, and the existing `PolicySideEffect` is reused. There is deliberately no read-filter option, because in DCB the `DcbCriteria` is both the read filter and the consistency boundary. Kotlin gets a reified `dcbSideEffect` builder.
   * Kotlin callers get `executeSequence` and `executeList` extensions on `DcbApplicationService` that return a nullable `DcbAppendResult?` (null on a no-op command) instead of the Java `Optional<DcbAppendResult>`, mirroring the stream `executeSequence`/`executeList`, and both take an optional `DcbExecuteOptions`. The Kotlin decider `execute` extensions now return `DcbAppendResult?` as well.
   * The Kotlin decider `execute` extensions widen a decider's event type for you, so a feature decider over its own narrow event type can be passed straight to a `DcbApplicationService` over a broader event type without calling `adapt` or `adaptEvents` first. This matters because the injected `DcbApplicationService` is typically over the whole domain's event type, so a feature decider would otherwise need widening at every call site.
 * Added Spring Mongo event-store capabilities.
@@ -245,7 +246,7 @@ DCB is a capability layered on the existing CloudEvent storage, not a new store 
   * In DCB-only mode the auto-configured subscriptions are currently live only, because the catch-up model is not wired in DCB-only mode. Replay by `dcbposition` for auto-configured subscriptions is a follow-up.
   * Occurrent creates missing indexes/collections only. It never removes indexes or collections automatically.
 * Added DCB query excluded-type support.
-  * `DcbQueryItem` has `excludedTypes`.
+  * `DcbCriterion` has `excludedTypes`.
   * Excluded event types are expressed with `excludingTypes(..)` on a query.
   * Included types are any-of, tags are all-of, and excluded types are none-of within each query item.
   * Reads respect excluded types, so excluded events are filtered from DCB query results. The Spring Mongo append-condition check over-approximates excluded types as a safe conservatism (see the query-scoped concurrency note), so an excluded event that still carries a query's positive tag can trigger a self-healing conflict rather than being ignored.
@@ -253,17 +254,18 @@ DCB is a capability layered on the existing CloudEvent storage, not a new store 
   * New module: `org.occurrent:dcb-dsl-blocking`.
   * Java helpers: `DcbDomainEventQueries` and `DcbDomainEventStream`.
   * `DcbDomainEventQueries` wraps a `DomainEventQueries`, reusing its configured `CloudEventConverter` and delegating the regular stream query API, so a DCB application uses one object for both DCB queries and stream queries instead of passing a `DcbEventStore` directly.
+  * The DSL can build criteria from domain event `Class` objects, resolved through the same `CloudEventTypeMapper` used at write time, via `queries.criteria().types(SomeEvent.class)` (Kotlin: `typeOf<SomeEvent>()`), so callers no longer hand-write type strings.
   * Kotlin query extensions on `DcbDomainEventQueries`: `queryForSequence` and `queryForList`. The `queryWithPosition` overloads are member functions on `DcbDomainEventQueries`.
   * `DcbDomainEventStream` and `queryWithPosition` carry the `DcbConsistencyToken` alongside the sequence position, so a caller can read through the DSL and then run a sound conditional append. The Kotlin `queryForListWithPosition`/`queryForSequenceWithPosition` extensions return the token as the third element of a `Triple`.
   * Kotlin live subscription extension on `Subscribable`: `subscribeDcb`.
-  * DCB subscription helpers subscribe to CloudEvents and post-filter DCB-tagged events by `DcbQuery`. They are live subscription conveniences, not DCB-consistent reads.
+  * DCB subscription helpers subscribe to CloudEvents and post-filter DCB-tagged events by `DcbCriteria`. They are live subscription conveniences, not DCB-consistent reads.
   * DCB subscription metadata callbacks reuse the existing `EventMetadata` type and expose the shared `position` (on `EventMetadata`) and the DCB `dcbTags` Kotlin extension property.
-  * Kotlin decider extensions on `DcbApplicationService` mirror the stream decider helpers while using `DcbQuery` as the decision boundary.
+  * Kotlin decider extensions on `DcbApplicationService` mirror the stream decider helpers while using `DcbCriteria` as the decision boundary.
   * `DcbEventMetadata` gives Java callers an `OptionalLong` `position()` and the `dcbTags()` of a subscription event. Kotlin reads `position` on `EventMetadata` and `dcbTags` through the extension property.
   * `DcbSubscriptions` is an instance wrapper over a `Subscribable` and a `CloudEventConverter`, so DCB subscriptions can be created without passing the converter on every call, mirroring `DcbDomainEventQueries`.
   * Kotlin `queryForListWithPosition` and `queryForSequenceWithPosition` extensions return the matching events together with the observed DCB sequence position.
 * Added DCB catch-up subscription support to `CatchupSubscriptionModel`.
-  * A new DCB-mode constructor takes a `DcbEventStore` and a `DcbQuery`. In this mode the catch-up phase replays historic DCB events ordered by `dcbposition` and the subscription resumes by `dcbposition`, so a DCB application can rebuild a read model from history rather than only subscribing live.
+  * A new DCB-mode constructor takes a `DcbEventStore` and a `DcbCriteria`. In this mode the catch-up phase replays historic DCB events ordered by `dcbposition` and the subscription resumes by `dcbposition`, so a DCB application can rebuild a read model from history rather than only subscribing live.
   * The replay pages through the DCB sequence in position windows, so a large rebuild does not load the whole matched set at once. The window size is configurable through `CatchupSubscriptionModelConfig.dcbCatchupPositionWindowSize`.
   * Reconciliation of events written during the replay is by `dcbposition` rather than by a count, so the DCB catch-up is immune to the clock-skew loss and the `estimatedDocumentCount` undercount the stream catch-up has to defend against.
   * The stream catch-up behavior and its constructors are unchanged. A `CatchupSubscriptionModel` is in either stream mode or DCB mode, selected by constructor.

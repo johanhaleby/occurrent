@@ -24,7 +24,8 @@ import org.junit.jupiter.api.DisplayNameGeneration;
 import org.junit.jupiter.api.DisplayNameGenerator.ReplaceUnderscores;
 import org.junit.jupiter.api.Test;
 import org.occurrent.eventstore.api.dcb.DcbCloudEvents;
-import org.occurrent.eventstore.api.dcb.DcbQuery;
+import org.occurrent.eventstore.api.dcb.Tag;
+import org.occurrent.eventstore.api.dcb.DcbCriteria;
 import org.occurrent.subscription.DcbSubscriptionFilter;
 
 import java.net.URI;
@@ -56,7 +57,7 @@ class InMemorySubscriptionModelDcbFilterTest {
     @Test
     void delivers_matching_dcb_event_to_subscriber_with_dcb_filter() {
         CopyOnWriteArrayList<CloudEvent> received = new CopyOnWriteArrayList<>();
-        subscriptionModel.subscribe("sub", DcbSubscriptionFilter.filter(DcbQuery.tags("x:1")), received::add)
+        subscriptionModel.subscribe("sub", DcbSubscriptionFilter.filter(DcbCriteria.tags(Tag.parse("x:1"))), received::add)
                 .waitUntilStarted();
 
         CloudEvent matching = dcbEvent("TypeA", 1L, List.of("x:1"));
@@ -68,7 +69,7 @@ class InMemorySubscriptionModelDcbFilterTest {
     @Test
     void does_not_deliver_event_missing_required_tag() {
         CopyOnWriteArrayList<CloudEvent> received = new CopyOnWriteArrayList<>();
-        subscriptionModel.subscribe("sub", DcbSubscriptionFilter.filter(DcbQuery.tags("x:1")), received::add)
+        subscriptionModel.subscribe("sub", DcbSubscriptionFilter.filter(DcbCriteria.tags(Tag.parse("x:1"))), received::add)
                 .waitUntilStarted();
 
         CloudEvent nonMatching = dcbEvent("TypeA", 1L, List.of("y:2"));
@@ -82,10 +83,10 @@ class InMemorySubscriptionModelDcbFilterTest {
     @Test
     void does_not_deliver_a_stream_event_that_has_a_position_but_no_dcb_tags() {
         CopyOnWriteArrayList<CloudEvent> received = new CopyOnWriteArrayList<>();
-        // A DcbQuery.all() matches any tags, so only the DCB discriminator (the DCB tags extension) keeps stream
+        // A DcbCriteria.all() matches any tags, so only the DCB discriminator (the DCB tags extension) keeps stream
         // events out. With stream position on by default, a stream event carries a position, so a "position > 0" guard
         // would leak it into this DCB subscription; the isDcbEvent guard must not.
-        subscriptionModel.subscribe("sub", DcbSubscriptionFilter.filter(DcbQuery.all()), received::add)
+        subscriptionModel.subscribe("sub", DcbSubscriptionFilter.filter(DcbCriteria.all()), received::add)
                 .waitUntilStarted();
 
         // A stream-written event: it has a global position but no DCB tags extension, so it is not a DCB event.
@@ -104,7 +105,7 @@ class InMemorySubscriptionModelDcbFilterTest {
     @Test
     void filters_out_non_matching_and_keeps_matching_events_in_same_batch() {
         CopyOnWriteArrayList<CloudEvent> received = new CopyOnWriteArrayList<>();
-        subscriptionModel.subscribe("sub", DcbSubscriptionFilter.filter(DcbQuery.tags("x:1")), received::add)
+        subscriptionModel.subscribe("sub", DcbSubscriptionFilter.filter(DcbCriteria.tags(Tag.parse("x:1"))), received::add)
                 .waitUntilStarted();
 
         CloudEvent matching = dcbEvent("TypeA", 1L, List.of("x:1", "y:2"));
@@ -118,7 +119,7 @@ class InMemorySubscriptionModelDcbFilterTest {
     @Test
     void type_filter_delivers_only_matching_type() {
         CopyOnWriteArrayList<CloudEvent> received = new CopyOnWriteArrayList<>();
-        subscriptionModel.subscribe("sub", DcbSubscriptionFilter.filter(DcbQuery.type("OrderPlaced")), received::add)
+        subscriptionModel.subscribe("sub", DcbSubscriptionFilter.filter(DcbCriteria.type("OrderPlaced")), received::add)
                 .waitUntilStarted();
 
         CloudEvent matching = dcbEvent("OrderPlaced", 1L, List.of("order:1"));
@@ -136,7 +137,7 @@ class InMemorySubscriptionModelDcbFilterTest {
                 .withSource(URI.create("urn:test"))
                 .withTime(OffsetDateTime.now())
                 .build();
-        CloudEvent tagged = DcbCloudEvents.withTags(base, tags);
+        CloudEvent tagged = DcbCloudEvents.withTags(base, tags.stream().map(Tag::parse).toList());
         return OccurrentCloudEventExtension.withPosition(tagged, position);
     }
 }

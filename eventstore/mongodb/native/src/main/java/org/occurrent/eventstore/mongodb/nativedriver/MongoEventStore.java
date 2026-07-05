@@ -313,7 +313,7 @@ public class MongoEventStore implements EventStore, EventStoreOperations, EventS
     }
 
     @Override
-    public DcbEventStream read(DcbQuery query, DcbReadOptions options) {
+    public DcbEventStream read(DcbCriteria query, DcbReadOptions options) {
         requireDcbCapability();
         requireNonNull(query, "Query cannot be null");
         requireNonNull(options, "Read options cannot be null");
@@ -373,7 +373,7 @@ public class MongoEventStore implements EventStore, EventStoreOperations, EventS
     }
 
     @Override
-    public boolean exists(DcbQuery query, DcbReadOptions options) {
+    public boolean exists(DcbCriteria query, DcbReadOptions options) {
         requireDcbCapability();
         requireNonNull(query, "Query cannot be null");
         requireNonNull(options, "Read options cannot be null");
@@ -381,7 +381,7 @@ public class MongoEventStore implements EventStore, EventStoreOperations, EventS
     }
 
     @Override
-    public long count(DcbQuery query, DcbReadOptions options) {
+    public long count(DcbCriteria query, DcbReadOptions options) {
         requireDcbCapability();
         requireNonNull(query, "Query cannot be null");
         requireNonNull(options, "Read options cannot be null");
@@ -402,8 +402,8 @@ public class MongoEventStore implements EventStore, EventStoreOperations, EventS
         // Place by the condition's boundary tags when it constrains on tags, so the same boundary always lands in
         // the same partition regardless of per-event tags. Otherwise (no condition, or a type-only/match-all
         // condition) fall back to the events' tags so tagless boundaries do not all collapse onto one hot partition.
-        Set<String> conditionBoundaryTags = condition == null ? Set.of() : DcbCloudEvents.boundaryTags(condition.query());
-        Set<String> placementTags = conditionBoundaryTags.isEmpty() ? DcbMarkerModel.boundaryTagsOf(eventsToAppend) : conditionBoundaryTags;
+        Set<Tag> conditionTags = condition == null ? Set.of() : DcbCloudEvents.tagsOf(condition.query());
+        Set<Tag> placementTags = conditionTags.isEmpty() ? DcbMarkerModel.tagsOf(eventsToAppend) : conditionTags;
         String streamId = requireNonNull(dcbStreamIdGenerator.generateStreamId(placementTags), "DcbStreamIdGenerator returned a null stream id");
 
         // Reserve the position block once, outside the transaction. The counter findAndModify is a single atomic
@@ -498,7 +498,7 @@ public class MongoEventStore implements EventStore, EventStoreOperations, EventS
     // append touched at least one of the query's markers since the reader observed it. Because the versions are bumped
     // inside the append transaction (not when positions are reserved), this token reflects only committed appends and is
     // therefore immune to the read-watermark overshoot that a position-based check suffers (ADR 0021).
-    private long consistencyToken(@Nullable ClientSession clientSession, DcbQuery query) {
+    private long consistencyToken(@Nullable ClientSession clientSession, DcbCriteria query) {
         Set<String> markerKeys = DcbMarkerModel.queryMarkerKeys(query);
         if (markerKeys.isEmpty()) {
             return 0;
@@ -851,9 +851,9 @@ public class MongoEventStore implements EventStore, EventStoreOperations, EventS
         return and(streamIdEqualTo(streamId), lte(STREAM_VERSION, version));
     }
 
-    private static Bson toDcbBsonQuery(DcbQuery query, long afterPosition, long upperSequencePosition) {
+    private static Bson toDcbBsonQuery(DcbCriteria query, long afterPosition, long upperSequencePosition) {
         Bson positionFilter = and(gt(OccurrentCloudEventExtension.POSITION, afterPosition), lte(OccurrentCloudEventExtension.POSITION, upperSequencePosition));
-        if (query instanceof DcbQuery.MatchAll) {
+        if (query instanceof DcbCriteria.MatchAll) {
             return positionFilter;
         }
         List<Bson> itemFilters = DcbMarkerModel.dcbQueryItems(query).stream()
@@ -862,7 +862,7 @@ public class MongoEventStore implements EventStore, EventStoreOperations, EventS
         return and(positionFilter, or(itemFilters));
     }
 
-    private static Bson toBsonFilter(DcbQueryItem item) {
+    private static Bson toBsonFilter(DcbCriterion item) {
         List<Bson> filters = new ArrayList<>();
         if (!item.types().isEmpty()) {
             filters.add(in("type", item.types()));
@@ -871,7 +871,7 @@ public class MongoEventStore implements EventStore, EventStoreOperations, EventS
             filters.add(nin("type", item.excludedTypes()));
         }
         if (!item.tags().isEmpty()) {
-            filters.add(Filters.all(DcbDocumentMapper.DCB_TAGS_INDEX_FIELD, item.tags()));
+            filters.add(Filters.all(DcbDocumentMapper.DCB_TAGS_INDEX_FIELD, item.tags().stream().map(Tag::canonical).toList()));
         }
         return and(filters);
     }

@@ -22,7 +22,7 @@ import org.occurrent.application.converter.get
 import org.occurrent.dsl.dcb.dcbTags
 import org.occurrent.dsl.subscription.EventMetadata
 import org.occurrent.eventstore.api.dcb.DcbCloudEvents
-import org.occurrent.eventstore.api.dcb.DcbQuery
+import org.occurrent.eventstore.api.dcb.DcbCriteria
 import org.occurrent.subscription.DcbStartAt
 import org.occurrent.subscription.DcbSubscriptionFilter
 import org.occurrent.subscription.api.blocking.Subscribable
@@ -32,14 +32,14 @@ import org.occurrent.subscription.api.blocking.Subscription
  * Subscribes to live DCB-tagged events that match [query].
  *
  * This is a live CloudEvent subscription convenience that post-filters DCB-tagged
- * events by [DcbQuery]. It is not a DCB read and it does not provide DCB append-condition
+ * events by [DcbCriteria]. It is not a DCB read and it does not provide DCB append-condition
  * or high-watermark guarantees.
  */
 @JvmName("subscribeDcb")
 fun <E : Any> Subscribable.subscribeDcb(
     subscriptionId: String,
     cloudEventConverter: CloudEventConverter<E>,
-    query: DcbQuery = DcbQuery.all(),
+    query: DcbCriteria = DcbCriteria.all(),
     startAt: DcbStartAt? = null,
     fn: (E) -> Unit
 ): Subscription =
@@ -56,7 +56,7 @@ fun <E : Any> Subscribable.subscribeDcb(
 fun <E : Any> Subscribable.subscribeDcb(
     subscriptionId: String,
     cloudEventConverter: CloudEventConverter<E>,
-    query: DcbQuery = DcbQuery.all(),
+    query: DcbCriteria = DcbCriteria.all(),
     startAt: DcbStartAt? = null,
     waitUntilStarted: Boolean = true,
     fn: (EventMetadata, E) -> Unit

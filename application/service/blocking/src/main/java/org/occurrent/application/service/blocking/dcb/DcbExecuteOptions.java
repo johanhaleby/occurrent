@@ -28,7 +28,7 @@ import java.util.stream.Stream;
  * <p>
  * It carries an optional side-effect that is invoked after the produced events have been appended.
  * Unlike the stream {@code ExecuteOptions}, it has no read-filter option on purpose: in DCB the
- * {@link org.occurrent.eventstore.api.dcb.DcbQuery} passed to {@code execute} is both the read filter and the
+ * {@link org.occurrent.eventstore.api.dcb.DcbCriteria} passed to {@code execute} is both the read filter and the
  * consistency boundary, so a separate filter here would be redundant and misleading.
  * <p>
  * A typical usage pattern is:

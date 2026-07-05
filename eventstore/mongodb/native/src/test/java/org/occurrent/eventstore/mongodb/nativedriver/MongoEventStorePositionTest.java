@@ -34,6 +34,7 @@ import org.occurrent.cloudevents.OccurrentCloudEventExtension;
 import org.occurrent.eventstore.api.PositionRange;
 import org.occurrent.eventstore.api.WriteCondition;
 import org.occurrent.eventstore.api.dcb.DcbCloudEvents;
+import org.occurrent.eventstore.api.dcb.Tag;
 import org.occurrent.filter.Filter;
 import org.occurrent.mongodb.timerepresentation.TimeRepresentation;
 import org.occurrent.testsupport.mongodb.FlushMongoDBExtension;
@@ -101,7 +102,7 @@ class MongoEventStorePositionTest {
         eventStore.write("stream:1", WriteCondition.anyStreamVersion(), Stream.of(event("StreamEvent1"), event("StreamEvent2")));
         eventStore.append(List.of(taggedEvent("NameChanged", "name:1")));
 
-        List<CloudEvent> nameEvents = eventStore.read(org.occurrent.eventstore.api.dcb.DcbQuery.tags("name:1")).events();
+        List<CloudEvent> nameEvents = eventStore.read(org.occurrent.eventstore.api.dcb.DcbCriteria.tags(Tag.parse("name:1"))).events();
         List<CloudEvent> streamEvents = eventStore.read("stream:1").events().toList();
         assertThat(streamEvents).hasSize(2);
 
@@ -321,7 +322,7 @@ class MongoEventStorePositionTest {
     }
 
     private static CloudEvent taggedEvent(String type, String... tags) {
-        return DcbCloudEvents.withTags(event(type), Set.of(tags));
+        return DcbCloudEvents.withTags(event(type), java.util.Arrays.stream(tags).map(Tag::parse).toList());
     }
 
     private static CloudEvent event(String type) {

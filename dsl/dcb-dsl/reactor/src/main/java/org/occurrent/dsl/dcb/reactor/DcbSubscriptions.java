@@ -20,9 +20,10 @@ import io.cloudevents.CloudEvent;
 import org.jspecify.annotations.NullMarked;
 import org.jspecify.annotations.Nullable;
 import org.occurrent.application.converter.CloudEventConverter;
+import org.occurrent.dsl.dcb.DcbCriteriaBuilder;
 import org.occurrent.dsl.dcb.DcbEventMetadata;
 import org.occurrent.dsl.subscription.EventMetadata;
-import org.occurrent.eventstore.api.dcb.DcbQuery;
+import org.occurrent.eventstore.api.dcb.DcbCriteria;
 import org.occurrent.subscription.DcbStartAt;
 import org.occurrent.subscription.api.reactor.DcbSubscriptionModel;
 import org.occurrent.subscription.api.reactor.Subscribable;
@@ -44,13 +45,13 @@ import static java.util.Objects.requireNonNull;
  * subscription, so it is cancelled by cancelling the downstream subscription, for example disposing the
  * {@link reactor.core.Disposable} returned by {@code subscribe()}.
  * <p>
- * Delivery is live. Events are filtered by the {@link DcbQuery} server-side where the backend supports it, with an
+ * Delivery is live. Events are filtered by the {@link DcbCriteria} server-side where the backend supports it, with an
  * in-process scoping filter as a correctness floor. A {@link DcbStartAt} is passed through to the underlying
  * {@link SubscriptionModel}, so whether a replay-oriented start such as {@link DcbStartAt#beginning()} replays history
  * depends on that model. A plain model has no DCB catch-up and treats such a start as live, whereas a model composed
  * with {@code ReactorDcbCatchupSubscriptionModel} replays history from that position before going live.
  * <p>
- * The {@link #subscribe(String, DcbQuery, Function)} and {@link #subscribeWithMetadata(String, DcbQuery, BiFunction)}
+ * The {@link #subscribe(String, DcbCriteria, Function)} and {@link #subscribeWithMetadata(String, DcbCriteria, BiFunction)}
  * methods below are the named, lifecycle-managed counterpart to the {@link Flux}-returning methods above, mirroring
  * {@link Subscribable}: they return a {@link Subscription} tracked by id, which can be cancelled with
  * {@link #cancel(String)}. Like {@link Subscribable}, they return without waiting for the subscription to start; call
@@ -70,9 +71,17 @@ public final class DcbSubscriptions<E> {
     }
 
     /**
+     * A {@link DcbCriteriaBuilder} bound to this instance's {@link CloudEventConverter}, so criteria can be built from
+     * domain event classes (mapped to their CloudEvent type strings) rather than raw type strings.
+     */
+    public DcbCriteriaBuilder<E> criteria() {
+        return new DcbCriteriaBuilder<>(cloudEventConverter);
+    }
+
+    /**
      * Subscribes to live DCB events that match {@code query}, converting each to a domain event.
      */
-    public Flux<E> subscribe(DcbQuery query) {
+    public Flux<E> subscribe(DcbCriteria query) {
         return subscribe(query, DcbStartAt.subscriptionModelDefault());
     }
 
@@ -80,7 +89,7 @@ public final class DcbSubscriptions<E> {
      * Subscribes to live DCB events that match {@code query}, starting at {@code startAt}, converting each to a domain
      * event.
      */
-    public Flux<E> subscribe(DcbQuery query, DcbStartAt startAt) {
+    public Flux<E> subscribe(DcbCriteria query, DcbStartAt startAt) {
         return subscriptionModel.subscribe(query, startAt).map(cloudEventConverter::toDomainEvent);
     }
 
@@ -88,7 +97,7 @@ public final class DcbSubscriptions<E> {
      * Subscribes to live DCB events that match {@code query}, delivering each domain event together with its DCB
      * metadata.
      */
-    public Flux<DcbEvent<E>> subscribeWithMetadata(DcbQuery query) {
+    public Flux<DcbEvent<E>> subscribeWithMetadata(DcbCriteria query) {
         return subscribeWithMetadata(query, DcbStartAt.subscriptionModelDefault());
     }
 
@@ -96,7 +105,7 @@ public final class DcbSubscriptions<E> {
      * Subscribes to live DCB events that match {@code query}, starting at {@code startAt}, delivering each domain event
      * together with its DCB metadata.
      */
-    public Flux<DcbEvent<E>> subscribeWithMetadata(DcbQuery query, DcbStartAt startAt) {
+    public Flux<DcbEvent<E>> subscribeWithMetadata(DcbCriteria query, DcbStartAt startAt) {
         return subscriptionModel.subscribe(query, startAt)
                 .map(cloudEvent -> new DcbEvent<>(DcbEventMetadata.from(EventMetadata.from(cloudEvent)), cloudEventConverter.toDomainEvent(cloudEvent)));
     }
@@ -104,7 +113,7 @@ public final class DcbSubscriptions<E> {
     /**
      * Subscribes to live DCB events that match {@code query}, tracked by {@code subscriptionId}.
      */
-    public Subscription subscribe(String subscriptionId, DcbQuery query, Function<E, Mono<Void>> fn) {
+    public Subscription subscribe(String subscriptionId, DcbCriteria query, Function<E, Mono<Void>> fn) {
         return subscribe(subscriptionId, query, null, fn);
     }
 
@@ -112,7 +121,7 @@ public final class DcbSubscriptions<E> {
      * Subscribes to live DCB events that match {@code query}, starting at {@code startAt}, tracked by
      * {@code subscriptionId}.
      */
-    public Subscription subscribe(String subscriptionId, DcbQuery query, @Nullable DcbStartAt startAt, Function<E, Mono<Void>> fn) {
+    public Subscription subscribe(String subscriptionId, DcbCriteria query, @Nullable DcbStartAt startAt, Function<E, Mono<Void>> fn) {
         requireNonNull(fn, "Subscription function cannot be null");
         return subscribeWithMetadata(subscriptionId, query, startAt, (metadata, event) -> fn.apply(event));
     }
@@ -124,7 +133,7 @@ public final class DcbSubscriptions<E> {
      * This is a distinct method rather than an overload of {@link #subscribe} so that a method reference stays
      * unambiguous on the {@link Function} overloads.
      */
-    public Subscription subscribeWithMetadata(String subscriptionId, DcbQuery query, BiFunction<DcbEventMetadata, E, Mono<Void>> fn) {
+    public Subscription subscribeWithMetadata(String subscriptionId, DcbCriteria query, BiFunction<DcbEventMetadata, E, Mono<Void>> fn) {
         return subscribeWithMetadata(subscriptionId, query, null, fn);
     }
 
@@ -133,7 +142,7 @@ public final class DcbSubscriptions<E> {
      * {@code subscriptionId}, exposing DCB metadata to the callback. Returns without waiting for the subscription to
      * start.
      */
-    public Subscription subscribeWithMetadata(String subscriptionId, DcbQuery query, @Nullable DcbStartAt startAt, BiFunction<DcbEventMetadata, E, Mono<Void>> fn) {
+    public Subscription subscribeWithMetadata(String subscriptionId, DcbCriteria query, @Nullable DcbStartAt startAt, BiFunction<DcbEventMetadata, E, Mono<Void>> fn) {
         requireNonNull(subscriptionId, "Subscription id cannot be null");
         requireNonNull(query, "Query cannot be null");
         requireNonNull(fn, "Subscription function cannot be null");

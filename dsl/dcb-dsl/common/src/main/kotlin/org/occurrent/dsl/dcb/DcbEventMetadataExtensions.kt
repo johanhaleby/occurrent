@@ -17,8 +17,9 @@
 package org.occurrent.dsl.dcb
 
 import org.occurrent.dsl.subscription.EventMetadata
+import org.occurrent.eventstore.api.dcb.Tag
 
 /**
  * The canonical DCB tags of an event, or an empty set when the event has no DCB tags.
  */
-val EventMetadata.dcbTags: Set<String> get() = DcbEventMetadata.from(this).dcbTags()
+val EventMetadata.dcbTags: Set<Tag> get() = DcbEventMetadata.from(this).dcbTags()
