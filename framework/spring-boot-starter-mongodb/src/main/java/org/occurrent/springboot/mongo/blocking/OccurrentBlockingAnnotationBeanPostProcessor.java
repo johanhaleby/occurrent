@@ -158,7 +158,7 @@ class OccurrentBlockingAnnotationBeanPostProcessor implements BeanPostProcessor,
             List<Class<E>> domainEventTypesToSubscribeTo = SubscriptionAnnotations.resolveDomainEventTypes(id, bean, method, specifiedEventType, annotation.eventTypes(), "@DcbSubscription");
             List<String> cloudEventTypes = domainEventTypesToSubscribeTo.stream().map(cloudEventConverter::getCloudEventType).toList();
             List<Tag> tags = new ArrayList<>();
-            for (String tag : annotation.tagsAllOf()) {
+            for (String tag : annotation.tags()) {
                 try {
                     tags.add(Tag.parse(tag));
                 } catch (IllegalArgumentException e) {
