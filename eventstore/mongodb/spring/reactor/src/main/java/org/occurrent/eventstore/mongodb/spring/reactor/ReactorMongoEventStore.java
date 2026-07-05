@@ -528,13 +528,14 @@ public class ReactorMongoEventStore implements EventStore, EventStoreOperations,
 
     private static Query toDcbMongoQuery(DcbCriteria query, long afterPosition, long upperSequencePosition) {
         Criteria positionCriteria = where(OccurrentCloudEventExtension.POSITION).gt(afterPosition).lte(upperSequencePosition);
+        Criteria dcbEventCriteria = where(DcbDocumentMapper.DCB_TAGS_INDEX_FIELD).exists(true);
         if (query instanceof DcbCriteria.MatchAll) {
-            return new Query(positionCriteria);
+            return new Query(new Criteria().andOperator(positionCriteria, dcbEventCriteria));
         }
         List<Criteria> itemCriteria = DcbMarkerModel.dcbQueryItems(query).stream()
                 .map(ReactorMongoEventStore::toCriteria)
                 .toList();
-        return new Query(new Criteria().andOperator(positionCriteria, new Criteria().orOperator(itemCriteria)));
+        return new Query(new Criteria().andOperator(positionCriteria, dcbEventCriteria, new Criteria().orOperator(itemCriteria)));
     }
 
     private static Criteria toCriteria(DcbCriterion item) {
@@ -676,7 +677,7 @@ public class ReactorMongoEventStore implements EventStore, EventStoreOperations,
         if (dcbEnabled) {
             chain = chain
                     .then(createCollection(dcbCheckpointCollectionName, mongoTemplate))
-                    .then(createIndex(eventStoreCollectionName, mongoTemplate, Indexes.ascending(DcbDocumentMapper.DCB_TAGS_INDEX_FIELD), new IndexOptions()))
+                    .then(createIndex(eventStoreCollectionName, mongoTemplate, Indexes.ascending(DcbDocumentMapper.DCB_TAGS_INDEX_FIELD), new IndexOptions().sparse(true)))
                     .then();
         }
 

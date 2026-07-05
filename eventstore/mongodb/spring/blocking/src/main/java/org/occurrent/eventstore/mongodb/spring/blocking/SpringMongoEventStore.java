@@ -693,13 +693,14 @@ public class SpringMongoEventStore implements EventStore, EventStoreOperations, 
 
     private static Query toDcbMongoQuery(DcbCriteria query, long afterPosition, long upperSequencePosition) {
         Criteria positionCriteria = where(OccurrentCloudEventExtension.POSITION).gt(afterPosition).lte(upperSequencePosition);
+        Criteria dcbEventCriteria = where(DCB_TAGS_INDEX_FIELD).exists(true);
         if (query instanceof DcbCriteria.MatchAll) {
-            return new Query(positionCriteria);
+            return new Query(new Criteria().andOperator(positionCriteria, dcbEventCriteria));
         }
         List<Criteria> itemCriteria = DcbMarkerModel.dcbQueryItems(query).stream()
                 .map(SpringMongoEventStore::toCriteria)
                 .toList();
-        return new Query(new Criteria().andOperator(positionCriteria, new Criteria().orOperator(itemCriteria)));
+        return new Query(new Criteria().andOperator(positionCriteria, dcbEventCriteria, new Criteria().orOperator(itemCriteria)));
     }
 
     private static Criteria toCriteria(DcbCriterion item) {
@@ -791,7 +792,7 @@ public class SpringMongoEventStore implements EventStore, EventStoreOperations, 
             eventStoreCollection.createIndex(Indexes.compoundIndex(Indexes.ascending(STREAM_ID), Indexes.ascending(STREAM_VERSION)), new IndexOptions().unique(true));
         }
         if (dcbEnabled) {
-            eventStoreCollection.createIndex(Indexes.ascending(DCB_TAGS_INDEX_FIELD));
+            eventStoreCollection.createIndex(Indexes.ascending(DCB_TAGS_INDEX_FIELD), new IndexOptions().sparse(true));
         }
         // The position index is created whenever the store writes a position, so position-ordered reads and catch-up
         // have an index to sort on.

@@ -11,6 +11,10 @@ DCB is a capability layered on the existing CloudEvent storage, not a new store 
 #### Changes
 
 * Occurrent now requires Java 21 instead of Java 17. This raises the minimum JDK needed to build and run Occurrent. Stored data is unaffected, so an existing application only needs to move its runtime to Java 21.
+* Fixed DCB reads (`DcbCriteria.all()` and type-only criteria) so they no longer return stream-written events on a
+  store with both `STREAM` and `DCB` capabilities enabled. They now only return DCB-written events, backed by a
+  sparse `dcbTags` index for efficient exclusion.
+  * See [ADR 49](doc/architecture/decisions/0049-dcb-reads-exclude-non-dcb-stream-events.md).
 * Renamed the `SubscriptionPosition` type family to `Checkpoint` to stop overloading "position" for two different
   concepts: the ordering value (`position`) and the per-subscriber resume marker built from it. This is a breaking
   API change; there is no deprecated alias.
