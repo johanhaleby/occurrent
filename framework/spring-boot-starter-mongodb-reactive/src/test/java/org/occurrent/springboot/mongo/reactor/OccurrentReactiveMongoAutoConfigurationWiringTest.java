@@ -25,6 +25,7 @@ import org.occurrent.annotation.StreamSubscription;
 import org.occurrent.eventstore.api.dcb.Tag;
 import org.occurrent.annotation.StreamSubscription.StartPosition;
 import org.occurrent.application.service.dcb.TagGenerator;
+import org.occurrent.application.service.dcb.annotation.AnnotationTagGenerator;
 import org.occurrent.application.service.reactor.ApplicationService;
 import org.occurrent.application.service.reactor.dcb.DcbApplicationService;
 import org.occurrent.dsl.dcb.reactor.DcbDomainEventQueries;
@@ -37,6 +38,7 @@ import org.occurrent.subscription.api.reactor.Subscribable;
 import org.occurrent.subscription.reactor.durable.ReactorDurableSubscriptionModel;
 import org.springframework.beans.factory.NoSuchBeanDefinitionException;
 import org.springframework.boot.autoconfigure.AutoConfigurations;
+import org.springframework.boot.test.context.FilteredClassLoader;
 import org.springframework.boot.test.context.runner.ApplicationContextRunner;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
@@ -132,15 +134,41 @@ class OccurrentReactiveMongoAutoConfigurationWiringTest {
     }
 
     @Test
-    void dcb_capability_does_not_auto_configure_dcb_application_service_without_tag_generator() {
+    void dcb_capability_auto_configures_dcb_application_service_with_annotation_tag_generator_default_when_no_user_tag_generator_is_defined() {
+        // dcb-annotation-taggenerator is an optional starter dependency and therefore present on this module's own
+        // test classpath, so with no user-defined TagGenerator bean the auto-configured AnnotationTagGenerator kicks
+        // in and the DcbApplicationService is created, unlike before this default existed.
         contextRunner()
                 .withPropertyValues("occurrent.event-store.capabilities=dcb")
                 .run(context -> {
                     assertThat(context).hasNotFailed();
+                    assertThat(context).hasSingleBean(DcbApplicationService.class);
+                    assertThat(context.getBean(TagGenerator.class)).isInstanceOf(AnnotationTagGenerator.class);
+                });
+    }
+
+    @Test
+    void dcb_capability_does_not_auto_configure_dcb_application_service_without_tag_generator_when_annotation_tag_generator_module_is_absent() {
+        contextRunner()
+                .withClassLoader(new FilteredClassLoader(AnnotationTagGenerator.class))
+                .withPropertyValues("occurrent.event-store.capabilities=dcb")
+                .run(context -> {
+                    assertThat(context).hasNotFailed();
+                    assertThat(context).doesNotHaveBean(TagGenerator.class);
                     // The DcbApplicationService bean method returns null here (see DcbApplicationServiceDiagnostics),
                     // so doesNotHaveBean would wrongly report it present; assert the real by-type resolution instead.
                     assertThatThrownBy(() -> context.getBean(DcbApplicationService.class)).isInstanceOf(NoSuchBeanDefinitionException.class);
                 });
+    }
+
+    @Test
+    void user_defined_tag_generator_takes_precedence_over_the_annotation_tag_generator_default() {
+        TagGenerator<TestEvent> userTagGenerator = tagsForTestEvent();
+
+        contextRunner()
+                .withPropertyValues("occurrent.event-store.capabilities=dcb")
+                .withBean(TagGenerator.class, () -> userTagGenerator)
+                .run(context -> assertThat(context.getBean(TagGenerator.class)).isSameAs(userTagGenerator));
     }
 
     @Test

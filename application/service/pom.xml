@@ -30,5 +30,6 @@
         <module>common</module>
         <module>blocking</module>
         <module>reactor</module>
+        <module>dcb-annotation</module>
     </modules>
 </project>
