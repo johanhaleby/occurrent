@@ -158,14 +158,15 @@ public final class AnnotationTagGenerator<E> implements TagGenerator<E> {
 
     private static Method findGetter(Class<?> clazz, String fieldName) {
         String capitalized = Character.toUpperCase(fieldName.charAt(0)) + fieldName.substring(1);
-        for (String candidateName : List.of("get" + capitalized, "is" + capitalized, fieldName)) {
-            try {
-                Method candidate = clazz.getMethod(candidateName);
-                if (candidate.getParameterCount() == 0) {
-                    return candidate;
+        Set<String> candidateNames = Set.of("get" + capitalized, "is" + capitalized, fieldName);
+        // Walk the hierarchy from the concrete class up (so a subclass getter wins) and use getDeclaredMethods, which
+        // also sees a non-public getter; it is made accessible when bound. getMethod would miss non-public accessors.
+        for (Class<?> current = clazz; current != null && current != Object.class; current = current.getSuperclass()) {
+            for (Method method : current.getDeclaredMethods()) {
+                if (method.getParameterCount() == 0 && !method.isSynthetic() && !Modifier.isStatic(method.getModifiers())
+                        && method.getReturnType() != void.class && candidateNames.contains(method.getName())) {
+                    return method;
                 }
-            } catch (NoSuchMethodException ignored) {
-                // Try the next candidate name.
             }
         }
         return null;
