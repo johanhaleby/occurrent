@@ -4,7 +4,7 @@ Guidance for AI coding agents, and human contributors, working in this repositor
 
 ## What this is
 
-Occurrent is a Maven multi-module JVM event-sourcing library built on CloudEvents. Java 17 baseline, Kotlin coexists in most modules (the root build adds `src/main/kotlin` and `src/test/kotlin`). It ships as small composable libraries rather than a framework: domain models stay independent of Occurrent.
+Occurrent is a Maven multi-module JVM event-sourcing library built on CloudEvents. Java 21 baseline, Kotlin coexists in most modules (the root build adds `src/main/kotlin` and `src/test/kotlin`). It ships as small composable libraries rather than a framework: domain models stay independent of Occurrent.
 
 ## Module layout
 
@@ -35,7 +35,7 @@ Unreleased changes go under the existing `### Changelog next version` heading, n
 
 ## Coding conventions
 
-- Java 17 and Kotlin coexist in most modules.
+- Java 21 and Kotlin coexist in most modules.
 - Public APIs are small capability interfaces composed together, not large monoliths.
 - Nullness uses JSpecify (`@NullMarked`, `@Nullable`) in newer APIs, not uniformly across older code.
 - Validate nulls and invalid arguments eagerly, with `Objects.requireNonNull` or `IllegalArgumentException`.
@@ -52,10 +52,10 @@ Unreleased changes go under the existing `### Changelog next version` heading, n
 
 ## Build and verification
 
-- Full build: `mvn -B package --file pom.xml` (CI runs this on Temurin Java 17 and 21).
+- Full build: `mvn -B package --file pom.xml` (CI runs this on Temurin Java 21 and 25).
 - Focused module test: `mvn -pl <module-path> -am test`.
 - Focused test class: `mvn -pl <module-path> -am -Dtest=<TestClass> -Dsurefire.failIfNoSpecifiedTests=false test`.
-- Release: `mvn_release.sh` (Java 17, `mvn deploy -Prelease`, GPG signing, Sonatype Central publishing).
+- Release: `mvn_release.sh` (Java 21, `mvn deploy -Prelease`, GPG signing, Sonatype Central publishing).
 
 ## Deeper context
 

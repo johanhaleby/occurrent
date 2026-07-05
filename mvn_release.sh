@@ -45,7 +45,7 @@ if [ -z "${releaseVersion}" ]; then
     exit 1
 fi
 
-echo "!!!!!DON'T FORGET TO SWITCH TO JAVA 17!!!!!"
+echo "!!!!!DON'T FORGET TO SWITCH TO JAVA 21!!!!!"
 echo You may also need to disable "Stay invisible at the local network" in NordVPN, see nordvpn.md.
 echo
 read -r -p "Do you want to proceed (y/N)? " REPLY
