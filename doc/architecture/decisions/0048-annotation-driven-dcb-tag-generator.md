@@ -34,20 +34,28 @@ blank values are skipped.
 **An `AnnotationTagGenerator`, in a new optional module.** `AnnotationTagGenerator<E> implements TagGenerator<E>`
 (module `dcb-annotation-taggenerator`, package `org.occurrent.application.service.dcb.annotation`) reflects over an
 event to read its `@DcbTag` members and build the tags. It is production-quality: it scans each concrete event class
-once and caches the result in a `ConcurrentHashMap`, and it reads values through cached `MethodHandle`s bound to the
-public accessors (record accessors and getters), not private fields, so it needs no `setAccessible` and no
-module-system opens. Records are read through `getRecordComponents()`; other classes (including Kotlin `data class`es)
-through their annotated fields and getters, deduplicated by resolved key so a Kotlin property annotated on both its
-backing field and its getter yields one tag. An event with no `@DcbTag` yields an empty set. Value conversion is
-`toString()`, and only top-level members are read; a pluggable value converter and nested traversal are possible later
-extensions, deliberately not built now.
+once per generator instance and caches the result in an instance-level `ConcurrentHashMap`, reading values through
+cached `MethodHandle`s. It reads through an accessor where one exists (a record accessor or a getter), and falls back
+to the field itself when a field is annotated with no matching getter; the accessor is made accessible once at scan
+time, so the event class need not be public, at the cost of needing the declaring package open for reflection under
+the Java module system, the same requirement reflective libraries such as Jackson have. Records are read through
+`getRecordComponents()`; other classes (including Kotlin `data class`es) through their annotated fields and getters,
+deduplicated by resolved key so a Kotlin property annotated on both its backing field and its getter yields one tag.
+Static members are skipped, since they carry no per-event value. An event with no `@DcbTag` yields an empty set. Value
+conversion is `toString()`, and only top-level members are read; a pluggable value converter and nested traversal are
+possible later extensions, deliberately not built now. The cache is per-instance rather than global, so it does not
+outlive a generator instance and does not retain event classes across a classloader restart (relevant for tooling such
+as Spring Boot DevTools).
 
-**Opt-in Spring wiring that is never dragged in.** The Spring Boot starters gain a conditional bean that supplies an
+**Opt-in Spring wiring that is never dragged in.** The Spring Boot starters gain a bean that supplies an
 `AnnotationTagGenerator` as the default `TagGenerator` only when the generator module is on the classpath
-(`@ConditionalOnClass`) and the application has not defined its own `TagGenerator` (`@ConditionalOnMissingBean`). The
-starters declare the generator module as an optional dependency, so it is not transitively placed on any application's
-classpath. A team activates the feature by explicitly adding the module. When it is absent the starters behave exactly
-as before.
+(`@ConditionalOnClass`). Excluding it when the application defines its own `TagGenerator` uses `@Lazy` and
+`@Fallback` rather than `@ConditionalOnMissingBean`: these starters are activated through `@EnableOccurrent`'s plain
+`@Import` rather than the auto-configuration import list, so there is no guarantee a user's `TagGenerator` bean is
+already registered when `@ConditionalOnMissingBean` would evaluate, and a `@Fallback` bean defers that exclusion to
+dependency-resolution time instead. The starters declare the generator module as an optional dependency, so it is not
+transitively placed on any application's classpath. A team activates the feature by explicitly adding the module. When
+it is absent the starters behave exactly as before.
 
 ## Consequences
 

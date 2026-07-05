@@ -25,6 +25,7 @@ import java.lang.invoke.MethodHandle;
 import java.lang.invoke.MethodHandles;
 import java.lang.reflect.Field;
 import java.lang.reflect.Method;
+import java.lang.reflect.Modifier;
 import java.lang.reflect.RecordComponent;
 import java.util.ArrayList;
 import java.util.Collections;
@@ -52,19 +53,22 @@ import static java.util.Objects.requireNonNull;
  * reflective libraries such as Jackson have).
  * <p>
  * Each concrete event class is scanned for its {@link DcbTag}-annotated members once; the resulting
- * accessors are cached per {@link Class} and reused for every subsequent event of that class. The
- * cached accessors are immutable and the cache itself is a {@link ConcurrentHashMap}, so a single
- * generator instance is safe to share and use concurrently.
+ * accessors are cached per {@link Class} for the lifetime of this generator instance and reused for
+ * every subsequent event of that class. The cache is per-instance rather than shared globally, so
+ * reuse a single {@link AnnotationTagGenerator} instance across events of the same application
+ * rather than constructing a new one per event. The cached accessors are immutable and the cache
+ * itself is a {@link ConcurrentHashMap}, so a single generator instance is safe to share and use
+ * concurrently.
  */
 @NullMarked
 public final class AnnotationTagGenerator<E> implements TagGenerator<E> {
 
-    private static final ConcurrentMap<Class<?>, List<TagExtractor>> CACHE = new ConcurrentHashMap<>();
+    private final ConcurrentMap<Class<?>, List<TagExtractor>> cache = new ConcurrentHashMap<>();
 
     @Override
     public Set<Tag> tags(E event) {
         requireNonNull(event);
-        List<TagExtractor> extractors = CACHE.computeIfAbsent(event.getClass(), AnnotationTagGenerator::scan);
+        List<TagExtractor> extractors = this.cache.computeIfAbsent(event.getClass(), AnnotationTagGenerator::scan);
         if (extractors.isEmpty()) {
             return Set.of();
         }
@@ -110,7 +114,7 @@ public final class AnnotationTagGenerator<E> implements TagGenerator<E> {
         Map<String, TagExtractor> extractorsByKey = new LinkedHashMap<>();
         for (Class<?> current = clazz; current != null && current != Object.class; current = current.getSuperclass()) {
             scanMethods(current, extractorsByKey);
-            scanFields(current, extractorsByKey);
+            scanFields(current, clazz, extractorsByKey);
         }
         return List.copyOf(extractorsByKey.values());
     }
@@ -118,7 +122,8 @@ public final class AnnotationTagGenerator<E> implements TagGenerator<E> {
     private static void scanMethods(Class<?> clazz, Map<String, TagExtractor> extractorsByKey) {
         for (Method method : clazz.getDeclaredMethods()) {
             DcbTag annotation = method.getAnnotation(DcbTag.class);
-            if (annotation == null || method.getParameterCount() != 0 || method.isSynthetic()) {
+            if (annotation == null || method.getParameterCount() != 0 || method.isSynthetic()
+                    || Modifier.isStatic(method.getModifiers()) || method.getReturnType() == void.class) {
                 continue;
             }
             String key = resolveKey(annotation, propertyNameFromGetter(method));
@@ -126,10 +131,10 @@ public final class AnnotationTagGenerator<E> implements TagGenerator<E> {
         }
     }
 
-    private static void scanFields(Class<?> clazz, Map<String, TagExtractor> extractorsByKey) {
-        for (Field field : clazz.getDeclaredFields()) {
+    private static void scanFields(Class<?> declaringClass, Class<?> concreteClass, Map<String, TagExtractor> extractorsByKey) {
+        for (Field field : declaringClass.getDeclaredFields()) {
             DcbTag annotation = field.getAnnotation(DcbTag.class);
-            if (annotation == null || field.isSynthetic()) {
+            if (annotation == null || field.isSynthetic() || Modifier.isStatic(field.getModifiers())) {
                 continue;
             }
             String key = resolveKey(annotation, field.getName());
@@ -137,8 +142,9 @@ public final class AnnotationTagGenerator<E> implements TagGenerator<E> {
                 continue;
             }
             // Prefer reading through the getter (Kotlin generates a public getter for every val); fall back to the
-            // field itself only when a field is annotated with no matching accessor.
-            Method getter = findGetter(clazz, field.getName());
+            // field itself only when a field is annotated with no matching accessor. The getter is looked up on the
+            // concrete class so a getter declared or overridden only on a subclass is still found.
+            Method getter = findGetter(concreteClass, field.getName());
             extractorsByKey.put(key, new TagExtractor(key, getter != null ? unreflect(getter) : unreflectField(field)));
         }
     }
