@@ -143,7 +143,7 @@ public sealed interface DcbQuery permits DcbQuery.MatchAll, DcbQuery.Items, DcbQ
                 items.addAll(existing.items());
             }
         }
-        return items.size() == 1 ? items.get(0) : new Items(items);
+        return items.size() == 1 ? items.getFirst() : new Items(items);
     }
 
     /**

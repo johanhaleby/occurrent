@@ -192,7 +192,7 @@ public class SpringMongoEventStore implements EventStore, EventStoreOperations, 
                     }
                 }
                 insertAll(streamId, currentStreamVersion, writeCondition, cloudEventDocuments);
-                newStreamVersion = cloudEventDocuments.get(cloudEventDocuments.size() - 1).getLong(STREAM_VERSION);
+                newStreamVersion = cloudEventDocuments.getLast().getLong(STREAM_VERSION);
             } else {
                 newStreamVersion = currentStreamVersion;
             }
