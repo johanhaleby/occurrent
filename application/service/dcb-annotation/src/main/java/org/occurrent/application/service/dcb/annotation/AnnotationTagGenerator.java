@@ -21,6 +21,7 @@ import org.occurrent.annotation.DcbTag;
 import org.occurrent.application.service.dcb.TagGenerator;
 import org.occurrent.eventstore.api.dcb.Tag;
 
+import java.beans.Introspector;
 import java.lang.invoke.MethodHandle;
 import java.lang.invoke.MethodHandles;
 import java.lang.reflect.Field;
@@ -83,7 +84,13 @@ public final class AnnotationTagGenerator<E> implements TagGenerator<E> {
             if (s.isBlank()) {
                 continue;
             }
-            tags.add(Tag.of(extractor.key(), s));
+            try {
+                tags.add(Tag.of(extractor.key(), s));
+            } catch (IllegalArgumentException e) {
+                throw new AnnotationTagGeneratorException(
+                        "Invalid @" + DcbTag.class.getSimpleName() + " value for key \"" + extractor.key() + "\" on "
+                                + event.getClass().getName() + ": " + e.getMessage(), e);
+            }
         }
         return Collections.unmodifiableSet(tags);
     }
@@ -193,16 +200,12 @@ public final class AnnotationTagGenerator<E> implements TagGenerator<E> {
     private static String propertyNameFromGetter(Method method) {
         String name = method.getName();
         if (name.startsWith("get") && name.length() > 3) {
-            return decapitalize(name.substring(3));
+            return Introspector.decapitalize(name.substring(3));
         }
         if (name.startsWith("is") && name.length() > 2) {
-            return decapitalize(name.substring(2));
+            return Introspector.decapitalize(name.substring(2));
         }
         return name;
-    }
-
-    private static String decapitalize(String s) {
-        return Character.toLowerCase(s.charAt(0)) + s.substring(1);
     }
 
     private static String resolveKey(DcbTag annotation, String defaultName) {

@@ -31,6 +31,11 @@ import java.lang.annotation.*;
  * This annotation may be placed on a record component, a field, or a no-arg method. On a Kotlin
  * data class, use the {@code @field} or {@code @get} use-site targets to apply it to the backing
  * field or the generated getter.
+ * <p>
+ * The resulting key and value follow the constraints of the underlying tag type: the key may not
+ * contain {@code :}, and neither the key nor the value may contain a newline. An explicit
+ * {@link #key()} or a runtime value that breaks these rules fails when the tag is derived, not when
+ * this annotation is applied.
  */
 @Target({ElementType.RECORD_COMPONENT, ElementType.FIELD, ElementType.METHOD})
 @Retention(RetentionPolicy.RUNTIME)
