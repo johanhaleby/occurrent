@@ -338,11 +338,27 @@ class ReactorMongoEventStoreDcbTest {
     void dcb_match_all_query_is_index_backed_on_dcb_tags_field() {
         eventStore.append(List.of(taggedEvent("SeedType", "explain:tag"))).block();
 
+        // Bias the planner the same way ADR 49's spike did: many more position-only stream
+        // documents than dcbTags-carrying ones, so the position index is only cheaper if the
+        // planner ignores dcbTags selectivity. Without this skew, a single-document collection
+        // ties and the planner may pick either index, defeating the point of the assertion below.
+        List<org.bson.Document> streamOnlyDocuments = new ArrayList<>();
+        for (int i = 0; i < 20_000; i++) {
+            streamOnlyDocuments.add(new org.bson.Document("id", "explain-stream-only-" + i)
+                    .append("source", SOURCE.toString())
+                    .append("streamid", "explain-stream-only-" + i)
+                    .append("streamversion", 0L)
+                    .append("position", 1_000 + i));
+        }
+        requireNonNull(mongoTemplate.getCollection("events")
+                .flatMap(collection -> reactor.core.publisher.Mono.from(collection.insertMany(streamOnlyDocuments)))
+                .block());
+
         // Mirrors what toDcbMongoQuery(...) now builds for DcbCriteria.all(): the position window ANDed with an
         // existence check on dcbTags, so a MatchAll/type-only read can never match a stream-written event (which has
         // no dcbTags field) and does so via an index rather than a collection scan.
         org.bson.Document matchAllQuery = new org.bson.Document("$and", List.of(
-                new org.bson.Document("position", new org.bson.Document("$gt", 0).append("$lte", 1000000)),
+                new org.bson.Document("position", new org.bson.Document("$gt", 0).append("$lte", 1_000_000)),
                 new org.bson.Document("dcbTags", new org.bson.Document("$exists", true))
         ));
 
@@ -353,9 +369,9 @@ class ReactorMongoEventStoreDcbTest {
         assertThat(extractWinningPlanStage(explain))
                 .as("MatchAll DCB read should be index-backed via the sparse dcbTags index, not a COLLSCAN. Full explain: %s", explain.toJson())
                 .isEqualTo("IXSCAN");
-        assertThat(explain.toJson())
+        assertThat(extractWinningIndexName(explain))
                 .as("The winning plan should use the dcbTags index specifically. Full explain: %s", explain.toJson())
-                .contains("dcbTags");
+                .isEqualTo("dcbTags_1");
     }
 
     private static String extractWinningPlanStage(org.bson.Document explainDoc) {
@@ -382,6 +398,25 @@ class ReactorMongoEventStoreDcbTest {
             plan = inputStage;
         }
         return "UNKNOWN";
+    }
+
+    private static String extractWinningIndexName(org.bson.Document explainDoc) {
+        org.bson.Document queryPlanner = explainDoc.get("queryPlanner", org.bson.Document.class);
+        org.bson.Document plan = queryPlanner == null ? null : queryPlanner.get("winningPlan", org.bson.Document.class);
+        int depth = 0;
+        while (plan != null && depth++ < 20) {
+            if ("IXSCAN".equals(plan.getString("stage"))) {
+                return plan.getString("indexName");
+            }
+            org.bson.Document inputStage = plan.get("inputStage", org.bson.Document.class);
+            if (inputStage == null) {
+                List<?> inputStages = plan.getList("inputStages", org.bson.Document.class);
+                plan = inputStages != null && !inputStages.isEmpty() ? (org.bson.Document) inputStages.get(0) : null;
+            } else {
+                plan = inputStage;
+            }
+        }
+        return null;
     }
 
     @Test

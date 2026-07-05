@@ -749,20 +749,34 @@ class SpringMongoEventStoreDcbConcurrencyTest {
 
         MongoCollection<Document> collection = mongoTemplate.getCollection(COLLECTION);
 
+        // Bias the planner the same way ADR 49's spike did: many more position-only stream
+        // documents than dcbTags-carrying ones, so the position index is only cheaper if the
+        // planner ignores dcbTags selectivity. Without this skew, a single-document collection
+        // ties and the planner may pick either index, defeating the point of the assertion below.
+        List<Document> streamOnlyDocuments = new ArrayList<>();
+        for (int i = 0; i < 20_000; i++) {
+            streamOnlyDocuments.add(new Document("id", "explain-stream-only-" + i)
+                    .append("source", SOURCE.toString())
+                    .append("streamid", "explain-stream-only-" + i)
+                    .append("streamversion", 0L)
+                    .append("position", 1_000 + i));
+        }
+        collection.insertMany(streamOnlyDocuments);
+
         // Mirrors what toDcbMongoQuery(...) now builds for DcbCriteria.all(): the position window ANDed with an
         // existence check on dcbTags, so a MatchAll/type-only read can never match a stream-written event (which has
         // no dcbTags field) and does so via an index rather than a collection scan.
         Document matchAllQuery = new Document("$and", List.of(
-                new Document("position", new Document("$gt", 0).append("$lte", 1000000)),
+                new Document("position", new Document("$gt", 0).append("$lte", 1_000_000)),
                 new Document("dcbTags", new Document("$exists", true))
         ));
         Document matchAllExplain = collection.find(matchAllQuery).explain(ExplainVerbosity.QUERY_PLANNER);
         assertThat(extractWinningPlanStage(matchAllExplain))
                 .as("MatchAll DCB read should be index-backed via the sparse dcbTags index, not a COLLSCAN. Full explain: %s", matchAllExplain.toJson())
                 .isEqualTo("IXSCAN");
-        assertThat(matchAllExplain.toJson())
+        assertThat(extractWinningIndexName(matchAllExplain))
                 .as("The winning plan should use the dcbTags index specifically. Full explain: %s", matchAllExplain.toJson())
-                .contains("dcbTags");
+                .isEqualTo("dcbTags_1");
     }
 
     /**
@@ -805,6 +819,30 @@ class SpringMongoEventStoreDcbConcurrencyTest {
             }
         }
         return "UNKNOWN";
+    }
+
+    /**
+     * Extracts the index name of the winning plan's IXSCAN stage, if any, walking the
+     * same {@code queryPlanner.winningPlan} tree as {@link #extractWinningPlanStage(Document)}.
+     */
+    private static String extractWinningIndexName(Document explainDoc) {
+        Document queryPlanner = explainDoc.get("queryPlanner", Document.class);
+        Document plan = queryPlanner == null ? null : queryPlanner.get("winningPlan", Document.class);
+        int depth = 0;
+        while (plan != null && depth++ < 20) {
+            if ("IXSCAN".equals(plan.getString("stage"))) {
+                return plan.getString("indexName");
+            }
+            Document input = plan.get("inputStage", Document.class);
+            if (input != null) {
+                plan = input;
+            } else {
+                @SuppressWarnings("unchecked")
+                List<Document> inputStages = (List<Document>) plan.get("inputStages");
+                plan = inputStages != null && !inputStages.isEmpty() ? inputStages.get(0) : null;
+            }
+        }
+        return null;
     }
 
     // ---------------------------------------------------------------------------
