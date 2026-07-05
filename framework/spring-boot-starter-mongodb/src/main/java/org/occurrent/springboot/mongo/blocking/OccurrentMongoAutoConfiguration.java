@@ -28,6 +28,7 @@ import org.occurrent.application.service.blocking.ApplicationService;
 import org.occurrent.application.service.blocking.dcb.DcbApplicationService;
 import org.occurrent.application.service.blocking.dcb.GenericDcbApplicationService;
 import org.occurrent.application.service.dcb.TagGenerator;
+import org.occurrent.application.service.dcb.annotation.AnnotationTagGenerator;
 import org.occurrent.application.service.blocking.generic.GenericApplicationService;
 import org.occurrent.dsl.dcb.blocking.DcbDomainEventQueries;
 import org.occurrent.dsl.dcb.blocking.DcbSubscriptions;
@@ -72,6 +73,7 @@ import org.springframework.boot.mongodb.autoconfigure.MongoAutoConfiguration;
 import org.springframework.boot.context.properties.EnableConfigurationProperties;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Conditional;
+import org.springframework.context.annotation.Configuration;
 import org.springframework.context.annotation.Fallback;
 import org.springframework.context.annotation.Import;
 import org.springframework.context.annotation.Lazy;
@@ -268,5 +270,38 @@ public class OccurrentMongoAutoConfiguration<E> {
         return enableDefaultRetryStrategy
                 ? new GenericDcbApplicationService<>(eventStore, cloudEventConverter, tagGenerator)
                 : new GenericDcbApplicationService<>(eventStore, cloudEventConverter, tagGenerator, RetryStrategy.none());
+    }
+
+    /**
+     * Supplies a default {@link TagGenerator} backed by {@link AnnotationTagGenerator} when the
+     * {@code dcb-annotation-taggenerator} module is on the classpath and the user has not defined their own
+     * {@link TagGenerator} bean. The module is an {@code optional} dependency of this starter, so it is never
+     * dragged onto a consumer's classpath transitively; the {@link ConditionalOnClass} guard means this nested
+     * configuration class itself is never loaded (avoiding {@link NoClassDefFoundError}) when the module is absent.
+     * <p>
+     * {@code @Fallback} rather than {@code @ConditionalOnMissingBean(TagGenerator.class)}: {@link OccurrentMongoAutoConfiguration}
+     * is activated via {@code @EnableOccurrent}'s {@code @Import}, not {@code spring.factories}/{@code AutoConfiguration.imports},
+     * so it is not guaranteed to be processed after the importing user configuration's own {@code @Bean} methods -
+     * {@code @ConditionalOnMissingBean} can therefore run before a user-defined {@code TagGenerator} bean is
+     * registered and let both beans through. A {@code @Fallback} bean is instead excluded at dependency-resolution
+     * time (see {@code occurrentTypeMapper()} above for the same pattern), which is unaffected by registration order.
+     */
+    @Configuration(proxyBeanMethods = false)
+    @ConditionalOnClass(AnnotationTagGenerator.class)
+    static class AnnotationTagGeneratorConfiguration {
+
+        /**
+         * Declared as a raw {@link TagGenerator} (not {@code AnnotationTagGenerator<Object>|<E>}) so that Spring's
+         * generic bean matching resolves it for {@code ObjectProvider<TagGenerator<E>>} at any type argument
+         * {@code E}: a raw-typed bean definition matches any parameterization of the target generic when resolved
+         * through {@link ObjectProvider}.
+         */
+        @Bean
+        @Lazy
+        @Fallback
+        @SuppressWarnings({"rawtypes", "unchecked"})
+        TagGenerator occurrentAnnotationTagGenerator() {
+            return new AnnotationTagGenerator<>();
+        }
     }
 }
