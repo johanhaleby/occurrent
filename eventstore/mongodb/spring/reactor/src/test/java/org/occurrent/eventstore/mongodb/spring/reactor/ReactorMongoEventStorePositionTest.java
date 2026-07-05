@@ -122,9 +122,9 @@ class ReactorMongoEventStorePositionTest {
         assertThat(eventStore.currentPosition().block()).isEqualTo(3L);
     }
 
-    // Wave 1 does not add a way to opt a STREAM-only store IN to position (the default flip to on-by-default is
-    // Wave 3); today the only way to get a STREAM store that writesPosition() is true is to combine it with DCB,
-    // which forces stream position on (writesPosition() = DCB present || (STREAM present && streamPositionEnabled)).
+    // There is currently no way to opt a STREAM-only store IN to position, so today the only way to get a STREAM
+    // store where writesPosition() is true is to combine it with DCB, which forces stream position on
+    // (writesPosition() = DCB present || (STREAM present && streamPositionEnabled)).
     // These tests use a combined STREAM+DCB store to exercise the position-enabled behavior on stream-written events.
 
     @Test

@@ -46,7 +46,7 @@ import java.util.stream.Stream;
 
 /**
  * The blocking DCB catch-up path (ADR 20): replays historic DCB events ordered by {@code position} then hands over to
- * a live subscription. Split out of {@code CatchupSubscriptionModel} (see ADR 25 / Wave 2b) alongside
+ * a live subscription. Split out of {@code CatchupSubscriptionModel} (see ADR 25) alongside
  * {@code StreamCatchupSubscriptionModel} so the two paths can be depended on independently; this class is the one that
  * still needs {@code eventstore-api-dcb} on the classpath.
  * <p>

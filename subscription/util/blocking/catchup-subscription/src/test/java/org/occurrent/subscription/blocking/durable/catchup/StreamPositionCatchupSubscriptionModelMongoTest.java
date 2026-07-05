@@ -72,7 +72,7 @@ import static org.occurrent.time.internal.RFC3339.RFC_3339_DATE_TIME_FORMATTER;
 
 /**
  * Real MongoDB integration test for {@link CatchupSubscriptionModel} in stream mode when the store writes a global
- * position ({@code writesPosition()} is {@code true}). See ADR 25 / Wave 2a: the reconciliation strategy (position vs
+ * position ({@code writesPosition()} is {@code true}). See ADR 25: the reconciliation strategy (position vs
  * time) is chosen from the store's position capability, not from the DCB-vs-stream distinction, so a STREAM-only,
  * position-enabled store now replays through the same position-windowed range loop DCB mode uses (see
  * {@link DcbCatchupSubscriptionModelMongoTest}), reading via {@code PositionOrderedReader.readInPositionOrder}, and

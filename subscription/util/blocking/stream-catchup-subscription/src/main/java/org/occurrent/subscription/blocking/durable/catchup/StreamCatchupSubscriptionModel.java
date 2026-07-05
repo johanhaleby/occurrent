@@ -60,7 +60,7 @@ import static org.occurrent.time.internal.RFC3339.RFC_3339_DATE_TIME_FORMATTER;
 /**
  * The blocking stream catch-up path: replays historic stream events (by {@code position} when the store writes one,
  * otherwise by the legacy time/{@code $natural} order) then hands over to a live subscription. This is the stream
- * counterpart split out of {@code CatchupSubscriptionModel} (see ADR 25 / Wave 2b) so a stream-only application does
+ * counterpart split out of {@code CatchupSubscriptionModel} (see ADR 25) so a stream-only application does
  * not need to depend on {@code eventstore-api-dcb}. The dispatcher {@code CatchupSubscriptionModel} in the
  * {@code catchup-subscription} module wraps this class for its stream routing.
  * <p>
