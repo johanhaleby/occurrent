@@ -74,9 +74,8 @@ import static org.occurrent.eventstore.api.EventStoreCapability.DCB;
 import static org.occurrent.eventstore.api.EventStoreCapability.STREAM;
 
 /**
- * A STREAM-only store does not yet write a position on stream events by default, so these tests combine STREAM with
- * DCB, which turns {@code writesPosition()} on for stream-written events too. This exercises the reactive stream
- * catch-up path without depending on that default.
+ * These tests combine STREAM with DCB to prove the reactive stream catch-up path works when stream events share the
+ * global {@code position} sequence with DCB events.
  */
 @Timeout(120)
 @Testcontainers

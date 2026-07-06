@@ -71,11 +71,12 @@ import static org.occurrent.subscription.OccurrentSubscriptionFilter.filter;
  * <p>
  * The reactive stream (non-DCB) catch-up model replays only by position, so a {@link StreamSubscription} that starts
  * at a specific time ({@code startAtISO8601} or {@code startAtTimeEpochMillis}) fails loud, position replay cannot
- * resolve a wall-clock time to a position. {@code BEGINNING_OF_TIME} replays from position 0 on a position-writing
- * STREAM-only store, and fails loud otherwise. {@code NOW} and {@code DEFAULT} are always supported. DCB
- * subscriptions replay history by position via the reactive DCB catch-up model, matching the blocking behavior. The
- * capability-agnostic {@link Subscription} replays over the unified global position, so {@code BEGINNING} replays from
- * position 0 and {@code startAtGlobalPosition} from a specific position, both delivering events of every capability.
+ * resolve a wall-clock time to a position. {@code BEGINNING_OF_TIME} replays from position 0 on any STREAM store
+ * that writes position, including a combined STREAM and DCB store, and fails loud otherwise. {@code NOW} and
+ * {@code DEFAULT} are always supported. DCB subscriptions replay history by position via the reactive DCB catch-up
+ * model, matching the blocking behavior. The capability-agnostic {@link Subscription} replays over the unified global
+ * position, so {@code BEGINNING} replays from position 0 and {@code startAtGlobalPosition} from a specific position,
+ * both delivering events of every capability.
  */
 class OccurrentReactiveAnnotationBeanPostProcessor implements BeanPostProcessor, ApplicationContextAware {
 
@@ -346,7 +347,7 @@ class OccurrentReactiveAnnotationBeanPostProcessor implements BeanPostProcessor,
 
     // A stream subscription's start position. A specific start time (startAtISO8601 or startAtTimeEpochMillis) always
     // fails loud, since position replay cannot resolve a wall-clock time to a position. BEGINNING_OF_TIME replays
-    // history when replay is supported (a position-writing STREAM-only store), and fails loud otherwise rather than
+    // history when replay is supported (a STREAM store that writes position), and fails loud otherwise rather than
     // silently starting live. NOW and DEFAULT are always supported.
     private StartAt generateStreamStartAt(StreamSubscriptionDefinition subscription, boolean historyReplaySupported) {
         boolean specificTimeStart = !subscription.startAtISO8601().isBlank()

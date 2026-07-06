@@ -28,7 +28,10 @@ import org.occurrent.application.converter.CloudEventConverter;
 import org.occurrent.application.converter.jackson.JacksonCloudEventConverter;
 import org.occurrent.domain.DomainEvent;
 import org.occurrent.domain.NameDefined;
+import org.occurrent.eventstore.api.PositionRange;
+import org.occurrent.eventstore.api.SortBy;
 import org.occurrent.eventstore.inmemory.InMemoryEventStore;
+import org.occurrent.filter.Filter;
 import org.occurrent.subscription.GlobalCheckpoint;
 import org.occurrent.subscription.StartAt;
 import org.occurrent.subscription.SubscriptionFilter;
@@ -113,6 +116,25 @@ class StreamCatchupSubscriptionModelTest {
     }
 
     @Test
+    void beginning_of_time_maps_to_position_zero_when_the_store_writes_position() {
+        PositionOnlyInMemoryEventStore eventStore = new PositionOnlyInMemoryEventStore(inMemorySubscriptionModel);
+        assertThat(eventStore.writesPosition()).isTrue();
+
+        NameDefined event1 = nameDefined("event1");
+        NameDefined event2 = nameDefined("event2");
+        write(eventStore, event1);
+        write(eventStore, event2);
+
+        CopyOnWriteArrayList<DomainEvent> received = new CopyOnWriteArrayList<>();
+        StreamCatchupSubscriptionModel subscription = new StreamCatchupSubscriptionModel(subscriptionModel, eventStore, new CatchupSubscriptionModelConfig(100));
+
+        subscription.subscribe("subscription", StartAtTime.beginningOfTime(), toDomainEvents(received)).waitUntilStarted();
+
+        await().untilAsserted(() -> assertThat(received).containsExactly(event1, event2));
+        assertThat(eventStore.lastPositionRange.afterPosition()).hasValue(0L);
+    }
+
+    @Test
     void live_only_subscription_delegates_to_the_wrapped_model_when_start_is_now() {
         InMemoryEventStore eventStore = new InMemoryEventStore(inMemorySubscriptionModel);
         CopyOnWriteArrayList<DomainEvent> received = new CopyOnWriteArrayList<>();
@@ -137,6 +159,30 @@ class StreamCatchupSubscriptionModelTest {
     private void write(InMemoryEventStore eventStore, DomainEvent event) {
         Stream<CloudEvent> cloudEvents = cloudEventConverter.toCloudEvents(Stream.of(event));
         eventStore.write(event.eventId(), cloudEvents);
+    }
+
+    private static final class PositionOnlyInMemoryEventStore extends InMemoryEventStore {
+        private PositionRange lastPositionRange;
+
+        private PositionOnlyInMemoryEventStore(Consumer<Stream<CloudEvent>> listener) {
+            super(listener);
+        }
+
+        @Override
+        public Stream<CloudEvent> readInPositionOrder(Filter filter, PositionRange range) {
+            lastPositionRange = range;
+            return super.readInPositionOrder(filter, range);
+        }
+
+        @Override
+        public Stream<CloudEvent> query(Filter filter, int skip, int limit, SortBy sortBy) {
+            throw new AssertionError("Position-enabled beginning-of-time catch-up must not use the time-based query path");
+        }
+
+        @Override
+        public long count(Filter filter) {
+            throw new AssertionError("Position-enabled beginning-of-time catch-up must not use the time-based count path");
+        }
     }
 
     /**

@@ -177,8 +177,8 @@ public class CatchupSubscriptionModel implements SubscriptionModel, DelegatingSu
     }
 
     /**
-     * Create a dual-mode instance that catches up both stream subscriptions (by time, over {@code eventStoreQueries})
-     * and DCB subscriptions (by {@code position}, over {@code dcbEventStore}). Each subscription is routed by its
+     * Create a dual-mode instance that catches up both stream subscriptions (by {@code position} when the stream store
+     * writes one, otherwise by time) and DCB subscriptions (by {@code position}). Each subscription is routed by its
      * filter and start position, so a single model serves an application that uses both streams and DCB.
      *
      * @param subscriptionModel The subscription that'll be used to subscribe to new events <i>after</i> catch-up is completed.
