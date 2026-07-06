@@ -8,8 +8,6 @@ import org.springframework.scheduling.concurrent.ThreadPoolTaskExecutor;
 
 import java.time.Duration;
 import java.util.concurrent.Executor;
-import java.util.concurrent.ExecutorService;
-import java.util.concurrent.Executors;
 
 import static java.util.Objects.requireNonNull;
 
@@ -90,21 +88,42 @@ public class SpringMongoSubscriptionModelConfig {
 
     /**
      * Specify the executor to use for this subscription model. Under the hood the {@link SpringMongoSubscriptionModel} will use this executor when initializing the {@link DefaultMessageListenerContainer}
-     * to listen to events written MongoDB. By default a {@link ThreadPoolTaskExecutor} will be used with queue size {@code 0}, which effectively will make behave as unbounded {@link Executors#newCachedThreadPool()}.
+     * to listen to events written MongoDB. By default a {@link ThreadPoolTaskExecutor} will be used with queue size {@code 0}, which effectively will make behave as unbounded
+     * {@link java.util.concurrent.Executors#newCachedThreadPool()}.
      * <br/><br/>
-     * Note that if you're using a non-spring implementation, for example an {@link ExecutorService}, you need to shut it down your self after {@link SpringMongoSubscriptionModel} is shutdown.
+     * Note that if you're using a non-spring implementation, for example an {@link java.util.concurrent.ExecutorService}, you need to shut it down your self after
+     * {@link SpringMongoSubscriptionModel} is shutdown.
      *
      * @param executor The executor to use
-     * @return A new instance of {@code SpringSubscriptionModelConfig}
+     * @return A new instance of {@code SpringMongoSubscriptionModelConfig}
      * @see ThreadPoolTaskExecutor
      */
     public SpringMongoSubscriptionModelConfig executor(Executor executor) {
         return new SpringMongoSubscriptionModelConfig(eventCollection, timeRepresentation, retryStrategy, restartSubscriptionsOnChangeStreamHistoryLost, executor);
     }
 
+    /**
+     * Use virtual threads for blocking MongoDB change stream listener tasks while keeping Spring's
+     * {@link ThreadPoolTaskExecutor} lifecycle semantics.
+     *
+     * @return A new instance of {@code SpringMongoSubscriptionModelConfig}
+     */
+    public SpringMongoSubscriptionModelConfig useVirtualThreads() {
+        return executor(virtualThreadExecutor());
+    }
+
     private static Executor defaultExecutor() {
+        return newTaskExecutor(false);
+    }
+
+    private static Executor virtualThreadExecutor() {
+        return newTaskExecutor(true);
+    }
+
+    private static Executor newTaskExecutor(boolean virtualThreads) {
         ThreadPoolTaskExecutor executor = new ThreadPoolTaskExecutor();
         executor.setQueueCapacity(0);
+        executor.setVirtualThreads(virtualThreads);
         executor.initialize();
         return executor;
     }

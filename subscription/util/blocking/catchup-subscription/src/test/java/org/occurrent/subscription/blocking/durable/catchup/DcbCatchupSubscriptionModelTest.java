@@ -49,6 +49,7 @@ import java.util.UUID;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.ConcurrentMap;
+import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.function.Consumer;
 import java.util.stream.Stream;
 
@@ -101,11 +102,18 @@ class DcbCatchupSubscriptionModelTest {
         appendTagged("name:1", name3);
 
         CopyOnWriteArrayList<DomainEvent> received = new CopyOnWriteArrayList<>();
+        AtomicBoolean replayedOnVirtualThread = new AtomicBoolean(false);
         CatchupSubscriptionModel subscription = new CatchupSubscriptionModel(subscriptionModel, eventStore, DcbCriteria.tags(Tag.parse("name:1")));
 
-        subscription.subscribe("subscription", StartAt.checkpoint(GlobalCheckpoint.of(0)), toDomainEvents(received)).waitUntilStarted();
+        subscription.subscribe("subscription", StartAt.checkpoint(GlobalCheckpoint.of(0)), cloudEvent -> {
+            replayedOnVirtualThread.set(Thread.currentThread().isVirtual());
+            received.add(cloudEventConverter.toDomainEvent(cloudEvent));
+        }).waitUntilStarted();
 
-        await().untilAsserted(() -> assertThat(received).containsExactly(name1, name2, name3));
+        await().untilAsserted(() -> {
+            assertThat(received).containsExactly(name1, name2, name3);
+            assertThat(replayedOnVirtualThread).isTrue();
+        });
     }
 
     @Test

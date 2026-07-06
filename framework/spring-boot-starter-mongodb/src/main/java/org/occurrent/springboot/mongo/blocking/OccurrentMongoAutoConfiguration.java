@@ -62,6 +62,7 @@ import org.occurrent.subscription.blocking.durable.catchup.CatchupSubscriptionMo
 import org.occurrent.subscription.mongodb.spring.blocking.SpringMongoLeaseCompetingConsumerStrategy;
 import org.occurrent.subscription.mongodb.spring.blocking.SpringMongoSubscriptionModel;
 import org.occurrent.subscription.mongodb.spring.blocking.SpringMongoCheckpointStorage;
+import org.occurrent.subscription.mongodb.spring.blocking.SpringMongoSubscriptionModelConfig;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.ObjectProvider;
@@ -77,6 +78,7 @@ import org.springframework.context.annotation.Configuration;
 import org.springframework.context.annotation.Fallback;
 import org.springframework.context.annotation.Import;
 import org.springframework.context.annotation.Lazy;
+import org.springframework.core.env.Environment;
 import org.springframework.data.mongodb.MongoDatabaseFactory;
 import org.springframework.data.mongodb.MongoTransactionManager;
 import org.springframework.data.mongodb.core.MongoTemplate;
@@ -160,10 +162,14 @@ public class OccurrentMongoAutoConfiguration<E> {
     @ConditionalOnMissingBean(SubscriptionModel.class)
     @ConditionalOnProperty(name = "occurrent.subscription.enabled", havingValue = "true", matchIfMissing = true)
     public SubscriptionModel occurrentCompetingDurableSubscriptionModel(MongoTemplate mongoTemplate, SpringMongoLeaseCompetingConsumerStrategy competingConsumerStrategy, CheckpointStorage storage,
-                                                                        OccurrentProperties occurrentProperties, EventStoreQueries eventStoreQueries, ObjectProvider<DcbEventStore> dcbEventStore) {
+                                                                        OccurrentProperties occurrentProperties, EventStoreQueries eventStoreQueries, ObjectProvider<DcbEventStore> dcbEventStore, Environment environment) {
         EventStoreProperties eventStoreProperties = occurrentProperties.getEventStore();
-        SpringMongoSubscriptionModel mongoSubscriptionModel = new SpringMongoSubscriptionModel(mongoTemplate, withConfig(eventStoreProperties.getCollection(), eventStoreProperties.getTimeRepresentation())
-                .restartSubscriptionsOnChangeStreamHistoryLost(occurrentProperties.getSubscription().isRestartOnChangeStreamHistoryLost()));
+        SpringMongoSubscriptionModelConfig mongoSubscriptionModelConfig = withConfig(eventStoreProperties.getCollection(), eventStoreProperties.getTimeRepresentation())
+                .restartSubscriptionsOnChangeStreamHistoryLost(occurrentProperties.getSubscription().isRestartOnChangeStreamHistoryLost());
+        if (environment.getProperty("spring.threads.virtual.enabled", Boolean.class, false)) {
+            mongoSubscriptionModelConfig = mongoSubscriptionModelConfig.useVirtualThreads();
+        }
+        SpringMongoSubscriptionModel mongoSubscriptionModel = new SpringMongoSubscriptionModel(mongoTemplate, mongoSubscriptionModelConfig);
         DurableSubscriptionModel durableSubscriptionModel = new DurableSubscriptionModel(mongoSubscriptionModel, storage);
         CatchupSubscriptionModelConfig catchupConfig = new CatchupSubscriptionModelConfig(useCheckpointStorage(storage)
                 .andPersistCheckpointDuringCatchupPhaseForEveryNEvents(1000));

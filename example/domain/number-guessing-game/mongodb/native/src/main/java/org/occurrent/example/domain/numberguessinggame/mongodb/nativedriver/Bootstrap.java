@@ -202,7 +202,7 @@ public class Bootstrap {
 
     private static SubscriptionModel initializeSubscription(MongoClient mongoClient) {
         MongoDatabase database = mongoClient.getDatabase(DATABASE_NAME);
-        NativeMongoSubscriptionModel blockingSubscriptionForMongoDB = new NativeMongoSubscriptionModel(database, EVENTS_COLLECTION_NAME, TimeRepresentation.DATE, Executors.newCachedThreadPool(), RetryStrategy.fixed(200));
+        NativeMongoSubscriptionModel blockingSubscriptionForMongoDB = new NativeMongoSubscriptionModel(database, EVENTS_COLLECTION_NAME, TimeRepresentation.DATE, Executors.newVirtualThreadPerTaskExecutor(), RetryStrategy.fixed(200));
         CheckpointStorage storage = new NativeMongoCheckpointStorage(database, CHECKPOINTS_COLLECTION_NAME);
         return new DurableSubscriptionModel(blockingSubscriptionForMongoDB, storage);
     }

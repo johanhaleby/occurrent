@@ -11,6 +11,9 @@ DCB is a capability layered on the existing CloudEvent storage, not a new store 
 #### Changes
 
 * Occurrent now requires Java 21 instead of Java 17. This raises the minimum JDK needed to build and run Occurrent. Stored data is unaffected, so an existing application only needs to move its runtime to Java 21.
+* Blocking catch-up subscriptions now run their replay handoff work on Java virtual threads instead of the common
+  `ForkJoinPool`, avoiding common-pool starvation from blocking event-store reads and subscriber callbacks. The Spring
+  Boot Mongo starter also honors `spring.threads.virtual.enabled=true` for its blocking Mongo subscription executor.
 * Fixed DCB reads (`DcbCriteria.all()` and type-only criteria) so they no longer return stream-written events on a
   store with both `STREAM` and `DCB` capabilities enabled. They now only return DCB-written events, backed by a
   sparse `dcbTags` index for efficient exclusion.
