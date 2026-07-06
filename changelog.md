@@ -14,6 +14,9 @@ DCB is a capability layered on the existing CloudEvent storage, not a new store 
 * Blocking catch-up subscriptions now run their replay handoff work on Java virtual threads instead of the common
   `ForkJoinPool`, avoiding common-pool starvation from blocking event-store reads and subscriber callbacks. The Spring
   Boot Mongo starter also honors `spring.threads.virtual.enabled=true` for its blocking Mongo subscription executor.
+* Fixed example-profile compilation after recent DSL and query cleanup. The RPS decider web example now uses the stream
+  subscription DSL expected by the view DSL, and the course-enrollment student management use case points at the renamed
+  DCB query helper.
 * Fixed DCB reads (`DcbCriteria.all()` and type-only criteria) so they no longer return stream-written events on a
   store with both `STREAM` and `DCB` capabilities enabled. They now only return DCB-written events, backed by a
   sparse `dcbTags` index for efficient exclusion.

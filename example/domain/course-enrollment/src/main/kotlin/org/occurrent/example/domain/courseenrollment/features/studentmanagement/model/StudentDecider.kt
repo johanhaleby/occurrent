@@ -24,8 +24,8 @@ import java.time.Instant
 import java.util.*
 
 /**
- * Decider for the student's own lifecycle. Single boundary: the student (see
- * [org.occurrent.example.domain.courseenrollment.infrastructure.dcb.CourseEnrollmentDcbQueries.studentBoundary]).
+ * Decider for the student's own lifecycle. The boundary is the student itself (see
+ * [org.occurrent.example.domain.courseenrollment.infrastructure.dcb.CourseEnrollmentQueries.studentCriteria]).
  */
 val studentDecider: Decider<StudentCommand, StudentRegistry, StudentEvent> =
     decider(

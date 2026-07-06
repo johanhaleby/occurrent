@@ -20,7 +20,7 @@ package org.occurrent.example.domain.rps.decidermodel.web.cqrs.gameplay
 import com.fasterxml.jackson.annotation.JsonInclude
 import com.fasterxml.jackson.annotation.JsonInclude.Include.NON_NULL
 import org.occurrent.dsl.subscription.EventMetadata
-import org.occurrent.dsl.subscription.blocking.Subscriptions
+import org.occurrent.dsl.subscription.blocking.StreamSubscriptions
 import org.occurrent.dsl.view.materialized
 import org.occurrent.dsl.view.updateView
 import org.occurrent.dsl.view.view
@@ -110,7 +110,7 @@ private val gameView = view<GameReadModel?, Pair<EventMetadata, GameEvent>>(
 )
 
 @Component
-private class UpdateGameViewWhenGamePlayed(subscriptions: Subscriptions<GameEvent>, mongoOperations: MongoOperations) {
+private class UpdateGameViewWhenGamePlayed(subscriptions: StreamSubscriptions<GameEvent>, mongoOperations: MongoOperations) {
     private val log = loggerFor<UpdateGameViewWhenGamePlayed>()
 
     init {
