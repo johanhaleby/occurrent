@@ -22,7 +22,7 @@ import org.occurrent.example.domain.courseenrollment.common.DomainEvent
 import org.occurrent.example.domain.courseenrollment.features.coursemanagement.model.CourseCommand.CancelCourse
 import org.occurrent.example.domain.courseenrollment.features.coursemanagement.model.CourseCommand.DefineCourse
 import org.occurrent.example.domain.courseenrollment.features.coursemanagement.model.courseDecider
-import org.occurrent.example.domain.courseenrollment.infrastructure.dcb.CourseEnrollmentDcbQueries.courseBoundary
+import org.occurrent.example.domain.courseenrollment.infrastructure.dcb.CourseEnrollmentQueries.courseBoundary
 import java.time.Instant
 import java.util.*
 

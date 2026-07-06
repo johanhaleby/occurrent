@@ -26,21 +26,21 @@ import org.occurrent.example.domain.hotelbooking.features.booking.readmodel.Room
 import org.occurrent.example.domain.hotelbooking.features.booking.usecases.bookRoom
 import org.occurrent.example.domain.hotelbooking.features.booking.usecases.cancelBooking
 import org.occurrent.example.domain.hotelbooking.features.hoteldashboard.readmodel.HotelDashboard
-import org.occurrent.example.domain.hotelbooking.infrastructure.dcb.HotelBookingDcbQueries
+import org.occurrent.example.domain.hotelbooking.infrastructure.dcb.HotelBookingCriteria
+import org.springframework.format.annotation.DateTimeFormat
 import org.springframework.http.MediaType
 import org.springframework.http.codec.ServerSentEvent
 import org.springframework.stereotype.Controller
 import org.springframework.ui.Model
-import org.springframework.format.annotation.DateTimeFormat
 import org.springframework.web.bind.annotation.GetMapping
 import org.springframework.web.bind.annotation.ModelAttribute
 import org.springframework.web.bind.annotation.PathVariable
 import org.springframework.web.bind.annotation.PostMapping
 import org.springframework.web.util.HtmlUtils
-import reactor.core.publisher.Mono
 import reactor.core.publisher.Flux
+import reactor.core.publisher.Mono
 import java.time.LocalDate
-import java.util.UUID
+import java.util.*
 
 /**
  * Form-backed booking command. On WebFlux, @RequestParam reads only query params, so form bodies bind via
@@ -111,7 +111,7 @@ class BookingController(
      */
     @GetMapping("/rooms/{id}/activity", produces = [MediaType.TEXT_EVENT_STREAM_VALUE])
     fun activity(@PathVariable id: UUID): Flux<ServerSentEvent<String>> =
-        dcbSubscriptions.subscribe(HotelBookingDcbQueries.roomBoundary(id))
+        dcbSubscriptions.subscribe(HotelBookingCriteria.roomCriteria(id))
             .mapNotNull { event ->
                 // The guest name is user input, so it is HTML-escaped before going into this raw SSE fragment.
                 val line = when (event) {

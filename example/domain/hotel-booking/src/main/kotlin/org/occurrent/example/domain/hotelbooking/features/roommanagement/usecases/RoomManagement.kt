@@ -24,18 +24,18 @@ import org.occurrent.example.domain.hotelbooking.common.RoomId
 import org.occurrent.example.domain.hotelbooking.features.roommanagement.model.RoomCommand.CloseRoom
 import org.occurrent.example.domain.hotelbooking.features.roommanagement.model.RoomCommand.DefineRoom
 import org.occurrent.example.domain.hotelbooking.features.roommanagement.model.roomDecider
-import org.occurrent.example.domain.hotelbooking.infrastructure.dcb.HotelBookingDcbQueries.roomBoundary
+import org.occurrent.example.domain.hotelbooking.infrastructure.dcb.HotelBookingCriteria.roomCriteria
 import java.time.Instant
 import java.util.*
 
 fun DcbApplicationService<DomainEvent>.defineRoom(hotelId: HotelId, roomId: RoomId, roomNumber: String, occurredAt: Instant = Instant.now()) = execute(
-    roomBoundary(roomId),
+    roomCriteria(roomId),
     DefineRoom(UUID.randomUUID(), occurredAt, hotelId, roomId, roomNumber),
     roomDecider
 )
 
 fun DcbApplicationService<DomainEvent>.closeRoom(hotelId: HotelId, roomId: RoomId, occurredAt: Instant = Instant.now()) = execute(
-    roomBoundary(roomId),
+    roomCriteria(roomId),
     CloseRoom(UUID.randomUUID(), occurredAt, hotelId, roomId),
     roomDecider
 )

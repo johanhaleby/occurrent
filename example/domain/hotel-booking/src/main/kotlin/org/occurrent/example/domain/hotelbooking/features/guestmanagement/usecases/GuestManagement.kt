@@ -23,18 +23,18 @@ import org.occurrent.example.domain.hotelbooking.common.GuestId
 import org.occurrent.example.domain.hotelbooking.features.guestmanagement.model.GuestCommand.DeregisterGuest
 import org.occurrent.example.domain.hotelbooking.features.guestmanagement.model.GuestCommand.RegisterGuest
 import org.occurrent.example.domain.hotelbooking.features.guestmanagement.model.guestDecider
-import org.occurrent.example.domain.hotelbooking.infrastructure.dcb.HotelBookingDcbQueries.guestBoundary
+import org.occurrent.example.domain.hotelbooking.infrastructure.dcb.HotelBookingCriteria.guestCriteria
 import java.time.Instant
 import java.util.*
 
 fun DcbApplicationService<DomainEvent>.registerGuest(guestId: GuestId, name: String, occurredAt: Instant = Instant.now()) = execute(
-    guestBoundary(guestId),
+    guestCriteria(guestId),
     RegisterGuest(UUID.randomUUID(), occurredAt, guestId, name),
     guestDecider
 )
 
 fun DcbApplicationService<DomainEvent>.deregisterGuest(guestId: GuestId, occurredAt: Instant = Instant.now()) = execute(
-    guestBoundary(guestId),
+    guestCriteria(guestId),
     DeregisterGuest(UUID.randomUUID(), occurredAt, guestId),
     guestDecider
 )

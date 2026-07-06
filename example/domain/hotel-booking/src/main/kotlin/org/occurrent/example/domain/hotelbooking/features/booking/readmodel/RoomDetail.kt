@@ -27,7 +27,7 @@ import org.occurrent.example.domain.hotelbooking.features.booking.model.Stay
 import org.occurrent.example.domain.hotelbooking.features.guestmanagement.model.GuestRegistered
 import org.occurrent.example.domain.hotelbooking.features.roommanagement.model.RoomClosed
 import org.occurrent.example.domain.hotelbooking.features.roommanagement.model.RoomDefined
-import org.occurrent.example.domain.hotelbooking.infrastructure.dcb.HotelBookingDcbQueries
+import org.occurrent.example.domain.hotelbooking.infrastructure.dcb.HotelBookingCriteria
 import org.springframework.stereotype.Component
 import reactor.core.publisher.Mono
 
@@ -53,7 +53,7 @@ class RoomDetail(private val queries: DcbDomainEventQueries<DomainEvent>) {
 
     fun of(roomId: RoomId): Mono<RoomDetailView> {
         // The room tag scopes the read to this room's own events (definition plus bookings), not the guests'.
-        return queries.queryForList(HotelBookingDcbQueries.roomBoundary(roomId))
+        return queries.queryForList(HotelBookingCriteria.roomCriteria(roomId))
             .map { events ->
                 events.fold(RoomAccumulator()) { acc, event ->
                     when (event) {
@@ -83,7 +83,7 @@ class RoomDetail(private val queries: DcbDomainEventQueries<DomainEvent>) {
     }
 
     private fun nameOf(guestId: GuestId): Mono<String> =
-        queries.queryForList(HotelBookingDcbQueries.guestBoundary(guestId))
+        queries.queryForList(HotelBookingCriteria.guestCriteria(guestId))
             .map { events -> events.filterIsInstance<GuestRegistered>().map { it.name }.firstOrNull() ?: guestId.toString() }
 }
 

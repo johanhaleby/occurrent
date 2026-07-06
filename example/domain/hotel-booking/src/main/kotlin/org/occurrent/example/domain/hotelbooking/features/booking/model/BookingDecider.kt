@@ -18,11 +18,7 @@ package org.occurrent.example.domain.hotelbooking.features.booking.model
 
 import org.occurrent.dsl.decider.Decider
 import org.occurrent.dsl.decider.decider
-import org.occurrent.example.domain.hotelbooking.common.DomainCommand
-import org.occurrent.example.domain.hotelbooking.common.DomainEvent
-import org.occurrent.example.domain.hotelbooking.common.GuestId
-import org.occurrent.example.domain.hotelbooking.common.HotelId
-import org.occurrent.example.domain.hotelbooking.common.RoomId
+import org.occurrent.example.domain.hotelbooking.common.*
 import org.occurrent.example.domain.hotelbooking.features.guestmanagement.model.GuestDeregistered
 import org.occurrent.example.domain.hotelbooking.features.guestmanagement.model.GuestRegistered
 import org.occurrent.example.domain.hotelbooking.features.roommanagement.model.RoomClosed
@@ -32,7 +28,7 @@ import java.util.*
 
 /**
  * The cross-boundary decider, and the point of the example. Its boundary spans a room AND a guest at once (see
- * [org.occurrent.example.domain.hotelbooking.infrastructure.dcb.HotelBookingDcbQueries.bookingBoundary]), so one
+ * [org.occurrent.example.domain.hotelbooking.infrastructure.dcb.HotelBookingCriteria.bookingCriteria]), so one
  * conditional append holds both the no-double-booking invariant (on the room) and the per-guest booking-limit invariant
  * (on the guest).
  *

@@ -14,7 +14,7 @@ import org.occurrent.example.domain.courseenrollment.features.studentmanagement.
 
 /**
  * Assigns DCB tags to each event when it is appended. The tags decide which boundaries an event belongs to, and
- * therefore which events a later [CourseEnrollmentDcbQueries] query will see.
+ * therefore which events a later [CourseEnrollmentQueries] query will see.
  *
  * Tagging the enroll/unenroll events with BOTH the course and the student is the heart of the example: it is what lets a
  * single conditional append protect the course capacity AND the per-student limit in one atomic decision.

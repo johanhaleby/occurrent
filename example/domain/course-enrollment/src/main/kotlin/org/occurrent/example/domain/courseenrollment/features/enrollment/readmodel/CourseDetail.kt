@@ -26,7 +26,7 @@ import org.occurrent.example.domain.courseenrollment.features.coursemanagement.m
 import org.occurrent.example.domain.courseenrollment.features.enrollment.model.StudentEnrolledInCourse
 import org.occurrent.example.domain.courseenrollment.features.enrollment.model.StudentUnenrolledFromCourse
 import org.occurrent.example.domain.courseenrollment.features.studentmanagement.model.StudentRegistered
-import org.occurrent.example.domain.courseenrollment.infrastructure.dcb.CourseEnrollmentDcbQueries
+import org.occurrent.example.domain.courseenrollment.infrastructure.dcb.CourseEnrollmentQueries
 import org.springframework.stereotype.Component
 
 data class EnrolledStudent(val studentId: StudentId, val name: String)
@@ -47,7 +47,7 @@ class CourseDetail(private val queries: DcbDomainEventQueries<DomainEvent>) {
     fun of(courseId: CourseId): CourseDetailView? {
         // The course tag scopes the read to this course's own events (definition plus enrollments), not the students'.
         // A DCB read materializes its matched window into a list, so the sequence needs no explicit closing.
-        val state = queries.queryForSequence(CourseEnrollmentDcbQueries.courseBoundary(courseId))
+        val state = queries.queryForSequence(CourseEnrollmentQueries.courseBoundary(courseId))
             .fold(CourseAccumulator()) { acc, event ->
                 when (event) {
                     is CourseDefined -> acc.copy(title = event.title, capacity = event.capacity)
@@ -66,6 +66,6 @@ class CourseDetail(private val queries: DcbDomainEventQueries<DomainEvent>) {
     }
 
     private fun nameOf(studentId: StudentId): String =
-        queries.queryForSequence(CourseEnrollmentDcbQueries.studentBoundary(studentId))
+        queries.queryForSequence(CourseEnrollmentQueries.studentBoundary(studentId))
             .filterIsInstance<StudentRegistered>().map { it.name }.firstOrNull() ?: studentId.toString()
 }

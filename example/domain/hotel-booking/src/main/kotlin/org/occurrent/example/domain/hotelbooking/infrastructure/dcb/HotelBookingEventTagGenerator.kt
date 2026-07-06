@@ -14,7 +14,7 @@ import org.occurrent.example.domain.hotelbooking.features.roommanagement.model.R
 
 /**
  * Assigns DCB tags to each event when it is appended. The tags decide which boundaries an event belongs to, and
- * therefore which events a later [HotelBookingDcbQueries] query will see.
+ * therefore which events a later [HotelBookingCriteria] query will see.
  *
  * Tagging the book/cancel events with BOTH the room and the guest is the heart of the example: it is what lets a single
  * conditional append protect the no-double-booking invariant AND the per-guest booking limit in one atomic decision.

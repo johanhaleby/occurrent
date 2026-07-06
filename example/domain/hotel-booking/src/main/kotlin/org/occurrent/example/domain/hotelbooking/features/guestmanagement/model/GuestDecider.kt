@@ -25,7 +25,7 @@ import java.util.*
 
 /**
  * Decider for the guest's own lifecycle. Single boundary: the guest (see
- * [org.occurrent.example.domain.hotelbooking.infrastructure.dcb.HotelBookingDcbQueries.guestBoundary]).
+ * [org.occurrent.example.domain.hotelbooking.infrastructure.dcb.HotelBookingCriteria.guestCriteria]).
  */
 val guestDecider: Decider<GuestCommand, GuestRegistry, GuestEvent> =
     decider(

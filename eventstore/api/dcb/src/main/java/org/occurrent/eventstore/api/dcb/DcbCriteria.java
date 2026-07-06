@@ -18,11 +18,7 @@ package org.occurrent.eventstore.api.dcb;
 
 import org.jspecify.annotations.NullMarked;
 
-import java.util.ArrayList;
-import java.util.Collection;
-import java.util.LinkedHashSet;
-import java.util.List;
-import java.util.Set;
+import java.util.*;
 
 import static java.util.Objects.requireNonNull;
 
@@ -136,12 +132,14 @@ public sealed interface DcbCriteria permits DcbCriteria.MatchAll, DcbCriteria.It
         List<DcbCriterion> items = new ArrayList<>();
         for (DcbCriteria criterion : criteria) {
             requireNonNull(criterion, "Criteria cannot be null");
-            if (criterion instanceof MatchAll) {
-                return new MatchAll();
-            } else if (criterion instanceof DcbCriterion item) {
-                items.add(item);
-            } else if (criterion instanceof Items existing) {
-                items.addAll(existing.items());
+            switch (criterion) {
+                case MatchAll ignored -> {
+                    return new MatchAll();
+                }
+                case DcbCriterion item -> items.add(item);
+                case Items existing -> items.addAll(existing.items());
+                default -> {
+                }
             }
         }
         return items.size() == 1 ? items.getFirst() : new Items(items);

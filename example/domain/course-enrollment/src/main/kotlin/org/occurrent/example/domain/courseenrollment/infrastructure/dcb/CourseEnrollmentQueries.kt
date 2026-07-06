@@ -10,14 +10,14 @@ import org.occurrent.example.domain.courseenrollment.features.studentmanagement.
  * The DCB queries that define the decision boundary for each command. A query is both the read filter (what the decider
  * folds its state from) and the consistency boundary (what a conditional append is checked against).
  */
-internal object CourseEnrollmentDcbQueries {
+internal object CourseEnrollmentQueries {
 
     /**
      * The boundary for enrolling or unenrolling a student in a course. It must span TWO entities at once:
      *  - the course's events, to know the capacity and how many students are already enrolled, and
      *  - the student's events, to know the student exists, is not already enrolled here, and is under the course limit.
      */
-    fun enrollmentBoundary(courseId: CourseId, studentId: StudentId): DcbCriteria =
+    fun enrollmentCriteria(courseId: CourseId, studentId: StudentId): DcbCriteria =
         DcbCriteria.tagsAnyOf(CourseTags.course(courseId), StudentTags.student(studentId))
 
     /** The boundary for defining a course (the course's own events). */

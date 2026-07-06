@@ -26,7 +26,7 @@ import java.util.*
 
 /**
  * Decider for the room's own lifecycle. Single boundary: the room (see
- * [org.occurrent.example.domain.hotelbooking.infrastructure.dcb.HotelBookingDcbQueries.roomBoundary]).
+ * [org.occurrent.example.domain.hotelbooking.infrastructure.dcb.HotelBookingCriteria.roomCriteria]).
  */
 val roomDecider: Decider<RoomCommand, RoomState, RoomEvent> = decider(
     initialState = RoomState.NotDefined, decide = ::decide, evolve = ::evolve

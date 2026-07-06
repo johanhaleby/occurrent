@@ -26,18 +26,18 @@ import org.occurrent.example.domain.hotelbooking.features.booking.model.BookingC
 import org.occurrent.example.domain.hotelbooking.features.booking.model.BookingCommand.CancelBooking
 import org.occurrent.example.domain.hotelbooking.features.booking.model.Stay
 import org.occurrent.example.domain.hotelbooking.features.booking.model.bookingDecider
-import org.occurrent.example.domain.hotelbooking.infrastructure.dcb.HotelBookingDcbQueries.bookingBoundary
+import org.occurrent.example.domain.hotelbooking.infrastructure.dcb.HotelBookingCriteria.bookingCriteria
 import java.time.Instant
 import java.util.*
 
 fun DcbApplicationService<DomainEvent>.bookRoom(hotelId: HotelId, roomId: RoomId, guestId: GuestId, stay: Stay, occurredAt: Instant = Instant.now()) = execute(
-    bookingBoundary(roomId, guestId),
+    bookingCriteria(roomId, guestId),
     BookRoom(UUID.randomUUID(), occurredAt, hotelId, roomId, guestId, stay),
     bookingDecider
 )
 
 fun DcbApplicationService<DomainEvent>.cancelBooking(roomId: RoomId, guestId: GuestId, stay: Stay, occurredAt: Instant = Instant.now()) = execute(
-    bookingBoundary(roomId, guestId),
+    bookingCriteria(roomId, guestId),
     CancelBooking(UUID.randomUUID(), occurredAt, roomId, guestId, stay),
     bookingDecider
 )
