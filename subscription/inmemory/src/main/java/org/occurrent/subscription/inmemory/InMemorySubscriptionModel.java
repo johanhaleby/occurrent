@@ -173,26 +173,31 @@ public class InMemorySubscriptionModel implements SubscriptionModel, Consumer<St
     }
 
     private static Predicate<CloudEvent> matcherFor(@Nullable SubscriptionFilter filter) {
-        if (filter == null) {
-            return cloudEvent -> matchesFilter(cloudEvent, Filter.all());
-        } else if (filter instanceof StreamSubscriptionFilter streamSubscriptionFilter) {
-            Filter f = streamSubscriptionFilter.filter();
-            return cloudEvent -> matchesFilter(cloudEvent, f);
-        } else if (filter instanceof AgnosticSubscriptionFilter agnosticSubscriptionFilter) {
-            // Capability-agnostic delivery: match only the plain Filter, with no capability guard, so both stream and
-            // DCB events are delivered. A plain Filter (no CapabilityFilter) matches events of every capability.
-            Filter f = agnosticSubscriptionFilter.filter();
-            return cloudEvent -> matchesFilter(cloudEvent, f);
-        } else if (filter instanceof DcbSubscriptionFilter dcbSubscriptionFilter) {
-            // Match the DCB query in process and require the event to be a DCB-written event, so a non-Mongo
-            // subscribable filters DCB events without a server-side change stream match. The discriminator is
-            // isDcbEvent (the presence of the DCB tags extension), not a positive position: with stream position on by
-            // default, stream events also carry a global position, so a "position > 0" guard would leak stream events
-            // into a DCB subscription.
-            DcbCriteria query = dcbSubscriptionFilter.criteria();
-            return cloudEvent -> DcbCloudEvents.isDcbEvent(cloudEvent) && DcbCloudEvents.matches(cloudEvent, query);
-        } else {
-            throw new IllegalArgumentException(InMemorySubscriptionModel.class.getSimpleName() + " only supports filters of type " + StreamSubscriptionFilter.class.getName() + " and " + DcbSubscriptionFilter.class.getName());
+        switch (filter) {
+            case null -> {
+                return cloudEvent -> matchesFilter(cloudEvent, Filter.all());
+            }
+            case StreamSubscriptionFilter streamSubscriptionFilter -> {
+                Filter f = streamSubscriptionFilter.filter();
+                return cloudEvent -> matchesFilter(cloudEvent, f);
+            }
+            case AgnosticSubscriptionFilter agnosticSubscriptionFilter -> {
+                // Capability-agnostic delivery: match only the plain Filter, with no capability guard, so both stream and
+                // DCB events are delivered. A plain Filter (no CapabilityFilter) matches events of every capability.
+                Filter f = agnosticSubscriptionFilter.filter();
+                return cloudEvent -> matchesFilter(cloudEvent, f);
+            }
+            case DcbSubscriptionFilter dcbSubscriptionFilter -> {
+                // Match the DCB query in process and require the event to be a DCB-written event, so a non-Mongo
+                // subscribable filters DCB events without a server-side change stream match. The discriminator is
+                // isDcbEvent (the presence of the DCB tags extension), not a positive position: with stream position on by
+                // default, stream events also carry a global position, so a "position > 0" guard would leak stream events
+                // into a DCB subscription.
+                DcbCriteria query = dcbSubscriptionFilter.criteria();
+                return cloudEvent -> DcbCloudEvents.isDcbEvent(cloudEvent) && DcbCloudEvents.matches(cloudEvent, query);
+            }
+            default ->
+                    throw new IllegalArgumentException(InMemorySubscriptionModel.class.getSimpleName() + " only supports filters of type " + StreamSubscriptionFilter.class.getName() + " and " + DcbSubscriptionFilter.class.getName());
         }
     }
 
