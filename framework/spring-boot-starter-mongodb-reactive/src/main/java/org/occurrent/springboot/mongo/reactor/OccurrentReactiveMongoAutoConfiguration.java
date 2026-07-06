@@ -31,6 +31,7 @@ import org.occurrent.dsl.dcb.reactor.DcbDomainEventQueries;
 import org.occurrent.dsl.dcb.reactor.DcbSubscriptions;
 import org.occurrent.dsl.query.reactor.DomainEventQueries;
 import org.occurrent.dsl.subscription.reactor.StreamSubscriptions;
+import org.occurrent.dsl.subscription.reactor.Subscriptions;
 import org.occurrent.eventstore.api.EventStoreCapability;
 import org.occurrent.eventstore.api.dcb.DcbCriteria;
 import org.occurrent.eventstore.api.dcb.reactor.DcbEventStore;
@@ -188,6 +189,18 @@ public class OccurrentReactiveMongoAutoConfiguration<E> {
     @Conditional(OnMissingCloudEventConverterAndCloudEventTypeMapperCondition.class)
     public CloudEventTypeMapper<E> occurrentTypeMapper() {
         return ReflectionCloudEventTypeMapper.qualified();
+    }
+
+    /**
+     * The capability-agnostic subscription DSL, used by the {@code @Subscription} annotation. On a store with both the
+     * {@code STREAM} and {@code DCB} capabilities it delivers both stream-written and DCB-appended events, filtered only
+     * by event type.
+     */
+    @Bean
+    @ConditionalOnMissingBean(Subscriptions.class)
+    @ConditionalOnProperty(name = "occurrent.subscription.enabled", havingValue = "true", matchIfMissing = true)
+    public Subscriptions<E> occurrentSubscriptions(Subscribable subscribable, CloudEventConverter<E> cloudEventConverter) {
+        return new Subscriptions<>(subscribable, cloudEventConverter);
     }
 
     @Bean

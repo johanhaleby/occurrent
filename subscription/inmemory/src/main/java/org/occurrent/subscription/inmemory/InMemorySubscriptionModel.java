@@ -24,6 +24,7 @@ import org.occurrent.eventstore.api.dcb.DcbCloudEvents;
 import org.occurrent.eventstore.api.dcb.DcbCriteria;
 import org.occurrent.filter.Filter;
 import org.occurrent.retry.RetryStrategy;
+import org.occurrent.subscription.AgnosticSubscriptionFilter;
 import org.occurrent.subscription.DcbSubscriptionFilter;
 import org.occurrent.subscription.OccurrentSubscriptionFilter;
 import org.occurrent.subscription.StartAt;
@@ -176,6 +177,11 @@ public class InMemorySubscriptionModel implements SubscriptionModel, Consumer<St
             return cloudEvent -> matchesFilter(cloudEvent, Filter.all());
         } else if (filter instanceof OccurrentSubscriptionFilter occurrentSubscriptionFilter) {
             Filter f = occurrentSubscriptionFilter.filter();
+            return cloudEvent -> matchesFilter(cloudEvent, f);
+        } else if (filter instanceof AgnosticSubscriptionFilter agnosticSubscriptionFilter) {
+            // Capability-agnostic delivery: match only the plain Filter, with no capability guard, so both stream and
+            // DCB events are delivered. A plain Filter (no CapabilityFilter) matches events of every capability.
+            Filter f = agnosticSubscriptionFilter.filter();
             return cloudEvent -> matchesFilter(cloudEvent, f);
         } else if (filter instanceof DcbSubscriptionFilter dcbSubscriptionFilter) {
             // Match the DCB query in process and require the event to be a DCB-written event, so a non-Mongo

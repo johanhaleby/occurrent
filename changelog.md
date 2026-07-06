@@ -25,6 +25,13 @@ DCB is a capability layered on the existing CloudEvent storage, not a new store 
   invisible to DCB reads. This enforces the invariant that the Mongo capability filter relies on, so the filter keys
   off the sparse-indexed `dcbTags` array for an efficient `Filter.capability(DCB)`.
   * See [ADR 50](doc/architecture/decisions/0050-stream-catchup-subscriptions-exclude-dcb-events.md).
+* Revived `@Subscription` and the `Subscriptions` DSL, previously deprecated aliases for the stream forms, as the
+  capability-neutral default. On a store with both `STREAM` and `DCB` capabilities they deliver both stream-written and
+  DCB-appended events, filtered only by event type, with catch-up over the unified global position and resume via
+  `GlobalCheckpoint`. `@StreamSubscription` and `@DcbSubscription` stay as the explicit capability-scoped forms. This is
+  safe for existing applications because the neutral form only ever also sees DCB events on a DCB-enabled store, and
+  those are new since DCB is unreleased. On a stream-only store it behaves exactly as `@Subscription` did before.
+  * See [ADR 51](doc/architecture/decisions/0051-capability-agnostic-subscription.md).
 * Renamed the `SubscriptionPosition` type family to `Checkpoint` to stop overloading "position" for two different
   concepts: the ordering value (`position`) and the per-subscriber resume marker built from it. This is a breaking
   API change; there is no deprecated alias.

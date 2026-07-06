@@ -23,6 +23,7 @@ import org.occurrent.eventstore.api.dcb.DcbCriteria;
 import org.occurrent.eventstore.api.dcb.reactor.DcbEventStore;
 import org.occurrent.eventstore.api.reactor.PositionOrderedReader;
 import org.occurrent.filter.Filter;
+import org.occurrent.subscription.AgnosticSubscriptionFilter;
 import org.occurrent.subscription.DcbSubscriptionFilter;
 import org.occurrent.subscription.OccurrentSubscriptionFilter;
 import org.occurrent.subscription.GlobalCheckpoint;
@@ -48,6 +49,11 @@ public class ReactorCatchupSubscriptionModel implements CheckpointAwareSubscript
 
     private final @Nullable ReactorStreamCatchupSubscriptionModel streamCatchupSubscriptionModel;
     private final @Nullable ReactorDcbCatchupSubscriptionModel dcbCatchupSubscriptionModel;
+    // The capability-agnostic position catch-up: the same position catch-up as the stream model but with no capability
+    // scope, so it replays and delivers events of every capability, filtered only by the caller's plain Filter. Present
+    // whenever a PositionOrderedReader is wired (stream-only and dual-mode). Null in the DCB-only configuration, where
+    // an AgnosticSubscriptionFilter routes to the DCB model instead (a DCB-only store has only DCB events).
+    private final @Nullable ReactorStreamCatchupSubscriptionModel agnosticCatchupSubscriptionModel;
 
     /**
      * Create a stream-only instance. Every subscription routes to the stream catch-up model.
@@ -59,6 +65,7 @@ public class ReactorCatchupSubscriptionModel implements CheckpointAwareSubscript
     public ReactorCatchupSubscriptionModel(CheckpointAwareSubscriptionModel subscriptionModel, PositionOrderedReader positionOrderedReader, @Nullable Filter defaultFilter, long windowSize, int handoverCacheSize) {
         this.streamCatchupSubscriptionModel = new ReactorStreamCatchupSubscriptionModel(requireNonNull(subscriptionModel, CheckpointAwareSubscriptionModel.class.getSimpleName() + " cannot be null"), positionOrderedReader, defaultFilter, windowSize, handoverCacheSize);
         this.dcbCatchupSubscriptionModel = null;
+        this.agnosticCatchupSubscriptionModel = new ReactorStreamCatchupSubscriptionModel(subscriptionModel, positionOrderedReader, defaultFilter, windowSize, handoverCacheSize, null);
     }
 
     /**
@@ -71,6 +78,7 @@ public class ReactorCatchupSubscriptionModel implements CheckpointAwareSubscript
     public ReactorCatchupSubscriptionModel(CheckpointAwareSubscriptionModel subscriptionModel, DcbEventStore dcbEventStore, @Nullable DcbCriteria defaultQuery, long windowSize, int handoverCacheSize) {
         this.streamCatchupSubscriptionModel = null;
         this.dcbCatchupSubscriptionModel = new ReactorDcbCatchupSubscriptionModel(requireNonNull(subscriptionModel, CheckpointAwareSubscriptionModel.class.getSimpleName() + " cannot be null"), dcbEventStore, defaultQuery, windowSize, handoverCacheSize);
+        this.agnosticCatchupSubscriptionModel = null;
     }
 
     /**
@@ -83,6 +91,7 @@ public class ReactorCatchupSubscriptionModel implements CheckpointAwareSubscript
         requireNonNull(subscriptionModel, CheckpointAwareSubscriptionModel.class.getSimpleName() + " cannot be null");
         this.streamCatchupSubscriptionModel = new ReactorStreamCatchupSubscriptionModel(subscriptionModel, positionOrderedReader, defaultFilter, windowSize, handoverCacheSize);
         this.dcbCatchupSubscriptionModel = new ReactorDcbCatchupSubscriptionModel(subscriptionModel, dcbEventStore, defaultQuery, windowSize, handoverCacheSize);
+        this.agnosticCatchupSubscriptionModel = new ReactorStreamCatchupSubscriptionModel(subscriptionModel, positionOrderedReader, defaultFilter, windowSize, handoverCacheSize, null);
     }
 
     public ReactorCatchupSubscriptionModel(CheckpointAwareSubscriptionModel subscriptionModel, PositionOrderedReader positionOrderedReader, DcbEventStore dcbEventStore, @Nullable DcbCriteria defaultQuery, @Nullable Filter defaultFilter) {
@@ -92,9 +101,21 @@ public class ReactorCatchupSubscriptionModel implements CheckpointAwareSubscript
     @Override
     public Flux<CloudEvent> subscribe(@Nullable SubscriptionFilter filter, StartAt startAt) {
         requireNonNull(startAt, StartAt.class.getSimpleName() + " cannot be null");
+        return route(filter, startAt).subscribe(filter, startAt);
+    }
+
+    // Route to the DCB, stream, or capability-agnostic catch-up model. An AgnosticSubscriptionFilter routes to the
+    // unscoped agnostic model so both stream and DCB events are delivered; if there is no agnostic model (a DCB-only
+    // store) it falls back to the DCB model, whose store has only DCB events anyway.
+    private CheckpointAwareSubscriptionModel route(@Nullable SubscriptionFilter filter, StartAt startAt) {
+        if (filter instanceof AgnosticSubscriptionFilter) {
+            return agnosticCatchupSubscriptionModel != null
+                    ? agnosticCatchupSubscriptionModel
+                    : requireNonNull(dcbCatchupSubscriptionModel);
+        }
         return routesToDcb(filter, startAt)
-                ? requireNonNull(dcbCatchupSubscriptionModel).subscribe(filter, startAt)
-                : requireNonNull(streamCatchupSubscriptionModel).subscribe(filter, startAt);
+                ? requireNonNull(dcbCatchupSubscriptionModel)
+                : requireNonNull(streamCatchupSubscriptionModel);
     }
 
     // Route to the DCB path or the stream path. A single-mode model has only one inner model and always routes there.

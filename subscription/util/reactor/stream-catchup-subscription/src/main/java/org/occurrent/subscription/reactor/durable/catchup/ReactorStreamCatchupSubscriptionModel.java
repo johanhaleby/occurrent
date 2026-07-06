@@ -25,6 +25,7 @@ import org.occurrent.eventstore.api.PositionRange;
 import org.occurrent.eventstore.api.reactor.PositionOrderedReader;
 import org.occurrent.filter.Filter;
 import org.occurrent.inmemory.filtermatching.FilterMatcher;
+import org.occurrent.subscription.AgnosticSubscriptionFilter;
 import org.occurrent.subscription.GlobalCheckpoint;
 import org.occurrent.subscription.OccurrentSubscriptionFilter;
 import org.occurrent.subscription.CheckpointAwareCloudEvent;
@@ -101,6 +102,11 @@ public class ReactorStreamCatchupSubscriptionModel implements CheckpointAwareSub
     private final @Nullable Filter defaultFilter;
     private final long windowSize;
     private final int handoverCacheSize;
+    // The capability guard ANDed into every replay read and the live subscription. It is {@link #STREAM_CAPABILITY_FILTER}
+    // for a stream subscription (so a DCB-tagged event never reaches a stream subscriber, see ADR 50), and {@code null}
+    // for a capability-agnostic subscription, which then filters only by the caller's plain Filter and so delivers
+    // events of every capability.
+    private final @Nullable Filter capabilityScope;
 
     public ReactorStreamCatchupSubscriptionModel(CheckpointAwareSubscriptionModel subscriptionModel, PositionOrderedReader positionOrderedReader) {
         this(subscriptionModel, positionOrderedReader, null, DEFAULT_POSITION_WINDOW_SIZE, DEFAULT_HANDOVER_CACHE_SIZE);
@@ -120,9 +126,20 @@ public class ReactorStreamCatchupSubscriptionModel implements CheckpointAwareSub
     }
 
     public ReactorStreamCatchupSubscriptionModel(CheckpointAwareSubscriptionModel subscriptionModel, PositionOrderedReader positionOrderedReader, @Nullable Filter defaultFilter, long windowSize, int handoverCacheSize) {
+        this(subscriptionModel, positionOrderedReader, defaultFilter, windowSize, handoverCacheSize, STREAM_CAPABILITY_FILTER);
+    }
+
+    /**
+     * @param capabilityScope The capability {@link Filter} ANDed into every replay read and the live subscription.
+     *                        Pass {@link #STREAM_CAPABILITY_FILTER} for a stream subscription, or {@code null} for a
+     *                        capability-agnostic subscription that delivers events of every capability, filtered only by
+     *                        the caller's plain {@link Filter}.
+     */
+    public ReactorStreamCatchupSubscriptionModel(CheckpointAwareSubscriptionModel subscriptionModel, PositionOrderedReader positionOrderedReader, @Nullable Filter defaultFilter, long windowSize, int handoverCacheSize, @Nullable Filter capabilityScope) {
         this.subscriptionModel = requireNonNull(subscriptionModel, CheckpointAwareSubscriptionModel.class.getSimpleName() + " cannot be null");
         this.positionOrderedReader = requireNonNull(positionOrderedReader, PositionOrderedReader.class.getSimpleName() + " cannot be null");
         this.defaultFilter = defaultFilter;
+        this.capabilityScope = capabilityScope;
         if (windowSize <= 0) {
             throw new IllegalArgumentException("Window size must be greater than zero");
         }
@@ -150,8 +167,10 @@ public class ReactorStreamCatchupSubscriptionModel implements CheckpointAwareSub
             resolvedFilter = defaultFilter;
         } else if (filter instanceof OccurrentSubscriptionFilter occurrentSubscriptionFilter) {
             resolvedFilter = occurrentSubscriptionFilter.filter();
+        } else if (filter instanceof AgnosticSubscriptionFilter agnosticSubscriptionFilter) {
+            resolvedFilter = agnosticSubscriptionFilter.filter();
         } else {
-            return Flux.error(new IllegalArgumentException(ReactorStreamCatchupSubscriptionModel.class.getSimpleName() + " only supports an " + OccurrentSubscriptionFilter.class.getSimpleName() + ", but got " + filter.getClass().getName()));
+            return Flux.error(new IllegalArgumentException(ReactorStreamCatchupSubscriptionModel.class.getSimpleName() + " only supports an " + OccurrentSubscriptionFilter.class.getSimpleName() + " or " + AgnosticSubscriptionFilter.class.getSimpleName() + ", but got " + filter.getClass().getName()));
         }
         return subscribe(resolvedFilter, startAt);
     }
@@ -171,10 +190,11 @@ public class ReactorStreamCatchupSubscriptionModel implements CheckpointAwareSub
         requireNonNull(callerFilter, "Filter cannot be null");
         requireNonNull(startAt, StartAt.class.getSimpleName() + " cannot be null");
 
-        // AND the stream-capability guard onto the caller's filter, so a store with the DCB capability also enabled
-        // never replays or delivers a DCB-tagged event through this stream catch-up path, in either the replay reads,
-        // the live subscription filter, or the in-process live predicate below (see ADR 50).
-        Filter filter = withStreamCapability(callerFilter);
+        // AND the capability scope onto the caller's filter. For a stream subscription this keeps a DCB-tagged event
+        // out of the replay reads, the live subscription filter, and the in-process live predicate below (see ADR 50).
+        // For a capability-agnostic subscription the scope is null, so the caller's filter is used unchanged and events
+        // of every capability are delivered.
+        Filter filter = withCapabilityScope(callerFilter);
 
         StartAt resolved = startAt.get(new SubscriptionModelContext(ReactorStreamCatchupSubscriptionModel.class));
         if (!(resolved instanceof StartAt.StartAtCheckpoint position) || !GlobalCheckpoint.isGlobalCheckpoint(position.checkpoint)) {
@@ -191,10 +211,14 @@ public class ReactorStreamCatchupSubscriptionModel implements CheckpointAwareSub
         return pipeline.catchup(subscriptionModel, OccurrentSubscriptionFilter.filter(filter), livePredicate, startPosition);
     }
 
-    // ANDs the stream-capability guard onto the caller's filter. Since Filter.all() means "no constraint", ANDing the
-    // capability onto it is exactly the capability filter alone.
-    private static Filter withStreamCapability(Filter filter) {
-        return filter instanceof Filter.All ? STREAM_CAPABILITY_FILTER : filter.and(STREAM_CAPABILITY_FILTER);
+    // ANDs the capability scope onto the caller's filter. When the scope is null (a capability-agnostic subscription)
+    // the caller's filter is returned unchanged, so events of every capability are delivered. Since Filter.all() means
+    // "no constraint", ANDing the scope onto it is exactly the scope filter alone.
+    private Filter withCapabilityScope(Filter filter) {
+        if (capabilityScope == null) {
+            return filter;
+        }
+        return filter instanceof Filter.All ? capabilityScope : filter.and(capabilityScope);
     }
 
     // Reads stream events in position order through the PositionOrderedReader, wrapping each with its position so a

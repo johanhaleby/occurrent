@@ -199,12 +199,27 @@ public class OccurrentMongoAutoConfiguration<E> {
         return ReflectionCloudEventTypeMapper.qualified();
     }
 
+    /**
+     * The capability-agnostic subscription DSL, used by the {@code @Subscription} annotation. On a store with both the
+     * {@code STREAM} and {@code DCB} capabilities it delivers both stream-written and DCB-appended events, filtered only
+     * by event type.
+     */
+    @Bean
+    @ConditionalOnMissingBean(Subscriptions.class)
+    @ConditionalOnProperty(name = "occurrent.subscription.enabled", havingValue = "true", matchIfMissing = true)
+    public Subscriptions<E> occurrentSubscriptionDsl(Subscribable subscribable, CloudEventConverter<E> cloudEventConverter) {
+        return new Subscriptions<>(subscribable, cloudEventConverter);
+    }
+
+    /**
+     * The stream subscription DSL, used by the {@code @StreamSubscription} annotation. It scopes delivery to the
+     * {@code STREAM} capability.
+     */
     @Bean
     @ConditionalOnMissingBean(StreamSubscriptions.class)
     @ConditionalOnProperty(name = "occurrent.subscription.enabled", havingValue = "true", matchIfMissing = true)
-    @SuppressWarnings("deprecation") // The released bean type stays Subscriptions for binary compatibility; it is-a StreamSubscriptions, so new code can inject either.
-    public Subscriptions<E> occurrentSubscriptionDsl(Subscribable subscribable, CloudEventConverter<E> cloudEventConverter) {
-        return new Subscriptions<>(subscribable, cloudEventConverter);
+    public StreamSubscriptions<E> occurrentStreamSubscriptionDsl(Subscribable subscribable, CloudEventConverter<E> cloudEventConverter) {
+        return new StreamSubscriptions<>(subscribable, cloudEventConverter);
     }
 
     /**
