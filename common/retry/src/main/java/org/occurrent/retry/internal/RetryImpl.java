@@ -172,7 +172,7 @@ public final class RetryImpl implements RetryStrategy.Retry {
     }
 
     @Override
-    public boolean equals(Object o) {
+    public boolean equals(@Nullable Object o) {
         if (this == o) return true;
         if (!(o instanceof RetryImpl that)) return false;
         return Objects.equals(backoff, that.backoff) && Objects.equals(maxAttempts, that.maxAttempts) && Objects.equals(retryPredicate, that.retryPredicate) && Objects.equals(errorListener, that.errorListener) && Objects.equals(onBeforeRetryListener, that.onBeforeRetryListener) && Objects.equals(onAfterRetryListener, that.onAfterRetryListener) && Objects.equals(onRetryableErrorListener, that.onRetryableErrorListener) && Objects.equals(errorMapper, that.errorMapper);

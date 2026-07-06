@@ -17,6 +17,7 @@
 package org.occurrent.subscription;
 
 import org.jspecify.annotations.NullMarked;
+import org.jspecify.annotations.Nullable;
 
 import java.util.Objects;
 
@@ -33,7 +34,7 @@ public class StringBasedCheckpoint implements Checkpoint {
     }
 
     @Override
-    public boolean equals(Object o) {
+    public boolean equals(@Nullable Object o) {
         if (this == o) return true;
         if (!(o instanceof StringBasedCheckpoint that)) return false;
         return Objects.equals(value, that.value);

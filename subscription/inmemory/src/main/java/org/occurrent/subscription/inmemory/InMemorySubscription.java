@@ -18,6 +18,7 @@ package org.occurrent.subscription.inmemory;
 
 import io.cloudevents.CloudEvent;
 import org.jspecify.annotations.NullMarked;
+import org.jspecify.annotations.Nullable;
 import org.occurrent.retry.RetryStrategy;
 import org.occurrent.subscription.DurationToTimeoutConverter;
 import org.occurrent.subscription.DurationToTimeoutConverter.Timeout;
@@ -74,7 +75,7 @@ public class InMemorySubscription implements Subscription, Runnable {
     }
 
     @Override
-    public boolean equals(Object o) {
+    public boolean equals(@Nullable Object o) {
         if (this == o) return true;
         if (!(o instanceof InMemorySubscription that)) return false;
         return shutdown == that.shutdown && Objects.equals(id, that.id) && Objects.equals(queue, that.queue) && Objects.equals(consumer, that.consumer) && Objects.equals(matcher, that.matcher) && Objects.equals(retryStrategy, that.retryStrategy);

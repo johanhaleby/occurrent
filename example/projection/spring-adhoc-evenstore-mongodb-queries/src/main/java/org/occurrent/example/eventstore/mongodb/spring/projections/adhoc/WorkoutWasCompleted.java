@@ -16,6 +16,7 @@
 
 package org.occurrent.example.eventstore.mongodb.spring.projections.adhoc;
 
+import org.jspecify.annotations.Nullable;
 import tools.jackson.databind.annotation.JsonDeserialize;
 import tools.jackson.databind.annotation.JsonSerialize;
 import tools.jackson.core.JsonGenerator;
@@ -69,7 +70,7 @@ public class WorkoutWasCompleted {
     }
 
     @Override
-    public boolean equals(Object o) {
+    public boolean equals(@Nullable Object o) {
         if (this == o) return true;
         if (!(o instanceof WorkoutWasCompleted that)) return false;
         return Objects.equals(eventId, that.eventId) &&

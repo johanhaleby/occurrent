@@ -16,6 +16,7 @@
 
 package org.occurrent.domain;
 
+import org.jspecify.annotations.Nullable;
 import org.occurrent.command.ChangeName;
 import org.occurrent.command.DefineName;
 import org.occurrent.time.TimeConversion;
@@ -48,10 +49,10 @@ public class Name {
         return changeName(events, UUID.randomUUID().toString(), changeName.time(), changeName.userId(), changeName.newName());
     }
 
-    public static List<DomainEvent> changeNameFromCurrent(String eventId, LocalDateTime time, String userId, String currentName, String newName) {
+    public static List<DomainEvent> changeNameFromCurrent(String eventId, LocalDateTime time, String userId, @Nullable String currentName, String newName) {
         if (Objects.equals(currentName, "John Doe")) {
             throw new IllegalArgumentException("Cannot change name from John Doe since this is the ultimate name");
-        } else if (currentName.isEmpty()) {
+        } else if (currentName == null || currentName.isEmpty()) {
             throw new IllegalArgumentException("Cannot change name because it is currently undefined");
         }
         return Collections.singletonList(new NameWasChanged(eventId, TimeConversion.toDate(time), userId, newName));

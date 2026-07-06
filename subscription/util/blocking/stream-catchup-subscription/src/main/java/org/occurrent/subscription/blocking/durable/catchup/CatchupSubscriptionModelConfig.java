@@ -17,6 +17,7 @@
 package org.occurrent.subscription.blocking.durable.catchup;
 
 import org.jspecify.annotations.NullMarked;
+import org.jspecify.annotations.Nullable;
 import org.occurrent.eventstore.api.SortBy;
 import org.occurrent.eventstore.api.blocking.EventStoreQueries;
 import org.occurrent.subscription.api.blocking.Subscription;
@@ -137,7 +138,7 @@ public class CatchupSubscriptionModelConfig {
     }
 
     @Override
-    public boolean equals(Object o) {
+    public boolean equals(@Nullable Object o) {
         if (this == o) return true;
         if (!(o instanceof CatchupSubscriptionModelConfig that)) return false;
         return cacheSize == that.cacheSize &&

@@ -602,7 +602,7 @@ public class InMemoryEventStore implements EventStore, EventStoreOperations, Eve
         }
 
         @Override
-        public boolean equals(Object o) {
+        public boolean equals(@Nullable Object o) {
             if (this == o) return true;
             if (!(o instanceof EventStreamImpl that)) return false;
             return version == that.version &&

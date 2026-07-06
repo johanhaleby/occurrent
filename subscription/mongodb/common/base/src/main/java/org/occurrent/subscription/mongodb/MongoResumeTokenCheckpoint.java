@@ -20,6 +20,7 @@ import org.bson.BsonDocument;
 import org.bson.BsonValue;
 import org.bson.Document;
 import org.jspecify.annotations.NullMarked;
+import org.jspecify.annotations.Nullable;
 import org.occurrent.subscription.Checkpoint;
 
 import java.util.Objects;
@@ -42,7 +43,7 @@ public class MongoResumeTokenCheckpoint implements Checkpoint {
     }
 
     @Override
-    public boolean equals(Object o) {
+    public boolean equals(@Nullable Object o) {
         if (this == o) return true;
         if (!(o instanceof MongoResumeTokenCheckpoint that)) return false;
         return Objects.equals(resumeToken, that.resumeToken);

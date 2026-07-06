@@ -16,6 +16,7 @@
 
 package org.occurrent.functionalsupport.internal;
 
+import org.jspecify.annotations.Nullable;
 import java.util.Iterator;
 import java.util.Objects;
 import java.util.function.BiFunction;
@@ -97,7 +98,7 @@ public class FunctionalSupport {
         }
 
         @Override
-        public boolean equals(Object o) {
+        public boolean equals(@Nullable Object o) {
             if (this == o) return true;
             if (!(o instanceof Pair)) return false;
             Pair<?, ?> pair = (Pair<?, ?>) o;

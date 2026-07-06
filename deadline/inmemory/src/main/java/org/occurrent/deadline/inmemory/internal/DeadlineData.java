@@ -17,6 +17,7 @@
 
 package org.occurrent.deadline.inmemory.internal;
 
+import org.jspecify.annotations.Nullable;
 import org.occurrent.deadline.api.blocking.Deadline;
 
 import java.util.Objects;
@@ -39,7 +40,7 @@ public class DeadlineData {
     }
 
     @Override
-    public boolean equals(Object o) {
+    public boolean equals(@Nullable Object o) {
         if (this == o) return true;
         if (!(o instanceof DeadlineData that)) return false;
         return Objects.equals(id, that.id) && Objects.equals(category, that.category) && Objects.equals(deadline, that.deadline) && Objects.equals(data, that.data);

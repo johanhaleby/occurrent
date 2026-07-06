@@ -16,6 +16,7 @@
 
 package org.occurrent.example.domain.numberguessinggame.mongodb.spring.blocking.view.latestgamesoverview;
 
+import org.jspecify.annotations.Nullable;
 import java.time.LocalDateTime;
 import java.util.Objects;
 import java.util.UUID;
@@ -43,7 +44,7 @@ public class GameOverview {
             }
 
             @Override
-            public boolean equals(Object o) {
+            public boolean equals(@Nullable Object o) {
                 if (this == o) return true;
                 if (!(o instanceof Ongoing ongoing)) return false;
                 return numberOfAttemptsLeft == ongoing.numberOfAttemptsLeft;
@@ -72,7 +73,7 @@ public class GameOverview {
             }
 
             @Override
-            public boolean equals(Object o) {
+            public boolean equals(@Nullable Object o) {
                 if (this == o) return true;
                 if (!(o instanceof Ended ended)) return false;
                 return playerGuessedTheRightNumber == ended.playerGuessedTheRightNumber &&

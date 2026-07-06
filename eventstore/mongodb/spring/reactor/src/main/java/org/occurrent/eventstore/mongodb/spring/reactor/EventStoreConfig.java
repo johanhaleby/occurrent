@@ -16,6 +16,7 @@
 
 package org.occurrent.eventstore.mongodb.spring.reactor;
 
+import org.jspecify.annotations.Nullable;
 import org.occurrent.eventstore.api.EventStoreCapability;
 import org.occurrent.eventstore.api.dcb.DcbStreamIdGenerator;
 import org.occurrent.eventstore.api.dcb.PartitionedDcbStreamIdGenerator;
@@ -111,7 +112,7 @@ public class EventStoreConfig {
     }
 
     @Override
-    public boolean equals(Object o) {
+    public boolean equals(@Nullable Object o) {
         if (this == o) return true;
         if (!(o instanceof EventStoreConfig that)) return false;
         return Objects.equals(eventStoreCollectionName, that.eventStoreCollectionName) && Objects.equals(transactionalOperator, that.transactionalOperator) && timeRepresentation == that.timeRepresentation && Objects.equals(queryOptions, that.queryOptions) && Objects.equals(readOptions, that.readOptions) && Objects.equals(eventStoreCapabilities, that.eventStoreCapabilities) && Objects.equals(dcbStreamIdGenerator, that.dcbStreamIdGenerator) && streamPositionEnabled == that.streamPositionEnabled && streamPositionExplicitlyEnabled == that.streamPositionExplicitlyEnabled && requireBackfilledPosition == that.requireBackfilledPosition;

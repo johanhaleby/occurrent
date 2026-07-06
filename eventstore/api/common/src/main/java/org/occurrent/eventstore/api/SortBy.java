@@ -2,6 +2,7 @@ package org.occurrent.eventstore.api;
 
 import io.cloudevents.core.v1.CloudEventV1;
 import org.jspecify.annotations.NullMarked;
+import org.jspecify.annotations.Nullable;
 import org.occurrent.cloudevents.OccurrentCloudEventExtension;
 
 import java.util.*;
@@ -102,7 +103,7 @@ public sealed interface SortBy {
         }
 
         @Override
-        public boolean equals(Object o) {
+        public boolean equals(@Nullable Object o) {
             if (this == o) return true;
             if (!(o instanceof NaturalImpl natural)) return false;
             return direction == natural.direction;
@@ -157,7 +158,7 @@ public sealed interface SortBy {
         }
 
         @Override
-        public boolean equals(Object o) {
+        public boolean equals(@Nullable Object o) {
             if (this == o) return true;
             if (!(o instanceof SingleFieldImpl that)) return false;
             return Objects.equals(fieldName, that.fieldName) && direction == that.direction;
@@ -221,7 +222,7 @@ public sealed interface SortBy {
         }
 
         @Override
-        public boolean equals(Object o) {
+        public boolean equals(@Nullable Object o) {
             if (this == o) return true;
             if (!(o instanceof MultipleSortStepsImpl that)) return false;
             return Objects.equals(steps, that.steps);

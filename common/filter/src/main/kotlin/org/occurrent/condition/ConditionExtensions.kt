@@ -17,5 +17,5 @@
 
 package org.occurrent.condition
 
-fun <T> isIn(values: Collection<T>): Condition<T> = Condition.`in`(values)
-fun <T> isIn(value: T, vararg moreValues: T): Condition<T> = Condition.`in`(value, *moreValues)
+fun <T : Any> isIn(values: Collection<T>): Condition<T> = Condition.`in`(values)
+fun <T : Any> isIn(value: T, vararg moreValues: T): Condition<T> = Condition.`in`(value, *moreValues)

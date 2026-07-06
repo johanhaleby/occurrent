@@ -17,6 +17,7 @@
 
 package org.occurrent.deadline.inmemory;
 
+import org.jspecify.annotations.Nullable;
 import org.occurrent.deadline.api.blocking.DeadlineConsumer;
 import org.occurrent.deadline.api.blocking.DeadlineConsumerRegistry;
 import org.occurrent.deadline.inmemory.internal.DeadlineData;
@@ -209,7 +210,7 @@ public class InMemoryDeadlineConsumerRegistry implements DeadlineConsumerRegistr
         }
 
         @Override
-        public boolean equals(Object o) {
+        public boolean equals(@Nullable Object o) {
             if (this == o) return true;
             if (!(o instanceof Config config)) return false;
             return pollInterval == config.pollInterval && pollIntervalTimeUnit == config.pollIntervalTimeUnit && Objects.equals(retryStrategy, config.retryStrategy);

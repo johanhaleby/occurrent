@@ -22,7 +22,7 @@ import org.occurrent.dsl.decider.Decider.Decision
 /**
  * A utility function for creating deciders a bit more nicer in Kotlin
  */
-fun <C, S, E> decider(initialState: S, decide: (C, S) -> List<E>, evolve: (S, E) -> S, isTerminal: (S) -> Boolean = { false }): Decider<C, S, E> = Decider.create(initialState, decide, evolve, isTerminal)
+fun <C : Any, S, E : Any> decider(initialState: S, decide: (C, S) -> List<E>, evolve: (S, E) -> S, isTerminal: (S) -> Boolean = { false }): Decider<C, S, E> = Decider.create(initialState, decide, evolve, isTerminal)
 
 /**
  * Widen a feature decider so it can run where a decider over broader command and event types is expected, for example
@@ -35,8 +35,8 @@ fun <C, S, E> decider(initialState: S, decide: (C, S) -> List<E>, evolve: (S, E)
  * val widened: Decider<DomainCommand, CourseState, DomainEvent> = courseDecider.adapt()
  * ```
  */
-inline fun <reified SubC : C, S, reified SubE : E, C, E : Any> Decider<SubC, S, SubE>.adapt(): Decider<C, S, E> =
-    Decider.adapt(this, SubC::class.java, SubE::class.java)
+inline fun <reified SubC : C, S, reified SubE : E, C : Any, E : Any> Decider<SubC, S, SubE>.adapt(): Decider<C, S, E> =
+    Decider.adapt<C, S, E, SubC, SubE>(this, SubC::class.java, SubE::class.java)
 
 /**
  * Widen only the event type of a decider, from [SubE] to the broader [E], leaving the command type unchanged. Events that
@@ -149,7 +149,7 @@ inline fun <C : Any, reified C1 : C, S1, reified E1 : E, reified C2 : C, S2, rei
  *     compose(listOf(courseDecider.adapt(), studentDecider.adapt(), enrollmentDecider.adapt(), roomDecider.adapt()))
  * ```
  */
-fun <C, E : Any> compose(deciders: List<Decider<C, *, E>>): Decider<C, CompositeState, E> =
+fun <C : Any, E : Any> compose(deciders: List<Decider<C, *, E>>): Decider<C, CompositeState, E> =
     Decider.compose(deciders)
 
 /**
@@ -163,13 +163,13 @@ fun <C, E : Any> compose(deciders: List<Decider<C, *, E>>): Decider<C, Composite
  *     compose(courseDecider.adapt(), studentDecider.adapt(), enrollmentDecider.adapt(), roomDecider.adapt())
  * ```
  */
-fun <C, E : Any> compose(first: Decider<C, *, E>, second: Decider<C, *, E>, third: Decider<C, *, E>, fourth: Decider<C, *, E>, vararg rest: Decider<C, *, E>): Decider<C, CompositeState, E> =
+fun <C : Any, E : Any> compose(first: Decider<C, *, E>, second: Decider<C, *, E>, third: Decider<C, *, E>, fourth: Decider<C, *, E>, vararg rest: Decider<C, *, E>): Decider<C, CompositeState, E> =
     Decider.compose(listOf(first, second, third, fourth, *rest))
 
-fun <C, S, E> Decider<C, S, E>.decide(events: List<E>, command: C, vararg moreCommands: C): Decision<S, E> = decideOnEvents(events, listOf(command, *moreCommands))
-fun <C, S, E> Decider<C, S, E>.decide(events: List<E>, commands: List<C>): Decision<S, E> = decideOnEvents(events, commands)
-fun <C, S, E> Decider<C, S, E>.decide(state: S, command: C, vararg moreCommands: C): Decision<S, E> = decideOnState(state, listOf(command, *moreCommands))
-fun <C, S, E> Decider<C, S, E>.decide(state: S, commands: List<C>): Decision<S, E> = decideOnState(state, commands)
+fun <C : Any, S, E : Any> Decider<C, S, E>.decide(events: List<E>, command: C, vararg moreCommands: C): Decision<S, E> = decideOnEvents(events, listOf(command, *moreCommands))
+fun <C : Any, S, E : Any> Decider<C, S, E>.decide(events: List<E>, commands: List<C>): Decision<S, E> = decideOnEvents(events, commands)
+fun <C : Any, S, E : Any> Decider<C, S, E>.decide(state: S, command: C, vararg moreCommands: C): Decision<S, E> = decideOnState(state, listOf(command, *moreCommands))
+fun <C : Any, S, E : Any> Decider<C, S, E>.decide(state: S, commands: List<C>): Decision<S, E> = decideOnState(state, commands)
 
-operator fun <S, E> Decision<S, E>.component1(): S = state
-operator fun <S, E> Decision<S, E>.component2(): List<E> = events
+operator fun <S, E : Any> Decision<S, E>.component1(): S = state
+operator fun <S, E : Any> Decision<S, E>.component2(): List<E> = events

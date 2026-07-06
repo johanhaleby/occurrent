@@ -16,6 +16,7 @@
 
 package org.occurrent.example.eventstore.mongodb.spring.subscriptionprojections;
 
+import org.jspecify.annotations.Nullable;
 import org.springframework.data.annotation.Id;
 import org.springframework.data.annotation.TypeAlias;
 import org.springframework.data.mongodb.core.mapping.Document;
@@ -64,7 +65,7 @@ public class CurrentName {
     }
 
     @Override
-    public boolean equals(Object o) {
+    public boolean equals(@Nullable Object o) {
         if (this == o) return true;
         if (!(o instanceof CurrentName that)) return false;
         return Objects.equals(id, that.id) &&

@@ -34,7 +34,7 @@ import java.util.function.Predicate;
  * @param <S> The state that the decider work
  * @param <E> The type of events that the decider returns
  */
-public interface Decider<C, S, E> {
+public interface Decider<C, S extends @Nullable Object, E> {
     /**
      * The state a decider starts from, before any events have been applied.
      */
@@ -220,21 +220,21 @@ public interface Decider<C, S, E> {
     /**
      * The outcome of a decision: the resulting {@code state} and the new {@code events} that were produced.
      */
-    record Decision<S, E>(S state, List<E> events) {
+    record Decision<S extends @Nullable Object, E>(S state, List<E> events) {
     }
 
     /**
      * Create a decider from functions instead of implementing the interface. This overload is never terminal. See
      * {@link #create(Object, BiFunction, BiFunction, Predicate)} to also supply an {@code isTerminal} predicate.
      */
-    static <C, S, E> Decider<C, S, E> create(S initialState, @NonNull BiFunction<C, S, List<E>> decide, @NonNull BiFunction<S, E, S> evolve) {
+    static <C, S extends @Nullable Object, E> Decider<C, S, E> create(S initialState, @NonNull BiFunction<C, S, List<E>> decide, @NonNull BiFunction<S, E, S> evolve) {
         return create(initialState, decide, evolve, __ -> false);
     }
 
     /**
      * Create a decider from functions instead of implementing the interface, including an {@code isTerminal} predicate.
      */
-    static <C, S, E> Decider<C, S, E> create(S initialState, @NonNull BiFunction<C, S, List<E>> decide, @NonNull BiFunction<S, E, S> evolve,
+    static <C, S extends @Nullable Object, E> Decider<C, S, E> create(S initialState, @NonNull BiFunction<C, S, List<E>> decide, @NonNull BiFunction<S, E, S> evolve,
                                              @NonNull Predicate<S> isTerminal) {
 
         return new Decider<>() {
@@ -282,7 +282,7 @@ public interface Decider<C, S, E> {
      * @param commandType the command type the decider understands
      * @param eventType   the event type the decider understands
      */
-    static <C, S, E, SubC extends C, SubE extends E> Decider<C, S, E> adapt(@NonNull Decider<SubC, S, SubE> decider,
+    static <C, S extends @Nullable Object, E, SubC extends C, SubE extends E> Decider<C, S, E> adapt(@NonNull Decider<SubC, S, SubE> decider,
                                                                             @NonNull Class<SubC> commandType,
                                                                             @NonNull Class<SubE> eventType) {
         return create(
@@ -325,10 +325,10 @@ public interface Decider<C, S, E> {
      */
     static <C, E> Decider<C, CompositeState, E> compose(@NonNull List<? extends Decider<C, ?, E>> deciders) {
         @SuppressWarnings("unchecked")
-        List<Decider<C, Object, E>> slices = (List<Decider<C, Object, E>>) new ArrayList<>(deciders);
+        List<Decider<C, @Nullable Object, E>> slices = (List<Decider<C, @Nullable Object, E>>) new ArrayList<>(deciders);
 
-        List<Object> initialStates = new ArrayList<>();
-        for (Decider<C, Object, E> decider : slices) {
+        List<@Nullable Object> initialStates = new ArrayList<>();
+        for (Decider<C, @Nullable Object, E> decider : slices) {
             initialStates.add(decider.initialState());
         }
 
@@ -342,10 +342,10 @@ public interface Decider<C, S, E> {
                     return events;
                 },
                 (composite, event) -> {
-                    List<Object> next = new ArrayList<>(composite.states());
+                    List<@Nullable Object> next = new ArrayList<>(composite.states());
                     for (int i = 0; i < slices.size(); i++) {
-                        Decider<C, Object, E> decider = slices.get(i);
-                        Object slice = next.get(i);
+                        Decider<C, @Nullable Object, E> decider = slices.get(i);
+                        @Nullable Object slice = next.get(i);
                         if (!decider.isTerminal(slice)) {
                             next.set(i, decider.evolve(slice, event));
                         }

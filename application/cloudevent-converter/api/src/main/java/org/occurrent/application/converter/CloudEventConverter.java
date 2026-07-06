@@ -17,6 +17,7 @@
 package org.occurrent.application.converter;
 
 import io.cloudevents.CloudEvent;
+import org.jspecify.annotations.Nullable;
 
 import java.util.Objects;
 import java.util.stream.Stream;
@@ -73,7 +74,7 @@ public interface CloudEventConverter<T> {
      * @param events The domain events to convert to cloud events
      * @return A stram of cloud events.
      */
-    default Stream<CloudEvent> toCloudEvents(Stream<T> events) {
+    default Stream<CloudEvent> toCloudEvents(@Nullable Stream<T> events) {
         Stream<T> stream = events == null ? Stream.empty() : events;
         return stream.map(this::toCloudEvent);
     }
@@ -85,7 +86,7 @@ public interface CloudEventConverter<T> {
      * @param events The cloud events to convert to domain events
      * @return A stram of cloud events.
      */
-    default Stream<T> toDomainEvents(Stream<CloudEvent> events) {
+    default Stream<T> toDomainEvents(@Nullable Stream<CloudEvent> events) {
         Stream<CloudEvent> stream = events == null ? Stream.empty() : events;
         return stream.map(this::toDomainEvent);
     }

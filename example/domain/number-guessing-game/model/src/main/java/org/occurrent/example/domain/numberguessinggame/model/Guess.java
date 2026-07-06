@@ -16,6 +16,7 @@
 
 package org.occurrent.example.domain.numberguessinggame.model;
 
+import org.jspecify.annotations.Nullable;
 import java.util.Objects;
 
 public class Guess {
@@ -29,7 +30,7 @@ public class Guess {
     }
 
     @Override
-    public boolean equals(Object o) {
+    public boolean equals(@Nullable Object o) {
         if (this == o) return true;
         if (!(o instanceof Guess that)) return false;
         return value == that.value;

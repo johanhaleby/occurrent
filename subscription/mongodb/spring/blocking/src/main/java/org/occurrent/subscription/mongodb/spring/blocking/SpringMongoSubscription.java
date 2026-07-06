@@ -17,6 +17,7 @@
 package org.occurrent.subscription.mongodb.spring.blocking;
 
 import org.jspecify.annotations.NullMarked;
+import org.jspecify.annotations.Nullable;
 import org.occurrent.subscription.DurationToTimeoutConverter;
 import org.occurrent.subscription.api.blocking.Subscription;
 
@@ -76,7 +77,7 @@ public class SpringMongoSubscription implements Subscription {
     }
 
     @Override
-    public boolean equals(Object o) {
+    public boolean equals(@Nullable Object o) {
         if (this == o) return true;
         if (!(o instanceof SpringMongoSubscription that)) return false;
         return shutdown == that.shutdown && Objects.equals(subscriptionId, that.subscriptionId) && Objects.equals(subscriptionReference, that.subscriptionReference);

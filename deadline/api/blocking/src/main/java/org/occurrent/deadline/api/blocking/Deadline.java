@@ -17,6 +17,7 @@
 
 package org.occurrent.deadline.api.blocking;
 
+import org.jspecify.annotations.Nullable;
 import java.time.*;
 import java.util.Date;
 import java.util.Objects;
@@ -174,7 +175,7 @@ public sealed interface Deadline {
         }
 
         @Override
-        public boolean equals(Object o) {
+        public boolean equals(@Nullable Object o) {
             if (this == o) return true;
             if (!(o instanceof ZonedDateTimeDeadLine that)) return false;
             return Objects.equals(zonedDateTime, that.zonedDateTime);
@@ -202,7 +203,7 @@ public sealed interface Deadline {
         }
 
         @Override
-        public boolean equals(Object o) {
+        public boolean equals(@Nullable Object o) {
             if (this == o) return true;
             if (!(o instanceof OffsetDateTimeDeadLine that)) return false;
             return Objects.equals(offsetDateTime, that.offsetDateTime);
@@ -230,7 +231,7 @@ public sealed interface Deadline {
         }
 
         @Override
-        public boolean equals(Object o) {
+        public boolean equals(@Nullable Object o) {
             if (this == o) return true;
             if (!(o instanceof LocalDateTimeDeadLine that)) return false;
             return Objects.equals(localDateTime, that.localDateTime);
@@ -258,7 +259,7 @@ public sealed interface Deadline {
         }
 
         @Override
-        public boolean equals(Object o) {
+        public boolean equals(@Nullable Object o) {
             if (this == o) return true;
             if (!(o instanceof InstantDeadLine that)) return false;
             return Objects.equals(instant, that.instant);

@@ -18,6 +18,7 @@ package org.occurrent.retry;
 
 import org.jspecify.annotations.NonNull;
 import org.jspecify.annotations.NullMarked;
+import org.jspecify.annotations.Nullable;
 import org.occurrent.retry.internal.RetryImpl;
 
 import java.time.Duration;
@@ -120,7 +121,7 @@ public interface RetryStrategy {
      * @param function A function that takes {@link RetryInfo} and returns the result
      * @return The result of the supplier, if successful.
      */
-    default <T> T execute(Function<RetryInfo, T> function) {
+    default <T extends @Nullable Object> T execute(Function<RetryInfo, T> function) {
         Objects.requireNonNull(function, Supplier.class.getSimpleName() + " cannot be null");
         return executeWithRetry(function, __ -> true, this).apply(null);
     }
@@ -132,7 +133,7 @@ public interface RetryStrategy {
      * @param supplier The supplier to execute
      * @return The result of the supplier, if successful.
      */
-    default <T> T execute(Supplier<T> supplier) {
+    default <T extends @Nullable Object> T execute(Supplier<T> supplier) {
         Objects.requireNonNull(supplier, Supplier.class.getSimpleName() + " cannot be null");
         return executeWithRetry(supplier, __ -> true, this).get();
     }

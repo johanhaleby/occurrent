@@ -17,6 +17,7 @@
 package org.occurrent.retry.internal;
 
 import org.jspecify.annotations.NonNull;
+import org.jspecify.annotations.Nullable;
 import org.occurrent.retry.AfterRetryInfo.ResultOfRetryAttempt;
 import org.occurrent.retry.Backoff;
 import org.occurrent.retry.MaxAttempts;
@@ -38,11 +39,11 @@ import java.util.stream.Stream;
  */
 public class RetryExecution {
 
-    public static <T1> Supplier<T1> executeWithRetry(@NonNull Supplier<T1> supplier, @NonNull Predicate<Throwable> shutdownPredicate, @NonNull RetryStrategy retryStrategy) {
+    public static <T1 extends @Nullable Object> Supplier<T1> executeWithRetry(@NonNull Supplier<T1> supplier, @NonNull Predicate<Throwable> shutdownPredicate, @NonNull RetryStrategy retryStrategy) {
         return () -> executeWithRetry((Function<RetryInfo, T1>) __ -> supplier.get(), shutdownPredicate, retryStrategy).apply(null);
     }
 
-    public static <T1> Function<RetryInfo, T1> executeWithRetry(@NonNull Function<RetryInfo, T1> function, @NonNull Predicate<Throwable> shutdownPredicate, @NonNull RetryStrategy retryStrategy) {
+    public static <T1 extends @Nullable Object> Function<RetryInfo, T1> executeWithRetry(@NonNull Function<RetryInfo, T1> function, @NonNull Predicate<Throwable> shutdownPredicate, @NonNull RetryStrategy retryStrategy) {
         if (retryStrategy instanceof DontRetry) {
             return function;
         }
@@ -83,7 +84,7 @@ public class RetryExecution {
         }, retry, delay).apply(null);
     }
 
-    private static <T1> Function<RetryInfo, T1> executeWithRetry(
+    private static <T1 extends @Nullable Object> Function<RetryInfo, T1> executeWithRetry(
             Function<RetryInfo, T1> fn,
             RetryImpl retry,
             Iterator<Long> delay

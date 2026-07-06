@@ -86,7 +86,7 @@ class DomainEventQueriesKotlinTest {
         )
 
         // When
-        val events = domainEventQueries.queryForSequence(type(NameWasChanged::class.qualifiedName), SortBy.natural(ASCENDING)).toList()
+        val events = domainEventQueries.queryForSequence(type(NameWasChanged::class.java.name), SortBy.natural(ASCENDING)).toList()
 
         // Then
         assertAll(
@@ -128,7 +128,7 @@ class DomainEventQueriesKotlinTest {
         )
 
         // When
-        val events = domainEventQueries.queryForList(type(NameWasChanged::class.qualifiedName), SortBy.natural(ASCENDING))
+        val events = domainEventQueries.queryForList(type(NameWasChanged::class.java.name), SortBy.natural(ASCENDING))
 
         // Then
         assertAll(
@@ -149,7 +149,7 @@ class DomainEventQueriesKotlinTest {
         )
 
         // When
-        val sequence: Sequence<NameWasChanged> = domainEventQueries.queryForSequence(type(NameWasChanged::class.qualifiedName))
+        val sequence: Sequence<NameWasChanged> = domainEventQueries.queryForSequence(type(NameWasChanged::class.java.name))
 
         // Then
         val events: List<NameWasChanged> = sequence.toList()
@@ -171,7 +171,7 @@ class DomainEventQueriesKotlinTest {
         )
 
         // When
-        val events: List<NameWasChanged> = domainEventQueries.queryForList(type(NameWasChanged::class.qualifiedName))
+        val events: List<NameWasChanged> = domainEventQueries.queryForList(type(NameWasChanged::class.java.name))
 
         // Then
         assertAll(
@@ -192,7 +192,7 @@ class DomainEventQueriesKotlinTest {
         )
 
         // When
-        val event = domainEventQueries.queryOne<NameWasChanged>(type(NameWasChanged::class.qualifiedName))
+        val event = domainEventQueries.queryOne<NameWasChanged>(type(NameWasChanged::class.java.name))
 
         // Then
         assertThat(event).isEqualTo(NameWasChanged("eventId2", time, "name", "Jane Doe"))

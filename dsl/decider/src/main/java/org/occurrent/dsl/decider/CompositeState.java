@@ -17,6 +17,8 @@
 
 package org.occurrent.dsl.decider;
 
+import org.jspecify.annotations.Nullable;
+
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.List;
@@ -29,8 +31,8 @@ import java.util.List;
  * The vararg {@code compose} produces this type. The two and three decider overloads in the Kotlin DSL produce typed
  * {@code Pair} and {@code Triple} states instead, so reach for this only when composing four or more deciders.
  */
-public record CompositeState(List<Object> states) {
-    public CompositeState(List<Object> states) {
+public record CompositeState(List<@Nullable Object> states) {
+    public CompositeState(List<@Nullable Object> states) {
         this.states = Collections.unmodifiableList(new ArrayList<>(states));
     }
 
@@ -39,7 +41,7 @@ public record CompositeState(List<Object> states) {
      * safe by construction because slice {@code i} always holds the state of decider {@code i}.
      */
     @SuppressWarnings("unchecked")
-    public <T> T slice(int index) {
+    public <T extends @Nullable Object> T slice(int index) {
         return (T) states.get(index);
     }
 }

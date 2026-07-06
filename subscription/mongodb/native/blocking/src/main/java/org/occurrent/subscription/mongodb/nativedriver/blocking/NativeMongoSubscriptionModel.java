@@ -439,7 +439,7 @@ public class NativeMongoSubscriptionModel implements CheckpointAwareSubscription
         }
 
         @Override
-        public boolean equals(Object o) {
+        public boolean equals(@Nullable Object o) {
             if (this == o) return true;
             if (!(o instanceof InternalSubscription that)) return false;
             return Objects.equals(filter, that.filter) && Objects.equals(startedLatch, that.startedLatch) && Objects.equals(stoppedLatch, that.stoppedLatch) && Objects.equals(cursor, that.cursor) && Objects.equals(currentStartAt, that.currentStartAt) && Objects.equals(action, that.action);

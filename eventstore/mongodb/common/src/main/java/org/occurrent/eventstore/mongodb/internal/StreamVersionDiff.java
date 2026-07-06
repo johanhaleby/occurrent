@@ -17,6 +17,7 @@
 
 package org.occurrent.eventstore.mongodb.internal;
 
+import org.jspecify.annotations.Nullable;
 import java.util.Objects;
 import java.util.StringJoiner;
 
@@ -38,7 +39,7 @@ public class StreamVersionDiff {
     }
 
     @Override
-    public boolean equals(Object o) {
+    public boolean equals(@Nullable Object o) {
         if (this == o) return true;
         if (!(o instanceof StreamVersionDiff that)) return false;
         return oldStreamVersion == that.oldStreamVersion && newStreamVersion == that.newStreamVersion;

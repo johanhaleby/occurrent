@@ -17,6 +17,7 @@
 
 package org.occurrent.retry.internal;
 
+import org.jspecify.annotations.Nullable;
 import org.occurrent.retry.MaxAttempts;
 import org.occurrent.retry.RetryInfo;
 
@@ -88,7 +89,7 @@ class RetryInfoImpl implements RetryInfo {
     }
 
     @Override
-    public boolean equals(Object o) {
+    public boolean equals(@Nullable Object o) {
         if (this == o) return true;
         if (!(o instanceof RetryInfoImpl retryInfo)) return false;
         return attemptNumber == retryInfo.attemptNumber && retryCount == retryInfo.retryCount && Objects.equals(maxAttempts, retryInfo.maxAttempts) && Objects.equals(backoff, retryInfo.backoff);
