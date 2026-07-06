@@ -15,6 +15,13 @@ DCB is a capability layered on the existing CloudEvent storage, not a new store 
   store with both `STREAM` and `DCB` capabilities enabled. They now only return DCB-written events, backed by a
   sparse `dcbTags` index for efficient exclusion.
   * See [ADR 49](doc/architecture/decisions/0049-dcb-reads-exclude-non-dcb-stream-events.md).
+* Fixed the reverse gap so `StreamCatchupSubscriptionModel` and `ReactorStreamCatchupSubscriptionModel` no longer
+  replay or live-deliver DCB-tagged events on a store with both `STREAM` and `DCB` capabilities enabled. They now
+  only ever deliver stream-capability events, in both the catch-up and the live phases, backed by a new
+  `Filter.capability(EventStoreCapability)` primitive. `@StreamSubscription`-annotated subscriptions inherit the fix.
+  A plain `EventStoreQueries` caller or a subscription model not wrapped in `StreamCatchupSubscriptionModel` is
+  unaffected.
+  * See [ADR 50](doc/architecture/decisions/0050-stream-catchup-subscriptions-exclude-dcb-events.md).
 * Renamed the `SubscriptionPosition` type family to `Checkpoint` to stop overloading "position" for two different
   concepts: the ordering value (`position`) and the per-subscriber resume marker built from it. This is a breaking
   API change; there is no deprecated alias.

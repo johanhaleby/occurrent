@@ -19,6 +19,7 @@ package org.occurrent.subscription.blocking.durable.catchup;
 import io.cloudevents.CloudEvent;
 import org.jspecify.annotations.NullMarked;
 import org.jspecify.annotations.Nullable;
+import org.occurrent.eventstore.api.EventStoreCapability;
 import org.occurrent.eventstore.api.PositionRange;
 import org.occurrent.eventstore.api.SortBy;
 import org.occurrent.eventstore.api.blocking.EventStoreQueries;
@@ -64,11 +65,22 @@ import static org.occurrent.time.internal.RFC3339.RFC_3339_DATE_TIME_FORMATTER;
  * not need to depend on {@code eventstore-api-dcb}. The dispatcher {@code CatchupSubscriptionModel} in the
  * {@code catchup-subscription} module wraps this class for its stream routing.
  * <p>
+ * This class only ever replays and delivers stream-capability events. On a store that has both the {@code STREAM} and
+ * {@code DCB} capabilities enabled at once, that promise is enforced, not merely descriptive: a
+ * {@link Filter#capability(EventStoreCapability) STREAM-capability filter} is ANDed into both the catch-up-phase reads
+ * and the filter handed to the delegated live subscription, so a DCB-tagged event never reaches a subscriber of this
+ * class in either phase (see ADR 50). A caller filter is still honored; the capability guard is composed on top of it.
+ * <p>
  * Delivery is at-least-once, with the same catch-up-to-live handover and clock-skew-safe reconciliation guarantees
  * documented on the dispatcher.
  */
 @NullMarked
 public class StreamCatchupSubscriptionModel extends AbstractCatchupSubscriptionModel {
+
+    // Guards every read and every live handover this class performs so a DCB-tagged event is never delivered to a
+    // stream subscriber, even on a store that has both capabilities enabled (see ADR 50). It is store-agnostic: each
+    // Filter-conversion implementation maps this capability to its own storage artifact.
+    private static final Filter STREAM_CAPABILITY_FILTER = Filter.capability(EventStoreCapability.STREAM);
 
     private final EventStoreQueries eventStoreQueries;
 
@@ -125,12 +137,14 @@ public class StreamCatchupSubscriptionModel extends AbstractCatchupSubscriptionM
             // delegate to the parent subscription model.
             Checkpoint checkpoint = returnIfCheckpointStorageConfigIs(UseCheckpointInStorage.class, cfg -> cfg.storage().read(subscriptionId)).orElse(null);
             if (checkpoint == null) {
-                return getDelegatedSubscriptionModel().subscribe(subscriptionId, filter, startAt, action);
+                // Resumed straight to live without a catch-up phase, so scope the delegated subscription the same way
+                // the handover would, keeping DCB events out.
+                return getDelegatedSubscriptionModel().subscribe(subscriptionId, withStreamCapability(filter), startAt, action);
             } else if (positionMode && isTimeBasedCheckpoint(checkpoint)) {
                 // The store now writes position, but this stored token predates that and is time-based. Reading it as a
                 // position would misinterpret a timestamp or replay from an unrelated cursor, so re-resolve to the
                 // model default instead.
-                return getDelegatedSubscriptionModel().subscribe(subscriptionId, filter, StartAt.subscriptionModelDefault(), action);
+                return getDelegatedSubscriptionModel().subscribe(subscriptionId, withStreamCapability(filter), StartAt.subscriptionModelDefault(), action);
             } else {
                 firstStartAt = StartAt.checkpoint(checkpoint);
             }
@@ -138,7 +152,7 @@ public class StreamCatchupSubscriptionModel extends AbstractCatchupSubscriptionM
             StartAt startAtGeneratedByDynamic = startAt.get(generateSubscriptionModelContext());
             if (startAtGeneratedByDynamic == null) {
                 // We're not allowed to start this subscription model, defer to parent!
-                return getDelegatedSubscriptionModel().subscribe(subscriptionId, filter, startAt, action);
+                return getDelegatedSubscriptionModel().subscribe(subscriptionId, withStreamCapability(filter), startAt, action);
             } else {
                 firstStartAt = startAtGeneratedByDynamic;
             }
@@ -155,12 +169,12 @@ public class StreamCatchupSubscriptionModel extends AbstractCatchupSubscriptionM
                 // A specific wall-clock time has no position to map to, so replay it through the legacy time-based
                 // catch-up even on a position store.
                 case SPECIFIC_TIME -> streamTimeCatchup(subscriptionId, filter, startAt, action, firstStartAt);
-                case LIVE -> subscriptionModel.subscribe(subscriptionId, filter, firstStartAt, action);
+                case LIVE -> subscriptionModel.subscribe(subscriptionId, withStreamCapability(filter), firstStartAt, action);
             };
         }
         return switch (streamStart) {
             case BEGINNING_OF_TIME, SPECIFIC_TIME -> streamTimeCatchup(subscriptionId, filter, startAt, action, firstStartAt);
-            case GLOBAL_POSITION, LIVE -> subscriptionModel.subscribe(subscriptionId, filter, firstStartAt, action);
+            case GLOBAL_POSITION, LIVE -> subscriptionModel.subscribe(subscriptionId, withStreamCapability(filter), firstStartAt, action);
         };
     }
 
@@ -350,7 +364,7 @@ public class StreamCatchupSubscriptionModel extends AbstractCatchupSubscriptionM
             });
             subscription = new CancelledSubscription(subscriptionId);
         } else {
-            subscription = getDelegatedSubscriptionModel().subscribe(subscriptionId, filter, startAtToUse, liveConsumer);
+            subscription = getDelegatedSubscriptionModel().subscribe(subscriptionId, withStreamCapability(filter), startAtToUse, liveConsumer);
         }
         return subscription;
     }
@@ -363,7 +377,7 @@ public class StreamCatchupSubscriptionModel extends AbstractCatchupSubscriptionM
     private Subscription startPositionCatchupSubscriptionForStream(String subscriptionId, @Nullable SubscriptionFilter filter, StartAt startAt, Consumer<CloudEvent> action, StartAt firstStartAt) {
         runningCatchupSubscriptions.put(subscriptionId, true);
         PositionOrderedReader positionOrderedReader = (PositionOrderedReader) eventStoreQueries;
-        Filter streamFilter = filter == null ? Filter.all() : ((OccurrentSubscriptionFilter) filter).filter();
+        Filter streamFilter = withStreamCapability(filter == null ? Filter.all() : ((OccurrentSubscriptionFilter) filter).filter());
         long windowSize = config.dcbCatchupPositionWindowSize;
 
         StartAt nextStartAt = firstStartAt.get(generateSubscriptionModelContext());
@@ -466,7 +480,21 @@ public class StreamCatchupSubscriptionModel extends AbstractCatchupSubscriptionM
             Filter userSuppliedFilter = ((OccurrentSubscriptionFilter) filter).filter();
             catchupFilter = timeFilter.and(userSuppliedFilter);
         }
-        return catchupFilter;
+        return withStreamCapability(catchupFilter);
+    }
+
+    // ANDs the stream-capability guard onto the caller's filter, so a store with the DCB capability also enabled never
+    // returns a DCB-tagged event through this stream catch-up path. Since Filter.all() means "no constraint", ANDing the
+    // capability onto it is exactly the capability filter alone.
+    private static Filter withStreamCapability(Filter filter) {
+        return filter instanceof Filter.All ? STREAM_CAPABILITY_FILTER : filter.and(STREAM_CAPABILITY_FILTER);
+    }
+
+    // Wraps the caller's (possibly null) subscription filter into a capability-scoped OccurrentSubscriptionFilter to
+    // hand to the delegated live subscription, so live delivery after handover excludes DCB events just like the replay.
+    private static OccurrentSubscriptionFilter withStreamCapability(@Nullable SubscriptionFilter filter) {
+        Filter callerFilter = filter == null ? Filter.all() : ((OccurrentSubscriptionFilter) filter).filter();
+        return OccurrentSubscriptionFilter.filter(withStreamCapability(callerFilter));
     }
 
     private void runCatchupForStream(Stream<CloudEvent> cloudEvents, String subscriptionId, Consumer<CloudEvent> action, @Nullable FixedSizeCache cache) {

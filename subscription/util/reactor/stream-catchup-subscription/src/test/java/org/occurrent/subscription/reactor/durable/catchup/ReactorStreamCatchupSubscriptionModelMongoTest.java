@@ -36,6 +36,8 @@ import org.occurrent.domain.NameDefined;
 import org.occurrent.eventstore.api.EventStoreCapability;
 import org.occurrent.eventstore.api.PositionRange;
 import org.occurrent.eventstore.api.WriteCondition;
+import org.occurrent.eventstore.api.dcb.DcbCloudEvents;
+import org.occurrent.eventstore.api.dcb.Tag;
 import org.occurrent.eventstore.api.reactor.PositionOrderedReader;
 import org.occurrent.eventstore.mongodb.spring.reactor.EventStoreConfig;
 import org.occurrent.eventstore.mongodb.spring.reactor.ReactorMongoEventStore;
@@ -235,6 +237,30 @@ class ReactorStreamCatchupSubscriptionModelMongoTest {
         });
     }
 
+    @Test
+    void stream_subscription_does_not_receive_dcb_only_events_during_catchup_and_live_delivery() {
+        // Given - one stream-only event and one DCB-tagged event written before the subscription starts. Both are
+        // NameDefined events, so a leaked DCB event would deserialize and show up in the received list.
+        appendToStream("stream-1", name("streamHistoric"));
+        appendDcb(name("dcbHistoric"));
+
+        // When - a stream catch-up subscription with no stream constraint (Filter.all()) replays from the beginning
+        ReactorStreamCatchupSubscriptionModel catchup = new ReactorStreamCatchupSubscriptionModel(subscriptionModel, asReader());
+        CopyOnWriteArrayList<String> received = new CopyOnWriteArrayList<>();
+        subscribe(catchup.subscribe(Filter.all(), StartAt.checkpoint(GlobalCheckpoint.of(0))), received);
+
+        // Then - only the stream event is replayed, the DCB event is excluded by the stream-capability guard
+        await().atMost(Duration.ofSeconds(40)).untilAsserted(() -> assertThat(received).containsExactly("streamHistoric"));
+
+        // When - after handover to live, a DCB event and then a stream event arrive
+        appendDcb(name("dcbLive"));
+        appendToStream("stream-1", name("streamLive"));
+
+        // Then - the live stream event is delivered but neither DCB event ever is, proving the guard covers both the
+        // replay and the live handover phase
+        await().atMost(Duration.ofSeconds(40)).untilAsserted(() -> assertThat(received).containsExactly("streamHistoric", "streamLive"));
+    }
+
     private PositionOrderedReader asReader() {
         return eventStore;
     }
@@ -252,6 +278,12 @@ class ReactorStreamCatchupSubscriptionModelMongoTest {
     private void appendToStream(String streamId, DomainEvent event) {
         CloudEvent cloudEvent = converter.toCloudEvents(Stream.of(event)).collect(Collectors.toList()).get(0);
         eventStore.write(streamId, WriteCondition.anyStreamVersion(), Flux.just(cloudEvent)).block();
+    }
+
+    private void appendDcb(DomainEvent event) {
+        CloudEvent cloudEvent = converter.toCloudEvents(Stream.of(event)).collect(Collectors.toList()).get(0);
+        CloudEvent dcbEvent = DcbCloudEvents.withTags(cloudEvent, List.of(Tag.parse("kind:dcb")));
+        eventStore.append(List.of(dcbEvent)).block();
     }
 
     private static void sleep(long millis) {

@@ -24,6 +24,7 @@
     <modelVersion>4.0.0</modelVersion>
     <packaging>pom</packaging>
     <modules>
+        <module>eventstore-capability</module>
         <module>filter</module>
         <module>mongodb</module>
         <module>time</module>

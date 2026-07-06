@@ -20,6 +20,7 @@ import io.cloudevents.CloudEvent;
 import org.jspecify.annotations.NullMarked;
 import org.jspecify.annotations.Nullable;
 import org.occurrent.cloudevents.OccurrentCloudEventExtension;
+import org.occurrent.eventstore.api.EventStoreCapability;
 import org.occurrent.eventstore.api.PositionRange;
 import org.occurrent.eventstore.api.reactor.PositionOrderedReader;
 import org.occurrent.filter.Filter;
@@ -49,6 +50,13 @@ import static java.util.Objects.requireNonNull;
  * in-process, where the DCB model uses a {@code DcbCriteria}. Otherwise the two are the same, because both read the
  * same global {@code position} sequence.
  * <p>
+ * This model only ever replays and delivers stream-capability events. On a store that has both the {@code STREAM} and
+ * {@code DCB} capabilities enabled at once, that promise is enforced, not merely descriptive: a
+ * {@link Filter#capability(EventStoreCapability) STREAM-capability filter} is ANDed into both the position-ordered
+ * replay reads and the filter handed to (and matched against) the live subscription, so a DCB-tagged event never
+ * reaches a subscriber of this model in either phase (see ADR 50). A caller filter is still honored; the capability
+ * guard is composed on top of it.
+ * <p>
  * Only meaningful for a store that writes a {@code position} on stream events. This model cannot check that itself
  * (it depends only on {@link PositionOrderedReader}), so do not wire it up against a store that does not write
  * position. If you do, {@link PositionOrderedReader#readInPositionOrder(Filter, PositionRange)} throws
@@ -74,6 +82,10 @@ import static java.util.Objects.requireNonNull;
  */
 @NullMarked
 public class ReactorStreamCatchupSubscriptionModel implements CheckpointAwareSubscriptionModel {
+
+    // Guards every replay read and the live subscription this model performs so a DCB-tagged event is never delivered
+    // to a stream subscriber, even on a store that has both capabilities enabled (see ADR 50).
+    private static final Filter STREAM_CAPABILITY_FILTER = Filter.capability(EventStoreCapability.STREAM);
 
     /**
      * Default number of positions read per replay window.
@@ -155,9 +167,14 @@ public class ReactorStreamCatchupSubscriptionModel implements CheckpointAwareSub
      * example {@code GlobalCheckpoint.of(0)} to replay from the beginning) to replay history then go live.
      * Any other start (now or the subscription model default) goes straight to live.
      */
-    public Flux<CloudEvent> subscribe(Filter filter, StartAt startAt) {
-        requireNonNull(filter, "Filter cannot be null");
+    public Flux<CloudEvent> subscribe(Filter callerFilter, StartAt startAt) {
+        requireNonNull(callerFilter, "Filter cannot be null");
         requireNonNull(startAt, StartAt.class.getSimpleName() + " cannot be null");
+
+        // AND the stream-capability guard onto the caller's filter, so a store with the DCB capability also enabled
+        // never replays or delivers a DCB-tagged event through this stream catch-up path, in either the replay reads,
+        // the live subscription filter, or the in-process live predicate below (see ADR 50).
+        Filter filter = withStreamCapability(callerFilter);
 
         StartAt resolved = startAt.get(new SubscriptionModelContext(ReactorStreamCatchupSubscriptionModel.class));
         if (!(resolved instanceof StartAt.StartAtCheckpoint position) || !GlobalCheckpoint.isGlobalCheckpoint(position.checkpoint)) {
@@ -172,6 +189,12 @@ public class ReactorStreamCatchupSubscriptionModel implements CheckpointAwareSub
         PositionCatchupPipeline pipeline = new PositionCatchupPipeline(reader, windowSize, handoverCacheSize);
         Predicate<CloudEvent> livePredicate = cloudEvent -> OccurrentCloudEventExtension.getPosition(cloudEvent) > 0 && FilterMatcher.matchesFilter(cloudEvent, filter);
         return pipeline.catchup(subscriptionModel, OccurrentSubscriptionFilter.filter(filter), livePredicate, startPosition);
+    }
+
+    // ANDs the stream-capability guard onto the caller's filter. Since Filter.all() means "no constraint", ANDing the
+    // capability onto it is exactly the capability filter alone.
+    private static Filter withStreamCapability(Filter filter) {
+        return filter instanceof Filter.All ? STREAM_CAPABILITY_FILTER : filter.and(STREAM_CAPABILITY_FILTER);
     }
 
     // Reads stream events in position order through the PositionOrderedReader, wrapping each with its position so a

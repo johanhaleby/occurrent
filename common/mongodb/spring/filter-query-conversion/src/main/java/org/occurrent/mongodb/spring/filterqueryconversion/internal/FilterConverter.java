@@ -17,8 +17,10 @@
 package org.occurrent.mongodb.spring.filterqueryconversion.internal;
 
 import org.occurrent.condition.Condition;
+import org.occurrent.eventstore.api.EventStoreCapability;
 import org.occurrent.filter.Filter;
 import org.occurrent.filter.Filter.All;
+import org.occurrent.filter.Filter.CapabilityFilter;
 import org.occurrent.filter.Filter.CompositionFilter;
 import org.occurrent.filter.Filter.SingleConditionFilter;
 import org.occurrent.mongodb.specialfilterhandling.internal.SpecialFilterHandling;
@@ -33,6 +35,9 @@ import static java.util.Objects.requireNonNull;
  * an event store using Spring.
  */
 public class FilterConverter {
+
+    // Mirror of DcbDocumentMapper.DCB_TAGS_INDEX_FIELD, duplicated as a literal so this module keeps no DCB dependency.
+    private static final String DCB_TAGS_FIELD = "dcbTags";
 
     public static Query convertFilterToQuery(TimeRepresentation timeRepresentation, Filter filter) {
         return convertFilterToQuery(null, timeRepresentation, filter);
@@ -59,6 +64,13 @@ public class FilterConverter {
             Condition<?> conditionToUse = SpecialFilterHandling.resolveSpecialCases(timeRepresentation, scf);
             String fieldName = fieldNameOf(fieldNamePrefix, scf.fieldName());
             criteria = ConditionToCriteriaConverter.convertConditionToCriteria(fieldName, conditionToUse);
+        } else if (filter instanceof CapabilityFilter cpf) {
+            // Only DCB-written events carry the indexed dcbTags array field in the stored document (see
+            // DcbDocumentMapper.DCB_TAGS_INDEX_FIELD; the literal is duplicated here to keep this module free of any DCB
+            // dependency). Its presence is the discriminator: DCB events have it, stream events do not.
+            boolean shouldHaveDcbTags = cpf.capability() == EventStoreCapability.DCB;
+            String fieldName = fieldNameOf(fieldNamePrefix, DCB_TAGS_FIELD);
+            criteria = Criteria.where(fieldName).exists(shouldHaveDcbTags);
         } else if (filter instanceof CompositionFilter cf) {
             Criteria[] composedCriteria = cf.filters().stream().map(f -> FilterConverter.convertFilterToCriteria(fieldNamePrefix, timeRepresentation, f)).toArray(Criteria[]::new);
             Criteria c = new Criteria();
