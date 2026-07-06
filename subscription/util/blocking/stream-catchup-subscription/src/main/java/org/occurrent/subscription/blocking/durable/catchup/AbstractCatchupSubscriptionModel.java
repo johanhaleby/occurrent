@@ -27,8 +27,11 @@ import org.occurrent.subscription.blocking.durable.catchup.CheckpointStorageConf
 
 import java.util.Objects;
 import java.util.Optional;
+import java.util.concurrent.Callable;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ConcurrentMap;
+import java.util.concurrent.Future;
+import java.util.concurrent.FutureTask;
 import java.util.function.Consumer;
 import java.util.function.Function;
 
@@ -139,5 +142,11 @@ abstract class AbstractCatchupSubscriptionModel implements SubscriptionModel, De
         if (cls.isInstance(config.subscriptionStorageConfig)) {
             consumer.accept(cls.cast(config.subscriptionStorageConfig));
         }
+    }
+
+    protected Future<Subscription> startCatchupAsync(String subscriptionId, Callable<Subscription> catchup) {
+        FutureTask<Subscription> task = new FutureTask<>(catchup);
+        Thread.ofVirtual().name("occurrent-catchup-" + subscriptionId).start(task);
+        return task;
     }
 }

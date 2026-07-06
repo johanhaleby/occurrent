@@ -43,6 +43,7 @@ import java.time.LocalDateTime;
 import java.util.List;
 import java.util.UUID;
 import java.util.concurrent.CopyOnWriteArrayList;
+import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.function.Consumer;
 import java.util.stream.Stream;
 
@@ -87,11 +88,18 @@ class StreamCatchupSubscriptionModelTest {
         write(eventStore, event2);
 
         CopyOnWriteArrayList<DomainEvent> received = new CopyOnWriteArrayList<>();
+        AtomicBoolean replayedOnVirtualThread = new AtomicBoolean(false);
         StreamCatchupSubscriptionModel subscription = new StreamCatchupSubscriptionModel(subscriptionModel, eventStore, new CatchupSubscriptionModelConfig(100));
 
-        subscription.subscribe("subscription", StartAtTime.beginningOfTime(), toDomainEvents(received)).waitUntilStarted();
+        subscription.subscribe("subscription", StartAtTime.beginningOfTime(), cloudEvent -> {
+            replayedOnVirtualThread.set(Thread.currentThread().isVirtual());
+            received.add(cloudEventConverter.toDomainEvent(cloudEvent));
+        }).waitUntilStarted();
 
-        await().untilAsserted(() -> assertThat(received).containsExactly(event1, event2));
+        await().untilAsserted(() -> {
+            assertThat(received).containsExactly(event1, event2);
+            assertThat(replayedOnVirtualThread).isTrue();
+        });
     }
 
     @Test

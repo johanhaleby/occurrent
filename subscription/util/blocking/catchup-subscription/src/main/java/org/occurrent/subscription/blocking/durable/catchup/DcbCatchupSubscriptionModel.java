@@ -38,7 +38,6 @@ import org.occurrent.subscription.blocking.durable.catchup.CheckpointStorageConf
 
 import java.util.Objects;
 import java.util.StringJoiner;
-import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.Future;
 import java.util.function.Consumer;
 import java.util.function.Supplier;
@@ -106,7 +105,7 @@ class DcbCatchupSubscriptionModel extends AbstractCatchupSubscriptionModel {
             return startLiveDcbSubscription(subscriptionId, filter, firstStartAt, action, null);
         }
 
-        Future<Subscription> subscriptionCompletableFuture = CompletableFuture.supplyAsync(() -> startDcbCatchupSubscription(subscriptionId, filter, startAt, action, firstStartAt));
+        Future<Subscription> subscriptionCompletableFuture = startCatchupAsync(subscriptionId, () -> startDcbCatchupSubscription(subscriptionId, filter, startAt, action, firstStartAt));
         return new CatchupSubscription(subscriptionId, subscriptionCompletableFuture);
     }
 

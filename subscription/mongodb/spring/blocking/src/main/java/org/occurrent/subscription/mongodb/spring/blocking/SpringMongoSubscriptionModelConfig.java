@@ -102,9 +102,28 @@ public class SpringMongoSubscriptionModelConfig {
         return new SpringMongoSubscriptionModelConfig(eventCollection, timeRepresentation, retryStrategy, restartSubscriptionsOnChangeStreamHistoryLost, executor);
     }
 
+    /**
+     * Use virtual threads for blocking MongoDB change stream listener tasks while keeping Spring's
+     * {@link ThreadPoolTaskExecutor} lifecycle semantics.
+     *
+     * @return A new instance of {@code SpringSubscriptionModelConfig}
+     */
+    public SpringMongoSubscriptionModelConfig useVirtualThreads() {
+        return executor(virtualThreadExecutor());
+    }
+
     private static Executor defaultExecutor() {
+        return newTaskExecutor(false);
+    }
+
+    private static Executor virtualThreadExecutor() {
+        return newTaskExecutor(true);
+    }
+
+    private static Executor newTaskExecutor(boolean virtualThreads) {
         ThreadPoolTaskExecutor executor = new ThreadPoolTaskExecutor();
         executor.setQueueCapacity(0);
+        executor.setVirtualThreads(virtualThreads);
         executor.initialize();
         return executor;
     }

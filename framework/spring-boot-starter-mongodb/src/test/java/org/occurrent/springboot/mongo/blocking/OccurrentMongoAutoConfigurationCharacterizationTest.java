@@ -38,6 +38,7 @@ import org.occurrent.subscription.api.blocking.DelegatingSubscriptionModel;
 import org.occurrent.subscription.api.blocking.SubscriptionModel;
 import org.occurrent.subscription.blocking.durable.DurableSubscriptionModel;
 import org.occurrent.subscription.blocking.durable.catchup.CatchupSubscriptionModel;
+import org.occurrent.subscription.mongodb.spring.blocking.SpringMongoSubscriptionModel;
 import org.springframework.beans.factory.NoSuchBeanDefinitionException;
 import org.springframework.boot.autoconfigure.AutoConfigurations;
 import org.springframework.boot.test.context.FilteredClassLoader;
@@ -46,11 +47,17 @@ import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 import org.springframework.data.mongodb.MongoDatabaseFactory;
 import org.springframework.data.mongodb.core.MongoTemplate;
+import org.springframework.data.mongodb.core.messaging.DefaultMessageListenerContainer;
+import org.springframework.scheduling.concurrent.ThreadPoolTaskExecutor;
 
+import java.lang.reflect.Field;
 import java.net.URI;
 import java.util.Date;
 import java.util.Set;
 import java.util.UUID;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicBoolean;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
@@ -190,6 +197,34 @@ class OccurrentMongoAutoConfigurationCharacterizationTest {
                     assertThat(delegated).isInstanceOf(CatchupSubscriptionModel.class);
                     assertThat(((DelegatingSubscriptionModel) delegated).getDelegatedSubscriptionModel())
                             .isInstanceOf(DurableSubscriptionModel.class);
+                });
+    }
+
+    @Test
+    void virtual_thread_property_configures_the_blocking_subscription_executor() {
+        eventStoreConfigContextRunner()
+                .withPropertyValues(
+                        "occurrent.subscription.enabled=true",
+                        "spring.threads.virtual.enabled=true"
+                )
+                .run(context -> {
+                    SpringMongoSubscriptionModel springMongoSubscriptionModel = findDelegate(context.getBean(SubscriptionModel.class), SpringMongoSubscriptionModel.class);
+                    DefaultMessageListenerContainer container = getField(springMongoSubscriptionModel, "messageListenerContainer", DefaultMessageListenerContainer.class);
+                    ThreadPoolTaskExecutor executor = getField(container, "taskExecutor", ThreadPoolTaskExecutor.class);
+                    CountDownLatch executed = new CountDownLatch(1);
+                    AtomicBoolean virtual = new AtomicBoolean(false);
+
+                    try {
+                        executor.execute(() -> {
+                            virtual.set(Thread.currentThread().isVirtual());
+                            executed.countDown();
+                        });
+
+                        assertThat(executed.await(5, TimeUnit.SECONDS)).isTrue();
+                        assertThat(virtual).isTrue();
+                    } finally {
+                        executor.shutdown();
+                    }
                 });
     }
 
@@ -343,6 +378,30 @@ class OccurrentMongoAutoConfigurationCharacterizationTest {
 
     private TagGenerator<TestEvent> tagsForTestEvent() {
         return event -> Set.of(Tag.of("subject", event.subject()));
+    }
+
+    private static <T> T findDelegate(SubscriptionModel subscriptionModel, Class<T> type) {
+        SubscriptionModel current = subscriptionModel;
+        while (true) {
+            if (type.isInstance(current)) {
+                return type.cast(current);
+            }
+            if (current instanceof DelegatingSubscriptionModel delegatingSubscriptionModel) {
+                current = delegatingSubscriptionModel.getDelegatedSubscriptionModel();
+            } else {
+                throw new IllegalStateException("Could not find delegate of type " + type.getName());
+            }
+        }
+    }
+
+    private static <T> T getField(Object target, String fieldName, Class<T> type) {
+        try {
+            Field field = target.getClass().getDeclaredField(fieldName);
+            field.setAccessible(true);
+            return type.cast(field.get(target));
+        } catch (ReflectiveOperationException e) {
+            throw new IllegalStateException("Could not read field " + fieldName + " from " + target.getClass().getName(), e);
+        }
     }
 
     @Configuration(proxyBeanMethods = false)
