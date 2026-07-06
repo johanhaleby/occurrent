@@ -20,7 +20,6 @@ import org.jspecify.annotations.NullMarked;
 import org.occurrent.condition.Condition;
 import org.occurrent.condition.Condition.*;
 
-import java.util.Collection;
 import java.util.Objects;
 import java.util.stream.Stream;
 
@@ -33,30 +32,33 @@ public class LongConditionEvaluator {
     public static boolean evaluate(Condition<Long> condition, long value) {
         Objects.requireNonNull(condition, "Condition cannot be null");
 
-        if (condition instanceof MultiOperandCondition<Long> operation) {
-            MultiOperandConditionName operationName = operation.operationName();
-            Stream<Condition<Long>> operations = operation.operations().stream();
-            return switch (operationName) {
-                case AND -> operations.allMatch(c -> evaluate(c, value));
-                case OR -> operations.anyMatch(c -> evaluate(c, value));
-                case NOT -> operations.noneMatch(c -> evaluate(c, value));
-            };
-        } else if (condition instanceof SingleOperandCondition<Long> singleOperandCondition) {
-            long operand = singleOperandCondition.operand();
-            SingleOperandConditionName singleOperandConditionName = singleOperandCondition.operandConditionName();
-            return switch (singleOperandConditionName) {
-                case EQ -> value == operand;
-                case LT -> value < operand;
-                case GT -> value > operand;
-                case LTE -> value <= operand;
-                case GTE -> value >= operand;
-                case NE -> value != operand;
-            };
-        } else if (condition instanceof InOperandCondition<Long> inOperandCondition) {
-            Collection<Long> longs = inOperandCondition.operand();
-            return longs.contains(value);
-        } else {
-            throw new IllegalArgumentException("Unsupported condition: " + condition.getClass());
-        }
+        return switch (condition) {
+            case MultiOperandCondition<Long> operation -> evaluate(operation, value);
+            case SingleOperandCondition<Long> singleOperandCondition -> evaluate(singleOperandCondition, value);
+            case InOperandCondition<Long> inOperandCondition -> inOperandCondition.operand().contains(value);
+        };
+    }
+
+    private static boolean evaluate(MultiOperandCondition<Long> operation, long value) {
+        MultiOperandConditionName operationName = operation.operationName();
+        Stream<Condition<Long>> operations = operation.operations().stream();
+        return switch (operationName) {
+            case AND -> operations.allMatch(c -> evaluate(c, value));
+            case OR -> operations.anyMatch(c -> evaluate(c, value));
+            case NOT -> operations.noneMatch(c -> evaluate(c, value));
+        };
+    }
+
+    private static boolean evaluate(SingleOperandCondition<Long> singleOperandCondition, long value) {
+        long operand = singleOperandCondition.operand();
+        SingleOperandConditionName singleOperandConditionName = singleOperandCondition.operandConditionName();
+        return switch (singleOperandConditionName) {
+            case EQ -> value == operand;
+            case LT -> value < operand;
+            case GT -> value > operand;
+            case LTE -> value <= operand;
+            case GTE -> value >= operand;
+            case NE -> value != operand;
+        };
     }
 }

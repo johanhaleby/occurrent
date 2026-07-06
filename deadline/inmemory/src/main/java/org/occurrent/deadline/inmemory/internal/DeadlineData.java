@@ -41,8 +41,7 @@ public class DeadlineData {
     @Override
     public boolean equals(Object o) {
         if (this == o) return true;
-        if (!(o instanceof DeadlineData)) return false;
-        DeadlineData that = (DeadlineData) o;
+        if (!(o instanceof DeadlineData that)) return false;
         return Objects.equals(id, that.id) && Objects.equals(category, that.category) && Objects.equals(deadline, that.deadline) && Objects.equals(data, that.data);
     }
 

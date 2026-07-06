@@ -44,8 +44,7 @@ public class MongoResumeTokenCheckpoint implements Checkpoint {
     @Override
     public boolean equals(Object o) {
         if (this == o) return true;
-        if (!(o instanceof MongoResumeTokenCheckpoint)) return false;
-        MongoResumeTokenCheckpoint that = (MongoResumeTokenCheckpoint) o;
+        if (!(o instanceof MongoResumeTokenCheckpoint that)) return false;
         return Objects.equals(resumeToken, that.resumeToken);
     }
 

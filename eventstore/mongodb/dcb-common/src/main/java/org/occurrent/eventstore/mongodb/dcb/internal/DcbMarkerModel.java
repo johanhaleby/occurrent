@@ -81,10 +81,11 @@ public final class DcbMarkerModel {
 
     // A query here is either a single DcbCriterion alternative or an Items list (MatchAll is handled by the callers).
     public static List<DcbCriterion> dcbQueryItems(DcbCriteria query) {
-        if (query instanceof DcbCriterion item) {
-            return List.of(item);
-        }
-        return ((DcbCriteria.Items) query).items();
+        return switch (query) {
+            case DcbCriteria.MatchAll ignored -> List.of();
+            case DcbCriterion item -> List.of(item);
+            case DcbCriteria.Items items -> items.items();
+        };
     }
 
     public static Set<String> eventMarkerKeys(List<CloudEvent> events) {

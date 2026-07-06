@@ -104,8 +104,7 @@ class NumberGuessingGameCompleted {
     @Override
     public boolean equals(Object o) {
         if (this == o) return true;
-        if (!(o instanceof NumberGuessingGameCompleted)) return false;
-        NumberGuessingGameCompleted that = (NumberGuessingGameCompleted) o;
+        if (!(o instanceof NumberGuessingGameCompleted that)) return false;
         return secretNumberToGuess == that.secretNumberToGuess &&
                 maxNumberOfGuesses == that.maxNumberOfGuesses &&
                 rightNumberWasGuessed == that.rightNumberWasGuessed &&
@@ -178,8 +177,7 @@ class NumberGuessingGameCompleted {
         @Override
         public boolean equals(Object o) {
             if (this == o) return true;
-            if (!(o instanceof GuessedNumber)) return false;
-            GuessedNumber that = (GuessedNumber) o;
+            if (!(o instanceof GuessedNumber that)) return false;
             return number == that.number &&
                     Objects.equals(playerId, that.playerId) &&
                     Objects.equals(guessedAt, that.guessedAt);

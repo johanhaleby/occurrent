@@ -30,8 +30,7 @@ public class GameNotStarted extends RuntimeException {
     @Override
     public boolean equals(Object o) {
         if (this == o) return true;
-        if (!(o instanceof GameNotStarted)) return false;
-        GameNotStarted that = (GameNotStarted) o;
+        if (!(o instanceof GameNotStarted that)) return false;
         return Objects.equals(gameId, that.gameId);
     }
 

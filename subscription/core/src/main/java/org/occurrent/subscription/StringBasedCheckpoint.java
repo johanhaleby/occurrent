@@ -35,8 +35,7 @@ public class StringBasedCheckpoint implements Checkpoint {
     @Override
     public boolean equals(Object o) {
         if (this == o) return true;
-        if (!(o instanceof StringBasedCheckpoint)) return false;
-        StringBasedCheckpoint that = (StringBasedCheckpoint) o;
+        if (!(o instanceof StringBasedCheckpoint that)) return false;
         return Objects.equals(value, that.value);
     }
 

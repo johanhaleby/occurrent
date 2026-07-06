@@ -104,37 +104,27 @@ public class Serialization {
     }
 
     private byte[] toBytes(GameEvent event) {
-        final Map<String, Object> eventAsMap;
-        if (event instanceof GuessingAttemptsExhausted || event instanceof NumberGuessingGameEnded) {
-            eventAsMap = null;
-        } else if (event instanceof NumberGuessingGameWasStarted) {
-            NumberGuessingGameWasStarted e = (NumberGuessingGameWasStarted) event;
-            eventAsMap = new HashMap<String, Object>() {{
+        final Map<String, Object> eventAsMap = switch (event) {
+            case GuessingAttemptsExhausted ignored -> null;
+            case NumberGuessingGameEnded ignored -> null;
+            case NumberGuessingGameWasStarted e -> new HashMap<String, Object>() {{
                 put("startedBy", e.startedBy().toString());
                 put("secretNumberToGuess", e.secretNumberToGuess());
                 put("maxNumberOfGuesses", e.maxNumberOfGuesses());
             }};
-        } else if (event instanceof PlayerGuessedANumberThatWasTooBig) {
-            PlayerGuessedANumberThatWasTooBig e = (PlayerGuessedANumberThatWasTooBig) event;
-            eventAsMap = new HashMap<String, Object>() {{
+            case PlayerGuessedANumberThatWasTooBig e -> new HashMap<String, Object>() {{
                 put("playerId", e.playerId().toString());
                 put("guessedNumber", e.guessedNumber());
             }};
-        } else if (event instanceof PlayerGuessedANumberThatWasTooSmall) {
-            PlayerGuessedANumberThatWasTooSmall e = (PlayerGuessedANumberThatWasTooSmall) event;
-            eventAsMap = new HashMap<String, Object>() {{
+            case PlayerGuessedANumberThatWasTooSmall e -> new HashMap<String, Object>() {{
                 put("playerId", e.playerId().toString());
                 put("guessedNumber", e.guessedNumber());
             }};
-        } else if (event instanceof PlayerGuessedTheRightNumber) {
-            PlayerGuessedTheRightNumber e = (PlayerGuessedTheRightNumber) event;
-            eventAsMap = new HashMap<String, Object>() {{
+            case PlayerGuessedTheRightNumber e -> new HashMap<String, Object>() {{
                 put("playerId", e.playerId().toString());
                 put("guessedNumber", e.guessedNumber());
             }};
-        } else {
-            throw new IllegalArgumentException("Unrecognized event: " + event.getClass().getName());
-        }
+        };
 
         if (eventAsMap == null) {
             return null;

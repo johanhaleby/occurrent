@@ -108,10 +108,11 @@ public final class DcbCloudEvents {
     public static boolean matches(CloudEvent cloudEvent, DcbCriteria criteria) {
         requireNonNull(cloudEvent, "CloudEvent cannot be null");
         requireNonNull(criteria, "Criteria cannot be null");
-        if (criteria instanceof DcbCriteria.MatchAll) {
-            return true;
-        }
-        return itemsOf(criteria).stream().anyMatch(item -> matches(cloudEvent, item));
+        return switch (criteria) {
+            case DcbCriteria.MatchAll ignored -> true;
+            case DcbCriterion item -> matches(cloudEvent, item);
+            case DcbCriteria.Items items -> items.items().stream().anyMatch(item -> matches(cloudEvent, item));
+        };
     }
 
     private static boolean matches(CloudEvent cloudEvent, DcbCriterion item) {
@@ -135,13 +136,11 @@ public final class DcbCloudEvents {
     }
 
     private static List<DcbCriterion> itemsOf(DcbCriteria criteria) {
-        if (criteria instanceof DcbCriterion item) {
-            return List.of(item);
-        }
-        if (criteria instanceof DcbCriteria.Items items) {
-            return items.items();
-        }
-        return List.of();
+        return switch (criteria) {
+            case DcbCriteria.MatchAll ignored -> List.of();
+            case DcbCriterion item -> List.of(item);
+            case DcbCriteria.Items items -> items.items();
+        };
     }
 
     /**

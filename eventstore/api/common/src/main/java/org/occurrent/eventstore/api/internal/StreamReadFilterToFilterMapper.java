@@ -59,32 +59,22 @@ public final class StreamReadFilterToFilterMapper {
     @SuppressWarnings({"unchecked", "rawtypes"})
     public static Filter map(StreamReadFilter filter) {
         requireNonNull(filter, "StreamReadFilter cannot be null");
-        if (filter instanceof AttributeFilter<?> af) {
-            return Filter.filter(af.attributeName(), (Condition) af.condition());
-        }
+        return switch (filter) {
+            case AttributeFilter<?> af -> Filter.filter(af.attributeName(), (Condition) af.condition());
+            case ExtensionFilter<?> ef -> Filter.filter(ef.extensionName(), (Condition) ef.condition());
+            case DataFilter<?> df -> Filter.data(df.path(), (Condition) df.condition());
+            case StreamReadFilter.CompositionFilter cf -> {
+                List<Filter> mapped = new ArrayList<>(cf.filters().size());
+                for (StreamReadFilter f : cf.filters()) {
+                    mapped.add(map(f));
+                }
 
-        if (filter instanceof ExtensionFilter<?> ef) {
-            return Filter.filter(ef.extensionName(), (Condition) ef.condition());
-        }
+                Filter.CompositionOperator op = cf.operator() == StreamReadFilter.CompositionOperator.AND
+                        ? Filter.CompositionOperator.AND
+                        : Filter.CompositionOperator.OR;
 
-        if (filter instanceof DataFilter<?> df) {
-            return Filter.data(df.path(), (Condition) df.condition());
-        }
-
-        if (filter instanceof StreamReadFilter.CompositionFilter cf) {
-
-            List<Filter> mapped = new ArrayList<>(cf.filters().size());
-            for (StreamReadFilter f : cf.filters()) {
-                mapped.add(map(f));
+                yield new Filter.CompositionFilter(op, mapped);
             }
-
-            Filter.CompositionOperator op = cf.operator() == StreamReadFilter.CompositionOperator.AND
-                    ? Filter.CompositionOperator.AND
-                    : Filter.CompositionOperator.OR;
-
-            return new Filter.CompositionFilter(op, mapped);
-        }
-
-        throw new IllegalArgumentException("Unknown StreamReadFilter implementation: " + filter.getClass().getName());
+        };
     }
 }

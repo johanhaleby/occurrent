@@ -577,11 +577,11 @@ public class StreamCatchupSubscriptionModel extends AbstractCatchupSubscriptionM
 
     public static boolean isTimeBasedCheckpoint(StartAt startAt, Class<?> contextType) {
         StartAt start = startAt.get(new SubscriptionModelContext(contextType));
-        if (!(start instanceof StartAtCheckpoint)) {
+        if (!(start instanceof StartAtCheckpoint position)) {
             return false;
         }
 
-        Checkpoint checkpoint = ((StartAtCheckpoint) start).checkpoint;
+        Checkpoint checkpoint = position.checkpoint;
         return isTimeBasedCheckpoint(checkpoint);
     }
 

@@ -35,8 +35,7 @@ public class MaxNumberOfGuesses {
     @Override
     public boolean equals(Object o) {
         if (this == o) return true;
-        if (!(o instanceof MaxNumberOfGuesses)) return false;
-        MaxNumberOfGuesses that = (MaxNumberOfGuesses) o;
+        if (!(o instanceof MaxNumberOfGuesses that)) return false;
         return value == that.value;
     }
 

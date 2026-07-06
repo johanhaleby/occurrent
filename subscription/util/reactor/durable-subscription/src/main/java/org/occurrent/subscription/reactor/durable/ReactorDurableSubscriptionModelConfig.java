@@ -51,8 +51,7 @@ public class ReactorDurableSubscriptionModelConfig {
     @Override
     public boolean equals(Object o) {
         if (this == o) return true;
-        if (!(o instanceof ReactorDurableSubscriptionModelConfig)) return false;
-        ReactorDurableSubscriptionModelConfig that = (ReactorDurableSubscriptionModelConfig) o;
+        if (!(o instanceof ReactorDurableSubscriptionModelConfig that)) return false;
         return Objects.equals(persistCloudEventPositionPredicate, that.persistCloudEventPositionPredicate);
     }
 

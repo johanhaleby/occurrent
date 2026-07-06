@@ -76,8 +76,7 @@ public class InMemorySubscription implements Subscription, Runnable {
     @Override
     public boolean equals(Object o) {
         if (this == o) return true;
-        if (!(o instanceof InMemorySubscription)) return false;
-        InMemorySubscription that = (InMemorySubscription) o;
+        if (!(o instanceof InMemorySubscription that)) return false;
         return shutdown == that.shutdown && Objects.equals(id, that.id) && Objects.equals(queue, that.queue) && Objects.equals(consumer, that.consumer) && Objects.equals(matcher, that.matcher) && Objects.equals(retryStrategy, that.retryStrategy);
     }
 

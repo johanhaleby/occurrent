@@ -69,8 +69,7 @@ public class MostNumberOfWorkouts {
         @Override
         public boolean equals(Object o) {
             if (this == o) return true;
-            if (!(o instanceof PersonWithMostNumberOfWorkouts)) return false;
-            PersonWithMostNumberOfWorkouts that = (PersonWithMostNumberOfWorkouts) o;
+            if (!(o instanceof PersonWithMostNumberOfWorkouts that)) return false;
             return count == that.count &&
                     Objects.equals(name, that.name);
         }

@@ -70,15 +70,17 @@ public class NumberGuessingGame {
 
     private static GameState rehydrate(Stream<GameEvent> events) {
         return events.collect(GameState::new, (state, gameEvent) -> {
-            if (gameEvent instanceof NumberGuessingGameWasStarted) {
-                NumberGuessingGameWasStarted numberGuessingGameWasStarted = (NumberGuessingGameWasStarted) gameEvent;
-                state.started = true;
-                state.secretNumberToGuess = numberGuessingGameWasStarted.secretNumberToGuess();
-                state.maxNumberOfGuesses = numberGuessingGameWasStarted.maxNumberOfGuesses();
-            } else if (gameEvent instanceof PlayerGuessedANumberThatWasTooSmall || gameEvent instanceof PlayerGuessedANumberThatWasTooBig) {
-                state.numberOfGuesses = state.numberOfGuesses + 1;
-            } else {
-                state.ended = true;
+            switch (gameEvent) {
+                case NumberGuessingGameWasStarted numberGuessingGameWasStarted -> {
+                    state.started = true;
+                    state.secretNumberToGuess = numberGuessingGameWasStarted.secretNumberToGuess();
+                    state.maxNumberOfGuesses = numberGuessingGameWasStarted.maxNumberOfGuesses();
+                }
+                case PlayerGuessedANumberThatWasTooSmall ignored -> state.numberOfGuesses = state.numberOfGuesses + 1;
+                case PlayerGuessedANumberThatWasTooBig ignored -> state.numberOfGuesses = state.numberOfGuesses + 1;
+                case PlayerGuessedTheRightNumber ignored -> state.ended = true;
+                case GuessingAttemptsExhausted ignored -> state.ended = true;
+                case NumberGuessingGameEnded ignored -> state.ended = true;
             }
         }, EMPTY);
     }

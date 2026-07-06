@@ -44,8 +44,7 @@ public class MongoOperationTimeCheckpoint implements Checkpoint {
     @Override
     public boolean equals(Object o) {
         if (this == o) return true;
-        if (!(o instanceof MongoOperationTimeCheckpoint)) return false;
-        MongoOperationTimeCheckpoint that = (MongoOperationTimeCheckpoint) o;
+        if (!(o instanceof MongoOperationTimeCheckpoint that)) return false;
         return Objects.equals(operationTime, that.operationTime);
     }
 

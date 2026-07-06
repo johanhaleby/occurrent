@@ -71,15 +71,17 @@ class InsertGameIntoLatestGamesOverview {
                 return;
             }
 
-            if (gameEvent instanceof PlayerGuessedANumberThatWasTooSmall || gameEvent instanceof PlayerGuessedANumberThatWasTooBig) {
-                game.put("numberOfGuesses", (int) game.get("numberOfGuesses") + 1);
-            } else if (gameEvent instanceof PlayerGuessedTheRightNumber) {
-                game.put("numberOfGuesses", (int) game.get("numberOfGuesses") + 1);
-                game.put("playerGuessedTheRightNumber", true);
-            } else if (gameEvent instanceof GuessingAttemptsExhausted) {
-                game.put("playerGuessedTheRightNumber", false);
-            } else if (gameEvent instanceof NumberGuessingGameEnded) {
-                game.put("endedAt", toDate(gameEvent.timestamp()));
+            switch (gameEvent) {
+                case NumberGuessingGameWasStarted ignored -> {
+                }
+                case PlayerGuessedANumberThatWasTooSmall ignored -> game.put("numberOfGuesses", (int) game.get("numberOfGuesses") + 1);
+                case PlayerGuessedANumberThatWasTooBig ignored -> game.put("numberOfGuesses", (int) game.get("numberOfGuesses") + 1);
+                case PlayerGuessedTheRightNumber ignored -> {
+                    game.put("numberOfGuesses", (int) game.get("numberOfGuesses") + 1);
+                    game.put("playerGuessedTheRightNumber", true);
+                }
+                case GuessingAttemptsExhausted ignored -> game.put("playerGuessedTheRightNumber", false);
+                case NumberGuessingGameEnded ignored -> game.put("endedAt", toDate(gameEvent.timestamp()));
             }
 
             mongoOperations.findAndReplace(query, game, new FindAndReplaceOptions().upsert(), LatestGamesOverviewCollection.NAME);

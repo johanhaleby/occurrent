@@ -69,8 +69,7 @@ public class DeadlineJobRequest implements JobRequest {
     @Override
     public boolean equals(Object o) {
         if (this == o) return true;
-        if (!(o instanceof DeadlineJobRequest)) return false;
-        DeadlineJobRequest that = (DeadlineJobRequest) o;
+        if (!(o instanceof DeadlineJobRequest that)) return false;
         return deadlineInEpochMilli == that.deadlineInEpochMilli && Objects.equals(id, that.id) && Objects.equals(category, that.category) && Objects.equals(data, that.data);
     }
 

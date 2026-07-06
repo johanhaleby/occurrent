@@ -78,8 +78,7 @@ public class SpringMongoSubscription implements Subscription {
     @Override
     public boolean equals(Object o) {
         if (this == o) return true;
-        if (!(o instanceof SpringMongoSubscription)) return false;
-        SpringMongoSubscription that = (SpringMongoSubscription) o;
+        if (!(o instanceof SpringMongoSubscription that)) return false;
         return shutdown == that.shutdown && Objects.equals(subscriptionId, that.subscriptionId) && Objects.equals(subscriptionReference, that.subscriptionReference);
     }
 

@@ -153,8 +153,7 @@ class JobRunrDeadlineManagerTest {
         @Override
         public boolean equals(Object o) {
             if (this == o) return true;
-            if (!(o instanceof MyDTO)) return false;
-            MyDTO myDTO = (MyDTO) o;
+            if (!(o instanceof MyDTO myDTO)) return false;
             return Objects.equals(something, myDTO.something);
         }
 

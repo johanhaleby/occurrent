@@ -52,31 +52,20 @@ public final class StreamReadFilterValidator {
     }
 
     private static void validateInternal(StreamReadFilter filter) {
-        if (filter instanceof AttributeFilter<?> af) {
-            verifyForbiddenName(normalize(af.attributeName()), "attribute");
-            return;
-        }
-
-        if (filter instanceof ExtensionFilter<?> ef) {
-            verifyForbiddenName(normalize(ef.extensionName()), "extension");
-            return;
-        }
-
-        if (filter instanceof StreamReadFilter.DataFilter) {
-            // Allowed
-            return;
-        }
-
-        if (filter instanceof StreamReadFilter.CompositionFilter cf) {
-            List<StreamReadFilter> filters = cf.filters();
-            for (StreamReadFilter f : filters) {
-                requireNonNull(f, "StreamReadFilter composition cannot contain null");
-                validateInternal(f);
+        switch (filter) {
+            case AttributeFilter<?> af -> verifyForbiddenName(normalize(af.attributeName()), "attribute");
+            case ExtensionFilter<?> ef -> verifyForbiddenName(normalize(ef.extensionName()), "extension");
+            case StreamReadFilter.DataFilter<?> ignored -> {
+                // Allowed
             }
-            return;
+            case StreamReadFilter.CompositionFilter cf -> {
+                List<StreamReadFilter> filters = cf.filters();
+                for (StreamReadFilter f : filters) {
+                    requireNonNull(f, "StreamReadFilter composition cannot contain null");
+                    validateInternal(f);
+                }
+            }
         }
-
-        throw new IllegalArgumentException("Unknown StreamReadFilter implementation: " + filter.getClass().getName());
     }
 
     private static void verifyForbiddenName(String normalizedName, String kind) {

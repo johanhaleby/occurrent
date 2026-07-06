@@ -67,13 +67,11 @@ public final class DcbSubscriptionFilterConverter {
 
     // A bare DcbCriterion is a single alternative, Items is several, and MatchAll yields no constraint (position only).
     private static List<DcbCriterion> itemsOf(DcbCriteria query) {
-        if (query instanceof DcbCriterion item) {
-            return List.of(item);
-        }
-        if (query instanceof DcbCriteria.Items items) {
-            return items.items();
-        }
-        return List.of();
+        return switch (query) {
+            case DcbCriteria.MatchAll ignored -> List.of();
+            case DcbCriterion item -> List.of(item);
+            case DcbCriteria.Items items -> items.items();
+        };
     }
 
     private static Document toItemCondition(DcbCriterion item) {

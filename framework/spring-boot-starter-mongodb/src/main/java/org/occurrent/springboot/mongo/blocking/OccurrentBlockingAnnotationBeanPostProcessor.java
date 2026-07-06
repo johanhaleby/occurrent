@@ -345,26 +345,22 @@ class OccurrentBlockingAnnotationBeanPostProcessor implements BeanPostProcessor,
     // TODO Also check resume behavior if subscription exists!
     private static boolean shouldWaitUntilStarted(StartPositionToUse startPositionToUse, StartupMode startupMode) {
         return switch (startupMode) {
-            case DEFAULT -> {
-                if (startPositionToUse instanceof StartPositionToUse.StartAtISO8601 || startPositionToUse instanceof StartPositionToUse.StartAtTimeEpoch) {
-                    yield false;
-                } else {
-                    StartPositionToUse.StartAtStartPosition startPosition = (StartPositionToUse.StartAtStartPosition) startPositionToUse;
-                    yield switch (startPosition.startPosition) {
-                        case BEGINNING_OF_TIME -> false;
-                        case NOW, DEFAULT -> true;
-                    };
-                }
-            }
+            case DEFAULT -> switch (startPositionToUse) {
+                case StartPositionToUse.StartAtISO8601 ignored -> false;
+                case StartPositionToUse.StartAtTimeEpoch ignored -> false;
+                case StartPositionToUse.StartAtStartPosition startPosition -> switch (startPosition.startPosition) {
+                    case BEGINNING_OF_TIME -> false;
+                    case NOW, DEFAULT -> true;
+                };
+            };
             case WAIT_UNTIL_STARTED -> true;
             case BACKGROUND -> false;
         };
     }
 
     private @NonNull StartAt generateStartAt(String subscriptionId, StartPositionToUse startPositionToUse, ResumeBehavior resumeBehavior) {
-        final StartAt startAt;
-        if (startPositionToUse instanceof StartPositionToUse.StartAtISO8601 iso8601) {
-            startAt = switch (resumeBehavior) {
+        return switch (startPositionToUse) {
+            case StartPositionToUse.StartAtISO8601 iso8601 -> switch (resumeBehavior) {
                 case SAME_AS_START_AT -> StartAt.dynamic(ctx -> {
                     boolean isCompetingConsumerSubscription = CompetingConsumerSubscriptionModel.class.isAssignableFrom(ctx.subscriptionModelType());
                     if (isCompetingConsumerSubscription) {
@@ -400,11 +396,11 @@ class OccurrentBlockingAnnotationBeanPostProcessor implements BeanPostProcessor,
                     }
                 });
             };
-        } else if (startPositionToUse instanceof StartPositionToUse.StartAtTimeEpoch epoch) {
-            OffsetDateTime offsetDateTime = OffsetDateTime.ofInstant(Instant.ofEpochMilli(epoch.startAtTimeEpoch), ZoneOffset.UTC);
-            startAt = generateStartAt(subscriptionId, new StartPositionToUse.StartAtISO8601(offsetDateTime), resumeBehavior);
-        } else if (startPositionToUse instanceof StartPositionToUse.StartAtStartPosition startAtStartPosition) {
-            startAt = switch (startAtStartPosition.startPosition) {
+            case StartPositionToUse.StartAtTimeEpoch epoch -> {
+                OffsetDateTime offsetDateTime = OffsetDateTime.ofInstant(Instant.ofEpochMilli(epoch.startAtTimeEpoch), ZoneOffset.UTC);
+                yield generateStartAt(subscriptionId, new StartPositionToUse.StartAtISO8601(offsetDateTime), resumeBehavior);
+            }
+            case StartPositionToUse.StartAtStartPosition startAtStartPosition -> switch (startAtStartPosition.startPosition) {
                 case BEGINNING_OF_TIME -> switch (resumeBehavior) {
                     case SAME_AS_START_AT -> StartAt.dynamic(ctx -> {
                         boolean isCompetingConsumerSubscription = CompetingConsumerSubscriptionModel.class.isAssignableFrom(ctx.subscriptionModelType());
@@ -450,11 +446,7 @@ class OccurrentBlockingAnnotationBeanPostProcessor implements BeanPostProcessor,
                     return isCatchupSubscription ? null : StartAt.subscriptionModelDefault();
                 });
             };
-        } else {
-            throw new IllegalStateException("Internal error: Didn't recognize start position");
-        }
-
-        return startAt;
+        };
     }
 
     private static StartPositionToUse findStartPositionToUseOrThrow(String subscriptionId, String startAtISO8601, long startAtTimeEpoch, StartPosition startPosition) {
@@ -474,15 +466,13 @@ class OccurrentBlockingAnnotationBeanPostProcessor implements BeanPostProcessor,
         if (definedStartPositions.isEmpty()) {
             throw new IllegalArgumentException("You need to specify at least one valid start position for subscription '%s'.".formatted(subscriptionId));
         } else if (definedStartPositions.size() > 1) {
-            String startPositionNames = definedStartPositions.stream().map(position -> {
-                if (position instanceof StartPositionToUse.StartAtISO8601) {
-                    return "startAtISO8601";
-                } else if (position instanceof StartPositionToUse.StartAtTimeEpoch) {
-                    return "startAtTimeEpoch";
-                } else {
-                    return "startAt";
-                }
-            }).collect(Collectors.joining(" and "));
+            String startPositionNames = definedStartPositions.stream()
+                    .map(position -> switch (position) {
+                        case StartPositionToUse.StartAtISO8601 ignored -> "startAtISO8601";
+                        case StartPositionToUse.StartAtTimeEpoch ignored -> "startAtTimeEpoch";
+                        case StartPositionToUse.StartAtStartPosition ignored -> "startAt";
+                    })
+                    .collect(Collectors.joining(" and "));
             throw new IllegalArgumentException("You can only specify one start position for subscription '%s', both %s are defined.".formatted(subscriptionId, startPositionNames));
         } else {
             return definedStartPositions.get(0);

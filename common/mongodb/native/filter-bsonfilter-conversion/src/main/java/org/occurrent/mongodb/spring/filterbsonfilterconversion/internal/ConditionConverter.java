@@ -23,7 +23,6 @@ import org.occurrent.condition.Condition.MultiOperandCondition;
 import org.occurrent.condition.Condition.SingleOperandCondition;
 import org.occurrent.condition.Condition.SingleOperandConditionName;
 
-import java.util.Collection;
 import java.util.List;
 
 /**
@@ -32,7 +31,14 @@ import java.util.List;
 public class ConditionConverter {
 
     public static <T> Bson convertConditionToBsonCriteria(String fieldName, Condition<T> condition) {
-        if (condition instanceof MultiOperandCondition<T> operation) {
+        return switch (condition) {
+            case MultiOperandCondition<T> operation -> convertMultiOperandConditionToBsonCriteria(fieldName, operation);
+            case SingleOperandCondition<T> singleOperandCondition -> convertSingleOperandConditionToBsonCriteria(fieldName, singleOperandCondition);
+            case Condition.InOperandCondition<T> inOperandCondition -> Filters.in(fieldName, inOperandCondition.operand());
+        };
+    }
+
+    private static <T> Bson convertMultiOperandConditionToBsonCriteria(String fieldName, MultiOperandCondition<T> operation) {
             Condition.MultiOperandConditionName operationName = operation.operationName();
             List<Condition<T>> operations = operation.operations();
             Bson[] filters = operations.stream().map(c -> convertConditionToBsonCriteria(fieldName, c)).toArray(Bson[]::new);
@@ -41,7 +47,9 @@ public class ConditionConverter {
                 case OR -> Filters.or(filters);
                 case NOT -> Filters.not(filters[0]);
             };
-        } else if (condition instanceof SingleOperandCondition<T> singleOperandCondition) {
+    }
+
+    private static <T> Bson convertSingleOperandConditionToBsonCriteria(String fieldName, SingleOperandCondition<T> singleOperandCondition) {
             T operand = singleOperandCondition.operand();
             SingleOperandConditionName singleOperandConditionName = singleOperandCondition.operandConditionName();
             return switch (singleOperandConditionName) {
@@ -52,11 +60,5 @@ public class ConditionConverter {
                 case GTE -> Filters.gte(fieldName, operand);
                 case NE -> Filters.ne(fieldName, operand);
             };
-        } else if (condition instanceof Condition.InOperandCondition<T> inOperandCondition) {
-            Collection<T> operand = inOperandCondition.operand();
-            return Filters.in(fieldName, operand);
-        } else {
-            throw new IllegalArgumentException("Unsupported condition: " + condition.getClass());
-        }
     }
 }

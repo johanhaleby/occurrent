@@ -30,7 +30,14 @@ import java.util.List;
 public class ConditionToCriteriaConverter {
 
     public static <T> Criteria convertConditionToCriteria(String fieldName, Condition<T> condition) {
-        if (condition instanceof MultiOperandCondition<T> operation) {
+        return switch (condition) {
+            case MultiOperandCondition<T> operation -> convertMultiOperandConditionToCriteria(fieldName, operation);
+            case SingleOperandCondition<T> singleOperandCondition -> convertSingleOperandConditionToCriteria(fieldName, singleOperandCondition);
+            case Condition.InOperandCondition<T> inOperandCondition -> Criteria.where(fieldName).in(inOperandCondition.operand());
+        };
+    }
+
+    private static <T> Criteria convertMultiOperandConditionToCriteria(String fieldName, MultiOperandCondition<T> operation) {
             Condition.MultiOperandConditionName operationName = operation.operationName();
             List<Condition<T>> operations = operation.operations();
             Criteria[] criteria = operations.stream().map(c -> convertConditionToCriteria(fieldName, c)).toArray(Criteria[]::new);
@@ -39,7 +46,9 @@ public class ConditionToCriteriaConverter {
                 case OR -> new Criteria().orOperator(criteria);
                 case NOT -> new Criteria().norOperator(criteria);
             };
-        } else if (condition instanceof SingleOperandCondition<T> singleOperandCondition) {
+    }
+
+    private static <T> Criteria convertSingleOperandConditionToCriteria(String fieldName, SingleOperandCondition<T> singleOperandCondition) {
             T value = singleOperandCondition.operand();
             Condition.SingleOperandConditionName singleOperandConditionName = singleOperandCondition.operandConditionName();
             return switch (singleOperandConditionName) {
@@ -50,11 +59,5 @@ public class ConditionToCriteriaConverter {
                 case GTE -> Criteria.where(fieldName).gte(value);
                 case NE -> Criteria.where(fieldName).ne(value);
             };
-        } else if (condition instanceof Condition.InOperandCondition<T> inOperandCondition) {
-            Collection<T> operand = inOperandCondition.operand();
-            return Criteria.where(fieldName).in(operand);
-        } else {
-            throw new IllegalArgumentException("Unsupported condition: " + condition.getClass());
-        }
     }
 }

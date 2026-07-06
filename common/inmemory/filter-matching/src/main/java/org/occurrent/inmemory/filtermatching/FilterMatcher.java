@@ -39,31 +39,29 @@ public class FilterMatcher {
             throw new IllegalArgumentException(Filter.class.getSimpleName() + " cannot be null");
         }
 
-        final boolean matches;
-        if (filter instanceof All) {
-            matches = true;
-        } else if (filter instanceof SingleConditionFilter scf) {
-            matches = ConditionMatcher.matchesCondition(cloudEvent, scf.fieldName(), scf.condition());
-        } else if (filter instanceof CapabilityFilter cpf) {
-            // A DCB append always stamps the dcbtags extension on the live CloudEvent; a stream event never carries it.
-            boolean isDcbEvent = cloudEvent.getExtension(EventStoreCloudEventExtensions.DCB_TAGS) != null;
-            // Exhaustive switch so a new EventStoreCapability constant forces a compile error here rather than being
-            // silently treated as a stream event.
-            boolean shouldBeDcbEvent = switch (cpf.capability()) {
-                case DCB -> true;
-                case STREAM -> false;
-            };
-            matches = isDcbEvent == shouldBeDcbEvent;
-        } else if (filter instanceof CompositionFilter cf) {
-            Predicate<Filter> matchingPredicate = f -> matchesFilter(cloudEvent, f);
-            matches = switch (cf.operator()) {
-                case AND -> cf.filters().stream().allMatch(matchingPredicate);
-                case OR -> cf.filters().stream().anyMatch(matchingPredicate);
-            };
-        } else {
-            throw new IllegalArgumentException("Unrecognized filter: " + filter.getClass().getName());
-        }
+        return switch (filter) {
+            case All ignored -> true;
+            case SingleConditionFilter scf -> ConditionMatcher.matchesCondition(cloudEvent, scf.fieldName(), scf.condition());
+            case CapabilityFilter cpf -> matchesCapabilityFilter(cloudEvent, cpf);
+            case CompositionFilter cf -> {
+                Predicate<Filter> matchingPredicate = f -> matchesFilter(cloudEvent, f);
+                yield switch (cf.operator()) {
+                    case AND -> cf.filters().stream().allMatch(matchingPredicate);
+                    case OR -> cf.filters().stream().anyMatch(matchingPredicate);
+                };
+            }
+        };
+    }
 
-        return matches;
+    private static boolean matchesCapabilityFilter(CloudEvent cloudEvent, CapabilityFilter cpf) {
+        // A DCB append always stamps the dcbtags extension on the live CloudEvent; a stream event never carries it.
+        boolean isDcbEvent = cloudEvent.getExtension(EventStoreCloudEventExtensions.DCB_TAGS) != null;
+        // Exhaustive switch so a new EventStoreCapability constant forces a compile error here rather than being
+        // silently treated as a stream event.
+        boolean shouldBeDcbEvent = switch (cpf.capability()) {
+            case DCB -> true;
+            case STREAM -> false;
+        };
+        return isDcbEvent == shouldBeDcbEvent;
     }
 }
