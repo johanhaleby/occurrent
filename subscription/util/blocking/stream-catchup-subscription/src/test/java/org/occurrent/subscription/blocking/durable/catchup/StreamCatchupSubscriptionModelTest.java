@@ -42,7 +42,9 @@ import java.net.URI;
 import java.time.LocalDateTime;
 import java.util.List;
 import java.util.UUID;
+import java.util.concurrent.Callable;
 import java.util.concurrent.CopyOnWriteArrayList;
+import java.util.concurrent.Future;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.function.Consumer;
 import java.util.stream.Stream;
@@ -132,6 +134,26 @@ class StreamCatchupSubscriptionModelTest {
         write(eventStore, live);
 
         await().untilAsserted(() -> assertThat(received).containsExactly(live));
+    }
+
+    @Test
+    void catchup_is_marked_running_before_the_virtual_thread_starts() {
+        InMemoryEventStore eventStore = new InMemoryEventStore(inMemorySubscriptionModel).withoutStreamPosition();
+        CopyOnWriteArrayList<DomainEvent> received = new CopyOnWriteArrayList<>();
+        AtomicBoolean runningMarkedBeforeCatchupRuns = new AtomicBoolean(false);
+        StreamCatchupSubscriptionModel subscription = new StreamCatchupSubscriptionModel(subscriptionModel, eventStore, new CatchupSubscriptionModelConfig(100)) {
+            @Override
+            protected Future<Subscription> startCatchupAsync(String subscriptionId, Callable<Subscription> catchup) {
+                return super.startCatchupAsync(subscriptionId, () -> {
+                    runningMarkedBeforeCatchupRuns.set(runningCatchupSubscriptions.containsKey(subscriptionId));
+                    return catchup.call();
+                });
+            }
+        };
+
+        subscription.subscribe("subscription", StartAtTime.beginningOfTime(), toDomainEvents(received)).waitUntilStarted();
+
+        assertThat(runningMarkedBeforeCatchupRuns).isTrue();
     }
 
     private NameDefined nameDefined(String name) {

@@ -145,6 +145,7 @@ abstract class AbstractCatchupSubscriptionModel implements SubscriptionModel, De
     }
 
     protected Future<Subscription> startCatchupAsync(String subscriptionId, Callable<Subscription> catchup) {
+        runningCatchupSubscriptions.put(subscriptionId, true);
         FutureTask<Subscription> task = new FutureTask<>(catchup);
         Thread.ofVirtual().name("occurrent-catchup-" + subscriptionId).start(task);
         return task;
