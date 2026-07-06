@@ -35,9 +35,14 @@ import org.occurrent.eventstore.api.dcb.DcbCloudEvents;
 import org.occurrent.eventstore.api.dcb.Tag;
 import org.occurrent.eventstore.api.dcb.DcbEventStore;
 import org.occurrent.eventstore.api.dcb.DcbCriteria;
+import org.occurrent.condition.Condition;
 import org.occurrent.filter.Filter;
+import org.occurrent.subscription.AgnosticSubscriptionFilter;
+import org.occurrent.subscription.GlobalCheckpoint;
 import org.occurrent.subscription.OccurrentSubscriptionFilter;
 import org.occurrent.subscription.DcbStartAt;
+import org.occurrent.subscription.StartAt;
+import org.occurrent.subscription.api.blocking.Subscription;
 import org.occurrent.subscription.api.blocking.SubscriptionModel;
 import org.occurrent.subscription.blocking.durable.catchup.StartAtTime;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -344,6 +349,182 @@ class DcbDualModeCatchupAutoConfigurationMongoTest {
         await().atMost(ofSeconds(20)).pollInterval(ofMillis(100)).untilAsserted(() -> {
             assertThat(received).contains(historic, live);
             assertThat(received).doesNotHaveDuplicates();
+        });
+    }
+
+    @Test
+    void neutral_subscription_receives_both_stream_and_dcb_historic_events_during_catchup() {
+        // Given - one stream event and one DCB event written before the neutral subscription starts
+        TestEvent streamHistoric = streamEvent("neutral-catchup-stream-historic");
+        TestEvent dcbHistoric = dcbEvent("neutral-catchup-dcb-historic");
+        appendStream(streamHistoric);
+        appendDcb(dcbHistoric);
+
+        CopyOnWriteArrayList<TestEvent> received = new CopyOnWriteArrayList<>();
+
+        // When - a capability-agnostic subscription (AgnosticSubscriptionFilter, no capability scope) catches up from
+        // the unified global position 0
+        subscriptionModel.subscribe(
+                        "neutral-catchup-" + UUID.randomUUID(),
+                        AgnosticSubscriptionFilter.filter(Filter.type(cloudEventConverter.getCloudEventType(TestEvent.class))),
+                        StartAt.checkpoint(GlobalCheckpoint.of(0)),
+                        ce -> received.add(cloudEventConverter.toDomainEvent(ce)))
+                .waitUntilStarted();
+
+        // Then - both the stream-written and the DCB-appended event are delivered, unlike a plain stream subscription
+        // (see stream_subscription_does_not_receive_dcb_only_events_during_catchup) which would exclude the DCB one
+        await().atMost(ofSeconds(30)).pollInterval(ofMillis(100)).untilAsserted(() ->
+                assertThat(received).contains(streamHistoric, dcbHistoric));
+    }
+
+    @Test
+    void neutral_subscription_receives_both_stream_and_dcb_events_live_after_handover() {
+        // Given - one historic stream event so the subscription has something to catch up on before going live
+        TestEvent historic = streamEvent("neutral-live-historic");
+        appendStream(historic);
+
+        CopyOnWriteArrayList<TestEvent> received = new CopyOnWriteArrayList<>();
+
+        Subscription subscription = subscriptionModel.subscribe(
+                        "neutral-live-" + UUID.randomUUID(),
+                        AgnosticSubscriptionFilter.filter(Filter.type(cloudEventConverter.getCloudEventType(TestEvent.class))),
+                        StartAt.checkpoint(GlobalCheckpoint.of(0)),
+                        ce -> received.add(cloudEventConverter.toDomainEvent(ce)));
+        subscription.waitUntilStarted();
+
+        await().atMost(ofSeconds(30)).pollInterval(ofMillis(100)).untilAsserted(() ->
+                assertThat(received).contains(historic));
+
+        // When - after catch-up has handed over to live delivery, a stream event and a DCB event are both appended
+        TestEvent liveStream = streamEvent("neutral-live-stream");
+        TestEvent liveDcb = dcbEvent("neutral-live-dcb");
+        appendStream(liveStream);
+        appendDcb(liveDcb);
+
+        // Then - both live events are delivered to the same neutral subscription
+        await().atMost(ofSeconds(30)).pollInterval(ofMillis(100)).untilAsserted(() ->
+                assertThat(received).contains(historic, liveStream, liveDcb));
+    }
+
+    @Test
+    void neutral_subscription_resumes_from_global_checkpoint_across_restart_without_missing_events() {
+        // Given - a first-generation event of each capability, delivered to a neutral subscription that is then
+        // paused (not cancelled: cancelSubscription deletes the durable checkpoint, which would defeat this test).
+        // Pausing and resuming the live delegate while keeping the checkpoint in storage is what a subscription with
+        // the same id resuming after a genuine application restart also does, since the checkpoint lives in Mongo
+        // independent of the in-process subscription object.
+        String subscriptionId = "neutral-resume-" + UUID.randomUUID();
+        TestEvent firstStream = streamEvent("neutral-resume-stream-1");
+        TestEvent firstDcb = dcbEvent("neutral-resume-dcb-1");
+        appendStream(firstStream);
+        appendDcb(firstDcb);
+
+        CopyOnWriteArrayList<TestEvent> received = new CopyOnWriteArrayList<>();
+        subscriptionModel.subscribe(
+                        subscriptionId,
+                        AgnosticSubscriptionFilter.filter(Filter.type(cloudEventConverter.getCloudEventType(TestEvent.class))),
+                        StartAt.checkpoint(GlobalCheckpoint.of(0)),
+                        ce -> received.add(cloudEventConverter.toDomainEvent(ce)))
+                .waitUntilStarted();
+
+        await().atMost(ofSeconds(30)).pollInterval(ofMillis(100)).untilAsserted(() ->
+                assertThat(received).contains(firstStream, firstDcb));
+
+        subscriptionModel.pauseSubscription(subscriptionId);
+        await().atMost(ofSeconds(10)).pollInterval(ofMillis(50)).until(() -> subscriptionModel.isPaused(subscriptionId));
+
+        // When - more events of both capabilities are written while the subscription is paused, then it is resumed
+        // with the same id, which continues from the stored GlobalCheckpoint rather than replaying from the beginning
+        TestEvent secondStream = streamEvent("neutral-resume-stream-2");
+        TestEvent secondDcb = dcbEvent("neutral-resume-dcb-2");
+        appendStream(secondStream);
+        appendDcb(secondDcb);
+
+        subscriptionModel.resumeSubscription(subscriptionId);
+
+        // Then - the events written while paused are delivered after resume, without a gap. Delivery is at-least-once,
+        // so the assertion only requires the new events to show up, not that the first-generation ones stop appearing.
+        await().atMost(ofSeconds(30)).pollInterval(ofMillis(100)).untilAsserted(() ->
+                assertThat(received).contains(secondStream, secondDcb));
+    }
+
+    @Test
+    void neutral_subscription_with_type_filter_receives_only_matching_type_across_both_capabilities() {
+        // Given - a stream event and a DCB event of the shared TestEvent cloud event type (the only domain type this
+        // test fixture's CloudEventConverter can decode), distinguished into "signal" and "noise" by subject the same
+        // way the STREAM_TAG/DCB_TAG split already distinguishes capability elsewhere in this class. Filter.type is
+        // exercised directly against the real, single cloud event type this fixture has; Filter.subject narrows further
+        // to isolate signal from noise, mirroring how a real app narrows a type filter with an additional predicate.
+        TestEvent streamNoise = streamEvent("type-filter-stream-noise");
+        TestEvent dcbNoise = dcbEvent("type-filter-dcb-noise");
+        TestEvent streamSignal = new TestEvent(UUID.randomUUID().toString(), new Date(), "type-filter-signal-stream", "type-filter-stream-signal");
+        TestEvent dcbSignal = new TestEvent(UUID.randomUUID().toString(), new Date(), "type-filter-signal-dcb", "type-filter-dcb-signal");
+        appendStream(streamNoise, streamSignal);
+        appendDcb(dcbNoise, dcbSignal);
+
+        CopyOnWriteArrayList<TestEvent> received = new CopyOnWriteArrayList<>();
+
+        // When - a neutral subscription is filtered to the TestEvent cloud event type and further narrowed to the
+        // "signal" subjects only
+        String testEventCloudEventType = cloudEventConverter.getCloudEventType(TestEvent.class);
+        Filter signalFilter = new Filter.CompositionFilter(Filter.CompositionOperator.AND, List.of(
+                Filter.type(testEventCloudEventType),
+                Filter.subject(Condition.in("type-filter-signal-stream", "type-filter-signal-dcb"))));
+        subscriptionModel.subscribe(
+                        "neutral-type-filter-" + UUID.randomUUID(),
+                        AgnosticSubscriptionFilter.filter(signalFilter),
+                        StartAt.checkpoint(GlobalCheckpoint.of(0)),
+                        ce -> received.add(cloudEventConverter.toDomainEvent(ce)))
+                .waitUntilStarted();
+
+        // Then - both the stream-written and the DCB-appended signal events are delivered (proving the filter applies
+        // across both capabilities), while the noise events are excluded
+        await().atMost(ofSeconds(30)).pollInterval(ofMillis(100)).untilAsserted(() ->
+                assertThat(received).contains(streamSignal, dcbSignal).doesNotContain(streamNoise, dcbNoise));
+    }
+
+    @Test
+    void stream_and_dcb_annotated_style_subscriptions_stay_scoped_to_their_own_capability_alongside_a_neutral_one() {
+        // Given - one event of each capability
+        TestEvent streamOnly = streamEvent("regression-stream");
+        TestEvent dcbOnly = dcbEvent("regression-dcb");
+        appendStream(streamOnly);
+        appendDcb(dcbOnly);
+
+        CopyOnWriteArrayList<TestEvent> streamReceived = new CopyOnWriteArrayList<>();
+        CopyOnWriteArrayList<TestEvent> dcbReceived = new CopyOnWriteArrayList<>();
+        CopyOnWriteArrayList<TestEvent> neutralReceived = new CopyOnWriteArrayList<>();
+
+        // When - a stream-scoped, a DCB-scoped and a neutral subscription all catch up from the beginning at once
+        subscriptionModel.subscribe(
+                        "regression-stream-" + UUID.randomUUID(),
+                        OccurrentSubscriptionFilter.filter(Filter.all()),
+                        StartAtTime.beginningOfTime(),
+                        ce -> streamReceived.add(cloudEventConverter.toDomainEvent(ce)))
+                .waitUntilStarted();
+
+        dcbSubscriptions
+                .subscribe(
+                        "regression-dcb-" + UUID.randomUUID(),
+                        DcbCriteria.all(),
+                        DcbStartAt.beginning(),
+                        dcbReceived::add)
+                .waitUntilStarted();
+
+        subscriptionModel.subscribe(
+                        "regression-neutral-" + UUID.randomUUID(),
+                        AgnosticSubscriptionFilter.filter(Filter.type(cloudEventConverter.getCloudEventType(TestEvent.class))),
+                        StartAt.checkpoint(GlobalCheckpoint.of(0)),
+                        ce -> neutralReceived.add(cloudEventConverter.toDomainEvent(ce)))
+                .waitUntilStarted();
+
+        // Then - the stream subscription sees only the stream event, the DCB subscription sees only the DCB event, and
+        // only the neutral subscription sees both, confirming the #282 capability guard is intact alongside the new
+        // neutral behavior
+        await().atMost(ofSeconds(30)).pollInterval(ofMillis(100)).untilAsserted(() -> {
+            assertThat(streamReceived).contains(streamOnly).doesNotContain(dcbOnly);
+            assertThat(dcbReceived).contains(dcbOnly).doesNotContain(streamOnly);
+            assertThat(neutralReceived).contains(streamOnly, dcbOnly);
         });
     }
 

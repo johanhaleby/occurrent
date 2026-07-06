@@ -23,6 +23,7 @@ import org.jspecify.annotations.Nullable;
 import org.occurrent.eventstore.api.blocking.EventStoreQueries;
 import org.occurrent.eventstore.api.dcb.DcbEventStore;
 import org.occurrent.eventstore.api.dcb.DcbCriteria;
+import org.occurrent.subscription.AgnosticSubscriptionFilter;
 import org.occurrent.subscription.Checkpoint;
 import org.occurrent.subscription.DcbSubscriptionFilter;
 import org.occurrent.subscription.OccurrentSubscriptionFilter;
@@ -108,6 +109,12 @@ public class CatchupSubscriptionModel implements SubscriptionModel, DelegatingSu
     private final CheckpointAwareSubscriptionModel subscriptionModel;
     private final @Nullable StreamCatchupSubscriptionModel streamCatchupSubscriptionModel;
     private final @Nullable DcbCatchupSubscriptionModel dcbCatchupSubscriptionModel;
+    // The capability-agnostic position catch-up: the same position/time catch-up as the stream model but with no
+    // capability scope, so it replays and delivers events of every capability, filtered only by the caller's plain
+    // Filter. Present whenever a position/time-capable store (EventStoreQueries) is wired, i.e. in the stream-only and
+    // dual-mode configurations. Null in the DCB-only configuration, where an AgnosticSubscriptionFilter routes to the
+    // DCB model instead (a DCB-only store has only DCB events).
+    private final @Nullable StreamCatchupSubscriptionModel agnosticCatchupSubscriptionModel;
 
     /**
      * Create a new instance of {@link CatchupSubscriptionModel} the uses a default {@link CatchupSubscriptionModelConfig} with a cache size of
@@ -134,6 +141,7 @@ public class CatchupSubscriptionModel implements SubscriptionModel, DelegatingSu
         this.subscriptionModel = Objects.requireNonNull(subscriptionModel, "subscriptionModel cannot be null");
         this.streamCatchupSubscriptionModel = new StreamCatchupSubscriptionModel(subscriptionModel, eventStoreQueries, config, CatchupSubscriptionModel.class);
         this.dcbCatchupSubscriptionModel = null;
+        this.agnosticCatchupSubscriptionModel = new StreamCatchupSubscriptionModel(subscriptionModel, eventStoreQueries, config, CatchupSubscriptionModel.class, null);
     }
 
     /**
@@ -165,6 +173,7 @@ public class CatchupSubscriptionModel implements SubscriptionModel, DelegatingSu
         this.subscriptionModel = Objects.requireNonNull(subscriptionModel, "subscriptionModel cannot be null");
         this.streamCatchupSubscriptionModel = null;
         this.dcbCatchupSubscriptionModel = new DcbCatchupSubscriptionModel(subscriptionModel, dcbEventStore, dcbQuery, config, CatchupSubscriptionModel.class);
+        this.agnosticCatchupSubscriptionModel = null;
     }
 
     /**
@@ -182,6 +191,7 @@ public class CatchupSubscriptionModel implements SubscriptionModel, DelegatingSu
         this.subscriptionModel = Objects.requireNonNull(subscriptionModel, "subscriptionModel cannot be null");
         this.streamCatchupSubscriptionModel = new StreamCatchupSubscriptionModel(subscriptionModel, eventStoreQueries, config, CatchupSubscriptionModel.class);
         this.dcbCatchupSubscriptionModel = new DcbCatchupSubscriptionModel(subscriptionModel, dcbEventStore, dcbQuery, config, CatchupSubscriptionModel.class);
+        this.agnosticCatchupSubscriptionModel = new StreamCatchupSubscriptionModel(subscriptionModel, eventStoreQueries, config, CatchupSubscriptionModel.class, null);
     }
 
     /**
@@ -209,15 +219,27 @@ public class CatchupSubscriptionModel implements SubscriptionModel, DelegatingSu
     @Override
     public Subscription subscribe(String subscriptionId, @Nullable SubscriptionFilter filter, @Nullable StartAt startAt, Consumer<CloudEvent> action) {
         Objects.requireNonNull(startAt, "Start at supplier cannot be null");
-        return routesToDcb(filter, startAt)
-                ? Objects.requireNonNull(dcbCatchupSubscriptionModel).subscribe(subscriptionId, filter, startAt, action)
-                : Objects.requireNonNull(streamCatchupSubscriptionModel).subscribe(subscriptionId, filter, startAt, action);
+        return route(filter, startAt).subscribe(subscriptionId, filter, startAt, action);
     }
 
-    // Route to the DCB path or the stream path. A single-mode model has only one inner model and always routes there.
-    // A dual-mode model routes by filter type first, since a global position start is ambiguous between the two
-    // position-ordered replays (stream-position and DCB). Only an already-resolved start is inspected for the
-    // fallback heuristic, so routing reads no position storage.
+    // Route to the DCB, stream, or capability-agnostic catch-up model. A single-mode model has only one inner model and
+    // always routes there. A dual-mode model routes by filter type first, since a global position start is ambiguous
+    // between the position-ordered replays. An AgnosticSubscriptionFilter routes to the unscoped agnostic model so both
+    // stream and DCB events are delivered; if there is no agnostic model (a DCB-only store) it falls back to the DCB
+    // model, whose store has only DCB events anyway. Only an already-resolved start is inspected for the fallback
+    // heuristic, so routing reads no position storage.
+    private SubscriptionModel route(@Nullable SubscriptionFilter filter, StartAt startAt) {
+        if (filter instanceof AgnosticSubscriptionFilter) {
+            if (agnosticCatchupSubscriptionModel != null) {
+                return agnosticCatchupSubscriptionModel;
+            }
+            return Objects.requireNonNull(dcbCatchupSubscriptionModel);
+        }
+        return routesToDcb(filter, startAt)
+                ? Objects.requireNonNull(dcbCatchupSubscriptionModel)
+                : Objects.requireNonNull(streamCatchupSubscriptionModel);
+    }
+
     private boolean routesToDcb(@Nullable SubscriptionFilter filter, StartAt startAt) {
         if (dcbCatchupSubscriptionModel == null) {
             return false;
@@ -279,6 +301,9 @@ public class CatchupSubscriptionModel implements SubscriptionModel, DelegatingSu
         if (dcbCatchupSubscriptionModel != null) {
             dcbCatchupSubscriptionModel.cancelRunningCatchup(subscriptionId);
         }
+        if (agnosticCatchupSubscriptionModel != null) {
+            agnosticCatchupSubscriptionModel.cancelRunningCatchup(subscriptionId);
+        }
         subscriptionModel.cancelSubscription(subscriptionId);
         // Position storage is shared config, not per-mode state; either inner model's config deletes the same
         // storage entry, so delegate to whichever is present instead of deleting twice.
@@ -297,6 +322,9 @@ public class CatchupSubscriptionModel implements SubscriptionModel, DelegatingSu
         }
         if (dcbCatchupSubscriptionModel != null) {
             dcbCatchupSubscriptionModel.markShuttingDown();
+        }
+        if (agnosticCatchupSubscriptionModel != null) {
+            agnosticCatchupSubscriptionModel.markShuttingDown();
         }
         subscriptionModel.shutdown();
     }

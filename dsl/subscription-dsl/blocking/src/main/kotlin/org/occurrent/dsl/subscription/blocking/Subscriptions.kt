@@ -20,8 +20,10 @@ import io.cloudevents.CloudEvent
 import org.occurrent.application.converter.CloudEventConverter
 import org.occurrent.application.converter.get
 import org.occurrent.dsl.subscription.EventMetadata
+import org.occurrent.dsl.subscription.agnosticSubscriptionFilterFromEventTypes
 import org.occurrent.dsl.subscription.subscriptionFilterFromEventTypes
 import org.occurrent.filter.Filter
+import org.occurrent.subscription.AgnosticSubscriptionFilter
 import org.occurrent.subscription.OccurrentSubscriptionFilter
 import org.occurrent.subscription.StartAt
 import org.occurrent.subscription.api.blocking.Subscribable
@@ -51,14 +53,23 @@ fun <E : Any> streamSubscriptions(subscriptionModel: Subscribable, cloudEventCon
 }
 
 /**
- * Renamed to [streamSubscriptions] to mirror `@StreamSubscription` and the DCB counterpart `DcbSubscriptions`.
+ * Capability-agnostic subscription DSL entry-point. On a store with both the `STREAM` and `DCB` capabilities it
+ * delivers both stream-written and DCB-appended events, filtered only by event type. Usage example:
+ *
+ * ```
+ * val mySubscriptionModel = ..
+ * val myCloudEventConverter = ..
+ * subscriptions(mySubscriptionModel, myCloudEventConverter) {
+ *      subscribe<MyEvent>("subscriptionId") {
+ *          ...
+ *      }
+ * }
+ * ```
+ *
+ * Use [streamSubscriptions] or the DCB counterpart when a subscription should be scoped to a single capability.
  */
-// No ReplaceWith: the lambda receiver is Subscriptions<E>, which is not assignable to the streamSubscriptions
-// receiver StreamSubscriptions<E>, so an automated replacement would not compile.
-@Deprecated("Renamed to streamSubscriptions")
-@Suppress("DEPRECATION")
-fun <E : Any> subscriptions(subscriptionModel: Subscribable, cloudEventConverter: CloudEventConverter<E>, subscriptions: Subscriptions<E>.() -> Unit) {
-    Subscriptions(subscriptionModel, cloudEventConverter).apply(subscriptions)
+fun <E : Any> subscriptions(subscriptionModel: Subscribable, cloudEventConverter: CloudEventConverter<E>, block: Subscriptions<E>.() -> Unit) {
+    Subscriptions(subscriptionModel, cloudEventConverter).apply(block)
 }
 
 open class StreamSubscriptions<E : Any>(private val subscriptionModel: Subscribable, private val cloudEventConverter: CloudEventConverter<E>) {
@@ -173,8 +184,118 @@ open class StreamSubscriptions<E : Any>(private val subscriptionModel: Subscriba
 }
 
 /**
- * Renamed to [StreamSubscriptions] to mirror `@StreamSubscription` and the DCB counterpart `DcbSubscriptions`. Kept as a
- * subclass rather than a typealias so the released type stays in the bytecode for Java and binary compatibility.
+ * The capability-agnostic subscription DSL. It mirrors the method surface of [StreamSubscriptions] but routes through an
+ * [AgnosticSubscriptionFilter] instead of an [OccurrentSubscriptionFilter], so on a store with both the `STREAM` and
+ * `DCB` capabilities it delivers both stream-written and DCB-appended events, filtered only by event type. Use
+ * [StreamSubscriptions] or `DcbSubscriptions` when a subscription should be scoped to a single capability.
  */
-@Deprecated("Renamed to StreamSubscriptions", ReplaceWith("StreamSubscriptions"))
-class Subscriptions<E : Any>(subscriptionModel: Subscribable, cloudEventConverter: CloudEventConverter<E>) : StreamSubscriptions<E>(subscriptionModel, cloudEventConverter)
+class Subscriptions<E : Any>(private val subscriptionModel: Subscribable, private val cloudEventConverter: CloudEventConverter<E>) {
+
+    /**
+     * Create a new subscription that is invoked after a specific domain event is written to the event store
+     */
+    @JvmName("subscribeAll")
+    fun subscribe(subscriptionId: String, startAt: StartAt? = null, fn: (E) -> Unit): Subscription {
+        return subscribe(subscriptionId, startAt) { _, e -> fn(e) }
+    }
+
+    /**
+     * Create a new subscription that is invoked after a specific domain event is written to the event store
+     */
+    @JvmName("subscribeAll")
+    fun subscribe(subscriptionId: String, startAt: StartAt? = null, fn: (EventMetadata, E) -> Unit): Subscription {
+        return subscribe(subscriptionId, *emptyArray(), startAt = startAt) { metadata, e -> fn(metadata, e) }
+    }
+
+    /**
+     * Create a new subscription that is invoked after a specific domain event is written to the event store
+     */
+    inline fun <reified E1 : E> subscribe(subscriptionId: String = E1::class.simpleName!!, startAt: StartAt? = null, crossinline fn: (E1) -> Unit): Subscription {
+        return subscribe(subscriptionId, E1::class, startAt = startAt) { _, e -> fn(e as E1) }
+    }
+
+    /**
+     * Create a new subscription that is invoked after a specific domain event is written to the event store
+     */
+    inline fun <reified E1 : E> subscribe(subscriptionId: String = E1::class.simpleName!!, startAt: StartAt? = null, crossinline fn: (EventMetadata, E1) -> Unit): Subscription {
+        return subscribe(subscriptionId, E1::class, startAt = startAt) { metadata, e -> fn(metadata, e as E1) }
+    }
+
+
+    @JvmName("subscribeAnyOf")
+    inline fun <reified E1 : E, reified E2 : E> subscribe(subscriptionId: String, startAt: StartAt? = null, crossinline fn: (E) -> Unit): Subscription {
+        return subscribe(subscriptionId, E1::class, E2::class, startAt = startAt) { _, e -> fn(e) }
+    }
+
+    @JvmName("subscribeAnyOf")
+    inline fun <reified E1 : E, reified E2 : E> subscribe(subscriptionId: String, startAt: StartAt? = null, crossinline fn: (EventMetadata, E) -> Unit): Subscription {
+        return subscribe(subscriptionId, E1::class, E2::class, startAt = startAt) { metadata, e -> fn(metadata, e) }
+    }
+
+    @JvmOverloads
+    fun <E1 : E> subscribe(subscriptionId: String, eventType: Class<E1>, startAt: StartAt? = null, fn: Consumer<E1>): Subscription {
+        return subscribe(subscriptionId, listOf(eventType), startAt) { e: E ->
+            @Suppress("UNCHECKED_CAST")
+            fn.accept(e as E1)
+        }
+    }
+
+    @JvmOverloads
+    fun <E1 : E> subscribe(subscriptionId: String, eventType: Class<E1>, startAt: StartAt? = null, fn: BiConsumer<EventMetadata, E1>): Subscription {
+        return subscribe(subscriptionId, listOf(eventType), startAt) { metadata, e ->
+            @Suppress("UNCHECKED_CAST")
+            fn.accept(metadata, e as E1)
+        }
+    }
+
+    @JvmOverloads
+    fun subscribe(subscriptionId: String, eventTypes: List<Class<out E>>, startAt: StartAt? = null, fn: Consumer<E>): Subscription {
+        return subscribe(subscriptionId, *eventTypes.map { c -> c.kotlin }.toTypedArray(), startAt = startAt) { e -> fn.accept(e) }
+    }
+
+    @JvmOverloads
+    fun subscribe(subscriptionId: String, eventTypes: List<Class<out E>>, startAt: StartAt? = null, fn: BiConsumer<EventMetadata, E>): Subscription {
+        return subscribe(subscriptionId, *eventTypes.map { c -> c.kotlin }.toTypedArray(), startAt = startAt) { metadata, e -> fn.accept(metadata, e) }
+    }
+
+    fun subscribe(subscriptionId: String, vararg eventTypes: KClass<out E>, startAt: StartAt? = null, fn: (E) -> Unit): Subscription {
+        val filter = agnosticSubscriptionFilterFromEventTypes(cloudEventConverter, eventTypes)
+        return subscribe(subscriptionId, filter, startAt, fn)
+    }
+
+    fun subscribe(subscriptionId: String, vararg eventTypes: KClass<out E>, startAt: StartAt? = null, fn: (EventMetadata, E) -> Unit): Subscription {
+        val filter = agnosticSubscriptionFilterFromEventTypes(cloudEventConverter, eventTypes)
+        return subscribe(subscriptionId, filter, startAt, true, fn)
+    }
+
+    fun subscribe(subscriptionId: String, filter: AgnosticSubscriptionFilter = AgnosticSubscriptionFilter.filter(Filter.all()), startAt: StartAt? = null, fn: (E) -> Unit): Subscription {
+        return subscribe(subscriptionId, filter, startAt) { _, e -> fn(e) }
+    }
+
+    @JvmOverloads
+    fun subscribe(
+        subscriptionId: String,
+        filter: AgnosticSubscriptionFilter = AgnosticSubscriptionFilter.filter(Filter.all()),
+        startAt: StartAt? = null,
+        waitUntilStarted: Boolean = true,
+        fn: (EventMetadata, E) -> Unit
+    ): Subscription {
+        val consumer: (CloudEvent) -> Unit = { cloudEvent ->
+            val event = cloudEventConverter[cloudEvent]
+            val eventMetadata = EventMetadata.from(cloudEvent)
+            fn(eventMetadata, event)
+        }
+
+        val subscription = if (startAt == null) {
+            subscriptionModel.subscribe(subscriptionId, filter, consumer)
+        } else {
+            subscriptionModel.subscribe(subscriptionId, filter, startAt, consumer)
+        }
+
+        return subscription.apply {
+            if (waitUntilStarted) {
+                waitUntilStarted()
+            }
+        }
+    }
+}

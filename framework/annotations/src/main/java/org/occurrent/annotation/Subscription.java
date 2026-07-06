@@ -20,7 +20,9 @@ package org.occurrent.annotation;
 import java.lang.annotation.*;
 
 /**
- * An annotation that can be used to start/resume subscriptions. For example:
+ * Starts or resumes a capability-agnostic subscription. It delivers events of the given types regardless of which write
+ * model produced them, so on a store that has both the {@code STREAM} and {@code DCB} capabilities it receives both
+ * stream-written and DCB-appended events, filtered only by event type. For example:
  *
  * <pre lang="java">
  * &#64;Subscription(id = "mySubscription")
@@ -29,29 +31,41 @@ import java.lang.annotation.*;
  * }
  * </pre>
  *
+ * <h4>Which subscription annotation to use</h4>
+ * <p>
+ * This is the neutral default for a read model or policy that reacts to events by type and does not care which write
+ * model produced them. Use {@link StreamSubscription} or {@link DcbSubscription} instead when a subscription should be
+ * scoped to a single capability, that is stream-written events only, or DCB events filtered by tags.
+ * </p>
+ *
  * <h4>Start Position</h4>
  * <p>
- * You can also specify at which time the subscription should start:
+ * You can specify where the subscription should start over the unified global {@code position}:
  * <pre lang="java">
- * &#64;Subscription(id = "mySubscription", startAt = StartPosition.BEGINNING_OF_TIME)
+ * &#64;Subscription(id = "mySubscription", startAt = StartPosition.BEGINNING)
  * void mySubscription(MyDomainEvent event) { .. }
  * </pre>
- * This will first replay all historic events from the beginning of time and then continue subscribing to new events continuously. You can also start at a specific date
- * by using {@link #startAtISO8601()} or {@link #startAtTimeEpochMillis()}.
+ * This will first replay all historic events from the beginning of the global position sequence and then continue
+ * subscribing to new events continuously. You can also start after a specific global position with
+ * {@link #startAtGlobalPosition()}.
  * </p>
  * <p>
- * Note that the example above will <i>start</i> replay historic events from the beginning of time when the subscription is started the first time. However, once the subscription is resumed,
- * e.g. on application restart, it'll continue from the last received event. If you want a different behavior, configure a different {@link #resumeBehavior()}.
+ * Note that the example above will <i>start</i> replaying historic events from the beginning when the subscription is
+ * started the first time. However, once the subscription is resumed, for example on application restart, it will
+ * continue from the last received event. If you want a different behavior, configure a different
+ * {@link #resumeBehavior()}.
  * </p>
  * <p>
- * Note also that if {@code MyDomainEvent} is a sealed interface/class, then all events implementing this interface/class will be received. If you want to receive only
- * some of the events that implements this interface, see {@link #eventTypes()}.
+ * Note also that if {@code MyDomainEvent} is a sealed interface or class, then all events implementing this interface
+ * or class will be received. If you want to receive only some of the events that implement this interface, see
+ * {@link #eventTypes()}.
  * </p>
  *
  * <h4>Metadata</h4>
  * <p>
- * Sometimes it can be useful to get the metadata associated with the received event. For this reason, you can add a parameter to the method annotated with
- * {@code @Subscription} of type {@link org.occurrent.dsl.subscription.EventMetadata}. For example:
+ * Sometimes it can be useful to get the metadata associated with the received event. For this reason, you can add a
+ * parameter to the method annotated with {@code @Subscription} of type
+ * {@link org.occurrent.dsl.subscription.EventMetadata}. For example:
  * <pre lang="java">
  * &#64;Subscription(id = "mySubscription")
  * void mySubscription(MyDomainEvent event, EventMetadata metadata) {
@@ -61,11 +75,7 @@ import java.lang.annotation.*;
  *   ..
  * }
  * </pre>
- *
- * @deprecated Use {@link StreamSubscription} instead. This annotation is the original name for a stream subscription and
- * is kept as an alias for backward compatibility. It will be removed in a future release.
  */
-@Deprecated(forRemoval = true)
 @Target({ElementType.METHOD})
 @Retention(RetentionPolicy.RUNTIME)
 @Documented
@@ -103,58 +113,51 @@ public @interface Subscription {
     Class<?>[] eventTypes() default {};
 
     /**
-     * Specify the start position to one if the predefined ones in {@link StartPosition}.
+     * Specify the start position as one of the predefined {@link StartPosition} values. Mutually exclusive with
+     * {@link #startAtGlobalPosition()}, which starts after a specific global position instead of a predefined one.
      */
     StartPosition startAt() default StartPosition.DEFAULT;
 
     /**
-     * Specify the start position as time epoch milliseconds
+     * Start after a specific global {@code position}, that is deliver events from {@code startAtGlobalPosition + 1}
+     * onward, which is useful to rewind a durable read model to a known-good position. The default of {@code -1} means
+     * unset, in which case {@link #startAt()} is used. Mutually exclusive with a non-{@link StartPosition#DEFAULT}
+     * {@link #startAt()}, and {@link #resumeBehavior()} applies the same way it does to {@link StartPosition#BEGINNING}.
      */
-    long startAtTimeEpochMillis() default -1;
+    long startAtGlobalPosition() default -1;
 
     /**
-     * Start a subscription from the specified ISO8601 date/time. Valid dates are e.g.
-     * <pre>
-     * 2024-05-10T10:48:00.838
-     * 2024-05-10T10:48:00.838Z
-     * 2024-05-10T15:30:37.123+02:00
-     * </pre>
-     */
-    String startAtISO8601() default "";
-
-    /**
-     * Specify if the resume behavior for the subscription should differ from when its started.
-     * For example, if you specify {@code startAt=BEGINNING_OF_TIME}, the {@code resumeBehavior}
-     * defines how the subscription should behave on restart of the application. By default, if you've
-     * specified {@code startAt} (or epoch/iso date), then the subscription will be resumed from the last
-     * received event when the application is restarted. I.e. first the subscription is caught-up
-     * (by reading the events from the beginning of time in this example) and then it'll continue by listening
-     * to new events, <i>without</i>_ starting from the beginning of time when the application is restarted.
-     * If you <i>always</i> want to start from the beginning of time, you can set the resume behavior to
-     * {@link ResumeBehavior#SAME_AS_START_AT}. This means that the subscription will start the "catching-up"
-     * even on application restarts. This can be useful for in-memory projections/read-models where you don't
-     * want to maintain any state at all.
+     * Specify if the resume behavior for the subscription should differ from when it is started. By default
+     * ({@link ResumeBehavior#DEFAULT}), a subscription that starts by replaying history (from
+     * {@link StartPosition#BEGINNING} or from a {@link #startAtGlobalPosition()}) replays only the first time it is
+     * started and then resumes from the last received event on application restart. That is the right behavior for a
+     * durable read model that persists what it builds.
+     * <p>
+     * An in-memory read model is different: it keeps no durable state, so it has to replay the whole history on every
+     * boot. For that, combine {@link StartPosition#BEGINNING} with {@link ResumeBehavior#SAME_AS_START_AT}, which
+     * replays from the beginning on every restart and keeps no checkpoint. With the default resume behavior an in-memory
+     * model would, after a restart, resume mid-sequence and silently miss all history before the stored position.
      */
     ResumeBehavior resumeBehavior() default ResumeBehavior.DEFAULT;
 
     StartupMode startupMode() default StartupMode.DEFAULT;
 
     /**
-     * A set of predefined start positions
+     * A set of predefined, capability-neutral start positions over the unified global {@code position}.
      */
     enum StartPosition {
         /**
-         * Start this subscription from the first event in the event store
+         * Replay the whole global position sequence from the beginning (global position 0) before switching to live
+         * delivery, so a read model can be rebuilt from history.
          */
-        BEGINNING_OF_TIME,
+        BEGINNING,
         /**
-         * Start this subscription from "NOW"
+         * Start from "now", delivering only events written after the subscription starts.
          */
         NOW,
         /**
-         * Start this subscription using the default behavior of the subscription model.
-         * Typically, this means that it'll start from "NOW", unless the subscription has already been
-         * started before, in which case the subscription will be started from its last know position.
+         * Use the default behavior of the subscription model. Typically this resumes from the last stored position if
+         * the subscription has run before, otherwise it behaves like {@link #NOW}.
          */
         DEFAULT
     }

@@ -31,12 +31,15 @@ import org.occurrent.dsl.dcb.DcbEventMetadata;
 import org.occurrent.dsl.dcb.blocking.DcbSubscriptions;
 import org.occurrent.dsl.subscription.EventMetadata;
 import org.occurrent.dsl.subscription.blocking.StreamSubscriptions;
+import org.occurrent.dsl.subscription.blocking.Subscriptions;
 import org.occurrent.eventstore.api.dcb.DcbCriteria;
 import org.occurrent.eventstore.api.dcb.Tag;
 import org.occurrent.filter.Filter;
 import org.occurrent.springboot.mongo.common.SubscriptionAnnotations;
 import org.occurrent.springboot.mongo.common.SubscriptionAnnotations.StreamSubscriptionDefinition;
+import org.occurrent.subscription.AgnosticSubscriptionFilter;
 import org.occurrent.subscription.DcbStartAt;
+import org.occurrent.subscription.GlobalCheckpoint;
 import org.occurrent.subscription.StartAt;
 import org.occurrent.subscription.api.blocking.CheckpointStorage;
 import org.occurrent.subscription.blocking.competingconsumers.CompetingConsumerSubscriptionModel;
@@ -70,9 +73,9 @@ import static org.occurrent.filter.Filter.CompositionOperator.OR;
 import static org.occurrent.subscription.OccurrentSubscriptionFilter.filter;
 
 /**
- * Implements support for the {@link StreamSubscription} and {@link DcbSubscription} annotations, and the deprecated
- * {@link Subscription} alias, in Spring Boot. The stack-neutral reflection and event-type resolution is shared with the
- * reactive processor through {@link SubscriptionAnnotations}.
+ * Implements support for the {@link Subscription}, {@link StreamSubscription} and {@link DcbSubscription} annotations in
+ * Spring Boot. The stack-neutral reflection and event-type resolution is shared with the reactive processor through
+ * {@link SubscriptionAnnotations}.
  */
 class OccurrentBlockingAnnotationBeanPostProcessor implements BeanPostProcessor, ApplicationContextAware {
 
@@ -92,12 +95,12 @@ class OccurrentBlockingAnnotationBeanPostProcessor implements BeanPostProcessor,
             DcbSubscription dcbSubscription = AnnotationUtils.findAnnotation(method, DcbSubscription.class);
             long annotationCount = Stream.of(streamSubscription, subscription, dcbSubscription).filter(Objects::nonNull).count();
             if (annotationCount > 1) {
-                throw new IllegalArgumentException("Method %s#%s is annotated with more than one of @StreamSubscription, @DcbSubscription and the deprecated @Subscription, use only one.".formatted(bean.getClass().getName(), method.getName()));
+                throw new IllegalArgumentException("Method %s#%s is annotated with more than one of @Subscription, @StreamSubscription and @DcbSubscription, use only one.".formatted(bean.getClass().getName(), method.getName()));
             }
             if (streamSubscription != null) {
                 processSubscribeAnnotation(bean, method, StreamSubscriptionDefinition.from(streamSubscription));
             } else if (subscription != null) {
-                processSubscribeAnnotation(bean, method, StreamSubscriptionDefinition.from(subscription));
+                processAgnosticSubscribeAnnotation(bean, method, subscription);
             } else if (dcbSubscription != null) {
                 processDcbSubscribeAnnotation(bean, method, dcbSubscription);
             }
@@ -144,6 +147,95 @@ class OccurrentBlockingAnnotationBeanPostProcessor implements BeanPostProcessor,
         applyStartupWorkarounds();
 
         subscribable.subscribe(id, filter(filter), startAt, shouldWaitUntilStarted, consumer);
+    }
+
+    @SuppressWarnings("unchecked")
+    private <E> void processAgnosticSubscribeAnnotation(Object bean, Method method, Subscription annotation) {
+        String id = annotation.id();
+        final Filter filter;
+        final List<Class<?>> parameterTypes;
+        if (method.getParameterCount() >= 1) {
+            CloudEventConverter<E> cloudEventTypeMapper = applicationContext.getBean(CloudEventConverter.class);
+            parameterTypes = SubscriptionAnnotations.analyzeParameters(method, SubscriptionAnnotations::isStreamMetadataParameter);
+            Class<E> specifiedEventType = (Class<E>) SubscriptionAnnotations.eventTypeOf(parameterTypes, SubscriptionAnnotations::isStreamMetadataParameter);
+            List<Class<E>> domainEventTypesToSubscribeTo = SubscriptionAnnotations.resolveDomainEventTypes(id, bean, method, specifiedEventType, annotation.eventTypes(), "@Subscription");
+
+            if (domainEventTypesToSubscribeTo.size() == 1) {
+                filter = Filter.type(cloudEventTypeMapper.getCloudEventType(domainEventTypesToSubscribeTo.get(0)));
+            } else {
+                List<Filter> typeFilters = domainEventTypesToSubscribeTo.stream()
+                        .map(cloudEventTypeMapper::getCloudEventType)
+                        .map(Filter::type)
+                        .toList();
+                filter = new Filter.CompositionFilter(OR, typeFilters);
+            }
+        } else {
+            throw new IllegalArgumentException("A subscription method must declare an event parameter, but %s#%s has none.".formatted(bean.getClass().getName(), method.getName()));
+        }
+
+        Function2<EventMetadata, E, Unit> consumer = (metadata, event) -> {
+            invoke(method, bean, SubscriptionAnnotations.bindArguments(parameterTypes, event, metadata, SubscriptionAnnotations::isStreamMetadataParameter));
+            return Unit.INSTANCE;
+        };
+
+        long startAtGlobalPosition = annotation.startAtGlobalPosition();
+        if (startAtGlobalPosition >= 0 && annotation.startAt() != Subscription.StartPosition.DEFAULT) {
+            throw new IllegalArgumentException("Specify either startAt or startAtGlobalPosition for @Subscription '%s', not both.".formatted(id));
+        }
+        StartAt startAt = generateAgnosticStartAt(id, annotation.startAt(), startAtGlobalPosition, annotation.resumeBehavior());
+        boolean replaysHistory = startAtGlobalPosition >= 0 || annotation.startAt() == Subscription.StartPosition.BEGINNING;
+        boolean shouldWaitUntilStarted = shouldWaitUntilStartedAgnostic(replaysHistory, annotation.startupMode());
+        Subscriptions<E> subscribable = applicationContext.getBean(Subscriptions.class);
+
+        applyStartupWorkarounds();
+
+        subscribable.subscribe(id, AgnosticSubscriptionFilter.filter(filter), startAt, shouldWaitUntilStarted, consumer);
+    }
+
+    private static boolean shouldWaitUntilStartedAgnostic(boolean replaysHistory, Subscription.StartupMode startupMode) {
+        return switch (startupMode) {
+            // A subscription that replays history may have a lot to read, so by default it starts in the background.
+            case DEFAULT -> !replaysHistory;
+            case WAIT_UNTIL_STARTED -> true;
+            case BACKGROUND -> false;
+        };
+    }
+
+    // Build the neutral StartAt over the unified global position. BEGINNING replays from global position 0,
+    // startAtGlobalPosition replays after a specific position, both applying the same replay-then-resume logic. NOW and
+    // DEFAULT go straight to live.
+    private StartAt generateAgnosticStartAt(String subscriptionId, Subscription.StartPosition startPosition, long startAtGlobalPosition, Subscription.ResumeBehavior resumeBehavior) {
+        if (startAtGlobalPosition >= 0) {
+            return replayThenResumeAgnostic(subscriptionId, StartAt.checkpoint(GlobalCheckpoint.of(startAtGlobalPosition)), resumeBehavior);
+        }
+        return switch (startPosition) {
+            case NOW -> StartAt.now();
+            case DEFAULT -> StartAt.dynamic(ctx -> {
+                // Do not let the catch-up model run its default (replay from the beginning); delegate to the parent
+                // live subscription instead by returning null to the catch-up layer.
+                boolean isCatchupSubscription = CatchupSubscriptionModel.class.isAssignableFrom(ctx.subscriptionModelType());
+                return isCatchupSubscription ? null : StartAt.subscriptionModelDefault();
+            });
+            case BEGINNING -> replayThenResumeAgnostic(subscriptionId, StartAt.checkpoint(GlobalCheckpoint.of(0)), resumeBehavior);
+        };
+    }
+
+    // Replay from replayStart, then on later restarts either resume from the stored position (DEFAULT) or replay again
+    // (SAME_AS_START_AT). SAME_AS_START_AT also disables the competing consumer and durable position storage by
+    // delegating to the parent subscription model for those layers, so an in-memory read model rebuilt on every boot
+    // sees every event and keeps no checkpoint. Mirrors the DCB replayThenResume.
+    private StartAt replayThenResumeAgnostic(String subscriptionId, StartAt replayStart, Subscription.ResumeBehavior resumeBehavior) {
+        return switch (resumeBehavior) {
+            case SAME_AS_START_AT -> StartAt.dynamic(ctx -> {
+                boolean isCompetingConsumerSubscription = CompetingConsumerSubscriptionModel.class.isAssignableFrom(ctx.subscriptionModelType());
+                boolean isDurableSubscription = DurableSubscriptionModel.class.isAssignableFrom(ctx.subscriptionModelType());
+                return isCompetingConsumerSubscription || isDurableSubscription ? null : replayStart;
+            });
+            case DEFAULT -> StartAt.dynamic(ctx -> {
+                CheckpointStorage checkpointStorage = applicationContext.getBean(CheckpointStorage.class);
+                return checkpointStorage.exists(subscriptionId) ? StartAt.subscriptionModelDefault() : replayStart;
+            });
+        };
     }
 
     @SuppressWarnings("unchecked")

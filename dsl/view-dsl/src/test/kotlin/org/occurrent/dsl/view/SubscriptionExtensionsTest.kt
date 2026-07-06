@@ -29,7 +29,7 @@ import org.occurrent.application.converter.jackson.jacksonCloudEventConverter
 import org.occurrent.domain.DomainEvent
 import org.occurrent.domain.NameDefined
 import org.occurrent.domain.NameWasChanged
-import org.occurrent.dsl.subscription.blocking.subscriptions
+import org.occurrent.dsl.subscription.blocking.streamSubscriptions
 import org.occurrent.eventstore.api.blocking.write
 import org.occurrent.eventstore.inmemory.InMemoryEventStore
 import org.occurrent.subscription.inmemory.InMemorySubscriptionModel
@@ -55,7 +55,7 @@ class SubscriptionExtensionsTest {
         val subscriptionModel = InMemorySubscriptionModel()
         val converter = jacksonCloudEventConverter(ObjectMapper(), URI.create("urn:name"), DomainEvent::eventId)
 
-        subscriptions(subscriptionModel, converter) {
+        streamSubscriptions(subscriptionModel, converter) {
             updateView("names", materializedView)
         }
 

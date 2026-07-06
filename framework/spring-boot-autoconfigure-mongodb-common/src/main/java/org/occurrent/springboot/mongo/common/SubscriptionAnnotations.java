@@ -39,10 +39,11 @@ import java.util.function.Predicate;
 import static java.util.function.Predicate.not;
 
 /**
- * Stack-neutral helpers for processing the {@link StreamSubscription} and {@link DcbSubscription} annotations, and the
- * deprecated {@link Subscription} alias. Shared by the blocking and reactive annotation {@code BeanPostProcessor}s so the
- * reflection and event-type resolution logic lives in one place and cannot drift. The stack-specific parts (how the
- * consumer is invoked, how the start position is resolved, and which subscription DSL is used) stay in each processor.
+ * Stack-neutral helpers for processing the {@link StreamSubscription}, {@link DcbSubscription} and the
+ * capability-agnostic {@link Subscription} annotations. Shared by the blocking and reactive annotation
+ * {@code BeanPostProcessor}s so the reflection and event-type resolution logic lives in one place and cannot drift. The
+ * stack-specific parts (how the consumer is invoked, how the start position is resolved, and which subscription DSL is
+ * used) stay in each processor.
  */
 public final class SubscriptionAnnotations {
 
@@ -50,9 +51,7 @@ public final class SubscriptionAnnotations {
     }
 
     /**
-     * The normalized form of a stream subscription declaration, built from either the {@link StreamSubscription}
-     * annotation or the deprecated {@link Subscription} alias. The deprecated annotation's enums are mapped to the
-     * canonical {@link StreamSubscription} enums by name, since the constants are identical.
+     * The normalized form of a stream subscription declaration, built from the {@link StreamSubscription} annotation.
      */
     public record StreamSubscriptionDefinition(String id, Class<?>[] eventTypes, String startAtISO8601,
                                                long startAtTimeEpochMillis, StartPosition startAt,
@@ -61,13 +60,6 @@ public final class SubscriptionAnnotations {
         public static StreamSubscriptionDefinition from(StreamSubscription subscription) {
             return new StreamSubscriptionDefinition(subscription.id(), subscription.eventTypes(), subscription.startAtISO8601(),
                     subscription.startAtTimeEpochMillis(), subscription.startAt(), subscription.resumeBehavior(), subscription.startupMode(), "@StreamSubscription");
-        }
-
-        @SuppressWarnings("deprecation")
-        public static StreamSubscriptionDefinition from(Subscription subscription) {
-            return new StreamSubscriptionDefinition(subscription.id(), subscription.eventTypes(), subscription.startAtISO8601(),
-                    subscription.startAtTimeEpochMillis(), StartPosition.valueOf(subscription.startAt().name()),
-                    ResumeBehavior.valueOf(subscription.resumeBehavior().name()), StartupMode.valueOf(subscription.startupMode().name()), "@Subscription");
         }
     }
 

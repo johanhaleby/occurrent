@@ -31,6 +31,7 @@ import org.occurrent.eventstore.api.dcb.DcbReadOptions;
 import org.occurrent.eventstore.api.dcb.reactor.DcbEventStore;
 import org.occurrent.eventstore.api.reactor.PositionOrderedReader;
 import org.occurrent.filter.Filter;
+import org.occurrent.subscription.AgnosticSubscriptionFilter;
 import org.occurrent.subscription.DcbSubscriptionFilter;
 import org.occurrent.subscription.GlobalCheckpoint;
 import org.occurrent.subscription.OccurrentSubscriptionFilter;
@@ -79,6 +80,22 @@ class ReactorCatchupSubscriptionModelRoutingTest {
         // Routed to the DCB model: passes the DCB filter-type check, then fails loud on the missing resume token.
         StepVerifier.create(catchup.subscribe(DcbSubscriptionFilter.filter(DcbCriteria.tags(Tag.parse("name:1"))), StartAt.checkpoint(GlobalCheckpoint.of(0))))
                 .expectError(IllegalStateException.class)
+                .verify();
+    }
+
+    @Test
+    void an_agnostic_filter_routes_to_the_neutral_unscoped_model_not_stream_or_dcb() {
+        ReactorCatchupSubscriptionModel catchup = dualMode();
+
+        // A null/agnostic capability scope: routed to the neutral inner model, which accepts any SubscriptionFilter
+        // (including AgnosticSubscriptionFilter) and fails loud on the missing resume token, same as the scoped models.
+        // Reaching either scoped model's filter-type IllegalArgumentException would prove misrouting.
+        StepVerifier.create(catchup.subscribe(AgnosticSubscriptionFilter.filter(Filter.all()), StartAt.checkpoint(GlobalCheckpoint.of(0))))
+                .expectErrorSatisfies(error -> {
+                    if (error instanceof IllegalArgumentException illegalArgumentException) {
+                        throw new AssertionError("Agnostic subscription was misrouted to a capability-scoped model", illegalArgumentException);
+                    }
+                })
                 .verify();
     }
 
