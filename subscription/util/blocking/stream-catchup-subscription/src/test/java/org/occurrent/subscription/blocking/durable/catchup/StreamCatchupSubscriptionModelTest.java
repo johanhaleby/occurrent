@@ -131,6 +131,7 @@ class StreamCatchupSubscriptionModelTest {
         subscription.subscribe("subscription", StartAtTime.beginningOfTime(), toDomainEvents(received)).waitUntilStarted();
 
         await().untilAsserted(() -> assertThat(received).containsExactly(event1, event2));
+        assertThat(eventStore.lastPositionRange).isNotNull();
         assertThat(eventStore.lastPositionRange.afterPosition()).hasValue(0L);
     }
 

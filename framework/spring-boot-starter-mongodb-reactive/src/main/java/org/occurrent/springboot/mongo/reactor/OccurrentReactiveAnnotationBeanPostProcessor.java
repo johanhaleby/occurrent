@@ -133,12 +133,13 @@ class OccurrentReactiveAnnotationBeanPostProcessor implements BeanPostProcessor,
             throw new IllegalArgumentException("A subscription method must declare an event parameter, but %s#%s has none.".formatted(bean.getClass().getName(), method.getName()));
         }
 
-        StartAt startAt = generateStreamStartAt(subscription, streamHistoryReplaySupported());
+        boolean streamHistoryReplaySupported = streamHistoryReplaySupported();
+        StartAt startAt = generateStreamStartAt(subscription, streamHistoryReplaySupported);
 
         Function2<EventMetadata, E, Mono<Void>> consumer = (metadata, event) ->
                 invokeMono(method, bean, SubscriptionAnnotations.bindArguments(parameterTypes, event, metadata, SubscriptionAnnotations::isStreamMetadataParameter));
 
-        boolean shouldWaitUntilStarted = shouldWaitUntilStarted(subscription.startupMode());
+        boolean shouldWaitUntilStarted = shouldWaitUntilStarted(subscription.startAt() == StartPosition.BEGINNING_OF_TIME && streamHistoryReplaySupported, subscription.startupMode());
         StreamSubscriptions<E> streamSubscriptions = applicationContext.getBean(StreamSubscriptions.class);
 
         applyStartupWorkarounds();
@@ -316,10 +317,11 @@ class OccurrentReactiveAnnotationBeanPostProcessor implements BeanPostProcessor,
         // End workarounds
     }
 
-    private static boolean shouldWaitUntilStarted(StartupMode startupMode) {
+    private static boolean shouldWaitUntilStarted(boolean replaysHistory, StartupMode startupMode) {
         return switch (startupMode) {
-            // Stream subscriptions never replay history on the reactive stack, so the default is to wait until started.
-            case DEFAULT, WAIT_UNTIL_STARTED -> true;
+            // A subscription that replays history may have a lot to read, so by default it starts in the background.
+            case DEFAULT -> !replaysHistory;
+            case WAIT_UNTIL_STARTED -> true;
             case BACKGROUND -> false;
         };
     }
