@@ -139,8 +139,7 @@ public class CatchupSubscriptionModelConfig {
     @Override
     public boolean equals(Object o) {
         if (this == o) return true;
-        if (!(o instanceof CatchupSubscriptionModelConfig)) return false;
-        CatchupSubscriptionModelConfig that = (CatchupSubscriptionModelConfig) o;
+        if (!(o instanceof CatchupSubscriptionModelConfig that)) return false;
         return cacheSize == that.cacheSize &&
                 Objects.equals(subscriptionStorageConfig, that.subscriptionStorageConfig);
     }

@@ -138,8 +138,6 @@ public sealed interface DcbCriteria permits DcbCriteria.MatchAll, DcbCriteria.It
                 }
                 case DcbCriterion item -> items.add(item);
                 case Items existing -> items.addAll(existing.items());
-                default -> {
-                }
             }
         }
         return items.size() == 1 ? items.getFirst() : new Items(items);

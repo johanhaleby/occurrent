@@ -20,22 +20,15 @@ public class SortConverter {
      * @return A Spring {@code Sort} instance.
      */
     public static Sort convertToSpringSort(SortBy sortBy) {
-        final Sort sort;
-        if (sortBy instanceof SortBy.Unsorted) {
-            sort = Sort.unsorted();
-        } else if (sortBy instanceof SortBy.NaturalImpl) {
-            sort = Sort.by(toDirection(((SortBy.NaturalImpl) sortBy).direction), NATURAL);
-        } else if (sortBy instanceof SortBy.SingleFieldImpl singleField) {
-            sort = Sort.by(toDirection(singleField.direction), singleField.fieldName);
-        } else if (sortBy instanceof SortBy.MultipleSortStepsImpl) {
-            sort = ((SortBy.MultipleSortStepsImpl) sortBy).steps.stream()
+        return switch (sortBy) {
+            case SortBy.Unsorted ignored -> Sort.unsorted();
+            case SortBy.NaturalImpl natural -> Sort.by(toDirection(natural.direction), NATURAL);
+            case SortBy.SingleFieldImpl singleField -> Sort.by(toDirection(singleField.direction), singleField.fieldName);
+            case SortBy.MultipleSortStepsImpl multipleSortSteps -> multipleSortSteps.steps.stream()
                     .map(SortConverter::convertToSpringSort)
                     .reduce(Sort::and)
                     .orElseThrow(() -> new IllegalStateException("Internal error: Expecting " + SortBy.MultipleSortStepsImpl.class.getSimpleName() + " to have at least one step"));
-        } else {
-            throw new IllegalArgumentException("Internal error: Unrecognized " + SortBy.class.getSimpleName() + " instance: " + sortBy.getClass().getSimpleName());
-        }
-        return sort;
+        };
     }
 
     private static Sort.Direction toDirection(SortBy.SortDirection sortDirection) {

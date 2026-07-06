@@ -45,8 +45,7 @@ public class GameOverview {
             @Override
             public boolean equals(Object o) {
                 if (this == o) return true;
-                if (!(o instanceof Ongoing)) return false;
-                Ongoing ongoing = (Ongoing) o;
+                if (!(o instanceof Ongoing ongoing)) return false;
                 return numberOfAttemptsLeft == ongoing.numberOfAttemptsLeft;
             }
 
@@ -75,8 +74,7 @@ public class GameOverview {
             @Override
             public boolean equals(Object o) {
                 if (this == o) return true;
-                if (!(o instanceof Ended)) return false;
-                Ended ended = (Ended) o;
+                if (!(o instanceof Ended ended)) return false;
                 return playerGuessedTheRightNumber == ended.playerGuessedTheRightNumber &&
                         Objects.equals(endedAt, ended.endedAt);
             }

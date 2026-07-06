@@ -49,29 +49,27 @@ public class ApplyFilterToChangeStreamOptionsBuilder {
         final ChangeStreamOptions changeStreamOptions;
         if (filter == null) {
             changeStreamOptions = changeStreamOptionsBuilder.build();
-        } else if (filter instanceof StreamSubscriptionFilter) {
-            Filter streamFilter = ((StreamSubscriptionFilter) filter).filter();
+        } else if (filter instanceof StreamSubscriptionFilter streamSubscriptionFilter) {
+            Filter streamFilter = streamSubscriptionFilter.filter();
             Criteria criteria = convertFilterToCriteria(FULL_DOCUMENT, timeRepresentation, streamFilter);
             changeStreamOptions = changeStreamOptionsBuilder.filter(newAggregation(match(criteria))).build();
         } else if (filter instanceof DcbSubscriptionFilter dcbSubscriptionFilter) {
             Document matchStage = DcbSubscriptionFilterConverter.toChangeStreamMatchStage(dcbSubscriptionFilter.criteria());
             changeStreamOptions = changeStreamOptionsBuilder.filter(matchStage).build();
-        } else if (filter instanceof MongoJsonFilterSpecification) {
-            changeStreamOptions = changeStreamOptionsBuilder.filter(Document.parse(((MongoJsonFilterSpecification) filter).getJson())).build();
-        } else if (filter instanceof MongoFilterSpecification.MongoBsonFilterSpecification) {
-            Bson[] aggregationStages = ((MongoFilterSpecification.MongoBsonFilterSpecification) filter).getAggregationStages();
+        } else if (filter instanceof MongoJsonFilterSpecification jsonFilterSpecification) {
+            changeStreamOptions = changeStreamOptionsBuilder.filter(Document.parse(jsonFilterSpecification.getJson())).build();
+        } else if (filter instanceof MongoFilterSpecification.MongoBsonFilterSpecification bsonFilterSpecification) {
+            Bson[] aggregationStages = bsonFilterSpecification.getAggregationStages();
             DocumentAdapter documentAdapter = new DocumentAdapter(MongoClientSettings.getDefaultCodecRegistry());
             Document[] documents = Stream.of(aggregationStages).map(aggregationStage -> {
-                final Document result;
-                if (aggregationStage instanceof Document) {
-                    result = (Document) aggregationStage;
-                } else if (aggregationStage instanceof BsonDocument) {
-                    result = documentAdapter.fromBson((BsonDocument) aggregationStage);
-                } else {
-                    BsonDocument bsonDocument = aggregationStage.toBsonDocument(null, MongoClientSettings.getDefaultCodecRegistry());
-                    result = documentAdapter.fromBson(bsonDocument);
-                }
-                return result;
+                return switch (aggregationStage) {
+                    case Document document -> document;
+                    case BsonDocument bsonDocument -> documentAdapter.fromBson(bsonDocument);
+                    default -> {
+                        BsonDocument bsonDocument = aggregationStage.toBsonDocument(null, MongoClientSettings.getDefaultCodecRegistry());
+                        yield documentAdapter.fromBson(bsonDocument);
+                    }
+                };
             }).toArray(Document[]::new);
 
             changeStreamOptions = changeStreamOptionsBuilder.filter(documents).build();

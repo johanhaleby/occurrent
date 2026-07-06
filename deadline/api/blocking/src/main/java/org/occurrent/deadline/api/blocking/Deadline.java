@@ -33,34 +33,19 @@ public sealed interface Deadline {
      * @return Return the deadline time as a {@link Date}.
      */
     default Date toDate() {
-        if (this instanceof InstantDeadLine) {
-            return Date.from(toInstant());
-        } else if (this instanceof ZonedDateTimeDeadLine) {
-            return Date.from(toInstant());
-        } else if (this instanceof OffsetDateTimeDeadLine) {
-            return Date.from(toInstant());
-        } else if (this instanceof LocalDateTimeDeadLine) {
-            return Date.from(toInstant());
-        } else {
-            throw new IllegalStateException("Internal error: Cannot convert " + this.getClass().getSimpleName() + " to a " + Date.class.getName());
-        }
+        return Date.from(toInstant());
     }
 
     /**
      * @return Return the deadline time as an {@link Instant}.
      */
     default Instant toInstant() {
-        if (this instanceof InstantDeadLine) {
-            return ((InstantDeadLine) this).instant;
-        } else if (this instanceof ZonedDateTimeDeadLine) {
-            return ((ZonedDateTimeDeadLine) this).zonedDateTime.toInstant();
-        } else if (this instanceof OffsetDateTimeDeadLine) {
-            return ((OffsetDateTimeDeadLine) this).offsetDateTime.toInstant();
-        } else if (this instanceof LocalDateTimeDeadLine) {
-            return ((LocalDateTimeDeadLine) this).localDateTime.toInstant(UTC);
-        } else {
-            throw new IllegalStateException("Internal error: Cannot convert " + this.getClass().getSimpleName() + " to a " + Date.class.getName());
-        }
+        return switch (this) {
+            case InstantDeadLine deadline -> deadline.instant;
+            case ZonedDateTimeDeadLine deadline -> deadline.zonedDateTime.toInstant();
+            case OffsetDateTimeDeadLine deadline -> deadline.offsetDateTime.toInstant();
+            case LocalDateTimeDeadLine deadline -> deadline.localDateTime.toInstant(UTC);
+        };
     }
 
     /**

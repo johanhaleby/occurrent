@@ -50,22 +50,23 @@ class WhenGameEndedThenPublishIntegrationEvent {
         long streamVersion = metadata.getStreamVersion();
         NumberGuessingGameCompleted numberGuessingGameCompleted = domainEventQueries.query(subject(eq(gameId)).and(streamVersion(lte(streamVersion))))
                 .collect(NumberGuessingGameCompleted::new, (integrationEvent, gameEvent) -> {
-                    if (gameEvent instanceof NumberGuessingGameWasStarted e) {
-                        integrationEvent.setGameId(gameEvent.gameId().toString());
-                        integrationEvent.setSecretNumberToGuess(e.secretNumberToGuess());
-                        integrationEvent.setMaxNumberOfGuesses(e.maxNumberOfGuesses());
-                        integrationEvent.setStartedAt(toDate(e.timestamp()));
-                    } else if (gameEvent instanceof PlayerGuessedANumberThatWasTooSmall e) {
-                        integrationEvent.addGuess(new GuessedNumber(e.playerId().toString(), e.guessedNumber(), toDate(e.timestamp())));
-                    } else if (gameEvent instanceof PlayerGuessedANumberThatWasTooBig e) {
-                        integrationEvent.addGuess(new GuessedNumber(e.playerId().toString(), e.guessedNumber(), toDate(e.timestamp())));
-                    } else if (gameEvent instanceof PlayerGuessedTheRightNumber e) {
-                        integrationEvent.addGuess(new GuessedNumber(e.playerId().toString(), e.guessedNumber(), toDate(e.timestamp())));
-                        integrationEvent.setRightNumberWasGuessed(true);
-                    } else if (gameEvent instanceof GuessingAttemptsExhausted) {
-                        integrationEvent.setRightNumberWasGuessed(false);
-                    } else if (gameEvent instanceof NumberGuessingGameEnded) {
-                        integrationEvent.setEndedAt(toDate(gameEvent.timestamp()));
+                    switch (gameEvent) {
+                        case NumberGuessingGameWasStarted e -> {
+                            integrationEvent.setGameId(gameEvent.gameId().toString());
+                            integrationEvent.setSecretNumberToGuess(e.secretNumberToGuess());
+                            integrationEvent.setMaxNumberOfGuesses(e.maxNumberOfGuesses());
+                            integrationEvent.setStartedAt(toDate(e.timestamp()));
+                        }
+                        case PlayerGuessedANumberThatWasTooSmall e ->
+                                integrationEvent.addGuess(new GuessedNumber(e.playerId().toString(), e.guessedNumber(), toDate(e.timestamp())));
+                        case PlayerGuessedANumberThatWasTooBig e ->
+                                integrationEvent.addGuess(new GuessedNumber(e.playerId().toString(), e.guessedNumber(), toDate(e.timestamp())));
+                        case PlayerGuessedTheRightNumber e -> {
+                            integrationEvent.addGuess(new GuessedNumber(e.playerId().toString(), e.guessedNumber(), toDate(e.timestamp())));
+                            integrationEvent.setRightNumberWasGuessed(true);
+                        }
+                        case GuessingAttemptsExhausted ignored -> integrationEvent.setRightNumberWasGuessed(false);
+                        case NumberGuessingGameEnded ignored -> integrationEvent.setEndedAt(toDate(gameEvent.timestamp()));
                     }
                 }, (i1, i2) -> {
                 });

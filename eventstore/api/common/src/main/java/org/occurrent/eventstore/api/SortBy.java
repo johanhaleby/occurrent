@@ -212,8 +212,8 @@ public sealed interface SortBy {
         public MultipleSortSteps thenMerge(SortBy next) {
             Objects.requireNonNull(next, ComposableSortStep.class.getSimpleName() + " cannot be null");
             List<SortBy> newSteps = new ArrayList<>(steps);
-            if (next instanceof MultipleSortStepsImpl) {
-                newSteps.addAll(((MultipleSortStepsImpl) next).steps);
+            if (next instanceof MultipleSortStepsImpl multipleSortSteps) {
+                newSteps.addAll(multipleSortSteps.steps);
             } else {
                 newSteps.add(next);
             }

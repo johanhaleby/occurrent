@@ -11,6 +11,8 @@ DCB is a capability layered on the existing CloudEvent storage, not a new store 
 #### Changes
 
 * Occurrent now requires Java 21 instead of Java 17. This raises the minimum JDK needed to build and run Occurrent. Stored data is unaffected, so an existing application only needs to move its runtime to Java 21.
+* Modernized Java dispatch code to use Java 21 pattern matching and exhaustive switches across sealed filters,
+  criteria, start positions, checkpoints, deadlines, and examples.
 * Renamed `OccurrentSubscriptionFilter` to `StreamSubscriptionFilter` to make the stream-scoped subscription marker
   explicit next to `AgnosticSubscriptionFilter` and `DcbSubscriptionFilter`. This is a breaking API change for callers
   that construct subscription filters directly.

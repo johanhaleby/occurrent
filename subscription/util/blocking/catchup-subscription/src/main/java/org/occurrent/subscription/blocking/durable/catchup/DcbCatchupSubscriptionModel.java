@@ -248,10 +248,10 @@ class DcbCatchupSubscriptionModel extends AbstractCatchupSubscriptionModel {
     // again is a no-op; generateSubscriptionModelContext() is used anyway for consistency with the other call sites.
     private boolean isDcbCatchupPosition(StartAt startAt) {
         StartAt start = startAt.get(generateSubscriptionModelContext());
-        if (!(start instanceof StartAtCheckpoint)) {
+        if (!(start instanceof StartAtCheckpoint position)) {
             return false;
         }
-        return GlobalCheckpoint.isGlobalCheckpoint(((StartAtCheckpoint) start).checkpoint);
+        return GlobalCheckpoint.isGlobalCheckpoint(position.checkpoint);
     }
 
     @Override

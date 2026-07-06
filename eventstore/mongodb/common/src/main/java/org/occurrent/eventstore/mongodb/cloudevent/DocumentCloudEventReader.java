@@ -77,10 +77,10 @@ public class DocumentCloudEventReader implements CloudEventReader {
             }
 
             // Switch on types document support
-            if (extension.getValue() instanceof Integer) {
-                writer.withContextAttribute(extension.getKey(), (Integer) extension.getValue());
-            } else if (extension.getValue() instanceof Boolean) {
-                writer.withContextAttribute(extension.getKey(), (Boolean) extension.getValue());
+            if (extension.getValue() instanceof Integer integer) {
+                writer.withContextAttribute(extension.getKey(), integer);
+            } else if (extension.getValue() instanceof Boolean bool) {
+                writer.withContextAttribute(extension.getKey(), bool);
             } else {
                 writer.withContextAttribute(extension.getKey(), extension.getValue().toString());
             }
@@ -93,12 +93,12 @@ public class DocumentCloudEventReader implements CloudEventReader {
             final CloudEventData ceData;
             if (isJson(contentType)) {
                 ceData = convertJsonData(data);
-            } else if (data instanceof byte[]) {
-                ceData = BytesCloudEventData.wrap((byte[]) data);
-            } else if (data instanceof String) {
-                ceData = BytesCloudEventData.wrap(((String) data).getBytes(UTF_8));
-            } else if (data instanceof Binary) {
-                ceData = BytesCloudEventData.wrap(((Binary) data).getData());
+            } else if (data instanceof byte[] byteArray) {
+                ceData = BytesCloudEventData.wrap(byteArray);
+            } else if (data instanceof String string) {
+                ceData = BytesCloudEventData.wrap(string.getBytes(UTF_8));
+            } else if (data instanceof Binary binary) {
+                ceData = BytesCloudEventData.wrap(binary.getData());
             } else {
                 throw CloudEventRWException.newInvalidDataType(data.getClass().getName(), String.class.getName(), byte[].class.getName(), Binary.class.getName());
             }
@@ -129,8 +129,8 @@ public class DocumentCloudEventReader implements CloudEventReader {
             } else {
                 ceData = BytesCloudEventData.wrap(json.getBytes(UTF_8));
             }
-        } else if (data instanceof Binary) {
-            ceData = BytesCloudEventData.wrap(((Binary) data).getData());
+        } else if (data instanceof Binary binary) {
+            ceData = BytesCloudEventData.wrap(binary.getData());
         } else {
             throw CloudEventRWException.newInvalidDataType(data.getClass().getName(), String.class.getName(), byte[].class.getName(), Map.class.getName(), Binary.class.getName());
         }

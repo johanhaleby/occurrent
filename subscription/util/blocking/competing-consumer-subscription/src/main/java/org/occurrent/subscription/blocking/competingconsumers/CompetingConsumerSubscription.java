@@ -37,8 +37,7 @@ public class CompetingConsumerSubscription implements Subscription {
     @Override
     public boolean equals(Object o) {
         if (this == o) return true;
-        if (!(o instanceof CompetingConsumerSubscription)) return false;
-        CompetingConsumerSubscription that = (CompetingConsumerSubscription) o;
+        if (!(o instanceof CompetingConsumerSubscription that)) return false;
         return Objects.equals(subscriptionId, that.subscriptionId) && Objects.equals(subscriberId, that.subscriberId) && Objects.equals(subscription, that.subscription);
     }
 

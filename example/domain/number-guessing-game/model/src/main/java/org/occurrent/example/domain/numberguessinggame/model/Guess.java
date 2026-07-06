@@ -31,8 +31,7 @@ public class Guess {
     @Override
     public boolean equals(Object o) {
         if (this == o) return true;
-        if (!(o instanceof Guess)) return false;
-        Guess that = (Guess) o;
+        if (!(o instanceof Guess that)) return false;
         return value == that.value;
     }
 

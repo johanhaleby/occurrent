@@ -44,7 +44,14 @@ public class ConditionMatcher {
     private static final Set<String> ATTRIBUTE_NAMES = Set.of(SPEC_VERSION, ID, TYPE, TIME, SOURCE, SUBJECT, DATA_SCHEMA, DATA_CONTENT_TYPE);
 
     public static <T> boolean matchesCondition(CloudEvent cloudEvent, String fieldName, Condition<T> condition) {
-        if (condition instanceof MultiOperandCondition<T> operation) {
+        return switch (condition) {
+            case MultiOperandCondition<T> operation -> matchesMultiOperandCondition(cloudEvent, fieldName, operation);
+            case SingleOperandCondition<T> singleOperandCondition -> matchesSingleOperandCondition(cloudEvent, fieldName, singleOperandCondition);
+            case Condition.InOperandCondition<T> inOperandCondition -> matchesInOperandCondition(cloudEvent, fieldName, inOperandCondition);
+        };
+    }
+
+    private static <T> boolean matchesMultiOperandCondition(CloudEvent cloudEvent, String fieldName, MultiOperandCondition<T> operation) {
             Condition.MultiOperandConditionName operationName = operation.operationName();
             List<Condition<T>> operations = operation.operations();
             Stream<Boolean> filters = operations.stream().map(c -> matchesCondition(cloudEvent, fieldName, c));
@@ -53,20 +60,21 @@ public class ConditionMatcher {
                 case OR -> filters.anyMatch(isEqual(true));
                 case NOT -> filters.allMatch(isEqual(false));
             };
-        } else if (condition instanceof SingleOperandCondition<T> singleOperandCondition) {
+    }
+
+    private static <T> boolean matchesSingleOperandCondition(CloudEvent cloudEvent, String fieldName, SingleOperandCondition<T> singleOperandCondition) {
             T expected = singleOperandCondition.operand();
             SingleOperandConditionName singleOperandConditionName = singleOperandCondition.operandConditionName();
             Object actual = extractValue(cloudEvent, fieldName);
-            final boolean matches;
             if (singleOperandConditionName == EQ) {
-                matches = Objects.equals(actual, expected);
+                return Objects.equals(actual, expected);
             } else if (singleOperandConditionName == NE) {
-                matches = !Objects.equals(actual, expected);
+                return !Objects.equals(actual, expected);
             } else {
                 Comparable<Object> expectedComparable = toComparable(expected, "Expected value must implement " + Comparable.class.getName() + " in order to be used in Filter's");
                 Comparable<Object> actualComparable = toComparable(actual, "Value in CloudEvent must implement " + Comparable.class.getName() + " in order to be used in Filter's");
                 int comparisonResult = actualComparable.compareTo(expectedComparable);
-                matches = switch (singleOperandConditionName) {
+                return switch (singleOperandConditionName) {
                     case LT -> comparisonResult < 0;
                     case GT -> comparisonResult > 0;
                     case LTE -> comparisonResult <= 0;
@@ -74,14 +82,12 @@ public class ConditionMatcher {
                     default -> throw new IllegalStateException("Unexpected value: " + singleOperandConditionName);
                 };
             }
-            return matches;
-        } else if (condition instanceof Condition.InOperandCondition<T> inOperandCondition) {
+    }
+
+    private static <T> boolean matchesInOperandCondition(CloudEvent cloudEvent, String fieldName, Condition.InOperandCondition<T> inOperandCondition) {
             Object actual = extractValue(cloudEvent, fieldName);
             Collection<T> operand = inOperandCondition.operand();
             return operand.stream().anyMatch(it -> Objects.equals(it, actual));
-        } else {
-            throw new IllegalArgumentException("Unsupported condition: " + condition.getClass());
-        }
     }
 
     @SuppressWarnings("unchecked")

@@ -36,15 +36,30 @@ public sealed interface StartAt {
     StartAt get(SubscriptionModelContext context);
 
     default boolean isNow() {
-        return this instanceof Now;
+        return switch (this) {
+            case Now ignored -> true;
+            case Default ignored -> false;
+            case Dynamic ignored -> false;
+            case StartAtCheckpoint ignored -> false;
+        };
     }
 
     default boolean isDefault() {
-        return this instanceof Default;
+        return switch (this) {
+            case Default ignored -> true;
+            case Now ignored -> false;
+            case Dynamic ignored -> false;
+            case StartAtCheckpoint ignored -> false;
+        };
     }
 
     default boolean isDynamic() {
-        return this instanceof Dynamic;
+        return switch (this) {
+            case Dynamic ignored -> true;
+            case Now ignored -> false;
+            case Default ignored -> false;
+            case StartAtCheckpoint ignored -> false;
+        };
     }
 
     final class Now implements StartAt {
@@ -95,8 +110,8 @@ public sealed interface StartAt {
         @Override
         public StartAt get(SubscriptionModelContext context) {
             StartAt startAt = function.apply(context);
-            if (startAt instanceof Dynamic) {
-                return startAt.get(context);
+            if (startAt instanceof Dynamic dynamic) {
+                return dynamic.get(context);
             }
             return startAt;
         }

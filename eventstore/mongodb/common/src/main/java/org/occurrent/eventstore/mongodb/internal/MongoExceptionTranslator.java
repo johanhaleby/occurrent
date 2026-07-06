@@ -40,8 +40,7 @@ public class MongoExceptionTranslator {
      */
     public static RuntimeException translateException(WriteContext ctx, MongoException e) {
         final RuntimeException runtimeException;
-        if (e instanceof MongoBulkWriteException) {
-            MongoBulkWriteException mongoBulkWriteException = (MongoBulkWriteException) e;
+        if (e instanceof MongoBulkWriteException mongoBulkWriteException) {
             runtimeException = mongoBulkWriteException.getWriteErrors().stream()
                     .filter(bulkWriteError -> ErrorCategory.fromErrorCode(bulkWriteError.getCode()) == ErrorCategory.DUPLICATE_KEY)
                     .map(bulkWriteError -> translateToDuplicateCloudEventException(mongoBulkWriteException, bulkWriteError))

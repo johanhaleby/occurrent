@@ -97,10 +97,10 @@ public class SpringMongoCheckpointStorage implements CheckpointStorage {
     @Override
     public Checkpoint save(String subscriptionId, Checkpoint checkpoint) {
         Supplier<Checkpoint> save = () -> {
-            if (checkpoint instanceof MongoResumeTokenCheckpoint) {
-                persistResumeTokenStreamPosition(subscriptionId, ((MongoResumeTokenCheckpoint) checkpoint).resumeToken);
-            } else if (checkpoint instanceof MongoOperationTimeCheckpoint) {
-                persistOperationTimeStreamPosition(subscriptionId, ((MongoOperationTimeCheckpoint) checkpoint).operationTime);
+            if (checkpoint instanceof MongoResumeTokenCheckpoint mongoResumeTokenCheckpoint) {
+                persistResumeTokenStreamPosition(subscriptionId, mongoResumeTokenCheckpoint.resumeToken);
+            } else if (checkpoint instanceof MongoOperationTimeCheckpoint mongoOperationTimeCheckpoint) {
+                persistOperationTimeStreamPosition(subscriptionId, mongoOperationTimeCheckpoint.operationTime);
             } else {
                 String checkpointString = checkpoint.asString();
                 Document document = MongoCommons.generateGenericCheckpointDocument(subscriptionId, checkpointString);

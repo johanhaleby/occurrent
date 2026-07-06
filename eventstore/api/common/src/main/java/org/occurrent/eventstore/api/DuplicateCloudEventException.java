@@ -55,8 +55,7 @@ public class DuplicateCloudEventException extends RuntimeException {
     @Override
     public boolean equals(Object o) {
         if (this == o) return true;
-        if (!(o instanceof DuplicateCloudEventException)) return false;
-        DuplicateCloudEventException that = (DuplicateCloudEventException) o;
+        if (!(o instanceof DuplicateCloudEventException that)) return false;
         return Objects.equals(id, that.id) && Objects.equals(source, that.source) && Objects.equals(details, that.details);
     }
 

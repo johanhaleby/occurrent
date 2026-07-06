@@ -124,8 +124,7 @@ public class EventStoreConfig {
     @Override
     public boolean equals(Object o) {
         if (this == o) return true;
-        if (!(o instanceof EventStoreConfig)) return false;
-        EventStoreConfig that = (EventStoreConfig) o;
+        if (!(o instanceof EventStoreConfig that)) return false;
         return Objects.equals(transactionOptions, that.transactionOptions) && timeRepresentation == that.timeRepresentation && Objects.equals(queryOptions, that.queryOptions) && Objects.equals(eventStoreCapabilities, that.eventStoreCapabilities) && Objects.equals(dcbStreamIdGenerator, that.dcbStreamIdGenerator) && streamPositionEnabled == that.streamPositionEnabled && streamPositionExplicitlyEnabled == that.streamPositionExplicitlyEnabled && requireBackfilledPosition == that.requireBackfilledPosition;
     }
 

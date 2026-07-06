@@ -72,8 +72,7 @@ public class OccurrentCloudEventMongoDocumentMapper {
 
         if (timeRepresentation == DATE) {
             Object time = document.get("time"); // Be a bit nice and don't enforce Date here if TimeRepresentation has been changed
-            if (time instanceof Date) {
-                Date timeAsDate = (Date) time;
+            if (time instanceof Date timeAsDate) {
                 OffsetDateTime offsetDateTime = OffsetDateTime.ofInstant(timeAsDate.toInstant(), UTC);
                 String format = RFC_3339_DATE_TIME_FORMATTER.format(offsetDateTime);
                 document.put("time", format);

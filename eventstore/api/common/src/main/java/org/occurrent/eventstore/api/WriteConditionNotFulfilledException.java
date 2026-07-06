@@ -43,8 +43,7 @@ public class WriteConditionNotFulfilledException extends RuntimeException {
     @Override
     public boolean equals(Object o) {
         if (this == o) return true;
-        if (!(o instanceof WriteConditionNotFulfilledException)) return false;
-        WriteConditionNotFulfilledException that = (WriteConditionNotFulfilledException) o;
+        if (!(o instanceof WriteConditionNotFulfilledException that)) return false;
         return eventStreamVersion == that.eventStreamVersion && Objects.equals(eventStreamId, that.eventStreamId) && Objects.equals(writeCondition, that.writeCondition) && Objects.equals(getMessage(), that.getMessage());
     }
 

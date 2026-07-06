@@ -278,28 +278,26 @@ public class NativeMongoSubscriptionModel implements CheckpointAwareSubscription
         final List<Bson> pipeline;
         if (filter == null) {
             pipeline = Collections.emptyList();
-        } else if (filter instanceof StreamSubscriptionFilter) {
-            Filter streamFilter = ((StreamSubscriptionFilter) filter).filter();
+        } else if (filter instanceof StreamSubscriptionFilter streamSubscriptionFilter) {
+            Filter streamFilter = streamSubscriptionFilter.filter();
             Bson bson = FilterToBsonFilterConverter.convertFilterToBsonFilter(MongoFilterSpecification.FULL_DOCUMENT, timeRepresentation, streamFilter);
             pipeline = Collections.singletonList(match(bson));
         } else if (filter instanceof DcbSubscriptionFilter dcbSubscriptionFilter) {
             pipeline = Collections.singletonList(DcbSubscriptionFilterConverter.toChangeStreamMatchStage(dcbSubscriptionFilter.criteria()));
-        } else if (filter instanceof MongoFilterSpecification.MongoJsonFilterSpecification) {
-            pipeline = Collections.singletonList(Document.parse(((MongoFilterSpecification.MongoJsonFilterSpecification) filter).getJson()));
-        } else if (filter instanceof MongoFilterSpecification.MongoBsonFilterSpecification) {
-            Bson[] aggregationStages = ((MongoFilterSpecification.MongoBsonFilterSpecification) filter).getAggregationStages();
+        } else if (filter instanceof MongoFilterSpecification.MongoJsonFilterSpecification jsonFilterSpecification) {
+            pipeline = Collections.singletonList(Document.parse(jsonFilterSpecification.getJson()));
+        } else if (filter instanceof MongoFilterSpecification.MongoBsonFilterSpecification bsonFilterSpecification) {
+            Bson[] aggregationStages = bsonFilterSpecification.getAggregationStages();
             DocumentAdapter documentAdapter = new DocumentAdapter(MongoClientSettings.getDefaultCodecRegistry());
             pipeline = Stream.of(aggregationStages).map(aggregationStage -> {
-                final Document result;
-                if (aggregationStage instanceof Document) {
-                    result = (Document) aggregationStage;
-                } else if (aggregationStage instanceof BsonDocument) {
-                    result = documentAdapter.fromBson((BsonDocument) aggregationStage);
-                } else {
-                    BsonDocument bsonDocument = aggregationStage.toBsonDocument(null, MongoClientSettings.getDefaultCodecRegistry());
-                    result = documentAdapter.fromBson(bsonDocument);
-                }
-                return result;
+                return switch (aggregationStage) {
+                    case Document document -> document;
+                    case BsonDocument bsonDocument -> documentAdapter.fromBson(bsonDocument);
+                    default -> {
+                        BsonDocument bsonDocument = aggregationStage.toBsonDocument(null, MongoClientSettings.getDefaultCodecRegistry());
+                        yield documentAdapter.fromBson(bsonDocument);
+                    }
+                };
             }).collect(Collectors.toList());
         } else {
             throw new IllegalArgumentException("Invalid " + SubscriptionFilter.class.getSimpleName());
@@ -443,8 +441,7 @@ public class NativeMongoSubscriptionModel implements CheckpointAwareSubscription
         @Override
         public boolean equals(Object o) {
             if (this == o) return true;
-            if (!(o instanceof InternalSubscription)) return false;
-            InternalSubscription that = (InternalSubscription) o;
+            if (!(o instanceof InternalSubscription that)) return false;
             return Objects.equals(filter, that.filter) && Objects.equals(startedLatch, that.startedLatch) && Objects.equals(stoppedLatch, that.stoppedLatch) && Objects.equals(cursor, that.cursor) && Objects.equals(currentStartAt, that.currentStartAt) && Objects.equals(action, that.action);
         }
 

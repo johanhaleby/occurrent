@@ -47,8 +47,7 @@ public class InsertGameIntoLatestGamesOverview {
         return cloudEvent -> {
             GameEvent gameEvent = deserialize.apply(cloudEvent);
 
-            if (gameEvent instanceof NumberGuessingGameWasStarted) {
-                NumberGuessingGameWasStarted e = (NumberGuessingGameWasStarted) gameEvent;
+            if (gameEvent instanceof NumberGuessingGameWasStarted e) {
                 Document game = new Document();
                 game.put("_id", gameEvent.gameId().toString());
                 game.put("startedAt", toDate(gameEvent.timestamp()));
@@ -62,15 +61,17 @@ public class InsertGameIntoLatestGamesOverview {
                     return;
                 }
 
-                if (gameEvent instanceof PlayerGuessedANumberThatWasTooSmall || gameEvent instanceof PlayerGuessedANumberThatWasTooBig) {
-                    game.put("numberOfGuesses", (int) game.get("numberOfGuesses") + 1);
-                } else if (gameEvent instanceof PlayerGuessedTheRightNumber) {
-                    game.put("numberOfGuesses", (int) game.get("numberOfGuesses") + 1);
-                    game.put("playerGuessedTheRightNumber", true);
-                } else if (gameEvent instanceof GuessingAttemptsExhausted) {
-                    game.put("playerGuessedTheRightNumber", false);
-                } else if (gameEvent instanceof NumberGuessingGameEnded) {
-                    game.put("endedAt", toDate(gameEvent.timestamp()));
+                switch (gameEvent) {
+                    case NumberGuessingGameWasStarted ignored -> {
+                    }
+                    case PlayerGuessedANumberThatWasTooSmall ignored -> game.put("numberOfGuesses", (int) game.get("numberOfGuesses") + 1);
+                    case PlayerGuessedANumberThatWasTooBig ignored -> game.put("numberOfGuesses", (int) game.get("numberOfGuesses") + 1);
+                    case PlayerGuessedTheRightNumber ignored -> {
+                        game.put("numberOfGuesses", (int) game.get("numberOfGuesses") + 1);
+                        game.put("playerGuessedTheRightNumber", true);
+                    }
+                    case GuessingAttemptsExhausted ignored -> game.put("playerGuessedTheRightNumber", false);
+                    case NumberGuessingGameEnded ignored -> game.put("endedAt", toDate(gameEvent.timestamp()));
                 }
 
                 latestGamesOverviewCollection.replaceOne(findGame, game, new ReplaceOptions().upsert(true));

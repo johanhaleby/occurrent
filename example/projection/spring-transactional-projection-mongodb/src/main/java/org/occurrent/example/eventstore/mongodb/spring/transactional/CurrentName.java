@@ -66,8 +66,7 @@ public class CurrentName {
     @Override
     public boolean equals(Object o) {
         if (this == o) return true;
-        if (!(o instanceof CurrentName)) return false;
-        CurrentName that = (CurrentName) o;
+        if (!(o instanceof CurrentName that)) return false;
         return Objects.equals(id, that.id) &&
                 Objects.equals(name, that.name);
     }

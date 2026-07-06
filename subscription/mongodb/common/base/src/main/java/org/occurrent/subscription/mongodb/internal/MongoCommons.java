@@ -93,18 +93,18 @@ public class MongoCommons {
         StartAt startAtValue = startAt == null ? null : startAt.get(ctx);
         if (startAtValue == null || startAtValue.isNow() || startAtValue.isDefault()) {
             return t;
-        } else if (!(startAtValue instanceof StartAtCheckpoint)) {
+        }
+        if (!(startAtValue instanceof StartAtCheckpoint position)) {
             throw new IllegalArgumentException("Unrecognized " + StartAt.class.getSimpleName() + " implementation: " + startAtValue.getClass().getName());
         }
 
         final T withStartPositionApplied;
-        StartAtCheckpoint position = (StartAtCheckpoint) startAtValue;
         Checkpoint changeStreamPosition = position.checkpoint;
-        if (changeStreamPosition instanceof MongoResumeTokenCheckpoint) {
-            BsonDocument resumeToken = ((MongoResumeTokenCheckpoint) changeStreamPosition).resumeToken;
+        if (changeStreamPosition instanceof MongoResumeTokenCheckpoint mongoResumeTokenCheckpoint) {
+            BsonDocument resumeToken = mongoResumeTokenCheckpoint.resumeToken;
             withStartPositionApplied = applyResumeToken.apply(t, resumeToken);
-        } else if (changeStreamPosition instanceof MongoOperationTimeCheckpoint) {
-            withStartPositionApplied = applyOperationTime.apply(t, ((MongoOperationTimeCheckpoint) changeStreamPosition).operationTime);
+        } else if (changeStreamPosition instanceof MongoOperationTimeCheckpoint mongoOperationTimeCheckpoint) {
+            withStartPositionApplied = applyOperationTime.apply(t, mongoOperationTimeCheckpoint.operationTime);
         } else {
             String changeStreamPositionString = changeStreamPosition.asString();
             if (changeStreamPositionString.contains(RESUME_TOKEN)) {

@@ -57,7 +57,7 @@ public sealed interface WriteCondition {
     }
 
     default boolean isAnyStreamVersion() {
-        return this instanceof StreamVersionWriteCondition && ((StreamVersionWriteCondition) this).isAny();
+        return this instanceof StreamVersionWriteCondition condition && condition.isAny();
     }
 
     record StreamVersionWriteCondition(Condition<Long> condition) implements WriteCondition {

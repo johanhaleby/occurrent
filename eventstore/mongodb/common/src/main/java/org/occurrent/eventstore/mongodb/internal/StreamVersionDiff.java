@@ -40,8 +40,7 @@ public class StreamVersionDiff {
     @Override
     public boolean equals(Object o) {
         if (this == o) return true;
-        if (!(o instanceof StreamVersionDiff)) return false;
-        StreamVersionDiff that = (StreamVersionDiff) o;
+        if (!(o instanceof StreamVersionDiff that)) return false;
         return oldStreamVersion == that.oldStreamVersion && newStreamVersion == that.newStreamVersion;
     }
 

@@ -62,10 +62,10 @@ public class ReactorCheckpointStorage implements CheckpointStorage {
     @Override
     public Mono<Checkpoint> save(String subscriptionId, Checkpoint changeStreamPosition) {
         Mono<?> result;
-        if (changeStreamPosition instanceof MongoResumeTokenCheckpoint) {
-            result = persistResumeTokenStreamPosition(subscriptionId, ((MongoResumeTokenCheckpoint) changeStreamPosition).resumeToken);
-        } else if (changeStreamPosition instanceof MongoOperationTimeCheckpoint) {
-            result = persistOperationTimeStreamPosition(subscriptionId, ((MongoOperationTimeCheckpoint) changeStreamPosition).operationTime);
+        if (changeStreamPosition instanceof MongoResumeTokenCheckpoint mongoResumeTokenCheckpoint) {
+            result = persistResumeTokenStreamPosition(subscriptionId, mongoResumeTokenCheckpoint.resumeToken);
+        } else if (changeStreamPosition instanceof MongoOperationTimeCheckpoint mongoOperationTimeCheckpoint) {
+            result = persistOperationTimeStreamPosition(subscriptionId, mongoOperationTimeCheckpoint.operationTime);
         } else {
             String checkpointString = changeStreamPosition.asString();
             Document document = MongoCommons.generateGenericCheckpointDocument(subscriptionId, checkpointString);

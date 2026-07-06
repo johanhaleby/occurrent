@@ -130,14 +130,11 @@ public class Bootstrap {
                             integrationEvent.setSecretNumberToGuess(e.secretNumberToGuess());
                             integrationEvent.setMaxNumberOfGuesses(e.maxNumberOfGuesses());
                             integrationEvent.setStartedAt(toDate(e.timestamp()));
-                        } else if (gameEvent instanceof PlayerGuessedANumberThatWasTooSmall) {
-                            PlayerGuessedANumberThatWasTooSmall e = (PlayerGuessedANumberThatWasTooSmall) gameEvent;
+                        } else if (gameEvent instanceof PlayerGuessedANumberThatWasTooSmall e) {
                             integrationEvent.addGuess(new GuessedNumber(e.playerId().toString(), e.guessedNumber(), toDate(e.timestamp())));
-                        } else if (gameEvent instanceof PlayerGuessedANumberThatWasTooBig) {
-                            PlayerGuessedANumberThatWasTooBig e = (PlayerGuessedANumberThatWasTooBig) gameEvent;
+                        } else if (gameEvent instanceof PlayerGuessedANumberThatWasTooBig e) {
                             integrationEvent.addGuess(new GuessedNumber(e.playerId().toString(), e.guessedNumber(), toDate(e.timestamp())));
-                        } else if (gameEvent instanceof PlayerGuessedTheRightNumber) {
-                            PlayerGuessedTheRightNumber e = (PlayerGuessedTheRightNumber) gameEvent;
+                        } else if (gameEvent instanceof PlayerGuessedTheRightNumber e) {
                             integrationEvent.addGuess(new GuessedNumber(e.playerId().toString(), e.guessedNumber(), toDate(e.timestamp())));
                             integrationEvent.setRightNumberWasGuessed(true);
                         } else if (gameEvent instanceof GuessingAttemptsExhausted) {
@@ -185,14 +182,11 @@ public class Bootstrap {
                                 gameStatus.gameId = event.gameId();
                                 gameStatus.secretNumber = ((NumberGuessingGameWasStarted) event).secretNumberToGuess();
                                 gameStatus.maxNumberOfGuesses = ((NumberGuessingGameWasStarted) event).maxNumberOfGuesses();
-                            } else if (event instanceof PlayerGuessedANumberThatWasTooSmall) {
-                                PlayerGuessedANumberThatWasTooSmall e = (PlayerGuessedANumberThatWasTooSmall) event;
+                            } else if (event instanceof PlayerGuessedANumberThatWasTooSmall e) {
                                 gameStatus.guesses.add(new GameStatus.GuessAndTime(e.guessedNumber(), e.timestamp()));
-                            } else if (event instanceof PlayerGuessedANumberThatWasTooBig) {
-                                PlayerGuessedANumberThatWasTooBig e = (PlayerGuessedANumberThatWasTooBig) event;
+                            } else if (event instanceof PlayerGuessedANumberThatWasTooBig e) {
                                 gameStatus.guesses.add(new GameStatus.GuessAndTime(e.guessedNumber(), e.timestamp()));
-                            } else if (event instanceof PlayerGuessedTheRightNumber) {
-                                PlayerGuessedTheRightNumber e = (PlayerGuessedTheRightNumber) event;
+                            } else if (event instanceof PlayerGuessedTheRightNumber e) {
                                 gameStatus.guesses.add(new GameStatus.GuessAndTime(e.guessedNumber(), e.timestamp()));
                             }
                         }, (gameStatus, gameStatus2) -> {

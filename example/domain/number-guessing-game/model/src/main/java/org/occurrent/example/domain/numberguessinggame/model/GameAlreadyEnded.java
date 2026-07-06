@@ -30,8 +30,7 @@ public class GameAlreadyEnded extends RuntimeException {
     @Override
     public boolean equals(Object o) {
         if (this == o) return true;
-        if (!(o instanceof GameAlreadyEnded)) return false;
-        GameAlreadyEnded that = (GameAlreadyEnded) o;
+        if (!(o instanceof GameAlreadyEnded that)) return false;
         return Objects.equals(gameId, that.gameId);
     }
 

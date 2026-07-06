@@ -71,8 +71,7 @@ public class WorkoutWasCompleted {
     @Override
     public boolean equals(Object o) {
         if (this == o) return true;
-        if (!(o instanceof WorkoutWasCompleted)) return false;
-        WorkoutWasCompleted that = (WorkoutWasCompleted) o;
+        if (!(o instanceof WorkoutWasCompleted that)) return false;
         return Objects.equals(eventId, that.eventId) &&
                 Objects.equals(workoutId, that.workoutId) &&
                 Objects.equals(completedBy, that.completedBy) &&

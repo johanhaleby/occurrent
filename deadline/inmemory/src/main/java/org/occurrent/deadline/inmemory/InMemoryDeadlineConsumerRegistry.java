@@ -211,8 +211,7 @@ public class InMemoryDeadlineConsumerRegistry implements DeadlineConsumerRegistr
         @Override
         public boolean equals(Object o) {
             if (this == o) return true;
-            if (!(o instanceof Config)) return false;
-            Config config = (Config) o;
+            if (!(o instanceof Config config)) return false;
             return pollInterval == config.pollInterval && pollIntervalTimeUnit == config.pollIntervalTimeUnit && Objects.equals(retryStrategy, config.retryStrategy);
         }
 

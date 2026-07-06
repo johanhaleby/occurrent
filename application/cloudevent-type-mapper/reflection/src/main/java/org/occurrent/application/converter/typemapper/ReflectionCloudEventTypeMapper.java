@@ -36,35 +36,25 @@ public class ReflectionCloudEventTypeMapper<T> implements CloudEventTypeMapper<T
 
     @Override
     public String getCloudEventType(Class<? extends T> type) {
-        final String cloudEventType;
-        if (className instanceof ClassName.Simple) {
-            cloudEventType = type.getSimpleName();
-        } else if (className instanceof ClassName.Qualified) {
-            cloudEventType = type.getName();
-        } else {
-            throw new IllegalStateException("Internal error: Invalid class name setting " + className);
-        }
-
-        return cloudEventType;
+        return switch (className) {
+            case ClassName.Simple<?> ignored -> type.getSimpleName();
+            case ClassName.Qualified ignored -> type.getName();
+        };
     }
 
     @SuppressWarnings("unchecked")
     @Override
     public <E extends T> Class<E> getDomainEventType(String cloudEventType) {
-        final Class<E> domainEvenType;
-        if (className instanceof ClassName.Simple) {
-            domainEvenType = (Class<E>) ((ClassName.Simple<T>) className).domainEventTypeFromCloudEventType().apply(cloudEventType);
-        } else if (className instanceof ClassName.Qualified) {
-            try {
-                //noinspection unchecked
-                domainEvenType = (Class<E>) Class.forName(cloudEventType);
-            } catch (ClassNotFoundException e) {
-                throw new RuntimeException(e);
+        return switch (className) {
+            case ClassName.Simple<?> simple -> (Class<E>) simple.domainEventTypeFromCloudEventType().apply(cloudEventType);
+            case ClassName.Qualified ignored -> {
+                try {
+                    yield (Class<E>) Class.forName(cloudEventType);
+                } catch (ClassNotFoundException e) {
+                    throw new RuntimeException(e);
+                }
             }
-        } else {
-            throw new IllegalStateException("Internal error: Invalid class name setting " + className);
-        }
-        return domainEvenType;
+        };
     }
 
     /**
