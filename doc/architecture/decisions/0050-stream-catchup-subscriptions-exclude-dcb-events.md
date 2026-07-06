@@ -65,10 +65,33 @@ caller's own filter is still honored. The capability guard is composed on top of
 including the in-process live predicate it matches events against. Because the live models already translate an
 `OccurrentSubscriptionFilter` generically, they need no capability-awareness of their own.
 
-**No index or schema change.** This mirrors ADR 49's reasoning in reverse. The `STREAM` guard resolves to
-`$exists: false` on the `dcbTags` field, and a sparse index cannot accelerate `$exists: false` (a sparse index only
-contains entries for documents that have the field). A marker-field migration on the already-shipped `STREAM` write
-path would be disproportionate for a capability that has zero production deployments today.
+**The stream write path enforces the DCB invariant.** A DCB append always stamps the `dcbtags` CloudEvent extension
+(even for an empty tag set), and when written through the DCB `append(...)` path the stored Mongo document also gets a
+derived indexed array field `dcbTags` (see [ADR 49](0049-dcb-reads-exclude-non-dcb-stream-events.md) and
+`DcbDocumentMapper.DCB_TAGS_INDEX_FIELD`). The only way those two representations could diverge was a footgun: a caller
+stamps `dcbtags` via `DcbCloudEvents.withTags(...)`, then writes the event through the plain stream `write(...)` API
+instead of `append(...)`. That produced a DCB-tagged CloudEvent with no derived `dcbTags` array and no DCB position, so
+it was silently invisible to DCB reads. The code documented that this could not happen but did not enforce it. All four
+stores now reject any `dcbtags`-carrying event on the stream `write(...)` path with a clear error pointing the caller at
+`append(...)`. The guard is unconditional (it fires regardless of which capabilities are enabled), mirroring ADR 49's
+unconditional-guard philosophy, because a `dcbtags`-carrying event on the stream path is wrong even on a `STREAM`-only
+store.
+
+**The Mongo capability filter keys off the sparse-indexed `dcbTags` array, the in-memory matcher keys off the
+extension.** The two Mongo `Filter` converters resolve the capability case against the derived `dcbTags` array field,
+so `Filter.capability(DCB)` becomes `$exists: true` on that field and reuses ADR 49's sparse index. Keying the Mongo
+filter off the `dcbtags` CloudEvent extension instead would work but would defeat that index, since the extension field
+carries no index and `$exists: true` on it would fall back to a collection scan. The in-memory `FilterMatcher` keys off
+the `dcbtags` extension through `DcbCloudEvents.isDcbEvent`, which is correct because the in-memory store holds only
+CloudEvents with no derived array. These two paths are equivalent because the enforced write-path invariant guarantees
+that the `dcbtags` extension is present exactly when the `dcbTags` array is present. The array is a faithful
+discriminator even for an empty-tag DCB append, because `DcbDocumentMapper.toDocument(...)` always writes the array
+field (an empty array for zero tags), so `$exists: true` matches empty-tag DCB events too.
+
+**No index or schema change on the stream side.** This mirrors ADR 49's reasoning in reverse. The `STREAM` guard
+resolves to `$exists: false` on the `dcbTags` field, and a sparse index cannot accelerate `$exists: false` (a sparse
+index only contains entries for documents that have the field). A marker-field migration on the already-shipped
+`STREAM` write path would be disproportionate for a capability that has zero production deployments today.
 
 ## Consequences
 
@@ -82,5 +105,11 @@ methods, which inherit the fix by routing through it. Such a subscriber only eve
 the replay and the live phases, even when it supplies its own `OccurrentSubscriptionFilter` that would otherwise match a
 DCB event.
 
-There is zero production impact, because DCB has no live deployments. A future reader should not add a startup guard,
-migration, or index for this change. None is needed.
+The stream `write(...)` path now rejects a `dcbtags`-carrying event that it previously accepted. Such an event was
+always malformed, since it produced no `dcbTags` array and no DCB position and so was invisible to DCB reads, so this
+turns a silent data problem into a fast, actionable error. The rejection is a behavior change on a released API in the
+narrow sense that a previously-accepted input now throws, but it only rejects an input that no correct caller produces,
+and DCB itself is unreleased, so there is zero production impact.
+
+There is zero production impact overall, because DCB has no live deployments. A future reader should not add a startup
+guard, migration, or index for this change. None is needed.

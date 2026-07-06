@@ -166,6 +166,9 @@ public class ReactorMongoEventStore implements EventStore, EventStoreOperations,
         // commits abandons it, so positions may have gaps. Reserve only when the store writes position and there is
         // at least one event.
         return events.collectList().flatMap(cachedEvents -> {
+            if (cachedEvents.stream().anyMatch(DcbCloudEvents::isDcbEvent)) {
+                return Mono.error(dcbTaggedEventOnStreamWriteError());
+            }
             Mono<Long> firstReservedPosition = writesPosition() && !cachedEvents.isEmpty()
                     ? reservePositions(cachedEvents.size())
                     : Mono.just(0L);
@@ -445,6 +448,16 @@ public class ReactorMongoEventStore implements EventStore, EventStoreOperations,
 
     private static UnsupportedOperationException capabilityError(EventStoreCapability capability) {
         return new UnsupportedOperationException(capability + " capability is not enabled for this ReactorMongoEventStore");
+    }
+
+    /**
+     * Error surfaced when a DCB-tagged event is written through the stream write path, regardless of which capabilities
+     * are enabled. A dcbtags-carrying event written through write(...) would get no derived dcbTags array and no DCB
+     * position, so it would be silently invisible to DCB reads. Enforcing this keeps the dcbtags extension and the
+     * dcbTags array equivalent, which the capability filter relies on.
+     */
+    private static IllegalArgumentException dcbTaggedEventOnStreamWriteError() {
+        return new IllegalArgumentException("A DCB-tagged event cannot be written through the stream write(...) API, use the DCB append(...) API instead.");
     }
 
     /**

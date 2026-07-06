@@ -18,7 +18,6 @@ package org.occurrent.mongodb.spring.filterqueryconversion.internal;
 
 import org.occurrent.condition.Condition;
 import org.occurrent.eventstore.api.EventStoreCapability;
-import org.occurrent.eventstore.api.EventStoreCloudEventExtensions;
 import org.occurrent.filter.Filter;
 import org.occurrent.filter.Filter.All;
 import org.occurrent.filter.Filter.CapabilityFilter;
@@ -36,6 +35,9 @@ import static java.util.Objects.requireNonNull;
  * an event store using Spring.
  */
 public class FilterConverter {
+
+    // Mirror of DcbDocumentMapper.DCB_TAGS_INDEX_FIELD, duplicated as a literal so this module keeps no DCB dependency.
+    private static final String DCB_TAGS_FIELD = "dcbTags";
 
     public static Query convertFilterToQuery(TimeRepresentation timeRepresentation, Filter filter) {
         return convertFilterToQuery(null, timeRepresentation, filter);
@@ -63,11 +65,14 @@ public class FilterConverter {
             String fieldName = fieldNameOf(fieldNamePrefix, scf.fieldName());
             criteria = ConditionToCriteriaConverter.convertConditionToCriteria(fieldName, conditionToUse);
         } else if (filter instanceof CapabilityFilter cpf) {
-            // A DCB append always stamps the dcbtags CloudEvent extension, which is persisted as a top-level document
-            // field under its extension name (see DocumentCloudEventWriter). A stream-written event never carries it,
-            // so its presence is the discriminator: DCB events have it, stream events do not.
+            // Match on the sparse-indexed dcbTags array field (DcbDocumentMapper.DCB_TAGS_INDEX_FIELD; the literal is
+            // duplicated here to keep this module free of any DCB dependency) so the capability filter uses the ADR 49
+            // index. A DCB append always writes this array (an empty array for zero tags), while a stream write never
+            // does, so its presence is the discriminator: DCB events have it, stream events do not. This is equivalent
+            // to keying off the dcbtags CloudEvent extension because the stream write path now rejects dcbtags-carrying
+            // events, so the array and the extension always agree.
             boolean shouldHaveDcbTags = cpf.capability() == EventStoreCapability.DCB;
-            String fieldName = fieldNameOf(fieldNamePrefix, EventStoreCloudEventExtensions.DCB_TAGS);
+            String fieldName = fieldNameOf(fieldNamePrefix, DCB_TAGS_FIELD);
             criteria = Criteria.where(fieldName).exists(shouldHaveDcbTags);
         } else if (filter instanceof CompositionFilter cf) {
             Criteria[] composedCriteria = cf.filters().stream().map(f -> FilterConverter.convertFilterToCriteria(fieldNamePrefix, timeRepresentation, f)).toArray(Criteria[]::new);

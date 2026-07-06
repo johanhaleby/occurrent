@@ -274,6 +274,16 @@ class SpringMongoEventStoreCapabilityTest {
                 .isExactlyInstanceOf(UnsupportedOperationException.class);
     }
 
+    @Test
+    void write_rejects_a_dcb_tagged_event_written_through_the_plain_write_path() {
+        SpringMongoEventStore both = new SpringMongoEventStore(mongoTemplate, eventStoreConfig(STREAM, DCB).build());
+        CloudEvent dcbTaggedEvent = taggedEvent("NameDefined", "name:1");
+
+        assertThatThrownBy(() -> both.write("name:1", WriteCondition.anyStreamVersion(), Stream.of(dcbTaggedEvent)))
+                .isExactlyInstanceOf(IllegalArgumentException.class)
+                .hasMessage("A DCB-tagged event cannot be written through the stream write(...) API, use the DCB append(...) API instead.");
+    }
+
     private List<String> indexNames() {
         return StreamSupport.stream(mongoTemplate.getCollection(EVENT_COLLECTION).listIndexes(Document.class).spliterator(), false)
                 .map(index -> index.getString("name"))

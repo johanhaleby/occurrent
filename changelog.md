@@ -20,7 +20,10 @@ DCB is a capability layered on the existing CloudEvent storage, not a new store 
   only ever deliver stream-capability events, in both the catch-up and the live phases, backed by a new
   `Filter.capability(EventStoreCapability)` primitive. `@StreamSubscription`-annotated subscriptions inherit the fix.
   A plain `EventStoreQueries` caller or a subscription model not wrapped in `StreamCatchupSubscriptionModel` is
-  unaffected.
+  unaffected. The stream `write(...)` path now rejects a DCB-tagged (`dcbtags`-carrying) event with a clear error that
+  points the caller at the DCB `append(...)` API, since such an event written through `write(...)` would be silently
+  invisible to DCB reads. This enforces the invariant that the Mongo capability filter relies on, so the filter keys
+  off the sparse-indexed `dcbTags` array for an efficient `Filter.capability(DCB)`.
   * See [ADR 50](doc/architecture/decisions/0050-stream-catchup-subscriptions-exclude-dcb-events.md).
 * Renamed the `SubscriptionPosition` type family to `Checkpoint` to stop overloading "position" for two different
   concepts: the ordering value (`position`) and the per-subscriber resume marker built from it. This is a breaking

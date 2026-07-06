@@ -256,6 +256,7 @@ public class MongoEventStore implements EventStore, EventStoreOperations, EventS
         // The transaction may retry, but a Stream cannot be consumed twice, so materialize the events into a list that
         // every attempt re-reads. This also gives the event count needed to reserve positions before the transaction.
         List<CloudEvent> cachedEvents = events.toList();
+        rejectDcbTaggedEvents(cachedEvents);
 
         // Reserve the position block outside the transaction, like DCB does (see reservePositions), so the shared
         // counter does not become a transaction write-write conflict. The block is reused across retries, and a write
@@ -817,6 +818,18 @@ public class MongoEventStore implements EventStore, EventStoreOperations, EventS
 
     private void requireStreamCapability() {
         requireCapability(STREAM);
+    }
+
+    /**
+     * Rejects any DCB-tagged event on the stream write path, regardless of which capabilities are enabled. A
+     * dcbtags-carrying event written through write(...) would get no derived dcbTags array and no DCB position, so it
+     * would be silently invisible to DCB reads. Enforcing this keeps the dcbtags extension and the dcbTags array
+     * equivalent, which the capability filter relies on.
+     */
+    private static void rejectDcbTaggedEvents(List<CloudEvent> events) {
+        if (events.stream().anyMatch(DcbCloudEvents::isDcbEvent)) {
+            throw new IllegalArgumentException("A DCB-tagged event cannot be written through the stream write(...) API, use the DCB append(...) API instead.");
+        }
     }
 
     private void requireDcbCapability() {

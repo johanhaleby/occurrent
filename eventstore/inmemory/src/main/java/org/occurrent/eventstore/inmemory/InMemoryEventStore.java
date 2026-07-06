@@ -167,7 +167,9 @@ public class InMemoryEventStore implements EventStore, EventStoreOperations, Eve
     @Override
     public WriteResult write(String streamId, WriteCondition writeCondition, Stream<CloudEvent> events) {
         requireTrue(writeCondition != null, WriteCondition.class.getSimpleName() + " cannot be null");
-        Stream<CloudEvent> cloudEventStream = events.peek(e -> requireTrue(e.getSpecVersion() == SpecVersion.V1, "Spec version needs to be " + SpecVersion.V1));
+        List<CloudEvent> cachedEvents = events.toList();
+        rejectDcbTaggedEvents(cachedEvents);
+        Stream<CloudEvent> cloudEventStream = cachedEvents.stream().peek(e -> requireTrue(e.getSpecVersion() == SpecVersion.V1, "Spec version needs to be " + SpecVersion.V1));
 
         final AtomicReference<@Nullable List<CloudEvent>> newCloudEvents = new AtomicReference<>();
         final AtomicLong currentStreamVersionContainer = new AtomicLong();
@@ -620,6 +622,17 @@ public class InMemoryEventStore implements EventStore, EventStoreOperations, Eve
                     ", version=" + version +
                     ", events=" + events +
                     '}';
+        }
+    }
+
+    /**
+     * Rejects any DCB-tagged event on the stream write path, regardless of which capabilities are enabled. A
+     * dcbtags-carrying event written through write(...) would bypass the DCB append path, so it would be silently
+     * invisible to DCB reads. Enforcing this keeps the dcbtags extension the reliable DCB discriminator.
+     */
+    private static void rejectDcbTaggedEvents(List<CloudEvent> events) {
+        if (events.stream().anyMatch(DcbCloudEvents::isDcbEvent)) {
+            throw new IllegalArgumentException("A DCB-tagged event cannot be written through the stream write(...) API, use the DCB append(...) API instead.");
         }
     }
 

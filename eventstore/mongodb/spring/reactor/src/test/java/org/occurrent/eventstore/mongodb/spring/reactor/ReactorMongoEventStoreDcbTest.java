@@ -435,6 +435,19 @@ class ReactorMongoEventStoreDcbTest {
         assertThat(elapsedMillis).as("a duplicate CloudEvent must not be retried, so it fails well before the multi-second backoff").isLessThan(3000L);
     }
 
+    @Test
+    void stream_write_rejects_a_dcb_tagged_event_reactively() {
+        CloudEvent dcbTaggedEvent = taggedEvent("NameDefined", "name:1");
+
+        StepVerifier.create(eventStore.write("name:1", Flux.just(dcbTaggedEvent)))
+                .expectErrorSatisfies(error -> assertThat(error)
+                        .isExactlyInstanceOf(IllegalArgumentException.class)
+                        .hasMessage("A DCB-tagged event cannot be written through the stream write(...) API, use the DCB append(...) API instead."))
+                .verify();
+
+        assertThat(requireNonNull(eventStore.read("name:1").block()).eventList().block()).isEmpty();
+    }
+
     private static CloudEvent taggedEvent(String type, String... tags) {
         return DcbCloudEvents.withTags(event(type), java.util.Arrays.stream(tags).map(Tag::parse).toList());
     }

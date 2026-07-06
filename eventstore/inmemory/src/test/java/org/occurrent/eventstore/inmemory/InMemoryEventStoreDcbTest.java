@@ -404,6 +404,18 @@ class InMemoryEventStoreDcbTest {
         return Tag.parse(canonical);
     }
 
+    @Test
+    void stream_write_rejects_a_dcb_tagged_event() {
+        InMemoryEventStore eventStore = new InMemoryEventStore();
+        CloudEvent dcbTaggedEvent = taggedEvent("NameDefined", "name:1");
+
+        assertThatThrownBy(() -> eventStore.write("name:1", WriteCondition.anyStreamVersion(), Stream.of(dcbTaggedEvent)))
+                .isExactlyInstanceOf(IllegalArgumentException.class)
+                .hasMessage("A DCB-tagged event cannot be written through the stream write(...) API, use the DCB append(...) API instead.");
+
+        assertThat(eventStore.all()).isEmpty();
+    }
+
     private static CloudEvent taggedEvent(String type, String... tags) {
         return DcbCloudEvents.withTags(event(type), Arrays.stream(tags).map(Tag::parse).toList());
     }
