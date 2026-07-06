@@ -17,7 +17,6 @@
 package org.occurrent.mongodb.spring.filterqueryconversion.internal;
 
 import org.occurrent.condition.Condition;
-import org.occurrent.eventstore.api.EventStoreCapability;
 import org.occurrent.filter.Filter;
 import org.occurrent.filter.Filter.All;
 import org.occurrent.filter.Filter.CapabilityFilter;
@@ -71,7 +70,12 @@ public class FilterConverter {
             // does, so its presence is the discriminator: DCB events have it, stream events do not. This is equivalent
             // to keying off the dcbtags CloudEvent extension because the stream write path now rejects dcbtags-carrying
             // events, so the array and the extension always agree.
-            boolean shouldHaveDcbTags = cpf.capability() == EventStoreCapability.DCB;
+            // Exhaustive switch so a new EventStoreCapability constant forces a compile error here rather than being
+            // silently treated as a stream event.
+            boolean shouldHaveDcbTags = switch (cpf.capability()) {
+                case DCB -> true;
+                case STREAM -> false;
+            };
             String fieldName = fieldNameOf(fieldNamePrefix, DCB_TAGS_FIELD);
             criteria = Criteria.where(fieldName).exists(shouldHaveDcbTags);
         } else if (filter instanceof CompositionFilter cf) {

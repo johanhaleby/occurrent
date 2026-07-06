@@ -18,7 +18,6 @@ package org.occurrent.inmemory.filtermatching;
 
 import io.cloudevents.CloudEvent;
 import org.jspecify.annotations.NullMarked;
-import org.occurrent.eventstore.api.EventStoreCapability;
 import org.occurrent.eventstore.api.EventStoreCloudEventExtensions;
 import org.occurrent.filter.Filter;
 import org.occurrent.filter.Filter.CompositionFilter;
@@ -48,7 +47,12 @@ public class FilterMatcher {
         } else if (filter instanceof CapabilityFilter cpf) {
             // A DCB append always stamps the dcbtags extension on the live CloudEvent; a stream event never carries it.
             boolean isDcbEvent = cloudEvent.getExtension(EventStoreCloudEventExtensions.DCB_TAGS) != null;
-            boolean shouldBeDcbEvent = cpf.capability() == EventStoreCapability.DCB;
+            // Exhaustive switch so a new EventStoreCapability constant forces a compile error here rather than being
+            // silently treated as a stream event.
+            boolean shouldBeDcbEvent = switch (cpf.capability()) {
+                case DCB -> true;
+                case STREAM -> false;
+            };
             matches = isDcbEvent == shouldBeDcbEvent;
         } else if (filter instanceof CompositionFilter cf) {
             Predicate<Filter> matchingPredicate = f -> matchesFilter(cloudEvent, f);
