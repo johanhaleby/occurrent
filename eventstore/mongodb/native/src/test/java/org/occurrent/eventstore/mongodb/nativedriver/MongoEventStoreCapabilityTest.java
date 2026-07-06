@@ -241,6 +241,45 @@ class MongoEventStoreCapabilityTest {
         assertThat(both.read(orderStreamId).events()).extracting(CloudEvent::getType).contains("OrderPlaced");
     }
 
+    @Test
+    void write_rejects_a_dcb_tagged_event_written_through_the_plain_write_path() {
+        MongoEventStore both = newEventStore(eventStoreConfig(STREAM, DCB).build());
+        CloudEvent dcbTaggedEvent = taggedEvent("NameDefined", "name:1");
+
+        assertThatThrownBy(() -> both.write("name:1", WriteCondition.anyStreamVersion(), Stream.of(dcbTaggedEvent)))
+                .isExactlyInstanceOf(IllegalArgumentException.class)
+                .hasMessage("A DCB-tagged event cannot be written through the stream write(...) API, use the DCB append(...) API instead.");
+
+        assertThat(both.query(Filter.capability(STREAM), 0, 10, SortBy.unsorted()).toList()).isEmpty();
+        assertThat(both.query(Filter.capability(DCB), 0, 10, SortBy.unsorted()).toList()).isEmpty();
+    }
+
+    @Test
+    void capability_filter_excludes_appended_dcb_event_from_stream_and_includes_it_in_dcb() {
+        MongoEventStore both = newEventStore(eventStoreConfig(STREAM, DCB).build());
+        both.write("name:1", WriteCondition.anyStreamVersion(), Stream.of(event("NameDefined")));
+        both.append(List.of(taggedEvent("NameChanged", "name:1")));
+
+        List<CloudEvent> streamCapabilityEvents = both.query(Filter.capability(STREAM), 0, 10, SortBy.unsorted()).toList();
+        List<CloudEvent> dcbCapabilityEvents = both.query(Filter.capability(DCB), 0, 10, SortBy.unsorted()).toList();
+
+        assertThat(streamCapabilityEvents).extracting(CloudEvent::getType).containsExactly("NameDefined");
+        assertThat(dcbCapabilityEvents).extracting(CloudEvent::getType).containsExactly("NameChanged");
+    }
+
+    @Test
+    void capability_filter_matches_an_empty_tag_dcb_append_by_the_dcb_tags_array() {
+        MongoEventStore both = newEventStore(eventStoreConfig(STREAM, DCB).build());
+        both.write("name:1", WriteCondition.anyStreamVersion(), Stream.of(event("NameDefined")));
+        both.append(List.of(event("SystemInitialized")));
+
+        List<CloudEvent> streamCapabilityEvents = both.query(Filter.capability(STREAM), 0, 10, SortBy.unsorted()).toList();
+        List<CloudEvent> dcbCapabilityEvents = both.query(Filter.capability(DCB), 0, 10, SortBy.unsorted()).toList();
+
+        assertThat(streamCapabilityEvents).extracting(CloudEvent::getType).containsExactly("NameDefined");
+        assertThat(dcbCapabilityEvents).extracting(CloudEvent::getType).containsExactly("SystemInitialized");
+    }
+
     private MongoEventStore newEventStore(EventStoreConfig config) {
         return new MongoEventStore(mongoClient, databaseName, EVENT_COLLECTION, config);
     }

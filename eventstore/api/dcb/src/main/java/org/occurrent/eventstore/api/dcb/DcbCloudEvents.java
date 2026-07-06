@@ -19,6 +19,7 @@ package org.occurrent.eventstore.api.dcb;
 import io.cloudevents.CloudEvent;
 import io.cloudevents.core.builder.CloudEventBuilder;
 import org.jspecify.annotations.NullMarked;
+import org.occurrent.eventstore.api.EventStoreCloudEventExtensions;
 
 import java.util.Arrays;
 import java.util.Collection;
@@ -42,9 +43,10 @@ import static java.util.stream.Collectors.toCollection;
 @NullMarked
 public final class DcbCloudEvents {
     /**
-     * CloudEvent extension name that contains newline-separated DCB tags.
+     * CloudEvent extension name that contains newline-separated DCB tags. Aliases the shared single source of truth,
+     * {@link EventStoreCloudEventExtensions#DCB_TAGS}, so the literal is defined in exactly one place.
      */
-    public static final String TAGS = "dcbtags";
+    public static final String TAGS = EventStoreCloudEventExtensions.DCB_TAGS;
     private static final String TAG_SEPARATOR = "\n";
 
     private DcbCloudEvents() {

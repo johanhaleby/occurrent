@@ -44,6 +44,11 @@
         </dependency>
         <dependency>
             <groupId>org.occurrent</groupId>
+            <artifactId>eventstore-capability</artifactId>
+            <version>${project.version}</version>
+        </dependency>
+        <dependency>
+            <groupId>org.occurrent</groupId>
             <artifactId>eventstore-api-common</artifactId>
             <version>${project.version}</version>
         </dependency>

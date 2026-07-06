@@ -19,6 +19,7 @@ package org.occurrent.filter;
 import io.cloudevents.SpecVersion;
 import org.occurrent.cloudevents.OccurrentCloudEventExtension;
 import org.occurrent.condition.Condition;
+import org.occurrent.eventstore.api.EventStoreCapability;
 
 import java.net.URI;
 import java.time.OffsetDateTime;
@@ -64,6 +65,16 @@ public sealed interface Filter {
         }
     }
 
+    /**
+     * Matches only the events written through a single {@link EventStoreCapability}, so a store with more than one
+     * capability enabled does not mix them. See {@link #capability(EventStoreCapability)}.
+     */
+    record CapabilityFilter(EventStoreCapability capability) implements Filter {
+        public CapabilityFilter {
+            requireNonNull(capability, "Capability cannot be null");
+        }
+    }
+
     static <T> Filter filter(Supplier<String> fieldName, Condition<T> condition) {
         return filter(fieldName.get(), condition);
     }
@@ -104,6 +115,23 @@ public sealed interface Filter {
 
     static Filter all() {
         return new All();
+    }
+
+    /**
+     * A filter that matches only events written through the given {@link EventStoreCapability}. This is useful on a
+     * store that has more than one capability enabled at once, where a plain filter would otherwise mix events from
+     * every capability together.
+     * <p>
+     * A DCB append always stamps the DCB tags extension, so {@code DCB} matches events that carry it. {@code STREAM} has
+     * no positive marker of its own; a stream-written event is defined simply as one that is not DCB-tagged, so it
+     * matches events that lack that extension. The concrete field/extension name each store checks lives in that store's
+     * {@code Filter}-conversion code, not here, since the same capability maps to differently named artifacts across
+     * storage engines.
+     *
+     * @param capability The capability whose events should match
+     */
+    static Filter capability(EventStoreCapability capability) {
+        return new CapabilityFilter(capability);
     }
 
     // Convenience methods

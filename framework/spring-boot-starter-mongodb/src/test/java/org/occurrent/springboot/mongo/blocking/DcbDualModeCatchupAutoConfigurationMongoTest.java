@@ -30,10 +30,13 @@ import org.occurrent.application.converter.typemapper.ReflectionCloudEventTypeMa
 import org.occurrent.application.service.blocking.ApplicationService;
 import org.occurrent.application.service.dcb.TagGenerator;
 import org.occurrent.dsl.dcb.blocking.DcbSubscriptions;
+import org.occurrent.eventstore.api.blocking.EventStoreQueries;
 import org.occurrent.eventstore.api.dcb.DcbCloudEvents;
 import org.occurrent.eventstore.api.dcb.Tag;
 import org.occurrent.eventstore.api.dcb.DcbEventStore;
 import org.occurrent.eventstore.api.dcb.DcbCriteria;
+import org.occurrent.filter.Filter;
+import org.occurrent.subscription.OccurrentSubscriptionFilter;
 import org.occurrent.subscription.DcbStartAt;
 import org.occurrent.subscription.api.blocking.SubscriptionModel;
 import org.occurrent.subscription.blocking.durable.catchup.StartAtTime;
@@ -101,6 +104,9 @@ class DcbDualModeCatchupAutoConfigurationMongoTest {
 
     @Autowired
     private CloudEventConverter<TestEvent> cloudEventConverter;
+
+    @Autowired
+    private EventStoreQueries eventStoreQueries;
 
     @Test
     void stream_subscription_replays_historic_stream_events_appended_before_subscribe() {
@@ -211,6 +217,104 @@ class DcbDualModeCatchupAutoConfigurationMongoTest {
         // Then - the DCB subscription receives only the DCB event, not the stream-only one
         await().atMost(ofSeconds(30)).pollInterval(ofMillis(100)).untilAsserted(() ->
                 assertThat(dcbReceived).contains(dcbOnly).doesNotContain(streamOnly));
+    }
+
+    @Test
+    void stream_subscription_does_not_receive_dcb_only_events_during_catchup() {
+        // Given - one stream-only event and one DCB-tagged event written before the subscription starts
+        TestEvent streamOnly = streamEvent("signal-stream");
+        TestEvent dcbOnly = dcbEvent("noise-dcb");
+        appendStream(streamOnly);
+        appendDcb(dcbOnly);
+
+        // Every delivered event is collected without any test-side filter, so a leaked DCB event would show up here.
+        CopyOnWriteArrayList<TestEvent> received = new CopyOnWriteArrayList<>();
+
+        // When - a stream subscription with no filter catches up from the beginning of time
+        subscriptionModel.subscribe(
+                        "stream-no-filter-catchup-" + UUID.randomUUID(),
+                        StartAtTime.beginningOfTime(),
+                        ce -> received.add(cloudEventConverter.toDomainEvent(ce)))
+                .waitUntilStarted();
+
+        // Then - only the stream event is replayed, the DCB event is excluded by the capability guard
+        await().atMost(ofSeconds(30)).pollInterval(ofMillis(100)).untilAsserted(() ->
+                assertThat(received).contains(streamOnly).doesNotContain(dcbOnly));
+    }
+
+    @Test
+    void stream_subscription_with_explicit_filter_does_not_receive_dcb_only_events_during_catchup() {
+        // Given - a stream and a DCB event that both match the caller's explicit source filter
+        TestEvent streamOnly = streamEvent("filtered-stream");
+        TestEvent dcbOnly = dcbEvent("filtered-dcb");
+        appendStream(streamOnly);
+        appendDcb(dcbOnly);
+
+        CopyOnWriteArrayList<TestEvent> received = new CopyOnWriteArrayList<>();
+
+        // When - a stream subscription with an explicit OccurrentSubscriptionFilter (that also matches the DCB event)
+        // catches up from the beginning of time
+        OccurrentSubscriptionFilter filter = OccurrentSubscriptionFilter.filter(Filter.source(SOURCE));
+        subscriptionModel.subscribe(
+                        "stream-explicit-filter-catchup-" + UUID.randomUUID(),
+                        filter,
+                        StartAtTime.beginningOfTime(),
+                        ce -> received.add(cloudEventConverter.toDomainEvent(ce)))
+                .waitUntilStarted();
+
+        // Then - the DCB event is still excluded even though the caller's own filter would have matched it
+        await().atMost(ofSeconds(30)).pollInterval(ofMillis(100)).untilAsserted(() ->
+                assertThat(received).contains(streamOnly).doesNotContain(dcbOnly));
+    }
+
+    @Test
+    void stream_subscription_does_not_receive_dcb_only_events_during_live_delivery() {
+        // Given - one historic stream event so the subscription catches up and then goes live
+        TestEvent historic = streamEvent("live-stream-historic");
+        appendStream(historic);
+
+        CopyOnWriteArrayList<TestEvent> received = new CopyOnWriteArrayList<>();
+
+        subscriptionModel.subscribe(
+                        "stream-live-guard-" + UUID.randomUUID(),
+                        StartAtTime.beginningOfTime(),
+                        ce -> received.add(cloudEventConverter.toDomainEvent(ce)))
+                .waitUntilStarted();
+
+        await().atMost(ofSeconds(30)).pollInterval(ofMillis(100)).untilAsserted(() ->
+                assertThat(received).contains(historic));
+
+        // When - after handover to live, a DCB event and then a stream event arrive
+        TestEvent liveDcb = dcbEvent("live-dcb-should-be-excluded");
+        TestEvent liveStream = streamEvent("live-stream-should-be-delivered");
+        appendDcb(liveDcb);
+        appendStream(liveStream);
+
+        // Then - the live stream event is delivered but the live DCB event never is, proving the guard covers the
+        // live handover phase and not just the replay. Asserting on the stream event first gives the DCB event ample
+        // time to have leaked through if the guard were missing.
+        await().atMost(ofSeconds(30)).pollInterval(ofMillis(100)).untilAsserted(() ->
+                assertThat(received).contains(historic, liveStream));
+        assertThat(received).doesNotContain(liveDcb);
+    }
+
+    @Test
+    void plain_event_store_queries_on_the_same_dual_capability_store_still_return_dcb_events() {
+        // Given - a stream event and a DCB event on the dual-capability store
+        TestEvent streamOnly = streamEvent("neutral-stream");
+        TestEvent dcbOnly = dcbEvent("neutral-dcb");
+        appendStream(streamOnly);
+        appendDcb(dcbOnly);
+
+        // When - querying the neutral EventStoreQueries layer directly with Filter.all(), bypassing
+        // StreamCatchupSubscriptionModel entirely
+        List<TestEvent> queried = eventStoreQueries.query(Filter.all())
+                .map(cloudEventConverter::toDomainEvent)
+                .toList();
+
+        // Then - the neutral layer is unaffected by the stream-capability guard and returns both events, proving the
+        // fix is scoped to StreamCatchupSubscriptionModel and did not leak into the generic query layer
+        assertThat(queried).contains(streamOnly, dcbOnly);
     }
 
     @Test
