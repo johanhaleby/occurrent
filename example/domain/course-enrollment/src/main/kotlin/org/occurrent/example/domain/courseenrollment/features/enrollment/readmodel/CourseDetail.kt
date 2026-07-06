@@ -66,6 +66,6 @@ class CourseDetail(private val queries: DcbDomainEventQueries<DomainEvent>) {
     }
 
     private fun nameOf(studentId: StudentId): String =
-        queries.queryForSequence(CourseEnrollmentQueries.studentBoundary(studentId))
+        queries.queryForSequence(CourseEnrollmentQueries.studentCriteria(studentId))
             .filterIsInstance<StudentRegistered>().map { it.name }.firstOrNull() ?: studentId.toString()
 }
