@@ -26,7 +26,7 @@ import org.occurrent.eventstore.api.reactor.PositionOrderedReader;
 import org.occurrent.filter.Filter;
 import org.occurrent.subscription.DcbSubscriptionFilter;
 import org.occurrent.subscription.GlobalCheckpoint;
-import org.occurrent.subscription.OccurrentSubscriptionFilter;
+import org.occurrent.subscription.StreamSubscriptionFilter;
 import org.occurrent.subscription.StartAt;
 import org.occurrent.subscription.SubscriptionFilter;
 import org.occurrent.subscription.Checkpoint;
@@ -64,7 +64,7 @@ class ReactorStreamCatchupSubscriptionModelTest {
     void generic_subscribe_with_a_stream_filter_goes_live_for_a_non_replay_start() {
         ReactorStreamCatchupSubscriptionModel catchup = new ReactorStreamCatchupSubscriptionModel(new NoTokenSubscriptionModel(), new UnusedPositionOrderedReader());
 
-        StepVerifier.create(catchup.subscribe(OccurrentSubscriptionFilter.filter(Filter.all()), StartAt.now()))
+        StepVerifier.create(catchup.subscribe(StreamSubscriptionFilter.filter(Filter.all()), StartAt.now()))
                 .verifyComplete();
     }
 

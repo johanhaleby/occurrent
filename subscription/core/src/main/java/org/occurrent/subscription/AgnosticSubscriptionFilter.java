@@ -24,8 +24,8 @@ import java.util.Objects;
 /**
  * A capability-agnostic {@link SubscriptionFilter} that wraps a plain Occurrent {@link Filter}.
  * <p>
- * It is the neutral sibling of {@link OccurrentSubscriptionFilter} (stream capability) and
- * {@link DcbSubscriptionFilter} (DCB tags). Where {@link OccurrentSubscriptionFilter} scopes a subscription to the
+ * It is the neutral sibling of {@link StreamSubscriptionFilter} (stream capability) and
+ * {@link DcbSubscriptionFilter} (DCB tags). Where {@link StreamSubscriptionFilter} scopes a subscription to the
  * {@code STREAM} capability, this marker signals that events of every capability should be delivered, filtered only by
  * the wrapped {@link Filter} (typically an event-type filter). On a store with both {@code STREAM} and {@code DCB}
  * capabilities it therefore delivers both stream-written and DCB-appended events, catching up over the unified global

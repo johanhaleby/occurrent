@@ -278,7 +278,7 @@ class OccurrentReactiveMongoAutoConfigurationWiringTest {
     void a_combined_stream_and_dcb_store_starts_a_beginning_of_time_stream_subscription_and_replays_history_without_failing() {
         // With both capabilities on, the reactive stack wires the dual-mode ReactorCatchupSubscriptionModel (see
         // OccurrentReactiveMongoAutoConfiguration#occurrentReactorCatchupSubscriptionModel). A @StreamSubscription
-        // carries an OccurrentSubscriptionFilter, which the routing fix always sends to the stream inner model, so
+        // carries a StreamSubscriptionFilter, which the routing fix always sends to the stream inner model, so
         // BEGINNING_OF_TIME must replay rather than fail loud like the position-off/specific-time scenarios above.
         contextRunner()
                 .withPropertyValues("occurrent.event-store.capabilities=stream,dcb")

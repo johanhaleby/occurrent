@@ -24,7 +24,7 @@ import org.occurrent.dsl.subscription.agnosticSubscriptionFilterFromEventTypes
 import org.occurrent.dsl.subscription.subscriptionFilterFromEventTypes
 import org.occurrent.filter.Filter
 import org.occurrent.subscription.AgnosticSubscriptionFilter
-import org.occurrent.subscription.OccurrentSubscriptionFilter
+import org.occurrent.subscription.StreamSubscriptionFilter
 import org.occurrent.subscription.StartAt
 import org.occurrent.subscription.api.reactor.Subscribable
 import org.occurrent.subscription.api.reactor.Subscription
@@ -133,14 +133,14 @@ class StreamSubscriptions<E : Any>(private val subscriptionModel: Subscribable, 
         return subscribe(subscriptionId, filter, startAt, fn)
     }
 
-    fun subscribe(subscriptionId: String, filter: OccurrentSubscriptionFilter = OccurrentSubscriptionFilter.filter(Filter.all()), startAt: StartAt? = null, fn: (E) -> Mono<Void>): Subscription {
+    fun subscribe(subscriptionId: String, filter: StreamSubscriptionFilter = StreamSubscriptionFilter.filter(Filter.all()), startAt: StartAt? = null, fn: (E) -> Mono<Void>): Subscription {
         return subscribe(subscriptionId, filter, startAt) { _, e -> fn(e) }
     }
 
     @JvmOverloads
     fun subscribe(
         subscriptionId: String,
-        filter: OccurrentSubscriptionFilter = OccurrentSubscriptionFilter.filter(Filter.all()),
+        filter: StreamSubscriptionFilter = StreamSubscriptionFilter.filter(Filter.all()),
         startAt: StartAt? = null,
         fn: (EventMetadata, E) -> Mono<Void>
     ): Subscription {
@@ -181,7 +181,7 @@ fun <E : Any> subscriptions(subscriptionModel: Subscribable, cloudEventConverter
 
 /**
  * The capability-agnostic subscription DSL. It mirrors the method surface of [StreamSubscriptions] but routes through an
- * [AgnosticSubscriptionFilter] instead of an [OccurrentSubscriptionFilter], so on a store with both the `STREAM` and
+ * [AgnosticSubscriptionFilter] instead of a [StreamSubscriptionFilter], so on a store with both the `STREAM` and
  * `DCB` capabilities it delivers both stream-written and DCB-appended events, filtered only by event type. Use
  * [StreamSubscriptions] or `DcbSubscriptions` when a subscription should be scoped to a single capability.
  */

@@ -61,7 +61,7 @@ import java.util.function.BiFunction;
 import java.util.stream.Stream;
 
 import static org.occurrent.filter.Filter.CompositionOperator.OR;
-import static org.occurrent.subscription.OccurrentSubscriptionFilter.filter;
+import static org.occurrent.subscription.StreamSubscriptionFilter.filter;
 
 /**
  * Reactive counterpart of the blocking {@code OccurrentBlockingAnnotationBeanPostProcessor}. It supports the

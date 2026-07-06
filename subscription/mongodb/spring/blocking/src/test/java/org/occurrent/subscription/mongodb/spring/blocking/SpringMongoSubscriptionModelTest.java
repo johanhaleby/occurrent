@@ -39,7 +39,7 @@ import org.occurrent.filter.Filter;
 import org.occurrent.functional.CheckedFunction;
 import org.occurrent.functional.Not;
 import org.occurrent.mongodb.timerepresentation.TimeRepresentation;
-import org.occurrent.subscription.OccurrentSubscriptionFilter;
+import org.occurrent.subscription.StreamSubscriptionFilter;
 import org.occurrent.subscription.CheckpointAwareCloudEvent;
 import org.occurrent.subscription.StartAt;
 import org.occurrent.subscription.Checkpoint;
@@ -612,8 +612,8 @@ public class SpringMongoSubscriptionModelTest {
     }
 
     @Nested
-    @DisplayName("SubscriptionFilter using OccurrentSubscriptionFilter")
-    class OccurrentSubscriptionFilterTest {
+    @DisplayName("SubscriptionFilter using StreamSubscriptionFilter")
+    class StreamSubscriptionFilterTest {
 
         @Test
         void using_occurrent_subscription_filter_for_type() {
@@ -621,7 +621,7 @@ public class SpringMongoSubscriptionModelTest {
             LocalDateTime now = LocalDateTime.now();
             CopyOnWriteArrayList<CloudEvent> state = new CopyOnWriteArrayList<>();
             String subscriberId = UUID.randomUUID().toString();
-            subscriptionModel.subscribe(subscriberId, OccurrentSubscriptionFilter.filter(Filter.type(NameDefined.class.getName())), state::add).waitUntilStarted();
+            subscriptionModel.subscribe(subscriberId, StreamSubscriptionFilter.filter(Filter.type(NameDefined.class.getName())), state::add).waitUntilStarted();
             NameDefined nameDefined1 = new NameDefined(UUID.randomUUID().toString(), now, "name", "name1");
             NameDefined nameDefined2 = new NameDefined(UUID.randomUUID().toString(), now.plusSeconds(2), "name2", "name2");
             NameWasChanged nameWasChanged1 = new NameWasChanged(UUID.randomUUID().toString(), now.plusSeconds(3), "name", "name3");
@@ -650,7 +650,7 @@ public class SpringMongoSubscriptionModelTest {
             NameWasChanged nameWasChanged2 = new NameWasChanged(UUID.randomUUID().toString(), now.plusSeconds(4), "name2", "name4");
 
             Filter filter = Filter.id(nameDefined2.eventId()).and(Filter.type(NameDefined.class.getName()));
-            subscriptionModel.subscribe(subscriberId, OccurrentSubscriptionFilter.filter(filter), state::add).waitUntilStarted();
+            subscriptionModel.subscribe(subscriberId, StreamSubscriptionFilter.filter(filter), state::add).waitUntilStarted();
 
             // When
             mongoEventStore.write("1", 0, serialize(nameDefined1));

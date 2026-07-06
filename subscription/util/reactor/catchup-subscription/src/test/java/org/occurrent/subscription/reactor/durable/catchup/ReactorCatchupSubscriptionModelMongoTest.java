@@ -43,7 +43,7 @@ import org.occurrent.filter.Filter;
 import org.occurrent.mongodb.timerepresentation.TimeRepresentation;
 import org.occurrent.subscription.DcbStartAt;
 import org.occurrent.subscription.GlobalCheckpoint;
-import org.occurrent.subscription.OccurrentSubscriptionFilter;
+import org.occurrent.subscription.StreamSubscriptionFilter;
 import org.occurrent.subscription.StartAt;
 import org.occurrent.subscription.DcbSubscriptionFilter;
 import org.occurrent.subscription.mongodb.spring.reactor.ReactorMongoSubscriptionModel;
@@ -130,7 +130,7 @@ class ReactorCatchupSubscriptionModelMongoTest {
 
         ReactorCatchupSubscriptionModel catchup = dualMode();
         CopyOnWriteArrayList<String> received = new CopyOnWriteArrayList<>();
-        subscribe(catchup.subscribe(OccurrentSubscriptionFilter.filter(Filter.streamId("stream-1")), StartAt.checkpoint(GlobalCheckpoint.of(0))), received);
+        subscribe(catchup.subscribe(StreamSubscriptionFilter.filter(Filter.streamId("stream-1")), StartAt.checkpoint(GlobalCheckpoint.of(0))), received);
 
         await().atMost(Duration.ofSeconds(40)).untilAsserted(() -> assertThat(received).containsExactly("h1", "h2"));
 
@@ -176,7 +176,7 @@ class ReactorCatchupSubscriptionModelMongoTest {
         ReactorCatchupSubscriptionModel catchup = dualMode();
 
         CopyOnWriteArrayList<String> streamReceived = new CopyOnWriteArrayList<>();
-        subscribe(catchup.subscribe(OccurrentSubscriptionFilter.filter(Filter.streamId("stream-1")), StartAt.checkpoint(GlobalCheckpoint.of(0))), streamReceived);
+        subscribe(catchup.subscribe(StreamSubscriptionFilter.filter(Filter.streamId("stream-1")), StartAt.checkpoint(GlobalCheckpoint.of(0))), streamReceived);
 
         CopyOnWriteArrayList<String> dcbReceived = new CopyOnWriteArrayList<>();
         subscribe(catchup.subscribe(DcbSubscriptionFilter.filter(DcbCriteria.tags(Tag.parse("name:1"))), DcbStartAt.beginning().toStartAt()), dcbReceived);

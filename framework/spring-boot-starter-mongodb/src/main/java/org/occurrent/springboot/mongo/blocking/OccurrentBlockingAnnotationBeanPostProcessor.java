@@ -70,7 +70,7 @@ import java.util.stream.Stream;
 
 import static java.time.format.DateTimeFormatter.ISO_LOCAL_DATE_TIME;
 import static org.occurrent.filter.Filter.CompositionOperator.OR;
-import static org.occurrent.subscription.OccurrentSubscriptionFilter.filter;
+import static org.occurrent.subscription.StreamSubscriptionFilter.filter;
 
 /**
  * Implements support for the {@link Subscription}, {@link StreamSubscription} and {@link DcbSubscription} annotations in

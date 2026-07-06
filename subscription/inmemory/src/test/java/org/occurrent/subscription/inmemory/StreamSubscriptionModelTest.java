@@ -39,7 +39,7 @@ import static org.awaitility.Awaitility.await;
 
 /**
  * The typed {@link StreamSubscriptionModel} facade over the shared {@link InMemorySubscriptionModel}. It wraps the
- * Occurrent {@link Filter} in an {@code OccurrentSubscriptionFilter} for the delegate and forwards life-cycle calls, so
+ * Occurrent {@link Filter} in an {@code StreamSubscriptionFilter} for the delegate and forwards life-cycle calls, so
  * a DCB query cannot be passed to it: that is a compile-time guarantee, not something a runtime test can express.
  */
 @DisplayNameGeneration(ReplaceUnderscores.class)

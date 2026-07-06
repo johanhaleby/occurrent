@@ -27,7 +27,7 @@ import org.occurrent.filter.Filter;
 import org.occurrent.inmemory.filtermatching.FilterMatcher;
 import org.occurrent.subscription.AgnosticSubscriptionFilter;
 import org.occurrent.subscription.GlobalCheckpoint;
-import org.occurrent.subscription.OccurrentSubscriptionFilter;
+import org.occurrent.subscription.StreamSubscriptionFilter;
 import org.occurrent.subscription.CheckpointAwareCloudEvent;
 import org.occurrent.subscription.StartAt;
 import org.occurrent.subscription.StartAt.SubscriptionModelContext;
@@ -78,7 +78,7 @@ import static java.util.Objects.requireNonNull;
  * <p>
  * It implements {@link CheckpointAwareSubscriptionModel}, so it can sit as a plain (cold) subscription model underneath
  * a durable model. Its generic {@link #subscribe(SubscriptionFilter, StartAt)} only accepts an
- * {@link OccurrentSubscriptionFilter}, or no filter, in which case the default {@link Filter} passed to the
+ * {@link StreamSubscriptionFilter}, or no filter, in which case the default {@link Filter} passed to the
  * constructor is used.
  */
 @NullMarked
@@ -152,7 +152,7 @@ public class ReactorStreamCatchupSubscriptionModel implements CheckpointAwareSub
 
     /**
      * The generic (cold) subscription-model entry point. The {@code filter} must be an
-     * {@link OccurrentSubscriptionFilter}, or {@code null} to use the default {@link Filter} supplied to the
+     * {@link StreamSubscriptionFilter}, or {@code null} to use the default {@link Filter} supplied to the
      * constructor. A {@code startAt} that resolves to a {@code position} replays history from that position and then
      * goes live, anything else goes straight to live.
      */
@@ -162,15 +162,15 @@ public class ReactorStreamCatchupSubscriptionModel implements CheckpointAwareSub
         final Filter resolvedFilter;
         if (filter == null) {
             if (defaultFilter == null) {
-                return Flux.error(new IllegalArgumentException("A " + OccurrentSubscriptionFilter.class.getSimpleName() + " is required unless a default " + Filter.class.getSimpleName() + " was supplied to the constructor."));
+                return Flux.error(new IllegalArgumentException("A " + StreamSubscriptionFilter.class.getSimpleName() + " is required unless a default " + Filter.class.getSimpleName() + " was supplied to the constructor."));
             }
             resolvedFilter = defaultFilter;
-        } else if (filter instanceof OccurrentSubscriptionFilter occurrentSubscriptionFilter) {
-            resolvedFilter = occurrentSubscriptionFilter.filter();
+        } else if (filter instanceof StreamSubscriptionFilter streamSubscriptionFilter) {
+            resolvedFilter = streamSubscriptionFilter.filter();
         } else if (filter instanceof AgnosticSubscriptionFilter agnosticSubscriptionFilter) {
             resolvedFilter = agnosticSubscriptionFilter.filter();
         } else {
-            return Flux.error(new IllegalArgumentException(ReactorStreamCatchupSubscriptionModel.class.getSimpleName() + " only supports an " + OccurrentSubscriptionFilter.class.getSimpleName() + " or " + AgnosticSubscriptionFilter.class.getSimpleName() + ", but got " + filter.getClass().getName()));
+            return Flux.error(new IllegalArgumentException(ReactorStreamCatchupSubscriptionModel.class.getSimpleName() + " only supports an " + StreamSubscriptionFilter.class.getSimpleName() + " or " + AgnosticSubscriptionFilter.class.getSimpleName() + ", but got " + filter.getClass().getName()));
         }
         return subscribe(resolvedFilter, startAt);
     }
@@ -200,7 +200,7 @@ public class ReactorStreamCatchupSubscriptionModel implements CheckpointAwareSub
         if (!(resolved instanceof StartAt.StartAtCheckpoint position) || !GlobalCheckpoint.isGlobalCheckpoint(position.checkpoint)) {
             // Not a catch-up position, so go straight to live. Filter in-process too, so a backend that does not
             // honor the filter server-side still only delivers matching events, and skip events without a position.
-            return subscriptionModel.subscribe(OccurrentSubscriptionFilter.filter(filter), resolved == null ? startAt : resolved)
+            return subscriptionModel.subscribe(StreamSubscriptionFilter.filter(filter), resolved == null ? startAt : resolved)
                     .filter(cloudEvent -> OccurrentCloudEventExtension.getPosition(cloudEvent) > 0 && FilterMatcher.matchesFilter(cloudEvent, filter));
         }
 
@@ -208,7 +208,7 @@ public class ReactorStreamCatchupSubscriptionModel implements CheckpointAwareSub
         CatchupReader reader = new StreamCatchupReader(positionOrderedReader, filter);
         PositionCatchupPipeline pipeline = new PositionCatchupPipeline(reader, windowSize, handoverCacheSize);
         Predicate<CloudEvent> livePredicate = cloudEvent -> OccurrentCloudEventExtension.getPosition(cloudEvent) > 0 && FilterMatcher.matchesFilter(cloudEvent, filter);
-        return pipeline.catchup(subscriptionModel, OccurrentSubscriptionFilter.filter(filter), livePredicate, startPosition);
+        return pipeline.catchup(subscriptionModel, StreamSubscriptionFilter.filter(filter), livePredicate, startPosition);
     }
 
     // ANDs the capability scope onto the caller's filter. When the scope is null (a capability-agnostic subscription)

@@ -37,7 +37,7 @@ import org.occurrent.eventstore.mongodb.spring.blocking.EventStoreConfig;
 import org.occurrent.eventstore.mongodb.spring.blocking.SpringMongoEventStore;
 import org.occurrent.mongodb.timerepresentation.TimeRepresentation;
 import org.occurrent.subscription.GlobalCheckpoint;
-import org.occurrent.subscription.OccurrentSubscriptionFilter;
+import org.occurrent.subscription.StreamSubscriptionFilter;
 import org.occurrent.subscription.StartAt;
 import org.occurrent.subscription.StringBasedCheckpoint;
 import org.occurrent.subscription.Checkpoint;
@@ -151,7 +151,7 @@ class StreamPositionCatchupSubscriptionModelMongoTest {
                 new CatchupSubscriptionModelConfig(100, useCheckpointStorage(storage).andPersistCheckpointDuringCatchupPhaseForEveryNEvents(1)));
 
         // When the position-mode catch-up subscription replays from the beginning of the global position sequence
-        subscription.subscribe("subscription", OccurrentSubscriptionFilter.filter(type(EVENT_TYPE)),
+        subscription.subscribe("subscription", StreamSubscriptionFilter.filter(type(EVENT_TYPE)),
                 StartAt.checkpoint(GlobalCheckpoint.of(0)), toDomainEvents(received)).waitUntilStarted();
 
         // Then the historic events are delivered in position order
@@ -187,7 +187,7 @@ class StreamPositionCatchupSubscriptionModelMongoTest {
                 new CatchupSubscriptionModelConfig(100, useCheckpointStorage(storage).andPersistCheckpointDuringCatchupPhaseForEveryNEvents(1)));
 
         // Resuming after position 1 (as if event1 was already processed elsewhere) replays only event2 and event3.
-        subscription.subscribe("subscription", OccurrentSubscriptionFilter.filter(type(EVENT_TYPE)),
+        subscription.subscribe("subscription", StreamSubscriptionFilter.filter(type(EVENT_TYPE)),
                 StartAt.checkpoint(GlobalCheckpoint.of(1)), toDomainEvents(received)).waitUntilStarted();
 
         await().atMost(AT_MOST).with().pollInterval(Duration.of(100, MILLIS)).untilAsserted(() ->
@@ -211,7 +211,7 @@ class StreamPositionCatchupSubscriptionModelMongoTest {
         // Using StartAt.subscriptionModelDefault() triggers the default resume-from-storage path, where the model
         // must detect that the stored token is a legacy time token (not a GlobalCheckpoint) and re-resolve
         // rather than misinterpret it as -- or crash trying to parse it as -- a position.
-        subscription.subscribe("subscription", OccurrentSubscriptionFilter.filter(type(EVENT_TYPE)),
+        subscription.subscribe("subscription", StreamSubscriptionFilter.filter(type(EVENT_TYPE)),
                 StartAt.subscriptionModelDefault(), toDomainEvents(received)).waitUntilStarted();
 
         // The re-resolved subscription does not replay preFlip history (it delegates live, exactly like a
@@ -249,7 +249,7 @@ class StreamPositionCatchupSubscriptionModelMongoTest {
                 ? StartAt.checkpoint(GlobalCheckpoint.of(0))
                 : null);
 
-        subscription.subscribe("subscription", OccurrentSubscriptionFilter.filter(type(EVENT_TYPE)), sameAsStartAt, toDomainEvents(received))
+        subscription.subscribe("subscription", StreamSubscriptionFilter.filter(type(EVENT_TYPE)), sameAsStartAt, toDomainEvents(received))
                 .waitUntilStarted();
 
         await().atMost(AT_MOST).with().pollInterval(Duration.of(100, MILLIS)).untilAsserted(() ->

@@ -21,7 +21,7 @@ import org.occurrent.application.converter.get
 import org.occurrent.condition.Condition
 import org.occurrent.filter.Filter
 import org.occurrent.subscription.AgnosticSubscriptionFilter
-import org.occurrent.subscription.OccurrentSubscriptionFilter
+import org.occurrent.subscription.StreamSubscriptionFilter
 import kotlin.reflect.KClass
 
 /**
@@ -39,11 +39,11 @@ fun <E : Any> filterFromEventTypes(cloudEventConverter: CloudEventConverter<E>, 
 }
 
 /**
- * Build an [OccurrentSubscriptionFilter] (stream capability) that matches the cloud event types derived from the given
+ * Build a [StreamSubscriptionFilter] (stream capability) that matches the cloud event types derived from the given
  * domain [eventTypes]. An empty [eventTypes] matches all events.
  */
-fun <E : Any> subscriptionFilterFromEventTypes(cloudEventConverter: CloudEventConverter<E>, eventTypes: Array<out KClass<out E>>): OccurrentSubscriptionFilter =
-    OccurrentSubscriptionFilter.filter(filterFromEventTypes(cloudEventConverter, eventTypes))
+fun <E : Any> subscriptionFilterFromEventTypes(cloudEventConverter: CloudEventConverter<E>, eventTypes: Array<out KClass<out E>>): StreamSubscriptionFilter =
+    StreamSubscriptionFilter.filter(filterFromEventTypes(cloudEventConverter, eventTypes))
 
 /**
  * Build an [AgnosticSubscriptionFilter] (capability-agnostic) that matches the cloud event types derived from the given

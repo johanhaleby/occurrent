@@ -63,7 +63,7 @@ into the `Filter` it uses for its own catch-up reads (the time-based `query`/`co
 delegated live subscription at handover, including the paths that resume straight to live without a replay phase. The
 caller's own filter is still honored. The capability guard is composed on top of it. The reactor twin does the same,
 including the in-process live predicate it matches events against. Because the live models already translate an
-`OccurrentSubscriptionFilter` generically, they need no capability-awareness of their own.
+`StreamSubscriptionFilter` generically, they need no capability-awareness of their own.
 
 **The stream write path enforces the DCB invariant.** A DCB append always stamps the `dcbtags` CloudEvent extension
 (even for an empty tag set), and when written through the DCB `append(...)` path the stored Mongo document also gets a
@@ -102,7 +102,7 @@ filter. The generic layer stays neutral.
 
 Only `StreamCatchupSubscriptionModel` subscribers get capability-scoped delivery, including `@StreamSubscription`-annotated
 methods, which inherit the fix by routing through it. Such a subscriber only ever sees stream-capability events, in both
-the replay and the live phases, even when it supplies its own `OccurrentSubscriptionFilter` that would otherwise match a
+the replay and the live phases, even when it supplies its own `StreamSubscriptionFilter` that would otherwise match a
 DCB event.
 
 The stream `write(...)` path now rejects a `dcbtags`-carrying event that it previously accepted. Such an event was

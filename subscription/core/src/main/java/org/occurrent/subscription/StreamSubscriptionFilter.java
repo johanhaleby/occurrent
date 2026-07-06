@@ -22,16 +22,20 @@ import org.occurrent.filter.Filter;
 import java.util.Objects;
 
 /**
- * An implementation of {@code SubscriptionFilter} for Occurrent {@link Filter}'s.
+ * A {@link SubscriptionFilter} for stream subscriptions, expressed as a plain Occurrent {@link Filter}.
+ * <p>
+ * On a store with both {@code STREAM} and {@code DCB} capabilities enabled, this marker means that the subscription is
+ * scoped to stream-written events. Use {@link AgnosticSubscriptionFilter} when a subscription should receive matching
+ * events from every enabled capability.
  */
 @NullMarked
-public record OccurrentSubscriptionFilter(Filter filter) implements SubscriptionFilter {
+public record StreamSubscriptionFilter(Filter filter) implements SubscriptionFilter {
 
-    public OccurrentSubscriptionFilter {
+    public StreamSubscriptionFilter {
         Objects.requireNonNull(filter, Filter.class.getSimpleName() + " cannot be null");
     }
 
-    public static OccurrentSubscriptionFilter filter(Filter filter) {
-        return new OccurrentSubscriptionFilter(filter);
+    public static StreamSubscriptionFilter filter(Filter filter) {
+        return new StreamSubscriptionFilter(filter);
     }
 }

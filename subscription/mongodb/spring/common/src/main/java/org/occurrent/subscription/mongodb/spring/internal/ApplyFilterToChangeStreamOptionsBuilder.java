@@ -25,7 +25,7 @@ import org.jspecify.annotations.Nullable;
 import org.occurrent.filter.Filter;
 import org.occurrent.mongodb.timerepresentation.TimeRepresentation;
 import org.occurrent.subscription.DcbSubscriptionFilter;
-import org.occurrent.subscription.OccurrentSubscriptionFilter;
+import org.occurrent.subscription.StreamSubscriptionFilter;
 import org.occurrent.subscription.SubscriptionFilter;
 import org.occurrent.subscription.mongodb.MongoFilterSpecification;
 import org.occurrent.subscription.mongodb.MongoFilterSpecification.MongoJsonFilterSpecification;
@@ -49,9 +49,9 @@ public class ApplyFilterToChangeStreamOptionsBuilder {
         final ChangeStreamOptions changeStreamOptions;
         if (filter == null) {
             changeStreamOptions = changeStreamOptionsBuilder.build();
-        } else if (filter instanceof OccurrentSubscriptionFilter) {
-            Filter occurrentFilter = ((OccurrentSubscriptionFilter) filter).filter();
-            Criteria criteria = convertFilterToCriteria(FULL_DOCUMENT, timeRepresentation, occurrentFilter);
+        } else if (filter instanceof StreamSubscriptionFilter) {
+            Filter streamFilter = ((StreamSubscriptionFilter) filter).filter();
+            Criteria criteria = convertFilterToCriteria(FULL_DOCUMENT, timeRepresentation, streamFilter);
             changeStreamOptions = changeStreamOptionsBuilder.filter(newAggregation(match(criteria))).build();
         } else if (filter instanceof DcbSubscriptionFilter dcbSubscriptionFilter) {
             Document matchStage = DcbSubscriptionFilterConverter.toChangeStreamMatchStage(dcbSubscriptionFilter.criteria());

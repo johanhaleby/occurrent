@@ -24,7 +24,7 @@ import java.util.Objects;
 /**
  * A {@link SubscriptionFilter} for Dynamic Consistency Boundary (DCB) subscriptions, expressed as a {@link DcbCriteria}.
  * <p>
- * This is the DCB counterpart to {@link OccurrentSubscriptionFilter}: where the stream filter wraps an Occurrent
+ * This is the DCB counterpart to {@link StreamSubscriptionFilter}: where the stream filter wraps an Occurrent
  * {@link org.occurrent.filter.Filter}, the DCB filter wraps a {@link DcbCriteria}. A subscription model that understands
  * it limits the delivered events to those matching the criteria, server-side where the backend supports it.
  */

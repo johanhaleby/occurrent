@@ -11,6 +11,9 @@ DCB is a capability layered on the existing CloudEvent storage, not a new store 
 #### Changes
 
 * Occurrent now requires Java 21 instead of Java 17. This raises the minimum JDK needed to build and run Occurrent. Stored data is unaffected, so an existing application only needs to move its runtime to Java 21.
+* Renamed `OccurrentSubscriptionFilter` to `StreamSubscriptionFilter` to make the stream-scoped subscription marker
+  explicit next to `AgnosticSubscriptionFilter` and `DcbSubscriptionFilter`. This is a breaking API change for callers
+  that construct subscription filters directly.
 * Blocking catch-up subscriptions now run their replay handoff work on Java virtual threads instead of the common
   `ForkJoinPool`, avoiding common-pool starvation from blocking event-store reads and subscriber callbacks. The Spring
   Boot Mongo starter also honors `spring.threads.virtual.enabled=true` for its blocking Mongo subscription executor.
@@ -223,7 +226,7 @@ DCB is a capability layered on the existing CloudEvent storage, not a new store 
   * See [ADR 24](doc/architecture/decisions/0024-stream-and-dcb-subscription-model-split.md).
 
 * DCB subscriptions filter server-side.
-  * `DcbSubscriptionFilter`, wrapping a `DcbCriteria`, is a first-class `SubscriptionFilter` alongside the stream `OccurrentSubscriptionFilter`. The Spring and native MongoDB subscription models translate it into a change stream `$match`, so a DCB read model that cares about a few event types or a tag boundary receives only the matching events rather than every DCB event. The in-memory model honors it in process. `DcbSubscriptions` subscribes with it and keeps a small in-process check only as a correctness floor for backends that do not filter.
+  * `DcbSubscriptionFilter`, wrapping a `DcbCriteria`, is a first-class `SubscriptionFilter` alongside the stream `StreamSubscriptionFilter`. The Spring and native MongoDB subscription models translate it into a change stream `$match`, so a DCB read model that cares about a few event types or a tag boundary receives only the matching events rather than every DCB event. The in-memory model honors it in process. `DcbSubscriptions` subscribes with it and keeps a small in-process check only as a correctness floor for backends that do not filter.
   * Tag containment matches the indexed `dcbTags` array the event store already writes, exposed as the public constant `OccurrentCloudEventMongoDocumentMapper.DCB_TAGS_INDEX_FIELD`.
   * See [ADR 23](doc/architecture/decisions/0023-server-side-filtering-for-dcb-subscriptions.md).
 
@@ -642,7 +645,7 @@ Read more about Kotlin typed execute-filter namespacing in [ADR 13](doc/architec
 * Upgraded xstream from 1.4.20 to 1.4.21
 
 ### 0.19.8 (2025-01-17)
-* Converted `org.occurrent.subscription.OccurrentSubscriptionFilter` from a Java class to a record. This means that the `public final` filter instance field is now a record property. So if you ever used `occurrentSubscriptionFilter.filter` to access the underlying filter, you now need to do `occurrentSubscriptionFilter.filter()` instead.
+* Converted `org.occurrent.subscription.StreamSubscriptionFilter` from a Java class to a record. This means that the `public final` filter instance field is now a record property. So if you ever used `streamSubscriptionFilter.filter` to access the underlying filter, you now need to do `streamSubscriptionFilter.filter()` instead.
 * Fixed a bug in MongoLeaseCompetingConsumerStrategySupport in which it was not marked a running on start. This could affect retries of certain competing consumer errors.
 * Adding equals/hashcode and toString to SpringMongoSubscriptionModel, this is useful in certain debug logging scenarios
 * Upgraded spring-boot from 3.3.5 to 3.4.1
@@ -654,7 +657,7 @@ Read more about Kotlin typed execute-filter namespacing in [ADR 13](doc/architec
 * Upgraded jackson from 2.17.2 to 2.18.2
 
 ### 0.19.7 (2024-11-01)
-* Implemented "in" conditions so you can now do e.g. `subscriptionModel.subscribe("id", OccurrentSubscriptionFilter.filter(Filter.streamVersion(Condition.in(12L, 14L))`. There's also a Kotlin extension function, `isIn`, which can be imported from `org.occurrent.condition.isIn`.
+* Implemented "in" conditions so you can now do e.g. `subscriptionModel.subscribe("id", StreamSubscriptionFilter.filter(Filter.streamVersion(Condition.in(12L, 14L))`. There's also a Kotlin extension function, `isIn`, which can be imported from `org.occurrent.condition.isIn`.
 * Upgraded kotlin from 2.0.20 to 2.0.21
 * Upgraded spring-boot from 3.3.3 to 3.3.5
 * Upgraded spring-data-mongodb from 4.3.3 to 4.3.5

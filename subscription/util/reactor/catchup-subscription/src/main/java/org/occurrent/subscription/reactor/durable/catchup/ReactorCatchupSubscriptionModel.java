@@ -25,7 +25,7 @@ import org.occurrent.eventstore.api.reactor.PositionOrderedReader;
 import org.occurrent.filter.Filter;
 import org.occurrent.subscription.AgnosticSubscriptionFilter;
 import org.occurrent.subscription.DcbSubscriptionFilter;
-import org.occurrent.subscription.OccurrentSubscriptionFilter;
+import org.occurrent.subscription.StreamSubscriptionFilter;
 import org.occurrent.subscription.GlobalCheckpoint;
 import org.occurrent.subscription.StartAt;
 import org.occurrent.subscription.StartAt.StartAtCheckpoint;
@@ -132,7 +132,7 @@ public class ReactorCatchupSubscriptionModel implements CheckpointAwareSubscript
         if (filter instanceof DcbSubscriptionFilter) {
             return true;
         }
-        if (filter instanceof OccurrentSubscriptionFilter) {
+        if (filter instanceof StreamSubscriptionFilter) {
             return false;
         }
         return startsAtExplicitDcbPosition(startAt);

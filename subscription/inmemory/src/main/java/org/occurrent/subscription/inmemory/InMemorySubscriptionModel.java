@@ -26,7 +26,7 @@ import org.occurrent.filter.Filter;
 import org.occurrent.retry.RetryStrategy;
 import org.occurrent.subscription.AgnosticSubscriptionFilter;
 import org.occurrent.subscription.DcbSubscriptionFilter;
-import org.occurrent.subscription.OccurrentSubscriptionFilter;
+import org.occurrent.subscription.StreamSubscriptionFilter;
 import org.occurrent.subscription.StartAt;
 import org.occurrent.subscription.StartAt.SubscriptionModelContext;
 import org.occurrent.subscription.SubscriptionFilter;
@@ -175,8 +175,8 @@ public class InMemorySubscriptionModel implements SubscriptionModel, Consumer<St
     private static Predicate<CloudEvent> matcherFor(@Nullable SubscriptionFilter filter) {
         if (filter == null) {
             return cloudEvent -> matchesFilter(cloudEvent, Filter.all());
-        } else if (filter instanceof OccurrentSubscriptionFilter occurrentSubscriptionFilter) {
-            Filter f = occurrentSubscriptionFilter.filter();
+        } else if (filter instanceof StreamSubscriptionFilter streamSubscriptionFilter) {
+            Filter f = streamSubscriptionFilter.filter();
             return cloudEvent -> matchesFilter(cloudEvent, f);
         } else if (filter instanceof AgnosticSubscriptionFilter agnosticSubscriptionFilter) {
             // Capability-agnostic delivery: match only the plain Filter, with no capability guard, so both stream and
@@ -192,7 +192,7 @@ public class InMemorySubscriptionModel implements SubscriptionModel, Consumer<St
             DcbCriteria query = dcbSubscriptionFilter.criteria();
             return cloudEvent -> DcbCloudEvents.isDcbEvent(cloudEvent) && DcbCloudEvents.matches(cloudEvent, query);
         } else {
-            throw new IllegalArgumentException(InMemorySubscriptionModel.class.getSimpleName() + " only supports filters of type " + OccurrentSubscriptionFilter.class.getName() + " and " + DcbSubscriptionFilter.class.getName());
+            throw new IllegalArgumentException(InMemorySubscriptionModel.class.getSimpleName() + " only supports filters of type " + StreamSubscriptionFilter.class.getName() + " and " + DcbSubscriptionFilter.class.getName());
         }
     }
 

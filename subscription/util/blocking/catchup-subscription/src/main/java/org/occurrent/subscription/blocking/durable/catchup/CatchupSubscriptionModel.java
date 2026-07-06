@@ -26,7 +26,7 @@ import org.occurrent.eventstore.api.dcb.DcbCriteria;
 import org.occurrent.subscription.AgnosticSubscriptionFilter;
 import org.occurrent.subscription.Checkpoint;
 import org.occurrent.subscription.DcbSubscriptionFilter;
-import org.occurrent.subscription.OccurrentSubscriptionFilter;
+import org.occurrent.subscription.StreamSubscriptionFilter;
 import org.occurrent.subscription.StartAt;
 import org.occurrent.subscription.SubscriptionFilter;
 import org.occurrent.subscription.api.blocking.CheckpointAwareSubscriptionModel;
@@ -250,7 +250,7 @@ public class CatchupSubscriptionModel implements SubscriptionModel, DelegatingSu
         if (filter instanceof DcbSubscriptionFilter) {
             return true;
         }
-        if (filter instanceof OccurrentSubscriptionFilter) {
+        if (filter instanceof StreamSubscriptionFilter) {
             return false;
         }
         return StreamCatchupSubscriptionModel.startsAtExplicitGlobalPosition(startAt, CatchupSubscriptionModel.class);

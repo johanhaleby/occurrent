@@ -70,7 +70,7 @@ import static org.awaitility.Awaitility.await;
 import static org.occurrent.filter.Filter.TIME;
 import static org.occurrent.filter.Filter.type;
 import static org.occurrent.functional.CheckedFunction.unchecked;
-import static org.occurrent.subscription.OccurrentSubscriptionFilter.filter;
+import static org.occurrent.subscription.StreamSubscriptionFilter.filter;
 import static org.occurrent.subscription.blocking.durable.catchup.CheckpointStorageConfig.useCheckpointStorage;
 import static org.occurrent.time.TimeConversion.toLocalDateTime;
 

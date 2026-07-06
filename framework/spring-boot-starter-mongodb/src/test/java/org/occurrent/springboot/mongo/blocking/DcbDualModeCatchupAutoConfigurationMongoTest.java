@@ -39,7 +39,7 @@ import org.occurrent.condition.Condition;
 import org.occurrent.filter.Filter;
 import org.occurrent.subscription.AgnosticSubscriptionFilter;
 import org.occurrent.subscription.GlobalCheckpoint;
-import org.occurrent.subscription.OccurrentSubscriptionFilter;
+import org.occurrent.subscription.StreamSubscriptionFilter;
 import org.occurrent.subscription.DcbStartAt;
 import org.occurrent.subscription.StartAt;
 import org.occurrent.subscription.api.blocking.Subscription;
@@ -257,9 +257,9 @@ class DcbDualModeCatchupAutoConfigurationMongoTest {
 
         CopyOnWriteArrayList<TestEvent> received = new CopyOnWriteArrayList<>();
 
-        // When - a stream subscription with an explicit OccurrentSubscriptionFilter (that also matches the DCB event)
+        // When - a stream subscription with an explicit StreamSubscriptionFilter (that also matches the DCB event)
         // catches up from the beginning of time
-        OccurrentSubscriptionFilter filter = OccurrentSubscriptionFilter.filter(Filter.source(SOURCE));
+        StreamSubscriptionFilter filter = StreamSubscriptionFilter.filter(Filter.source(SOURCE));
         subscriptionModel.subscribe(
                         "stream-explicit-filter-catchup-" + UUID.randomUUID(),
                         filter,
@@ -498,7 +498,7 @@ class DcbDualModeCatchupAutoConfigurationMongoTest {
         // When - a stream-scoped, a DCB-scoped and a neutral subscription all catch up from the beginning at once
         subscriptionModel.subscribe(
                         "regression-stream-" + UUID.randomUUID(),
-                        OccurrentSubscriptionFilter.filter(Filter.all()),
+                        StreamSubscriptionFilter.filter(Filter.all()),
                         StartAtTime.beginningOfTime(),
                         ce -> streamReceived.add(cloudEventConverter.toDomainEvent(ce)))
                 .waitUntilStarted();

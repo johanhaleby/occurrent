@@ -32,7 +32,7 @@ import org.occurrent.eventstore.mongodb.spring.reactor.EventStoreConfig;
 import org.occurrent.eventstore.mongodb.spring.reactor.ReactorMongoEventStore;
 import org.occurrent.filter.Filter;
 import org.occurrent.mongodb.timerepresentation.TimeRepresentation;
-import org.occurrent.subscription.OccurrentSubscriptionFilter;
+import org.occurrent.subscription.StreamSubscriptionFilter;
 import org.occurrent.subscription.mongodb.MongoFilterSpecification;
 import org.occurrent.testsupport.mongodb.FlushMongoDBExtension;
 import org.springframework.data.mongodb.ReactiveMongoTransactionManager;
@@ -241,8 +241,8 @@ public class ReactorMongoSubscriptionModelTest {
     }
 
     @Nested
-    @DisplayName("SubscriptionFilter using OccurrentSubscriptionFilter")
-    class OccurrentSubscriptionFilterTest {
+    @DisplayName("SubscriptionFilter using StreamSubscriptionFilter")
+    class StreamSubscriptionFilterTest {
 
         @Test
         void using_occurrent_subscription_filter_for_type() throws InterruptedException {
@@ -250,7 +250,7 @@ public class ReactorMongoSubscriptionModelTest {
             LocalDateTime now = LocalDateTime.now();
             CopyOnWriteArrayList<CloudEvent> state = new CopyOnWriteArrayList<>();
 
-            subscription.subscribe(OccurrentSubscriptionFilter.filter(Filter.type(NameDefined.class.getSimpleName())))
+            subscription.subscribe(StreamSubscriptionFilter.filter(Filter.type(NameDefined.class.getSimpleName())))
                     .flatMap(cloudEvent -> Mono.fromRunnable(() -> state.add(cloudEvent)))
                     .subscribe();
 
@@ -283,7 +283,7 @@ public class ReactorMongoSubscriptionModelTest {
             NameWasChanged nameWasChanged2 = new NameWasChanged(UUID.randomUUID().toString(), now.plusSeconds(4), "name", "name4");
 
             Filter filter = Filter.id(nameDefined2.eventId()).and(Filter.type(NameDefined.class.getSimpleName()));
-            subscription.subscribe(OccurrentSubscriptionFilter.filter(filter))
+            subscription.subscribe(StreamSubscriptionFilter.filter(filter))
                     .flatMap(cloudEvent -> Mono.fromRunnable(() -> state.add(cloudEvent)))
                     .subscribe();
 

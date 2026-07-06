@@ -54,7 +54,7 @@ public interface StreamSubscriptionModel extends SubscriptionModelLifeCycle {
 
     /**
      * Create a stream view over an existing {@link SubscriptionModel}. The returned model wraps the {@link Filter} in an
-     * {@code OccurrentSubscriptionFilter} for the delegate, and forwards all life-cycle calls to it.
+     * {@code StreamSubscriptionFilter} for the delegate, and forwards all life-cycle calls to it.
      */
     static StreamSubscriptionModel from(SubscriptionModel delegate) {
         return new StreamSubscriptionModelAdapter(delegate);

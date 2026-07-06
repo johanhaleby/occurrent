@@ -19,7 +19,7 @@ package org.occurrent.subscription.api.blocking;
 import io.cloudevents.CloudEvent;
 import org.jspecify.annotations.NullMarked;
 import org.occurrent.filter.Filter;
-import org.occurrent.subscription.OccurrentSubscriptionFilter;
+import org.occurrent.subscription.StreamSubscriptionFilter;
 import org.occurrent.subscription.StartAt;
 
 import java.util.function.Consumer;
@@ -28,7 +28,7 @@ import static java.util.Objects.requireNonNull;
 
 /**
  * Translates {@link StreamSubscriptionModel} calls into the shared {@link SubscriptionModel}, wrapping the
- * {@link Filter} in an {@link OccurrentSubscriptionFilter}. All life-cycle calls forward to the delegate (see
+ * {@link Filter} in an {@link StreamSubscriptionFilter}. All life-cycle calls forward to the delegate (see
  * {@link AbstractDelegatingSubscriptionModelAdapter}).
  */
 @NullMarked
@@ -44,6 +44,6 @@ final class StreamSubscriptionModelAdapter extends AbstractDelegatingSubscriptio
         requireNonNull(filter, Filter.class.getSimpleName() + " cannot be null");
         requireNonNull(startAt, StartAt.class.getSimpleName() + " cannot be null");
         requireNonNull(action, "Subscription action cannot be null");
-        return delegate.subscribe(subscriptionId, OccurrentSubscriptionFilter.filter(filter), startAt, action);
+        return delegate.subscribe(subscriptionId, StreamSubscriptionFilter.filter(filter), startAt, action);
     }
 }

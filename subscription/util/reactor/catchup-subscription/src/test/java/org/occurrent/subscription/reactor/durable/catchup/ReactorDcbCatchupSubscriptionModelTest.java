@@ -31,7 +31,7 @@ import org.occurrent.eventstore.api.dcb.reactor.DcbEventStore;
 import org.occurrent.filter.Filter;
 import org.occurrent.subscription.DcbStartAt;
 import org.occurrent.subscription.DcbSubscriptionFilter;
-import org.occurrent.subscription.OccurrentSubscriptionFilter;
+import org.occurrent.subscription.StreamSubscriptionFilter;
 import org.occurrent.subscription.StartAt;
 import org.occurrent.subscription.SubscriptionFilter;
 import org.occurrent.subscription.Checkpoint;
@@ -95,7 +95,7 @@ class ReactorDcbCatchupSubscriptionModelTest {
     void generic_subscribe_rejects_a_non_dcb_filter() {
         ReactorDcbCatchupSubscriptionModel catchup = new ReactorDcbCatchupSubscriptionModel(new NoTokenSubscriptionModel(), new UnusedDcbEventStore());
 
-        StepVerifier.create(catchup.subscribe(OccurrentSubscriptionFilter.filter(Filter.all()), StartAt.now()))
+        StepVerifier.create(catchup.subscribe(StreamSubscriptionFilter.filter(Filter.all()), StartAt.now()))
                 .expectError(IllegalArgumentException.class)
                 .verify();
     }
