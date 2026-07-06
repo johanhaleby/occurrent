@@ -21,6 +21,7 @@ import org.bson.BsonDocument;
 import org.bson.conversions.Bson;
 import org.occurrent.condition.Condition;
 import org.occurrent.eventstore.api.EventStoreCapability;
+import org.occurrent.eventstore.api.EventStoreCloudEventExtensions;
 import org.occurrent.filter.Filter;
 import org.occurrent.filter.Filter.All;
 import org.occurrent.filter.Filter.CapabilityFilter;
@@ -36,9 +37,6 @@ import static org.occurrent.mongodb.spring.filterbsonfilterconversion.internal.C
  * Converts a {@link Filter} into a {@link Bson} filter that can be used when querying MongoDB.
  */
 public class FilterToBsonFilterConverter {
-
-    // Mirror of DcbDocumentMapper.DCB_TAGS_INDEX_FIELD, duplicated as a literal so this module keeps no DCB dependency.
-    private static final String DCB_TAGS_FIELD = "dcbTags";
 
     public static Bson convertFilterToBsonFilter(TimeRepresentation timeRepresentation, Filter filter) {
         return convertFilterToBsonFilter(null, timeRepresentation, filter);
@@ -66,11 +64,11 @@ public class FilterToBsonFilterConverter {
             String fieldName = fieldNameOf(fieldNamePrefix, scf.fieldName());
             criteria = convertConditionToBsonCriteria(fieldName, conditionToUse);
         } else if (filter instanceof CapabilityFilter cpf) {
-            // Only DCB-written events carry the indexed dcbTags array field in the stored document (see
-            // DcbDocumentMapper.DCB_TAGS_INDEX_FIELD; the literal is duplicated here to keep this module free of any DCB
-            // dependency). Its presence is the discriminator: DCB events have it, stream events do not.
+            // A DCB append always stamps the dcbtags CloudEvent extension, which is persisted as a top-level document
+            // field under its extension name (see DocumentCloudEventWriter). A stream-written event never carries it,
+            // so its presence is the discriminator: DCB events have it, stream events do not.
             boolean shouldHaveDcbTags = cpf.capability() == EventStoreCapability.DCB;
-            String fieldName = fieldNameOf(fieldNamePrefix, DCB_TAGS_FIELD);
+            String fieldName = fieldNameOf(fieldNamePrefix, EventStoreCloudEventExtensions.DCB_TAGS);
             criteria = Filters.exists(fieldName, shouldHaveDcbTags);
         } else if (filter instanceof CompositionFilter cf) {
             Bson[] composedBson = cf.filters().stream().map(f -> innerConvert(fieldNamePrefix, timeRepresentation, f)).toArray(Bson[]::new);

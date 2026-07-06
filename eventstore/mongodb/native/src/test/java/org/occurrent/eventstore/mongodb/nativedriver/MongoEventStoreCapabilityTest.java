@@ -241,6 +241,22 @@ class MongoEventStoreCapabilityTest {
         assertThat(both.read(orderStreamId).events()).extracting(CloudEvent::getType).contains("OrderPlaced");
     }
 
+    @Test
+    void capability_filter_excludes_dcb_tagged_event_from_stream_even_when_written_through_the_plain_write_path() {
+        MongoEventStore both = newEventStore(eventStoreConfig(STREAM, DCB).build());
+        CloudEvent dcbTaggedEventWrittenAsStreamEvent = taggedEvent("NameDefined", "name:1");
+
+        // Note: written through the plain stream write path, not through append(..), so the derived "dcbTags" index
+        // array is never populated for this event. The event still carries the "dcbtags" CloudEvent extension though.
+        both.write("name:1", WriteCondition.anyStreamVersion(), Stream.of(dcbTaggedEventWrittenAsStreamEvent));
+
+        List<CloudEvent> streamCapabilityEvents = both.query(Filter.capability(STREAM), 0, 10, SortBy.unsorted()).toList();
+        List<CloudEvent> dcbCapabilityEvents = both.query(Filter.capability(DCB), 0, 10, SortBy.unsorted()).toList();
+
+        assertThat(streamCapabilityEvents).isEmpty();
+        assertThat(dcbCapabilityEvents).extracting(CloudEvent::getType).containsExactly("NameDefined");
+    }
+
     private MongoEventStore newEventStore(EventStoreConfig config) {
         return new MongoEventStore(mongoClient, databaseName, EVENT_COLLECTION, config);
     }
