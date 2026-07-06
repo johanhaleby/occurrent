@@ -79,7 +79,7 @@ public final class DcbMarkerModel {
         return keys;
     }
 
-    // A query here is either a single DcbCriterion alternative or an Items list (MatchAll is handled by the callers).
+    // MatchAll has no per-item markers. A DcbCriterion is one alternative, and Items contains several.
     public static List<DcbCriterion> dcbQueryItems(DcbCriteria query) {
         return switch (query) {
             case DcbCriteria.MatchAll ignored -> List.of();
