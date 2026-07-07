@@ -8,7 +8,7 @@ Accepted
 
 ## Context
 
-DCB is unreleased. Before the surface locks, PRs #293 and #294 swept the decider, DSL, and dcb-api packages for
+DCB is unreleased. Before the DCB API surface locks, PRs #293 and #294 swept the decider, DSL, and dcb-api packages for
 internal inconsistencies that would otherwise ship as permanent API warts. None of these are new features. Each is a
 narrow correction found by comparing the three compose combinators, the four execute variants, and the two retry
 policies against each other and asking whether their behavior actually agreed.
