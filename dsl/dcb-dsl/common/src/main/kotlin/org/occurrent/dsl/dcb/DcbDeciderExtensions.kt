@@ -27,14 +27,14 @@ import org.occurrent.dsl.decider.compose as decidersCompose
 /**
  * A utility function for creating a [DcbDecider] a bit more nicely in Kotlin.
  */
-fun <C : Any, S : Any, E : Any> dcbDecider(decider: Decider<C, S, E>, criteria: (C) -> DcbCriteria, tags: (E) -> Set<Tag>): DcbDecider<C, S, E> =
+fun <C : Any, S, E : Any> dcbDecider(decider: Decider<C, S, E>, criteria: (C) -> DcbCriteria, tags: (E) -> Set<Tag>): DcbDecider<C, S, E> =
     DcbDecider.from(decider, { c -> criteria(c) }, TagGenerator { e -> tags(e) })
 
 /**
  * Wraps this [Decider] with the DCB [criteria] (the read boundary for a command) and [tags] (the tags for events it
  * emits) it needs to run against a DCB event store, producing a [DcbDecider].
  */
-fun <C : Any, S : Any, E : Any> Decider<C, S, E>.toDcb(criteria: (C) -> DcbCriteria, tags: (E) -> Set<Tag>): DcbDecider<C, S, E> =
+fun <C : Any, S, E : Any> Decider<C, S, E>.toDcb(criteria: (C) -> DcbCriteria, tags: (E) -> Set<Tag>): DcbDecider<C, S, E> =
     dcbDecider(this, criteria, tags)
 
 /**
@@ -43,7 +43,7 @@ fun <C : Any, S : Any, E : Any> Decider<C, S, E>.toDcb(criteria: (C) -> DcbCrite
  * [E] for you. The combined criteria is the union of the boundaries of whichever of [first]/[second] recognizes the
  * command, and the combined tags is the union of tags contributed by whichever recognizes the event.
  */
-inline fun <C : Any, reified C1 : C, S1 : Any, reified E1 : E, reified C2 : C, S2 : Any, reified E2 : E, E : Any> compose(
+inline fun <C : Any, reified C1 : C, S1, reified E1 : E, reified C2 : C, S2, reified E2 : E, E : Any> compose(
     first: DcbDecider<C1, S1, E1>,
     second: DcbDecider<C2, S2, E2>
 ): DcbDecider<C, Pair<S1, S2>, E> {
@@ -69,7 +69,7 @@ inline fun <C : Any, reified C1 : C, S1 : Any, reified E1 : E, reified C2 : C, S
  * deciders only, for the same reason as the [Decider] infix compose: use the prefix `compose(a, b, c)` for three.
  */
 @JvmName("composeWith")
-inline infix fun <C : Any, reified C1 : C, S1 : Any, reified E1 : E, reified C2 : C, S2 : Any, reified E2 : E, E : Any> DcbDecider<C1, S1, E1>.compose(
+inline infix fun <C : Any, reified C1 : C, S1, reified E1 : E, reified C2 : C, S2, reified E2 : E, E : Any> DcbDecider<C1, S1, E1>.compose(
     other: DcbDecider<C2, S2, E2>
 ): DcbDecider<C, Pair<S1, S2>, E> = compose(this, other)
 
@@ -77,7 +77,7 @@ inline infix fun <C : Any, reified C1 : C, S1 : Any, reified E1 : E, reified C2 
  * Combine three feature DcbDeciders into one whose state is the [Triple] of their states. Works like the two-ary
  * [compose], extended to a third.
  */
-inline fun <C : Any, reified C1 : C, S1 : Any, reified E1 : E, reified C2 : C, S2 : Any, reified E2 : E, reified C3 : C, S3 : Any, reified E3 : E, E : Any> compose(
+inline fun <C : Any, reified C1 : C, S1, reified E1 : E, reified C2 : C, S2, reified E2 : E, reified C3 : C, S3, reified E3 : E, E : Any> compose(
     first: DcbDecider<C1, S1, E1>,
     second: DcbDecider<C2, S2, E2>,
     third: DcbDecider<C3, S3, E3>

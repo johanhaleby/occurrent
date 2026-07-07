@@ -55,7 +55,7 @@ internal fun <C : Any, E : Any> dcbCriteriaFor(commands: List<C>, dcbDecider: Dc
  * Returns the [DcbAppendResult], or `null` when the decider produced no new events (a no-op command). This is the
  * Kotlin-idiomatic counterpart to the Java [DcbApplicationService.execute] which returns `Optional<DcbAppendResult>`.
  */
-inline fun <C : Any, S : Any, reified SubE : E, E : Any> DcbApplicationService<E>.execute(
+inline fun <C : Any, S, reified SubE : E, E : Any> DcbApplicationService<E>.execute(
     command: C,
     dcbDecider: DcbDecider<C, S, SubE>
 ): DcbAppendResult? = execute(listOf(command), dcbDecider)
@@ -66,7 +66,7 @@ inline fun <C : Any, S : Any, reified SubE : E, E : Any> DcbApplicationService<E
  *
  * Returns the [DcbAppendResult], or `null` when the decider produced no new events.
  */
-inline fun <C : Any, S : Any, reified SubE : E, E : Any> DcbApplicationService<E>.execute(
+inline fun <C : Any, S, reified SubE : E, E : Any> DcbApplicationService<E>.execute(
     commands: List<C>,
     dcbDecider: DcbDecider<C, S, SubE>
 ): DcbAppendResult? {
@@ -82,7 +82,7 @@ inline fun <C : Any, S : Any, reified SubE : E, E : Any> DcbApplicationService<E
 /**
  * Execute a command and return the folded state plus the new events decided by [dcbDecider].
  */
-inline fun <C : Any, S : Any, reified SubE : E, E : Any> DcbApplicationService<E>.executeAndReturnDecision(
+inline fun <C : Any, S, reified SubE : E, E : Any> DcbApplicationService<E>.executeAndReturnDecision(
     command: C,
     dcbDecider: DcbDecider<C, S, SubE>
 ): Decider.Decision<S, E> = executeAndReturnDecision(listOf(command), dcbDecider)
@@ -90,7 +90,7 @@ inline fun <C : Any, S : Any, reified SubE : E, E : Any> DcbApplicationService<E
 /**
  * Execute commands and return the folded state plus the new events decided by [dcbDecider].
  */
-inline fun <C : Any, S : Any, reified SubE : E, E : Any> DcbApplicationService<E>.executeAndReturnDecision(
+inline fun <C : Any, S, reified SubE : E, E : Any> DcbApplicationService<E>.executeAndReturnDecision(
     commands: List<C>,
     dcbDecider: DcbDecider<C, S, SubE>
 ): Decider.Decision<S, E> {
@@ -124,11 +124,11 @@ inline fun <C : Any, S : Any, reified SubE : E, E : Any> DcbApplicationService<E
 /**
  * Execute a command and return the new events decided by [dcbDecider].
  */
-inline fun <C : Any, S : Any, reified SubE : E, E : Any> DcbApplicationService<E>.executeAndReturnEvents(command: C, dcbDecider: DcbDecider<C, S, SubE>): List<E> =
+inline fun <C : Any, S, reified SubE : E, E : Any> DcbApplicationService<E>.executeAndReturnEvents(command: C, dcbDecider: DcbDecider<C, S, SubE>): List<E> =
     executeAndReturnDecision(command, dcbDecider).events
 
 /**
  * Execute commands and return the new events decided by [dcbDecider].
  */
-inline fun <C : Any, S : Any, reified SubE : E, E : Any> DcbApplicationService<E>.executeAndReturnEvents(commands: List<C>, dcbDecider: DcbDecider<C, S, SubE>): List<E> =
+inline fun <C : Any, S, reified SubE : E, E : Any> DcbApplicationService<E>.executeAndReturnEvents(commands: List<C>, dcbDecider: DcbDecider<C, S, SubE>): List<E> =
     executeAndReturnDecision(commands, dcbDecider).events

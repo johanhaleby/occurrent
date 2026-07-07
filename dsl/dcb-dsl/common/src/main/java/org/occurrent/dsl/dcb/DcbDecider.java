@@ -51,7 +51,7 @@ import java.util.function.Function;
  * @param <S>      the state type
  * @param <E>      the event type
  */
-public record DcbDecider<C, S, E>(
+public record DcbDecider<C, S extends @Nullable Object, E>(
         Decider<C, S, E> decider,
         Function<C, @Nullable DcbCriteria> criteria,
         TagGenerator<E> tags
@@ -67,7 +67,7 @@ public record DcbDecider<C, S, E>(
      * Creates a {@code DcbDecider} from its three components. Equivalent to calling the canonical constructor, provided
      * as a static factory for a more fluent call site.
      */
-    public static <C, S, E> DcbDecider<C, S, E> from(Decider<C, S, E> decider, Function<C, @Nullable DcbCriteria> criteria, TagGenerator<E> tags) {
+    public static <C, S extends @Nullable Object, E> DcbDecider<C, S, E> from(Decider<C, S, E> decider, Function<C, @Nullable DcbCriteria> criteria, TagGenerator<E> tags) {
         return new DcbDecider<>(decider, criteria, tags);
     }
 
@@ -83,7 +83,7 @@ public record DcbDecider<C, S, E>(
      * @param commandType the command type the decider understands
      * @param eventType   the event type the decider understands
      */
-    public static <C, S, E, SubC extends C, SubE extends E> DcbDecider<C, S, E> adapt(DcbDecider<SubC, S, SubE> d, Class<SubC> commandType, Class<SubE> eventType) {
+    public static <C, S extends @Nullable Object, E, SubC extends C, SubE extends E> DcbDecider<C, S, E> adapt(DcbDecider<SubC, S, SubE> d, Class<SubC> commandType, Class<SubE> eventType) {
         Objects.requireNonNull(d, "DcbDecider cannot be null");
         Objects.requireNonNull(commandType, "commandType cannot be null");
         Objects.requireNonNull(eventType, "eventType cannot be null");
@@ -125,6 +125,7 @@ public record DcbDecider<C, S, E>(
 
         List<Decider<C, ?, E>> childDeciders = new ArrayList<>();
         for (DcbDecider<C, ?, E> d : deciders) {
+            Objects.requireNonNull(d, "deciders cannot contain null");
             childDeciders.add(d.decider());
         }
         Decider<C, CompositeState, E> composedDecider = Decider.compose(childDeciders);
