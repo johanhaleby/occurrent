@@ -168,6 +168,24 @@ class DcbDeciderTest {
             .isInstanceOf(IllegalArgumentException::class.java)
     }
 
+    @Test
+    fun compose_of_a_list_with_a_null_decider_fails_loudly() {
+        val course: DcbDecider<SchoolCommand, Boolean, SchoolEvent> = DcbDecider.adapt(
+            courseDecider().toDcb(
+                criteria = { command -> DcbCriteria.tags(Tag.of("course", command.courseId)) },
+                tags = { event -> setOf(Tag.of("course", event.courseId)) }
+            ),
+            RegisterCourse::class.java,
+            CourseRegistered::class.java
+        )
+        val deciders = listOf(course, null)
+
+        assertThatThrownBy {
+            @Suppress("UNCHECKED_CAST")
+            DcbDecider.compose(deciders as List<DcbDecider<SchoolCommand, Boolean, SchoolEvent>>)
+        }.isInstanceOf(NullPointerException::class.java)
+    }
+
     // ---- fixtures ----
 
     private sealed interface SchoolCommand

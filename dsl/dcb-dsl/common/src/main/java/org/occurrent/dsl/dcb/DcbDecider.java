@@ -103,8 +103,8 @@ public record DcbDecider<C, S extends @Nullable Object, E>(
     /**
      * Combine several DcbDeciders that already share the same command and event types into one, mirroring
      * {@link Decider#compose(Decider, Decider, Decider[])}. Use {@link #adapt} first to bring each feature decider onto
-     * the common types. Requires at least two deciders; use {@link #compose(List)} when the count is dynamic and may be
-     * fewer than two.
+     * the common types. Requires at least two deciders; use {@link #compose(List)} when the count is only known at
+     * runtime. It enforces the same two-decider minimum.
      * <p>
      * The combined {@code criteria} reads the union of the boundaries of the children that recognize the command: each
      * child is asked for its {@link DcbCriteria}, children that return {@code null} (they do not recognize the command)

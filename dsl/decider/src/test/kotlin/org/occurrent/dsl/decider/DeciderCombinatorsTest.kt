@@ -561,6 +561,15 @@ class DeciderCombinatorsTest {
                 compose(emptyList<Decider<DomainCommand, *, DomainEvent>>())
             }.isInstanceOf(IllegalArgumentException::class.java)
         }
+
+        @Test
+        fun `composing a list with a null decider fails loudly instead of a later NullPointerException`() {
+            val deciders = listOf(bulbWidened, null, counterWidened)
+            assertThatThrownBy {
+                @Suppress("UNCHECKED_CAST")
+                compose(deciders as List<Decider<DomainCommand, *, DomainEvent>>)
+            }.isInstanceOf(NullPointerException::class.java)
+        }
     }
 
     // -----------------------------------------------------------------------

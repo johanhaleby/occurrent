@@ -316,7 +316,8 @@ public interface Decider<C, S extends @Nullable Object, E> {
      * </pre>
      * <p>
      * Requires at least two deciders: composing zero or one would build a degenerate decider that does not actually
-     * combine anything. Use {@link #compose(List)} when the count is dynamic and may be fewer than two.
+     * combine anything. Use {@link #compose(List)} when the count is only known at runtime; it enforces the same
+     * two-decider minimum.
      *
      * @param first  the first decider to combine
      * @param second the second decider to combine
@@ -342,6 +343,11 @@ public interface Decider<C, S extends @Nullable Object, E> {
         Objects.requireNonNull(deciders, "deciders cannot be null");
         if (deciders.size() < 2) {
             throw new IllegalArgumentException("compose requires at least two deciders, got " + deciders.size());
+        }
+        for (int i = 0; i < deciders.size(); i++) {
+            if (deciders.get(i) == null) {
+                throw new NullPointerException("decider at index " + i + " cannot be null");
+            }
         }
         @SuppressWarnings("unchecked")
         List<Decider<C, @Nullable Object, E>> slices = (List<Decider<C, @Nullable Object, E>>) new ArrayList<>(deciders);
