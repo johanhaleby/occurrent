@@ -329,11 +329,11 @@ public class CatchupSubscriptionModel implements SubscriptionModel, DelegatingSu
         subscriptionModel.shutdown();
     }
 
-    public static boolean isTimeBasedCheckpoint(StartAt startAt) {
+    static boolean isTimeBasedCheckpoint(StartAt startAt) {
         return StreamCatchupSubscriptionModel.isTimeBasedCheckpoint(startAt, CatchupSubscriptionModel.class);
     }
 
-    public static boolean isTimeBasedCheckpoint(Checkpoint checkpoint) {
+    static boolean isTimeBasedCheckpoint(Checkpoint checkpoint) {
         return StreamCatchupSubscriptionModel.isTimeBasedCheckpoint(checkpoint);
     }
 
