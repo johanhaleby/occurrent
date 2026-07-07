@@ -115,14 +115,14 @@ public interface RetryStrategy {
     }
 
     /**
-     * Execute a {@link Supplier} with the configured retry settings.
-     * Rethrows the exception from the supplier if retry strategy is exhausted.
+     * Execute a {@link Function} with the configured retry settings.
+     * Rethrows the exception from the function if retry strategy is exhausted.
      *
      * @param function A function that takes {@link RetryInfo} and returns the result
-     * @return The result of the supplier, if successful.
+     * @return The result of the function, if successful.
      */
     default <T extends @Nullable Object> T execute(Function<RetryInfo, T> function) {
-        Objects.requireNonNull(function, Supplier.class.getSimpleName() + " cannot be null");
+        Objects.requireNonNull(function, Function.class.getSimpleName() + " cannot be null");
         return executeWithRetry(function, __ -> true, this).apply(firstAttemptRetryInfo());
     }
 

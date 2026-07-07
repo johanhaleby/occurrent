@@ -16,7 +16,7 @@ DCB is a capability layered on the existing CloudEvent storage, not a new store 
 * Added package-level JSpecify nullness defaults across the Java modules and tightened Kotlin wrappers around nullable
   state, retry results, and optional CloudEvent time and subject values.
 * Fixed `RetryStrategy.none().execute(Function<RetryInfo, T>)` so the function receives a non-null first-attempt
-  `RetryInfo` instead of `null`.
+  `RetryInfo` instead of `null`, and corrected the `Function` overload documentation and null-check message.
 * Renamed `OccurrentSubscriptionFilter` to `StreamSubscriptionFilter` to make the stream-scoped subscription marker
   explicit next to `AgnosticSubscriptionFilter` and `DcbSubscriptionFilter`. This is a breaking API change for callers
   that construct subscription filters directly.
