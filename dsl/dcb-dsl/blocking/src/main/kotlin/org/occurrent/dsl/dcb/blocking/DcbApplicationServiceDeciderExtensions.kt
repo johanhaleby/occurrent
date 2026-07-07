@@ -35,27 +35,34 @@ import java.util.stream.Stream
 /**
  * Resolve the read boundary for [commands] from [dcbDecider]. The boundary comes from the command, and every command in
  * one execute must resolve to the same boundary because they are appended atomically under one condition. The boundary
- * is taken from the first command and the rest must match it, so a batch that mixes recognized and unrecognized
- * commands fails that guard rather than returning `null`. Returns `null` only when the command, or the whole batch, is
- * not recognized, which the callers treat as a no-op.
+ * is taken from the first command and the rest must match it. An unrecognized command, meaning no decider recognizes
+ * it, is a programming error and throws [IllegalArgumentException] rather than being treated as a no-op, and a batch
+ * that mixes a recognized and an unrecognized command throws that same unrecognized-command error rather than the
+ * boundary-mismatch one, so the message points at the actual cause.
  */
 @PublishedApi
-internal fun <C : Any, E : Any> dcbCriteriaFor(commands: List<C>, dcbDecider: DcbDecider<C, *, E>): DcbCriteria? {
+internal fun <C : Any, E : Any> dcbCriteriaFor(commands: List<C>, dcbDecider: DcbDecider<C, *, E>): DcbCriteria {
     require(commands.isNotEmpty()) { "Must supply at least one command" }
-    val first = dcbDecider.criteria().apply(commands.first())
+    val first = requireRecognized(commands.first(), dcbDecider)
     for (i in 1 until commands.size) {
-        require(dcbDecider.criteria().apply(commands[i]) == first) {
+        val boundary = requireRecognized(commands[i], dcbDecider)
+        require(boundary == first) {
             "All commands in a single execute must resolve to the same DcbCriteria boundary, they are appended atomically under one condition"
         }
     }
     return first
 }
 
+private fun <C : Any, E : Any> requireRecognized(command: C, dcbDecider: DcbDecider<C, *, E>): DcbCriteria =
+    dcbDecider.criteria().apply(command)
+        ?: throw IllegalArgumentException("The decider does not recognize command $command, so there is no boundary to read and no decision to make")
+
 /**
  * Execute a decider command. The [dcbDecider] carries the DCB decision boundary and the tags for the events it emits.
  *
  * Returns the [DcbAppendResult], or `null` when the decider produced no new events (a no-op command). This is the
  * Kotlin-idiomatic counterpart to the Java [DcbApplicationService.execute] which returns `Optional<DcbAppendResult>`.
+ * Throws [IllegalArgumentException] when [command] is not recognized by [dcbDecider].
  */
 inline fun <C : Any, S, reified SubE : E, E : Any> DcbApplicationService<E>.execute(
     command: C,
@@ -66,13 +73,14 @@ inline fun <C : Any, S, reified SubE : E, E : Any> DcbApplicationService<E>.exec
  * Execute decider commands in order. The [dcbDecider] carries the DCB decision boundary and the tags for the events it
  * emits.
  *
- * Returns the [DcbAppendResult], or `null` when the decider produced no new events.
+ * Returns the [DcbAppendResult], or `null` when the decider produced no new events. Throws [IllegalArgumentException]
+ * when any of [commands] is not recognized by [dcbDecider].
  */
 inline fun <C : Any, S, reified SubE : E, E : Any> DcbApplicationService<E>.execute(
     commands: List<C>,
     dcbDecider: DcbDecider<C, S, SubE>
 ): DcbAppendResult? {
-    val criteria = dcbCriteriaFor(commands, dcbDecider) ?: return null
+    val criteria = dcbCriteriaFor(commands, dcbDecider)
     val widened: Decider<C, S, E> = dcbDecider.decider().adaptEvents()
     val tags = TagGenerator<E> { event -> if (event is SubE) dcbDecider.tags().tags(event) else emptySet() }
     val options = DcbExecuteOptions.options<E>().tagGenerator(tags)
@@ -82,7 +90,8 @@ inline fun <C : Any, S, reified SubE : E, E : Any> DcbApplicationService<E>.exec
 }
 
 /**
- * Execute a command and return the folded state plus the new events decided by [dcbDecider].
+ * Execute a command and return the folded state plus the new events decided by [dcbDecider]. Throws
+ * [IllegalArgumentException] when [command] is not recognized by [dcbDecider].
  */
 inline fun <C : Any, S, reified SubE : E, E : Any> DcbApplicationService<E>.executeAndReturnDecision(
     command: C,
@@ -90,15 +99,14 @@ inline fun <C : Any, S, reified SubE : E, E : Any> DcbApplicationService<E>.exec
 ): Decider.Decision<S, E> = executeAndReturnDecision(listOf(command), dcbDecider)
 
 /**
- * Execute commands and return the folded state plus the new events decided by [dcbDecider].
+ * Execute commands and return the folded state plus the new events decided by [dcbDecider]. Throws
+ * [IllegalArgumentException] when any of [commands] is not recognized by [dcbDecider].
  */
 inline fun <C : Any, S, reified SubE : E, E : Any> DcbApplicationService<E>.executeAndReturnDecision(
     commands: List<C>,
     dcbDecider: DcbDecider<C, S, SubE>
 ): Decider.Decision<S, E> {
-    val criteria = requireNotNull(dcbCriteriaFor(commands, dcbDecider)) {
-        "The decider does not recognize the given command(s), so there is no boundary to read and no decision to make"
-    }
+    val criteria = dcbCriteriaFor(commands, dcbDecider)
     val widened: Decider<C, S, E> = dcbDecider.decider().adaptEvents()
     val tags = TagGenerator<E> { event -> if (event is SubE) dcbDecider.tags().tags(event) else emptySet() }
     val options = DcbExecuteOptions.options<E>().tagGenerator(tags)

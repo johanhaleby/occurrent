@@ -21,9 +21,9 @@ import org.jspecify.annotations.NonNull;
 import org.jspecify.annotations.Nullable;
 
 import java.util.ArrayList;
-import java.util.Arrays;
 import java.util.Collections;
 import java.util.List;
+import java.util.Objects;
 import java.util.function.BiFunction;
 import java.util.function.Predicate;
 
@@ -314,16 +314,41 @@ public interface Decider<C, S extends @Nullable Object, E> {
      * CourseState course = state.slice(0);   // first decider's state
      * StudentState student = state.slice(1);  // second decider's state
      * </pre>
+     * <p>
+     * Requires at least two deciders: composing zero or one would build a degenerate decider that does not actually
+     * combine anything. Use {@link #compose(List)} when the count is only known at runtime; it enforces the same
+     * two-decider minimum.
+     *
+     * @param first  the first decider to combine
+     * @param second the second decider to combine
+     * @param rest   any further deciders to combine
      */
     @SafeVarargs
-    static <C, E> Decider<C, CompositeState, E> compose(@NonNull Decider<C, ?, E>... deciders) {
-        return compose(Arrays.asList(deciders));
+    static <C, E> Decider<C, CompositeState, E> compose(@NonNull Decider<C, ?, E> first, @NonNull Decider<C, ?, E> second, @NonNull Decider<C, ?, E>... rest) {
+        Objects.requireNonNull(first, "first cannot be null");
+        Objects.requireNonNull(second, "second cannot be null");
+        Objects.requireNonNull(rest, "rest cannot be null");
+        List<Decider<C, ?, E>> deciders = new ArrayList<>();
+        deciders.add(first);
+        deciders.add(second);
+        Collections.addAll(deciders, rest);
+        return compose(deciders);
     }
 
     /**
-     * Like {@link #compose(Decider[])} but takes the deciders as a list, for when the number is not known at compile time.
+     * Like {@link #compose(Decider, Decider, Decider[])} but takes the deciders as a list, for when the number is not
+     * known at compile time. Requires at least two deciders.
      */
     static <C, E> Decider<C, CompositeState, E> compose(@NonNull List<? extends Decider<C, ?, E>> deciders) {
+        Objects.requireNonNull(deciders, "deciders cannot be null");
+        if (deciders.size() < 2) {
+            throw new IllegalArgumentException("compose requires at least two deciders, got " + deciders.size());
+        }
+        for (int i = 0; i < deciders.size(); i++) {
+            if (deciders.get(i) == null) {
+                throw new NullPointerException("decider at index " + i + " cannot be null");
+            }
+        }
         @SuppressWarnings("unchecked")
         List<Decider<C, @Nullable Object, E>> slices = (List<Decider<C, @Nullable Object, E>>) new ArrayList<>(deciders);
 

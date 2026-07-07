@@ -116,6 +116,29 @@ class GenericDcbApplicationServiceTest {
                 .containsExactly("NameDefined", "NameChangedByOther", "NameChangedByService");
     }
 
+    @Test
+    void default_retry_strategy_makes_five_attempts_in_total_before_rethrowing() {
+        InMemoryEventStore delegate = new InMemoryEventStore();
+        delegate.append(List.of(DcbCloudEvents.withTags(converter().toCloudEvent(new DomainEvent("NameDefined", "name:1")), Set.of(Tag.parse("name:1")))));
+        AlwaysConflictingDcbEventStore eventStore = new AlwaysConflictingDcbEventStore(delegate, converter());
+        AtomicInteger attempts = new AtomicInteger();
+        GenericDcbApplicationService<DomainEvent> applicationService = new GenericDcbApplicationService<>(
+                eventStore,
+                converter(),
+                event -> Set.of(Tag.parse(event.name())),
+                GenericDcbApplicationService.defaultRetryStrategy());
+
+        org.assertj.core.api.Assertions.assertThatThrownBy(() -> applicationService.execute(tags(Tag.parse("name:1")), events -> {
+                    attempts.incrementAndGet();
+                    return Stream.of(new DomainEvent("NameChangedByService", "name:1"));
+                }))
+                .isInstanceOf(org.occurrent.eventstore.api.dcb.DcbAppendConditionNotFulfilledException.class);
+
+        // The default policy allows five attempts in total (the initial attempt plus four retries) before giving up,
+        // matching the reactive counterpart's defaultRetry.
+        assertThat(attempts).hasValue(5);
+    }
+
     private static CloudEventConverter<DomainEvent> converter() {
         return new CloudEventConverter<>() {
             @Override
@@ -168,6 +191,33 @@ class GenericDcbApplicationServiceTest {
             if (conflictInserted.compareAndSet(false, true)) {
                 delegate.append(List.of(conflictingEvent));
             }
+            return delegate.append(events, condition);
+        }
+    }
+
+    private static class AlwaysConflictingDcbEventStore implements DcbEventStore {
+        private final DcbEventStore delegate;
+        private final CloudEventConverter<DomainEvent> converter;
+
+        private AlwaysConflictingDcbEventStore(DcbEventStore delegate, CloudEventConverter<DomainEvent> converter) {
+            this.delegate = delegate;
+            this.converter = converter;
+        }
+
+        @Override
+        public DcbEventStream read(DcbCriteria query, DcbReadOptions options) {
+            return delegate.read(query, options);
+        }
+
+        @Override
+        public DcbAppendResult append(List<CloudEvent> events) {
+            return delegate.append(events);
+        }
+
+        @Override
+        public DcbAppendResult append(List<CloudEvent> events, DcbAppendCondition condition) {
+            CloudEvent interloper = DcbCloudEvents.withTags(converter.toCloudEvent(new DomainEvent("NameChangedByOther", "name:1")), Set.of(Tag.parse("name:1")));
+            delegate.append(List.of(interloper));
             return delegate.append(events, condition);
         }
     }

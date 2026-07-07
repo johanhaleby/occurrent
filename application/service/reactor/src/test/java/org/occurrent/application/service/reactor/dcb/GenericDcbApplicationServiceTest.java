@@ -216,9 +216,10 @@ class GenericDcbApplicationServiceTest {
                 .expectError(DcbAppendConditionNotFulfilledException.class)
                 .verify();
 
-        // The default policy retries five times before giving up, so the decider runs six times and the original
-        // condition failure surfaces rather than a retry-exhausted wrapper.
-        assertThat(attempts).hasValue(6);
+        // The default policy allows five attempts in total (the initial attempt plus four retries) before giving up,
+        // matching the blocking counterpart, so the decider runs five times and the original condition failure
+        // surfaces rather than a retry-exhausted wrapper.
+        assertThat(attempts).hasValue(5);
     }
 
     private static CloudEventConverter<DomainEvent> converter() {
