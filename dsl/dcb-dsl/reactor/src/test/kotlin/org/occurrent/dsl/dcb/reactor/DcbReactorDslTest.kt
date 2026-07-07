@@ -159,7 +159,6 @@ class DcbReactorDslTest {
         val conflictingStore = ConflictingOnceDcbEventStore(eventStore, interloper)
         val service = GenericDcbApplicationService(conflictingStore, converter, { event -> setOf(tagFor(event)) }, GenericDcbApplicationService.defaultRetry())
         val deciderRuns = AtomicInteger()
-        // toDcb requires a non-null state type, so an empty string stands in for "no name yet" instead of null.
         val countingDecider: Decider<NameCommand, String, DomainEvent> = decider(
             initialState = "",
             decide = { command, _ ->
@@ -182,7 +181,6 @@ class DcbReactorDslTest {
         assertThat(decision.state).isEqualTo("John Doe")
     }
 
-    // toDcb requires a non-null state type, so an empty string stands in for "no name yet" instead of null.
     private fun nameDecider(): Decider<NameCommand, String, DomainEvent> =
         decider(
             initialState = "",

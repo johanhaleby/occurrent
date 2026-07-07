@@ -132,10 +132,10 @@ class DcbApplicationServiceDeciderExtensionsTest {
 
     @Test
     fun decider_over_a_narrower_event_type_runs_without_an_explicit_adaptEvents() {
-        // Given a decider whose event type (NameDefined) is a subtype of the service's event type (DomainEvent)
-        // toDcb requires a non-null state type, so an empty string stands in for "no name yet" instead of null.
-        val narrowDecider: Decider<DefineName, String, NameDefined> = decider(
-            initialState = "",
+        // Given a decider whose event type (NameDefined) is a subtype of the service's event type (DomainEvent).
+        // Its state is nullable (null means "no name yet"), which toDcb and execute now accept.
+        val narrowDecider: Decider<DefineName, String?, NameDefined> = decider(
+            initialState = null,
             decide = { command, _ -> listOf(NameDefined("event-1", time, "name", command.name)) },
             evolve = { _, event -> event.name() }
         )
@@ -152,7 +152,7 @@ class DcbApplicationServiceDeciderExtensionsTest {
         assertThat(readNameEvents("name")).containsExactly(NameDefined("event-1", time, "name", "Jane Doe"))
     }
 
-    // toDcb requires a non-null state type, so an empty string stands in for "no name yet" instead of null.
+    // executeAndReturnState returns the state directly and cannot carry null, so this decider uses a non-null String, with an empty string for "no name yet".
     private fun nameDecider(): Decider<NameCommand, String, DomainEvent> =
         decider(
             initialState = "",

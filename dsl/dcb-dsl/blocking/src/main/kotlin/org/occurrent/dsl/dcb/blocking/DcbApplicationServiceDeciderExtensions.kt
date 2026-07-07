@@ -34,8 +34,10 @@ import java.util.stream.Stream
 
 /**
  * Resolve the read boundary for [commands] from [dcbDecider]. The boundary comes from the command, and every command in
- * one execute must resolve to the same boundary because they are appended atomically under one condition. Returns
- * `null` when the decider does not recognize the command(s), which the callers treat as a no-op.
+ * one execute must resolve to the same boundary because they are appended atomically under one condition. The boundary
+ * is taken from the first command and the rest must match it, so a batch that mixes recognized and unrecognized
+ * commands fails that guard rather than returning `null`. Returns `null` only when the command, or the whole batch, is
+ * not recognized, which the callers treat as a no-op.
  */
 @PublishedApi
 internal fun <C : Any, E : Any> dcbCriteriaFor(commands: List<C>, dcbDecider: DcbDecider<C, *, E>): DcbCriteria? {
