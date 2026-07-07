@@ -31,9 +31,11 @@ import static java.util.Objects.requireNonNull;
  * the window and head reads, so this pipeline is free of any specific store or query type, and is reused by both the
  * stream and the DCB catch-up models (the blocking counterpart of the reactor {@code PositionCatchupPipeline}).
  * <p>
- * The replay pages the sequence in {@code windowSize} windows, then a reconciliation pass keeps paging until the head
- * stops advancing so events written during the replay are delivered in order. The caller supplies the delivery
- * (dedup cache, checkpoint persistence, cancellation) so this class stays a pure paging loop.
+ * The replay pages the sequence in {@code windowSize} windows, then a single reconciliation pass drains up to a head
+ * snapshotted once at reconcile start so events written during the replay are delivered in order. It does not chase a
+ * moving head, which under sustained writes would never terminate, so anything committed after the snapshot head is
+ * left to the live subscription (resuming from the pre-bulk token), deduped by the caller's cache. The caller supplies
+ * the delivery (dedup cache, checkpoint persistence, cancellation) so this class stays a pure paging loop.
  */
 @NullMarked
 final class PositionCatchupPipeline {
@@ -66,9 +68,9 @@ final class PositionCatchupPipeline {
     }
 
     /**
-     * Replays from {@code startPosition} to the current head, then reconciles until the head stops advancing,
-     * handing each read window to {@code deliver}. Returns the position the replay reached, which is the resume
-     * boundary the caller hands over to live delivery.
+     * Replays from {@code startPosition} to the current head, then reconciles once up to a head snapshotted at
+     * reconcile start (it does not chase a moving head), handing each read window to {@code deliver}. Returns the
+     * position the replay reached, which is the resume boundary the caller hands over to live delivery.
      *
      * @param keepRunning Checked before every window read; stops the replay early on cancellation or shutdown.
      * @param deliver     Called with each window's events (bulk windows get a {@code null} cache, reconciliation
@@ -78,13 +80,15 @@ final class PositionCatchupPipeline {
         long bulkHead = reader.currentHead();
         long cursor = windows(startPosition, bulkHead, keepRunning, deliver, null);
 
-        // Reconcile events written during the bulk replay by continuing to page until the head stops advancing.
-        // Re-reads of overlapping windows are deduped by the cache (delivery is at-least-once).
-        long head = reader.currentHead();
-        while (head > cursor && keepRunning.getAsBoolean()) {
-            cursor = windows(cursor, head, keepRunning, deliver, cache);
-            head = reader.currentHead();
-        }
+        // Reconcile events written during the bulk replay by draining up to a head snapshotted once here. It does not
+        // chase a moving head: under sustained writes re-reading the head would advance forever and the catch-up would
+        // never hand over to live (a livelock). Anything committed after this snapshot head is delivered by the live
+        // subscription, which resumes from the pre-bulk token, deduped by the cache. Loss-safe: nothing in
+        // (snapshotHead, now] is skipped because live covers it, and nothing in (cursor, snapshotHead] is skipped
+        // because this pass drains it. Re-reads of the bulk-tail overlap are deduped by the cache (delivery is
+        // at-least-once).
+        long snapshotHead = reader.currentHead();
+        cursor = windows(cursor, snapshotHead, keepRunning, deliver, cache);
         return cursor;
     }
 

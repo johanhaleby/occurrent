@@ -24,26 +24,32 @@ import java.util.LinkedHashSet;
 import java.util.Set;
 
 /**
- * A bounded, insertion-ordered set of recently replayed event ids. The live change stream resumes inclusively and
- * re-delivers events near the captured token that the replay already emitted, and this cache skips those. It only
- * needs the tail the live resume can overlap, not the whole history.
+ * An insertion-ordered set of replayed event ids that the inclusive live resume re-delivers at the handover seam, so
+ * the pipeline can suppress those duplicates. It holds the ids delivered during the replay window (the overlap the
+ * live change stream re-delivers, bounded by the write volume during the replay, not by total history), and grows to
+ * cover that overlap up to {@code ceiling}. Once the set would exceed {@code ceiling} it evicts oldest-first.
+ * <p>
+ * Eviction is loss-safe by construction: dropping an id can only stop a re-delivered live event from being suppressed,
+ * so an overlap larger than {@code ceiling} yields extra duplicate deliveries, never loss. Dedup is by id, never by
+ * position, so a low-position event that commits late (after the handover advanced past its position) and is therefore
+ * absent from the forward-only replay is never in this set and is always delivered by the live change stream.
  */
 @NullMarked
 final class HandoverCache {
-    private final int maxSize;
+    private final int ceiling;
     private final Set<String> ids;
 
-    public HandoverCache(int maxSize) {
-        if (maxSize < 1) {
-            throw new IllegalArgumentException("maxSize must be at least 1, was " + maxSize);
+    public HandoverCache(int ceiling) {
+        if (ceiling < 1) {
+            throw new IllegalArgumentException("ceiling must be at least 1, was " + ceiling);
         }
-        this.maxSize = maxSize;
+        this.ceiling = ceiling;
         this.ids = Collections.synchronizedSet(new LinkedHashSet<>());
     }
 
     public void add(String id) {
         synchronized (ids) {
-            if (ids.add(id) && ids.size() > maxSize) {
+            if (ids.add(id) && ids.size() > ceiling) {
                 Iterator<String> iterator = ids.iterator();
                 iterator.next();
                 iterator.remove();

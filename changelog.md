@@ -25,6 +25,20 @@ DCB is a capability layered on the existing CloudEvent storage, not a new store 
   delivery, `CatchupSubscriptionModelConfig.equals`/`hashCode` now include every configurable field, the in-memory
   handover cache is synchronized to match the reactor stack, and the time-based reconciliation delta is now read in
   bounded windows instead of one unbounded list.
+* The catch-up-to-live handover dedup now scales to the during-replay overlap with a configurable ceiling, so a large
+  rebuild with heavy concurrent writes gets far fewer duplicate deliveries while delivery stays at-least-once. The
+  dedup id set previously capped at a fixed size (1000 in the reactor models, 100 in the blocking models) and, once the
+  overlap the live subscription re-delivers grew past that cap, evicted ids the live stream then re-delivered as
+  duplicates. It now grows to cover that overlap (bounded by the write volume during the replay, not by total history)
+  up to a ceiling that defaults to 100000 and is configurable through the catch-up config. Exceeding the ceiling only
+  yields extra duplicates, never loss, and dedup stays keyed by id so a low-position event that commits late is still
+  delivered by the live stream. Both the reactor and blocking stream and DCB catch-up paths get this.
+* Catch-up reconcile no longer livelocks under sustained writes. The reconciliation pass that drains events written
+  during the bulk replay used to re-read the store head after every window and keep paging until the head stopped
+  advancing, so a continuous write rate meant it never handed over to live delivery. It now snapshots the head once at
+  reconcile start and drains up to that snapshot, then hands over to live. Anything committed after the snapshot is
+  delivered by the live subscription, which resumes from the pre-bulk token, so the change loses nothing. Both the
+  reactor and blocking stream and DCB catch-up paths get this.
 * Occurrent now requires Java 21 instead of Java 17. This raises the minimum JDK needed to build and run Occurrent. Stored data is unaffected, so an existing application only needs to move its runtime to Java 21.
 * Modernized Java dispatch code to use Java 21 pattern matching and exhaustive switches across sealed filters,
   criteria, start positions, checkpoints, deadlines, and examples.

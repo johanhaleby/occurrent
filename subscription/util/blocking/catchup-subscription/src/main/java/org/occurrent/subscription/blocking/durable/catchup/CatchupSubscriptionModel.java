@@ -104,7 +104,7 @@ import java.util.function.Consumer;
 @NullMarked
 public class CatchupSubscriptionModel implements SubscriptionModel, DelegatingSubscriptionModel {
 
-    private static final int DEFAULT_CACHE_SIZE = 100;
+    private static final int DEFAULT_CACHE_SIZE = CatchupSubscriptionModelConfig.DEFAULT_HANDOVER_CACHE_SIZE;
 
     private final CheckpointAwareSubscriptionModel subscriptionModel;
     private final @Nullable StreamCatchupSubscriptionModel streamCatchupSubscriptionModel;
