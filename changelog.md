@@ -80,6 +80,11 @@ DCB is a capability layered on the existing CloudEvent storage, not a new store 
   * See [ADR 52](doc/architecture/decisions/0052-couple-decider-with-dcb-boundary-and-tags.md).
 * Fixed concurrent DCB appends failing with a misleading duplicate CloudEvent error on a store with both the DCB and
   STREAM capabilities enabled. Two appends to disjoint DCB boundaries can hash to the same partition stream and race on
+  the next stream version, and the loser hit the unique `streamid` plus `streamversion` index. That collision is not a
+  real duplicate CloudEvent, so it is now retried through the read-decide-append cycle instead of failing, while a
+  genuine duplicate CloudEvent (same `id` and `source`) still fails as before.
+* DCB-enabled stores now index the stream-version lookup, write conflict markers in a single bulk write, and run
+  reads concurrently in the reactor DCB support.
   the next stream version, and the loser hits the unique `streamid` plus `streamversion` index. That collision is not a
   real duplicate CloudEvent, so it is now retried through the read-decide-append cycle instead of failing, while a
   genuine duplicate CloudEvent (same `id` and `source`) still fails as before.

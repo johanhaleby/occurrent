@@ -18,9 +18,11 @@ package org.occurrent.eventstore.mongodb.nativedriver;
 
 import com.mongodb.ErrorCategory;
 import com.mongodb.MongoBulkWriteException;
+import com.mongodb.MongoCommandException;
 import com.mongodb.MongoException;
 import com.mongodb.TransactionOptions;
 import com.mongodb.client.*;
+import com.mongodb.client.model.BulkWriteOptions;
 import com.mongodb.client.model.FindOneAndUpdateOptions;
 import com.mongodb.client.model.Filters;
 import com.mongodb.client.model.IndexOptions;
@@ -28,8 +30,10 @@ import com.mongodb.client.model.Indexes;
 import com.mongodb.client.model.Projections;
 import com.mongodb.client.model.ReturnDocument;
 import com.mongodb.client.model.Sorts;
+import com.mongodb.client.model.UpdateOneModel;
 import com.mongodb.client.model.UpdateOptions;
 import com.mongodb.client.model.Updates;
+import com.mongodb.client.model.WriteModel;
 import com.mongodb.client.result.UpdateResult;
 import io.cloudevents.CloudEvent;
 import org.bson.Document;
@@ -488,11 +492,17 @@ public class MongoEventStore implements EventStore, EventStoreOperations, EventS
     // and nothing reclaims them automatically, so a high-cardinality tag (a tag per entity) grows the collection without
     // bound. An operator can prune markers during quiescence (a later append recreates any it still needs).
     private void incrementConflictMarkers(ClientSession clientSession, Set<String> markerKeys, long lastPosition) {
-        for (String key : markerKeys) {
-            dcbCheckpointCollection.updateOne(clientSession, eq(ID, DcbMarkerModel.markerId(key)),
-                    Updates.combine(Updates.inc(DcbMarkerModel.CHECKPOINT_VERSION, 1L), Updates.set(DcbMarkerModel.CHECKPOINT_LAST_POSITION, lastPosition)),
-                    new UpdateOptions().upsert(true));
+        if (markerKeys.isEmpty()) {
+            return;
         }
+        // One unordered bulk write of upserts rather than one updateOne round trip per key, so a boundary with several
+        // tags and types costs one round trip inside the transaction instead of K serial ones.
+        List<WriteModel<Document>> updates = markerKeys.stream()
+                .map(key -> (WriteModel<Document>) new UpdateOneModel<Document>(eq(ID, DcbMarkerModel.markerId(key)),
+                        Updates.combine(Updates.inc(DcbMarkerModel.CHECKPOINT_VERSION, 1L), Updates.set(DcbMarkerModel.CHECKPOINT_LAST_POSITION, lastPosition)),
+                        new UpdateOptions().upsert(true)))
+                .toList();
+        dcbCheckpointCollection.bulkWrite(clientSession, updates, new BulkWriteOptions().ordered(false));
     }
 
     // The optimistic-concurrency token for a query: the sum of the versions of its conflict markers. The sum is
@@ -748,12 +758,18 @@ public class MongoEventStore implements EventStore, EventStoreOperations, EventS
 
         // Cloud spec defines id + source must be unique!
         eventStoreCollection.createIndex(Indexes.compoundIndex(Indexes.ascending("id"), Indexes.ascending("source")), new IndexOptions().unique(true));
-        // streamId + streamVersion uniqueness is a stream-mode invariant. DCB does not use stream version, so a
-        // DCB-only store does not create it.
-        if (eventStoreCapabilities.contains(STREAM)) {
+        // streamId + streamVersion uniqueness is a stream-mode invariant, but the DCB append path also looks up the
+        // current stream version per partition (currentStreamVersion), so it needs the same compound index to avoid a
+        // collection scan. The index is unique for both capabilities: DCB-only writes assign sequential per-partition
+        // stream versions, so uniqueness holds there too. The only way two events collide on the same
+        // streamId+streamVersion is two disjoint DCB boundaries hashing to the same partition stream, which
+        // insertAllDcb already treats as a retryable transient (re-reads and re-assigns a fresh version) rather than a
+        // duplicate error. Creating the identical unique index for STREAM and DCB also means no capability combination
+        // or DCB-only to STREAM+DCB upgrade ever hits an IndexOptionsConflict.
+        if (eventStoreCapabilities.contains(STREAM) || dcbEnabled) {
             // Create a streamId + streamVersion ascending index (note that we don't need to index stream id separately since it's covered by this compound index)
             // Note also that this index supports when sorting both ascending and descending since MongoDB can traverse an index in both directions.
-            eventStoreCollection.createIndex(Indexes.compoundIndex(Indexes.ascending(STREAM_ID), Indexes.ascending(STREAM_VERSION)), new IndexOptions().unique(true));
+            createStreamVersionIndex(eventStoreCollection, new IndexOptions().unique(true));
         }
         // The position index is created whenever position is written, since DCB and stream writes share the same
         // unique, sparse position field.
@@ -762,6 +778,24 @@ public class MongoEventStore implements EventStore, EventStoreOperations, EventS
         }
         if (dcbEnabled) {
             eventStoreCollection.createIndex(Indexes.ascending(DcbDocumentMapper.DCB_TAGS_INDEX_FIELD), new IndexOptions().sparse(true));
+        }
+    }
+
+    // IndexOptionsConflict (error code 85) means an index with this name already exists with different options.
+    // Occurrent always requests the unique streamId+streamVersion index for both STREAM and DCB, so normal capability
+    // combinations and upgrades never conflict. A conflict here therefore means an operator manually created an
+    // incompatible (e.g. non-unique) index. Occurrent never drops or replaces an existing index, and running on a
+    // non-unique index would silently lose the uniqueness guarantee stream and DCB writes rely on, so this fails
+    // startup instead of swallowing the conflict.
+    private static void createStreamVersionIndex(MongoCollection<Document> eventStoreCollection, IndexOptions indexOptions) {
+        try {
+            eventStoreCollection.createIndex(Indexes.compoundIndex(Indexes.ascending(STREAM_ID), Indexes.ascending(STREAM_VERSION)), indexOptions);
+        } catch (MongoCommandException e) {
+            if (e.getErrorCode() == 85) {
+                throw new IllegalStateException("The '" + STREAM_ID + "_1_" + STREAM_VERSION + "_1' index already exists with options incompatible with the unique index Occurrent requires. Occurrent does not drop or replace existing indexes automatically, so running with the existing index would silently lose the uniqueness guarantee that stream and DCB writes rely on. Drop and recreate the index as unique out-of-band, then restart.", e);
+            } else {
+                throw e;
+            }
         }
     }
 

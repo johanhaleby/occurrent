@@ -598,6 +598,36 @@ class MongoEventStoreDcbConcurrencyTest {
     }
 
     @Test
+    void dcb_append_current_stream_version_lookup_is_index_backed_on_a_dcb_only_store() {
+        // A DCB-only store (no STREAM capability), so the compound index under test is the non-unique variant DCB
+        // gets, not the unique variant STREAM creates.
+        String dcbOnlyCollectionName = "dcb_only_" + COLLECTION;
+        EventStoreConfig config = new EventStoreConfig.Builder()
+                .timeRepresentation(TimeRepresentation.RFC_3339_STRING)
+                .eventStoreCapabilities(DCB)
+                .build();
+        MongoEventStore dcbOnlyStore = new MongoEventStore(mongoClient, databaseName, dcbOnlyCollectionName, config);
+        dcbOnlyStore.append(List.of(taggedEvent("SeedType", "streamversion:tag")));
+
+        MongoCollection<Document> collection = mongoClient.getDatabase(databaseName).getCollection(dcbOnlyCollectionName);
+
+        // Mirrors the query MongoEventStore.currentStreamVersion runs inside the DCB append transaction: find by
+        // streamId, sorted by streamVersion descending, limited to one. Before the streamId+streamVersion index was
+        // created for DCB-only stores this was a COLLSCAN+SORT that grows with store size.
+        String dcbPartitionStreamId = dcbOnlyStore.read(DcbCriteria.tags(org.occurrent.eventstore.api.dcb.Tag.parse("streamversion:tag"))).events().stream()
+                .findFirst()
+                .map(org.occurrent.cloudevents.OccurrentExtensionGetter::getStreamId)
+                .orElseThrow();
+        Document streamVersionLookupExplain = collection.find(new Document("streamid", dcbPartitionStreamId))
+                .sort(new Document("streamversion", -1))
+                .limit(1)
+                .explain(ExplainVerbosity.EXECUTION_STATS);
+        assertThat(extractWinningPlanStage(streamVersionLookupExplain))
+                .as("DCB append's currentStreamVersion lookup should use IXSCAN, not COLLSCAN. Full explain: %s", streamVersionLookupExplain.toJson())
+                .isEqualTo("IXSCAN");
+    }
+
+    @Test
     void dcb_match_all_query_is_index_backed_on_dcb_tags_field() {
         eventStore.append(List.of(taggedEvent("SeedType", "explain:tag")));
 
