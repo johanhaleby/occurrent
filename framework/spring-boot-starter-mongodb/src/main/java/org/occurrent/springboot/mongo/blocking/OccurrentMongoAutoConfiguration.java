@@ -291,6 +291,11 @@ public class OccurrentMongoAutoConfiguration<E> {
                                                                      ObjectProvider<TagGenerator<E>> tagGeneratorProvider, OccurrentProperties occurrentProperties) {
         TagGenerator<E> tagGenerator = tagGeneratorProvider.getIfAvailable();
         boolean enableDefaultRetryStrategy = occurrentProperties.getApplicationService().isEnableDefaultRetryStrategy();
+        if (tagGenerator == null) {
+            return enableDefaultRetryStrategy
+                    ? new GenericDcbApplicationService<>(eventStore, cloudEventConverter)
+                    : new GenericDcbApplicationService<>(eventStore, cloudEventConverter, RetryStrategy.none());
+        }
         return enableDefaultRetryStrategy
                 ? new GenericDcbApplicationService<>(eventStore, cloudEventConverter, tagGenerator)
                 : new GenericDcbApplicationService<>(eventStore, cloudEventConverter, tagGenerator, RetryStrategy.none());
