@@ -169,6 +169,8 @@ public class OccurrentMongoAutoConfiguration<E> {
             mongoSubscriptionModelConfig = mongoSubscriptionModelConfig.useVirtualThreads();
         }
         SpringMongoSubscriptionModel mongoSubscriptionModel = new SpringMongoSubscriptionModel(mongoTemplate, mongoSubscriptionModelConfig);
+        // Checkpoints after every event by default, see DurableSubscriptionModel javadoc for the EveryN.every(n)
+        // throughput tradeoff if checkpoint write volume becomes a bottleneck.
         DurableSubscriptionModel durableSubscriptionModel = new DurableSubscriptionModel(mongoSubscriptionModel, storage);
         CatchupSubscriptionModelConfig catchupConfig = new CatchupSubscriptionModelConfig(useCheckpointStorage(storage)
                 .andPersistCheckpointDuringCatchupPhaseForEveryNEvents(1000));

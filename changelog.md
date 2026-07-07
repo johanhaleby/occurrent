@@ -10,6 +10,7 @@ DCB is a capability layered on the existing CloudEvent storage, not a new store 
 
 #### Changes
 
+* The Spring blocking subscription now backs off on restart matching the reactor and native models.
 * Occurrent now requires Java 21 instead of Java 17. This raises the minimum JDK needed to build and run Occurrent. Stored data is unaffected, so an existing application only needs to move its runtime to Java 21.
 * Modernized Java dispatch code to use Java 21 pattern matching and exhaustive switches across sealed filters,
   criteria, start positions, checkpoints, deadlines, and examples.
