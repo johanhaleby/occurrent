@@ -22,9 +22,9 @@ DCB is a capability layered on the existing CloudEvent storage, not a new store 
   that construct subscription filters directly.
 * Fixed the capability-agnostic `Subscriptions` DSL and `@Subscription` (ADR 0051) on the MongoDB stack. The MongoDB
   live subscription models (the Spring blocking and reactor models through their shared change-stream options builder,
-  and the native driver model) did not recognize the `AgnosticSubscriptionFilter` the agnostic DSL produces and threw
-  `Unrecognized SubscriptionFilter for MongoDB subscription` when the subscription started. They now apply its plain
-  `Filter` the same way a `StreamSubscriptionFilter` is applied.
+  and the native driver model) did not recognize the `AgnosticSubscriptionFilter` the agnostic DSL produces and threw an
+  `IllegalArgumentException` when the subscription started. They now apply its plain `Filter` the same way a
+  `StreamSubscriptionFilter` is applied.
 * Blocking catch-up subscriptions now run their replay handoff work on Java virtual threads instead of the common
   `ForkJoinPool`, avoiding common-pool starvation from blocking event-store reads and subscriber callbacks. The Spring
   Boot Mongo starter also honors `spring.threads.virtual.enabled=true` for its blocking Mongo subscription executor.
