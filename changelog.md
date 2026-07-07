@@ -11,10 +11,7 @@ DCB is a capability layered on the existing CloudEvent storage, not a new store 
 #### Changes
 
 * The Spring blocking subscription now backs off on restart matching the reactor and native models.
-* Aligned the `compose` combinators on `Decider`, `DcbDecider` and `TagGenerator` on the same shape, a two-required-then-varargs overload plus a list overload for a dynamic count. `Decider.compose` and `DcbDecider.compose` used to accept zero or one element and produce a degenerate composite, they now throw `IllegalArgumentException` for fewer than two, matching `TagGenerator.compose`. This is a breaking change for callers relying on the old zero or one element behavior.
-* Unified the unrecognized-command semantic across the DCB decider DSL. `execute`, `executeAndReturnDecision`, `executeAndReturnState` and `executeAndReturnEvents` on both the blocking and reactor stacks now throw `IllegalArgumentException` when no decider recognizes a command, instead of `execute` silently no-oping while `executeAndReturnDecision` threw. A batch that mixes a recognized and an unrecognized command now reports the unrecognized command rather than a boundary mismatch. This is a breaking change for callers relying on the old `execute` no-op for a fully unrecognized command.
-* Documented that `DcbDecider.compose` collapses the combined read boundary to `DcbCriteria.MatchAll` as soon as one recognizing child returns `MatchAll`, downgrading every other child's scoped lock for that command to a whole-store lock, and documented the invariant that `from` and `compose` expect a decider's `criteria` and `decider` to agree on which commands they recognize.
-* Aligned the blocking and reactive default DCB retry policies so both allow five attempts in total with the same exponential backoff and no jitter. The reactive `GenericDcbApplicationService.defaultRetry` previously allowed six attempts in total with Reactor's default jitter while the blocking `defaultRetryStrategy` allowed five with no jitter, despite both being documented as five.
+* `Decider.compose` now requires at least two deciders, matching its list overload. It previously accepted zero or one element and produced a degenerate composite, and now throws `IllegalArgumentException` for fewer than two. This is a breaking change for callers relying on the old zero or one element behavior.
 * Blocking catch-up now fails loudly instead of silently dropping events when the resume token is unavailable.
   `StreamCatchupSubscriptionModel` and `DcbCatchupSubscriptionModel` used to fall back to `StartAt.subscriptionModelDefault()`
   when the delegated subscription model reported no resume token after a long replay, which silently dropped every
@@ -35,31 +32,12 @@ DCB is a capability layered on the existing CloudEvent storage, not a new store 
 * Renamed `OccurrentSubscriptionFilter` to `StreamSubscriptionFilter` to make the stream-scoped subscription marker
   explicit next to `AgnosticSubscriptionFilter` and `DcbSubscriptionFilter`. This is a breaking API change for callers
   that construct subscription filters directly.
-* Fixed the capability-agnostic `Subscriptions` DSL and `@Subscription` (ADR 0051) on the MongoDB stack. The MongoDB
-  live subscription models (the Spring blocking and reactor models through their shared change-stream options builder,
-  and the native driver model) did not recognize the `AgnosticSubscriptionFilter` the agnostic DSL produces and threw an
-  `IllegalArgumentException` when the subscription started. They now apply its plain `Filter` the same way a
-  `StreamSubscriptionFilter` is applied.
 * Blocking catch-up subscriptions now run their replay handoff work on Java virtual threads instead of the common
   `ForkJoinPool`, avoiding common-pool starvation from blocking event-store reads and subscriber callbacks. The Spring
   Boot Mongo starter also honors `spring.threads.virtual.enabled=true` for its blocking Mongo subscription executor.
 * Fixed example-profile compilation after recent DSL and query cleanup. The RPS decider web example now uses the stream
   subscription DSL expected by the view DSL, and the course-enrollment student management use case points at the renamed
   DCB query helper.
-* Fixed DCB reads (`DcbCriteria.all()` and type-only criteria) so they no longer return stream-written events on a
-  store with both `STREAM` and `DCB` capabilities enabled. They now only return DCB-written events, backed by a
-  sparse `dcbTags` index for efficient exclusion.
-  * See [ADR 49](doc/architecture/decisions/0049-dcb-reads-exclude-non-dcb-stream-events.md).
-* Fixed the reverse gap so `StreamCatchupSubscriptionModel` and `ReactorStreamCatchupSubscriptionModel` no longer
-  replay or live-deliver DCB-tagged events on a store with both `STREAM` and `DCB` capabilities enabled. They now
-  only ever deliver stream-capability events, in both the catch-up and the live phases, backed by a new
-  `Filter.capability(EventStoreCapability)` primitive. `@StreamSubscription`-annotated subscriptions inherit the fix.
-  A plain `EventStoreQueries` caller or a subscription model not wrapped in `StreamCatchupSubscriptionModel` is
-  unaffected. The stream `write(...)` path now rejects a DCB-tagged (`dcbtags`-carrying) event with a clear error that
-  points the caller at the DCB `append(...)` API, since such an event written through `write(...)` would be silently
-  invisible to DCB reads. This enforces the invariant that the Mongo capability filter relies on, so the filter keys
-  off the sparse-indexed `dcbTags` array for an efficient `Filter.capability(DCB)`.
-  * See [ADR 50](doc/architecture/decisions/0050-stream-catchup-subscriptions-exclude-dcb-events.md).
 * Revived `@Subscription` and the `Subscriptions` DSL, previously deprecated aliases for the stream forms, as the
   capability-neutral default. On a store with both `STREAM` and `DCB` capabilities they deliver both stream-written and
   DCB-appended events, filtered only by event type, with catch-up over the unified global position and resume via
@@ -78,16 +56,6 @@ DCB is a capability layered on the existing CloudEvent storage, not a new store 
   auto-configure the `DcbApplicationService` even when no global `TagGenerator` bean exists, so a decider-only
   application needs none, while `@DcbTag` and raw-execute users still get a global tagger when one is present.
   * See [ADR 52](doc/architecture/decisions/0052-couple-decider-with-dcb-boundary-and-tags.md).
-* Fixed concurrent DCB appends failing with a misleading duplicate CloudEvent error on a store with both the DCB and
-  STREAM capabilities enabled. Two appends to disjoint DCB boundaries can hash to the same partition stream and race on
-  the next stream version, and the loser hit the unique `streamid` plus `streamversion` index. That collision is not a
-  real duplicate CloudEvent, so it is now retried through the read-decide-append cycle instead of failing, while a
-  genuine duplicate CloudEvent (same `id` and `source`) still fails as before.
-* DCB-enabled stores now index the stream-version lookup, write conflict markers in a single bulk write, and run
-  reads concurrently in the reactor DCB support.
-  the next stream version, and the loser hits the unique `streamid` plus `streamversion` index. That collision is not a
-  real duplicate CloudEvent, so it is now retried through the read-decide-append cycle instead of failing, while a
-  genuine duplicate CloudEvent (same `id` and `source`) still fails as before.
 * Renamed the `SubscriptionPosition` type family to `Checkpoint` to stop overloading "position" for two different
   concepts: the ordering value (`position`) and the per-subscriber resume marker built from it. This is a breaking
   API change; there is no deprecated alias.
@@ -204,10 +172,6 @@ DCB is a capability layered on the existing CloudEvent storage, not a new store 
   * `ReactorDcbCatchupSubscriptionModel` replays DCB history by `position` and hands over to a live subscription, so a reactive read model can be rebuilt from the beginning. It mirrors the blocking DCB catch-up (the live resume token is captured before the replay so an event committing during the replay is still delivered), with id-based handover dedup because the reactive resume token is inclusive. Reactive DCB now matches the blocking stack across the store, application service, query DSL, and subscriptions.
   * See [ADR 38](doc/architecture/decisions/0038-reactive-dcb-catch-up.md).
 
-* Shared the common DCB types between the blocking and reactive DSLs instead of keeping a copy in each.
-  * `EventMetadata` is a plain wrapper over a CloudEvent's extensions with nothing blocking about it, but it used to live in `subscription-dsl-blocking`. It moved to a new `subscription-dsl-common` module (package `org.occurrent.dsl.subscription`), and the shared `DcbEventMetadata`, the `DcbDomainEventStream` read result, and the `EventMetadata.dcbTags` Kotlin accessor and the `DcbEventMetadata.position()` Java accessor moved to a new `dcb-dsl-common` module (package `org.occurrent.dsl.dcb`). The `TagGenerator` interface moved to a new `application-service-common` module (package `org.occurrent.application.service.dcb`). The blocking and reactive stacks now read the same classes rather than each carrying its own, and reactive Kotlin callers read `position` and `dcbTags` the same way the blocking DSL does.
-  * `EventMetadata` is the one released type here, so its move is a breaking change. The old `org.occurrent.dsl.subscription.blocking.EventMetadata` is gone, so update the import to `org.occurrent.dsl.subscription.EventMetadata`.
-
 * Added live reactive DCB subscriptions.
   * A reactive `DcbSubscriptionModel` facade (`subscription-api-reactor`) subscribes to DCB events matching a `DcbCriteria` as a `Flux<CloudEvent>`, filtered server-side, and the reactor DCB DSL gains `DcbSubscriptions` with `Flux<E> subscribe(...)` and `Flux<DcbEvent<E>> subscribeWithMetadata(...)`. Live only for now. The `DcbStartAt` is passed through to the underlying subscription model, and the current reactive models have no DCB catch-up, so a `DcbStartAt.beginning()` behaves like a live start rather than replaying history.
   * See [ADR 37](doc/architecture/decisions/0037-live-reactive-dcb-subscriptions.md).
@@ -228,11 +192,6 @@ DCB is a capability layered on the existing CloudEvent storage, not a new store 
 * DCB now works on the native MongoDB driver event store, not only the Spring store.
   * `MongoEventStore`, the plain synchronous-driver store, implements the same DCB read and append API as the Spring store, with the same per-attribute marker model and consistency-token semantics. The shared model now lives in a new `eventstore-mongodb-dcb-common` module so the two stores cannot drift on the storage contract, and the capability set moved to a shared `EventStoreCapability` enum in `eventstore-api-common`. The native store defaults to stream-only, so existing applications are untouched.
   * See [ADR 33](doc/architecture/decisions/0033-native-mongodb-driver-dcb-parity-via-shared-marker-model.md).
-
-* DCB catch-up delivers an event even when it commits during the replay.
-  * `position` is reserved before the append commits (ADR 21), so the store head can run ahead of committed data and a position below the head can be an in-flight hole. The catch-up captures the live resume token before the replay, so an event that commits at such a position while the replay runs is delivered by the live change stream, and the handover cache dedups the overlap.
-  * Trade-off: a replay that runs longer than the change stream history makes the resume token age out, so the handover fails loudly rather than silently dropping events. Size the change stream history (the MongoDB oplog window) for very large rebuilds.
-  * See [ADR 28](doc/architecture/decisions/0028-dcb-catch-up-captures-resume-token-before-replay.md).
 
 * The stream subscription DSL `Subscriptions` was renamed to `StreamSubscriptions`.
   * The canonical class is now `StreamSubscriptions` and the builder is `streamSubscriptions(...)`, so the stream DSL name matches `@StreamSubscription`, `StreamSubscriptionModel`, and the DCB counterpart `DcbSubscriptions`. The released `Subscriptions` class is kept as a deprecated subclass of `StreamSubscriptions`, and the `subscriptions(...)` builder as a deprecated shim, so existing Java, Kotlin, and already-compiled callers keep working. A subclass is used rather than a typealias on purpose, because a Kotlin typealias preserves only Kotlin source compatibility and not Java or binary compatibility for a released type.
@@ -261,10 +220,6 @@ DCB is a capability layered on the existing CloudEvent storage, not a new store 
 * Added the `@DcbSubscription` annotation, the declarative DCB counterpart to `@StreamSubscription`.
   * A DCB read model is declared as a single annotated method. `eventTypes` and `tags` express the `DcbCriteria`, and `startAt` (BEGINNING, NOW, DEFAULT) or `startAtDcbPosition` (an explicit position, the DCB counterpart to the stream `startAtTimeEpochMillis`) together with `resumeBehavior` give history replay, resume from the stored position, and an always-replay in-memory mode that disables the competing consumer and checkpoint storage. It routes through the DCB DSL, so it gets the server-side filter, and the method can take the event plus an optional `EventMetadata` or `DcbEventMetadata`. `DcbStartAt` has a `dynamic` factory to back the resume logic. The course-enrollment dashboard subscriber uses `@DcbSubscription` (combining `BEGINNING` with `SAME_AS_START_AT`, since it is an in-memory model rebuilt on every boot).
   * See [ADR 27](doc/architecture/decisions/0027-dcb-subscription-annotation.md).
-
-* `@Subscription` is superseded by the new `@StreamSubscription` and deprecated.
-  * `@StreamSubscription` is the new canonical name, paired with the upcoming `@DcbSubscription` so the annotations are symmetric. `@Subscription` still works as a deprecated alias (deprecated for removal), with its attributes and enums frozen, so existing code keeps compiling and behaving as before. The annotation processor honors both. The example applications now use `@StreamSubscription`.
-  * See [ADR 26](doc/architecture/decisions/0026-rename-subscription-annotation-to-stream-subscription.md).
 
 * A STREAM-and-DCB application catches up both kinds of subscription.
   * `CatchupSubscriptionModel` has a dual-mode constructor that holds both the stream query API and the DCB event store and routes each subscription to the right catch-up. A DCB subscription replays by `position`. A stream subscription also replays by `position` when the stream store writes one, and otherwise keeps the time-based replay path. The Spring Boot starter wires this when the event store has both the STREAM and the DCB capability, so a combined application can rebuild both stream and DCB read models from history.
@@ -365,15 +320,7 @@ DCB is a capability layered on the existing CloudEvent storage, not a new store 
   * [ADR 20](doc/architecture/decisions/0020-dcb-catch-up-subscription-by-dcbposition.md)
   * [ADR 21](doc/architecture/decisions/0021-dcb-write-path-query-scoped-concurrency.md)
 * Renamed the package-private `OccurrentAnnotationBeanPostProcessor` to `OccurrentBlockingAnnotationBeanPostProcessor` for symmetry with the reactive starter's `OccurrentReactiveAnnotationBeanPostProcessor`. Internal only, no public API impact.
-* Fixed a bug in `ReactorDcbCatchupSubscriptionModel` where resuming a DCB catch-up subscription from an explicit position (`DcbStartAt.afterPosition(N)` with `N > 0`, for example `@DcbSubscription(startAtDcbPosition = N)`) could redeliver an event at or before that position through the live handover. The live change stream resumes from a token captured before the bulk replay and dedupes against it by event id, but that dedup cache only covers what the replay itself fetched, which deliberately excludes everything at or below `N`. An event in that excluded range could still slip through the live stream's own resume window uncached. The live filter now also excludes anything at or below the requested resume position directly, closing the gap. Replaying from the beginning (`N = 0`) was never affected, since nothing is excluded from the replay in that case.
 * Extensively broadened the integration test coverage for `@StreamSubscription` and `@DcbSubscription` annotation processing on both the blocking and reactive starters: the full `startAt` matrix (including the ISO8601 and epoch millis attributes, previously untested at the annotation level), durable resume and replay across an actual application restart for every `resumeBehavior`, metadata parameter binding for the reactive stack and for blocking stream subscriptions, reactive handler return type adaptation (`void`, `Mono<Void>`, and non-`Void` `Mono<T>`), the observable behavior of a permanently failing handler on each stack, and `startupMode = WAIT_UNTIL_STARTED`. This is what caught the `ReactorDcbCatchupSubscriptionModel` bug above.
-* Added `DcbAppendCondition.wholeStoreLock()` and `wholeStoreLock(DcbConsistencyToken)`, explicit factories for the whole-store optimistic lock previously only reachable by passing `DcbCriteria.all()` to `failIfEventsMatch`. The dedicated name spells out the whole-store boundary at the append-condition call site instead of leaning on a reader to recognize `all()` as a lock rather than a read-everything query. `failIfEventsMatch(DcbCriteria.all())` still works unchanged, since a `MatchAll` query is also a legitimate single-writer or bootstrap append condition, but the new factories are now the documented, preferred spelling.
-* Converted `DcbAppendConditionNotFulfilledException` from public fields (`appendCondition`, `currentPosition`) to accessor methods of the same names with parentheses, unifying it with the record-based accessor style already used everywhere else in the DCB API.
-* Replaced the roughly thirty hand-forwarded stream-query methods on the blocking and reactive `DcbDomainEventQueries` with a `domainEventQueries()` accessor that returns the wrapped `DomainEventQueries` directly. The forwarders duplicated `DomainEventQueries` and had to be kept in sync with it by hand. Callers now reach `query`, `queryOne`, `count`, `exists`, and `all` through `domainEventQueries()` instead. The DCB-specific `query(DcbCriteria, ...)` and `queryWithPosition(...)` methods are unchanged.
-* Documented that `DcbExecuteOptions.sideEffect(...)` and `tagGenerator(...)` widen the other, already-configured field with an independent unchecked cast, so narrowing one to an event subtype while the other targets an unrelated type can throw a `ClassCastException` later, at invocation time, rather than at the call that built the options.
-* Documented that `DcbDomainEventStream`'s two-argument constructor, like `DcbEventStream`'s, only defaults the consistency token soundly from the position for a store whose read head is itself a sound optimistic-concurrency boundary.
-* Clarified that `DcbCriteria.tagsAnyOf` ORs one tag per alternative, not a compound tag set per alternative, and documented the naming drift between the `DcbCriteria` type and the `query` parameter name used at `DcbEventStore.read` and `DcbAppendCondition` call sites, which refer to the same value.
-
 #### Notes
 
 * Existing stream-based APIs remain backward compatible by default.
