@@ -24,6 +24,8 @@ import org.occurrent.eventstore.api.dcb.Tag;
 
 import java.beans.Introspector;
 import java.lang.annotation.Annotation;
+import java.lang.annotation.Retention;
+import java.lang.annotation.RetentionPolicy;
 import java.lang.invoke.MethodHandle;
 import java.lang.invoke.MethodHandles;
 import java.lang.reflect.Field;
@@ -69,7 +71,7 @@ import static java.util.Objects.requireNonNull;
  * When a custom annotation type is supplied without an explicit key resolver, a no-arg
  * {@code String key()} annotation element is used when present and non-blank. If no such element
  * exists, or if it returns a blank value, the member name is used as the tag key. Custom annotations
- * must have runtime retention to be visible to reflection.
+ * must be annotated with {@code @Retention(RUNTIME)}.
  */
 @NullMarked
 public final class AnnotationTagGenerator<E> implements TagGenerator<E> {
@@ -94,7 +96,7 @@ public final class AnnotationTagGenerator<E> implements TagGenerator<E> {
      * @param annotationType The annotation type to scan for
      */
     public AnnotationTagGenerator(Class<? extends Annotation> annotationType) {
-        this.annotationType = requireNonNull(annotationType, "Annotation type cannot be null");
+        this.annotationType = validateAnnotationType(annotationType);
         this.keyResolver = defaultKeyResolver(this.annotationType);
     }
 
@@ -108,7 +110,7 @@ public final class AnnotationTagGenerator<E> implements TagGenerator<E> {
      * @param <A> The annotation type
      */
     public <A extends Annotation> AnnotationTagGenerator(Class<A> annotationType, Function<? super A, @Nullable String> keyResolver) {
-        this.annotationType = requireNonNull(annotationType, "Annotation type cannot be null");
+        this.annotationType = validateAnnotationType(annotationType);
         requireNonNull(keyResolver, "Key resolver cannot be null");
         this.keyResolver = annotation -> keyResolver.apply(annotationType.cast(annotation));
     }
@@ -259,6 +261,15 @@ public final class AnnotationTagGenerator<E> implements TagGenerator<E> {
     private String resolveKey(Annotation annotation, String defaultName) {
         @Nullable String key = keyResolver.apply(annotation);
         return key == null || key.isBlank() ? defaultName : key;
+    }
+
+    private static <A extends Annotation> Class<A> validateAnnotationType(Class<A> annotationType) {
+        requireNonNull(annotationType, "Annotation type cannot be null");
+        Retention retention = annotationType.getAnnotation(Retention.class);
+        if (retention == null || retention.value() != RetentionPolicy.RUNTIME) {
+            throw new IllegalArgumentException("Annotation type must be annotated with @Retention(RUNTIME)");
+        }
+        return annotationType;
     }
 
     private static Function<Annotation, @Nullable String> defaultKeyResolver(Class<? extends Annotation> annotationType) {

@@ -26,6 +26,7 @@ import java.util.Set;
 import static java.lang.annotation.ElementType.FIELD;
 import static java.lang.annotation.ElementType.METHOD;
 import static java.lang.annotation.ElementType.RECORD_COMPONENT;
+import static java.lang.annotation.RetentionPolicy.CLASS;
 import static java.lang.annotation.RetentionPolicy.RUNTIME;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
@@ -153,6 +154,20 @@ class AnnotationTagGeneratorTest {
                 .hasMessage("Key resolver cannot be null");
     }
 
+    @Test
+    void constructor_rejects_annotation_type_without_runtime_retention() {
+        assertThatThrownBy(() -> new AnnotationTagGenerator<>(ClassRetentionTag.class))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessage("Annotation type must be annotated with @Retention(RUNTIME)");
+    }
+
+    @Test
+    void constructor_with_key_resolver_rejects_annotation_type_without_runtime_retention() {
+        assertThatThrownBy(() -> new AnnotationTagGenerator<>(ClassRetentionTag.class, __ -> null))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessage("Annotation type must be annotated with @Retention(RUNTIME)");
+    }
+
     @Target({RECORD_COMPONENT, FIELD, METHOD})
     @Retention(RUNTIME)
     private @interface BoundaryTag {
@@ -168,6 +183,11 @@ class AnnotationTagGeneratorTest {
     @Retention(RUNTIME)
     private @interface NamedTag {
         String name() default "";
+    }
+
+    @Target({RECORD_COMPONENT, FIELD, METHOD})
+    @Retention(CLASS)
+    private @interface ClassRetentionTag {
     }
 
     private record CustomMemberNameTags(@BoundaryTag String courseId, @BoundaryTag String studentId) {
