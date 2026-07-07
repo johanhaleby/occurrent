@@ -36,7 +36,6 @@ import org.occurrent.eventstore.api.reactor.EventStore;
 import org.occurrent.eventstore.mongodb.spring.reactor.ReactorMongoEventStore;
 import org.occurrent.subscription.api.reactor.Subscribable;
 import org.occurrent.subscription.reactor.durable.ReactorDurableSubscriptionModel;
-import org.springframework.beans.factory.NoSuchBeanDefinitionException;
 import org.springframework.boot.autoconfigure.AutoConfigurations;
 import org.springframework.boot.test.context.FilteredClassLoader;
 import org.springframework.boot.test.context.runner.ApplicationContextRunner;
@@ -60,7 +59,6 @@ import java.util.stream.Stream;
 
 import static java.util.Objects.requireNonNull;
 import static org.assertj.core.api.Assertions.assertThat;
-import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.awaitility.Awaitility.await;
 import static org.mockito.Mockito.mock;
 
@@ -148,16 +146,17 @@ class OccurrentReactiveMongoAutoConfigurationWiringTest {
     }
 
     @Test
-    void dcb_capability_does_not_auto_configure_dcb_application_service_without_tag_generator_when_annotation_tag_generator_module_is_absent() {
+    void dcb_capability_auto_configures_dcb_application_service_without_tag_generator_even_when_annotation_tag_generator_module_is_absent() {
+        // A global TagGenerator is now optional. A DcbDecider carries the tags for the events it emits, so the service
+        // is auto-configured even with no TagGenerator bean and no AnnotationTagGenerator fallback. Decider-less
+        // execution with no tagger of any kind fails loudly at append time instead.
         contextRunner()
                 .withClassLoader(new FilteredClassLoader(AnnotationTagGenerator.class))
                 .withPropertyValues("occurrent.event-store.capabilities=dcb")
                 .run(context -> {
                     assertThat(context).hasNotFailed();
                     assertThat(context).doesNotHaveBean(TagGenerator.class);
-                    // The DcbApplicationService bean method returns null here (see DcbApplicationServiceDiagnostics),
-                    // so doesNotHaveBean would wrongly report it present; assert the real by-type resolution instead.
-                    assertThatThrownBy(() -> context.getBean(DcbApplicationService.class)).isInstanceOf(NoSuchBeanDefinitionException.class);
+                    assertThat(context).hasSingleBean(DcbApplicationService.class);
                 });
     }
 

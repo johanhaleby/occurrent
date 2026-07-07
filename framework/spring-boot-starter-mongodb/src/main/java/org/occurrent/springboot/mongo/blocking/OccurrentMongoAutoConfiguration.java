@@ -43,7 +43,6 @@ import org.occurrent.eventstore.api.dcb.DcbCriteria;
 import org.occurrent.eventstore.mongodb.spring.blocking.EventStoreConfig;
 import org.occurrent.eventstore.mongodb.spring.blocking.SpringMongoEventStore;
 import org.occurrent.retry.RetryStrategy;
-import org.occurrent.springboot.mongo.common.DcbApplicationServiceDiagnostics;
 import org.occurrent.springboot.mongo.common.Jackson3CloudEventConverterConfiguration;
 import org.occurrent.springboot.mongo.common.OccurrentProperties;
 import org.occurrent.springboot.mongo.common.OccurrentProperties.EventStoreProperties;
@@ -272,9 +271,17 @@ public class OccurrentMongoAutoConfiguration<E> {
     }
 
     /**
-     * See {@link DcbApplicationServiceDiagnostics} for why this resolves {@link TagGenerator} through
-     * {@link ObjectProvider} instead of {@code @ConditionalOnBean(TagGenerator.class)}, and why returning {@code null}
-     * is the correct way to express "not auto-configured" here.
+     * Auto-configures the {@link DcbApplicationService} when the DCB capability is enabled. The {@link TagGenerator} is
+     * resolved through {@link ObjectProvider} rather than {@code @ConditionalOnBean(TagGenerator.class)} because
+     * {@code @EnableOccurrent} imports this configuration with a plain {@code @Import}, so a {@code @ConditionalOnBean}
+     * could be evaluated before a user's own {@link TagGenerator} bean is registered. {@code getIfAvailable()} resolves
+     * at instantiation time instead, after all bean definitions exist.
+     * <p>
+     * A global {@link TagGenerator} is optional. A {@code DcbDecider} carries the tags for the events it emits, so a
+     * decider-based application needs none. Decider-less DCB (a raw {@code execute}, or {@code @DcbTag}) relies on this
+     * global tagger (an explicit bean or the {@link AnnotationTagGenerator} fallback) or on per-execute tags supplied
+     * through {@code DcbExecuteOptions}. When events are produced and no tagger of any kind is available, the append
+     * fails loudly.
      */
     @Bean
     @ConditionalOnMissingBean(DcbApplicationService.class)
@@ -283,10 +290,6 @@ public class OccurrentMongoAutoConfiguration<E> {
     public DcbApplicationService<E> occurrentDcbApplicationService(DcbEventStore eventStore, CloudEventConverter<E> cloudEventConverter,
                                                                      ObjectProvider<TagGenerator<E>> tagGeneratorProvider, OccurrentProperties occurrentProperties) {
         TagGenerator<E> tagGenerator = tagGeneratorProvider.getIfAvailable();
-        if (tagGenerator == null) {
-            DcbApplicationServiceDiagnostics.warnTagGeneratorMissing(log, DcbApplicationService.class);
-            return null;
-        }
         boolean enableDefaultRetryStrategy = occurrentProperties.getApplicationService().isEnableDefaultRetryStrategy();
         return enableDefaultRetryStrategy
                 ? new GenericDcbApplicationService<>(eventStore, cloudEventConverter, tagGenerator)

@@ -22,7 +22,6 @@ import org.occurrent.dsl.decider.Decider
 import org.occurrent.dsl.decider.decider
 import org.occurrent.example.domain.courseenrollment.common.DomainCommand
 import org.occurrent.example.domain.courseenrollment.common.StudentId
-import org.occurrent.example.domain.courseenrollment.infrastructure.dcb.CourseEnrollmentEventTagGenerator
 import org.occurrent.example.domain.courseenrollment.infrastructure.dcb.CourseEnrollmentQueries
 import java.time.Instant
 import java.util.*
@@ -46,7 +45,12 @@ val studentDcbDecider: DcbDecider<StudentCommand, StudentRegistry, StudentEvent>
         }
         CourseEnrollmentQueries.studentCriteria(studentId)
     },
-    tags = { event -> CourseEnrollmentEventTagGenerator().tags(event) }
+    tags = { event ->
+        when (event) {
+            is StudentRegistered -> setOf(StudentTags.student(event.studentId))
+            is StudentDeregistered -> setOf(StudentTags.student(event.studentId))
+        }
+    }
 )
 
 sealed interface StudentCommand : DomainCommand {

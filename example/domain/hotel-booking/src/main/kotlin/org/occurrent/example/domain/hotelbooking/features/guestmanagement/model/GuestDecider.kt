@@ -23,7 +23,6 @@ import org.occurrent.dsl.decider.decider
 import org.occurrent.example.domain.hotelbooking.common.DomainCommand
 import org.occurrent.example.domain.hotelbooking.common.GuestId
 import org.occurrent.example.domain.hotelbooking.infrastructure.dcb.HotelBookingCriteria.guestCriteria
-import org.occurrent.example.domain.hotelbooking.infrastructure.dcb.HotelBookingEventTagGenerator
 import java.time.Instant
 import java.util.*
 
@@ -46,7 +45,12 @@ val guestDcbDecider: DcbDecider<GuestCommand, GuestRegistry, GuestEvent> = guest
             is GuestCommand.DeregisterGuest -> guestCriteria(command.guestId)
         }
     },
-    tags = { event -> HotelBookingEventTagGenerator().tags(event) }
+    tags = { event ->
+        when (event) {
+            is GuestRegistered -> setOf(GuestTags.guest(event.guestId))
+            is GuestDeregistered -> setOf(GuestTags.guest(event.guestId))
+        }
+    }
 )
 
 sealed interface GuestCommand : DomainCommand {

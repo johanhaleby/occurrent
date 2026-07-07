@@ -54,7 +54,17 @@ which the existing examples already do, so this is not a new requirement in prac
 The write path keeps its existing safety net: `addTags` still fails loudly if it needs to tag events but no tagger
 (per-execute or global) is available, so events are never silently appended untagged.
 
+Tagging now has two complementary models rather than one. A decider-based flow takes its tags from the `DcbDecider`
+(per-execute), and needs no global tagger. Decider-less DCB, meaning the raw `execute(criteria, function)` path or
+annotation-driven `@DcbTag`, still relies on the optional global `TagGenerator`, either an explicit bean or the
+`AnnotationTagGenerator` fallback, or on per-execute tags passed through `DcbExecuteOptions`. The precedence is
+per-execute first, then global. The Spring starter reflects this: the `DcbApplicationService` is now auto-configured
+even when no global `TagGenerator` bean exists, so a decider-only application needs none, while `@DcbTag` and
+raw-execute users still get a global tagger when one is present. The cost is that a user who enables DCB, uses neither
+deciders nor `@DcbTag`, and forgets to define a tagger now sees the failure at append time rather than at wiring time.
+
 This builds on the existing `Decider` and its composition model, and on the DCB application service and tag model
-established by earlier ADRs. It does not change the behavior of callers that keep passing criteria and a plain
-`Decider` separately, since `DcbDecider` is an additional way to call `execute`, not a replacement for the existing
-one.
+established by earlier ADRs. The DSL's previous `execute(criteria, command, decider)` extensions are replaced by the
+`DcbDecider` form. Since the DCB API is unreleased, no deprecated alias is kept. The low-level
+`execute(criteria, function)` on the application service is unchanged, for callers that produce and tag their own
+events without a decider.

@@ -54,7 +54,9 @@ DCB is a capability layered on the existing CloudEvent storage, not a new store 
   in both the blocking and reactor variants. `DcbDecider` composes the same way `Decider` does, through `adapt` and
   `compose`, with the composed criteria being `DcbCriteria.anyOf` over the recognizing children and the composed tags
   being the union of the children's tags. The global `TagGenerator` on the DCB application service is now optional,
-  and `DcbExecuteOptions` gained a per-execute `TagGenerator` that overrides it.
+  and `DcbExecuteOptions` gained a per-execute `TagGenerator` that overrides it. The Spring starters now
+  auto-configure the `DcbApplicationService` even when no global `TagGenerator` bean exists, so a decider-only
+  application needs none, while `@DcbTag` and raw-execute users still get a global tagger when one is present.
   * See [ADR 52](doc/architecture/decisions/0052-couple-decider-with-dcb-boundary-and-tags.md).
 * Renamed the `SubscriptionPosition` type family to `Checkpoint` to stop overloading "position" for two different
   concepts: the ordering value (`position`) and the per-subscriber resume marker built from it. This is a breaking

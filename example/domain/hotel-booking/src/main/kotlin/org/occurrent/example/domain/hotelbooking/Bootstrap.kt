@@ -18,9 +18,7 @@ package org.occurrent.example.domain.hotelbooking
 
 import org.occurrent.application.converter.typemapper.CloudEventTypeMapper
 import org.occurrent.application.converter.typemapper.ReflectionCloudEventTypeMapper
-import org.occurrent.application.service.dcb.TagGenerator
 import org.occurrent.example.domain.hotelbooking.common.DomainEvent
-import org.occurrent.example.domain.hotelbooking.infrastructure.dcb.HotelBookingEventTagGenerator
 import org.occurrent.springboot.mongo.reactor.EnableOccurrentReactive
 import org.springframework.boot.autoconfigure.SpringBootApplication
 import org.springframework.boot.runApplication
@@ -43,10 +41,6 @@ class Bootstrap {
 
     @Bean
     fun hotelBookingCloudEventTypeMapper(): CloudEventTypeMapper<DomainEvent> = ReflectionCloudEventTypeMapper.qualified()
-
-    /** Required by the starter when the DCB capability is enabled: how each event maps to its DCB tags. */
-    @Bean
-    fun hotelBookingTagGenerator(): TagGenerator<DomainEvent> = HotelBookingEventTagGenerator()
 }
 
 fun main(args: Array<String>) {

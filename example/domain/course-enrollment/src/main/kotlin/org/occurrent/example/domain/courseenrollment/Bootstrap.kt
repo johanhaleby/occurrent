@@ -18,9 +18,7 @@ package org.occurrent.example.domain.courseenrollment
 
 import org.occurrent.application.converter.typemapper.CloudEventTypeMapper
 import org.occurrent.application.converter.typemapper.ReflectionCloudEventTypeMapper
-import org.occurrent.application.service.dcb.TagGenerator
 import org.occurrent.example.domain.courseenrollment.common.DomainEvent
-import org.occurrent.example.domain.courseenrollment.infrastructure.dcb.CourseEnrollmentEventTagGenerator
 import org.occurrent.springboot.mongo.blocking.EnableOccurrent
 import org.springframework.boot.autoconfigure.SpringBootApplication
 import org.springframework.boot.runApplication
@@ -42,10 +40,6 @@ class Bootstrap {
 
     @Bean
     fun courseEnrollmentCloudEventTypeMapper(): CloudEventTypeMapper<DomainEvent> = ReflectionCloudEventTypeMapper.qualified()
-
-    /** Required by the starter when the DCB capability is enabled: how each event maps to its DCB tags. */
-    @Bean
-    fun courseEnrollmentTagGenerator(): TagGenerator<DomainEvent> = CourseEnrollmentEventTagGenerator()
 }
 
 fun main(args: Array<String>) {

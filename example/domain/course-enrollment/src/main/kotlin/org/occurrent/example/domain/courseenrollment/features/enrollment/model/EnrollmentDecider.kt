@@ -26,9 +26,10 @@ import org.occurrent.example.domain.courseenrollment.common.DomainEvent
 import org.occurrent.example.domain.courseenrollment.common.StudentId
 import org.occurrent.example.domain.courseenrollment.features.coursemanagement.model.CourseCancelled
 import org.occurrent.example.domain.courseenrollment.features.coursemanagement.model.CourseDefined
+import org.occurrent.example.domain.courseenrollment.features.coursemanagement.model.CourseTags
 import org.occurrent.example.domain.courseenrollment.features.studentmanagement.model.StudentDeregistered
 import org.occurrent.example.domain.courseenrollment.features.studentmanagement.model.StudentRegistered
-import org.occurrent.example.domain.courseenrollment.infrastructure.dcb.CourseEnrollmentEventTagGenerator
+import org.occurrent.example.domain.courseenrollment.features.studentmanagement.model.StudentTags
 import org.occurrent.example.domain.courseenrollment.infrastructure.dcb.CourseEnrollmentQueries
 import java.time.Instant
 import java.util.*
@@ -51,7 +52,13 @@ val enrollmentDecider: Decider<EnrollmentCommand, EnrollmentState, DomainEvent> 
 
 val enrollmentDcbDecider: DcbDecider<EnrollmentCommand, EnrollmentState, DomainEvent> = enrollmentDecider.toDcb(
     criteria = { command -> CourseEnrollmentQueries.enrollmentCriteria(command.courseId, command.studentId) },
-    tags = { event -> CourseEnrollmentEventTagGenerator().tags(event) }
+    tags = { event ->
+        when (event) {
+            is StudentEnrolledInCourse -> setOf(CourseTags.course(event.courseId), StudentTags.student(event.studentId))
+            is StudentUnenrolledFromCourse -> setOf(CourseTags.course(event.courseId), StudentTags.student(event.studentId))
+            else -> error("No DCB tags defined for event ${event::class.simpleName}. Every event must be tagged so the right decision boundary can find it.")
+        }
+    }
 )
 
 /** Domain policy constants. */

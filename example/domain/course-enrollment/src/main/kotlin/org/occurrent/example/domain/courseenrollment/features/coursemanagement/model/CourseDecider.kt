@@ -22,7 +22,6 @@ import org.occurrent.dsl.decider.Decider
 import org.occurrent.dsl.decider.decider
 import org.occurrent.example.domain.courseenrollment.common.CourseId
 import org.occurrent.example.domain.courseenrollment.common.DomainCommand
-import org.occurrent.example.domain.courseenrollment.infrastructure.dcb.CourseEnrollmentEventTagGenerator
 import org.occurrent.example.domain.courseenrollment.infrastructure.dcb.CourseEnrollmentQueries
 import java.time.Instant
 import java.util.*
@@ -43,7 +42,12 @@ val courseDcbDecider: DcbDecider<CourseCommand, CourseState, CourseEvent> = cour
         }
         CourseEnrollmentQueries.courseBoundary(courseId)
     },
-    tags = { event -> CourseEnrollmentEventTagGenerator().tags(event) }
+    tags = { event ->
+        when (event) {
+            is CourseDefined -> setOf(CourseTags.course(event.courseId))
+            is CourseCancelled -> setOf(CourseTags.course(event.courseId))
+        }
+    }
 )
 
 sealed interface CourseCommand : DomainCommand {

@@ -24,7 +24,6 @@ import org.occurrent.example.domain.hotelbooking.common.DomainCommand
 import org.occurrent.example.domain.hotelbooking.common.HotelId
 import org.occurrent.example.domain.hotelbooking.common.RoomId
 import org.occurrent.example.domain.hotelbooking.infrastructure.dcb.HotelBookingCriteria.roomCriteria
-import org.occurrent.example.domain.hotelbooking.infrastructure.dcb.HotelBookingEventTagGenerator
 import java.time.Instant
 import java.util.*
 
@@ -44,7 +43,12 @@ val roomDcbDecider: DcbDecider<RoomCommand, RoomState, RoomEvent> = roomDecider.
             is RoomCommand.CloseRoom -> roomCriteria(command.roomId)
         }
     },
-    tags = { event -> HotelBookingEventTagGenerator().tags(event) }
+    tags = { event ->
+        when (event) {
+            is RoomDefined -> setOf(RoomTags.room(event.roomId))
+            is RoomClosed -> setOf(RoomTags.room(event.roomId))
+        }
+    }
 )
 
 sealed interface RoomCommand : DomainCommand {
