@@ -23,6 +23,11 @@ import org.occurrent.filter.Filter
 import kotlin.reflect.KClass
 import kotlin.streams.asSequence
 
+// Naming convention: the blocking query DSL names its extensions after the return type they produce
+// (queryForSequence, queryForList) because the underlying Java query returns a java.util.stream.Stream, so the verb
+// signals the conversion. The reactor query DSL keeps the bare query name since a Flux is already the idiomatic
+// reactive result and needs no conversion.
+
 /**
  * Query that returns a [Sequence] instead of a [java.util.stream.Stream].
  * @see DomainEventQueries.query

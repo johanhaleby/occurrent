@@ -130,10 +130,8 @@ class DcbDomainEventQueriesTest {
         InMemoryEventStore eventStoreWithSubscriptions = new InMemoryEventStore(subscriptionModel);
         CopyOnWriteArrayList<EventMetadata> metadata = new CopyOnWriteArrayList<>();
 
-        DcbSubscriptionsKt.subscribeDcbWithMetadata(subscriptionModel, "subscription", cloudEventConverter, DcbCriteria.tags(Tag.of("name", "1")), null, true, (eventMetadata, event) -> {
-            metadata.add(eventMetadata);
-            return kotlin.Unit.INSTANCE;
-        });
+        DcbSubscriptions<DomainEvent> dcbSubscriptions = new DcbSubscriptions<>(subscriptionModel, cloudEventConverter);
+        dcbSubscriptions.subscribeWithMetadata("subscription", DcbCriteria.tags(Tag.of("name", "1")), (dcbMetadata, event) -> metadata.add(dcbMetadata.eventMetadata()));
 
         List<CloudEvent> cloudEvents = cloudEventConverter.toCloudEvents(Stream.of(new NameDefined("eventId1", time, "name", "Some Doe")))
                 .map(event -> DcbCloudEvents.withTags(event, List.of(Tag.of("name", "1"))))

@@ -14,37 +14,37 @@
  * limitations under the License.
  */
 
-package org.occurrent.dsl.dcb.blocking
+package org.occurrent.dsl.dcb.reactor
 
 import org.occurrent.dsl.dcb.DcbEventMetadata
 import org.occurrent.eventstore.api.dcb.DcbCriteria
 import org.occurrent.subscription.DcbStartAt
-import org.occurrent.subscription.api.blocking.Subscription
+import org.occurrent.subscription.api.reactor.Subscription
+import reactor.core.publisher.Mono
 
 /**
- * Kotlin-idiomatic sugar over [DcbSubscriptions], the canonical class-based DCB subscription entry-point. This is a
- * thin wrapper that always forwards to [DcbSubscriptions.subscribeWithMetadata] with an explicit `waitUntilStarted`
- * argument, so the Kotlin default here (`true`) is preserved regardless of what the Java 3-arg overloads on
- * [DcbSubscriptions] resolve to when called without that argument.
+ * Kotlin-idiomatic sugar over [DcbSubscriptions], the canonical class-based reactive DCB subscription entry-point,
+ * mirroring the blocking counterpart in `org.occurrent.dsl.dcb.blocking`. Unlike the blocking DSL there is no
+ * `waitUntilStarted` flag here: [Subscription] is returned immediately and exposes its own
+ * [Subscription.waitUntilStarted] returning a `Mono<Void>` that the caller can compose into their own reactive
+ * chain, mirroring the equivalent decision in the regular subscription DSL's reactor module.
  */
 @JvmName("subscribeDcb")
 fun <E : Any> DcbSubscriptions<E>.subscribeDcb(
     subscriptionId: String,
     query: DcbCriteria = DcbCriteria.all(),
     startAt: DcbStartAt? = null,
-    waitUntilStarted: Boolean = true,
-    fn: (E) -> Unit
-): Subscription = subscribeWithMetadata(subscriptionId, query, startAt, waitUntilStarted) { _, event -> fn(event) }
+    fn: (E) -> Mono<Void>
+): Subscription = subscribeWithMetadata(subscriptionId, query, startAt) { _, event -> fn(event) }
 
 /**
- * Kotlin-idiomatic sugar over [DcbSubscriptions], including DCB metadata in the callback. See [subscribeDcb] for the
- * `waitUntilStarted` default behavior.
+ * Kotlin-idiomatic sugar over [DcbSubscriptions], including DCB metadata in the callback. See [subscribeDcb] for why
+ * there is no `waitUntilStarted` parameter.
  */
 @JvmName("subscribeDcbWithMetadata")
 fun <E : Any> DcbSubscriptions<E>.subscribeDcbWithMetadata(
     subscriptionId: String,
     query: DcbCriteria = DcbCriteria.all(),
     startAt: DcbStartAt? = null,
-    waitUntilStarted: Boolean = true,
-    fn: (DcbEventMetadata, E) -> Unit
-): Subscription = subscribeWithMetadata(subscriptionId, query, startAt, waitUntilStarted, fn)
+    fn: (DcbEventMetadata, E) -> Mono<Void>
+): Subscription = subscribeWithMetadata(subscriptionId, query, startAt, fn)

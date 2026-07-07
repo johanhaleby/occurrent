@@ -25,7 +25,11 @@ import org.occurrent.cloudevents.OccurrentCloudEventExtension
  */
 data class EventMetadata(val data: Map<String, Any?>) {
     /**
-     * The streamId of the event
+     * The streamId of the event.
+     *
+     * Note that for an event delivered through the capability-agnostic or DCB path, this is the internal generated
+     * partition id (for example "dcb:partition:...") rather than a domain stream id. It is always non-null, it is just
+     * semantically an internal id in that case.
      */
     val streamId: String get() = data[OccurrentCloudEventExtension.STREAM_ID] as String
 
@@ -47,6 +51,11 @@ data class EventMetadata(val data: Map<String, Any?>) {
             else -> throw IllegalArgumentException("Position extension must be a Number or String")
         }
 
+    /**
+     * Reads an arbitrary extension [key] from the metadata and casts it to [T]. The cast is unchecked, so an extension
+     * whose stored value is not a [T] throws a [ClassCastException] at the call site rather than here. Prefer the typed
+     * accessors ([streamId], [streamVersion], [position]) where they exist.
+     */
     inline operator fun <reified T : Any?> get(key: String) = data[key] as T
 
     companion object {
