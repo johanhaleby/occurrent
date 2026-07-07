@@ -717,6 +717,21 @@ public class ReactorMongoEventStore implements EventStore, EventStoreOperations,
             chain = chain
                     .then(createCollection(dcbCheckpointCollectionName, mongoTemplate))
                     .then(createIndex(eventStoreCollectionName, mongoTemplate, Indexes.ascending(DcbDocumentMapper.DCB_TAGS_INDEX_FIELD), new IndexOptions().sparse(true)))
+                    // A type-only DcbCriteria has no tags to hit the dcbTags index with, so it falls back to the
+                    // position index with type checked as a residual FETCH filter, examining every DCB event in the
+                    // position range to find the (possibly rare) matches. A (type, position) compound index lets the
+                    // planner satisfy both the type equality and the position sort directly from the index, so
+                    // keysExamined tracks nReturned instead of the full position range. Evidence:
+                    // explain("executionStats") on a 50k/50 skewed dataset showed docsExamined=50050 for nReturned=50
+                    // without this index.
+                    .then(createIndex(eventStoreCollectionName, mongoTemplate, Indexes.compoundIndex(Indexes.ascending("type"), Indexes.ascending(OccurrentCloudEventExtension.POSITION)), new IndexOptions().sparse(true)))
+                    // The multikey dcbTags index alone cannot provide the position sort order, so a tag boundary read
+                    // falls back to an in-memory (or, on MongoDB 6.0+, disk-spilling) SORT after fetching every
+                    // matching document. Evidence: explain("executionStats") on a 5,000-of-305,000 skewed dataset (a
+                    // plausible "popular tag" boundary, not a pathological one) showed a winning SORT stage over the
+                    // dcbTags index. A (dcbTags, position) compound index lets the planner read matches in position
+                    // order directly, avoiding the sort.
+                    .then(createIndex(eventStoreCollectionName, mongoTemplate, Indexes.compoundIndex(Indexes.ascending(DcbDocumentMapper.DCB_TAGS_INDEX_FIELD), Indexes.ascending(OccurrentCloudEventExtension.POSITION)), new IndexOptions().sparse(true)))
                     .then();
         }
 
