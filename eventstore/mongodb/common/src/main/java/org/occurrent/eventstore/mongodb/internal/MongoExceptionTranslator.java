@@ -21,6 +21,7 @@ import com.mongodb.MongoBulkWriteException;
 import com.mongodb.MongoCommandException;
 import com.mongodb.MongoException;
 import com.mongodb.bulk.BulkWriteError;
+import org.occurrent.cloudevents.OccurrentCloudEventExtension;
 import org.occurrent.eventstore.api.DuplicateCloudEventException;
 import org.occurrent.eventstore.api.WriteCondition;
 import org.occurrent.eventstore.api.WriteConditionNotFulfilledException;
@@ -59,6 +60,31 @@ public class MongoExceptionTranslator {
             runtimeException = e;
         }
         return runtimeException;
+    }
+
+    /**
+     * Tells whether a duplicate-key error hit the unique {@code (streamid, streamversion)} index rather than the unique
+     * {@code (id, source)} index. On a store with both the DCB and STREAM capabilities enabled a DCB append is placed in
+     * a partition stream, and two appends to disjoint DCB boundaries can hash to the same partition and race on the next
+     * stream version. That collision is not a genuine duplicate CloudEvent, so callers rethrow it as retryable rather
+     * than as a {@link DuplicateCloudEventException}.
+     *
+     * @param e The Mongo exception to inspect
+     * @return {@code true} when a duplicate-key write error references the stream-version index
+     */
+    public static boolean isDuplicateKeyErrorOnStreamVersionIndex(MongoException e) {
+        if (e instanceof MongoBulkWriteException bulkWriteException) {
+            return bulkWriteException.getWriteErrors().stream()
+                    .filter(bulkWriteError -> ErrorCategory.fromErrorCode(bulkWriteError.getCode()) == ErrorCategory.DUPLICATE_KEY)
+                    .anyMatch(bulkWriteError -> referencesStreamVersion(bulkWriteError.getMessage()));
+        }
+        return e.getCode() == 11000 && referencesStreamVersion(e.getMessage());
+    }
+
+    private static boolean referencesStreamVersion(String message) {
+        // The duplicate-key message names the offending index and its key fields. The stream-version index message names
+        // the streamversion field, the id+source index message does not, so this distinguishes the two.
+        return message != null && message.contains(OccurrentCloudEventExtension.STREAM_VERSION);
     }
 
     private static DuplicateCloudEventException translateToDuplicateCloudEventException(MongoBulkWriteException e, BulkWriteError bulk) {
