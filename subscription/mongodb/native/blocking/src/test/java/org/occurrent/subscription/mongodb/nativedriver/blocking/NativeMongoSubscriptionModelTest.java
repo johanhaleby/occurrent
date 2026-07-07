@@ -37,6 +37,7 @@ import org.occurrent.eventstore.mongodb.nativedriver.MongoEventStore;
 import org.occurrent.filter.Filter;
 import org.occurrent.mongodb.timerepresentation.TimeRepresentation;
 import org.occurrent.retry.RetryStrategy;
+import org.occurrent.subscription.AgnosticSubscriptionFilter;
 import org.occurrent.subscription.StreamSubscriptionFilter;
 import org.occurrent.subscription.internal.ExecutorShutdown;
 import org.occurrent.subscription.mongodb.MongoFilterSpecification.MongoJsonFilterSpecification;
@@ -526,6 +527,82 @@ public class NativeMongoSubscriptionModelTest {
 
             Filter filter = Filter.id(nameDefined2.eventId()).and(type(NameDefined.class.getName()));
             subscriptionModel.subscribe(subscriberId, StreamSubscriptionFilter.filter(filter), state::add).waitUntilStarted();
+
+            // When
+            mongoEventStore.write("1", 0, serialize(nameDefined1));
+            mongoEventStore.write("1", 1, serialize(nameWasChanged1));
+            mongoEventStore.write("2", 0, serialize(nameDefined2));
+            mongoEventStore.write("2", 1, serialize(nameWasChanged2));
+
+            // Then
+            await().atMost(FIVE_SECONDS).until(state::size, is(1));
+            assertThat(state).extracting(CloudEvent::getId, CloudEvent::getType).containsOnly(tuple(nameDefined2.eventId(), NameDefined.class.getName()));
+        }
+    }
+
+    @Nested
+    @DisplayName("SubscriptionFilter using AgnosticSubscriptionFilter")
+    class AgnosticSubscriptionFilterTest {
+
+        @Test
+        void using_occurrent_subscription_filter_for_type() {
+            // Given
+            LocalDateTime now = LocalDateTime.now();
+            CopyOnWriteArrayList<CloudEvent> state = new CopyOnWriteArrayList<>();
+            String subscriberId = UUID.randomUUID().toString();
+            subscriptionModel.subscribe(subscriberId, AgnosticSubscriptionFilter.filter(type(NameDefined.class.getName())), state::add).waitUntilStarted();
+            NameDefined nameDefined1 = new NameDefined(UUID.randomUUID().toString(), now, "name", "name1");
+            NameDefined nameDefined2 = new NameDefined(UUID.randomUUID().toString(), now.plusSeconds(2), "name2", "name2");
+            NameWasChanged nameWasChanged1 = new NameWasChanged(UUID.randomUUID().toString(), now.plusSeconds(3), "name", "name3");
+            NameWasChanged nameWasChanged2 = new NameWasChanged(UUID.randomUUID().toString(), now.plusSeconds(4), "name2", "name4");
+
+            // When
+            mongoEventStore.write("1", 0, serialize(nameDefined1));
+            mongoEventStore.write("1", 1, serialize(nameWasChanged1));
+            mongoEventStore.write("2", 0, serialize(nameDefined2));
+            mongoEventStore.write("2", 1, serialize(nameWasChanged2));
+
+            // Then
+            await().atMost(FIVE_SECONDS).until(state::size, is(2));
+            assertThat(state).extracting(CloudEvent::getType).containsOnly(NameDefined.class.getName());
+        }
+
+        @Test
+        void using_occurrent_subscription_filter_for_data() {
+            // Given
+            LocalDateTime now = LocalDateTime.now();
+            CopyOnWriteArrayList<CloudEvent> state = new CopyOnWriteArrayList<>();
+            String subscriberId = UUID.randomUUID().toString();
+            subscriptionModel.subscribe(subscriberId, AgnosticSubscriptionFilter.filter(data("name", Condition.eq("name3"))), state::add).waitUntilStarted();
+            NameDefined nameDefined1 = new NameDefined(UUID.randomUUID().toString(), now, "name", "name1");
+            NameDefined nameDefined2 = new NameDefined(UUID.randomUUID().toString(), now.plusSeconds(2), "name2", "name2");
+            NameWasChanged nameWasChanged1 = new NameWasChanged(UUID.randomUUID().toString(), now.plusSeconds(3), "name", "name3");
+            NameWasChanged nameWasChanged2 = new NameWasChanged(UUID.randomUUID().toString(), now.plusSeconds(4), "name2", "name4");
+
+            // When
+            mongoEventStore.write("1", 0, serialize(nameDefined1));
+            mongoEventStore.write("1", 1, serialize(nameWasChanged1));
+            mongoEventStore.write("2", 0, serialize(nameDefined2));
+            mongoEventStore.write("2", 1, serialize(nameWasChanged2));
+
+            // Then
+            await().atMost(FIVE_SECONDS).until(state::size, is(1));
+            assertThat(state).extracting(CloudEvent::getId).containsOnly(nameWasChanged1.eventId());
+        }
+
+        @Test
+        void using_occurrent_subscription_filter_dsl_composition() {
+            // Given
+            LocalDateTime now = LocalDateTime.now();
+            CopyOnWriteArrayList<CloudEvent> state = new CopyOnWriteArrayList<>();
+            String subscriberId = UUID.randomUUID().toString();
+            NameDefined nameDefined1 = new NameDefined(UUID.randomUUID().toString(), now, "name", "name1");
+            NameDefined nameDefined2 = new NameDefined(UUID.randomUUID().toString(), now.plusSeconds(2), "name2", "name2");
+            NameWasChanged nameWasChanged1 = new NameWasChanged(UUID.randomUUID().toString(), now.plusSeconds(3), "name", "name3");
+            NameWasChanged nameWasChanged2 = new NameWasChanged(UUID.randomUUID().toString(), now.plusSeconds(4), "name2", "name4");
+
+            Filter filter = Filter.id(nameDefined2.eventId()).and(type(NameDefined.class.getName()));
+            subscriptionModel.subscribe(subscriberId, AgnosticSubscriptionFilter.filter(filter), state::add).waitUntilStarted();
 
             // When
             mongoEventStore.write("1", 0, serialize(nameDefined1));

@@ -24,6 +24,7 @@ import org.jspecify.annotations.NullMarked;
 import org.jspecify.annotations.Nullable;
 import org.occurrent.filter.Filter;
 import org.occurrent.mongodb.timerepresentation.TimeRepresentation;
+import org.occurrent.subscription.AgnosticSubscriptionFilter;
 import org.occurrent.subscription.DcbSubscriptionFilter;
 import org.occurrent.subscription.StreamSubscriptionFilter;
 import org.occurrent.subscription.SubscriptionFilter;
@@ -52,6 +53,12 @@ public class ApplyFilterToChangeStreamOptionsBuilder {
         } else if (filter instanceof StreamSubscriptionFilter streamSubscriptionFilter) {
             Filter streamFilter = streamSubscriptionFilter.filter();
             Criteria criteria = convertFilterToCriteria(FULL_DOCUMENT, timeRepresentation, streamFilter);
+            changeStreamOptions = changeStreamOptionsBuilder.filter(newAggregation(match(criteria))).build();
+        } else if (filter instanceof AgnosticSubscriptionFilter agnosticSubscriptionFilter) {
+            // Capability-agnostic: the change stream applies the plain Filter, the same as a stream filter. The stream
+            // versus DCB scoping lives in the catch-up layer, not here.
+            Filter agnosticFilter = agnosticSubscriptionFilter.filter();
+            Criteria criteria = convertFilterToCriteria(FULL_DOCUMENT, timeRepresentation, agnosticFilter);
             changeStreamOptions = changeStreamOptionsBuilder.filter(newAggregation(match(criteria))).build();
         } else if (filter instanceof DcbSubscriptionFilter dcbSubscriptionFilter) {
             Document matchStage = DcbSubscriptionFilterConverter.toChangeStreamMatchStage(dcbSubscriptionFilter.criteria());
