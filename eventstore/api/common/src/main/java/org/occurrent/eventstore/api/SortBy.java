@@ -32,6 +32,12 @@ public sealed interface SortBy {
     /**
      * Sort by natural order in the supplied direction. This is typically the insertion order,
      * but it could also be undefined for certain datastores.
+     * <p>
+     * Combining a natural step with other sort steps (for example through {@code thenNatural})
+     * is supported by the in-memory event store, where natural order acts as an insertion-order
+     * tiebreaker for the preceding fields. The MongoDB event stores reject such a compound sort
+     * with an {@link IllegalArgumentException}, because MongoDB cannot express a natural sort
+     * combined with other keys. Use a natural sort on its own against the MongoDB stores.
      *
      * @param direction The direction
      * @return A new instance of {@link SortBy}.
