@@ -223,7 +223,7 @@ public final class AnnotationTagGenerator<E> implements TagGenerator<E> {
 
     // Bind an accessor to a MethodHandle, making it accessible first so the event class need not be public.
     // Under the module system this requires the declaring package to be open for reflection.
-    private static MethodHandle unreflect(Method accessor) {
+    private MethodHandle unreflect(Method accessor) {
         try {
             accessor.setAccessible(true);
             return MethodHandles.lookup().unreflect(accessor);
@@ -232,7 +232,7 @@ public final class AnnotationTagGenerator<E> implements TagGenerator<E> {
         }
     }
 
-    private static MethodHandle unreflectField(Field field) {
+    private MethodHandle unreflectField(Field field) {
         try {
             field.setAccessible(true);
             return MethodHandles.lookup().unreflectGetter(field);
@@ -241,9 +241,9 @@ public final class AnnotationTagGenerator<E> implements TagGenerator<E> {
         }
     }
 
-    private static AnnotationTagGeneratorException accessError(Class<?> owner, String member, Throwable cause) {
+    private AnnotationTagGeneratorException accessError(Class<?> owner, String member, Throwable cause) {
         return new AnnotationTagGeneratorException(
-                "Cannot access annotated member " + member + " on " + owner.getName()
+                "Cannot access @" + annotationType.getSimpleName() + " member " + member + " on " + owner.getName()
                         + ". Under the Java module system the declaring package must be open for reflection.", cause);
     }
 
@@ -265,6 +265,9 @@ public final class AnnotationTagGenerator<E> implements TagGenerator<E> {
 
     private static <A extends Annotation> Class<A> validateAnnotationType(Class<A> annotationType) {
         requireNonNull(annotationType, "Annotation type cannot be null");
+        if (!annotationType.isAnnotation()) {
+            throw new IllegalArgumentException("Annotation type must be an annotation");
+        }
         Retention retention = annotationType.getAnnotation(Retention.class);
         if (retention == null || retention.value() != RetentionPolicy.RUNTIME) {
             throw new IllegalArgumentException("Annotation type must be annotated with @Retention(RUNTIME)");

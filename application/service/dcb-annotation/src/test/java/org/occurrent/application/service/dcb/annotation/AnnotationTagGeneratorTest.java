@@ -148,6 +148,14 @@ class AnnotationTagGeneratorTest {
     }
 
     @Test
+    @SuppressWarnings({"rawtypes", "unchecked"})
+    void constructor_rejects_class_that_is_not_an_annotation_type() {
+        assertThatThrownBy(() -> new AnnotationTagGenerator((Class) String.class))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessage("Annotation type must be an annotation");
+    }
+
+    @Test
     void constructor_rejects_null_key_resolver() {
         assertThatThrownBy(() -> new AnnotationTagGenerator<>(BoundaryTag.class, null))
                 .isInstanceOf(NullPointerException.class)
