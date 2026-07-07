@@ -181,6 +181,32 @@ class DcbReactorDslTest {
         assertThat(decision.state).isEqualTo("John Doe")
     }
 
+    @Test
+    fun execute_fails_with_illegal_argument_on_a_command_the_decider_does_not_recognize() {
+        val unrecognizingDecider = org.occurrent.dsl.dcb.DcbDecider.from(
+            nameDecider(),
+            { command -> if (command is DefineName) nameQuery("name") else null },
+            org.occurrent.application.service.dcb.TagGenerator { event -> setOf(tagFor(event)) }
+        )
+
+        org.assertj.core.api.Assertions.assertThatThrownBy {
+            applicationService.execute(ChangeName("John Doe"), unrecognizingDecider).block()
+        }.isInstanceOf(IllegalArgumentException::class.java)
+    }
+
+    @Test
+    fun executeAndReturnDecision_fails_with_illegal_argument_on_a_command_the_decider_does_not_recognize() {
+        val unrecognizingDecider = org.occurrent.dsl.dcb.DcbDecider.from(
+            nameDecider(),
+            { command -> if (command is DefineName) nameQuery("name") else null },
+            org.occurrent.application.service.dcb.TagGenerator { event -> setOf(tagFor(event)) }
+        )
+
+        org.assertj.core.api.Assertions.assertThatThrownBy {
+            applicationService.executeAndReturnDecision(ChangeName("John Doe"), unrecognizingDecider).block()
+        }.isInstanceOf(IllegalArgumentException::class.java)
+    }
+
     private fun nameDecider(): Decider<NameCommand, String, DomainEvent> =
         decider(
             initialState = "",

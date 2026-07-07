@@ -16,6 +16,7 @@
 
 package org.occurrent.dsl.dcb.blocking
 
+import org.occurrent.dsl.dcb.DcbEventMetadata
 import org.occurrent.dsl.dcb.dcbTags
 import org.occurrent.dsl.dcb.typeOf
 
@@ -114,9 +115,8 @@ class DcbDslKotlinTest {
     fun dcb_subscription_invokes_callback_only_for_matching_dcb_events() {
         val received = CopyOnWriteArrayList<DomainEvent>()
 
-        subscriptionModel.subscribeDcb(
+        DcbSubscriptions(subscriptionModel, cloudEventConverter).subscribeDcb(
             subscriptionId = "subscription",
-            cloudEventConverter = cloudEventConverter,
             query = DcbCriteria.tags(listOf(Tag.of("name", "1"))).excludingTypes(listOf(NameWasChanged::class.java.name))
         ) {
             received.add(it)
@@ -135,7 +135,7 @@ class DcbDslKotlinTest {
     fun dcb_subscription_all_query_ignores_normal_stream_events() {
         val received = CopyOnWriteArrayList<DomainEvent>()
 
-        subscriptionModel.subscribeDcb("subscription", cloudEventConverter, DcbCriteria.all()) {
+        DcbSubscriptions(subscriptionModel, cloudEventConverter).subscribeDcb("subscription", DcbCriteria.all()) {
             received.add(it)
         }
 
@@ -150,9 +150,9 @@ class DcbDslKotlinTest {
 
     @Test
     fun dcb_subscription_metadata_exposes_stream_and_dcb_metadata() {
-        val metadata = CopyOnWriteArrayList<EventMetadata>()
+        val metadata = CopyOnWriteArrayList<DcbEventMetadata>()
 
-        subscriptionModel.subscribeDcb("subscription", cloudEventConverter, DcbCriteria.tags(Tag.of("name", "1"))) { eventMetadata, _ ->
+        DcbSubscriptions(subscriptionModel, cloudEventConverter).subscribeDcbWithMetadata("subscription", DcbCriteria.tags(Tag.of("name", "1"))) { eventMetadata, _ ->
             metadata.add(eventMetadata)
         }
 
@@ -160,10 +160,10 @@ class DcbDslKotlinTest {
 
         await().untilAsserted {
             assertThat(metadata).hasSize(1)
-            assertThat(metadata[0].streamId).startsWith("dcb:partition:")
-            assertThat(metadata[0].streamVersion).isPositive()
-            assertThat(metadata[0].position).isEqualTo(1)
-            assertThat(metadata[0].dcbTags).containsExactlyInAnyOrder(Tag.of("name", "1"), Tag.of("tenant", "1"))
+            assertThat(metadata[0].eventMetadata().streamId).startsWith("dcb:partition:")
+            assertThat(metadata[0].eventMetadata().streamVersion).isPositive()
+            assertThat(metadata[0].position()).hasValue(1)
+            assertThat(metadata[0].dcbTags()).containsExactlyInAnyOrder(Tag.of("name", "1"), Tag.of("tenant", "1"))
         }
     }
 

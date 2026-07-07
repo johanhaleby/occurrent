@@ -27,9 +27,11 @@ import org.occurrent.application.converter.CloudEventConverter
 import org.occurrent.application.converter.jackson.JacksonCloudEventConverter
 import org.occurrent.application.service.blocking.dcb.DcbApplicationService
 import org.occurrent.application.service.blocking.dcb.GenericDcbApplicationService
+import org.occurrent.application.service.dcb.TagGenerator
 import org.occurrent.domain.DomainEvent
 import org.occurrent.domain.NameDefined
 import org.occurrent.domain.NameWasChanged
+import org.occurrent.dsl.dcb.DcbDecider
 import org.occurrent.dsl.dcb.toDcb
 import org.occurrent.dsl.decider.Decider
 import org.occurrent.dsl.decider.decider
@@ -128,6 +130,46 @@ class DcbApplicationServiceDeciderExtensionsTest {
         assertThatThrownBy {
             applicationService.execute(listOf(DefineName("Jane Doe"), ChangeName("John Doe")), perCommandDecider)
         }.isInstanceOf(IllegalArgumentException::class.java)
+    }
+
+    @Test
+    fun execute_throws_on_a_command_the_decider_does_not_recognize() {
+        val unrecognizingDecider = DcbDecider.from(
+            nameDecider(),
+            { command -> if (command is DefineName) nameQuery("name") else null },
+            TagGenerator { event -> setOf(tagFor(event)) }
+        )
+
+        assertThatThrownBy {
+            applicationService.execute(ChangeName("John Doe"), unrecognizingDecider)
+        }.isInstanceOf(IllegalArgumentException::class.java)
+    }
+
+    @Test
+    fun executeAndReturnDecision_throws_on_a_command_the_decider_does_not_recognize() {
+        val unrecognizingDecider = DcbDecider.from(
+            nameDecider(),
+            { command -> if (command is DefineName) nameQuery("name") else null },
+            TagGenerator { event -> setOf(tagFor(event)) }
+        )
+
+        assertThatThrownBy {
+            applicationService.executeAndReturnDecision(ChangeName("John Doe"), unrecognizingDecider)
+        }.isInstanceOf(IllegalArgumentException::class.java)
+    }
+
+    @Test
+    fun a_batch_mixing_a_recognized_and_an_unrecognized_command_reports_the_unrecognized_command_not_a_boundary_mismatch() {
+        val unrecognizingDecider = DcbDecider.from(
+            nameDecider(),
+            { command -> if (command is DefineName) nameQuery("name") else null },
+            TagGenerator { event -> setOf(tagFor(event)) }
+        )
+
+        assertThatThrownBy {
+            applicationService.execute(listOf(DefineName("Jane Doe"), ChangeName("John Doe")), unrecognizingDecider)
+        }.isInstanceOf(IllegalArgumentException::class.java)
+            .hasMessageContaining("does not recognize")
     }
 
     @Test

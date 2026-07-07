@@ -41,8 +41,16 @@ import static org.occurrent.subscription.util.predicate.EveryN.everyEvent;
  * thus making the subscription durable.
  *
  * <p>
- * Note that this implementation stores the checkpoint after _every_ action. If you have a lot of events and duplication is not
- * that much of a deal, consider changing this behavior by supplying an instance of {@link DurableSubscriptionModelConfig}.
+ * Note that this implementation stores the checkpoint after _every_ action by default. This means one synchronous checkpoint
+ * write per delivered event, which roughly doubles the write load of a subscription that's keeping pace with the event store.
+ * This default is kept on purpose since changing it would change what happens after a crash: with the default, replay after
+ * a restart resumes right after the last delivered event; if checkpoints are written less often, replay resumes from an
+ * earlier checkpoint and events already handled before the crash will be re-delivered.
+ * <p>
+ * If checkpoint-write throughput matters more than minimizing re-delivery after a crash, pass a {@link DurableSubscriptionModelConfig}
+ * with {@link org.occurrent.subscription.util.predicate.EveryN#every(int)} as the {@code persistCloudEventPositionPredicate}, for example
+ * {@code EveryN.every(10)} to checkpoint every 10th event instead of every single one. The tradeoff is fewer checkpoint writes in
+ * exchange for more events being re-delivered (and needing to be handled idempotently) after a crash or restart.
  */
 @NullMarked
 public class DurableSubscriptionModel implements CheckpointAwareSubscriptionModel, DelegatingSubscriptionModel {

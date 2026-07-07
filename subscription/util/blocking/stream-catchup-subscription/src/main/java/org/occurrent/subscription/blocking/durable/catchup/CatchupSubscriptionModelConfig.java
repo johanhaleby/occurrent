@@ -142,19 +142,23 @@ public class CatchupSubscriptionModelConfig {
         if (this == o) return true;
         if (!(o instanceof CatchupSubscriptionModelConfig that)) return false;
         return cacheSize == that.cacheSize &&
-                Objects.equals(subscriptionStorageConfig, that.subscriptionStorageConfig);
+                dcbCatchupPositionWindowSize == that.dcbCatchupPositionWindowSize &&
+                Objects.equals(subscriptionStorageConfig, that.subscriptionStorageConfig) &&
+                Objects.equals(catchupPhaseSortBy, that.catchupPhaseSortBy);
     }
 
     @Override
     public int hashCode() {
-        return Objects.hash(cacheSize, subscriptionStorageConfig);
+        return Objects.hash(cacheSize, subscriptionStorageConfig, catchupPhaseSortBy, dcbCatchupPositionWindowSize);
     }
 
     @Override
     public String toString() {
-        return "CatchupSupportingBlockingSubscriptionConfig{" +
+        return "CatchupSubscriptionModelConfig{" +
                 "cacheSize=" + cacheSize +
-                ", catchupPositionPersistenceConfig=" + subscriptionStorageConfig +
+                ", subscriptionStorageConfig=" + subscriptionStorageConfig +
+                ", catchupPhaseSortBy=" + catchupPhaseSortBy +
+                ", dcbCatchupPositionWindowSize=" + dcbCatchupPositionWindowSize +
                 '}';
     }
 }

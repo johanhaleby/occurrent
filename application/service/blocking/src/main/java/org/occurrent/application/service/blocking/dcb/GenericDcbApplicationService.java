@@ -157,7 +157,10 @@ public class GenericDcbApplicationService<E> implements DcbApplicationService<E>
     }
 
     /**
-     * Returns the default retry policy for optimistic DCB conflicts.
+     * Returns the default retry policy for optimistic DCB conflicts. It makes up to five attempts in total for a
+     * {@link DcbAppendConditionNotFulfilledException}, with exponential backoff and no jitter. This matches the
+     * reactive counterpart's {@code defaultRetry}, which also allows five attempts in total with the same backoff
+     * and no jitter.
      */
     public static Retry defaultRetryStrategy() {
         return RetryStrategy.exponentialBackoff(Duration.ofMillis(100), Duration.ofSeconds(2), 2.0f).maxAttempts(5).retryIf(DcbAppendConditionNotFulfilledException.class::isInstance);
