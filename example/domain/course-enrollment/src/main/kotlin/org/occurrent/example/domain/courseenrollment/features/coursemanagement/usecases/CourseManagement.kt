@@ -21,19 +21,16 @@ import org.occurrent.dsl.dcb.blocking.execute
 import org.occurrent.example.domain.courseenrollment.common.DomainEvent
 import org.occurrent.example.domain.courseenrollment.features.coursemanagement.model.CourseCommand.CancelCourse
 import org.occurrent.example.domain.courseenrollment.features.coursemanagement.model.CourseCommand.DefineCourse
-import org.occurrent.example.domain.courseenrollment.features.coursemanagement.model.courseDecider
-import org.occurrent.example.domain.courseenrollment.infrastructure.dcb.CourseEnrollmentQueries.courseBoundary
+import org.occurrent.example.domain.courseenrollment.features.coursemanagement.model.courseDcbDecider
 import java.time.Instant
 import java.util.*
 
 fun DcbApplicationService<DomainEvent>.defineCourse(courseId: UUID, title: String, capacity: Int, occurredAt: Instant = Instant.now()) = execute(
-    courseBoundary(courseId),
     DefineCourse(UUID.randomUUID(), occurredAt, courseId, title, capacity),
-    courseDecider
+    courseDcbDecider
 )
 
 fun DcbApplicationService<DomainEvent>.cancelCourse(courseId: UUID, occurredAt: Instant = Instant.now()) = execute(
-    courseBoundary(courseId),
     CancelCourse(UUID.randomUUID(), occurredAt, courseId),
-    courseDecider
+    courseDcbDecider
 )

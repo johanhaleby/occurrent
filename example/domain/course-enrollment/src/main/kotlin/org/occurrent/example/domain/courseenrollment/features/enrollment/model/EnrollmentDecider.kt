@@ -16,6 +16,8 @@
 
 package org.occurrent.example.domain.courseenrollment.features.enrollment.model
 
+import org.occurrent.dsl.dcb.DcbDecider
+import org.occurrent.dsl.dcb.toDcb
 import org.occurrent.dsl.decider.Decider
 import org.occurrent.dsl.decider.decider
 import org.occurrent.example.domain.courseenrollment.common.CourseId
@@ -26,6 +28,8 @@ import org.occurrent.example.domain.courseenrollment.features.coursemanagement.m
 import org.occurrent.example.domain.courseenrollment.features.coursemanagement.model.CourseDefined
 import org.occurrent.example.domain.courseenrollment.features.studentmanagement.model.StudentDeregistered
 import org.occurrent.example.domain.courseenrollment.features.studentmanagement.model.StudentRegistered
+import org.occurrent.example.domain.courseenrollment.infrastructure.dcb.CourseEnrollmentEventTagGenerator
+import org.occurrent.example.domain.courseenrollment.infrastructure.dcb.CourseEnrollmentQueries
 import java.time.Instant
 import java.util.*
 
@@ -44,6 +48,11 @@ val enrollmentDecider: Decider<EnrollmentCommand, EnrollmentState, DomainEvent> 
         decide = ::decide,
         evolve = ::evolve
     )
+
+val enrollmentDcbDecider: DcbDecider<EnrollmentCommand, EnrollmentState, DomainEvent> = enrollmentDecider.toDcb(
+    criteria = { command -> CourseEnrollmentQueries.enrollmentCriteria(command.courseId, command.studentId) },
+    tags = { event -> CourseEnrollmentEventTagGenerator().tags(event) }
+)
 
 /** Domain policy constants. */
 object EnrollmentPolicy {

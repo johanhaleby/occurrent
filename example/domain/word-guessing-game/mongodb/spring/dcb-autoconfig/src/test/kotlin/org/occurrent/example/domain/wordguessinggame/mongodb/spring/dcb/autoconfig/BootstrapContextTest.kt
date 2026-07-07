@@ -22,8 +22,8 @@ import org.junit.jupiter.api.Test
 import org.occurrent.application.service.blocking.ApplicationService
 import org.occurrent.application.service.blocking.dcb.DcbApplicationService
 import org.occurrent.dsl.dcb.blocking.DcbDomainEventQueries
+import org.occurrent.dsl.dcb.DcbDecider
 import org.occurrent.dsl.dcb.blocking.DcbSubscriptions
-import org.occurrent.dsl.decider.Decider
 import org.occurrent.dsl.query.blocking.DomainEventQueries
 import org.occurrent.dsl.subscription.blocking.Subscriptions
 import org.occurrent.eventstore.mongodb.spring.blocking.EventStoreConfig
@@ -54,7 +54,7 @@ class BootstrapContextTest {
             .containsOnlyKeys("occurrentDcbDomainEventQueries")
         assertThat(applicationContext.getBeansOfType(DcbSubscriptions::class.java))
             .containsOnlyKeys("occurrentDcbSubscriptions")
-        assertThat(applicationContext.getBeansOfType(Decider::class.java)).hasSize(1)
+        assertThat(applicationContext.getBeansOfType(DcbDecider::class.java)).hasSize(1)
     }
 
     @Test

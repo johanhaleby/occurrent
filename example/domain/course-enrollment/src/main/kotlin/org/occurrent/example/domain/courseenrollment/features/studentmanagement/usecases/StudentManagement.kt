@@ -21,19 +21,16 @@ import org.occurrent.dsl.dcb.blocking.execute
 import org.occurrent.example.domain.courseenrollment.common.DomainEvent
 import org.occurrent.example.domain.courseenrollment.features.studentmanagement.model.StudentCommand.DeregisterStudent
 import org.occurrent.example.domain.courseenrollment.features.studentmanagement.model.StudentCommand.RegisterStudent
-import org.occurrent.example.domain.courseenrollment.features.studentmanagement.model.studentDecider
-import org.occurrent.example.domain.courseenrollment.infrastructure.dcb.CourseEnrollmentQueries.studentCriteria
+import org.occurrent.example.domain.courseenrollment.features.studentmanagement.model.studentDcbDecider
 import java.time.Instant
 import java.util.*
 
 fun DcbApplicationService<DomainEvent>.registerStudent(studentId: UUID, name: String, occurredAt: Instant = Instant.now()) = execute(
-    studentCriteria(studentId),
     RegisterStudent(UUID.randomUUID(), occurredAt, studentId, name),
-    studentDecider
+    studentDcbDecider
 )
 
 fun DcbApplicationService<DomainEvent>.deregisterStudent(studentId: UUID, occurredAt: Instant = Instant.now()) = execute(
-    studentCriteria(studentId),
     DeregisterStudent(UUID.randomUUID(), occurredAt, studentId),
-    studentDecider
+    studentDcbDecider
 )

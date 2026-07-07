@@ -16,10 +16,14 @@
 
 package org.occurrent.example.domain.courseenrollment.features.studentmanagement.model
 
+import org.occurrent.dsl.dcb.DcbDecider
+import org.occurrent.dsl.dcb.toDcb
 import org.occurrent.dsl.decider.Decider
 import org.occurrent.dsl.decider.decider
 import org.occurrent.example.domain.courseenrollment.common.DomainCommand
 import org.occurrent.example.domain.courseenrollment.common.StudentId
+import org.occurrent.example.domain.courseenrollment.infrastructure.dcb.CourseEnrollmentEventTagGenerator
+import org.occurrent.example.domain.courseenrollment.infrastructure.dcb.CourseEnrollmentQueries
 import java.time.Instant
 import java.util.*
 
@@ -33,6 +37,17 @@ val studentDecider: Decider<StudentCommand, StudentRegistry, StudentEvent> =
         decide = ::decide,
         evolve = ::evolve
     )
+
+val studentDcbDecider: DcbDecider<StudentCommand, StudentRegistry, StudentEvent> = studentDecider.toDcb(
+    criteria = { command ->
+        val studentId = when (command) {
+            is StudentCommand.RegisterStudent -> command.studentId
+            is StudentCommand.DeregisterStudent -> command.studentId
+        }
+        CourseEnrollmentQueries.studentCriteria(studentId)
+    },
+    tags = { event -> CourseEnrollmentEventTagGenerator().tags(event) }
+)
 
 sealed interface StudentCommand : DomainCommand {
     data class RegisterStudent(val eventId: UUID, val occurredAt: Instant, val studentId: StudentId, val name: String) : StudentCommand

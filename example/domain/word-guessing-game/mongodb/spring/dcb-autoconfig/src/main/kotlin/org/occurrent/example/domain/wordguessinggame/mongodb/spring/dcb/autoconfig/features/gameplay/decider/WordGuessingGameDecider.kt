@@ -56,6 +56,7 @@ sealed interface WordGuessingGameCommand {
         val guessEventId: UUID,
         val guessesExhaustedEventId: UUID,
         val gameEndedEventId: UUID,
+        val gameId: GameId,
         val timestamp: Timestamp,
         val playerId: PlayerId,
         val word: Word

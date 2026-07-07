@@ -16,6 +16,8 @@
 
 package org.occurrent.example.domain.hotelbooking.features.booking.model
 
+import org.occurrent.dsl.dcb.DcbDecider
+import org.occurrent.dsl.dcb.toDcb
 import org.occurrent.dsl.decider.Decider
 import org.occurrent.dsl.decider.decider
 import org.occurrent.example.domain.hotelbooking.common.*
@@ -23,6 +25,8 @@ import org.occurrent.example.domain.hotelbooking.features.guestmanagement.model.
 import org.occurrent.example.domain.hotelbooking.features.guestmanagement.model.GuestRegistered
 import org.occurrent.example.domain.hotelbooking.features.roommanagement.model.RoomClosed
 import org.occurrent.example.domain.hotelbooking.features.roommanagement.model.RoomDefined
+import org.occurrent.example.domain.hotelbooking.infrastructure.dcb.HotelBookingCriteria.bookingCriteria
+import org.occurrent.example.domain.hotelbooking.infrastructure.dcb.HotelBookingEventTagGenerator
 import java.time.Instant
 import java.util.*
 
@@ -43,6 +47,12 @@ val bookingDecider: Decider<BookingCommand, BookingState, DomainEvent> =
         decide = ::decide,
         evolve = ::evolve
     )
+
+/** The [bookingDecider] wired to its cross-boundary DCB criteria and event tags, ready for [org.occurrent.dsl.dcb.reactor.execute]. */
+val bookingDcbDecider: DcbDecider<BookingCommand, BookingState, DomainEvent> = bookingDecider.toDcb(
+    criteria = { command -> bookingCriteria(command.roomId, command.guestId) },
+    tags = { event -> HotelBookingEventTagGenerator().tags(event) }
+)
 
 /** Domain policy constants. */
 object BookingPolicy {
