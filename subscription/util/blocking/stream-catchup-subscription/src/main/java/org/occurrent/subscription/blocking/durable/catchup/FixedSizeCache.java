@@ -26,6 +26,9 @@ import java.util.Map;
  * A bounded, insertion-ordered cache of recently delivered event ids, evicting the oldest entry once full. Used both
  * to dedupe an overlapping catch-up reconciliation re-read and to skip, in the live consumer, events already
  * delivered during catch-up at the handover seam. Shared by the stream and DCB catch-up paths.
+ * <p>
+ * Written on the catch-up (replay) thread and read on the live delivery thread at the handover seam, so every access
+ * is synchronized, matching the reactor {@code HandoverCache}.
  */
 @NullMarked
 final class FixedSizeCache {
@@ -40,11 +43,11 @@ final class FixedSizeCache {
         };
     }
 
-    public void put(String value) {
+    public synchronized void put(String value) {
         cacheContent.put(value, null);
     }
 
-    public boolean isCached(String key) {
+    public synchronized boolean isCached(String key) {
         return cacheContent.containsKey(key);
     }
 }

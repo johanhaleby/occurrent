@@ -6,6 +6,8 @@ Date: 2026-06-28
 
 Accepted
 
+Superseded in part by ADR 0051
+
 ## Context
 
 The stream and DCB sides of the subscription API are named explicitly everywhere now: `@StreamSubscription` and `@DcbSubscription` (ADR 0026, ADR 0027), `StreamSubscriptionModel` and `DcbSubscriptionModel` (ADR 0024), and the DCB DSL `DcbSubscriptions`. The one name left behind is the stream subscription DSL itself, the Kotlin class `Subscriptions` and its builder `subscriptions(...)`. Next to `DcbSubscriptions` it reads as if it covers every subscription rather than the stream ones, the same lopsidedness the annotation rename fixed.

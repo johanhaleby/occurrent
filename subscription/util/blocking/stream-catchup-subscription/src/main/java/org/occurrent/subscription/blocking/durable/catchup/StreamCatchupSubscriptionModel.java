@@ -260,21 +260,18 @@ public class StreamCatchupSubscriptionModel extends AbstractCatchupSubscriptionM
         // to NOT store the position durably. This because we start at "beginning of time" and we also want to resume at
         // "beginning of time" and thus we never need to store ANY subscription position (because we always start from "beginning of time"
         // when application is rebooted). This allows for catching up in-memory projections/views/policies.
+        // We force the wrapping subscription to be a CheckpointAwareSubscriptionModel so that we can capture
+        // where the live subscription should resume. This position is captured *after* the bulk replay so it
+        // stays fresh: capturing it before a long replay would risk the resume token ageing out of the
+        // database change stream (e.g. MongoDB's oplog) before the handover, making the live subscription
+        // unresumable. Events written during the replay are not covered by this position (they were written
+        // before it). They are reconciled separately by the insertion-order delta below. A null resume token from
+        // the delegate fails loudly (captureLiveResumeCheckpoint) instead of silently resuming live at "now" and
+        // dropping every event committed during the replay; see the position path for the same guarantee captured
+        // before its replay instead.
         Class<? extends SubscriptionModel> delegatedSubscriptionModelType = getDelegatedSubscriptionModel().getClass();
         StartAt delegatedStartAt = startAt.get(new SubscriptionModelContext(delegatedSubscriptionModelType));
-        final Checkpoint globalCheckpoint;
-        if (delegatedStartAt == null) {
-            // The delegated subscription model is not allowed to subscribe, so we don't need to get the global position.
-            globalCheckpoint = null;
-        } else {
-            // We force the wrapping subscription to be a CheckpointAwareSubscriptionModel so that we can capture
-            // where the live subscription should resume. This position is captured *after* the bulk replay so it
-            // stays fresh: capturing it before a long replay would risk the resume token ageing out of the
-            // database change stream (e.g. MongoDB's oplog) before the handover, making the live subscription
-            // unresumable. Events written during the replay are not covered by this position (they were written
-            // before it). They are reconciled separately by the insertion-order delta below.
-            globalCheckpoint = subscriptionModel.globalCheckpoint();
-        }
+        final Checkpoint globalCheckpoint = captureLiveResumeCheckpoint(delegatedStartAt);
 
         // We generate a cache so that events that are streamed at the same time as streaming the events missed
         // during the catch-up phase are not streamed again.
@@ -302,11 +299,22 @@ public class StreamCatchupSubscriptionModel extends AbstractCatchupSubscriptionM
         // globalCheckpoint and is therefore covered by the live subscription regardless.
         long reconciledThroughCount = numberOfEventsBeforeStartingCatchupSubscription;
         long matchingEventCount = eventStoreQueries.count(catchupFilter);
-        while (matchingEventCount > reconciledThroughCount) {
+        while (matchingEventCount > reconciledThroughCount && shouldKeepReplaying(subscriptionId)) {
             long numberOfEventsToReconcile = matchingEventCount - numberOfEventsBeforeStartingCatchupSubscription;
-            List<CloudEvent> eventsWrittenDuringCatchup = new ArrayList<>(eventStoreQueries.query(catchupFilter, 0, Math.toIntExact(numberOfEventsToReconcile), SortBy.natural(DESCENDING)).toList());
-            Collections.reverse(eventsWrittenDuringCatchup);
-            runCatchupForStream(eventsWrittenDuringCatchup.stream(), subscriptionId, action, catchupPhaseCache);
+            // Read the delta in bounded windows, newest-window-first (skip counts down from the full delta), instead
+            // of materializing the whole delta in one ArrayList, mirroring the position path's window delivery. Each
+            // window is still read and reversed in natural-order-descending, so events within and across windows are
+            // delivered oldest first.
+            long remaining = numberOfEventsToReconcile;
+            while (remaining > 0 && shouldKeepReplaying(subscriptionId)) {
+                long windowCountAsLong = Math.min(remaining, Math.min(config.dcbCatchupPositionWindowSize, Integer.MAX_VALUE));
+                int windowCount = (int) windowCountAsLong;
+                long skip = remaining - windowCount;
+                List<CloudEvent> window = new ArrayList<>(eventStoreQueries.query(catchupFilter, Math.toIntExact(skip), windowCount, SortBy.natural(DESCENDING)).toList());
+                Collections.reverse(window);
+                runCatchupForStream(window.stream(), subscriptionId, action, catchupPhaseCache);
+                remaining -= windowCount;
+            }
             reconciledThroughCount = matchingEventCount;
             matchingEventCount = eventStoreQueries.count(catchupFilter);
         }
@@ -321,7 +329,7 @@ public class StreamCatchupSubscriptionModel extends AbstractCatchupSubscriptionM
         }
 
         final boolean subscriptionsWasCancelledOrShutdown;
-        if (!shuttingDown && runningCatchupSubscriptions.containsKey(subscriptionId)) {
+        if (shouldKeepReplaying(subscriptionId)) {
             subscriptionsWasCancelledOrShutdown = false;
             runningCatchupSubscriptions.remove(subscriptionId);
         } else {
@@ -383,6 +391,7 @@ public class StreamCatchupSubscriptionModel extends AbstractCatchupSubscriptionM
             subscription = new CancelledSubscription(subscriptionId);
         } else {
             subscription = getDelegatedSubscriptionModel().subscribe(subscriptionId, withCapabilityScope(filter), startAtToUse, liveConsumer);
+            applyPendingPauseIfAny(subscriptionId);
         }
         return subscription;
     }
@@ -403,25 +412,31 @@ public class StreamCatchupSubscriptionModel extends AbstractCatchupSubscriptionM
         long startPosition = GlobalCheckpoint.positionOf(checkpoint);
 
         // Capture the live resume token before the bulk replay so an event committed during the replay is still
-        // delivered live, like the DCB handover.
+        // delivered live, like the DCB handover. Fails loudly instead of falling back to "now" when the delegate
+        // reports no resume token (captureLiveResumeCheckpoint).
         Class<? extends SubscriptionModel> delegatedSubscriptionModelType = getDelegatedSubscriptionModel().getClass();
         StartAt delegatedStartAt = startAt.get(new SubscriptionModelContext(delegatedSubscriptionModelType));
-        final Checkpoint globalCheckpoint = delegatedStartAt == null ? null : subscriptionModel.globalCheckpoint();
+        final Checkpoint globalCheckpoint = captureLiveResumeCheckpoint(delegatedStartAt);
 
         // Page through the position sequence from the resume position to the head seen at the start, in windows so a
-        // large rebuild does not load the whole matched set at once.
-        long bulkHead = positionOrderedReader.currentPosition();
-        long cursor = deliverPositionWindows(positionOrderedReader, streamFilter, startPosition, bulkHead, windowSize, subscriptionId, action, null);
-
+        // large rebuild does not load the whole matched set at once, then reconcile until the head stops advancing.
+        // Re-reads of overlapping windows are deduped by the cache (delivery is at-least-once).
         FixedSizeCache catchupPhaseCache = new FixedSizeCache(config.cacheSize);
+        PositionCatchupPipeline.Reader streamReader = new PositionCatchupPipeline.Reader() {
+            @Override
+            public long currentHead() {
+                return positionOrderedReader.currentPosition();
+            }
 
-        // Reconcile events written during the bulk replay (positions beyond bulkHead) by continuing to page until the
-        // head stops advancing. Re-reads of overlapping windows are deduped by the cache (delivery is at-least-once).
-        long head = positionOrderedReader.currentPosition();
-        while (head > cursor && !shuttingDown && runningCatchupSubscriptions.containsKey(subscriptionId)) {
-            cursor = deliverPositionWindows(positionOrderedReader, streamFilter, cursor, head, windowSize, subscriptionId, action, catchupPhaseCache);
-            head = positionOrderedReader.currentPosition();
-        }
+            @Override
+            public Stream<CloudEvent> readWindow(long fromExclusive, long toInclusive) {
+                return positionOrderedReader.readInPositionOrder(streamFilter, PositionRange.between(fromExclusive, toInclusive));
+            }
+        };
+        PositionCatchupPipeline pipeline = new PositionCatchupPipeline(streamReader, windowSize);
+        pipeline.replay(startPosition, () -> shouldKeepReplaying(subscriptionId),
+                (events, cache) -> deliverCatchupEvents(events, subscriptionId, action, cache, e -> GlobalCheckpoint.of(OccurrentCloudEventExtension.getPosition(e))),
+                catchupPhaseCache);
 
         if (delegatedStartAt == null) {
             returnIfCheckpointStorageConfigIs(UseCheckpointInStorage.class, cfg -> {
@@ -431,7 +446,7 @@ public class StreamCatchupSubscriptionModel extends AbstractCatchupSubscriptionM
         }
 
         final boolean subscriptionsWasCancelledOrShutdown;
-        if (!shuttingDown && runningCatchupSubscriptions.containsKey(subscriptionId)) {
+        if (shouldKeepReplaying(subscriptionId)) {
             subscriptionsWasCancelledOrShutdown = false;
             runningCatchupSubscriptions.remove(subscriptionId);
         } else {
@@ -465,21 +480,6 @@ public class StreamCatchupSubscriptionModel extends AbstractCatchupSubscriptionM
             }
         };
         return startDelegatedSubscription(subscriptionId, filter, subscriptionsWasCancelledOrShutdown, startAtToUse, liveConsumer);
-    }
-
-    /**
-     * Delivers stream events in {@code (fromExclusive, toInclusive]} by paging through position windows, and returns
-     * the position the cursor reached. Stops early on shutdown or cancellation.
-     */
-    private long deliverPositionWindows(PositionOrderedReader positionOrderedReader, Filter filter, long fromExclusive, long toInclusive, long windowSize, String subscriptionId, Consumer<CloudEvent> action, @Nullable FixedSizeCache cache) {
-        long cursor = fromExclusive;
-        while (cursor < toInclusive && !shuttingDown && runningCatchupSubscriptions.containsKey(subscriptionId)) {
-            long upTo = Math.min(cursor + windowSize, toInclusive);
-            Stream<CloudEvent> slice = positionOrderedReader.readInPositionOrder(filter, PositionRange.between(cursor, upTo));
-            deliverCatchupEvents(slice, subscriptionId, action, cache, e -> GlobalCheckpoint.of(OccurrentCloudEventExtension.getPosition(e)));
-            cursor = upTo;
-        }
-        return cursor;
     }
 
     private Filter deriveFilterToUseDuringCatchupPhase(@Nullable SubscriptionFilter filter, Checkpoint checkpoint) {
@@ -548,7 +548,7 @@ public class StreamCatchupSubscriptionModel extends AbstractCatchupSubscriptionM
         // try-with-resources closes the source stream even when takeWhile short-circuits on shutdown, so a
         // resource-backed read (the Spring Mongo bulk replay wraps a server cursor) does not leak its cursor.
         try (cloudEvents) {
-            Stream<CloudEvent> takeWhile = cloudEvents.takeWhile(__ -> !shuttingDown && runningCatchupSubscriptions.containsKey(subscriptionId));
+            Stream<CloudEvent> takeWhile = cloudEvents.takeWhile(__ -> shouldKeepReplaying(subscriptionId));
             if (cache != null) {
                 // Skip events already delivered in an earlier reconciliation pass (the delta is re-read until it
                 // stabilises, so passes overlap) and record the rest so the live subscription can skip them at the

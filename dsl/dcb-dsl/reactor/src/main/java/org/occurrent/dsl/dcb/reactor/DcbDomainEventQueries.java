@@ -17,20 +17,15 @@
 package org.occurrent.dsl.dcb.reactor;
 
 import org.jspecify.annotations.NullMarked;
-import org.jspecify.annotations.Nullable;
 import org.occurrent.dsl.dcb.DcbCriteriaBuilder;
 import org.occurrent.dsl.dcb.DcbDomainEventStream;
 import org.occurrent.dsl.query.reactor.DomainEventQueries;
-import org.occurrent.eventstore.api.SortBy;
 import org.occurrent.eventstore.api.reactor.EventStoreQueries;
 import org.occurrent.eventstore.api.dcb.DcbCriteria;
 import org.occurrent.eventstore.api.dcb.DcbReadOptions;
 import org.occurrent.eventstore.api.dcb.reactor.DcbEventStore;
-import org.occurrent.filter.Filter;
 import reactor.core.publisher.Flux;
 import reactor.core.publisher.Mono;
-
-import java.util.Collection;
 
 import static java.util.Objects.requireNonNull;
 
@@ -38,11 +33,10 @@ import static java.util.Objects.requireNonNull;
  * Queries a reactive DCB-capable event store and converts the matched CloudEvents into your domain event type.
  *
  * <p>This wraps a {@link DomainEventQueries} so a DCB application can use a single object for both DCB queries
- * (the {@link #query(DcbCriteria)} family) and the regular stream-oriented queries (which are delegated to the
- * wrapped {@link DomainEventQueries} unchanged). This is the reactive counterpart to the blocking
- * {@code DcbDomainEventQueries}. The wrapped instance must be backed by an event store that also implements the
- * reactive {@link DcbEventStore} (for example the Spring MongoDB event store with the DCB capability enabled);
- * otherwise the constructor throws.</p>
+ * (the {@link #query(DcbCriteria)} family) and the regular stream-oriented queries, reached through
+ * {@link #domainEventQueries()}. This is the reactive counterpart to the blocking {@code DcbDomainEventQueries}. The
+ * wrapped instance must be backed by an event store that also implements the reactive {@link DcbEventStore} (for
+ * example the Spring MongoDB event store with the DCB capability enabled); otherwise the constructor throws.</p>
  *
  * @param <E> the domain event type
  */
@@ -60,6 +54,14 @@ public class DcbDomainEventQueries<E> {
     public DcbDomainEventQueries(DomainEventQueries<E> domainEventQueries) {
         this.domainEventQueries = requireNonNull(domainEventQueries, DomainEventQueries.class.getSimpleName() + " cannot be null");
         this.dcbEventStore = requireDcbEventStore(domainEventQueries);
+    }
+
+    /**
+     * The wrapped {@link DomainEventQueries}, for the regular stream-oriented queries ({@code query}, {@code queryOne},
+     * {@code count}, {@code exists}, {@code all}, ...) that this type does not itself add DCB semantics to.
+     */
+    public DomainEventQueries<E> domainEventQueries() {
+        return domainEventQueries;
     }
 
     /**
@@ -107,111 +109,6 @@ public class DcbDomainEventQueries<E> {
         return dcbEventStore.read(query, options).flatMap(eventStream ->
                 domainEventQueries.<E>toDomainEvents(Flux.fromStream(eventStream.stream())).collectList()
                         .map(events -> new DcbDomainEventStream<>(events, eventStream.lastSequencePosition(), eventStream.consistencyToken())));
-    }
-
-    // ------------------------------------------------------------------------------------------------------
-    // Stream queries delegated to the wrapped DomainEventQueries
-    // ------------------------------------------------------------------------------------------------------
-
-    public <E1 extends E> Mono<E1> queryOne(Filter filter) {
-        return domainEventQueries.queryOne(filter);
-    }
-
-    public <E1 extends E> Mono<E1> queryOne(Class<E1> type) {
-        return domainEventQueries.queryOne(type);
-    }
-
-    public <E1 extends E> Mono<E1> queryOne(Class<E1> type, SortBy sortBy) {
-        return domainEventQueries.queryOne(type, sortBy);
-    }
-
-    public <E1 extends E> Mono<E1> queryOne(Class<E1> type, int skip, int limit) {
-        return domainEventQueries.queryOne(type, skip, limit);
-    }
-
-    public <E1 extends E> Mono<E1> queryOne(Class<E1> type, int skip, int limit, SortBy sortBy) {
-        return domainEventQueries.queryOne(type, skip, limit, sortBy);
-    }
-
-    public <E1 extends E> Flux<E1> query(Class<E1> type) {
-        return domainEventQueries.query(type);
-    }
-
-    public <E1 extends E> Flux<E1> query(Class<E1> type, int skip, int limit) {
-        return domainEventQueries.query(type, skip, limit);
-    }
-
-    public <E1 extends E> Flux<E1> query(Class<E1> type, int skip, int limit, SortBy sortBy) {
-        return domainEventQueries.query(type, skip, limit, sortBy);
-    }
-
-    public <E1 extends E> Flux<E1> query(Class<E1> type, SortBy sortBy) {
-        return domainEventQueries.query(type, sortBy);
-    }
-
-    public <E1 extends E> Flux<E1> query(Filter filter, int skip, int limit, SortBy sortBy) {
-        return domainEventQueries.query(filter, skip, limit, sortBy);
-    }
-
-    public Flux<E> query(Collection<Class<? extends E>> types, int skip, int limit, SortBy sortBy) {
-        return domainEventQueries.query(types, skip, limit, sortBy);
-    }
-
-    public Flux<E> query(Collection<Class<? extends E>> types, int skip, int limit) {
-        return domainEventQueries.query(types, skip, limit);
-    }
-
-    public Flux<E> query(Collection<Class<? extends E>> types, SortBy sortBy) {
-        return domainEventQueries.query(types, sortBy);
-    }
-
-    public Flux<E> query(Collection<Class<? extends E>> types) {
-        return domainEventQueries.query(types);
-    }
-
-    @SafeVarargs
-    public final Flux<E> query(Class<? extends E> type, @Nullable Class<? extends E>... types) {
-        return domainEventQueries.query(type, types);
-    }
-
-    public Mono<Long> count(Filter filter) {
-        return domainEventQueries.count(filter);
-    }
-
-    public Mono<Long> count() {
-        return domainEventQueries.count();
-    }
-
-    public Mono<Boolean> exists(Filter filter) {
-        return domainEventQueries.exists(filter);
-    }
-
-    public <E1 extends E> Flux<E1> query(Filter filter, SortBy sortBy) {
-        return domainEventQueries.query(filter, sortBy);
-    }
-
-    public <E1 extends E> Flux<E1> query(Filter filter, int skip, int limit) {
-        return domainEventQueries.query(filter, skip, limit);
-    }
-
-    public Flux<E> all(int skip, int limit, SortBy sortBy) {
-        return domainEventQueries.all(skip, limit, sortBy);
-    }
-
-    public Flux<E> all(SortBy sortBy) {
-        return domainEventQueries.all(sortBy);
-    }
-
-    public Flux<E> all(int skip, int limit) {
-        return domainEventQueries.all(skip, limit);
-    }
-
-    public Flux<E> all() {
-        return domainEventQueries.all();
-    }
-
-    public <E1 extends E> Flux<E1> query(Filter filter) {
-        return domainEventQueries.query(filter);
     }
 
     private static DcbEventStore requireDcbEventStore(DomainEventQueries<?> domainEventQueries) {

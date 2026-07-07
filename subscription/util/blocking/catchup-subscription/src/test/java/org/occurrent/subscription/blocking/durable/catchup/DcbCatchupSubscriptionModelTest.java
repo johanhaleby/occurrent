@@ -49,11 +49,15 @@ import java.util.UUID;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.ConcurrentMap;
+import java.util.concurrent.ExecutionException;
+import java.util.concurrent.Future;
+import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.function.Consumer;
 import java.util.stream.Stream;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.awaitility.Awaitility.await;
 import static org.occurrent.subscription.blocking.durable.catchup.CheckpointStorageConfig.useCheckpointStorage;
 
@@ -206,6 +210,29 @@ class DcbCatchupSubscriptionModelTest {
         await().untilAsserted(() -> assertThat(received).containsExactlyElementsOf(events));
     }
 
+    @Test
+    void position_catchup_fails_loudly_instead_of_silently_resuming_at_now_when_the_delegate_reports_no_resume_token() {
+        appendTagged("name:1", nameDefined("position1"));
+
+        CheckpointAwareSubscriptionModel nullCheckpointSubscriptionModel = new CheckpointAwareInMemorySubscriptionModel(inMemorySubscriptionModel) {
+            @Override
+            public @Nullable Checkpoint globalCheckpoint() {
+                return null;
+            }
+        };
+        CatchupSubscriptionModel subscription = new CatchupSubscriptionModel(nullCheckpointSubscriptionModel, eventStore, DcbCriteria.tags(Tag.parse("name:1")));
+
+        Subscription started = subscription.subscribe("subscription", StartAt.checkpoint(GlobalCheckpoint.of(0)), cloudEvent -> {
+        });
+
+        assertThat(started).isInstanceOf(CatchupSubscription.class);
+        Future<Subscription> delegatedSubscription = ((CatchupSubscription) started).delegatedSubscription();
+        assertThatThrownBy(() -> delegatedSubscription.get(10, TimeUnit.SECONDS))
+                .isInstanceOf(ExecutionException.class)
+                .hasCauseInstanceOf(IllegalStateException.class)
+                .cause().hasMessageContaining("no resume token");
+    }
+
     private NameDefined nameDefined(String name) {
         return new NameDefined(UUID.randomUUID().toString(), time, "name", name);
     }
@@ -227,7 +254,7 @@ class DcbCatchupSubscriptionModelTest {
      * model only supports {@code now}/{@code default}, so any position start is translated to {@code now}. The stub
      * global position is enough for the catch-up to take its normal handover path.
      */
-    private static final class CheckpointAwareInMemorySubscriptionModel implements CheckpointAwareSubscriptionModel {
+    private static class CheckpointAwareInMemorySubscriptionModel implements CheckpointAwareSubscriptionModel {
         private final InMemorySubscriptionModel delegate;
 
         private CheckpointAwareInMemorySubscriptionModel(InMemorySubscriptionModel delegate) {

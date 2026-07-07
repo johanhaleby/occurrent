@@ -78,6 +78,10 @@ public final class DcbExecuteOptions<E> {
      *                     completes when the side-effect is done.
      * @param <E_SPECIFIC> The side-effect event type for the returned options.
      * @return New options with the side-effect applied.
+     * @apiNote Widens the existing {@code tagGenerator} with an unchecked cast, independently of this call's own type
+     * parameter. Narrowing {@code sideEffect} to {@code E_SPECIFIC} while a {@code tagGenerator} for an unrelated,
+     * non-supertype event type is already configured can therefore throw a {@link ClassCastException} later, at the
+     * point the tag generator is invoked, not here.
      */
     @SuppressWarnings("unchecked")
     public <E_SPECIFIC extends E> DcbExecuteOptions<E_SPECIFIC> sideEffect(Function<Stream<E_SPECIFIC>, Mono<Void>> sideEffect) {
@@ -91,6 +95,10 @@ public final class DcbExecuteOptions<E> {
      * @param tagGenerator The per-execute {@link TagGenerator}.
      * @param <E_SPECIFIC> The tag generator event type for the returned options.
      * @return New options with the tag generator applied.
+     * @apiNote Widens the existing {@code sideEffect} with an unchecked cast, independently of this call's own type
+     * parameter. Narrowing {@code tagGenerator} to {@code E_SPECIFIC} while a {@code sideEffect} for an unrelated,
+     * non-supertype event type is already configured can therefore throw a {@link ClassCastException} later, at the
+     * point the side-effect is invoked, not here.
      */
     @SuppressWarnings("unchecked")
     public <E_SPECIFIC extends E> DcbExecuteOptions<E_SPECIFIC> tagGenerator(TagGenerator<E_SPECIFIC> tagGenerator) {
