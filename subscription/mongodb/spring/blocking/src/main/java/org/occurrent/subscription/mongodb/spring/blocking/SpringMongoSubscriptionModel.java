@@ -409,7 +409,7 @@ public class SpringMongoSubscriptionModel implements CheckpointAwareSubscription
         }
 
         @Override
-        public boolean equals(Object o) {
+        public boolean equals(@Nullable Object o) {
             if (this == o) return true;
             if (!(o instanceof InternalSubscription that)) return false;
             return Objects.equals(occurrentSubscription, that.occurrentSubscription) && Objects.equals(changeStreamRequestBuilder, that.changeStreamRequestBuilder);
@@ -440,7 +440,7 @@ public class SpringMongoSubscriptionModel implements CheckpointAwareSubscription
 
 
     @Override
-    public boolean equals(Object o) {
+    public boolean equals(@Nullable Object o) {
         if (!(o instanceof SpringMongoSubscriptionModel that)) return false;
         return restartSubscriptionsOnChangeStreamHistoryLost == that.restartSubscriptionsOnChangeStreamHistoryLost && shutdown == that.shutdown && Objects.equals(eventCollection, that.eventCollection) && Objects.equals(messageListenerContainer, that.messageListenerContainer) && Objects.equals(runningSubscriptions, that.runningSubscriptions) && Objects.equals(pausedSubscriptions, that.pausedSubscriptions) && timeRepresentation == that.timeRepresentation && Objects.equals(mongoOperations, that.mongoOperations) && Objects.equals(retryStrategy, that.retryStrategy);
     }

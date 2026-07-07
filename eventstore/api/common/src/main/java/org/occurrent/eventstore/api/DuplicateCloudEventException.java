@@ -16,6 +16,7 @@
 
 package org.occurrent.eventstore.api;
 
+import org.jspecify.annotations.Nullable;
 import java.net.URI;
 import java.util.Objects;
 import java.util.StringJoiner;
@@ -53,7 +54,7 @@ public class DuplicateCloudEventException extends RuntimeException {
     }
 
     @Override
-    public boolean equals(Object o) {
+    public boolean equals(@Nullable Object o) {
         if (this == o) return true;
         if (!(o instanceof DuplicateCloudEventException that)) return false;
         return Objects.equals(id, that.id) && Objects.equals(source, that.source) && Objects.equals(details, that.details);

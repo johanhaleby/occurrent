@@ -32,7 +32,7 @@ import java.util.function.Function;
  * @param <S>  The state to store
  * @param <ID> The id that uniquely identifies the state
  */
-public interface ViewStateRepository<S, ID> {
+public interface ViewStateRepository<S extends @Nullable Object, ID> {
     Optional<@NonNull S> findById(@NonNull ID id);
 
     void save(@NonNull ID id, @NonNull S state);
@@ -45,7 +45,7 @@ public interface ViewStateRepository<S, ID> {
         return findById(id).orElse(initialState);
     }
 
-    static <S, ID> ViewStateRepository<S, ID> create(Function<@NonNull ID, @Nullable S> findById, BiConsumer<@NonNull ID, @NonNull S> save) {
+    static <S extends @Nullable Object, ID> ViewStateRepository<S, ID> create(Function<@NonNull ID, @Nullable S> findById, BiConsumer<@NonNull ID, @NonNull S> save) {
         return new ViewStateRepository<>() {
             @Override
             public Optional<S> findById(@NonNull ID id) {

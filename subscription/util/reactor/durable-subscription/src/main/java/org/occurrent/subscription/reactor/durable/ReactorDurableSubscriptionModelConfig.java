@@ -18,6 +18,7 @@ package org.occurrent.subscription.reactor.durable;
 
 import io.cloudevents.CloudEvent;
 import org.jspecify.annotations.NullMarked;
+import org.jspecify.annotations.Nullable;
 import org.occurrent.subscription.util.predicate.EveryN;
 
 import java.util.Objects;
@@ -49,7 +50,7 @@ public class ReactorDurableSubscriptionModelConfig {
     }
 
     @Override
-    public boolean equals(Object o) {
+    public boolean equals(@Nullable Object o) {
         if (this == o) return true;
         if (!(o instanceof ReactorDurableSubscriptionModelConfig that)) return false;
         return Objects.equals(persistCloudEventPositionPredicate, that.persistCloudEventPositionPredicate);

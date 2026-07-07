@@ -50,20 +50,17 @@ public class Jackson3CloudEventConverterConfiguration {
         CloudEventTypeMapper<E> typeMapper = cloudEventTypeMapper.orElseGet(ReflectionCloudEventTypeMapper::qualified);
         JacksonCloudEventConverter.Builder<E> builder = new JacksonCloudEventConverter.Builder<E>(om, occurrentProperties.getCloudEventConverter().getCloudEventSource())
                 .typeMapper(typeMapper);
-        ChronoUnit timePrecision = resolveTimePrecision(occurrentProperties);
-        if (timePrecision != null) {
-            builder.timePrecision(timePrecision);
-        }
+        resolveTimePrecision(occurrentProperties).ifPresent(builder::timePrecision);
         return builder.build();
     }
 
     // An explicit time-precision wins. Otherwise, when the event store uses TimeRepresentation.DATE (which cannot store
     // sub-millisecond precision), default to MILLIS so that Instant.now()/OffsetDateTime.now() values just work.
-    private static ChronoUnit resolveTimePrecision(OccurrentProperties occurrentProperties) {
+    private static Optional<ChronoUnit> resolveTimePrecision(OccurrentProperties occurrentProperties) {
         ChronoUnit configured = occurrentProperties.getCloudEventConverter().getTimePrecision();
         if (configured != null) {
-            return configured;
+            return Optional.of(configured);
         }
-        return occurrentProperties.getEventStore().getTimeRepresentation() == TimeRepresentation.DATE ? ChronoUnit.MILLIS : null;
+        return occurrentProperties.getEventStore().getTimeRepresentation() == TimeRepresentation.DATE ? Optional.of(ChronoUnit.MILLIS) : Optional.empty();
     }
 }

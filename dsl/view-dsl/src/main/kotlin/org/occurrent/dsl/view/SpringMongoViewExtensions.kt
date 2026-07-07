@@ -31,16 +31,16 @@ interface StateConverter<S_VIEW, S_DTO> {
     fun fromDTO(dto: S_DTO): S_VIEW
 }
 
-inline fun <reified S, E, VIEW_ID : Any> View<S, E>.currentState(mongoOperations: MongoOperations, id: VIEW_ID): S? {
+inline fun <reified S : Any, E : Any, VIEW_ID : Any> View<S, E>.currentState(mongoOperations: MongoOperations, id: VIEW_ID): S? {
     return mongoOperations.findById(id)
 }
 
-inline fun <reified S, E, VIEW_ID : Any> View<S, E>.materialized(
+inline fun <reified S, E : Any, VIEW_ID : Any> View<S, E>.materialized(
     mongoOperations: MongoOperations,
     crossinline deriveViewIdFromEvent: (E) -> VIEW_ID
 ): MaterializedView<E> = materialized(mongoOperations, SpringMongoViewConfig.config(), deriveViewIdFromEvent)
 
-inline fun <reified S, E, VIEW_ID : Any> View<S, E>.materialized(
+inline fun <reified S, E : Any, VIEW_ID : Any> View<S, E>.materialized(
     mongoOperations: MongoOperations,
     config: SpringMongoViewConfig = SpringMongoViewConfig.config(),
     crossinline deriveViewIdFromEvent: (E) -> VIEW_ID
@@ -52,13 +52,13 @@ inline fun <reified S, E, VIEW_ID : Any> View<S, E>.materialized(
     return materialized(mongoOperations, noopStateConvert, config, deriveViewIdFromEvent)
 }
 
-inline fun <S_VIEW, reified S_DTO : Any, E, VIEW_ID : Any> View<S_VIEW, E>.materialized(
+inline fun <S_VIEW, reified S_DTO : Any, E : Any, VIEW_ID : Any> View<S_VIEW, E>.materialized(
     mongoOperations: MongoOperations,
     converter: StateConverter<S_VIEW, S_DTO>,
     crossinline deriveViewIdFromEvent: (E) -> VIEW_ID
 ): MaterializedView<E> = materialized(mongoOperations, converter, SpringMongoViewConfig.config(), deriveViewIdFromEvent)
 
-inline fun <S_VIEW, reified S_DTO : Any, E, VIEW_ID : Any> View<S_VIEW, E>.materialized(
+inline fun <S_VIEW, reified S_DTO : Any, E : Any, VIEW_ID : Any> View<S_VIEW, E>.materialized(
     mongoOperations: MongoOperations,
     converter: StateConverter<S_VIEW, S_DTO>,
     config: SpringMongoViewConfig = SpringMongoViewConfig.config(),
@@ -127,7 +127,7 @@ inline fun <S_VIEW, reified S_DTO : Any, E, VIEW_ID : Any> View<S_VIEW, E>.mater
     }
 }
 
-fun <S : Any, E, VIEW_ID : Any> View<S, E>.materialized(
+fun <S : Any, E : Any, VIEW_ID : Any> View<S, E>.materialized(
     crudRepository: CrudRepository<S, VIEW_ID>,
     deriveViewIdFromEvent: (E) -> VIEW_ID
 ): MaterializedView<E> {
@@ -138,7 +138,7 @@ fun <S : Any, E, VIEW_ID : Any> View<S, E>.materialized(
     return materialized(crudRepository, noopStateConvert, deriveViewIdFromEvent)
 }
 
-fun <S_VIEW, S_DTO : Any, E, VIEW_ID : Any> View<S_VIEW, E>.materialized(
+fun <S_VIEW, S_DTO : Any, E : Any, VIEW_ID : Any> View<S_VIEW, E>.materialized(
     crudRepository: CrudRepository<S_DTO, VIEW_ID>,
     converter: StateConverter<S_VIEW, S_DTO>,
     deriveViewIdFromEvent: (E) -> VIEW_ID

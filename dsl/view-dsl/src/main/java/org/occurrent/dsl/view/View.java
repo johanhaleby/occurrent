@@ -31,7 +31,7 @@ import java.util.stream.Stream;
  * @param <S> The type of the state that this view produces
  * @param <E> The type of the event that is used to create the state
  */
-public interface View<S, E> {
+public interface View<S extends @Nullable Object, E> {
     /**
      * @return The initial state
      */
@@ -92,7 +92,7 @@ public interface View<S, E> {
         return evolve(initialState(), events);
     }
 
-    static <S, E> View<S, E> create(S initialState, @NonNull BiFunction<S, E, S> evolve) {
+    static <S extends @Nullable Object, E> View<S, E> create(S initialState, @NonNull BiFunction<S, E, S> evolve) {
         return new View<>() {
             @Override
             public S initialState() {

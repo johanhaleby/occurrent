@@ -104,7 +104,7 @@ public final class CheckpointAwareCloudEvent implements CloudEvent {
     }
 
     @Override
-    public boolean equals(Object o) {
+    public boolean equals(@org.jspecify.annotations.Nullable Object o) {
         if (this == o) return true;
         if (!(o instanceof CheckpointAwareCloudEvent that)) return false;
         return Objects.equals(cloudEvent, that.cloudEvent) &&

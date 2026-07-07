@@ -117,7 +117,7 @@ class DcbDslKotlinTest {
         subscriptionModel.subscribeDcb(
             subscriptionId = "subscription",
             cloudEventConverter = cloudEventConverter,
-            query = DcbCriteria.tags(listOf(Tag.of("name", "1"))).excludingTypes(listOf(NameWasChanged::class.qualifiedName!!))
+            query = DcbCriteria.tags(listOf(Tag.of("name", "1"))).excludingTypes(listOf(NameWasChanged::class.java.name))
         ) {
             received.add(it)
         }

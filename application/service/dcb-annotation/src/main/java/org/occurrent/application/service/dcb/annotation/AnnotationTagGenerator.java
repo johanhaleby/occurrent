@@ -17,6 +17,7 @@
 package org.occurrent.application.service.dcb.annotation;
 
 import org.jspecify.annotations.NullMarked;
+import org.jspecify.annotations.Nullable;
 import org.occurrent.annotation.DcbTag;
 import org.occurrent.application.service.dcb.TagGenerator;
 import org.occurrent.eventstore.api.dcb.Tag;
@@ -156,7 +157,7 @@ public final class AnnotationTagGenerator<E> implements TagGenerator<E> {
         }
     }
 
-    private static Method findGetter(Class<?> clazz, String fieldName) {
+    private static @Nullable Method findGetter(Class<?> clazz, String fieldName) {
         String capitalized = Character.toUpperCase(fieldName.charAt(0)) + fieldName.substring(1);
         Set<String> candidateNames = Set.of("get" + capitalized, "is" + capitalized, fieldName);
         // Walk the hierarchy from the concrete class up (so a subclass getter wins) and use getDeclaredMethods, which

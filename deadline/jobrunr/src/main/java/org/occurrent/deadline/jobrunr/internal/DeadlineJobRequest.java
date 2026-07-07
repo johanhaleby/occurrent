@@ -17,6 +17,7 @@
 
 package org.occurrent.deadline.jobrunr.internal;
 
+import org.jspecify.annotations.Nullable;
 import org.jobrunr.jobs.lambdas.JobRequest;
 import org.jobrunr.jobs.lambdas.JobRequestHandler;
 import org.occurrent.deadline.jobrunr.JobRunrDeadlineConsumerRegistry;
@@ -67,7 +68,7 @@ public class DeadlineJobRequest implements JobRequest {
     }
 
     @Override
-    public boolean equals(Object o) {
+    public boolean equals(@Nullable Object o) {
         if (this == o) return true;
         if (!(o instanceof DeadlineJobRequest that)) return false;
         return deadlineInEpochMilli == that.deadlineInEpochMilli && Objects.equals(id, that.id) && Objects.equals(category, that.category) && Objects.equals(data, that.data);

@@ -18,6 +18,7 @@ package org.occurrent.retry;
 
 import org.jspecify.annotations.NonNull;
 import org.jspecify.annotations.NullMarked;
+import org.jspecify.annotations.Nullable;
 import org.occurrent.retry.internal.RetryImpl;
 
 import java.time.Duration;
@@ -114,15 +115,59 @@ public interface RetryStrategy {
     }
 
     /**
-     * Execute a {@link Supplier} with the configured retry settings.
-     * Rethrows the exception from the supplier if retry strategy is exhausted.
+     * Execute a {@link Function} with the configured retry settings.
+     * Rethrows the exception from the function if retry strategy is exhausted.
      *
      * @param function A function that takes {@link RetryInfo} and returns the result
-     * @return The result of the supplier, if successful.
+     * @return The result of the function, if successful.
      */
-    default <T> T execute(Function<RetryInfo, T> function) {
-        Objects.requireNonNull(function, Supplier.class.getSimpleName() + " cannot be null");
-        return executeWithRetry(function, __ -> true, this).apply(null);
+    default <T extends @Nullable Object> T execute(Function<RetryInfo, T> function) {
+        Objects.requireNonNull(function, Function.class.getSimpleName() + " cannot be null");
+        return executeWithRetry(function, __ -> true, this).apply(firstAttemptRetryInfo());
+    }
+
+    private static RetryInfo firstAttemptRetryInfo() {
+        return new RetryInfo() {
+            @Override
+            public int getRetryCount() {
+                return 0;
+            }
+
+            @Override
+            public int getAttemptNumber() {
+                return 1;
+            }
+
+            @Override
+            public int getMaxAttempts() {
+                return 1;
+            }
+
+            @Override
+            public int getAttemptsLeft() {
+                return 1;
+            }
+
+            @Override
+            public boolean isInfiniteRetriesLeft() {
+                return false;
+            }
+
+            @Override
+            public Duration getBackoff() {
+                return Duration.ZERO;
+            }
+
+            @Override
+            public boolean isLastAttempt() {
+                return true;
+            }
+
+            @Override
+            public boolean isFirstAttempt() {
+                return true;
+            }
+        };
     }
 
     /**
@@ -132,7 +177,7 @@ public interface RetryStrategy {
      * @param supplier The supplier to execute
      * @return The result of the supplier, if successful.
      */
-    default <T> T execute(Supplier<T> supplier) {
+    default <T extends @Nullable Object> T execute(Supplier<T> supplier) {
         Objects.requireNonNull(supplier, Supplier.class.getSimpleName() + " cannot be null");
         return executeWithRetry(supplier, __ -> true, this).get();
     }

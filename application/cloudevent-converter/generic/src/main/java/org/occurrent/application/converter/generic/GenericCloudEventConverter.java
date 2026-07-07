@@ -16,6 +16,7 @@
 
 package org.occurrent.application.converter.generic;
 
+import org.jspecify.annotations.Nullable;
 import io.cloudevents.CloudEvent;
 import org.occurrent.application.converter.CloudEventConverter;
 import org.occurrent.application.converter.typemapper.CloudEventTypeGetter;
@@ -72,7 +73,7 @@ public class GenericCloudEventConverter<T> implements CloudEventConverter<T> {
     }
 
     @Override
-    public boolean equals(Object o) {
+    public boolean equals(@Nullable Object o) {
         if (this == o) return true;
         if (!(o instanceof GenericCloudEventConverter)) return false;
         GenericCloudEventConverter<?> that = (GenericCloudEventConverter<?>) o;

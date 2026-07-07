@@ -110,7 +110,7 @@ class DomainEventQueriesKotlinTest {
         ).block()
 
         // When
-        val events = domainEventQueries.queryForList(Filter.type(NameWasChanged::class.qualifiedName), SortBy.natural(ASCENDING)).block()
+        val events = domainEventQueries.queryForList(Filter.type(NameWasChanged::class.java.name), SortBy.natural(ASCENDING)).block()
 
         // Then
         assertAll(

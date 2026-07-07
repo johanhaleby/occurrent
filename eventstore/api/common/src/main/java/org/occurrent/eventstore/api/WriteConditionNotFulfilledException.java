@@ -17,6 +17,7 @@
 package org.occurrent.eventstore.api;
 
 import org.jspecify.annotations.NullMarked;
+import org.jspecify.annotations.Nullable;
 
 import java.util.Objects;
 import java.util.StringJoiner;
@@ -41,7 +42,7 @@ public class WriteConditionNotFulfilledException extends RuntimeException {
     }
 
     @Override
-    public boolean equals(Object o) {
+    public boolean equals(@Nullable Object o) {
         if (this == o) return true;
         if (!(o instanceof WriteConditionNotFulfilledException that)) return false;
         return eventStreamVersion == that.eventStreamVersion && Objects.equals(eventStreamId, that.eventStreamId) && Objects.equals(writeCondition, that.writeCondition) && Objects.equals(getMessage(), that.getMessage());

@@ -16,6 +16,7 @@
 
 package org.occurrent.example.eventstore.mongodb.spring.projections.adhoc;
 
+import org.jspecify.annotations.Nullable;
 import org.springframework.data.annotation.Id;
 import org.springframework.data.mongodb.core.MongoOperations;
 import org.springframework.data.mongodb.core.aggregation.Aggregation;
@@ -67,7 +68,7 @@ public class MostNumberOfWorkouts {
         }
 
         @Override
-        public boolean equals(Object o) {
+        public boolean equals(@Nullable Object o) {
             if (this == o) return true;
             if (!(o instanceof PersonWithMostNumberOfWorkouts that)) return false;
             return count == that.count &&

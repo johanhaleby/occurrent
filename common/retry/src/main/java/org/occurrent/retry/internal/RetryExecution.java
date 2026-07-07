@@ -17,6 +17,7 @@
 package org.occurrent.retry.internal;
 
 import org.jspecify.annotations.NonNull;
+import org.jspecify.annotations.Nullable;
 import org.occurrent.retry.AfterRetryInfo.ResultOfRetryAttempt;
 import org.occurrent.retry.Backoff;
 import org.occurrent.retry.MaxAttempts;
@@ -38,11 +39,15 @@ import java.util.stream.Stream;
  */
 public class RetryExecution {
 
-    public static <T1> Supplier<T1> executeWithRetry(@NonNull Supplier<T1> supplier, @NonNull Predicate<Throwable> shutdownPredicate, @NonNull RetryStrategy retryStrategy) {
-        return () -> executeWithRetry((Function<RetryInfo, T1>) __ -> supplier.get(), shutdownPredicate, retryStrategy).apply(null);
+    private static RetryInfo firstAttemptRetryInfo() {
+        return new RetryInfoImpl(1, 0, new MaxAttempts.Limit(1), Duration.ZERO);
     }
 
-    public static <T1> Function<RetryInfo, T1> executeWithRetry(@NonNull Function<RetryInfo, T1> function, @NonNull Predicate<Throwable> shutdownPredicate, @NonNull RetryStrategy retryStrategy) {
+    public static <T1 extends @Nullable Object> Supplier<T1> executeWithRetry(@NonNull Supplier<T1> supplier, @NonNull Predicate<Throwable> shutdownPredicate, @NonNull RetryStrategy retryStrategy) {
+        return () -> executeWithRetry((Function<RetryInfo, T1>) __ -> supplier.get(), shutdownPredicate, retryStrategy).apply(firstAttemptRetryInfo());
+    }
+
+    public static <T1 extends @Nullable Object> Function<RetryInfo, T1> executeWithRetry(@NonNull Function<RetryInfo, T1> function, @NonNull Predicate<Throwable> shutdownPredicate, @NonNull RetryStrategy retryStrategy) {
         if (retryStrategy instanceof DontRetry) {
             return function;
         }
@@ -72,18 +77,20 @@ public class RetryExecution {
     }
 
     private static Runnable executeWithRetry(Runnable runnable, RetryImpl retry, Iterator<Long> delay) {
-        Consumer<Void> runnableConsumer = __ -> runnable.run();
-        return () -> executeWithRetry(runnableConsumer, retry, delay).accept(null);
+        return () -> executeWithRetry(__ -> {
+            runnable.run();
+            return null;
+        }, retry, delay).apply(firstAttemptRetryInfo());
     }
 
     private static <T1> Consumer<T1> executeWithRetry(@NonNull Consumer<T1> fn, @NonNull RetryImpl retry, @NonNull Iterator<Long> delay) {
         return t1 -> executeWithRetry(retryInfo -> {
             fn.accept(t1);
             return null;
-        }, retry, delay).apply(null);
+        }, retry, delay).apply(firstAttemptRetryInfo());
     }
 
-    private static <T1> Function<RetryInfo, T1> executeWithRetry(
+    private static <T1 extends @Nullable Object> Function<RetryInfo, T1> executeWithRetry(
             Function<RetryInfo, T1> fn,
             RetryImpl retry,
             Iterator<Long> delay

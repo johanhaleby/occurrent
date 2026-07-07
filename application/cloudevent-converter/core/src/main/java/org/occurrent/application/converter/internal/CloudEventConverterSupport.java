@@ -21,6 +21,7 @@ import io.cloudevents.CloudEvent;
 import io.cloudevents.CloudEventData;
 import io.cloudevents.core.builder.CloudEventBuilder;
 import io.cloudevents.core.data.PojoCloudEventData;
+import org.jspecify.annotations.Nullable;
 import org.occurrent.application.converter.typemapper.CloudEventTypeMapper;
 import org.occurrent.application.converter.typemapper.ReflectionCloudEventTypeMapper;
 
@@ -45,7 +46,7 @@ public final class CloudEventConverterSupport {
     private CloudEventConverterSupport() {
     }
 
-    public static <T> CloudEvent toCloudEvent(T domainEvent, URI cloudEventSource, Function<T, String> idMapper, CloudEventTypeMapper<T> cloudEventTypeMapper, Function<T, OffsetDateTime> timeMapper, Function<T, String> subjectMapper, String contentType, Function<T, Map<String, Object>> dataMapper, ThrowingFunction<Map<String, Object>, byte[]> dataSerializer) {
+    public static <T> CloudEvent toCloudEvent(T domainEvent, URI cloudEventSource, Function<T, String> idMapper, CloudEventTypeMapper<T> cloudEventTypeMapper, Function<T, @Nullable OffsetDateTime> timeMapper, Function<T, @Nullable String> subjectMapper, String contentType, Function<T, Map<String, Object>> dataMapper, ThrowingFunction<Map<String, Object>, byte[]> dataSerializer) {
         requireNonNull(domainEvent, "Domain event cannot be null");
         Map<String, Object> data = dataMapper.apply(domainEvent);
         PojoCloudEventData<Map<String, Object>> cloudEventData = PojoCloudEventData.wrap(data, value -> {
@@ -95,7 +96,7 @@ public final class CloudEventConverterSupport {
         return ReflectionCloudEventTypeMapper.qualified();
     }
 
-    public static <T> Function<T, OffsetDateTime> defaultTimeMapperFunction() {
+    public static <T> Function<T, @Nullable OffsetDateTime> defaultTimeMapperFunction() {
         return __ -> OffsetDateTime.now(UTC);
     }
 
@@ -104,7 +105,7 @@ public final class CloudEventConverterSupport {
      * Returns the original mapper unchanged when {@code precision} is {@code null}. This is useful when the event store
      * uses {@code TimeRepresentation.DATE}, which cannot represent sub-millisecond precision.
      */
-    public static <T> Function<T, OffsetDateTime> truncatingTimeMapper(Function<T, OffsetDateTime> timeMapper, ChronoUnit precision) {
+    public static <T> Function<T, @Nullable OffsetDateTime> truncatingTimeMapper(Function<T, @Nullable OffsetDateTime> timeMapper, @Nullable ChronoUnit precision) {
         if (precision == null) {
             return timeMapper;
         }
@@ -114,7 +115,7 @@ public final class CloudEventConverterSupport {
         };
     }
 
-    public static <T> Function<T, String> defaultSubjectMapperFunction() {
+    public static <T> Function<T, @Nullable String> defaultSubjectMapperFunction() {
         return __ -> null;
     }
 

@@ -100,7 +100,7 @@ public class StreamCatchupSubscriptionModel extends AbstractCatchupSubscriptionM
      *                                      class here so a caller that pattern-matches on the public dispatcher type
      *                                      keeps working regardless of which mode-specific class runs the catch-up.
      */
-    public StreamCatchupSubscriptionModel(CheckpointAwareSubscriptionModel subscriptionModel, EventStoreQueries eventStoreQueries, CatchupSubscriptionModelConfig config, Class<?> subscriptionModelContextType) {
+    StreamCatchupSubscriptionModel(CheckpointAwareSubscriptionModel subscriptionModel, EventStoreQueries eventStoreQueries, CatchupSubscriptionModelConfig config, Class<?> subscriptionModelContextType) {
         this(subscriptionModel, eventStoreQueries, config, subscriptionModelContextType, STREAM_CAPABILITY_FILTER);
     }
 
@@ -110,7 +110,7 @@ public class StreamCatchupSubscriptionModel extends AbstractCatchupSubscriptionM
      *                        capability-agnostic subscription that delivers events of every capability, filtered only by
      *                        the caller's plain {@link Filter}.
      */
-    public StreamCatchupSubscriptionModel(CheckpointAwareSubscriptionModel subscriptionModel, EventStoreQueries eventStoreQueries, CatchupSubscriptionModelConfig config, Class<?> subscriptionModelContextType, @Nullable Filter capabilityScope) {
+    StreamCatchupSubscriptionModel(CheckpointAwareSubscriptionModel subscriptionModel, EventStoreQueries eventStoreQueries, CatchupSubscriptionModelConfig config, Class<?> subscriptionModelContextType, @Nullable Filter capabilityScope) {
         super(subscriptionModel, config, subscriptionModelContextType);
         this.eventStoreQueries = Objects.requireNonNull(eventStoreQueries, "eventStoreQueries cannot be null");
         this.capabilityScope = capabilityScope;
@@ -134,7 +134,7 @@ public class StreamCatchupSubscriptionModel extends AbstractCatchupSubscriptionM
      * Whether the wrapped store carries a global position. A store without {@link PositionOrderedReader}, or one that
      * reports {@code writesPosition()==false}, stays on the time-ordered catch-up path.
      */
-    public boolean streamStoreWritesPosition() {
+    private boolean streamStoreWritesPosition() {
         return eventStoreQueries instanceof PositionOrderedReader positionOrderedReader && positionOrderedReader.writesPosition();
     }
 
@@ -225,7 +225,7 @@ public class StreamCatchupSubscriptionModel extends AbstractCatchupSubscriptionM
      * routing, which needs the same check before any mode-specific class is even chosen; {@code contextType} is the
      * class the dispatcher (or this class, standalone) reports to a caller-supplied {@code StartAt.dynamic}.
      */
-    public static boolean startsAtExplicitGlobalPosition(StartAt startAt, Class<?> contextType) {
+    static boolean startsAtExplicitGlobalPosition(StartAt startAt, Class<?> contextType) {
         StartAt start = startAt.get(new SubscriptionModelContext(contextType));
         return start instanceof StartAtCheckpoint position
                 && GlobalCheckpoint.isGlobalCheckpoint(position.checkpoint);
@@ -575,7 +575,7 @@ public class StreamCatchupSubscriptionModel extends AbstractCatchupSubscriptionM
         subscriptionModel.shutdown();
     }
 
-    public static boolean isTimeBasedCheckpoint(StartAt startAt, Class<?> contextType) {
+    static boolean isTimeBasedCheckpoint(StartAt startAt, Class<?> contextType) {
         StartAt start = startAt.get(new SubscriptionModelContext(contextType));
         if (!(start instanceof StartAtCheckpoint position)) {
             return false;
@@ -585,7 +585,7 @@ public class StreamCatchupSubscriptionModel extends AbstractCatchupSubscriptionM
         return isTimeBasedCheckpoint(checkpoint);
     }
 
-    public static boolean isTimeBasedCheckpoint(Checkpoint checkpoint) {
+    static boolean isTimeBasedCheckpoint(Checkpoint checkpoint) {
         return checkpoint instanceof TimeBasedCheckpoint ||
                 (checkpoint instanceof StringBasedCheckpoint && isRfc3339Timestamp(checkpoint.asString()));
     }

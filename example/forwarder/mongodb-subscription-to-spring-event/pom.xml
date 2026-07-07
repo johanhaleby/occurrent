@@ -27,6 +27,11 @@
 
     <dependencies>
         <dependency>
+            <groupId>org.jspecify</groupId>
+            <artifactId>jspecify</artifactId>
+            <optional>true</optional>
+        </dependency>
+        <dependency>
             <groupId>org.occurrent</groupId>
             <artifactId>subscription-mongodb-spring-reactor-position-storage</artifactId>
             <version>${project.version}</version>

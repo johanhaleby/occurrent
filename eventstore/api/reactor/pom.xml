@@ -29,6 +29,11 @@
 
     <dependencies>
         <dependency>
+            <groupId>org.jspecify</groupId>
+            <artifactId>jspecify</artifactId>
+            <optional>true</optional>
+        </dependency>
+        <dependency>
             <groupId>org.occurrent</groupId>
             <artifactId>eventstore-api-common</artifactId>
             <version>${project.version}</version>

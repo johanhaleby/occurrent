@@ -16,6 +16,7 @@
 
 package org.occurrent.example.domain.numberguessinggame.model;
 
+import org.jspecify.annotations.Nullable;
 import java.util.Objects;
 import java.util.UUID;
 
@@ -28,7 +29,7 @@ public class GameAlreadyEnded extends RuntimeException {
     }
 
     @Override
-    public boolean equals(Object o) {
+    public boolean equals(@Nullable Object o) {
         if (this == o) return true;
         if (!(o instanceof GameAlreadyEnded that)) return false;
         return Objects.equals(gameId, that.gameId);

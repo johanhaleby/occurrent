@@ -39,10 +39,10 @@ typealias ContentType = String
  * @param subjectMapper Extract the subject from the event (defaults to `null`)
  * @param timeMapper Extract the time from the event (uses `OffsetDateTime.now(UTC)` by default)
  */
-fun <E> jacksonCloudEventConverter(
+fun <E : Any> jacksonCloudEventConverter(
     objectMapper: ObjectMapper, cloudEventSource: URI, idMapper: (E) -> CloudEventId = { e -> JacksonCloudEventConverter.defaultIdMapperFunction<E>().apply(e) },
     typeMapper: CloudEventTypeMapper<E> = JacksonCloudEventConverter.defaultTypeMapper(),
-    timeMapper: (E) -> OffsetDateTime = { e -> JacksonCloudEventConverter.defaultTimeMapperFunction<E>().apply(e) },
+    timeMapper: (E) -> OffsetDateTime? = { e -> JacksonCloudEventConverter.defaultTimeMapperFunction<E>().apply(e) },
     subjectMapper: (E) -> Subject? = { e -> JacksonCloudEventConverter.defaultSubjectMapperFunction<E>().apply(e) },
     contentType: ContentType = JacksonCloudEventConverter.DEFAULT_CONTENT_TYPE
 ): JacksonCloudEventConverter<E> {

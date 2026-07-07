@@ -17,6 +17,7 @@
 
 package org.occurrent.dsl.view;
 
+import org.jspecify.annotations.Nullable;
 import org.occurrent.retry.RetryStrategy;
 
 import java.util.function.Function;
@@ -27,11 +28,11 @@ import java.util.function.Function;
 public interface MaterializedView<E> {
     void update(E event);
 
-    default <S, ID> void updateFromRepository(ID id, E event, View<S, E> view, ViewStateRepository<S, ID> repository) {
+    default <S extends @Nullable Object, ID> void updateFromRepository(ID id, E event, View<S, E> view, ViewStateRepository<S, ID> repository) {
         updateFromRepository(id, event, view, repository, RetryStrategy.none());
     }
 
-    default <S, ID> void updateFromRepository(ID id, E event, View<S, E> view, ViewStateRepository<S, ID> repository, RetryStrategy retryStrategy) {
+    default <S extends @Nullable Object, ID> void updateFromRepository(ID id, E event, View<S, E> view, ViewStateRepository<S, ID> repository, RetryStrategy retryStrategy) {
         retryStrategy.execute(() -> {
             S currentState = repository.findById(id).orElse(view.initialState());
             S updatedState = view.evolve(currentState, event);
@@ -39,7 +40,7 @@ public interface MaterializedView<E> {
         });
     }
 
-    static <S, E, ID> MaterializedView<E> create(Function<E, ID> idMapper, View<S, E> view, ViewStateRepository<S, ID> repository) {
+    static <S extends @Nullable Object, E, ID> MaterializedView<E> create(Function<E, ID> idMapper, View<S, E> view, ViewStateRepository<S, ID> repository) {
         return new MaterializedView<>() {
             @Override
             public void update(E event) {

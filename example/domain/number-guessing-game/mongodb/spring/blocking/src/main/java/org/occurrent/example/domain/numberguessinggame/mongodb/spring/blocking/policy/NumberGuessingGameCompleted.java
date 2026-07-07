@@ -16,6 +16,7 @@
 
 package org.occurrent.example.domain.numberguessinggame.mongodb.spring.blocking.policy;
 
+import org.jspecify.annotations.Nullable;
 import java.util.ArrayList;
 import java.util.Date;
 import java.util.List;
@@ -102,7 +103,7 @@ class NumberGuessingGameCompleted {
     }
 
     @Override
-    public boolean equals(Object o) {
+    public boolean equals(@Nullable Object o) {
         if (this == o) return true;
         if (!(o instanceof NumberGuessingGameCompleted that)) return false;
         return secretNumberToGuess == that.secretNumberToGuess &&
@@ -175,7 +176,7 @@ class NumberGuessingGameCompleted {
         }
 
         @Override
-        public boolean equals(Object o) {
+        public boolean equals(@Nullable Object o) {
             if (this == o) return true;
             if (!(o instanceof GuessedNumber that)) return false;
             return number == that.number &&

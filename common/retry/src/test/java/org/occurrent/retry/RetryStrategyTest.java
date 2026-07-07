@@ -39,6 +39,28 @@ public class RetryStrategyTest {
         );
     }
 
+    @Test
+    void passes_retry_info_when_retry_strategy_is_none() {
+        // Given
+        RetryStrategy retryStrategy = RetryStrategy.none();
+
+        // When
+        RetryInfo retryInfo = retryStrategy.execute(info -> info);
+
+        // Then
+        assertAll(
+                () -> assertThat(retryInfo.getRetryCount()).isZero(),
+                () -> assertThat(retryInfo.getAttemptNumber()).isOne(),
+                () -> assertThat(retryInfo.getNumberOfPreviousAttempts()).isZero(),
+                () -> assertThat(retryInfo.getBackoff()).isEqualTo(Duration.ZERO),
+                () -> assertThat(retryInfo.getMaxAttempts()).isOne(),
+                () -> assertThat(retryInfo.getAttemptsLeft()).isOne(),
+                () -> assertThat(retryInfo.isFirstAttempt()).isTrue(),
+                () -> assertThat(retryInfo.isLastAttempt()).isTrue(),
+                () -> assertThat(retryInfo.isInfiniteRetriesLeft()).isFalse()
+        );
+    }
+
     @Timeout(2)
     @Test
     void example_of_retry_executed_with_function_that_takes_retry_info() {

@@ -18,6 +18,7 @@
 package org.occurrent.application.converter.jackson3;
 
 import io.cloudevents.CloudEvent;
+import org.jspecify.annotations.Nullable;
 import org.occurrent.application.converter.CloudEventConverter;
 import org.occurrent.application.converter.internal.CloudEventConverterSupport;
 import org.occurrent.application.converter.internal.CloudEventConverterSupport.ThrowingBiFunction;
@@ -44,8 +45,8 @@ public class JacksonCloudEventConverter<T> implements CloudEventConverter<T> {
     private final URI cloudEventSource;
     private final Function<T, String> idMapper;
     private final CloudEventTypeMapper<T> cloudEventTypeMapper;
-    private final Function<T, OffsetDateTime> timeMapper;
-    private final Function<T, String> subjectMapper;
+    private final Function<T, @Nullable OffsetDateTime> timeMapper;
+    private final Function<T, @Nullable String> subjectMapper;
     private final String contentType;
 
     /**
@@ -66,7 +67,7 @@ public class JacksonCloudEventConverter<T> implements CloudEventConverter<T> {
         this(objectMapper, cloudEventSource, defaultIdMapperFunction(), defaultTypeMapper(), defaultTimeMapperFunction(), defaultSubjectMapperFunction(), DEFAULT_CONTENT_TYPE);
     }
 
-    private JacksonCloudEventConverter(ObjectMapper objectMapper, URI cloudEventSource, Function<T, String> idMapper, CloudEventTypeMapper<T> cloudEventTypeMapper, Function<T, OffsetDateTime> timeMapper, Function<T, String> subjectMapper, String contentType) {
+    private JacksonCloudEventConverter(ObjectMapper objectMapper, URI cloudEventSource, Function<T, String> idMapper, CloudEventTypeMapper<T> cloudEventTypeMapper, Function<T, @Nullable OffsetDateTime> timeMapper, Function<T, @Nullable String> subjectMapper, String contentType) {
         this.objectMapper = java.util.Objects.requireNonNull(objectMapper, ObjectMapper.class.getSimpleName() + " cannot be null");
         this.cloudEventSource = java.util.Objects.requireNonNull(cloudEventSource, "cloudEventSource cannot be null");
         this.idMapper = java.util.Objects.requireNonNull(idMapper, "idMapper cannot be null");
@@ -110,9 +111,9 @@ public class JacksonCloudEventConverter<T> implements CloudEventConverter<T> {
         private String contentType = DEFAULT_CONTENT_TYPE;
         private Function<T, String> idMapper = defaultIdMapperFunction();
         private CloudEventTypeMapper<T> cloudEventTypeMapper = defaultTypeMapper();
-        private Function<T, OffsetDateTime> timeMapper = defaultTimeMapperFunction();
-        private Function<T, String> subjectMapper = defaultSubjectMapperFunction();
-        private ChronoUnit timePrecision = null;
+        private Function<T, @Nullable OffsetDateTime> timeMapper = defaultTimeMapperFunction();
+        private Function<T, @Nullable String> subjectMapper = defaultSubjectMapperFunction();
+        private @Nullable ChronoUnit timePrecision = null;
 
         public Builder(ObjectMapper objectMapper, URI cloudEventSource) {
             this.objectMapper = objectMapper;
@@ -134,12 +135,12 @@ public class JacksonCloudEventConverter<T> implements CloudEventConverter<T> {
             return this;
         }
 
-        public Builder<T> timeMapper(Function<T, OffsetDateTime> timeMapper) {
+        public Builder<T> timeMapper(Function<T, @Nullable OffsetDateTime> timeMapper) {
             this.timeMapper = timeMapper;
             return this;
         }
 
-        public Builder<T> subjectMapper(Function<T, String> subjectMapper) {
+        public Builder<T> subjectMapper(Function<T, @Nullable String> subjectMapper) {
             this.subjectMapper = subjectMapper;
             return this;
         }
@@ -167,11 +168,11 @@ public class JacksonCloudEventConverter<T> implements CloudEventConverter<T> {
         return CloudEventConverterSupport.defaultTypeMapper();
     }
 
-    static <T> Function<T, OffsetDateTime> defaultTimeMapperFunction() {
+    static <T> Function<T, @Nullable OffsetDateTime> defaultTimeMapperFunction() {
         return CloudEventConverterSupport.defaultTimeMapperFunction();
     }
 
-    static <T> Function<T, String> defaultSubjectMapperFunction() {
+    static <T> Function<T, @Nullable String> defaultSubjectMapperFunction() {
         return CloudEventConverterSupport.defaultSubjectMapperFunction();
     }
 }
