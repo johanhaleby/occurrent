@@ -35,9 +35,11 @@ import static java.util.Objects.requireNonNull;
  * type, and is reused by both the stream and the DCB catch-up models.
  * <p>
  * The live resume token is captured before the bulk replay, not after, so an event that commits during the replay is
- * still delivered by the live subscription. The replay pages the sequence in {@code position} windows, then a
- * reconciliation pass keeps paging until the head stops advancing so events written during the replay are delivered
- * in order. A bounded id cache dedupes events that both the replay and the live subscription see.
+ * still delivered by the live subscription. The replay pages the sequence in {@code position} windows, then a single
+ * reconciliation pass drains up to a head snapshotted once at reconcile start so events written during the replay are
+ * delivered in order. It does not chase a moving head: under sustained writes that would never terminate, so anything
+ * committed after the snapshot head is left to the live subscription (which resumes from the pre-bulk token), deduped
+ * by the id cache. That cache dedupes events that both the replay and the live subscription see.
  * <p>
  * If the replay runs longer than the change stream history (the MongoDB oplog window), the captured token ages out
  * and the live resume fails loudly rather than silently dropping an event. If the model reports no resume token at
@@ -108,11 +110,13 @@ final class PositionCatchupPipeline {
                 .concatWith(Flux.defer(() -> windows(upTo, toInclusive, cache)));
     }
 
-    // Pages from the bulk head onward, re-reading the head each round, until it stops advancing. This delivers events
-    // written during the bulk replay in position order.
+    // Drains events written during the bulk replay in position order up to a head snapshotted once here. It does not
+    // chase a moving head: under sustained writes re-reading the head would advance forever and the catch-up would
+    // never hand over to live (a livelock). Anything committed after this snapshot head is delivered by the live
+    // change stream, which resumes from the pre-bulk token, deduped by the id cache. Loss-safe: nothing in
+    // (snapshotHead, now] is skipped because live covers it, and nothing in (cursor, snapshotHead] is skipped because
+    // this pass drains it.
     private Flux<CloudEvent> reconcile(long cursor, HandoverCache cache) {
-        return reader.currentHead().flatMapMany(head -> head > cursor
-                ? windows(cursor, head, cache).concatWith(Flux.defer(() -> reconcile(head, cache)))
-                : Flux.empty());
+        return reader.currentHead().flatMapMany(snapshotHead -> windows(cursor, snapshotHead, cache));
     }
 }

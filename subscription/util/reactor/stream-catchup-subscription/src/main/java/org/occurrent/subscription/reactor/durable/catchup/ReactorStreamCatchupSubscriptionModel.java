@@ -93,9 +93,14 @@ public class ReactorStreamCatchupSubscriptionModel implements CheckpointAwareSub
      */
     public static final long DEFAULT_POSITION_WINDOW_SIZE = 1000;
     /**
-     * Default number of event ids kept to deduplicate the replay-to-live handover seam.
+     * Default ceiling on the number of event ids kept to deduplicate the replay-to-live handover seam. The dedup set
+     * grows to cover the overlap the live change stream re-delivers (bounded by the write volume during the replay,
+     * not by total history) and evicts oldest-first only once it would exceed this ceiling. Exceeding the ceiling
+     * yields extra duplicate deliveries, never loss (delivery is at-least-once), so raise it to cut duplicates on a
+     * large rebuild or lower it to cap memory (each id is a short string). It is well above the previous {@code 1000}
+     * so a rebuild with heavy concurrent writes no longer evicts the overlap before the live stream re-delivers it.
      */
-    public static final int DEFAULT_HANDOVER_CACHE_SIZE = 1000;
+    public static final int DEFAULT_HANDOVER_CACHE_SIZE = 100_000;
 
     private final CheckpointAwareSubscriptionModel subscriptionModel;
     private final PositionOrderedReader positionOrderedReader;

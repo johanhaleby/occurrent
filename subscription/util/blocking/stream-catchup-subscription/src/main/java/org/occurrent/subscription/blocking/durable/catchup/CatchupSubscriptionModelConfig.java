@@ -35,6 +35,22 @@ public class CatchupSubscriptionModelConfig {
 
     static final long DEFAULT_DCB_CATCHUP_POSITION_WINDOW_SIZE = 1000;
 
+    /**
+     * Default ceiling on the number of event ids kept to deduplicate the catch-up-to-live handover seam, used by the
+     * convenience constructors that do not take an explicit {@code cacheSize}. The dedup cache grows to cover the
+     * overlap the live subscription re-delivers (bounded by the write volume during the replay, not by total history)
+     * and evicts oldest-first only once it would exceed this ceiling. Exceeding it yields extra duplicate deliveries,
+     * never loss (delivery is at-least-once). It is well above the previous {@code 100} so a rebuild with heavy
+     * concurrent writes no longer evicts the overlap before the live subscription re-delivers it. Each id is a short
+     * string, so lower it to cap memory or raise it to cut duplicates further.
+     */
+    public static final int DEFAULT_HANDOVER_CACHE_SIZE = 100_000;
+
+    /**
+     * The ceiling on the number of CloudEvent ids kept in-memory to deduplicate the switch from catch-up mode to
+     * live subscription mode. The cache grows to cover the overlap the live subscription re-delivers up to this
+     * ceiling, then evicts oldest-first. Exceeding the ceiling yields extra duplicate deliveries, never loss.
+     */
     public final int cacheSize;
     public final CheckpointStorageConfig subscriptionStorageConfig;
     public final SortBy catchupPhaseSortBy;
@@ -63,7 +79,7 @@ public class CatchupSubscriptionModelConfig {
      * @param subscriptionStorageConfig Configures if and how checkpoint persistence should be handled during the catch-up phase.
      */
     public CatchupSubscriptionModelConfig(CheckpointStorageConfig subscriptionStorageConfig) {
-        this(100, subscriptionStorageConfig);
+        this(DEFAULT_HANDOVER_CACHE_SIZE, subscriptionStorageConfig);
     }
 
     /**
