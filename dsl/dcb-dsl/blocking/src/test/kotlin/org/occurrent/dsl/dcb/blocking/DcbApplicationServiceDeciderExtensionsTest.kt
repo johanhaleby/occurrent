@@ -29,6 +29,7 @@ import org.occurrent.application.service.blocking.dcb.GenericDcbApplicationServi
 import org.occurrent.domain.DomainEvent
 import org.occurrent.domain.NameDefined
 import org.occurrent.domain.NameWasChanged
+import org.occurrent.dsl.dcb.toDcb
 import org.occurrent.dsl.decider.Decider
 import org.occurrent.dsl.decider.decider
 import org.occurrent.eventstore.api.dcb.DcbCloudEvents
@@ -62,7 +63,7 @@ class DcbApplicationServiceDeciderExtensionsTest {
 
     @Test
     fun command_execution_appends_decider_produced_events() {
-        val result = applicationService.execute(nameQuery("name"), DefineName("Jane Doe"), nameDecider())
+        val result = applicationService.execute(DefineName("Jane Doe"), nameDcbDecider())
 
         assertThat(result).isNotNull()
         assertThat(result!!.eventCount()).isEqualTo(1)
@@ -73,7 +74,7 @@ class DcbApplicationServiceDeciderExtensionsTest {
     fun no_op_decisions_return_null() {
         append(NameDefined("event-0", time, "name", "Jane Doe"))
 
-        val result = applicationService.execute(nameQuery("name"), DefineName("Jane Doe"), nameDecider())
+        val result = applicationService.execute(DefineName("Jane Doe"), nameDcbDecider())
 
         assertThat(result).isNull()
         assertThat(readNameEvents("name")).containsExactly(NameDefined("event-0", time, "name", "Jane Doe"))
@@ -83,7 +84,7 @@ class DcbApplicationServiceDeciderExtensionsTest {
     fun executeAndReturnDecision_returns_folded_state_plus_new_events() {
         append(NameDefined("event-0", time, "name", "Jane Doe"))
 
-        val decision = applicationService.executeAndReturnDecision(nameQuery("name"), ChangeName("John Doe"), nameDecider())
+        val decision = applicationService.executeAndReturnDecision(ChangeName("John Doe"), nameDcbDecider())
 
         assertThat(decision.state).isEqualTo("John Doe")
         assertThat(decision.events).containsExactly(NameWasChanged("event-2", time, "name", "John Doe"))
@@ -96,48 +97,58 @@ class DcbApplicationServiceDeciderExtensionsTest {
     @Test
     fun multiple_commands_are_handled_in_order() {
         val newEvents = applicationService.executeAndReturnEvents(
-            nameQuery("name"),
             listOf(DefineName("Jane Doe"), ChangeName("John Doe")),
-            nameDecider()
+            nameDcbDecider()
         )
 
         assertThat(newEvents).containsExactly(
             NameDefined("event-1", time, "name", "Jane Doe"),
             NameWasChanged("event-2", time, "name", "John Doe")
         )
-        assertThat(applicationService.executeAndReturnState(nameQuery("name"), NoOp, nameDecider())).isEqualTo("John Doe")
+        assertThat(applicationService.executeAndReturnState(NoOp, nameDcbDecider())).isEqualTo("John Doe")
         assertThat(readNameEvents("name")).containsExactlyElementsOf(newEvents)
     }
 
     @Test
     fun decider_over_a_narrower_event_type_runs_without_an_explicit_adaptEvents() {
         // Given a decider whose event type (NameDefined) is a subtype of the service's event type (DomainEvent)
-        val narrowDecider: Decider<DefineName, String?, NameDefined> = decider(
-            initialState = null,
+        // toDcb requires a non-null state type, so an empty string stands in for "no name yet" instead of null.
+        val narrowDecider: Decider<DefineName, String, NameDefined> = decider(
+            initialState = "",
             decide = { command, _ -> listOf(NameDefined("event-1", time, "name", command.name)) },
             evolve = { _, event -> event.name() }
         )
+        val narrowDcbDecider = narrowDecider.toDcb(
+            criteria = { nameQuery("name") },
+            tags = { event -> setOf(tagFor(event)) }
+        )
 
         // When passed straight to execute, no narrowDecider.adaptEvents() needed
-        val result = applicationService.execute(nameQuery("name"), DefineName("Jane Doe"), narrowDecider)
+        val result = applicationService.execute(DefineName("Jane Doe"), narrowDcbDecider)
 
         // Then
         assertThat(result).isNotNull()
         assertThat(readNameEvents("name")).containsExactly(NameDefined("event-1", time, "name", "Jane Doe"))
     }
 
-    private fun nameDecider(): Decider<NameCommand, String?, DomainEvent> =
+    // toDcb requires a non-null state type, so an empty string stands in for "no name yet" instead of null.
+    private fun nameDecider(): Decider<NameCommand, String, DomainEvent> =
         decider(
-            initialState = null,
+            initialState = "",
             decide = { command, state ->
                 when (command) {
-                    is DefineName -> if (state == null) listOf(NameDefined("event-1", time, "name", command.name)) else emptyList()
+                    is DefineName -> if (state.isEmpty()) listOf(NameDefined("event-1", time, "name", command.name)) else emptyList()
                     is ChangeName -> listOf(NameWasChanged("event-2", time, "name", command.name))
                     NoOp -> emptyList()
                 }
             },
             evolve = { _, event -> event.name() }
         )
+
+    private fun nameDcbDecider() = nameDecider().toDcb(
+        criteria = { nameQuery("name") },
+        tags = { event -> setOf(tagFor(event)) }
+    )
 
     private fun append(vararg events: DomainEvent) {
         val cloudEvents = cloudEventConverter.toCloudEvents(Stream.of(*events))

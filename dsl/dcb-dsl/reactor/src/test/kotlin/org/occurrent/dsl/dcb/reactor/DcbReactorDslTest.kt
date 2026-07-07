@@ -33,6 +33,7 @@ import org.occurrent.application.service.reactor.dcb.GenericDcbApplicationServic
 import org.occurrent.domain.DomainEvent
 import org.occurrent.domain.NameDefined
 import org.occurrent.domain.NameWasChanged
+import org.occurrent.dsl.dcb.toDcb
 import org.occurrent.dsl.decider.Decider
 import org.occurrent.dsl.decider.decider
 import org.occurrent.dsl.query.reactor.DomainEventQueries
@@ -94,7 +95,7 @@ class DcbReactorDslTest {
 
     @Test
     fun command_execution_appends_decider_produced_events() {
-        val result = applicationService.execute(nameQuery("name"), DefineName("Jane Doe"), nameDecider()).block()
+        val result = applicationService.execute(DefineName("Jane Doe"), nameDcbDecider()).block()
 
         assertThat(result).isNotNull
         assertThat(result!!.eventCount()).isEqualTo(1)
@@ -105,7 +106,7 @@ class DcbReactorDslTest {
     fun no_op_decisions_return_an_empty_mono() {
         append(NameDefined("event-0", time, "name", "Jane Doe"))
 
-        val result = applicationService.execute(nameQuery("name"), DefineName("Jane Doe"), nameDecider()).block()
+        val result = applicationService.execute(DefineName("Jane Doe"), nameDcbDecider()).block()
 
         assertThat(result).isNull()
         assertThat(readNameEvents("name")).containsExactly(NameDefined("event-0", time, "name", "Jane Doe"))
@@ -115,7 +116,7 @@ class DcbReactorDslTest {
     fun executeAndReturnDecision_returns_folded_state_plus_new_events() {
         append(NameDefined("event-0", time, "name", "Jane Doe"))
 
-        val decision = applicationService.executeAndReturnDecision(nameQuery("name"), ChangeName("John Doe"), nameDecider()).block()
+        val decision = applicationService.executeAndReturnDecision(ChangeName("John Doe"), nameDcbDecider()).block()
 
         assertThat(decision!!.state).isEqualTo("John Doe")
         assertThat(decision.events).containsExactly(NameWasChanged("event-2", time, "name", "John Doe"))
@@ -125,7 +126,7 @@ class DcbReactorDslTest {
     fun executeAndReturnEvents_returns_the_new_events() {
         append(NameDefined("event-0", time, "name", "Jane Doe"))
 
-        val events = applicationService.executeAndReturnEvents(nameQuery("name"), ChangeName("Jane Roe"), nameDecider()).block()
+        val events = applicationService.executeAndReturnEvents(ChangeName("Jane Roe"), nameDcbDecider()).block()
 
         assertThat(events).containsExactly(NameWasChanged("event-2", time, "name", "Jane Roe"))
     }
@@ -158,8 +159,9 @@ class DcbReactorDslTest {
         val conflictingStore = ConflictingOnceDcbEventStore(eventStore, interloper)
         val service = GenericDcbApplicationService(conflictingStore, converter, { event -> setOf(tagFor(event)) }, GenericDcbApplicationService.defaultRetry())
         val deciderRuns = AtomicInteger()
-        val countingDecider: Decider<NameCommand, String?, DomainEvent> = decider(
-            initialState = null,
+        // toDcb requires a non-null state type, so an empty string stands in for "no name yet" instead of null.
+        val countingDecider: Decider<NameCommand, String, DomainEvent> = decider(
+            initialState = "",
             decide = { command, _ ->
                 deciderRuns.incrementAndGet()
                 when (command) {
@@ -170,7 +172,8 @@ class DcbReactorDslTest {
             evolve = { _, event -> event.name() }
         )
 
-        val decision = service.executeAndReturnDecision(nameQuery("name"), ChangeName("John Doe"), countingDecider).block()
+        val countingDcbDecider = countingDecider.toDcb(criteria = { nameQuery("name") }, tags = { event -> setOf(tagFor(event)) })
+        val decision = service.executeAndReturnDecision(ChangeName("John Doe"), countingDcbDecider).block()
 
         // The first append conflicts on the interloper, the retry reruns the decider against the fresh read, and
         // executeAndReturnDecision returns the committed attempt's decision, not the first attempt's.
@@ -179,17 +182,23 @@ class DcbReactorDslTest {
         assertThat(decision.state).isEqualTo("John Doe")
     }
 
-    private fun nameDecider(): Decider<NameCommand, String?, DomainEvent> =
+    // toDcb requires a non-null state type, so an empty string stands in for "no name yet" instead of null.
+    private fun nameDecider(): Decider<NameCommand, String, DomainEvent> =
         decider(
-            initialState = null,
+            initialState = "",
             decide = { command, state ->
                 when (command) {
-                    is DefineName -> if (state == null) listOf(NameDefined("event-1", time, "name", command.name)) else emptyList()
+                    is DefineName -> if (state.isEmpty()) listOf(NameDefined("event-1", time, "name", command.name)) else emptyList()
                     is ChangeName -> listOf(NameWasChanged("event-2", time, "name", command.name))
                 }
             },
             evolve = { _, event -> event.name() }
         )
+
+    private fun nameDcbDecider() = nameDecider().toDcb(
+        criteria = { nameQuery("name") },
+        tags = { event -> setOf(tagFor(event)) }
+    )
 
     private fun append(vararg events: DomainEvent) {
         val cloudEvents = converter.toCloudEvents(Stream.of(*events))

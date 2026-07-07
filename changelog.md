@@ -47,6 +47,15 @@ DCB is a capability layered on the existing CloudEvent storage, not a new store 
   safe for existing applications because the neutral form only ever also sees DCB events on a DCB-enabled store, and
   those are new since DCB is unreleased. On a stream-only store it behaves exactly as `@Subscription` did before.
   * See [ADR 51](doc/architecture/decisions/0051-capability-agnostic-subscription.md).
+* Added `DcbDecider`, which couples a `Decider` with its DCB read boundary and its event tags on one object, so a
+  feature can describe its own read boundary and write tags right next to its decision logic instead of assembling
+  them separately at the call site. The read boundary is derived from the command through a
+  `Function<C, DcbCriteria>`, and the write tags come from a `TagGenerator<E>`. The DSL gains `execute(command, dcbDecider)`
+  in both the blocking and reactor variants. `DcbDecider` composes the same way `Decider` does, through `adapt` and
+  `compose`, with the composed criteria being `DcbCriteria.anyOf` over the recognizing children and the composed tags
+  being the union of the children's tags. The global `TagGenerator` on the DCB application service is now optional,
+  and `DcbExecuteOptions` gained a per-execute `TagGenerator` that overrides it.
+  * See [ADR 52](doc/architecture/decisions/0052-couple-decider-with-dcb-boundary-and-tags.md).
 * Renamed the `SubscriptionPosition` type family to `Checkpoint` to stop overloading "position" for two different
   concepts: the ordering value (`position`) and the per-subscriber resume marker built from it. This is a breaking
   API change; there is no deprecated alias.
