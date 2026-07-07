@@ -19,6 +19,8 @@ package org.occurrent.eventstore.mongodb.nativedriver;
 import com.mongodb.ConnectionString;
 import com.mongodb.client.MongoClient;
 import com.mongodb.client.MongoClients;
+import com.mongodb.client.model.IndexOptions;
+import com.mongodb.client.model.Indexes;
 import io.cloudevents.CloudEvent;
 import io.cloudevents.core.builder.CloudEventBuilder;
 import org.assertj.core.api.ThrowableAssert.ThrowingCallable;
@@ -153,15 +155,16 @@ class MongoEventStoreCapabilityTest {
         newEventStore(eventStoreConfig(DCB).build());
 
         // A DCB-only store still creates the streamId+streamVersion compound index, since the DCB append path looks
-        // up the current stream version per partition (currentStreamVersion), but non-unique, since two disjoint DCB
-        // boundaries hashing to the same partition stream can legitimately collide on it transiently.
+        // up the current stream version per partition (currentStreamVersion). It is unique, identical to the STREAM
+        // index: DCB-only writes assign sequential per-partition stream versions, and the only collision (two
+        // disjoint DCB boundaries hashing to the same partition stream) is a retryable transient, not a duplicate.
         assertThat(indexNames()).contains(STREAM_INDEX, POSITION_INDEX, DCB_TAGS_INDEX);
         assertThat(index(CLOUD_EVENT_ID_SOURCE_INDEX))
                 .containsEntry("key", new Document("id", 1).append("source", 1))
                 .containsEntry("unique", true);
         assertThat(index(STREAM_INDEX))
                 .containsEntry("key", new Document("streamid", 1).append("streamversion", 1))
-                .doesNotContainKey("unique");
+                .containsEntry("unique", true);
         assertThat(index(POSITION_INDEX))
                 .containsEntry("key", new Document("position", 1))
                 .containsEntry("unique", true)
@@ -172,8 +175,12 @@ class MongoEventStoreCapabilityTest {
     }
 
     @Test
-    void upgrading_a_dcb_only_store_to_stream_fails_loudly_instead_of_silently_running_without_uniqueness() {
-        newEventStore(eventStoreConfig(DCB).build());
+    void an_operator_created_incompatible_stream_version_index_fails_startup_loudly() {
+        // Simulate an operator manually creating a non-unique streamid+streamversion index out-of-band. Occurrent
+        // requires this index to be unique, so constructing a store must fail loudly rather than silently run
+        // without the uniqueness guarantee stream and DCB writes rely on.
+        mongoClient.getDatabase(databaseName).getCollection(EVENT_COLLECTION)
+                .createIndex(Indexes.compoundIndex(Indexes.ascending("streamid"), Indexes.ascending("streamversion")), new IndexOptions());
         assertThat(index(STREAM_INDEX)).doesNotContainKey("unique");
 
         assertThatThrownBy(() -> newEventStore(eventStoreConfig(STREAM, DCB).build()))

@@ -802,23 +802,16 @@ public class SpringMongoEventStore implements EventStore, EventStoreOperations, 
         eventStoreCollection.createIndex(Indexes.compoundIndex(Indexes.ascending(CloudEventV1.ID), Indexes.ascending(CloudEventV1.SOURCE)), new IndexOptions().unique(true));
         // streamId + streamVersion uniqueness is a stream-mode invariant, but the DCB append path also looks up the
         // current stream version per partition (currentStreamVersion), so it needs the same compound index to avoid a
-        // collection scan. STREAM gets the unique variant, since that uniqueness is its invariant. DCB-only gets a
-        // non-unique variant of the same compound index, since two disjoint DCB boundaries hashing to the same
-        // partition stream can legitimately collide on streamId+streamVersion before the retry in insertAllDcb
-        // re-reads and re-assigns a fresh version, so uniqueness is not a DCB invariant.
-        if (eventStoreCapabilities.contains(STREAM)) {
+        // collection scan. The index is unique for both capabilities: DCB-only writes assign sequential per-partition
+        // stream versions, so uniqueness holds there too. The only way two events collide on the same
+        // streamId+streamVersion is two disjoint DCB boundaries hashing to the same partition stream, which the DCB
+        // append path already treats as a retryable transient (re-reads and re-assigns a fresh version) rather than a
+        // duplicate error. Creating the identical unique index for STREAM and DCB also means no capability combination
+        // or DCB-only to STREAM+DCB upgrade ever hits an IndexOptionsConflict.
+        if (eventStoreCapabilities.contains(STREAM) || dcbEnabled) {
             // Create a streamId + streamVersion ascending index (note that we don't need to index stream id separately since it's covered by this compound index)
             // Note also that this index supports sorting both ascending and descending since MongoDB can traverse an index in both directions.
-            // A store that previously ran DCB-only already created the non-unique variant of this index (see the
-            // else branch below). MongoDB rejects re-creating the same index name with different options, and this
-            // never drops or replaces an existing index. Stream writes rely on this index being unique, so a
-            // conflict here is not swallowed: it means the collection has a pre-existing non-unique index and
-            // running as-is would silently lose the uniqueness guarantee, so this fails startup instead.
             createStreamVersionIndex(eventStoreCollection, new IndexOptions().unique(true));
-        } else if (dcbEnabled) {
-            // DCB-only doesn't require uniqueness on this index (see comment above), so an existing unique index
-            // from a prior STREAM configuration is a strictly stronger constraint and is fine to keep as-is.
-            createStreamVersionIndex(eventStoreCollection, new IndexOptions());
         }
         if (dcbEnabled) {
             eventStoreCollection.createIndex(Indexes.ascending(DCB_TAGS_INDEX_FIELD), new IndexOptions().sparse(true));
@@ -834,21 +827,18 @@ public class SpringMongoEventStore implements EventStore, EventStoreOperations, 
         mongoTemplate.setSessionSynchronization(ALWAYS);
     }
 
-    // IndexOptionsConflict (error code 85) means an index with this name already exists with different options, e.g.
-    // a DCB-only store's non-unique streamId+streamVersion index when STREAM is enabled afterward. Occurrent never
-    // drops or replaces an existing index. When the requested index is unique (STREAM is enabled), the conflict is
-    // not swallowed: stream writes rely on this index enforcing uniqueness, so continuing to run on a pre-existing
-    // non-unique index would silently lose that guarantee and is worse than failing startup. When the requested
-    // index is non-unique (DCB-only), an existing unique index is a strictly stronger constraint and is fine to
-    // keep, so that conflict is logged and swallowed.
+    // IndexOptionsConflict (error code 85) means an index with this name already exists with different options.
+    // Occurrent always requests the unique streamId+streamVersion index for both STREAM and DCB, so normal capability
+    // combinations and upgrades never conflict. A conflict here therefore means an operator manually created an
+    // incompatible (e.g. non-unique) index. Occurrent never drops or replaces an existing index, and running on a
+    // non-unique index would silently lose the uniqueness guarantee stream and DCB writes rely on, so this fails
+    // startup instead of swallowing the conflict.
     private static void createStreamVersionIndex(MongoCollection<Document> eventStoreCollection, IndexOptions indexOptions) {
         try {
             eventStoreCollection.createIndex(Indexes.compoundIndex(Indexes.ascending(STREAM_ID), Indexes.ascending(STREAM_VERSION)), indexOptions);
         } catch (MongoCommandException e) {
-            if (e.getErrorCode() == 85 && !indexOptions.isUnique()) {
-                log.warn("The '{}' index already exists with different options than requested ({}). Occurrent does not drop or replace existing indexes automatically, so the store continues using the existing index. Drop and recreate it out-of-band if the new options are required.", STREAM_ID + "_1_" + STREAM_VERSION + "_1", indexOptions, e);
-            } else if (e.getErrorCode() == 85) {
-                throw new IllegalStateException("The '" + STREAM_ID + "_1_" + STREAM_VERSION + "_1' index already exists with different, non-unique options, but this store requires it to be unique because it has the STREAM capability enabled. Occurrent does not drop or replace existing indexes automatically, so running with a non-unique index would silently lose the uniqueness guarantee that stream writes rely on. Drop and recreate the index as unique out-of-band, then restart.", e);
+            if (e.getErrorCode() == 85) {
+                throw new IllegalStateException("The '" + STREAM_ID + "_1_" + STREAM_VERSION + "_1' index already exists with options incompatible with the unique index Occurrent requires. Occurrent does not drop or replace existing indexes automatically, so running with the existing index would silently lose the uniqueness guarantee that stream and DCB writes rely on. Drop and recreate the index as unique out-of-band, then restart.", e);
             } else {
                 throw e;
             }
