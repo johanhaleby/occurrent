@@ -22,7 +22,6 @@ import org.jspecify.annotations.Nullable;
 import org.occurrent.cloudevents.OccurrentCloudEventExtension;
 import org.occurrent.eventstore.api.dcb.DcbCloudEvents;
 import org.occurrent.eventstore.api.dcb.DcbEventStore;
-import org.occurrent.eventstore.api.dcb.DcbEventStream;
 import org.occurrent.eventstore.api.dcb.DcbCriteria;
 import org.occurrent.eventstore.api.dcb.DcbReadOptions;
 import org.occurrent.subscription.GlobalCheckpoint;
@@ -134,28 +133,31 @@ class DcbCatchupSubscriptionModel extends AbstractCatchupSubscriptionModel {
         long startPosition = GlobalCheckpoint.positionOf(checkpoint);
 
         // Capture the live resume token before the bulk replay so an event committed during the replay is still
-        // delivered live. On a replay longer than the change stream history the token ages out and the handover fails
-        // loudly instead of dropping the event.
+        // delivered live. On a replay longer than the change stream history the token ages out, or the delegate
+        // reports none at all, and the handover fails loudly instead of dropping the event (captureLiveResumeCheckpoint).
         Class<? extends SubscriptionModel> delegatedSubscriptionModelType = getDelegatedSubscriptionModel().getClass();
         StartAt delegatedStartAt = startAt.get(new SubscriptionModelContext(delegatedSubscriptionModelType));
-        final Checkpoint globalCheckpoint = delegatedStartAt == null ? null : subscriptionModel.globalCheckpoint();
+        final Checkpoint globalCheckpoint = captureLiveResumeCheckpoint(delegatedStartAt);
 
         // Page through the DCB sequence from the resume position to the head seen at the start, in windows so a large
-        // rebuild does not load the whole matched set at once. position is monotonic and server-assigned, so this needs
-        // no count and no time sort.
-        long bulkHead = dcbEventStore.read(dcbQuery, DcbReadOptions.between(startPosition, startPosition)).lastSequencePosition();
-        long cursor = deliverDcbWindows(startPosition, bulkHead, windowSize, subscriptionId, action, null);
-
+        // rebuild does not load the whole matched set at once, then reconcile until the head stops advancing.
+        // position is monotonic and server-assigned, so this needs no count and no time sort. Anything written after
+        // the reconciliation loop stabilises is newer than the live resume position and arrives live.
         FixedSizeCache catchupPhaseCache = new FixedSizeCache(config.cacheSize);
+        PositionCatchupPipeline.Reader dcbReader = new PositionCatchupPipeline.Reader() {
+            @Override
+            public long currentHead() {
+                return dcbEventStore.read(dcbQuery, DcbReadOptions.between(0, 0)).lastSequencePosition();
+            }
 
-        // Reconcile events written during the replay by paging until the head stops advancing. Overlapping re-reads
-        // are deduped by the cache. Anything written after the loop is newer than the live resume position and arrives
-        // live.
-        long head = dcbEventStore.read(dcbQuery, DcbReadOptions.between(cursor, cursor)).lastSequencePosition();
-        while (head > cursor && !shuttingDown && runningCatchupSubscriptions.containsKey(subscriptionId)) {
-            cursor = deliverDcbWindows(cursor, head, windowSize, subscriptionId, action, catchupPhaseCache);
-            head = dcbEventStore.read(dcbQuery, DcbReadOptions.between(cursor, cursor)).lastSequencePosition();
-        }
+            @Override
+            public Stream<CloudEvent> readWindow(long fromExclusive, long toInclusive) {
+                return dcbEventStore.read(dcbQuery, DcbReadOptions.between(fromExclusive, toInclusive)).stream();
+            }
+        };
+        PositionCatchupPipeline pipeline = new PositionCatchupPipeline(dcbReader, windowSize);
+        pipeline.replay(startPosition, () -> shouldKeepReplaying(subscriptionId),
+                (events, cache) -> deliverCatchupEvents(events, subscriptionId, action, cache), catchupPhaseCache);
 
         if (delegatedStartAt == null) {
             returnIfCheckpointStorageConfigIs(UseCheckpointInStorage.class, cfg -> {
@@ -165,7 +167,7 @@ class DcbCatchupSubscriptionModel extends AbstractCatchupSubscriptionModel {
         }
 
         final boolean subscriptionsWasCancelledOrShutdown;
-        if (!shuttingDown && runningCatchupSubscriptions.containsKey(subscriptionId)) {
+        if (shouldKeepReplaying(subscriptionId)) {
             subscriptionsWasCancelledOrShutdown = false;
             runningCatchupSubscriptions.remove(subscriptionId);
         } else {
@@ -202,23 +204,9 @@ class DcbCatchupSubscriptionModel extends AbstractCatchupSubscriptionModel {
             subscription = new CancelledSubscription(subscriptionId);
         } else {
             subscription = startLiveDcbSubscription(subscriptionId, filter, startAtToUse, action, catchupPhaseCache);
+            applyPendingPauseIfAny(subscriptionId);
         }
         return subscription;
-    }
-
-    /**
-     * Delivers DCB events in {@code (fromExclusive, toInclusive]} by paging through position windows, and returns the
-     * position the cursor reached. Stops early on shutdown or cancellation.
-     */
-    private long deliverDcbWindows(long fromExclusive, long toInclusive, long windowSize, String subscriptionId, Consumer<CloudEvent> action, @Nullable FixedSizeCache cache) {
-        long cursor = fromExclusive;
-        while (cursor < toInclusive && !shuttingDown && runningCatchupSubscriptions.containsKey(subscriptionId)) {
-            long upTo = Math.min(cursor + windowSize, toInclusive);
-            DcbEventStream slice = dcbEventStore.read(dcbQuery, DcbReadOptions.between(cursor, upTo));
-            deliverCatchupEvents(slice.stream(), subscriptionId, action, cache);
-            cursor = upTo;
-        }
-        return cursor;
     }
 
     /**
@@ -229,7 +217,7 @@ class DcbCatchupSubscriptionModel extends AbstractCatchupSubscriptionModel {
         // try-with-resources closes the source stream even when takeWhile short-circuits on shutdown, so a
         // resource-backed read does not leak its cursor.
         try (cloudEvents) {
-            Stream<CloudEvent> takeWhile = cloudEvents.takeWhile(__ -> !shuttingDown && runningCatchupSubscriptions.containsKey(subscriptionId));
+            Stream<CloudEvent> takeWhile = cloudEvents.takeWhile(__ -> shouldKeepReplaying(subscriptionId));
             if (cache != null) {
                 // Skip events already delivered in an earlier reconciliation pass (the delta is re-read until it
                 // stabilises, so passes overlap) and record the rest so the live subscription can skip them at the

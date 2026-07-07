@@ -10,6 +10,16 @@ DCB is a capability layered on the existing CloudEvent storage, not a new store 
 
 #### Changes
 
+* Blocking catch-up now fails loudly instead of silently dropping events when the resume token is unavailable.
+  `StreamCatchupSubscriptionModel` and `DcbCatchupSubscriptionModel` used to fall back to `StartAt.subscriptionModelDefault()`
+  when the delegated subscription model reported no resume token after a long replay, which silently dropped every
+  event committed during that replay. Both now throw an `IllegalStateException` instead, matching the reactor catch-up
+  pipeline's existing fail-loud handover. The shared position-windowed replay used by both the stream and DCB position
+  paths was also extracted into one class, `isRunning` now reports an in-progress replay correctly, `stop()` interrupts
+  an in-flight replay, `pauseSubscription` on a subscription still replaying is honored once it hands over to live
+  delivery, `CatchupSubscriptionModelConfig.equals`/`hashCode` now include every configurable field, the in-memory
+  handover cache is synchronized to match the reactor stack, and the time-based reconciliation delta is now read in
+  bounded windows instead of one unbounded list.
 * Occurrent now requires Java 21 instead of Java 17. This raises the minimum JDK needed to build and run Occurrent. Stored data is unaffected, so an existing application only needs to move its runtime to Java 21.
 * Modernized Java dispatch code to use Java 21 pattern matching and exhaustive switches across sealed filters,
   criteria, start positions, checkpoints, deadlines, and examples.
