@@ -6,6 +6,8 @@ Date: 2026-07-02
 
 Accepted
 
+Superseded in part by ADR 0045
+
 ## Context
 
 Occurrent had one Spring Boot starter, `spring-boot-starter-mongodb`, which wires the blocking stack: a `SpringMongoEventStore`, a competing-consumer durable catch-up subscription model, the blocking DSLs, the blocking application service, and annotation-driven subscriptions through `@StreamSubscription` and `@DcbSubscription`. The reactive (Project Reactor) stack was complete at the library level (event store, application service, query DSLs, subscription model with resilience and lifecycle, durable and DCB catch-up wrappers, position storage) but had no auto-configuration, so a reactive application had to hand-wire every bean.
