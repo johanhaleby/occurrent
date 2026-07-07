@@ -16,10 +16,13 @@
 
 package org.occurrent.example.domain.hotelbooking.features.guestmanagement.model
 
+import org.occurrent.dsl.dcb.DcbDecider
+import org.occurrent.dsl.dcb.toDcb
 import org.occurrent.dsl.decider.Decider
 import org.occurrent.dsl.decider.decider
 import org.occurrent.example.domain.hotelbooking.common.DomainCommand
 import org.occurrent.example.domain.hotelbooking.common.GuestId
+import org.occurrent.example.domain.hotelbooking.infrastructure.dcb.HotelBookingCriteria.guestCriteria
 import java.time.Instant
 import java.util.*
 
@@ -33,6 +36,22 @@ val guestDecider: Decider<GuestCommand, GuestRegistry, GuestEvent> =
         decide = ::decide,
         evolve = ::evolve
     )
+
+/** The [guestDecider] wired to its DCB boundary and event tags, ready for [org.occurrent.dsl.dcb.reactor.execute]. */
+val guestDcbDecider: DcbDecider<GuestCommand, GuestRegistry, GuestEvent> = guestDecider.toDcb(
+    criteria = { command ->
+        when (command) {
+            is GuestCommand.RegisterGuest -> guestCriteria(command.guestId)
+            is GuestCommand.DeregisterGuest -> guestCriteria(command.guestId)
+        }
+    },
+    tags = { event ->
+        when (event) {
+            is GuestRegistered -> setOf(GuestTags.guest(event.guestId))
+            is GuestDeregistered -> setOf(GuestTags.guest(event.guestId))
+        }
+    }
+)
 
 sealed interface GuestCommand : DomainCommand {
     data class RegisterGuest(val eventId: UUID, val occurredAt: Instant, val guestId: GuestId, val name: String) : GuestCommand

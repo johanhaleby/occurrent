@@ -21,8 +21,10 @@ import org.occurrent.application.converter.jackson3.jacksonCloudEventConverter
 import org.occurrent.application.converter.typemapper.CloudEventTypeMapper
 import org.occurrent.application.converter.typemapper.ReflectionCloudEventTypeMapper
 import org.occurrent.application.service.dcb.TagGenerator
-import org.occurrent.dsl.decider.Decider
+import org.occurrent.dsl.dcb.DcbDecider
+import org.occurrent.dsl.dcb.toDcb
 import org.occurrent.example.domain.wordguessinggame.event.GameEvent
+import org.occurrent.example.domain.wordguessinggame.mongodb.spring.dcb.autoconfig.features.dcb.GameDcbQueries
 import org.occurrent.example.domain.wordguessinggame.mongodb.spring.dcb.autoconfig.features.dcb.GameEventTagGenerator
 import org.occurrent.example.domain.wordguessinggame.mongodb.spring.dcb.autoconfig.features.gameplay.decider.WordGuessingGameCommand
 import org.occurrent.example.domain.wordguessinggame.mongodb.spring.dcb.autoconfig.features.gameplay.decider.WordGuessingGameState
@@ -73,8 +75,16 @@ class Bootstrap {
     // DcbDomainEventQueries is auto-configured by the starter when the DCB capability is enabled.
 
     @Bean
-    fun wordGuessingGameDecider(): Decider<WordGuessingGameCommand, WordGuessingGameState, GameEvent> =
-        createWordGuessingGameDecider()
+    fun wordGuessingGameDecider(): DcbDecider<WordGuessingGameCommand, WordGuessingGameState, GameEvent> =
+        createWordGuessingGameDecider().toDcb(
+            criteria = { command ->
+                when (command) {
+                    is WordGuessingGameCommand.StartGame -> GameDcbQueries.gameplay(command.gameId)
+                    is WordGuessingGameCommand.GuessWord -> GameDcbQueries.gameplay(command.gameId)
+                }
+            },
+            tags = GameEventTagGenerator()::tags
+        )
 }
 
 fun main(args: Array<String>) {

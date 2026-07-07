@@ -16,11 +16,14 @@
 
 package org.occurrent.example.domain.hotelbooking.features.roommanagement.model
 
+import org.occurrent.dsl.dcb.DcbDecider
+import org.occurrent.dsl.dcb.toDcb
 import org.occurrent.dsl.decider.Decider
 import org.occurrent.dsl.decider.decider
 import org.occurrent.example.domain.hotelbooking.common.DomainCommand
 import org.occurrent.example.domain.hotelbooking.common.HotelId
 import org.occurrent.example.domain.hotelbooking.common.RoomId
+import org.occurrent.example.domain.hotelbooking.infrastructure.dcb.HotelBookingCriteria.roomCriteria
 import java.time.Instant
 import java.util.*
 
@@ -30,6 +33,22 @@ import java.util.*
  */
 val roomDecider: Decider<RoomCommand, RoomState, RoomEvent> = decider(
     initialState = RoomState.NotDefined, decide = ::decide, evolve = ::evolve
+)
+
+/** The [roomDecider] wired to its DCB boundary and event tags, ready for [org.occurrent.dsl.dcb.reactor.execute]. */
+val roomDcbDecider: DcbDecider<RoomCommand, RoomState, RoomEvent> = roomDecider.toDcb(
+    criteria = { command ->
+        when (command) {
+            is RoomCommand.DefineRoom -> roomCriteria(command.roomId)
+            is RoomCommand.CloseRoom -> roomCriteria(command.roomId)
+        }
+    },
+    tags = { event ->
+        when (event) {
+            is RoomDefined -> setOf(RoomTags.room(event.roomId))
+            is RoomClosed -> setOf(RoomTags.room(event.roomId))
+        }
+    }
 )
 
 sealed interface RoomCommand : DomainCommand {

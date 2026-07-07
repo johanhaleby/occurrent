@@ -18,6 +18,7 @@ package org.occurrent.application.service.blocking.dcb;
 
 import org.jspecify.annotations.NullMarked;
 import org.jspecify.annotations.Nullable;
+import org.occurrent.application.service.dcb.TagGenerator;
 
 import java.util.Objects;
 import java.util.function.Consumer;
@@ -43,19 +44,21 @@ import java.util.stream.Stream;
 @NullMarked
 public final class DcbExecuteOptions<E> {
     private final @Nullable Consumer<Stream<E>> sideEffect;
+    private final @Nullable TagGenerator<E> tagGenerator;
 
-    private DcbExecuteOptions(@Nullable Consumer<Stream<E>> sideEffect) {
+    private DcbExecuteOptions(@Nullable Consumer<Stream<E>> sideEffect, @Nullable TagGenerator<E> tagGenerator) {
         this.sideEffect = sideEffect;
+        this.tagGenerator = tagGenerator;
     }
 
     /**
-     * Create empty options, i.e. no side-effect.
+     * Create empty options, i.e. no side-effect and no per-execute {@link TagGenerator}.
      *
      * @param <E> The application service event type.
      * @return Empty execute options.
      */
     public static <E> DcbExecuteOptions<E> empty() {
-        return new DcbExecuteOptions<>(null);
+        return new DcbExecuteOptions<>(null, null);
     }
 
     /**
@@ -78,8 +81,22 @@ public final class DcbExecuteOptions<E> {
      * @param <E_SPECIFIC> The side-effect event type for the returned options.
      * @return New options with the side-effect applied.
      */
+    @SuppressWarnings("unchecked")
     public <E_SPECIFIC extends E> DcbExecuteOptions<E_SPECIFIC> sideEffect(Consumer<Stream<E_SPECIFIC>> sideEffect) {
-        return new DcbExecuteOptions<>(Objects.requireNonNull(sideEffect, "sideEffect cannot be null"));
+        return new DcbExecuteOptions<>(Objects.requireNonNull(sideEffect, "sideEffect cannot be null"), (TagGenerator<E_SPECIFIC>) this.tagGenerator);
+    }
+
+    /**
+     * Set the {@link TagGenerator} to use for this execution, overriding any global tagger configured on the
+     * application service.
+     *
+     * @param tagGenerator The per-execute {@link TagGenerator}.
+     * @param <E_SPECIFIC> The tag generator event type for the returned options.
+     * @return New options with the tag generator applied.
+     */
+    @SuppressWarnings("unchecked")
+    public <E_SPECIFIC extends E> DcbExecuteOptions<E_SPECIFIC> tagGenerator(TagGenerator<E_SPECIFIC> tagGenerator) {
+        return new DcbExecuteOptions<>((Consumer<Stream<E_SPECIFIC>>) (Consumer<?>) this.sideEffect, Objects.requireNonNull(tagGenerator, "tagGenerator cannot be null"));
     }
 
     /**
@@ -89,21 +106,28 @@ public final class DcbExecuteOptions<E> {
         return sideEffect;
     }
 
+    /**
+     * Return the configured per-execute {@link TagGenerator}, or {@code null} if none has been configured.
+     */
+    public @Nullable TagGenerator<E> tagGenerator() {
+        return tagGenerator;
+    }
+
     @Override
     public boolean equals(@Nullable Object obj) {
         if (obj == this) return true;
         if (obj == null || obj.getClass() != this.getClass()) return false;
         DcbExecuteOptions<?> that = (DcbExecuteOptions<?>) obj;
-        return Objects.equals(this.sideEffect, that.sideEffect);
+        return Objects.equals(this.sideEffect, that.sideEffect) && Objects.equals(this.tagGenerator, that.tagGenerator);
     }
 
     @Override
     public int hashCode() {
-        return Objects.hash(sideEffect);
+        return Objects.hash(sideEffect, tagGenerator);
     }
 
     @Override
     public String toString() {
-        return "DcbExecuteOptions[sideEffect=" + sideEffect + ']';
+        return "DcbExecuteOptions[sideEffect=" + sideEffect + ", tagGenerator=" + tagGenerator + ']';
     }
 }

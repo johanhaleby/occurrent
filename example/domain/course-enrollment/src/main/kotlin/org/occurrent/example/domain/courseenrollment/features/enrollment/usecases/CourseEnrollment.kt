@@ -21,19 +21,16 @@ import org.occurrent.dsl.dcb.blocking.execute
 import org.occurrent.example.domain.courseenrollment.common.DomainEvent
 import org.occurrent.example.domain.courseenrollment.features.enrollment.model.EnrollmentCommand.EnrollStudent
 import org.occurrent.example.domain.courseenrollment.features.enrollment.model.EnrollmentCommand.UnenrollStudent
-import org.occurrent.example.domain.courseenrollment.features.enrollment.model.enrollmentDecider
-import org.occurrent.example.domain.courseenrollment.infrastructure.dcb.CourseEnrollmentQueries.enrollmentCriteria
+import org.occurrent.example.domain.courseenrollment.features.enrollment.model.enrollmentDcbDecider
 import java.time.Instant
 import java.util.*
 
 fun DcbApplicationService<DomainEvent>.enrollStudent(courseId: UUID, studentId: UUID, occurredAt: Instant = Instant.now()) = execute(
-    enrollmentCriteria(courseId, studentId),
     EnrollStudent(UUID.randomUUID(), occurredAt, courseId, studentId),
-    enrollmentDecider
+    enrollmentDcbDecider
 )
 
 fun DcbApplicationService<DomainEvent>.unenrollStudent(courseId: UUID, studentId: UUID, occurredAt: Instant = Instant.now()) = execute(
-    enrollmentCriteria(courseId, studentId),
     UnenrollStudent(UUID.randomUUID(), occurredAt, courseId, studentId),
-    enrollmentDecider
+    enrollmentDcbDecider
 )
