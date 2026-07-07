@@ -107,13 +107,14 @@ class DcbDeciderTest {
         assertThat(composed.tags().tags(CourseRegistered("course-1"))).containsExactly(Tag.of("course", "course-1"))
         assertThat(composed.tags().tags(StudentEnrolled("student-1"))).containsExactly(Tag.of("student", "student-1"))
 
-        // The composed state exposes both slices.
-        val state = composed.decider().decideOnEvents(
-            listOf(CourseRegistered("course-1"), StudentEnrolled("student-1")),
-            emptyList<SchoolCommand>()
-        ).state
-        assertThat(state.slice<Boolean>(0)).isTrue()
-        assertThat(state.slice<Boolean>(1)).isTrue()
+        // The composed state keeps both children's slices side by side, each evolved only by its own events.
+        val afterCourse = composed.decider().decideOnEvents(emptyList(), RegisterCourse("course-1")).state
+        assertThat(afterCourse.slice<Boolean>(0)).isTrue()
+        assertThat(afterCourse.slice<Boolean>(1)).isFalse()
+
+        val afterStudent = composed.decider().decideOnEvents(emptyList(), EnrollStudent("student-1")).state
+        assertThat(afterStudent.slice<Boolean>(0)).isFalse()
+        assertThat(afterStudent.slice<Boolean>(1)).isTrue()
     }
 
     // ---- fixtures ----
