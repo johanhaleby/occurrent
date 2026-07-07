@@ -172,6 +172,19 @@ class MongoEventStoreCapabilityTest {
     }
 
     @Test
+    void upgrading_a_dcb_only_store_to_stream_fails_loudly_instead_of_silently_running_without_uniqueness() {
+        newEventStore(eventStoreConfig(DCB).build());
+        assertThat(index(STREAM_INDEX)).doesNotContainKey("unique");
+
+        assertThatThrownBy(() -> newEventStore(eventStoreConfig(STREAM, DCB).build()))
+                .isInstanceOf(IllegalStateException.class)
+                .hasMessageContaining(STREAM_INDEX)
+                .hasMessageContaining("unique");
+        // The pre-existing non-unique index is never dropped or replaced automatically.
+        assertThat(index(STREAM_INDEX)).doesNotContainKey("unique");
+    }
+
+    @Test
     void stream_and_dcb_capabilities_initialize_both_index_sets() {
         newEventStore(eventStoreConfig(STREAM, DCB).build());
 

@@ -701,10 +701,13 @@ public class ReactorMongoEventStore implements EventStore, EventStoreOperations,
         if (eventStoreCapabilities.contains(STREAM)) {
             // A store that previously ran DCB-only already created the non-unique variant of this index below.
             // MongoDB rejects re-creating the same index name with different options, and this never drops or
-            // replaces an existing index, so that conflict is caught and logged: the store keeps running on the
-            // existing index, and an operator upgrades it out-of-band if needed.
+            // replaces an existing index. Stream writes rely on this index being unique, so a conflict here is not
+            // swallowed: it means the collection has a pre-existing non-unique index and running as-is would
+            // silently lose the uniqueness guarantee, so this fails startup instead.
             chain = chain.then(createStreamVersionIndex(eventStoreCollectionName, mongoTemplate, new IndexOptions().unique(true))).then();
         } else if (dcbEnabled) {
+            // DCB-only doesn't require uniqueness on this index (see comment above), so an existing unique index
+            // from a prior STREAM configuration is a strictly stronger constraint and is fine to keep as-is.
             chain = chain.then(createStreamVersionIndex(eventStoreCollectionName, mongoTemplate, new IndexOptions())).then();
         }
 
@@ -770,15 +773,21 @@ public class ReactorMongoEventStore implements EventStore, EventStoreOperations,
 
     // IndexOptionsConflict (error code 85) means an index with this name already exists with different options, e.g.
     // a DCB-only store's non-unique streamId+streamVersion index when STREAM is enabled afterward. Occurrent never
-    // drops or replaces an existing index, so this logs and keeps running on the existing index rather than failing
-    // startup; an operator upgrades the index out-of-band if the new options are required.
+    // drops or replaces an existing index. When the requested index is unique (STREAM is enabled), the conflict is
+    // not swallowed: stream writes rely on this index enforcing uniqueness, so continuing to run on a pre-existing
+    // non-unique index would silently lose that guarantee and is worse than failing startup. When the requested
+    // index is non-unique (DCB-only), an existing unique index is a strictly stronger constraint and is fine to
+    // keep, so that conflict is logged and swallowed.
     private static Mono<String> createStreamVersionIndex(String eventStoreCollectionName, ReactiveMongoTemplate mongoTemplate, IndexOptions indexOptions) {
         Bson index = Indexes.compoundIndex(Indexes.ascending(STREAM_ID), Indexes.ascending(STREAM_VERSION));
         return createIndex(eventStoreCollectionName, mongoTemplate, index, indexOptions)
                 .onErrorResume(MongoCommandException.class, e -> {
-                    if (e.getErrorCode() == 85) {
+                    if (e.getErrorCode() == 85 && !indexOptions.isUnique()) {
                         LOGGER.warn("The '{}' index already exists with different options than requested ({}). Occurrent does not drop or replace existing indexes automatically, so the store continues using the existing index. Drop and recreate it out-of-band if the new options are required.", STREAM_ID + "_1_" + STREAM_VERSION + "_1", indexOptions, e);
                         return Mono.empty();
+                    }
+                    if (e.getErrorCode() == 85) {
+                        return Mono.error(new IllegalStateException("The '" + STREAM_ID + "_1_" + STREAM_VERSION + "_1' index already exists with different, non-unique options, but this store requires it to be unique because it has the STREAM capability enabled. Occurrent does not drop or replace existing indexes automatically, so running with a non-unique index would silently lose the uniqueness guarantee that stream writes rely on. Drop and recreate the index as unique out-of-band, then restart.", e));
                     }
                     return Mono.error(e);
                 });

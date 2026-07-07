@@ -68,8 +68,8 @@ DCB is a capability layered on the existing CloudEvent storage, not a new store 
   the next stream version, and the loser hit the unique `streamid` plus `streamversion` index. That collision is not a
   real duplicate CloudEvent, so it is now retried through the read-decide-append cycle instead of failing, while a
   genuine duplicate CloudEvent (same `id` and `source`) still fails as before.
-* DCB-enabled stores now index the stream-version lookup, conflict markers written in one bulk write, reactor DCB
-  support reads run concurrently.
+* DCB-enabled stores now index the stream-version lookup, write conflict markers in a single bulk write, and run
+  reads concurrently in the reactor DCB support.
 * Renamed the `SubscriptionPosition` type family to `Checkpoint` to stop overloading "position" for two different
   concepts: the ordering value (`position`) and the per-subscriber resume marker built from it. This is a breaking
   API change; there is no deprecated alias.
