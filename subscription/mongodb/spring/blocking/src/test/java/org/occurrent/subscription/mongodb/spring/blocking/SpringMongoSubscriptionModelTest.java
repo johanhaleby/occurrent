@@ -39,6 +39,7 @@ import org.occurrent.filter.Filter;
 import org.occurrent.functional.CheckedFunction;
 import org.occurrent.functional.Not;
 import org.occurrent.mongodb.timerepresentation.TimeRepresentation;
+import org.occurrent.retry.RetryStrategy;
 import org.occurrent.subscription.AgnosticSubscriptionFilter;
 import org.occurrent.subscription.StreamSubscriptionFilter;
 import org.occurrent.subscription.CheckpointAwareCloudEvent;
@@ -813,6 +814,68 @@ public class SpringMongoSubscriptionModelTest {
             // Restart-recovery await: after the mocked failure the subscription model restarts the change stream, which
             // can take longer than a couple of seconds on a loaded CI machine. Awaitility short-circuits on success.
             await().atMost(10, SECONDS).with().pollInterval(Duration.of(20, MILLIS)).untilAsserted(() -> assertThat(state).hasSize(1));
+        }
+    }
+
+    @Nested
+    @DisplayName("Restart backoff")
+    class RestartBackoffTest {
+
+        @SuppressWarnings("unchecked")
+        @Timeout(value = 20, unit = SECONDS)
+        @Test
+        void restarts_follow_bounded_retry_schedule_and_keep_thread_count_bounded_under_persistent_failure() {
+            // Given
+            MongoTemplate mongoTemplateSpy = spy(mongoTemplate);
+            MongoDatabase mongoDatabase = mock(MongoDatabase.class);
+            MongoCollection<Document> mongoCollection = (MongoCollection<Document>) mock(MongoCollection.class);
+
+            List<BsonElement> elements = new ArrayList<>();
+            elements.add(new BsonElement("code", new BsonInt32(11600)));
+            elements.add(new BsonElement("codeName", new BsonString("InterruptedAtShutdown")));
+
+            // Every attempt to open the change stream fails, simulating a persistent fault rather than a single
+            // transient error.
+            when(mongoTemplateSpy.getDb()).thenReturn(mongoDatabase);
+            when(mongoDatabase.getCollection("events")).thenReturn(mongoCollection);
+            when(mongoCollection.watch(any(Class.class))).thenThrow(new UncategorizedMongoDbException("expected", new MongoQueryException(new BsonDocument(elements), new ServerAddress())));
+
+            Duration backoff = Duration.ofMillis(150);
+            subscriptionModel = new SpringMongoSubscriptionModel(mongoTemplateSpy, withConfig("events", TimeRepresentation.RFC_3339_STRING).retryStrategy(RetryStrategy.fixed(backoff)));
+
+            String restartThreadNamePrefix = "spring-mongo-subscription-restart";
+            AtomicInteger maxObservedRestartThreads = new AtomicInteger(countThreadsWithNamePrefix(restartThreadNamePrefix));
+
+            // When
+            subscriptionModel.subscribe(UUID.randomUUID().toString(), __ -> {
+            });
+
+            // Then
+            // Sample the live thread count repeatedly while several restart cycles play out. A thread-per-attempt
+            // implementation would keep creating new threads for every failed attempt; the shared restart executor
+            // should keep the count bounded to (at most) one restart thread per subscription regardless of how many
+            // attempts have been made.
+            Duration observationWindow = backoff.multipliedBy(8);
+            long deadline = System.currentTimeMillis() + observationWindow.toMillis();
+            while (System.currentTimeMillis() < deadline) {
+                maxObservedRestartThreads.accumulateAndGet(countThreadsWithNamePrefix(restartThreadNamePrefix), Math::max);
+                sleep(20);
+            }
+
+            assertThat(maxObservedRestartThreads.get()).isLessThanOrEqualTo(1);
+
+            // The retry schedule paces restarts roughly every "backoff" duration rather than restarting immediately
+            // and repeatedly. With an 8x backoff observation window we expect well under twice as many attempts as
+            // that would allow, never anywhere near an unbounded/immediate-restart count.
+            long maxExpectedAttempts = observationWindow.dividedBy(backoff) * 2;
+            verify(mongoCollection, atMost((int) maxExpectedAttempts)).watch(any(Class.class));
+        }
+
+        private int countThreadsWithNamePrefix(String prefix) {
+            return (int) Thread.getAllStackTraces().keySet().stream()
+                    .filter(Thread::isAlive)
+                    .filter(thread -> thread.getName().startsWith(prefix))
+                    .count();
         }
     }
 

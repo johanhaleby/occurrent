@@ -138,6 +138,9 @@ public class RetryExecution {
                         try {
                             TimeUnit.MILLISECONDS.sleep(backoffMillis);
                         } catch (InterruptedException ie) {
+                            // Restore the interrupt status so that callers can tell an interrupted backoff sleep
+                            // (e.g. executor shutdown) apart from genuine retry exhaustion.
+                            Thread.currentThread().interrupt();
                             throw new RuntimeException(e);
                         }
                     }
