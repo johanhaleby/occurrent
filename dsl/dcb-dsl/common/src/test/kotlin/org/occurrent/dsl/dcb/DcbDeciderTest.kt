@@ -153,6 +153,21 @@ class DcbDeciderTest {
             .isInstanceOf(IllegalArgumentException::class.java)
     }
 
+    @Test
+    fun compose_of_a_single_decider_fails_loudly() {
+        val course: DcbDecider<SchoolCommand, Boolean, SchoolEvent> = DcbDecider.adapt(
+            courseDecider().toDcb(
+                criteria = { command -> DcbCriteria.tags(Tag.of("course", command.courseId)) },
+                tags = { event -> setOf(Tag.of("course", event.courseId)) }
+            ),
+            RegisterCourse::class.java,
+            CourseRegistered::class.java
+        )
+
+        assertThatThrownBy { DcbDecider.compose(listOf(course)) }
+            .isInstanceOf(IllegalArgumentException::class.java)
+    }
+
     // ---- fixtures ----
 
     private sealed interface SchoolCommand

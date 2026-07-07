@@ -37,27 +37,33 @@ import java.util.stream.Stream
 /**
  * Resolve the read boundary for [commands] from [dcbDecider]. The boundary comes from the command, and every command in
  * one execute must resolve to the same boundary because they are appended atomically under one condition. The boundary
- * is taken from the first command and the rest must match it, so a batch that mixes recognized and unrecognized
- * commands fails that guard rather than returning `null`. Returns `null` only when the command, or the whole batch, is
- * not recognized, which the callers treat as a no-op.
+ * is taken from the first command and the rest must match it. An unrecognized command, meaning no decider recognizes
+ * it, is a programming error and throws [IllegalArgumentException] rather than being treated as a no-op, and a batch
+ * that mixes a recognized and an unrecognized command throws that same unrecognized-command error rather than the
+ * boundary-mismatch one, so the message points at the actual cause.
  */
 @PublishedApi
-internal fun <C : Any, E : Any> dcbCriteriaFor(commands: List<C>, dcbDecider: DcbDecider<C, *, E>): DcbCriteria? {
+internal fun <C : Any, E : Any> dcbCriteriaFor(commands: List<C>, dcbDecider: DcbDecider<C, *, E>): DcbCriteria {
     require(commands.isNotEmpty()) { "Must supply at least one command" }
-    val first = dcbDecider.criteria().apply(commands.first())
+    val first = requireRecognized(commands.first(), dcbDecider)
     for (i in 1 until commands.size) {
-        require(dcbDecider.criteria().apply(commands[i]) == first) {
+        val boundary = requireRecognized(commands[i], dcbDecider)
+        require(boundary == first) {
             "All commands in a single execute must resolve to the same DcbCriteria boundary, they are appended atomically under one condition"
         }
     }
     return first
 }
 
+private fun <C : Any, E : Any> requireRecognized(command: C, dcbDecider: DcbDecider<C, *, E>): DcbCriteria =
+    dcbDecider.criteria().apply(command)
+        ?: throw IllegalArgumentException("The decider does not recognize command $command, so there is no boundary to read and no decision to make")
+
 /**
  * Execute a decider command. The [dcbDecider] carries the DCB decision boundary and the tags for the events it emits.
  *
  * Returns a [Mono] of the [DcbAppendResult], or an empty [Mono] when the decider produced no new events (a no-op
- * command).
+ * command). The [Mono] fails with [IllegalArgumentException] when [command] is not recognized by [dcbDecider].
  */
 inline fun <C : Any, S, reified SubE : E, E : Any> DcbApplicationService<E>.execute(
     command: C,
@@ -68,23 +74,29 @@ inline fun <C : Any, S, reified SubE : E, E : Any> DcbApplicationService<E>.exec
  * Execute decider commands in order. The [dcbDecider] carries the DCB decision boundary and the tags for the events it
  * emits.
  *
- * Returns a [Mono] of the [DcbAppendResult], or an empty [Mono] when the decider produced no new events.
+ * Returns a [Mono] of the [DcbAppendResult], or an empty [Mono] when the decider produced no new events. The [Mono]
+ * fails with [IllegalArgumentException] when any of [commands] is not recognized by [dcbDecider].
  */
 inline fun <C : Any, S, reified SubE : E, E : Any> DcbApplicationService<E>.execute(
     commands: List<C>,
     dcbDecider: DcbDecider<C, S, SubE>
 ): Mono<DcbAppendResult> {
-    val criteria = dcbCriteriaFor(commands, dcbDecider) ?: return Mono.empty()
-    val widened: Decider<C, S, E> = dcbDecider.decider().adaptEvents()
-    val tags = TagGenerator<E> { event -> if (event is SubE) dcbDecider.tags().tags(event) else emptySet() }
-    val options = DcbExecuteOptions.options<E>().tagGenerator(tags)
-    return execute(criteria, options) { events: Stream<E> ->
-        widened.decideOnEventsAndReturnEvents(events.toList(), commands).stream()
+    // Deferred so criteria resolution, and the IllegalArgumentException it may throw, happens per subscription rather
+    // than eagerly when the Mono is built.
+    return Mono.defer {
+        val criteria = dcbCriteriaFor(commands, dcbDecider)
+        val widened: Decider<C, S, E> = dcbDecider.decider().adaptEvents()
+        val tags = TagGenerator<E> { event -> if (event is SubE) dcbDecider.tags().tags(event) else emptySet() }
+        val options = DcbExecuteOptions.options<E>().tagGenerator(tags)
+        execute(criteria, options) { events: Stream<E> ->
+            widened.decideOnEventsAndReturnEvents(events.toList(), commands).stream()
+        }
     }
 }
 
 /**
- * Execute a command and return the folded state plus the new events decided by [dcbDecider].
+ * Execute a command and return the folded state plus the new events decided by [dcbDecider]. The [Mono] fails with
+ * [IllegalArgumentException] when [command] is not recognized by [dcbDecider].
  */
 inline fun <C : Any, S, reified SubE : E, E : Any> DcbApplicationService<E>.executeAndReturnDecision(
     command: C,
@@ -92,7 +104,8 @@ inline fun <C : Any, S, reified SubE : E, E : Any> DcbApplicationService<E>.exec
 ): Mono<Decider.Decision<S, E>> = executeAndReturnDecision(listOf(command), dcbDecider)
 
 /**
- * Execute commands and return the folded state plus the new events decided by [dcbDecider].
+ * Execute commands and return the folded state plus the new events decided by [dcbDecider]. The [Mono] fails with
+ * [IllegalArgumentException] when any of [commands] is not recognized by [dcbDecider].
  */
 inline fun <C : Any, S, reified SubE : E, E : Any> DcbApplicationService<E>.executeAndReturnDecision(
     commands: List<C>,
@@ -100,12 +113,11 @@ inline fun <C : Any, S, reified SubE : E, E : Any> DcbApplicationService<E>.exec
 ): Mono<Decider.Decision<S, E>> {
     val widened: Decider<C, S, E> = dcbDecider.decider().adaptEvents()
     val tags = TagGenerator<E> { event -> if (event is SubE) dcbDecider.tags().tags(event) else emptySet() }
-    // Defer so the AtomicReference is created per subscription. A shared one would let concurrent or repeat
-    // subscribers see each other's decision.
+    // Defer so the AtomicReference is created per subscription, and so criteria resolution (and the
+    // IllegalArgumentException it may throw) happens per subscription rather than eagerly. A shared AtomicReference
+    // would let concurrent or repeat subscribers see each other's decision.
     return Mono.defer {
-        val criteria = requireNotNull(dcbCriteriaFor(commands, dcbDecider)) {
-            "The decider does not recognize the given command(s), so there is no boundary to read and no decision to make"
-        }
+        val criteria = dcbCriteriaFor(commands, dcbDecider)
         val options = DcbExecuteOptions.options<E>().tagGenerator(tags)
         val decision = AtomicReference<Decider.Decision<S, E>>()
         execute(criteria, options) { events: Stream<E> ->

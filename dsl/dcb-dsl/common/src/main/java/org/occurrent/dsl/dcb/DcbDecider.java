@@ -23,6 +23,7 @@ import org.occurrent.dsl.decider.Decider;
 import org.occurrent.eventstore.api.dcb.DcbCriteria;
 
 import java.util.ArrayList;
+import java.util.Collections;
 import java.util.List;
 import java.util.Objects;
 import java.util.Set;
@@ -66,6 +67,12 @@ public record DcbDecider<C, S extends @Nullable Object, E>(
     /**
      * Creates a {@code DcbDecider} from its three components. Equivalent to calling the canonical constructor, provided
      * as a static factory for a more fluent call site.
+     * <p>
+     * {@code criteria} and {@code decider} are expected to agree on which commands they recognize: whenever
+     * {@code decider} produces events for a command, {@code criteria} should return a non-null boundary for that same
+     * command. This is not enforced here. Building both from a shared command type check, as {@link #adapt} does,
+     * keeps them in sync automatically; a hand-built pair that disagrees can under-scope the DCB append condition
+     * without either the decider or the criteria function raising an error.
      */
     public static <C, S extends @Nullable Object, E> DcbDecider<C, S, E> from(Decider<C, S, E> decider, Function<C, @Nullable DcbCriteria> criteria, TagGenerator<E> tags) {
         return new DcbDecider<>(decider, criteria, tags);
@@ -95,8 +102,9 @@ public record DcbDecider<C, S extends @Nullable Object, E>(
 
     /**
      * Combine several DcbDeciders that already share the same command and event types into one, mirroring
-     * {@link Decider#compose(Decider[])}. Use {@link #adapt} first to bring each feature decider onto the common
-     * types.
+     * {@link Decider#compose(Decider, Decider, Decider[])}. Use {@link #adapt} first to bring each feature decider onto
+     * the common types. Requires at least two deciders; use {@link #compose(List)} when the count is dynamic and may be
+     * fewer than two.
      * <p>
      * The combined {@code criteria} reads the union of the boundaries of the children that recognize the command: each
      * child is asked for its {@link DcbCriteria}, children that return {@code null} (they do not recognize the command)
@@ -105,22 +113,39 @@ public record DcbDecider<C, S extends @Nullable Object, E>(
      * command is offered to every child decider and adapted children silently ignore commands that are not their own,
      * so the resulting state only depends on the children that actually recognize it.
      * <p>
+     * <b>{@code MatchAll} collapse:</b> {@link DcbCriteria#anyOf} collapses to {@link DcbCriteria.MatchAll} as soon as
+     * any one of the boundaries being combined is itself {@code MatchAll}. So if any child that recognizes a command
+     * reads the whole store, the composed criteria for that command silently becomes whole-store too, downgrading every
+     * other child's scoped optimistic lock for that command to a whole-store lock. This is rarely what you want:
+     * before composing, check whether a child's {@code criteria} function ever returns {@code MatchAll} and, if so,
+     * whether that is intentional for the composed decider.
+     * <p>
      * The combined {@code tags} is {@link TagGenerator#compose} over the children's tag generators, so an event is
      * tagged by whichever child recognizes it.
+     * <p>
+     * {@code criteria} and {@code decider} on each child are expected to agree on which commands they recognize, see
+     * {@link #from}. {@code compose} does not enforce that agreement.
      */
     @SafeVarargs
-    public static <C, E> DcbDecider<C, CompositeState, E> compose(DcbDecider<C, ?, E>... deciders) {
-        return compose(List.of(deciders));
+    public static <C, E> DcbDecider<C, CompositeState, E> compose(DcbDecider<C, ?, E> first, DcbDecider<C, ?, E> second, DcbDecider<C, ?, E>... rest) {
+        Objects.requireNonNull(first, "first cannot be null");
+        Objects.requireNonNull(second, "second cannot be null");
+        Objects.requireNonNull(rest, "rest cannot be null");
+        List<DcbDecider<C, ?, E>> deciders = new ArrayList<>();
+        deciders.add(first);
+        deciders.add(second);
+        Collections.addAll(deciders, rest);
+        return compose(deciders);
     }
 
     /**
-     * Like {@link #compose(DcbDecider[])} but takes the deciders as a list, for when the number is not known at compile
-     * time.
+     * Like {@link #compose(DcbDecider, DcbDecider, DcbDecider[])} but takes the deciders as a list, for when the
+     * number is not known at compile time. Requires at least two deciders.
      */
     public static <C, E> DcbDecider<C, CompositeState, E> compose(List<? extends DcbDecider<C, ?, E>> deciders) {
         Objects.requireNonNull(deciders, "deciders cannot be null");
-        if (deciders.isEmpty()) {
-            throw new IllegalArgumentException("Cannot compose an empty list of deciders");
+        if (deciders.size() < 2) {
+            throw new IllegalArgumentException("compose requires at least two deciders, got " + deciders.size());
         }
 
         List<Decider<C, ?, E>> childDeciders = new ArrayList<>();
