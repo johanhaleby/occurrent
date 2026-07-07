@@ -60,6 +60,14 @@ class MongoExceptionTranslatorTest {
     }
 
     @Test
+    void does_not_classify_id_source_duplicate_as_retryable_when_source_value_contains_streamversion() {
+        MongoBulkWriteException e = duplicateKeyBulkWriteException(
+                "E11000 duplicate key error collection: test.events index: id_1_source_1 dup key: { id: \"some-id\", source: \"urn:streamversion:collision\" }");
+
+        assertThat(MongoExceptionTranslator.isDuplicateKeyErrorOnStreamVersionIndex(e)).isFalse();
+    }
+
+    @Test
     void translates_duplicate_key_on_id_source_index_to_duplicate_cloud_event_exception() {
         MongoBulkWriteException e = duplicateKeyBulkWriteException(
                 "E11000 duplicate key error collection: test.events index: id_1_source_1 dup key: { id: \"some-id\", source: \"urn:test\" }");

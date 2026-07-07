@@ -44,6 +44,7 @@ import org.testcontainers.junit.jupiter.Container;
 import org.testcontainers.junit.jupiter.Testcontainers;
 import org.testcontainers.mongodb.MongoDBContainer;
 
+import java.lang.reflect.InvocationTargetException;
 import java.lang.reflect.Proxy;
 import java.net.URI;
 import java.time.OffsetDateTime;
@@ -733,7 +734,13 @@ class MongoEventStoreDcbConcurrencyTest {
                     if ("insertMany".equals(method.getName()) && insertManyCalls.getAndIncrement() == 0) {
                         throw streamVersionDuplicateKeyException();
                     }
-                    return method.invoke(realCollection, args);
+                    try {
+                        return method.invoke(realCollection, args);
+                    } catch (InvocationTargetException invocationTargetException) {
+                        // Unwrap so the code under test observes the real collection's exception directly, not
+                        // wrapped in InvocationTargetException, which would break its duplicate/transient classification.
+                        throw invocationTargetException.getCause();
+                    }
                 });
     }
 

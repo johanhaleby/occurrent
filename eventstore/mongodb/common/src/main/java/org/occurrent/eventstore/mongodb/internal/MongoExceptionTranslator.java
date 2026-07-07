@@ -81,10 +81,20 @@ public class MongoExceptionTranslator {
         return e.getCode() == 11000 && referencesStreamVersion(e.getMessage());
     }
 
+    /**
+     * The name Mongo assigns the unique {@code (streamid, streamversion)} index, following its default
+     * {@code field1_1_field2_1} naming convention. Matched against the {@code index: <name>} segment of the
+     * duplicate-key message rather than a bare substring search, since a bare search for {@code streamversion}
+     * could false-positive on a duplicate {@code id}/{@code source} error whose {@code source} value happens to
+     * contain that text.
+     */
+    private static final String STREAM_VERSION_INDEX_NAME = OccurrentCloudEventExtension.STREAM_ID + "_1_" + OccurrentCloudEventExtension.STREAM_VERSION + "_1";
+
     private static boolean referencesStreamVersion(String message) {
-        // The duplicate-key message names the offending index and its key fields. The stream-version index message names
-        // the streamversion field, the id+source index message does not, so this distinguishes the two.
-        return message != null && message.contains(OccurrentCloudEventExtension.STREAM_VERSION);
+        // The duplicate-key message names the offending index, e.g. "index: streamid_1_streamversion_1". Matching
+        // the index name (rather than a bare "streamversion" substring) avoids misclassifying an id+source
+        // duplicate whose source value happens to contain that text.
+        return message != null && message.contains("index: " + STREAM_VERSION_INDEX_NAME);
     }
 
     private static DuplicateCloudEventException translateToDuplicateCloudEventException(MongoBulkWriteException e, BulkWriteError bulk) {
