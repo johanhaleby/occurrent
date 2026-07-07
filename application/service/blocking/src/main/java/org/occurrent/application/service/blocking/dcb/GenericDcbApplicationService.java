@@ -47,7 +47,7 @@ import java.util.stream.Stream;
 public class GenericDcbApplicationService<E> implements DcbApplicationService<E> {
     private final DcbEventStore eventStore;
     private final CloudEventConverter<E> cloudEventConverter;
-    private final TagGenerator<E> tagGenerator;
+    private final @Nullable TagGenerator<E> tagGenerator;
     private final RetryStrategy retryStrategy;
 
     /**
@@ -55,6 +55,15 @@ public class GenericDcbApplicationService<E> implements DcbApplicationService<E>
      */
     public GenericDcbApplicationService(DcbEventStore eventStore, CloudEventConverter<E> cloudEventConverter, TagGenerator<E> tagGenerator) {
         this(eventStore, cloudEventConverter, tagGenerator, defaultRetryStrategy());
+    }
+
+    /**
+     * Creates a service with the default retry strategy and no global {@link TagGenerator}. Every call to
+     * {@code execute} must then supply a {@link TagGenerator} via {@link DcbExecuteOptions#tagGenerator(TagGenerator)},
+     * or use a domain function whose events already carry tags (e.g. a decider that carries its own tags).
+     */
+    public GenericDcbApplicationService(DcbEventStore eventStore, CloudEventConverter<E> cloudEventConverter) {
+        this(eventStore, cloudEventConverter, defaultRetryStrategy());
     }
 
     /**
@@ -70,6 +79,24 @@ public class GenericDcbApplicationService<E> implements DcbApplicationService<E>
         this.eventStore = eventStore;
         this.cloudEventConverter = cloudEventConverter;
         this.tagGenerator = tagGenerator;
+        this.retryStrategy = retryStrategy;
+    }
+
+    /**
+     * Creates a service with explicit collaborators for event conversion and retries after DCB append conflicts, but
+     * no global {@link TagGenerator}. Every call to {@code execute} must then supply a {@link TagGenerator} via
+     * {@link DcbExecuteOptions#tagGenerator(TagGenerator)}, or use a domain function whose events already carry tags
+     * (e.g. a decider that carries its own tags). Storage stream placement is configured on the
+     * {@link DcbEventStore}, not here.
+     */
+    public GenericDcbApplicationService(DcbEventStore eventStore, CloudEventConverter<E> cloudEventConverter, RetryStrategy retryStrategy) {
+        if (eventStore == null) throw new IllegalArgumentException(DcbEventStore.class.getSimpleName() + " cannot be null");
+        if (cloudEventConverter == null) throw new IllegalArgumentException(CloudEventConverter.class.getSimpleName() + " cannot be null");
+        if (retryStrategy == null) throw new IllegalArgumentException(RetryStrategy.class.getSimpleName() + " cannot be null");
+
+        this.eventStore = eventStore;
+        this.cloudEventConverter = cloudEventConverter;
+        this.tagGenerator = null;
         this.retryStrategy = retryStrategy;
     }
 
@@ -97,7 +124,7 @@ public class GenericDcbApplicationService<E> implements DcbApplicationService<E>
             }
 
             List<CloudEvent> cloudEvents = cloudEventConverter.toCloudEvents(newDomainEvents.stream()).toList();
-            List<CloudEvent> dcbEvents = addTags(newDomainEvents, cloudEvents);
+            List<CloudEvent> dcbEvents = addTags(options.tagGenerator(), newDomainEvents, cloudEvents);
             DcbAppendCondition appendCondition = DcbAppendCondition.failIfEventsMatch(query, eventStream.consistencyToken());
             return new Tuple<>(Optional.of(eventStore.append(dcbEvents, appendCondition)), newDomainEvents);
         });
@@ -110,13 +137,17 @@ public class GenericDcbApplicationService<E> implements DcbApplicationService<E>
         return result.v1;
     }
 
-    private List<CloudEvent> addTags(List<E> domainEvents, List<CloudEvent> cloudEvents) {
+    private List<CloudEvent> addTags(@Nullable TagGenerator<E> perExecuteTagger, List<E> domainEvents, List<CloudEvent> cloudEvents) {
         if (domainEvents.size() != cloudEvents.size()) {
             throw new IllegalStateException(CloudEventConverter.class.getSimpleName() + " must preserve the number of events when converting to CloudEvents");
         }
+        TagGenerator<E> effective = perExecuteTagger != null ? perExecuteTagger : this.tagGenerator;
+        if (effective == null) {
+            throw new IllegalStateException("No TagGenerator available to tag DCB events. Supply one when constructing GenericDcbApplicationService, pass DcbExecuteOptions.tagGenerator(...), or use a DcbDecider that carries its tags.");
+        }
         ArrayList<CloudEvent> dcbEvents = new ArrayList<>(domainEvents.size());
         for (int i = 0; i < domainEvents.size(); i++) {
-            dcbEvents.add(DcbCloudEvents.withTags(cloudEvents.get(i), tagGenerator.tags(domainEvents.get(i))));
+            dcbEvents.add(DcbCloudEvents.withTags(cloudEvents.get(i), effective.tags(domainEvents.get(i))));
         }
         return dcbEvents;
     }
