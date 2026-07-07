@@ -224,8 +224,8 @@ class OccurrentReactiveMongoAutoConfigurationWiringTest {
     @Test
     void a_stream_subscription_that_replays_history_fails_loud_when_stream_position_is_off() {
         // Stream position is on by default, which makes reactive stream history replay supported. With position
-        // explicitly opted out there is no reactive stream catch-up model, so a BEGINNING_OF_TIME @StreamSubscription
-        // must fail loud rather than silently start live.
+        // explicitly opted out there is no reactive stream history replay path, so a BEGINNING_OF_TIME
+        // @StreamSubscription must fail loud rather than silently start live.
         contextRunner()
                 .withPropertyValues("occurrent.event-store.stream.position=false")
                 .withUserConfiguration(BeginningOfTimeStreamSubscriptionConfiguration.class).run(context -> {

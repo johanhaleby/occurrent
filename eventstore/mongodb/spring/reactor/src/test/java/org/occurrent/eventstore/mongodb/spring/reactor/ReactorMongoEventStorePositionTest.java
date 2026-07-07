@@ -21,11 +21,13 @@ import com.mongodb.reactivestreams.client.MongoClient;
 import com.mongodb.reactivestreams.client.MongoClients;
 import io.cloudevents.CloudEvent;
 import io.cloudevents.core.builder.CloudEventBuilder;
+import org.bson.Document;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayNameGeneration;
 import org.junit.jupiter.api.DisplayNameGenerator.ReplaceUnderscores;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.RegisterExtension;
+import org.occurrent.cloudevents.OccurrentCloudEventExtension;
 import org.occurrent.eventstore.api.EventStoreCapability;
 import org.occurrent.eventstore.api.PositionRange;
 import org.occurrent.eventstore.api.WriteCondition;
@@ -49,7 +51,6 @@ import java.util.ArrayList;
 import java.util.List;
 import java.util.Set;
 import java.util.UUID;
-import org.occurrent.cloudevents.OccurrentCloudEventExtension;
 
 import static java.nio.charset.StandardCharsets.UTF_8;
 import static java.util.Objects.requireNonNull;
@@ -123,23 +124,44 @@ class ReactorMongoEventStorePositionTest {
         assertThat(eventStore.currentPosition().block()).isEqualTo(3L);
     }
 
-    // There is currently no way to opt a STREAM-only store IN to position, so today the only way to get a STREAM
-    // store where writesPosition() is true is to combine it with DCB, which forces stream position on
-    // (writesPosition() = DCB present || (STREAM present && streamPositionEnabled)).
-    // These tests use a combined STREAM+DCB store to exercise the position-enabled behavior on stream-written events.
+    @Test
+    void stream_only_store_creates_the_shared_position_index_by_default() {
+        ReactorMongoEventStore eventStore = storeWith(STREAM);
+        assertThat(eventStore.writesPosition()).isTrue();
+
+        eventStore.write("stream-1", WriteCondition.anyStreamVersion(), Flux.just(event("SomethingHappened"))).block();
+
+        assertThat(hasPositionIndex()).isTrue();
+    }
 
     @Test
     void position_index_exists_when_stream_position_is_enabled() {
         ReactorMongoEventStore eventStore = storeWith(STREAM, DCB);
+        assertThat(eventStore.writesPosition()).isTrue();
+
         eventStore.write("stream-1", WriteCondition.anyStreamVersion(), Flux.just(event("SomethingHappened"))).block();
 
-        List<org.bson.Document> indexes = mongoTemplate.getCollection("events")
-                .flatMapMany(collection -> reactor.core.publisher.Flux.from(collection.listIndexes()))
+        assertThat(hasPositionIndex()).isTrue();
+    }
+
+    @Test
+    void dcb_only_store_creates_the_shared_position_index() {
+        ReactorMongoEventStore eventStore = storeWith(DCB);
+        assertThat(eventStore.writesPosition()).isTrue();
+
+        eventStore.append(List.of(taggedEvent("NameDefined", "name:1"))).block();
+
+        assertThat(hasPositionIndex()).isTrue();
+    }
+
+    private boolean hasPositionIndex() {
+        List<Document> indexes = mongoTemplate.getCollection("events")
+                .flatMapMany(collection -> Flux.from(collection.listIndexes()))
                 .collectList()
                 .block();
 
-        assertThat(requireNonNull(indexes))
-                .extracting(document -> document.get("key", org.bson.Document.class).keySet())
+        return requireNonNull(indexes).stream()
+                .map(document -> document.get("key", Document.class).keySet())
                 .anyMatch(keys -> keys.contains(OccurrentCloudEventExtension.POSITION));
     }
 
