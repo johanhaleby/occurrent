@@ -71,6 +71,8 @@ class SpringMongoEventStoreCapabilityTest {
     private static final String STREAM_INDEX = "streamid_1_streamversion_1";
     private static final String POSITION_INDEX = "position_1";
     private static final String DCB_TAGS_INDEX = "dcbTags_1";
+    private static final String TYPE_POSITION_INDEX = "type_1_position_1";
+    private static final String DCB_TAGS_POSITION_INDEX = "dcbTags_1_position_1";
 
     @Container
     private static final MongoDBContainer mongoDBContainer;
@@ -137,7 +139,7 @@ class SpringMongoEventStoreCapabilityTest {
         new SpringMongoEventStore(mongoTemplate, eventStoreConfig(STREAM).withoutStreamPosition().build());
 
         assertThat(indexNames()).contains(STREAM_INDEX);
-        assertThat(indexNames()).doesNotContain(POSITION_INDEX, DCB_TAGS_INDEX);
+        assertThat(indexNames()).doesNotContain(POSITION_INDEX, DCB_TAGS_INDEX, TYPE_POSITION_INDEX, DCB_TAGS_POSITION_INDEX);
         assertThat(index(CLOUD_EVENT_ID_SOURCE_INDEX))
                 .containsEntry("key", new Document("id", 1).append("source", 1))
                 .containsEntry("unique", true);
@@ -156,7 +158,7 @@ class SpringMongoEventStoreCapabilityTest {
         // up the current stream version per partition (currentStreamVersion). It is unique, identical to the STREAM
         // index: DCB-only writes assign sequential per-partition stream versions, and the only collision (two
         // disjoint DCB boundaries hashing to the same partition stream) is a retryable transient, not a duplicate.
-        assertThat(indexNames()).contains(STREAM_INDEX, POSITION_INDEX, DCB_TAGS_INDEX);
+        assertThat(indexNames()).contains(STREAM_INDEX, POSITION_INDEX, DCB_TAGS_INDEX, TYPE_POSITION_INDEX, DCB_TAGS_POSITION_INDEX);
         assertThat(index(CLOUD_EVENT_ID_SOURCE_INDEX))
                 .containsEntry("key", new Document("id", 1).append("source", 1))
                 .containsEntry("unique", true);
@@ -168,6 +170,15 @@ class SpringMongoEventStoreCapabilityTest {
                 .containsEntry("unique", true)
                 .containsEntry("sparse", true);
         assertThat(index(DCB_TAGS_INDEX)).containsEntry("key", new Document("dcbTags", 1));
+        // These compound indexes back type-only DCB reads and large tag-boundary DCB reads that would otherwise fall
+        // back to a residual FETCH filter or an in-memory SORT over the position index (see initializeEventStore's
+        // comments for the explain evidence).
+        assertThat(index(TYPE_POSITION_INDEX))
+                .containsEntry("key", new Document("type", 1).append("position", 1))
+                .containsEntry("sparse", true);
+        assertThat(index(DCB_TAGS_POSITION_INDEX))
+                .containsEntry("key", new Document("dcbTags", 1).append("position", 1))
+                .containsEntry("sparse", true);
         assertThat(mongoTemplate.collectionExists(EVENT_COLLECTION + "_position")).isTrue();
         assertThat(mongoTemplate.collectionExists(EVENT_COLLECTION + "_dcb_checkpoints")).isTrue();
     }
@@ -176,7 +187,7 @@ class SpringMongoEventStoreCapabilityTest {
     void stream_and_dcb_capabilities_initialize_both_index_sets() {
         new SpringMongoEventStore(mongoTemplate, eventStoreConfig(STREAM, DCB).build());
 
-        assertThat(indexNames()).contains(STREAM_INDEX, POSITION_INDEX, DCB_TAGS_INDEX);
+        assertThat(indexNames()).contains(STREAM_INDEX, POSITION_INDEX, DCB_TAGS_INDEX, TYPE_POSITION_INDEX, DCB_TAGS_POSITION_INDEX);
     }
 
     @Test

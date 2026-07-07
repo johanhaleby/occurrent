@@ -166,6 +166,24 @@ class ReactorMongoEventStorePositionTest {
     }
 
     @Test
+    void dcb_capability_creates_type_and_dcb_tags_position_compound_indexes() {
+        // A type-only DcbCriteria read falls back to the position index with type as a residual filter, and a large
+        // tag-boundary read falls back to an in-memory SORT over the dcbTags index, since neither index alone can
+        // provide the position sort order for those filters. See the explain evidence in initializeEventStore's
+        // comments. These compound indexes let the planner satisfy the filter and the position sort in one pass.
+        ReactorMongoEventStore eventStore = storeWith(DCB);
+        eventStore.append(List.of(taggedEvent("NameDefined", "name:1"))).block();
+
+        List<Document> indexNames = mongoTemplate.getCollection("events")
+                .flatMapMany(collection -> Flux.from(collection.listIndexes()))
+                .collectList()
+                .block();
+
+        List<String> names = requireNonNull(indexNames).stream().map(document -> document.getString("name")).toList();
+        assertThat(names).contains("type_1_position_1", "dcbTags_1_position_1");
+    }
+
+    @Test
     void position_ordered_reader_returns_events_within_the_requested_range() {
         ReactorMongoEventStore eventStore = storeWith(STREAM, DCB);
         eventStore.write("stream-1", WriteCondition.anyStreamVersion(), Flux.just(event("A"), event("B"))).block();
