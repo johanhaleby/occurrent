@@ -74,6 +74,7 @@ import static java.util.Objects.requireNonNull;
 import static org.occurrent.cloudevents.OccurrentCloudEventExtension.STREAM_ID;
 import static org.occurrent.cloudevents.OccurrentCloudEventExtension.STREAM_VERSION;
 import static org.occurrent.eventstore.api.SortBy.SortDirection.ASCENDING;
+import static org.occurrent.eventstore.mongodb.internal.MongoExceptionTranslator.isDuplicateKeyErrorOnStreamVersionIndex;
 import static org.occurrent.eventstore.mongodb.internal.MongoExceptionTranslator.translateException;
 import static org.occurrent.eventstore.api.EventStoreCapability.DCB;
 import static org.occurrent.eventstore.api.EventStoreCapability.STREAM;
@@ -412,10 +413,10 @@ public class SpringMongoEventStore implements EventStore, EventStoreOperations, 
     private static <T> T executeWithTransientRetry(Supplier<T> action) {
         // Exponential backoff with generous attempts: several appends placed in the same partition stream serialize on
         // stream_version, so the last writer can need to retry past all the others before it commits.
-        // Retry a transient transaction conflict, and also a DuplicateKeyException from two transactions first-creating
-        // the same conflict marker at once. Event-insert duplicates are translated to domain exceptions in insertAllDcb
-        // and so never reach here, so the only DuplicateKeyException at this layer is that cold-marker race. The retry
-        // re-runs the transaction, by which point the marker exists and the upsert updates it.
+        // Retry a transient transaction conflict, and also a DuplicateKeyException. That duplicate is either two
+        // transactions first-creating the same conflict marker at once, or two disjoint DCB boundaries hashing to the
+        // same partition stream and losing on the unique streamid+streamversion index. Both are safe to rerun. A genuine
+        // duplicate CloudEvent is translated to a domain exception in insertAllDcb and never reaches here.
         return RetryStrategy.exponentialBackoff(Duration.ofMillis(10), Duration.ofMillis(500), 2.0f)
                 .maxAttempts(15)
                 .retryIf(throwable -> isTransientTransactionError(throwable) || isDuplicateKeyError(throwable))
@@ -434,10 +435,10 @@ public class SpringMongoEventStore implements EventStore, EventStoreOperations, 
     }
 
     private static boolean isDuplicateKeyError(Throwable throwable) {
-        // A cold-marker race can surface the DuplicateKeyException wrapped rather than at the top, so walk the cause
-        // chain the same bounded way as the transient-transaction check. Event-insert duplicates are translated to
-        // domain exceptions in insertAllDcb and so never reach a retry predicate, so the only duplicate here is the
-        // marker race.
+        // A duplicate can surface wrapped rather than at the top, so walk the cause chain the same bounded way as the
+        // transient-transaction check. The duplicate here is either the cold-marker race or a partition stream-version
+        // collision, both retryable. A genuine duplicate CloudEvent is translated to a domain exception in insertAllDcb
+        // and so never reaches this predicate.
         Throwable cause = throwable;
         for (int hops = 0; cause != null && hops < 64; cause = cause.getCause(), hops++) {
             if (cause instanceof DuplicateKeyException) {
@@ -661,11 +662,16 @@ public class SpringMongoEventStore implements EventStore, EventStoreOperations, 
         } catch (DataAccessException e) {
             final Throwable rootCause = e.getRootCause();
             if (rootCause instanceof MongoException mongoException) {
-                // A transient transaction conflict (e.g. two disjoint DCB boundaries that hash to the same partition
-                // stream racing on stream_version) must stay transient so executeWithTransientRetry retries it, rather
-                // than being mapped to the stream-path WriteConditionNotFulfilledException (which DCB does not use).
+                // A transient transaction conflict is retried by executeWithTransientRetry rather than mapped to the
+                // stream-path WriteConditionNotFulfilledException, which DCB does not use.
                 if (isTransientTransactionError(mongoException)) {
                     throw mongoException;
+                }
+                // Two disjoint DCB boundaries that hash to the same partition stream race on the next stream version and
+                // one loses on the unique streamid+streamversion index. This is not a duplicate CloudEvent, so rethrow
+                // the duplicate-key error and let executeWithTransientRetry rerun the read-decide-append cycle.
+                if (isDuplicateKeyErrorOnStreamVersionIndex(mongoException)) {
+                    throw e;
                 }
                 throw translateException(new WriteContext(streamId, streamVersion, WriteCondition.anyStreamVersion()), mongoException);
             } else {

@@ -78,6 +78,11 @@ DCB is a capability layered on the existing CloudEvent storage, not a new store 
   auto-configure the `DcbApplicationService` even when no global `TagGenerator` bean exists, so a decider-only
   application needs none, while `@DcbTag` and raw-execute users still get a global tagger when one is present.
   * See [ADR 52](doc/architecture/decisions/0052-couple-decider-with-dcb-boundary-and-tags.md).
+* Fixed concurrent DCB appends failing with a misleading duplicate CloudEvent error on a store with both the DCB and
+  STREAM capabilities enabled. Two appends to disjoint DCB boundaries can hash to the same partition stream and race on
+  the next stream version, and the loser hits the unique `streamid` plus `streamversion` index. That collision is not a
+  real duplicate CloudEvent, so it is now retried through the read-decide-append cycle instead of failing, while a
+  genuine duplicate CloudEvent (same `id` and `source`) still fails as before.
 * Renamed the `SubscriptionPosition` type family to `Checkpoint` to stop overloading "position" for two different
   concepts: the ordering value (`position`) and the per-subscriber resume marker built from it. This is a breaking
   API change; there is no deprecated alias.

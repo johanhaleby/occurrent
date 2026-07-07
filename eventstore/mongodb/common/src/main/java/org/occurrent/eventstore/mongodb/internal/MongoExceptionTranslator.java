@@ -21,6 +21,7 @@ import com.mongodb.MongoBulkWriteException;
 import com.mongodb.MongoCommandException;
 import com.mongodb.MongoException;
 import com.mongodb.bulk.BulkWriteError;
+import org.occurrent.cloudevents.OccurrentCloudEventExtension;
 import org.occurrent.eventstore.api.DuplicateCloudEventException;
 import org.occurrent.eventstore.api.WriteCondition;
 import org.occurrent.eventstore.api.WriteConditionNotFulfilledException;
@@ -59,6 +60,41 @@ public class MongoExceptionTranslator {
             runtimeException = e;
         }
         return runtimeException;
+    }
+
+    /**
+     * Tells whether a duplicate-key error hit the unique {@code (streamid, streamversion)} index rather than the unique
+     * {@code (id, source)} index. On a store with both the DCB and STREAM capabilities enabled a DCB append is placed in
+     * a partition stream, and two appends to disjoint DCB boundaries can hash to the same partition and race on the next
+     * stream version. That collision is not a genuine duplicate CloudEvent, so callers rethrow it as retryable rather
+     * than as a {@link DuplicateCloudEventException}.
+     *
+     * @param e The Mongo exception to inspect
+     * @return {@code true} when a duplicate-key write error references the stream-version index
+     */
+    public static boolean isDuplicateKeyErrorOnStreamVersionIndex(MongoException e) {
+        if (e instanceof MongoBulkWriteException bulkWriteException) {
+            return bulkWriteException.getWriteErrors().stream()
+                    .filter(bulkWriteError -> ErrorCategory.fromErrorCode(bulkWriteError.getCode()) == ErrorCategory.DUPLICATE_KEY)
+                    .anyMatch(bulkWriteError -> referencesStreamVersion(bulkWriteError.getMessage()));
+        }
+        return e.getCode() == 11000 && referencesStreamVersion(e.getMessage());
+    }
+
+    /**
+     * The name Mongo assigns the unique {@code (streamid, streamversion)} index, following its default
+     * {@code field1_1_field2_1} naming convention. Matched against the {@code index: <name>} segment of the
+     * duplicate-key message rather than a bare substring search, since a bare search for {@code streamversion}
+     * could false-positive on a duplicate {@code id}/{@code source} error whose {@code source} value happens to
+     * contain that text.
+     */
+    private static final String STREAM_VERSION_INDEX_NAME = OccurrentCloudEventExtension.STREAM_ID + "_1_" + OccurrentCloudEventExtension.STREAM_VERSION + "_1";
+
+    private static boolean referencesStreamVersion(String message) {
+        // The duplicate-key message names the offending index, e.g. "index: streamid_1_streamversion_1". Matching
+        // the index name (rather than a bare "streamversion" substring) avoids misclassifying an id+source
+        // duplicate whose source value happens to contain that text.
+        return message != null && message.contains("index: " + STREAM_VERSION_INDEX_NAME);
     }
 
     private static DuplicateCloudEventException translateToDuplicateCloudEventException(MongoBulkWriteException e, BulkWriteError bulk) {

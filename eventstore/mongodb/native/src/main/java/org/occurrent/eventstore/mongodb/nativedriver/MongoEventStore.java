@@ -87,6 +87,7 @@ import static org.occurrent.eventstore.api.SortBy.*;
 import static org.occurrent.eventstore.api.SortBy.SortDirection.ASCENDING;
 import static org.occurrent.eventstore.api.WriteCondition.StreamVersionWriteCondition;
 import static org.occurrent.eventstore.api.WriteCondition.anyStreamVersion;
+import static org.occurrent.eventstore.mongodb.internal.MongoExceptionTranslator.isDuplicateKeyErrorOnStreamVersionIndex;
 import static org.occurrent.eventstore.mongodb.internal.MongoExceptionTranslator.translateException;
 import static org.occurrent.eventstore.mongodb.internal.OccurrentCloudEventMongoDocumentMapper.convertToDocument;
 import static org.occurrent.functionalsupport.internal.FunctionalSupport.mapWithIndex;
@@ -561,10 +562,15 @@ public class MongoEventStore implements EventStore, EventStoreOperations, EventS
         try {
             eventCollection.insertMany(clientSession, documents);
         } catch (MongoException e) {
-            // A transient transaction conflict (e.g. two disjoint DCB boundaries that hash to the same partition
-            // stream racing on stream_version) must stay transient so executeWithTransientRetry retries it, rather
-            // than being mapped to the stream-path WriteConditionNotFulfilledException (which DCB does not use).
+            // A transient transaction conflict is retried by executeWithTransientRetry rather than mapped to the
+            // stream-path WriteConditionNotFulfilledException, which DCB does not use.
             if (isTransientTransactionError(e)) {
+                throw e;
+            }
+            // Two disjoint DCB boundaries that hash to the same partition stream race on the next stream version and one
+            // loses on the unique streamid+streamversion index. This is not a duplicate CloudEvent, so rethrow the raw
+            // duplicate-key error and let executeWithTransientRetry rerun the read-decide-append cycle.
+            if (isDuplicateKeyErrorOnStreamVersionIndex(e)) {
                 throw e;
             }
             throw translateException(new WriteContext(streamId, streamVersion, anyStreamVersion()), e);
@@ -574,7 +580,8 @@ public class MongoEventStore implements EventStore, EventStoreOperations, EventS
     // Retry the append transaction on a MongoDB TransientTransactionError (the error label is present when two
     // transactions conflict, e.g. a write-write conflict on a shared marker). The native driver's withTransaction
     // already retries a transient transaction error on its own, so at this layer the retry mainly covers the
-    // cold-marker DuplicateKeyException race where two transactions first-create the same marker at once.
+    // cold-marker DuplicateKeyException race where two transactions first-create the same marker at once, and the
+    // partition stream-version collision where two disjoint DCB boundaries hash to the same partition stream.
     // DcbAppendConditionNotFulfilledException is deliberately NOT retried here: it propagates to the application
     // service, which re-reads and retries the whole command.
     private static <T> T executeWithTransientRetry(Supplier<T> action) {
@@ -596,10 +603,11 @@ public class MongoEventStore implements EventStore, EventStoreOperations, EventS
     }
 
     private static boolean isDuplicateKeyError(Throwable throwable) {
-        // A cold-marker race can surface the duplicate key wrapped rather than at the top, so walk the cause chain the
-        // same bounded way as the transient-transaction check. A DuplicateCloudEventException is a genuine business
-        // error (an event whose id and source already exist), not the cold-start race, and the driver duplicate-key
-        // exception is its cause, so stop and do not retry once it appears in the chain.
+        // A duplicate key can surface wrapped rather than at the top, so walk the cause chain the same bounded way as
+        // the transient-transaction check. It is either the cold-marker race or a partition stream-version collision,
+        // both retryable. A DuplicateCloudEventException is a genuine business error (an event whose id and source
+        // already exist), and the driver duplicate-key exception is its cause, so stop and do not retry once it appears
+        // in the chain.
         Throwable cause = throwable;
         for (int hops = 0; cause != null && hops < 64; cause = cause.getCause(), hops++) {
             if (cause instanceof DuplicateCloudEventException) {

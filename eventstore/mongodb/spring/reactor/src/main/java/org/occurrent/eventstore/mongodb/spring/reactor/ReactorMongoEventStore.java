@@ -85,6 +85,7 @@ import static org.occurrent.cloudevents.OccurrentCloudEventExtension.STREAM_VERS
 import static org.occurrent.eventstore.api.EventStoreCapability.DCB;
 import static org.occurrent.eventstore.api.EventStoreCapability.STREAM;
 import static org.occurrent.eventstore.api.SortBy.SortDirection.ASCENDING;
+import static org.occurrent.eventstore.mongodb.internal.MongoExceptionTranslator.isDuplicateKeyErrorOnStreamVersionIndex;
 import static org.occurrent.eventstore.mongodb.internal.MongoExceptionTranslator.translateException;
 import static org.occurrent.mongodb.spring.sortconversion.internal.SortConverter.convertToSpringSort;
 import static org.springframework.data.domain.Sort.Direction.DESC;
@@ -431,14 +432,20 @@ public class ReactorMongoEventStore implements EventStore, EventStoreOperations,
     private Mono<Void> insertAllDcb(String streamId, long streamVersion, List<Document> documents) {
         return mongoTemplate.insert(documents, eventStoreCollectionName)
                 .onErrorResume(throwable -> {
-                    // A transient transaction conflict (e.g. two disjoint DCB boundaries that hash to the same partition
-                    // stream racing on stream_version) must stay transient so the append retry retries it, rather than
-                    // being mapped to the stream-path WriteConditionNotFulfilledException (which DCB does not use).
+                    // A transient transaction conflict is retried by the append retry rather than mapped to the
+                    // stream-path WriteConditionNotFulfilledException, which DCB does not use.
                     if (isTransientTransactionError(throwable)) {
                         return Mono.error(throwable);
                     }
                     MongoException mongoException = findMongoException(throwable);
                     if (mongoException != null) {
+                        // Two disjoint DCB boundaries that hash to the same partition stream race on the next stream
+                        // version and one loses on the unique streamid+streamversion index. This is not a duplicate
+                        // CloudEvent, so rethrow the raw duplicate-key error and let the append retry rerun the
+                        // read-decide-append cycle.
+                        if (isDuplicateKeyErrorOnStreamVersionIndex(mongoException)) {
+                            return Mono.error(throwable);
+                        }
                         return Mono.error(translateException(new WriteContext(streamId, streamVersion, WriteCondition.anyStreamVersion()), mongoException));
                     }
                     return Mono.error(throwable);
@@ -506,8 +513,8 @@ public class ReactorMongoEventStore implements EventStore, EventStoreOperations,
 
     private static boolean isDuplicateKeyError(Throwable throwable) {
         // A DuplicateCloudEventException is a genuine business error (an event whose id and source already exist), not
-        // the cold-start marker or position race, and the driver duplicate-key exception is its cause, so stop and do
-        // not retry once it appears in the chain.
+        // the cold-start marker or position race and not a partition stream-version collision, and the driver
+        // duplicate-key exception is its cause, so stop and do not retry once it appears in the chain.
         Throwable cause = throwable;
         for (int hops = 0; cause != null && hops < 64; cause = cause.getCause(), hops++) {
             if (cause instanceof DuplicateCloudEventException) {

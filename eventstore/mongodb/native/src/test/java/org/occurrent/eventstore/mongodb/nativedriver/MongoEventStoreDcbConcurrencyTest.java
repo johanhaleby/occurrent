@@ -18,11 +18,17 @@ package org.occurrent.eventstore.mongodb.nativedriver;
 
 import com.mongodb.ConnectionString;
 import com.mongodb.ExplainVerbosity;
+import com.mongodb.MongoBulkWriteException;
+import com.mongodb.ServerAddress;
+import com.mongodb.bulk.BulkWriteError;
+import com.mongodb.bulk.BulkWriteResult;
 import com.mongodb.client.MongoClient;
 import com.mongodb.client.MongoClients;
 import com.mongodb.client.MongoCollection;
+import com.mongodb.client.MongoDatabase;
 import io.cloudevents.CloudEvent;
 import io.cloudevents.core.builder.CloudEventBuilder;
+import org.bson.BsonDocument;
 import org.bson.Document;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
@@ -38,6 +44,8 @@ import org.testcontainers.junit.jupiter.Container;
 import org.testcontainers.junit.jupiter.Testcontainers;
 import org.testcontainers.mongodb.MongoDBContainer;
 
+import java.lang.reflect.InvocationTargetException;
+import java.lang.reflect.Proxy;
 import java.net.URI;
 import java.time.OffsetDateTime;
 import java.util.ArrayList;
@@ -625,6 +633,84 @@ class MongoEventStoreDcbConcurrencyTest {
                 .isEqualTo("dcbTags_1");
     }
 
+    @Test
+    void single_partition_disjoint_boundaries_are_retried_to_success() throws Exception {
+        // A single partition forces every DCB append into one stream, so any two concurrent appends to disjoint
+        // boundaries collide on the next stream version and one loses on the unique streamid+streamversion index. That
+        // loser must be retried to success, not surfaced as a duplicate CloudEvent failure. On MongoDB 4.2 the
+        // collision surfaces as a transient write conflict that the transaction retries on its own, so this passes with
+        // or without the fix and stands as a regression guard for the intent.
+        int threadCount = 12;
+        int iterations = 40;
+        MongoEventStore singlePartitionStore = buildEventStoreWithStreamIdGenerator(
+                new PartitionedDcbStreamIdGenerator(1, "dcb:partition:"));
+
+        for (int i = 0; i < iterations; i++) {
+            CyclicBarrier barrier = new CyclicBarrier(threadCount);
+            ExecutorService pool = Executors.newFixedThreadPool(threadCount);
+
+            AtomicInteger successCount = new AtomicInteger(0);
+            List<Throwable> failures = new CopyOnWriteArrayList<>();
+            List<Future<Void>> futures = new ArrayList<>();
+
+            for (int t = 0; t < threadCount; t++) {
+                final String distinctTag = "single:iter" + i + "t" + t;
+                final String distinctType = "SinglePartitionEvent-iter" + i + "-t" + t;
+                futures.add(pool.submit(() -> {
+                    DcbConsistencyToken token = singlePartitionStore.read(tags(Tag.parse(distinctTag))).consistencyToken();
+                    DcbAppendCondition cond = failIfEventsMatch(tags(Tag.parse(distinctTag)), token);
+                    barrier.await();
+                    try {
+                        singlePartitionStore.append(List.of(taggedEvent(distinctType, distinctTag)), cond);
+                        successCount.incrementAndGet();
+                    } catch (Throwable e) {
+                        failures.add(e);
+                    }
+                    return null;
+                }));
+            }
+
+            pool.shutdown();
+            for (Future<Void> f : futures) {
+                f.get();
+            }
+
+            assertThat(failures)
+                    .as("Iteration %d: disjoint boundaries in a single partition must all be retried to success, not fail with a duplicate CloudEvent error", i)
+                    .isEmpty();
+            assertThat(successCount.get())
+                    .as("Iteration %d: all %d single-partition appends should succeed", i, threadCount)
+                    .isEqualTo(threadCount);
+        }
+    }
+
+    @Test
+    void non_transient_stream_version_duplicate_is_retried_to_success() {
+        // Deterministic, MongoDB-version-independent gate. The first insertMany in the DCB append path is made to throw
+        // a non-transient duplicate-key error on the streamid+streamversion index, exactly the post-commit E11000 a
+        // partition stream-version collision produces on the MongoDB versions and configurations that return it rather
+        // than a transient write conflict. Without the fix that error is mistranslated to a non-retryable duplicate
+        // CloudEvent and the append fails. With the fix it is retried and the append commits on the next attempt, which
+        // does not throw.
+        MongoDatabase database = mongoClient.getDatabase(databaseName);
+        MongoCollection<Document> realEventCollection = database.getCollection(COLLECTION);
+        MongoCollection<Document> failingOnceCollection = collectionThatFailsFirstInsertManyWithStreamVersionDuplicate(realEventCollection);
+
+        EventStoreConfig config = new EventStoreConfig.Builder()
+                .timeRepresentation(TimeRepresentation.RFC_3339_STRING)
+                .eventStoreCapabilities(STREAM, DCB)
+                .dcbStreamIdGenerator(new PartitionedDcbStreamIdGenerator(1, "dcb:partition:"))
+                .build();
+        MongoEventStore store = new MongoEventStore(mongoClient, database, failingOnceCollection, config);
+
+        String tag = "injected:streamversion:collision";
+        store.append(List.of(taggedEvent("InjectedEvent", tag)), failIfEventsMatch(tags(Tag.parse(tag))));
+
+        assertThat(store.exists(types("InjectedEvent")))
+                .as("The append must be retried past the injected stream-version duplicate and commit its event")
+                .isTrue();
+    }
+
     private MongoEventStore buildEventStoreWithStreamIdGenerator(DcbStreamIdGenerator streamIdGenerator) {
         EventStoreConfig config = new EventStoreConfig.Builder()
                 .timeRepresentation(TimeRepresentation.RFC_3339_STRING)
@@ -632,6 +718,39 @@ class MongoEventStoreDcbConcurrencyTest {
                 .dcbStreamIdGenerator(streamIdGenerator)
                 .build();
         return new MongoEventStore(mongoClient, databaseName, COLLECTION, config);
+    }
+
+    /**
+     * Wraps a real event collection so the first {@code insertMany(...)} call throws a non-transient duplicate-key
+     * error on the streamid+streamversion index and every other call and method delegates to the real collection.
+     */
+    @SuppressWarnings("unchecked")
+    private static MongoCollection<Document> collectionThatFailsFirstInsertManyWithStreamVersionDuplicate(MongoCollection<Document> realCollection) {
+        AtomicInteger insertManyCalls = new AtomicInteger(0);
+        return (MongoCollection<Document>) Proxy.newProxyInstance(
+                MongoCollection.class.getClassLoader(),
+                new Class<?>[]{MongoCollection.class},
+                (proxy, method, args) -> {
+                    if ("insertMany".equals(method.getName()) && insertManyCalls.getAndIncrement() == 0) {
+                        throw streamVersionDuplicateKeyException();
+                    }
+                    try {
+                        return method.invoke(realCollection, args);
+                    } catch (InvocationTargetException invocationTargetException) {
+                        // Unwrap so the code under test observes the real collection's exception directly, not
+                        // wrapped in InvocationTargetException, which would break its duplicate/transient classification.
+                        throw invocationTargetException.getCause();
+                    }
+                });
+    }
+
+    private static MongoBulkWriteException streamVersionDuplicateKeyException() {
+        BulkWriteError error = new BulkWriteError(11000,
+                "E11000 duplicate key error collection: test.events index: streamid_1_streamversion_1 dup key: { streamid: \"dcb:partition:\", streamversion: 1 }",
+                new BsonDocument(), 0);
+        BulkWriteResult writeResult = BulkWriteResult.acknowledged(0, 0, 0, 0, List.of(), List.of());
+        // Empty error labels so the exception is NOT a transient transaction error, matching a post-commit E11000.
+        return new MongoBulkWriteException(writeResult, List.of(error), null, new ServerAddress("localhost", 27017), Set.of());
     }
 
     private static String extractWinningPlanStage(Document explainDoc) {
