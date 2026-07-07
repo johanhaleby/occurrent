@@ -53,8 +53,9 @@ data class EventMetadata(val data: Map<String, Any?>) {
 
     /**
      * Reads an arbitrary extension [key] from the metadata and casts it to [T]. The cast is unchecked, so an extension
-     * whose stored value is not a [T] throws a [ClassCastException] at the call site rather than here. Prefer the typed
-     * accessors ([streamId], [streamVersion], [position]) where they exist.
+     * whose stored value is not a [T] throws a [ClassCastException] here, at the point of the cast, since being
+     * `inline` this call is effectively inlined into the caller. Prefer the typed accessors ([streamId],
+     * [streamVersion], [position]) where they exist.
      */
     inline operator fun <reified T : Any?> get(key: String) = data[key] as T
 

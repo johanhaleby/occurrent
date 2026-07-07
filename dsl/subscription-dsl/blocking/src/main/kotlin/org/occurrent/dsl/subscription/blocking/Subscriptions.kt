@@ -147,14 +147,14 @@ open class StreamSubscriptions<E : Any>(private val subscriptionModel: Subscriba
         return subscribe(subscriptionId, *eventTypes.map { c -> c.kotlin }.toTypedArray(), startAt = startAt) { metadata, e -> fn.accept(metadata, e) }
     }
 
-    fun subscribe(subscriptionId: String, vararg eventTypes: KClass<out E>, startAt: StartAt? = null, fn: (E) -> Unit): Subscription {
+    fun subscribe(subscriptionId: String, vararg eventTypes: KClass<out E>, startAt: StartAt? = null, waitUntilStarted: Boolean = true, fn: (E) -> Unit): Subscription {
         val filter = subscriptionFilterFromEventTypes(cloudEventConverter, eventTypes)
-        return subscribe(subscriptionId, filter, startAt, true, fn)
+        return subscribe(subscriptionId, filter, startAt, waitUntilStarted, fn)
     }
 
-    fun subscribe(subscriptionId: String, vararg eventTypes: KClass<out E>, startAt: StartAt? = null, fn: (EventMetadata, E) -> Unit): Subscription {
+    fun subscribe(subscriptionId: String, vararg eventTypes: KClass<out E>, startAt: StartAt? = null, waitUntilStarted: Boolean = true, fn: (EventMetadata, E) -> Unit): Subscription {
         val filter = subscriptionFilterFromEventTypes(cloudEventConverter, eventTypes)
-        return subscribe(subscriptionId, filter, startAt, true, fn)
+        return subscribe(subscriptionId, filter, startAt, waitUntilStarted, fn)
     }
 
     fun subscribe(subscriptionId: String, filter: StreamSubscriptionFilter = StreamSubscriptionFilter.filter(Filter.all()), startAt: StartAt? = null, waitUntilStarted: Boolean = true, fn: (E) -> Unit): Subscription {
@@ -270,14 +270,14 @@ class Subscriptions<E : Any>(private val subscriptionModel: Subscribable, privat
         return subscribe(subscriptionId, *eventTypes.map { c -> c.kotlin }.toTypedArray(), startAt = startAt) { metadata, e -> fn.accept(metadata, e) }
     }
 
-    fun subscribe(subscriptionId: String, vararg eventTypes: KClass<out E>, startAt: StartAt? = null, fn: (E) -> Unit): Subscription {
+    fun subscribe(subscriptionId: String, vararg eventTypes: KClass<out E>, startAt: StartAt? = null, waitUntilStarted: Boolean = true, fn: (E) -> Unit): Subscription {
         val filter = agnosticSubscriptionFilterFromEventTypes(cloudEventConverter, eventTypes)
-        return subscribe(subscriptionId, filter, startAt, true, fn)
+        return subscribe(subscriptionId, filter, startAt, waitUntilStarted, fn)
     }
 
-    fun subscribe(subscriptionId: String, vararg eventTypes: KClass<out E>, startAt: StartAt? = null, fn: (EventMetadata, E) -> Unit): Subscription {
+    fun subscribe(subscriptionId: String, vararg eventTypes: KClass<out E>, startAt: StartAt? = null, waitUntilStarted: Boolean = true, fn: (EventMetadata, E) -> Unit): Subscription {
         val filter = agnosticSubscriptionFilterFromEventTypes(cloudEventConverter, eventTypes)
-        return subscribe(subscriptionId, filter, startAt, true, fn)
+        return subscribe(subscriptionId, filter, startAt, waitUntilStarted, fn)
     }
 
     fun subscribe(subscriptionId: String, filter: AgnosticSubscriptionFilter = AgnosticSubscriptionFilter.filter(Filter.all()), startAt: StartAt? = null, waitUntilStarted: Boolean = true, fn: (E) -> Unit): Subscription {
