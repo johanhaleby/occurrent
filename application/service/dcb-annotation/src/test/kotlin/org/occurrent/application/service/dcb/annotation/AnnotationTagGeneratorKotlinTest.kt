@@ -31,6 +31,15 @@ data class GetterTaggedEvent(
     @get:DcbTag(key = "student") val studentId: String
 )
 
+@Target(AnnotationTarget.FIELD, AnnotationTarget.PROPERTY_GETTER)
+@Retention(AnnotationRetention.RUNTIME)
+annotation class CustomKotlinTag(val key: String = "")
+
+data class CustomKotlinTaggedEvent(
+    @field:CustomKotlinTag val courseId: String,
+    @get:CustomKotlinTag(key = "student") val studentId: String
+)
+
 data class NoTagsEvent(val id: String)
 
 class AnnotationTagGeneratorKotlinTest {
@@ -71,5 +80,17 @@ class AnnotationTagGeneratorKotlinTest {
 
         assertThat(tags1).containsExactlyInAnyOrder(Tag.of("courseId", "course-1"), Tag.of("student", "student-1"))
         assertThat(tags2).containsExactlyInAnyOrder(Tag.of("courseId", "course-2"), Tag.of("student", "student-2"))
+    }
+
+    @Test
+    fun `custom annotation field and getter use-site targets produce tags`() {
+        val customGenerator = AnnotationTagGenerator<Any>(CustomKotlinTag::class.java)
+
+        val tags = customGenerator.tags(CustomKotlinTaggedEvent("course-1", "student-1"))
+
+        assertThat(tags).containsExactlyInAnyOrder(
+            Tag.of("courseId", "course-1"),
+            Tag.of("student", "student-1")
+        )
     }
 }

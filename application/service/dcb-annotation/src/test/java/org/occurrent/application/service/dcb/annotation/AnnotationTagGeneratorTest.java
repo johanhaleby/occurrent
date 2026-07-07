@@ -19,9 +19,16 @@ package org.occurrent.application.service.dcb.annotation;
 import org.junit.jupiter.api.Test;
 import org.occurrent.eventstore.api.dcb.Tag;
 
+import java.lang.annotation.Retention;
+import java.lang.annotation.Target;
 import java.util.Set;
 
+import static java.lang.annotation.ElementType.FIELD;
+import static java.lang.annotation.ElementType.METHOD;
+import static java.lang.annotation.ElementType.RECORD_COMPONENT;
+import static java.lang.annotation.RetentionPolicy.RUNTIME;
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 class AnnotationTagGeneratorTest {
 
@@ -94,5 +101,81 @@ class AnnotationTagGeneratorTest {
                 Tag.of("courseId", "course-1"),
                 Tag.of("studentId", "student-1")
         );
+    }
+
+    @Test
+    void custom_annotation_without_key_element_uses_member_name_as_tag_key() {
+        AnnotationTagGenerator<Object> customGenerator = new AnnotationTagGenerator<>(BoundaryTag.class);
+
+        Set<Tag> tags = customGenerator.tags(new CustomMemberNameTags("course-1", "student-1"));
+
+        assertThat(tags).containsExactlyInAnyOrder(Tag.of("courseId", "course-1"), Tag.of("studentId", "student-1"));
+    }
+
+    @Test
+    void custom_annotation_with_key_element_uses_explicit_key_and_falls_back_to_member_name_for_blank_key() {
+        AnnotationTagGenerator<Object> customGenerator = new AnnotationTagGenerator<>(CustomTag.class);
+
+        Set<Tag> tags = customGenerator.tags(new CustomKeyTags("course-1", "student-1"));
+
+        assertThat(tags).containsExactlyInAnyOrder(Tag.of("course", "course-1"), Tag.of("studentId", "student-1"));
+    }
+
+    @Test
+    void custom_annotation_can_use_explicit_key_resolver_for_nonstandard_attribute() {
+        AnnotationTagGenerator<Object> customGenerator = new AnnotationTagGenerator<>(NamedTag.class, NamedTag::name);
+
+        Set<Tag> tags = customGenerator.tags(new CustomNamedTags("course-1", "student-1"));
+
+        assertThat(tags).containsExactlyInAnyOrder(Tag.of("course", "course-1"), Tag.of("studentId", "student-1"));
+    }
+
+    @Test
+    void custom_key_resolver_null_result_falls_back_to_member_name() {
+        AnnotationTagGenerator<Object> customGenerator = new AnnotationTagGenerator<>(NamedTag.class, __ -> null);
+
+        Set<Tag> tags = customGenerator.tags(new CustomNamedTags("course-1", "student-1"));
+
+        assertThat(tags).containsExactlyInAnyOrder(Tag.of("courseId", "course-1"), Tag.of("studentId", "student-1"));
+    }
+
+    @Test
+    void constructor_rejects_null_annotation_type() {
+        assertThatThrownBy(() -> new AnnotationTagGenerator<>((Class<BoundaryTag>) null))
+                .isInstanceOf(NullPointerException.class)
+                .hasMessage("Annotation type cannot be null");
+    }
+
+    @Test
+    void constructor_rejects_null_key_resolver() {
+        assertThatThrownBy(() -> new AnnotationTagGenerator<>(BoundaryTag.class, null))
+                .isInstanceOf(NullPointerException.class)
+                .hasMessage("Key resolver cannot be null");
+    }
+
+    @Target({RECORD_COMPONENT, FIELD, METHOD})
+    @Retention(RUNTIME)
+    private @interface BoundaryTag {
+    }
+
+    @Target({RECORD_COMPONENT, FIELD, METHOD})
+    @Retention(RUNTIME)
+    private @interface CustomTag {
+        String key() default "";
+    }
+
+    @Target({RECORD_COMPONENT, FIELD, METHOD})
+    @Retention(RUNTIME)
+    private @interface NamedTag {
+        String name() default "";
+    }
+
+    private record CustomMemberNameTags(@BoundaryTag String courseId, @BoundaryTag String studentId) {
+    }
+
+    private record CustomKeyTags(@CustomTag(key = "course") String courseId, @CustomTag String studentId) {
+    }
+
+    private record CustomNamedTags(@NamedTag(name = "course") String courseId, @NamedTag String studentId) {
     }
 }
