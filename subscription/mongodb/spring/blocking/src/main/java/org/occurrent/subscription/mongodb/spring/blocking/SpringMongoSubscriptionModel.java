@@ -92,9 +92,13 @@ public class SpringMongoSubscriptionModel implements CheckpointAwareSubscription
     private final RetryStrategy retryStrategy;
     private final boolean restartSubscriptionsOnChangeStreamHistoryLost;
     // Shared executor for restart loops so a persistently failing subscription backs off (via retryStrategy)
-    // instead of spawning a new thread for every single restart attempt. One thread is occupied per subscription
-    // that is currently restarting, not per attempt, and it's released as soon as the subscription recovers,
-    // is paused/cancelled, or the model is shut down.
+    // instead of spawning a new thread for every single restart attempt. One virtual thread is occupied per
+    // subscription that is currently restarting, not per attempt, and it's released as soon as the subscription
+    // recovers, is paused/cancelled, or the model is shut down. Virtual threads are used (rather than a cached
+    // platform-thread pool) because "restartOnce" blocks on "failureSignal.join()" for the entire time the
+    // subscription is restarting, which can be a long time for a persistently failing subscription. A blocked
+    // virtual thread unmounts from its carrier while parked, so this doesn't pin a platform thread for that
+    // duration the way a cached thread pool would.
     private final ExecutorService restartExecutor;
     // Tracks the in-flight "wait for the next failure (or a stop signal)" future for a subscription that is
     // currently being restarted, so pauseSubscription/cancelSubscription/shutdown can wake up a blocked restart
@@ -143,11 +147,7 @@ public class SpringMongoSubscriptionModel implements CheckpointAwareSubscription
         this.pausedSubscriptions = new ConcurrentHashMap<>();
         this.retryStrategy = config.retryStrategy;
         this.restartSubscriptionsOnChangeStreamHistoryLost = config.restartSubscriptionsOnChangeStreamHistoryLost;
-        this.restartExecutor = Executors.newCachedThreadPool(runnable -> {
-            Thread thread = new Thread(runnable, "spring-mongo-subscription-restart");
-            thread.setDaemon(true);
-            return thread;
-        });
+        this.restartExecutor = Executors.newThreadPerTaskExecutor(Thread.ofVirtual().name("spring-mongo-subscription-restart-", 0).factory());
         this.activeRestartSignal = new ConcurrentHashMap<>();
         this.messageListenerContainer = new DefaultMessageListenerContainer(mongoTemplate, config.executor);
         this.messageListenerContainer.start();
@@ -431,7 +431,16 @@ public class SpringMongoSubscriptionModel implements CheckpointAwareSubscription
                 throw outcome.cause() instanceof RuntimeException runtimeException ? runtimeException : new RuntimeException(outcome.cause());
             }, __ -> !shutdown, retryStrategy).run();
         } catch (RuntimeException e) {
-            log.error("Giving up restarting subscription {}, retries exhausted", subscriptionId, e);
+            // A backoff sleep that's interrupted (restart executor shut down) restores the thread's interrupt
+            // status before rethrowing, see RetryExecution. Report that distinctly from genuine retry exhaustion,
+            // and don't clear the interrupt status since the executor thread is being torn down.
+            if (Thread.currentThread().isInterrupted()) {
+                log.warn("Restart loop for subscription {} was interrupted, likely because the restart executor is shutting down", subscriptionId, e);
+            } else if (shutdown) {
+                logDebug("Stopped restarting subscription {} because the subscription model is shutting down", subscriptionId);
+            } else {
+                log.error("Giving up restarting subscription {}, retries exhausted", subscriptionId, e);
+            }
         }
     }
 
