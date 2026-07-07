@@ -45,7 +45,10 @@ public record DcbDomainEventStream<E>(List<E> events, long lastSequencePosition,
     }
 
     /**
-     * Convenience for callers that do not need the optimistic-concurrency token, defaulting it to the position.
+     * Convenience for stores whose read head is itself a sound optimistic-concurrency boundary (for example the
+     * in-memory store, whose appends assign positions and commit atomically). Such stores use the position as the
+     * {@code consistencyToken}. See {@link org.occurrent.eventstore.api.dcb.DcbEventStream#DcbEventStream(java.util.List, long)}
+     * for the same caveat on the underlying CloudEvent-level stream.
      */
     public DcbDomainEventStream(List<E> events, long lastSequencePosition) {
         this(events, lastSequencePosition, DcbConsistencyToken.of(lastSequencePosition));

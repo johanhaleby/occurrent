@@ -182,6 +182,25 @@ class DcbApiTest {
         assertThat(DcbCriteria.type("X")).isEqualTo(DcbCriteria.types(java.util.List.of("X")));
     }
 
+    @Test
+    void whole_store_lock_is_equivalent_to_fail_if_events_match_with_match_all() {
+        assertThat(DcbAppendCondition.wholeStoreLock()).isEqualTo(DcbAppendCondition.failIfEventsMatch(DcbCriteria.all()));
+
+        DcbConsistencyToken token = DcbConsistencyToken.of(3);
+        assertThat(DcbAppendCondition.wholeStoreLock(token)).isEqualTo(DcbAppendCondition.failIfEventsMatch(DcbCriteria.all(), token));
+    }
+
+    @Test
+    void append_condition_not_fulfilled_exception_exposes_condition_and_position_via_accessors() {
+        DcbAppendCondition condition = DcbAppendCondition.wholeStoreLock();
+
+        DcbAppendConditionNotFulfilledException exception = new DcbAppendConditionNotFulfilledException(condition, 7, "conflict");
+
+        assertThat(exception.appendCondition()).isEqualTo(condition);
+        assertThat(exception.currentPosition()).isEqualTo(7);
+        assertThat(exception.getMessage()).isEqualTo("conflict");
+    }
+
     private static io.cloudevents.CloudEvent cloudEvent() {
         return cloudEvent("type");
     }
