@@ -10,6 +10,7 @@ DCB is a capability layered on the existing CloudEvent storage, not a new store 
 
 #### Changes
 
+* The integration tests now run against MongoDB 8.0 instead of the end of life MongoDB 4.2, raising the MongoDB version Occurrent is validated against. As part of this the MongoDB event stores now treat error code 86 (IndexKeySpecsConflict) the same as error code 85 (IndexOptionsConflict) when an operator has created an incompatible stream version index out of band, since MongoDB 7.0 and later report that clash as 86. A sort that combines a field with a natural step now applies the natural order alone, matching how MongoDB 4.x behaved and how MongoDB 7.0 and later require a natural sort to be specified.
 * The Spring blocking subscription now backs off on restart matching the reactor and native models.
 * `Decider.compose` now requires at least two deciders, matching its list overload. It previously accepted zero or one element and produced a degenerate composite, and now throws `IllegalArgumentException` for fewer than two. This is a breaking change for callers relying on the old zero or one element behavior.
 * Blocking catch-up now fails loudly instead of silently dropping events when the resume token is unavailable.

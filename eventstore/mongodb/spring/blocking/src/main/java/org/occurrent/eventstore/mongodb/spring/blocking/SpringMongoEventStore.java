@@ -827,17 +827,18 @@ public class SpringMongoEventStore implements EventStore, EventStoreOperations, 
         mongoTemplate.setSessionSynchronization(ALWAYS);
     }
 
-    // IndexOptionsConflict (error code 85) means an index with this name already exists with different options.
-    // Occurrent always requests the unique streamId+streamVersion index for both STREAM and DCB, so normal capability
-    // combinations and upgrades never conflict. A conflict here therefore means an operator manually created an
-    // incompatible (e.g. non-unique) index. Occurrent never drops or replaces an existing index, and running on a
-    // non-unique index would silently lose the uniqueness guarantee stream and DCB writes rely on, so this fails
-    // startup instead of swallowing the conflict.
+    // IndexOptionsConflict (error code 85) and IndexKeySpecsConflict (error code 86) both mean an index with this name
+    // already exists with a specification incompatible with the one Occurrent requests. Older MongoDB (4.x) reports the
+    // non-unique-vs-unique clash as 85, while MongoDB 7.0+ reports the same clash as 86. Occurrent always requests the
+    // unique streamId+streamVersion index for both STREAM and DCB, so normal capability combinations and upgrades never
+    // conflict. A conflict here therefore means an operator manually created an incompatible (e.g. non-unique) index.
+    // Occurrent never drops or replaces an existing index, and running on a non-unique index would silently lose the
+    // uniqueness guarantee stream and DCB writes rely on, so this fails startup instead of swallowing the conflict.
     private static void createStreamVersionIndex(MongoCollection<Document> eventStoreCollection, IndexOptions indexOptions) {
         try {
             eventStoreCollection.createIndex(Indexes.compoundIndex(Indexes.ascending(STREAM_ID), Indexes.ascending(STREAM_VERSION)), indexOptions);
         } catch (MongoCommandException e) {
-            if (e.getErrorCode() == 85) {
+            if (e.getErrorCode() == 85 || e.getErrorCode() == 86) {
                 throw new IllegalStateException("The '" + STREAM_ID + "_1_" + STREAM_VERSION + "_1' index already exists with options incompatible with the unique index Occurrent requires. Occurrent does not drop or replace existing indexes automatically, so running with the existing index would silently lose the uniqueness guarantee that stream and DCB writes rely on. Drop and recreate the index as unique out-of-band, then restart.", e);
             } else {
                 throw e;
