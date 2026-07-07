@@ -154,9 +154,9 @@ public class CatchupSubscriptionModelConfig {
 
     @Override
     public String toString() {
-        return "CatchupSupportingBlockingSubscriptionConfig{" +
+        return "CatchupSubscriptionModelConfig{" +
                 "cacheSize=" + cacheSize +
-                ", catchupPositionPersistenceConfig=" + subscriptionStorageConfig +
+                ", subscriptionStorageConfig=" + subscriptionStorageConfig +
                 ", catchupPhaseSortBy=" + catchupPhaseSortBy +
                 ", dcbCatchupPositionWindowSize=" + dcbCatchupPositionWindowSize +
                 '}';

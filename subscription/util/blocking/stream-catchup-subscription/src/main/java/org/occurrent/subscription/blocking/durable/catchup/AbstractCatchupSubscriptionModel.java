@@ -138,11 +138,13 @@ abstract class AbstractCatchupSubscriptionModel implements SubscriptionModel, De
     }
 
     /**
-     * Captures the live resume token before the bulk replay so an event committed during the replay is still
-     * delivered live. Returns null when the delegated subscription model must not run ({@code delegatedStartAt} is
-     * null, i.e. the catch-up owns the position entirely). Otherwise fails loudly when the delegate reports no
-     * resume token, mirroring the reactor pipeline's fail-loud handover, instead of silently falling back to
-     * "now" and dropping every event committed during the replay.
+     * Captures the live resume token so an event committed during the replay is still delivered live. Callers
+     * choose when to capture it relative to the bulk replay: {@link StreamCatchupSubscriptionModel}'s position path
+     * captures it before the replay so no in-flight event is missed, while its time-based path captures it after
+     * the replay to keep the token fresh. Returns null when the delegated subscription model must not run
+     * ({@code delegatedStartAt} is null, i.e. the catch-up owns the position entirely). Otherwise fails loudly when
+     * the delegate reports no resume token, mirroring the reactor pipeline's fail-loud handover, instead of silently
+     * falling back to "now" and dropping every event committed during the replay.
      */
     protected @Nullable Checkpoint captureLiveResumeCheckpoint(@Nullable StartAt delegatedStartAt) {
         if (delegatedStartAt == null) {
@@ -162,6 +164,7 @@ abstract class AbstractCatchupSubscriptionModel implements SubscriptionModel, De
      */
     public void cancelRunningCatchup(String subscriptionId) {
         runningCatchupSubscriptions.remove(subscriptionId);
+        pauseRequestedDuringCatchup.remove(subscriptionId);
     }
 
     /**
@@ -171,6 +174,7 @@ abstract class AbstractCatchupSubscriptionModel implements SubscriptionModel, De
     public void markShuttingDown() {
         shuttingDown = true;
         runningCatchupSubscriptions.clear();
+        pauseRequestedDuringCatchup.clear();
     }
 
     /**

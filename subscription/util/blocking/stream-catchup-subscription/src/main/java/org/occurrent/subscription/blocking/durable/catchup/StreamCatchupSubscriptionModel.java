@@ -307,7 +307,8 @@ public class StreamCatchupSubscriptionModel extends AbstractCatchupSubscriptionM
             // delivered oldest first.
             long remaining = numberOfEventsToReconcile;
             while (remaining > 0 && shouldKeepReplaying(subscriptionId)) {
-                int windowCount = (int) Math.min(remaining, config.dcbCatchupPositionWindowSize);
+                long windowCountAsLong = Math.min(remaining, Math.min(config.dcbCatchupPositionWindowSize, Integer.MAX_VALUE));
+                int windowCount = (int) windowCountAsLong;
                 long skip = remaining - windowCount;
                 List<CloudEvent> window = new ArrayList<>(eventStoreQueries.query(catchupFilter, Math.toIntExact(skip), windowCount, SortBy.natural(DESCENDING)).toList());
                 Collections.reverse(window);
