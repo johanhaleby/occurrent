@@ -26,7 +26,6 @@ import java.util.Objects;
 import java.util.function.*;
 
 import static org.occurrent.retry.internal.RetryExecution.executeWithRetry;
-import static org.occurrent.retry.internal.RetryExecution.firstAttemptRetryInfo;
 
 /**
  * Retry strategy to use if the action throws an exception.
@@ -125,6 +124,50 @@ public interface RetryStrategy {
     default <T extends @Nullable Object> T execute(Function<RetryInfo, T> function) {
         Objects.requireNonNull(function, Supplier.class.getSimpleName() + " cannot be null");
         return executeWithRetry(function, __ -> true, this).apply(firstAttemptRetryInfo());
+    }
+
+    private static RetryInfo firstAttemptRetryInfo() {
+        return new RetryInfo() {
+            @Override
+            public int getRetryCount() {
+                return 0;
+            }
+
+            @Override
+            public int getAttemptNumber() {
+                return 1;
+            }
+
+            @Override
+            public int getMaxAttempts() {
+                return 1;
+            }
+
+            @Override
+            public int getAttemptsLeft() {
+                return 1;
+            }
+
+            @Override
+            public boolean isInfiniteRetriesLeft() {
+                return false;
+            }
+
+            @Override
+            public Duration getBackoff() {
+                return Duration.ZERO;
+            }
+
+            @Override
+            public boolean isLastAttempt() {
+                return true;
+            }
+
+            @Override
+            public boolean isFirstAttempt() {
+                return true;
+            }
+        };
     }
 
     /**

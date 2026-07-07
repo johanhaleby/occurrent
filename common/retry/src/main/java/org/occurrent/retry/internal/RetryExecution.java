@@ -39,7 +39,7 @@ import java.util.stream.Stream;
  */
 public class RetryExecution {
 
-    public static RetryInfo firstAttemptRetryInfo() {
+    private static RetryInfo firstAttemptRetryInfo() {
         return new RetryInfoImpl(1, 0, new MaxAttempts.Limit(1), Duration.ZERO);
     }
 
