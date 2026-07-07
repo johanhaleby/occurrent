@@ -18,6 +18,7 @@ package org.occurrent.dsl.dcb.blocking
 
 import com.fasterxml.jackson.databind.ObjectMapper
 import org.assertj.core.api.Assertions.assertThat
+import org.assertj.core.api.Assertions.assertThatThrownBy
 import org.junit.jupiter.api.BeforeEach
 import org.junit.jupiter.api.DisplayNameGeneration
 import org.junit.jupiter.api.DisplayNameGenerator.ReplaceUnderscores
@@ -107,6 +108,26 @@ class DcbApplicationServiceDeciderExtensionsTest {
         )
         assertThat(applicationService.executeAndReturnState(NoOp, nameDcbDecider())).isEqualTo("John Doe")
         assertThat(readNameEvents("name")).containsExactlyElementsOf(newEvents)
+    }
+
+    @Test
+    fun a_batch_whose_commands_resolve_to_different_criteria_is_rejected() {
+        // A decider whose read boundary depends on the command, so two commands can resolve to different boundaries.
+        // A single execute appends atomically under one condition, so a mixed-boundary batch must fail loudly.
+        val perCommandDecider = nameDecider().toDcb(
+            criteria = { command ->
+                when (command) {
+                    is DefineName -> nameQuery(command.name)
+                    is ChangeName -> nameQuery(command.name)
+                    NoOp -> nameQuery("name")
+                }
+            },
+            tags = { event -> setOf(tagFor(event)) }
+        )
+
+        assertThatThrownBy {
+            applicationService.execute(listOf(DefineName("Jane Doe"), ChangeName("John Doe")), perCommandDecider)
+        }.isInstanceOf(IllegalArgumentException::class.java)
     }
 
     @Test

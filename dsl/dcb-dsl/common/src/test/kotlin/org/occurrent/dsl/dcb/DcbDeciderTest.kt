@@ -17,6 +17,7 @@
 package org.occurrent.dsl.dcb
 
 import org.assertj.core.api.Assertions.assertThat
+import org.assertj.core.api.Assertions.assertThatThrownBy
 import org.junit.jupiter.api.DisplayNameGeneration
 import org.junit.jupiter.api.DisplayNameGenerator.ReplaceUnderscores
 import org.junit.jupiter.api.Test
@@ -115,6 +116,41 @@ class DcbDeciderTest {
         val afterStudent = composed.decider().decideOnEvents(emptyList(), EnrollStudent("student-1")).state
         assertThat(afterStudent.slice<Boolean>(0)).isFalse()
         assertThat(afterStudent.slice<Boolean>(1)).isTrue()
+    }
+
+    @Test
+    fun compose_unions_criteria_and_tags_when_more_than_one_child_recognizes_the_command() {
+        // Two independent deciders both recognize RegisterCourse / CourseRegistered but scope it to different tags.
+        val course: DcbDecider<SchoolCommand, Boolean, SchoolEvent> = DcbDecider.adapt(
+            courseDecider().toDcb(
+                criteria = { command -> DcbCriteria.tags(Tag.of("course", command.courseId)) },
+                tags = { event -> setOf(Tag.of("course", event.courseId)) }
+            ),
+            RegisterCourse::class.java,
+            CourseRegistered::class.java
+        )
+        val audit: DcbDecider<SchoolCommand, Boolean, SchoolEvent> = DcbDecider.adapt(
+            courseDecider().toDcb(
+                criteria = { command -> DcbCriteria.tags(Tag.of("audit", command.courseId)) },
+                tags = { event -> setOf(Tag.of("audit", event.courseId)) }
+            ),
+            RegisterCourse::class.java,
+            CourseRegistered::class.java
+        )
+
+        val composed = DcbDecider.compose(listOf(course, audit))
+
+        assertThat(composed.criteria().apply(RegisterCourse("course-1"))).isEqualTo(
+            DcbCriteria.anyOf(listOf(DcbCriteria.tags(Tag.of("course", "course-1")), DcbCriteria.tags(Tag.of("audit", "course-1"))))
+        )
+        assertThat(composed.tags().tags(CourseRegistered("course-1")))
+            .containsExactly(Tag.of("course", "course-1"), Tag.of("audit", "course-1"))
+    }
+
+    @Test
+    fun compose_of_no_deciders_fails_loudly() {
+        assertThatThrownBy { DcbDecider.compose(emptyList<DcbDecider<SchoolCommand, Boolean, SchoolEvent>>()) }
+            .isInstanceOf(IllegalArgumentException::class.java)
     }
 
     // ---- fixtures ----

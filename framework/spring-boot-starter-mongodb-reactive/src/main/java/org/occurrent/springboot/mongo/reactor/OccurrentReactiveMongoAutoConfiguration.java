@@ -268,14 +268,10 @@ public class OccurrentReactiveMongoAutoConfiguration<E> {
                                                                      ObjectProvider<TagGenerator<E>> tagGeneratorProvider, OccurrentProperties occurrentProperties) {
         TagGenerator<E> tagGenerator = tagGeneratorProvider.getIfAvailable();
         boolean enableDefaultRetryStrategy = occurrentProperties.getApplicationService().isEnableDefaultRetryStrategy();
-        if (tagGenerator == null) {
-            return enableDefaultRetryStrategy
-                    ? new GenericDcbApplicationService<>(eventStore, cloudEventConverter)
-                    : new GenericDcbApplicationService<>(eventStore, cloudEventConverter, Retry.max(0));
-        }
-        return enableDefaultRetryStrategy
-                ? new GenericDcbApplicationService<>(eventStore, cloudEventConverter, tagGenerator)
-                : new GenericDcbApplicationService<>(eventStore, cloudEventConverter, tagGenerator, Retry.max(0));
+        Retry retry = enableDefaultRetryStrategy ? GenericDcbApplicationService.defaultRetry() : Retry.max(0);
+        return tagGenerator == null
+                ? new GenericDcbApplicationService<>(eventStore, cloudEventConverter, retry)
+                : new GenericDcbApplicationService<>(eventStore, cloudEventConverter, tagGenerator, retry);
     }
 
     /**

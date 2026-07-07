@@ -119,6 +119,9 @@ public record DcbDecider<C, S, E>(
      */
     public static <C, E> DcbDecider<C, CompositeState, E> compose(List<? extends DcbDecider<C, ?, E>> deciders) {
         Objects.requireNonNull(deciders, "deciders cannot be null");
+        if (deciders.isEmpty()) {
+            throw new IllegalArgumentException("Cannot compose an empty list of deciders");
+        }
 
         List<Decider<C, ?, E>> childDeciders = new ArrayList<>();
         for (DcbDecider<C, ?, E> d : deciders) {

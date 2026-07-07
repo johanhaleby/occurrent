@@ -51,6 +51,10 @@ for them to disagree with. A decider-only application no longer needs a global `
 Deriving the criteria from the command requires the command to carry the boundary ids the criteria is built from,
 which the existing examples already do, so this is not a new requirement in practice.
 
+The criteria function returning null means the decider does not apply to that command, which composition uses to skip
+children that do not recognize it. It does not mean "read everything". A decider that wants an unscoped read must
+return `DcbCriteria.all()` explicitly.
+
 The write path keeps its existing safety net: `addTags` still fails loudly if it needs to tag events but no tagger
 (per-execute or global) is available, so events are never silently appended untagged.
 
