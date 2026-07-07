@@ -67,6 +67,7 @@ import static java.nio.charset.StandardCharsets.UTF_8;
 import static java.time.ZoneOffset.UTC;
 import static java.util.concurrent.TimeUnit.SECONDS;
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.assertj.core.api.Assertions.catchThrowable;
 import static org.junit.jupiter.api.Assertions.assertAll;
 import static org.junit.jupiter.api.condition.JRE.JAVA_11;
@@ -1657,7 +1658,7 @@ class MongoEventStoreTest {
                 }
 
                 @Test
-                void sort_by_time_desc_and_natural_descending() {
+                void sort_by_time_desc_and_natural_descending_is_rejected() {
                     LocalDateTime now = LocalDateTime.now();
                     NameDefined nameDefined = new NameDefined(UUID.randomUUID().toString(), now, "name", "name");
                     NameWasChanged nameWasChanged1 = new NameWasChanged(UUID.randomUUID().toString(), now, "name", "name2");
@@ -1669,12 +1670,13 @@ class MongoEventStoreTest {
                     persist("name2", nameWasChanged2);
 
                     // Then
-                    Stream<CloudEvent> events = eventStore.all(SortBy.time(DESCENDING).thenNatural(DESCENDING));
-                    assertThat(deserialize(events)).containsExactly(nameWasChanged2, nameWasChanged1, nameDefined);
+                    // A natural sort step cannot be combined with other sort steps, since natural order is already a total ordering.
+                    assertThatThrownBy(() -> eventStore.all(SortBy.time(DESCENDING).thenNatural(DESCENDING)))
+                            .isInstanceOf(IllegalArgumentException.class);
                 }
 
                 @Test
-                void sort_by_time_desc_and_natural_ascending() {
+                void sort_by_time_desc_and_natural_ascending_is_rejected() {
                     // Given
                     LocalDateTime now = LocalDateTime.now();
                     NameDefined nameDefined = new NameDefined(UUID.randomUUID().toString(), now, "name", "name");
@@ -1687,9 +1689,9 @@ class MongoEventStoreTest {
                     persist("name", nameWasChanged2);
 
                     // Then
-                    Stream<CloudEvent> events = eventStore.all(SortBy.time(DESCENDING).thenNatural(ASCENDING));
-                    // Natural ignores indexes!
-                    assertThat(deserialize(events)).containsExactly(nameDefined, nameWasChanged1, nameWasChanged2);
+                    // A natural sort step cannot be combined with other sort steps, since natural order is already a total ordering.
+                    assertThatThrownBy(() -> eventStore.all(SortBy.time(DESCENDING).thenNatural(ASCENDING)))
+                            .isInstanceOf(IllegalArgumentException.class);
                 }
 
                 @Test

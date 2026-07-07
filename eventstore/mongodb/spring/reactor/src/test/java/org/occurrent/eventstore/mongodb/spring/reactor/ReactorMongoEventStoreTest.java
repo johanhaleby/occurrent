@@ -73,6 +73,7 @@ import static java.time.ZoneOffset.UTC;
 import static java.util.Objects.requireNonNull;
 import static java.util.concurrent.TimeUnit.SECONDS;
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.assertj.core.api.Assertions.catchThrowable;
 import static org.hamcrest.Matchers.not;
 import static org.hamcrest.Matchers.nullValue;
@@ -1624,7 +1625,7 @@ public class ReactorMongoEventStoreTest {
             }
 
             @Test
-            void sort_by_time_desc_and_natural_descending() {
+            void sort_by_time_desc_and_natural_descending_is_rejected() {
                 LocalDateTime now = LocalDateTime.now();
                 NameDefined nameDefined = new NameDefined(UUID.randomUUID().toString(), now, "name", "name");
                 NameWasChanged nameWasChanged1 = new NameWasChanged(UUID.randomUUID().toString(), now, "name", "name2");
@@ -1636,12 +1637,13 @@ public class ReactorMongoEventStoreTest {
                 persist("name2", nameWasChanged2).block();
 
                 // Then
-                Flux<CloudEvent> events = eventStore.all(SortBy.time(DESCENDING).thenNatural(DESCENDING));
-                assertThat(deserialize(events)).containsExactly(nameWasChanged2, nameWasChanged1, nameDefined);
+                // A natural sort step cannot be combined with other sort steps, since natural order is already a total ordering.
+                assertThatThrownBy(() -> eventStore.all(SortBy.time(DESCENDING).thenNatural(DESCENDING)))
+                        .isInstanceOf(IllegalArgumentException.class);
             }
 
             @Test
-            void sort_by_time_desc_and_natural_ascending() {
+            void sort_by_time_desc_and_natural_ascending_is_rejected() {
                 // Given
                 LocalDateTime now = LocalDateTime.now();
                 NameDefined nameDefined = new NameDefined(UUID.randomUUID().toString(), now, "name", "name");
@@ -1654,9 +1656,9 @@ public class ReactorMongoEventStoreTest {
                 persist("name", nameWasChanged2).block();
 
                 // Then
-                Flux<CloudEvent> events = eventStore.all(SortBy.time(DESCENDING).thenNatural(ASCENDING));
-                // Natural ignores other sort parameters!!
-                assertThat(deserialize(events)).containsExactly(nameDefined, nameWasChanged1, nameWasChanged2);
+                // A natural sort step cannot be combined with other sort steps, since natural order is already a total ordering.
+                assertThatThrownBy(() -> eventStore.all(SortBy.time(DESCENDING).thenNatural(ASCENDING)))
+                        .isInstanceOf(IllegalArgumentException.class);
             }
 
             @Test

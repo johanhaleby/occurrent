@@ -963,23 +963,18 @@ public class MongoEventStore implements EventStore, EventStoreOperations, EventS
             sort = singleField.direction == ASCENDING ? ascending(singleField.fieldName) : descending(singleField.fieldName);
         } else if (sortBy instanceof MultipleSortStepsImpl) {
             List<SortBy> steps = ((MultipleSortStepsImpl) sortBy).steps;
-            // MongoDB 7.0+ rejects $natural inside a compound sort (BadValue: "$natural sort cannot be set to a value
-            // other than -1 or 1"). Older MongoDB (4.x) accepted the compound specification but applied pure natural
-            // order and ignored the other keys, so a query combining a field sort with a natural step effectively
-            // sorted by natural order alone. Preserve that behavior on modern MongoDB by collapsing a compound sort
-            // that contains a natural step down to just the natural sort.
-            Optional<NaturalImpl> naturalStep = steps.stream()
-                    .filter(NaturalImpl.class::isInstance)
-                    .map(NaturalImpl.class::cast)
-                    .reduce((first, second) -> second);
-            if (naturalStep.isPresent()) {
-                sort = convertToMongoDBSort(naturalStep.get());
-            } else {
-                sort = steps.stream()
-                        .map(MongoEventStore::convertToMongoDBSort)
-                        .reduce(Sorts::orderBy)
-                        .orElseThrow(() -> new IllegalStateException("Internal error: Expecting " + MultipleSortStepsImpl.class.getSimpleName() + " to have at least one step"));
+            // A natural sort step is already a total ordering, so combining it with other sort steps in a compound
+            // sort is semantically incoherent, and Occurrent never builds such a sort itself. MongoDB 7.0+ also
+            // rejects $natural inside a compound sort server-side (BadValue: "$natural sort cannot be set to a value
+            // other than -1 or 1"), so reject it here instead of silently degrading it, which is what older MongoDB
+            // (4.x) did by applying pure natural order and ignoring the other keys.
+            if (steps.stream().anyMatch(NaturalImpl.class::isInstance)) {
+                throw new IllegalArgumentException("A natural sort step cannot be combined with other sort steps, since natural order is already a total ordering. Use natural sort alone.");
             }
+            sort = steps.stream()
+                    .map(MongoEventStore::convertToMongoDBSort)
+                    .reduce(Sorts::orderBy)
+                    .orElseThrow(() -> new IllegalStateException("Internal error: Expecting " + MultipleSortStepsImpl.class.getSimpleName() + " to have at least one step"));
         } else {
             throw new IllegalArgumentException("Internal error: Unrecognized " + SortBy.class.getSimpleName() + " instance: " + sortBy.getClass().getSimpleName());
         }
