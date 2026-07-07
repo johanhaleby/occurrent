@@ -18,6 +18,7 @@ package org.occurrent.eventstore.mongodb.spring.reactor;
 
 import com.mongodb.ErrorCategory;
 import com.mongodb.MongoBulkWriteException;
+import com.mongodb.MongoCommandException;
 import com.mongodb.MongoException;
 import com.mongodb.client.model.IndexOptions;
 import com.mongodb.client.model.Indexes;
@@ -57,7 +58,9 @@ import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.dao.DuplicateKeyException;
 import org.springframework.data.domain.Sort;
 import org.springframework.data.mongodb.UncategorizedMongoDbException;
+import org.springframework.data.mongodb.core.BulkOperations;
 import org.springframework.data.mongodb.core.FindAndModifyOptions;
+import org.springframework.data.mongodb.core.ReactiveBulkOperations;
 import org.springframework.data.mongodb.core.ReactiveMongoTemplate;
 import org.springframework.data.mongodb.core.query.Criteria;
 import org.springframework.data.mongodb.core.query.Query;
@@ -236,9 +239,13 @@ public class ReactorMongoEventStore implements EventStore, EventStoreOperations,
         requireNonNull(options, "Read options cannot be null");
         // Snapshot the consistency token BEFORE reading the events. If an append commits between these two reads, the
         // events may include it while the token does not, which only makes a later conditional append over-cautious (a
-        // false conflict that retries) rather than miss the conflict.
-        return consistencyToken(query).flatMap(token ->
-                currentPosition().flatMap(highWatermark -> {
+        // false conflict that retries) rather than miss the conflict (ADR 0031). The token read and the position read
+        // are independent of each other (neither is derived from the other's result), so zip them concurrently rather
+        // than sequencing them, while keeping both strictly before the event read below.
+        return Mono.zip(consistencyToken(query), currentPosition())
+                .flatMap(tokenAndHighWatermark -> {
+                    long token = tokenAndHighWatermark.getT1();
+                    long highWatermark = tokenAndHighWatermark.getT2();
                     long upperBound = Math.min(highWatermark, options.upToPosition().orElse(highWatermark));
                     Query mongoQuery = toDcbMongoQuery(query, options.afterPosition().orElse(0), upperBound);
                     mongoQuery.with(Sort.by(Sort.Direction.ASC, OccurrentCloudEventExtension.POSITION));
@@ -246,7 +253,7 @@ public class ReactorMongoEventStore implements EventStore, EventStoreOperations,
                             .map(document -> DcbDocumentMapper.toCloudEvent(timeRepresentation, document))
                             .collectList()
                             .map(events -> new DcbEventStream(events, highWatermark, DcbConsistencyToken.of(token)));
-                }));
+                });
     }
 
     @Override
@@ -368,13 +375,19 @@ public class ReactorMongoEventStore implements EventStore, EventStoreOperations,
     }
 
     private Mono<Void> incrementConflictMarkers(Set<String> markerKeys, long lastPosition) {
-        return Flux.fromIterable(markerKeys)
-                .concatMap(key -> {
-                    Query query = new Query(where(ID).is(DcbMarkerModel.markerId(key)));
-                    Update update = new Update().inc(DcbMarkerModel.CHECKPOINT_VERSION, 1L).set(DcbMarkerModel.CHECKPOINT_LAST_POSITION, lastPosition);
-                    return mongoTemplate.upsert(query, update, dcbCheckpointCollectionName);
-                })
-                .then();
+        if (markerKeys.isEmpty()) {
+            return Mono.empty();
+        }
+        // One unordered bulk write of upserts rather than one upsert round trip per key (previously sequential via
+        // concatMap), so a boundary with several tags and types costs one round trip inside the transaction instead
+        // of K serial ones.
+        ReactiveBulkOperations bulkOperations = mongoTemplate.bulkOps(BulkOperations.BulkMode.UNORDERED, dcbCheckpointCollectionName);
+        for (String key : markerKeys) {
+            Query query = new Query(where(ID).is(DcbMarkerModel.markerId(key)));
+            Update update = new Update().inc(DcbMarkerModel.CHECKPOINT_VERSION, 1L).set(DcbMarkerModel.CHECKPOINT_LAST_POSITION, lastPosition);
+            bulkOperations.upsert(query, update);
+        }
+        return bulkOperations.execute().then();
     }
 
     // The optimistic-concurrency token for a query: the sum of the versions of its conflict markers. Read the markers
@@ -679,10 +692,20 @@ public class ReactorMongoEventStore implements EventStore, EventStoreOperations,
                 .then(createIndex(eventStoreCollectionName, mongoTemplate, Indexes.compoundIndex(Indexes.ascending("id"), Indexes.ascending("source")), new IndexOptions().unique(true)))
                 .then();
 
-        // streamId + streamVersion uniqueness is a stream-mode invariant. DCB does not use stream version, so a
-        // DCB-only store does not create it.
+        // streamId + streamVersion uniqueness is a stream-mode invariant, but the DCB append path also looks up the
+        // current stream version per partition (currentStreamVersion), so it needs the same compound index to avoid a
+        // collection scan. STREAM gets the unique variant, since that uniqueness is its invariant. DCB-only gets a
+        // non-unique variant of the same compound index, since two disjoint DCB boundaries hashing to the same
+        // partition stream can legitimately collide on streamId+streamVersion before the append retry re-reads and
+        // re-assigns a fresh version, so uniqueness is not a DCB invariant.
         if (eventStoreCapabilities.contains(STREAM)) {
-            chain = chain.then(createIndex(eventStoreCollectionName, mongoTemplate, Indexes.compoundIndex(Indexes.ascending(STREAM_ID), Indexes.ascending(STREAM_VERSION)), new IndexOptions().unique(true))).then();
+            // A store that previously ran DCB-only already created the non-unique variant of this index below.
+            // MongoDB rejects re-creating the same index name with different options, and this never drops or
+            // replaces an existing index, so that conflict is caught and logged: the store keeps running on the
+            // existing index, and an operator upgrades it out-of-band if needed.
+            chain = chain.then(createStreamVersionIndex(eventStoreCollectionName, mongoTemplate, new IndexOptions().unique(true))).then();
+        } else if (dcbEnabled) {
+            chain = chain.then(createStreamVersionIndex(eventStoreCollectionName, mongoTemplate, new IndexOptions())).then();
         }
 
         // The position counter collection and index are shared by DCB and by STREAM when position is enabled. The
@@ -743,6 +766,22 @@ public class ReactorMongoEventStore implements EventStore, EventStoreOperations,
 
     private static Mono<String> createIndex(String eventStoreCollectionName, ReactiveMongoTemplate mongoTemplate, Bson index, IndexOptions indexOptions) {
         return mongoTemplate.getCollection(eventStoreCollectionName).flatMap(collection -> Mono.from(collection.createIndex(index, indexOptions)));
+    }
+
+    // IndexOptionsConflict (error code 85) means an index with this name already exists with different options, e.g.
+    // a DCB-only store's non-unique streamId+streamVersion index when STREAM is enabled afterward. Occurrent never
+    // drops or replaces an existing index, so this logs and keeps running on the existing index rather than failing
+    // startup; an operator upgrades the index out-of-band if the new options are required.
+    private static Mono<String> createStreamVersionIndex(String eventStoreCollectionName, ReactiveMongoTemplate mongoTemplate, IndexOptions indexOptions) {
+        Bson index = Indexes.compoundIndex(Indexes.ascending(STREAM_ID), Indexes.ascending(STREAM_VERSION));
+        return createIndex(eventStoreCollectionName, mongoTemplate, index, indexOptions)
+                .onErrorResume(MongoCommandException.class, e -> {
+                    if (e.getErrorCode() == 85) {
+                        LOGGER.warn("The '{}' index already exists with different options than requested ({}). Occurrent does not drop or replace existing indexes automatically, so the store continues using the existing index. Drop and recreate it out-of-band if the new options are required.", STREAM_ID + "_1_" + STREAM_VERSION + "_1", indexOptions, e);
+                        return Mono.empty();
+                    }
+                    return Mono.error(e);
+                });
     }
 
     private static Mono<MongoCollection<Document>> createCollection(String eventStoreCollectionName, ReactiveMongoTemplate mongoTemplate) {

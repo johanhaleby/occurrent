@@ -16,6 +16,7 @@
 
 package org.occurrent.eventstore.mongodb.spring.blocking;
 
+import com.mongodb.MongoCommandException;
 import com.mongodb.MongoException;
 import com.mongodb.client.MongoCollection;
 import com.mongodb.client.model.IndexOptions;
@@ -49,6 +50,7 @@ import org.slf4j.LoggerFactory;
 import org.springframework.dao.DataAccessException;
 import org.springframework.dao.DuplicateKeyException;
 import org.springframework.data.domain.Sort;
+import org.springframework.data.mongodb.core.BulkOperations;
 import org.springframework.data.mongodb.core.FindAndModifyOptions;
 import org.springframework.data.mongodb.core.MongoTemplate;
 import org.springframework.data.mongodb.core.query.Criteria;
@@ -500,11 +502,18 @@ public class SpringMongoEventStore implements EventStore, EventStoreOperations, 
     // reclamation is deferred: safe reclamation needs proof that no in-flight append references a marker, which is its
     // own concurrency problem and out of proportion to the need today.
     private void incrementConflictMarkers(Set<String> markerKeys, long lastPosition) {
+        if (markerKeys.isEmpty()) {
+            return;
+        }
+        // One unordered bulk write of upserts rather than one upsert round trip per key, so a boundary with several
+        // tags and types costs one round trip inside the transaction instead of K serial ones.
+        BulkOperations bulkOperations = mongoTemplate.bulkOps(BulkOperations.BulkMode.UNORDERED, dcbCheckpointCollectionName);
         for (String key : markerKeys) {
             Query query = new Query(where(ID).is(DcbMarkerModel.markerId(key)));
             Update update = new Update().inc(DcbMarkerModel.CHECKPOINT_VERSION, 1L).set(DcbMarkerModel.CHECKPOINT_LAST_POSITION, lastPosition);
-            mongoTemplate.upsert(query, update, dcbCheckpointCollectionName);
+            bulkOperations.upsert(query, update);
         }
+        bulkOperations.execute();
     }
 
     // The optimistic-concurrency token for a query: the sum of the versions of its conflict markers. The sum is
@@ -791,12 +800,22 @@ public class SpringMongoEventStore implements EventStore, EventStoreOperations, 
         MongoCollection<Document> eventStoreCollection = mongoTemplate.getCollection(eventStoreCollectionName);
         // Cloud spec defines id + source must be unique!
         eventStoreCollection.createIndex(Indexes.compoundIndex(Indexes.ascending(CloudEventV1.ID), Indexes.ascending(CloudEventV1.SOURCE)), new IndexOptions().unique(true));
-        // streamId + streamVersion uniqueness is a stream-mode invariant. DCB does not use stream version, so a
-        // DCB-only store does not create it.
+        // streamId + streamVersion uniqueness is a stream-mode invariant, but the DCB append path also looks up the
+        // current stream version per partition (currentStreamVersion), so it needs the same compound index to avoid a
+        // collection scan. STREAM gets the unique variant, since that uniqueness is its invariant. DCB-only gets a
+        // non-unique variant of the same compound index, since two disjoint DCB boundaries hashing to the same
+        // partition stream can legitimately collide on streamId+streamVersion before the retry in insertAllDcb
+        // re-reads and re-assigns a fresh version, so uniqueness is not a DCB invariant.
         if (eventStoreCapabilities.contains(STREAM)) {
             // Create a streamId + streamVersion ascending index (note that we don't need to index stream id separately since it's covered by this compound index)
             // Note also that this index supports sorting both ascending and descending since MongoDB can traverse an index in both directions.
-            eventStoreCollection.createIndex(Indexes.compoundIndex(Indexes.ascending(STREAM_ID), Indexes.ascending(STREAM_VERSION)), new IndexOptions().unique(true));
+            // A store that previously ran DCB-only already created the non-unique variant of this index (see the
+            // else branch below). MongoDB rejects re-creating the same index name with different options, and this
+            // never drops or replaces an existing index, so that conflict is caught and logged: the store keeps
+            // running on the existing index, and an operator upgrades it out-of-band if needed.
+            createStreamVersionIndex(eventStoreCollection, new IndexOptions().unique(true));
+        } else if (dcbEnabled) {
+            createStreamVersionIndex(eventStoreCollection, new IndexOptions());
         }
         if (dcbEnabled) {
             eventStoreCollection.createIndex(Indexes.ascending(DCB_TAGS_INDEX_FIELD), new IndexOptions().sparse(true));
@@ -810,6 +829,22 @@ public class SpringMongoEventStore implements EventStore, EventStoreOperations, 
         // SessionSynchronization need to be "ALWAYS" in order for TransactionTemplate to work with mongo template!
         // See https://docs.spring.io/spring-data/mongodb/docs/current/reference/html/#mongo.transactions.transaction-template
         mongoTemplate.setSessionSynchronization(ALWAYS);
+    }
+
+    // IndexOptionsConflict (error code 85) means an index with this name already exists with different options, e.g.
+    // a DCB-only store's non-unique streamId+streamVersion index when STREAM is enabled afterward. Occurrent never
+    // drops or replaces an existing index, so this logs and keeps running on the existing index rather than failing
+    // startup; an operator upgrades the index out-of-band if the new options are required.
+    private static void createStreamVersionIndex(MongoCollection<Document> eventStoreCollection, IndexOptions indexOptions) {
+        try {
+            eventStoreCollection.createIndex(Indexes.compoundIndex(Indexes.ascending(STREAM_ID), Indexes.ascending(STREAM_VERSION)), indexOptions);
+        } catch (MongoCommandException e) {
+            if (e.getErrorCode() == 85) {
+                log.warn("The '{}' index already exists with different options than requested ({}). Occurrent does not drop or replace existing indexes automatically, so the store continues using the existing index. Drop and recreate it out-of-band if the new options are required.", STREAM_ID + "_1_" + STREAM_VERSION + "_1", indexOptions, e);
+            } else {
+                throw e;
+            }
+        }
     }
 
     // Decide at startup whether this store writes stream position. An explicit choice (withStreamPosition() or

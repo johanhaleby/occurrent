@@ -152,11 +152,16 @@ class MongoEventStoreCapabilityTest {
     void dcb_capability_initializes_only_dcb_indexes_and_support_collections() {
         newEventStore(eventStoreConfig(DCB).build());
 
-        assertThat(indexNames()).contains(POSITION_INDEX, DCB_TAGS_INDEX);
-        assertThat(indexNames()).doesNotContain(STREAM_INDEX);
+        // A DCB-only store still creates the streamId+streamVersion compound index, since the DCB append path looks
+        // up the current stream version per partition (currentStreamVersion), but non-unique, since two disjoint DCB
+        // boundaries hashing to the same partition stream can legitimately collide on it transiently.
+        assertThat(indexNames()).contains(STREAM_INDEX, POSITION_INDEX, DCB_TAGS_INDEX);
         assertThat(index(CLOUD_EVENT_ID_SOURCE_INDEX))
                 .containsEntry("key", new Document("id", 1).append("source", 1))
                 .containsEntry("unique", true);
+        assertThat(index(STREAM_INDEX))
+                .containsEntry("key", new Document("streamid", 1).append("streamversion", 1))
+                .doesNotContainKey("unique");
         assertThat(index(POSITION_INDEX))
                 .containsEntry("key", new Document("position", 1))
                 .containsEntry("unique", true)

@@ -18,9 +18,11 @@ package org.occurrent.eventstore.mongodb.nativedriver;
 
 import com.mongodb.ErrorCategory;
 import com.mongodb.MongoBulkWriteException;
+import com.mongodb.MongoCommandException;
 import com.mongodb.MongoException;
 import com.mongodb.TransactionOptions;
 import com.mongodb.client.*;
+import com.mongodb.client.model.BulkWriteOptions;
 import com.mongodb.client.model.FindOneAndUpdateOptions;
 import com.mongodb.client.model.Filters;
 import com.mongodb.client.model.IndexOptions;
@@ -28,8 +30,10 @@ import com.mongodb.client.model.Indexes;
 import com.mongodb.client.model.Projections;
 import com.mongodb.client.model.ReturnDocument;
 import com.mongodb.client.model.Sorts;
+import com.mongodb.client.model.UpdateOneModel;
 import com.mongodb.client.model.UpdateOptions;
 import com.mongodb.client.model.Updates;
+import com.mongodb.client.model.WriteModel;
 import com.mongodb.client.result.UpdateResult;
 import io.cloudevents.CloudEvent;
 import org.bson.Document;
@@ -488,11 +492,17 @@ public class MongoEventStore implements EventStore, EventStoreOperations, EventS
     // and nothing reclaims them automatically, so a high-cardinality tag (a tag per entity) grows the collection without
     // bound. An operator can prune markers during quiescence (a later append recreates any it still needs).
     private void incrementConflictMarkers(ClientSession clientSession, Set<String> markerKeys, long lastPosition) {
-        for (String key : markerKeys) {
-            dcbCheckpointCollection.updateOne(clientSession, eq(ID, DcbMarkerModel.markerId(key)),
-                    Updates.combine(Updates.inc(DcbMarkerModel.CHECKPOINT_VERSION, 1L), Updates.set(DcbMarkerModel.CHECKPOINT_LAST_POSITION, lastPosition)),
-                    new UpdateOptions().upsert(true));
+        if (markerKeys.isEmpty()) {
+            return;
         }
+        // One unordered bulk write of upserts rather than one updateOne round trip per key, so a boundary with several
+        // tags and types costs one round trip inside the transaction instead of K serial ones.
+        List<WriteModel<Document>> updates = markerKeys.stream()
+                .map(key -> (WriteModel<Document>) new UpdateOneModel<Document>(eq(ID, DcbMarkerModel.markerId(key)),
+                        Updates.combine(Updates.inc(DcbMarkerModel.CHECKPOINT_VERSION, 1L), Updates.set(DcbMarkerModel.CHECKPOINT_LAST_POSITION, lastPosition)),
+                        new UpdateOptions().upsert(true)))
+                .toList();
+        dcbCheckpointCollection.bulkWrite(clientSession, updates, new BulkWriteOptions().ordered(false));
     }
 
     // The optimistic-concurrency token for a query: the sum of the versions of its conflict markers. The sum is
@@ -748,12 +758,22 @@ public class MongoEventStore implements EventStore, EventStoreOperations, EventS
 
         // Cloud spec defines id + source must be unique!
         eventStoreCollection.createIndex(Indexes.compoundIndex(Indexes.ascending("id"), Indexes.ascending("source")), new IndexOptions().unique(true));
-        // streamId + streamVersion uniqueness is a stream-mode invariant. DCB does not use stream version, so a
-        // DCB-only store does not create it.
+        // streamId + streamVersion uniqueness is a stream-mode invariant, but the DCB append path also looks up the
+        // current stream version per partition (currentStreamVersion), so it needs the same compound index to avoid a
+        // collection scan. STREAM gets the unique variant, since that uniqueness is its invariant. DCB-only gets a
+        // non-unique variant of the same compound index, since two disjoint DCB boundaries hashing to the same
+        // partition stream can legitimately collide on streamId+streamVersion before the retry in insertAllDcb
+        // re-reads and re-assigns a fresh version, so uniqueness is not a DCB invariant.
         if (eventStoreCapabilities.contains(STREAM)) {
             // Create a streamId + streamVersion ascending index (note that we don't need to index stream id separately since it's covered by this compound index)
             // Note also that this index supports when sorting both ascending and descending since MongoDB can traverse an index in both directions.
-            eventStoreCollection.createIndex(Indexes.compoundIndex(Indexes.ascending(STREAM_ID), Indexes.ascending(STREAM_VERSION)), new IndexOptions().unique(true));
+            // A store that previously ran DCB-only already created the non-unique variant of this index (see the
+            // else branch below). MongoDB rejects re-creating the same index name with different options, and this
+            // never drops or replaces an existing index, so that conflict is caught and logged: the store keeps
+            // running on the non-unique index, and an operator upgrades it to unique out-of-band if needed.
+            createStreamVersionIndex(eventStoreCollection, new IndexOptions().unique(true));
+        } else if (dcbEnabled) {
+            createStreamVersionIndex(eventStoreCollection, new IndexOptions());
         }
         // The position index is created whenever position is written, since DCB and stream writes share the same
         // unique, sparse position field.
@@ -762,6 +782,22 @@ public class MongoEventStore implements EventStore, EventStoreOperations, EventS
         }
         if (dcbEnabled) {
             eventStoreCollection.createIndex(Indexes.ascending(DcbDocumentMapper.DCB_TAGS_INDEX_FIELD), new IndexOptions().sparse(true));
+        }
+    }
+
+    // IndexOptionsConflict (error code 85) means an index with this name already exists with different options, e.g.
+    // a DCB-only store's non-unique streamId+streamVersion index when STREAM is enabled afterward. Occurrent never
+    // drops or replaces an existing index, so this logs and keeps running on the existing index rather than failing
+    // startup; an operator upgrades the index out-of-band if the new options are required.
+    private static void createStreamVersionIndex(MongoCollection<Document> eventStoreCollection, IndexOptions indexOptions) {
+        try {
+            eventStoreCollection.createIndex(Indexes.compoundIndex(Indexes.ascending(STREAM_ID), Indexes.ascending(STREAM_VERSION)), indexOptions);
+        } catch (MongoCommandException e) {
+            if (e.getErrorCode() == 85) {
+                log.warn("The '{}' index already exists with different options than requested ({}). Occurrent does not drop or replace existing indexes automatically, so the store continues using the existing index. Drop and recreate it out-of-band if the new options are required.", STREAM_ID + "_1_" + STREAM_VERSION + "_1", indexOptions, e);
+            } else {
+                throw e;
+            }
         }
     }
 
