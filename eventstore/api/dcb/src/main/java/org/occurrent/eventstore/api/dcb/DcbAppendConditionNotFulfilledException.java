@@ -23,19 +23,13 @@ import java.util.StringJoiner;
 /**
  * Thrown when a DCB append condition detects a conflicting event.
  * <p>
- * {@link #appendCondition} is the condition that was evaluated and
- * {@link #currentPosition} is the event store position at the time the append failed.
+ * {@link #appendCondition()} is the condition that was evaluated and
+ * {@link #currentPosition()} is the event store position at the time the append failed.
  */
 @NullMarked
 public class DcbAppendConditionNotFulfilledException extends RuntimeException {
-    /**
-     * The DCB append condition that was not fulfilled.
-     */
-    public final DcbAppendCondition appendCondition;
-    /**
-     * The current event store sequence position when the conflict was detected.
-     */
-    public final long currentPosition;
+    private final DcbAppendCondition appendCondition;
+    private final long currentPosition;
 
     /**
      * Creates an exception for a failed DCB append condition.
@@ -44,6 +38,20 @@ public class DcbAppendConditionNotFulfilledException extends RuntimeException {
         super(message);
         this.appendCondition = appendCondition;
         this.currentPosition = currentPosition;
+    }
+
+    /**
+     * The DCB append condition that was not fulfilled.
+     */
+    public DcbAppendCondition appendCondition() {
+        return appendCondition;
+    }
+
+    /**
+     * The current event store sequence position when the conflict was detected.
+     */
+    public long currentPosition() {
+        return currentPosition;
     }
 
     @Override

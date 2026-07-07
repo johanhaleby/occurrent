@@ -33,6 +33,11 @@ import static java.util.Objects.requireNonNull;
  * {@code DcbCriteria.anyOf(DcbCriteria.tags(Tag.of("order", "1")), DcbCriteria.tags(Tag.of("customer", "1")))} (or the
  * {@link #tagsAnyOf(Tag, Tag...)} shortcut) to OR several. The model is deliberately an OR of items rather than a general
  * boolean tree (see ADR 32).
+ * <p>
+ * Naming note: this type is {@code DcbCriteria}, but {@link DcbEventStore#read(DcbCriteria)} and
+ * {@link DcbAppendCondition#query()} both name their parameter {@code query}. Same value, two names depending on
+ * whether the surrounding API is talking about the type/builder ({@code criteria}) or a call-site argument
+ * ({@code query}); there is no semantic difference.
  */
 @NullMarked
 public sealed interface DcbCriteria permits DcbCriteria.MatchAll, DcbCriteria.Items, DcbCriterion {
@@ -63,7 +68,11 @@ public sealed interface DcbCriteria permits DcbCriteria.MatchAll, DcbCriteria.It
      * As a read criteria this simply matches everything. Take care using it as a {@link DcbAppendCondition} boundary: it
      * is a whole-store optimistic lock that is skew-safe only against other whole-store conditions, not against a
      * concurrent tag-scoped or type-scoped append, so on a store taking concurrent scoped writes it can under-protect
-     * (see ADR 30). It is correct for single-writer operations and for an empty-store or bootstrap guard.
+     * (see ADR 30). It is correct for single-writer operations and for an empty-store or bootstrap guard. When building
+     * an append condition, prefer {@link DcbAppendCondition#wholeStoreLock()} /
+     * {@link DcbAppendCondition#wholeStoreLock(DcbConsistencyToken)} over passing {@code all()} to
+     * {@code failIfEventsMatch}, so the whole-store lock is spelled out explicitly and not confused with a
+     * read-everything query.
      */
     static DcbCriteria all() {
         return new MatchAll();
@@ -144,8 +153,10 @@ public sealed interface DcbCriteria permits DcbCriteria.MatchAll, DcbCriteria.It
     }
 
     /**
-     * Creates a criteria matching events that carry any one of the supplied DCB tags. Shorthand for
-     * {@code anyOf(tags(a), tags(b), ...)}.
+     * Creates a criteria matching events that carry any one of the supplied DCB tags, one tag per alternative. Shorthand
+     * for {@code anyOf(tags(a), tags(b), ...)}. Each alternative is a single tag, not a compound tag set: to OR
+     * alternatives that each require several tags together, build them with {@link #tags(Tag, Tag...)} and combine them
+     * with {@link #anyOf(DcbCriteria, DcbCriteria...)} instead.
      */
     static DcbCriteria tagsAnyOf(Tag first, Tag... rest) {
         requireNonNull(first, "First tag cannot be null");
