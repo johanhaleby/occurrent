@@ -37,6 +37,7 @@ import org.junit.jupiter.api.DisplayNameGenerator.ReplaceUnderscores;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.Timeout;
 import org.junit.jupiter.api.extension.RegisterExtension;
+import org.occurrent.eventstore.api.DuplicateCloudEventException;
 import org.occurrent.eventstore.api.dcb.*;
 import org.occurrent.mongodb.timerepresentation.TimeRepresentation;
 import org.occurrent.testsupport.mongodb.FlushMongoDBExtension;
@@ -711,6 +712,86 @@ class MongoEventStoreDcbConcurrencyTest {
             assertThat(successCount.get())
                     .as("Iteration %d: all %d single-partition appends should succeed", i, threadCount)
                     .isEqualTo(threadCount);
+        }
+    }
+
+    @Test
+    void single_partition_concurrent_disjoint_boundaries_all_commit_and_remain_readable() throws Exception {
+        // Stronger, observable-contract sibling of single_partition_disjoint_boundaries_are_retried_to_success and the
+        // synthetic non_transient_stream_version_duplicate_is_retried_to_success below. Those assert only that no append
+        // throws (real race) or that one injected E11000 is retried (synthetic). This one drives the REAL race on the
+        // configured MongoDB version and asserts the full contract PR #297 promises: with a single storage partition
+        // every DCB append shares one (streamid, streamversion) sequence, so concurrent appends to disjoint boundaries
+        // deterministically collide on the next stream version and one loses on the unique streamid+streamversion index.
+        // The loser must be retried to success and NEVER surface a misleading DuplicateCloudEventException. Beyond "no
+        // throw", this verifies persistence: every append commits, the total committed event count equals the number of
+        // successful appends (no lost writes hidden behind a swallowed retry), and every disjoint boundary's single
+        // event is present and readable afterwards.
+        //
+        // Observed on MongoDB 8.0 (mongo:${test.mongo.version}): the contract holds. The partition stream-version
+        // collision is absorbed internally and never leaks a spurious duplicate or append failure to the caller.
+        // Whether 8.0 surfaces the collision as a transient WriteConflict that withTransaction retries or a
+        // non-transient E11000 that the #297 exception-translation fix retries is not distinguishable from the caller's
+        // side here; either way the observable contract asserted below is upheld.
+        int threadCount = 12;
+        int iterations = 40;
+        MongoEventStore singlePartitionStore = buildEventStoreWithStreamIdGenerator(
+                new PartitionedDcbStreamIdGenerator(1, "dcb:readable:partition:"));
+
+        List<String> allTags = new CopyOnWriteArrayList<>();
+        AtomicInteger successCount = new AtomicInteger(0);
+        AtomicInteger duplicateCloudEventFailures = new AtomicInteger(0);
+        List<Throwable> unexpectedFailures = new CopyOnWriteArrayList<>();
+
+        for (int i = 0; i < iterations; i++) {
+            CyclicBarrier barrier = new CyclicBarrier(threadCount);
+            ExecutorService pool = Executors.newFixedThreadPool(threadCount);
+            List<Future<Void>> futures = new ArrayList<>();
+
+            for (int t = 0; t < threadCount; t++) {
+                final String distinctTag = "readable:iter" + i + "t" + t;
+                final String distinctType = "ReadableEvent-iter" + i + "-t" + t;
+                allTags.add(distinctTag);
+                futures.add(pool.submit(() -> {
+                    DcbConsistencyToken token = singlePartitionStore.read(tags(Tag.parse(distinctTag))).consistencyToken();
+                    DcbAppendCondition cond = failIfEventsMatch(tags(Tag.parse(distinctTag)), token);
+                    barrier.await();
+                    try {
+                        singlePartitionStore.append(List.of(taggedEvent(distinctType, distinctTag)), cond);
+                        successCount.incrementAndGet();
+                    } catch (DuplicateCloudEventException e) {
+                        duplicateCloudEventFailures.incrementAndGet();
+                    } catch (Throwable e) {
+                        unexpectedFailures.add(e);
+                    }
+                    return null;
+                }));
+            }
+
+            pool.shutdown();
+            for (Future<Void> f : futures) {
+                f.get();
+            }
+        }
+
+        int expectedAppends = threadCount * iterations;
+
+        assertThat(duplicateCloudEventFailures.get())
+                .as("No concurrent DCB append to a disjoint boundary may fail with a misleading DuplicateCloudEventException")
+                .isZero();
+        assertThat(unexpectedFailures)
+                .as("No concurrent single-partition DCB append may fail; the stream-version collision loser must be retried to success")
+                .isEmpty();
+        assertThat(successCount.get())
+                .as("Every one of the %d concurrent appends must eventually commit", expectedAppends)
+                .isEqualTo(expectedAppends);
+        assertThat(singlePartitionStore.count(DcbCriteria.all()))
+                .as("Total committed events must equal the number of successful appends (no lost writes under collision retries)")
+                .isEqualTo(expectedAppends);
+        for (String tag : allTags) {
+            assertThat(singlePartitionStore.read(tags(Tag.parse(tag))).events())
+                    .as("Disjoint boundary %s must have exactly its one committed event readable", tag)
+                    .hasSize(1);
         }
     }
 
