@@ -282,6 +282,12 @@ public class NativeMongoSubscriptionModel implements CheckpointAwareSubscription
             Filter streamFilter = streamSubscriptionFilter.filter();
             Bson bson = FilterToBsonFilterConverter.convertFilterToBsonFilter(MongoFilterSpecification.FULL_DOCUMENT, timeRepresentation, streamFilter);
             pipeline = Collections.singletonList(match(bson));
+        } else if (filter instanceof AgnosticSubscriptionFilter agnosticSubscriptionFilter) {
+            // Capability-agnostic: the change stream applies the plain Filter, the same as a stream filter. The stream
+            // versus DCB scoping lives in the catch-up layer, not here.
+            Filter agnosticFilter = agnosticSubscriptionFilter.filter();
+            Bson bson = FilterToBsonFilterConverter.convertFilterToBsonFilter(MongoFilterSpecification.FULL_DOCUMENT, timeRepresentation, agnosticFilter);
+            pipeline = Collections.singletonList(match(bson));
         } else if (filter instanceof DcbSubscriptionFilter dcbSubscriptionFilter) {
             pipeline = Collections.singletonList(DcbSubscriptionFilterConverter.toChangeStreamMatchStage(dcbSubscriptionFilter.criteria()));
         } else if (filter instanceof MongoFilterSpecification.MongoJsonFilterSpecification jsonFilterSpecification) {
