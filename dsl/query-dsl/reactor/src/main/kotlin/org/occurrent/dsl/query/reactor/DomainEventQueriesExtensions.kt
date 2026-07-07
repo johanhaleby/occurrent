@@ -23,6 +23,10 @@ import reactor.core.publisher.Flux
 import reactor.core.publisher.Mono
 import kotlin.reflect.KClass
 
+// Naming convention: the reactor query DSL keeps the bare query name because a Flux is already the idiomatic reactive
+// result and needs no conversion. The blocking query DSL instead names its extensions after the return type they
+// produce (queryForSequence, queryForList) since the underlying Java query returns a java.util.stream.Stream.
+
 /**
  * Query by type of domain event ([T]).
  *

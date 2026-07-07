@@ -155,14 +155,14 @@ class DcbDomainEventQueriesTest {
     }
 
     @Test
-    void delegates_plain_filter_and_type_queries_to_the_wrapped_domain_event_queries() {
+    void domain_event_queries_accessor_exposes_the_wrapped_plain_filter_and_type_queries() {
         NameDefined nameDefined = new NameDefined("eventId1", time, "name", "Some Doe");
         NameWasChanged nameWasChanged = new NameWasChanged("eventId2", time, "name", "Jane Doe");
         append("name:1", nameDefined, nameWasChanged);
 
-        List<NameWasChanged> byType = dcbQueries.query(NameWasChanged.class).collectList().block();
-        List<DomainEvent> byFilter = dcbQueries.<DomainEvent>query(Filter.all()).collectList().block();
-        NameDefined one = dcbQueries.queryOne(NameDefined.class).block();
+        List<NameWasChanged> byType = dcbQueries.domainEventQueries().query(NameWasChanged.class).collectList().block();
+        List<DomainEvent> byFilter = dcbQueries.domainEventQueries().<DomainEvent>query(Filter.all()).collectList().block();
+        NameDefined one = dcbQueries.domainEventQueries().queryOne(NameDefined.class).block();
 
         assertThat(byType).containsExactly(nameWasChanged);
         assertThat(byFilter).containsExactly(nameDefined, nameWasChanged);
@@ -170,11 +170,11 @@ class DcbDomainEventQueriesTest {
     }
 
     @Test
-    void delegates_count_and_exists_to_the_wrapped_domain_event_queries() {
+    void domain_event_queries_accessor_exposes_the_wrapped_count_and_exists() {
         append("name:1", new NameDefined("eventId1", time, "name", "Some Doe"));
 
-        Long count = dcbQueries.count().block();
-        Boolean exists = dcbQueries.exists(Filter.type(NameDefined.class.getName())).block();
+        Long count = dcbQueries.domainEventQueries().count().block();
+        Boolean exists = dcbQueries.domainEventQueries().exists(Filter.type(NameDefined.class.getName())).block();
 
         assertThat(count).isEqualTo(1L);
         assertThat(exists).isTrue();

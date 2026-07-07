@@ -172,8 +172,8 @@ public @interface Subscription {
          */
         SAME_AS_START_AT,
         /**
-         * Use the default resume behavior of the underlying subscription model. For example, if the {@link StartPosition} is set to {@link StartPosition#BEGINNING_OF_TIME},
-         * and {@code ResumeBehavior} is set to {@link ResumeBehavior#DEFAULT}, then the subscription will <i>start</i> from the beginning of time the first time it's run,
+         * Use the default resume behavior of the underlying subscription model. For example, if the {@link StartPosition} is set to {@link StartPosition#BEGINNING},
+         * and {@code ResumeBehavior} is set to {@link ResumeBehavior#DEFAULT}, then the subscription will <i>start</i> from the beginning the first time it's run,
          * then on application restart, it'll continue from the last received event (the checkpoint for the subscription) on restart.
          */
         DEFAULT
@@ -185,7 +185,7 @@ public @interface Subscription {
     enum StartupMode {
         /**
          * Occurrent will determine the startup mode based on the other properties of the subscription (such as {@link #startAt()} and {@link #resumeBehavior()}).
-         * It'll use {@link #BACKGROUND} if the subscription needs to replay historic events before subscribing to new ones (e.g. if {@link #startAt()} is {@link StartPosition#BEGINNING_OF_TIME}),
+         * It'll use {@link #BACKGROUND} if the subscription needs to replay historic events before subscribing to new ones (e.g. if {@link #startAt()} is {@link StartPosition#BEGINNING}),
          * otherwise {@link #WAIT_UNTIL_STARTED} will be used.
          */
         DEFAULT,

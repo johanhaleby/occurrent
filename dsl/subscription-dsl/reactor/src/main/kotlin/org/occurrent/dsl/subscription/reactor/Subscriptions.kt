@@ -57,6 +57,12 @@ fun <E : Any> streamSubscriptions(subscriptionModel: Subscribable, cloudEventCon
 class StreamSubscriptions<E : Any>(private val subscriptionModel: Subscribable, private val cloudEventConverter: CloudEventConverter<E>) {
 
     /**
+     * Derives a stable default subscription id from the cloud event type that [cloudEventConverter] maps [type] to.
+     * This is a genuinely non-inline function so that changing the cloud event type mapping doesn't require recompiling callers.
+     */
+    fun defaultSubscriptionId(type: KClass<out E>): String = cloudEventConverter.getCloudEventType(type.java)
+
+    /**
      * Create a new subscription that is invoked after a specific domain event is written to the event store
      */
     @JvmName("subscribeAll")
@@ -75,14 +81,14 @@ class StreamSubscriptions<E : Any>(private val subscriptionModel: Subscribable, 
     /**
      * Create a new subscription that is invoked after a specific domain event is written to the event store
      */
-    inline fun <reified E1 : E> subscribe(subscriptionId: String = E1::class.simpleName!!, startAt: StartAt? = null, crossinline fn: (E1) -> Mono<Void>): Subscription {
+    inline fun <reified E1 : E> subscribe(subscriptionId: String = defaultSubscriptionId(E1::class), startAt: StartAt? = null, crossinline fn: (E1) -> Mono<Void>): Subscription {
         return subscribe(subscriptionId, E1::class, startAt = startAt) { _, e -> fn(e as E1) }
     }
 
     /**
      * Create a new subscription that is invoked after a specific domain event is written to the event store
      */
-    inline fun <reified E1 : E> subscribe(subscriptionId: String = E1::class.simpleName!!, startAt: StartAt? = null, crossinline fn: (EventMetadata, E1) -> Mono<Void>): Subscription {
+    inline fun <reified E1 : E> subscribe(subscriptionId: String = defaultSubscriptionId(E1::class), startAt: StartAt? = null, crossinline fn: (EventMetadata, E1) -> Mono<Void>): Subscription {
         return subscribe(subscriptionId, E1::class, startAt = startAt) { metadata, e -> fn(metadata, e as E1) }
     }
 
@@ -137,6 +143,12 @@ class StreamSubscriptions<E : Any>(private val subscriptionModel: Subscribable, 
         return subscribe(subscriptionId, filter, startAt) { _, e -> fn(e) }
     }
 
+    /**
+     * Unlike the blocking DSL this overload has no `waitUntilStarted` flag. The blocking DSL blocks the calling
+     * thread until the subscription has started, which only makes sense for a synchronous API. Here [Subscription]
+     * is returned immediately and exposes its own [Subscription.waitUntilStarted] returning a `Mono<Void>` that the
+     * caller can compose into their own reactive chain if they need to wait, so no extra parameter is needed on `subscribe` itself.
+     */
     @JvmOverloads
     fun subscribe(
         subscriptionId: String,
@@ -188,6 +200,12 @@ fun <E : Any> subscriptions(subscriptionModel: Subscribable, cloudEventConverter
 class Subscriptions<E : Any>(private val subscriptionModel: Subscribable, private val cloudEventConverter: CloudEventConverter<E>) {
 
     /**
+     * Derives a stable default subscription id from the cloud event type that [cloudEventConverter] maps [type] to.
+     * This is a genuinely non-inline function so that changing the cloud event type mapping doesn't require recompiling callers.
+     */
+    fun defaultSubscriptionId(type: KClass<out E>): String = cloudEventConverter.getCloudEventType(type.java)
+
+    /**
      * Create a new subscription that is invoked after a specific domain event is written to the event store
      */
     @JvmName("subscribeAll")
@@ -206,14 +224,14 @@ class Subscriptions<E : Any>(private val subscriptionModel: Subscribable, privat
     /**
      * Create a new subscription that is invoked after a specific domain event is written to the event store
      */
-    inline fun <reified E1 : E> subscribe(subscriptionId: String = E1::class.simpleName!!, startAt: StartAt? = null, crossinline fn: (E1) -> Mono<Void>): Subscription {
+    inline fun <reified E1 : E> subscribe(subscriptionId: String = defaultSubscriptionId(E1::class), startAt: StartAt? = null, crossinline fn: (E1) -> Mono<Void>): Subscription {
         return subscribe(subscriptionId, E1::class, startAt = startAt) { _, e -> fn(e as E1) }
     }
 
     /**
      * Create a new subscription that is invoked after a specific domain event is written to the event store
      */
-    inline fun <reified E1 : E> subscribe(subscriptionId: String = E1::class.simpleName!!, startAt: StartAt? = null, crossinline fn: (EventMetadata, E1) -> Mono<Void>): Subscription {
+    inline fun <reified E1 : E> subscribe(subscriptionId: String = defaultSubscriptionId(E1::class), startAt: StartAt? = null, crossinline fn: (EventMetadata, E1) -> Mono<Void>): Subscription {
         return subscribe(subscriptionId, E1::class, startAt = startAt) { metadata, e -> fn(metadata, e as E1) }
     }
 
@@ -268,6 +286,12 @@ class Subscriptions<E : Any>(private val subscriptionModel: Subscribable, privat
         return subscribe(subscriptionId, filter, startAt) { _, e -> fn(e) }
     }
 
+    /**
+     * Unlike the blocking DSL this overload has no `waitUntilStarted` flag. The blocking DSL blocks the calling
+     * thread until the subscription has started, which only makes sense for a synchronous API. Here [Subscription]
+     * is returned immediately and exposes its own [Subscription.waitUntilStarted] returning a `Mono<Void>` that the
+     * caller can compose into their own reactive chain if they need to wait, so no extra parameter is needed on `subscribe` itself.
+     */
     @JvmOverloads
     fun subscribe(
         subscriptionId: String,

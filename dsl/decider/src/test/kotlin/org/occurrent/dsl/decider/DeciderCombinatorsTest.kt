@@ -556,16 +556,19 @@ class DeciderCombinatorsTest {
         }
 
         @Test
-        fun `composing zero deciders yields an empty, vacuously terminal composite`() {
-            // Given
-            val composed: Decider<DomainCommand, CompositeState, DomainEvent> = compose(emptyList())
+        fun `composing zero deciders fails loudly instead of yielding a vacuous composite`() {
+            assertThatThrownBy {
+                compose(emptyList<Decider<DomainCommand, *, DomainEvent>>())
+            }.isInstanceOf(IllegalArgumentException::class.java)
+        }
 
-            // Then
-            assertAll(
-                { assertThat(composed.initialState().states()).isEmpty() },
-                { assertThat(composed.decide(state = composed.initialState(), command = TurnOn).component2()).isEmpty() },
-                { assertThat(composed.isTerminal(composed.initialState())).isTrue() }
-            )
+        @Test
+        fun `composing a list with a null decider fails loudly instead of a later NullPointerException`() {
+            val deciders = listOf(bulbWidened, null, counterWidened)
+            assertThatThrownBy {
+                @Suppress("UNCHECKED_CAST")
+                compose(deciders as List<Decider<DomainCommand, *, DomainEvent>>)
+            }.isInstanceOf(NullPointerException::class.java)
         }
     }
 
@@ -643,6 +646,33 @@ class DeciderCombinatorsTest {
                 { assertThat(state.first).isEqualTo(BulbState(on = false)) },
                 { assertThat(state.second).isEqualTo(CounterState(count = 1)) }
             )
+        }
+    }
+
+    // -----------------------------------------------------------------------
+    // Decider.compose (raw Java varargs/list overloads) require at least two
+    // -----------------------------------------------------------------------
+
+    @Nested
+    @DisplayName("Decider#compose two-required guard")
+    inner class ComposeTwoRequiredGuard {
+
+        // Decider.compose(Decider, Decider, Decider...) requires two arguments at compile time, so a single-decider
+        // varargs call cannot even be written. The list overload is the escape hatch for a dynamic count, and it
+        // enforces the same minimum at runtime.
+
+        @Test
+        fun `list compose of zero deciders fails loudly`() {
+            assertThatThrownBy {
+                Decider.compose(emptyList<Decider<DomainCommand, *, DomainEvent>>())
+            }.isInstanceOf(IllegalArgumentException::class.java)
+        }
+
+        @Test
+        fun `list compose of a single decider fails loudly`() {
+            assertThatThrownBy {
+                Decider.compose(listOf(bulbDecider.adapt()))
+            }.isInstanceOf(IllegalArgumentException::class.java)
         }
     }
 }
