@@ -188,11 +188,9 @@ public class InMemorySubscriptionModel implements SubscriptionModel, Consumer<St
                 return cloudEvent -> matchesFilter(cloudEvent, f);
             }
             case DcbSubscriptionFilter dcbSubscriptionFilter -> {
-                // Match the DCB query in process and require the event to be a DCB-written event, so a non-Mongo
-                // subscribable filters DCB events without a server-side change stream match. The discriminator is
-                // isDcbEvent (the presence of the DCB tags extension), not a positive position: with stream position on by
-                // default, stream events also carry a global position, so a "position > 0" guard would leak stream events
-                // into a DCB subscription.
+                // Requires isDcbEvent (the DCB tags extension) rather than a positive position, since with
+                // stream position on by default, stream events also carry a global position. A "position > 0"
+                // guard would leak stream events into a DCB subscription.
                 DcbCriteria query = dcbSubscriptionFilter.criteria();
                 return cloudEvent -> DcbCloudEvents.isDcbEvent(cloudEvent) && DcbCloudEvents.matches(cloudEvent, query);
             }

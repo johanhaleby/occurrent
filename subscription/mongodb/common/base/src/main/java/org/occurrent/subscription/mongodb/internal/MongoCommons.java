@@ -116,13 +116,11 @@ public class MongoCommons {
                 BsonTimestamp operationTime = document.get(OPERATION_TIME, BsonTimestamp.class);
                 withStartPositionApplied = applyOperationTime.apply(t, operationTime);
             } else {
-                // We don't recognize the start position, but instead of throwing an exception we just start at "subscription model default"/now which
-                // means returning t. The reason for not throwing is that subscription models that wraps _this_ subscription (which doesn't understand the
-                // "changeStreamPositionString") may have custom understanding of the change stream position. For example, in the case of a CatchupSubscription,
-                // it adds a "TimeBasedCheckpoint" which no other subscription model understands. In the case where the CatchupSubscription cannot get a global position,
-                // for example if we run on Atlas free-tier, it may write the "TimeBasedCheckpoint" to the position storage impl. If no event has been received after
-                // the subscription has caught-up, the "TimeBasedCheckpoint" will be retained in storage. If a restart happens before a new event has been received,
-                // then the CatchupSubscription will kick in again and understand the "TimeBasedCheckpoint", thus preventing reading the events from the event store again.
+                // Unrecognized start position: return t (subscription model default/now) instead of throwing,
+                // since a wrapping subscription model may understand a position this one doesn't. For example
+                // CatchupSubscription's "TimeBasedCheckpoint" (written when it can't get a global position,
+                // e.g. on Atlas free-tier): if no event arrives after catch-up and a restart happens first,
+                // CatchupSubscription reads it back instead of replaying from the event store.
                 return t;
             }
         }

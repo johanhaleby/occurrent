@@ -91,18 +91,14 @@ public class SpringMongoSubscriptionModel implements CheckpointAwareSubscription
     private final MongoOperations mongoOperations;
     private final RetryStrategy retryStrategy;
     private final boolean restartSubscriptionsOnChangeStreamHistoryLost;
-    // Shared executor for restart loops so a persistently failing subscription backs off (via retryStrategy)
-    // instead of spawning a new thread for every single restart attempt. One virtual thread is occupied per
-    // subscription that is currently restarting, not per attempt, and it's released as soon as the subscription
-    // recovers, is paused/cancelled, or the model is shut down. Virtual threads are used (rather than a cached
-    // platform-thread pool) because "restartOnce" blocks on "failureSignal.join()" for the entire time the
-    // subscription is restarting, which can be a long time for a persistently failing subscription. A blocked
-    // virtual thread unmounts from its carrier while parked, so this doesn't pin a platform thread for that
-    // duration the way a cached thread pool would.
+    // Shared executor for restart loops so a failing subscription backs off (via retryStrategy) instead of
+    // spawning a thread per restart attempt. One virtual thread per currently-restarting subscription,
+    // released on recovery, pause/cancel, or shutdown. Virtual threads matter because restartOnce() blocks
+    // on failureSignal.join() for the whole restart duration, and a blocked virtual thread unmounts from
+    // its carrier instead of pinning a platform thread.
     private final ExecutorService restartExecutor;
-    // Tracks the in-flight "wait for the next failure (or a stop signal)" future for a subscription that is
-    // currently being restarted, so pauseSubscription/cancelSubscription/shutdown can wake up a blocked restart
-    // loop instead of leaving its thread parked forever.
+    // Tracks the in-flight "wait for next failure or stop signal" future for a restarting subscription, so
+    // pause/cancel/shutdown can wake a blocked restart loop instead of leaving it parked forever.
     private final ConcurrentMap<String, CompletableFuture<@Nullable RestartSignal>> activeRestartSignal;
 
     private volatile boolean shutdown = false;
@@ -165,12 +161,9 @@ public class SpringMongoSubscriptionModel implements CheckpointAwareSubscription
 
         logDebug("Subscribing ({})", subscriptionId);
 
-        // We wrap the creation of ChangeStreamRequestOptions in a supplier since otherwise the "startAtSupplier"
-        // would be supplied only once, here, during initialization. When using a supplier here, the "startAtSupplier"
-        // is called again when pausing and resuming a subscription. Take the case when a subscription is started with "StartAt.now()".
-        // If we hadn't used a supplier and a subscription is paused and later resumed, it'll be resumed from the _initial_ "StartAt.now()" position,
-        // and not the position the "StartAt.now()" position of when the subscription was resumed. This will lead to historic events being
-        // replayed which is (most likely) not what the user expects.
+        // Wraps ChangeStreamRequestOptions creation in a supplier so it's recomputed on pause/resume, not just
+        // once at subscribe time. Without this, a subscription started with StartAt.now() would resume from
+        // the _initial_ now() position instead of the resume-time position, replaying historic events.
         Function<@Nullable StartAt, ChangeStreamRequestOptions> requestOptionsFunction = overridingStartAt -> {
             var subscriptionModelContext = new StartAt.SubscriptionModelContext(SpringMongoSubscriptionModel.class);
             // TODO We should change builder::resumeAt to builder::startAtOperationTime once Spring adds support for it (see https://jira.spring.io/browse/DATAMONGO-2607)
@@ -242,16 +235,15 @@ public class SpringMongoSubscriptionModel implements CheckpointAwareSubscription
 
     @Override
     public @Nullable Checkpoint globalCheckpoint() {
-        // Note that we increase the "increment" by 1 in order to not clash with an existing event in the event store.
-        // This is so that we can avoid duplicates in certain rare cases when replaying events.
+        // Increment by 1 to avoid clashing with an existing event, preventing duplicates in rare replay cases.
         BsonTimestamp currentOperationTime;
         try {
             currentOperationTime = MongoCommons.getServerOperationTime(mongoOperations.executeCommand(new Document("hostInfo", 1)), 1);
         } catch (UncategorizedMongoDbException e) {
             if (e.getCause() instanceof MongoCommandException) {
                 log.warn(cannotFindGlobalCheckpointErrorMessage(e.getCause()));
-                // This can if the server doesn't allow to get the operation time since "db.adminCommand( { "hostInfo" : 1 } )" is prohibited.
-                // This is the case on for example shared Atlas clusters. If this happens we return the current time of the client instead.
+                // Happens when the server prohibits "hostInfo" (e.g. shared Atlas clusters), falls back to
+                // the client's current time.
                 return null;
             } else {
                 throw e;
@@ -395,16 +387,15 @@ public class SpringMongoSubscriptionModel implements CheckpointAwareSubscription
         });
     }
 
-    // Carries what a restart attempt should do next: reconnect at "startAt" because "cause" was the triggering
-    // error. A completed future holding "null" instead of a RestartSignal means "stop restarting" (the
-    // subscription was paused/cancelled/shut down, or history was lost and restarting is disabled).
+    // Carries what a restart attempt should do next: reconnect at "startAt" because "cause" triggered it. A
+    // completed future holding null instead means "stop restarting" (paused/cancelled/shut down, or history
+    // lost with restarting disabled).
     private record RestartSignal(StartAt startAt, Throwable cause) {
     }
 
-    // Delivers the outcome of a change-stream error to whichever restart loop is currently responsible for this
-    // subscription: if a restart loop is already waiting for the next failure, wake it up with the signal;
-    // otherwise this is the first failure since subscribe/resume, so start a new restart loop on the shared
-    // restart executor instead of spawning a dedicated thread for this one attempt.
+    // Delivers a change-stream error to whichever restart loop is responsible for this subscription: wakes
+    // an already-waiting loop, or starts a new one on the shared restart executor if this is the first
+    // failure since subscribe/resume.
     private void reportFailure(String subscriptionId, @Nullable CompletableFuture<@Nullable RestartSignal> failureSignal, @Nullable RestartSignal signal) {
         if (failureSignal != null) {
             failureSignal.complete(signal);
@@ -413,10 +404,9 @@ public class SpringMongoSubscriptionModel implements CheckpointAwareSubscription
         }
     }
 
-    // Runs on the shared restart executor: retries restarting the subscription with the backoff configured by
-    // "retryStrategy", the same strategy already used elsewhere in this class, instead of restarting immediately
-    // and unconditionally like the previous thread-per-attempt implementation did. The loop ends (without
-    // throwing) as soon as a restart attempt reports "no further restart needed".
+    // Runs on the shared restart executor, retrying with the backoff from "retryStrategy" instead of
+    // restarting immediately and unconditionally. Ends without throwing once a restart attempt reports no
+    // further restart needed.
     private void runRestartLoop(String subscriptionId, RestartSignal firstSignal) {
         AtomicReference<RestartSignal> next = new AtomicReference<>(firstSignal);
         try {
@@ -431,9 +421,9 @@ public class SpringMongoSubscriptionModel implements CheckpointAwareSubscription
                 throw outcome.cause() instanceof RuntimeException runtimeException ? runtimeException : new RuntimeException(outcome.cause());
             }, __ -> !shutdown, retryStrategy).run();
         } catch (RuntimeException e) {
-            // A backoff sleep that's interrupted (restart executor shut down) restores the thread's interrupt
-            // status before rethrowing, see RetryExecution. Report that distinctly from genuine retry exhaustion,
-            // and don't clear the interrupt status since the executor thread is being torn down.
+            // An interrupted backoff sleep (executor shutting down) restores the thread's interrupt status
+            // before rethrowing, see RetryExecution. Reported distinctly from retry exhaustion, and the
+            // interrupt status isn't cleared since the executor thread is being torn down.
             if (Thread.currentThread().isInterrupted()) {
                 log.warn("Restart loop for subscription {} was interrupted, likely because the restart executor is shutting down", subscriptionId, e);
             } else if (shutdown) {
@@ -444,9 +434,8 @@ public class SpringMongoSubscriptionModel implements CheckpointAwareSubscription
         }
     }
 
-    // Performs a single restart attempt, then blocks (without holding the model's lock) until either the
-    // freshly (re)registered subscription fails again or the loop is told to stop. Returns the signal describing
-    // the next failure so the caller can retry, or null if no further restart is needed.
+    // Performs one restart attempt, then blocks (without the model's lock) until the subscription fails
+    // again or is told to stop. Returns the next failure signal for the caller to retry, or null if done.
     private @Nullable RestartSignal restartOnce(String subscriptionId, RestartSignal signal) {
         CompletableFuture<@Nullable RestartSignal> failureSignal = new CompletableFuture<>();
         synchronized (this) {
@@ -470,8 +459,8 @@ public class SpringMongoSubscriptionModel implements CheckpointAwareSubscription
         }
     }
 
-    // Wakes up a restart loop that's currently blocked waiting for the next failure of "subscriptionId", if any,
-    // so pausing/cancelling/shutting down doesn't leave a restart-executor thread parked forever.
+    // Wakes a restart loop blocked on the next failure of "subscriptionId", if any, so pause/cancel/shutdown
+    // doesn't leave a restart-executor thread parked forever.
     private void stopRestartLoop(String subscriptionId) {
         CompletableFuture<@Nullable RestartSignal> pending = activeRestartSignal.remove(subscriptionId);
         if (pending != null) {
@@ -483,8 +472,8 @@ public class SpringMongoSubscriptionModel implements CheckpointAwareSubscription
         return throwable instanceof IllegalStateException && throwable.getMessage().startsWith("Cursor") && throwable.getMessage().endsWith("is not longer open.");
     }
 
-    // Model that hold both the spring subscription and the change stream request so that we can pause the subscription
-    // (by removing it and starting it again)
+    // Holds both the spring subscription and the change stream request so a subscription can be paused (by
+    // removing it) and resumed (by starting a new one).
     private record InternalSubscription(SpringMongoSubscription occurrentSubscription, Function<@Nullable StartAt, ChangeStreamRequest<Document>> changeStreamRequestBuilder) {
 
         InternalSubscription copy(org.springframework.data.mongodb.core.messaging.Subscription springSubscription) {

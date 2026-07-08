@@ -204,12 +204,11 @@ public class NativeMongoSubscriptionModel implements CheckpointAwareSubscription
         cloudEventDispatcher.execute(executeWithRetry(internalSubscription, NOT_SHUTDOWN, retryStrategy));
     }
 
-    // currentStartAt tracks the position of the last change-stream document read (updated below, whether or not it
-    // produced a delivered CloudEvent), shared with the outer executeWithRetry(internalSubscription, ...) wrapper in
-    // startSubscription so that a restart (rethrown below) or a resume (see resumeSubscription) continues gap-free
-    // from there instead of the original StartAt.
-    // The try block spans opening the cursor too, not just iterating it, since a change-stream error (e.g. history lost,
-    // a failover) can just as well surface when the cursor is (re-)opened as while iterating it.
+    // currentStartAt tracks the last change-stream document read (updated below, even without a delivered
+    // CloudEvent), shared with startSubscription's executeWithRetry wrapper so a restart or resume continues
+    // gap-free from there instead of the original StartAt.
+    // The try block spans opening the cursor too: a change-stream error (history lost, failover) can surface
+    // there just as well as while iterating.
     private void newInternalSubscription(String subscriptionId, SubscriptionFilter filter, AtomicReference<StartAt> currentStartAt, Consumer<CloudEvent> action, CountDownLatch subscriptionStartedLatch) {
         InternalSubscription internalSubscription = null;
         try {
@@ -335,13 +334,12 @@ public class NativeMongoSubscriptionModel implements CheckpointAwareSubscription
     public Checkpoint globalCheckpoint() {
         BsonTimestamp currentOperationTime;
         try {
-            // Note that we increase the "increment" by 1 in order to not clash with an existing event in the event store.
-            // This is so that we can avoid duplicates in certain rare cases when replaying events.
+            // Increment by 1 to avoid clashing with an existing event, preventing duplicates in rare replay cases.
             currentOperationTime = MongoCommons.getServerOperationTime(database.runCommand(new Document("hostInfo", 1)), 1);
         } catch (MongoCommandException e) {
             log.warn(cannotFindGlobalCheckpointErrorMessage(e));
-            // This can if the server doesn't allow to get the operation time since "db.adminCommand( { "hostInfo" : 1 } )" is prohibited.
-            // This is the case on for example shared Atlas clusters. If this happens we return the current time of the client instead.
+            // Happens when the server prohibits "hostInfo" (e.g. shared Atlas clusters), falls back to the
+            // client's current time.
             return null;
         }
         return new MongoOperationTimeCheckpoint(currentOperationTime);
@@ -397,8 +395,8 @@ public class NativeMongoSubscriptionModel implements CheckpointAwareSubscription
         running = true;
 
         CountDownLatch startedLatch = new CountDownLatch(1);
-        // Reuses the same currentStartAt reference so a resume continues from the position of the last change-stream
-        // document read before the subscription was paused, rather than replaying (or skipping) from the original StartAt.
+        // Reuses the same currentStartAt reference so a resume continues from the last change-stream document
+        // read before the subscription was paused, not the original StartAt.
         Runnable newSubscription = () -> newInternalSubscription(subscriptionId, internalSubscription.filter,
                 internalSubscription.currentStartAt, internalSubscription.action, startedLatch);
         startSubscription(newSubscription);

@@ -121,13 +121,10 @@ public class ReactorMongoSubscriptionModel implements CheckpointAwareSubscriptio
     @Override
     public Flux<CloudEvent> subscribe(@Nullable SubscriptionFilter filter, StartAt startAt) {
         requireNonNull(startAt, StartAt.class.getSimpleName() + " cannot be null");
-        // currentStartAt tracks the position of the last change-stream document read (updated eagerly for every
-        // document changeStream(...) reads below, whether or not it produced a delivered CloudEvent), read again by
-        // resilientChangeStream(...) on every resubscribe that retryWhen triggers, so recovery from an error
-        // continues gap-free instead of replaying or skipping events. This is safe here because the caller owns
-        // consumption of the returned Flux directly, unlike the named-subscription path below, which defers
-        // tracking to actual action completion since it interposes its own buffering stage.
-        // Flux.defer gives each subscriber to the returned Flux its own tracked position.
+        // currentStartAt tracks the last change-stream document read (even if it produced no delivered
+        // CloudEvent), so a resubscribe from retryWhen resumes gap-free. Safe here since the caller consumes
+        // the Flux directly. The buffered named-subscription path below advances only on action completion.
+        // Flux.defer gives each subscriber its own tracked position.
         return Flux.defer(() -> {
             AtomicReference<StartAt> currentStartAt = new AtomicReference<>(startAt);
             return resilientChangeStream(filter, currentStartAt, currentStartAt::set, null);
@@ -151,23 +148,22 @@ public class ReactorMongoSubscriptionModel implements CheckpointAwareSubscriptio
 
     private Subscription startInternalSubscription(String subscriptionId, @Nullable SubscriptionFilter filter, AtomicReference<StartAt> currentStartAt, Function<CloudEvent, Mono<Void>> action) {
         if (!running) {
-            // The model is stopped: don't subscribe at all, so waitUntilStarted() doesn't complete successfully for
-            // a subscription that won't deliver anything until start(true)/resumeSubscription actually starts it.
+            // Model stopped: don't subscribe, so waitUntilStarted() doesn't complete for a subscription that
+            // won't deliver anything until start(true)/resumeSubscription actually starts it.
             InternalSubscription internalSubscription = new InternalSubscription(Disposables.disposed(), currentStartAt, filter, action, Mono.never());
             pausedSubscriptions.put(subscriptionId, internalSubscription);
             return new ReactorMongoSubscription(subscriptionId, internalSubscription.started);
         }
         Sinks.Empty<Void> startedSink = Sinks.empty();
-        // A placeholder goes in before subscribing, since a synchronously-failing subscribe (e.g. building the
-        // change stream options itself throws) runs the error handler below before subscribe() even returns,
-        // which would otherwise try to remove an entry that was never put in yet.
+        // Placeholder goes in before subscribing: a synchronously-failing subscribe (e.g. building the change
+        // stream options throws) runs the error handler below before subscribe() returns, which would
+        // otherwise remove an entry never put in.
         runningSubscriptions.put(subscriptionId, new InternalSubscription(Disposables.disposed(), currentStartAt, filter, action, startedSink.asMono()));
-        // The change stream's own eager, per-document-read tracking (used by the plain subscribe(...) above) is not
-        // used here: concatMap(action) can have several documents already read out of the change stream and
-        // buffered ahead of a slow action, and tracking eagerly would let a pause/cancel or a change-stream error
-        // resume past one of those buffered documents without ever handing it to action, losing it for good.
-        // Advancing currentStartAt only once action() completes means pausing, cancelling, or an automatic retry
-        // can at most redeliver the in-flight event, never skip one.
+        // Eager per-document tracking (used by plain subscribe(...) above) isn't used here: concatMap(action)
+        // can buffer several documents ahead of a slow action, and tracking eagerly would let a pause/cancel
+        // or retry resume past a buffered document without ever handing it to action, losing it. Advancing
+        // currentStartAt only once action() completes means retry/pause/cancel can at most redeliver the
+        // in-flight event, never skip one.
         Disposable disposable = resilientChangeStream(filter, currentStartAt, __ -> {
                 }, startedSink)
                 .concatMap(cloudEvent -> action.apply(cloudEvent)
@@ -175,18 +171,17 @@ public class ReactorMongoSubscriptionModel implements CheckpointAwareSubscriptio
                 .subscribe(unused -> {
                         }, throwable -> {
                             log.error("Subscription {} terminated with an unrecoverable error", subscriptionId, throwable);
-                            // No-op if doOnSubscribe already completed the sink successfully, but if the change
-                            // stream never got that far (e.g. building the change stream options itself threw),
-                            // this is what keeps waitUntilStarted() from hanging forever.
+                            // No-op if the sink already completed successfully, otherwise (e.g. building the
+                            // change stream options threw) this keeps waitUntilStarted() from hanging forever.
                             startedSink.tryEmitError(throwable);
-                            // A dead subscription must not still count as running, or isRunning(id) would lie and
-                            // the id couldn't be reused without an explicit cancelSubscription() call.
+                            // A dead subscription must not count as running, or isRunning(id) would lie and the
+                            // id couldn't be reused without an explicit cancelSubscription().
                             runningSubscriptions.remove(subscriptionId);
                         });
         InternalSubscription internalSubscription = new InternalSubscription(disposable, currentStartAt, filter, action, startedSink.asMono());
         if (runningSubscriptions.replace(subscriptionId, internalSubscription) == null) {
-            // The placeholder was already removed by a synchronous error above, so this subscription is already
-            // dead. Dispose defensively, matching what the error handler does for the same subscription otherwise.
+            // Placeholder already removed by a synchronous error above, so this subscription is dead,
+            // dispose defensively to match what the error handler otherwise does.
             disposable.dispose();
         }
         return new ReactorMongoSubscription(subscriptionId, internalSubscription.started);
@@ -206,9 +201,9 @@ public class ReactorMongoSubscriptionModel implements CheckpointAwareSubscriptio
             ChangeStreamOptionsBuilder builder = MongoCommons.applyStartPosition(ChangeStreamOptions.builder(), ChangeStreamOptionsBuilder::startAfter, ChangeStreamOptionsBuilder::resumeAt, currentStartAt.get(), subscriptionModelContext);
             final ChangeStreamOptions changeStreamOptions = ApplyFilterToChangeStreamOptionsBuilder.applyFilter(timeRepresentation, filter, builder);
             Flux<ChangeStreamEvent<Document>> changeStream = mongo.changeStream(eventCollection, changeStreamOptions, Document.class);
-            // "Started" only means the change stream Flux has been subscribed to, not that the server has
-            // acknowledged the command and the cursor is positioned. This is weaker than NativeMongoSubscriptionModel's
-            // latch, which only fires after that blocking round trip has already completed.
+            // "Started" only means the change stream Flux was subscribed to, not that the server acknowledged
+            // the command and the cursor is positioned. Weaker than NativeMongoSubscriptionModel's latch,
+            // which only fires after that round trip completes.
             if (startedSink != null) {
                 changeStream = changeStream.doOnSubscribe(subscription -> startedSink.tryEmitEmpty());
             }
@@ -216,15 +211,15 @@ public class ReactorMongoSubscriptionModel implements CheckpointAwareSubscriptio
                     .flatMap(changeEvent -> {
                         ChangeStreamDocument<Document> raw = changeEvent.getRaw();
                         if (raw == null) {
-                            // Mirrors SpringMongoSubscriptionModel's same defensive check. Not expected to ever
-                            // happen, but skipping this one event beats an NPE that retries the whole subscription.
+                            // Mirrors SpringMongoSubscriptionModel's defensive check. Not expected, but skipping
+                            // this event beats an NPE that retries the whole subscription.
                             log.error("Internal error: ChangeStreamEvent for collection {} had a null raw document", eventCollection);
                             return Mono.empty();
                         }
                         MongoResumeTokenCheckpoint checkpoint = new MongoResumeTokenCheckpoint(requireNonNull(raw.getResumeToken()));
-                        // Advance the tracked position for every change-stream document received, even if it
-                        // doesn't deserialize into a delivered CloudEvent, mirroring NativeMongoSubscriptionModel,
-                        // so a resubscribe after an error resumes gap-free.
+                        // Advances the tracked position for every document received, even ones that don't
+                        // deserialize into a delivered CloudEvent, mirroring NativeMongoSubscriptionModel, so
+                        // a resubscribe resumes gap-free.
                         onDocumentRead.accept(StartAt.checkpoint(checkpoint));
                         return MongoCloudEventsToJsonDeserializer.deserializeToCloudEvent(raw, timeRepresentation)
                                 .map(cloudEvent -> new CheckpointAwareCloudEvent(cloudEvent, checkpoint))
@@ -234,10 +229,9 @@ public class ReactorMongoSubscriptionModel implements CheckpointAwareSubscriptio
         });
     }
 
-    // Classifies the error a change-stream Flux terminated with. ChangeStreamHistoryLost (286) restarts from
-    // StartAt.now() only when configured to; everything else (a failover, a transient network error, or anything
-    // else the driver itself could not resume) restarts from the tracked position. Mirrors the classification in
-    // NativeMongoSubscriptionModel and SpringMongoSubscriptionModel.
+    // ChangeStreamHistoryLost (286) restarts from StartAt.now() only when configured to. Everything else
+    // (failover, transient network error, anything the driver itself couldn't resume) restarts from the
+    // tracked position. Mirrors NativeMongoSubscriptionModel and SpringMongoSubscriptionModel.
     private boolean shouldRestart(Throwable throwable, AtomicReference<StartAt> currentStartAt) {
         if (isChangeStreamHistoryLost(throwable)) {
             if (config.restartSubscriptionsOnChangeStreamHistoryLost) {
@@ -260,14 +254,14 @@ public class ReactorMongoSubscriptionModel implements CheckpointAwareSubscriptio
 
     @Override
     public Mono<Checkpoint> globalCheckpoint() {
-        // Increase the "increment" by 1 so the resume position lands after the most recently
-        // written event, matching SpringMongoSubscriptionModel and avoiding replaying it.
+        // Increment by 1 so the resume position lands after the most recently written event, matching
+        // SpringMongoSubscriptionModel, avoiding a replay.
         return mongo.executeCommand(new Document("hostInfo", 1))
                 .map(document -> MongoCommons.getServerOperationTime(document, 1))
                 .onErrorResume(UncategorizedMongoDbException.class, throwable -> {
                     if (throwable.getCause() instanceof MongoCommandException) {
-                        // This can if the server doesn't allow to get the operation time since "db.adminCommand( { "hostInfo" : 1 } )" is prohibited.
-                        // This is the case on for example shared Atlas clusters. If this happens we return the current time of the client instead.
+                        // Happens when the server prohibits "hostInfo" (e.g. shared Atlas clusters), falls
+                        // back to the client's current time.
                         log.warn(cannotFindGlobalCheckpointErrorMessage(throwable.getCause()));
                         return Mono.empty();
                     } else {
@@ -308,8 +302,8 @@ public class ReactorMongoSubscriptionModel implements CheckpointAwareSubscriptio
         }
 
         running = true;
-        // Reuses the same currentStartAt reference so resume continues from the position of the last event
-        // delivered before the subscription was paused, rather than replaying (or skipping) from the original StartAt.
+        // Reuses the same currentStartAt reference so resume continues from the last delivered event, not
+        // the original StartAt.
         return startInternalSubscription(subscriptionId, internalSubscription.filter, internalSubscription.currentStartAt, internalSubscription.action);
     }
 
